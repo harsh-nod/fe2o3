@@ -1,16 +1,18 @@
 //! Durable custody for one exact opaque Worker V3 load envelope.
 //!
 //! This module deliberately knows nothing about the load-envelope schema, the worker bundle, or
-//! COMGR. An unsafe boundary attests only that the supplied opaque bytes contain the complete
-//! compact replay preimages whose durable custody permits retirement of the original V3
-//! publication intent. The terminal receipt does not authenticate descriptor-source evidence,
-//! perform semantic load admission, establish HSA readiness, or grant load or launch authority.
+//! COMGR. An unsafe boundary attests only that the supplied opaque envelope bytes, together with
+//! the exact current V3 publication named by the accompanying durable claim, retain every compact
+//! replay preimage. Their joint durable custody permits retirement of the duplicate V3 publication
+//! intent. The terminal receipt does not authenticate descriptor-source evidence, perform semantic
+//! load admission, establish HSA readiness, or grant load or launch authority.
 
 use crate::attempt::{AttemptPhase, BackendReceiptV1};
 use crate::durable_published_claim::validate_current_hsaco_publication_locked_v3;
 use crate::{
     AttemptCodecError, BackendPublicationReceiptV3, BuildAttempt,
-    DurablePublishedClaimReacquisitionErrorV3, DurablePublishedHsacoClaimV3, EmitError,
+    DurablePublishedClaimCodecErrorV3, DurablePublishedClaimReacquisitionErrorV3,
+    DurablePublishedHsacoClaimV3, EmitError, MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES_V3,
     MAX_OUTPUT_ENTRIES, PinnedOutput, commit_attempt_registry_direct, read_attempt_registry,
 };
 use rustix::fs::{
@@ -40,7 +42,7 @@ const BACKEND_RECEIPT_IDENTITY_DOMAIN_V1: &[u8] =
 const NAMESPACE_KEY_DOMAIN_V1: &[u8] = b"fe2o3.worker-v3-load-readiness.namespace-key.v1\0";
 const ATTEMPT_BYTES: usize = 8 + 16 + 32;
 const RECEIPT_BODY_BYTES_V1: usize =
-    RECEIPT_MAGIC_V1.len() + 2 + ATTEMPT_BYTES + 32 + 32 + 8 + (8 * 8);
+    RECEIPT_MAGIC_V1.len() + 2 + ATTEMPT_BYTES + 32 + 32 + 8 + 32 + 8 + (8 * 14);
 
 /// Exact canonical size of one terminal Worker V3 load-readiness receipt.
 pub const MAX_WORKER_V3_LOAD_READINESS_RECEIPT_BYTES_V1: usize = RECEIPT_BODY_BYTES_V1 + 32;
@@ -50,6 +52,7 @@ pub const MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1: usize = 256 * 1024 * 1024;
 
 const FILE_PREFIX_V1: &str = ".fe2o3-worker-v3-load-readiness-v1-";
 const ENVELOPE_SUFFIX_V1: &str = ".envelope";
+const CLAIM_SUFFIX_V1: &str = ".claim";
 const RECEIPT_SUFFIX_V1: &str = ".receipt";
 const TEMP_MARKER_V1: &str = ".tmp-";
 const MAX_TEMP_ATTEMPTS: u64 = 64;
@@ -171,10 +174,11 @@ impl VerifiedWorkerV3LoadEnvelopeAuthorityV1 {
     ///
     /// # Safety
     ///
-    /// The caller must have verified that the exact bytes named by `binding` durably replace every
-    /// compact replay preimage in the corresponding Worker V3 publication intent. This assertion
-    /// is only sufficient to retire those duplicate replay files. It must not be made from native
-    /// V3 structural finalization alone and does not authenticate compiler-produced
+    /// The caller must have verified that the exact bytes named by `binding` contain every
+    /// non-artifact compact replay preimage and bind the same current V3 publication whose durable
+    /// claim retains the exact finalized artifact. This assertion is only sufficient to persist
+    /// that joint custody and later retire the duplicate replay files. It must not be made from
+    /// native V3 structural finalization alone and does not authenticate compiler-produced
     /// descriptor-source evidence or admit the envelope for HSA loading.
     #[doc(hidden)]
     pub unsafe fn from_complete_compact_replay_preimages_unchecked(
@@ -223,12 +227,19 @@ pub struct WorkerV3LoadReadinessReceiptV1 {
     attempt: BuildAttempt,
     backend_receipt_sha256: [u8; 32],
     envelope: WorkerV3LoadEnvelopeBindingV1,
+    durable_claim_sha256: [u8; 32],
+    durable_claim_length: u64,
     output_directory: ExactFileIdentityV1,
     envelope_file: ExactFileIdentityV1,
     envelope_mtime_seconds: i64,
     envelope_mtime_nanoseconds: u64,
     envelope_ctime_seconds: i64,
     envelope_ctime_nanoseconds: u64,
+    durable_claim_file: ExactFileIdentityV1,
+    durable_claim_mtime_seconds: i64,
+    durable_claim_mtime_nanoseconds: u64,
+    durable_claim_ctime_seconds: i64,
+    durable_claim_ctime_nanoseconds: u64,
 }
 
 impl WorkerV3LoadReadinessReceiptV1 {
@@ -278,8 +289,19 @@ impl WorkerV3LoadReadinessReceiptV1 {
         Ok(self.backend_receipt_sha256 == backend_receipt_identity(receipt)?)
     }
 
+    pub fn matches_durable_claim(
+        self,
+        claim: &DurablePublishedHsacoClaimV3,
+    ) -> Result<bool, WorkerV3LoadReadinessErrorV1> {
+        let (sha256, length) = durable_claim_binding(claim)?;
+        Ok(self.durable_claim_sha256 == sha256 && self.durable_claim_length == length)
+    }
+
     pub fn encode_canonical(&self) -> Result<Vec<u8>, WorkerV3LoadReadinessCodecErrorV1> {
         validate_envelope_length(self.envelope.byte_length)?;
+        if self.durable_claim_length == 0 {
+            return Err(WorkerV3LoadReadinessCodecErrorV1::InvalidDurableClaimLength);
+        }
         let mut bytes = fallible_vec(MAX_WORKER_V3_LOAD_READINESS_RECEIPT_BYTES_V1)?;
         bytes.extend_from_slice(RECEIPT_MAGIC_V1);
         bytes.extend_from_slice(&RECEIPT_VERSION_V1.to_le_bytes());
@@ -287,6 +309,8 @@ impl WorkerV3LoadReadinessReceiptV1 {
         bytes.extend_from_slice(&self.backend_receipt_sha256);
         bytes.extend_from_slice(&self.envelope.sha256);
         bytes.extend_from_slice(&self.envelope.byte_length.to_le_bytes());
+        bytes.extend_from_slice(&self.durable_claim_sha256);
+        bytes.extend_from_slice(&self.durable_claim_length.to_le_bytes());
         for value in [
             self.output_directory.device,
             self.output_directory.inode,
@@ -299,6 +323,16 @@ impl WorkerV3LoadReadinessReceiptV1 {
         bytes.extend_from_slice(&self.envelope_mtime_nanoseconds.to_le_bytes());
         bytes.extend_from_slice(&self.envelope_ctime_seconds.to_le_bytes());
         bytes.extend_from_slice(&self.envelope_ctime_nanoseconds.to_le_bytes());
+        for value in [
+            self.durable_claim_file.device,
+            self.durable_claim_file.inode,
+        ] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        bytes.extend_from_slice(&self.durable_claim_mtime_seconds.to_le_bytes());
+        bytes.extend_from_slice(&self.durable_claim_mtime_nanoseconds.to_le_bytes());
+        bytes.extend_from_slice(&self.durable_claim_ctime_seconds.to_le_bytes());
+        bytes.extend_from_slice(&self.durable_claim_ctime_nanoseconds.to_le_bytes());
         let checksum = domain_hash(RECEIPT_CHECKSUM_DOMAIN_V1, &bytes);
         bytes.extend_from_slice(&checksum);
         debug_assert_eq!(bytes.len(), MAX_WORKER_V3_LOAD_READINESS_RECEIPT_BYTES_V1);
@@ -327,6 +361,11 @@ impl WorkerV3LoadReadinessReceiptV1 {
         let attempt = decoder.attempt()?;
         let backend_receipt_sha256 = decoder.fixed()?;
         let envelope = WorkerV3LoadEnvelopeBindingV1::new(decoder.fixed()?, decoder.u64()?)?;
+        let durable_claim_sha256 = decoder.fixed()?;
+        let durable_claim_length = decoder.u64()?;
+        if durable_claim_length == 0 {
+            return Err(WorkerV3LoadReadinessCodecErrorV1::InvalidDurableClaimLength);
+        }
         let output_directory = ExactFileIdentityV1 {
             device: decoder.u64()?,
             inode: decoder.u64()?,
@@ -339,6 +378,14 @@ impl WorkerV3LoadReadinessReceiptV1 {
         let envelope_mtime_nanoseconds = decoder.u64()?;
         let envelope_ctime_seconds = decoder.i64()?;
         let envelope_ctime_nanoseconds = decoder.u64()?;
+        let durable_claim_file = ExactFileIdentityV1 {
+            device: decoder.u64()?,
+            inode: decoder.u64()?,
+        };
+        let durable_claim_mtime_seconds = decoder.i64()?;
+        let durable_claim_mtime_nanoseconds = decoder.u64()?;
+        let durable_claim_ctime_seconds = decoder.i64()?;
+        let durable_claim_ctime_nanoseconds = decoder.u64()?;
         if !decoder.finished() {
             return Err(WorkerV3LoadReadinessCodecErrorV1::TrailingBytes);
         }
@@ -346,12 +393,19 @@ impl WorkerV3LoadReadinessReceiptV1 {
             attempt,
             backend_receipt_sha256,
             envelope,
+            durable_claim_sha256,
+            durable_claim_length,
             output_directory,
             envelope_file,
             envelope_mtime_seconds,
             envelope_mtime_nanoseconds,
             envelope_ctime_seconds,
             envelope_ctime_nanoseconds,
+            durable_claim_file,
+            durable_claim_mtime_seconds,
+            durable_claim_mtime_nanoseconds,
+            durable_claim_ctime_seconds,
+            durable_claim_ctime_nanoseconds,
         })
     }
 
@@ -395,6 +449,7 @@ pub enum WorkerV3LoadReadinessCodecErrorV1 {
     UnsupportedVersion { actual: u16 },
     ChecksumMismatch,
     InvalidEnvelopeLength { actual: u64, maximum: usize },
+    InvalidDurableClaimLength,
     InvalidAttempt,
     Truncated,
     TrailingBytes,
@@ -422,6 +477,9 @@ impl fmt::Display for WorkerV3LoadReadinessCodecErrorV1 {
                 formatter,
                 "Worker V3 load-envelope length {actual} is outside 1..={maximum}"
             ),
+            Self::InvalidDurableClaimLength => {
+                formatter.write_str("Worker V3 durable-claim binding has zero length")
+            }
             Self::InvalidAttempt => {
                 formatter.write_str("invalid Worker V3 load-readiness build attempt")
             }
@@ -446,6 +504,11 @@ pub enum WorkerV3LoadReadinessBoundaryV1 {
     SyncEnvelopeTemp,
     RenameEnvelope,
     SyncEnvelopeName,
+    CreateClaimTemp,
+    WriteClaimTemp,
+    SyncClaimTemp,
+    RenameClaim,
+    SyncClaimName,
     CreateReceiptTemp,
     WriteReceiptTemp,
     SyncReceiptTemp,
@@ -485,10 +548,12 @@ pub enum WorkerV3LoadReadinessOutcomeV1 {
     Recovered,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct WorkerV3LoadReadinessResultV1 {
     outcome: WorkerV3LoadReadinessOutcomeV1,
     receipt: WorkerV3LoadReadinessReceiptV1,
+    claim: DurablePublishedHsacoClaimV3,
+    exact_envelope: Vec<u8>,
     envelope_path: PathBuf,
 }
 
@@ -499,6 +564,20 @@ impl WorkerV3LoadReadinessResultV1 {
 
     pub const fn receipt(&self) -> WorkerV3LoadReadinessReceiptV1 {
         self.receipt
+    }
+
+    pub const fn published_claim(&self) -> &DurablePublishedHsacoClaimV3 {
+        &self.claim
+    }
+
+    /// Returns exact bytes read from the revalidated pinned envelope file.
+    pub fn exact_envelope_bytes(&self) -> &[u8] {
+        &self.exact_envelope
+    }
+
+    /// Consumes the custody result and transfers ownership of the exact validated envelope bytes.
+    pub fn into_exact_envelope_bytes(self) -> Vec<u8> {
+        self.exact_envelope
     }
 
     /// Diagnostic path only. Durable validation always uses the pinned directory and exact inode.
@@ -532,6 +611,7 @@ impl WorkerV3LoadReadinessResultV1 {
 #[non_exhaustive]
 pub enum WorkerV3LoadReadinessErrorV1 {
     Codec(WorkerV3LoadReadinessCodecErrorV1),
+    ClaimCodec(DurablePublishedClaimCodecErrorV3),
     Claim(DurablePublishedClaimReacquisitionErrorV3),
     Store(EmitError),
     Io(std::io::Error),
@@ -542,6 +622,7 @@ pub enum WorkerV3LoadReadinessErrorV1 {
     ReceiptMismatch,
     EnvelopeMismatch,
     MissingEnvelope,
+    MissingClaim,
     MissingReceipt,
     InvalidPrivateEntry { entry: PathBuf },
     FileChanged { entry: PathBuf },
@@ -555,6 +636,9 @@ impl fmt::Display for WorkerV3LoadReadinessErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Codec(error) => write!(formatter, "invalid Worker V3 load readiness: {error}"),
+            Self::ClaimCodec(error) => {
+                write!(formatter, "invalid Worker V3 durable claim: {error}")
+            }
             Self::Claim(error) => write!(formatter, "Worker V3 claim is not current: {error}"),
             Self::Store(error) => {
                 write!(formatter, "Worker V3 load-readiness store failure: {error}")
@@ -582,6 +666,9 @@ impl fmt::Display for WorkerV3LoadReadinessErrorV1 {
             }
             Self::MissingEnvelope => {
                 formatter.write_str("durable Worker V3 load envelope is missing")
+            }
+            Self::MissingClaim => {
+                formatter.write_str("durable Worker V3 published claim is missing")
             }
             Self::MissingReceipt => {
                 formatter.write_str("durable Worker V3 load-readiness receipt is missing")
@@ -620,6 +707,7 @@ impl std::error::Error for WorkerV3LoadReadinessErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Codec(error) => Some(error),
+            Self::ClaimCodec(error) => Some(error),
             Self::Claim(error) => Some(error),
             Self::Store(error) => Some(error),
             Self::Io(error) => Some(error),
@@ -632,6 +720,12 @@ impl std::error::Error for WorkerV3LoadReadinessErrorV1 {
 impl From<WorkerV3LoadReadinessCodecErrorV1> for WorkerV3LoadReadinessErrorV1 {
     fn from(error: WorkerV3LoadReadinessCodecErrorV1) -> Self {
         Self::Codec(error)
+    }
+}
+
+impl From<DurablePublishedClaimCodecErrorV3> for WorkerV3LoadReadinessErrorV1 {
+    fn from(error: DurablePublishedClaimCodecErrorV3) -> Self {
+        Self::ClaimCodec(error)
     }
 }
 
@@ -696,19 +790,23 @@ pub fn publish_worker_v3_load_readiness_v1_with_options(
     let _publication = validate_current_hsaco_publication_locked_v3(&output, claim)
         .map_err(WorkerV3LoadReadinessErrorV1::Claim)?;
     let mut faults = FaultInjector::new(options.injected_crash);
-    cleanup_temps(&output, &names)?;
+    let output_entry_count = cleanup_temps(&output, &names)?;
 
     let (stable_source, registry_state) =
         exact_registry_state(&output, claim.plan().attempt(), backend)?;
     let receipt_present = private_snapshot_optional(&output, &names.receipt)?.is_some();
     let envelope_present = private_snapshot_optional(&output, &names.envelope)?.is_some();
+    let claim_present = private_snapshot_optional(&output, &names.claim)?.is_some();
 
-    if let RegistryReadinessState::LoadReady(durable_readiness) = registry_state {
+    if let RegistryReadinessState::EnvelopeCustody(durable_readiness) = registry_state {
         if !receipt_present {
             return Err(WorkerV3LoadReadinessErrorV1::MissingReceipt);
         }
         if !envelope_present {
             return Err(WorkerV3LoadReadinessErrorV1::MissingEnvelope);
+        }
+        if !claim_present {
+            return Err(WorkerV3LoadReadinessErrorV1::MissingClaim);
         }
         let receipt = validate_terminal_receipt(
             &output,
@@ -717,7 +815,7 @@ pub fn publish_worker_v3_load_readiness_v1_with_options(
             backend,
             Some(envelope),
         )?;
-        if receipt != durable_readiness {
+        if receipt != durable_readiness || !receipt.matches_durable_claim(claim)? {
             return Err(WorkerV3LoadReadinessErrorV1::ReceiptMismatch);
         }
         compare_exact_envelope(&output, &names.envelope, &exact_envelope, receipt)?;
@@ -731,9 +829,19 @@ pub fn publish_worker_v3_load_readiness_v1_with_options(
         );
     }
 
+    ensure_publication_headroom(
+        output_entry_count,
+        envelope_present,
+        claim_present,
+        receipt_present,
+    )?;
+
     let receipt = if receipt_present {
         if !envelope_present {
             return Err(WorkerV3LoadReadinessErrorV1::MissingEnvelope);
+        }
+        if !claim_present {
+            return Err(WorkerV3LoadReadinessErrorV1::MissingClaim);
         }
         let receipt = validate_terminal_receipt(
             &output,
@@ -742,6 +850,9 @@ pub fn publish_worker_v3_load_readiness_v1_with_options(
             backend,
             Some(envelope),
         )?;
+        if !receipt.matches_durable_claim(claim)? {
+            return Err(WorkerV3LoadReadinessErrorV1::ReceiptMismatch);
+        }
         compare_exact_envelope(&output, &names.envelope, &exact_envelope, receipt)?;
         receipt
     } else {
@@ -752,12 +863,22 @@ pub fn publish_worker_v3_load_readiness_v1_with_options(
         } else {
             persist_envelope(&output, &names, &exact_envelope, &mut faults)?
         };
+        let claim_bytes = claim.encode_canonical()?;
+        let claim_snapshot = if claim_present {
+            let snapshot = private_snapshot_required(&output, &names.claim)?;
+            compare_bytes_and_snapshot(&output, &names.claim, &claim_bytes, snapshot)?;
+            snapshot
+        } else {
+            persist_claim(&output, &names, &claim_bytes, &mut faults)?
+        };
         let receipt = make_receipt(
             &output,
+            claim,
             claim.plan().attempt(),
             backend,
             envelope,
             envelope_snapshot,
+            claim_snapshot,
         )?;
         persist_receipt(&output, &names, receipt, &mut faults)?;
         receipt
@@ -805,10 +926,13 @@ pub fn recover_worker_v3_load_readiness_v1(
     let names = ReadinessNames::new(claim.receipt())?;
     cleanup_temps(&output, &names)?;
     let (_, state) = exact_registry_state(&output, claim.plan().attempt(), claim.receipt())?;
-    let RegistryReadinessState::LoadReady(receipt) = state else {
+    let RegistryReadinessState::EnvelopeCustody(receipt) = state else {
         return Err(WorkerV3LoadReadinessErrorV1::AttemptState);
     };
     validate_durable_worker_v3_load_readiness_locked_v1(&output, claim.receipt(), receipt)?;
+    if !receipt.matches_durable_claim(claim)? {
+        return Err(WorkerV3LoadReadinessErrorV1::ReceiptMismatch);
+    }
     let _publication = validate_current_hsaco_publication_locked_v3(&output, claim)
         .map_err(WorkerV3LoadReadinessErrorV1::Claim)?;
     result(
@@ -816,6 +940,49 @@ pub fn recover_worker_v3_load_readiness_v1(
         &names,
         WorkerV3LoadReadinessOutcomeV1::Recovered,
         receipt,
+    )
+}
+
+/// Recovers terminal envelope custody using only the output directory and exact build attempt.
+///
+/// The registry selects one backend receipt; its terminal receipt authenticates a canonical claim
+/// sidecar, which then re-enters the ordinary exact-claim recovery path. No envelope schema is
+/// decoded here and no semantic, load, or launch authority is granted.
+pub fn recover_worker_v3_load_readiness_for_attempt_v1(
+    output_dir: &Path,
+    attempt: BuildAttempt,
+) -> Result<WorkerV3LoadReadinessResultV1, WorkerV3LoadReadinessErrorV1> {
+    let output = PinnedOutput::open_existing(output_dir)?;
+    let _lock = output.lock()?;
+    output.verify_path_identity()?;
+    let attempts = read_attempt_registry(&output)?;
+    let (_, record) = attempts
+        .record_for_attempt(attempt)
+        .ok_or(WorkerV3LoadReadinessErrorV1::AttemptState)?;
+    let Some(BackendReceiptV1::EnvelopeCustodyV3(backend, expected)) = record.backend_receipt
+    else {
+        return Err(WorkerV3LoadReadinessErrorV1::AttemptState);
+    };
+    let names = ReadinessNames::new(backend)?;
+    cleanup_temps(&output, &names)?;
+    let actual = validate_terminal_receipt(&output, &names, attempt, backend, None)?;
+    if actual != expected {
+        return Err(WorkerV3LoadReadinessErrorV1::ReceiptMismatch);
+    }
+    let claim = read_validated_claim_file(&output, &names, actual)?;
+    if claim.plan().attempt() != attempt
+        || claim.receipt() != backend
+        || !actual.matches_durable_claim(&claim)?
+    {
+        return Err(WorkerV3LoadReadinessErrorV1::ReceiptMismatch);
+    }
+    let _publication = validate_current_hsaco_publication_locked_v3(&output, &claim)
+        .map_err(WorkerV3LoadReadinessErrorV1::Claim)?;
+    result(
+        &output,
+        &names,
+        WorkerV3LoadReadinessOutcomeV1::Recovered,
+        actual,
     )
 }
 
@@ -831,7 +998,7 @@ pub(crate) fn validate_durable_worker_v3_load_readiness_locked_v1(
     }
     let names = ReadinessNames::new(backend)?;
     let (_, state) = exact_registry_state(output, expected.attempt(), backend)?;
-    if !matches!(state, RegistryReadinessState::LoadReady(actual) if actual == expected) {
+    if !matches!(state, RegistryReadinessState::EnvelopeCustody(actual) if actual == expected) {
         return Err(WorkerV3LoadReadinessErrorV1::ReceiptMismatch);
     }
     let actual = validate_terminal_receipt(
@@ -850,7 +1017,7 @@ pub(crate) fn validate_durable_worker_v3_load_readiness_locked_v1(
 #[derive(Clone, Copy)]
 enum RegistryReadinessState {
     Provenance,
-    LoadReady(WorkerV3LoadReadinessReceiptV1),
+    EnvelopeCustody(WorkerV3LoadReadinessReceiptV1),
 }
 
 fn exact_registry_state(
@@ -870,10 +1037,11 @@ fn exact_registry_state(
     }
     let state = match record.backend_receipt {
         Some(BackendReceiptV1::ProvenanceV3(actual)) if actual == backend => {
+            attempts.ensure_worker_v3_load_readiness_fits(stable_source, attempt, backend)?;
             RegistryReadinessState::Provenance
         }
-        Some(BackendReceiptV1::LoadReadyV3(actual, readiness)) if actual == backend => {
-            RegistryReadinessState::LoadReady(readiness)
+        Some(BackendReceiptV1::EnvelopeCustodyV3(actual, readiness)) if actual == backend => {
+            RegistryReadinessState::EnvelopeCustody(readiness)
         }
         _ => return Err(WorkerV3LoadReadinessErrorV1::AttemptState),
     };
@@ -889,27 +1057,40 @@ fn exact_registry_state(
 
 fn make_receipt(
     output: &PinnedOutput,
+    claim: &DurablePublishedHsacoClaimV3,
     attempt: BuildAttempt,
     backend: BackendPublicationReceiptV3,
     envelope: WorkerV3LoadEnvelopeBindingV1,
-    snapshot: rustix::fs::Stat,
+    envelope_snapshot: rustix::fs::Stat,
+    claim_snapshot: rustix::fs::Stat,
 ) -> Result<WorkerV3LoadReadinessReceiptV1, WorkerV3LoadReadinessErrorV1> {
+    let (durable_claim_sha256, durable_claim_length) = durable_claim_binding(claim)?;
     Ok(WorkerV3LoadReadinessReceiptV1 {
         attempt,
         backend_receipt_sha256: backend_receipt_identity(backend)?,
         envelope,
+        durable_claim_sha256,
+        durable_claim_length,
         output_directory: ExactFileIdentityV1 {
             device: output.device,
             inode: output.inode,
         },
         envelope_file: ExactFileIdentityV1 {
-            device: snapshot.st_dev,
-            inode: snapshot.st_ino,
+            device: envelope_snapshot.st_dev,
+            inode: envelope_snapshot.st_ino,
         },
-        envelope_mtime_seconds: snapshot.st_mtime,
-        envelope_mtime_nanoseconds: snapshot.st_mtime_nsec,
-        envelope_ctime_seconds: snapshot.st_ctime,
-        envelope_ctime_nanoseconds: snapshot.st_ctime_nsec,
+        envelope_mtime_seconds: envelope_snapshot.st_mtime,
+        envelope_mtime_nanoseconds: envelope_snapshot.st_mtime_nsec,
+        envelope_ctime_seconds: envelope_snapshot.st_ctime,
+        envelope_ctime_nanoseconds: envelope_snapshot.st_ctime_nsec,
+        durable_claim_file: ExactFileIdentityV1 {
+            device: claim_snapshot.st_dev,
+            inode: claim_snapshot.st_ino,
+        },
+        durable_claim_mtime_seconds: claim_snapshot.st_mtime,
+        durable_claim_mtime_nanoseconds: claim_snapshot.st_mtime_nsec,
+        durable_claim_ctime_seconds: claim_snapshot.st_ctime,
+        durable_claim_ctime_nanoseconds: claim_snapshot.st_ctime_nsec,
     })
 }
 
@@ -966,6 +1147,70 @@ fn persist_envelope(
         WorkerV3LoadReadinessFaultTimingV1::After,
     )?;
     faults.around(WorkerV3LoadReadinessBoundaryV1::SyncEnvelopeName, || {
+        fsync(&output.fd)
+            .map_err(std::io::Error::from)
+            .map_err(Into::into)
+    })?;
+    output.verify_path_identity()?;
+    Ok(named)
+}
+
+fn persist_claim(
+    output: &PinnedOutput,
+    names: &ReadinessNames,
+    bytes: &[u8],
+    faults: &mut FaultInjector,
+) -> Result<rustix::fs::Stat, WorkerV3LoadReadinessErrorV1> {
+    if bytes.is_empty() || bytes.len() > MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES_V3 {
+        return Err(WorkerV3LoadReadinessErrorV1::ReceiptMismatch);
+    }
+    let (temp, mut file) = create_temp(
+        output,
+        names,
+        "claim",
+        WorkerV3LoadReadinessBoundaryV1::CreateClaimTemp,
+        faults,
+    )?;
+    faults.around(WorkerV3LoadReadinessBoundaryV1::WriteClaimTemp, || {
+        file.write_all(bytes).map_err(Into::into)
+    })?;
+    faults.around(WorkerV3LoadReadinessBoundaryV1::SyncClaimTemp, || {
+        file.sync_all().map_err(Into::into)
+    })?;
+    let before = fstat(&file).map_err(std::io::Error::from)?;
+    if !is_private_file(&before) || usize::try_from(before.st_size).ok() != Some(bytes.len()) {
+        return Err(WorkerV3LoadReadinessErrorV1::FileChanged {
+            entry: PathBuf::from(&temp),
+        });
+    }
+    faults.hit(
+        WorkerV3LoadReadinessBoundaryV1::RenameClaim,
+        WorkerV3LoadReadinessFaultTimingV1::Before,
+    )?;
+    output.verify_path_identity()?;
+    renameat_with(
+        &output.fd,
+        &temp,
+        &output.fd,
+        &names.claim,
+        RenameFlags::NOREPLACE,
+    )
+    .map_err(std::io::Error::from)?;
+    let named = private_snapshot_required(output, &names.claim)?;
+    let descriptor = fstat(&file).map_err(std::io::Error::from)?;
+    if !same_private_inode(&before, &named)
+        || !same_private_inode(&before, &descriptor)
+        || !same_snapshot(&named, &descriptor)
+    {
+        return Err(WorkerV3LoadReadinessErrorV1::FileChanged {
+            entry: PathBuf::from(&names.claim),
+        });
+    }
+    faults.hit(
+        WorkerV3LoadReadinessBoundaryV1::RenameClaim,
+        WorkerV3LoadReadinessFaultTimingV1::After,
+    )?;
+    faults.around(WorkerV3LoadReadinessBoundaryV1::SyncClaimName, || {
         fsync(&output.fd)
             .map_err(std::io::Error::from)
             .map_err(Into::into)
@@ -1102,13 +1347,71 @@ fn validate_terminal_receipt(
         return Err(WorkerV3LoadReadinessErrorV1::ReceiptMismatch);
     }
     validate_envelope_file(output, names, receipt)?;
+    read_validated_claim_file(output, names, receipt)?;
     Ok(receipt)
+}
+
+fn read_validated_claim_file(
+    output: &PinnedOutput,
+    names: &ReadinessNames,
+    receipt: WorkerV3LoadReadinessReceiptV1,
+) -> Result<DurablePublishedHsacoClaimV3, WorkerV3LoadReadinessErrorV1> {
+    let expected_length = usize::try_from(receipt.durable_claim_length)
+        .ok()
+        .filter(|length| *length != 0 && *length <= MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES_V3)
+        .ok_or(WorkerV3LoadReadinessErrorV1::ReceiptMismatch)?;
+    let (mut file, before) = open_private_file(output, &names.claim, expected_length)?;
+    if before.st_dev != receipt.durable_claim_file.device
+        || before.st_ino != receipt.durable_claim_file.inode
+        || before.st_mtime != receipt.durable_claim_mtime_seconds
+        || before.st_mtime_nsec != receipt.durable_claim_mtime_nanoseconds
+        || before.st_ctime != receipt.durable_claim_ctime_seconds
+        || before.st_ctime_nsec != receipt.durable_claim_ctime_nanoseconds
+    {
+        return Err(WorkerV3LoadReadinessErrorV1::ReceiptMismatch);
+    }
+    let mut exact = fallible_vec(expected_length)?;
+    exact.resize(expected_length, 0);
+    file.read_exact(&mut exact)?;
+    finish_private_read(output, &names.claim, &file, &before)?;
+    if <[u8; 32]>::from(Sha256::digest(&exact)) != receipt.durable_claim_sha256 {
+        return Err(WorkerV3LoadReadinessErrorV1::ReceiptMismatch);
+    }
+    let claim = DurablePublishedHsacoClaimV3::decode_canonical(&exact)?;
+    if !receipt.matches_durable_claim(&claim)? {
+        return Err(WorkerV3LoadReadinessErrorV1::ReceiptMismatch);
+    }
+    Ok(claim)
 }
 
 fn validate_envelope_file(
     output: &PinnedOutput,
     names: &ReadinessNames,
     receipt: WorkerV3LoadReadinessReceiptV1,
+) -> Result<(), WorkerV3LoadReadinessErrorV1> {
+    inspect_validated_envelope_file(output, names, receipt, |_| Ok(()))
+}
+
+fn read_validated_envelope_file(
+    output: &PinnedOutput,
+    names: &ReadinessNames,
+    receipt: WorkerV3LoadReadinessReceiptV1,
+) -> Result<Vec<u8>, WorkerV3LoadReadinessErrorV1> {
+    let expected_length = usize::try_from(receipt.envelope.byte_length)
+        .map_err(|_| WorkerV3LoadReadinessErrorV1::EnvelopeMismatch)?;
+    let mut exact = fallible_vec(expected_length)?;
+    inspect_validated_envelope_file(output, names, receipt, |chunk| {
+        exact.extend_from_slice(chunk);
+        Ok(())
+    })?;
+    Ok(exact)
+}
+
+fn inspect_validated_envelope_file(
+    output: &PinnedOutput,
+    names: &ReadinessNames,
+    receipt: WorkerV3LoadReadinessReceiptV1,
+    mut inspect_chunk: impl FnMut(&[u8]) -> Result<(), WorkerV3LoadReadinessErrorV1>,
 ) -> Result<(), WorkerV3LoadReadinessErrorV1> {
     let expected_length = usize::try_from(receipt.envelope.byte_length)
         .map_err(|_| WorkerV3LoadReadinessErrorV1::EnvelopeMismatch)?;
@@ -1129,6 +1432,7 @@ fn validate_envelope_file(
         let length = remaining.min(buffer.len());
         file.read_exact(&mut buffer[..length])?;
         digest.update(&buffer[..length]);
+        inspect_chunk(&buffer[..length])?;
         remaining -= length;
     }
     finish_private_read(output, &names.envelope, &file, &before)?;
@@ -1199,6 +1503,8 @@ fn open_private_file(
         Err(error) if error == rustix::io::Errno::NOENT => {
             return Err(if entry.ends_with(ENVELOPE_SUFFIX_V1) {
                 WorkerV3LoadReadinessErrorV1::MissingEnvelope
+            } else if entry.ends_with(CLAIM_SUFFIX_V1) {
+                WorkerV3LoadReadinessErrorV1::MissingClaim
             } else {
                 WorkerV3LoadReadinessErrorV1::MissingReceipt
             });
@@ -1253,6 +1559,8 @@ fn private_snapshot_required(
     private_snapshot_optional(output, entry)?.ok_or_else(|| {
         if entry.ends_with(ENVELOPE_SUFFIX_V1) {
             WorkerV3LoadReadinessErrorV1::MissingEnvelope
+        } else if entry.ends_with(CLAIM_SUFFIX_V1) {
+            WorkerV3LoadReadinessErrorV1::MissingClaim
         } else {
             WorkerV3LoadReadinessErrorV1::MissingReceipt
         }
@@ -1262,7 +1570,7 @@ fn private_snapshot_required(
 fn cleanup_temps(
     output: &PinnedOutput,
     names: &ReadinessNames,
-) -> Result<(), WorkerV3LoadReadinessErrorV1> {
+) -> Result<usize, WorkerV3LoadReadinessErrorV1> {
     let directory = rustix::io::fcntl_dupfd_cloexec(&output.fd, 0).map_err(std::io::Error::from)?;
     let mut entries = rustix::fs::Dir::read_from(&directory).map_err(std::io::Error::from)?;
     let mut scanned = 0_usize;
@@ -1309,20 +1617,112 @@ fn cleanup_temps(
         })?;
         candidates.push((path, snapshot));
     }
-    if candidates.is_empty() {
-        return Ok(());
-    }
     output.verify_path_identity()?;
     for (entry, snapshot) in candidates {
-        let current =
-            statat(&output.fd, &entry, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
-        if !same_snapshot(&snapshot, &current) {
-            return Err(WorkerV3LoadReadinessErrorV1::FileChanged { entry });
-        }
-        unlinkat(&output.fd, &entry, AtFlags::empty()).map_err(std::io::Error::from)?;
+        quarantine_and_unlink_temp(output, names, &entry, &snapshot)?;
+        scanned -= 1;
     }
     fsync(&output.fd).map_err(std::io::Error::from)?;
     output.verify_path_identity()?;
+    Ok(scanned)
+}
+
+fn quarantine_and_unlink_temp(
+    output: &PinnedOutput,
+    names: &ReadinessNames,
+    entry: &Path,
+    snapshot: &rustix::fs::Stat,
+) -> Result<(), WorkerV3LoadReadinessErrorV1> {
+    let exact_length = usize::try_from(snapshot.st_size)
+        .ok()
+        .filter(|length| *length <= MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1)
+        .ok_or_else(|| WorkerV3LoadReadinessErrorV1::InvalidPrivateEntry {
+            entry: entry.to_path_buf(),
+        })?;
+    let entry_name =
+        entry
+            .to_str()
+            .ok_or_else(|| WorkerV3LoadReadinessErrorV1::InvalidPrivateEntry {
+                entry: entry.to_path_buf(),
+            })?;
+    let (file, pinned) = open_private_file(output, entry_name, exact_length)?;
+    if !same_snapshot(snapshot, &pinned) {
+        return Err(WorkerV3LoadReadinessErrorV1::FileChanged {
+            entry: entry.to_path_buf(),
+        });
+    }
+
+    let quarantine = reserve_cleanup_quarantine_name(output, names, entry)?;
+    let named =
+        statat(&output.fd, &quarantine, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
+    let descriptor = fstat(&file).map_err(std::io::Error::from)?;
+    if !same_private_inode(snapshot, &named)
+        || !same_private_inode(snapshot, &descriptor)
+        || !same_snapshot(&named, &descriptor)
+    {
+        return Err(WorkerV3LoadReadinessErrorV1::FileChanged { entry: quarantine });
+    }
+
+    unlinkat(&output.fd, &quarantine, AtFlags::empty()).map_err(std::io::Error::from)?;
+    let unlinked = fstat(&file).map_err(std::io::Error::from)?;
+    if unlinked.st_dev != snapshot.st_dev
+        || unlinked.st_ino != snapshot.st_ino
+        || unlinked.st_nlink != 0
+    {
+        return Err(WorkerV3LoadReadinessErrorV1::FileChanged { entry: quarantine });
+    }
+    Ok(())
+}
+
+fn reserve_cleanup_quarantine_name(
+    output: &PinnedOutput,
+    names: &ReadinessNames,
+    source: &Path,
+) -> Result<PathBuf, WorkerV3LoadReadinessErrorV1> {
+    let start = NEXT_TEMP_ID.fetch_add(MAX_TEMP_ATTEMPTS, Ordering::Relaxed);
+    for offset in 0..MAX_TEMP_ATTEMPTS {
+        let name = format!(
+            "{}cleanup-{}-{}-{}",
+            names.temp_prefix,
+            std::process::id(),
+            start.wrapping_add(offset),
+            offset
+        );
+        match renameat_with(
+            &output.fd,
+            source,
+            &output.fd,
+            &name,
+            RenameFlags::NOREPLACE,
+        ) {
+            Ok(()) => return Ok(PathBuf::from(name)),
+            Err(error) if error == rustix::io::Errno::EXIST => {}
+            Err(error) => return Err(std::io::Error::from(error).into()),
+        }
+    }
+    Err(WorkerV3LoadReadinessErrorV1::TemporaryNameExhausted)
+}
+
+fn ensure_publication_headroom(
+    current_entries: usize,
+    envelope_present: bool,
+    claim_present: bool,
+    receipt_present: bool,
+) -> Result<(), WorkerV3LoadReadinessErrorV1> {
+    let missing_finals = usize::from(!envelope_present)
+        + usize::from(!claim_present)
+        + usize::from(!receipt_present);
+    let required = missing_finals
+        .checked_add(1)
+        .and_then(|additional| current_entries.checked_add(additional))
+        .ok_or(WorkerV3LoadReadinessErrorV1::DirectoryEntryLimitExceeded {
+            maximum: MAX_OUTPUT_ENTRIES,
+        })?;
+    if required > MAX_OUTPUT_ENTRIES {
+        return Err(WorkerV3LoadReadinessErrorV1::DirectoryEntryLimitExceeded {
+            maximum: MAX_OUTPUT_ENTRIES,
+        });
+    }
     Ok(())
 }
 
@@ -1354,15 +1754,20 @@ fn result(
     outcome: WorkerV3LoadReadinessOutcomeV1,
     receipt: WorkerV3LoadReadinessReceiptV1,
 ) -> Result<WorkerV3LoadReadinessResultV1, WorkerV3LoadReadinessErrorV1> {
+    let claim = read_validated_claim_file(output, names, receipt)?;
+    let exact_envelope = read_validated_envelope_file(output, names, receipt)?;
     Ok(WorkerV3LoadReadinessResultV1 {
         outcome,
         receipt,
+        claim,
+        exact_envelope,
         envelope_path: output.display_path.join(&names.envelope),
     })
 }
 
 struct ReadinessNames {
     envelope: String,
+    claim: String,
     receipt: String,
     temp_prefix: String,
 }
@@ -1376,6 +1781,7 @@ impl ReadinessNames {
         let base = format!("{FILE_PREFIX_V1}{}", crate::encode_hex(&key));
         Ok(Self {
             envelope: format!("{base}{ENVELOPE_SUFFIX_V1}"),
+            claim: format!("{base}{CLAIM_SUFFIX_V1}"),
             receipt: format!("{base}{RECEIPT_SUFFIX_V1}"),
             temp_prefix: format!("{base}{TEMP_MARKER_V1}"),
         })
@@ -1428,6 +1834,18 @@ fn backend_receipt_identity(
         },
     )?;
     Ok(domain_hash(BACKEND_RECEIPT_IDENTITY_DOMAIN_V1, &bytes))
+}
+
+fn durable_claim_binding(
+    claim: &DurablePublishedHsacoClaimV3,
+) -> Result<([u8; 32], u64), WorkerV3LoadReadinessErrorV1> {
+    let bytes = claim.encode_canonical()?;
+    let length = u64::try_from(bytes.len())
+        .map_err(|_| WorkerV3LoadReadinessCodecErrorV1::InvalidDurableClaimLength)?;
+    if length == 0 {
+        return Err(WorkerV3LoadReadinessCodecErrorV1::InvalidDurableClaimLength.into());
+    }
+    Ok((Sha256::digest(&bytes).into(), length))
 }
 
 fn push_attempt(bytes: &mut Vec<u8>, attempt: BuildAttempt) {
@@ -1563,6 +1981,8 @@ mod tests {
             backend_receipt_sha256: backend_receipt_identity(backend).unwrap(),
             envelope: WorkerV3LoadEnvelopeBindingV1::from_exact_bytes(b"opaque V3 envelope")
                 .unwrap(),
+            durable_claim_sha256: [0x71; 32],
+            durable_claim_length: 0x72,
             output_directory: ExactFileIdentityV1 {
                 device: 0x1112_1314_1516_1718,
                 inode: 0x2122_2324_2526_2728,
@@ -1575,6 +1995,14 @@ mod tests {
             envelope_mtime_nanoseconds: 0x1112_1314_1516_1718,
             envelope_ctime_seconds: 0x2122_2324_2526_2728,
             envelope_ctime_nanoseconds: 0x3132_3334_3536_3738,
+            durable_claim_file: ExactFileIdentityV1 {
+                device: 0x5152_5354_5556_5758,
+                inode: 0x6162_6364_6566_6768,
+            },
+            durable_claim_mtime_seconds: 0x4142_4344_4546_4748,
+            durable_claim_mtime_nanoseconds: 0x5152_5354_5556_5758,
+            durable_claim_ctime_seconds: 0x6162_6364_6566_6768,
+            durable_claim_ctime_nanoseconds: 0x7172_7374_7576_7778,
         }
     }
 
@@ -1738,7 +2166,7 @@ mod tests {
                 .record_exact("path:/src/load-ready.rs", expected_attempt)
                 .unwrap()
                 .backend_receipt,
-            Some(BackendReceiptV1::LoadReadyV3(backend, readiness))
+            Some(BackendReceiptV1::EnvelopeCustodyV3(backend, readiness))
         );
     }
 
@@ -1763,5 +2191,23 @@ mod tests {
         assert!(!receipt.establishes_hsa_readiness());
         assert!(!receipt.grants_load_authority());
         assert!(!receipt.grants_launch_authority());
+    }
+
+    #[test]
+    fn publication_headroom_reserves_three_finals_and_one_transient_entry() {
+        assert!(ensure_publication_headroom(MAX_OUTPUT_ENTRIES - 4, false, false, false).is_ok());
+        assert!(matches!(
+            ensure_publication_headroom(MAX_OUTPUT_ENTRIES - 3, false, false, false),
+            Err(WorkerV3LoadReadinessErrorV1::DirectoryEntryLimitExceeded {
+                maximum: MAX_OUTPUT_ENTRIES
+            })
+        ));
+        assert!(ensure_publication_headroom(MAX_OUTPUT_ENTRIES - 1, true, true, true).is_ok());
+        assert!(matches!(
+            ensure_publication_headroom(MAX_OUTPUT_ENTRIES, true, true, true),
+            Err(WorkerV3LoadReadinessErrorV1::DirectoryEntryLimitExceeded {
+                maximum: MAX_OUTPUT_ENTRIES
+            })
+        ));
     }
 }

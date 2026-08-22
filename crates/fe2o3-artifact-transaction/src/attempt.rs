@@ -25,7 +25,7 @@ const BACKEND_RECEIPT_PROVENANCE_V2: u8 = 4;
 const BACKEND_RECEIPT_PENDING_PROVENANCE_V2: u8 = 5;
 const BACKEND_RECEIPT_PROVENANCE_V3: u8 = 6;
 const BACKEND_RECEIPT_PENDING_PROVENANCE_V3: u8 = 7;
-const BACKEND_RECEIPT_LOAD_READY_V3: u8 = 8;
+const BACKEND_RECEIPT_ENVELOPE_CUSTODY_V3: u8 = 8;
 const BACKEND_PROVENANCE_RECEIPT_BYTES_V1: usize = 7 * 32;
 pub(crate) const COMPILER_CLOSURE_BYTES_V2: usize = (6 * 32) + 2 + 32;
 const BACKEND_PROVENANCE_RECEIPT_BYTES_V2: usize =
@@ -589,7 +589,7 @@ pub(crate) enum BackendReceiptV1 {
     ProvenanceV2(BackendPublicationReceiptV2),
     PendingProvenanceV3(BackendPublicationReceiptV3),
     ProvenanceV3(BackendPublicationReceiptV3),
-    LoadReadyV3(BackendPublicationReceiptV3, WorkerV3LoadReadinessReceiptV1),
+    EnvelopeCustodyV3(BackendPublicationReceiptV3, WorkerV3LoadReadinessReceiptV1),
 }
 
 impl BackendReceiptV1 {
@@ -600,7 +600,7 @@ impl BackendReceiptV1 {
                 | Self::Provenance(_)
                 | Self::ProvenanceV2(_)
                 | Self::ProvenanceV3(_)
-                | Self::LoadReadyV3(_, _)
+                | Self::EnvelopeCustodyV3(_, _)
         )
     }
 }
@@ -800,8 +800,8 @@ impl AttemptRegistry {
                     bytes.push(BACKEND_RECEIPT_PENDING_PROVENANCE_V3);
                     push_backend_publication_receipt_v3(&mut bytes, receipt)?;
                 }
-                Some(BackendReceiptV1::LoadReadyV3(receipt, readiness)) => {
-                    bytes.push(BACKEND_RECEIPT_LOAD_READY_V3);
+                Some(BackendReceiptV1::EnvelopeCustodyV3(receipt, readiness)) => {
+                    bytes.push(BACKEND_RECEIPT_ENVELOPE_CUSTODY_V3);
                     push_backend_publication_receipt_v3(&mut bytes, receipt)?;
                     bytes.extend_from_slice(&readiness.encode_canonical()?);
                 }
@@ -865,7 +865,7 @@ impl AttemptRegistry {
                         decode_backend_publication_receipt_v3(&mut decoder)?,
                     ))
                 }
-                BACKEND_RECEIPT_LOAD_READY_V3 => {
+                BACKEND_RECEIPT_ENVELOPE_CUSTODY_V3 => {
                     let receipt = decode_backend_publication_receipt_v3(&mut decoder)?;
                     let readiness = WorkerV3LoadReadinessReceiptV1::decode_canonical(
                         decoder.take(crate::MAX_WORKER_V3_LOAD_READINESS_RECEIPT_BYTES_V1)?,
@@ -873,7 +873,7 @@ impl AttemptRegistry {
                     if !readiness.matches_backend_receipt(receipt)? {
                         return Err(AttemptCodecError::WorkerV3LoadReadinessMismatch);
                     }
-                    Some(BackendReceiptV1::LoadReadyV3(receipt, readiness))
+                    Some(BackendReceiptV1::EnvelopeCustodyV3(receipt, readiness))
                 }
                 value => return Err(AttemptCodecError::InvalidBackendReceiptTag(value)),
             };
@@ -1133,17 +1133,44 @@ impl AttemptRegistry {
         if !readiness.matches_backend_receipt(receipt)? || readiness.attempt() != attempt {
             return Err(AttemptCodecError::WorkerV3LoadReadinessMismatch);
         }
+        self.ensure_worker_v3_load_readiness_fits(stable_source, attempt, receipt)?;
         let record = self.exact_record_mut(stable_source, attempt)?;
         match record.backend_receipt {
             Some(BackendReceiptV1::ProvenanceV3(existing)) if existing == receipt => {
-                record.backend_receipt = Some(BackendReceiptV1::LoadReadyV3(receipt, readiness));
+                record.backend_receipt =
+                    Some(BackendReceiptV1::EnvelopeCustodyV3(receipt, readiness));
                 Ok(())
             }
-            Some(BackendReceiptV1::LoadReadyV3(existing, durable))
+            Some(BackendReceiptV1::EnvelopeCustodyV3(existing, durable))
                 if existing == receipt && durable == readiness =>
             {
                 Ok(())
             }
+            Some(_) => Err(AttemptCodecError::BackendAlreadySeen),
+            None => Err(AttemptCodecError::InvalidTransition),
+        }
+    }
+
+    pub(crate) fn ensure_worker_v3_load_readiness_fits(
+        &self,
+        stable_source: &str,
+        attempt: BuildAttempt,
+        receipt: BackendPublicationReceiptV3,
+    ) -> Result<(), AttemptCodecError> {
+        receipt.validate()?;
+        let record = self.record_exact(stable_source, attempt)?;
+        match record.backend_receipt {
+            Some(BackendReceiptV1::ProvenanceV3(existing)) if existing == receipt => {
+                let projected = self
+                    .canonical_size()?
+                    .checked_add(crate::MAX_WORKER_V3_LOAD_READINESS_RECEIPT_BYTES_V1)
+                    .ok_or(AttemptCodecError::RegistryTooLarge)?;
+                if projected > MAX_ATTEMPT_BYTES {
+                    return Err(AttemptCodecError::RegistryTooLarge);
+                }
+                Ok(())
+            }
+            Some(BackendReceiptV1::EnvelopeCustodyV3(existing, _)) if existing == receipt => Ok(()),
             Some(_) => Err(AttemptCodecError::BackendAlreadySeen),
             None => Err(AttemptCodecError::InvalidTransition),
         }
@@ -1589,7 +1616,7 @@ fn record_size(
             Some(BackendReceiptV1::PendingProvenanceV3(_) | BackendReceiptV1::ProvenanceV3(_)) => {
                 BACKEND_PROVENANCE_RECEIPT_BYTES_V3
             }
-            Some(BackendReceiptV1::LoadReadyV3(_, _)) => {
+            Some(BackendReceiptV1::EnvelopeCustodyV3(_, _)) => {
                 BACKEND_PROVENANCE_RECEIPT_BYTES_V3
                     + crate::MAX_WORKER_V3_LOAD_READINESS_RECEIPT_BYTES_V1
             }
@@ -2063,6 +2090,63 @@ mod tests {
         registry
             .record_backend_publication_receipt_v3("path:v3", attempt, receipt)
             .unwrap();
+    }
+
+    #[test]
+    fn load_readiness_capacity_is_preflighted_before_persistence() {
+        let mut registry = AttemptRegistry::default();
+        let attempt = start(&mut registry, "path:v3-capacity", SESSION_A);
+        registry
+            .transition_building("path:v3-capacity", attempt)
+            .unwrap();
+        let receipt = provenance_receipt_v3(0x62);
+        registry
+            .claim_backend_with_pending_receipt_v3("path:v3-capacity", attempt, receipt)
+            .unwrap();
+        registry
+            .record_backend_publication_receipt_v3("path:v3-capacity", attempt, receipt)
+            .unwrap();
+
+        let readiness_bytes = crate::MAX_WORKER_V3_LOAD_READINESS_RECEIPT_BYTES_V1;
+        for index in 0..MAX_ATTEMPT_RECORDS {
+            let remaining = MAX_ATTEMPT_BYTES - registry.canonical_size().unwrap();
+            if remaining < readiness_bytes {
+                break;
+            }
+            let prefix = format!("path:capacity-{index:04}:");
+            let minimum = ATTEMPT_RECORD_FIXED_BYTES + prefix.len() + 1;
+            let maximum =
+                ATTEMPT_RECORD_FIXED_BYTES + MAX_STABLE_SOURCE_BYTES + MAX_CRATE_NAME_BYTES;
+            let record_bytes = if remaining <= maximum + readiness_bytes - 1 {
+                remaining.saturating_sub(readiness_bytes - 1).max(minimum)
+            } else {
+                maximum
+            };
+            let payload_bytes = record_bytes - ATTEMPT_RECORD_FIXED_BYTES;
+            let crate_len = MAX_CRATE_NAME_BYTES.min(payload_bytes - prefix.len());
+            let source_len = payload_bytes - crate_len;
+            let source = format!("{prefix}{}", "s".repeat(source_len - prefix.len()));
+            let crate_name = "c".repeat(crate_len);
+            assert!(matches!(
+                registry
+                    .start_or_resume(&source, &crate_name, INVOCATION_A, SESSION_A)
+                    .unwrap(),
+                StartAttemptOutcome::New(_)
+            ));
+        }
+
+        assert!(MAX_ATTEMPT_BYTES - registry.canonical_size().unwrap() < readiness_bytes);
+        assert_eq!(
+            registry.ensure_worker_v3_load_readiness_fits("path:v3-capacity", attempt, receipt,),
+            Err(AttemptCodecError::RegistryTooLarge)
+        );
+        assert!(matches!(
+            registry
+                .record_exact("path:v3-capacity", attempt)
+                .unwrap()
+                .backend_receipt,
+            Some(BackendReceiptV1::ProvenanceV3(actual)) if actual == receipt
+        ));
     }
 
     #[test]

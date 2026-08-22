@@ -21,6 +21,7 @@ use super::durable_link_publication::{
     DurableCurrentLinkPublicationLeaseV1, DurableFileIdentityV1, DurableLinkPublicationError,
     DurableLinkPublicationPlanV1, DurablePublishedFileBindingV1,
     MAX_DURABLE_FINALIZED_ARTIFACT_BYTES, reacquire_current_publication_lease_locked,
+    recover_durable_published_file_binding_locked,
 };
 use super::{
     AtomicPublicationIdentityV1, BackendPublicationReceiptV1, BackendPublicationReceiptV2,
@@ -1212,6 +1213,29 @@ pub(crate) fn validate_current_hsaco_publication_locked_v3(
         .map_err(reacquisition_error_v3)
 }
 
+pub(crate) fn validate_current_hsaco_publication_receipt_locked_v3(
+    output: &PinnedOutput,
+    plan: DurableLinkPublicationPlanV1,
+    receipt: BackendPublicationReceiptV3,
+) -> Result<
+    (
+        DurablePublishedHsacoClaimV3,
+        DurableCurrentLinkPublicationLeaseV1,
+    ),
+    DurablePublishedClaimReacquisitionErrorV3,
+> {
+    let files = recover_durable_published_file_binding_locked(output, plan)
+        .map_err(ReacquisitionError::Publication)
+        .map_err(reacquisition_error_v3)?
+        .ok_or(DurablePublishedClaimReacquisitionErrorV3::ReceiptMismatch)?;
+    let upstream =
+        UpstreamCodeObjectEvidenceIdentityV1::from_bytes(receipt.upstream_evidence_identity());
+    let claim = DurablePublishedHsacoClaimV3::new(plan, upstream, receipt, files)
+        .map_err(DurablePublishedClaimReacquisitionErrorV3::InvalidClaim)?;
+    let lease = validate_current_hsaco_publication_locked_v3(output, &claim)?;
+    Ok((claim, lease))
+}
+
 enum ReacquisitionError<C> {
     Busy,
     InvalidClaim(C),
@@ -1310,7 +1334,7 @@ impl ClaimSchema for ClaimSchemaV3 {
         matches!(
             receipt,
             Some(BackendReceiptV1::ProvenanceV3(actual))
-                | Some(BackendReceiptV1::LoadReadyV3(actual, _))
+                | Some(BackendReceiptV1::EnvelopeCustodyV3(actual, _))
                 if actual == claim.receipt
         )
     }

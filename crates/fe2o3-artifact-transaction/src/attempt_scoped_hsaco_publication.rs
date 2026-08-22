@@ -1535,7 +1535,7 @@ impl PublicationSchema for PublicationSchemaV1 {
                 | BackendReceiptV1::ProvenanceV2(_)
                 | BackendReceiptV1::PendingProvenanceV3(_)
                 | BackendReceiptV1::ProvenanceV3(_)
-                | BackendReceiptV1::LoadReadyV3(_, _),
+                | BackendReceiptV1::EnvelopeCustodyV3(_, _),
             ) => SchemaReceiptState::Foreign,
         }
     }
@@ -1618,7 +1618,7 @@ impl PublicationSchema for PublicationSchemaV2 {
                 | BackendReceiptV1::Provenance(_)
                 | BackendReceiptV1::PendingProvenanceV3(_)
                 | BackendReceiptV1::ProvenanceV3(_)
-                | BackendReceiptV1::LoadReadyV3(_, _),
+                | BackendReceiptV1::EnvelopeCustodyV3(_, _),
             ) => SchemaReceiptState::Foreign,
         }
     }
@@ -1701,7 +1701,7 @@ impl PublicationSchema for PublicationSchemaV3 {
             Some(BackendReceiptV1::ProvenanceV3(receipt)) => {
                 SchemaReceiptState::Provenance(receipt)
             }
-            Some(BackendReceiptV1::LoadReadyV3(receipt, _)) => {
+            Some(BackendReceiptV1::EnvelopeCustodyV3(receipt, _)) => {
                 SchemaReceiptState::Provenance(receipt)
             }
             Some(
@@ -2274,7 +2274,7 @@ pub fn read_backend_publication_receipt_v1(
             | BackendReceiptV1::ProvenanceV2(_)
             | BackendReceiptV1::PendingProvenanceV3(_)
             | BackendReceiptV1::ProvenanceV3(_)
-            | BackendReceiptV1::LoadReadyV3(_, _),
+            | BackendReceiptV1::EnvelopeCustodyV3(_, _),
         ) => {
             return Err(build_attempt_error(
                 "build attempt contains an incompatible protected backend receipt",
@@ -2322,7 +2322,7 @@ pub fn read_backend_publication_receipt_v2(
             | BackendReceiptV1::Provenance(_)
             | BackendReceiptV1::PendingProvenanceV3(_)
             | BackendReceiptV1::ProvenanceV3(_)
-            | BackendReceiptV1::LoadReadyV3(_, _),
+            | BackendReceiptV1::EnvelopeCustodyV3(_, _),
         ) => Err(AttemptScopedHsacoPublicationErrorV2::IncompatibleReceiptVersion),
     }
 }
@@ -2360,7 +2360,7 @@ pub fn read_backend_publication_receipt_v3(
         Some(BackendReceiptV1::ProvenanceV3(receipt)) => {
             Ok(PersistedBackendReceiptV3::Provenance(receipt))
         }
-        Some(BackendReceiptV1::LoadReadyV3(receipt, _)) => {
+        Some(BackendReceiptV1::EnvelopeCustodyV3(receipt, _)) => {
             Ok(PersistedBackendReceiptV3::Provenance(receipt))
         }
         Some(

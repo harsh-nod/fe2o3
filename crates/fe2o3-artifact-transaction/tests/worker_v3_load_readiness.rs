@@ -15,7 +15,8 @@ use fe2o3_artifact_transaction::{
     clear_worker_v3_publication_intent_v1, persist_worker_v3_publication_intent_v1,
     publish_exact_hsaco_evidence_for_attempt_v3, publish_worker_v3_load_readiness_v1,
     publish_worker_v3_load_readiness_v1_with_options, recover_published_hsaco_claim_for_attempt_v3,
-    recover_worker_v3_load_readiness_v1,
+    recover_worker_v3_load_readiness_for_attempt_v1, recover_worker_v3_load_readiness_v1,
+    recover_worker_v3_publication_intent_v1,
     retire_worker_v3_publication_intent_after_load_readiness_v1,
 };
 use fe2o3_build_authority::CompilerClosureV2;
@@ -27,7 +28,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const CHILD_OUTPUT: &str = "FE2O3_LOAD_READY_CHILD_OUTPUT";
-const CHILD_CLAIM: &str = "FE2O3_LOAD_READY_CHILD_CLAIM";
+const CHILD_ATTEMPT: &str = "FE2O3_LOAD_READY_CHILD_ATTEMPT";
 
 static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -236,6 +237,19 @@ fn readiness_entry(output: &Path, suffix: &str) -> PathBuf {
     matches.pop().unwrap()
 }
 
+fn publication_artifact(output: &Path) -> PathBuf {
+    let mut matches = fs::read_dir(output)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            let name = path.file_name().unwrap().to_string_lossy();
+            name.starts_with(".fe2o3-link-artifact-v1-") && name.ends_with(".bin")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(matches.len(), 1, "expected one published artifact");
+    matches.pop().unwrap()
+}
+
 #[test]
 fn exact_publication_retry_and_restart_recovery_are_idempotent_and_inert() {
     let state = setup(1);
@@ -268,58 +282,50 @@ fn exact_publication_retry_and_restart_recovery_are_idempotent_and_inert() {
 
 #[test]
 fn crash_sides_reconcile_to_one_exact_terminal_receipt() {
-    let points = [
-        WorkerV3LoadReadinessFaultPointV1 {
-            boundary: WorkerV3LoadReadinessBoundaryV1::SyncEnvelopeTemp,
-            timing: WorkerV3LoadReadinessFaultTimingV1::After,
-        },
-        WorkerV3LoadReadinessFaultPointV1 {
-            boundary: WorkerV3LoadReadinessBoundaryV1::RenameEnvelope,
-            timing: WorkerV3LoadReadinessFaultTimingV1::After,
-        },
-        WorkerV3LoadReadinessFaultPointV1 {
-            boundary: WorkerV3LoadReadinessBoundaryV1::SyncEnvelopeName,
-            timing: WorkerV3LoadReadinessFaultTimingV1::After,
-        },
-        WorkerV3LoadReadinessFaultPointV1 {
-            boundary: WorkerV3LoadReadinessBoundaryV1::SyncReceiptTemp,
-            timing: WorkerV3LoadReadinessFaultTimingV1::After,
-        },
-        WorkerV3LoadReadinessFaultPointV1 {
-            boundary: WorkerV3LoadReadinessBoundaryV1::RenameReceipt,
-            timing: WorkerV3LoadReadinessFaultTimingV1::After,
-        },
-        WorkerV3LoadReadinessFaultPointV1 {
-            boundary: WorkerV3LoadReadinessBoundaryV1::SyncReceiptName,
-            timing: WorkerV3LoadReadinessFaultTimingV1::After,
-        },
-        WorkerV3LoadReadinessFaultPointV1 {
-            boundary: WorkerV3LoadReadinessBoundaryV1::CommitAttemptRegistry,
-            timing: WorkerV3LoadReadinessFaultTimingV1::Before,
-        },
-        WorkerV3LoadReadinessFaultPointV1 {
-            boundary: WorkerV3LoadReadinessBoundaryV1::CommitAttemptRegistry,
-            timing: WorkerV3LoadReadinessFaultTimingV1::After,
-        },
+    let boundaries = [
+        WorkerV3LoadReadinessBoundaryV1::CreateEnvelopeTemp,
+        WorkerV3LoadReadinessBoundaryV1::WriteEnvelopeTemp,
+        WorkerV3LoadReadinessBoundaryV1::SyncEnvelopeTemp,
+        WorkerV3LoadReadinessBoundaryV1::RenameEnvelope,
+        WorkerV3LoadReadinessBoundaryV1::SyncEnvelopeName,
+        WorkerV3LoadReadinessBoundaryV1::CreateClaimTemp,
+        WorkerV3LoadReadinessBoundaryV1::WriteClaimTemp,
+        WorkerV3LoadReadinessBoundaryV1::SyncClaimTemp,
+        WorkerV3LoadReadinessBoundaryV1::RenameClaim,
+        WorkerV3LoadReadinessBoundaryV1::SyncClaimName,
+        WorkerV3LoadReadinessBoundaryV1::CreateReceiptTemp,
+        WorkerV3LoadReadinessBoundaryV1::WriteReceiptTemp,
+        WorkerV3LoadReadinessBoundaryV1::SyncReceiptTemp,
+        WorkerV3LoadReadinessBoundaryV1::RenameReceipt,
+        WorkerV3LoadReadinessBoundaryV1::SyncReceiptName,
+        WorkerV3LoadReadinessBoundaryV1::CommitAttemptRegistry,
     ];
-    for (index, point) in points.into_iter().enumerate() {
-        let state = setup(10 + index as u8);
-        let error = publish_worker_v3_load_readiness_v1_with_options(
-            &state.output(),
-            &state.claim,
-            state.authority(),
-            state.envelope.clone(),
-            WorkerV3LoadReadinessOptionsV1 {
-                injected_crash: Some(point),
-            },
-        )
-        .unwrap_err();
-        assert!(
-            matches!(error, WorkerV3LoadReadinessErrorV1::InjectedCrash(actual) if actual == point)
-        );
-        let retry = state.publish_readiness();
-        assert_eq!(fs::read(retry.envelope_path()).unwrap(), state.envelope);
-        recover_worker_v3_load_readiness_v1(&state.output(), &state.claim).unwrap();
+    let mut index = 0_u8;
+    for boundary in boundaries {
+        for timing in [
+            WorkerV3LoadReadinessFaultTimingV1::Before,
+            WorkerV3LoadReadinessFaultTimingV1::After,
+        ] {
+            let point = WorkerV3LoadReadinessFaultPointV1 { boundary, timing };
+            let state = setup(10 + index);
+            index += 1;
+            let error = publish_worker_v3_load_readiness_v1_with_options(
+                &state.output(),
+                &state.claim,
+                state.authority(),
+                state.envelope.clone(),
+                WorkerV3LoadReadinessOptionsV1 {
+                    injected_crash: Some(point),
+                },
+            )
+            .unwrap_err();
+            assert!(
+                matches!(error, WorkerV3LoadReadinessErrorV1::InjectedCrash(actual) if actual == point)
+            );
+            let retry = state.publish_readiness();
+            assert_eq!(retry.exact_envelope_bytes(), state.envelope);
+            recover_worker_v3_load_readiness_v1(&state.output(), &state.claim).unwrap();
+        }
     }
 }
 
@@ -391,7 +397,18 @@ fn missing_and_inode_substituted_terminal_files_fail_closed() {
         Err(WorkerV3LoadReadinessErrorV1::MissingReceipt)
     ));
 
-    let substituted = setup(42);
+    let missing_claim = setup(42);
+    missing_claim.publish_readiness();
+    fs::remove_file(readiness_entry(&missing_claim.output(), ".claim")).unwrap();
+    assert!(matches!(
+        recover_worker_v3_load_readiness_for_attempt_v1(
+            &missing_claim.output(),
+            missing_claim.attempt,
+        ),
+        Err(WorkerV3LoadReadinessErrorV1::MissingClaim)
+    ));
+
+    let substituted = setup(43);
     substituted.publish_readiness();
     let envelope_path = readiness_entry(&substituted.output(), ".envelope");
     fs::remove_file(&envelope_path).unwrap();
@@ -403,6 +420,21 @@ fn missing_and_inode_substituted_terminal_files_fail_closed() {
         matches!(error, WorkerV3LoadReadinessErrorV1::EnvelopeMismatch),
         "unexpected substitution error: {error:?}"
     );
+
+    let substituted_claim = setup(44);
+    substituted_claim.publish_readiness();
+    let claim_path = readiness_entry(&substituted_claim.output(), ".claim");
+    let claim_bytes = fs::read(&claim_path).unwrap();
+    fs::remove_file(&claim_path).unwrap();
+    fs::write(&claim_path, claim_bytes).unwrap();
+    fs::set_permissions(&claim_path, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(matches!(
+        recover_worker_v3_load_readiness_for_attempt_v1(
+            &substituted_claim.output(),
+            substituted_claim.attempt,
+        ),
+        Err(WorkerV3LoadReadinessErrorV1::ReceiptMismatch)
+    ));
 }
 
 #[test]
@@ -455,6 +487,59 @@ fn only_exact_durable_readiness_retires_current_intent_without_admitting_load() 
 }
 
 #[test]
+fn retirement_preserves_intent_when_the_separate_publication_artifact_is_not_exact() {
+    for (seed, mutation) in [
+        (60, "missing"),
+        (61, "replaced-inode"),
+        (62, "mutated-bytes"),
+    ] {
+        let state = setup(seed);
+        let readiness = state.publish_readiness();
+        let artifact = publication_artifact(&state.output());
+        let exact = fs::read(&artifact).unwrap();
+        match mutation {
+            "missing" => fs::remove_file(&artifact).unwrap(),
+            "replaced-inode" => {
+                fs::remove_file(&artifact).unwrap();
+                fs::write(&artifact, &exact).unwrap();
+                fs::set_permissions(&artifact, fs::Permissions::from_mode(0o600)).unwrap();
+            }
+            "mutated-bytes" => {
+                let mut changed = exact;
+                changed[0] ^= 1;
+                fs::write(&artifact, changed).unwrap();
+            }
+            _ => unreachable!(),
+        }
+
+        let retirement = retire_worker_v3_publication_intent_after_load_readiness_v1(
+            &state.output(),
+            &state.producer,
+            state.attempt,
+            state.intent,
+            readiness.receipt(),
+        );
+        assert!(
+            matches!(
+                retirement,
+                Err(WorkerV3PublicationIntentErrorV1::LoadReadiness(
+                    WorkerV3LoadReadinessErrorV1::Claim(_)
+                )) | Err(WorkerV3PublicationIntentErrorV1::ReceiptNotDurable)
+            ),
+            "unexpected {mutation} retirement result: {retirement:?}"
+        );
+        assert!(
+            recover_worker_v3_publication_intent_v1(
+                &state.output(),
+                &state.producer,
+                state.attempt,
+            )
+            .is_ok()
+        );
+    }
+}
+
+#[test]
 fn current_retirement_crash_resumes_only_with_the_same_readiness() {
     let state = setup(52);
     let readiness = state.publish_readiness();
@@ -500,10 +585,9 @@ fn process_restart_child_revalidates_terminal_custody() {
     let Ok(output) = std::env::var(CHILD_OUTPUT) else {
         return;
     };
-    let claim_path = std::env::var(CHILD_CLAIM).unwrap();
-    let claim =
-        DurablePublishedHsacoClaimV3::decode_canonical(&fs::read(claim_path).unwrap()).unwrap();
-    let recovered = recover_worker_v3_load_readiness_v1(Path::new(&output), &claim).unwrap();
+    let attempt = BuildAttempt::from_env_value(&std::env::var(CHILD_ATTEMPT).unwrap()).unwrap();
+    let recovered =
+        recover_worker_v3_load_readiness_for_attempt_v1(Path::new(&output), attempt).unwrap();
     assert_eq!(
         recovered.outcome(),
         WorkerV3LoadReadinessOutcomeV1::Recovered
@@ -518,14 +602,12 @@ fn process_restart_recovery_uses_only_durable_state() {
     }
     let state = setup(60);
     state.publish_readiness();
-    let claim_path = state.directory.0.join("claim.v3");
-    fs::write(&claim_path, state.claim.encode_canonical().unwrap()).unwrap();
     let status = Command::new(std::env::current_exe().unwrap())
         .arg("--exact")
         .arg("process_restart_child_revalidates_terminal_custody")
         .arg("--nocapture")
         .env(CHILD_OUTPUT, state.output())
-        .env(CHILD_CLAIM, claim_path)
+        .env(CHILD_ATTEMPT, state.attempt.to_env_value())
         .status()
         .unwrap();
     assert!(status.success());

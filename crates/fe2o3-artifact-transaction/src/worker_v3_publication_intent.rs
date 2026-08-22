@@ -15,10 +15,15 @@
 //! semantic identities, or grant publication, loading, or launch authority.
 
 use crate::attempt::{AttemptPhase, BackendReceiptV1};
+use crate::durable_published_claim::{
+    validate_current_hsaco_publication_locked_v3,
+    validate_current_hsaco_publication_receipt_locked_v3,
+};
 use crate::worker_v3_load_readiness::validate_durable_worker_v3_load_readiness_locked_v1;
 use crate::{
     AtomicPublicationIdentityV1, BuildAttempt, BuildInvocation, BuildSession,
-    CanonicalLinkRequestIdentityV1, DurableLinkPublicationPlanV1, FinalizationIdentityV1,
+    CanonicalLinkRequestIdentityV1, DurableCurrentLinkPublicationLeaseV1,
+    DurableLinkPublicationPlanV1, DurablePublishedHsacoClaimV3, FinalizationIdentityV1,
     FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1,
     MAX_COMPILER_MODULE_HANDOFF_BYTES_V3, MAX_DURABLE_FINALIZED_ARTIFACT_BYTES, MAX_OUTPUT_ENTRIES,
     PackageIdentityV1, PinnedOutput, PinnedWorkerIdentityV1, ProducerIdentity, TargetIdentityV1,
@@ -1613,9 +1618,10 @@ pub fn clear_worker_v3_publication_intent_v1_with_options(
 
 /// Retires one exact current V3 intent only after exact durable envelope custody is revalidated.
 ///
-/// The readiness receipt is sufficient solely because its exact opaque envelope durably retains
-/// all compact replay preimages. It does not authenticate descriptor-source evidence, perform
-/// semantic load admission, establish HSA readiness, or grant load or launch authority.
+/// The readiness receipt is sufficient solely because its exact opaque envelope and the bound
+/// current V3 publication jointly retain all compact replay preimages. It does not authenticate
+/// descriptor-source evidence, perform semantic load admission, establish HSA readiness, or grant
+/// load or launch authority.
 pub fn retire_worker_v3_publication_intent_after_load_readiness_v1(
     output_dir: &Path,
     producer: &ProducerIdentity,
@@ -2096,7 +2102,8 @@ fn complete_quarantined_retirement_locked(
     if expected_identity.is_some_and(|identity| identity != pinned.record.identity()) {
         return Err(WorkerV3PublicationIntentErrorV1::IdentityMismatch);
     }
-    authorize_retirement(output, producer, attempt, pinned.record, authorization)?;
+    let publication_guard =
+        authorize_retirement(output, producer, attempt, pinned.record, authorization)?;
     let mut faults = FaultInjector::new(None);
     unlink_pinned_private_candidate(
         output,
@@ -2112,6 +2119,7 @@ fn complete_quarantined_retirement_locked(
     )?;
     fsync(&output.fd).map_err(std::io::Error::from)?;
     output.verify_path_identity()?;
+    revalidate_retirement_publication_guard(output, &publication_guard)?;
     Ok(1)
 }
 
@@ -2128,7 +2136,7 @@ fn retire_pinned_occurrence_locked(
     {
         return Err(WorkerV3PublicationIntentErrorV1::IdentityMismatch);
     }
-    authorize_retirement(
+    let publication_guard = authorize_retirement(
         output,
         authority.producer,
         authority.attempt,
@@ -2232,6 +2240,7 @@ fn retire_pinned_occurrence_locked(
             .map_err(Into::into)
     })?;
     output.verify_path_identity()?;
+    revalidate_retirement_publication_guard(output, &publication_guard)?;
     Ok(removed)
 }
 
@@ -2282,7 +2291,13 @@ fn authorize_retirement(
     attempt: BuildAttempt,
     intent: WorkerV3PublicationIntentRecordV1,
     authorization: RetirementAuthorizationV1,
-) -> Result<(), WorkerV3PublicationIntentErrorV1> {
+) -> Result<
+    Option<(
+        DurablePublishedHsacoClaimV3,
+        DurableCurrentLinkPublicationLeaseV1,
+    )>,
+    WorkerV3PublicationIntentErrorV1,
+> {
     let attempts = read_attempt_registry(output)?;
     let Some(current) = attempts.record(&producer.stable_source) else {
         return Err(WorkerV3PublicationIntentErrorV1::ScavengeNotAuthorized);
@@ -2297,7 +2312,7 @@ fn authorize_retirement(
         let RetirementAuthorizationV1::ExactLoadReadiness(readiness) = authorization else {
             return Err(WorkerV3PublicationIntentErrorV1::ReceiptNotDurable);
         };
-        let Some(BackendReceiptV1::LoadReadyV3(backend, durable_readiness)) =
+        let Some(BackendReceiptV1::EnvelopeCustodyV3(backend, durable_readiness)) =
             current.backend_receipt
         else {
             return Err(WorkerV3PublicationIntentErrorV1::ReceiptNotDurable);
@@ -2312,12 +2327,32 @@ fn authorize_retirement(
             return Err(WorkerV3PublicationIntentErrorV1::ReceiptNotDurable);
         }
         validate_durable_worker_v3_load_readiness_locked_v1(output, backend, readiness)?;
-        return Ok(());
+        let (claim, publication) =
+            validate_current_hsaco_publication_receipt_locked_v3(output, intent.plan(), backend)
+                .map_err(WorkerV3LoadReadinessErrorV1::Claim)?;
+        if !readiness.matches_durable_claim(&claim)? {
+            return Err(WorkerV3PublicationIntentErrorV1::ReceiptNotDurable);
+        }
+        return Ok(Some((claim, publication)));
     }
     if current.generation > attempt.generation() {
-        return Ok(());
+        return Ok(None);
     }
     Err(WorkerV3PublicationIntentErrorV1::ScavengeNotAuthorized)
+}
+
+fn revalidate_retirement_publication_guard(
+    output: &PinnedOutput,
+    guard: &Option<(
+        DurablePublishedHsacoClaimV3,
+        DurableCurrentLinkPublicationLeaseV1,
+    )>,
+) -> Result<(), WorkerV3PublicationIntentErrorV1> {
+    if let Some((claim, _lease)) = guard {
+        let _current = validate_current_hsaco_publication_locked_v3(output, claim)
+            .map_err(WorkerV3LoadReadinessErrorV1::Claim)?;
+    }
+    Ok(())
 }
 
 fn recover_locked(

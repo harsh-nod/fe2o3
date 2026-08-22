@@ -219,7 +219,7 @@ pub use worker_v3_load_readiness::{
     WorkerV3LoadReadinessFaultTimingV1, WorkerV3LoadReadinessOptionsV1,
     WorkerV3LoadReadinessOutcomeV1, WorkerV3LoadReadinessReceiptV1, WorkerV3LoadReadinessResultV1,
     publish_worker_v3_load_readiness_v1, publish_worker_v3_load_readiness_v1_with_options,
-    recover_worker_v3_load_readiness_v1,
+    recover_worker_v3_load_readiness_for_attempt_v1, recover_worker_v3_load_readiness_v1,
 };
 pub use worker_v3_publication_binding::{
     MAX_WORKER_V3_PUBLICATION_BINDING_BYTES_V1, WorkerV3PublicationBindingErrorV1,
