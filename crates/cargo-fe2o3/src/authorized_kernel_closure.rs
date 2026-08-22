@@ -570,7 +570,9 @@ fn selected_package_names(args: &[std::ffi::OsString]) -> Result<Vec<String>, St
     let mut selected = Vec::new();
     let mut index = 0;
     while index < args.len() {
-        let value = args[index].to_string_lossy();
+        let value = args[index]
+            .to_str()
+            .ok_or_else(|| "authoritative Cargo arguments must be UTF-8".to_owned())?;
         if value == "-p" || value == "--package" {
             index += 1;
             let package = args
@@ -1013,6 +1015,8 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::pinned_executable_test_directory::TestDirectory;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
 
     fn metadata(target_kind: &str, package_name: &str, links: Value) -> Value {
         serde_json::json!({
@@ -1034,6 +1038,42 @@ mod tests {
             "workspace_default_members": ["path+file:///fixture#0.1.0"],
             "workspace_root": "/fixture"
         })
+    }
+
+    #[test]
+    fn package_selection_is_exact_and_rejects_non_utf8_arguments() {
+        assert_eq!(
+            selected_package_names(&[
+                "--package=beta".into(),
+                "-p".into(),
+                "alpha".into(),
+                "--package".into(),
+                "beta".into(),
+            ])
+            .unwrap(),
+            vec!["alpha".to_owned(), "beta".to_owned()]
+        );
+
+        #[cfg(unix)]
+        for argument in [
+            std::ffi::OsString::from_vec(b"--package=alias-\xff".to_vec()),
+            std::ffi::OsString::from_vec(b"irrelevant-\xff".to_vec()),
+        ] {
+            assert_eq!(
+                selected_package_names(&[argument]).unwrap_err(),
+                "authoritative Cargo arguments must be UTF-8"
+            );
+        }
+
+        #[cfg(unix)]
+        assert_eq!(
+            selected_package_names(&[
+                "--package".into(),
+                std::ffi::OsString::from_vec(b"alias-\xff".to_vec()),
+            ])
+            .unwrap_err(),
+            "authoritative --package requires one UTF-8 name"
+        );
     }
 
     #[test]
