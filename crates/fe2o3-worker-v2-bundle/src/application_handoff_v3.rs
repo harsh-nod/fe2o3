@@ -441,6 +441,18 @@ impl WorkerV3ApplicationOccurrenceV1 {
             .ok_or(WorkerV3ApplicationHandoffProtocolErrorV1::LengthOverflow {
                 field: "application occurrence",
             })?;
+        let wire_len = FRAME_HEADER_BYTES_V1
+            .checked_add(payload_len)
+            .and_then(|length| length.checked_add(FRAME_CHECKSUM_BYTES_V1))
+            .ok_or(WorkerV3ApplicationHandoffProtocolErrorV1::LengthOverflow {
+                field: "application occurrence",
+            })?;
+        let live_allocation_bytes = payload_len.checked_add(wire_len).ok_or(
+            WorkerV3ApplicationHandoffProtocolErrorV1::LengthOverflow {
+                field: "application occurrence",
+            },
+        )?;
+        require_allocation_budget(live_allocation_bytes, budget)?;
         let mut payload = allocate_bytes(payload_len, budget, "application occurrence payload")?;
         push_exact_identity(
             &mut payload,
@@ -570,11 +582,6 @@ impl WorkerV3ApplicationOccurrenceV1 {
             inputs: inputs.into_boxed_slice(),
             identity,
         };
-        if value.encode_canonical()?.as_slice() != bytes {
-            return Err(WorkerV3ApplicationHandoffProtocolErrorV1::NonCanonical {
-                field: "application occurrence",
-            });
-        }
         Ok(value)
     }
 
@@ -818,11 +825,6 @@ impl WorkerV3ApplicationHandoffExpectationV1 {
             occurrence,
             commitment,
         };
-        if value.encode_canonical()?.as_slice() != bytes {
-            return Err(WorkerV3ApplicationHandoffProtocolErrorV1::NonCanonical {
-                field: "Worker V3 application expectation",
-            });
-        }
         Ok(value)
     }
 
@@ -940,11 +942,6 @@ impl WorkerV3ApplicationHandoffAckV1 {
             occurrence,
             commitment,
         };
-        if value.encode_canonical()?.as_slice() != bytes {
-            return Err(WorkerV3ApplicationHandoffProtocolErrorV1::NonCanonical {
-                field: "Worker V3 application acknowledgment",
-            });
-        }
         Ok(value)
     }
 
@@ -1483,6 +1480,10 @@ fn encode_frame(
         .map_err(|_| WorkerV3ApplicationHandoffProtocolErrorV1::LengthOverflow { field })?;
     let payload_u32 = u32::try_from(payload.len())
         .map_err(|_| WorkerV3ApplicationHandoffProtocolErrorV1::LengthOverflow { field })?;
+    let live_allocation_bytes = total_len
+        .checked_add(payload.len())
+        .ok_or(WorkerV3ApplicationHandoffProtocolErrorV1::LengthOverflow { field })?;
+    require_allocation_budget(live_allocation_bytes, budget)?;
     let mut bytes = allocate_bytes(total_len, budget, field)?;
     bytes.extend_from_slice(&magic);
     bytes.extend_from_slice(&WORKER_V3_APPLICATION_HANDOFF_VERSION_V1.to_le_bytes());
@@ -2121,6 +2122,16 @@ mod tests {
                 &bytes,
                 allocation_budget
             ),
+            Err(WorkerV3ApplicationHandoffProtocolErrorV1::AllocationBudgetExceeded { .. })
+        ));
+
+        let encode_budget = WorkerV3ApplicationHandoffCodecBudgetV1::new(
+            MAX_WORKER_V3_APPLICATION_OCCURRENCE_BYTES_V1,
+            bytes.len(),
+            MAX_WORKER_V3_APPLICATION_INPUTS_V1,
+        );
+        assert!(matches!(
+            value.encode_canonical_with_budget(encode_budget),
             Err(WorkerV3ApplicationHandoffProtocolErrorV1::AllocationBudgetExceeded { .. })
         ));
     }
