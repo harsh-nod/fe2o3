@@ -633,9 +633,17 @@ turn the foundations below into end-to-end features.
   storage owns each unique outer/provider/finalized component, and fresh
   persistence and process recovery share one validator that reconstructs both
   worker exchanges, rederives the complete semantic binding, re-inspects raw
-  HSACO, and requires byte-identical canonical re-finalization. This route is
-  inert and is not yet connected to a V3 load envelope, application handoff,
-  host admission, exclusive Cargo routing, or HSA launch.
+  HSACO, and requires byte-identical canonical re-finalization. The recovered
+  owner crosses one audited, move-only publication-authority boundary; safe
+  transaction callers cannot construct that authority from hashes. The
+  transaction revalidates the complete durable intent under its publication
+  lock, commits version-separated pending/final V3 receipts, returns a bounded
+  canonical V3 claim and currentness lease, and reconstructs the same move-only
+  production result after either backend-claimed or completed process restart.
+  Current-generation replay inputs remain protected even after publication
+  until a future durable load-envelope readiness receipt exists. This route is
+  still not connected to a V3 load envelope, application handoff, host
+  admission, exclusive Cargo routing, or HSA launch.
 - Linux-only rustc and codegen-backend primitives use descriptor-backed procfs
   paths. The external Cargo path copies the backend into a rehashed, immutable
   sealed memfd and installs it after a compile-shaped managed wrapper

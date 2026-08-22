@@ -204,10 +204,14 @@ HSA loading authority, or grants kernel-launch authority. On `mi300x`, the ignor
 worker for `gfx942:xnack-`, through durable publication. Those tests do not load or launch the HSACO,
 and no optimized Release-worker result is claimed.
 
-The strict V3 durable bridge has a synthetic descriptor-bearing `vecadd` process-restart test. It
-does not yet provide a V3 load envelope, application descriptor transfer, host admission before
-HSA, exclusive Cargo V3 routing, authenticated compiler-produced descriptor-source evidence, or a
-gfx942 compile/recover/load/launch numerical result.
+The strict V3 durable bridge has a synthetic descriptor-bearing `vecadd` test that persists and
+independently replays finalizer lineage, publishes through a move-only verified authority, encodes
+and decodes the V3 claim, reacquires current artifact custody, completes the build attempt, and
+reconstructs the same production publication result after process-like restart. The lower
+transaction layer revalidates exact restart storage but cannot mint this authority from a raw
+binding in safe code. The route does not yet provide a V3 load envelope, application descriptor
+transfer, host admission before HSA, exclusive Cargo V3 routing, authenticated compiler-produced
+descriptor-source evidence, or a gfx942 compile/recover/load/launch numerical result.
 
 ### Tiled GEMM V1 structural artifact policy
 
