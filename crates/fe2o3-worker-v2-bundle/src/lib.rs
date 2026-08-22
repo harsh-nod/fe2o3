@@ -13,6 +13,7 @@ mod model;
 mod protected_transcript_v2;
 mod protected_v2;
 mod static_application;
+mod worker_v3_load_envelope;
 
 pub use application_handoff::{
     ApplicationHandoffProtocolErrorV1, MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1,
@@ -95,3 +96,9 @@ pub use protected_v2::{
     WorkerV2ResourceIdentityV2, WorkerV2SymbolIdentityV2, WorkerV2TargetIdentityV2,
 };
 pub use static_application::SealedStaticApplicationErrorV1;
+pub use worker_v3_load_envelope::{
+    MAX_WORKER_V3_LOAD_ENVELOPE_ALLOCATION_BYTES_V1, MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1,
+    WORKER_V3_LOAD_ENVELOPE_MAGIC_V1, WORKER_V3_LOAD_ENVELOPE_VERSION_V1,
+    WorkerV3LoadEnvelopeBindingFieldV1, WorkerV3LoadEnvelopeCodecBudgetV1,
+    WorkerV3LoadEnvelopeErrorV1, WorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeWireV1,
+};
