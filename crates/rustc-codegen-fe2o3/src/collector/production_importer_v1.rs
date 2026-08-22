@@ -211,6 +211,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         AdmittedInertSemanticMirV1,
         AuthenticatedRustcIdentityInventoryV3,
         AuthenticatedRustcPreflightPlanV3,
+        crate::production_target_v1::AuthenticatedProductionTargetV1,
     ),
     ProductionSemanticImportErrorV1,
 > {
@@ -316,7 +317,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
     )?;
     let (rustc_preflight_plan_sha256, rustc_preflight_plan_transcript) =
         plan.into_identity_and_canonical_transcript();
-    drop((target, collection));
+    drop(collection);
     Ok((
         semantic_mir,
         AuthenticatedRustcIdentityInventoryV3 {
@@ -328,6 +329,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
             rustc_identity_inventory_sha256,
             canonical_transcript: rustc_preflight_plan_transcript,
         },
+        target,
     ))
 }
 

@@ -191,6 +191,7 @@ impl ProductionCompilerModulePublicationV1 {
 struct AuthenticatedProductionBindingsV1 {
     rustc_identity_inventory: crate::collector::AuthenticatedRustcIdentityInventoryV3,
     rustc_preflight_plan: crate::collector::AuthenticatedRustcPreflightPlanV3,
+    rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
     typed_descriptor_roots: Vec<crate::compiler_descriptor::TypedDescriptorRootV1>,
     transaction: ProductionTransactionBindingsV1,
 }
@@ -265,6 +266,7 @@ struct PreparedProductionWorkerPublicationV1 {
     publication: ProductionCompilerModulePublicationV1,
     rustc_identity_inventory: crate::collector::AuthenticatedRustcIdentityInventoryV3,
     rustc_preflight_plan: crate::collector::AuthenticatedRustcPreflightPlanV3,
+    rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
     ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV3,
     prepared: crate::worker_v2_producer::PreparedProductionLineageWorkerHandoffV3,
 }
@@ -488,6 +490,7 @@ impl Gfx942LoweredProductionCompilationV1 {
         let AuthenticatedProductionBindingsV1 {
             rustc_identity_inventory,
             rustc_preflight_plan,
+            rustc_target,
             typed_descriptor_roots,
             transaction,
         } = bindings;
@@ -525,6 +528,7 @@ impl Gfx942LoweredProductionCompilationV1 {
             publication,
             rustc_identity_inventory,
             rustc_preflight_plan,
+            rustc_target,
             ranked_verification,
             prepared,
         })
@@ -538,6 +542,7 @@ impl Gfx942LoweredProductionCompilationV1 {
         let _ = (
             publication.rustc_identity_inventory.canonical_transcript(),
             publication.rustc_preflight_plan.canonical_transcript(),
+            publication.rustc_target.rustc_layout(),
             publication.ranked_verification.ranked_ir(),
             publication
                 .ranked_verification
@@ -562,6 +567,7 @@ impl Gfx942LoweredProductionCompilationV1 {
         let _ = (
             publication.rustc_identity_inventory.canonical_transcript(),
             publication.rustc_preflight_plan.canonical_transcript(),
+            publication.rustc_target.rustc_layout(),
             publication.ranked_verification.lowering(),
             publication
                 .ranked_verification
@@ -714,7 +720,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
             typed_descriptor_roots,
             transaction,
         } = self.stage;
-        let (semantic_mir, rustc_identity_inventory, rustc_preflight_plan) =
+        let (semantic_mir, rustc_identity_inventory, rustc_preflight_plan, rustc_target) =
             crate::collector::construct_production_semantic_mir_v1(tcx, closure)
                 .map_err(ProductionPipelineErrorV1::SemanticImport)?;
         Ok(ProductionCompilationV1 {
@@ -723,6 +729,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
                 bindings: AuthenticatedProductionBindingsV1 {
                     rustc_identity_inventory,
                     rustc_preflight_plan,
+                    rustc_target,
                     typed_descriptor_roots,
                     transaction,
                 },
