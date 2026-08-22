@@ -120,6 +120,11 @@ impl ProtectedWorkerV3CompactFinalizerReplayV1 {
     pub fn decode_canonical(
         bytes: &[u8],
     ) -> Result<Self, ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
+        if bytes.len() < COMPACT_REPLAY_MAGIC_V1.len() + 2 + 32
+            || bytes.len() > MAX_PROTECTED_WORKER_V3_COMPACT_FINALIZER_REPLAY_BYTES_V1
+        {
+            return Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Length);
+        }
         Self::decode_owned(try_copy_bytes(bytes, "compact transcript decode")?)
     }
 
@@ -951,6 +956,12 @@ mod tests {
     #[test]
     fn compact_replay_rejects_corruption_and_cross_version_bytes() {
         let bytes = valid_bytes();
+
+        let oversized = vec![0; MAX_PROTECTED_WORKER_V3_COMPACT_FINALIZER_REPLAY_BYTES_V1 + 1];
+        assert_eq!(
+            ProtectedWorkerV3CompactFinalizerReplayV1::decode_canonical(&oversized),
+            Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Length)
+        );
 
         let mut corrupt_checksum = bytes.clone();
         *corrupt_checksum.last_mut().unwrap() ^= 1;
