@@ -140,14 +140,22 @@ impl ExactWorkgroupSyncProfileV1 {
         ];
         match self.kind {
             WorkgroupSyncProfileKindV1::LdsReduction => diagnostics.push(
-                "post_link.check=workgroup_lds_reduction_v1_profile status=ok workgroup=[64,1,1] retained_grid=[1,1,1] explicit_kernarg_size=40 kernarg_size=296 kernarg_align=8 group_size=0 required_dynamic_lds=256 hidden_dynamic_lds_offset=160 hidden_dynamic_lds_value=256 private_size=0 wavefront_size=64 barriers=2 lds_bytes=256 calls=0 spills=0 dynamic_stack=false descriptor_binding=byte_exact rust_descriptor_admission=required".to_owned(),
+                "post_link.check=workgroup_lds_reduction_v1_profile status=ok workgroup=[64,1,1] retained_grid=[1,1,1] explicit_kernarg_size=32 kernarg_size=288 kernarg_align=8 group_size=0 required_dynamic_lds=256 hidden_dynamic_lds_offset=152 hidden_dynamic_lds_value=256 private_size=0 wavefront_size=64 barriers=2 lds_bytes=256 calls=0 spills=0 dynamic_stack=false descriptor_binding=byte_exact rust_descriptor_admission=required".to_owned(),
             ),
             WorkgroupSyncProfileKindV1::ScopedAtomic => diagnostics.push(
                 "post_link.check=scoped_atomic_v1_profile status=ok workgroup=[64,1,1] retained_grid=[1,1,1] explicit_kernarg_size=40 kernarg_size=296 kernarg_align=8 group_size=0 private_size=0 wavefront_size=64 atomic=add ordering=relaxed scope=system address_space=global calls=0 spills=0 dynamic_stack=false descriptor_binding=byte_exact rust_descriptor_admission=required".to_owned(),
             ),
         }
+        let kernarg_size = match self.kind {
+            WorkgroupSyncProfileKindV1::LdsReduction => {
+                LDS_REDUCTION_V1_COMPLETE_COV6_KERNARG_BYTES
+            }
+            WorkgroupSyncProfileKindV1::ScopedAtomic => {
+                SCOPED_ATOMIC_V1_COMPLETE_COV6_KERNARG_BYTES
+            }
+        };
         diagnostics.push(format!(
-            "post_link.kernel name={} symbol={} kernarg_size=296 group_size=0 private_size=0 kernarg_align=8 wavefront_size=64 max_workgroup_size=64 reqd_workgroup_size=[64,1,1]",
+            "post_link.kernel name={} symbol={} kernarg_size={kernarg_size} group_size=0 private_size=0 kernarg_align=8 wavefront_size=64 max_workgroup_size=64 reqd_workgroup_size=[64,1,1]",
             self.kernel, self.descriptor
         ));
         diagnostics.sort();
@@ -629,11 +637,21 @@ fn validate_hsaco_metadata(
     let [kernel] = inspected.kernels() else {
         return Err(profile_mismatch("metadata kernel count"));
     };
+    let (explicit_kernarg_bytes, complete_kernarg_bytes) = match spec.kind {
+        WorkgroupSyncProfileKindV1::LdsReduction => (
+            LDS_REDUCTION_V1_EXPLICIT_KERNARG_BYTES,
+            LDS_REDUCTION_V1_COMPLETE_COV6_KERNARG_BYTES,
+        ),
+        WorkgroupSyncProfileKindV1::ScopedAtomic => (
+            SCOPED_ATOMIC_V1_EXPLICIT_KERNARG_BYTES,
+            SCOPED_ATOMIC_V1_COMPLETE_COV6_KERNARG_BYTES,
+        ),
+    };
     if kernel.name() != spec.kernel
         || kernel.symbol() != spec.descriptor
-        || kernel.kernarg_segment_size() != 296
+        || kernel.kernarg_segment_size() != u64::from(complete_kernarg_bytes)
         || kernel.kernarg_segment_alignment() != 8
-        || kernel.implicit_argument_offset() != Some(40)
+        || kernel.implicit_argument_offset() != Some(u64::from(explicit_kernarg_bytes))
         || kernel.implicit_argument_size() != 256
         || kernel.group_segment_fixed_size() != 0
         || kernel.private_segment_fixed_size() != 0
@@ -663,7 +681,7 @@ fn validate_lds_arguments(
     kernel: &fe2o3_hsaco::InspectedKernel,
 ) -> Result<(), WorkgroupSyncWorkerErrorV1> {
     let arguments = kernel.explicit_arguments();
-    if arguments.len() != 5 {
+    if arguments.len() != 4 {
         return Err(profile_mismatch("LDS metadata explicit argument count"));
     }
     validate_global_pointer(
@@ -673,21 +691,20 @@ fn validate_lds_arguments(
         ArgumentAccess::ReadOnly,
     )?;
     validate_scalar(&arguments[1], 8, 8, ExplicitValueType::U64)?;
-    validate_scalar(&arguments[2], 16, 4, ExplicitValueType::U32)?;
     validate_global_pointer(
-        &arguments[3],
-        24,
+        &arguments[2],
+        16,
         ExplicitValueType::I32,
         ArgumentAccess::ReadWrite,
     )?;
-    validate_scalar(&arguments[4], 32, 8, ExplicitValueType::U64)?;
+    validate_scalar(&arguments[3], 24, 8, ExplicitValueType::U64)?;
     let dynamic: Vec<_> = kernel
         .hidden_arguments()
         .iter()
         .copied()
         .filter(|argument| argument.value_kind() == HiddenValueKind::DynamicLdsSize)
         .collect();
-    if dynamic.len() != 1 || dynamic[0].offset() != 160 || dynamic[0].size() != 4 {
+    if dynamic.len() != 1 || dynamic[0].offset() != 152 || dynamic[0].size() != 4 {
         return Err(profile_mismatch("COV6 hidden dynamic-LDS argument"));
     }
     Ok(())
@@ -861,35 +878,30 @@ fn exact_descriptor_source(
         WorkgroupSyncProfileKindV1::LdsReduction => {
             let shared =
                 SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::I32));
-            let scalar = SourceTypeRecordV1::new(SourceTypeDescriptorV1::scalar(ScalarTypeV1::U32));
             let output =
                 SourceTypeRecordV1::new(SourceTypeDescriptorV1::disjoint_slice(ScalarTypeV1::I32));
             let shared_layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(
                 ScalarTypeV1::I32,
             ));
-            let scalar_layout =
-                DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::scalar(ScalarTypeV1::U32));
             let output_layout = DeviceLayoutRecordV1::new(
                 DeviceLayoutDescriptorV1::disjoint_slice(ScalarTypeV1::I32),
             );
             let arguments = vec![
                 LogicalArgumentV1::shared_slice(0, name("values")?, &shared, &shared_layout, 0)
                     .map_err(|_| profile_mismatch("values descriptor"))?,
-                LogicalArgumentV1::scalar(1, name("epoch")?, &scalar, &scalar_layout, 16)
-                    .map_err(|_| profile_mismatch("epoch descriptor"))?,
                 LogicalArgumentV1::disjoint_slice(
-                    2,
+                    1,
                     name("output")?,
                     &output,
                     &output_layout,
                     AccessMode::ReadWrite,
-                    24,
+                    16,
                 )
                 .map_err(|_| profile_mismatch("output descriptor"))?,
             ];
             (
-                vec![shared, scalar, output],
-                vec![shared_layout, scalar_layout, output_layout],
+                vec![shared, output],
+                vec![shared_layout, output_layout],
                 arguments,
                 vec![CapabilityV1::WorkgroupMemory, CapabilityV1::AmdWave],
                 256,

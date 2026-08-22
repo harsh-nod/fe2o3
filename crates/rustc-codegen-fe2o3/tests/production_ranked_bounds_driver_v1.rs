@@ -2,11 +2,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const SAFE_PRODUCTION_CRATE_BINDING_V1: &str =
-    "e9af58d0521591b656a0bdfbd4bb0f9b27d702118d594ad63e01f30a5bcd5d82";
-const OOB_PRODUCTION_CRATE_BINDING_V1: &str =
-    "09db87689fbbae9d81a8f6df813c91acabe06ca91a15223a1d49d94268a85450";
-
 struct ScratchTarget {
     path: PathBuf,
 }
@@ -129,49 +124,6 @@ fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
             "production extraction entered forbidden path {forbidden:?}",
         );
     }
-
-    let production_target = ScratchTarget::new();
-    let safe_production = run_unprotected_production_validation(&production_target, false);
-    assert!(
-        !safe_production.status.success()
-            && safe_production
-                .stderr
-                .contains("production-v1 target-neutral lowering failed")
-            && !safe_production
-                .stderr
-                .contains("production-v1 general kernel verification failed"),
-        "safe kernel did not pass PLIRON before the later lowering boundary:\n{}",
-        safe_production.stderr,
-    );
-
-    let oob_production = run_unprotected_production_validation(&production_target, true);
-    assert!(
-        !oob_production.status.success()
-            && oob_production
-                .stderr
-                .contains("production-v1 general kernel verification failed")
-            && oob_production.stderr.contains("error[FE2O3-BOUNDS-001]")
-            && oob_production.stderr.contains("required: 64 < 64")
-            && oob_production.stderr.contains("Rust source")
-            && oob_production
-                .stderr
-                .contains("ranked PLIRON before rejected lowering")
-            && oob_production
-                .stderr
-                .contains("lowering stopped before target IR or artifact emission")
-            && !oob_production
-                .stderr
-                .contains("production-v1 target-neutral lowering failed"),
-        "out-of-bounds kernel bypassed the production PLIRON bounds pass:\n{}",
-        oob_production.stderr,
-    );
-    assert!(
-        std::fs::read_dir(production_target.path().join("artifacts"))
-            .expect("read production artifact directory")
-            .next()
-            .is_none(),
-        "ranked verification emitted a production artifact",
-    );
 }
 
 #[test]
@@ -259,52 +211,6 @@ fn run_feature_extraction(target: &ScratchTarget, feature: &str) -> ExtractionOu
         )
         .args(["--features", feature]);
     output(command, "run safe mapped AMD extraction fixture")
-}
-
-fn run_unprotected_production_validation(target: &ScratchTarget, oob: bool) -> ExtractionOutput {
-    let artifacts = target.path().join("artifacts");
-    std::fs::create_dir_all(&artifacts).expect("create production artifact directory");
-    let backend = Path::new(env!("CARGO_BIN_EXE_fe2o3-rustc-extract"))
-        .parent()
-        .expect("extractor binary directory")
-        .join(format!(
-            "{}rustc_codegen_fe2o3{}",
-            std::env::consts::DLL_PREFIX,
-            std::env::consts::DLL_SUFFIX,
-        ));
-    assert!(
-        backend.is_file(),
-        "missing codegen backend {}",
-        backend.display()
-    );
-
-    let mut command = base_command("rustc", &target.path().join("cargo"));
-    command
-        .env("FE2O3_CODEGEN_PIPELINE", "production-v1")
-        .env(
-            "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
-            "1",
-        )
-        .env("FE2O3_HSACO_DIR", &artifacts)
-        .env("FE2O3_TARGET", "gfx942")
-        .env(
-            "FE2O3_CRATE_BINDING_ID_V1",
-            if oob {
-                OOB_PRODUCTION_CRATE_BINDING_V1
-            } else {
-                SAFE_PRODUCTION_CRATE_BINDING_V1
-            },
-        );
-    command.args([
-        "--features",
-        if oob {
-            "production_oob"
-        } else {
-            "production_safe"
-        },
-    ]);
-    command.args(["--", &format!("-Zcodegen-backend={}", backend.display())]);
-    output(command, "run production AMD codegen route")
 }
 
 fn base_command(action: &str, target_dir: &Path) -> Command {

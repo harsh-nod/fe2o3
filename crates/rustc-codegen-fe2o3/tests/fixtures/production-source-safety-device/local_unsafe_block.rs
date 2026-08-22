@@ -9,7 +9,7 @@ fn local_unsafe_block() {
 
 #[kernel(
     typed,
-    namespace = "9168b0344c5ac9133db3b3833b6c2a1ae3b4d8cd7350381fd4682fe7fc60b9f1"
+    namespace = "b14f0669db1e71dca51160be3a750616fdab9884c9a0ea17e82ac3bba346cc52"
 )]
 pub fn unsafe_block_reachable(_output: DisjointSlice<u32>) {
     local_unsafe_block();

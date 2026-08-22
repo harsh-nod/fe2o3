@@ -421,8 +421,9 @@ the exact V2 process/environment and the canonical compiler closure;
 compatibility captures may remain V2. The process-consistency record above
 separately binds the pinned cwd object. No object-identity join between that
 object and the descriptor pathname is claimed. V3 is sealed and inherited by
-rustc at fd 199, but the backend does not yet consume and compare it with the
-live process.
+rustc at fd 199. Protected production routes consume it before collection and
+compare its argv, working directory, complete compile environment, target,
+rustc image, backend image, and full compiler closure with the live process.
 
 ## Pinned codegen-backend object
 
@@ -442,98 +443,33 @@ argument mutation, so the selector cannot be replaced after preparation. The
 external Cargo path actively uses the same primitive with a reserved stable
 descriptor; the separate `fe2o3-rustc-wrapper` compile path remains disabled.
 
-## Production S09 compile regression
+## Production compiler regression ownership
 
-The ignored `production_s09_compile_captures_and_publishes_worker_output`
-integration test invokes the built `cargo-fe2o3` binary against the real
-`fe2o3-typed-alias-spoof` S09 fixture. It therefore traverses project
-discovery, pinned Cargo execution, the S09 capability broker, brokered backend
-and artifact descriptors, `binding_wrapper::run`, closed-environment
-materialization, inert V2-or-V3 descriptor capture, pinned rustc spawn, Worker
-V2 selection, and durable HSACO publication. It is not a `--print` query. The
-regression still exercises V1 compiler-handoff and publication-intent
-production call sites. It exercises sealed V3 delivery to the rustc process,
-but not the pending backend admission or protected V2 restart path.
+Production validation no longer has an unprotected `production-v1` success
+test. Protected production requires the authority-release boundary, the sealed
+V3 rustc-invocation capability, and the full compiler closure. Dependency
+crates receive the pinned backend but not the selected kernel unit's pipeline,
+artifact, Worker, or authority signals.
 
-The test clears its outer environment and requires these explicit inputs:
+The regression path is split along real ownership boundaries:
 
-- `FE2O3_TEST_UPSTREAM_CARGO`: canonical native Cargo executable;
-- `FE2O3_TEST_UPSTREAM_RUSTC`: canonical compatible nightly rustc executable;
-- `FE2O3_TEST_RUSTC_LIBRARY_PATH`: canonical rustc library directory needed by
-  Cargo build-script probes in the outer harness;
-- `FE2O3_TEST_CODEGEN_BACKEND`: compatible built backend dynamic library;
-- `FE2O3_TEST_CARGO_HOME`: populated Cargo cache for `--offline` resolution;
-- `FE2O3_LLVM_LINK_WORKER`, `FE2O3_LLVM_LINK_WORKER_BUILD_ID`, and
-  `FE2O3_LLVM_BUILD_ID`: matching measured native Worker inputs.
+- `external_project_cli::protected_release_build_reaches_authenticated_cargo_publication_fixture`
+  exercises the protected launcher, static binding trampoline, V3 capability
+  broker, selected rustc child, and authenticated publication boundary;
+- `production_extraction_driver_v1` rejects reachable unsafe Rust and verifies
+  attributed-kernel collection in a real AMD dependency graph;
+- `production_ranked_bounds_driver_v1` projects ordinary Rust into ranked
+  PLIRON and runs the fixed bounds, atomic-legality, race, barrier-convergence,
+  workgroup-memory, and semantic-refinement pass sequence before lowering;
+- `reproducible_first_build_worker_v3` and `worker_v3_hsaco_admission` bind the
+  exact V3 invocation, compiler closure, transaction, link plan, Worker
+  measurement, response, raw HSACO, and finalized output.
 
-Run it with:
-
-```text
-FE2O3_TEST_UPSTREAM_CARGO=/absolute/toolchain/bin/cargo \
-FE2O3_TEST_UPSTREAM_RUSTC=/absolute/toolchain/bin/rustc \
-FE2O3_TEST_RUSTC_LIBRARY_PATH=/absolute/toolchain/lib \
-FE2O3_TEST_CODEGEN_BACKEND=/absolute/librustc_codegen_fe2o3.so \
-FE2O3_TEST_CARGO_HOME=/absolute/cargo-home \
-FE2O3_LLVM_LINK_WORKER=/absolute/fe2o3-llvm-link-worker \
-FE2O3_LLVM_LINK_WORKER_BUILD_ID=<measured-worker-id> \
-FE2O3_LLVM_BUILD_ID=<measured-llvm-id> \
-cargo test --locked -p cargo-fe2o3 --test production_s09 \
-  production_s09_compile_captures_and_publishes_worker_output \
-  -- --ignored --exact --nocapture
-```
-
-The same explicit tool inputs run the unified `production-v1` fill regression:
-
-```text
-FE2O3_TEST_UPSTREAM_CARGO=/absolute/toolchain/bin/cargo \
-FE2O3_TEST_UPSTREAM_RUSTC=/absolute/toolchain/bin/rustc \
-FE2O3_TEST_CODEGEN_BACKEND=/absolute/librustc_codegen_fe2o3.so \
-FE2O3_TEST_CARGO_HOME=/absolute/cargo-home \
-FE2O3_LLVM_LINK_WORKER=/absolute/fe2o3-llvm-link-worker \
-FE2O3_LLVM_LINK_WORKER_BUILD_ID=<measured-worker-id> \
-FE2O3_LLVM_BUILD_ID=<measured-llvm-id> \
-cargo test --locked -p cargo-fe2o3 --test production_s09 \
-  production_v1_fill_compiles_and_publishes_finalized_worker_output \
-  -- --ignored --exact --nocapture
-```
-
-This test compiles ordinary attributed Rust for `amdgcn-amd-amdhsa` through
-the sole production importer, target-neutral Kernel IR, formal memory checks,
-deterministic gfx942 LLVM lowering, the measured upstream LLVM/LLD worker, raw
-HSACO inspection, canonical descriptor finalization, and durable publication.
-It independently verifies the embedded descriptor digest and requires
-`fill`/`fill.kd`, a 16-byte explicit ABI, a 272-byte complete kernarg segment,
-and a 64-thread workgroup. It uses the debug-only unprotected validation
-switch because the integrated static Cargo-wrapper boundary is still open;
-passing the test grants no compiler, artifact, load, launch, or GPU authority.
-
-`FE2O3_TEST_RUSTC_LIBRARY_PATH` configures only the outer Cargo harness. The
-selected S09 rustc still receives the production closed child environment.
-`FE2O3_TEST_S09_RETAIN_DIR` may select a pre-created, empty, canonical absolute
-directory whose basename is `cargo-fe2o3-s09-retain-` followed by exactly 32
-lowercase hexadecimal characters that are not all zero. The test rejects
-symlinks, aliases, nonempty paths, repositories, and home directories. It
-creates a versioned sentinel and never removes a caller-selected directory; a
-repeated run must use a new empty leaf. Without the variable, the test creates
-and owns a unique temporary directory.
-
-After compilation, the test decodes the exact canonical durable publication
-envelope and nested link-publication record. It validates the envelope checksum,
-scope-derived record name, published state, complete identity chain, and the
-finalized-output digest and content-addressed artifact name against the exact
-bytes passed to HSACO inspection. The printed target is the admitted metadata
-value from those bytes, including `xnack-`; the same bytes must contain COV6
-metadata and exactly the `alpha` kernel. The test emits only SHA-256 and typed
-identity observations; it does not persist the descriptor or plaintext
-environment and the decoded record grants no authority.
-
-The printed descriptor digest is an inert pre-spawn observation. Successful
-test completion and the separate process-consistency checks establish the
-tested path's behavior, but the digest is not an execution receipt,
-authenticator, artifact authority, or protected-attestation claim. The scalar
-GEMM profile remains limited to an exact configured crate/source/cwd unit. Its
-descriptor does not authenticate source contents or establish an output-object
-association; those limits are unchanged by this test and capture diagnostic.
+The first three suites run with repository fixtures. The ignored native V3
+worker case additionally requires a measured upstream LLVM/LLD worker and a
+rustc-produced gfx942 handoff. Historical S09 evidence under `tests/evidence`
+documents the older observation-only route; it is not current execution
+guidance and grants no production authority.
 
 ## Platform and trust limits
 

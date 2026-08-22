@@ -30,7 +30,7 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
 
 #[kernel(
     typed,
-    namespace = "733de473b3b81963ce2a3b6bc3b67bfc1eb309494ed6e36435de5bbab54f28f6"
+    namespace = "409a087b69c0a4c4431f5bb659606feed29b109454cfb528f220397bf0349bcb"
 )]
 #[cfg(not(any(
     feature = "oob",
@@ -56,7 +56,7 @@ pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
 
 #[kernel(
     typed,
-    namespace = "426635fc4a465fce5a626e5cd0b3b287bbae25ea52f301b85663b550b63945b8"
+    namespace = "d5e6306fc6d085e809eda08b970bad03531d474a128843df69f1ed181e89fa1b"
 )]
 #[cfg(feature = "oob")]
 #[allow(unconditional_panic)]
@@ -70,7 +70,7 @@ pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
 
 #[kernel(
     typed,
-    namespace = "79c5632b023afb6feb75aee40b5dd8651b6db739828a0ac9669799ca706e19a0"
+    namespace = "be106fd078c3d060c4116b385a8baecd9304a4b92106105e8efcddd3174011bf"
 )]
 #[cfg(feature = "shifted")]
 pub fn checked_shifted(mut output: DisjointSlice<f32, Shifted<Index1D, 4>>) {
@@ -83,7 +83,7 @@ pub fn checked_shifted(mut output: DisjointSlice<f32, Shifted<Index1D, 4>>) {
 
 #[kernel(
     typed,
-    namespace = "5e13f6c884eb2e4fb53ae8ad285e07aebfd312c992620887c9ff32cc18207282"
+    namespace = "3e9e4387be6f680bd9bce54206ec008602d61c3f115631ce6711f6501379c01c"
 )]
 #[cfg(feature = "grid_exclusive")]
 pub fn grid_exclusive(mut output: DisjointSlice<f32, GridExclusive>) {
@@ -96,7 +96,7 @@ pub fn grid_exclusive(mut output: DisjointSlice<f32, GridExclusive>) {
 
 #[kernel(
     typed,
-    namespace = "e9af58d0521591b656a0bdfbd4bb0f9b27d702118d594ad63e01f30a5bcd5d82"
+    namespace = "54c58fba8acb2f20497d528eb87c83d76e6af1dfe27f1d2778ffda8d69221fa9"
 )]
 #[cfg(feature = "production_safe")]
 pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
@@ -109,7 +109,7 @@ pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
 
 #[kernel(
     typed,
-    namespace = "09db87689fbbae9d81a8f6df813c91acabe06ca91a15223a1d49d94268a85450"
+    namespace = "73adbf13666463e194459888d8d7c5084f35ebdb009511ac82225994ff184b2a"
 )]
 #[cfg(feature = "production_oob")]
 #[allow(unconditional_panic)]
@@ -123,7 +123,7 @@ pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
 
 #[kernel(
     typed,
-    namespace = "6f36aa42e529752a3f46af005c5b289a215446de5ceec61fcd6d4a2f463610a3"
+    namespace = "b9fe29428bdba6d62863664f0f44be15fc465334eb1fcfa52ac1bb98c48abaf2"
 )]
 #[cfg(feature = "blocked")]
 pub fn blocked(mut output: DisjointSlice<f32, Blocked<Index1D, 1, 2>>) {
@@ -137,7 +137,7 @@ pub fn blocked(mut output: DisjointSlice<f32, Blocked<Index1D, 1, 2>>) {
 #[kernel(
     typed,
     launch(required = [64, 1, 1], max = [64, 1, 1]),
-    namespace = "a39c65034cfbcc32984d8f4f8de9989637941735ef75c9d2aa3ac3a502e05ca0"
+    namespace = "a5538b13de02007c2a5e2dbf0f8411b9e3fad5443c6e870fa5241170a36d8b8a"
 )]
 #[cfg(feature = "barrier_after_access")]
 pub fn barrier_after_access(mut output: DisjointSlice<f32, Blocked<Index1D, 1, 2>>) {
@@ -152,7 +152,7 @@ pub fn barrier_after_access(mut output: DisjointSlice<f32, Blocked<Index1D, 1, 2
 #[kernel(
     typed,
     launch(required = [64, 1, 1], max = [64, 1, 1]),
-    namespace = "c23759cb39af0fba9c734ad713d879231dbc4e8701c6e165c5e00c23b6c02bd7"
+    namespace = "bffc6b541ab2d7b61ac7abf7291e53b445022e06a329a222afaae0a0f0efcb46"
 )]
 #[cfg(feature = "barrier_before_access")]
 pub fn barrier_before_access(mut output: DisjointSlice<f32, Blocked<Index1D, 1, 2>>) {
@@ -167,7 +167,7 @@ pub fn barrier_before_access(mut output: DisjointSlice<f32, Blocked<Index1D, 1, 
 #[kernel(
     typed,
     launch(required = [64, 1, 1], max = [64, 1, 1]),
-    namespace = "956b6bc346a6d0b5f16d7bbc2abe4b699474b4985d61eafd7f6333bfc818e365"
+    namespace = "7dfb796b56d8d965f325ac68cf055928fbdcdd59b944a8798e4cfdf62be7e506"
 )]
 #[cfg(feature = "barrier_divergent")]
 pub fn barrier_divergent(mut output: DisjointSlice<f32, GridExclusive>) {
@@ -182,7 +182,7 @@ pub fn barrier_divergent(mut output: DisjointSlice<f32, GridExclusive>) {
 #[kernel(
     typed,
     launch(required = [64, 1, 1], max = [64, 1, 1]),
-    namespace = "dea205920007e6c762313a092e8c3245990d41a365da1c877810d50279404ebe"
+    namespace = "510446d73bb1342ad48dfd8662d46b156b78b13255b9546996dd713edb518dde"
 )]
 #[cfg(feature = "barrier_early_return")]
 pub fn barrier_early_return(mut output: DisjointSlice<f32, GridExclusive>) {
@@ -199,7 +199,7 @@ pub fn barrier_early_return(mut output: DisjointSlice<f32, GridExclusive>) {
     typed,
     launch(required = [64, 1, 1], max = [64, 1, 1]),
     control_flow(loop_bounds(2)),
-    namespace = "90c815f83f1074e5b78c5ea1dfe21e31f02174335e2b622d890c16eaa15c5e1d"
+    namespace = "bf169e1721587032b7790154b762e4c075ca954ae46d4b6a290e250d1284ab57"
 )]
 #[cfg(feature = "barrier_loop")]
 pub fn barrier_loop(mut output: DisjointSlice<f32, Blocked<Index1D, 1, 2>>) {
@@ -223,7 +223,7 @@ fn helper_barrier() {
 #[kernel(
     typed,
     launch(required = [64, 1, 1], max = [64, 1, 1]),
-    namespace = "8c442eb8bd35605ffdd9478a993befb8eb502f5fd35e5ecb58bc296e70b3d589"
+    namespace = "da4bb8bd1232ae9e51a47d988b354fd9011c1788d3ba34bc4ab0fa3f8105055e"
 )]
 #[cfg(feature = "barrier_helper")]
 pub fn barrier_helper(mut output: DisjointSlice<f32, Blocked<Index1D, 1, 2>>) {

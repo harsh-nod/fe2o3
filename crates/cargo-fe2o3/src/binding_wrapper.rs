@@ -96,6 +96,7 @@ const TARGET_ENV: &str = "FE2O3_TARGET";
 const VERIFY_KERNEL_IR_ENV: &str = "FE2O3_VERIFY_KERNEL_IR";
 const SCALAR_GEMM_V1_PIPELINE: &str = "collected-scalar-gemm-v1";
 const ROW_SOFTMAX_V1_PIPELINE: &str = "collected-row-softmax-v1";
+const PRODUCTION_V1_PIPELINE: &str = "production-v1";
 const NON_PRODUCTION_REPRODUCTION_RECORD_ENV: &str =
     "FE2O3_NON_PRODUCTION_COMPILER_REPRODUCTION_RECORD_V1";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
@@ -487,7 +488,14 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         )?;
         pinned_execution_directory.configure_child_fchdir(command.as_command_mut());
         if let Some(capabilities) = &compiler_capabilities {
-            capabilities.prepare_command(command.as_command_mut())?;
+            if managed_attempt.is_none()
+                && std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref()
+                    == Some(OsStr::new(PRODUCTION_V1_PIPELINE))
+            {
+                capabilities.prepare_unmanaged_production_command(command.as_command_mut())?;
+            } else {
+                capabilities.prepare_command(command.as_command_mut())?;
+            }
         }
         configure_build_observation_environment(command.as_command_mut(), build_observation);
         if let Some(managed) = &managed_attempt {
@@ -2472,9 +2480,7 @@ impl CompilerCapabilities {
 
     fn prepare_command(&self, command: &mut Command) -> Result<(), BindingWrapperError> {
         let artifact_path = PathBuf::from(format!("/proc/self/fd/{ARTIFACT_CHILD_FD}"));
-        self.backend
-            .replace_for_child_at(command, BACKEND_CHILD_FD)
-            .map_err(|error| BindingWrapperError::ChildCapability(error.to_string()))?;
+        self.prepare_backend_command(command)?;
         self.artifact
             .replace_for_child_at(command, ARTIFACT_CHILD_FD)
             .map_err(BindingWrapperError::ChildCapability)?;
@@ -2493,6 +2499,21 @@ impl CompilerCapabilities {
                 .map_err(BindingWrapperError::CapabilityBroker)?;
         }
         Ok(())
+    }
+
+    fn prepare_unmanaged_production_command(
+        &self,
+        command: &mut Command,
+    ) -> Result<(), BindingWrapperError> {
+        self.prepare_backend_command(command)?;
+        scope_unmanaged_production_environment(command);
+        Ok(())
+    }
+
+    fn prepare_backend_command(&self, command: &mut Command) -> Result<(), BindingWrapperError> {
+        self.backend
+            .replace_for_child_at(command, BACKEND_CHILD_FD)
+            .map_err(|error| BindingWrapperError::ChildCapability(error.to_string()))
     }
 
     fn prepare_invocation_authority(
@@ -2538,6 +2559,20 @@ impl CompilerCapabilities {
         let broker = measure_build_executable("/proc/self/exe", "cargo-fe2o3 broker image")?;
         RowSoftmaxV1AuthorityPolicyV1::new(provider, attempt, broker, compiler)
             .map_err(|error| BindingWrapperError::BuildObservation(error.to_string()))
+    }
+}
+
+fn scope_unmanaged_production_environment(command: &mut Command) {
+    for name in [
+        "FE2O3_CODEGEN_PIPELINE",
+        HSACO_DIR_ENV,
+        CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2,
+        crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV,
+        crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV,
+        WORKER_V2_CONFIG_ENV,
+        WORKER_V2_EXPECTED_ID_ENV,
+    ] {
+        command.env_remove(name);
     }
 }
 
@@ -4648,6 +4683,7 @@ mod tests {
         publish_finish_and_clear_protected, reject_authority_linker_arguments,
         reject_uninspectable_rustc_args, resolve_command_executable_with_path,
         row_softmax_effective_rustc_argv_identity, row_softmax_provider_observation_json,
+        scope_unmanaged_production_environment,
     };
     use crate::inert_rustc_invocation_capture::InertRustcInvocationCaptureV2;
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
@@ -5600,6 +5636,52 @@ mod tests {
         assert_ne!(
             removed, empty,
             "removed and empty environments were conflated"
+        );
+    }
+
+    #[test]
+    fn unmanaged_dependencies_do_not_inherit_production_authority_signals() {
+        let mut command = Command::new("/proc/self/fd/194");
+        for (name, value) in [
+            ("FE2O3_CODEGEN_PIPELINE", "production-v1"),
+            ("FE2O3_HSACO_DIR", "/proc/self/fd/197"),
+            ("FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2", "44"),
+            ("FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1", "55"),
+            (
+                "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
+                "1",
+            ),
+            ("FE2O3_WORKER_V2_CONFIG_V2", "/workspace/worker.json"),
+            ("FE2O3_WORKER_V2_EXPECTED_ID_V1", "66"),
+        ] {
+            command.env(name, value);
+        }
+        command
+            .env("FE2O3_TARGET", "gfx942")
+            .env("FE2O3_CRATE_BINDING_ID_V1", "77");
+
+        scope_unmanaged_production_environment(&mut command);
+        let overrides = command
+            .get_envs()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        for name in [
+            "FE2O3_CODEGEN_PIPELINE",
+            "FE2O3_HSACO_DIR",
+            "FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2",
+            "FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1",
+            "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
+            "FE2O3_WORKER_V2_CONFIG_V2",
+            "FE2O3_WORKER_V2_EXPECTED_ID_V1",
+        ] {
+            assert_eq!(overrides.get(OsStr::new(name)), Some(&None));
+        }
+        assert_eq!(
+            overrides.get(OsStr::new("FE2O3_TARGET")),
+            Some(&Some(OsStr::new("gfx942")))
+        );
+        assert_eq!(
+            overrides.get(OsStr::new("FE2O3_CRATE_BINDING_ID_V1")),
+            Some(&Some(OsStr::new("77")))
         );
     }
 
