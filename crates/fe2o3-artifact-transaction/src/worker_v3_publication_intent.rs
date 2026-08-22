@@ -90,12 +90,9 @@ pub const MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_PAYLOADS_V1: usize = 127;
 /// opaque outer handoff. The finalizer must also enforce its tighter compiler-plus-provider total.
 pub const MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_BYTES_V1: usize = 64 * 1024 * 1024;
 
-const MAX_REPLAY_LINK_INPUTS_V1: usize = 128;
 const MAX_REPLAY_LINK_OPTIONS_V1: usize = 64;
 const MAX_REPLAY_LINK_OPTION_NAME_BYTES_V1: usize = 64;
 const MAX_REPLAY_LINK_OPTION_VALUE_BYTES_V1: usize = 256;
-const MAX_REPLAY_PROVENANCE_NODES_V1: usize = 1024;
-const MAX_REPLAY_PROVENANCE_EDGES_V1: usize = 4096;
 const MAX_REPLAY_TARGET_BYTES_V1: usize = 128;
 const MAX_REPLAY_TOOLCHAIN_ID_BYTES_V1: usize = 160;
 const MAX_REPLAY_SYMBOLS_V1: usize = 4096;
@@ -106,21 +103,6 @@ const MAX_REPLAY_PROVIDER_IDENTITY_BYTES_V1: usize = 128;
 const MAX_REPLAY_DIAGNOSTICS_V1: usize = 64;
 const MAX_REPLAY_TOTAL_DIAGNOSTIC_BYTES_V1: usize = 16 * 1024;
 const REPLAY_CONTENT_IDENTITY_BYTES_V1: usize = 32 + 8;
-const MAX_REPLAY_FIXED_METADATA_BYTES_V1: usize = 64 * 1024;
-
-// Complete canonical plan framing, target, identities, options, provenance nodes, and edges.
-const MAX_REPLAY_LINK_PLAN_METADATA_BYTES_V1: usize = 64
-    + 4
-    + MAX_REPLAY_TARGET_BYTES_V1
-    + 4
-    + MAX_REPLAY_LINK_INPUTS_V1 * REPLAY_CONTENT_IDENTITY_BYTES_V1
-    + 4
-    + MAX_REPLAY_LINK_OPTIONS_V1
-        * (8 + MAX_REPLAY_LINK_OPTION_NAME_BYTES_V1 + MAX_REPLAY_LINK_OPTION_VALUE_BYTES_V1)
-    + REPLAY_CONTENT_IDENTITY_BYTES_V1
-    + 4
-    + MAX_REPLAY_PROVENANCE_NODES_V1 * (REPLAY_CONTENT_IDENTITY_BYTES_V1 + 4)
-    + MAX_REPLAY_PROVENANCE_EDGES_V1 * REPLAY_CONTENT_IDENTITY_BYTES_V1;
 
 // One device-library provider-evidence metadata body from a Worker V3 response. Strict V3 binds
 // bootstrap and replay responses independently, so the transcript budget includes two bodies.
@@ -130,26 +112,41 @@ const MAX_REPLAY_PROVIDER_EVIDENCE_METADATA_BYTES_V1: usize = MAX_REPLAY_PROVIDE
     + MAX_REPLAY_PROVIDER_FILES_V1 * (MAX_REPLAY_PROVIDER_BASENAME_BYTES_V1 + 36)
     + 49;
 
-const MAX_REPLAY_DIAGNOSTIC_METADATA_BYTES_V1: usize =
-    2 * (MAX_REPLAY_TOTAL_DIAGNOSTIC_BYTES_V1 + MAX_REPLAY_DIAGNOSTICS_V1 * 4 + 4);
-const MAX_REPLAY_WORKER_OPTION_METADATA_BYTES_V1: usize = 2 * MAX_REPLAY_TOOLCHAIN_ID_BYTES_V1
+const MAX_REPLAY_DIAGNOSTIC_BODY_BYTES_V1: usize =
+    MAX_REPLAY_TOTAL_DIAGNOSTIC_BYTES_V1 + MAX_REPLAY_DIAGNOSTICS_V1 * 4 + 4;
+const MAX_REPLAY_SHARED_WORKER_OPTION_METADATA_BYTES_V1: usize = 2
+    * MAX_REPLAY_TOOLCHAIN_ID_BYTES_V1
     + REPLAY_CONTENT_IDENTITY_BYTES_V1
     + MAX_REPLAY_TARGET_BYTES_V1
     + MAX_REPLAY_LINK_OPTIONS_V1
         * (8 + MAX_REPLAY_LINK_OPTION_NAME_BYTES_V1 + MAX_REPLAY_LINK_OPTION_VALUE_BYTES_V1);
+// Exact V3 response metadata shell excluding the separately stored output payload: magic, nine
+// field headers, three request/closure identities, worker build identity, stage, diagnostics,
+// output identity/length shell, provider evidence, and response identity.
+const MAX_REPLAY_RESPONSE_METADATA_SHELL_BYTES_V1: usize = 8
+    + 9 * (2 + 4)
+    + 3 * 32
+    + MAX_REPLAY_TOOLCHAIN_ID_BYTES_V1
+    + 1
+    + MAX_REPLAY_DIAGNOSTIC_BODY_BYTES_V1
+    + (1 + REPLAY_CONTENT_IDENTITY_BYTES_V1)
+    + MAX_REPLAY_PROVIDER_EVIDENCE_METADATA_BYTES_V1
+    + 32;
+// Audited bound for versioned transcript framing and fixed request/plan identities not already in
+// the two response shells or shared worker/target/option reconstruction metadata.
+const MAX_REPLAY_SHARED_FRAMING_AND_IDENTITIES_BYTES_V1: usize = 4_175;
 
 /// Maximum compact opaque finalizer reconstruction metadata retained by one intent.
 ///
-/// The formula admits one canonical link plan, two independently bound Worker V3 provider-evidence
-/// metadata bodies, both bounded diagnostic sets, worker/target/option metadata, and 64 KiB of
-/// versioned framing and fixed identities. Large handoff, provider, raw-output, and
+/// The formula admits two independent strict-V3 response metadata shells, including separate
+/// provider-evidence and diagnostic bodies, plus shared worker/target/option reconstruction
+/// metadata and audited fixed framing/identity bytes. Large handoff, provider, raw-output, and
 /// finalized-output bytes have separate attachments and must not be copied into this metadata.
-pub const MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1: usize =
-    MAX_REPLAY_LINK_PLAN_METADATA_BYTES_V1
-        + 2 * MAX_REPLAY_PROVIDER_EVIDENCE_METADATA_BYTES_V1
-        + MAX_REPLAY_DIAGNOSTIC_METADATA_BYTES_V1
-        + MAX_REPLAY_WORKER_OPTION_METADATA_BYTES_V1
-        + MAX_REPLAY_FIXED_METADATA_BYTES_V1;
+pub const MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1: usize = 2
+    * MAX_REPLAY_RESPONSE_METADATA_SHELL_BYTES_V1
+    + MAX_REPLAY_SHARED_WORKER_OPTION_METADATA_BYTES_V1
+    + MAX_REPLAY_SHARED_FRAMING_AND_IDENTITIES_BYTES_V1;
+const _: () = assert!(MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1 == 2_195_505);
 
 const PROVIDER_ARCHIVE_MAGIC_V1: &[u8] = b"FE2O3-WORKER-V3-PROVIDER-PAYLOADS-V1\0";
 const PROVIDER_ARCHIVE_VERSION_V1: u16 = 1;
@@ -185,8 +182,8 @@ pub const MAX_WORKER_V3_PUBLICATION_INTENT_METADATA_BYTES_V1: usize =
 
 /// Maximum retained bytes allocated by one restart recovery.
 ///
-/// This is the checked sum of unique large byte owners plus bounded retained and recovery-only
-/// metadata: one outer handoff, each provider payload once, one finalized output, and
+/// This is the checked sum of storage-layout byte owners plus bounded retained and recovery-only
+/// metadata: one outer handoff entry, each provider archive payload entry, one output entry, and
 /// [`MAX_WORKER_V3_PUBLICATION_INTENT_METADATA_BYTES_V1`]. Raw output must be deterministically
 /// derived from finalized output; no canonical request or response aggregate is included.
 pub const MAX_WORKER_V3_PUBLICATION_INTENT_RECOVERY_BYTES_V1: usize =
@@ -373,7 +370,7 @@ impl fmt::Display for WorkerV3PublicationIntentCodecErrorV1 {
                 .write_str("Worker V3 publication-intent length arithmetic overflowed"),
             Self::RecoveryBudgetExceeded { required, maximum } => write!(
                 formatter,
-                "Worker V3 unique-byte recovery working set {required} exceeds {maximum}"
+                "Worker V3 storage-layout recovery working set {required} exceeds {maximum}"
             ),
             Self::ProviderArchiveMagicMismatch => {
                 formatter.write_str("Worker V3 external-provider archive magic mismatch")
@@ -1031,7 +1028,7 @@ impl RecoveredWorkerV3PublicationIntentV1 {
         &self.exact_output
     }
 
-    /// Borrows all unique finalizer replay attachments.
+    /// Borrows all stored finalizer replay attachments.
     pub const fn replay_attachments(&self) -> &WorkerV3FinalizerReplayAttachmentsV1 {
         &self.replay_attachments
     }
@@ -1370,7 +1367,7 @@ impl From<WorkerV3PublicationIntentCodecErrorV1> for WorkerV3PublicationIntentEr
     }
 }
 
-/// Persists one deduplicated replay set and exact finalized output for restart.
+/// Persists one compact replay storage layout and exact finalized output for restart.
 ///
 /// A fresh intent is accepted only while the exact producer occurrence remains in `Building`.
 /// Exact recovery remains available after backend claim or completion. Inputs are accepted by value
@@ -3780,11 +3777,13 @@ mod tests {
     fn transcript_and_owner_capacity_formulas_are_independent_and_checked() {
         assert_eq!(
             MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1,
-            MAX_REPLAY_LINK_PLAN_METADATA_BYTES_V1
-                + 2 * MAX_REPLAY_PROVIDER_EVIDENCE_METADATA_BYTES_V1
-                + MAX_REPLAY_DIAGNOSTIC_METADATA_BYTES_V1
-                + MAX_REPLAY_WORKER_OPTION_METADATA_BYTES_V1
-                + MAX_REPLAY_FIXED_METADATA_BYTES_V1
+            2 * MAX_REPLAY_RESPONSE_METADATA_SHELL_BYTES_V1
+                + MAX_REPLAY_SHARED_WORKER_OPTION_METADATA_BYTES_V1
+                + MAX_REPLAY_SHARED_FRAMING_AND_IDENTITIES_BYTES_V1
+        );
+        assert_eq!(
+            MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1,
+            2_195_505
         );
         assert_eq!(
             validate_caller_owner_capacity_values(
@@ -3798,6 +3797,17 @@ mod tests {
             .unwrap(),
             MAX_WORKER_V3_PUBLICATION_INTENT_CALLER_OWNER_CAPACITY_BYTES_V1
         );
+        #[cfg(target_pointer_width = "64")]
+        {
+            assert_eq!(
+                MAX_WORKER_V3_PUBLICATION_INTENT_RECOVERY_BYTES_V1,
+                388_610_319
+            );
+            assert_eq!(
+                MAX_WORKER_V3_PUBLICATION_INTENT_CALLER_OWNER_CAPACITY_BYTES_V1,
+                388_599_264
+            );
+        }
         assert!(matches!(
             validate_caller_owner_capacity_values(
                 MAX_COMPILER_MODULE_HANDOFF_BYTES_V3 + 1,
