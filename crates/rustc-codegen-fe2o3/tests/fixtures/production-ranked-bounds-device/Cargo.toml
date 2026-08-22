@@ -11,6 +11,8 @@ publish = false
 oob = []
 shifted = []
 grid_exclusive = []
+production_safe = []
+production_oob = []
 
 [dependencies]
 fe2o3-device.workspace = true

@@ -3,9 +3,9 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const SAFE_PRODUCTION_CRATE_BINDING_V1: &str =
-    "9cf5c6d630a1cb5aae7973e2850e5875404c726f813e368ff3d6c53d34bf025c";
+    "e9af58d0521591b656a0bdfbd4bb0f9b27d702118d594ad63e01f30a5bcd5d82";
 const OOB_PRODUCTION_CRATE_BINDING_V1: &str =
-    "ed4c8ab709ef6feb1aa913f84536489b3714f591bcf204b5a5414318f6c54289";
+    "09db87689fbbae9d81a8f6df813c91acabe06ca91a15223a1d49d94268a85450";
 
 struct ScratchTarget {
     path: PathBuf,
@@ -94,7 +94,7 @@ fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
         oob.stderr.contains("error[FE2O3-BOUNDS-001]")
             && oob.stderr.contains("required: 64 < 64")
             && oob.stderr.contains("Rust source")
-            && oob.stderr.contains(":26:20")
+            && oob.stderr.contains(":36:20")
             && oob.stderr.contains("kernel.index_constant 64")
             && oob
                 .stderr
@@ -118,7 +118,7 @@ fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
     }
 
     let production_target = ScratchTarget::new();
-    let safe_production = run_production_pipeline(&production_target, false);
+    let safe_production = run_unprotected_production_validation(&production_target, false);
     assert!(
         !safe_production.status.success()
             && safe_production
@@ -131,7 +131,7 @@ fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
         safe_production.stderr,
     );
 
-    let oob_production = run_production_pipeline(&production_target, true);
+    let oob_production = run_unprotected_production_validation(&production_target, true);
     assert!(
         !oob_production.status.success()
             && oob_production
@@ -200,7 +200,7 @@ fn run_feature_extraction(target: &ScratchTarget, feature: &str) -> ExtractionOu
     output(command, "run safe mapped AMD extraction fixture")
 }
 
-fn run_production_pipeline(target: &ScratchTarget, oob: bool) -> ExtractionOutput {
+fn run_unprotected_production_validation(target: &ScratchTarget, oob: bool) -> ExtractionOutput {
     let artifacts = target.path().join("artifacts");
     std::fs::create_dir_all(&artifacts).expect("create production artifact directory");
     let backend = Path::new(env!("CARGO_BIN_EXE_fe2o3-rustc-extract"))
@@ -220,6 +220,10 @@ fn run_production_pipeline(target: &ScratchTarget, oob: bool) -> ExtractionOutpu
     let mut command = base_command("rustc", &target.path().join("cargo"));
     command
         .env("FE2O3_CODEGEN_PIPELINE", "production-v1")
+        .env(
+            "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
+            "1",
+        )
         .env("FE2O3_HSACO_DIR", &artifacts)
         .env("FE2O3_TARGET", "gfx942")
         .env(
@@ -230,9 +234,14 @@ fn run_production_pipeline(target: &ScratchTarget, oob: bool) -> ExtractionOutpu
                 SAFE_PRODUCTION_CRATE_BINDING_V1
             },
         );
-    if oob {
-        command.args(["--features", "oob"]);
-    }
+    command.args([
+        "--features",
+        if oob {
+            "production_oob"
+        } else {
+            "production_safe"
+        },
+    ]);
     command.args(["--", &format!("-Zcodegen-backend={}", backend.display())]);
     output(command, "run production AMD codegen route")
 }

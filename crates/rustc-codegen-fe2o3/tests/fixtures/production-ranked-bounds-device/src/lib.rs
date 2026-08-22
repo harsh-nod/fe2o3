@@ -8,9 +8,15 @@ use fe2o3_device::{Index1D, Shifted};
 
 #[kernel(
     typed,
-    namespace = "3b396cb285ea8af892007da6ebb4e714a7f03969d1b07db3eaae179ef7100e27"
+    namespace = "a130f76c1071b4a38d95d4243086735784efd11000f30a04ed4beaf1e6ef67d6"
 )]
-#[cfg(not(any(feature = "oob", feature = "shifted", feature = "grid_exclusive")))]
+#[cfg(not(any(
+    feature = "oob",
+    feature = "shifted",
+    feature = "grid_exclusive",
+    feature = "production_safe",
+    feature = "production_oob"
+)))]
 pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
     let input = [value; 64];
     let selected = input[63];
@@ -21,7 +27,7 @@ pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
 
 #[kernel(
     typed,
-    namespace = "24581859896c50358dec58673c853eed6805ed66208dc90186b0e9a7d5013117"
+    namespace = "2071184a44bd1eb8257e5623dff35c629e517cfb6aaffb641f7c3ff32f573fc9"
 )]
 #[cfg(feature = "oob")]
 #[allow(unconditional_panic)]
@@ -35,7 +41,7 @@ pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
 
 #[kernel(
     typed,
-    namespace = "a2f15d56ba1c5a4d100743ffe976774c7e4b43bf37709788685b8bab5ed73570"
+    namespace = "a1c8d65df28d93d3567e3d99058431b0ada97a60637c83b5375953a36e5a6972"
 )]
 #[cfg(feature = "shifted")]
 pub fn checked_shifted(mut output: DisjointSlice<f32, Shifted<Index1D, 4>>) {
@@ -48,7 +54,7 @@ pub fn checked_shifted(mut output: DisjointSlice<f32, Shifted<Index1D, 4>>) {
 
 #[kernel(
     typed,
-    namespace = "a7d280c45c82a757eae770bac6e64a6064ee4ce2ffbc1b5b0b7cca214e65d14d"
+    namespace = "0a5525deac37d1126cd5a1a817512d66b7338591f913c397afffb26bc027fa01"
 )]
 #[cfg(feature = "grid_exclusive")]
 pub fn grid_exclusive(mut output: DisjointSlice<f32, GridExclusive>) {
@@ -56,5 +62,32 @@ pub fn grid_exclusive(mut output: DisjointSlice<f32, GridExclusive>) {
         if let Some(element) = output.get_mut_exclusive(&leader, 7) {
             *element = 1.0;
         }
+    }
+}
+
+#[kernel(
+    typed,
+    namespace = "e9af58d0521591b656a0bdfbd4bb0f9b27d702118d594ad63e01f30a5bcd5d82"
+)]
+#[cfg(feature = "production_safe")]
+pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
+    let input = [value; 64];
+    let selected = input[63];
+    if let Some(element) = output.get_mut(thread::index_1d()) {
+        *element = selected;
+    }
+}
+
+#[kernel(
+    typed,
+    namespace = "09db87689fbbae9d81a8f6df813c91acabe06ca91a15223a1d49d94268a85450"
+)]
+#[cfg(feature = "production_oob")]
+#[allow(unconditional_panic)]
+pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
+    let input = [value; 64];
+    let selected = input[64];
+    if let Some(element) = output.get_mut(thread::index_1d()) {
+        *element = selected;
     }
 }
