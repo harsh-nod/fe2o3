@@ -640,10 +640,16 @@ turn the foundations below into end-to-end features.
   lock, commits version-separated pending/final V3 receipts, returns a bounded
   canonical V3 claim and currentness lease, and reconstructs the same move-only
   production result after either backend-claimed or completed process restart.
-  Current-generation replay inputs remain protected even after publication
-  until a future durable load-envelope readiness receipt exists. This route is
-  still not connected to a V3 load envelope, application handoff, host
-  admission, exclusive Cargo routing, or HSA launch.
+  That result can now transfer into a move-only `WorkerV3LoadEnvelopeV1`. A
+  claim-bound audited bridge publishes the exact canonical envelope, claim,
+  and terminal custody receipt; restart can discover and revalidate that
+  custody from the attempt registry before reconstructing the same inert live
+  envelope. Exact terminal custody authorizes retirement of the duplicate
+  current-generation replay intent, while registry-rooted scavenging removes
+  only superseded custody. The envelope still grants no descriptor
+  authentication, semantic admission, HSA readiness, load, or launch
+  authority. V3 application descriptor transfer, host admission, exclusive
+  Cargo routing, and HSA launch remain open.
 - Linux-only rustc and codegen-backend primitives use descriptor-backed procfs
   paths. The external Cargo path copies the backend into a rehashed, immutable
   sealed memfd and installs it after a compile-shaped managed wrapper

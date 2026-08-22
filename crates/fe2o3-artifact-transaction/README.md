@@ -18,7 +18,8 @@ surfaces.
 | Compiler module handoff V2 | The complete canonical `CompilerClosureV2`, attempt, producer, slot, and exact module bytes are committed by V2 publish/consume APIs. | Existing protected backend and wrapper/finalizer call sites have not been migrated by this crate-only change. |
 | Compiler module handoff V3 | The native terminal identity and exact canonical bytes of `InertSemanticCompilerModuleHandoffV3` are bound to the attempt, producer, slot, and transaction identity in a separate V3 namespace. Cross-process receipt recovery validates the exact durable ready record and payload under the cooperative lock; additive currentness APIs retain pinned output/namespace/slot/record/payload descriptors in a move-only lease, mint a single-use token under the lock, and consume that token when committing the existing one-shot tombstone. | The transport, inert receipt recovery, and currentness custody are implemented and tested but production callers are not wired by this crate-only change. |
 | Worker V2 publication intent | The complete closure is committed with the attempt, producer, durable plan, upstream evidence, output identity, length, and exact retained bytes; V2 persist/recover/clear APIs reject closure mismatch. | Protected publication and restart-marker paths still persist, recover, and clear V1 intents. |
-| Worker V3 publication intent V1 | A side-by-side namespace commits one outer handoff entry, an ordered provider archive with one entry per supplied external payload, compact opaque replay metadata, one finalized output entry, the complete durable plan, and the producer occurrence. The record is committed last. Current-generation inputs remain protected pending load-envelope readiness; successor-authorized scavenge uses a restartable retirement marker. | Exact restart recovery, strict V3 pending/final receipts, durable claims, currentness reacquisition, completed-state reconstruction, and successor retirement are implemented. Safe publication requires a move-only verified-finalizer authority supplied by `fe2o3-hsaco-finalize`; V1/V2 wires are unchanged. |
+| Worker V3 publication intent V1 | A side-by-side namespace commits one outer handoff entry, an ordered provider archive with one entry per supplied external payload, compact opaque replay metadata, one finalized output entry, the complete durable plan, and the producer occurrence. The record is committed last. Current-generation inputs remain protected pending exact load-envelope custody; successor-authorized scavenge uses a restartable retirement marker. | Exact restart recovery, strict V3 pending/final receipts, durable claims, currentness reacquisition, completed-state reconstruction, receipt-bound current retirement, and successor retirement are implemented. Safe publication requires a move-only verified-finalizer authority supplied by `fe2o3-hsaco-finalize`; V1/V2 wires are unchanged. |
+| Worker V3 load readiness V1 | A claim-bound audited authority permits one exact opaque envelope, canonical durable claim, and fixed terminal receipt to be published under the same pinned output lock. The receipt binds the attempt, backend receipt, envelope and claim digests and lengths, output directory, file inodes, and timestamps. | Exact retry, output-directory-only attempt discovery, process-restart recovery, abrupt-crash reconciliation at every durability boundary, and registry-rooted cleanup of superseded custody are implemented. The result is inert and grants no descriptor authentication, semantic admission, HSA readiness, load, or launch authority. |
 
 V1 and V2 APIs, wire formats, and byte maxima remain unchanged and are not
 silently upgraded. V3 uses the compiler-FFI V3 maximum only in its own schema
@@ -81,11 +82,13 @@ resynchronized before the record commit. If any record-absent attachment differs
 private attachment set is removed before the retry. Record-absent recovery removes validated
 uncommitted files and returns `NotFound`.
 
-Backend publication alone cannot authorize current-generation cleanup: replay preimages must
-remain available until a later protocol durably records that the V3 load envelope is ready.
-`clear_worker_v3_publication_intent_v1` therefore returns `ReceiptNotDurable` for the current
-occurrence even after an exact V1, protected V2, or strict V3 receipt. A strictly newer same-source,
-same-crate generation is independent revocation authority for its predecessor.
+Backend publication alone cannot authorize current-generation cleanup: replay preimages remain
+available until the V3 load-readiness protocol durably records exact joint custody of the envelope
+and current published artifact. `clear_worker_v3_publication_intent_v1` therefore returns
+`ReceiptNotDurable` for the current occurrence even after an exact V1, protected V2, or strict V3
+publication receipt. `retire_worker_v3_publication_intent_after_load_readiness_v1` accepts only the
+exact current terminal custody receipt. A strictly newer same-source, same-crate generation remains
+independent revocation authority for its predecessor.
 
 Retirement validates every record and attachment before atomically renaming `.record` or
 `.record.redo` to `.record.retiring`. That marker name is synchronized before any attachment is

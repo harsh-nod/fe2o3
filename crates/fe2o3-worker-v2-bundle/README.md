@@ -79,10 +79,12 @@ and checksum domains.
 Worker V3 V1 decoders reject Worker V2 values, stale challenges, substituted
 applications or input occurrences, aliased or noncanonical inputs, hostile
 counts and lengths, truncation, trailing bytes, checksums, and explicit codec
-budget exhaustion. Construction and decoding remain inert: no V3 load-envelope
-implementation is implied, and no serialized identity, occurrence, challenge,
-expectation, commitment, or ACK grants currentness, publication, host, load,
-launch, or process authority.
+budget exhaustion. Construction and decoding remain inert. A separate strict
+`WorkerV3LoadEnvelopeV1` implementation now transfers completed publication
+custody and supports exact durable restart recovery, but the application
+protocol treats its bytes as opaque and grants no schema validation. No
+serialized identity, occurrence, challenge, expectation, commitment, ACK, or
+recovered envelope grants host, load, launch, or process authority.
 
 `DurablePublishedHsacoClaimV1` preserves the exact publication plan, receipt,
 output-directory identity, record identity, artifact identity, and artifact
