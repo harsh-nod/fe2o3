@@ -47,6 +47,7 @@ pub(crate) enum ProductionPipelineErrorV1 {
     Gfx942Lowering(dialect_amdgcn::LoweringErrors),
     UpstreamLlvmLayoutBinding(String),
     DescriptorEvidence(crate::compiler_descriptor::CompilerDescriptorError),
+    RustcLineageMismatch,
     ProtectedRustcInvocation(ProtectedRustcInvocationErrorV1),
     ProtectedHandoffRequiresV2,
     UnprotectedHandoffRequiresV1,
@@ -87,6 +88,9 @@ impl fmt::Display for ProductionPipelineErrorV1 {
             Self::DescriptorEvidence(error) => {
                 write!(formatter, "production-v1 descriptor evidence failed: {error}")
             }
+            Self::RustcLineageMismatch => formatter.write_str(
+                "production-v1 rustc preflight plan is not bound to the retained identity inventory",
+            ),
             Self::ProtectedRustcInvocation(error) => write!(
                 formatter,
                 "production-v1 final protected rustc invocation validation failed: {error}"
@@ -121,6 +125,7 @@ impl std::error::Error for ProductionPipelineErrorV1 {
             | Self::EmptyCollectedDeviceClosure
             | Self::ProtectedHandoffRequiresV2
             | Self::UnprotectedHandoffRequiresV1
+            | Self::RustcLineageMismatch
             | Self::UpstreamLlvmLayoutBinding(_) => None,
         }
     }
@@ -488,6 +493,11 @@ impl Gfx942LoweredProductionCompilationV1 {
             compiler_ffi_envelope,
             publication,
         } = transaction;
+        if rustc_preflight_plan.rustc_identity_inventory_sha256()
+            != rustc_identity_inventory.sha256()
+        {
+            return Err(ProductionPipelineErrorV1::RustcLineageMismatch);
+        }
         let compiler_module = AuthenticatedProductionGfx942ModuleV1 {
             admitted,
             target_module,

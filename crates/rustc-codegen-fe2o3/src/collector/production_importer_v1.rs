@@ -185,12 +185,17 @@ impl AuthenticatedRustcIdentityInventoryV3 {
 /// production transaction. Public hashes cannot construct this owner.
 pub(crate) struct AuthenticatedRustcPreflightPlanV3 {
     sha256: [u8; 32],
+    rustc_identity_inventory_sha256: [u8; 32],
     canonical_transcript: Box<[u8]>,
 }
 
 impl AuthenticatedRustcPreflightPlanV3 {
     pub(crate) const fn sha256(&self) -> [u8; 32] {
         self.sha256
+    }
+
+    pub(crate) const fn rustc_identity_inventory_sha256(&self) -> [u8; 32] {
+        self.rustc_identity_inventory_sha256
     }
 
     pub(crate) fn canonical_transcript(&self) -> &[u8] {
@@ -320,6 +325,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         },
         AuthenticatedRustcPreflightPlanV3 {
             sha256: rustc_preflight_plan_sha256,
+            rustc_identity_inventory_sha256,
             canonical_transcript: rustc_preflight_plan_transcript,
         },
     ))
