@@ -1639,11 +1639,13 @@ pub fn resume_worker_v3_publication_intent_retirement_v1(
     retire_pinned_occurrence_locked(
         &output,
         &names,
-        producer,
-        attempt,
         pinned_record,
-        None,
-        RetirementAuthorizationV1::ReceiptOrSuccessor,
+        RetirementAuthorityV1 {
+            producer,
+            attempt,
+            expected_identity: None,
+            authorization: RetirementAuthorizationV1::ReceiptOrSuccessor,
+        },
         &mut faults,
     )?;
     Ok(())
@@ -1874,6 +1876,14 @@ enum RetirementAuthorizationV1 {
 }
 
 #[derive(Clone, Copy)]
+struct RetirementAuthorityV1<'a> {
+    producer: &'a ProducerIdentity,
+    attempt: BuildAttempt,
+    expected_identity: Option<WorkerV3PublicationIntentIdentityV1>,
+    authorization: RetirementAuthorizationV1,
+}
+
+#[derive(Clone, Copy)]
 enum RetirementRecordStateV1 {
     Canonical,
     Redo,
@@ -1933,11 +1943,13 @@ fn retire_committed_occurrence_locked(
     retire_pinned_occurrence_locked(
         output,
         names,
-        producer,
-        attempt,
         pinned_record,
-        expected_identity,
-        authorization,
+        RetirementAuthorityV1 {
+            producer,
+            attempt,
+            expected_identity,
+            authorization,
+        },
         faults,
     )?
     .checked_add(cleanup.removed_entries)
@@ -1995,8 +2007,10 @@ fn complete_quarantined_retirement_locked(
         names,
         &candidate,
         "retire-record",
-        WorkerV3PublicationIntentBoundaryV1::RenameRetiringRecordToQuarantine,
-        WorkerV3PublicationIntentBoundaryV1::RemoveRetiringRecord,
+        CleanupBoundariesV1 {
+            quarantine: WorkerV3PublicationIntentBoundaryV1::RenameRetiringRecordToQuarantine,
+            remove: WorkerV3PublicationIntentBoundaryV1::RemoveRetiringRecord,
+        },
         &pinned.file,
         &mut faults,
     )?;
@@ -2008,22 +2022,22 @@ fn complete_quarantined_retirement_locked(
 fn retire_pinned_occurrence_locked(
     output: &PinnedOutput,
     names: &IntentNames,
-    producer: &ProducerIdentity,
-    attempt: BuildAttempt,
     mut pinned_record: PinnedRetirementRecordV1,
-    expected_identity: Option<WorkerV3PublicationIntentIdentityV1>,
-    authorization: RetirementAuthorizationV1,
+    authority: RetirementAuthorityV1<'_>,
     faults: &mut FaultInjector,
 ) -> Result<usize, WorkerV3PublicationIntentErrorV1> {
-    if expected_identity.is_some_and(|identity| identity != pinned_record.record.identity()) {
+    if authority
+        .expected_identity
+        .is_some_and(|identity| identity != pinned_record.record.identity())
+    {
         return Err(WorkerV3PublicationIntentErrorV1::IdentityMismatch);
     }
     authorize_retirement(
         output,
-        producer,
-        attempt,
+        authority.producer,
+        authority.attempt,
         pinned_record.record,
-        authorization,
+        authority.authorization,
     )?;
 
     let require_complete = !matches!(pinned_record.state, RetirementRecordStateV1::Retiring);
@@ -2077,8 +2091,10 @@ fn retire_pinned_occurrence_locked(
                 names,
                 &candidate,
                 purpose,
-                quarantine_boundary,
-                remove_boundary,
+                CleanupBoundariesV1 {
+                    quarantine: quarantine_boundary,
+                    remove: remove_boundary,
+                },
                 faults,
             )?;
             removed = removed
@@ -2104,8 +2120,10 @@ fn retire_pinned_occurrence_locked(
             snapshot: pinned_record.snapshot,
         },
         "retire-record",
-        WorkerV3PublicationIntentBoundaryV1::RenameRetiringRecordToQuarantine,
-        WorkerV3PublicationIntentBoundaryV1::RemoveRetiringRecord,
+        CleanupBoundariesV1 {
+            quarantine: WorkerV3PublicationIntentBoundaryV1::RenameRetiringRecordToQuarantine,
+            remove: WorkerV3PublicationIntentBoundaryV1::RemoveRetiringRecord,
+        },
         &pinned_record.file,
         faults,
     )?;
@@ -2541,6 +2559,12 @@ struct CleanupCandidate {
     snapshot: rustix::fs::Stat,
 }
 
+#[derive(Clone, Copy)]
+struct CleanupBoundariesV1 {
+    quarantine: WorkerV3PublicationIntentBoundaryV1,
+    remove: WorkerV3PublicationIntentBoundaryV1,
+}
+
 struct TempCleanupOutcomeV1 {
     removed_entries: usize,
     quarantined_retiring_record: Option<CleanupCandidate>,
@@ -2725,8 +2749,7 @@ fn unlink_exact_private_candidate(
     names: &IntentNames,
     candidate: &CleanupCandidate,
     purpose: &str,
-    quarantine_boundary: WorkerV3PublicationIntentBoundaryV1,
-    remove_boundary: WorkerV3PublicationIntentBoundaryV1,
+    boundaries: CleanupBoundariesV1,
     faults: &mut FaultInjector,
 ) -> Result<(), WorkerV3PublicationIntentErrorV1> {
     let exact_length = usize::try_from(candidate.snapshot.st_size).map_err(|_| {
@@ -2751,16 +2774,7 @@ fn unlink_exact_private_candidate(
             WorkerV3PublicationIntentInvalidReasonV1::FileChangedWhileRead,
         ));
     }
-    unlink_pinned_private_candidate(
-        output,
-        names,
-        candidate,
-        purpose,
-        quarantine_boundary,
-        remove_boundary,
-        &file,
-        faults,
-    )
+    unlink_pinned_private_candidate(output, names, candidate, purpose, boundaries, &file, faults)
 }
 
 fn unlink_pinned_private_candidate(
@@ -2768,13 +2782,12 @@ fn unlink_pinned_private_candidate(
     names: &IntentNames,
     candidate: &CleanupCandidate,
     purpose: &str,
-    quarantine_boundary: WorkerV3PublicationIntentBoundaryV1,
-    remove_boundary: WorkerV3PublicationIntentBoundaryV1,
+    boundaries: CleanupBoundariesV1,
     file: &fs::File,
     faults: &mut FaultInjector,
 ) -> Result<(), WorkerV3PublicationIntentErrorV1> {
     faults.hit(
-        quarantine_boundary,
+        boundaries.quarantine,
         WorkerV3PublicationIntentFaultTimingV1::Before,
     )?;
     output.verify_path_identity()?;
@@ -2806,11 +2819,11 @@ fn unlink_pinned_private_candidate(
         ));
     }
     faults.hit(
-        quarantine_boundary,
+        boundaries.quarantine,
         WorkerV3PublicationIntentFaultTimingV1::After,
     )?;
     faults.hit(
-        remove_boundary,
+        boundaries.remove,
         WorkerV3PublicationIntentFaultTimingV1::Before,
     )?;
     output.verify_path_identity()?;
@@ -2839,7 +2852,7 @@ fn unlink_pinned_private_candidate(
         ));
     }
     faults.hit(
-        remove_boundary,
+        boundaries.remove,
         WorkerV3PublicationIntentFaultTimingV1::After,
     )
 }
@@ -2918,8 +2931,10 @@ fn remove_uncommitted_occurrence_entries(
             names,
             candidate,
             &purpose,
-            WorkerV3PublicationIntentBoundaryV1::RenameOutputToQuarantine,
-            WorkerV3PublicationIntentBoundaryV1::RemoveOutput,
+            CleanupBoundariesV1 {
+                quarantine: WorkerV3PublicationIntentBoundaryV1::RenameOutputToQuarantine,
+                remove: WorkerV3PublicationIntentBoundaryV1::RemoveOutput,
+            },
             &mut faults,
         )?;
     }
@@ -3923,8 +3938,10 @@ fn cleanup_temps(
                 names,
                 candidate,
                 &purpose,
-                WorkerV3PublicationIntentBoundaryV1::RenameOutputToQuarantine,
-                WorkerV3PublicationIntentBoundaryV1::RemoveOutput,
+                CleanupBoundariesV1 {
+                    quarantine: WorkerV3PublicationIntentBoundaryV1::RenameOutputToQuarantine,
+                    remove: WorkerV3PublicationIntentBoundaryV1::RemoveOutput,
+                },
                 &mut faults,
             )?;
         }
@@ -5065,8 +5082,11 @@ mod tests {
                     snapshot,
                 },
                 "test-record",
-                WorkerV3PublicationIntentBoundaryV1::RenameRetiringRecordToQuarantine,
-                WorkerV3PublicationIntentBoundaryV1::RemoveRetiringRecord,
+                CleanupBoundariesV1 {
+                    quarantine:
+                        WorkerV3PublicationIntentBoundaryV1::RenameRetiringRecordToQuarantine,
+                    remove: WorkerV3PublicationIntentBoundaryV1::RemoveRetiringRecord,
+                },
                 &file,
                 &mut faults,
             ),
