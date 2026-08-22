@@ -3,16 +3,20 @@
 use std::{error::Error, fmt, path::Path, sync::Arc};
 
 use fe2o3_artifact_transaction::{
-    AtomicPublicationIdentityV1, BuildAttempt, CanonicalLinkRequestIdentityV1,
-    DurableLinkPublicationPlanV1, FinalizationIdentityV1, FinalizedOutputIdentityV1,
-    KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1, PackageIdentityV1,
-    PinnedWorkerIdentityV1, ProducerIdentity, RecoveredWorkerV3PublicationIntentV1,
-    TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1, ValidatedResponseIdentityV1,
-    WorkerV3FinalizerReplayAttachmentsV1, WorkerV3PublicationIntentErrorV1,
+    AtomicPublicationIdentityV1, AttemptScopedHsacoPublicationErrorV3,
+    AttemptScopedHsacoPublicationResultV3, BuildAttempt, CanonicalLinkRequestIdentityV1,
+    DurableLinkPublicationPlanV1, DurablePublishedHsacoClaimV3, FinalizationIdentityV1,
+    FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1,
+    PackageIdentityV1, PinnedWorkerIdentityV1, ProducerIdentity,
+    RecoveredWorkerV3PublicationIntentV1, TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1,
+    ValidatedResponseIdentityV1, VerifiedWorkerV3PublicationAuthorityV1,
+    WorkerV3FinalizerReplayAttachmentsV1, WorkerV3PublicationBindingErrorV1,
+    WorkerV3PublicationBindingV1, WorkerV3PublicationIntentErrorV1,
     WorkerV3PublicationIntentOutcomeV1, WorkerV3PublicationIntentRecordV1,
     persist_worker_v3_publication_intent_v1, producer_package_identity_v1,
-    recover_worker_v3_publication_intent_v1,
+    publish_exact_hsaco_evidence_for_attempt_v3, recover_worker_v3_publication_intent_v1,
 };
+use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3;
 use sha2::{Digest, Sha256};
 
@@ -168,6 +172,43 @@ pub struct RecoveredProtectedWorkerV3HsacoPublicationV1 {
     intent: SealedProtectedWorkerV3HsacoPublicationIntentV1,
 }
 
+/// Move-only production result retaining both replayed lineage and completed publication state.
+#[derive(Debug)]
+pub struct PublishedProtectedWorkerV3HsacoV1 {
+    recovered: RecoveredProtectedWorkerV3HsacoPublicationV1,
+    publication: AttemptScopedHsacoPublicationResultV3,
+}
+
+impl PublishedProtectedWorkerV3HsacoV1 {
+    pub const fn recovered_evidence(&self) -> &RecoveredProtectedWorkerV3HsacoPublicationV1 {
+        &self.recovered
+    }
+
+    pub const fn publication_result(&self) -> &AttemptScopedHsacoPublicationResultV3 {
+        &self.publication
+    }
+
+    pub const fn published_claim(&self) -> &DurablePublishedHsacoClaimV3 {
+        self.publication.published_claim()
+    }
+
+    pub const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_proof_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
 impl RecoveredProtectedWorkerV3HsacoPublicationV1 {
     pub const fn outcome(&self) -> WorkerV3PublicationIntentOutcomeV1 {
         self.outcome
@@ -189,6 +230,35 @@ impl RecoveredProtectedWorkerV3HsacoPublicationV1 {
         &self.finalized
     }
 
+    /// Derives the exact transaction-owned binding required to complete V3 publication.
+    ///
+    /// The compiler closure is supplied by the authenticated Cargo boundary. Every other axis is
+    /// taken from this independently replayed restart owner and cannot be mixed with a different
+    /// publication-intent record or finalizer lineage.
+    pub fn publication_binding(
+        &self,
+        compiler_closure: CompilerClosureV2,
+    ) -> Result<WorkerV3PublicationBindingV1, WorkerV3HsacoPublicationErrorV1> {
+        if compiler_closure != self.finalized.binding_expectation().compiler_closure() {
+            return Err(WorkerV3HsacoPublicationErrorV1::CompilerClosureMismatch);
+        }
+        let raw_output = self.intent.raw_output_identity();
+        let finalized_output = self.intent.finalized_output_identity();
+        WorkerV3PublicationBindingV1::new(
+            compiler_closure,
+            self.record.identity().as_bytes(),
+            *self.intent.finalization_identity().as_bytes(),
+            *self.intent.source_evidence_identity().as_bytes(),
+            *self.intent.binding_identity().as_bytes(),
+            *self.intent.raw_inspection_identity().as_bytes(),
+            *raw_output.sha256(),
+            raw_output.byte_len(),
+            *finalized_output.sha256(),
+            finalized_output.byte_len(),
+        )
+        .map_err(WorkerV3HsacoPublicationErrorV1::PublicationBinding)
+    }
+
     pub const fn grants_publication_authority(&self) -> bool {
         false
     }
@@ -206,6 +276,7 @@ impl RecoveredProtectedWorkerV3HsacoPublicationV1 {
 #[non_exhaustive]
 pub enum WorkerV3HsacoPublicationErrorV1 {
     ProducerIdentityMismatch,
+    CompilerClosureMismatch,
     RawOutputMismatch,
     FinalizedOutputMismatch,
     TranscriptFinalizationMismatch,
@@ -215,6 +286,8 @@ pub enum WorkerV3HsacoPublicationErrorV1 {
     ProviderIdentityMismatch { index: usize },
     CompactReplay(ProtectedWorkerV3CompactFinalizerReplayErrorV1),
     Storage(WorkerV3PublicationIntentErrorV1),
+    PublicationBinding(WorkerV3PublicationBindingErrorV1),
+    Transaction(AttemptScopedHsacoPublicationErrorV3),
     OuterHandoff(fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffErrorV3),
     Binding(crate::ProtectedCompilerHandoffBindingErrorV3),
     Request(WorkerRequestConstructionError),
@@ -233,6 +306,8 @@ impl fmt::Display for WorkerV3HsacoPublicationErrorV1 {
             Self::ProducerIdentityMismatch => {
                 formatter.write_str("V3 publication producer differs from the prepared producer")
             }
+            Self::CompilerClosureMismatch => formatter
+                .write_str("V3 publication compiler closure differs from recovered handoff"),
             Self::RawOutputMismatch => {
                 formatter.write_str("recovered raw HSACO differs from strict V3 replay evidence")
             }
@@ -256,6 +331,8 @@ impl fmt::Display for WorkerV3HsacoPublicationErrorV1 {
             }
             Self::CompactReplay(error) => error.fmt(formatter),
             Self::Storage(error) => error.fmt(formatter),
+            Self::PublicationBinding(error) => error.fmt(formatter),
+            Self::Transaction(error) => error.fmt(formatter),
             Self::OuterHandoff(error) => error.fmt(formatter),
             Self::Binding(error) => error.fmt(formatter),
             Self::Request(error) => error.fmt(formatter),
@@ -277,6 +354,8 @@ impl Error for WorkerV3HsacoPublicationErrorV1 {
         match self {
             Self::CompactReplay(error) => Some(error),
             Self::Storage(error) => Some(error),
+            Self::PublicationBinding(error) => Some(error),
+            Self::Transaction(error) => Some(error),
             Self::OuterHandoff(error) => Some(error),
             Self::Binding(error) => Some(error),
             Self::Request(error) => Some(error),
@@ -306,6 +385,8 @@ error_conversion!(
     CompactReplay
 );
 error_conversion!(WorkerV3PublicationIntentErrorV1, Storage);
+error_conversion!(WorkerV3PublicationBindingErrorV1, PublicationBinding);
+error_conversion!(AttemptScopedHsacoPublicationErrorV3, Transaction);
 error_conversion!(
     fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffErrorV3,
     OuterHandoff
@@ -376,6 +457,46 @@ pub fn recover_protected_worker_v3_hsaco_publication_v1(
 ) -> Result<RecoveredProtectedWorkerV3HsacoPublicationV1, WorkerV3HsacoPublicationErrorV1> {
     let recovered = recover_worker_v3_publication_intent_v1(output_dir, producer, attempt)?;
     validate_recovered_publication(producer, recovered)
+}
+
+/// Completes the production V3 publication path from one independently replayed restart owner.
+///
+/// This is the production entry point. The lower-level artifact-transaction V3 API independently
+/// requires matching durable restart storage under the publication lock, but only this facade
+/// reconstructs and authenticates the strict finalizer transcript before publication.
+#[allow(
+    unsafe_code,
+    reason = "one audited semantic-authority bridge follows complete strict-finalizer replay"
+)]
+pub fn publish_recovered_protected_worker_v3_hsaco_v1(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    compiler_closure: CompilerClosureV2,
+    recovered: RecoveredProtectedWorkerV3HsacoPublicationV1,
+) -> Result<PublishedProtectedWorkerV3HsacoV1, WorkerV3HsacoPublicationErrorV1> {
+    let intent = recovered.publication_intent();
+    let binding = recovered.publication_binding(compiler_closure)?;
+    // SAFETY: `recovered` exists only after `validate_recovered_publication` independently decodes
+    // and replays every stored finalizer input, checks all binding axes, and retains that owner in
+    // the returned `PublishedProtectedWorkerV3HsacoV1`.
+    let authority = unsafe {
+        VerifiedWorkerV3PublicationAuthorityV1::from_authenticated_finalizer_replay_unchecked(
+            binding,
+        )
+    };
+    let publication = publish_exact_hsaco_evidence_for_attempt_v3(
+        output_dir,
+        producer,
+        intent.durable_plan().attempt(),
+        intent.durable_plan(),
+        intent.upstream_evidence(),
+        authority,
+        recovered.exact_finalized_hsaco(),
+    )?;
+    Ok(PublishedProtectedWorkerV3HsacoV1 {
+        recovered,
+        publication,
+    })
 }
 
 fn validate_recovered_publication(

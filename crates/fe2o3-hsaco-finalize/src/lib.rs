@@ -289,10 +289,11 @@ pub use worker_v3_compact_finalizer_replay::{
     prepare_protected_worker_v3_compact_finalizer_replay_v2,
 };
 pub use worker_v3_hsaco_publication::{
-    PreparedProtectedWorkerV3HsacoPublicationV1, RecoveredProtectedWorkerV3HsacoPublicationV1,
-    SealedProtectedWorkerV3HsacoPublicationIntentV1, WorkerV3HsacoPublicationErrorV1,
-    persist_prepared_protected_worker_v3_hsaco_publication_v1,
+    PreparedProtectedWorkerV3HsacoPublicationV1, PublishedProtectedWorkerV3HsacoV1,
+    RecoveredProtectedWorkerV3HsacoPublicationV1, SealedProtectedWorkerV3HsacoPublicationIntentV1,
+    WorkerV3HsacoPublicationErrorV1, persist_prepared_protected_worker_v3_hsaco_publication_v1,
     prepare_protected_worker_v3_hsaco_publication_v1,
+    publish_recovered_protected_worker_v3_hsaco_v1,
     recover_protected_worker_v3_hsaco_publication_v1,
 };
 pub use workgroup_sync_v1_artifact::{
