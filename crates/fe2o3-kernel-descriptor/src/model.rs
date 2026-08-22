@@ -207,6 +207,17 @@ pub enum CodeObjectVersion {
     V6,
 }
 
+impl CodeObjectVersion {
+    /// Returns the numeric AMDGPU HSA code-object version.
+    pub const fn number(self) -> u8 {
+        match self {
+            Self::V4 => 4,
+            Self::V5 => 5,
+            Self::V6 => 6,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ScalarTypeV1 {
     I8,

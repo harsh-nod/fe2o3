@@ -206,11 +206,7 @@ pub(crate) const fn scalar_tag(value: ScalarTypeV1) -> u8 {
 }
 
 pub(crate) const fn code_object_version_tag(value: CodeObjectVersion) -> u8 {
-    match value {
-        CodeObjectVersion::V4 => 4,
-        CodeObjectVersion::V5 => 5,
-        CodeObjectVersion::V6 => 6,
-    }
+    value.number()
 }
 
 pub(crate) const fn ownership_tag(value: OwnershipSemantics) -> u8 {
