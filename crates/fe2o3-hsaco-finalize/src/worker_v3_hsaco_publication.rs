@@ -177,6 +177,14 @@ pub struct RecoveredProtectedWorkerV3HsacoPublicationV1 {
 }
 
 /// Move-only production result retaining both replayed lineage and completed publication state.
+///
+/// ```compile_fail
+/// use fe2o3_hsaco_finalize::PublishedProtectedWorkerV3HsacoV1;
+///
+/// fn cannot_clone_published_v3(value: PublishedProtectedWorkerV3HsacoV1) {
+///     let _duplicate = value.clone();
+/// }
+/// ```
 #[derive(Debug)]
 pub struct PublishedProtectedWorkerV3HsacoV1 {
     recovered: RecoveredProtectedWorkerV3HsacoPublicationV1,
@@ -245,6 +253,14 @@ impl PublishedProtectedWorkerV3HsacoV1 {
 /// This value cannot be constructed outside this crate. Its serialized fields remain inert; the
 /// retained current-publication lease is the only occurrence-sensitive component and still grants
 /// no HSA load or launch authority.
+///
+/// ```compile_fail
+/// use fe2o3_hsaco_finalize::PublishedProtectedWorkerV3LoadEnvelopePartsV1;
+///
+/// fn cannot_extract_private_lease(value: PublishedProtectedWorkerV3LoadEnvelopePartsV1) {
+///     let PublishedProtectedWorkerV3LoadEnvelopePartsV1 { current_lease, .. } = value;
+/// }
+/// ```
 pub struct PublishedProtectedWorkerV3LoadEnvelopePartsV1 {
     replay: ProtectedWorkerV3CompactFinalizerReplayPartsV2,
     storage_record: WorkerV3PublicationIntentRecordV1,
