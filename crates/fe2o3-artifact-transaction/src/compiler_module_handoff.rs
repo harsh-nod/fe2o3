@@ -3283,6 +3283,16 @@ mod semantic_v3 {
     }
 
     impl CompilerModuleHandoffConsumptionTokenV3 {
+        /// Borrows the strictly decoded inert handoff while this token keeps
+        /// the cooperative lock held.
+        ///
+        /// This allows a caller to apply its private authority checks before
+        /// committing the one-shot tombstone. The borrowed content remains
+        /// inert and grants no compiler, link, load, or launch authority.
+        pub const fn handoff(&self) -> &fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3 {
+            &self.handoff
+        }
+
         /// Revalidates the exact files and generation while this token keeps the lock held.
         pub fn revalidate_locked_currentness(&self) -> Result<(), CompilerModuleHandoffErrorV3> {
             validate_current_metadata_locked(&self.binding)
