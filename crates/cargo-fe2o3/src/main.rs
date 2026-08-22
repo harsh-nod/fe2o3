@@ -1572,7 +1572,12 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
         command
     };
     scrub_application_environment(&mut child);
-    application_exec::configure_descriptor_free_application(&mut child);
+    // Non-Worker typed kernels still load their compiler-produced image by name. Give the
+    // application only the already pinned generation directory rather than reopening its path or
+    // restoring any ambient build environment.
+    application_exec::configure_closed_descriptor_baseline(&mut child);
+    artifact_dir.replace_for_child_at(&mut child, ARTIFACT_CHILD_FD)?;
+    child.env(HSACO_DIR_ENV, format!("/proc/self/fd/{ARTIFACT_CHILD_FD}"));
     child
         .status()
         .map_err(|error| format!("failed to launch Cargo runner/application: {error}"))

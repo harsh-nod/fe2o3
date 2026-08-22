@@ -11,6 +11,7 @@ use std::fmt;
 
 const SOURCE_DIGEST_DOMAIN: &[u8] = b"fe2o3.typed-vecadd.source-llvm-ir.v1\0";
 const EXECUTABLE_DIGEST_DOMAIN: &[u8] = b"fe2o3.typed-vecadd.executable-hsaco.v1\0";
+const TYPED_VECADD_EXPLICIT_KERNARG_BYTES: u64 = 48;
 
 /// Canonical container and content identity for one finalized typed vecadd.
 pub(crate) struct GeneratedTypedArtifactV1 {
@@ -168,15 +169,23 @@ pub(crate) fn validate_typed_vecadd_hsaco_v2(
             "typed HSACO kernel must be a normal dispatchable entry".to_owned(),
         ));
     }
-    if kernel.kernarg_segment_alignment() != 8
-        || kernel.kernarg_segment_size() < 48
-        || kernel.implicit_argument_offset() != Some(48)
-    {
+    if !is_production_typed_vecadd_kernarg_shape(
+        kernel.kernarg_segment_size(),
+        kernel.kernarg_segment_alignment(),
+        kernel.implicit_argument_offset(),
+    ) {
         return Err(TypedArtifactError::PhysicalAbi(format!(
-            "typed HSACO kernarg segment has size {}, alignment {}, implicit offset {:?}; expected size at least 48, alignment 8, implicit offset 48",
+            "typed HSACO kernarg segment has size {}, alignment {}, implicit offset {:?}; expected optimized size 48, alignment 8, and no implicit arguments",
             kernel.kernarg_segment_size(),
             kernel.kernarg_segment_alignment(),
             kernel.implicit_argument_offset()
+        )));
+    }
+    if kernel.sgpr_spill_count() != Some(0) || kernel.vgpr_spill_count() != Some(0) {
+        return Err(TypedArtifactError::PhysicalAbi(format!(
+            "typed HSACO contains register spills: sgpr={:?}, vgpr={:?}; expected both counts to be zero",
+            kernel.sgpr_spill_count(),
+            kernel.vgpr_spill_count()
         )));
     }
     if kernel.group_segment_fixed_size() != 0 {
@@ -242,6 +251,14 @@ pub(crate) fn validate_typed_vecadd_hsaco_v2(
     }
 
     Ok(())
+}
+
+fn is_production_typed_vecadd_kernarg_shape(
+    size: u64,
+    alignment: u64,
+    implicit_offset: Option<u64>,
+) -> bool {
+    size == TYPED_VECADD_EXPLICIT_KERNARG_BYTES && alignment == 8 && implicit_offset.is_none()
 }
 
 fn typed_vecadd_launch() -> Result<LaunchContract, TypedArtifactError> {
@@ -415,6 +432,15 @@ mod tests {
             RustPointerMutabilityV1::Mut,
         );
         [shared, shared, output]
+    }
+
+    #[test]
+    fn production_kernarg_shape_is_explicit_only() {
+        assert!(is_production_typed_vecadd_kernarg_shape(48, 8, None));
+        assert!(!is_production_typed_vecadd_kernarg_shape(304, 8, Some(48)));
+        assert!(!is_production_typed_vecadd_kernarg_shape(48, 4, None));
+        assert!(!is_production_typed_vecadd_kernarg_shape(52, 8, None));
+        assert!(!is_production_typed_vecadd_kernarg_shape(48, 8, Some(48)));
     }
 
     fn build() -> GeneratedTypedArtifactV1 {

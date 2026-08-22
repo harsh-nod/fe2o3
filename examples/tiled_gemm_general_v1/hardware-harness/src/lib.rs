@@ -492,13 +492,13 @@ impl GeneralGemmProtectedLaunchContractV1 {
     /// Derives the exact launch contract from a checked prepared case.
     pub fn from_prepared(prepared: &PreparedGeneralGemmHardwareCaseV1) -> Self {
         Self {
-            grid: prepared.plan.aql_grid_work_items(),
+            grid: prepared.plan.block_counts(),
             workgroup: GENERAL_GEMM_WORKGROUP_V1,
             lds_bytes: GENERAL_GEMM_LDS_BYTES_V1,
         }
     }
 
-    /// Returns the 2D-tiled AQL grid in work-items.
+    /// Returns the 2D grid in workgroups.
     pub const fn grid(self) -> [u32; 3] {
         self.grid
     }
@@ -1833,7 +1833,15 @@ mod tests {
             assert!(!comparison.grants_protected_execution_evidence());
 
             let launch = GeneralGemmProtectedLaunchContractV1::from_prepared(&prepared);
-            assert_eq!(launch.grid(), prepared.plan().aql_grid_work_items());
+            assert_eq!(launch.grid(), prepared.plan().block_counts());
+            assert_eq!(
+                [
+                    launch.grid()[0] * launch.workgroup()[0],
+                    launch.grid()[1] * launch.workgroup()[1],
+                    launch.grid()[2] * launch.workgroup()[2],
+                ],
+                prepared.plan().aql_grid_work_items()
+            );
             assert_eq!(launch.workgroup(), GENERAL_GEMM_WORKGROUP_V1);
             assert_eq!(launch.lds_bytes(), GENERAL_GEMM_LDS_BYTES_V1);
         }

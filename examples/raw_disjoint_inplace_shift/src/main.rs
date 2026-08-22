@@ -7,13 +7,18 @@ use std::path::PathBuf;
 pub fn raw_disjoint_inplace_shift(x: &[f32], mut out: DisjointSlice<f32, Shifted<Index1D, 1>>) {
     let idx = thread::index_1d();
     let source = idx.get();
-    if source < x.len() {
-        if let Some(target) = idx.checked_shift::<1>() {
-            if let Some(value) = out.get_disjoint_mut(target) {
-                *value = *value + x[source];
-            }
-        }
+    if source >= x.len() {
+        return;
     }
+    let Some(target) = idx.checked_shift::<1>() else {
+        fe2o3_device::trap();
+        return;
+    };
+    let Some(value) = out.get_disjoint_mut(target) else {
+        fe2o3_device::trap();
+        return;
+    };
+    *value += x[source];
 }
 
 fn main() -> fe2o3_core::Result<()> {

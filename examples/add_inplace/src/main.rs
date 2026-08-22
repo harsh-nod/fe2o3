@@ -6,9 +6,10 @@ use std::path::PathBuf;
 #[kernel]
 pub fn add_inplace(delta: f32, mut values: DisjointSlice<f32>) {
     let idx = thread::index_1d();
-    if let Some(value) = values.get_mut(idx) {
-        *value = *value + delta;
-    }
+    let Some(value) = values.get_mut(idx) else {
+        return;
+    };
+    *value += delta;
 }
 
 fn main() -> fe2o3_core::Result<()> {

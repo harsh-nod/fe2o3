@@ -23,10 +23,10 @@ pub open spec fn attributed_source_identity_v1() -> Digest256V1 {
 /// SHA-256 of the exact checked-in Wave64 semantic Kernel-IR schema source.
 pub open spec fn kernel_ir_schema_identity_v1() -> Digest256V1 {
     Digest256V1 {
-        word0: 0x382fcf4c8733e55d,
-        word1: 0xcacaf8b25691a270,
-        word2: 0xa9adcf68912a679c,
-        word3: 0x6ea848fee62f84be,
+        word0: 0xd733ad4e530cc75a,
+        word1: 0xdd27f051620394bf,
+        word2: 0xd7a05e75b1d57754,
+        word3: 0x3b693f42d91b4b42,
     }
 }
 

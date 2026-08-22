@@ -11,5 +11,5 @@ error[E0308]: mismatched types
 note: method defined here
  --> src/tensor.rs
   |
-  |     pub fn read_wave_fragment(&self, lane: &WaveLane<Wave64>) -> Option<[T; 4]> {
+  |     pub fn read_wave_fragment(&self, lane: &WaveLane<Wave64>) -> [T; 4] {
   |            ^^^^^^^^^^^^^^^^^^

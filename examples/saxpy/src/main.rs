@@ -7,9 +7,14 @@ use std::path::PathBuf;
 pub fn saxpy(alpha: f32, x: &[f32], y: &[f32], mut out: DisjointSlice<f32>) {
     let idx = thread::index_1d();
     let i = idx.get();
-    if let Some(value) = out.get_mut(idx) {
-        *value = alpha * x[i] + y[i];
+    let Some(value) = out.get_mut(idx) else {
+        return;
+    };
+    if i >= x.len() || i >= y.len() {
+        fe2o3_device::trap();
+        return;
     }
+    *value = alpha * x[i] + y[i];
 }
 
 fn main() -> fe2o3_core::Result<()> {

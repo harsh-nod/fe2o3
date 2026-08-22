@@ -32,10 +32,10 @@ impl GpuContext {
     /// The code object is not authenticated and its ABI, target compatibility, and
     /// semantics are not checked. The caller must trust all executable behavior in
     /// the object, including initialization during loading and finalization during
-    /// unloading. `path` and the referenced file must remain available and
-    /// acceptable to HIP for the duration of this call. The caller may use only
-    /// functions whose target and ABI are compatible with this context, and must
-    /// uphold the existing unsafe launch contract for every launch.
+    /// unloading. `path` must name a readable, self-contained HIP code object.
+    /// The caller may use only functions whose target and ABI are compatible
+    /// with this context, and must uphold the existing unsafe launch contract
+    /// for every launch.
     ///
     /// This is an explicit escape hatch. Validated loading will use a separate,
     /// sealed API.
@@ -43,15 +43,10 @@ impl GpuContext {
         self: &Arc<Self>,
         path: impl AsRef<Path>,
     ) -> Result<Arc<GpuModule>> {
-        self.bind_to_thread()?;
-        let path = CString::new(path.as_ref().to_string_lossy().as_bytes())?;
-        let mut raw = core::ptr::null_mut();
-        check(unsafe { fe2o3_hip_sys::hipModuleLoad(&mut raw, path.as_ptr()) })?;
-        Ok(Arc::new(GpuModule {
-            raw,
-            context: self.clone(),
-            _image: None,
-        }))
+        let image = std::fs::read(path)?;
+        // SAFETY: this method has the same trust contract as the in-memory
+        // escape hatch and retains the loaded image for the module lifetime.
+        unsafe { self.load_module_from_bytes_unchecked(&image) }
     }
 
     /// Loads a HIP code object from memory without validating its provenance or contract.

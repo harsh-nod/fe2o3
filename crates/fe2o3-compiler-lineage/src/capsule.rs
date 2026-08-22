@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, ops::Range, sync::Arc};
 
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_kernel_descriptor::{DeviceTargetV1, ValidationError as TargetValidationError};
@@ -16,6 +16,7 @@ use crate::{
     InertProofBindingReceiptV3, InertRustcIdentityInventoryReceiptV3,
     InertRustcPreflightPlanReceiptV3, InertSemanticToLlvmReceiptV3, InertTargetBindingReceiptV3,
     LineageDecodeErrorV3, LineageErrorV3,
+    receipt::{ImmutableBytesV3, SharedBackingV3},
 };
 
 /// Fixed magic at the start of every inert production semantic capsule V3.
@@ -27,10 +28,13 @@ pub const INERT_PRODUCTION_SEMANTIC_CAPSULE_VERSION_V3: u16 = 3;
 /// Maximum complete canonical inert capsule bytes accepted by the V3 decoder.
 pub const MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_BYTES_V3: usize = 160 * 1024 * 1024;
 
-/// Maximum heap bytes retained by a successful decode, excluding caller-owned input.
+/// Conservative compatibility ceiling for heap bytes retained by a successful decode.
 ///
-/// The bound accounts for one copy of all receipt preimages, one complete
-/// canonical capsule encoding, and one decoded invocation representation.
+/// V3 shared-range decoding no longer retains separate copies of the receipt
+/// preimages. The tighter current payload bound is exposed as
+/// [`InertProductionSemanticCapsuleV3::MAX_SUCCESSFUL_DECODE_RETAINED_BYTES`].
+/// This historical exported ceiling remains unchanged for downstream resource
+/// policies that already use it.
 pub const MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_DECODE_OWNED_BYTES_V3: usize =
     2 * MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_BYTES_V3 + MAX_DESCRIPTOR_BYTES_V3;
 
@@ -254,10 +258,19 @@ pub struct InertProductionSemanticCapsuleV3 {
     target: DeviceTargetV1,
     receipts: OrderedInertSemanticLineageReceiptsV3,
     identity: InertProductionSemanticCapsuleIdentityV3,
-    canonical_bytes: Box<[u8]>,
+    canonical_bytes: ImmutableBytesV3,
 }
 
 impl InertProductionSemanticCapsuleV3 {
+    /// Tight retained payload-byte bound for successful borrowed-input decoding.
+    ///
+    /// This includes one admitted canonical capsule buffer and one decoded
+    /// invocation representation. [`Self::decode_shared`] reuses its caller's
+    /// admitted buffer, so its additional retained payload is bounded by
+    /// `MAX_DESCRIPTOR_BYTES_V3`.
+    pub const MAX_SUCCESSFUL_DECODE_RETAINED_BYTES: usize =
+        MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_BYTES_V3 + MAX_DESCRIPTOR_BYTES_V3;
+
     /// Constructs one internally consistent inert capsule from exact preimages.
     pub fn new(
         invocation: RustcInvocationDescriptorV3,
@@ -291,7 +304,10 @@ impl InertProductionSemanticCapsuleV3 {
         }
         let total_len_u64 = u64::try_from(total_len).map_err(|_| LineageErrorV3::LengthOverflow)?;
 
-        let mut canonical = Vec::with_capacity(total_len);
+        let mut canonical = Vec::new();
+        canonical
+            .try_reserve_exact(total_len)
+            .map_err(|_| LineageErrorV3::LengthOverflow)?;
         canonical.extend_from_slice(&INERT_PRODUCTION_SEMANTIC_CAPSULE_MAGIC_V3);
         canonical.extend_from_slice(&INERT_PRODUCTION_SEMANTIC_CAPSULE_VERSION_V3.to_le_bytes());
         canonical.extend_from_slice(&0_u16.to_le_bytes());
@@ -321,7 +337,7 @@ impl InertProductionSemanticCapsuleV3 {
             target,
             receipts,
             identity,
-            canonical_bytes: canonical.into_boxed_slice(),
+            canonical_bytes: ImmutableBytesV3::from_owned(canonical.into_boxed_slice()),
         })
     }
 
@@ -332,6 +348,50 @@ impl InertProductionSemanticCapsuleV3 {
                 max: MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_BYTES_V3,
             });
         }
+        let mut admitted = Vec::new();
+        admitted
+            .try_reserve_exact(bytes.len())
+            .map_err(|_| LineageDecodeErrorV3::TooLarge {
+                max: MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_BYTES_V3,
+            })?;
+        admitted.extend_from_slice(bytes);
+        let admitted_len = admitted.len();
+        Self::decode_shared_backing(SharedBackingV3::Vector(Arc::new(admitted)), 0..admitted_len)
+    }
+
+    /// Strictly decodes a checked range in one immutable caller-owned buffer.
+    ///
+    /// The returned capsule and all fifteen receipt preimages retain ranges in
+    /// this exact `Arc` allocation. No capsule-sized or receipt-sized payload
+    /// copy is made. Reversed ranges are rejected as invalid lengths and ranges
+    /// outside `backing` are rejected as truncated input.
+    pub fn decode_shared(
+        backing: Arc<[u8]>,
+        capsule_range: Range<usize>,
+    ) -> Result<Self, LineageDecodeErrorV3> {
+        Self::decode_shared_backing(SharedBackingV3::Slice(backing), capsule_range)
+    }
+
+    /// Strictly decodes a checked range in one immutable shared `Vec` allocation.
+    ///
+    /// This entry point lets an outer transport transfer its existing `Vec`
+    /// allocation into `Arc` custody without copying the underlying payload.
+    pub fn decode_shared_vec(
+        backing: Arc<Vec<u8>>,
+        capsule_range: Range<usize>,
+    ) -> Result<Self, LineageDecodeErrorV3> {
+        Self::decode_shared_backing(SharedBackingV3::Vector(backing), capsule_range)
+    }
+
+    fn decode_shared_backing(
+        backing: SharedBackingV3,
+        capsule_range: Range<usize>,
+    ) -> Result<Self, LineageDecodeErrorV3> {
+        let capsule_len = validate_capsule_range(backing.as_slice().len(), &capsule_range)?;
+        let bytes = backing
+            .as_slice()
+            .get(capsule_range.clone())
+            .ok_or(LineageDecodeErrorV3::Truncated)?;
         let mut reader = Reader::new(bytes);
         if reader.fixed::<8>()? != INERT_PRODUCTION_SEMANTIC_CAPSULE_MAGIC_V3 {
             return Err(LineageDecodeErrorV3::InvalidMagic);
@@ -355,10 +415,10 @@ impl InertProductionSemanticCapsuleV3 {
                 max: MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_BYTES_V3,
             });
         }
-        if declared_len_usize > bytes.len() {
+        if declared_len_usize > capsule_len {
             return Err(LineageDecodeErrorV3::Truncated);
         }
-        if declared_len_usize < bytes.len() {
+        if declared_len_usize < capsule_len {
             return Err(LineageDecodeErrorV3::TrailingBytes);
         }
         if reader.u32()? != 0 {
@@ -366,9 +426,15 @@ impl InertProductionSemanticCapsuleV3 {
         }
 
         let invocation_len = reader.bounded_u32("rustc invocation", MAX_DESCRIPTOR_BYTES_V3)?;
-        let invocation_bytes = reader.take(invocation_len)?;
+        let invocation_range = reader.take_range(invocation_len)?;
+        let invocation_bytes = &bytes[invocation_range];
         let invocation =
             decode_descriptor_v3(invocation_bytes).map_err(LineageDecodeErrorV3::Invocation)?;
+        let canonical_invocation =
+            encode_descriptor_v3(&invocation).map_err(|_| LineageDecodeErrorV3::NonCanonical)?;
+        if canonical_invocation.as_slice() != invocation_bytes {
+            return Err(LineageDecodeErrorV3::NonCanonical);
+        }
         let declared_invocation_digest = reader.fixed::<32>()?;
         if declared_invocation_digest == [0; 32] {
             return Err(LineageDecodeErrorV3::ZeroIdentity {
@@ -385,12 +451,16 @@ impl InertProductionSemanticCapsuleV3 {
         if target_len == 0 || target_len > MAX_TARGET_BYTES_V3 {
             return Err(LineageDecodeErrorV3::InvalidTarget);
         }
-        let target_text = std::str::from_utf8(reader.take(target_len)?)
+        let target_range = reader.take_range(target_len)?;
+        let target_text = std::str::from_utf8(&bytes[target_range])
             .map_err(|_| LineageDecodeErrorV3::InvalidTargetText)?;
         let target = DeviceTargetV1::parse(target_text).map_err(|error| match error {
             TargetValidationError::NonCanonicalOrder { .. } => LineageDecodeErrorV3::NonCanonical,
             _ => LineageDecodeErrorV3::InvalidTarget,
         })?;
+        if target.to_string() != target_text {
+            return Err(LineageDecodeErrorV3::NonCanonical);
+        }
         if invocation.amd_target() != target_text {
             return Err(LineageDecodeErrorV3::TargetMismatch);
         }
@@ -398,9 +468,11 @@ impl InertProductionSemanticCapsuleV3 {
         macro_rules! decode_receipt {
             ($type:ty) => {{
                 let len = reader.bounded_u32(<$type>::FIELD, <$type>::MAX_BYTES)?;
-                let payload = reader.take(len)?;
+                let local_range = reader.take_range(len)?;
                 let identity = reader.fixed::<32>()?;
-                <$type>::decode(payload, identity)?
+                let absolute_range =
+                    absolute_range(capsule_range.start, local_range, capsule_range.end)?;
+                <$type>::decode_shared(backing.clone(), absolute_range, identity)?
             }};
         }
 
@@ -436,11 +508,20 @@ impl InertProductionSemanticCapsuleV3 {
             return Err(LineageDecodeErrorV3::CapsuleIdentityMismatch);
         }
 
-        let capsule = Self::new(invocation, target, receipts).map_err(map_construction_error)?;
-        if capsule.canonical_bytes() != bytes {
-            return Err(LineageDecodeErrorV3::NonCanonical);
-        }
-        Ok(capsule)
+        let identity = InertProductionSemanticCapsuleIdentityV3 {
+            sha256: declared_capsule_sha256,
+            byte_len: declared_len,
+        };
+        let canonical_bytes = ImmutableBytesV3::from_shared(backing, capsule_range)
+            .ok_or(LineageDecodeErrorV3::Truncated)?;
+        Ok(Self {
+            invocation,
+            invocation_digest,
+            target,
+            receipts,
+            identity,
+            canonical_bytes,
+        })
     }
 
     /// Returns the exact canonical V3 rustc invocation.
@@ -475,7 +556,7 @@ impl InertProductionSemanticCapsuleV3 {
 
     /// Returns the complete canonical encoding, including terminal identity.
     pub fn canonical_bytes(&self) -> &[u8] {
-        &self.canonical_bytes
+        self.canonical_bytes.as_slice()
     }
 
     /// Reports the security limit that this inert object does not authenticate a producer.
@@ -531,8 +612,11 @@ fn encoded_len(
     receipts: &OrderedInertSemanticLineageReceiptsV3,
 ) -> Result<usize, LineageErrorV3> {
     let mut length = HEADER_BYTES_V3;
-    add_len(&mut length, 4 + invocation_bytes.len() + SHA256_BYTES)?;
-    add_len(&mut length, 2 + target_text.len())?;
+    add_len(&mut length, 4)?;
+    add_len(&mut length, invocation_bytes.len())?;
+    add_len(&mut length, SHA256_BYTES)?;
+    add_len(&mut length, 2)?;
+    add_len(&mut length, target_text.len())?;
     for payload_len in [
         receipts.rustc_identity_inventory.canonical_preimage().len(),
         receipts.rustc_preflight_plan.canonical_preimage().len(),
@@ -556,7 +640,9 @@ fn encoded_len(
             .canonical_preimage()
             .len(),
     ] {
-        add_len(&mut length, 4 + payload_len + SHA256_BYTES)?;
+        add_len(&mut length, 4)?;
+        add_len(&mut length, payload_len)?;
+        add_len(&mut length, SHA256_BYTES)?;
     }
     add_len(&mut length, SHA256_BYTES)?;
     Ok(length)
@@ -682,19 +768,40 @@ fn derive_capsule_sha256(bytes: &[u8]) -> Option<[u8; 32]> {
     (sha256 != [0; 32]).then_some(sha256)
 }
 
-fn map_construction_error(error: LineageErrorV3) -> LineageDecodeErrorV3 {
-    match error {
-        LineageErrorV3::EmptyPreimage { field } => LineageDecodeErrorV3::EmptyPreimage { field },
-        LineageErrorV3::PreimageTooLarge { field, max } => {
-            LineageDecodeErrorV3::PreimageTooLarge { field, max }
-        }
-        LineageErrorV3::ZeroIdentity { field } => LineageDecodeErrorV3::ZeroIdentity { field },
-        LineageErrorV3::TargetMismatch => LineageDecodeErrorV3::TargetMismatch,
-        LineageErrorV3::Invocation(_) | LineageErrorV3::LengthOverflow => {
-            LineageDecodeErrorV3::NonCanonical
-        }
-        LineageErrorV3::CapsuleTooLarge { max } => LineageDecodeErrorV3::TooLarge { max },
+fn validate_capsule_range(
+    backing_len: usize,
+    range: &Range<usize>,
+) -> Result<usize, LineageDecodeErrorV3> {
+    let length = range
+        .end
+        .checked_sub(range.start)
+        .ok_or(LineageDecodeErrorV3::InvalidLength(u64::MAX))?;
+    if range.end > backing_len {
+        return Err(LineageDecodeErrorV3::Truncated);
     }
+    if length > MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_BYTES_V3 {
+        return Err(LineageDecodeErrorV3::TooLarge {
+            max: MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_BYTES_V3,
+        });
+    }
+    Ok(length)
+}
+
+fn absolute_range(
+    base: usize,
+    local: Range<usize>,
+    capsule_end: usize,
+) -> Result<Range<usize>, LineageDecodeErrorV3> {
+    let start = base
+        .checked_add(local.start)
+        .ok_or(LineageDecodeErrorV3::Truncated)?;
+    let end = base
+        .checked_add(local.end)
+        .ok_or(LineageDecodeErrorV3::Truncated)?;
+    if start > end || end > capsule_end {
+        return Err(LineageDecodeErrorV3::Truncated);
+    }
+    Ok(start..end)
 }
 
 struct Reader<'a> {
@@ -708,16 +815,21 @@ impl<'a> Reader<'a> {
     }
 
     fn take(&mut self, length: usize) -> Result<&'a [u8], LineageDecodeErrorV3> {
+        let range = self.take_range(length)?;
+        self.bytes.get(range).ok_or(LineageDecodeErrorV3::Truncated)
+    }
+
+    fn take_range(&mut self, length: usize) -> Result<Range<usize>, LineageDecodeErrorV3> {
         let end = self
             .offset
             .checked_add(length)
             .ok_or(LineageDecodeErrorV3::Truncated)?;
-        let value = self
-            .bytes
+        self.bytes
             .get(self.offset..end)
             .ok_or(LineageDecodeErrorV3::Truncated)?;
+        let range = self.offset..end;
         self.offset = end;
-        Ok(value)
+        Ok(range)
     }
 
     fn fixed<const N: usize>(&mut self) -> Result<[u8; N], LineageDecodeErrorV3> {

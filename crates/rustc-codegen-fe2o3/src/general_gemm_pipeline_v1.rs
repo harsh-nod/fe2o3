@@ -64,7 +64,8 @@ pub(crate) const GENERAL_GEMM_PIPELINE_V1: &str = "collected-general-gemm-v1";
 const CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 const WORKER_CONFIG_ENV: &str = "FE2O3_WORKER_V2_CONFIG_V2";
 const EXPECTED_CONFIG_ID_ENV: &str = "FE2O3_WORKER_V2_EXPECTED_ID_V1";
-const CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2";
+const QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1: &str =
+    "FE2O3_QUALIFICATION_CODEGEN_BACKEND_SHA256_V1";
 const RUNTIME_CLOSURE_V2_ROOT_ENV: &str = "FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT";
 const RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV: &str =
     "FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256";
@@ -192,7 +193,7 @@ impl PreparedGeneralGemmPipelineV1 {
             ))
         })?;
         let codegen_backend_build_observation_v2 = parse_codegen_backend_build_observation_v2(
-            env::var_os(CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2).as_deref(),
+            env::var_os(QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1).as_deref(),
         )?;
         Self::from_manifest(
             &path,
@@ -283,7 +284,7 @@ fn parse_general_gemm_manifest_v1(
 ) -> Result<ParsedGeneralGemmPipelineV1, GeneralGemmPipelineErrorV1> {
     if compile_unit.codegen_backend_build_observation_v2 == [0; 32] {
         return Err(GeneralGemmPipelineErrorV1::Configuration(format!(
-            "{CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2} must not be zero"
+            "{QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1} must not be zero"
         )));
     }
     require_absolute_path(path, "configuration")?;
@@ -1295,13 +1296,13 @@ fn parse_codegen_backend_build_observation_v2(
 ) -> Result<[u8; 32], GeneralGemmPipelineErrorV1> {
     let value = value.and_then(std::ffi::OsStr::to_str).ok_or_else(|| {
         GeneralGemmPipelineErrorV1::Configuration(format!(
-            "{CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2} is required and must be valid UTF-8"
+            "{QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1} is required and must be valid UTF-8"
         ))
     })?;
-    let observation = decode_sha256(value, CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2)?;
+    let observation = decode_sha256(value, QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1)?;
     if observation == [0; 32] {
         return Err(GeneralGemmPipelineErrorV1::Configuration(format!(
-            "{CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2} must not be zero"
+            "{QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1} must not be zero"
         )));
     }
     Ok(observation)

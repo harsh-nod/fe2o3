@@ -7,9 +7,14 @@ use std::path::PathBuf;
 pub fn scale(alpha: f32, x: &[f32], mut y: DisjointSlice<f32>) {
     let idx = thread::index_1d();
     let i = idx.get();
-    if let Some(out) = y.get_mut(idx) {
-        *out = alpha * x[i];
+    let Some(out) = y.get_mut(idx) else {
+        return;
+    };
+    if i >= x.len() {
+        fe2o3_device::trap();
+        return;
     }
+    *out = alpha * x[i];
 }
 
 fn main() -> fe2o3_core::Result<()> {

@@ -6,12 +6,20 @@ use std::path::PathBuf;
 #[kernel]
 pub fn previous(x: &[f32], mut out: DisjointSlice<f32>) {
     let idx = thread::index_1d();
-    let source = idx.offset_signed(-1);
-    if source < x.len() {
-        if let Some(value) = out.get_mut(idx) {
-            *value = x[source];
-        }
+    let i = idx.get();
+    let Some(value) = out.get_mut(idx) else {
+        return;
+    };
+    if i == 0 {
+        *value = 0.0;
+        return;
     }
+    let source = i - 1;
+    if source >= x.len() {
+        fe2o3_device::trap();
+        return;
+    }
+    *value = x[source];
 }
 
 fn main() -> fe2o3_core::Result<()> {

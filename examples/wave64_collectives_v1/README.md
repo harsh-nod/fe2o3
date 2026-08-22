@@ -93,7 +93,7 @@ CPU source model and an independent interpreter of the exact canonical
 semantic Kernel IR. It binds both checked-in files by SHA-256:
 
 - attributed source: `c649e38712232ed45c1d2f6f8a2a49405f12a5e308907b3265c2415f227803a2`;
-- Kernel-IR schema: `382fcf4c8733e55dcacaf8b25691a270a9adcf68912a679c6ea848fee62f84be`.
+- Kernel-IR schema: `d733ad4e530cc75add27f051620394bfd7a05e75b1d577543b693f42d91b4b42`.
 
 The checker first requires the exact gfx942:xnack-, COV6, Wave64, WG64,
 one-workgroup profile and canonical KIR structure. It then compares all 192

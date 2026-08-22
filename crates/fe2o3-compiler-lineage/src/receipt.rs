@@ -1,8 +1,60 @@
-use std::fmt;
+use std::{fmt, ops::Range, sync::Arc};
 
 use sha2::{Digest, Sha256};
 
 use crate::{LineageDecodeErrorV3, LineageErrorV3};
+
+#[derive(Clone)]
+pub(crate) enum SharedBackingV3 {
+    Slice(Arc<[u8]>),
+    Vector(Arc<Vec<u8>>),
+}
+
+impl SharedBackingV3 {
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::Slice(bytes) => bytes,
+            Self::Vector(bytes) => bytes,
+        }
+    }
+}
+
+pub(crate) enum ImmutableBytesV3 {
+    Owned(Box<[u8]>),
+    Shared {
+        backing: SharedBackingV3,
+        range: Range<usize>,
+    },
+}
+
+impl ImmutableBytesV3 {
+    pub(crate) fn from_owned(bytes: Box<[u8]>) -> Self {
+        Self::Owned(bytes)
+    }
+
+    pub(crate) fn from_shared(backing: SharedBackingV3, range: Range<usize>) -> Option<Self> {
+        backing.as_slice().get(range.clone())?;
+        Some(Self::Shared { backing, range })
+    }
+
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::Owned(bytes) => bytes,
+            Self::Shared { backing, range } => backing
+                .as_slice()
+                .get(range.clone())
+                .expect("shared byte range was validated at construction"),
+        }
+    }
+}
+
+impl PartialEq for ImmutableBytesV3 {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl Eq for ImmutableBytesV3 {}
 
 /// Maximum bytes retained for one non-MIR lineage receipt preimage.
 pub const MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3: usize = 4 * 1024 * 1024;
@@ -67,11 +119,19 @@ macro_rules! define_receipt {
         }
 
         $(#[$receipt_meta])*
-        #[derive(Eq, PartialEq)]
         pub struct $receipt {
-            canonical_preimage: Box<[u8]>,
+            canonical_preimage: ImmutableBytesV3,
             identity: $identity,
         }
+
+        impl PartialEq for $receipt {
+            fn eq(&self, other: &Self) -> bool {
+                self.identity == other.identity
+                    && self.canonical_preimage == other.canonical_preimage
+            }
+        }
+
+        impl Eq for $receipt {}
 
         impl $receipt {
             const DOMAIN: &'static [u8] = $domain;
@@ -100,14 +160,16 @@ macro_rules! define_receipt {
                 let byte_len = u64::try_from(canonical_preimage.len())
                     .map_err(|_| LineageErrorV3::LengthOverflow)?;
                 Ok(Self {
-                    canonical_preimage: canonical_preimage.into_boxed_slice(),
+                    canonical_preimage: ImmutableBytesV3::from_owned(
+                        canonical_preimage.into_boxed_slice(),
+                    ),
                     identity: $identity { sha256, byte_len },
                 })
             }
 
             /// Returns the exact retained caller-supplied stage content.
             pub fn canonical_preimage(&self) -> &[u8] {
-                &self.canonical_preimage
+                self.canonical_preimage.as_slice()
             }
 
             /// Returns the inert typed identity derived from the retained content.
@@ -115,10 +177,14 @@ macro_rules! define_receipt {
                 self.identity
             }
 
-            pub(crate) fn decode(
-                bytes: &[u8],
+            pub(crate) fn decode_shared(
+                backing: SharedBackingV3,
+                range: Range<usize>,
                 declared_identity: [u8; 32],
             ) -> Result<Self, LineageDecodeErrorV3> {
+                let canonical_preimage = ImmutableBytesV3::from_shared(backing, range)
+                    .ok_or(LineageDecodeErrorV3::Truncated)?;
+                let bytes = canonical_preimage.as_slice();
                 if bytes.is_empty() {
                     return Err(LineageDecodeErrorV3::EmptyPreimage { field: Self::FIELD });
                 }
@@ -131,26 +197,25 @@ macro_rules! define_receipt {
                 if declared_identity == [0; 32] {
                     return Err(LineageDecodeErrorV3::ZeroIdentity { field: Self::FIELD });
                 }
-                let receipt = Self::from_canonical_preimage(bytes.to_vec()).map_err(|error| {
+                let sha256 = derive_identity(Self::DOMAIN, bytes, Self::FIELD).map_err(|error| {
                     match error {
-                        LineageErrorV3::EmptyPreimage { field } => {
-                            LineageDecodeErrorV3::EmptyPreimage { field }
-                        }
-                        LineageErrorV3::PreimageTooLarge { field, max } => {
-                            LineageDecodeErrorV3::PreimageTooLarge { field, max }
-                        }
                         LineageErrorV3::ZeroIdentity { field } => {
                             LineageDecodeErrorV3::ZeroIdentity { field }
                         }
                         _ => LineageDecodeErrorV3::NonCanonical,
                     }
                 })?;
-                if receipt.identity.sha256 != declared_identity {
+                if sha256 != declared_identity {
                     return Err(LineageDecodeErrorV3::ReceiptIdentityMismatch {
                         field: Self::FIELD,
                     });
                 }
-                Ok(receipt)
+                let byte_len =
+                    u64::try_from(bytes.len()).map_err(|_| LineageDecodeErrorV3::NonCanonical)?;
+                Ok(Self {
+                    canonical_preimage,
+                    identity: $identity { sha256, byte_len },
+                })
             }
         }
 

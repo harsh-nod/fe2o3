@@ -266,10 +266,15 @@ impl<'workgroup, T: LdsElement> LdsTile16x16<'workgroup, T, LdsUninitialized> {
 }
 
 impl<T: LdsElement + Copy> LdsTile16x16<'_, T, LdsInitialized> {
-    pub fn read_wave_fragment(&self, lane: &WaveLane<Wave64>) -> Option<[T; 4]> {
+    /// Reads the four initialized elements owned by an authenticated wave64 lane.
+    ///
+    /// `WaveLane<Wave64>` proves the lane is in `0..64`, and this tile's private
+    /// construction proves it contains exactly 256 initialized elements. The
+    /// corresponding XOR4 fragment is therefore always present.
+    pub fn read_wave_fragment(&self, lane: &WaveLane<Wave64>) -> [T; 4] {
         let indices = RowMajorXor4::lane_fragment_indices(lane.get() as usize)
             .expect("authenticated wave64 lane is in range");
-        Some(indices.map(|index| *self.lds.get(index).expect("bounded tile index")))
+        indices.map(|index| *self.lds.get(index).expect("bounded tile index"))
     }
 }
 
@@ -302,18 +307,14 @@ pub fn gfx942_publish_lds_bf16_tile_pair_m16x16_v1<'workgroup>(
 
 impl LdsTile16x16<'_, Bf16, LdsInitialized> {
     #[rustc_diagnostic_item = "fe2o3_device_lds_tile16x16_read_mfma_bf16_v1"]
-    pub fn read_mfma_fragment(&self, lane: &WaveLane<Wave64>) -> Option<Bf16MfmaFragment> {
-        self.read_wave_fragment(lane).map(Bf16MfmaFragment::new)
+    pub fn read_mfma_fragment(&self, lane: &WaveLane<Wave64>) -> Bf16MfmaFragment {
+        Bf16MfmaFragment::new(self.read_wave_fragment(lane))
     }
 }
 
 impl LdsTile16x16<'_, f32, LdsInitialized> {
-    pub fn read_accumulator_fragment(
-        &self,
-        lane: &WaveLane<Wave64>,
-    ) -> Option<F32AccumulatorFragment> {
-        self.read_wave_fragment(lane)
-            .map(F32AccumulatorFragment::new)
+    pub fn read_accumulator_fragment(&self, lane: &WaveLane<Wave64>) -> F32AccumulatorFragment {
+        F32AccumulatorFragment::new(self.read_wave_fragment(lane))
     }
 }
 
@@ -387,7 +388,7 @@ mod tests {
         let tile = unsafe { tile.assume_init_for_host_test() };
         for lane in 0..64 {
             let witness = WaveLane::<Wave64>::from_model_snapshot(lane).unwrap();
-            assert_eq!(tile.read_wave_fragment(&witness), Some([lane; 4]));
+            assert_eq!(tile.read_wave_fragment(&witness), [lane; 4]);
         }
     }
 

@@ -8,17 +8,18 @@ use fe2o3_artifact_transaction::{
 };
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::{
-    CompilerModuleHandoffErrorV2, CompilerModuleHandoffIdentityV2,
-    FinalCompilerModuleCommitmentErrorV3, InertFinalCompilerModuleCommitmentV3,
-    InertSemanticCompilerModuleHandoffErrorV3, InertSemanticCompilerModuleHandoffIdentityV3,
-    InertSemanticCompilerModuleHandoffV3,
+    CodeObjectVersion, CompilerModuleHandoffErrorV2, CompilerModuleHandoffIdentityV2,
+    CompilerModuleSymbolRoleV1, FinalCompilerModuleCommitmentErrorV3,
+    InertFinalCompilerModuleCommitmentV3, InertSemanticCompilerModuleHandoffErrorV3,
+    InertSemanticCompilerModuleHandoffIdentityV3, InertSemanticCompilerModuleHandoffV3,
 };
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ContentIdentityV1, InertDecodedWorkerExchangeV2, LinkInputKindClosureV1, LinkInputV1,
-    LinkOptionV1, LinkOutputV1, LinkPlanError, MultiInputLinkPlanV1, PinnedWorkerV1,
-    ProvenanceNodeV1, WorkerExecutionError, WorkerExecutionLimitsV1, WorkerInputV1,
+    ContentIdentityV1, LinkInputV1, LinkOptionV1, LinkOutputV1, LinkPlanError, MAX_LINK_INPUTS,
+    MAX_LINK_OPTIONS, MAX_WORKER_REQUEST_BYTES, MAX_WORKER_SYMBOL_BYTES, MAX_WORKER_SYMBOLS,
+    MAX_WORKER_TOTAL_INPUT_BYTES, MultiInputLinkPlanV1, PinnedWorkerV1, ProvenanceNodeV1,
+    WorkerExecutionError, WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1,
     WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerProtocolError,
     WorkerRequestConstructionError, WorkerResponseV2,
     first_build_worker_v2::{
@@ -27,15 +28,34 @@ use crate::{
         preflight_reproducible_first_build_worker_v2_engine,
     },
     request_construction::{
-        CompilerHandoffRequestBindingV2, construct_first_build_worker_request_v2_from_decoded,
-        construct_plan_worker_request_v2_from_decoded, decode_link_options,
-        decoded_compiler_module_handoff_v2,
+        CompilerHandoffRequestBindingV2, decode_link_options, decoded_compiler_module_handoff_v2,
     },
     worker_executor::InertWorkerExecutionV2,
 };
 
 const BINDING_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/PROTECTED-WORKER-COMPILER-HANDOFF-BINDING/V3\0";
 const EVIDENCE_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/PROTECTED-FIRST-BUILD-WORKER-EVIDENCE/V3\0";
+const WORKER_REQUEST_MAGIC_V2: &[u8; 8] = b"F3LREQ02";
+const WORKER_REQUEST_IDENTITY_DOMAIN_V2: &[u8] = b"FE2O3/DIRECT-LLVM-WORKER-REQUEST/V2\0";
+const PROTECTED_FIRST_BUILD_REQUEST_DOMAIN_V3: &[u8] =
+    b"FE2O3/SEMANTIC-CAPSULE-PROTECTED-FIRST-BUILD-WORKER-REQUEST/V3\0";
+const PROTECTED_PLAN_REQUEST_DOMAIN_V3: &[u8] =
+    b"FE2O3/SEMANTIC-CAPSULE-PROTECTED-PLAN-BOUND-WORKER-REQUEST/V3\0";
+const INPUT_KIND_CLOSURE_DOMAIN_V1: &[u8] = b"FE2O3/DEVICE-LINK-INPUT-KIND-CLOSURE/V1\0";
+const STAGED_COMPILER_FFI_ENVELOPE_DOMAIN_V1: &[u8] = b"FE2O3/STAGED-COMPILER-FFI-ENVELOPE/V1\0";
+const WORKER_REQUEST_FIELD_COUNT_V2: usize = 15;
+const WORKER_INPUT_WIRE_OVERHEAD_BYTES_V2: usize = 1 + 32 + 8;
+const WORKER_REQUEST_FIXED_BUDGET_BYTES_V3: usize = 4096;
+const RETAINED_INPUT_COPIES_DURING_PREFLIGHT_V3: usize = 4;
+const RETAINED_REQUEST_COPIES_DURING_PREFLIGHT_V3: usize = 3;
+
+/// Maximum aggregate V3 handoff, decoded input, and request working set admitted to preflight.
+///
+/// This is deliberately lower than the sum of every independent wire maximum. The inherited V2
+/// engine temporarily retains several exact copies while sealing candidate and replay requests;
+/// admitting all maxima simultaneously would allow a schema-valid request to amplify beyond a
+/// practical production working set before the worker starts.
+const MAX_PROTECTED_V3_LIVE_INPUT_REQUEST_BYTES_V1: usize = 512 * 1024 * 1024;
 
 /// Stable identity of one exact protected Worker V3 compiler-handoff binding.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -602,6 +622,19 @@ pub enum ProtectedFirstBuildWorkerV3Error {
     CompilerModuleHandoff(CompilerModuleHandoffErrorV2),
     /// Canonical link-plan derivation failed.
     LinkPlan(LinkPlanError),
+    /// The number of caller-owned external inputs cannot fit the bounded V3 link closure.
+    WorkingSetInputCountExceeded { actual: usize, maximum: usize },
+    /// The number of caller-owned link options cannot fit the bounded V3 plan.
+    WorkingSetOptionCountExceeded { actual: usize, maximum: usize },
+    /// Checked working-set accounting overflowed before worker execution.
+    WorkingSetArithmeticOverflow { component: &'static str },
+    /// Aggregate live handoff, input, and request storage exceeds the V3 production budget.
+    WorkingSetBudgetExceeded {
+        required_bytes: u64,
+        maximum_bytes: u64,
+    },
+    /// A bounded metadata collection could not reserve its exact capacity.
+    WorkingSetAllocationFailed { component: &'static str },
     /// Sealed direct-LLVM request construction failed.
     RequestConstruction(WorkerRequestConstructionError),
     /// Consumed transaction or measured worker did not match the sealed preflight owner.
@@ -639,6 +672,29 @@ impl fmt::Display for ProtectedFirstBuildWorkerV3Error {
                 )
             }
             Self::LinkPlan(error) => write!(formatter, "invalid derived link plan: {error}"),
+            Self::WorkingSetInputCountExceeded { actual, maximum } => write!(
+                formatter,
+                "strict-V3 external input count {actual} exceeds the working-set bound {maximum}"
+            ),
+            Self::WorkingSetOptionCountExceeded { actual, maximum } => write!(
+                formatter,
+                "strict-V3 link option count {actual} exceeds the working-set bound {maximum}"
+            ),
+            Self::WorkingSetArithmeticOverflow { component } => write!(
+                formatter,
+                "strict-V3 working-set accounting overflowed at {component}"
+            ),
+            Self::WorkingSetBudgetExceeded {
+                required_bytes,
+                maximum_bytes,
+            } => write!(
+                formatter,
+                "strict-V3 live input/request working set {required_bytes} exceeds the production budget {maximum_bytes}"
+            ),
+            Self::WorkingSetAllocationFailed { component } => write!(
+                formatter,
+                "strict-V3 bounded metadata allocation failed at {component}"
+            ),
             Self::RequestConstruction(error) => {
                 write!(
                     formatter,
@@ -692,6 +748,11 @@ impl Error for ProtectedFirstBuildWorkerV3Error {
             Self::BootstrapRequest(error) => Some(error),
             Self::BootstrapExecution(error) | Self::ReplayExecution(error) => Some(error),
             Self::BootstrapDidNotProduceOutput(_)
+            | Self::WorkingSetInputCountExceeded { .. }
+            | Self::WorkingSetOptionCountExceeded { .. }
+            | Self::WorkingSetArithmeticOverflow { .. }
+            | Self::WorkingSetBudgetExceeded { .. }
+            | Self::WorkingSetAllocationFailed { .. }
             | Self::PreflightMismatch { .. }
             | Self::ReplayDidNotProduceOutput { .. }
             | Self::OutputMismatch { .. }
@@ -722,6 +783,7 @@ pub fn preflight_protected_reproducible_first_build_worker_v3(
         expected_compiler_closure,
     )
     .map_err(ProtectedFirstBuildWorkerV3Error::Binding)?;
+    enforce_protected_v3_working_set_budget(handoff, &external_providers, &link_options)?;
     let decoded = decoded_compiler_module_handoff_v2(handoff.module_handoff().clone())
         .map_err(ProtectedFirstBuildWorkerV3Error::CompilerModuleHandoff)?;
     let engine = preflight_reproducible_first_build_worker_v2_engine(
@@ -738,6 +800,166 @@ pub fn preflight_protected_reproducible_first_build_worker_v3(
         worker: worker.measurement().clone(),
         limits,
         engine,
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProtectedV3WorkingSetDimensions {
+    outer_handoff_bytes: usize,
+    compiler_module_bytes: usize,
+    provider_payload_bytes: usize,
+    provider_count: usize,
+    option_text_bytes: usize,
+    option_count: usize,
+    envelope_bytes: usize,
+    manifest_bytes: usize,
+}
+
+fn enforce_protected_v3_working_set_budget(
+    handoff: &InertSemanticCompilerModuleHandoffV3,
+    external_providers: &[WorkerInputV1],
+    link_options: &[LinkOptionV1],
+) -> Result<(), ProtectedFirstBuildWorkerV3Error> {
+    let provider_payload_bytes = checked_sum(
+        external_providers.iter().map(|input| input.bytes().len()),
+        "external provider payload bytes",
+    )?;
+    let option_text_bytes = checked_sum(
+        link_options
+            .iter()
+            .flat_map(|option| [option.name().len(), option.value().len()]),
+        "link option text bytes",
+    )?;
+    let nested = handoff.module_handoff();
+    validate_working_set_dimensions(ProtectedV3WorkingSetDimensions {
+        outer_handoff_bytes: handoff.canonical_bytes().len(),
+        compiler_module_bytes: nested.module_bytes().len(),
+        provider_payload_bytes,
+        provider_count: external_providers.len(),
+        option_text_bytes,
+        option_count: link_options.len(),
+        envelope_bytes: nested.envelope().canonical_bytes().len(),
+        manifest_bytes: nested.symbol_manifest().canonical_bytes().len(),
+    })
+}
+
+fn validate_working_set_dimensions(
+    dimensions: ProtectedV3WorkingSetDimensions,
+) -> Result<(), ProtectedFirstBuildWorkerV3Error> {
+    let maximum_providers = MAX_LINK_INPUTS.checked_sub(1).ok_or(
+        ProtectedFirstBuildWorkerV3Error::WorkingSetArithmeticOverflow {
+            component: "external provider count bound",
+        },
+    )?;
+    if dimensions.provider_count > maximum_providers {
+        return Err(
+            ProtectedFirstBuildWorkerV3Error::WorkingSetInputCountExceeded {
+                actual: dimensions.provider_count,
+                maximum: maximum_providers,
+            },
+        );
+    }
+    if dimensions.option_count > MAX_LINK_OPTIONS {
+        return Err(
+            ProtectedFirstBuildWorkerV3Error::WorkingSetOptionCountExceeded {
+                actual: dimensions.option_count,
+                maximum: MAX_LINK_OPTIONS,
+            },
+        );
+    }
+
+    let total_input_payload_bytes = dimensions
+        .compiler_module_bytes
+        .checked_add(dimensions.provider_payload_bytes)
+        .ok_or(
+            ProtectedFirstBuildWorkerV3Error::WorkingSetArithmeticOverflow {
+                component: "aggregate input payload bytes",
+            },
+        )?;
+    if total_input_payload_bytes > MAX_WORKER_TOTAL_INPUT_BYTES {
+        return Err(ProtectedFirstBuildWorkerV3Error::WorkingSetBudgetExceeded {
+            required_bytes: usize_as_u64(total_input_payload_bytes)?,
+            maximum_bytes: MAX_WORKER_TOTAL_INPUT_BYTES as u64,
+        });
+    }
+
+    let input_wire_overhead = dimensions
+        .provider_count
+        .checked_add(1)
+        .and_then(|count| count.checked_mul(WORKER_INPUT_WIRE_OVERHEAD_BYTES_V2))
+        .and_then(|bytes| bytes.checked_add(4))
+        .ok_or(
+            ProtectedFirstBuildWorkerV3Error::WorkingSetArithmeticOverflow {
+                component: "worker input wire overhead",
+            },
+        )?;
+    let expanded_symbol_bytes = dimensions
+        .envelope_bytes
+        .checked_add(dimensions.manifest_bytes)
+        .and_then(|bytes| bytes.checked_mul(3))
+        .ok_or(
+            ProtectedFirstBuildWorkerV3Error::WorkingSetArithmeticOverflow {
+                component: "worker symbol wire estimate",
+            },
+        )?;
+    let request_wire_bytes = WORKER_REQUEST_FIXED_BUDGET_BYTES_V3
+        .checked_add(total_input_payload_bytes)
+        .and_then(|bytes| bytes.checked_add(input_wire_overhead))
+        .and_then(|bytes| bytes.checked_add(expanded_symbol_bytes))
+        .ok_or(
+            ProtectedFirstBuildWorkerV3Error::WorkingSetArithmeticOverflow {
+                component: "worker request wire estimate",
+            },
+        )?
+        .min(MAX_WORKER_REQUEST_BYTES);
+    let retained_inputs = total_input_payload_bytes
+        .checked_mul(RETAINED_INPUT_COPIES_DURING_PREFLIGHT_V3)
+        .ok_or(
+            ProtectedFirstBuildWorkerV3Error::WorkingSetArithmeticOverflow {
+                component: "retained worker input copies",
+            },
+        )?;
+    let retained_requests = request_wire_bytes
+        .checked_mul(RETAINED_REQUEST_COPIES_DURING_PREFLIGHT_V3)
+        .ok_or(
+            ProtectedFirstBuildWorkerV3Error::WorkingSetArithmeticOverflow {
+                component: "retained worker request copies",
+            },
+        )?;
+    let required_bytes = dimensions
+        .outer_handoff_bytes
+        .checked_add(retained_inputs)
+        .and_then(|bytes| bytes.checked_add(retained_requests))
+        .and_then(|bytes| bytes.checked_add(dimensions.option_text_bytes))
+        .ok_or(
+            ProtectedFirstBuildWorkerV3Error::WorkingSetArithmeticOverflow {
+                component: "aggregate live input/request bytes",
+            },
+        )?;
+    if required_bytes > MAX_PROTECTED_V3_LIVE_INPUT_REQUEST_BYTES_V1 {
+        return Err(ProtectedFirstBuildWorkerV3Error::WorkingSetBudgetExceeded {
+            required_bytes: usize_as_u64(required_bytes)?,
+            maximum_bytes: MAX_PROTECTED_V3_LIVE_INPUT_REQUEST_BYTES_V1 as u64,
+        });
+    }
+    Ok(())
+}
+
+fn checked_sum(
+    values: impl IntoIterator<Item = usize>,
+    component: &'static str,
+) -> Result<usize, ProtectedFirstBuildWorkerV3Error> {
+    values.into_iter().try_fold(0_usize, |sum, value| {
+        sum.checked_add(value)
+            .ok_or(ProtectedFirstBuildWorkerV3Error::WorkingSetArithmeticOverflow { component })
+    })
+}
+
+fn usize_as_u64(value: usize) -> Result<u64, ProtectedFirstBuildWorkerV3Error> {
+    u64::try_from(value).map_err(|_| {
+        ProtectedFirstBuildWorkerV3Error::WorkingSetArithmeticOverflow {
+            component: "working-set report width",
+        }
     })
 }
 
@@ -782,7 +1004,7 @@ pub fn execute_preflighted_protected_reproducible_first_build_worker_v3(
     .map_err(|error| map_engine_error(binding, error))?;
 
     validate_replay(binding, worker.measurement(), &result)?;
-    let identity = calculate_evidence_identity(binding, worker.measurement(), limits, &result);
+    let identity = calculate_evidence_identity(binding, worker.measurement(), limits, &result)?;
     let bootstrap =
         InertProtectedCompilerHandoffExecutionV3::from_execution(binding, result.candidate);
     let replay =
@@ -850,22 +1072,20 @@ fn validate_replay(
     worker: &WorkerMeasurementV1,
     result: &crate::first_build_worker_v2::FirstBuildWorkerV2EngineResult,
 ) -> Result<ValidatedProtectedFirstBuildReplayV3, ProtectedFirstBuildWorkerV3Error> {
-    let bootstrap = InertDecodedWorkerExchangeV2::decode(
-        &result.candidate_request_bytes,
-        result.candidate.response().canonical_bytes(),
-    )
-    .map_err(|_| replay_error("bootstrap request/response canonical exchange"))?;
-    let replay = InertDecodedWorkerExchangeV2::decode(
-        &result.authorized_request_bytes,
-        result.authorized.response().canonical_bytes(),
-    )
-    .map_err(|_| replay_error("exact-replay request/response canonical exchange"))?;
-    let bootstrap_output = bootstrap
-        .response()
+    let bootstrap_request = BorrowedWorkerRequestV2::decode(&result.candidate_request_bytes)
+        .map_err(|_| replay_error("bootstrap request canonical transcript"))?;
+    let replay_request = BorrowedWorkerRequestV2::decode(&result.authorized_request_bytes)
+        .map_err(|_| replay_error("exact-replay request canonical transcript"))?;
+    let bootstrap_response = result.candidate.response();
+    let replay_response = result.authorized.response();
+    validate_request_response_binding(&bootstrap_request, bootstrap_response)
+        .map_err(|_| replay_error("bootstrap request/response canonical exchange"))?;
+    validate_request_response_binding(&replay_request, replay_response)
+        .map_err(|_| replay_error("exact-replay request/response canonical exchange"))?;
+    let bootstrap_output = bootstrap_response
         .output()
         .ok_or_else(|| replay_error("missing bootstrap output"))?;
-    let replay_output = replay
-        .response()
+    let replay_output = replay_response
         .output()
         .ok_or_else(|| replay_error("missing exact-replay output"))?;
     if bootstrap_output.bytes() != replay_output.bytes()
@@ -879,100 +1099,647 @@ fn validate_replay(
 
     let (_, options) = decode_link_options(result.plan.options())
         .map_err(|_| replay_error("canonical link options"))?;
-    let expected_bootstrap = construct_first_build_worker_request_v2_from_decoded(
-        CompilerHandoffRequestBindingV2::ProtectedV3(&binding),
+    let request_inputs =
+        validate_request_common_fields(&bootstrap_request, worker, &result.decoded, options)?;
+    validate_stable_request_fields(&bootstrap_request, &replay_request)
+        .map_err(|_| replay_error("stable bootstrap/replay request fields"))?;
+    let expected_bootstrap_request_id = calculate_bootstrap_request_id(
+        binding,
         worker,
         &result.decoded,
-        bootstrap.request().external_providers().to_vec(),
-        options,
-        bootstrap.request().output_constraints().clone(),
-    )
-    .map_err(|_| replay_error("reconstructed bootstrap request"))?;
-    if expected_bootstrap.sealed_request().canonical_bytes() != result.candidate_request_bytes {
+        &bootstrap_request,
+        &request_inputs,
+    )?;
+    if bootstrap_request.request_id() != expected_bootstrap_request_id {
         return Err(replay_error("bootstrap request identity"));
     }
 
-    let reconstructed_plan = reconstruct_plan(
+    let (reconstructed_plan, all_inputs) = reconstruct_plan(
         &result.decoded,
-        bootstrap.request().external_providers(),
-        result.plan.options().to_vec(),
+        &request_inputs,
+        result.plan.options(),
         bootstrap_output.identity(),
     )?;
-    if reconstructed_plan != result.plan
-        || reconstructed_plan.canonical_bytes() != result.plan.canonical_bytes()
-    {
+    if reconstructed_plan != result.plan {
         return Err(replay_error("complete canonical link plan"));
     }
-    let mut all_inputs = bootstrap.request().external_providers().to_vec();
-    all_inputs.push(bootstrap.request().compiler_module().clone());
-    all_inputs.sort_by_key(|input| (input.identity(), input.kind()));
-    let input_kinds = LinkInputKindClosureV1::new(
-        &result.plan,
-        all_inputs.iter().map(|input| input.kind()).collect(),
-    )
-    .map_err(|_| replay_error("link-plan input-kind closure"))?;
-    let expected_replay = construct_plan_worker_request_v2_from_decoded(
-        CompilerHandoffRequestBindingV2::ProtectedV3(&binding),
-        &result.plan,
+    if decode_u64(replay_request.field(14)).ok() != Some(bootstrap_output.identity().byte_len()) {
+        return Err(replay_error("exact-replay output bound"));
+    }
+    let expected_replay_request_id = calculate_replay_request_id(
+        binding,
         worker,
         &result.decoded,
-        bootstrap.request().external_providers().to_vec(),
-        &input_kinds,
-        WorkerOutputConstraintsV1::new(bootstrap_output.identity().byte_len())
-            .map_err(|_| replay_error("exact output bound"))?,
-    )
-    .map_err(|_| replay_error("reconstructed exact-replay request"))?;
-    if expected_replay.sealed_request().canonical_bytes() != result.authorized_request_bytes {
+        &replay_request,
+        &result.plan,
+        &request_inputs,
+        &all_inputs,
+    )?;
+    if replay_request.request_id() != expected_replay_request_id {
         return Err(replay_error("exact-replay request identity"));
     }
-
+    if bootstrap_request.request_id() == replay_request.request_id() {
+        return Err(replay_error(
+            "distinct bootstrap and replay request identities",
+        ));
+    }
     Ok(ValidatedProtectedFirstBuildReplayV3)
 }
 
 fn reconstruct_plan(
     decoded: &crate::request_construction::DecodedCompilerModuleHandoffV2,
-    providers: &[WorkerInputV1],
-    options: Vec<LinkOptionV1>,
+    request_inputs: &BorrowedRequestInputsV2,
+    options: &[LinkOptionV1],
     output_identity: ContentIdentityV1,
-) -> Result<MultiInputLinkPlanV1, ProtectedFirstBuildWorkerV3Error> {
-    let compiler = WorkerInputV1::new(
-        decoded.compiler_module_kind(),
-        decoded.compiler_module_bytes().to_vec(),
-    )
-    .map_err(|_| replay_error("nested compiler module input"))?;
-    let mut inputs = providers.to_vec();
-    inputs.push(compiler);
-    inputs.sort_by_key(|input| (input.identity(), input.kind()));
+) -> Result<(MultiInputLinkPlanV1, Vec<BorrowedInputIdentityV2>), ProtectedFirstBuildWorkerV3Error>
+{
+    let mut inputs = Vec::new();
+    inputs
+        .try_reserve_exact(request_inputs.providers.len().checked_add(1).ok_or(
+            ProtectedFirstBuildWorkerV3Error::WorkingSetArithmeticOverflow {
+                component: "reconstructed input count",
+            },
+        )?)
+        .map_err(|_| allocation_error("reconstructed input metadata"))?;
+    inputs.extend_from_slice(&request_inputs.providers);
+    inputs.push(request_inputs.compiler);
+    inputs.sort_by_key(|input| (input.identity, input.kind));
     for pair in inputs.windows(2) {
-        if pair[0].identity() == pair[1].identity() {
+        if pair[0].identity == pair[1].identity {
             return Err(replay_error("duplicate plan input identity"));
         }
     }
     let target = decoded.target();
-    let link_inputs = inputs
-        .iter()
-        .map(|input| LinkInputV1::new(input.identity(), target))
-        .collect::<Vec<_>>();
-    let mut provenance = link_inputs
-        .iter()
-        .map(|input| ProvenanceNodeV1::new(input.identity(), vec![]))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(ProtectedFirstBuildWorkerV3Error::LinkPlan)?;
-    provenance.push(
-        ProvenanceNodeV1::new(
-            output_identity,
-            link_inputs.iter().map(|input| input.identity()).collect(),
-        )
-        .map_err(ProtectedFirstBuildWorkerV3Error::LinkPlan)?,
+    let mut link_inputs = Vec::new();
+    link_inputs
+        .try_reserve_exact(inputs.len())
+        .map_err(|_| allocation_error("reconstructed link inputs"))?;
+    link_inputs.extend(
+        inputs
+            .iter()
+            .map(|input| LinkInputV1::new(input.identity, target)),
     );
-    MultiInputLinkPlanV1::canonicalized(
+    let mut provenance = Vec::new();
+    provenance
+        .try_reserve_exact(link_inputs.len().checked_add(1).ok_or(
+            ProtectedFirstBuildWorkerV3Error::WorkingSetArithmeticOverflow {
+                component: "reconstructed provenance count",
+            },
+        )?)
+        .map_err(|_| allocation_error("reconstructed provenance"))?;
+    for input in &link_inputs {
+        provenance.push(
+            ProvenanceNodeV1::new(input.identity(), Vec::new())
+                .map_err(ProtectedFirstBuildWorkerV3Error::LinkPlan)?,
+        );
+    }
+    let mut output_parents = Vec::new();
+    output_parents
+        .try_reserve_exact(link_inputs.len())
+        .map_err(|_| allocation_error("output provenance parents"))?;
+    output_parents.extend(link_inputs.iter().map(|input| input.identity()));
+    provenance.push(
+        ProvenanceNodeV1::new(output_identity, output_parents)
+            .map_err(ProtectedFirstBuildWorkerV3Error::LinkPlan)?,
+    );
+    let mut retained_options = Vec::new();
+    retained_options
+        .try_reserve_exact(options.len())
+        .map_err(|_| allocation_error("reconstructed link options"))?;
+    retained_options.extend(options.iter().cloned());
+    let plan = MultiInputLinkPlanV1::canonicalized(
         target,
         link_inputs,
-        options,
+        retained_options,
         LinkOutputV1::new(output_identity, target),
         provenance,
     )
-    .map_err(ProtectedFirstBuildWorkerV3Error::LinkPlan)
+    .map_err(ProtectedFirstBuildWorkerV3Error::LinkPlan)?;
+    Ok((plan, inputs))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BorrowedInputIdentityV2 {
+    kind: WorkerInputKindV1,
+    identity: ContentIdentityV1,
+}
+
+struct BorrowedRequestInputsV2 {
+    compiler: BorrowedInputIdentityV2,
+    providers: Vec<BorrowedInputIdentityV2>,
+}
+
+struct BorrowedWorkerRequestV2<'bytes> {
+    fields: [&'bytes [u8]; WORKER_REQUEST_FIELD_COUNT_V2],
+}
+
+impl<'bytes> BorrowedWorkerRequestV2<'bytes> {
+    fn decode(bytes: &'bytes [u8]) -> Result<Self, ()> {
+        if bytes.len() > MAX_WORKER_REQUEST_BYTES || !bytes.starts_with(WORKER_REQUEST_MAGIC_V2) {
+            return Err(());
+        }
+        let mut offset = WORKER_REQUEST_MAGIC_V2.len();
+        let mut fields = [&[][..]; WORKER_REQUEST_FIELD_COUNT_V2];
+        let mut identity_preimage_len = 0;
+        for expected_tag in 1..=WORKER_REQUEST_FIELD_COUNT_V2 {
+            let header_end = offset.checked_add(6).ok_or(())?;
+            let header = bytes.get(offset..header_end).ok_or(())?;
+            let tag = u16::from_le_bytes(header[..2].try_into().map_err(|_| ())?);
+            if usize::from(tag) != expected_tag {
+                return Err(());
+            }
+            let field_len = u32::from_le_bytes(header[2..].try_into().map_err(|_| ())?) as usize;
+            let field_end = header_end.checked_add(field_len).ok_or(())?;
+            fields[expected_tag - 1] = bytes.get(header_end..field_end).ok_or(())?;
+            if expected_tag == WORKER_REQUEST_FIELD_COUNT_V2 {
+                identity_preimage_len = offset;
+            }
+            offset = field_end;
+        }
+        if offset != bytes.len() || fields[14].len() != 32 {
+            return Err(());
+        }
+        let mut hasher = Sha256::new();
+        hasher.update(WORKER_REQUEST_IDENTITY_DOMAIN_V2);
+        hasher.update((identity_preimage_len as u64).to_le_bytes());
+        hasher.update(&bytes[..identity_preimage_len]);
+        let actual_identity: [u8; 32] = hasher.finalize().into();
+        if fields[14] != actual_identity {
+            return Err(());
+        }
+        Ok(Self { fields })
+    }
+
+    fn field(&self, tag: usize) -> &'bytes [u8] {
+        self.fields[tag - 1]
+    }
+
+    fn request_id(&self) -> &'bytes [u8] {
+        self.field(1)
+    }
+
+    fn request_identity(&self) -> &'bytes [u8] {
+        self.field(15)
+    }
+}
+
+fn validate_request_response_binding(
+    request: &BorrowedWorkerRequestV2<'_>,
+    response: &WorkerResponseV2,
+) -> Result<(), ()> {
+    if request.request_id() != response.request_id()
+        || request.request_identity() != response.request_identity()
+        || request.field(8) != response.compiler_envelope_identity().as_bytes()
+    {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn validate_request_common_fields(
+    request: &BorrowedWorkerRequestV2<'_>,
+    worker: &WorkerMeasurementV1,
+    decoded: &crate::request_construction::DecodedCompilerModuleHandoffV2,
+    options: crate::WorkerOptionsV1,
+) -> Result<BorrowedRequestInputsV2, ProtectedFirstBuildWorkerV3Error> {
+    if request.field(1).len() != 32
+        || request.field(2) != worker.llvm_build_identity().as_bytes()
+        || request.field(3) != worker.worker_build_identity().as_bytes()
+        || request.field(4) != encode_content_identity(worker.executable())
+        || request.field(5) != decoded.target().to_string().as_bytes()
+        || request.field(6) != [code_object_version_byte(decoded.code_object_version())]
+        || request.field(7)
+            != [
+                options.optimization() as u8,
+                u8::from(options.strip_debug()),
+                u8::from(options.verify_each()),
+            ]
+        || request.field(8) != decoded.envelope().identity().as_bytes()
+    {
+        return Err(replay_error("common worker request identity fields"));
+    }
+    let compiler = validate_compiler_input_field(request.field(9), decoded)
+        .map_err(|_| replay_error("compiler module request input"))?;
+    let providers = decode_borrowed_inputs(request.field(10))?;
+    validate_symbol_closure(request, decoded)?;
+    let output_bound =
+        decode_u64(request.field(14)).map_err(|_| replay_error("worker request output bound"))?;
+    if output_bound == 0 || output_bound > crate::MAX_WORKER_OUTPUT_BYTES as u64 {
+        return Err(replay_error("worker request output bound"));
+    }
+    Ok(BorrowedRequestInputsV2 {
+        compiler,
+        providers,
+    })
+}
+
+fn validate_stable_request_fields(
+    bootstrap: &BorrowedWorkerRequestV2<'_>,
+    replay: &BorrowedWorkerRequestV2<'_>,
+) -> Result<(), ()> {
+    for tag in 2..=13 {
+        if bootstrap.field(tag) != replay.field(tag) {
+            return Err(());
+        }
+    }
+    Ok(())
+}
+
+fn validate_compiler_input_field(
+    field: &[u8],
+    decoded: &crate::request_construction::DecodedCompilerModuleHandoffV2,
+) -> Result<BorrowedInputIdentityV2, ()> {
+    let (input, remaining) = decode_borrowed_input(field)?;
+    if !remaining.is_empty()
+        || input.kind != decoded.compiler_module_kind()
+        || field.get(WORKER_INPUT_WIRE_OVERHEAD_BYTES_V2..) != Some(decoded.compiler_module_bytes())
+    {
+        return Err(());
+    }
+    Ok(input)
+}
+
+fn decode_borrowed_inputs(
+    field: &[u8],
+) -> Result<Vec<BorrowedInputIdentityV2>, ProtectedFirstBuildWorkerV3Error> {
+    let count_bytes = field
+        .get(..4)
+        .ok_or_else(|| replay_error("provider input count"))?;
+    let count = u32::from_le_bytes(
+        count_bytes
+            .try_into()
+            .map_err(|_| replay_error("provider input count"))?,
+    ) as usize;
+    if count > MAX_LINK_INPUTS.saturating_sub(1) {
+        return Err(replay_error("provider input count"));
+    }
+    let mut inputs: Vec<BorrowedInputIdentityV2> = Vec::new();
+    inputs
+        .try_reserve_exact(count)
+        .map_err(|_| allocation_error("borrowed provider input metadata"))?;
+    let mut remaining = field
+        .get(4..)
+        .ok_or_else(|| replay_error("provider inputs"))?;
+    let mut total_payload_bytes = 0_usize;
+    for _ in 0..count {
+        let (input, next) = decode_borrowed_input(remaining)
+            .map_err(|_| replay_error("provider input encoding"))?;
+        let payload_bytes = usize::try_from(input.identity.byte_len())
+            .map_err(|_| replay_error("provider input length"))?;
+        total_payload_bytes = total_payload_bytes
+            .checked_add(payload_bytes)
+            .ok_or_else(|| replay_error("provider input length"))?;
+        if total_payload_bytes > MAX_WORKER_TOTAL_INPUT_BYTES {
+            return Err(replay_error("provider input length"));
+        }
+        if let Some(previous) = inputs.last()
+            && (previous.identity, previous.kind) >= (input.identity, input.kind)
+        {
+            return Err(replay_error("provider input canonical order"));
+        }
+        inputs.push(input);
+        remaining = next;
+    }
+    if !remaining.is_empty() {
+        return Err(replay_error("provider input trailing bytes"));
+    }
+    Ok(inputs)
+}
+
+fn decode_borrowed_input(field: &[u8]) -> Result<(BorrowedInputIdentityV2, &[u8]), ()> {
+    let header = field.get(..WORKER_INPUT_WIRE_OVERHEAD_BYTES_V2).ok_or(())?;
+    let kind = match header[0] {
+        1 => WorkerInputKindV1::LlvmBitcode,
+        2 => WorkerInputKindV1::AmdGpuRelocatable,
+        3 => WorkerInputKindV1::LlvmTextIr,
+        _ => return Err(()),
+    };
+    let sha256: [u8; 32] = header[1..33].try_into().map_err(|_| ())?;
+    let byte_len = u64::from_le_bytes(header[33..41].try_into().map_err(|_| ())?);
+    let payload_len = usize::try_from(byte_len).map_err(|_| ())?;
+    if payload_len == 0 || payload_len > MAX_WORKER_TOTAL_INPUT_BYTES {
+        return Err(());
+    }
+    let payload_end = WORKER_INPUT_WIRE_OVERHEAD_BYTES_V2
+        .checked_add(payload_len)
+        .ok_or(())?;
+    let payload = field
+        .get(WORKER_INPUT_WIRE_OVERHEAD_BYTES_V2..payload_end)
+        .ok_or(())?;
+    let identity = ContentIdentityV1::from_parts(sha256, byte_len);
+    if !identity.matches(payload) {
+        return Err(());
+    }
+    Ok((
+        BorrowedInputIdentityV2 { kind, identity },
+        field.get(payload_end..).ok_or(())?,
+    ))
+}
+
+fn decode_borrowed_strings(field: &[u8]) -> Result<Vec<&str>, ProtectedFirstBuildWorkerV3Error> {
+    let count = u32::from_le_bytes(
+        field
+            .get(..4)
+            .ok_or_else(|| replay_error("request symbol count"))?
+            .try_into()
+            .map_err(|_| replay_error("request symbol count"))?,
+    ) as usize;
+    if count > MAX_WORKER_SYMBOLS {
+        return Err(replay_error("request symbol count"));
+    }
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(count)
+        .map_err(|_| allocation_error("borrowed request symbols"))?;
+    let mut remaining = field
+        .get(4..)
+        .ok_or_else(|| replay_error("request symbols"))?;
+    let mut previous: Option<&[u8]> = None;
+    let mut total = 0_usize;
+    for _ in 0..count {
+        let length = u32::from_le_bytes(
+            remaining
+                .get(..4)
+                .ok_or_else(|| replay_error("request symbol length"))?
+                .try_into()
+                .map_err(|_| replay_error("request symbol length"))?,
+        ) as usize;
+        if length == 0 || length > MAX_WORKER_SYMBOL_BYTES {
+            return Err(replay_error("request symbol length"));
+        }
+        total = total.checked_add(length).ok_or(
+            ProtectedFirstBuildWorkerV3Error::WorkingSetArithmeticOverflow {
+                component: "request symbol bytes",
+            },
+        )?;
+        if total > MAX_WORKER_SYMBOLS * MAX_WORKER_SYMBOL_BYTES {
+            return Err(replay_error("request symbol bytes"));
+        }
+        let value = remaining
+            .get(
+                4..4_usize.checked_add(length).ok_or(
+                    ProtectedFirstBuildWorkerV3Error::WorkingSetArithmeticOverflow {
+                        component: "request symbol field offset",
+                    },
+                )?,
+            )
+            .ok_or_else(|| replay_error("request symbol bytes"))?;
+        if !value.is_ascii()
+            || value.iter().copied().any(|byte| {
+                byte.is_ascii_control()
+                    || byte.is_ascii_whitespace()
+                    || matches!(byte, b'/' | b'\\' | b'\'' | b'"')
+            })
+            || previous.is_some_and(|prior| prior >= value)
+        {
+            return Err(replay_error("request symbol canonical order"));
+        }
+        values.push(std::str::from_utf8(value).map_err(|_| replay_error("request symbol UTF-8"))?);
+        previous = Some(value);
+        remaining = remaining
+            .get(4 + length..)
+            .ok_or_else(|| replay_error("request symbol bytes"))?;
+    }
+    if !remaining.is_empty() {
+        return Err(replay_error("request symbol trailing bytes"));
+    }
+    Ok(values)
+}
+
+fn validate_symbol_closure(
+    request: &BorrowedWorkerRequestV2<'_>,
+    decoded: &crate::request_construction::DecodedCompilerModuleHandoffV2,
+) -> Result<(), ProtectedFirstBuildWorkerV3Error> {
+    use CompilerModuleSymbolRoleV1 as Role;
+
+    let imports = decode_borrowed_strings(request.field(11))?;
+    let exports = decode_borrowed_strings(request.field(12))?;
+    let final_symbols = decode_borrowed_strings(request.field(13))?;
+    let directional = decoded.envelope().directional_symbols();
+    if !imports.iter().copied().eq(directional.imports())
+        || !imports.iter().copied().eq(decoded
+            .symbol_manifest()
+            .symbols(Role::UnresolvedExternalImport))
+    {
+        return Err(replay_error("request import symbol closure"));
+    }
+    if !exports.iter().copied().eq(directional.exports())
+        || !exports
+            .iter()
+            .copied()
+            .eq(decoded.symbol_manifest().symbols(Role::DeviceFfiExport))
+    {
+        return Err(replay_error("request export symbol closure"));
+    }
+
+    let expected_count = [
+        Role::KernelEntry,
+        Role::KernelDescriptor,
+        Role::DeviceFfiExport,
+        Role::UnresolvedExternalImport,
+    ]
+    .into_iter()
+    .try_fold(0_usize, |count, role| {
+        count.checked_add(decoded.symbol_manifest().role_count(role))
+    })
+    .ok_or(
+        ProtectedFirstBuildWorkerV3Error::WorkingSetArithmeticOverflow {
+            component: "final symbol closure count",
+        },
+    )?;
+    let mut expected = Vec::new();
+    expected
+        .try_reserve_exact(expected_count)
+        .map_err(|_| allocation_error("expected final symbol closure"))?;
+    for role in [
+        Role::KernelEntry,
+        Role::KernelDescriptor,
+        Role::DeviceFfiExport,
+        Role::UnresolvedExternalImport,
+    ] {
+        expected.extend(decoded.symbol_manifest().symbols(role));
+    }
+    expected.sort_unstable();
+    if final_symbols != expected {
+        return Err(replay_error("request final symbol closure"));
+    }
+    Ok(())
+}
+
+fn encode_content_identity(identity: ContentIdentityV1) -> [u8; 40] {
+    let mut encoded = [0_u8; 40];
+    encoded[..32].copy_from_slice(identity.sha256());
+    encoded[32..].copy_from_slice(&identity.byte_len().to_le_bytes());
+    encoded
+}
+
+fn decode_u64(bytes: &[u8]) -> Result<u64, ()> {
+    Ok(u64::from_le_bytes(bytes.try_into().map_err(|_| ())?))
+}
+
+fn calculate_bootstrap_request_id(
+    binding: ProtectedCompilerHandoffBindingV3,
+    worker: &WorkerMeasurementV1,
+    decoded: &crate::request_construction::DecodedCompilerModuleHandoffV2,
+    request: &BorrowedWorkerRequestV2<'_>,
+    inputs: &BorrowedRequestInputsV2,
+) -> Result<[u8; 32], ProtectedFirstBuildWorkerV3Error> {
+    let mut hasher = Sha256::new();
+    hasher.update(PROTECTED_FIRST_BUILD_REQUEST_DOMAIN_V3);
+    binding.hash_identity_preimage(&mut hasher);
+    hash_worker_request_common(&mut hasher, worker, decoded, request, inputs)?;
+    Ok(hasher.finalize().into())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn calculate_replay_request_id(
+    binding: ProtectedCompilerHandoffBindingV3,
+    worker: &WorkerMeasurementV1,
+    decoded: &crate::request_construction::DecodedCompilerModuleHandoffV2,
+    request: &BorrowedWorkerRequestV2<'_>,
+    plan: &MultiInputLinkPlanV1,
+    inputs: &BorrowedRequestInputsV2,
+    all_inputs: &[BorrowedInputIdentityV2],
+) -> Result<[u8; 32], ProtectedFirstBuildWorkerV3Error> {
+    let input_kind_closure = calculate_input_kind_closure_identity(plan, all_inputs)?;
+    let staged_envelope = calculate_staged_envelope_identity(decoded);
+    let mut hasher = Sha256::new();
+    hasher.update(PROTECTED_PLAN_REQUEST_DOMAIN_V3);
+    binding.hash_identity_preimage(&mut hasher);
+    hasher.update(plan.identity().as_bytes());
+    hasher.update(input_kind_closure);
+    hasher.update(staged_envelope);
+    hash_worker_request_common(&mut hasher, worker, decoded, request, inputs)?;
+    Ok(hasher.finalize().into())
+}
+
+fn hash_worker_request_common(
+    hasher: &mut Sha256,
+    worker: &WorkerMeasurementV1,
+    decoded: &crate::request_construction::DecodedCompilerModuleHandoffV2,
+    request: &BorrowedWorkerRequestV2<'_>,
+    inputs: &BorrowedRequestInputsV2,
+) -> Result<(), ProtectedFirstBuildWorkerV3Error> {
+    hasher.update(request.field(8));
+    let manifest_identity = decoded.symbol_manifest().identity();
+    hasher.update(manifest_identity.sha256());
+    hasher.update(manifest_identity.byte_len().to_le_bytes());
+    hash_content(hasher, worker.executable());
+    hash_text_bytes(hasher, request.field(3))?;
+    hash_text_bytes(hasher, request.field(2))?;
+    hash_text_bytes(hasher, request.field(5))?;
+    hasher.update(request.field(6));
+    hasher.update(request.field(7));
+    hash_input_identity(hasher, inputs.compiler);
+    hasher.update(usize_as_u64(inputs.providers.len())?.to_le_bytes());
+    for provider in &inputs.providers {
+        hash_input_identity(hasher, *provider);
+    }
+    for tag in 11..=13 {
+        hash_string_field(hasher, request.field(tag))?;
+    }
+    hasher.update(request.field(14));
+    Ok(())
+}
+
+fn calculate_input_kind_closure_identity(
+    plan: &MultiInputLinkPlanV1,
+    all_inputs: &[BorrowedInputIdentityV2],
+) -> Result<[u8; 32], ProtectedFirstBuildWorkerV3Error> {
+    if all_inputs.len() != plan.inputs().len() {
+        return Err(replay_error("link-plan input-kind count"));
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(INPUT_KIND_CLOSURE_DOMAIN_V1);
+    hasher.update(plan.identity().as_bytes());
+    hasher.update(usize_as_u64(all_inputs.len())?.to_le_bytes());
+    for (planned, actual) in plan.inputs().iter().zip(all_inputs) {
+        if planned.identity() != actual.identity {
+            return Err(replay_error("link-plan input-kind identity"));
+        }
+        hash_content(&mut hasher, actual.identity);
+        hasher.update([actual.kind as u8]);
+    }
+    Ok(hasher.finalize().into())
+}
+
+fn calculate_staged_envelope_identity(
+    decoded: &crate::request_construction::DecodedCompilerModuleHandoffV2,
+) -> [u8; 32] {
+    let bytes = decoded.envelope().canonical_bytes();
+    let mut hasher = Sha256::new();
+    hasher.update(STAGED_COMPILER_FFI_ENVELOPE_DOMAIN_V1);
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+    hasher.finalize().into()
+}
+
+fn hash_input_identity(hasher: &mut Sha256, input: BorrowedInputIdentityV2) {
+    hasher.update([input.kind as u8]);
+    hash_content(hasher, input.identity);
+}
+
+fn hash_string_field(
+    hasher: &mut Sha256,
+    field: &[u8],
+) -> Result<(), ProtectedFirstBuildWorkerV3Error> {
+    let count = u32::from_le_bytes(
+        field
+            .get(..4)
+            .ok_or_else(|| replay_error("request symbol count"))?
+            .try_into()
+            .map_err(|_| replay_error("request symbol count"))?,
+    ) as usize;
+    hasher.update(usize_as_u64(count)?.to_le_bytes());
+    let mut remaining = field
+        .get(4..)
+        .ok_or_else(|| replay_error("request symbols"))?;
+    for _ in 0..count {
+        let length = u32::from_le_bytes(
+            remaining
+                .get(..4)
+                .ok_or_else(|| replay_error("request symbol length"))?
+                .try_into()
+                .map_err(|_| replay_error("request symbol length"))?,
+        ) as usize;
+        let value_end = 4_usize.checked_add(length).ok_or(
+            ProtectedFirstBuildWorkerV3Error::WorkingSetArithmeticOverflow {
+                component: "request symbol field offset",
+            },
+        )?;
+        let value = remaining
+            .get(4..value_end)
+            .ok_or_else(|| replay_error("request symbol bytes"))?;
+        hash_text_bytes(hasher, value)?;
+        remaining = remaining
+            .get(value_end..)
+            .ok_or_else(|| replay_error("request symbol bytes"))?;
+    }
+    if !remaining.is_empty() {
+        return Err(replay_error("request symbol trailing bytes"));
+    }
+    Ok(())
+}
+
+fn hash_text_bytes(
+    hasher: &mut Sha256,
+    bytes: &[u8],
+) -> Result<(), ProtectedFirstBuildWorkerV3Error> {
+    hasher.update(usize_as_u64(bytes.len())?.to_le_bytes());
+    hasher.update(bytes);
+    Ok(())
+}
+
+const fn code_object_version_byte(version: CodeObjectVersion) -> u8 {
+    match version {
+        CodeObjectVersion::V4 => 4,
+        CodeObjectVersion::V5 => 5,
+        CodeObjectVersion::V6 => 6,
+    }
+}
+
+const fn allocation_error(component: &'static str) -> ProtectedFirstBuildWorkerV3Error {
+    ProtectedFirstBuildWorkerV3Error::WorkingSetAllocationFailed { component }
 }
 
 const fn replay_error(field: &'static str) -> ProtectedFirstBuildWorkerV3Error {
@@ -1064,7 +1831,7 @@ fn calculate_evidence_identity(
     worker: &WorkerMeasurementV1,
     limits: WorkerExecutionLimitsV1,
     result: &crate::first_build_worker_v2::FirstBuildWorkerV2EngineResult,
-) -> ProtectedFirstBuildWorkerV3IdentityV1 {
+) -> Result<ProtectedFirstBuildWorkerV3IdentityV1, ProtectedFirstBuildWorkerV3Error> {
     let mut hasher = Sha256::new();
     hasher.update(EVIDENCE_IDENTITY_DOMAIN_V3);
     binding.hash_identity_preimage(&mut hasher);
@@ -1075,12 +1842,112 @@ fn calculate_evidence_identity(
     hasher.update(limits.timeout().subsec_nanos().to_le_bytes());
     hasher.update((limits.stdout_bytes() as u64).to_le_bytes());
     hasher.update((limits.stderr_bytes() as u64).to_le_bytes());
-    hash_blob(&mut hasher, &result.plan.canonical_bytes());
+    hash_canonical_plan_blob(&mut hasher, &result.plan)?;
     hash_blob(&mut hasher, &result.candidate_request_bytes);
     hash_blob(&mut hasher, result.candidate.response().canonical_bytes());
     hash_blob(&mut hasher, &result.authorized_request_bytes);
     hash_blob(&mut hasher, result.authorized.response().canonical_bytes());
-    ProtectedFirstBuildWorkerV3IdentityV1(hasher.finalize().into())
+    Ok(ProtectedFirstBuildWorkerV3IdentityV1(
+        hasher.finalize().into(),
+    ))
+}
+
+fn hash_canonical_plan_blob(
+    hasher: &mut Sha256,
+    plan: &MultiInputLinkPlanV1,
+) -> Result<(), ProtectedFirstBuildWorkerV3Error> {
+    const LINK_PLAN_DOMAIN_V1: &[u8] = b"FE2O3/AMDGPU-MULTI-INPUT-LINK-PLAN/V1\0";
+    const CONTENT_IDENTITY_BYTES: usize = 32 + 8;
+
+    let target = plan.target().to_string();
+    let mut byte_len = LINK_PLAN_DOMAIN_V1
+        .len()
+        .checked_add(4)
+        .and_then(|bytes| bytes.checked_add(target.len()))
+        .and_then(|bytes| bytes.checked_add(4))
+        .and_then(|bytes| {
+            plan.inputs()
+                .len()
+                .checked_mul(CONTENT_IDENTITY_BYTES)
+                .and_then(|inputs| bytes.checked_add(inputs))
+        })
+        .and_then(|bytes| bytes.checked_add(4))
+        .ok_or(
+            ProtectedFirstBuildWorkerV3Error::WorkingSetArithmeticOverflow {
+                component: "canonical link-plan length",
+            },
+        )?;
+    for option in plan.options() {
+        byte_len = byte_len
+            .checked_add(4)
+            .and_then(|bytes| bytes.checked_add(option.name().len()))
+            .and_then(|bytes| bytes.checked_add(4))
+            .and_then(|bytes| bytes.checked_add(option.value().len()))
+            .ok_or(
+                ProtectedFirstBuildWorkerV3Error::WorkingSetArithmeticOverflow {
+                    component: "canonical link-option length",
+                },
+            )?;
+    }
+    byte_len = byte_len
+        .checked_add(CONTENT_IDENTITY_BYTES)
+        .and_then(|bytes| bytes.checked_add(4))
+        .ok_or(
+            ProtectedFirstBuildWorkerV3Error::WorkingSetArithmeticOverflow {
+                component: "canonical link-plan output length",
+            },
+        )?;
+    for node in plan.provenance() {
+        byte_len = byte_len
+            .checked_add(CONTENT_IDENTITY_BYTES + 4)
+            .and_then(|bytes| {
+                node.parents()
+                    .len()
+                    .checked_mul(CONTENT_IDENTITY_BYTES)
+                    .and_then(|parents| bytes.checked_add(parents))
+            })
+            .ok_or(
+                ProtectedFirstBuildWorkerV3Error::WorkingSetArithmeticOverflow {
+                    component: "canonical link-plan provenance length",
+                },
+            )?;
+    }
+
+    hasher.update(usize_as_u64(byte_len)?.to_le_bytes());
+    hasher.update(LINK_PLAN_DOMAIN_V1);
+    hash_u32(hasher, target.len())?;
+    hasher.update(target.as_bytes());
+    hash_u32(hasher, plan.inputs().len())?;
+    for input in plan.inputs() {
+        hash_content(hasher, input.identity());
+    }
+    hash_u32(hasher, plan.options().len())?;
+    for option in plan.options() {
+        hash_u32(hasher, option.name().len())?;
+        hasher.update(option.name().as_bytes());
+        hash_u32(hasher, option.value().len())?;
+        hasher.update(option.value().as_bytes());
+    }
+    hash_content(hasher, plan.output().identity());
+    hash_u32(hasher, plan.provenance().len())?;
+    for node in plan.provenance() {
+        hash_content(hasher, node.identity());
+        hash_u32(hasher, node.parents().len())?;
+        for parent in node.parents() {
+            hash_content(hasher, *parent);
+        }
+    }
+    Ok(())
+}
+
+fn hash_u32(hasher: &mut Sha256, value: usize) -> Result<(), ProtectedFirstBuildWorkerV3Error> {
+    let value = u32::try_from(value).map_err(|_| {
+        ProtectedFirstBuildWorkerV3Error::WorkingSetArithmeticOverflow {
+            component: "canonical u32 length",
+        }
+    })?;
+    hasher.update(value.to_le_bytes());
+    Ok(())
 }
 
 fn hash_attempt(hasher: &mut Sha256, attempt: BuildAttempt) {
@@ -1112,4 +1979,122 @@ fn hash_content(hasher: &mut Sha256, identity: ContentIdentityV1) {
 fn hash_blob(hasher: &mut Sha256, bytes: &[u8]) {
     hasher.update((bytes.len() as u64).to_le_bytes());
     hasher.update(bytes);
+}
+
+#[cfg(test)]
+mod working_set_tests {
+    use super::*;
+    use fe2o3_kernel_descriptor::DeviceTargetV1;
+
+    fn dimensions() -> ProtectedV3WorkingSetDimensions {
+        ProtectedV3WorkingSetDimensions {
+            outer_handoff_bytes: 4096,
+            compiler_module_bytes: 1024,
+            provider_payload_bytes: 1024,
+            provider_count: 1,
+            option_text_bytes: 64,
+            option_count: 4,
+            envelope_bytes: 256,
+            manifest_bytes: 256,
+        }
+    }
+
+    #[test]
+    fn adversarial_provider_and_option_counts_fail_with_typed_errors() {
+        let mut too_many_providers = dimensions();
+        too_many_providers.provider_count = MAX_LINK_INPUTS;
+        assert_eq!(
+            validate_working_set_dimensions(too_many_providers),
+            Err(
+                ProtectedFirstBuildWorkerV3Error::WorkingSetInputCountExceeded {
+                    actual: MAX_LINK_INPUTS,
+                    maximum: MAX_LINK_INPUTS - 1,
+                }
+            )
+        );
+
+        let mut too_many_options = dimensions();
+        too_many_options.option_count = MAX_LINK_OPTIONS + 1;
+        assert_eq!(
+            validate_working_set_dimensions(too_many_options),
+            Err(
+                ProtectedFirstBuildWorkerV3Error::WorkingSetOptionCountExceeded {
+                    actual: MAX_LINK_OPTIONS + 1,
+                    maximum: MAX_LINK_OPTIONS,
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn adversarial_aggregate_size_fails_before_any_large_allocation() {
+        let mut oversized = dimensions();
+        oversized.outer_handoff_bytes = 224 * 1024 * 1024;
+        oversized.compiler_module_bytes = 64 * 1024 * 1024;
+        oversized.provider_payload_bytes = 0;
+        oversized.provider_count = 0;
+        oversized.envelope_bytes = 512 * 1024;
+        oversized.manifest_bytes = 16 * 1024 * 1024;
+
+        let error = validate_working_set_dimensions(oversized).unwrap_err();
+        assert!(matches!(
+            error,
+            ProtectedFirstBuildWorkerV3Error::WorkingSetBudgetExceeded {
+                required_bytes,
+                maximum_bytes,
+            } if required_bytes > maximum_bytes
+                && maximum_bytes == MAX_PROTECTED_V3_LIVE_INPUT_REQUEST_BYTES_V1 as u64
+        ));
+    }
+
+    #[test]
+    fn adversarial_lengths_use_checked_arithmetic() {
+        let mut overflowing = dimensions();
+        overflowing.outer_handoff_bytes = usize::MAX;
+        assert_eq!(
+            validate_working_set_dimensions(overflowing),
+            Err(
+                ProtectedFirstBuildWorkerV3Error::WorkingSetArithmeticOverflow {
+                    component: "aggregate live input/request bytes",
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn streamed_plan_blob_is_identity_compatible_with_canonical_bytes() {
+        let target = DeviceTargetV1::parse("gfx942:xnack-").unwrap();
+        let first = ContentIdentityV1::from_parts([0x11; 32], 17);
+        let second = ContentIdentityV1::from_parts([0x22; 32], 23);
+        let output = ContentIdentityV1::from_parts([0x33; 32], 31);
+        let inputs = vec![
+            LinkInputV1::new(first, target),
+            LinkInputV1::new(second, target),
+        ];
+        let options = vec![
+            LinkOptionV1::new("code-object-version", "6").unwrap(),
+            LinkOptionV1::new("opt-level", "2").unwrap(),
+            LinkOptionV1::new("strip-debug", "true").unwrap(),
+            LinkOptionV1::new("verify-each", "true").unwrap(),
+        ];
+        let provenance = vec![
+            ProvenanceNodeV1::new(first, Vec::new()).unwrap(),
+            ProvenanceNodeV1::new(second, Vec::new()).unwrap(),
+            ProvenanceNodeV1::new(output, vec![first, second]).unwrap(),
+        ];
+        let plan = MultiInputLinkPlanV1::canonicalized(
+            target,
+            inputs,
+            options,
+            LinkOutputV1::new(output, target),
+            provenance,
+        )
+        .unwrap();
+
+        let mut streamed = Sha256::new();
+        hash_canonical_plan_blob(&mut streamed, &plan).unwrap();
+        let mut legacy = Sha256::new();
+        hash_blob(&mut legacy, &plan.canonical_bytes());
+        assert_eq!(streamed.finalize(), legacy.finalize());
+    }
 }
