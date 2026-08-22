@@ -10,7 +10,7 @@ use fe2o3_kfd::{
     ComputeAqlQueueSessionV1, Gfx942CompletedDispatchBatchV1, Gfx942CompletedDispatchReadRequestV1,
     Gfx942CompletedDispatchReadbackV1, Gfx942CompletionRecycleObservationV1,
     Gfx942DeviceContentDescriptorV1, Gfx942DispatchBatchV1, Gfx942DispatchPollV1,
-    Gfx942FixedDispatchDataV1,
+    Gfx942FixedDispatchDataV1, Gfx942RecycledDispatchResourcesV1,
 };
 
 use crate::allocation::{
@@ -25,17 +25,17 @@ use crate::batch::ServiceFixedBatchV1;
 
 /// Frozen claim boundary for the reusable service queue composition layer.
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-service-addressless-fixed-queue-r6-v1\n",
+    "profile=fe2o3-service-addressless-fixed-queue-r7-v1\n",
     "queue=one-long-lived-kfd-compute-aql-owner,ring-event-doorbell-and-signal-resources-retained-across-rebind\n",
     "batch=1-through-8192-fixed-packets,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges\n",
     "implicit-kernarg=exact-trailing-256-byte-COV6-caller-zero-suffix,lower-owner-privately-populates-metadata-derived-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds,queue-pointer-and-runtime-service-or-address-fields-rejected\n",
     "publication=one-reservation-one-write-counter-fetch-add-one-final-doorbell-per-fixed-batch\n",
-    "custody=prepared-published-completed-recycled-unbound-linear-service-types,exact-completion-and-signal-recycle-before-detach-rebind-or-returning-destroy\n",
+    "custody=prepared-published-completed-recycled-unbound-linear-service-types,exact-completion-and-signal-recycle-before-detach-rebind-or-attached-or-unbound-returning-destroy\n",
     "data=read-and-readwrite-require-sealed-full-initialization,write-only-may-consume-uninitialized-exclusive-storage,initialized-state-retained-after-generic-completion-without-stale-content-digest\n",
     "subleases=whole-native-allocation-owner-retained,partition-registry-transfers-with-ledger,partitioned-bindings-require-member-index-and-contained-offset-extent,detached-initialized-replacement-preflights-and-atomically-installs-an-exact-new-partition,replacement-denies-old-allocation-generation\n",
     "readback=caller-can-mint-only-from-current-recycled-owner,request-binds-exact-dispatch-generation-and-owner-checked-host-allocation-generation,lower-owner-allows-only-one-inspected-write-or-readwrite-subrange-and-returns-owned-bytes,no-address-or-initialization-promotion\n",
     "rebind=same-native-queue-may-consume-a-different-fixed-cardinality-program-geometry-kernarg-and-addressless-data-binding-after-exact-recycle\n",
-    "release=return-data-custody-after-exact-recycle,destroy-native-queue,restore-service-ledger,reverse-order-unmap-and-free\n",
+    "release=return-attached-or-exact-ordered-detached-data-custody-after-exact-recycle,destroy-native-queue,restore-service-ledger,reverse-order-unmap-and-free\n",
     "failure=pure-rejection-recovers-input-owners,ambiguous-native-side-effect-is-terminal-and-denies-retry,opaque-quarantine-retains-available-owner-state\n",
     "authority=no-native-address-handle-pointer-fd-mmio-signal-or-packet-template-export,no-caller-initialization-or-effect-assertion\n",
     "excluded=executable-correctness,effect-correctness-beyond-inspected-metadata,full-write-coverage,content-interpretation,numerical-correctness,hardware-execution,performance\n",
@@ -43,7 +43,7 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "5370f2b82c310f9ced62af2b4f53767cd0a20a8c5faa74e38f9acf76a7f75e0b";
+    "4878ee7681f919aee21c4d33fbd3f343286d138f79c0c3d7e55817f5d6bb7da0";
 
 /// Queue composition, transition, or teardown error.
 #[derive(Debug)]
@@ -501,42 +501,47 @@ impl<const N: usize> ServiceRecycledQueueSessionV1<N> {
     pub fn destroy_and_release(
         self,
     ) -> Result<ServiceQueueReleaseObservationV1, ServiceQueueReleaseFailureV1> {
-        let resources = self
-            .owner
-            .queue
+        let ServiceQueueOwnerV1 { queue, ledger } = self.owner;
+        let resources = queue
             .destroy_returning_fixed_dispatch_resources()
             .map_err(|error| {
                 ServiceQueueReleaseFailureV1::Queue(ServiceQueueErrorV1::Kfd(error))
             })?;
-        let destroyed = resources.destroyed();
-        let dispatch_generation = resources.dispatch_generation();
-        let (session, data) = resources.into_session_and_data();
-        let allocations = self
-            .owner
-            .ledger
-            .restore(session, data)
-            .map_err(|failure| {
-                ServiceQueueReleaseFailureV1::Restore(Box::new(
-                    QuarantinedServiceQueueResourcesV1 { failure },
-                ))
-            })?;
-        let allocations = allocations
-            .release_quiescent()
-            .map_err(|failure| ServiceQueueReleaseFailureV1::Allocation(Box::new(failure)))?;
-        Ok(ServiceQueueReleaseObservationV1 {
-            destroyed,
-            dispatch_generation,
-            allocations,
-        })
+        restore_and_release_queue_resources(ledger, resources)
     }
 }
 
 /// A live native queue with no attached executable, kernarg, or packet batch.
 ///
 /// Queue ring, completion-signal, event, runtime, and doorbell resources remain
-/// owned and live. Only a compatible replacement batch may consume the detached
-/// dispatch-data allocations and reattach them.
-#[must_use = "the unbound live queue must be rebound or quarantined"]
+/// owned and live. A compatible replacement batch may consume the detached
+/// dispatch-data allocations and reattach them, or exact returning teardown may
+/// destroy the queue and release the allocations.
+///
+/// The unbound state cannot be fabricated from a pre-recycle queue:
+///
+/// ```compile_fail
+/// use fe2o3_service_host::ServiceQueueSessionV1;
+///
+/// fn release_before_recycle(queue: ServiceQueueSessionV1<1>) {
+///     let _ = queue.destroy_and_release();
+/// }
+/// ```
+///
+/// Its private detached-data and generation ledgers cannot be fabricated:
+///
+/// ```compile_fail
+/// use fe2o3_service_host::ServiceQueueUnboundSessionV1;
+///
+/// fn fabricate() -> ServiceQueueUnboundSessionV1 {
+///     ServiceQueueUnboundSessionV1 {
+///         owner: todo!(),
+///         dispatch_generation: 1,
+///         data: Vec::new(),
+///     }
+/// }
+/// ```
+#[must_use = "the unbound live queue must be rebound, destroyed, or quarantined"]
 pub struct ServiceQueueUnboundSessionV1 {
     owner: ServiceQueueOwnerV1,
     dispatch_generation: u64,
@@ -610,6 +615,37 @@ impl ServiceQueueUnboundSessionV1 {
     /// Returns a redacted observation of the still-live native queue.
     pub const fn observation(&self) -> ComputeAqlQueueObservationV1 {
         self.owner.observation()
+    }
+
+    /// Destroys the live queue and releases its exact detached allocation set.
+    ///
+    /// The detached data vector and private KFD generation, cardinality, and
+    /// ordered storage-identity ledgers are reunited by this consuming
+    /// transition. A mismatch is terminal and does not return retry custody.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_service_host::ServiceQueueUnboundSessionV1;
+    ///
+    /// fn destroy_twice(queue: ServiceQueueUnboundSessionV1) {
+    ///     let _first = queue.destroy_and_release();
+    ///     let _second = queue.destroy_and_release();
+    /// }
+    /// ```
+    pub fn destroy_and_release(
+        self,
+    ) -> Result<ServiceQueueReleaseObservationV1, ServiceQueueReleaseFailureV1> {
+        let Self {
+            owner,
+            dispatch_generation: _,
+            data,
+        } = self;
+        let ServiceQueueOwnerV1 { queue, ledger } = owner;
+        let resources = queue
+            .destroy_returning_detached_fixed_dispatch_resources(data)
+            .map_err(|error| {
+                ServiceQueueReleaseFailureV1::Queue(ServiceQueueErrorV1::Kfd(error))
+            })?;
+        restore_and_release_queue_resources(ledger, resources)
     }
 
     /// Rebinds a replacement fixed batch to the same live native queue.
@@ -1042,6 +1078,28 @@ impl ServiceQueueReleaseFailureV1 {
     }
 }
 
+fn restore_and_release_queue_resources(
+    ledger: ServiceQueueAllocationLedgerV1,
+    resources: Gfx942RecycledDispatchResourcesV1,
+) -> Result<ServiceQueueReleaseObservationV1, ServiceQueueReleaseFailureV1> {
+    let destroyed = resources.destroyed();
+    let dispatch_generation = resources.dispatch_generation();
+    let (session, data) = resources.into_session_and_data();
+    let allocations = ledger.restore(session, data).map_err(|failure| {
+        ServiceQueueReleaseFailureV1::Restore(Box::new(QuarantinedServiceQueueResourcesV1 {
+            failure,
+        }))
+    })?;
+    let allocations = allocations
+        .release_quiescent()
+        .map_err(|failure| ServiceQueueReleaseFailureV1::Allocation(Box::new(failure)))?;
+    Ok(ServiceQueueReleaseObservationV1 {
+        destroyed,
+        dispatch_generation,
+        allocations,
+    })
+}
+
 fn validate_ring<const N: usize>(ring_bytes: u32) -> Result<(), ServiceQueueErrorV1> {
     if N == 0 || N > AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize {
         return Err(ServiceQueueErrorV1::BatchContract(
@@ -1085,6 +1143,7 @@ mod tests {
         Published(u64),
         Recycled(u64),
         Unbound(u64),
+        Destroyed,
     }
 
     #[derive(Debug, Eq, PartialEq)]
@@ -1132,6 +1191,16 @@ mod tests {
             assert!(matches!(self.phase, TestQueuePhaseV1::Unbound(_)));
             self.batch = Some(batch);
             self.phase = TestQueuePhaseV1::Prepared;
+        }
+
+        fn destroy_unbound(&mut self, data: TestBatchDescriptionV1) -> Option<u64> {
+            let TestQueuePhaseV1::Unbound(generation) = self.phase else {
+                return None;
+            };
+            assert!(self.batch.is_none());
+            let _returned_data = data;
+            self.phase = TestQueuePhaseV1::Destroyed;
+            Some(generation)
         }
     }
 
@@ -1212,5 +1281,40 @@ mod tests {
         assert_eq!(current.geometry.grid(), [128, 2, 1]);
         assert_eq!(&*current.kernarg_scalar_bytes, &[9, 8, 7, 6]);
         assert_eq!(current.data_generation, 12);
+    }
+
+    #[test]
+    fn unbound_teardown_returns_the_detached_generation_once() {
+        let batch = TestBatchDescriptionV1 {
+            packet_count: 1,
+            program_identity: [7; 32],
+            geometry: fe2o3_aql::AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+            kernarg_scalar_bytes: vec![3, 1, 4].into_boxed_slice(),
+            data_generation: 23,
+        };
+        let mut queue = TestLongLivedQueueV1 {
+            queue_identity: 52,
+            phase: TestQueuePhaseV1::Prepared,
+            next_generation: 9,
+            publication_count: 0,
+            batch: Some(batch),
+        };
+
+        let generation = queue.submit();
+        assert_eq!(generation, 9);
+        assert_eq!(
+            queue.destroy_unbound(TestBatchDescriptionV1 {
+                packet_count: 0,
+                program_identity: [0; 32],
+                geometry: fe2o3_aql::AqlDispatchGeometryV1::new([1, 1, 1], [1, 1, 1]).unwrap(),
+                kernarg_scalar_bytes: Box::new([]),
+                data_generation: 0,
+            }),
+            None
+        );
+        queue.recycle(generation);
+        let detached = queue.detach().unwrap();
+        assert_eq!(queue.destroy_unbound(detached), Some(generation));
+        assert!(matches!(queue.phase, TestQueuePhaseV1::Destroyed));
     }
 }
