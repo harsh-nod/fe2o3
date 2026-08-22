@@ -620,6 +620,14 @@ turn the foundations below into end-to-end features.
   caller-measured evidence: it does not authenticate the compiler or establish
   source-to-machine-code refinement. None of these values grants load or launch
   authority.
+  The protected required-envelope Cargo route now carries its compiler handoff,
+  publication intent, receipt, completion, and restart state through the
+  closure-bound V2 schema with no V1 fallback. Its cleanup escrow and exact
+  successor lease make predecessor retirement restartable across every durable
+  boundary, including a crash after a newer `Ready` marker is published. The
+  ordinary compatibility route remains schema-separated on V1. This is durable
+  provenance and crash recovery, not the still-missing production proof
+  authenticator or host/HSA dispatch-authority bridge.
 - Linux-only rustc and codegen-backend primitives use descriptor-backed procfs
   paths. The external Cargo path copies the backend into a rehashed, immutable
   sealed memfd and installs it after a compile-shaped managed wrapper

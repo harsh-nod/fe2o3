@@ -221,12 +221,21 @@ device kernel, the backend rejects it because the required managed attempt is
 absent. A selected compilation must publish exactly one attempt-scoped handoff;
 a missing handoff is an error and invalidates the attempt.
 
-The closure-bound compiler handoff V2 and publication-intent V2 protocols are
-available in `fe2o3-artifact-transaction`, each through a shared V1/V2 engine.
-This flow's protected producer/consumer and restart call sites have not been
-migrated: they still call compiler handoff V1 and publication-intent V1 APIs.
-V1 remains supported for compatibility; the presence of V2 schemas does not
-make this path end-to-end provenance-bound.
+The protected producer, consumer, completion, cleanup, and restart route now
+uses the closure-bound compiler-handoff V2 and publication-intent V2 protocols
+end to end. It rejects V1 and obsolete protected state instead of probing or
+downgrading to it. Required-envelope restart joins the exact compiler closure,
+attempt, admission, intent, output, receipt, envelope inputs, and durable load
+envelope before resuming. Cleanup uses a durable escrow and exact successor
+lease; a crash after publishing a newer `Ready` marker resumes predecessor
+retirement idempotently. Directory scans are bounded, and authoritative path
+and argument bytes are never compared through lossy UTF-8 conversion.
+
+The ordinary non-protected route retains its separate V1 compatibility state
+machine. Schema separation prevents ordinary V1 records from entering or
+clearing protected V2 state. This closes the protected transport and restart
+provenance chain, but it does not authenticate compiler or proof claims and
+does not grant HSA load or launch authority.
 
 For a selected unit, the wrapper pins and validates all configured inputs,
 binds a domain-separated identity of the exact manifest, sealed worker image,
