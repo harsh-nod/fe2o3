@@ -112,6 +112,7 @@ fn static_non_gemm_kernel_reaches_safety_verified_lowering_input() {
     assert!(input.barrier_report().is_clean());
     assert!(input.workgroup_report().is_clean());
     assert!(input.semantic_report().is_clean());
+    assert!(input.all_mandatory_reports_are_clean());
     assert!(!input.bounds_report().grants_compiler_refinement_authority());
     assert!(!input.grants_artifact_or_launch_authority());
 }

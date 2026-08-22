@@ -105,11 +105,7 @@ impl ProductionRankedSemanticProgramV1 {
     }
 
     pub(crate) fn all_kernel_checks_are_clean(&self) -> bool {
-        self.lowering.bounds_report().is_clean()
-            && self.lowering.race_report().is_clean()
-            && self.lowering.barrier_report().is_clean()
-            && self.lowering.workgroup_report().is_clean()
-            && self.lowering.semantic_report().is_clean()
+        self.lowering.all_mandatory_reports_are_clean()
     }
 
     pub(crate) const fn grants_artifact_or_launch_authority(&self) -> bool {

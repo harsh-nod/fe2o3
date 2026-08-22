@@ -1391,6 +1391,15 @@ impl ProductionRankedKernelLoweringInputV1 {
         &self.semantic_report
     }
 
+    pub fn all_mandatory_reports_are_clean(&self) -> bool {
+        self.bounds_report.is_clean()
+            && self.atomic_report.is_clean()
+            && self.race_report.is_clean()
+            && self.barrier_report.is_clean()
+            && self.workgroup_report.is_clean()
+            && self.semantic_report.is_clean()
+    }
+
     pub const fn grants_artifact_or_launch_authority(&self) -> bool {
         false
     }
