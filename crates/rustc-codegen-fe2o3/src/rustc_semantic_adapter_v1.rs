@@ -15,9 +15,18 @@ use rustc_span::Span;
 use rustc_target::callconv::FnAbi;
 use sha2::{Digest as _, Sha256};
 
-use crate::semantic_layout_bridge::SemanticLayoutTargetV1;
+use crate::semantic_layout_bridge::{
+    MAX_SEMANTIC_LAYOUT_TARGET_TEXT_BYTES_V1, SemanticLayoutTargetV1,
+};
 
 const TARGET_LAYOUT_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-target-layout/v1";
+const TARGET_LAYOUT_TRANSCRIPT_FIELDS_V1: usize = 6;
+/// Maximum exact target-layout digest preimage admitted by the semantic layout bridge.
+pub(crate) const MAX_CANONICAL_TARGET_LAYOUT_TRANSCRIPT_BYTES_V1: usize =
+    TARGET_LAYOUT_TRANSCRIPT_FIELDS_V1 * size_of::<u64>()
+        + TARGET_LAYOUT_DOMAIN_V1.len()
+        + 4 * MAX_SEMANTIC_LAYOUT_TARGET_TEXT_BYTES_V1
+        + size_of::<u16>();
 const FUNCTION_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/function/v1";
 const ITEM_DEFINITION_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/item-definition/v1";
 const MONOMORPHIZATION_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/monomorphization/v1";
@@ -455,24 +464,46 @@ fn canonical_source_origin_v1(
     .map_err(|_| CanonicalSourceErrorV1::InvalidPosition)
 }
 
+/// Returns the exact bounded, domain-framed preimage of the target-layout identity.
+///
+/// Fields are encoded in identity order as an eight-byte little-endian length
+/// followed by exact bytes: domain, LLVM target, data layout, pointer width,
+/// active CPU, and normalized active features.
+pub(crate) fn canonical_target_layout_transcript_v1(target: &SemanticLayoutTargetV1) -> Box<[u8]> {
+    let pointer_width = target.default_pointer_width_bits().to_le_bytes();
+    let cpu = target.active_cpu().unwrap_or_default();
+    let features = target.active_features().unwrap_or_default();
+    let fields = [
+        TARGET_LAYOUT_DOMAIN_V1,
+        target.llvm_target().as_bytes(),
+        target.data_layout().as_bytes(),
+        &pointer_width,
+        cpu.as_bytes(),
+        features.as_bytes(),
+    ];
+    let exact_length = fields
+        .iter()
+        .map(|field| size_of::<u64>() + field.len())
+        .sum();
+    debug_assert!(exact_length <= MAX_CANONICAL_TARGET_LAYOUT_TRANSCRIPT_BYTES_V1);
+
+    let mut transcript = Vec::with_capacity(exact_length);
+    for field in fields {
+        append_transcript_field(&mut transcript, field);
+    }
+    debug_assert_eq!(transcript.len(), exact_length);
+    transcript.into_boxed_slice()
+}
+
 /// Derives the canonical target-layout identity from exact, already observed
 /// rustc target facts. Authentication remains the importer's responsibility.
 pub(crate) fn canonical_target_layout_v1(
     target: &SemanticLayoutTargetV1,
 ) -> SemanticTargetDataLayoutV1 {
-    let pointer_width = target.default_pointer_width_bits().to_le_bytes();
-    let cpu = target.active_cpu().unwrap_or_default();
-    let features = target.active_features().unwrap_or_default();
-    SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(domain_digest(
-        TARGET_LAYOUT_DOMAIN_V1,
-        &[
-            target.llvm_target().as_bytes(),
-            target.data_layout().as_bytes(),
-            &pointer_width,
-            cpu.as_bytes(),
-            features.as_bytes(),
-        ],
-    )))
+    let transcript = canonical_target_layout_transcript_v1(target);
+    SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(
+        Sha256::digest(&transcript).into(),
+    ))
 }
 
 pub(crate) fn domain_digest(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
@@ -515,15 +546,49 @@ mod tests {
     }
 
     fn target(features: &str) -> SemanticLayoutTargetV1 {
+        target_with_profile("amdgcn-amd-amdhsa", "e-p:64:64", 64, "gfx942", features)
+    }
+
+    fn target_with_profile(
+        llvm_target: &str,
+        data_layout: &str,
+        pointer_width: u16,
+        cpu: &str,
+        features: &str,
+    ) -> SemanticLayoutTargetV1 {
         SemanticLayoutTargetV1::new_with_codegen_profile(
-            "amdgcn-amd-amdhsa",
-            "e-p:64:64",
-            64,
-            "gfx942",
+            llvm_target,
+            data_layout,
+            pointer_width,
+            cpu,
             "",
             features,
         )
         .unwrap()
+    }
+
+    fn transcript_identity(transcript: &[u8]) -> [u8; 32] {
+        Sha256::digest(transcript).into()
+    }
+
+    fn framed_field_ranges(transcript: &[u8]) -> Vec<(std::ops::Range<usize>, usize)> {
+        let mut fields = Vec::new();
+        let mut cursor = 0;
+        while cursor < transcript.len() {
+            let length_offset = cursor;
+            let length_end = cursor + size_of::<u64>();
+            let field_length = u64::from_le_bytes(
+                transcript[cursor..length_end]
+                    .try_into()
+                    .expect("framed field length is eight bytes"),
+            ) as usize;
+            cursor = length_end;
+            let field_end = cursor + field_length;
+            fields.push((cursor..field_end, length_offset));
+            cursor = field_end;
+        }
+        assert_eq!(cursor, transcript.len());
+        fields
     }
 
     #[test]
@@ -546,6 +611,107 @@ mod tests {
 
         let reordered = canonical_target_layout_v1(&target("+wavefrontsize64,-xnack"));
         assert_eq!(exact.identity(), reordered.identity());
+    }
+
+    #[test]
+    fn target_layout_transcript_is_exact_bounded_deterministic_identity_preimage() {
+        let target = target("-xnack,+wavefrontsize64");
+        let first = canonical_target_layout_transcript_v1(&target);
+        let second = canonical_target_layout_transcript_v1(&target);
+
+        assert_eq!(first, second);
+        assert!(first.len() <= MAX_CANONICAL_TARGET_LAYOUT_TRANSCRIPT_BYTES_V1);
+        assert_eq!(
+            canonical_target_layout_v1(&target).identity().as_bytes(),
+            &transcript_identity(&first),
+        );
+    }
+
+    #[test]
+    fn target_layout_transcript_rejects_every_component_and_framing_substitution() {
+        let target = target("-xnack,+wavefrontsize64");
+        let transcript = canonical_target_layout_transcript_v1(&target);
+        let identity = transcript_identity(&transcript);
+        let fields = framed_field_ranges(&transcript);
+        assert_eq!(fields.len(), TARGET_LAYOUT_TRANSCRIPT_FIELDS_V1);
+
+        for (field_index, (field_range, _)) in fields.iter().enumerate() {
+            assert!(!field_range.is_empty());
+            let mut substituted = transcript.to_vec();
+            substituted[field_range.start] ^= 1;
+            assert_ne!(
+                transcript_identity(&substituted),
+                identity,
+                "field {field_index} substitution must change the identity",
+            );
+        }
+
+        for (field_index, (_, length_offset)) in fields.iter().enumerate() {
+            let mut substituted = transcript.to_vec();
+            substituted[*length_offset] ^= 1;
+            assert_ne!(
+                transcript_identity(&substituted),
+                identity,
+                "field {field_index} framing substitution must change the identity",
+            );
+        }
+    }
+
+    #[test]
+    fn target_layout_transcript_binds_each_target_component() {
+        let exact = target_with_profile(
+            "amdgcn-amd-amdhsa",
+            "e-p:64:64",
+            64,
+            "gfx942",
+            "-xnack,+wavefrontsize64",
+        );
+        let substitutions = [
+            target_with_profile(
+                "amdgcn-unknown-amdhsa",
+                "e-p:64:64",
+                64,
+                "gfx942",
+                "-xnack,+wavefrontsize64",
+            ),
+            target_with_profile(
+                "amdgcn-amd-amdhsa",
+                "e-p:64:64-i64:32",
+                64,
+                "gfx942",
+                "-xnack,+wavefrontsize64",
+            ),
+            target_with_profile(
+                "amdgcn-amd-amdhsa",
+                "e-p:64:64",
+                32,
+                "gfx942",
+                "-xnack,+wavefrontsize64",
+            ),
+            target_with_profile(
+                "amdgcn-amd-amdhsa",
+                "e-p:64:64",
+                64,
+                "gfx90a",
+                "-xnack,+wavefrontsize64",
+            ),
+            target_with_profile(
+                "amdgcn-amd-amdhsa",
+                "e-p:64:64",
+                64,
+                "gfx942",
+                "+xnack,+wavefrontsize64",
+            ),
+        ];
+        let exact_transcript = canonical_target_layout_transcript_v1(&exact);
+
+        for (component_index, substituted) in substitutions.iter().enumerate() {
+            assert_ne!(
+                canonical_target_layout_transcript_v1(substituted),
+                exact_transcript,
+                "target component {component_index} substitution must change the transcript",
+            );
+        }
     }
 
     #[test]
