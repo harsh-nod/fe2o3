@@ -22,7 +22,9 @@ use crate::{
     WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerProtocolError,
     WorkerRequestConstructionError, WorkerResponseV2,
     first_build_worker_v2::{
-        FirstBuildWorkerV2EngineError, execute_reproducible_first_build_worker_v2_engine,
+        FirstBuildWorkerV2EngineError, FirstBuildWorkerV2EnginePreflight,
+        execute_preflighted_reproducible_first_build_worker_v2_engine,
+        preflight_reproducible_first_build_worker_v2_engine,
     },
     request_construction::{
         CompilerHandoffRequestBindingV2, construct_first_build_worker_request_v2_from_decoded,
@@ -43,6 +45,50 @@ impl ProtectedCompilerHandoffBindingIdentityV3 {
     /// Returns the domain-separated identity bytes.
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+}
+
+/// Deterministically validated strict-V3 worker inputs prepared before one-shot consumption.
+///
+/// This move-only owner binds the durable receipt, exact semantic handoff, compiler closure,
+/// measured worker, providers, options, output bound, and both Worker request shapes. It is inert
+/// and grants no compiler, process, publication, load, or launch authority.
+pub struct PreparedProtectedFirstBuildWorkerV3PreflightV1 {
+    binding: ProtectedCompilerHandoffBindingV3,
+    worker: WorkerMeasurementV1,
+    limits: WorkerExecutionLimitsV1,
+    engine: FirstBuildWorkerV2EnginePreflight,
+}
+
+impl PreparedProtectedFirstBuildWorkerV3PreflightV1 {
+    /// Returns the exact transaction and semantic-handoff binding validated by preflight.
+    pub const fn binding(&self) -> ProtectedCompilerHandoffBindingV3 {
+        self.binding
+    }
+
+    /// Returns the exact measured worker selected during preflight.
+    pub const fn worker_measurement(&self) -> &WorkerMeasurementV1 {
+        &self.worker
+    }
+
+    /// Returns the exact execution limits selected during preflight.
+    pub const fn execution_limits(&self) -> WorkerExecutionLimitsV1 {
+        self.limits
+    }
+
+    /// Reports that preflight grants no compiler authority.
+    pub const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    /// Reports that preflight grants no worker or linker authority.
+    pub const fn grants_link_authority(&self) -> bool {
+        false
+    }
+
+    /// Reports that preflight grants no publication authority.
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
     }
 }
 
@@ -152,12 +198,11 @@ impl ProtectedCompilerHandoffExpectationV3 {
     }
 }
 
-/// Closed Worker V3 binding derived only from one consumed strict-V3 transaction result.
+/// Closed Worker V3 binding derived from one durable strict-V3 receipt and exact inert handoff.
 ///
-/// Construction strictly redecodes the complete outer owner and repeats its capsule, invocation,
-/// pair, compact commitment, and nested V2 associations. The transaction identity itself is
-/// accepted only through the move-only artifact-transaction result; it cannot be recomputed here
-/// because the producer namespace remains private to that crate.
+/// Construction repeats the receipt, capsule, invocation, pair, compact commitment, and nested V2
+/// associations. The transaction identity is accepted only from the artifact-transaction receipt;
+/// it cannot be recomputed here because the producer namespace remains private to that crate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProtectedCompilerHandoffBindingV3 {
     expectation: ProtectedCompilerHandoffExpectationV3,
@@ -182,25 +227,34 @@ impl ProtectedCompilerHandoffBindingV3 {
         if consumed.handoff_identity() != expected_receipt.handoff_identity() {
             return Err(binding_mismatch("parent outer V3 handoff identity"));
         }
+        Self::from_handoff(
+            consumed.handoff(),
+            expected_receipt,
+            expected_compiler_closure,
+        )
+    }
 
-        let exact_bytes = consumed.bytes();
+    pub(crate) fn from_handoff(
+        handoff: &InertSemanticCompilerModuleHandoffV3,
+        expected_receipt: CompilerModuleHandoffReceiptV3,
+        expected_compiler_closure: CompilerClosureV2,
+    ) -> Result<Self, ProtectedCompilerHandoffBindingErrorV3> {
+        if handoff.identity() != expected_receipt.handoff_identity() {
+            return Err(binding_mismatch("parent outer V3 handoff identity"));
+        }
+
+        let exact_bytes = handoff.canonical_bytes();
         let receipt_byte_len = u64::try_from(expected_receipt.length())
             .map_err(|_| binding_mismatch("parent receipt byte length"))?;
         if expected_receipt.length() != exact_bytes.len()
             || expected_receipt.handoff_identity().byte_len() != receipt_byte_len
+            || !expected_receipt
+                .handoff_identity()
+                .matches_canonical_bytes(exact_bytes)
         {
             return Err(binding_mismatch("parent receipt byte length"));
         }
-        let decoded = InertSemanticCompilerModuleHandoffV3::decode(exact_bytes)
-            .map_err(ProtectedCompilerHandoffBindingErrorV3::OuterHandoff)?;
-        if decoded.canonical_bytes() != exact_bytes
-            || decoded.identity() != consumed.handoff_identity()
-            || decoded != *consumed.handoff()
-        {
-            return Err(binding_mismatch("outer V3 handoff"));
-        }
 
-        let handoff = consumed.handoff();
         let capsule = handoff.capsule();
         let nested = handoff.module_handoff();
         let pair = handoff.pair_binding();
@@ -233,11 +287,11 @@ impl ProtectedCompilerHandoffBindingV3 {
         let final_receipt_identity = final_receipt.identity();
         let final_commitment_identity = final_commitment.identity();
         let expectation = ProtectedCompilerHandoffExpectationV3 {
-            attempt: consumed.attempt(),
-            slot: consumed.slot(),
-            transaction_identity: consumed.transaction_identity(),
+            attempt: expected_receipt.attempt(),
+            slot: expected_receipt.slot(),
+            transaction_identity: expected_receipt.transaction_identity(),
             receipt_byte_len,
-            outer_handoff_identity: consumed.handoff_identity(),
+            outer_handoff_identity: expected_receipt.handoff_identity(),
             capsule_sha256: *capsule_identity.sha256(),
             capsule_byte_len: capsule_identity.byte_len(),
             invocation_digest: *capsule.invocation_digest().as_bytes(),
@@ -550,6 +604,8 @@ pub enum ProtectedFirstBuildWorkerV3Error {
     LinkPlan(LinkPlanError),
     /// Sealed direct-LLVM request construction failed.
     RequestConstruction(WorkerRequestConstructionError),
+    /// Consumed transaction or measured worker did not match the sealed preflight owner.
+    PreflightMismatch { field: &'static str },
     /// The bootstrap request was invalid.
     BootstrapRequest(WorkerProtocolError),
     /// The bootstrap worker process failed.
@@ -588,6 +644,9 @@ impl fmt::Display for ProtectedFirstBuildWorkerV3Error {
                     formatter,
                     "strict-V3 worker request construction failed: {error}"
                 )
+            }
+            Self::PreflightMismatch { field } => {
+                write!(formatter, "strict-V3 worker preflight mismatch: {field}")
             }
             Self::BootstrapRequest(error) => {
                 write!(formatter, "strict-V3 bootstrap request is invalid: {error}")
@@ -633,11 +692,118 @@ impl Error for ProtectedFirstBuildWorkerV3Error {
             Self::BootstrapRequest(error) => Some(error),
             Self::BootstrapExecution(error) | Self::ReplayExecution(error) => Some(error),
             Self::BootstrapDidNotProduceOutput(_)
+            | Self::PreflightMismatch { .. }
             | Self::ReplayDidNotProduceOutput { .. }
             | Self::OutputMismatch { .. }
             | Self::ReplayValidation { .. } => None,
         }
     }
+}
+
+/// Validates and seals every deterministic strict-V3 worker input before one-shot consumption.
+///
+/// The caller must retain its artifact-transaction currentness lease while this function borrows
+/// the exact handoff named by `expected_receipt`. No worker process is started. Success proves that
+/// both candidate and replay request shapes are protocol-valid for the selected configuration.
+#[allow(clippy::too_many_arguments)]
+pub fn preflight_protected_reproducible_first_build_worker_v3(
+    handoff: &InertSemanticCompilerModuleHandoffV3,
+    expected_receipt: CompilerModuleHandoffReceiptV3,
+    expected_compiler_closure: CompilerClosureV2,
+    worker: &PinnedWorkerV1,
+    external_providers: Vec<WorkerInputV1>,
+    link_options: Vec<LinkOptionV1>,
+    candidate_output_bound: WorkerOutputConstraintsV1,
+    limits: WorkerExecutionLimitsV1,
+) -> Result<PreparedProtectedFirstBuildWorkerV3PreflightV1, ProtectedFirstBuildWorkerV3Error> {
+    let binding = ProtectedCompilerHandoffBindingV3::from_handoff(
+        handoff,
+        expected_receipt,
+        expected_compiler_closure,
+    )
+    .map_err(ProtectedFirstBuildWorkerV3Error::Binding)?;
+    let decoded = decoded_compiler_module_handoff_v2(handoff.module_handoff().clone())
+        .map_err(ProtectedFirstBuildWorkerV3Error::CompilerModuleHandoff)?;
+    let engine = preflight_reproducible_first_build_worker_v2_engine(
+        CompilerHandoffRequestBindingV2::ProtectedV3(&binding),
+        decoded,
+        worker,
+        external_providers,
+        link_options,
+        candidate_output_bound,
+    )
+    .map_err(|error| map_engine_error(binding, error))?;
+    Ok(PreparedProtectedFirstBuildWorkerV3PreflightV1 {
+        binding,
+        worker: worker.measurement().clone(),
+        limits,
+        engine,
+    })
+}
+
+/// Starts the measured worker only after consuming an exact matching preflight owner.
+pub fn execute_preflighted_protected_reproducible_first_build_worker_v3(
+    consumed: ConsumedCompilerModuleHandoffV3,
+    preflight: PreparedProtectedFirstBuildWorkerV3PreflightV1,
+    worker: &PinnedWorkerV1,
+) -> Result<InertProtectedFirstBuildWorkerV3EvidenceV1, ProtectedFirstBuildWorkerV3Error> {
+    let PreparedProtectedFirstBuildWorkerV3PreflightV1 {
+        binding,
+        worker: expected_worker,
+        limits,
+        engine,
+    } = preflight;
+    let expected = binding.expectation();
+    if consumed.attempt() != expected.attempt() {
+        return Err(preflight_mismatch("build attempt"));
+    }
+    if consumed.slot() != expected.slot() {
+        return Err(preflight_mismatch("transaction slot"));
+    }
+    if consumed.transaction_identity() != expected.transaction_identity() {
+        return Err(preflight_mismatch("transaction identity"));
+    }
+    if consumed.handoff_identity() != expected.outer_handoff_identity()
+        || consumed.bytes().len() as u64 != expected.receipt_byte_len()
+        || consumed.handoff().identity() != expected.outer_handoff_identity()
+    {
+        return Err(preflight_mismatch("semantic handoff"));
+    }
+    if worker.measurement() != &expected_worker {
+        return Err(preflight_mismatch("measured worker"));
+    }
+    let handoff = consumed.into_handoff();
+    let result = execute_preflighted_reproducible_first_build_worker_v2_engine(
+        CompilerHandoffRequestBindingV2::ProtectedV3(&binding),
+        engine,
+        worker,
+        limits,
+    )
+    .map_err(|error| map_engine_error(binding, error))?;
+
+    validate_replay(binding, worker.measurement(), &result)?;
+    let identity = calculate_evidence_identity(binding, worker.measurement(), limits, &result);
+    let bootstrap =
+        InertProtectedCompilerHandoffExecutionV3::from_execution(binding, result.candidate);
+    let replay =
+        InertProtectedCompilerHandoffExecutionV3::from_execution(binding, result.authorized);
+    Ok(InertProtectedFirstBuildWorkerV3EvidenceV1 {
+        identity,
+        binding,
+        handoff,
+        worker: expected_worker,
+        execution_limits: limits,
+        plan: result.plan,
+        bootstrap_request_bytes: result.candidate_request_bytes,
+        bootstrap,
+        replay_request_bytes: result.authorized_request_bytes,
+        replay,
+        _validation: ValidatedProtectedFirstBuildReplayV3,
+    })
+}
+
+const fn preflight_mismatch(field: &'static str) -> ProtectedFirstBuildWorkerV3Error {
+    ProtectedFirstBuildWorkerV3Error::PreflightMismatch { field }
 }
 
 /// Executes a consumed strict-V3 compiler handoff through the measured direct LLVM worker.
@@ -660,50 +826,23 @@ pub fn execute_protected_reproducible_first_build_worker_v3(
     candidate_output_bound: WorkerOutputConstraintsV1,
     limits: WorkerExecutionLimitsV1,
 ) -> Result<InertProtectedFirstBuildWorkerV3EvidenceV1, ProtectedFirstBuildWorkerV3Error> {
-    let binding = ProtectedCompilerHandoffBindingV3::from_consumed(
+    ProtectedCompilerHandoffBindingV3::from_consumed(
         &consumed,
         expected_receipt,
         expected_compiler_closure,
     )
     .map_err(ProtectedFirstBuildWorkerV3Error::Binding)?;
-    let nested = fe2o3_compiler_ffi::CompilerModuleHandoffV2::decode(
-        consumed.handoff().module_handoff().canonical_bytes(),
-    )
-    .map_err(ProtectedFirstBuildWorkerV3Error::CompilerModuleHandoff)?;
-    let decoded = decoded_compiler_module_handoff_v2(nested)
-        .map_err(ProtectedFirstBuildWorkerV3Error::CompilerModuleHandoff)?;
-    let handoff = consumed.into_handoff();
-
-    let result = execute_reproducible_first_build_worker_v2_engine(
-        CompilerHandoffRequestBindingV2::ProtectedV3(&binding),
-        decoded,
+    let preflight = preflight_protected_reproducible_first_build_worker_v3(
+        consumed.handoff(),
+        expected_receipt,
+        expected_compiler_closure,
         worker,
         external_providers,
         link_options,
         candidate_output_bound,
         limits,
-    )
-    .map_err(|error| map_engine_error(binding, error))?;
-
-    validate_replay(binding, worker.measurement(), &result)?;
-    let identity = calculate_evidence_identity(binding, worker.measurement(), limits, &result);
-    let bootstrap =
-        InertProtectedCompilerHandoffExecutionV3::from_execution(binding, result.candidate);
-    let replay =
-        InertProtectedCompilerHandoffExecutionV3::from_execution(binding, result.authorized);
-    Ok(InertProtectedFirstBuildWorkerV3EvidenceV1 {
-        identity,
-        binding,
-        handoff,
-        worker: worker.measurement().clone(),
-        execution_limits: limits,
-        plan: result.plan,
-        bootstrap_request_bytes: result.candidate_request_bytes,
-        bootstrap,
-        replay_request_bytes: result.authorized_request_bytes,
-        replay,
-        _validation: ValidatedProtectedFirstBuildReplayV3,
-    })
+    )?;
+    execute_preflighted_protected_reproducible_first_build_worker_v3(consumed, preflight, worker)
 }
 
 fn validate_replay(

@@ -26,7 +26,9 @@ use fe2o3_hsaco_finalize::{
     ContentIdentityV1, LinkOptionV1, PinnedWorkerV1, ProtectedCompilerHandoffBindingErrorV3,
     ProtectedFirstBuildWorkerV3Error, WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1,
     WorkerMeasurementV1, WorkerOutputConstraintsV1,
+    execute_preflighted_protected_reproducible_first_build_worker_v3,
     execute_protected_reproducible_first_build_worker_v3,
+    preflight_protected_reproducible_first_build_worker_v3,
 };
 use fe2o3_kernel_descriptor::DeviceTargetV1;
 use sha2::{Digest, Sha256};
@@ -463,6 +465,95 @@ fn consumed_v3_executes_natively_and_retains_every_exact_axis() {
         assert!(!exact_bytes.windows(5).any(|window| window == b"comgr"));
         assert!(!exact_bytes.windows(5).any(|window| window == b"COMGR"));
     }
+}
+
+#[test]
+fn deterministic_preflight_completes_before_transaction_consumption() {
+    let directory = TestDirectory::new();
+    let attempt = begin(&directory, 0x62);
+    let handoff = outer(0x20, 0x12);
+    let receipt = publish_compiler_module_handoff_in_slot_v3(
+        &directory.0,
+        &producer(),
+        attempt,
+        CompilerModuleHandoffSlotV3::Default,
+        &handoff,
+    )
+    .unwrap();
+    let closure = *handoff.capsule().compiler_closure();
+    let worker = pinned();
+    let preflight = preflight_protected_reproducible_first_build_worker_v3(
+        &handoff,
+        receipt,
+        closure,
+        &worker,
+        vec![provider()],
+        options(),
+        WorkerOutputConstraintsV1::new(4096).unwrap(),
+        limits(),
+    )
+    .unwrap();
+    assert_eq!(preflight.binding().expectation().attempt(), attempt);
+    assert!(!preflight.grants_compiler_authority());
+    assert!(!preflight.grants_link_authority());
+    assert!(!preflight.grants_publication_authority());
+
+    let consumed = consume_compiler_module_handoff_in_slot_v3(
+        &directory.0,
+        &producer(),
+        attempt,
+        CompilerModuleHandoffSlotV3::Default,
+        handoff.identity(),
+    )
+    .unwrap();
+    let evidence = execute_preflighted_protected_reproducible_first_build_worker_v3(
+        consumed, preflight, &worker,
+    )
+    .unwrap();
+    assert_eq!(evidence.output_bytes(), OUTPUT);
+}
+
+#[test]
+fn deterministic_preflight_rejection_leaves_transaction_unconsumed() {
+    let directory = TestDirectory::new();
+    let attempt = begin(&directory, 0x63);
+    let handoff = outer(0x20, 0x13);
+    let receipt = publish_compiler_module_handoff_in_slot_v3(
+        &directory.0,
+        &producer(),
+        attempt,
+        CompilerModuleHandoffSlotV3::Default,
+        &handoff,
+    )
+    .unwrap();
+    let closure = *handoff.capsule().compiler_closure();
+    let duplicate = LinkOptionV1::new("code-object-version", "6").unwrap();
+    let error = match preflight_protected_reproducible_first_build_worker_v3(
+        &handoff,
+        receipt,
+        closure,
+        &pinned(),
+        vec![provider()],
+        vec![duplicate.clone(), duplicate],
+        WorkerOutputConstraintsV1::new(4096).unwrap(),
+        limits(),
+    ) {
+        Ok(_) => panic!("duplicate options unexpectedly passed deterministic preflight"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        ProtectedFirstBuildWorkerV3Error::LinkPlan(_)
+    ));
+
+    consume_compiler_module_handoff_in_slot_v3(
+        &directory.0,
+        &producer(),
+        attempt,
+        CompilerModuleHandoffSlotV3::Default,
+        handoff.identity(),
+    )
+    .unwrap();
 }
 
 #[test]

@@ -95,10 +95,13 @@ pub use first_build_worker_v2::{
 };
 pub use first_build_worker_v3::{
     InertProtectedCompilerHandoffExecutionV3, InertProtectedFirstBuildWorkerV3EvidenceV1,
-    ProtectedCompilerHandoffBindingErrorV3, ProtectedCompilerHandoffBindingIdentityV3,
-    ProtectedCompilerHandoffBindingV3, ProtectedCompilerHandoffExpectationV3,
-    ProtectedFirstBuildWorkerV3Error, ProtectedFirstBuildWorkerV3IdentityV1,
+    PreparedProtectedFirstBuildWorkerV3PreflightV1, ProtectedCompilerHandoffBindingErrorV3,
+    ProtectedCompilerHandoffBindingIdentityV3, ProtectedCompilerHandoffBindingV3,
+    ProtectedCompilerHandoffExpectationV3, ProtectedFirstBuildWorkerV3Error,
+    ProtectedFirstBuildWorkerV3IdentityV1,
+    execute_preflighted_protected_reproducible_first_build_worker_v3,
     execute_protected_reproducible_first_build_worker_v3,
+    preflight_protected_reproducible_first_build_worker_v3,
 };
 pub use flash_attention_v1_finalizer::{
     FinalizedFlashAttentionV1ReceiptV1, FlashAttentionV1FinalizationErrorV1,
