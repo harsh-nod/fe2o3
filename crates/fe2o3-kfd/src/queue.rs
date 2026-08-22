@@ -56,7 +56,7 @@ pub use dispatch_binding::{
 pub use device_content::{
     GFX942_DEVICE_CONTENT_COPY_FOUNDATION_MANIFEST_SHA256_V1,
     GFX942_DEVICE_CONTENT_COPY_FOUNDATION_MANIFEST_V1, Gfx942DeviceContentDescriptorErrorV1,
-    Gfx942DeviceContentDescriptorV1, Gfx942DeviceContentRoleV1,
+    Gfx942DeviceContentDescriptorV1, Gfx942DeviceContentRoleV1, Gfx942RepeatedByteContentV1,
 };
 
 pub use live::{
