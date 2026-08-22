@@ -33,12 +33,15 @@ this owner's guarantees.
 The Linux x86_64 composition path can initialize complete device-local extents
 from owned bytes through KFD's checked public-device-local mapping path. It can
 also consume inspected executable envelopes, complete kernarg byte images, and
-checked addressless device ranges into a fixed batch. Native addresses are
+checked addressless device-local or host-visible coherent ranges into a fixed
+batch. Native addresses are
 substituted only inside KFD. A batch of 1 through 1024 packets uses one ring
 reservation and one final doorbell publication. Exact completion and signal
 recycle are required before the same native queue can detach its current batch,
 replace a complete initialized allocation, bind a different fixed batch, or
-return allocation custody for explicit release.
+return allocation custody for explicit release. An owned full-extent coherent
+initialization path is distinct from the arbitrary scoped host-write path, so
+only the former can satisfy an inspected read or read-write argument.
 
 For an admitted metadata-derived subset, callers supply a complete kernarg
 image whose exact trailing 256-byte COV6 implicit suffix is zero. The retained
@@ -47,13 +50,21 @@ zero global offsets, grid dimensions, and dynamic LDS before GPU mapping. Queue
 pointers and all runtime-service or address fields remain rejected. This
 service layer does not ask callers to fill or assert implicit values.
 
-This layer does not establish executable correctness, device memory-effect
-refinement, current output content, numerical correctness, hardware execution,
-or performance. Generic completion preserves only whether a complete device
-allocation was already initialized, never its stale pre-dispatch content
-digest. An allocation admitted uninitialized remains content-opaque after
-generic completion. Queue and allocation failures after ambiguous native
-effects are terminal and expose no retry. `NeverPublished` release remains
+After exact completion and signal recycle, the retained owner can create a
+request bound to that dispatch generation and one owner-checked coherent range.
+The lower owner copies bytes only when the requested range lies within exactly
+one metadata-inspected write or read-write binding. It rejects device-local,
+read-only, unwritten, out-of-range, overlapping, stale-generation,
+pre-completion, and pre-recycle access. The result owns a byte copy; it exposes
+no mapped pointer or GPU address and grants no full-allocation initialization.
+
+This layer does not establish executable correctness, effect correctness beyond
+inspected metadata, full write coverage, content interpretation, numerical
+correctness, hardware execution, or performance. Generic completion preserves
+only whether a complete allocation was already initialized, never its stale
+pre-dispatch content digest. An allocation admitted uninitialized remains
+uninitialized after generic completion. Queue and allocation failures after
+ambiguous native effects are terminal and expose no retry. `NeverPublished` release remains
 available only before queue composition and is not a guarantee about unsafe
 later use of a raw CPU pointer safely retained from a scoped callback.
 

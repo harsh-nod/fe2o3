@@ -25,12 +25,14 @@ use super::completion::{
     Gfx942CompletionBatchV1, Gfx942CompletionErrorV1, Gfx942CompletionPollV1,
 };
 use super::device_content::Gfx942DeviceContentDescriptorV1;
+use crate::HOST_VISIBLE_MEMORY_PAGE_BYTES_V1;
 use crate::MemorySessionError;
 use crate::shared_memory::{
-    AqlDispatchCodeResourceRoleV1, AqlDispatchKernargResourceRoleV1, ExecutableGttV1,
-    Gfx942DeviceMemoryDispatchAuthorityV1, Gfx942DeviceMemoryLayoutV1, Gfx942DeviceMemoryLeaseV1,
-    Gfx942DeviceMemoryMappedV1, Gfx942InitializedDeviceMemoryV1, GttGpuAccessibleExecutableV1,
-    GttGpuAccessibleMutableV1, KernargGttV1, SharedGttMemorySessionV1,
+    AqlDispatchCodeResourceRoleV1, AqlDispatchHostDataResourceRoleV1,
+    AqlDispatchKernargResourceRoleV1, ExecutableGttV1, Gfx942DeviceMemoryDispatchAuthorityV1,
+    Gfx942DeviceMemoryLeaseV1, Gfx942DeviceMemoryMappedV1, Gfx942InitializedDeviceMemoryV1,
+    Gfx942InitializedHostVisibleMemoryV1, GttGpuAccessibleExecutableV1, GttGpuAccessibleMutableV1,
+    HostVisibleCoherentGttV1, KernargGttV1, SharedGttAllocationV1, SharedGttMemorySessionV1,
     SharedGttQueueResourceAuthorityV1,
 };
 
@@ -56,10 +58,10 @@ const COV6_GLOBAL_OFFSET_Z_OFFSET_V1: usize = 56;
 const COV6_GRID_DIMENSIONS_OFFSET_V1: usize = 64;
 const COV6_DYNAMIC_LDS_SIZE_OFFSET_V1: usize = 120;
 
-/// One inert device-buffer field in a fixed dispatch kernarg image.
+/// One inert global-buffer field in a fixed dispatch kernarg image.
 ///
 /// This value identifies an inspected explicit-argument ordinal and a bounded
-/// subrange of a separately owned device allocation. It contains no native
+/// subrange of separately owned dispatch data. It contains no native
 /// address and grants no initialization, access-effect, or dispatch authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Gfx942DispatchBufferBindingV1 {
@@ -160,13 +162,44 @@ impl fmt::Debug for Gfx942FixedDispatchPacketV1 {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Gfx942FixedDispatchDataKindV1 {
+    DeviceLocal,
+    HostVisibleCoherent,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942FixedDispatchDataLayoutV1 {
+    kind: Gfx942FixedDispatchDataKindV1,
+    requested_bytes: u64,
+    alignment: u64,
+}
+
+impl Gfx942FixedDispatchDataLayoutV1 {
+    pub const fn kind(self) -> Gfx942FixedDispatchDataKindV1 {
+        self.kind
+    }
+
+    pub const fn requested_bytes(self) -> u64 {
+        self.requested_bytes
+    }
+
+    pub const fn alignment(self) -> u64 {
+        self.alignment
+    }
+}
+
 enum DispatchDataStorageV1 {
     Uninitialized(Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>),
     InitializedContent(Gfx942InitializedDeviceMemoryV1),
     InitializedAfterDispatch(Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>),
+    HostVisibleUninitialized(
+        SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+    ),
+    HostVisibleInitialized(Gfx942InitializedHostVisibleMemoryV1),
 }
 
-/// Move-only device-local allocation input for fixed dispatch composition.
+/// Move-only device-local or coherent host-visible input for fixed dispatch.
 ///
 /// Uninitialized storage is admitted only for inspected write-only arguments.
 /// Read-only and read-write arguments require the sealed initialized variant.
@@ -204,11 +237,53 @@ impl Gfx942FixedDispatchDataV1 {
         }
     }
 
-    pub const fn layout(&self) -> Gfx942DeviceMemoryLayoutV1 {
+    pub fn host_visible_uninitialized(
+        token: SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+    ) -> Self {
+        Self {
+            storage: DispatchDataStorageV1::HostVisibleUninitialized(token),
+        }
+    }
+
+    pub fn host_visible_initialized(memory: Gfx942InitializedHostVisibleMemoryV1) -> Self {
+        Self {
+            storage: DispatchDataStorageV1::HostVisibleInitialized(memory),
+        }
+    }
+
+    pub const fn layout(&self) -> Gfx942FixedDispatchDataLayoutV1 {
         match &self.storage {
-            DispatchDataStorageV1::Uninitialized(lease) => lease.layout(),
-            DispatchDataStorageV1::InitializedContent(memory) => memory.layout(),
-            DispatchDataStorageV1::InitializedAfterDispatch(lease) => lease.layout(),
+            DispatchDataStorageV1::Uninitialized(lease)
+            | DispatchDataStorageV1::InitializedAfterDispatch(lease) => {
+                let layout = lease.layout();
+                Gfx942FixedDispatchDataLayoutV1 {
+                    kind: Gfx942FixedDispatchDataKindV1::DeviceLocal,
+                    requested_bytes: layout.requested_bytes(),
+                    alignment: layout.alignment(),
+                }
+            }
+            DispatchDataStorageV1::InitializedContent(memory) => {
+                let layout = memory.layout();
+                Gfx942FixedDispatchDataLayoutV1 {
+                    kind: Gfx942FixedDispatchDataKindV1::DeviceLocal,
+                    requested_bytes: layout.requested_bytes(),
+                    alignment: layout.alignment(),
+                }
+            }
+            DispatchDataStorageV1::HostVisibleUninitialized(token) => {
+                Gfx942FixedDispatchDataLayoutV1 {
+                    kind: Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+                    requested_bytes: token.layout().requested_bytes() as u64,
+                    alignment: HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
+                }
+            }
+            DispatchDataStorageV1::HostVisibleInitialized(memory) => {
+                Gfx942FixedDispatchDataLayoutV1 {
+                    kind: Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+                    requested_bytes: memory.layout().requested_bytes() as u64,
+                    alignment: HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
+                }
+            }
         }
     }
 
@@ -217,25 +292,63 @@ impl Gfx942FixedDispatchDataV1 {
     /// This observation does not identify their current content after any
     /// device publication.
     pub const fn is_fully_initialized(&self) -> bool {
-        !matches!(self.storage, DispatchDataStorageV1::Uninitialized(_))
+        !matches!(
+            self.storage,
+            DispatchDataStorageV1::Uninitialized(_)
+                | DispatchDataStorageV1::HostVisibleUninitialized(_)
+        )
     }
 
-    pub(crate) fn into_parts(
-        self,
-    ) -> (
-        Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
-        Option<Gfx942DeviceContentDescriptorV1>,
-        bool,
-    ) {
+    pub(crate) fn into_parts(self) -> DispatchDataInputV1 {
+        let layout = self.layout();
         match self.storage {
-            DispatchDataStorageV1::Uninitialized(lease) => (lease, None, false),
+            DispatchDataStorageV1::Uninitialized(lease) => DispatchDataInputV1 {
+                layout,
+                storage: DispatchDataInputStorageV1::Device(lease),
+                initialized_content: None,
+                fully_initialized: false,
+            },
             DispatchDataStorageV1::InitializedContent(memory) => {
                 let (lease, content) = memory.into_parts();
-                (lease, Some(content), true)
+                DispatchDataInputV1 {
+                    layout,
+                    storage: DispatchDataInputStorageV1::Device(lease),
+                    initialized_content: Some(content),
+                    fully_initialized: true,
+                }
             }
-            DispatchDataStorageV1::InitializedAfterDispatch(lease) => (lease, None, true),
+            DispatchDataStorageV1::InitializedAfterDispatch(lease) => DispatchDataInputV1 {
+                layout,
+                storage: DispatchDataInputStorageV1::Device(lease),
+                initialized_content: None,
+                fully_initialized: true,
+            },
+            DispatchDataStorageV1::HostVisibleUninitialized(token) => DispatchDataInputV1 {
+                layout,
+                storage: DispatchDataInputStorageV1::HostVisible(token),
+                initialized_content: None,
+                fully_initialized: false,
+            },
+            DispatchDataStorageV1::HostVisibleInitialized(memory) => DispatchDataInputV1 {
+                layout,
+                storage: DispatchDataInputStorageV1::HostVisible(memory.into_token()),
+                initialized_content: None,
+                fully_initialized: true,
+            },
         }
     }
+}
+
+pub(crate) enum DispatchDataInputStorageV1 {
+    Device(Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>),
+    HostVisible(SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>),
+}
+
+pub(crate) struct DispatchDataInputV1 {
+    pub(crate) layout: Gfx942FixedDispatchDataLayoutV1,
+    pub(crate) storage: DispatchDataInputStorageV1,
+    pub(crate) initialized_content: Option<Gfx942DeviceContentDescriptorV1>,
+    pub(crate) fully_initialized: bool,
 }
 
 impl fmt::Debug for Gfx942FixedDispatchDataV1 {
@@ -248,27 +361,84 @@ impl fmt::Debug for Gfx942FixedDispatchDataV1 {
     }
 }
 
+/// Inert request for one owned copy from a recycled coherent dispatch range.
+///
+/// The request contains no address or allocation authority. The retained queue
+/// revalidates its dispatch generation, data ordinal, inspected write effect,
+/// coherent storage kind, and exact byte bounds before copying.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942CompletedDispatchReadRequestV1 {
+    dispatch_generation: u64,
+    data_index: usize,
+    offset: u64,
+    byte_len: u64,
+}
+
+impl Gfx942CompletedDispatchReadRequestV1 {
+    pub const fn new(
+        dispatch_generation: u64,
+        data_index: usize,
+        offset: u64,
+        byte_len: u64,
+    ) -> Self {
+        Self {
+            dispatch_generation,
+            data_index,
+            offset,
+            byte_len,
+        }
+    }
+}
+
+/// Owned bytes copied from one exact completed-and-recycled coherent range.
+#[derive(Debug, Eq, PartialEq)]
+pub struct Gfx942CompletedDispatchReadbackV1 {
+    dispatch_generation: u64,
+    data_index: usize,
+    offset: u64,
+    bytes: Box<[u8]>,
+}
+
+impl Gfx942CompletedDispatchReadbackV1 {
+    pub const fn dispatch_generation(&self) -> u64 {
+        self.dispatch_generation
+    }
+
+    pub const fn data_index(&self) -> usize {
+        self.data_index
+    }
+
+    pub const fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
 /// Frozen claim boundary for the addressless fixed-dispatch binding slice.
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r5-v1\n",
+    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r6-v1\n",
     "target=gfx942:xnack-,COV6,one-selected-current-device-vm-and-queue-generation\n",
     "code=1-through-32-validated-amdhsa-kernel-envelopes,content-and-selected-descriptor-identity,exact-zero-then-copy-materialization-into-owned-gtt,read-only-seal-before-map,per-packet-program-selection,descriptor-resolution-with-checked-relative-arithmetic\n",
     "kernarg=public-inert-complete-byte-images,exact-inspected-size-and-power-of-two-alignment,optional-exact-trailing-256-byte-COV6-implicit-suffix-must-be-caller-zero,metadata-declared-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds-only,queue-pointer-and-runtime-service-or-address-fields-rejected,all-global-buffer-fields-zero,checked-nonoverlapping-8-byte-internal-device-pointer-patches,one-owned-kernarg-gtt-arena-with-N-distinct-checked-aligned-slices,private-initialization-before-map\n",
     "geometry=block-count-floor-grid-div-workgroup,remainder-grid-mod-workgroup,inactive-dimensions-count-and-group-one-remainder-zero,uniform-workgroup-rejects-any-nonzero-remainder\n",
-    "data=1-through-16-actual-linear-mapped-device-memory-leases,exact-device-vm-generation-and-complete-live-set,checked-bounded-subranges,inspected-actual-access-derived-internally,read-or-readwrite-requires-sealed-host-initialized-authority,write-only-admits-uninitialized-exclusive-lease\n",
+    "data=1-through-16-actual-linear-mapped-device-local-or-host-visible-coherent-authorities,exact-device-vm-and-allocation-generation,complete-device-local-live-set,checked-bounded-subranges,inspected-actual-access-derived-internally,read-or-readwrite-requires-sealed-full-extent-initialization,write-only-admits-uninitialized-exclusive-storage\n",
     "batch=1-through-1024,aql-fixed-batch-v2,minimum-ring-packet-capacity-checked,all-program-code-owners,N-distinct-kernarg-slices,one-generation-bound-template-per-packet,one-reservation-one-write-counter-fetch-add-one-final-doorbell-and-one-signal-per-packet-composition\n",
-    "retention=queue-owns-all-code-kernarg-and-device-leases-through-exact-ready-and-recycle,ordinary-destroy-releases-all,returning-destroy-requires-one-exact-recycled-generation-and-returns-actual-mapped-authorities-with-owning-memory-session,fully-initialized-state-preserved-without-stale-current-content-digest,initially-uninitialized-remains-uninitialized\n",
+    "retention=queue-owns-all-code-kernarg-and-data-authorities-through-exact-ready-and-recycle,ordinary-destroy-releases-all,returning-destroy-requires-one-exact-recycled-generation-and-returns-actual-mapped-authorities-with-owning-memory-session,fully-initialized-state-preserved-without-stale-current-content-digest,initially-uninitialized-remains-uninitialized\n",
+    "readback=owned-byte-copy-only-after-exact-completion-and-signal-recycle,exact-dispatch-generation-and-retained-host-visible-allocation-authority,request-must-be-contained-in-exactly-one-metadata-inspected-write-or-readwrite-binding,device-local-readonly-unwritten-out-of-range-overlapping-and-stale-requests-rejected,no-initialization-promotion\n",
     "queue-transfer=ordinary-path-still-rejects-device-memory,dispatch-path-requires-exact-complete-distinct-set-of-every-live-mapped-c3-lease-before-model-mutation\n",
     "failure=all-layout-and-identity-validation-before-native-preparation;post-side-effect-failure,currentness,publication,completion,timeout,recycle-or-release-ambiguity-poisons-and-requires-teardown\n",
     "authority=public-linear-addressless-construction-submit-poll-wait-recycle-and-returning-destroy,no-address-handle-pointer-fd-packet-template-signal-or-mmio-export\n",
     "proof=bounded-host-state-machine-and-mock-fault-tests-only,no-concrete-verus-or-machine-refinement\n",
-    "contracted=code-segment-permission-refinement,cpu-gpu-coherence,firmware-dispatch-effects-and-quiescence\n",
-    "excluded=queue-pointer,printf-hostcall-heap-default-queue-completion-action-multigrid-private-base-shared-base-and-unknown-implicit-fields,caller-effect-assertion,caller-initialization-assertion,public-packet-template,async-copy,device-address-export,peer-map,kernel-memory-effect-refinement,numerical-correctness,hardware-execution\n",
+    "contracted=code-segment-permission-refinement,cpu-gpu-coherence,firmware-dispatch-effects-and-quiescence,acquire-observed-device-write-visibility\n",
+    "excluded=queue-pointer,printf-hostcall-heap-default-queue-completion-action-multigrid-private-base-shared-base-and-unknown-implicit-fields,caller-effect-assertion,caller-initialization-assertion,public-packet-template,async-copy,device-address-export,peer-map,full-write-coverage-or-initialization-promotion,numerical-correctness,hardware-execution\n",
 );
 
 /// SHA-256 of [`GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1`].
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1: &str =
-    "2f337a89375dd67c11055f2ba39c64fabf6c9b16ae593634670c77a974a3bc08";
+    "62e93a879af8af93d7cbbe498b80d9b1518464d4b85efd9e061ebd8edb41eee2";
 
 type CodeAuthority = SharedGttQueueResourceAuthorityV1<
     AqlDispatchCodeResourceRoleV1,
@@ -280,6 +450,43 @@ type KernargAuthority = SharedGttQueueResourceAuthorityV1<
     KernargGttV1,
     GttGpuAccessibleMutableV1,
 >;
+type HostDataAuthority = SharedGttQueueResourceAuthorityV1<
+    AqlDispatchHostDataResourceRoleV1,
+    HostVisibleCoherentGttV1,
+    GttGpuAccessibleMutableV1,
+>;
+
+enum DispatchDataAuthorityV1 {
+    Device(Gfx942DeviceMemoryDispatchAuthorityV1),
+    HostVisible(HostDataAuthority),
+}
+
+impl DispatchDataAuthorityV1 {
+    const fn kind(&self) -> Gfx942FixedDispatchDataKindV1 {
+        match self {
+            Self::Device(_) => Gfx942FixedDispatchDataKindV1::DeviceLocal,
+            Self::HostVisible(_) => Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+        }
+    }
+
+    const fn vm(&self) -> fe2o3_runtime_model::VmKeyV1 {
+        match self {
+            Self::Device(authority) => authority.facts().vm(),
+            Self::HostVisible(authority) => authority.facts().mapping().allocation.vm,
+        }
+    }
+
+    fn checked_gpu_subrange(&self, offset: u64, byte_len: u64, alignment: u64) -> Option<u64> {
+        match self {
+            Self::Device(authority) => authority
+                .facts()
+                .checked_gpu_subrange(offset, byte_len, alignment),
+            Self::HostVisible(authority) => authority
+                .facts()
+                .checked_gpu_subrange(offset, byte_len, alignment),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DeviceDataEffectV1 {
@@ -551,18 +758,26 @@ struct ResolvedCodeIdentityV1 {
     descriptor_address: ObservedGpuAddressV1,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 struct RetainedDataPremiseV1 {
+    layout: Gfx942FixedDispatchDataLayoutV1,
     role_identity: [u8; 32],
     valid_bytes: u64,
     effect: DeviceDataEffectV1,
     initialized_content: Option<Gfx942DeviceContentDescriptorV1>,
     fully_initialized: bool,
+    writable_ranges: Box<[CompletedWritableRangeV1]>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CompletedWritableRangeV1 {
+    offset: u64,
+    byte_len: u64,
 }
 
 /// One actual mapped C3 authority returned only after exact C4 recycle.
 pub(super) struct ReturnedDispatchDataLeaseV1 {
-    lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+    authority: DispatchDataAuthorityV1,
     premise: RetainedDataPremiseV1,
 }
 
@@ -583,8 +798,25 @@ impl ReturnedDispatchDataLeaseV1 {
         self.premise.fully_initialized
     }
 
-    pub(super) fn into_lease(self) -> Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1> {
-        self.lease
+    pub(super) fn into_data(self) -> Gfx942FixedDispatchDataV1 {
+        match (self.authority, self.premise.fully_initialized) {
+            (DispatchDataAuthorityV1::Device(authority), true) => {
+                Gfx942FixedDispatchDataV1::initialized_after_dispatch(authority.into_lease())
+            }
+            (DispatchDataAuthorityV1::Device(authority), false) => {
+                Gfx942FixedDispatchDataV1::uninitialized(authority.into_lease())
+            }
+            (DispatchDataAuthorityV1::HostVisible(authority), true) => {
+                Gfx942FixedDispatchDataV1::host_visible_initialized(
+                    Gfx942InitializedHostVisibleMemoryV1::from_completed_dispatch(
+                        authority.into_token(),
+                    ),
+                )
+            }
+            (DispatchDataAuthorityV1::HostVisible(authority), false) => {
+                Gfx942FixedDispatchDataV1::host_visible_uninitialized(authority.into_token())
+            }
+        }
     }
 }
 
@@ -626,14 +858,20 @@ pub(super) struct DispatchResourceOwnerV1 {
     code_identity: Vec<ResolvedCodeIdentityV1>,
     kernarg: KernargAuthority,
     packets: Vec<PreparedDispatchPacketV1>,
-    data: Vec<Gfx942DeviceMemoryDispatchAuthorityV1>,
+    data: Vec<DispatchDataAuthorityV1>,
     data_premises: Vec<RetainedDataPremiseV1>,
     generation: DispatchGenerationOwnerV1,
 }
 
 impl DispatchResourceOwnerV1 {
-    pub(super) fn device_authorities(&self) -> &[Gfx942DeviceMemoryDispatchAuthorityV1] {
-        &self.data
+    pub(super) fn device_authorities(&self) -> Vec<&Gfx942DeviceMemoryDispatchAuthorityV1> {
+        self.data
+            .iter()
+            .filter_map(|authority| match authority {
+                DispatchDataAuthorityV1::Device(authority) => Some(authority),
+                DispatchDataAuthorityV1::HostVisible(_) => None,
+            })
+            .collect()
     }
 
     pub(super) fn active_generation(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
@@ -653,10 +891,7 @@ impl DispatchResourceOwnerV1 {
                 .iter()
                 .any(|identity| identity.mapping.allocation.vm != queue.vm)
             || self.kernarg.facts().mapping().allocation.vm != queue.vm
-            || self
-                .data
-                .iter()
-                .any(|authority| authority.facts().vm() != queue.vm)
+            || self.data.iter().any(|authority| authority.vm() != queue.vm)
         {
             return Err(Gfx942DispatchBindingErrorV1::WrongQueueGeneration);
         }
@@ -728,6 +963,42 @@ impl DispatchResourceOwnerV1 {
         self.generation.returned_generation()
     }
 
+    pub(super) fn read_completed_host_visible(
+        &self,
+        memory: &mut SharedGttMemorySessionV1,
+        request: Gfx942CompletedDispatchReadRequestV1,
+    ) -> Result<Gfx942CompletedDispatchReadbackV1, Gfx942DispatchBindingErrorV1> {
+        let generation =
+            validate_completed_read_request(&self.generation, &self.data_premises, request)?;
+        let authority =
+            self.data
+                .get(request.data_index)
+                .ok_or(Gfx942DispatchBindingErrorV1::InvalidData {
+                    index: request.data_index,
+                    detail: "completed read authority ordinal",
+                })?;
+        if authority.kind() != Gfx942FixedDispatchDataKindV1::HostVisibleCoherent {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "completed read requires coherent host-visible storage",
+            });
+        }
+        let DispatchDataAuthorityV1::HostVisible(authority) = authority else {
+            unreachable!("coherent kind check matched retained authority");
+        };
+        let bytes = memory.copy_completed_dispatch_host_data_subrange(
+            authority,
+            request.offset,
+            request.byte_len,
+        )?;
+        Ok(Gfx942CompletedDispatchReadbackV1 {
+            dispatch_generation: generation,
+            data_index: request.data_index,
+            offset: request.offset,
+            bytes,
+        })
+    }
+
     pub(super) fn release(
         self,
         memory: &mut SharedGttMemorySessionV1,
@@ -740,8 +1011,16 @@ impl DispatchResourceOwnerV1 {
             memory.release_executable(code)?;
         }
         for data in self.data {
-            let lease = memory.unmap_gfx942_device_memory(data.into_lease())?;
-            memory.release_gfx942_device_memory(lease)?;
+            match data {
+                DispatchDataAuthorityV1::Device(authority) => {
+                    let lease = memory.unmap_gfx942_device_memory(authority.into_lease())?;
+                    memory.release_gfx942_device_memory(lease)?;
+                }
+                DispatchDataAuthorityV1::HostVisible(authority) => {
+                    let token = memory.unmap_from_gpu(authority.into_token())?;
+                    memory.release(token)?;
+                }
+            }
         }
         Ok(())
     }
@@ -772,10 +1051,7 @@ impl DispatchResourceOwnerV1 {
             .data
             .into_iter()
             .zip(self.data_premises)
-            .map(|(authority, premise)| ReturnedDispatchDataLeaseV1 {
-                lease: authority.into_lease(),
-                premise,
-            })
+            .map(|(authority, premise)| ReturnedDispatchDataLeaseV1 { authority, premise })
             .collect();
         Ok(ReturnedDispatchDataV1 { generation, data })
     }
@@ -783,6 +1059,76 @@ impl DispatchResourceOwnerV1 {
     fn require_prepared(&self) -> Result<(), Gfx942DispatchBindingErrorV1> {
         self.generation.ensure_prepared()
     }
+}
+
+fn validate_completed_read_request(
+    generation_owner: &DispatchGenerationOwnerV1,
+    premises: &[RetainedDataPremiseV1],
+    request: Gfx942CompletedDispatchReadRequestV1,
+) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+    let generation = generation_owner.returned_generation()?;
+    if request.dispatch_generation == 0 || request.dispatch_generation != generation {
+        return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration);
+    }
+    let premise =
+        premises
+            .get(request.data_index)
+            .ok_or(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "completed read data ordinal",
+            })?;
+    if premise.layout.kind() != Gfx942FixedDispatchDataKindV1::HostVisibleCoherent {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: request.data_index,
+            detail: "completed read requires coherent host-visible storage",
+        });
+    }
+    if !matches!(
+        premise.effect,
+        DeviceDataEffectV1::WriteOnly | DeviceDataEffectV1::ReadWrite
+    ) {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: request.data_index,
+            detail: "completed read requires inspected write access",
+        });
+    }
+    let end = request.offset.checked_add(request.byte_len).ok_or(
+        Gfx942DispatchBindingErrorV1::InvalidData {
+            index: request.data_index,
+            detail: "completed read range overflow",
+        },
+    )?;
+    if request.byte_len == 0 || end > premise.valid_bytes {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: request.data_index,
+            detail: "completed read range",
+        });
+    }
+    let matching_ranges = premise
+        .writable_ranges
+        .iter()
+        .filter(|range| {
+            ranges_overlap_u64(
+                range.offset,
+                range.byte_len,
+                request.offset,
+                request.byte_len,
+            )
+        })
+        .collect::<Vec<_>>();
+    let writable_end = matching_ranges
+        .first()
+        .and_then(|range| range.offset.checked_add(range.byte_len));
+    if matching_ranges.len() != 1
+        || request.offset < matching_ranges[0].offset
+        || writable_end.is_none_or(|writable_end| end > writable_end)
+    {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: request.data_index,
+            detail: "completed read requires one inspected writable range",
+        });
+    }
+    Ok(generation)
 }
 
 /// Linear published dispatch batch retaining one exact resource generation.
@@ -1000,13 +1346,19 @@ pub(super) fn prepare_dispatch_resources<const N: usize>(
         let lease = memory.map_gfx942_device_memory(lease)?;
         let authority = memory.retain_gfx942_device_memory_for_dispatch(lease)?;
         data_premises.push(RetainedDataPremiseV1 {
+            layout: Gfx942FixedDispatchDataLayoutV1 {
+                kind: Gfx942FixedDispatchDataKindV1::DeviceLocal,
+                requested_bytes: input.requested_bytes,
+                alignment: input.alignment,
+            },
             role_identity: premise.role_identity,
             valid_bytes: premise.valid_bytes,
             effect: premise.effect,
             initialized_content: None,
             fully_initialized: false,
+            writable_ranges: Box::new([]),
         });
-        data_authorities.push(authority);
+        data_authorities.push(DispatchDataAuthorityV1::Device(authority));
     }
 
     let mut code = memory.allocate_executable(image_len)?;
@@ -1050,7 +1402,6 @@ pub(super) fn prepare_dispatch_resources<const N: usize>(
             packet_bytes.copy_from_slice(&typed.bytes);
             for patch in &typed.device_pointers {
                 let address = data_authorities[patch.data_index]
-                    .facts()
                     .checked_gpu_subrange(
                         patch.data_byte_offset,
                         patch.required_bytes,
@@ -1230,6 +1581,7 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
     let mut referenced_programs = vec![false; programs.len()];
     let mut referenced_data = vec![false; data.len()];
     let mut data_effects = vec![None; data.len()];
+    let mut data_writable_ranges = vec![Vec::new(); data.len()];
     let mut packet_plans = Vec::with_capacity(N);
     let mut kernarg_arena_bytes = 0usize;
     for (packet_index, input) in packets.into_iter().enumerate() {
@@ -1272,6 +1624,7 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
             &data_layouts,
             &mut referenced_data,
             &mut data_effects,
+            &mut data_writable_ranges,
         )?;
         let geometry = DispatchGeometryV1::new(input.geometry, input.dynamic_group_segment_bytes);
         validate_geometry(
@@ -1323,16 +1676,24 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
     let mut data_authorities = Vec::with_capacity(data.len());
     let mut data_premises = Vec::with_capacity(data.len());
     for (index, input) in data.into_iter().enumerate() {
-        let layout = input.layout();
-        let (lease, initialized_content, fully_initialized) = input.into_parts();
-        let authority = memory.retain_gfx942_device_memory_for_dispatch(lease)?;
+        let input = input.into_parts();
+        let authority = match input.storage {
+            DispatchDataInputStorageV1::Device(lease) => DispatchDataAuthorityV1::Device(
+                memory.retain_gfx942_device_memory_for_dispatch(lease)?,
+            ),
+            DispatchDataInputStorageV1::HostVisible(token) => DispatchDataAuthorityV1::HostVisible(
+                memory.retain_aql_dispatch_host_data_resource(token)?,
+            ),
+        };
         data_authorities.push(authority);
         data_premises.push(RetainedDataPremiseV1 {
+            layout: input.layout,
             role_identity: [0; 32],
-            valid_bytes: layout.requested_bytes(),
+            valid_bytes: input.layout.requested_bytes(),
             effect: data_effects[index].expect("referenced data has an inspected effect"),
-            initialized_content,
-            fully_initialized,
+            initialized_content: input.initialized_content,
+            fully_initialized: input.fully_initialized,
+            writable_ranges: core::mem::take(&mut data_writable_ranges[index]).into_boxed_slice(),
         });
     }
 
@@ -1382,7 +1743,6 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
             packet_bytes.copy_from_slice(&packet.input.kernarg_bytes);
             for patch in &packet.patches {
                 let address = data_authorities[patch.data_index]
-                    .facts()
                     .checked_gpu_subrange(
                         patch.data_byte_offset,
                         patch.required_bytes,
@@ -1760,9 +2120,10 @@ fn validate_public_packet_bindings(
     packet: usize,
     kernel: &ValidatedKernelEnvelope<'_>,
     input: &Gfx942FixedDispatchPacketV1,
-    data: &[Gfx942DeviceMemoryLayoutV1],
+    data: &[Gfx942FixedDispatchDataLayoutV1],
     referenced_data: &mut [bool],
     data_effects: &mut [Option<DeviceDataEffectV1>],
+    data_writable_ranges: &mut [Vec<CompletedWritableRangeV1>],
 ) -> Result<Box<[DevicePointerPatchV1]>, Gfx942DispatchBindingErrorV1> {
     let arguments = kernel.selected_kernel().explicit_arguments();
     let global_count = arguments
@@ -1799,7 +2160,7 @@ fn validate_public_packet_bindings(
             data.get(binding.data_index)
                 .ok_or(Gfx942DispatchBindingErrorV1::InvalidKernarg {
                     packet,
-                    detail: "device data index",
+                    detail: "dispatch data index",
                 })?;
         let (patch, effect) = validate_inspected_buffer_contract(
             packet,
@@ -1818,6 +2179,15 @@ fn validate_public_packet_bindings(
         referenced_data[binding.data_index] = true;
         data_effects[binding.data_index] =
             Some(merge_effect(data_effects[binding.data_index], effect));
+        if matches!(
+            effect,
+            DeviceDataEffectV1::WriteOnly | DeviceDataEffectV1::ReadWrite
+        ) {
+            data_writable_ranges[binding.data_index].push(CompletedWritableRangeV1 {
+                offset: binding.data_byte_offset,
+                byte_len: binding.byte_len,
+            });
+        }
         if patches.iter().any(|prior: &DevicePointerPatchV1| {
             ranges_overlap_usize(prior.byte_offset, 8, patch.byte_offset, 8)
         }) {
@@ -1916,7 +2286,7 @@ fn validate_inspected_buffer_contract(
     {
         return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
             packet,
-            detail: "device buffer range or alias",
+            detail: "dispatch buffer range or alias",
         });
     }
     let effect = match access {
@@ -2885,6 +3255,121 @@ mod tests {
         assert!(owner.returned_generation().is_err());
         owner.recycle(generation).unwrap();
         assert_eq!(owner.returned_generation().unwrap(), generation);
+    }
+
+    fn readback_premise(
+        kind: Gfx942FixedDispatchDataKindV1,
+        effect: DeviceDataEffectV1,
+        ranges: &[(u64, u64)],
+    ) -> RetainedDataPremiseV1 {
+        RetainedDataPremiseV1 {
+            layout: Gfx942FixedDispatchDataLayoutV1 {
+                kind,
+                requested_bytes: 256,
+                alignment: 64,
+            },
+            role_identity: [0; 32],
+            valid_bytes: 256,
+            effect,
+            initialized_content: None,
+            fully_initialized: false,
+            writable_ranges: ranges
+                .iter()
+                .map(|&(offset, byte_len)| CompletedWritableRangeV1 { offset, byte_len })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn completed_read_requests_reject_phase_generation_effect_bounds_and_overlap() {
+        let writable = readback_premise(
+            Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+            DeviceDataEffectV1::WriteOnly,
+            &[(64, 64)],
+        );
+        let mut owner = DispatchGenerationOwnerV1::new();
+        let generation = owner.next().unwrap();
+        let request = Gfx942CompletedDispatchReadRequestV1::new(generation, 0, 64, 64);
+        assert!(validate_completed_read_request(&owner, &[writable], request).is_err());
+
+        owner.commit_begin(generation);
+        let writable = readback_premise(
+            Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+            DeviceDataEffectV1::WriteOnly,
+            &[(64, 64)],
+        );
+        assert!(validate_completed_read_request(&owner, &[writable], request).is_err());
+        owner.complete(generation).unwrap();
+        let writable = readback_premise(
+            Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+            DeviceDataEffectV1::WriteOnly,
+            &[(64, 64)],
+        );
+        assert!(validate_completed_read_request(&owner, &[writable], request).is_err());
+        owner.recycle(generation).unwrap();
+
+        let valid = || {
+            readback_premise(
+                Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+                DeviceDataEffectV1::WriteOnly,
+                &[(64, 64)],
+            )
+        };
+        assert_eq!(
+            validate_completed_read_request(&owner, &[valid()], request).unwrap(),
+            generation
+        );
+        for rejected in [
+            Gfx942CompletedDispatchReadRequestV1::new(0, 0, 64, 64),
+            Gfx942CompletedDispatchReadRequestV1::new(generation + 1, 0, 64, 64),
+            Gfx942CompletedDispatchReadRequestV1::new(generation, 1, 64, 64),
+            Gfx942CompletedDispatchReadRequestV1::new(generation, 0, 64, 0),
+            Gfx942CompletedDispatchReadRequestV1::new(generation, 0, 63, 1),
+            Gfx942CompletedDispatchReadRequestV1::new(generation, 0, 120, 16),
+            Gfx942CompletedDispatchReadRequestV1::new(generation, 0, 250, 16),
+        ] {
+            assert!(validate_completed_read_request(&owner, &[valid()], rejected).is_err());
+        }
+
+        let readonly = readback_premise(
+            Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+            DeviceDataEffectV1::ReadOnly,
+            &[],
+        );
+        assert!(validate_completed_read_request(&owner, &[readonly], request).is_err());
+        let device = readback_premise(
+            Gfx942FixedDispatchDataKindV1::DeviceLocal,
+            DeviceDataEffectV1::WriteOnly,
+            &[(64, 64)],
+        );
+        assert!(validate_completed_read_request(&owner, &[device], request).is_err());
+        let overlap = readback_premise(
+            Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+            DeviceDataEffectV1::ReadWrite,
+            &[(32, 64), (64, 64)],
+        );
+        assert!(validate_completed_read_request(&owner, &[overlap], request).is_err());
+        let readwrite = readback_premise(
+            Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+            DeviceDataEffectV1::ReadWrite,
+            &[(64, 64)],
+        );
+        assert!(validate_completed_read_request(&owner, &[readwrite], request).is_ok());
+
+        let next = owner.next().unwrap();
+        owner.commit_begin(next);
+        owner.complete(next).unwrap();
+        owner.recycle(next).unwrap();
+        assert!(validate_completed_read_request(&owner, &[valid()], request).is_err());
+        assert_eq!(
+            validate_completed_read_request(
+                &owner,
+                &[valid()],
+                Gfx942CompletedDispatchReadRequestV1::new(next, 0, 64, 64),
+            )
+            .unwrap(),
+            next
+        );
     }
 
     #[test]

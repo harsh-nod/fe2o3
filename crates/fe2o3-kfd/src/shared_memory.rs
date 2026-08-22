@@ -83,7 +83,7 @@ pub const GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_SHA256_V1: &str =
 
 /// Canonical contract for the bounded multi-allocation R2 adapter.
 pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-shared-gtt-memory-r4-v1\n",
+    "profile=fe2o3-mi300x-shared-gtt-memory-r5-v1\n",
     "base_memory_profile_sha256=7bdca672c4921ee56a850d41040045f4a8fbe5a20176628a4ea982dd80fbe8ec\n",
     "kfd_memory_schema_sha256=e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a\n",
     "profiles=host-visible-coherent:0x84000002,kernarg:0x86000002,aql-queue:0x8e000002,executable:0xc4000002\n",
@@ -91,25 +91,25 @@ pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
     "aql=logical-ring:power-of-two-4096..2147483648,gpu-va:checked-double,cpu-vma:single-physical-copy\n",
     "va_allocator=kernel-selected-prot-none-guards-retained-until-successful-free,checked-nonoverlap\n",
     "authority=one-retained-kfd-render-vm,multiple-linear-redacted-tokens,no-fd-handle-va-or-pointer-export\n",
-    "queue-bridge=crate-private-role-marked-linear-mapped-capabilities,ring-control-eop-cwsr-completion-signal-dispatch-code-and-dispatch-kernarg-roles,private-va-mapping-publication-facts,no-public-mint\n",
+    "queue-bridge=crate-private-role-marked-linear-mapped-capabilities,ring-control-eop-cwsr-completion-signal-dispatch-code-dispatch-kernarg-and-dispatch-host-data-roles,private-va-mapping-publication-facts,no-public-mint\n",
     "device-dispatch-bridge=exact-complete-distinct-set-of-every-live-mapped-c3-lease-required-before-model-transfer,actual-linear-lease-retained,private-address-facts\n",
     "queue-gtt-policy=ring:aql-special,control-and-completion-signals:host-visible-coherent,eop-and-cwsr:executable,not-rocr-equivalence\n",
-    "cpu_views=closure-scoped-before-map;mapped-completion-access-only-through-slot-bounded-acquire-observe-and-release-reset,no-safe-borrow-escape\n",
+    "cpu_views=closure-scoped-before-map;mapped-completion-access-only-through-slot-bounded-acquire-observe-and-release-reset;mapped-dispatch-data-copy-is-crate-private-bounded-owned-and-generation-gated-by-the-retaining-queue,no-safe-mapped-borrow-escape\n",
     "completion-bridge=exact-retained-host-coherent-mapping,private-64-byte-slot-index,backend-atomic-i64-acquire-observe-and-release-reset,currentness-sandwiched\n",
     "executable=cpu-construction-rw-to-vma-read-only-before-gpu-map,gpu-writable-flag-remains-contracted\n",
     "failure=global-quarantine-after-started-or-ambiguous-native-transaction,no-drop-cleanup-or-retry\n",
     "fork=current-base-contract,prot-none-dontfork-before-rw,no-raw-fork-clone-during-setup\n",
     "model=completion-only-append-journal,profile-kind-and-gpu-va-span,no-cpu-vma-or-seal-transition\n",
     "proof=no-concrete-verus-refinement,kernel-and-model-coupling-contracted,hostile-tests-only\n",
-    "excluded=queue-ioctl,doorbell,packet-publication,dispatch,completion-policy-or-aggregation,userptr,peer-map\n",
+    "excluded=queue-ioctl,doorbell,packet-publication,dispatch-generation-policy,completion-policy-or-aggregation,userptr,peer-map,hardware-coherence-proof\n",
 );
 
 pub const SHARED_GTT_MEMORY_PROFILE_SHA256_V1: &str =
-    "032e68de9b493deb70326fe8e65bb90248ff3a0d02d6a77f3e939df15262b33e";
+    "286ad8af398b666217d5ec8c0a19390a4736cfcf6624e363214c7488b8e2e535";
 
 pub const SHARED_GTT_MEMORY_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
-    0x03, 0x2e, 0x68, 0xde, 0x9b, 0x49, 0x3d, 0xeb, 0x70, 0x32, 0x6f, 0xe8, 0xe6, 0x5b, 0xb9, 0x02,
-    0x48, 0xff, 0x3a, 0x0d, 0x02, 0xd6, 0xa7, 0x7f, 0x3e, 0x93, 0x9d, 0xf1, 0x52, 0x62, 0xb3, 0x3e,
+    0x28, 0x6a, 0xd8, 0xaf, 0x39, 0x8b, 0x66, 0x62, 0x17, 0xd5, 0xec, 0x8c, 0x0a, 0x19, 0x39, 0x0a,
+    0x47, 0x36, 0xcf, 0xcf, 0x66, 0x24, 0xe3, 0x63, 0x21, 0x4c, 0x74, 0x88, 0xb8, 0xe2, 0xe5, 0x35,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -226,6 +226,44 @@ pub struct Gfx942DeviceMemoryLeaseV1<S: Gfx942DeviceMemoryStateV1> {
 pub struct Gfx942InitializedDeviceMemoryV1 {
     lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
     content: Gfx942DeviceContentDescriptorV1,
+}
+
+/// Linear host-visible coherent storage whose complete requested extent was
+/// copied from owned bytes before GPU mapping.
+///
+/// The mapped token and its native identities remain private. This authority
+/// can only be constructed by [`SharedGttMemorySessionV1::initialize_host_visible_coherent`].
+#[must_use = "initialized host-visible authority must be retained or explicitly released"]
+pub struct Gfx942InitializedHostVisibleMemoryV1 {
+    token: SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+}
+
+impl fmt::Debug for Gfx942InitializedHostVisibleMemoryV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942InitializedHostVisibleMemoryV1")
+            .field("layout", &self.token.layout())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Gfx942InitializedHostVisibleMemoryV1 {
+    /// Returns the checked layout without native identities or addresses.
+    pub const fn layout(&self) -> SharedGttAllocationLayoutV1 {
+        self.token.layout()
+    }
+
+    pub(crate) fn from_completed_dispatch(
+        token: SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+    ) -> Self {
+        Self { token }
+    }
+
+    pub(crate) fn into_token(
+        self,
+    ) -> SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1> {
+        self.token
+    }
 }
 
 impl fmt::Debug for Gfx942InitializedDeviceMemoryV1 {
@@ -551,6 +589,7 @@ pub(crate) enum AqlContextSaveResourceRoleV1 {}
 pub(crate) enum AqlCompletionSignalResourceRoleV1 {}
 pub(crate) enum AqlDispatchCodeResourceRoleV1 {}
 pub(crate) enum AqlDispatchKernargResourceRoleV1 {}
+pub(crate) enum AqlDispatchHostDataResourceRoleV1 {}
 
 macro_rules! define_resource_role {
     ($role:ty) => {
@@ -566,6 +605,7 @@ define_resource_role!(AqlContextSaveResourceRoleV1);
 define_resource_role!(AqlCompletionSignalResourceRoleV1);
 define_resource_role!(AqlDispatchCodeResourceRoleV1);
 define_resource_role!(AqlDispatchKernargResourceRoleV1);
+define_resource_role!(AqlDispatchHostDataResourceRoleV1);
 
 /// Linear crate-private bridge from shared memory into a later queue owner.
 ///
@@ -1137,7 +1177,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
 
     fn validate_dispatch_device_memory_set(
         &self,
-        authorities: &[Gfx942DeviceMemoryDispatchAuthorityV1],
+        authorities: &[&Gfx942DeviceMemoryDispatchAuthorityV1],
         expected_device: DeviceKeyV1,
         expected_vm: VmKeyV1,
     ) -> Result<(), MemorySessionError> {
@@ -1492,6 +1532,47 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
         B::reset_completion_signal_release(mapping, requested, slot_index)?;
         self.check_currentness()
+    }
+
+    fn copy_mapped_host_visible_subrange(
+        &mut self,
+        token: &SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+        offset: u64,
+        byte_len: u64,
+    ) -> Result<Box<[u8]>, MemorySessionError> {
+        self.check_currentness()?;
+        let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
+        let requested = self.allocations[index].layout.requested_bytes;
+        let start = usize::try_from(offset).map_err(|_| MemorySessionError::SizeOverflow)?;
+        let len = usize::try_from(byte_len).map_err(|_| MemorySessionError::SizeOverflow)?;
+        let end = start
+            .checked_add(len)
+            .ok_or(MemorySessionError::SizeOverflow)?;
+        if len == 0 || end > requested {
+            return Err(MemorySessionError::InvalidAllocationAuthority);
+        }
+        let outcome = {
+            let mapping = self.allocations[index]
+                .mapping
+                .as_ref()
+                .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                B::with_bytes(mapping, requested, |bytes| {
+                    bytes[start..end].to_vec().into_boxed_slice()
+                })
+            }))
+        };
+        let post = self.check_currentness();
+        match outcome {
+            Ok(bytes) => {
+                post?;
+                Ok(bytes)
+            }
+            Err(payload) => {
+                let _ = post;
+                std::panic::resume_unwind(payload)
+            }
+        }
     }
 
     fn seal_executable(
@@ -1962,9 +2043,17 @@ impl SharedGttMemorySessionV1 {
         &mut self,
         data: crate::Gfx942FixedDispatchDataV1,
     ) -> Result<(), MemorySessionError> {
-        let (lease, _, _) = data.into_parts();
-        let lease = self.engine.unmap_device_memory(lease)?;
-        self.engine.release_device_memory(lease)
+        let parts = data.into_parts();
+        match parts.storage {
+            crate::queue::dispatch_binding::DispatchDataInputStorageV1::Device(lease) => {
+                let lease = self.engine.unmap_device_memory(lease)?;
+                self.engine.release_device_memory(lease)
+            }
+            crate::queue::dispatch_binding::DispatchDataInputStorageV1::HostVisible(token) => {
+                let token = self.unmap_from_gpu(token)?;
+                self.release(token)
+            }
+        }
     }
 
     pub fn model_journal_summary(&self) -> MemoryModelJournalSummary {
@@ -2064,7 +2153,7 @@ impl SharedGttMemorySessionV1 {
     /// continues to reject any retained device memory.
     pub(crate) fn take_queue_model_foundation_with_dispatch_memory(
         &mut self,
-        authorities: &[Gfx942DeviceMemoryDispatchAuthorityV1],
+        authorities: &[&Gfx942DeviceMemoryDispatchAuthorityV1],
     ) -> Result<(DeviceIdentityStateV1, MemoryLifecycleStateV1), MemorySessionError> {
         self.check_queue_currentness()?;
         self.engine.validate_dispatch_device_memory_set(
@@ -2079,7 +2168,7 @@ impl SharedGttMemorySessionV1 {
     /// model ownership has already transferred into a live queue engine.
     pub(crate) fn validate_live_queue_dispatch_memory(
         &mut self,
-        authorities: &[Gfx942DeviceMemoryDispatchAuthorityV1],
+        authorities: &[&Gfx942DeviceMemoryDispatchAuthorityV1],
     ) -> Result<(), MemorySessionError> {
         self.check_queue_currentness()?;
         self.engine.validate_dispatch_device_memory_set(
@@ -2240,6 +2329,34 @@ impl SharedGttMemorySessionV1 {
         self.retain_queue_resource(token)
     }
 
+    pub(crate) fn retain_aql_dispatch_host_data_resource(
+        &self,
+        token: SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+    ) -> Result<
+        SharedGttQueueResourceAuthorityV1<
+            AqlDispatchHostDataResourceRoleV1,
+            HostVisibleCoherentGttV1,
+            GttGpuAccessibleMutableV1,
+        >,
+        MemorySessionError,
+    > {
+        self.retain_queue_resource(token)
+    }
+
+    pub(crate) fn copy_completed_dispatch_host_data_subrange(
+        &mut self,
+        authority: &SharedGttQueueResourceAuthorityV1<
+            AqlDispatchHostDataResourceRoleV1,
+            HostVisibleCoherentGttV1,
+            GttGpuAccessibleMutableV1,
+        >,
+        offset: u64,
+        byte_len: u64,
+    ) -> Result<Box<[u8]>, MemorySessionError> {
+        self.engine
+            .copy_mapped_host_visible_subrange(&authority.token, offset, byte_len)
+    }
+
     pub(crate) fn retain_gfx942_device_memory_for_dispatch(
         &self,
         lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
@@ -2333,6 +2450,24 @@ impl SharedGttMemorySessionV1 {
     ) -> Result<SharedGttAllocationV1<HostVisibleCoherentGttV1, GttCpuWritableV1>, MemorySessionError>
     {
         self.allocate_profile(requested_bytes)
+    }
+
+    /// Allocates one coherent GTT extent, copies every requested byte from the
+    /// owned source, and maps the exact allocation to the selected GPU.
+    ///
+    /// There is no caller-supplied initialization assertion. Successful return
+    /// proves only that the complete source extent was copied before mapping.
+    pub fn initialize_host_visible_coherent(
+        &mut self,
+        bytes: Box<[u8]>,
+    ) -> Result<Gfx942InitializedHostVisibleMemoryV1, MemorySessionError> {
+        if bytes.is_empty() {
+            return Err(MemorySessionError::InvalidRequestedSize);
+        }
+        let mut token = self.allocate_host_visible_coherent(bytes.len())?;
+        self.with_bytes_mut(&mut token, |mapped| mapped.copy_from_slice(&bytes))?;
+        let token = self.map_to_gpu(token)?;
+        Ok(Gfx942InitializedHostVisibleMemoryV1 { token })
     }
 
     pub fn allocate_kernarg(
@@ -2996,6 +3131,46 @@ mod tests {
     }
 
     #[test]
+    fn mapped_coherent_subrange_copy_is_exact_and_generation_checked() {
+        let mut engine = acquired();
+        let mut token = engine.allocate::<HostVisibleCoherentGttV1>(256).unwrap();
+        engine
+            .with_bytes_mut(&mut token, |bytes| {
+                for (index, byte) in bytes.iter_mut().enumerate() {
+                    *byte = index as u8;
+                }
+            })
+            .unwrap();
+        let token = engine.map_mutable(token).unwrap();
+        let copied = engine
+            .copy_mapped_host_visible_subrange(&token, 64, 32)
+            .unwrap();
+        assert_eq!(copied.as_ref(), &(64_u8..96).collect::<Vec<_>>());
+        assert!(
+            engine
+                .copy_mapped_host_visible_subrange(&token, 0, 0)
+                .is_err()
+        );
+        assert!(
+            engine
+                .copy_mapped_host_visible_subrange(&token, 250, 16)
+                .is_err()
+        );
+
+        let stale = SharedGttAllocationV1 {
+            id: token.id,
+            generation: token.generation + 1,
+            layout: token.layout,
+            marker: PhantomData,
+        };
+        assert!(
+            engine
+                .copy_mapped_host_visible_subrange(&stale, 64, 32)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn private_role_subranges_reject_overlap_misalignment_and_overflow() {
         let vm = VmKeyV1 {
             device: fe2o3_runtime_model::DeviceKeyV1 {
@@ -3422,24 +3597,27 @@ mod tests {
             }
         };
         let mut exact = [authority(first), authority(second)];
+        let exact_refs = [&exact[0], &exact[1]];
         assert!(
             engine
-                .validate_dispatch_device_memory_set(&exact, device, vm)
+                .validate_dispatch_device_memory_set(&exact_refs, device, vm)
                 .is_ok()
         );
         assert!(matches!(
-            engine.validate_dispatch_device_memory_set(&exact[..1], device, vm),
+            engine.validate_dispatch_device_memory_set(&exact_refs[..1], device, vm),
             Err(MemorySessionError::DeviceMemoryQueueBindingRequired)
         ));
 
         exact[1].facts = exact[0].facts;
+        let exact_refs = [&exact[0], &exact[1]];
         assert!(matches!(
-            engine.validate_dispatch_device_memory_set(&exact, device, vm),
+            engine.validate_dispatch_device_memory_set(&exact_refs, device, vm),
             Err(MemorySessionError::DeviceMemoryQueueBindingRequired)
         ));
         exact[1].facts.generation += 1;
+        let exact_refs = [&exact[0], &exact[1]];
         assert!(matches!(
-            engine.validate_dispatch_device_memory_set(&exact, device, vm),
+            engine.validate_dispatch_device_memory_set(&exact_refs, device, vm),
             Err(MemorySessionError::DeviceMemoryQueueBindingRequired)
         ));
         assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Active);

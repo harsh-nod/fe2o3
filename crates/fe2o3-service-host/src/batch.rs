@@ -10,7 +10,7 @@ use fe2o3_kfd::{Gfx942DispatchBufferBindingV1, Gfx942FixedDispatchPacketV1};
 
 use crate::allocation::{
     ServiceAllocationErrorV1, ServiceAllocationSessionV1, ServiceDeviceDispatchRangeV1,
-    ServiceQueueAllocationLedgerV1,
+    ServiceDispatchRangeV1, ServiceHostDispatchRangeV1, ServiceQueueAllocationLedgerV1,
 };
 
 /// One inert explicit kernarg-buffer binding to a checked service allocation range.
@@ -32,7 +32,7 @@ use crate::allocation::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ServiceFixedDispatchBufferV1 {
     explicit_argument_index: usize,
-    range: ServiceDeviceDispatchRangeV1,
+    range: ServiceDispatchRangeV1,
 }
 
 impl ServiceFixedDispatchBufferV1 {
@@ -40,7 +40,18 @@ impl ServiceFixedDispatchBufferV1 {
     pub const fn new(explicit_argument_index: usize, range: ServiceDeviceDispatchRangeV1) -> Self {
         Self {
             explicit_argument_index,
-            range,
+            range: ServiceDispatchRangeV1::Device(range),
+        }
+    }
+
+    /// Describes one explicit argument and checked coherent host-visible range.
+    pub const fn new_host_visible(
+        explicit_argument_index: usize,
+        range: ServiceHostDispatchRangeV1,
+    ) -> Self {
+        Self {
+            explicit_argument_index,
+            range: ServiceDispatchRangeV1::HostVisible(range),
         }
     }
 
@@ -50,16 +61,16 @@ impl ServiceFixedDispatchBufferV1 {
     }
 
     /// Returns the addressless service allocation range.
-    pub const fn range(&self) -> ServiceDeviceDispatchRangeV1 {
+    pub const fn range(&self) -> ServiceDispatchRangeV1 {
         self.range
     }
 
     fn into_kfd(self) -> Gfx942DispatchBufferBindingV1 {
         Gfx942DispatchBufferBindingV1::new(
             self.explicit_argument_index,
-            self.range.data_index,
-            self.range.offset_bytes,
-            self.range.extent_bytes,
+            self.range.data_index(),
+            self.range.offset_bytes(),
+            self.range.extent_bytes(),
         )
     }
 }
@@ -215,7 +226,14 @@ impl<'a, const N: usize> ServiceFixedBatchV1<'a, N> {
     ) -> Result<(), ServiceAllocationErrorV1> {
         for packet in &self.packets {
             for buffer in &packet.buffers {
-                allocation.validate_device_dispatch_range(buffer.range)?;
+                match buffer.range {
+                    ServiceDispatchRangeV1::Device(range) => {
+                        allocation.validate_device_dispatch_range(range)?
+                    }
+                    ServiceDispatchRangeV1::HostVisible(range) => {
+                        allocation.validate_host_dispatch_range(range)?
+                    }
+                }
             }
         }
         Ok(())

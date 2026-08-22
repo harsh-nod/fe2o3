@@ -23,7 +23,8 @@ use super::completion::{
 };
 use super::dispatch_binding::{
     DeviceDataAllocationInputV1, DispatchGeometryV1, DispatchResourceOwnerV1,
-    Gfx942CompletedDispatchBatchV1, Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1,
+    Gfx942CompletedDispatchBatchV1, Gfx942CompletedDispatchReadRequestV1,
+    Gfx942CompletedDispatchReadbackV1, Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1,
     Gfx942DispatchPollV1, Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1,
     ReturnedDispatchDataV1, TypedKernargImageV1, prepare_dispatch_resources,
     prepare_public_fixed_dispatch_resources, unwrap_completed, unwrap_published,
@@ -59,14 +60,14 @@ static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and fixed-batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r13-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r14-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
-    "memory_profile_sha256=032e68de9b493deb70326fe8e65bb90248ff3a0d02d6a77f3e939df15262b33e\n",
+    "memory_profile_sha256=286ad8af398b666217d5ec8c0a19390a4736cfcf6624e363214c7488b8e2e535\n",
     "queue_resource_profile_sha256=b8317e4288e14c6d7546b53887ec2a10e1938ffba9595271d174a2a652320f4f\n",
     "aql_dispatch_schema_sha256=b691e0df36e2c1f0695f49a19d49d3fbbe4380e8e9999b01368df02783952edf\n",
     "aql_fixed_batch_schema_sha256=3d8376174a564eaee500ad8849d8bf3a1a38d56f9e5bc50bf60aea408b25bf1d\n",
     "aql_completion_schema_sha256=406f1f2f3e93eb4704fba3b5ead0d0d05639991949baff4ad3a0360c343fb7a4\n",
-    "dispatch_binding_schema_sha256=2f337a89375dd67c11055f2ba39c64fabf6c9b16ae593634670c77a974a3bc08\n",
+    "dispatch_binding_schema_sha256=62e93a879af8af93d7cbbe498b80d9b1518464d4b85efd9e061ebd8edb41eee2\n",
     "event_schema_sha256=8d754af12ed2fcd0c238e1f9e38fbbdab053f44fc5d613b227fdcdd616fcc849\n",
     "runtime_enable_schema_sha256=4c762d1e35a5940f0972290151de51e6e19722f81874a6446c66ddc70a062ac1\n",
     "source.rocr.queues.c=b7ead541340ac996c2305b2e9660cb3176edcd61ee509d4880f02659fbb6f32b\n",
@@ -75,14 +76,15 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "source.kfd_debug.c=f6c688b75fd25ead43ce3c3961bd0af210f873bad1b29dce8e84bb7fb968fe4d\n",
     "source.kfd_chardev.c=f9a8805c5d479faee25e457051aa428e4bb523ecf1c7b1618a6a5f79ca5d7bba\n",
     "source.kfd_process.c=d76db8cbb546aa23dffb33b1d04244037e12246b49b752303194c68dd685e409\n",
-    "resources=linear-private-ring-control-eop-cwsr-completion-code-kernarg-and-exact-device-lease-authorities,exact-one-existing-shared-vm-session,transferred-model-ownership\n",
+    "resources=linear-private-ring-control-eop-cwsr-completion-code-kernarg-and-exact-device-local-or-coherent-host-data-authorities,exact-one-existing-shared-vm-session,transferred-model-ownership\n",
     "gtt_policy=ring:aql-queue,control-and-completion-signals:host-visible-coherent,eop-and-cwsr:executable;fe2o3-policy-not-rocr-equivalence\n",
     "runtime=one-process-global-fe2o3-owner;exact-enable-r_debug0-mode1-capabilities0-before-event-and-any-queue;ttmp-save-excluded;foreign-kfd-clients-excluded\n",
     "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-explicit-two-atomic-u64-zero;completion-arena-exact-1024-typed-64-byte-user-signals-pending-1-before-gpu-map;one-first-internal-auto-reset-signal-event-id-1-through-255-before-create;8-cwsr-bo-and-shadow-headers-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,one-first-shadow-aligned-error-reason-zero,exact-event-id\n",
     "submission=crate-private-non-clone-single-producer,aql-fixed-batch-v2-count-1-through-1024-and-ring-capacity-bounded,heap-owned-fixed-cardinality-state,no-mapped-slice-or-raw-pointer-escape,rptr-wptr-acquire,one-actual-wptr-acq-rel-fetch-add-by-count,all-invalid-bodies-before-any-ordered-u32-release-headers,release-fence-x86-sfence,one-final-volatile-u64-doorbell-store-of-last-packet-id\n",
     "completion=crate-private-non-clone-generation-bound-batches,unique-signal-per-packet,signal-code-kernarg-dispatch-and-queue-generations-retained,bounded-atomic-acquire-poll,pending-ready-fault-timeout-distinct,release-reset-only-after-all-signals-zero\n",
-    "dispatch=public-addressless-linear-fixed-batch,1-through-32-inspected-programs,1-through-1024-packets,validated-code-materialization,zero-pointer-kernarg-internal-injection,metadata-derived-COV6-geometry-and-dynamic-lds-implicit-subset-with-caller-zero-suffix,queue-pointer-and-runtime-address-fields-rejected,exact-mapped-lease-set,inspected-access-and-sealed-initialization-gates,ordinary-release-or-exact-recycle-gated-return-after-destroy\n",
-    "rebinding=exact-completion-and-signal-recycle-before-detach,code-and-kernarg-released,queue-ring-signal-event-doorbell-and-runtime-remain-live,exact-detached-device-lease-ledger,new-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest\n",
+    "dispatch=public-addressless-linear-fixed-batch,1-through-32-inspected-programs,1-through-1024-packets,validated-code-materialization,zero-pointer-kernarg-internal-injection,metadata-derived-COV6-geometry-and-dynamic-lds-implicit-subset-with-caller-zero-suffix,queue-pointer-and-runtime-address-fields-rejected,exact-mapped-data-set,inspected-access-and-sealed-initialization-gates,ordinary-release-or-exact-recycle-gated-return-after-destroy\n",
+    "readback=coherent-host-data-only,owned-bounded-copy-after-exact-acquire-observed-completion-and-signal-recycle,exact-dispatch-generation-and-one-inspected-write-or-readwrite-binding,no-native-address-or-mapped-borrow,no-whole-allocation-initialization-promotion\n",
+    "rebinding=exact-completion-and-signal-recycle-before-detach,code-and-kernarg-released,queue-ring-signal-event-doorbell-and-runtime-remain-live,exact-detached-data-authority-ledger,new-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest\n",
     "doorbell=complete-8192-byte-kfd-slice,exact-returned-offset,madv-dontfork,no-public-address-pointer-or-mmio-accessor\n",
     "lifecycle=runtime-enable,event-create,queue-create;all-completion-batches-observed-and-recycled;queue-destroy,event-destroy,runtime-disable,doorbell-release,cwsr-queue-resource-and-completion-arena-release;no-drop-ioctl-store-munmap-or-free\n",
     "currentness=pid-and-device-before-publication,after-bounded-preparation,and-before-mmio\n",
@@ -91,12 +93,12 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "cwsr-address-semantics=bo-cpu-vma-is-not-create-address;exact-8-owned-fixed-private-anonymous-pages,prot-none-then-dontfork-then-rw;headers-mirrored-and-read-back-in-bo-and-shadows;cpu-visible-debug-suspend-checkpoint-wave-state-copy-unsupported;ordinary-hardware-preemption-restore-contracted\n",
     "exception-observation=crate-private-one-shot-timeout-0-through-1000ms,wait-and-volatile-payload-must-agree,unknown-reason-rejected,timeout-is-terminal-racy-snapshot-not-absence-proof,no-atomic-or-lossless-delivery-claim\n",
     "failure=counter-divergence-regression-currentness-and-any-possible-side-effect-runtime-event-shadow-wait-publication-completion-observation-timeout-reset-or-teardown-error-terminally-poisons;no-in-process-recovery-rollback-or-cleanup-after-terminal-observation;only-pre-side-effect-full-or-insufficient-space-retryable\n",
-    "excluded=live-batch-execution-evidence,actual-hardware-completion-fault-or-exception-delivery-refinement,kernel-memory-effect-refinement,numerical-correctness,update,multi-producer,foreign-kfd-process-coordination,cpu-visible-debug-suspend-checkpoint-wave-state-copy\n",
+    "excluded=live-batch-execution-evidence,actual-hardware-completion-fault-or-exception-delivery-refinement,effect-correctness-beyond-inspected-metadata,full-write-coverage,numerical-correctness,update,multi-producer,foreign-kfd-process-coordination,cpu-visible-debug-suspend-checkpoint-wave-state-copy\n",
 );
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "80aa507a4d8fa6d07ca8a4ba39922ffcfec267671988f31c01eb575b5104dbf6";
+    "caafb81cfc4060f64181e72658d45d473bbfbdd6cf370335ed429c65c6d89a2b";
 
 type RingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -478,15 +480,7 @@ fn recover_fixed_dispatch_data(dispatch: ReturnedDispatchDataV1) -> Vec<Gfx942Fi
     dispatch
         .into_data()
         .into_iter()
-        .map(|returned| {
-            let initialized = returned.is_fully_initialized();
-            let lease = returned.into_lease();
-            if initialized {
-                Gfx942FixedDispatchDataV1::initialized_after_dispatch(lease)
-            } else {
-                Gfx942FixedDispatchDataV1::uninitialized(lease)
-            }
-        })
+        .map(|returned| returned.into_data())
         .collect()
 }
 
@@ -553,7 +547,7 @@ pub struct ComputeAqlQueueSessionV1 {
     completion_signals: Option<CompletionSignalAuthority>,
     completion_owner: CompletionSignalArenaOwnerV1,
     dispatch: Option<DispatchResourceOwnerV1>,
-    detached_device_lease_count: usize,
+    detached_data_count: usize,
     exception: Option<QueueExceptionStateV1>,
     terminal_poisoned: bool,
     observation: ComputeAqlQueueObservationV1,
@@ -775,8 +769,10 @@ impl ComputeAqlQueueSessionV1 {
             completion_signals.facts(),
         )?;
         let (identity, model) = match dispatch.as_ref() {
-            Some(dispatch) => memory
-                .take_queue_model_foundation_with_dispatch_memory(dispatch.device_authorities())?,
+            Some(dispatch) => {
+                let device_authorities = dispatch.device_authorities();
+                memory.take_queue_model_foundation_with_dispatch_memory(&device_authorities)?
+            }
             None => memory.take_queue_model_foundation()?,
         };
         let backend = LinuxNativeQueueBackendV1 {
@@ -809,7 +805,7 @@ impl ComputeAqlQueueSessionV1 {
             completion_signals: Some(completion_signals),
             completion_owner,
             dispatch,
-            detached_device_lease_count: 0,
+            detached_data_count: 0,
             exception: Some(QueueExceptionStateV1 {
                 runtime,
                 event,
@@ -877,21 +873,21 @@ impl ComputeAqlQueueSessionV1 {
         };
         let generation = returned.generation();
         let data = recover_fixed_dispatch_data(returned);
-        if self.detached_device_lease_count != 0 {
+        if self.detached_data_count != 0 {
             self.poison_terminal();
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
-                "detached device-lease ledger was not empty",
+                "detached dispatch-data ledger was not empty",
             ));
         }
-        self.detached_device_lease_count = data.len();
+        self.detached_data_count = data.len();
         Ok(Gfx942DetachedFixedDispatchV1 { generation, data })
     }
 
     /// Binds a new fixed batch to the same live native queue.
     ///
-    /// The queue must have no attached batch. The complete live mapped-device
-    /// allocation set is revalidated against the retained KFD session before
-    /// the new owner is installed. This operation does not publish the queue.
+    /// The queue must have no attached batch. The complete detached data set is
+    /// rebound, and its device-local subset is revalidated against the retained
+    /// KFD session before the new owner is installed. This does not publish.
     pub fn bind_fixed_dispatch<const N: usize>(
         &mut self,
         programs: Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>>,
@@ -904,10 +900,10 @@ impl ComputeAqlQueueSessionV1 {
         if self.dispatch.is_some() {
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
         }
-        if data.len() != self.detached_device_lease_count {
+        if data.len() != self.detached_data_count {
             return Err(Gfx942DispatchBindingErrorV1::InvalidData {
-                index: data.len().min(self.detached_device_lease_count),
-                detail: "detached device-lease cardinality",
+                index: data.len().min(self.detached_data_count),
+                detail: "detached dispatch-data cardinality",
             }
             .into());
         }
@@ -931,19 +927,20 @@ impl ComputeAqlQueueSessionV1 {
                 return Err(error.into());
             }
         };
+        let device_authorities = prepared.device_authorities();
         let validation = self
             .engine
             .as_mut()
             .expect("checked queue engine")
             .backend
             .session
-            .validate_live_queue_dispatch_memory(prepared.device_authorities());
+            .validate_live_queue_dispatch_memory(&device_authorities);
         if let Err(error) = validation {
             self.poison_terminal();
             return Err(error.into());
         }
         self.dispatch = Some(prepared);
-        self.detached_device_lease_count = 0;
+        self.detached_data_count = 0;
         Ok(())
     }
 
@@ -971,12 +968,11 @@ impl ComputeAqlQueueSessionV1 {
         };
         match result {
             Ok(lease) => {
-                self.detached_device_lease_count = self
-                    .detached_device_lease_count
-                    .checked_add(1)
-                    .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
-                        "detached device-lease ledger overflow",
-                    ))?;
+                self.detached_data_count = self.detached_data_count.checked_add(1).ok_or(
+                    ComputeAqlQueueSessionErrorV1::Contract(
+                        "detached dispatch-data ledger overflow",
+                    ),
+                )?;
                 Ok(Gfx942FixedDispatchDataV1::uninitialized(lease))
             }
             Err(error) => {
@@ -1007,12 +1003,11 @@ impl ComputeAqlQueueSessionV1 {
             .initialize_gfx942_device_memory(bytes, alignment, content);
         match result {
             Ok(memory) => {
-                self.detached_device_lease_count = self
-                    .detached_device_lease_count
-                    .checked_add(1)
-                    .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
-                        "detached device-lease ledger overflow",
-                    ))?;
+                self.detached_data_count = self.detached_data_count.checked_add(1).ok_or(
+                    ComputeAqlQueueSessionErrorV1::Contract(
+                        "detached dispatch-data ledger overflow",
+                    ),
+                )?;
                 Ok(Gfx942FixedDispatchDataV1::initialized(memory))
             }
             Err(error) => {
@@ -1028,7 +1023,6 @@ impl ComputeAqlQueueSessionV1 {
         data: Gfx942FixedDispatchDataV1,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         self.require_unbound_fixed_dispatch()?;
-        let (lease, _, _) = data.into_parts();
         let result = {
             let memory = &mut self
                 .engine
@@ -1038,16 +1032,14 @@ impl ComputeAqlQueueSessionV1 {
                 ))?
                 .backend
                 .session;
-            memory
-                .unmap_gfx942_device_memory(lease)
-                .and_then(|lease| memory.release_gfx942_device_memory(lease))
+            memory.release_fixed_dispatch_data(data)
         };
         if let Err(error) = result {
             self.poison_terminal();
             return Err(error.into());
         }
-        self.detached_device_lease_count = self.detached_device_lease_count.checked_sub(1).ok_or(
-            ComputeAqlQueueSessionErrorV1::Contract("detached device-lease ledger underflow"),
+        self.detached_data_count = self.detached_data_count.checked_sub(1).ok_or(
+            ComputeAqlQueueSessionErrorV1::Contract("detached dispatch-data ledger underflow"),
         )?;
         Ok(())
     }
@@ -1059,9 +1051,9 @@ impl ComputeAqlQueueSessionV1 {
         if self.dispatch.is_some() {
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
         }
-        if self.detached_device_lease_count > super::dispatch_binding::MAX_DISPATCH_DATA_LEASES_V1 {
+        if self.detached_data_count > super::dispatch_binding::MAX_DISPATCH_DATA_LEASES_V1 {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
-                "detached device-lease ledger bound",
+                "detached dispatch-data ledger bound",
             ));
         }
         self.completion_owner.ensure_releasable()?;
@@ -1069,10 +1061,9 @@ impl ComputeAqlQueueSessionV1 {
     }
 
     fn require_detached_allocation_capacity(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        if self.detached_device_lease_count >= super::dispatch_binding::MAX_DISPATCH_DATA_LEASES_V1
-        {
+        if self.detached_data_count >= super::dispatch_binding::MAX_DISPATCH_DATA_LEASES_V1 {
             return Err(Gfx942DispatchBindingErrorV1::DataLeaseCount {
-                requested: self.detached_device_lease_count + 1,
+                requested: self.detached_data_count + 1,
                 maximum: super::dispatch_binding::MAX_DISPATCH_DATA_LEASES_V1,
             }
             .into());
@@ -1368,6 +1359,48 @@ impl ComputeAqlQueueSessionV1 {
         Ok(observation)
     }
 
+    /// Returns the exact dispatch generation only while its completion signals
+    /// have been observed and recycled and the same batch remains attached.
+    pub fn recycled_fixed_dispatch_generation(&self) -> Result<u64, ComputeAqlQueueSessionErrorV1> {
+        self.dispatch
+            .as_ref()
+            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?
+            .ensure_returnable()
+            .map_err(Into::into)
+    }
+
+    /// Copies one inspected writable subrange from coherent host-visible data.
+    ///
+    /// The exact attached dispatch must have completed and recycled. Device-local
+    /// storage, read-only or unwritten bytes, stale generations, invalid bounds,
+    /// and requests intersecting more than one admitted writable range fail
+    /// before any mapped bytes are exposed.
+    pub fn read_recycled_fixed_dispatch_data(
+        &mut self,
+        request: Gfx942CompletedDispatchReadRequestV1,
+    ) -> Result<Gfx942CompletedDispatchReadbackV1, ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+        }
+        let dispatch = self
+            .dispatch
+            .as_ref()
+            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?;
+        let memory = &mut self
+            .engine
+            .as_mut()
+            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                "missing queue engine",
+            ))?
+            .backend
+            .session;
+        let result = dispatch.read_completed_host_visible(memory, request);
+        if matches!(result, Err(Gfx942DispatchBindingErrorV1::Memory(_))) {
+            self.poison_terminal();
+        }
+        result.map_err(Into::into)
+    }
+
     #[allow(dead_code)]
     pub(crate) fn poll_completion_batch<const N: usize>(
         &mut self,
@@ -1609,9 +1642,9 @@ impl ComputeAqlQueueSessionV1 {
                 "terminal queue session requires process teardown",
             ));
         }
-        if self.detached_device_lease_count != 0 {
+        if self.detached_data_count != 0 {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
-                "detached device allocations must be rebound or released before destroy",
+                "detached dispatch data must be rebound or released before destroy",
             ));
         }
         self.completion_owner.ensure_releasable()?;
@@ -2034,11 +2067,11 @@ mod tests {
         );
         assert_eq!(
             super::super::dispatch_binding::GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1,
-            "2f337a89375dd67c11055f2ba39c64fabf6c9b16ae593634670c77a974a3bc08"
+            "62e93a879af8af93d7cbbe498b80d9b1518464d4b85efd9e061ebd8edb41eee2"
         );
         assert_eq!(
             SHARED_GTT_MEMORY_PROFILE_SHA256_V1,
-            "032e68de9b493deb70326fe8e65bb90248ff3a0d02d6a77f3e939df15262b33e"
+            "286ad8af398b666217d5ec8c0a19390a4736cfcf6624e363214c7488b8e2e535"
         );
         assert_eq!(
             fe2o3_kfd_uapi::KFD_RUNTIME_ENABLE_SCHEMA_SHA256,

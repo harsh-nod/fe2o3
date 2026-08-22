@@ -7,7 +7,8 @@ use core::fmt;
 use fe2o3_aql::{AQL_MAX_FIXED_BATCH_PACKETS_V2, AqlRingCapacityV1};
 use fe2o3_kfd::{
     ComputeAqlQueueDestroyedV1, ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1,
-    ComputeAqlQueueSessionV1, Gfx942CompletedDispatchBatchV1, Gfx942CompletionRecycleObservationV1,
+    ComputeAqlQueueSessionV1, Gfx942CompletedDispatchBatchV1, Gfx942CompletedDispatchReadRequestV1,
+    Gfx942CompletedDispatchReadbackV1, Gfx942CompletionRecycleObservationV1,
     Gfx942DeviceContentDescriptorV1, Gfx942DispatchBatchV1, Gfx942DispatchPollV1,
     Gfx942FixedDispatchDataV1,
 };
@@ -15,30 +16,32 @@ use fe2o3_kfd::{
 use crate::allocation::{
     DeviceAllocationRoleMarkerV1, QuarantinedServiceAllocationsV1, ServiceAllocationErrorV1,
     ServiceAllocationReleaseFailureV1, ServiceAllocationReleaseObservationV1,
-    ServiceAllocationSessionV1, ServiceDeviceDispatchRangeV1, ServiceQueueAllocationLedgerV1,
+    ServiceAllocationSessionV1, ServiceDeviceDispatchRangeV1, ServiceDispatchRangeV1,
+    ServiceHostDispatchRangeV1, ServiceQueueAllocationLedgerV1,
     ServiceQueueAllocationRestoreFailureV1,
 };
 use crate::batch::ServiceFixedBatchV1;
 
 /// Frozen claim boundary for the reusable service queue composition layer.
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-service-addressless-fixed-queue-r2-v1\n",
+    "profile=fe2o3-service-addressless-fixed-queue-r3-v1\n",
     "queue=one-long-lived-kfd-compute-aql-owner,ring-event-doorbell-and-signal-resources-retained-across-rebind\n",
-    "batch=1-through-1024-fixed-packets,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-ranges\n",
+    "batch=1-through-1024-fixed-packets,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges\n",
     "implicit-kernarg=exact-trailing-256-byte-COV6-caller-zero-suffix,lower-owner-privately-populates-metadata-derived-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds,queue-pointer-and-runtime-service-or-address-fields-rejected\n",
     "publication=one-reservation-one-write-counter-fetch-add-one-final-doorbell-per-fixed-batch\n",
     "custody=prepared-published-completed-recycled-unbound-linear-service-types,exact-completion-and-signal-recycle-before-detach-rebind-or-returning-destroy\n",
     "data=read-and-readwrite-require-sealed-full-initialization,write-only-may-consume-uninitialized-exclusive-storage,initialized-state-retained-after-generic-completion-without-stale-content-digest\n",
+    "readback=caller-can-mint-only-from-current-recycled-owner,request-binds-exact-dispatch-generation-and-owner-checked-host-allocation-generation,lower-owner-allows-only-one-inspected-write-or-readwrite-subrange-and-returns-owned-bytes,no-address-or-initialization-promotion\n",
     "rebind=same-native-queue-may-consume-a-different-fixed-cardinality-program-geometry-kernarg-and-addressless-data-binding-after-exact-recycle\n",
-    "release=return-device-custody-after-exact-recycle,destroy-native-queue,restore-service-ledger,reverse-order-unmap-and-free\n",
+    "release=return-data-custody-after-exact-recycle,destroy-native-queue,restore-service-ledger,reverse-order-unmap-and-free\n",
     "failure=pure-rejection-recovers-input-owners,ambiguous-native-side-effect-is-terminal-and-denies-retry,opaque-quarantine-retains-available-owner-state\n",
     "authority=no-native-address-handle-pointer-fd-mmio-signal-or-packet-template-export,no-caller-initialization-or-effect-assertion\n",
-    "excluded=executable-correctness,device-memory-effect-refinement,current-output-content,numerical-correctness,hardware-execution,performance\n",
+    "excluded=executable-correctness,effect-correctness-beyond-inspected-metadata,full-write-coverage,content-interpretation,numerical-correctness,hardware-execution,performance\n",
 );
 
 /// SHA-256 of [`SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "eef3ad44ab906d85e3c904b80725712d243f4bb7e16e5c1cc062e311789edcc5";
+    "6b42d97c782264bc42ef5e5a07affc5fad833b9a1f40fcfecb248ec941b4b09e";
 
 /// Queue composition, transition, or teardown error.
 #[derive(Debug)]
@@ -361,12 +364,51 @@ impl<const N: usize> ServiceCompletedQueueSessionV1<N> {
         mut self,
     ) -> Result<ServiceRecycledQueueSessionV1<N>, ServiceQueueOperationFailureV1> {
         match self.owner.queue.recycle_fixed_dispatch(self.completed) {
-            Ok(observation) => Ok(ServiceRecycledQueueSessionV1 {
-                owner: self.owner,
-                recycle: observation,
-            }),
+            Ok(observation) => match self.owner.queue.recycled_fixed_dispatch_generation() {
+                Ok(dispatch_generation) => Ok(ServiceRecycledQueueSessionV1 {
+                    owner: self.owner,
+                    recycle: observation,
+                    dispatch_generation,
+                }),
+                Err(error) => Err(quarantine(self.owner, error)),
+            },
             Err(error) => Err(quarantine(self.owner, error)),
         }
+    }
+}
+
+/// Inert coherent read request bound to one exact recycled dispatch generation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ServiceCompletedReadRequestV1 {
+    dispatch_generation: u64,
+    range: ServiceHostDispatchRangeV1,
+}
+
+/// Owned bytes copied from one generation-checked coherent dispatch range.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ServiceCompletedReadbackV1 {
+    inner: Gfx942CompletedDispatchReadbackV1,
+}
+
+impl ServiceCompletedReadbackV1 {
+    /// Returns the exact dispatch generation that authorized the copy.
+    pub const fn dispatch_generation(&self) -> u64 {
+        self.inner.dispatch_generation()
+    }
+
+    /// Returns the addressless dispatch-data ordinal.
+    pub const fn data_index(&self) -> usize {
+        self.inner.data_index()
+    }
+
+    /// Returns the byte offset within the retained allocation.
+    pub const fn offset_bytes(&self) -> u64 {
+        self.inner.offset()
+    }
+
+    /// Returns the owned byte copy.
+    pub fn bytes(&self) -> &[u8] {
+        self.inner.bytes()
     }
 }
 
@@ -375,6 +417,7 @@ impl<const N: usize> ServiceCompletedQueueSessionV1<N> {
 pub struct ServiceRecycledQueueSessionV1<const N: usize> {
     owner: ServiceQueueOwnerV1,
     recycle: Gfx942CompletionRecycleObservationV1,
+    dispatch_generation: u64,
 }
 
 impl<const N: usize> fmt::Debug for ServiceRecycledQueueSessionV1<N> {
@@ -384,6 +427,7 @@ impl<const N: usize> fmt::Debug for ServiceRecycledQueueSessionV1<N> {
             .field("packet_count", &N)
             .field("queue", &self.owner.observation())
             .field("recycle", &self.recycle)
+            .field("dispatch_generation", &self.dispatch_generation)
             .finish_non_exhaustive()
     }
 }
@@ -392,6 +436,44 @@ impl<const N: usize> ServiceRecycledQueueSessionV1<N> {
     /// Returns the exact lower-layer recycle observation.
     pub const fn recycle_observation(&self) -> Gfx942CompletionRecycleObservationV1 {
         self.recycle
+    }
+
+    /// Creates a generation-bound inert request for one coherent allocation range.
+    pub const fn completed_read_request(
+        &self,
+        range: ServiceHostDispatchRangeV1,
+    ) -> ServiceCompletedReadRequestV1 {
+        ServiceCompletedReadRequestV1 {
+            dispatch_generation: self.dispatch_generation,
+            range,
+        }
+    }
+
+    /// Copies one exact inspected writable range after completion and recycle.
+    pub fn read_completed(
+        &mut self,
+        request: ServiceCompletedReadRequestV1,
+    ) -> Result<ServiceCompletedReadbackV1, ServiceQueueErrorV1> {
+        if request.dispatch_generation != self.dispatch_generation {
+            return Err(ServiceQueueErrorV1::Kfd(
+                fe2o3_kfd::Gfx942DispatchBindingErrorV1::StaleDispatchGeneration.into(),
+            ));
+        }
+        self.owner
+            .ledger
+            .validate_range(ServiceDispatchRangeV1::HostVisible(request.range))
+            .map_err(ServiceQueueErrorV1::Allocation)?;
+        let readback = self
+            .owner
+            .queue
+            .read_recycled_fixed_dispatch_data(Gfx942CompletedDispatchReadRequestV1::new(
+                request.dispatch_generation,
+                request.range.data_index,
+                request.range.offset_bytes,
+                request.range.extent_bytes,
+            ))
+            .map_err(ServiceQueueErrorV1::Kfd)?;
+        Ok(ServiceCompletedReadbackV1 { inner: readback })
     }
 
     /// Reuses the same attached batch without rebuilding queue resources.
@@ -451,7 +533,7 @@ impl<const N: usize> ServiceRecycledQueueSessionV1<N> {
 ///
 /// Queue ring, completion-signal, event, runtime, and doorbell resources remain
 /// owned and live. Only a compatible replacement batch may consume the detached
-/// device allocations and reattach them.
+/// dispatch-data allocations and reattach them.
 #[must_use = "the unbound live queue must be rebound or quarantined"]
 pub struct ServiceQueueUnboundSessionV1 {
     owner: ServiceQueueOwnerV1,
