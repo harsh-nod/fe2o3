@@ -429,7 +429,7 @@ impl WorkerResponseV2 {
             output,
             device_library_provider,
             response_identity,
-            canonical_bytes: bytes.to_vec(),
+            canonical_bytes: copy_bytes(bytes, "decoded response canonical bytes")?,
         })
     }
 
@@ -666,7 +666,7 @@ fn encode_request(request: &WorkerRequestV2) -> Result<(Vec<u8>, [u8; 32]), Work
         return Err(WorkerProtocolError::RequestTooLarge);
     }
 
-    let mut encoded = Vec::with_capacity(total_len);
+    let mut encoded = fallible_vec(total_len, "encoded worker request")?;
     encoded.extend_from_slice(WORKER_REQUEST_MAGIC_V2);
     push_field(&mut encoded, 1, &request.request_id)?;
     push_field(&mut encoded, 2, request.llvm_build_identity.as_bytes())?;
@@ -781,7 +781,7 @@ fn decode_request(bytes: &[u8]) -> Result<WorkerRequestV2, WorkerProtocolError> 
         export_symbols: parts.export_symbols,
         final_symbols: parts.final_symbols,
         output: parts.output,
-        canonical_bytes: bytes.to_vec(),
+        canonical_bytes: copy_bytes(bytes, "decoded request canonical bytes")?,
         identity: declared_identity,
     };
     if encode_request(&request)?.0 != bytes {
@@ -821,7 +821,7 @@ fn encode_input(input: &WorkerInputV1) -> Result<Vec<u8>, WorkerProtocolError> {
     let capacity = INPUT_OVERHEAD_BYTES
         .checked_add(input.bytes().len())
         .ok_or(WorkerProtocolError::IntegerOverflow)?;
-    let mut encoded = Vec::with_capacity(capacity);
+    let mut encoded = fallible_vec(capacity, "encoded worker input")?;
     encoded.push(input.kind() as u8);
     encoded.extend_from_slice(input.identity().sha256());
     encoded.extend_from_slice(&input.identity().byte_len().to_le_bytes());
@@ -839,7 +839,7 @@ fn decode_input(bytes: &[u8]) -> Result<WorkerInputV1, WorkerProtocolError> {
     if byte_len == 0 || byte_len > MAX_WORKER_TOTAL_INPUT_BYTES {
         return Err(WorkerProtocolError::InputBytesTooLarge);
     }
-    let payload = cursor.take(byte_len)?.to_vec();
+    let payload = copy_bytes(cursor.take(byte_len)?, "decoded compiler module")?;
     cursor.finish()?;
     WorkerInputV1::from_declared(
         kind,
@@ -853,7 +853,7 @@ fn encode_inputs(inputs: &[WorkerInputV1]) -> Result<Vec<u8>, WorkerProtocolErro
         sum.checked_add(INPUT_OVERHEAD_BYTES + input.bytes().len())
             .ok_or(WorkerProtocolError::IntegerOverflow)
     })?;
-    let mut encoded = Vec::with_capacity(exact);
+    let mut encoded = fallible_vec(exact, "encoded worker inputs")?;
     push_u32(&mut encoded, inputs.len())?;
     for input in inputs {
         encoded.extend_from_slice(&encode_input(input)?);
@@ -873,7 +873,7 @@ fn decode_inputs(
     if count == 0 && !allow_empty {
         return Err(WorkerProtocolError::EmptyInput);
     }
-    let mut inputs = Vec::with_capacity(count);
+    let mut inputs = fallible_vec(count, "decoded worker input records")?;
     let mut total = 0_usize;
     for _ in 0..count {
         let kind = decode_input_kind(cursor.byte()?)?;
@@ -890,7 +890,7 @@ fn decode_inputs(
         if total > MAX_WORKER_TOTAL_INPUT_BYTES {
             return Err(WorkerProtocolError::InputBytesTooLarge);
         }
-        let payload = cursor.take(byte_len)?.to_vec();
+        let payload = copy_bytes(cursor.take(byte_len)?, "decoded provider input")?;
         inputs.push(WorkerInputV1::from_declared(
             kind,
             ContentIdentityV1::from_parts(digest, byte_len_u64),
@@ -916,7 +916,7 @@ fn encode_strings(values: &[String]) -> Result<Vec<u8>, WorkerProtocolError> {
         sum.checked_add(4 + value.len())
             .ok_or(WorkerProtocolError::IntegerOverflow)
     })?;
-    let mut encoded = Vec::with_capacity(exact);
+    let mut encoded = fallible_vec(exact, "encoded worker strings")?;
     push_u32(&mut encoded, values.len())?;
     for value in values {
         push_u32(&mut encoded, value.len())?;
@@ -953,7 +953,7 @@ fn decode_strings(
             WorkerProtocolError::TooManySymbols
         });
     }
-    let mut values = Vec::with_capacity(count);
+    let mut values = fallible_vec(count, "decoded worker strings")?;
     let mut total = 0_usize;
     for _ in 0..count {
         let len = cursor.u32()? as usize;
@@ -974,11 +974,9 @@ fn decode_strings(
                 WorkerProtocolError::TooManySymbols
             });
         }
-        values.push(
-            str::from_utf8(cursor.take(len)?)
-                .map_err(|_| WorkerProtocolError::InvalidUtf8)?
-                .to_owned(),
-        );
+        let value =
+            str::from_utf8(cursor.take(len)?).map_err(|_| WorkerProtocolError::InvalidUtf8)?;
+        values.push(copy_text(value, "decoded worker string")?);
     }
     cursor.finish()?;
     if diagnostics {
@@ -1036,7 +1034,7 @@ fn decode_provider_evidence(
     if import_count == 0 || import_count > MAX_WORKER_SYMBOLS {
         return Err(WorkerProtocolError::TooManySymbols);
     }
-    let mut import_symbols = Vec::with_capacity(import_count);
+    let mut import_symbols = fallible_vec(import_count, "decoded provider imports")?;
     let mut total_import_bytes = 0_usize;
     for _ in 0..import_count {
         let len = cursor.u32()? as usize;
@@ -1049,11 +1047,9 @@ fn decode_provider_evidence(
         if total_import_bytes > MAX_WORKER_SYMBOLS * MAX_WORKER_SYMBOL_BYTES {
             return Err(WorkerProtocolError::TooManySymbols);
         }
-        import_symbols.push(
-            str::from_utf8(cursor.take(len)?)
-                .map_err(|_| WorkerProtocolError::InvalidUtf8)?
-                .to_owned(),
-        );
+        let value =
+            str::from_utf8(cursor.take(len)?).map_err(|_| WorkerProtocolError::InvalidUtf8)?;
+        import_symbols.push(copy_text(value, "decoded provider import")?);
     }
     validate_symbols(&import_symbols)?;
 
@@ -1061,7 +1057,7 @@ fn decode_provider_evidence(
     if file_count == 0 || file_count > MAX_PROVIDER_FILES {
         return Err(WorkerProtocolError::InvalidFieldLength(8));
     }
-    let mut files = Vec::with_capacity(file_count);
+    let mut files = fallible_vec(file_count, "decoded provider files")?;
     for _ in 0..file_count {
         let len = cursor.u32()? as usize;
         let basename = text(
@@ -1135,7 +1131,7 @@ fn decode_output(
             if byte_len == 0 || byte_len > MAX_WORKER_OUTPUT_BYTES {
                 return Err(WorkerProtocolError::InvalidOutputBound);
             }
-            let payload = cursor.take(byte_len)?.to_vec();
+            let payload = copy_bytes(cursor.take(byte_len)?, "decoded worker output")?;
             cursor.finish()?;
             let identity = ContentIdentityV1::from_parts(digest, byte_len_u64);
             if !identity.matches(&payload) {
@@ -1224,7 +1220,33 @@ fn text(bytes: &[u8], max: usize, field: &'static str) -> Result<String, WorkerP
     if !value.is_ascii() || value.bytes().any(|byte| byte.is_ascii_control()) {
         return Err(WorkerProtocolError::InvalidText(field));
     }
-    Ok(value.to_owned())
+    copy_text(value, field)
+}
+
+fn fallible_vec<T>(
+    capacity: usize,
+    component: &'static str,
+) -> Result<Vec<T>, WorkerProtocolError> {
+    let mut value = Vec::new();
+    value
+        .try_reserve_exact(capacity)
+        .map_err(|_| WorkerProtocolError::AllocationFailed(component))?;
+    Ok(value)
+}
+
+fn copy_bytes(bytes: &[u8], component: &'static str) -> Result<Vec<u8>, WorkerProtocolError> {
+    let mut value = fallible_vec(bytes.len(), component)?;
+    value.extend_from_slice(bytes);
+    Ok(value)
+}
+
+fn copy_text(value: &str, component: &'static str) -> Result<String, WorkerProtocolError> {
+    let mut output = String::new();
+    output
+        .try_reserve_exact(value.len())
+        .map_err(|_| WorkerProtocolError::AllocationFailed(component))?;
+    output.push_str(value);
+    Ok(output)
 }
 
 fn one_byte(bytes: &[u8]) -> Result<u8, WorkerProtocolError> {
@@ -1377,8 +1399,141 @@ impl fmt::Display for WorkerCompilerFfiEnvelopeIdentityV2 {
 }
 
 #[cfg(test)]
+#[allow(unsafe_code)] // Test-only forwarding allocator for deterministic allocation qualification.
 mod tests {
+    use std::{
+        alloc::{GlobalAlloc, Layout, System},
+        cell::Cell,
+        ptr,
+    };
+
     use super::*;
+
+    const MAX_RECORDED_ALLOCATIONS: usize = 256;
+
+    #[derive(Clone, Copy)]
+    struct AllocationProbe {
+        enabled: bool,
+        fail_at_or_above: usize,
+        event_count: usize,
+        total_bytes: usize,
+        sizes: [usize; MAX_RECORDED_ALLOCATIONS],
+        overflowed: bool,
+    }
+
+    impl AllocationProbe {
+        const fn disabled() -> Self {
+            Self {
+                enabled: false,
+                fail_at_or_above: usize::MAX,
+                event_count: 0,
+                total_bytes: 0,
+                sizes: [0; MAX_RECORDED_ALLOCATIONS],
+                overflowed: false,
+            }
+        }
+    }
+
+    thread_local! {
+        static ALLOCATION_PROBE: Cell<AllocationProbe> = const {
+            Cell::new(AllocationProbe::disabled())
+        };
+    }
+
+    struct ForwardingProbeAllocator;
+
+    #[global_allocator]
+    static TEST_ALLOCATOR: ForwardingProbeAllocator = ForwardingProbeAllocator;
+
+    // The probe is thread-local and forwards every unselected operation to the
+    // process allocator. Tests enable it only around one synchronous decode.
+    unsafe impl GlobalAlloc for ForwardingProbeAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            if allocation_must_fail(layout.size()) {
+                return ptr::null_mut();
+            }
+            // SAFETY: this forwards the allocator contract and the exact layout.
+            let pointer = unsafe { System.alloc(layout) };
+            record_allocation(pointer, layout.size());
+            pointer
+        }
+
+        unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+            // SAFETY: this forwards the pointer and layout supplied by the caller.
+            unsafe { System.dealloc(pointer, layout) };
+        }
+
+        unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            if allocation_must_fail(new_size) {
+                return ptr::null_mut();
+            }
+            // SAFETY: this forwards the allocator contract and exact arguments.
+            let new_pointer = unsafe { System.realloc(pointer, layout, new_size) };
+            record_allocation(new_pointer, new_size);
+            new_pointer
+        }
+    }
+
+    fn allocation_must_fail(size: usize) -> bool {
+        ALLOCATION_PROBE
+            .try_with(|probe| {
+                let probe = probe.get();
+                probe.enabled && size >= probe.fail_at_or_above
+            })
+            .unwrap_or(false)
+    }
+
+    fn record_allocation(pointer: *mut u8, size: usize) {
+        if pointer.is_null() {
+            return;
+        }
+        let _ = ALLOCATION_PROBE.try_with(|probe| {
+            let mut state = probe.get();
+            if !state.enabled {
+                return;
+            }
+            if let Some(total_bytes) = state.total_bytes.checked_add(size) {
+                state.total_bytes = total_bytes;
+            } else {
+                state.overflowed = true;
+            }
+            if state.event_count < state.sizes.len() {
+                state.sizes[state.event_count] = size;
+                state.event_count += 1;
+            } else {
+                state.overflowed = true;
+            }
+            probe.set(state);
+        });
+    }
+
+    fn probe_allocations<T>(
+        fail_at_or_above: usize,
+        operation: impl FnOnce() -> T,
+    ) -> (T, AllocationProbe) {
+        ALLOCATION_PROBE.with(|probe| {
+            assert!(!probe.get().enabled, "allocation probes must not nest");
+            let mut state = AllocationProbe::disabled();
+            state.enabled = true;
+            state.fail_at_or_above = fail_at_or_above;
+            probe.set(state);
+        });
+        let guard = AllocationProbeGuard;
+        let result = operation();
+        let snapshot = ALLOCATION_PROBE.with(Cell::get);
+        drop(guard);
+        (result, snapshot)
+    }
+
+    struct AllocationProbeGuard;
+
+    impl Drop for AllocationProbeGuard {
+        fn drop(&mut self) {
+            let _ = ALLOCATION_PROBE.try_with(|probe| {
+                probe.set(AllocationProbe::disabled());
+            });
+        }
+    }
 
     fn success_response(request: &WorkerRequestV2, output: &[u8]) -> Vec<u8> {
         let mut encoded = Vec::new();
@@ -1458,6 +1613,132 @@ mod tests {
             output: WorkerOutputConstraintsV1::new(4096).unwrap(),
         })
         .unwrap()
+    }
+
+    fn maximum_payload_request() -> WorkerRequestV2 {
+        WorkerRequestV2::from_sealed_parts(SealedWorkerRequestV2Parts {
+            request_id: [0x51; 32],
+            llvm_build_identity: "llvm-v2-allocation-qualification".to_owned(),
+            worker_build_identity: "worker-v2-allocation-qualification".to_owned(),
+            worker_executable: ContentIdentityV1::from_parts([0x52; 32], 4096),
+            target: DeviceTargetV1::parse("gfx942:xnack-").unwrap(),
+            code_object_version: CodeObjectVersion::V6,
+            options: WorkerOptionsV1::new(WorkerOptimizationLevelV1::O2, true, true),
+            compiler_envelope: WorkerCompilerFfiEnvelopeIdentityV2([0x53; 32]),
+            compiler_module: WorkerInputV1::new(
+                WorkerInputKindV1::LlvmBitcode,
+                vec![0x54; MAX_WORKER_TOTAL_INPUT_BYTES],
+            )
+            .unwrap(),
+            external_providers: Vec::new(),
+            import_symbols: Vec::new(),
+            export_symbols: vec!["kernel".to_owned()],
+            final_symbols: vec!["kernel".to_owned()],
+            output: WorkerOutputConstraintsV1::new(MAX_WORKER_OUTPUT_BYTES as u64).unwrap(),
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn maximum_request_response_and_output_allocations_are_bounded_and_fallible() {
+        let request = maximum_payload_request();
+        assert_eq!(
+            request.compiler_module().bytes().len(),
+            MAX_WORKER_TOTAL_INPUT_BYTES
+        );
+        assert!(request.canonical_bytes().len() <= MAX_WORKER_REQUEST_BYTES);
+
+        let (decoded_request, request_allocations) = probe_allocations(usize::MAX, || {
+            WorkerRequestV2::decode_for_test(request.canonical_bytes())
+        });
+        let decoded_request = decoded_request.unwrap();
+        assert_eq!(decoded_request, request);
+        assert!(!request_allocations.overflowed);
+        assert!(request_allocations.event_count > 0);
+        assert!(
+            request_allocations.sizes[..request_allocations.event_count]
+                .iter()
+                .all(|size| *size <= MAX_WORKER_REQUEST_BYTES)
+        );
+        assert!(
+            request_allocations.total_bytes <= 4 * MAX_WORKER_REQUEST_BYTES + 1024 * 1024,
+            "request decode allocated {} bytes",
+            request_allocations.total_bytes
+        );
+        assert!(
+            request_allocations.sizes[..request_allocations.event_count]
+                .iter()
+                .filter(|size| **size >= MAX_WORKER_TOTAL_INPUT_BYTES)
+                .count()
+                <= 4
+        );
+        drop(decoded_request);
+
+        let (failed_request, request_failure_allocations) =
+            probe_allocations(MAX_WORKER_TOTAL_INPUT_BYTES, || {
+                WorkerRequestV2::decode_for_test(request.canonical_bytes())
+            });
+        assert_eq!(
+            failed_request,
+            Err(WorkerProtocolError::AllocationFailed(
+                "decoded compiler module"
+            ))
+        );
+        assert!(!request_failure_allocations.overflowed);
+        assert!(
+            request_failure_allocations.sizes[..request_failure_allocations.event_count]
+                .iter()
+                .all(|size| *size < MAX_WORKER_TOTAL_INPUT_BYTES)
+        );
+
+        let output = vec![0x55; MAX_WORKER_OUTPUT_BYTES];
+        let response = success_response(&request, &output);
+        assert!(response.len() <= MAX_WORKER_RESPONSE_BYTES);
+        let (decoded_response, response_allocations) = probe_allocations(usize::MAX, || {
+            WorkerResponseV2::decode_for_request(&response, &request)
+        });
+        let decoded_response = decoded_response.unwrap();
+        assert_eq!(
+            decoded_response.output().unwrap().bytes().len(),
+            MAX_WORKER_OUTPUT_BYTES
+        );
+        assert!(!response_allocations.overflowed);
+        assert!(response_allocations.event_count > 0);
+        assert!(
+            response_allocations.sizes[..response_allocations.event_count]
+                .iter()
+                .all(|size| *size <= MAX_WORKER_RESPONSE_BYTES)
+        );
+        assert!(
+            response_allocations.total_bytes <= 2 * MAX_WORKER_RESPONSE_BYTES + 1024 * 1024,
+            "response decode allocated {} bytes",
+            response_allocations.total_bytes
+        );
+        assert!(
+            response_allocations.sizes[..response_allocations.event_count]
+                .iter()
+                .filter(|size| **size >= MAX_WORKER_OUTPUT_BYTES)
+                .count()
+                <= 2
+        );
+        drop(decoded_response);
+
+        let (failed_response, response_failure_allocations) =
+            probe_allocations(MAX_WORKER_OUTPUT_BYTES, || {
+                WorkerResponseV2::decode_for_request(&response, &request)
+            });
+        assert_eq!(
+            failed_response,
+            Err(WorkerProtocolError::AllocationFailed(
+                "decoded worker output"
+            ))
+        );
+        assert!(!response_failure_allocations.overflowed);
+        assert!(
+            response_failure_allocations.sizes[..response_failure_allocations.event_count]
+                .iter()
+                .all(|size| *size < MAX_WORKER_OUTPUT_BYTES)
+        );
     }
 
     #[test]

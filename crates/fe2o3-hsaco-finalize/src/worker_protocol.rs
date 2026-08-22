@@ -617,6 +617,7 @@ pub enum WorkerProtocolError {
     InvalidResponseState,
     NonCanonicalEncoding,
     IntegerOverflow,
+    AllocationFailed(&'static str),
 }
 
 impl fmt::Display for WorkerProtocolError {
@@ -680,6 +681,12 @@ impl fmt::Display for WorkerProtocolError {
             Self::InvalidResponseState => formatter.write_str("invalid worker response state"),
             Self::NonCanonicalEncoding => formatter.write_str("noncanonical worker encoding"),
             Self::IntegerOverflow => formatter.write_str("worker message integer overflow"),
+            Self::AllocationFailed(component) => {
+                write!(
+                    formatter,
+                    "worker protocol allocation failed at {component}"
+                )
+            }
         }
     }
 }
