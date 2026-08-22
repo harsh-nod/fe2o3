@@ -17,9 +17,9 @@ use fe2o3_kfd::{
 
 /// Canonical scope and non-claims for the first service allocation owner.
 pub const SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-service-allocation-owner-r6-v1\n",
+    "profile=fe2o3-service-allocation-owner-r7-v1\n",
     "backend=checked-gfx942-xnack-minus-device,shared-kfd-vm-session\n",
-    "device=device-local-vram-hbm,linear-unmapped-mapped-or-fixed-dispatch-kfd-custody,optional-exact-host-verified-owned-image-or-bounded-memory-repeated-byte-public-device-local-initialization\n",
+    "device=device-local-vram-hbm,linear-unmapped-mapped-or-fixed-dispatch-kfd-custody,optional-exact-host-verified-owned-image-or-private-recipe-complete-safe-slice-repeated-byte-public-device-local-initialization\n",
     "host=host-visible-coherent-gtt,linear-cpu-writable-gpu-mapped-sealed-full-initialized-or-fixed-dispatch-custody\n",
     "identity=service-scoped-process-local-owner-device-vm-allocation-labels-retained-beside-private-kfd-native-tokens\n",
     "views=typed-role-kind-offset-extent-alignment,no-handle-fd-gpu-address-or-persistent-raw-pointer-accessor\n",
@@ -34,7 +34,7 @@ pub const SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "c03c379df16817376d6cd330a71ec548412d58b4ad80d7ce90ea3f963b81741c";
+    "05014e4521d5392a6df2301294bd99578100de5a8c47f65ee2e3af2d261cc531";
 
 /// Maximum live allocations owned by one service allocation session.
 const MAX_SERVICE_ALLOCATIONS_V1: usize = 32;
@@ -1397,8 +1397,8 @@ impl ServiceAllocationSessionV1 {
     }
 
     /// Allocates a device-local extent whose complete logical bytes are filled
-    /// from one bounded-memory repeated-byte recipe, read back, CPU-unmapped,
-    /// and GPU-mapped by the retained KFD session.
+    /// from one private bounded-memory repeated-byte recipe, CPU-unmapped, and
+    /// GPU-mapped by the retained KFD session without a redundant HBM readback.
     ///
     /// ```compile_fail
     /// use fe2o3_kfd::{Gfx942DeviceContentRoleV1, Gfx942RepeatedByteContentV1};
