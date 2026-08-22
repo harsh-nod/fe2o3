@@ -11,6 +11,10 @@ use crate::{
     VerificationErrors, VerifiedKernelIrModuleV1, verify_module_ref,
 };
 
+mod receipt_v1;
+
+pub use receipt_v1::*;
+
 /// A caller-supplied one-dimensional launch extent used for formal extraction.
 ///
 /// This input is not authenticated against a runtime launch. `Unknown` is
