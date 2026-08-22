@@ -5073,14 +5073,13 @@ impl<'a> FunctionLowerer<'a> {
                     ));
                 }
             }
-            OperationKind::Compare { predicate, lhs, .. } => {
+            OperationKind::Compare { lhs, .. } => {
                 let ty = self.value_type(*lhs);
                 if !ty.as_scalar().is_some_and(|scalar| {
                     scalar == ScalarType::Bool
                         || supported_integer(scalar)
                         || (scalar == ScalarType::F32
-                            && self.target == LoweringTarget::Gfx942RowSoftmaxV1
-                            && *predicate == ComparePredicate::GreaterThan)
+                            && !matches!(self.target, LoweringTarget::Baseline))
                 }) {
                     return Err(LoweringErrors::one(
                         location,
@@ -6307,6 +6306,17 @@ impl<'a> FunctionLowerer<'a> {
             }
             OperationKind::Cast { kind, value, to } => {
                 let (value_name, from) = self.value(*value);
+                if *kind == CastKind::Bitcast && llvm_type(from) == llvm_type(to) {
+                    writeln!(
+                        output,
+                        "  {} = add {} {}, 0",
+                        result_name.expect("validated result"),
+                        llvm_type(from),
+                        value_name
+                    )
+                    .unwrap();
+                    return Ok(());
+                }
                 writeln!(
                     output,
                     "  {} = {} {} {} to {}",
@@ -7532,25 +7542,11 @@ fn supported_binary(op: BinaryOp, ty: &Type, target: LoweringTarget) -> bool {
         BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply => {
             supported_integer(scalar) || scalar == ScalarType::F32
         }
-        BinaryOp::Divide
-            if scalar == ScalarType::F32 && target == LoweringTarget::Gfx942RowSoftmaxV1 =>
-        {
-            true
+        BinaryOp::Divide if scalar == ScalarType::F32 => {
+            !matches!(target, LoweringTarget::Baseline)
         }
-        BinaryOp::Divide | BinaryOp::Remainder => {
-            matches!(
-                target,
-                LoweringTarget::Gfx942ScalarGemmV1
-                    | LoweringTarget::Gfx942TiledGemmV1
-                    | LoweringTarget::Gfx942TiledGemmLdsV1
-                    | LoweringTarget::Gfx942TiledGemmLdsK32V2
-                    | LoweringTarget::Gfx942TiledGemmLdsGridV1
-                    | LoweringTarget::Gfx942TiledGemmLdsEdgesV1
-            ) && supported_integer(scalar)
-        }
-        BinaryOp::BitAnd => {
-            scalar == ScalarType::Bool && target == LoweringTarget::Gfx942TiledGemmLdsEdgesV1
-        }
+        BinaryOp::Divide | BinaryOp::Remainder => supported_integer(scalar),
+        BinaryOp::BitAnd => scalar == ScalarType::Bool || supported_integer(scalar),
         BinaryOp::BitXor => supported_integer(scalar),
         _ => false,
     }
@@ -7752,9 +7748,7 @@ fn validate_cast(
         }
         CastKind::IntegerToFloat => supported_integer(from_scalar) && to_scalar == ScalarType::F32,
         CastKind::FloatToInteger => from_scalar == ScalarType::F32 && supported_integer(to_scalar),
-        CastKind::Bitcast => {
-            from_width == to_width && llvm_scalar(from_scalar) != llvm_scalar(to_scalar)
-        }
+        CastKind::Bitcast => from_width == to_width && from_scalar != to_scalar,
         CastKind::FloatExtend | CastKind::FloatTruncate => false,
     };
     if valid {
@@ -8041,5 +8035,48 @@ mod tests {
         );
         assert_eq!(compare_opcode(&Type::Scalar(ScalarType::F32)), "fcmp");
         assert_eq!(compare_opcode(&Type::INDEX), "icmp");
+    }
+
+    #[test]
+    fn equal_width_semantic_integer_bitcasts_are_supported() {
+        let u64_ty = Type::Scalar(ScalarType::U64);
+        let index_ty = Type::Scalar(ScalarType::Index);
+
+        assert!(
+            validate_cast(
+                CastKind::Bitcast,
+                &u64_ty,
+                &index_ty,
+                LoweringTarget::Gfx942XnackMinusV1
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_cast(
+                CastKind::Bitcast,
+                &index_ty,
+                &u64_ty,
+                LoweringTarget::Gfx942XnackMinusV1
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn ordinary_scalar_arithmetic_is_selected_by_type_not_workload_name() {
+        let target = LoweringTarget::Gfx942XnackMinusV1;
+        assert!(supported_binary(BinaryOp::Divide, &Type::INDEX, target));
+        assert!(supported_binary(BinaryOp::Remainder, &Type::INDEX, target));
+        assert!(supported_binary(
+            BinaryOp::BitAnd,
+            &Type::Scalar(ScalarType::U32),
+            target
+        ));
+        assert!(supported_binary(BinaryOp::Divide, &Type::F32, target));
+        assert!(!supported_binary(
+            BinaryOp::Divide,
+            &Type::F32,
+            LoweringTarget::Baseline
+        ));
     }
 }

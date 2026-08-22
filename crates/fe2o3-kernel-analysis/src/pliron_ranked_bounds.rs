@@ -12,10 +12,10 @@ use std::{
 
 use dialect_gpu::BarrierOp;
 use dialect_kernel::{
-    AccessKindAttr, BranchOp, DimensionOp, IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp,
-    InvocationIndexOp, MAX_RANKED_MEMORY_RANK, RankedAccessOp, RankedViewOp, RankedViewType,
-    RequireEquivalentOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp, SemanticSymbolOp,
-    ranked_view_type,
+    AccessKindAttr, AnalysisSplitOp, BranchOp, DimensionOp, IndexBinaryOp, IndexConstantOp,
+    IndexLessThanBranchOp, InvocationIndexOp, MAX_RANKED_MEMORY_RANK, RankedAccessOp, RankedViewOp,
+    RankedViewType, RequireEquivalentOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp,
+    SemanticSymbolOp, ranked_view_type,
 };
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
@@ -259,6 +259,7 @@ enum RankedOperationKind {
     Dimension,
     RankedAccess,
     IndexLessThanBranch,
+    AnalysisSplit,
     Branch,
     Return,
     Barrier,
@@ -272,7 +273,7 @@ impl RankedOperationKind {
     const fn is_terminator(self) -> bool {
         matches!(
             self,
-            Self::IndexLessThanBranch | Self::Branch | Self::Return
+            Self::IndexLessThanBranch | Self::AnalysisSplit | Self::Branch | Self::Return
         )
     }
 }
@@ -292,6 +293,8 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         Some(RankedOperationKind::RankedAccess)
     } else if operation.downcast_ref::<IndexLessThanBranchOp>().is_some() {
         Some(RankedOperationKind::IndexLessThanBranch)
+    } else if operation.downcast_ref::<AnalysisSplitOp>().is_some() {
+        Some(RankedOperationKind::AnalysisSplit)
     } else if operation.downcast_ref::<BranchOp>().is_some() {
         Some(RankedOperationKind::Branch)
     } else if operation.downcast_ref::<ReturnOp>().is_some() {

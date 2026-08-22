@@ -468,6 +468,49 @@ fn dynamic_access_requires_a_dominating_exact_bound() {
 }
 
 #[test]
+fn arbitrary_control_flow_split_never_manufactures_a_bounds_fact() {
+    let view = ProductionRankedOperationV1::View {
+        result: VIEW,
+        element_width: 32,
+        writable: false,
+        shape: vec![0],
+        dynamic_extents: vec![ProductionRankedValueV1::Argument(1)],
+    };
+    let access = ProductionRankedOperationV1::Access {
+        kind: AccessKindAttr::Read,
+        view: local(VIEW),
+        indices: vec![ProductionRankedValueV1::Argument(0)],
+    };
+    let kernel = ProductionRankedKernelV1::new(
+        "arbitrary_split",
+        2,
+        vec![
+            ProductionRankedBlockV1::new(
+                vec![view],
+                ProductionRankedTerminatorV1::AnalysisSplit {
+                    first_block: 1,
+                    second_block: 2,
+                },
+            ),
+            ProductionRankedBlockV1::new(vec![access], ProductionRankedTerminatorV1::Return),
+            ProductionRankedBlockV1::new(vec![], ProductionRankedTerminatorV1::Return),
+        ],
+    )
+    .unwrap();
+    let error = compile_ranked_kernel_for_lowering_v1(
+        construction(kernel),
+        ProductionSessionLimitsV1::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedBounds(_))
+    ));
+    assert!(error.to_string().contains("error[FE2O3-BOUNDS-002]"));
+}
+
+#[test]
 fn rank_two_static_shapes_are_checked_without_gemm_semantics() {
     let row = ProductionRankedValueIdV1::new(1);
     let column = ProductionRankedValueIdV1::new(2);

@@ -199,11 +199,13 @@ fn rejects_aliasing_tiles_alignment_drift_and_barrier_removal() {
 }
 
 #[test]
-fn generic_exact_target_lowering_does_not_bypass_the_slice_admission() {
-    let error = lower_kernel_to_gfx942_xnack_minus_llvm_ir(
+fn generic_exact_target_lowering_selects_integer_ops_without_workload_knowledge() {
+    let llvm = lower_kernel_to_gfx942_xnack_minus_llvm_ir(
         &tiled_gemm_lds_v1_module(),
         &TILED_GEMM_LDS_V1_KERNEL_ID.into(),
     )
-    .expect_err("generic exact-target lowering must reject LDS GEMM index div/rem");
-    assert!(error.to_string().contains("does not lower Remainder"));
+    .expect("generic gfx942 lowering selects ordinary integer operations by type");
+    assert!(llvm.contains("urem i64"));
+    assert!(llvm.contains("udiv i64"));
+    assert!(llvm.contains("llvm.amdgcn.mfma.f32.16x16x16bf16.1k"));
 }

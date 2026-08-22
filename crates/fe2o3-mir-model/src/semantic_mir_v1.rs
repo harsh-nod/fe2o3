@@ -4719,6 +4719,13 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         output_space: SemanticDisjointIndexSpaceV1,
         offset: u64,
     },
+    /// Returns the runtime element extent of a disjoint mutable slice.
+    DisjointSliceLen {
+        disjoint_slice: SemanticTypeIdV1,
+        element: SemanticTypeIdV1,
+        raw_index: SemanticTypeIdV1,
+        index_space: SemanticDisjointIndexSpaceV1,
+    },
     /// Bounds-checks one witness-indexed mutable access to `element`.
     DisjointSliceGetMut {
         disjoint_slice: SemanticTypeIdV1,
@@ -6233,6 +6240,11 @@ fn record_intrinsic_capability_claims(
             index_space,
             ..
         } => claims.claim_mapping(index_witness, index_space),
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceLen {
+            disjoint_slice,
+            index_space,
+            ..
+        } => claims.claim_mapping(disjoint_slice, index_space),
         SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
             disjoint_slice,
             index_witness,
@@ -6497,6 +6509,22 @@ fn compiler_intrinsic_signature_matches(
                     raw_index,
                 )
                 && checked_mutable_access_result_matches(request, output, element)
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceLen {
+            disjoint_slice,
+            element,
+            raw_index,
+            ..
+        } => {
+            inputs.len() == 1
+                && output == raw_index
+                && shared_reference_to(request, inputs[0], disjoint_slice)
+                && exclusive_disjoint_slice_type_matches(
+                    request,
+                    disjoint_slice,
+                    element,
+                    raw_index,
+                )
         }
         SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut {
             disjoint_slice,
@@ -10845,11 +10873,16 @@ fn validate_place(
                 if !is_unsigned_integer_type(context.request, index_type) {
                     return invalid_type_operation(SemanticTypeOperationV1::Projection, location);
                 }
-                let SemanticTypeShapeV1::Array { element, .. } = type_shape(context, current_type)
-                else {
-                    return invalid_type_operation(SemanticTypeOperationV1::Projection, location);
-                };
-                *element
+                match type_shape(context, current_type) {
+                    SemanticTypeShapeV1::Array { element, .. }
+                    | SemanticTypeShapeV1::Slice { element } => *element,
+                    _ => {
+                        return invalid_type_operation(
+                            SemanticTypeOperationV1::Projection,
+                            location,
+                        );
+                    }
+                }
             }
             SemanticProjectionKindV1::ConstantIndex { minimum_length, .. } => {
                 let SemanticTypeShapeV1::Array { element, length } =
@@ -12020,6 +12053,16 @@ fn enqueue_compiler_intrinsic_type_references(
         } => {
             pending.push_back(disjoint_slice);
             pending.push_back(index_witness);
+            pending.push_back(element);
+            pending.push_back(raw_index);
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceLen {
+            disjoint_slice,
+            element,
+            raw_index,
+            ..
+        } => {
+            pending.push_back(disjoint_slice);
             pending.push_back(element);
             pending.push_back(raw_index);
         }
@@ -13435,6 +13478,18 @@ fn encode_compiler_intrinsic_operation(
             encode_disjoint_index_space(writer, index_space)?;
             writer.u64(lanes_per_block)?;
             writer.u64(elements_per_lane)
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceLen {
+            disjoint_slice,
+            element,
+            raw_index,
+            index_space,
+        } => {
+            writer.u8(19)?;
+            writer.u32(disjoint_slice.0)?;
+            writer.u32(element.0)?;
+            writer.u32(raw_index.0)?;
+            encode_disjoint_index_space(writer, index_space)
         }
     }
 }

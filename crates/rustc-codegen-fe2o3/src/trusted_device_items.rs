@@ -41,8 +41,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x06, 0xa0, 0x6a, 0x6a, 0x83, 0x2a, 0x26, 0x0e, 0x83, 0x34, 0x9d, 0x31, 0x81, 0x62, 0xed, 0x72,
-    0x76, 0x91, 0xe9, 0x5a, 0x53, 0xfc, 0xb5, 0xa6, 0x0b, 0xc2, 0x8c, 0x41, 0x4b, 0x10, 0x24, 0xa6,
+    0xa3, 0x37, 0x2b, 0xf8, 0xa2, 0x64, 0x89, 0x68, 0x8c, 0xb5, 0x4d, 0x3f, 0xdd, 0x18, 0x70, 0xc0,
+    0xcd, 0xc9, 0x48, 0x56, 0x11, 0x33, 0x9c, 0xa0, 0x16, 0x26, 0xa4, 0xd5, 0xf5, 0xa8, 0x88, 0x0f,
 ];
 #[allow(
     dead_code,
@@ -79,8 +79,8 @@ const REVIEWED_GENERAL_GEMM_PROOF_DEFINITION_SOURCE_V1: [u8; 32] = [
 // Portable semantic identity of the reviewed `fe2o3_device::DisjointSlice`
 // definition and reference source closure used by the store signatures.
 const REVIEWED_GENERAL_GEMM_DISJOINT_SLICE_DEPENDENCY_V1: [u8; 32] = [
-    0x4f, 0x8f, 0xaa, 0x14, 0x66, 0x44, 0x55, 0x88, 0x8e, 0x6b, 0x4f, 0x5f, 0xea, 0xf0, 0xfc, 0xa5,
-    0x5b, 0xbc, 0xeb, 0x03, 0x5c, 0x2d, 0x5b, 0x6d, 0x0e, 0xcc, 0xd1, 0x2b, 0x63, 0xa2, 0xca, 0x2f,
+    0xf3, 0x4f, 0x2d, 0xa5, 0x68, 0x64, 0xfc, 0x05, 0x62, 0x46, 0xdc, 0xf1, 0xe1, 0x22, 0xa3, 0xbf,
+    0x58, 0x64, 0x9a, 0x81, 0x70, 0xf0, 0xcf, 0x69, 0xf7, 0x1d, 0x17, 0x69, 0xb2, 0x3a, 0x6c, 0xa7,
 ];
 
 #[cfg(test)]
@@ -440,6 +440,18 @@ pub(crate) enum TrustedDeviceItem {
     DynamicLdsExactCurrent,
     Invocation3D,
     Invocation3DCurrent,
+    ThreadIndexX,
+    ThreadIndexY,
+    ThreadIndexZ,
+    WorkgroupIndexX,
+    WorkgroupIndexY,
+    WorkgroupIndexZ,
+    WorkgroupDimensionX,
+    WorkgroupDimensionY,
+    WorkgroupDimensionZ,
+    GridDimensionX,
+    GridDimensionY,
+    GridDimensionZ,
     ThreadIndex,
     DisjointIndex,
     ShiftedIndexSpace,
@@ -545,6 +557,66 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::Invocation3DCurrent,
         "fe2o3_device_invocation_3d_current",
         "fe2o3_device::Invocation3D::current",
+    ),
+    (
+        TrustedDeviceItem::ThreadIndexX,
+        "fe2o3_device_thread_index_x_v1",
+        "fe2o3_device::thread::thread_idx_x",
+    ),
+    (
+        TrustedDeviceItem::ThreadIndexY,
+        "fe2o3_device_thread_index_y_v1",
+        "fe2o3_device::thread::thread_idx_y",
+    ),
+    (
+        TrustedDeviceItem::ThreadIndexZ,
+        "fe2o3_device_thread_index_z_v1",
+        "fe2o3_device::thread::thread_idx_z",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupIndexX,
+        "fe2o3_device_workgroup_index_x_v1",
+        "fe2o3_device::thread::block_idx_x",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupIndexY,
+        "fe2o3_device_workgroup_index_y_v1",
+        "fe2o3_device::thread::block_idx_y",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupIndexZ,
+        "fe2o3_device_workgroup_index_z_v1",
+        "fe2o3_device::thread::block_idx_z",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupDimensionX,
+        "fe2o3_device_workgroup_dimension_x_v1",
+        "fe2o3_device::thread::block_dim_x",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupDimensionY,
+        "fe2o3_device_workgroup_dimension_y_v1",
+        "fe2o3_device::thread::block_dim_y",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupDimensionZ,
+        "fe2o3_device_workgroup_dimension_z_v1",
+        "fe2o3_device::thread::block_dim_z",
+    ),
+    (
+        TrustedDeviceItem::GridDimensionX,
+        "fe2o3_device_grid_dimension_x_v1",
+        "fe2o3_device::thread::grid_dim_x",
+    ),
+    (
+        TrustedDeviceItem::GridDimensionY,
+        "fe2o3_device_grid_dimension_y_v1",
+        "fe2o3_device::thread::grid_dim_y",
+    ),
+    (
+        TrustedDeviceItem::GridDimensionZ,
+        "fe2o3_device_grid_dimension_z_v1",
+        "fe2o3_device::thread::grid_dim_z",
     ),
     (
         TrustedDeviceItem::ThreadIndex,
@@ -1472,6 +1544,18 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::DynamicLdsExactCurrent
             | TrustedDeviceItem::Invocation3D
             | TrustedDeviceItem::Invocation3DCurrent
+            | TrustedDeviceItem::ThreadIndexX
+            | TrustedDeviceItem::ThreadIndexY
+            | TrustedDeviceItem::ThreadIndexZ
+            | TrustedDeviceItem::WorkgroupIndexX
+            | TrustedDeviceItem::WorkgroupIndexY
+            | TrustedDeviceItem::WorkgroupIndexZ
+            | TrustedDeviceItem::WorkgroupDimensionX
+            | TrustedDeviceItem::WorkgroupDimensionY
+            | TrustedDeviceItem::WorkgroupDimensionZ
+            | TrustedDeviceItem::GridDimensionX
+            | TrustedDeviceItem::GridDimensionY
+            | TrustedDeviceItem::GridDimensionZ
             | TrustedDeviceItem::Gfx942CollectivesContext
             | TrustedDeviceItem::Gfx942CollectivesCurrent
             | TrustedDeviceItem::Gfx942StaticLdsU32x256
@@ -2678,7 +2762,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("06a06a6a832a260e83349d318162ed727691e95a53fcb5a60bc28c414b1024a6")
+            digest("a3372bf8a26489688cb54d3fdd1870c0cdc9485611339ca01626a4d5f5a8880f")
         );
 
         let definition = semantic_definition(
@@ -3344,6 +3428,18 @@ mod tests {
             TrustedDeviceItem::DynamicLdsExactCurrent,
             TrustedDeviceItem::Invocation3D,
             TrustedDeviceItem::Invocation3DCurrent,
+            TrustedDeviceItem::ThreadIndexX,
+            TrustedDeviceItem::ThreadIndexY,
+            TrustedDeviceItem::ThreadIndexZ,
+            TrustedDeviceItem::WorkgroupIndexX,
+            TrustedDeviceItem::WorkgroupIndexY,
+            TrustedDeviceItem::WorkgroupIndexZ,
+            TrustedDeviceItem::WorkgroupDimensionX,
+            TrustedDeviceItem::WorkgroupDimensionY,
+            TrustedDeviceItem::WorkgroupDimensionZ,
+            TrustedDeviceItem::GridDimensionX,
+            TrustedDeviceItem::GridDimensionY,
+            TrustedDeviceItem::GridDimensionZ,
             TrustedDeviceItem::ThreadIndex,
             TrustedDeviceItem::DisjointIndex,
             TrustedDeviceItem::ShiftedIndexSpace,

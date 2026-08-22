@@ -1834,6 +1834,18 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | TrustedDeviceItem::WorkgroupLdsScopeCurrent
                     | TrustedDeviceItem::DynamicLdsExactCurrent
                     | TrustedDeviceItem::Invocation3DCurrent
+                    | TrustedDeviceItem::ThreadIndexX
+                    | TrustedDeviceItem::ThreadIndexY
+                    | TrustedDeviceItem::ThreadIndexZ
+                    | TrustedDeviceItem::WorkgroupIndexX
+                    | TrustedDeviceItem::WorkgroupIndexY
+                    | TrustedDeviceItem::WorkgroupIndexZ
+                    | TrustedDeviceItem::WorkgroupDimensionX
+                    | TrustedDeviceItem::WorkgroupDimensionY
+                    | TrustedDeviceItem::WorkgroupDimensionZ
+                    | TrustedDeviceItem::GridDimensionX
+                    | TrustedDeviceItem::GridDimensionY
+                    | TrustedDeviceItem::GridDimensionZ
                     | TrustedDeviceItem::DisjointSliceLen
                     | TrustedDeviceItem::ThreadIndexIntoDisjoint
                     | TrustedDeviceItem::ThreadIndexCheckedShift

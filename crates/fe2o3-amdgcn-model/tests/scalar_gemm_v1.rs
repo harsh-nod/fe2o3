@@ -134,28 +134,22 @@ fn lowering_rejects_reordered_or_contraction_shaped_arithmetic_and_extra_roots()
 }
 
 #[test]
-fn generic_lowering_still_rejects_integer_divide_and_remainder() {
-    fn assert_all_generic_entries_reject(module: &Module, operation: &str) {
+fn generic_gfx942_lowering_supports_integer_divide_and_remainder_by_type() {
+    fn assert_gfx942_accepts(module: &Module, opcode: &str) {
         let kernel = KernelId::new(SCALAR_GEMM_V1_KERNEL_ID);
-        let errors = [
-            fe2o3_amdgcn_model::lower_device_module_to_gfx942_xnack_minus_llvm_ir(module)
-                .unwrap_err(),
+        let outputs = [
+            fe2o3_amdgcn_model::lower_device_module_to_gfx942_xnack_minus_llvm_ir(module).unwrap(),
             fe2o3_amdgcn_model::lower_kernel_to_gfx942_xnack_minus_llvm_ir(module, &kernel)
-                .unwrap_err(),
+                .unwrap(),
         ];
-        for error in errors {
-            assert!(
-                error
-                    .to_string()
-                    .contains(&format!("does not lower {operation}")),
-                "{error}"
-            );
+        for output in outputs {
+            assert!(output.contains(opcode), "missing {opcode} in:\n{output}");
         }
         assert!(fe2o3_amdgcn_model::lower_compiler_module_to_llvm_ir(module).is_err());
         assert!(fe2o3_amdgcn_model::lower_kernel_to_llvm_ir(module, &kernel).is_err());
     }
 
-    assert_all_generic_entries_reject(&scalar_gemm_v1_module(), "Divide");
+    assert_gfx942_accepts(&scalar_gemm_v1_module(), "udiv i64");
 
     let mut remainder_only = scalar_gemm_v1_module();
     remainder_only.functions[0].body.as_mut().unwrap().blocks[1].operations[0].kind =
@@ -164,7 +158,7 @@ fn generic_lowering_still_rejects_integer_divide_and_remainder() {
             lhs: ValueId(6),
             rhs: ValueId(8),
         };
-    assert_all_generic_entries_reject(&remainder_only, "Remainder");
+    assert_gfx942_accepts(&remainder_only, "urem i64");
 }
 
 #[test]

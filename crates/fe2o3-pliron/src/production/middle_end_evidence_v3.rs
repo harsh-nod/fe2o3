@@ -1154,6 +1154,14 @@ fn hash_ranked_terminator(digest: &mut Sha256, terminator: &ProductionRankedTerm
             digest.update(true_block.to_le_bytes());
             digest.update(false_block.to_le_bytes());
         }
+        ProductionRankedTerminatorV1::AnalysisSplit {
+            first_block,
+            second_block,
+        } => {
+            digest.update([4]);
+            digest.update(first_block.to_le_bytes());
+            digest.update(second_block.to_le_bytes());
+        }
         ProductionRankedTerminatorV1::Branch { target } => {
             digest.update([2]);
             digest.update(target.to_le_bytes());

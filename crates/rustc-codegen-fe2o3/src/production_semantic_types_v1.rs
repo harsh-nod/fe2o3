@@ -732,7 +732,11 @@ fn construct_layout_v1<'tcx>(
         layout.is_uninhabited(),
         layout.max_repr_align.map(|alignment| alignment.bytes()),
         layout.unadjusted_abi_align.bytes(),
-        layout.randomization_seed.as_u64(),
+        if matches!(shape, SemanticTypeShapeV1::Slice { .. }) {
+            0
+        } else {
+            layout.randomization_seed.as_u64()
+        },
         details,
     )
     .map_err(|error| context.schema(error))

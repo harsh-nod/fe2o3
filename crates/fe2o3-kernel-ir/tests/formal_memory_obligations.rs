@@ -938,6 +938,21 @@ fn calls_and_unknown_launches_fail_closed() {
 }
 
 #[test]
+fn registered_diagnostic_intrinsics_do_not_make_formal_memory_incomplete() {
+    let trap = AmdGpuDiagnosticOperation::Trap;
+    let mut module = module_with_kernel(vec![], vec![trap.operation(None)], dynamic_1d());
+    module.functions.push(trap.declaration());
+
+    let analysis = analyze(&module, 8);
+    assert!(matches!(
+        analysis,
+        FormalMemoryObligationAnalysis::Complete(_)
+    ));
+    assert!(analysis.incomplete_reasons().is_empty());
+    assert!(analysis.obligations().accesses().is_empty());
+}
+
+#[test]
 fn unknown_and_32_bit_index_widths_never_complete() {
     let module = exact_fill_module();
     for width in [FormalIndexWidth::Unknown, FormalIndexWidth::Bits32] {

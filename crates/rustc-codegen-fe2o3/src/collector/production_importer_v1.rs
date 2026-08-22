@@ -15,7 +15,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnsafeAssemblyDeclarationV1,
     SemanticUnsafeAssemblyTargetV1, SemanticWorkgroupDimensionsV1,
 };
-use rustc_middle::ty::{Instance, Ty, TyCtxt, TyKind};
+use rustc_middle::ty::{Instance, Ty, TyCtxt, TyKind, UintTy};
 use rustc_span::sym;
 
 use super::{
@@ -779,6 +779,36 @@ fn terminal_operation_v1<'tcx>(
     let rust_inputs = signature.inputs();
     let rust_output = signature.output();
     match expansion {
+        ProductionTerminalExpansionV1::ThreadIndex(axis)
+            if inputs.is_empty()
+                && rust_inputs.is_empty()
+                && matches!(rust_output.kind(), TyKind::Uint(UintTy::U32)) =>
+        {
+            Ok(SemanticCompilerIntrinsicOperationV1::ThreadIndex(axis))
+        }
+        ProductionTerminalExpansionV1::WorkgroupIndex(axis)
+            if inputs.is_empty()
+                && rust_inputs.is_empty()
+                && matches!(rust_output.kind(), TyKind::Uint(UintTy::U32)) =>
+        {
+            Ok(SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(axis))
+        }
+        ProductionTerminalExpansionV1::WorkgroupDimension(axis)
+            if inputs.is_empty()
+                && rust_inputs.is_empty()
+                && matches!(rust_output.kind(), TyKind::Uint(UintTy::U32)) =>
+        {
+            Ok(SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(
+                axis,
+            ))
+        }
+        ProductionTerminalExpansionV1::GridDimension(axis)
+            if inputs.is_empty()
+                && rust_inputs.is_empty()
+                && matches!(rust_output.kind(), TyKind::Uint(UintTy::U32)) =>
+        {
+            Ok(SemanticCompilerIntrinsicOperationV1::GridDimension(axis))
+        }
         ProductionTerminalExpansionV1::WorkgroupBarrier
             if inputs.is_empty()
                 && rust_inputs.is_empty()
@@ -915,6 +945,22 @@ fn terminal_operation_v1<'tcx>(
                 false,
             )
         }
+        ProductionTerminalExpansionV1::DisjointSliceLen
+            if inputs.len() == 1 && rust_inputs.len() == 1 =>
+        {
+            let (_, index_space) = rust_reference_pointee_v1(rust_inputs[0])
+                .and_then(|ty| rust_disjoint_slice_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("terminal disjoint-slice len"))?;
+            let disjoint_slice = pointer_pointee_v1(types, inputs[0])?;
+            let element_pointer = aggregate_field_v1(types, disjoint_slice, 0)?;
+            let element = pointer_pointee_v1(types, element_pointer)?;
+            Ok(SemanticCompilerIntrinsicOperationV1::DisjointSliceLen {
+                disjoint_slice,
+                element,
+                raw_index: output,
+                index_space,
+            })
+        }
         ProductionTerminalExpansionV1::DisjointSliceGetMut
             if inputs.len() == 2 && rust_inputs.len() == 2 =>
         {
@@ -1042,12 +1088,17 @@ fn terminal_operation_v1<'tcx>(
                 },
             )
         }
-        ProductionTerminalExpansionV1::ThreadIndex1d
+        ProductionTerminalExpansionV1::ThreadIndex(_)
+        | ProductionTerminalExpansionV1::WorkgroupIndex(_)
+        | ProductionTerminalExpansionV1::WorkgroupDimension(_)
+        | ProductionTerminalExpansionV1::GridDimension(_)
+        | ProductionTerminalExpansionV1::ThreadIndex1d
         | ProductionTerminalExpansionV1::ThreadIndexGet
         | ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint
         | ProductionTerminalExpansionV1::ThreadIndexCheckedShift
         | ProductionTerminalExpansionV1::DisjointIndexGet
         | ProductionTerminalExpansionV1::DisjointIndexCheckedShift
+        | ProductionTerminalExpansionV1::DisjointSliceLen
         | ProductionTerminalExpansionV1::DisjointSliceGetMut
         | ProductionTerminalExpansionV1::DisjointSliceGetDisjointMut
         | ProductionTerminalExpansionV1::GridLeaderCurrent
@@ -1310,6 +1361,43 @@ const fn terminal_operation_tag_v1(
 ) -> u8 {
     use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1;
     match expansion {
+        ProductionTerminalExpansionV1::ThreadIndex(
+            fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1::X,
+        ) => 13,
+        ProductionTerminalExpansionV1::ThreadIndex(
+            fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1::Y,
+        ) => 14,
+        ProductionTerminalExpansionV1::ThreadIndex(
+            fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1::Z,
+        ) => 15,
+        ProductionTerminalExpansionV1::WorkgroupIndex(
+            fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1::X,
+        ) => 16,
+        ProductionTerminalExpansionV1::WorkgroupIndex(
+            fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1::Y,
+        ) => 17,
+        ProductionTerminalExpansionV1::WorkgroupIndex(
+            fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1::Z,
+        ) => 18,
+        ProductionTerminalExpansionV1::WorkgroupDimension(
+            fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1::X,
+        ) => 19,
+        ProductionTerminalExpansionV1::WorkgroupDimension(
+            fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1::Y,
+        ) => 20,
+        ProductionTerminalExpansionV1::WorkgroupDimension(
+            fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1::Z,
+        ) => 21,
+        ProductionTerminalExpansionV1::GridDimension(
+            fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1::X,
+        ) => 22,
+        ProductionTerminalExpansionV1::GridDimension(
+            fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1::Y,
+        ) => 23,
+        ProductionTerminalExpansionV1::GridDimension(
+            fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1::Z,
+        ) => 24,
+        ProductionTerminalExpansionV1::DisjointSliceLen => 25,
         ProductionTerminalExpansionV1::ThreadIndex1d => 0,
         ProductionTerminalExpansionV1::ThreadIndexGet => 1,
         ProductionTerminalExpansionV1::DisjointSliceGetMut => 2,

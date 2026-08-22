@@ -884,6 +884,45 @@ impl Verify for IndexLessThanBranchOp {
     }
 }
 
+/// Target-neutral two-way split used when safety analysis retains control-flow
+/// topology but intentionally does not claim a predicate fact.
+#[pliron_op(
+    name = "kernel.analysis_split",
+    format,
+    interfaces = [IsTerminatorInterface, NResultsInterface<0>, NRegionsInterface<0>]
+)]
+pub struct AnalysisSplitOp;
+
+impl AnalysisSplitOp {
+    pub fn new(
+        context: &mut Context,
+        first_successor: Ptr<pliron::basic_block::BasicBlock>,
+        second_successor: Ptr<pliron::basic_block::BasicBlock>,
+    ) -> Self {
+        Self::from_operation(Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![],
+            vec![],
+            vec![first_successor, second_successor],
+            0,
+        ))
+    }
+}
+
+impl Verify for AnalysisSplitOp {
+    fn verify(&self, context: &Context) -> PlironResult<()> {
+        verify_no_regions_results_successors(self, context, 0, 2)?;
+        if self.get_operation().deref(context).get_num_operands() != 0 {
+            return verify_err!(
+                self.loc(context),
+                RankedMemoryError::MalformedPayload("kernel.analysis_split cannot carry operands")
+            );
+        }
+        Ok(())
+    }
+}
+
 /// Unconditional target-neutral branch.
 #[pliron_op(
     name = "kernel.br",
