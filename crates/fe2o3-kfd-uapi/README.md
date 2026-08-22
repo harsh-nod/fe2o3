@@ -30,6 +30,12 @@ That manifest composes with R1 by including its exact schema ID and digest,
 then binds the active KFD header and GPUVM implementation provenance, target,
 package, allocation flags and profiles, layouts, and request numbers.
 
+CPU-initializable device-local storage is an additive exact schema,
+`KFD_PUBLIC_DEVICE_MEMORY_SCHEMA_MANIFEST`. It composes the unchanged gfx942
+device-memory schema and admits only `VRAM | PUBLIC | WRITABLE`
+(`0xa0000001`). The typed flag proves only review of the wire value; it grants
+no allocation, CPU mapping, content, or GPU publication authority.
+
 The compute-AQL queue records are bound by a third, independently named
 KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST under schema ID
 linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v1, with SHA-256
