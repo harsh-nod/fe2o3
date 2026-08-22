@@ -4,15 +4,18 @@ use fe2o3_aql::{
     AMD_SIGNAL_VALUE_COMPLETE_V1, AMD_SIGNAL_VALUE_PENDING_V1,
     AQL_BATCH_RESERVATION_MODEL_MANIFEST_SHA256_V1, AQL_BATCH_RESERVATION_MODEL_MANIFEST_V1,
     AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_BYTES_V1, AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_V1,
-    AQL_DISPATCH_ABI_SCHEMA_MANIFEST_V1, AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
-    AQL_MAX_BATCH_PACKETS_V1, AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1,
-    AmdBusyCompletionSignalV1, AqlAddressObservationError, AqlCompletionObservationV1,
-    AqlDispatchGeometryV1, AqlDispatchPacketError, AqlGeometryError, AqlKernelDispatchPacketV1,
+    AQL_DISPATCH_ABI_SCHEMA_MANIFEST_V1, AQL_FIXED_BATCH_MODEL_MANIFEST_SHA256_V2,
+    AQL_FIXED_BATCH_MODEL_MANIFEST_V2, AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
+    AQL_MAX_BATCH_PACKETS_V1, AQL_MAX_FIXED_BATCH_PACKETS_V2,
+    AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1, AmdBusyCompletionSignalV1,
+    AqlAddressObservationError, AqlCompletionObservationV1, AqlDispatchGeometryV1,
+    AqlDispatchPacketError, AqlGeometryError, AqlKernelDispatchPacketV1,
     AqlPacketBatchPublicationTargetV1, AqlPacketPublicationTargetV1,
     AqlPreparedKernelDispatchBatchErrorV1, AqlPreparedKernelDispatchBatchV1,
-    AqlPreparedKernelDispatchV1, AqlRingCapacityError, AqlRingCapacityV1, AqlRingReservationError,
-    AqlSingleProducerRingModelV1, ObservedGpuAddressV1, classify_acquired_completion_value_v1,
-    encode_pending_completion_signal_bytes_v1, initialize_pending_completion_signal_bytes_v1,
+    AqlPreparedKernelDispatchBatchV2, AqlPreparedKernelDispatchV1, AqlRingCapacityError,
+    AqlRingCapacityV1, AqlRingReservationError, AqlSingleProducerRingModelV1, ObservedGpuAddressV1,
+    classify_acquired_completion_value_v1, encode_pending_completion_signal_bytes_v1,
+    initialize_pending_completion_signal_bytes_v1,
 };
 use sha2::{Digest, Sha256};
 
@@ -23,6 +26,17 @@ fn schema_digest_is_frozen() {
     assert_eq!(
         digest.as_slice(),
         AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_BYTES_V1
+    );
+}
+
+#[test]
+fn fixed_batch_v2_is_additive_and_frozen() {
+    let digest = Sha256::digest(AQL_FIXED_BATCH_MODEL_MANIFEST_V2);
+    assert_eq!(hex(&digest), AQL_FIXED_BATCH_MODEL_MANIFEST_SHA256_V2);
+    assert_eq!(AQL_MAX_BATCH_PACKETS_V1, 256);
+    assert_eq!(AQL_MAX_FIXED_BATCH_PACKETS_V2, 1024);
+    assert!(
+        AQL_FIXED_BATCH_MODEL_MANIFEST_V2.contains(AQL_BATCH_RESERVATION_MODEL_MANIFEST_SHA256_V1)
     );
 }
 
@@ -147,6 +161,38 @@ fn prepared_batch_rejects_counts_outside_the_reviewed_bound() {
             AqlPreparedKernelDispatchBatchErrorV1::PacketCountExceedsReviewedMaximum {
                 requested: 257,
                 maximum: 256,
+            }
+        )
+    );
+}
+
+#[test]
+fn fixed_batch_v2_admits_1024_with_one_two_phase_publication() {
+    let batch =
+        AqlPreparedKernelDispatchBatchV2::<1024>::try_from_packets(core::array::from_fn(|_| {
+            prepared_packet()
+        }))
+        .unwrap();
+    assert_eq!(batch.packet_count(), 1024);
+    let mut target = BatchCaptureTarget::default();
+    batch.publish_with(&mut target).unwrap();
+    assert_eq!(target.events.len(), 2048);
+    assert!(matches!(target.events[0], BatchEvent::Body(0)));
+    assert!(matches!(target.events[1023], BatchEvent::Body(1023)));
+    assert!(matches!(target.events[1024], BatchEvent::Header(0, 0x1402)));
+    assert!(matches!(
+        target.events[2047],
+        BatchEvent::Header(1023, 0x1402)
+    ));
+
+    assert_eq!(
+        AqlPreparedKernelDispatchBatchV2::<1025>::try_from_packets(core::array::from_fn(|_| {
+            prepared_packet()
+        })),
+        Err(
+            AqlPreparedKernelDispatchBatchErrorV1::PacketCountExceedsReviewedMaximum {
+                requested: 1025,
+                maximum: 1024,
             }
         )
     );
@@ -528,6 +574,49 @@ fn maximum_batch_and_last_nonoverflowing_counter_are_admitted() {
     assert_eq!(reservation.last_packet_id(), u64::MAX - 1);
     assert_eq!(reservation.next_write(), u64::MAX);
     assert_eq!(last.write(), u64::MAX);
+}
+
+#[test]
+fn fixed_batch_v2_reservation_is_bounded_by_64k_ring_and_checked_arithmetic() {
+    let capacity = AqlRingCapacityV1::from_ring_bytes(65_536).unwrap();
+    let mut model = AqlSingleProducerRingModelV1::new(capacity, 777, 777).unwrap();
+    assert_eq!(
+        model.reserve_batch(777, 257).unwrap_err(),
+        AqlRingReservationError::PacketCountExceedsReviewedMaximum {
+            requested: 257,
+            maximum: 256,
+        }
+    );
+    let reservation = model
+        .reserve_fixed_batch_v2(777, AQL_MAX_FIXED_BATCH_PACKETS_V2)
+        .unwrap();
+    assert_eq!(reservation.packet_count(), 1024);
+    assert_eq!(reservation.first_packet_id(), 777);
+    assert_eq!(reservation.last_packet_id(), 1800);
+    assert_eq!(reservation.next_write(), 1801);
+    assert_eq!(reservation.entries().len(), 1024);
+
+    let mut too_many = AqlSingleProducerRingModelV1::new(capacity, 0, 0).unwrap();
+    assert_eq!(
+        too_many
+            .reserve_fixed_batch_v2(0, AQL_MAX_FIXED_BATCH_PACKETS_V2 + 1)
+            .unwrap_err(),
+        AqlRingReservationError::PacketCountExceedsReviewedMaximum {
+            requested: 1025,
+            maximum: 1024,
+        }
+    );
+
+    let mut exhausted =
+        AqlSingleProducerRingModelV1::new(capacity, u64::MAX - 1023, u64::MAX - 1023).unwrap();
+    let before = exhausted.write();
+    assert_eq!(
+        exhausted
+            .reserve_fixed_batch_v2(u64::MAX - 1023, 1024)
+            .unwrap_err(),
+        AqlRingReservationError::WriteCounterExhausted
+    );
+    assert_eq!(exhausted.write(), before);
 }
 
 #[derive(Default)]
