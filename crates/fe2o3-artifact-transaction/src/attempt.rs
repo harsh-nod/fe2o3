@@ -5,6 +5,8 @@ use std::str::FromStr;
 
 use sha2::{Digest as _, Sha256};
 
+use crate::{WorkerV3PublicationBindingErrorV1, WorkerV3PublicationBindingV1};
+
 const ATTEMPT_MAGIC: &[u8] = b"FE2O3-ATTEMPTS-V1\0";
 const MAX_ATTEMPT_RECORDS: usize = 1024;
 pub(crate) const MAX_ATTEMPT_BYTES: usize = 1024 * 1024;
@@ -18,10 +20,16 @@ const BACKEND_RECEIPT_PROVENANCE_V1: u8 = 2;
 const BACKEND_RECEIPT_PENDING_PROVENANCE_V1: u8 = 3;
 const BACKEND_RECEIPT_PROVENANCE_V2: u8 = 4;
 const BACKEND_RECEIPT_PENDING_PROVENANCE_V2: u8 = 5;
+const BACKEND_RECEIPT_PROVENANCE_V3: u8 = 6;
+const BACKEND_RECEIPT_PENDING_PROVENANCE_V3: u8 = 7;
 const BACKEND_PROVENANCE_RECEIPT_BYTES_V1: usize = 7 * 32;
 pub(crate) const COMPILER_CLOSURE_BYTES_V2: usize = (6 * 32) + 2 + 32;
 const BACKEND_PROVENANCE_RECEIPT_BYTES_V2: usize =
     BACKEND_PROVENANCE_RECEIPT_BYTES_V1 + COMPILER_CLOSURE_BYTES_V2;
+const WORKER_V3_PUBLICATION_BINDING_BYTES_V1: usize =
+    COMPILER_CLOSURE_BYTES_V2 + (7 * 32) + (2 * 8);
+const BACKEND_PROVENANCE_RECEIPT_BYTES_V3: usize =
+    BACKEND_PROVENANCE_RECEIPT_BYTES_V1 + WORKER_V3_PUBLICATION_BINDING_BYTES_V1;
 const COMPILER_CLOSURE_BOUND_BUILD_INVOCATION_DOMAIN_V1: &[u8] =
     b"FE2O3/COMPILER-CLOSURE-BOUND-BUILD-INVOCATION/V1\0";
 
@@ -328,6 +336,125 @@ impl BackendPublicationReceiptV2 {
     }
 }
 
+/// Durable strict-Worker-V3 provenance bound to one exact backend publication.
+///
+/// The binding preserves the complete compiler closure and independent V3 finalizer axes without
+/// projecting them into V2. This receipt is inert coordination evidence: it does not authenticate
+/// a compiler, prove artifact semantics, authorize publication, or grant load or launch authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BackendPublicationReceiptV3 {
+    attempt_identity: [u8; 32],
+    producer_identity: [u8; 32],
+    scope_identity: [u8; 32],
+    plan_commitment: [u8; 32],
+    upstream_evidence_identity: [u8; 32],
+    finalized_output_identity: [u8; 32],
+    publication_identity: [u8; 32],
+    publication_binding: WorkerV3PublicationBindingV1,
+}
+
+impl BackendPublicationReceiptV3 {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) const fn new(
+        attempt_identity: [u8; 32],
+        producer_identity: [u8; 32],
+        scope_identity: [u8; 32],
+        plan_commitment: [u8; 32],
+        upstream_evidence_identity: [u8; 32],
+        finalized_output_identity: [u8; 32],
+        publication_identity: [u8; 32],
+        publication_binding: WorkerV3PublicationBindingV1,
+    ) -> Self {
+        Self {
+            attempt_identity,
+            producer_identity,
+            scope_identity,
+            plan_commitment,
+            upstream_evidence_identity,
+            finalized_output_identity,
+            publication_identity,
+            publication_binding,
+        }
+    }
+
+    /// Returns the V3-domain identity of the exact build attempt.
+    pub const fn attempt_identity(self) -> [u8; 32] {
+        self.attempt_identity
+    }
+
+    /// Returns the V3-domain identity of the producer source and crate name.
+    pub const fn producer_identity(self) -> [u8; 32] {
+        self.producer_identity
+    }
+
+    /// Returns the V3-domain package, kernel-set, and target scope identity.
+    pub const fn scope_identity(self) -> [u8; 32] {
+        self.scope_identity
+    }
+
+    /// Returns the commitment to every field in the durable publication plan.
+    pub const fn plan_commitment(self) -> [u8; 32] {
+        self.plan_commitment
+    }
+
+    /// Returns the caller-supplied upstream evidence identity.
+    pub const fn upstream_evidence_identity(self) -> [u8; 32] {
+        self.upstream_evidence_identity
+    }
+
+    /// Returns the SHA-256 identity of the exact finalized bytes.
+    pub const fn finalized_output_identity(self) -> [u8; 32] {
+        self.finalized_output_identity
+    }
+
+    /// Returns the atomic publication identity committed by the durable plan.
+    pub const fn publication_identity(self) -> [u8; 32] {
+        self.publication_identity
+    }
+
+    /// Returns the complete strict Worker V3 publication binding.
+    pub const fn publication_binding(self) -> WorkerV3PublicationBindingV1 {
+        self.publication_binding
+    }
+
+    /// Returns the complete canonical compiler-closure preimage retained by the V3 binding.
+    pub const fn compiler_closure(self) -> CompilerClosureV2 {
+        self.publication_binding.compiler_closure()
+    }
+
+    /// Receipt evidence does not authorize a compiler invocation.
+    pub const fn grants_compiler_authority(self) -> bool {
+        false
+    }
+
+    /// Receipt evidence does not prove artifact correctness or provenance.
+    pub const fn grants_proof_authority(self) -> bool {
+        false
+    }
+
+    /// Receipt evidence does not authorize artifact publication.
+    pub const fn grants_publication_authority(self) -> bool {
+        false
+    }
+
+    /// Receipt evidence does not authorize HSA loading.
+    pub const fn grants_load_authority(self) -> bool {
+        false
+    }
+
+    /// Receipt evidence does not authorize kernel launch.
+    pub const fn grants_launch_authority(self) -> bool {
+        false
+    }
+
+    fn validate(self) -> Result<(), AttemptCodecError> {
+        if self.finalized_output_identity != self.publication_binding.finalized_output_sha256() {
+            return Err(AttemptCodecError::WorkerV3FinalizedOutputIdentityMismatch);
+        }
+        Ok(())
+    }
+}
+
 impl BuildAttempt {
     pub(crate) fn new(
         generation: u64,
@@ -456,13 +583,18 @@ pub(crate) enum BackendReceiptV1 {
     Provenance(BackendPublicationReceiptV1),
     PendingProvenanceV2(BackendPublicationReceiptV2),
     ProvenanceV2(BackendPublicationReceiptV2),
+    PendingProvenanceV3(BackendPublicationReceiptV3),
+    ProvenanceV3(BackendPublicationReceiptV3),
 }
 
 impl BackendReceiptV1 {
     pub(crate) const fn is_completed(self) -> bool {
         matches!(
             self,
-            Self::LegacyCoordination | Self::Provenance(_) | Self::ProvenanceV2(_)
+            Self::LegacyCoordination
+                | Self::Provenance(_)
+                | Self::ProvenanceV2(_)
+                | Self::ProvenanceV3(_)
         )
     }
 }
@@ -500,6 +632,8 @@ pub enum AttemptCodecError {
     InvalidPhase(u8),
     InvalidBackendReceiptTag(u8),
     InvalidCompilerClosureV2(CompilerClosureErrorV2),
+    InvalidWorkerV3PublicationBinding(WorkerV3PublicationBindingErrorV1),
+    WorkerV3FinalizedOutputIdentityMismatch,
     ZeroGeneration,
     GenerationBeyondWatermark,
     DuplicateGeneration,
@@ -538,6 +672,12 @@ impl fmt::Display for AttemptCodecError {
             Self::InvalidPhase(_) => "invalid attempt phase",
             Self::InvalidBackendReceiptTag(_) => "invalid backend receipt tag",
             Self::InvalidCompilerClosureV2(_) => "invalid V2 compiler closure in backend receipt",
+            Self::InvalidWorkerV3PublicationBinding(_) => {
+                "invalid Worker V3 publication binding in backend receipt"
+            }
+            Self::WorkerV3FinalizedOutputIdentityMismatch => {
+                "Worker V3 receipt finalized-output identity does not match its binding"
+            }
             Self::ZeroGeneration => "attempt generation is zero",
             Self::GenerationBeyondWatermark => "attempt generation exceeds registry watermark",
             Self::DuplicateGeneration => "duplicate active attempt generation",
@@ -558,6 +698,9 @@ impl fmt::Display for AttemptCodecError {
                 write!(formatter, "{message}: {value}")
             }
             Self::InvalidCompilerClosureV2(error) => write!(formatter, "{message}: {error}"),
+            Self::InvalidWorkerV3PublicationBinding(error) => {
+                write!(formatter, "{message}: {error}")
+            }
             _ => formatter.write_str(message),
         }
     }
@@ -567,6 +710,7 @@ impl std::error::Error for AttemptCodecError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InvalidCompilerClosureV2(error) => Some(error),
+            Self::InvalidWorkerV3PublicationBinding(error) => Some(error),
             _ => None,
         }
     }
@@ -612,6 +756,14 @@ impl AttemptRegistry {
                 Some(BackendReceiptV1::PendingProvenanceV2(receipt)) => {
                     bytes.push(BACKEND_RECEIPT_PENDING_PROVENANCE_V2);
                     push_backend_publication_receipt_v2(&mut bytes, receipt);
+                }
+                Some(BackendReceiptV1::ProvenanceV3(receipt)) => {
+                    bytes.push(BACKEND_RECEIPT_PROVENANCE_V3);
+                    push_backend_publication_receipt_v3(&mut bytes, receipt)?;
+                }
+                Some(BackendReceiptV1::PendingProvenanceV3(receipt)) => {
+                    bytes.push(BACKEND_RECEIPT_PENDING_PROVENANCE_V3);
+                    push_backend_publication_receipt_v3(&mut bytes, receipt)?;
                 }
             }
         }
@@ -663,6 +815,14 @@ impl AttemptRegistry {
                 BACKEND_RECEIPT_PENDING_PROVENANCE_V2 => {
                     Some(BackendReceiptV1::PendingProvenanceV2(
                         decode_backend_publication_receipt_v2(&mut decoder)?,
+                    ))
+                }
+                BACKEND_RECEIPT_PROVENANCE_V3 => Some(BackendReceiptV1::ProvenanceV3(
+                    decode_backend_publication_receipt_v3(&mut decoder)?,
+                )),
+                BACKEND_RECEIPT_PENDING_PROVENANCE_V3 => {
+                    Some(BackendReceiptV1::PendingProvenanceV3(
+                        decode_backend_publication_receipt_v3(&mut decoder)?,
                     ))
                 }
                 value => return Err(AttemptCodecError::InvalidBackendReceiptTag(value)),
@@ -822,6 +982,25 @@ impl AttemptRegistry {
         Ok(())
     }
 
+    pub(crate) fn claim_backend_with_pending_receipt_v3(
+        &mut self,
+        stable_source: &str,
+        attempt: BuildAttempt,
+        receipt: BackendPublicationReceiptV3,
+    ) -> Result<(), AttemptCodecError> {
+        receipt.validate()?;
+        let record = self.exact_record_mut(stable_source, attempt)?;
+        if record.backend_receipt.is_some() {
+            return Err(AttemptCodecError::BackendAlreadySeen);
+        }
+        if record.phase != AttemptPhase::Building {
+            return Err(AttemptCodecError::InvalidTransition);
+        }
+        record.phase = AttemptPhase::BackendClaimed;
+        record.backend_receipt = Some(BackendReceiptV1::PendingProvenanceV3(receipt));
+        Ok(())
+    }
+
     pub(crate) fn record_legacy_backend_receipt(
         &mut self,
         stable_source: &str,
@@ -874,6 +1053,25 @@ impl AttemptRegistry {
         }
     }
 
+    pub(crate) fn record_backend_publication_receipt_v3(
+        &mut self,
+        stable_source: &str,
+        attempt: BuildAttempt,
+        receipt: BackendPublicationReceiptV3,
+    ) -> Result<(), AttemptCodecError> {
+        receipt.validate()?;
+        let record = self.exact_record_mut(stable_source, attempt)?;
+        match record.backend_receipt {
+            Some(BackendReceiptV1::PendingProvenanceV3(pending)) if pending == receipt => {
+                record.backend_receipt = Some(BackendReceiptV1::ProvenanceV3(receipt));
+                Ok(())
+            }
+            Some(BackendReceiptV1::ProvenanceV3(existing)) if existing == receipt => Ok(()),
+            Some(_) => Err(AttemptCodecError::BackendAlreadySeen),
+            None => Err(AttemptCodecError::InvalidTransition),
+        }
+    }
+
     pub(crate) fn mark_failed(
         &mut self,
         stable_source: &str,
@@ -888,7 +1086,11 @@ impl AttemptRegistry {
         }
         if matches!(
             record.backend_receipt,
-            Some(BackendReceiptV1::PendingProvenance(_) | BackendReceiptV1::PendingProvenanceV2(_))
+            Some(
+                BackendReceiptV1::PendingProvenance(_)
+                    | BackendReceiptV1::PendingProvenanceV2(_)
+                    | BackendReceiptV1::PendingProvenanceV3(_)
+            )
         ) {
             record.backend_receipt = None;
         }
@@ -1124,6 +1326,46 @@ fn push_backend_publication_receipt_v2(bytes: &mut Vec<u8>, receipt: BackendPubl
     push_compiler_closure_v2(bytes, receipt.compiler_closure);
 }
 
+fn push_backend_publication_receipt_v3(
+    bytes: &mut Vec<u8>,
+    receipt: BackendPublicationReceiptV3,
+) -> Result<(), AttemptCodecError> {
+    receipt.validate()?;
+    for identity in [
+        receipt.attempt_identity,
+        receipt.producer_identity,
+        receipt.scope_identity,
+        receipt.plan_commitment,
+        receipt.upstream_evidence_identity,
+        receipt.finalized_output_identity,
+        receipt.publication_identity,
+    ] {
+        bytes.extend_from_slice(&identity);
+    }
+    push_worker_v3_publication_binding_v1(bytes, receipt.publication_binding);
+    Ok(())
+}
+
+fn push_worker_v3_publication_binding_v1(
+    bytes: &mut Vec<u8>,
+    binding: WorkerV3PublicationBindingV1,
+) {
+    push_compiler_closure_v2(bytes, binding.compiler_closure());
+    for identity in [
+        binding.publication_intent_record_identity(),
+        binding.finalization_identity(),
+        binding.source_evidence_identity(),
+        binding.compiler_handoff_binding_identity(),
+        binding.raw_inspection_identity(),
+        binding.raw_output_sha256(),
+    ] {
+        bytes.extend_from_slice(&identity);
+    }
+    bytes.extend_from_slice(&binding.raw_output_length().to_le_bytes());
+    bytes.extend_from_slice(&binding.finalized_output_sha256());
+    bytes.extend_from_slice(&binding.finalized_output_length().to_le_bytes());
+}
+
 fn decode_backend_publication_receipt_v1(
     decoder: &mut AttemptDecoder<'_>,
 ) -> Result<BackendPublicationReceiptV1, AttemptCodecError> {
@@ -1160,6 +1402,51 @@ fn decode_backend_publication_receipt_v2(
         publication_identity,
         compiler_closure,
     ))
+}
+
+fn decode_backend_publication_receipt_v3(
+    decoder: &mut AttemptDecoder<'_>,
+) -> Result<BackendPublicationReceiptV3, AttemptCodecError> {
+    let attempt_identity = decoder.fixed()?;
+    let producer_identity = decoder.fixed()?;
+    let scope_identity = decoder.fixed()?;
+    let plan_commitment = decoder.fixed()?;
+    let upstream_evidence_identity = decoder.fixed()?;
+    let finalized_output_identity = decoder.fixed()?;
+    let publication_identity = decoder.fixed()?;
+    let publication_binding = decode_worker_v3_publication_binding_v1(decoder)?;
+    let receipt = BackendPublicationReceiptV3::new(
+        attempt_identity,
+        producer_identity,
+        scope_identity,
+        plan_commitment,
+        upstream_evidence_identity,
+        finalized_output_identity,
+        publication_identity,
+        publication_binding,
+    );
+    receipt.validate()?;
+    Ok(receipt)
+}
+
+fn decode_worker_v3_publication_binding_v1(
+    decoder: &mut AttemptDecoder<'_>,
+) -> Result<WorkerV3PublicationBindingV1, AttemptCodecError> {
+    let compiler_closure = decode_compiler_closure_v2(decoder.take(COMPILER_CLOSURE_BYTES_V2)?)
+        .map_err(AttemptCodecError::InvalidCompilerClosureV2)?;
+    WorkerV3PublicationBindingV1::new(
+        compiler_closure,
+        decoder.fixed()?,
+        decoder.fixed()?,
+        decoder.fixed()?,
+        decoder.fixed()?,
+        decoder.fixed()?,
+        decoder.fixed()?,
+        decoder.u64()?,
+        decoder.fixed()?,
+        decoder.u64()?,
+    )
+    .map_err(AttemptCodecError::InvalidWorkerV3PublicationBinding)
 }
 
 pub(crate) fn push_compiler_closure_v2(bytes: &mut Vec<u8>, closure: CompilerClosureV2) {
@@ -1207,6 +1494,9 @@ fn record_size(
             }
             Some(BackendReceiptV1::PendingProvenanceV2(_) | BackendReceiptV1::ProvenanceV2(_)) => {
                 BACKEND_PROVENANCE_RECEIPT_BYTES_V2
+            }
+            Some(BackendReceiptV1::PendingProvenanceV3(_) | BackendReceiptV1::ProvenanceV3(_)) => {
+                BACKEND_PROVENANCE_RECEIPT_BYTES_V3
             }
             Some(BackendReceiptV1::LegacyCoordination) | None => 0,
         }
@@ -1407,6 +1697,69 @@ mod tests {
         )
     }
 
+    fn compiler_closure(seed: u8) -> CompilerClosureV2 {
+        CompilerClosureV2::new(
+            [seed; 32],
+            [seed.wrapping_add(1); 32],
+            [seed.wrapping_add(2); 32],
+            [seed.wrapping_add(3); 32],
+            [seed.wrapping_add(4); 32],
+            [seed.wrapping_add(5); 32],
+        )
+        .unwrap()
+    }
+
+    fn provenance_receipt_v2(seed: u8) -> BackendPublicationReceiptV2 {
+        BackendPublicationReceiptV2::new(
+            [seed; 32],
+            [seed.wrapping_add(1); 32],
+            [seed.wrapping_add(2); 32],
+            [seed.wrapping_add(3); 32],
+            [seed.wrapping_add(4); 32],
+            [seed.wrapping_add(5); 32],
+            [seed.wrapping_add(6); 32],
+            compiler_closure(seed.wrapping_add(7)),
+        )
+    }
+
+    fn worker_v3_publication_binding(seed: u8) -> WorkerV3PublicationBindingV1 {
+        WorkerV3PublicationBindingV1::new(
+            compiler_closure(seed),
+            [seed.wrapping_add(6); 32],
+            [seed.wrapping_add(7); 32],
+            [seed.wrapping_add(8); 32],
+            [seed.wrapping_add(9); 32],
+            [seed.wrapping_add(10); 32],
+            [seed.wrapping_add(11); 32],
+            17,
+            [seed.wrapping_add(12); 32],
+            19,
+        )
+        .unwrap()
+    }
+
+    fn provenance_receipt_v3(seed: u8) -> BackendPublicationReceiptV3 {
+        let binding = worker_v3_publication_binding(seed.wrapping_add(7));
+        BackendPublicationReceiptV3::new(
+            [seed; 32],
+            [seed.wrapping_add(1); 32],
+            [seed.wrapping_add(2); 32],
+            [seed.wrapping_add(3); 32],
+            [seed.wrapping_add(4); 32],
+            binding.finalized_output_sha256(),
+            [seed.wrapping_add(6); 32],
+            binding,
+        )
+    }
+
+    fn receipt_tag_offset(bytes: &[u8], attempt_identity: [u8; 32]) -> usize {
+        bytes
+            .windows(attempt_identity.len())
+            .position(|window| window == attempt_identity)
+            .expect("receipt attempt identity")
+            - 1
+    }
+
     #[test]
     fn v1_pending_and_final_receipt_registry_goldens_are_stable() {
         let mut registry = AttemptRegistry::default();
@@ -1439,6 +1792,216 @@ mod tests {
                 .encode()
                 .unwrap(),
             final_receipt
+        );
+    }
+
+    #[test]
+    fn v2_registry_tags_and_payload_bytes_remain_unchanged() {
+        let mut registry = AttemptRegistry::default();
+        let attempt = start(&mut registry, "path:v2", SESSION_A);
+        registry.transition_building("path:v2", attempt).unwrap();
+        let receipt = provenance_receipt_v2(0x30);
+        registry
+            .claim_backend_with_pending_receipt_v2("path:v2", attempt, receipt)
+            .unwrap();
+
+        let pending = registry.encode().unwrap();
+        let tag_offset = receipt_tag_offset(&pending, receipt.attempt_identity());
+        assert_eq!(pending[tag_offset], 5);
+        let mut expected_payload = Vec::new();
+        for identity in [
+            receipt.attempt_identity(),
+            receipt.producer_identity(),
+            receipt.scope_identity(),
+            receipt.plan_commitment(),
+            receipt.upstream_evidence_identity(),
+            receipt.finalized_output_identity(),
+            receipt.publication_identity(),
+        ] {
+            expected_payload.extend_from_slice(&identity);
+        }
+        push_compiler_closure_v2(&mut expected_payload, receipt.compiler_closure());
+        assert_eq!(&pending[tag_offset + 1..], expected_payload);
+        assert_eq!(AttemptRegistry::decode(&pending).unwrap(), registry);
+
+        registry
+            .record_backend_publication_receipt_v2("path:v2", attempt, receipt)
+            .unwrap();
+        let completed = registry.encode().unwrap();
+        let mut expected_completed = pending;
+        expected_completed[tag_offset] = 4;
+        assert_eq!(completed, expected_completed);
+        assert_eq!(AttemptRegistry::decode(&completed).unwrap(), registry);
+    }
+
+    #[test]
+    fn v3_receipt_accessors_preserve_the_binding_and_remain_inert() {
+        let receipt = provenance_receipt_v3(0x30);
+        assert_eq!(receipt.attempt_identity(), [0x30; 32]);
+        assert_eq!(receipt.producer_identity(), [0x31; 32]);
+        assert_eq!(receipt.scope_identity(), [0x32; 32]);
+        assert_eq!(receipt.plan_commitment(), [0x33; 32]);
+        assert_eq!(receipt.upstream_evidence_identity(), [0x34; 32]);
+        assert_eq!(
+            receipt.finalized_output_identity(),
+            receipt.publication_binding().finalized_output_sha256()
+        );
+        assert_eq!(receipt.publication_identity(), [0x36; 32]);
+        assert_eq!(
+            receipt.compiler_closure(),
+            receipt.publication_binding().compiler_closure()
+        );
+        assert!(!receipt.grants_compiler_authority());
+        assert!(!receipt.grants_proof_authority());
+        assert!(!receipt.grants_publication_authority());
+        assert!(!receipt.grants_load_authority());
+        assert!(!receipt.grants_launch_authority());
+    }
+
+    #[test]
+    fn v3_pending_and_completed_registry_tags_have_exact_canonical_payloads() {
+        let mut registry = AttemptRegistry::default();
+        let attempt = start(&mut registry, "path:v3", SESSION_A);
+        registry.transition_building("path:v3", attempt).unwrap();
+        let receipt = provenance_receipt_v3(0x40);
+        registry
+            .claim_backend_with_pending_receipt_v3("path:v3", attempt, receipt)
+            .unwrap();
+
+        let pending = registry.encode().unwrap();
+        let tag_offset = receipt_tag_offset(&pending, receipt.attempt_identity());
+        assert_eq!(pending[tag_offset], 7);
+        let mut expected_payload = Vec::new();
+        for identity in [
+            receipt.attempt_identity(),
+            receipt.producer_identity(),
+            receipt.scope_identity(),
+            receipt.plan_commitment(),
+            receipt.upstream_evidence_identity(),
+            receipt.finalized_output_identity(),
+            receipt.publication_identity(),
+        ] {
+            expected_payload.extend_from_slice(&identity);
+        }
+        let binding = receipt.publication_binding();
+        push_compiler_closure_v2(&mut expected_payload, binding.compiler_closure());
+        for identity in [
+            binding.publication_intent_record_identity(),
+            binding.finalization_identity(),
+            binding.source_evidence_identity(),
+            binding.compiler_handoff_binding_identity(),
+            binding.raw_inspection_identity(),
+            binding.raw_output_sha256(),
+        ] {
+            expected_payload.extend_from_slice(&identity);
+        }
+        expected_payload.extend_from_slice(&binding.raw_output_length().to_le_bytes());
+        expected_payload.extend_from_slice(&binding.finalized_output_sha256());
+        expected_payload.extend_from_slice(&binding.finalized_output_length().to_le_bytes());
+        assert_eq!(expected_payload.len(), BACKEND_PROVENANCE_RECEIPT_BYTES_V3);
+        assert_eq!(&pending[tag_offset + 1..], expected_payload);
+        assert_eq!(AttemptRegistry::decode(&pending).unwrap(), registry);
+        assert_eq!(
+            registry.mark_completed("path:v3", attempt),
+            Err(AttemptCodecError::InvalidTransition)
+        );
+
+        registry
+            .record_backend_publication_receipt_v3("path:v3", attempt, receipt)
+            .unwrap();
+        let completed = registry.encode().unwrap();
+        let mut expected_completed = pending;
+        expected_completed[tag_offset] = 6;
+        assert_eq!(completed, expected_completed);
+        assert_eq!(AttemptRegistry::decode(&completed).unwrap(), registry);
+        registry.mark_completed("path:v3", attempt).unwrap();
+        assert_eq!(
+            registry
+                .record_exact("path:v3", attempt)
+                .unwrap()
+                .backend_receipt,
+            Some(BackendReceiptV1::ProvenanceV3(receipt))
+        );
+    }
+
+    #[test]
+    fn v3_completion_requires_the_exact_valid_pending_receipt() {
+        let mut registry = AttemptRegistry::default();
+        let attempt = start(&mut registry, "path:v3", SESSION_A);
+        registry.transition_building("path:v3", attempt).unwrap();
+        let receipt = provenance_receipt_v3(0x50);
+        registry
+            .claim_backend_with_pending_receipt_v3("path:v3", attempt, receipt)
+            .unwrap();
+        let pending = registry.clone();
+
+        assert_eq!(
+            registry.record_backend_publication_receipt_v3(
+                "path:v3",
+                attempt,
+                provenance_receipt_v3(0x51),
+            ),
+            Err(AttemptCodecError::BackendAlreadySeen)
+        );
+        assert_eq!(registry, pending);
+
+        let binding = receipt.publication_binding();
+        let mismatched = BackendPublicationReceiptV3::new(
+            receipt.attempt_identity(),
+            receipt.producer_identity(),
+            receipt.scope_identity(),
+            receipt.plan_commitment(),
+            receipt.upstream_evidence_identity(),
+            [0xfe; 32],
+            receipt.publication_identity(),
+            binding,
+        );
+        assert_eq!(
+            registry.record_backend_publication_receipt_v3("path:v3", attempt, mismatched),
+            Err(AttemptCodecError::WorkerV3FinalizedOutputIdentityMismatch)
+        );
+        assert_eq!(registry, pending);
+
+        registry
+            .record_backend_publication_receipt_v3("path:v3", attempt, receipt)
+            .unwrap();
+        registry
+            .record_backend_publication_receipt_v3("path:v3", attempt, receipt)
+            .unwrap();
+    }
+
+    #[test]
+    fn v3_registry_decoder_rejects_corrupt_binding_and_cross_axis_identity() {
+        let mut registry = AttemptRegistry::default();
+        let attempt = start(&mut registry, "path:v3", SESSION_A);
+        registry.transition_building("path:v3", attempt).unwrap();
+        let receipt = provenance_receipt_v3(0x60);
+        registry
+            .claim_backend_with_pending_receipt_v3("path:v3", attempt, receipt)
+            .unwrap();
+        let bytes = registry.encode().unwrap();
+        let tag_offset = receipt_tag_offset(&bytes, receipt.attempt_identity());
+
+        let mut corrupt_binding = bytes.clone();
+        let raw_length_offset = tag_offset
+            + 1
+            + BACKEND_PROVENANCE_RECEIPT_BYTES_V1
+            + COMPILER_CLOSURE_BYTES_V2
+            + (6 * 32);
+        corrupt_binding[raw_length_offset..raw_length_offset + 8].fill(0);
+        assert!(matches!(
+            AttemptRegistry::decode(&corrupt_binding),
+            Err(AttemptCodecError::InvalidWorkerV3PublicationBinding(
+                WorkerV3PublicationBindingErrorV1::InvalidArtifactLength { actual: 0, .. }
+            ))
+        ));
+
+        let mut mismatched_output = bytes;
+        let finalized_identity_offset = tag_offset + 1 + (5 * 32);
+        mismatched_output[finalized_identity_offset] ^= 1;
+        assert_eq!(
+            AttemptRegistry::decode(&mismatched_output),
+            Err(AttemptCodecError::WorkerV3FinalizedOutputIdentityMismatch)
         );
     }
 
@@ -1739,8 +2302,8 @@ mod tests {
             Err(AttemptCodecError::InvalidPhase(9))
         );
         assert_eq!(
-            AttemptRegistry::decode(&raw_registry(1, &[("path:a", "a", 1, SESSION_A, 0, 6)])),
-            Err(AttemptCodecError::InvalidBackendReceiptTag(6))
+            AttemptRegistry::decode(&raw_registry(1, &[("path:a", "a", 1, SESSION_A, 0, 8)])),
+            Err(AttemptCodecError::InvalidBackendReceiptTag(8))
         );
         assert_eq!(
             AttemptRegistry::decode(&raw_registry(1, &[("path:a", "a", 1, SESSION_A, 0, 1)])),

@@ -13,8 +13,9 @@ use super::attempt::{
     push_compiler_closure_v2,
 };
 use super::attempt_scoped_hsaco_publication::{
-    producer_receipt_identity_v1, producer_receipt_identity_v2,
+    producer_receipt_identity_v1, producer_receipt_identity_v2, producer_receipt_identity_v3,
     publication_receipt_for_producer_identity, publication_receipt_for_producer_identity_v2,
+    publication_receipt_for_producer_identity_v3,
 };
 use super::durable_link_publication::{
     DurableCurrentLinkPublicationLeaseV1, DurableFileIdentityV1, DurableLinkPublicationError,
@@ -23,10 +24,11 @@ use super::durable_link_publication::{
 };
 use super::{
     AtomicPublicationIdentityV1, BackendPublicationReceiptV1, BackendPublicationReceiptV2,
-    BuildAttempt, BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1, EmitError,
-    FinalizationIdentityV1, FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationScopeV1,
-    LinkedOutputIdentityV1, PackageIdentityV1, PinnedOutput, PinnedWorkerIdentityV1,
-    TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1, ValidatedResponseIdentityV1,
+    BackendPublicationReceiptV3, BuildAttempt, BuildInvocation, BuildSession,
+    CanonicalLinkRequestIdentityV1, EmitError, FinalizationIdentityV1, FinalizedOutputIdentityV1,
+    KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1, PackageIdentityV1,
+    PinnedOutput, PinnedWorkerIdentityV1, TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1,
+    ValidatedResponseIdentityV1, WorkerV3PublicationBindingErrorV1, WorkerV3PublicationBindingV1,
     read_attempt_registry,
 };
 use fe2o3_build_authority::{CompilerClosureErrorV2, CompilerClosureV2};
@@ -45,12 +47,22 @@ const CLAIM_VERSION_V2: u16 = 2;
 const CLAIM_CHECKSUM_DOMAIN_V2: &[u8] = b"fe2o3.published-hsaco-claim.checksum.v2\0";
 const CLAIM_FIXED_BODY_BYTES_V2: usize = CLAIM_FIXED_BODY_BYTES + COMPILER_CLOSURE_BYTES_V2;
 const CLAIM_CANONICAL_BYTES_V2: usize = CLAIM_FIXED_BODY_BYTES_V2 + 32;
+const CLAIM_MAGIC_V3: &[u8] = b"FE2O3-PUBLISHED-HSACO-CLAIM-V3\0";
+const CLAIM_VERSION_V3: u16 = 3;
+const CLAIM_CHECKSUM_DOMAIN_V3: &[u8] = b"fe2o3.published-hsaco-claim.checksum.v3\0";
+const WORKER_V3_BINDING_PREIMAGE_BYTES_V1: usize = COMPILER_CLOSURE_BYTES_V2 + (7 * 32) + (2 * 8);
+const CLAIM_FIXED_BODY_BYTES_V3: usize =
+    CLAIM_FIXED_BODY_BYTES + WORKER_V3_BINDING_PREIMAGE_BYTES_V1;
+const CLAIM_CANONICAL_BYTES_V3: usize = CLAIM_FIXED_BODY_BYTES_V3 + 32;
 
 /// Maximum accepted wire size for one durable published-HSACO claim.
 pub const MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES: usize = 1_024;
 
 /// Maximum accepted wire size for one durable protected published-HSACO claim.
 pub const MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES_V2: usize = 1_024;
+
+/// Maximum accepted wire size for one strict Worker V3 published-HSACO claim.
+pub const MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES_V3: usize = 1_280;
 
 /// Receipt field that disagrees with the complete plan or upstream identity in a claim.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,6 +86,27 @@ pub enum DurablePublishedClaimReceiptFieldV2 {
     UpstreamEvidence,
     FinalizedOutput,
     Publication,
+}
+
+/// Strict Worker V3 receipt field that disagrees with complete claim evidence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum DurablePublishedClaimReceiptFieldV3 {
+    Attempt,
+    Scope,
+    Plan,
+    UpstreamEvidence,
+    FinalizedOutput,
+    Publication,
+}
+
+/// Worker V3 binding axis that disagrees with the durable publication.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum DurablePublishedClaimWorkerV3BindingFieldV1 {
+    RawOutput,
+    FinalizedOutput,
+    ArtifactLength,
 }
 
 /// Bounded canonical claim codec failure.
@@ -123,6 +156,35 @@ pub enum DurablePublishedClaimCodecErrorV2 {
     InvalidCompilerClosure(CompilerClosureErrorV2),
     ReceiptMismatch {
         field: DurablePublishedClaimReceiptFieldV2,
+    },
+    NonCanonical,
+}
+
+/// Bounded canonical strict Worker V3 claim codec failure.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum DurablePublishedClaimCodecErrorV3 {
+    TooLarge {
+        actual: usize,
+        maximum: usize,
+    },
+    Truncated,
+    TrailingBytes,
+    BadMagic,
+    UnsupportedVersion {
+        actual: u16,
+    },
+    ChecksumMismatch,
+    InvalidAttempt,
+    InvalidArtifactLength {
+        actual: u64,
+    },
+    InvalidWorkerV3Binding(WorkerV3PublicationBindingErrorV1),
+    ReceiptMismatch {
+        field: DurablePublishedClaimReceiptFieldV3,
+    },
+    WorkerV3BindingMismatch {
+        field: DurablePublishedClaimWorkerV3BindingFieldV1,
     },
     NonCanonical,
 }
@@ -209,6 +271,62 @@ impl std::error::Error for DurablePublishedClaimCodecErrorV2 {
     }
 }
 
+impl fmt::Display for DurablePublishedClaimCodecErrorV3 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TooLarge { actual, maximum } => write!(
+                formatter,
+                "strict Worker V3 published claim size {actual} exceeds {maximum}"
+            ),
+            Self::Truncated => formatter.write_str("truncated strict Worker V3 published claim"),
+            Self::TrailingBytes => {
+                formatter.write_str("trailing strict Worker V3 published claim bytes")
+            }
+            Self::BadMagic => formatter.write_str("bad strict Worker V3 published claim magic"),
+            Self::UnsupportedVersion { actual } => write!(
+                formatter,
+                "unsupported strict Worker V3 published claim version {actual}"
+            ),
+            Self::ChecksumMismatch => {
+                formatter.write_str("strict Worker V3 published claim checksum mismatch")
+            }
+            Self::InvalidAttempt => {
+                formatter.write_str("invalid strict Worker V3 published claim build attempt")
+            }
+            Self::InvalidArtifactLength { actual } => write!(
+                formatter,
+                "invalid strict Worker V3 published claim artifact length {actual}"
+            ),
+            Self::InvalidWorkerV3Binding(error) => {
+                write!(
+                    formatter,
+                    "invalid strict Worker V3 publication binding: {error}"
+                )
+            }
+            Self::ReceiptMismatch { field } => write!(
+                formatter,
+                "strict Worker V3 published claim receipt {field:?} does not match"
+            ),
+            Self::WorkerV3BindingMismatch { field } => write!(
+                formatter,
+                "strict Worker V3 published claim binding {field:?} does not match"
+            ),
+            Self::NonCanonical => {
+                formatter.write_str("noncanonical strict Worker V3 published claim")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DurablePublishedClaimCodecErrorV3 {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidWorkerV3Binding(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
 /// Why an inert claim could not be reacquired as a fresh current-publication lease.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -229,6 +347,20 @@ pub enum DurablePublishedClaimReacquisitionErrorV1 {
 pub enum DurablePublishedClaimReacquisitionErrorV2 {
     Busy,
     InvalidClaim(DurablePublishedClaimCodecErrorV2),
+    Filesystem(EmitError),
+    AttemptNotFound,
+    AttemptState,
+    ReceiptMismatch,
+    ProducerIdentityMismatch,
+    Publication(DurableLinkPublicationError),
+}
+
+/// Why an inert strict Worker V3 claim could not be reacquired as a fresh current lease.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum DurablePublishedClaimReacquisitionErrorV3 {
+    Busy,
+    InvalidClaim(DurablePublishedClaimCodecErrorV3),
     Filesystem(EmitError),
     AttemptNotFound,
     AttemptState,
@@ -305,6 +437,49 @@ impl fmt::Display for DurablePublishedClaimReacquisitionErrorV2 {
 }
 
 impl std::error::Error for DurablePublishedClaimReacquisitionErrorV2 {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidClaim(error) => Some(error),
+            Self::Filesystem(error) => Some(error),
+            Self::Publication(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for DurablePublishedClaimReacquisitionErrorV3 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Busy => {
+                formatter.write_str("strict Worker V3 published-claim output lock is busy")
+            }
+            Self::InvalidClaim(error) => {
+                write!(formatter, "invalid strict Worker V3 published claim: {error}")
+            }
+            Self::Filesystem(error) => write!(
+                formatter,
+                "strict Worker V3 published-claim filesystem failure: {error}"
+            ),
+            Self::AttemptNotFound => formatter
+                .write_str("strict Worker V3 published claim attempt is not durably present"),
+            Self::AttemptState => formatter.write_str(
+                "strict Worker V3 published claim attempt is not backend-claimed or completed",
+            ),
+            Self::ReceiptMismatch => formatter.write_str(
+                "strict Worker V3 published claim receipt does not match durable V3 attempt state",
+            ),
+            Self::ProducerIdentityMismatch => formatter.write_str(
+                "strict Worker V3 published claim producer does not match the durable attempt owner",
+            ),
+            Self::Publication(error) => write!(
+                formatter,
+                "strict Worker V3 published claim is not current: {error}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DurablePublishedClaimReacquisitionErrorV3 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InvalidClaim(error) => Some(error),
@@ -741,6 +916,245 @@ impl DurablePublishedHsacoClaimV2 {
     }
 }
 
+/// Canonical inert claim retaining one exact strict Worker V3 publication binding.
+///
+/// The V3 binding is preserved directly and is never projected into the V2 compiler-closure
+/// schema. The private file bindings prevent construction from free-standing identities. This
+/// value remains coordination evidence and grants no compiler, proof, publication, load, or
+/// launch authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DurablePublishedHsacoClaimV3 {
+    plan: DurableLinkPublicationPlanV1,
+    upstream_evidence: UpstreamCodeObjectEvidenceIdentityV1,
+    receipt: BackendPublicationReceiptV3,
+    files: DurablePublishedFileBindingV1,
+}
+
+impl DurablePublishedHsacoClaimV3 {
+    pub(crate) fn new(
+        plan: DurableLinkPublicationPlanV1,
+        upstream_evidence: UpstreamCodeObjectEvidenceIdentityV1,
+        receipt: BackendPublicationReceiptV3,
+        files: DurablePublishedFileBindingV1,
+    ) -> Result<Self, DurablePublishedClaimCodecErrorV3> {
+        let claim = Self {
+            plan,
+            upstream_evidence,
+            receipt,
+            files,
+        };
+        claim.validate()?;
+        Ok(claim)
+    }
+
+    /// Returns the complete typed publication plan carried as inert data.
+    pub const fn plan(&self) -> DurableLinkPublicationPlanV1 {
+        self.plan
+    }
+
+    /// Returns the caller-supplied upstream evidence identity.
+    pub const fn upstream_evidence(&self) -> UpstreamCodeObjectEvidenceIdentityV1 {
+        self.upstream_evidence
+    }
+
+    /// Returns the exact V3 receipt persisted for the build attempt.
+    pub const fn receipt(&self) -> BackendPublicationReceiptV3 {
+        self.receipt
+    }
+
+    /// Returns the complete strict Worker V3 publication binding.
+    pub const fn worker_v3_binding(&self) -> WorkerV3PublicationBindingV1 {
+        self.receipt.publication_binding()
+    }
+
+    /// Returns the complete canonical compiler-closure preimage retained by V3.
+    pub const fn compiler_closure(&self) -> CompilerClosureV2 {
+        self.worker_v3_binding().compiler_closure()
+    }
+
+    /// Encodes this claim under its independent fixed V3 schema.
+    pub fn encode_canonical(&self) -> Result<Vec<u8>, DurablePublishedClaimCodecErrorV3> {
+        self.validate()?;
+        let mut bytes = Vec::with_capacity(CLAIM_CANONICAL_BYTES_V3);
+        bytes.extend_from_slice(CLAIM_MAGIC_V3);
+        bytes.extend_from_slice(&CLAIM_VERSION_V3.to_le_bytes());
+        push_attempt(&mut bytes, self.plan.attempt());
+        push_scope(&mut bytes, self.plan.scope());
+        for identity in [
+            *self.plan.request().as_bytes(),
+            *self.plan.worker().as_bytes(),
+            *self.plan.response().as_bytes(),
+            *self.plan.linked_output().as_bytes(),
+            *self.plan.finalization().as_bytes(),
+            *self.plan.finalized_output().as_bytes(),
+            *self.plan.publication().as_bytes(),
+            self.upstream_evidence.as_bytes(),
+        ] {
+            bytes.extend_from_slice(&identity);
+        }
+        push_receipt_v3(&mut bytes, self.receipt);
+        push_file_identity(&mut bytes, self.files.output_identity);
+        push_file_identity(&mut bytes, self.files.record_identity);
+        push_file_identity(&mut bytes, self.files.artifact_identity);
+        bytes.extend_from_slice(&(self.files.artifact_length as u64).to_le_bytes());
+        debug_assert_eq!(bytes.len(), CLAIM_FIXED_BODY_BYTES_V3);
+        bytes.extend_from_slice(&claim_checksum_v3(&bytes));
+        debug_assert_eq!(bytes.len(), CLAIM_CANONICAL_BYTES_V3);
+        Ok(bytes)
+    }
+
+    /// Decodes only the bounded canonical V3 schema; V1/V2 bytes are never reinterpreted.
+    pub fn decode_canonical(bytes: &[u8]) -> Result<Self, DurablePublishedClaimCodecErrorV3> {
+        if bytes.len() > MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES_V3 {
+            return Err(DurablePublishedClaimCodecErrorV3::TooLarge {
+                actual: bytes.len(),
+                maximum: MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES_V3,
+            });
+        }
+        if bytes.len() < CLAIM_CANONICAL_BYTES_V3 {
+            return Err(DurablePublishedClaimCodecErrorV3::Truncated);
+        }
+        if bytes.len() > CLAIM_CANONICAL_BYTES_V3 {
+            return Err(DurablePublishedClaimCodecErrorV3::TrailingBytes);
+        }
+        let (body, checksum) = bytes.split_at(CLAIM_FIXED_BODY_BYTES_V3);
+        if claim_checksum_v3(body) != checksum {
+            return Err(DurablePublishedClaimCodecErrorV3::ChecksumMismatch);
+        }
+
+        let mut decoder = ClaimDecoder::new(body);
+        if decode_v3(decoder.take(CLAIM_MAGIC_V3.len()))? != CLAIM_MAGIC_V3 {
+            return Err(DurablePublishedClaimCodecErrorV3::BadMagic);
+        }
+        let version = decode_v3(decoder.u16())?;
+        if version != CLAIM_VERSION_V3 {
+            return Err(DurablePublishedClaimCodecErrorV3::UnsupportedVersion { actual: version });
+        }
+        let attempt = decode_v3(decoder.attempt())?;
+        let scope = decode_v3(decoder.scope())?;
+        let plan = DurableLinkPublicationPlanV1::new(
+            attempt,
+            scope,
+            CanonicalLinkRequestIdentityV1::from_bytes(decode_v3(decoder.identity())?),
+            PinnedWorkerIdentityV1::from_bytes(decode_v3(decoder.identity())?),
+            ValidatedResponseIdentityV1::from_bytes(decode_v3(decoder.identity())?),
+            LinkedOutputIdentityV1::from_bytes(decode_v3(decoder.identity())?),
+            FinalizationIdentityV1::from_bytes(decode_v3(decoder.identity())?),
+            FinalizedOutputIdentityV1::from_bytes(decode_v3(decoder.identity())?),
+            AtomicPublicationIdentityV1::from_bytes(decode_v3(decoder.identity())?),
+        );
+        let upstream_evidence =
+            UpstreamCodeObjectEvidenceIdentityV1::from_bytes(decode_v3(decoder.identity())?);
+        let receipt = decode_receipt_v3(&mut decoder)?;
+        let files = DurablePublishedFileBindingV1 {
+            output_identity: decode_v3(decoder.file_identity())?,
+            record_identity: decode_v3(decoder.file_identity())?,
+            artifact_identity: decode_v3(decoder.file_identity())?,
+            artifact_length: decode_v3(decoder.artifact_length())?,
+        };
+        if !decoder.finished() {
+            return Err(DurablePublishedClaimCodecErrorV3::TrailingBytes);
+        }
+        let claim = Self {
+            plan,
+            upstream_evidence,
+            receipt,
+            files,
+        };
+        claim.validate()?;
+        if claim.encode_canonical()?.as_slice() != bytes {
+            return Err(DurablePublishedClaimCodecErrorV3::NonCanonical);
+        }
+        Ok(claim)
+    }
+
+    pub const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_proof_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+
+    fn validate(&self) -> Result<(), DurablePublishedClaimCodecErrorV3> {
+        let length = u64::try_from(self.files.artifact_length).unwrap_or(u64::MAX);
+        if self.files.artifact_length == 0
+            || self.files.artifact_length > MAX_DURABLE_FINALIZED_ARTIFACT_BYTES
+        {
+            return Err(DurablePublishedClaimCodecErrorV3::InvalidArtifactLength {
+                actual: length,
+            });
+        }
+        let binding = self.worker_v3_binding();
+        validate_worker_v3_binding(binding)?;
+        if binding.raw_output_sha256() != *self.plan.linked_output().as_bytes() {
+            return Err(DurablePublishedClaimCodecErrorV3::WorkerV3BindingMismatch {
+                field: DurablePublishedClaimWorkerV3BindingFieldV1::RawOutput,
+            });
+        }
+        if binding.finalized_output_sha256() != *self.plan.finalized_output().as_bytes() {
+            return Err(DurablePublishedClaimCodecErrorV3::WorkerV3BindingMismatch {
+                field: DurablePublishedClaimWorkerV3BindingFieldV1::FinalizedOutput,
+            });
+        }
+        if binding.finalized_output_length() != length {
+            return Err(DurablePublishedClaimCodecErrorV3::WorkerV3BindingMismatch {
+                field: DurablePublishedClaimWorkerV3BindingFieldV1::ArtifactLength,
+            });
+        }
+        let expected = publication_receipt_for_producer_identity_v3(
+            self.plan.attempt(),
+            self.plan,
+            self.upstream_evidence,
+            binding,
+            self.receipt.producer_identity(),
+        );
+        for (matches, field) in [
+            (
+                self.receipt.attempt_identity() == expected.attempt_identity(),
+                DurablePublishedClaimReceiptFieldV3::Attempt,
+            ),
+            (
+                self.receipt.scope_identity() == expected.scope_identity(),
+                DurablePublishedClaimReceiptFieldV3::Scope,
+            ),
+            (
+                self.receipt.plan_commitment() == expected.plan_commitment(),
+                DurablePublishedClaimReceiptFieldV3::Plan,
+            ),
+            (
+                self.receipt.upstream_evidence_identity() == expected.upstream_evidence_identity(),
+                DurablePublishedClaimReceiptFieldV3::UpstreamEvidence,
+            ),
+            (
+                self.receipt.finalized_output_identity() == expected.finalized_output_identity(),
+                DurablePublishedClaimReceiptFieldV3::FinalizedOutput,
+            ),
+            (
+                self.receipt.publication_identity() == expected.publication_identity(),
+                DurablePublishedClaimReceiptFieldV3::Publication,
+            ),
+        ] {
+            if !matches {
+                return Err(DurablePublishedClaimCodecErrorV3::ReceiptMismatch { field });
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Reacquires a fresh non-`Clone` lease from one inert cross-process claim.
 ///
 /// The operation takes the existing output directory's cooperative lock without blocking, then
@@ -764,6 +1178,15 @@ pub fn reacquire_current_hsaco_publication_lease_v2(
 ) -> Result<DurableCurrentLinkPublicationLeaseV1, DurablePublishedClaimReacquisitionErrorV2> {
     reacquire_current_hsaco_publication_lease::<ClaimSchemaV2>(output_dir, claim)
         .map_err(reacquisition_error_v2)
+}
+
+/// Reacquires a fresh lease only from exact strict Worker V3 claim and registry state.
+pub fn reacquire_current_hsaco_publication_lease_v3(
+    output_dir: &Path,
+    claim: &DurablePublishedHsacoClaimV3,
+) -> Result<DurableCurrentLinkPublicationLeaseV1, DurablePublishedClaimReacquisitionErrorV3> {
+    reacquire_current_hsaco_publication_lease::<ClaimSchemaV3>(output_dir, claim)
+        .map_err(reacquisition_error_v3)
 }
 
 enum ReacquisitionError<C> {
@@ -839,6 +1262,33 @@ impl ClaimSchema for ClaimSchemaV2 {
 
     fn producer_matches(stable_source: &str, crate_name: &str, claim: &Self::Claim) -> bool {
         producer_receipt_identity_v2(stable_source, crate_name) == claim.receipt.producer_identity()
+    }
+}
+
+struct ClaimSchemaV3;
+
+impl ClaimSchema for ClaimSchemaV3 {
+    type Claim = DurablePublishedHsacoClaimV3;
+    type CodecError = DurablePublishedClaimCodecErrorV3;
+
+    fn validate(claim: &Self::Claim) -> Result<(), Self::CodecError> {
+        claim.validate()
+    }
+
+    fn plan(claim: &Self::Claim) -> DurableLinkPublicationPlanV1 {
+        claim.plan
+    }
+
+    fn files(claim: &Self::Claim) -> DurablePublishedFileBindingV1 {
+        claim.files
+    }
+
+    fn receipt_matches(receipt: Option<BackendReceiptV1>, claim: &Self::Claim) -> bool {
+        matches!(receipt, Some(BackendReceiptV1::ProvenanceV3(actual)) if actual == claim.receipt)
+    }
+
+    fn producer_matches(stable_source: &str, crate_name: &str, claim: &Self::Claim) -> bool {
+        producer_receipt_identity_v3(stable_source, crate_name) == claim.receipt.producer_identity()
     }
 }
 
@@ -941,6 +1391,33 @@ fn reacquisition_error_v2(
     }
 }
 
+fn reacquisition_error_v3(
+    error: ReacquisitionError<DurablePublishedClaimCodecErrorV3>,
+) -> DurablePublishedClaimReacquisitionErrorV3 {
+    match error {
+        ReacquisitionError::Busy => DurablePublishedClaimReacquisitionErrorV3::Busy,
+        ReacquisitionError::InvalidClaim(error) => {
+            DurablePublishedClaimReacquisitionErrorV3::InvalidClaim(error)
+        }
+        ReacquisitionError::Filesystem(error) => {
+            DurablePublishedClaimReacquisitionErrorV3::Filesystem(error)
+        }
+        ReacquisitionError::AttemptNotFound => {
+            DurablePublishedClaimReacquisitionErrorV3::AttemptNotFound
+        }
+        ReacquisitionError::AttemptState => DurablePublishedClaimReacquisitionErrorV3::AttemptState,
+        ReacquisitionError::ReceiptMismatch => {
+            DurablePublishedClaimReacquisitionErrorV3::ReceiptMismatch
+        }
+        ReacquisitionError::ProducerIdentityMismatch => {
+            DurablePublishedClaimReacquisitionErrorV3::ProducerIdentityMismatch
+        }
+        ReacquisitionError::Publication(error) => {
+            DurablePublishedClaimReacquisitionErrorV3::Publication(error)
+        }
+    }
+}
+
 fn push_attempt(bytes: &mut Vec<u8>, attempt: BuildAttempt) {
     bytes.extend_from_slice(&attempt.generation().to_le_bytes());
     bytes.extend_from_slice(attempt.session().as_bytes());
@@ -982,6 +1459,38 @@ fn push_receipt_v2(bytes: &mut Vec<u8>, receipt: BackendPublicationReceiptV2) {
     push_compiler_closure_v2(bytes, receipt.compiler_closure());
 }
 
+fn push_receipt_v3(bytes: &mut Vec<u8>, receipt: BackendPublicationReceiptV3) {
+    for identity in [
+        receipt.attempt_identity(),
+        receipt.producer_identity(),
+        receipt.scope_identity(),
+        receipt.plan_commitment(),
+        receipt.upstream_evidence_identity(),
+        receipt.finalized_output_identity(),
+        receipt.publication_identity(),
+    ] {
+        bytes.extend_from_slice(&identity);
+    }
+    push_worker_v3_binding_preimage(bytes, receipt.publication_binding());
+}
+
+fn push_worker_v3_binding_preimage(bytes: &mut Vec<u8>, binding: WorkerV3PublicationBindingV1) {
+    push_compiler_closure_v2(bytes, binding.compiler_closure());
+    for identity in [
+        binding.publication_intent_record_identity(),
+        binding.finalization_identity(),
+        binding.source_evidence_identity(),
+        binding.compiler_handoff_binding_identity(),
+        binding.raw_inspection_identity(),
+        binding.raw_output_sha256(),
+    ] {
+        bytes.extend_from_slice(&identity);
+    }
+    bytes.extend_from_slice(&binding.raw_output_length().to_le_bytes());
+    bytes.extend_from_slice(&binding.finalized_output_sha256());
+    bytes.extend_from_slice(&binding.finalized_output_length().to_le_bytes());
+}
+
 fn push_file_identity(bytes: &mut Vec<u8>, identity: DurableFileIdentityV1) {
     bytes.extend_from_slice(&identity.device.to_le_bytes());
     bytes.extend_from_slice(&identity.inode.to_le_bytes());
@@ -997,6 +1506,13 @@ fn claim_checksum(bytes: &[u8]) -> [u8; 32] {
 fn claim_checksum_v2(bytes: &[u8]) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(CLAIM_CHECKSUM_DOMAIN_V2);
+    digest.update(bytes);
+    digest.finalize().into()
+}
+
+fn claim_checksum_v3(bytes: &[u8]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(CLAIM_CHECKSUM_DOMAIN_V3);
     digest.update(bytes);
     digest.finalize().into()
 }
@@ -1057,6 +1573,105 @@ fn decode_receipt_v2(
         publication_identity,
         compiler_closure,
     ))
+}
+
+fn decode_v3<T>(
+    value: Result<T, DurablePublishedClaimCodecErrorV1>,
+) -> Result<T, DurablePublishedClaimCodecErrorV3> {
+    value.map_err(|error| match error {
+        DurablePublishedClaimCodecErrorV1::TooLarge { actual, maximum } => {
+            DurablePublishedClaimCodecErrorV3::TooLarge { actual, maximum }
+        }
+        DurablePublishedClaimCodecErrorV1::Truncated => {
+            DurablePublishedClaimCodecErrorV3::Truncated
+        }
+        DurablePublishedClaimCodecErrorV1::TrailingBytes => {
+            DurablePublishedClaimCodecErrorV3::TrailingBytes
+        }
+        DurablePublishedClaimCodecErrorV1::BadMagic => DurablePublishedClaimCodecErrorV3::BadMagic,
+        DurablePublishedClaimCodecErrorV1::UnsupportedVersion { actual } => {
+            DurablePublishedClaimCodecErrorV3::UnsupportedVersion { actual }
+        }
+        DurablePublishedClaimCodecErrorV1::ChecksumMismatch => {
+            DurablePublishedClaimCodecErrorV3::ChecksumMismatch
+        }
+        DurablePublishedClaimCodecErrorV1::InvalidAttempt => {
+            DurablePublishedClaimCodecErrorV3::InvalidAttempt
+        }
+        DurablePublishedClaimCodecErrorV1::InvalidArtifactLength { actual } => {
+            DurablePublishedClaimCodecErrorV3::InvalidArtifactLength { actual }
+        }
+        DurablePublishedClaimCodecErrorV1::ReceiptMismatch { .. }
+        | DurablePublishedClaimCodecErrorV1::NonCanonical => {
+            unreachable!("shared decoder primitives do not produce semantic claim errors")
+        }
+    })
+}
+
+fn decode_receipt_v3(
+    decoder: &mut ClaimDecoder<'_>,
+) -> Result<BackendPublicationReceiptV3, DurablePublishedClaimCodecErrorV3> {
+    let attempt_identity = decode_v3(decoder.identity())?;
+    let producer_identity = decode_v3(decoder.identity())?;
+    let scope_identity = decode_v3(decoder.identity())?;
+    let plan_commitment = decode_v3(decoder.identity())?;
+    let upstream_evidence_identity = decode_v3(decoder.identity())?;
+    let finalized_output_identity = decode_v3(decoder.identity())?;
+    let publication_identity = decode_v3(decoder.identity())?;
+    let binding = decode_worker_v3_binding_preimage(decoder)?;
+    Ok(BackendPublicationReceiptV3::new(
+        attempt_identity,
+        producer_identity,
+        scope_identity,
+        plan_commitment,
+        upstream_evidence_identity,
+        finalized_output_identity,
+        publication_identity,
+        binding,
+    ))
+}
+
+fn decode_worker_v3_binding_preimage(
+    decoder: &mut ClaimDecoder<'_>,
+) -> Result<WorkerV3PublicationBindingV1, DurablePublishedClaimCodecErrorV3> {
+    let closure_bytes = decode_v3(decoder.take(COMPILER_CLOSURE_BYTES_V2))?;
+    let compiler_closure = decode_compiler_closure_v2(closure_bytes).map_err(|error| {
+        DurablePublishedClaimCodecErrorV3::InvalidWorkerV3Binding(
+            WorkerV3PublicationBindingErrorV1::InvalidCompilerClosure(error),
+        )
+    })?;
+    WorkerV3PublicationBindingV1::new(
+        compiler_closure,
+        decode_v3(decoder.identity())?,
+        decode_v3(decoder.identity())?,
+        decode_v3(decoder.identity())?,
+        decode_v3(decoder.identity())?,
+        decode_v3(decoder.identity())?,
+        decode_v3(decoder.identity())?,
+        decode_v3(decoder.u64())?,
+        decode_v3(decoder.identity())?,
+        decode_v3(decoder.u64())?,
+    )
+    .map_err(DurablePublishedClaimCodecErrorV3::InvalidWorkerV3Binding)
+}
+
+fn validate_worker_v3_binding(
+    binding: WorkerV3PublicationBindingV1,
+) -> Result<(), DurablePublishedClaimCodecErrorV3> {
+    WorkerV3PublicationBindingV1::new(
+        binding.compiler_closure(),
+        binding.publication_intent_record_identity(),
+        binding.finalization_identity(),
+        binding.source_evidence_identity(),
+        binding.compiler_handoff_binding_identity(),
+        binding.raw_inspection_identity(),
+        binding.raw_output_sha256(),
+        binding.raw_output_length(),
+        binding.finalized_output_sha256(),
+        binding.finalized_output_length(),
+    )
+    .map(|_| ())
+    .map_err(DurablePublishedClaimCodecErrorV3::InvalidWorkerV3Binding)
 }
 
 struct ClaimDecoder<'a> {
@@ -1157,6 +1772,68 @@ impl<'a> ClaimDecoder<'a> {
 mod tests {
     use super::*;
 
+    fn full_v3_claim() -> DurablePublishedHsacoClaimV3 {
+        let attempt = BuildAttempt::new(
+            0x0102_0304_0506_0708,
+            BuildSession::from_bytes([0x10; 16]),
+            BuildInvocation::from_bytes([0x11; 32]),
+        )
+        .unwrap();
+        let plan = DurableLinkPublicationPlanV1::new(
+            attempt,
+            LinkPublicationScopeV1::new(
+                PackageIdentityV1::from_bytes([0x20; 32]),
+                KernelSetIdentityV1::from_bytes([0x21; 32]),
+                TargetIdentityV1::from_bytes([0x22; 32]),
+            ),
+            CanonicalLinkRequestIdentityV1::from_bytes([0x30; 32]),
+            PinnedWorkerIdentityV1::from_bytes([0x31; 32]),
+            ValidatedResponseIdentityV1::from_bytes([0x32; 32]),
+            LinkedOutputIdentityV1::from_bytes([0x33; 32]),
+            FinalizationIdentityV1::from_bytes([0x34; 32]),
+            FinalizedOutputIdentityV1::from_bytes([0x35; 32]),
+            AtomicPublicationIdentityV1::from_bytes([0x36; 32]),
+        );
+        let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes([0x40; 32]);
+        let binding = WorkerV3PublicationBindingV1::new(
+            CompilerClosureV2::new([1; 32], [2; 32], [3; 32], [4; 32], [5; 32], [6; 32]).unwrap(),
+            [0x42; 32],
+            [0x43; 32],
+            [0x44; 32],
+            [0x45; 32],
+            [0x46; 32],
+            [0x33; 32],
+            0x1200,
+            [0x35; 32],
+            0x1234,
+        )
+        .unwrap();
+        let receipt = publication_receipt_for_producer_identity_v3(
+            attempt, plan, upstream, binding, [0x41; 32],
+        );
+        DurablePublishedHsacoClaimV3::new(
+            plan,
+            upstream,
+            receipt,
+            DurablePublishedFileBindingV1 {
+                output_identity: DurableFileIdentityV1 {
+                    device: 0x5051_5253_5455_5657,
+                    inode: 0x6061_6263_6465_6667,
+                },
+                record_identity: DurableFileIdentityV1 {
+                    device: 0x7071_7273_7475_7677,
+                    inode: 0x8081_8283_8485_8687,
+                },
+                artifact_identity: DurableFileIdentityV1 {
+                    device: 0x9091_9293_9495_9697,
+                    inode: 0xa0a1_a2a3_a4a5_a6a7,
+                },
+                artifact_length: 0x1234,
+            },
+        )
+        .unwrap()
+    }
+
     #[test]
     fn full_v1_claim_golden_is_stable() {
         let attempt = BuildAttempt::new(
@@ -1211,6 +1888,67 @@ mod tests {
         assert_eq!(
             DurablePublishedHsacoClaimV1::decode_canonical(&encoded).unwrap(),
             claim
+        );
+    }
+
+    #[test]
+    fn full_v3_claim_round_trips_under_only_the_v3_schema() {
+        let claim = full_v3_claim();
+        let encoded = claim.encode_canonical().unwrap();
+        assert_eq!(encoded.len(), CLAIM_CANONICAL_BYTES_V3);
+        assert_eq!(
+            DurablePublishedHsacoClaimV3::decode_canonical(&encoded).unwrap(),
+            claim
+        );
+        assert!(matches!(
+            DurablePublishedHsacoClaimV1::decode_canonical(&encoded),
+            Err(DurablePublishedClaimCodecErrorV1::TooLarge { .. })
+        ));
+        assert!(matches!(
+            DurablePublishedHsacoClaimV2::decode_canonical(&encoded),
+            Err(DurablePublishedClaimCodecErrorV2::TooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn v3_claim_codec_rejects_truncation_trailing_and_corruption() {
+        let encoded = full_v3_claim().encode_canonical().unwrap();
+        assert_eq!(
+            DurablePublishedHsacoClaimV3::decode_canonical(&encoded[..encoded.len() - 1]),
+            Err(DurablePublishedClaimCodecErrorV3::Truncated)
+        );
+
+        let mut trailing = encoded.clone();
+        trailing.push(0);
+        assert_eq!(
+            DurablePublishedHsacoClaimV3::decode_canonical(&trailing),
+            Err(DurablePublishedClaimCodecErrorV3::TrailingBytes)
+        );
+
+        let mut corrupt = encoded;
+        let last = corrupt.len() - 1;
+        corrupt[last] ^= 1;
+        assert_eq!(
+            DurablePublishedHsacoClaimV3::decode_canonical(&corrupt),
+            Err(DurablePublishedClaimCodecErrorV3::ChecksumMismatch)
+        );
+    }
+
+    #[test]
+    fn v3_claim_binds_finalized_length_to_the_published_file() {
+        let claim = full_v3_claim();
+        let mismatched = DurablePublishedHsacoClaimV3 {
+            files: DurablePublishedFileBindingV1 {
+                artifact_length: claim.files.artifact_length + 1,
+                ..claim.files
+            },
+            ..claim
+        };
+        assert_eq!(
+            mismatched.validate(),
+            Err(DurablePublishedClaimCodecErrorV3::WorkerV3BindingMismatch {
+                field: DurablePublishedClaimWorkerV3BindingFieldV1::ArtifactLength,
+            })
         );
     }
 }

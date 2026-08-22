@@ -5,22 +5,23 @@
 //! once, and compact opaque reconstruction metadata. It deliberately does not retain raw worker
 //! output or canonical worker request/response aggregates: a higher-level finalizer must derive raw
 //! bytes from the canonical finalized output and reconstruct or stream-hash the worker wires.
-//! Receipt-bound retirement moves the record to an inert marker before deleting attachments, so
-//! cleanup can resume after interruption or a successor generation without retaining old inputs.
+//! Retirement moves the record to an inert marker before deleting attachments, so cleanup can
+//! resume after interruption without exposing partly deleted state. Current-generation restart
+//! evidence remains protected until a later protocol persists load-envelope readiness; only a
+//! strictly newer same-producer generation can currently authorize retirement.
 //!
 //! This crate validates storage framing and resource bounds only. It does not authenticate a
 //! component's producer, establish that metadata is a canonical finalizer transcript, derive
 //! semantic identities, or grant publication, loading, or launch authority.
 
-use crate::attempt::{AttemptPhase, BackendReceiptV1};
-use crate::attempt_scoped_hsaco_publication::{publication_receipt, publication_receipt_v2};
+use crate::attempt::AttemptPhase;
 use crate::{
     AtomicPublicationIdentityV1, BuildAttempt, BuildInvocation, BuildSession,
     CanonicalLinkRequestIdentityV1, DurableLinkPublicationPlanV1, FinalizationIdentityV1,
     FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1,
     MAX_COMPILER_MODULE_HANDOFF_BYTES_V3, MAX_DURABLE_FINALIZED_ARTIFACT_BYTES, MAX_OUTPUT_ENTRIES,
     PackageIdentityV1, PinnedOutput, PinnedWorkerIdentityV1, ProducerIdentity, TargetIdentityV1,
-    UpstreamCodeObjectEvidenceIdentityV1, ValidatedResponseIdentityV1, read_attempt_registry,
+    ValidatedResponseIdentityV1, read_attempt_registry,
 };
 use rustix::fs::{
     AtFlags, FileType, Mode, OFlags, RenameFlags, fstat, fsync, openat, renameat, renameat_with,
@@ -1352,9 +1353,8 @@ impl fmt::Display for WorkerV3PublicationIntentErrorV1 {
             Self::CommittedIntentCannotBeScavenged => formatter.write_str(
                 "a committed Worker V3 publication intent cannot be scavenged",
             ),
-            Self::IdentityMismatch => formatter.write_str(
-                "Worker V3 retirement named a different publication-intent identity",
-            ),
+            Self::IdentityMismatch => formatter
+                .write_str("a different Worker V3 publication-intent identity was supplied"),
             Self::ReceiptNotDurable => formatter.write_str(
                 "the exact backend publication receipt is not durable for this Worker V3 intent",
             ),
@@ -1544,11 +1544,14 @@ pub fn persist_worker_v3_publication_intent_v1_with_options(
 
 /// Durably retires one exact committed Worker V3 restart intent.
 ///
-/// The current occurrence requires its exact completed backend receipt in the durable attempt
-/// registry. A strictly newer same-producer generation may instead retire a superseded intent.
-/// Cleanup first renames and synchronizes the validated record as an inert retirement marker,
-/// removes and synchronizes all attachments, and removes the marker last. Repeating this call
-/// resumes an interrupted retirement without making restart bytes recoverable again.
+/// Current-generation restart evidence remains protected even after backend publication because
+/// publication does not prove that a durable load envelope can be reconstructed. Until that later
+/// readiness receipt exists, this operation returns
+/// [`WorkerV3PublicationIntentErrorV1::ReceiptNotDurable`] for the current occurrence. A strictly
+/// newer same-producer generation may retire a superseded intent. Cleanup first renames and
+/// synchronizes the validated record as an inert retirement marker, removes and synchronizes all
+/// attachments, and removes the marker last. Repeating this call resumes an interrupted
+/// retirement without making restart bytes recoverable again.
 pub fn clear_worker_v3_publication_intent_v1(
     output_dir: &Path,
     producer: &ProducerIdentity,
@@ -1593,15 +1596,15 @@ pub fn clear_worker_v3_publication_intent_v1_with_options(
     Ok(())
 }
 
-/// Resumes receipt-authorized cleanup from an inert durable retirement marker.
+/// Resumes successor-authorized cleanup from an inert durable retirement marker.
 ///
 /// This operation intentionally accepts no caller-retained record identity. It decodes and pins
 /// the exact `.record.retiring` marker or its terminal quarantine temp, binds it to the requested
-/// producer occurrence, and reconstructs the exact backend-receipt authorization from durable
-/// state. Finding and removing the terminal quarantine completes this call successfully; if no
-/// marker evidence exists, the call returns [`WorkerV3PublicationIntentErrorV1::NotFound`].
-/// Canonical and redo records are rejected: callers must start their retirement with
-/// [`clear_worker_v3_publication_intent_v1`], which requires the exact record identity.
+/// producer occurrence, and reconstructs successor authorization from durable attempt state.
+/// Finding and removing the terminal quarantine completes this call successfully; if no marker
+/// evidence exists, the call returns [`WorkerV3PublicationIntentErrorV1::NotFound`]. Canonical and
+/// redo records are rejected: callers must start retirement through an authorized clear or
+/// successor scavenge operation.
 pub fn resume_worker_v3_publication_intent_retirement_v1(
     output_dir: &Path,
     producer: &ProducerIdentity,
@@ -1663,19 +1666,29 @@ pub fn recover_worker_v3_publication_intent_v1(
     let output = PinnedOutput::open_existing(output_dir)?;
     let _lock = output.lock()?;
     output.verify_path_identity()?;
-    authorize_occurrence(&output, producer, attempt)?;
+    recover_worker_v3_publication_intent_locked_v1(&output, producer, attempt)
+}
+
+/// Revalidates one exact V3 restart owner while the caller retains the artifact-store lock.
+pub(crate) fn recover_worker_v3_publication_intent_locked_v1(
+    output: &PinnedOutput,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+) -> Result<RecoveredWorkerV3PublicationIntentV1, WorkerV3PublicationIntentErrorV1> {
+    output.verify_path_identity()?;
+    authorize_occurrence(output, producer, attempt)?;
     let producer_key = producer_key(producer);
     let names = IntentNames::new(producer_key, occurrence_key(producer_key, attempt))?;
-    if cleanup_temps(&output, &names)?
+    if cleanup_temps(output, &names)?
         .quarantined_retiring_record
         .is_some()
     {
         return Err(WorkerV3PublicationIntentErrorV1::RetirementInProgress);
     }
-    if let Some(recovered) = recover_locked(&output, &names, producer, attempt)? {
+    if let Some(recovered) = recover_locked(output, &names, producer, attempt)? {
         return Ok(recovered);
     }
-    remove_uncommitted_occurrence_entries(&output, &names, false)?;
+    remove_uncommitted_occurrence_entries(output, &names, false)?;
     Err(WorkerV3PublicationIntentErrorV1::NotFound)
 }
 
@@ -1691,6 +1704,21 @@ pub fn scavenge_worker_v3_publication_intent_occurrence_v1(
     output_dir: &Path,
     producer: &ProducerIdentity,
     occurrence: BuildAttempt,
+) -> Result<WorkerV3PublicationIntentScavengeOutcomeV1, WorkerV3PublicationIntentErrorV1> {
+    scavenge_worker_v3_publication_intent_occurrence_v1_with_options(
+        output_dir,
+        producer,
+        occurrence,
+        WorkerV3PublicationIntentOptionsV1::default(),
+    )
+}
+
+/// Fault-injectable form of [`scavenge_worker_v3_publication_intent_occurrence_v1`].
+pub fn scavenge_worker_v3_publication_intent_occurrence_v1_with_options(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    occurrence: BuildAttempt,
+    options: WorkerV3PublicationIntentOptionsV1,
 ) -> Result<WorkerV3PublicationIntentScavengeOutcomeV1, WorkerV3PublicationIntentErrorV1> {
     if occurrence.session() == BuildSession::DIRECT {
         return Err(WorkerV3PublicationIntentErrorV1::ScavengeNotAuthorized);
@@ -1726,7 +1754,7 @@ pub fn scavenge_worker_v3_publication_intent_occurrence_v1(
         if authorization != OccurrenceScavengeAuthorizationV1::Superseded {
             return Err(WorkerV3PublicationIntentErrorV1::CommittedIntentCannotBeScavenged);
         }
-        let mut faults = FaultInjector::new(None);
+        let mut faults = FaultInjector::new(options.injected_crash);
         retire_committed_occurrence_locked(
             &output,
             &names,
@@ -2184,7 +2212,7 @@ fn authorize_retirement(
     output: &PinnedOutput,
     producer: &ProducerIdentity,
     attempt: BuildAttempt,
-    intent: WorkerV3PublicationIntentRecordV1,
+    _intent: WorkerV3PublicationIntentRecordV1,
     authorization: RetirementAuthorizationV1,
 ) -> Result<(), WorkerV3PublicationIntentErrorV1> {
     let attempts = read_attempt_registry(output)?;
@@ -2201,54 +2229,14 @@ fn authorize_retirement(
         if matches!(authorization, RetirementAuthorizationV1::SuccessorOnly) {
             return Err(WorkerV3PublicationIntentErrorV1::ScavengeNotAuthorized);
         }
-        if !matches!(
-            current.phase,
-            AttemptPhase::BackendClaimed | AttemptPhase::Completed
-        ) || !has_exact_durable_receipt(current.backend_receipt, producer, attempt, intent)
-        {
-            return Err(WorkerV3PublicationIntentErrorV1::ReceiptNotDurable);
-        }
-        return Ok(());
+        // Publication alone is insufficient: restart preimages must survive until a later
+        // durable load-envelope readiness receipt exists.
+        return Err(WorkerV3PublicationIntentErrorV1::ReceiptNotDurable);
     }
     if current.generation > attempt.generation() {
         return Ok(());
     }
     Err(WorkerV3PublicationIntentErrorV1::ScavengeNotAuthorized)
-}
-
-fn has_exact_durable_receipt(
-    receipt: Option<BackendReceiptV1>,
-    producer: &ProducerIdentity,
-    attempt: BuildAttempt,
-    intent: WorkerV3PublicationIntentRecordV1,
-) -> bool {
-    match receipt {
-        Some(BackendReceiptV1::Provenance(receipt)) => {
-            let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes(
-                receipt.upstream_evidence_identity(),
-            );
-            receipt == publication_receipt(producer, attempt, intent.plan(), upstream)
-        }
-        Some(BackendReceiptV1::ProvenanceV2(receipt)) => {
-            let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes(
-                receipt.upstream_evidence_identity(),
-            );
-            receipt
-                == publication_receipt_v2(
-                    producer,
-                    attempt,
-                    intent.plan(),
-                    upstream,
-                    receipt.compiler_closure(),
-                )
-        }
-        Some(
-            BackendReceiptV1::LegacyCoordination
-            | BackendReceiptV1::PendingProvenance(_)
-            | BackendReceiptV1::PendingProvenanceV2(_),
-        )
-        | None => false,
-    }
 }
 
 fn recover_locked(

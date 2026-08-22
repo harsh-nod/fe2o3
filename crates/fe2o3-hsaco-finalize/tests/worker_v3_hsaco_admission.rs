@@ -9,10 +9,11 @@ use std::{
 };
 
 use fe2o3_artifact_transaction::{
-    BuildInvocation, BuildSession, CompilerModuleHandoffReceiptV3, CompilerModuleHandoffSlotV3,
-    ConsumedCompilerModuleHandoffV3, ProducerIdentity, WorkerV3PublicationIntentOutcomeV1,
-    begin_build_attempt, consume_compiler_module_handoff_in_slot_v3,
-    publish_compiler_module_handoff_in_slot_v3,
+    AttemptScopedHsacoPublicationOutcomeV3, BuildInvocation, BuildSession,
+    CompilerModuleHandoffReceiptV3, CompilerModuleHandoffSlotV3, ConsumedCompilerModuleHandoffV3,
+    DurablePublishedHsacoClaimV3, ProducerIdentity, WorkerV3PublicationIntentOutcomeV1,
+    begin_build_attempt, consume_compiler_module_handoff_in_slot_v3, finish_build_attempt,
+    publish_compiler_module_handoff_in_slot_v3, reacquire_current_hsaco_publication_lease_v3,
 };
 use fe2o3_compiler_ffi::{
     CodeObjectVersion, CompilerFfiEnvelopeV1, CompilerModuleHandoffV2, CompilerModuleKindV1,
@@ -23,17 +24,18 @@ use fe2o3_compiler_ffi::{
     InertSemanticCompilerModuleHandoffV3,
 };
 use fe2o3_hsaco_finalize::{
-    ContentIdentityV1, InertProtectedFirstBuildWorkerV2EvidenceV1,
+    CompilerClosureV2, ContentIdentityV1, InertProtectedFirstBuildWorkerV2EvidenceV1,
     InertProtectedFirstBuildWorkerV3EvidenceV1, InspectedProtectedRawWorkerV2HsacoV1,
     InspectedProtectedRawWorkerV3HsacoV1, LinkOptionV1, PinnedWorkerV1, WorkerExecutionLimitsV1,
     WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1,
     WorkerV2HsacoFinalizationError, WorkerV2RawHsacoInspectionError,
-    execute_protected_reproducible_first_build_worker_v3,
+    WorkerV3HsacoPublicationErrorV1, execute_protected_reproducible_first_build_worker_v3,
     finalize_inspected_protected_worker_v3_hsaco_v1,
     inspect_protected_production_v1_worker_v2_raw_hsaco_v1,
     inspect_protected_production_v1_worker_v3_raw_hsaco_v1,
     persist_prepared_protected_worker_v3_hsaco_publication_v1,
     prepare_protected_worker_v3_hsaco_publication_v1,
+    publish_recovered_protected_worker_v3_hsaco_v1,
     recover_protected_worker_v3_hsaco_publication_v1,
 };
 use fe2o3_kernel_descriptor::{
@@ -287,16 +289,64 @@ fn native_v3_publication_persists_and_reconstructs_exact_lineage_after_restart()
         persisted.outcome(),
         WorkerV3PublicationIntentOutcomeV1::Persisted
     );
-    assert_eq!(persisted.exact_finalized_hsaco(), exact_finalized);
+    let compiler_closure = persisted
+        .finalized_evidence()
+        .binding_expectation()
+        .compiler_closure();
+    let binding = persisted.publication_binding(compiler_closure).unwrap();
+    assert_eq!(
+        binding.publication_intent_record_identity(),
+        persisted.storage_record().identity().as_bytes()
+    );
+    assert_eq!(
+        binding.finalization_identity(),
+        *persisted
+            .publication_intent()
+            .finalization_identity()
+            .as_bytes()
+    );
+    assert_eq!(
+        binding.finalized_output_length(),
+        exact_finalized.len() as u64
+    );
+    assert!(!binding.grants_publication_authority());
+    assert!(!binding.grants_load_authority());
+    assert!(!binding.grants_launch_authority());
+    let mismatched_closure =
+        CompilerClosureV2::new([21; 32], [22; 32], [23; 32], [24; 32], [25; 32], [26; 32]).unwrap();
+    assert!(matches!(
+        persisted.publication_binding(mismatched_closure),
+        Err(WorkerV3HsacoPublicationErrorV1::CompilerClosureMismatch)
+    ));
+    let published = publish_recovered_protected_worker_v3_hsaco_v1(
+        &directory.0,
+        &producer(),
+        compiler_closure,
+        persisted,
+    )
+    .unwrap();
+    let publication = published.publication_result();
+    assert_eq!(publication.publication_binding(), binding);
+    let encoded_claim = publication.published_claim().encode_canonical().unwrap();
+    let decoded_claim = DurablePublishedHsacoClaimV3::decode_canonical(&encoded_claim).unwrap();
+    assert_eq!(&decoded_claim, publication.published_claim());
+    let lease = reacquire_current_hsaco_publication_lease_v3(&directory.0, &decoded_claim).unwrap();
+    assert_eq!(lease.exact_artifact_bytes(), exact_finalized);
+    drop(lease);
+    assert_eq!(
+        published.recovered_evidence().exact_finalized_hsaco(),
+        exact_finalized
+    );
     assert_eq!(
         fe2o3_hsaco_finalize::derive_unfinalized_hsaco_from_finalized_v1(
-            persisted.exact_finalized_hsaco()
+            published.recovered_evidence().exact_finalized_hsaco()
         )
         .unwrap(),
         exact_raw
     );
-    let expected_intent = persisted.publication_intent();
-    drop(persisted);
+    let expected_intent = published.recovered_evidence().publication_intent();
+    drop(published);
+    finish_build_attempt(&directory.0, &producer(), attempt).unwrap();
 
     let recovered =
         recover_protected_worker_v3_hsaco_publication_v1(&directory.0, &producer(), attempt)
@@ -310,6 +360,22 @@ fn native_v3_publication_persists_and_reconstructs_exact_lineage_after_restart()
     assert!(!recovered.grants_publication_authority());
     assert!(!recovered.grants_load_authority());
     assert!(!recovered.grants_launch_authority());
+
+    let reconstructed = publish_recovered_protected_worker_v3_hsaco_v1(
+        &directory.0,
+        &producer(),
+        compiler_closure,
+        recovered,
+    )
+    .unwrap();
+    assert_eq!(
+        reconstructed.publication_result().outcome(),
+        AttemptScopedHsacoPublicationOutcomeV3::RecoveredCommittedPublication
+    );
+    assert_eq!(
+        reconstructed.recovered_evidence().exact_finalized_hsaco(),
+        exact_finalized
+    );
 }
 
 #[test]
