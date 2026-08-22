@@ -7,17 +7,17 @@
 use std::{collections::VecDeque, fmt};
 
 use dialect_kernel::{
-    AccessKindAttr, DYNAMIC_EXTENT, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr,
+    AccessKindAttr, DYNAMIC_EXTENT, IndexBinaryKindAttr, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr,
     SUPPORTED_ELEMENT_WIDTHS,
 };
 use fe2o3_kernel_analysis::MAX_RANKED_BOUNDS_OPERATIONS;
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticCallableDeclV1, SemanticCallableIdV1, SemanticCompilerIntrinsicOperationV1,
     SemanticConstantValueV1, SemanticDirectCallV1, SemanticDirectTailCallV1,
-    SemanticFunctionDeclV1, SemanticFunctionRoleV1, SemanticLocalIdV1, SemanticLocalRoleV1,
-    SemanticOperandV1, SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1,
-    SemanticSourceProvenanceV1, SemanticStatementKindV1, SemanticTerminatorKindV1,
-    SemanticTypeIdV1, SemanticTypeShapeV1,
+    SemanticDisjointIndexSpaceV1, SemanticFunctionDeclV1, SemanticFunctionRoleV1,
+    SemanticLocalIdV1, SemanticLocalRoleV1, SemanticOperandV1, SemanticPlaceV1,
+    SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticSourceProvenanceV1,
+    SemanticStatementKindV1, SemanticTerminatorKindV1, SemanticTypeIdV1, SemanticTypeShapeV1,
 };
 use fe2o3_pliron::{
     ProductionConstructionV1, ProductionRankedBlockV1, ProductionRankedCompileErrorV1,
@@ -45,10 +45,18 @@ pub(crate) struct ProjectedAccessSourceV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct GuardedDisjointAccessV1 {
     view: ProductionRankedValueIdV1,
-    index: ProductionRankedValueIdV1,
+    index: ProductionRankedValueV1,
+    precondition: Option<(ProductionRankedValueV1, ProductionRankedValueV1)>,
     extent_argument: u32,
     access: AccessKindAttr,
     source: SemanticSourceProvenanceV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProjectedDisjointIndexV1 {
+    value: ProductionRankedValueV1,
+    mapping: SemanticDisjointIndexSpaceV1,
+    precondition: Option<(ProductionRankedValueV1, ProductionRankedValueV1)>,
 }
 
 struct IntrinsicProjectionV1 {
@@ -243,6 +251,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         semantic.callables(),
         semantic.types(),
         function,
+        &constants,
         &mut operations,
         &mut next_value,
         &mut ranked_ir,
@@ -342,6 +351,7 @@ fn project_intrinsic_contracts(
     callables: &[SemanticCallableDeclV1],
     types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
+    constants: &[Option<u64>],
     operations: &mut Vec<ProductionRankedOperationV1>,
     next_value: &mut u32,
     ranked_ir: &mut String,
@@ -363,27 +373,35 @@ fn project_intrinsic_contracts(
             ));
         }
     }
-    let mut invocation_values = vec![None; function.locals().len()];
+    let mut index_values = vec![None; function.locals().len()];
+    let mut grid_leader_destinations = vec![false; function.locals().len()];
+    let mut grid_leader_precondition = None;
     for block in function.blocks() {
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
             continue;
         };
-        let Some(SemanticCallableDeclV1::CompilerIntrinsic {
-            operation: SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { .. },
-            ..
-        }) = callables.get(call.callee().index() as usize)
+        let Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) =
+            callables.get(call.callee().index() as usize)
         else {
             continue;
         };
+        if !matches!(
+            operation,
+            SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { .. }
+                | SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { .. }
+        ) {
+            continue;
+        }
         let destination = simple_call_destination(call)?;
-        let slot = invocation_values
-            .get_mut(destination.index() as usize)
-            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                "a thread-index destination outside the semantic local table",
-            ))?;
-        if slot.is_some() {
+        let destination = destination.index() as usize;
+        if destination >= index_values.len() {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "multiple thread-index definitions for one semantic local",
+                "an invocation-capability destination outside the semantic local table",
+            ));
+        }
+        if index_values[destination].is_some() || grid_leader_destinations[destination] {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "multiple invocation capabilities for one semantic local",
             ));
         }
         reserve_operation(operations)?;
@@ -400,7 +418,170 @@ fn project_intrinsic_contracts(
                 result.get()
             ),
         )?;
-        *slot = Some(result);
+        match operation {
+            SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { .. } => {
+                index_values[destination] = Some(ProjectedDisjointIndexV1 {
+                    value: ProductionRankedValueV1::Local(result),
+                    mapping: SemanticDisjointIndexSpaceV1::Index1d,
+                    precondition: None,
+                });
+            }
+            SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { grid_leader } => {
+                reserve_operation(operations)?;
+                let one = next_value_id(next_value)?;
+                operations.push(ProductionRankedOperationV1::IndexConstant {
+                    result: one,
+                    value: 1,
+                });
+                push_ranked_ir(
+                    ranked_ir,
+                    &format!("  %{} = kernel.index_constant 1\n", one.get()),
+                )?;
+                let precondition = (
+                    ProductionRankedValueV1::Local(result),
+                    ProductionRankedValueV1::Local(one),
+                );
+                grid_leader_destinations[destination] = true;
+                match grid_leader_precondition {
+                    None => grid_leader_precondition = Some((*grid_leader, precondition)),
+                    Some((existing, _)) if existing == *grid_leader => {}
+                    Some(_) => {
+                        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                            "multiple grid-leader semantic type identities",
+                        ));
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for block in function.blocks() {
+            for statement in block.statements() {
+                let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                    continue;
+                };
+                if !assignment.destination().projections().is_empty() {
+                    continue;
+                }
+                let source = match assignment.value().kind() {
+                    SemanticRvalueKindV1::Use(operand) => transparent_operand_place(operand),
+                    _ => None,
+                };
+                let Some(source) = source else {
+                    continue;
+                };
+                let source = source.local().index() as usize;
+                let destination = assignment.destination().local().index() as usize;
+                if source >= index_values.len() || destination >= index_values.len() {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "an invocation-capability alias outside the semantic local table",
+                    ));
+                }
+                if index_values[destination].is_none() && index_values[source].is_some() {
+                    index_values[destination] = index_values[source];
+                    changed = true;
+                }
+            }
+            let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+                continue;
+            };
+            let Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) =
+                callables.get(call.callee().index() as usize)
+            else {
+                continue;
+            };
+            let (mapping, offset, passthrough) = match operation {
+                SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint {
+                    index_space,
+                    ..
+                } => (*index_space, 0, true),
+                SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift {
+                    output_space,
+                    offset,
+                    ..
+                }
+                | SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift {
+                    output_space,
+                    offset,
+                    ..
+                } => (*output_space, *offset, false),
+                _ => continue,
+            };
+            let destination = simple_call_destination(call)?.index() as usize;
+            if index_values[destination].is_some() {
+                continue;
+            }
+            let source = call
+                .arguments()
+                .first()
+                .and_then(simple_operand_local)
+                .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "an index capability transform without one exact input local",
+                ))?
+                .index() as usize;
+            let Some(input) = index_values[source] else {
+                continue;
+            };
+            if passthrough {
+                index_values[destination] = Some(ProjectedDisjointIndexV1 { mapping, ..input });
+                changed = true;
+                continue;
+            }
+            reserve_operation(operations)?;
+            let offset_value = next_value_id(next_value)?;
+            operations.push(ProductionRankedOperationV1::IndexConstant {
+                result: offset_value,
+                value: offset,
+            });
+            reserve_operation(operations)?;
+            let shifted = next_value_id(next_value)?;
+            operations.push(ProductionRankedOperationV1::IndexBinary {
+                result: shifted,
+                kind: IndexBinaryKindAttr::Add,
+                lhs: input.value,
+                rhs: ProductionRankedValueV1::Local(offset_value),
+            });
+            push_ranked_ir(
+                ranked_ir,
+                &format!(
+                    "  %{} = kernel.index_constant {}\n  %{} = kernel.index_binary Add {}, %{}\n",
+                    offset_value.get(),
+                    offset,
+                    shifted.get(),
+                    ranked_value_text_v1(input.value),
+                    offset_value.get(),
+                ),
+            )?;
+            let precondition = if offset == 0 {
+                input.precondition
+            } else {
+                reserve_operation(operations)?;
+                let upper = next_value_id(next_value)?;
+                operations.push(ProductionRankedOperationV1::IndexConstant {
+                    result: upper,
+                    value: u64::MAX - offset + 1,
+                });
+                push_ranked_ir(
+                    ranked_ir,
+                    &format!(
+                        "  %{} = kernel.index_constant {}\n",
+                        upper.get(),
+                        u64::MAX - offset + 1,
+                    ),
+                )?;
+                Some((input.value, ProductionRankedValueV1::Local(upper)))
+            };
+            index_values[destination] = Some(ProjectedDisjointIndexV1 {
+                value: ProductionRankedValueV1::Local(shifted),
+                mapping,
+                precondition,
+            });
+            changed = true;
+        }
     }
 
     let mut guarded_accesses = Vec::new();
@@ -408,30 +589,95 @@ fn project_intrinsic_contracts(
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
             continue;
         };
-        let Some(SemanticCallableDeclV1::CompilerIntrinsic {
-            operation: SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { element, .. },
-            ..
-        }) = callables.get(call.callee().index() as usize)
+        let Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) =
+            callables.get(call.callee().index() as usize)
         else {
             continue;
         };
-        if call.arguments().len() != 2 {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "a checked disjoint access with a noncanonical argument count",
-            ));
-        }
-        let index_local = simple_operand_local(&call.arguments()[1]).ok_or(
-            ProductionRankedProjectionErrorV1::Incomplete(
-                "a checked disjoint access whose index witness is not one exact local",
-            ),
-        )?;
-        let index = invocation_values
-            .get(index_local.index() as usize)
-            .copied()
-            .flatten()
-            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-                "a checked disjoint access not bound to the current invocation index",
-            ))?;
+        let (element, index, precondition) = match operation {
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { element, .. } => {
+                let projected = projected_disjoint_operand_v1(call, 1, &index_values)?;
+                if projected.mapping != SemanticDisjointIndexSpaceV1::Index1d {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "identity accessor received a non-identity mapping",
+                    ));
+                }
+                (*element, projected.value, projected.precondition)
+            }
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut {
+                element,
+                index_space,
+                ..
+            } => {
+                let projected = projected_disjoint_operand_v1(call, 1, &index_values)?;
+                if projected.mapping != *index_space {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "disjoint accessor mapping identity changed",
+                    ));
+                }
+                (*element, projected.value, projected.precondition)
+            }
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive {
+                element,
+                grid_leader,
+                ..
+            } => {
+                let Some((producer_type, precondition)) = grid_leader_precondition else {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "an exclusive access without a grid-leader producer",
+                    ));
+                };
+                if producer_type != *grid_leader {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "grid-leader capability type identity changed",
+                    ));
+                }
+                let value = call
+                    .arguments()
+                    .get(2)
+                    .and_then(|operand| constant_operand_value(operand, constants))
+                    .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a dynamic grid-exclusive index before ranked-value projection is available",
+                    ))?;
+                reserve_operation(operations)?;
+                let constant_index = next_value_id(next_value)?;
+                operations.push(ProductionRankedOperationV1::IndexConstant {
+                    result: constant_index,
+                    value,
+                });
+                push_ranked_ir(
+                    ranked_ir,
+                    &format!(
+                        "  %{} = kernel.index_constant {}\n",
+                        constant_index.get(),
+                        value,
+                    ),
+                )?;
+                reserve_operation(operations)?;
+                let index = next_value_id(next_value)?;
+                operations.push(ProductionRankedOperationV1::IndexBinary {
+                    result: index,
+                    kind: IndexBinaryKindAttr::Add,
+                    lhs: precondition.0,
+                    rhs: ProductionRankedValueV1::Local(constant_index),
+                });
+                push_ranked_ir(
+                    ranked_ir,
+                    &format!(
+                        "  %{} = kernel.index_binary Add {}, %{}\n",
+                        index.get(),
+                        ranked_value_text_v1(precondition.0),
+                        constant_index.get(),
+                    ),
+                )?;
+                (
+                    *element,
+                    ProductionRankedValueV1::Local(index),
+                    Some(precondition),
+                )
+            }
+            _ => continue,
+        };
         let extent_argument = u32::try_from(guarded_accesses.len()).map_err(|_| {
             ProductionRankedProjectionErrorV1::Unsupported(
                 "too many checked disjoint extents for the ranked recipe",
@@ -441,7 +687,7 @@ fn project_intrinsic_contracts(
         let view = next_value_id(next_value)?;
         operations.push(ProductionRankedOperationV1::ViewInSpace {
             result: view,
-            element_width: type_width(types, *element)?,
+            element_width: type_width(types, element)?,
             writable: true,
             shape: vec![DYNAMIC_EXTENT],
             dynamic_extents: vec![ProductionRankedValueV1::Argument(extent_argument)],
@@ -452,13 +698,14 @@ fn project_intrinsic_contracts(
             &format!(
                 "  %{} = kernel.ranked_view <{}, true, [dynamic], Global>(%arg{})\n",
                 view.get(),
-                type_width(types, *element)?,
+                type_width(types, element)?,
                 extent_argument,
             ),
         )?;
         guarded_accesses.push(GuardedDisjointAccessV1 {
             view,
             index,
+            precondition,
             extent_argument,
             access: AccessKindAttr::Write,
             source: block.terminator().source(),
@@ -474,6 +721,32 @@ fn project_intrinsic_contracts(
     })
 }
 
+fn projected_disjoint_operand_v1(
+    call: &SemanticDirectCallV1,
+    argument: usize,
+    values: &[Option<ProjectedDisjointIndexV1>],
+) -> Result<ProjectedDisjointIndexV1, ProductionRankedProjectionErrorV1> {
+    let local = call
+        .arguments()
+        .get(argument)
+        .and_then(simple_operand_local)
+        .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+            "a checked disjoint access whose index witness is not one exact local",
+        ))?;
+    values.get(local.index() as usize).copied().flatten().ok_or(
+        ProductionRankedProjectionErrorV1::Incomplete(
+            "a checked disjoint access not bound to authenticated index authority",
+        ),
+    )
+}
+
+fn ranked_value_text_v1(value: ProductionRankedValueV1) -> String {
+    match value {
+        ProductionRankedValueV1::Local(identity) => format!("%{}", identity.get()),
+        ProductionRankedValueV1::Argument(argument) => format!("%arg{argument}"),
+    }
+}
+
 fn finish_guarded_access_graph(
     entry_operations: Vec<ProductionRankedOperationV1>,
     guarded: &[GuardedDisjointAccessV1],
@@ -487,13 +760,22 @@ fn finish_guarded_access_graph(
             ProductionRankedTerminatorV1::Return,
         )]);
     }
-    let block_count = guarded
-        .len()
-        .checked_mul(2)
-        .and_then(|count| count.checked_add(2))
-        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-            "checked-access CFG block count overflow",
-        ))?;
+    let mut starts = Vec::with_capacity(guarded.len());
+    let mut cursor = 1_usize;
+    for access in guarded {
+        starts.push(cursor);
+        cursor = cursor
+            .checked_add(2 + usize::from(access.precondition.is_some()))
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "checked-access CFG block count overflow",
+            ))?;
+    }
+    let block_count =
+        cursor
+            .checked_add(1)
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "checked-access CFG block count overflow",
+            ))?;
     if entry_operations
         .len()
         .checked_add(guarded.len())
@@ -504,7 +786,7 @@ fn finish_guarded_access_graph(
             "checked-access CFG exceeds the ranked operation limit",
         ));
     }
-    let final_block = u32::try_from(block_count - 1).map_err(|_| {
+    let final_block = u32::try_from(cursor).map_err(|_| {
         ProductionRankedProjectionErrorV1::Unsupported(
             "checked-access CFG block identity does not fit u32",
         )
@@ -519,28 +801,55 @@ fn finish_guarded_access_graph(
         entry_operations,
         ProductionRankedTerminatorV1::Branch { target: 1 },
     ));
-    push_ranked_ir(ranked_ir, "  kernel.br ^guard0\n")?;
+    push_ranked_ir(
+        ranked_ir,
+        &format!("  kernel.br ^{}\n", guarded_block_label(0, &guarded[0])),
+    )?;
     for (access_index, access) in guarded.iter().enumerate() {
-        let guard_block = u32::try_from(1 + access_index * 2).map_err(|_| {
+        let guard_block = u32::try_from(starts[access_index]).map_err(|_| {
             ProductionRankedProjectionErrorV1::Unsupported(
                 "checked-access guard block identity does not fit u32",
             )
         })?;
-        let access_block = guard_block + 1;
+        let bounds_block = guard_block + u32::from(access.precondition.is_some());
+        let access_block = bounds_block + 1;
         let next_guard = if access_index + 1 == guarded.len() {
             final_block
         } else {
-            guard_block + 2
+            u32::try_from(starts[access_index + 1]).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "checked-access guard block identity does not fit u32",
+                )
+            })?
         };
         let next_label = if access_index + 1 == guarded.len() {
             "exit".to_owned()
         } else {
-            format!("guard{}", access_index + 1)
+            guarded_block_label(access_index + 1, &guarded[access_index + 1])
         };
+        if let Some((lhs, rhs)) = access.precondition {
+            blocks.push(ProductionRankedBlockV1::new(
+                vec![],
+                ProductionRankedTerminatorV1::IndexLessThan {
+                    lhs,
+                    rhs,
+                    true_block: bounds_block,
+                    false_block: next_guard,
+                },
+            ));
+            push_ranked_ir(
+                ranked_ir,
+                &format!(
+                    "^guard{access_index}:\n  kernel.cond_br {} < {} ^bounds{access_index}, ^{next_label}\n",
+                    ranked_value_text_v1(lhs),
+                    ranked_value_text_v1(rhs),
+                ),
+            )?;
+        }
         blocks.push(ProductionRankedBlockV1::new(
             vec![],
             ProductionRankedTerminatorV1::IndexLessThan {
-                lhs: ProductionRankedValueV1::Local(access.index),
+                lhs: access.index,
                 rhs: ProductionRankedValueV1::Argument(access.extent_argument),
                 true_block: access_block,
                 false_block: next_guard,
@@ -550,7 +859,7 @@ fn finish_guarded_access_graph(
             vec![ProductionRankedOperationV1::Access {
                 kind: access.access,
                 view: ProductionRankedValueV1::Local(access.view),
-                indices: vec![ProductionRankedValueV1::Local(access.index)],
+                indices: vec![access.index],
             }],
             ProductionRankedTerminatorV1::Branch { target: next_guard },
         ));
@@ -564,12 +873,12 @@ fn finish_guarded_access_graph(
         push_ranked_ir(
             ranked_ir,
             &format!(
-                "^guard{access_index}:\n  kernel.cond_br %{} < %arg{} ^access{access_index}, ^{next_label}\n^access{access_index}:\n  kernel.access {:?} %{}[%{}]\n  kernel.br ^{next_label}\n",
-                access.index.get(),
+                "^bounds{access_index}:\n  kernel.cond_br {} < %arg{} ^access{access_index}, ^{next_label}\n^access{access_index}:\n  kernel.access {:?} %{}[{}]\n  kernel.br ^{next_label}\n",
+                ranked_value_text_v1(access.index),
                 access.extent_argument,
                 access.access,
                 access.view.get(),
-                access.index.get(),
+                ranked_value_text_v1(access.index),
             ),
         )?;
     }
@@ -579,6 +888,14 @@ fn finish_guarded_access_graph(
     ));
     push_ranked_ir(ranked_ir, "^exit:\n  kernel.return\n")?;
     Ok(blocks)
+}
+
+fn guarded_block_label(index: usize, access: &GuardedDisjointAccessV1) -> String {
+    if access.precondition.is_some() {
+        format!("guard{index}")
+    } else {
+        format!("bounds{index}")
+    }
 }
 
 fn checked_reference_origins(
@@ -631,7 +948,9 @@ fn checked_reference_origins(
         if !matches!(
             callables.get(call.callee().index() as usize),
             Some(SemanticCallableDeclV1::CompilerIntrinsic {
-                operation: SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { .. },
+                operation: SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { .. }
+                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut { .. }
+                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive { .. },
                 ..
             })
         ) {
@@ -1148,7 +1467,14 @@ fn project_direct_call_accesses(
         callables.get(call.callee().index() as usize),
         Some(SemanticCallableDeclV1::CompilerIntrinsic {
             operation: SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { .. }
-                | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { .. },
+                | SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint { .. }
+                | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift { .. }
+                | SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { .. }
+                | SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift { .. }
+                | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { .. }
+                | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut { .. }
+                | SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { .. }
+                | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive { .. },
             ..
         })
     ) {
@@ -1345,6 +1671,16 @@ fn constant_definition(operand: &SemanticOperandV1) -> ConstantDefinitionV1 {
             ConstantDefinitionV1::Alias(place.local())
         }
         SemanticOperandV1::Copy(_) | SemanticOperandV1::Move(_) => ConstantDefinitionV1::Invalid,
+    }
+}
+
+fn constant_operand_value(operand: &SemanticOperandV1, constants: &[Option<u64>]) -> Option<u64> {
+    match constant_definition(operand) {
+        ConstantDefinitionV1::Direct(value) => Some(value),
+        ConstantDefinitionV1::Alias(local) => {
+            constants.get(local.index() as usize).copied().flatten()
+        }
+        ConstantDefinitionV1::Missing | ConstantDefinitionV1::Invalid => None,
     }
 }
 
@@ -2140,7 +2476,8 @@ mod tests {
         operations
             .iter()
             .filter_map(|operation| match operation {
-                ProductionRankedOperationV1::Access { kind, .. } => Some(*kind),
+                ProductionRankedOperationV1::Access { kind, .. }
+                | ProductionRankedOperationV1::AtomicAccess { kind, .. } => Some(*kind),
                 ProductionRankedOperationV1::View { .. }
                 | ProductionRankedOperationV1::ViewInSpace { .. }
                 | ProductionRankedOperationV1::AtomicAccess { .. }
@@ -2232,7 +2569,8 @@ mod tests {
         ];
         let guarded = [GuardedDisjointAccessV1 {
             view,
-            index: invocation,
+            index: ProductionRankedValueV1::Local(invocation),
+            precondition: None,
             extent_argument: 0,
             access: AccessKindAttr::Write,
             source: SemanticSourceProvenanceV1::unavailable(),
@@ -2255,6 +2593,77 @@ mod tests {
         assert!(lowering.bounds_report().is_clean());
         assert!(lowering.race_report().is_clean());
         assert!(ranked_ir.contains("kernel.cond_br") && ranked_ir.contains("kernel.access"));
+        assert!(ranked_ir.contains("kernel.br ^bounds0"));
+        assert!(!ranked_ir.contains("^guard0"));
+    }
+
+    #[test]
+    fn shifted_disjoint_access_retains_overflow_and_extent_guards() {
+        let invocation = ProductionRankedValueIdV1::new(0);
+        let offset = ProductionRankedValueIdV1::new(1);
+        let shifted = ProductionRankedValueIdV1::new(2);
+        let upper = ProductionRankedValueIdV1::new(3);
+        let view = ProductionRankedValueIdV1::new(4);
+        let entry = vec![
+            ProductionRankedOperationV1::InvocationIndex {
+                result: invocation,
+                dimension: 0,
+                launch_extent: 0,
+            },
+            ProductionRankedOperationV1::IndexConstant {
+                result: offset,
+                value: 4,
+            },
+            ProductionRankedOperationV1::IndexBinary {
+                result: shifted,
+                kind: IndexBinaryKindAttr::Add,
+                lhs: ProductionRankedValueV1::Local(invocation),
+                rhs: ProductionRankedValueV1::Local(offset),
+            },
+            ProductionRankedOperationV1::IndexConstant {
+                result: upper,
+                value: u64::MAX - 3,
+            },
+            ProductionRankedOperationV1::ViewInSpace {
+                result: view,
+                element_width: 32,
+                writable: true,
+                shape: vec![DYNAMIC_EXTENT],
+                dynamic_extents: vec![ProductionRankedValueV1::Argument(0)],
+                memory_space: MemorySpaceAttr::Global,
+            },
+        ];
+        let guarded = [GuardedDisjointAccessV1 {
+            view,
+            index: ProductionRankedValueV1::Local(shifted),
+            precondition: Some((
+                ProductionRankedValueV1::Local(invocation),
+                ProductionRankedValueV1::Local(upper),
+            )),
+            extent_argument: 0,
+            access: AccessKindAttr::Write,
+            source: SemanticSourceProvenanceV1::unavailable(),
+        }];
+        let mut sources = Vec::new();
+        let mut ranked_ir = String::new();
+        let blocks =
+            finish_guarded_access_graph(entry, &guarded, &mut sources, &mut ranked_ir).unwrap();
+        assert_eq!(blocks.len(), 5);
+        assert_eq!(sources[0].block, 3);
+        assert!(ranked_ir.contains("kernel.br ^guard0"));
+        assert!(ranked_ir.contains("^guard0:"));
+        assert!(ranked_ir.contains("^bounds0:"));
+
+        let kernel = ProductionRankedKernelV1::new("shifted_checked_access", 1, blocks).unwrap();
+        let construction =
+            ProductionConstructionV1::ranked_kernel("shifted_access_module", kernel).unwrap();
+        let lowering = compile_ranked_kernel_for_lowering_v1(
+            construction,
+            ProductionSessionLimitsV1::default(),
+        )
+        .unwrap();
+        assert!(lowering.bounds_report().is_clean());
+        assert!(lowering.race_report().is_clean());
     }
 
     #[test]

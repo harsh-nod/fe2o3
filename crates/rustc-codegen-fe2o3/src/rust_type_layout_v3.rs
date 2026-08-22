@@ -295,12 +295,13 @@ fn extract_argument<'tcx>(
                 argument()
             )));
         };
-        if args.len() != 2 || index_space != trusted_index {
+        if args.len() != 2 {
             return Err(GeneralTypedExtractError::new(format!(
-                "{} must use the genuine Index1D index space",
+                "{} has malformed genuine DisjointSlice arguments",
                 argument()
             )));
         }
+        let index_space = disjoint_index_space_v1(tcx, index_space, trusted_index, &argument())?;
         let scalar = scalar_type(element).ok_or_else(|| {
             GeneralTypedExtractError::new(format!(
                 "{} has unsupported DisjointSlice element type `{element}`",
@@ -312,7 +313,7 @@ fn extract_argument<'tcx>(
             ty,
             scalar,
             true,
-            RustSourceTypeShapeV1::disjoint_slice(scalar, RustDisjointIndexSpaceV1::Index1D),
+            RustSourceTypeShapeV1::disjoint_slice(scalar, index_space),
             &argument(),
         )?;
         return Ok(GeneralTypedArgumentV3 {
@@ -325,6 +326,56 @@ fn extract_argument<'tcx>(
         "{} has unsupported type `{ty}`; only bounded scalars, shared slices, and genuine DisjointSlice values are accepted",
         argument()
     )))
+}
+
+fn disjoint_index_space_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+    trusted_index1d: Ty<'tcx>,
+    argument: &str,
+) -> Result<RustDisjointIndexSpaceV1, GeneralTypedExtractError> {
+    if ty == trusted_index1d {
+        return Ok(RustDisjointIndexSpaceV1::Index1D);
+    }
+    let TyKind::Adt(definition, arguments) = *ty.kind() else {
+        return Err(GeneralTypedExtractError::new(format!(
+            "{argument} uses unsupported disjoint index space `{ty}`"
+        )));
+    };
+    match trusted_device_items::classify(tcx, definition.did()) {
+        Some(TrustedDeviceItem::ShiftedIndexSpace) => {
+            let Some(base) = arguments.first().and_then(|argument| argument.as_type()) else {
+                return Err(GeneralTypedExtractError::new(format!(
+                    "{argument} has malformed genuine Shifted index-space arguments"
+                )));
+            };
+            let Some(offset) = arguments.get(1).and_then(|argument| argument.as_const()) else {
+                return Err(GeneralTypedExtractError::new(format!(
+                    "{argument} has malformed genuine Shifted index-space arguments"
+                )));
+            };
+            if arguments.len() != 2 || base != trusted_index1d {
+                return Err(GeneralTypedExtractError::new(format!(
+                    "{argument} supports only genuine Shifted<Index1D, N>, found `{ty}`"
+                )));
+            }
+            let offset = offset.try_to_target_usize(tcx).ok_or_else(|| {
+                GeneralTypedExtractError::new(format!(
+                    "{argument} has a non-value or out-of-range Shifted offset"
+                ))
+            })?;
+            Ok(RustDisjointIndexSpaceV1::ShiftedIndex1D { offset })
+        }
+        Some(TrustedDeviceItem::GridExclusiveIndexSpace) if arguments.is_empty() => {
+            Ok(RustDisjointIndexSpaceV1::GridExclusive)
+        }
+        Some(TrustedDeviceItem::GridExclusiveIndexSpace) => Err(GeneralTypedExtractError::new(
+            format!("{argument} has malformed genuine GridExclusive arguments"),
+        )),
+        _ => Err(GeneralTypedExtractError::new(format!(
+            "{argument} uses unsupported or untrusted disjoint index space `{ty}`"
+        ))),
+    }
 }
 
 fn scalar_type(ty: Ty<'_>) -> Option<RustScalarElementTypeV1> {

@@ -1799,6 +1799,10 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | TrustedDeviceItem::DeviceGlobalMutPtr
                     | TrustedDeviceItem::WorkgroupLdsScope
                     | TrustedDeviceItem::ThreadIndex
+                    | TrustedDeviceItem::DisjointIndex
+                    | TrustedDeviceItem::ShiftedIndexSpace
+                    | TrustedDeviceItem::GridExclusiveIndexSpace
+                    | TrustedDeviceItem::GridLeader
                     | TrustedDeviceItem::Gfx942CollectivesContext
                     | TrustedDeviceItem::Gfx942StaticLdsU32x256Type
                     | TrustedDeviceItem::DeviceMatrix
@@ -1825,7 +1829,14 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | TrustedDeviceItem::LdsTile16x16ReadMfmaBf16
                     | TrustedDeviceItem::WorkgroupSyncthreads
                     | TrustedDeviceItem::DynamicLdsExactFromCompiler
-                    | TrustedDeviceItem::DisjointSliceLen,
+                    | TrustedDeviceItem::DisjointSliceLen
+                    | TrustedDeviceItem::ThreadIndexIntoDisjoint
+                    | TrustedDeviceItem::ThreadIndexCheckedShift
+                    | TrustedDeviceItem::DisjointIndexGet
+                    | TrustedDeviceItem::DisjointIndexCheckedShift
+                    | TrustedDeviceItem::GridLeaderCurrent
+                    | TrustedDeviceItem::DisjointSliceGetDisjointMut
+                    | TrustedDeviceItem::DisjointSliceGetMutExclusive,
                 ) => {
                     return Err(diagnostic(
                         TranslationDiagnosticCode::UnsupportedCall,

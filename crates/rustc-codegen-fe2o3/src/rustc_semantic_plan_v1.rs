@@ -236,6 +236,7 @@ pub(crate) struct DirectCallRecipeV1 {
 #[derive(Debug)]
 pub(crate) struct RetainedSemanticTerminalProducerV1<'tcx> {
     pub(crate) identities: CanonicalFunctionIdentitiesV1,
+    pub(crate) instance: Instance<'tcx>,
     pub(crate) expansion: ProductionTerminalExpansionV1,
     pub(crate) abi: RetainedSemanticFunctionAbiProducerV1<'tcx>,
     pub(crate) source: RetainedSemanticSourceProducerV1,
@@ -1416,6 +1417,7 @@ fn build_terminal_producers_v1<'tcx>(
         )?;
         terminals.push(RetainedSemanticTerminalProducerV1 {
             identities,
+            instance,
             expansion,
             abi: build_retained_fn_abi_producer_v1(
                 tcx,
@@ -2036,6 +2038,13 @@ const fn terminal_expansion_tag_v1(expansion: ProductionTerminalExpansionV1) -> 
         ProductionTerminalExpansionV1::ThreadIndex1d => 0,
         ProductionTerminalExpansionV1::ThreadIndexGet => 1,
         ProductionTerminalExpansionV1::DisjointSliceGetMut => 2,
+        ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint => 3,
+        ProductionTerminalExpansionV1::ThreadIndexCheckedShift => 4,
+        ProductionTerminalExpansionV1::DisjointIndexGet => 5,
+        ProductionTerminalExpansionV1::DisjointIndexCheckedShift => 6,
+        ProductionTerminalExpansionV1::DisjointSliceGetDisjointMut => 7,
+        ProductionTerminalExpansionV1::GridLeaderCurrent => 8,
+        ProductionTerminalExpansionV1::DisjointSliceGetMutExclusive => 9,
     }
 }
 

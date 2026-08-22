@@ -1660,6 +1660,13 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         ProductionTerminalExpansionV1::ThreadIndex1d => Some(0),
         ProductionTerminalExpansionV1::ThreadIndexGet => Some(1),
         ProductionTerminalExpansionV1::DisjointSliceGetMut => Some(2),
+        ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint
+        | ProductionTerminalExpansionV1::ThreadIndexCheckedShift
+        | ProductionTerminalExpansionV1::DisjointIndexGet
+        | ProductionTerminalExpansionV1::DisjointIndexCheckedShift => Some(1),
+        ProductionTerminalExpansionV1::DisjointSliceGetDisjointMut => Some(2),
+        ProductionTerminalExpansionV1::GridLeaderCurrent => Some(0),
+        ProductionTerminalExpansionV1::DisjointSliceGetMutExclusive => Some(3),
     }
 }
 

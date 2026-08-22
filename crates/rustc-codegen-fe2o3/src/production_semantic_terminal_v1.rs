@@ -9,7 +9,14 @@ use crate::trusted_device_items::{self, TrustedDeviceItem};
 pub(crate) enum ProductionTerminalExpansionV1 {
     ThreadIndex1d,
     ThreadIndexGet,
+    ThreadIndexIntoDisjoint,
+    ThreadIndexCheckedShift,
+    DisjointIndexGet,
+    DisjointIndexCheckedShift,
     DisjointSliceGetMut,
+    DisjointSliceGetDisjointMut,
+    GridLeaderCurrent,
+    DisjointSliceGetMutExclusive,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -27,8 +34,29 @@ impl ProductionSemanticTerminalRuleV1 {
             TrustedDeviceItem::ThreadIndexGet => {
                 Self::Expand(ProductionTerminalExpansionV1::ThreadIndexGet)
             }
+            TrustedDeviceItem::ThreadIndexIntoDisjoint => {
+                Self::Expand(ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint)
+            }
+            TrustedDeviceItem::ThreadIndexCheckedShift => {
+                Self::Expand(ProductionTerminalExpansionV1::ThreadIndexCheckedShift)
+            }
+            TrustedDeviceItem::DisjointIndexGet => {
+                Self::Expand(ProductionTerminalExpansionV1::DisjointIndexGet)
+            }
+            TrustedDeviceItem::DisjointIndexCheckedShift => {
+                Self::Expand(ProductionTerminalExpansionV1::DisjointIndexCheckedShift)
+            }
             TrustedDeviceItem::DisjointSliceGetMut => {
                 Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetMut)
+            }
+            TrustedDeviceItem::DisjointSliceGetDisjointMut => {
+                Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetDisjointMut)
+            }
+            TrustedDeviceItem::GridLeaderCurrent => {
+                Self::Expand(ProductionTerminalExpansionV1::GridLeaderCurrent)
+            }
+            TrustedDeviceItem::DisjointSliceGetMutExclusive => {
+                Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetMutExclusive)
             }
             unsupported => Self::Reject(unsupported),
         }
@@ -43,8 +71,29 @@ impl ProductionSemanticTerminalRuleV1 {
             Self::Expand(ProductionTerminalExpansionV1::ThreadIndexGet) => {
                 TrustedDeviceItem::ThreadIndexGet
             }
+            Self::Expand(ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint) => {
+                TrustedDeviceItem::ThreadIndexIntoDisjoint
+            }
+            Self::Expand(ProductionTerminalExpansionV1::ThreadIndexCheckedShift) => {
+                TrustedDeviceItem::ThreadIndexCheckedShift
+            }
+            Self::Expand(ProductionTerminalExpansionV1::DisjointIndexGet) => {
+                TrustedDeviceItem::DisjointIndexGet
+            }
+            Self::Expand(ProductionTerminalExpansionV1::DisjointIndexCheckedShift) => {
+                TrustedDeviceItem::DisjointIndexCheckedShift
+            }
             Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetMut) => {
                 TrustedDeviceItem::DisjointSliceGetMut
+            }
+            Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetDisjointMut) => {
+                TrustedDeviceItem::DisjointSliceGetDisjointMut
+            }
+            Self::Expand(ProductionTerminalExpansionV1::GridLeaderCurrent) => {
+                TrustedDeviceItem::GridLeaderCurrent
+            }
+            Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetMutExclusive) => {
+                TrustedDeviceItem::DisjointSliceGetMutExclusive
             }
             Self::Reject(item) => item,
         }
@@ -72,8 +121,36 @@ mod tests {
                 ProductionTerminalExpansionV1::ThreadIndexGet,
             ),
             (
+                TrustedDeviceItem::ThreadIndexIntoDisjoint,
+                ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint,
+            ),
+            (
+                TrustedDeviceItem::ThreadIndexCheckedShift,
+                ProductionTerminalExpansionV1::ThreadIndexCheckedShift,
+            ),
+            (
+                TrustedDeviceItem::DisjointIndexGet,
+                ProductionTerminalExpansionV1::DisjointIndexGet,
+            ),
+            (
+                TrustedDeviceItem::DisjointIndexCheckedShift,
+                ProductionTerminalExpansionV1::DisjointIndexCheckedShift,
+            ),
+            (
                 TrustedDeviceItem::DisjointSliceGetMut,
                 ProductionTerminalExpansionV1::DisjointSliceGetMut,
+            ),
+            (
+                TrustedDeviceItem::DisjointSliceGetDisjointMut,
+                ProductionTerminalExpansionV1::DisjointSliceGetDisjointMut,
+            ),
+            (
+                TrustedDeviceItem::GridLeaderCurrent,
+                ProductionTerminalExpansionV1::GridLeaderCurrent,
+            ),
+            (
+                TrustedDeviceItem::DisjointSliceGetMutExclusive,
+                ProductionTerminalExpansionV1::DisjointSliceGetMutExclusive,
             ),
         ];
         for (item, expansion) in cases {

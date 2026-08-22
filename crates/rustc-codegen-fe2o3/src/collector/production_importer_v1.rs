@@ -7,15 +7,16 @@ use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, HARD_MAX_FUNCTIONS_V1, HARD_MAX_ROOTS_V1,
     InertSemanticMirRequestV1, SemanticCallableDeclV1, SemanticCallableIdV1,
     SemanticCompilerIntrinsicIdentityV1, SemanticCompilerIntrinsicOperationV1,
-    SemanticFunctionAbiV1, SemanticFunctionIdV1, SemanticFunctionIdentityV1,
-    SemanticFunctionRoleV1, SemanticKernelBindingIdentityV1, SemanticKernelEntryV1,
-    SemanticKernelLaunchBoundsV1, SemanticKernelSourceContractV1, SemanticLinkSymbolV1,
-    SemanticMirErrorV1, SemanticMirLimitsV1, SemanticMirResourceV1,
+    SemanticDisjointIndexSpaceV1, SemanticFunctionAbiV1, SemanticFunctionIdV1,
+    SemanticFunctionIdentityV1, SemanticFunctionRoleV1, SemanticKernelBindingIdentityV1,
+    SemanticKernelEntryV1, SemanticKernelLaunchBoundsV1, SemanticKernelSourceContractV1,
+    SemanticLinkSymbolV1, SemanticMirErrorV1, SemanticMirLimitsV1, SemanticMirResourceV1,
     SemanticNonBodyCallableBindingV1, SemanticReachableAssemblyV1, SemanticTargetDataLayoutV1,
     SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnsafeAssemblyDeclarationV1,
     SemanticUnsafeAssemblyTargetV1, SemanticWorkgroupDimensionsV1,
 };
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::ty::{Instance, Ty, TyCtxt, TyKind};
+use rustc_span::sym;
 
 use super::{
     AuthenticatedCollectedKernelClosureV1, AuthenticatedProductionRootV1, CollectedFunctionRole,
@@ -44,6 +45,7 @@ use crate::rustc_semantic_plan_v1::{
     ProductionSemanticPreflightErrorV1, ProductionSemanticPreflightPlanV1,
     RetainedSemanticFunctionProducerV1, build_production_semantic_preflight_plan_v1,
 };
+use crate::trusted_device_items::{self, TrustedDeviceItem};
 
 const IDENTITY_INVENTORY_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-identity-inventory/v1";
 
@@ -308,7 +310,8 @@ fn construct_complete_request_v1<'tcx>(
         .zip(&terminal_abis)
         .enumerate()
     {
-        let operation = terminal_operation_v1(terminal.expansion, abi, &types)?;
+        let operation =
+            terminal_operation_v1(tcx, terminal.instance, terminal.expansion, abi, &types)?;
         let mut digest =
             SemanticIdentityDigestV1::new(b"fe2o3/semantic-mir/production-compiler-intrinsic/v1");
         digest.field(terminal.identities.function().as_bytes());
@@ -667,7 +670,9 @@ fn semantic_kernel_source_contract_v1(
         .map_err(ProductionSemanticImportErrorV1::SemanticSchema)
 }
 
-fn terminal_operation_v1(
+fn terminal_operation_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
     expansion: crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1,
     abi: &SemanticFunctionAbiV1,
     types: &[SemanticTypeDeclV1],
@@ -675,22 +680,121 @@ fn terminal_operation_v1(
     use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1;
     let inputs = abi.source_input_types();
     let output = abi.source_output_type();
+    let signature = tcx.instantiate_bound_regions_with_erased(
+        tcx.fn_sig(instance.def_id())
+            .instantiate(tcx, instance.args),
+    );
+    let rust_inputs = signature.inputs();
+    let rust_output = signature.output();
     match expansion {
-        ProductionTerminalExpansionV1::ThreadIndex1d if inputs.is_empty() => {
+        ProductionTerminalExpansionV1::ThreadIndex1d
+            if inputs.is_empty()
+                && rust_inputs.is_empty()
+                && rust_index_witness_space_v1(
+                    tcx,
+                    rust_output,
+                    TrustedDeviceItem::ThreadIndex,
+                ) == Some(SemanticDisjointIndexSpaceV1::Index1d) =>
+        {
             let raw_index = aggregate_field_v1(types, output, 0)?;
             Ok(SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
                 index_witness: output,
                 raw_index,
             })
         }
-        ProductionTerminalExpansionV1::ThreadIndexGet if inputs.len() == 1 => {
+        ProductionTerminalExpansionV1::ThreadIndexGet
+            if inputs.len() == 1
+                && rust_inputs.len() == 1
+                && rust_reference_pointee_v1(rust_inputs[0])
+                    .and_then(|ty| {
+                        rust_index_witness_space_v1(tcx, ty, TrustedDeviceItem::ThreadIndex)
+                    })
+                    .is_some() =>
+        {
             let index_witness = pointer_pointee_v1(types, inputs[0])?;
             Ok(SemanticCompilerIntrinsicOperationV1::ThreadIndexGet {
                 index_witness,
                 raw_index: output,
             })
         }
-        ProductionTerminalExpansionV1::DisjointSliceGetMut if inputs.len() == 2 => {
+        ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint
+            if inputs.len() == 1 && rust_inputs.len() == 1 =>
+        {
+            let input_space =
+                rust_index_witness_space_v1(tcx, rust_inputs[0], TrustedDeviceItem::ThreadIndex);
+            let output_space =
+                rust_index_witness_space_v1(tcx, rust_output, TrustedDeviceItem::DisjointIndex);
+            if input_space.is_none() || input_space != output_space {
+                return Err(body_owner_table_mismatch_v1("terminal disjoint mapping"));
+            }
+            let raw_index = aggregate_field_v1(types, inputs[0], 0)?;
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint {
+                    input_witness: inputs[0],
+                    output_witness: output,
+                    raw_index,
+                    index_space: input_space.expect("checked mapping"),
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::ThreadIndexCheckedShift
+            if inputs.len() == 1 && rust_inputs.len() == 1 =>
+        {
+            checked_shift_operation_v1(
+                tcx,
+                rust_inputs[0],
+                rust_output,
+                inputs[0],
+                output,
+                types,
+                TrustedDeviceItem::ThreadIndex,
+                true,
+            )
+        }
+        ProductionTerminalExpansionV1::DisjointIndexGet
+            if inputs.len() == 1 && rust_inputs.len() == 1 =>
+        {
+            let Some(rust_witness) = rust_reference_pointee_v1(rust_inputs[0]) else {
+                return Err(body_owner_table_mismatch_v1(
+                    "terminal disjoint-index receiver",
+                ));
+            };
+            let Some(index_space) =
+                rust_index_witness_space_v1(tcx, rust_witness, TrustedDeviceItem::DisjointIndex)
+            else {
+                return Err(body_owner_table_mismatch_v1("terminal disjoint mapping"));
+            };
+            let index_witness = pointer_pointee_v1(types, inputs[0])?;
+            Ok(SemanticCompilerIntrinsicOperationV1::DisjointIndexGet {
+                index_witness,
+                raw_index: output,
+                index_space,
+            })
+        }
+        ProductionTerminalExpansionV1::DisjointIndexCheckedShift
+            if inputs.len() == 1 && rust_inputs.len() == 1 =>
+        {
+            checked_shift_operation_v1(
+                tcx,
+                rust_inputs[0],
+                rust_output,
+                inputs[0],
+                output,
+                types,
+                TrustedDeviceItem::DisjointIndex,
+                false,
+            )
+        }
+        ProductionTerminalExpansionV1::DisjointSliceGetMut
+            if inputs.len() == 2 && rust_inputs.len() == 2 =>
+        {
+            let rust_slice = rust_reference_pointee_v1(rust_inputs[0])
+                .and_then(|ty| rust_disjoint_slice_v1(tcx, ty));
+            let rust_index =
+                rust_index_witness_space_v1(tcx, rust_inputs[1], TrustedDeviceItem::ThreadIndex);
+            if rust_slice.map(|(_, space)| space) != rust_index {
+                return Err(body_owner_table_mismatch_v1("terminal disjoint mapping"));
+            }
             let disjoint_slice = pointer_pointee_v1(types, inputs[0])?;
             let index_witness = inputs[1];
             let raw_index = aggregate_field_v1(types, index_witness, 0)?;
@@ -703,12 +807,253 @@ fn terminal_operation_v1(
                 raw_index,
             })
         }
+        ProductionTerminalExpansionV1::DisjointSliceGetDisjointMut
+            if inputs.len() == 2 && rust_inputs.len() == 2 =>
+        {
+            let rust_slice = rust_reference_pointee_v1(rust_inputs[0])
+                .and_then(|ty| rust_disjoint_slice_v1(tcx, ty));
+            let rust_index =
+                rust_index_witness_space_v1(tcx, rust_inputs[1], TrustedDeviceItem::DisjointIndex);
+            let Some(index_space) = rust_index else {
+                return Err(body_owner_table_mismatch_v1("terminal disjoint mapping"));
+            };
+            if rust_slice.map(|(_, space)| space) != Some(index_space) {
+                return Err(body_owner_table_mismatch_v1("terminal disjoint mapping"));
+            }
+            let disjoint_slice = pointer_pointee_v1(types, inputs[0])?;
+            let index_witness = inputs[1];
+            let raw_index = aggregate_field_v1(types, index_witness, 0)?;
+            let element_pointer = aggregate_field_v1(types, disjoint_slice, 0)?;
+            let element = pointer_pointee_v1(types, element_pointer)?;
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut {
+                    disjoint_slice,
+                    index_witness,
+                    element,
+                    raw_index,
+                    index_space,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::GridLeaderCurrent
+            if inputs.is_empty() && rust_inputs.is_empty() =>
+        {
+            let Some(rust_leader) = rust_option_payload_v1(tcx, rust_output) else {
+                return Err(body_owner_table_mismatch_v1("terminal grid-leader result"));
+            };
+            if !rust_is_trusted_adt_v1(tcx, rust_leader, TrustedDeviceItem::GridLeader) {
+                return Err(body_owner_table_mismatch_v1(
+                    "terminal grid-leader identity",
+                ));
+            }
+            Ok(SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent {
+                grid_leader: option_payload_v1(types, output)?,
+            })
+        }
+        ProductionTerminalExpansionV1::DisjointSliceGetMutExclusive
+            if inputs.len() == 3 && rust_inputs.len() == 3 =>
+        {
+            let rust_slice = rust_reference_pointee_v1(rust_inputs[0])
+                .and_then(|ty| rust_disjoint_slice_v1(tcx, ty));
+            let rust_leader = rust_reference_pointee_v1(rust_inputs[1]);
+            if rust_slice.map(|(_, space)| space)
+                != Some(SemanticDisjointIndexSpaceV1::GridExclusive)
+                || rust_leader.is_none_or(|ty| {
+                    !rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::GridLeader)
+                })
+            {
+                return Err(body_owner_table_mismatch_v1(
+                    "terminal grid-exclusive mapping",
+                ));
+            }
+            let disjoint_slice = pointer_pointee_v1(types, inputs[0])?;
+            let grid_leader = pointer_pointee_v1(types, inputs[1])?;
+            let element_pointer = aggregate_field_v1(types, disjoint_slice, 0)?;
+            let element = pointer_pointee_v1(types, element_pointer)?;
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive {
+                    disjoint_slice,
+                    grid_leader,
+                    element,
+                    raw_index: inputs[2],
+                },
+            )
+        }
         ProductionTerminalExpansionV1::ThreadIndex1d
         | ProductionTerminalExpansionV1::ThreadIndexGet
-        | ProductionTerminalExpansionV1::DisjointSliceGetMut => {
+        | ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint
+        | ProductionTerminalExpansionV1::ThreadIndexCheckedShift
+        | ProductionTerminalExpansionV1::DisjointIndexGet
+        | ProductionTerminalExpansionV1::DisjointIndexCheckedShift
+        | ProductionTerminalExpansionV1::DisjointSliceGetMut
+        | ProductionTerminalExpansionV1::DisjointSliceGetDisjointMut
+        | ProductionTerminalExpansionV1::GridLeaderCurrent
+        | ProductionTerminalExpansionV1::DisjointSliceGetMutExclusive => {
             Err(body_owner_table_mismatch_v1("terminal callable ABI"))
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn checked_shift_operation_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    rust_input: Ty<'tcx>,
+    rust_output: Ty<'tcx>,
+    input_witness: SemanticTypeIdV1,
+    output: SemanticTypeIdV1,
+    types: &[SemanticTypeDeclV1],
+    input_kind: TrustedDeviceItem,
+    thread_index: bool,
+) -> Result<SemanticCompilerIntrinsicOperationV1, ProductionSemanticImportErrorV1> {
+    let input_space = rust_index_witness_space_v1(tcx, rust_input, input_kind)
+        .ok_or_else(|| body_owner_table_mismatch_v1("terminal checked-shift input"))?;
+    let rust_output_witness = rust_option_payload_v1(tcx, rust_output)
+        .ok_or_else(|| body_owner_table_mismatch_v1("terminal checked-shift result"))?;
+    let output_space =
+        rust_index_witness_space_v1(tcx, rust_output_witness, TrustedDeviceItem::DisjointIndex)
+            .ok_or_else(|| body_owner_table_mismatch_v1("terminal checked-shift output"))?;
+    let offset = match (input_space, output_space) {
+        (
+            SemanticDisjointIndexSpaceV1::Index1d,
+            SemanticDisjointIndexSpaceV1::ShiftedIndex1d { offset },
+        ) => offset,
+        _ => {
+            return Err(body_owner_table_mismatch_v1(
+                "terminal checked-shift mapping",
+            ));
+        }
+    };
+    let output_witness = option_payload_v1(types, output)?;
+    let raw_index = aggregate_field_v1(types, input_witness, 0)?;
+    Ok(if thread_index {
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift {
+            input_witness,
+            output_witness,
+            raw_index,
+            input_space,
+            output_space,
+            offset,
+        }
+    } else {
+        SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift {
+            input_witness,
+            output_witness,
+            raw_index,
+            input_space,
+            output_space,
+            offset,
+        }
+    })
+}
+
+fn rust_reference_pointee_v1(ty: Ty<'_>) -> Option<Ty<'_>> {
+    match *ty.kind() {
+        TyKind::Ref(_, pointee, _) => Some(pointee),
+        _ => None,
+    }
+}
+
+fn rust_option_payload_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
+    let TyKind::Adt(definition, arguments) = *ty.kind() else {
+        return None;
+    };
+    (tcx.is_diagnostic_item(sym::Option, definition.did()) && arguments.len() == 1)
+        .then(|| arguments[0].as_type())
+        .flatten()
+}
+
+fn rust_is_trusted_adt_v1(tcx: TyCtxt<'_>, ty: Ty<'_>, item: TrustedDeviceItem) -> bool {
+    matches!(*ty.kind(), TyKind::Adt(definition, arguments)
+        if arguments.is_empty() && trusted_device_items::classify(tcx, definition.did()) == Some(item))
+}
+
+fn rust_disjoint_slice_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<(Ty<'tcx>, SemanticDisjointIndexSpaceV1)> {
+    let TyKind::Adt(definition, arguments) = *ty.kind() else {
+        return None;
+    };
+    if trusted_device_items::classify(tcx, definition.did())
+        != Some(TrustedDeviceItem::DisjointSlice)
+        || arguments.len() != 2
+    {
+        return None;
+    }
+    Some((
+        arguments[0].as_type()?,
+        rust_disjoint_index_space_v1(tcx, arguments[1].as_type()?)?,
+    ))
+}
+
+fn rust_index_witness_space_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+    item: TrustedDeviceItem,
+) -> Option<SemanticDisjointIndexSpaceV1> {
+    let TyKind::Adt(definition, arguments) = *ty.kind() else {
+        return None;
+    };
+    if trusted_device_items::classify(tcx, definition.did()) != Some(item) || arguments.len() != 1 {
+        return None;
+    }
+    rust_disjoint_index_space_v1(tcx, arguments[0].as_type()?)
+}
+
+fn rust_disjoint_index_space_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<SemanticDisjointIndexSpaceV1> {
+    if ty == trusted_index1d_type_v1(tcx)? {
+        return Some(SemanticDisjointIndexSpaceV1::Index1d);
+    }
+    let TyKind::Adt(definition, arguments) = *ty.kind() else {
+        return None;
+    };
+    match trusted_device_items::classify(tcx, definition.did()) {
+        Some(TrustedDeviceItem::ShiftedIndexSpace) if arguments.len() == 2 => {
+            let base = arguments[0].as_type()?;
+            if base != trusted_index1d_type_v1(tcx)? {
+                return None;
+            }
+            let offset = arguments[1].as_const()?.try_to_target_usize(tcx)?;
+            Some(SemanticDisjointIndexSpaceV1::ShiftedIndex1d { offset })
+        }
+        Some(TrustedDeviceItem::GridExclusiveIndexSpace) if arguments.is_empty() => {
+            Some(SemanticDisjointIndexSpaceV1::GridExclusive)
+        }
+        _ => None,
+    }
+}
+
+fn trusted_index1d_type_v1<'tcx>(tcx: TyCtxt<'tcx>) -> Option<Ty<'tcx>> {
+    let function = trusted_device_items::definition(tcx, TrustedDeviceItem::ThreadIndex1d)?;
+    let signature =
+        tcx.instantiate_bound_regions_with_erased(tcx.fn_sig(function).instantiate_identity());
+    let TyKind::Adt(definition, arguments) = *signature.output().kind() else {
+        return None;
+    };
+    (trusted_device_items::classify(tcx, definition.did()) == Some(TrustedDeviceItem::ThreadIndex)
+        && arguments.len() == 1)
+        .then(|| arguments[0].as_type())
+        .flatten()
+}
+
+fn option_payload_v1(
+    types: &[SemanticTypeDeclV1],
+    option: SemanticTypeIdV1,
+) -> Result<SemanticTypeIdV1, ProductionSemanticImportErrorV1> {
+    let declaration = types
+        .get(option.index() as usize)
+        .ok_or_else(|| body_owner_table_mismatch_v1("terminal option type"))?;
+    let SemanticTypeShapeV1::Enum { variants, .. } = declaration.shape() else {
+        return Err(body_owner_table_mismatch_v1("terminal option type"));
+    };
+    variants
+        .get(1)
+        .and_then(|variant| variant.fields().fields().first())
+        .copied()
+        .ok_or_else(|| body_owner_table_mismatch_v1("terminal option payload"))
 }
 
 fn aggregate_field_v1(
@@ -750,6 +1095,13 @@ const fn terminal_operation_tag_v1(
         ProductionTerminalExpansionV1::ThreadIndex1d => 0,
         ProductionTerminalExpansionV1::ThreadIndexGet => 1,
         ProductionTerminalExpansionV1::DisjointSliceGetMut => 2,
+        ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint => 3,
+        ProductionTerminalExpansionV1::ThreadIndexCheckedShift => 4,
+        ProductionTerminalExpansionV1::DisjointIndexGet => 5,
+        ProductionTerminalExpansionV1::DisjointIndexCheckedShift => 6,
+        ProductionTerminalExpansionV1::DisjointSliceGetDisjointMut => 7,
+        ProductionTerminalExpansionV1::GridLeaderCurrent => 8,
+        ProductionTerminalExpansionV1::DisjointSliceGetMutExclusive => 9,
     }
 }
 

@@ -9,6 +9,8 @@ publish = false
 
 [features]
 oob = []
+shifted = []
+grid_exclusive = []
 
 [dependencies]
 fe2o3-device.workspace = true

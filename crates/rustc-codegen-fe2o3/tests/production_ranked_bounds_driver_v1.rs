@@ -59,6 +59,32 @@ fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
         safe.stderr
     );
 
+    let shifted = run_feature_extraction(&ScratchTarget::new(), "shifted");
+    assert!(
+        shifted.status.success()
+            && shifted
+                .stderr
+                .contains("all mandatory kernel checks clean true")
+            && shifted.stderr.contains("kernel.index_binary Add")
+            && shifted.stderr.contains("kernel.br ^guard0")
+            && shifted.stderr.contains("kernel.access Write"),
+        "safe shifted disjoint access did not pass production extraction:\n{}",
+        shifted.stderr,
+    );
+
+    let exclusive = run_feature_extraction(&ScratchTarget::new(), "grid_exclusive");
+    assert!(
+        exclusive.status.success()
+            && exclusive
+                .stderr
+                .contains("all mandatory kernel checks clean true")
+            && exclusive.stderr.contains("kernel.index_constant 7")
+            && exclusive.stderr.contains("kernel.br ^guard0")
+            && exclusive.stderr.contains("kernel.access Write"),
+        "safe grid-exclusive access did not pass production extraction:\n{}",
+        exclusive.stderr,
+    );
+
     let oob = run_extraction(&ScratchTarget::new(), true);
     assert!(
         !oob.status.success(),
@@ -156,6 +182,22 @@ fn run_extraction(target: &ScratchTarget, oob: bool) -> ExtractionOutput {
         command.args(["--features", "oob"]);
     }
     output(command, "run AMD extraction fixture")
+}
+
+fn run_feature_extraction(target: &ScratchTarget, feature: &str) -> ExtractionOutput {
+    let mut command = base_command("check", target.path());
+    command
+        .env("FE2O3_EXTRACT_RANKED_MEMORY_V1", "1")
+        .env(
+            "RUSTC_WORKSPACE_WRAPPER",
+            env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
+        )
+        .env(
+            "FE2O3_EXTRACT_CRATE_V1",
+            "fe2o3_production_ranked_bounds_fixture",
+        )
+        .args(["--features", feature]);
+    output(command, "run safe mapped AMD extraction fixture")
 }
 
 fn run_production_pipeline(target: &ScratchTarget, oob: bool) -> ExtractionOutput {

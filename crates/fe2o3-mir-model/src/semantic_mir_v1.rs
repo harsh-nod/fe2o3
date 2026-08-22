@@ -4650,6 +4650,14 @@ pub enum SemanticAxisV1 {
     Z,
 }
 
+/// Authenticated source-level mapping carried by a disjoint index capability.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SemanticDisjointIndexSpaceV1 {
+    Index1d,
+    ShiftedIndex1d { offset: u64 },
+    GridExclusive,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticCompilerIntrinsicOperationV1 {
     ThreadIndex(SemanticAxisV1),
@@ -4669,10 +4677,53 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         index_witness: SemanticTypeIdV1,
         raw_index: SemanticTypeIdV1,
     },
+    ThreadIndexIntoDisjoint {
+        input_witness: SemanticTypeIdV1,
+        output_witness: SemanticTypeIdV1,
+        raw_index: SemanticTypeIdV1,
+        index_space: SemanticDisjointIndexSpaceV1,
+    },
+    ThreadIndexCheckedShift {
+        input_witness: SemanticTypeIdV1,
+        output_witness: SemanticTypeIdV1,
+        raw_index: SemanticTypeIdV1,
+        input_space: SemanticDisjointIndexSpaceV1,
+        output_space: SemanticDisjointIndexSpaceV1,
+        offset: u64,
+    },
+    DisjointIndexGet {
+        index_witness: SemanticTypeIdV1,
+        raw_index: SemanticTypeIdV1,
+        index_space: SemanticDisjointIndexSpaceV1,
+    },
+    DisjointIndexCheckedShift {
+        input_witness: SemanticTypeIdV1,
+        output_witness: SemanticTypeIdV1,
+        raw_index: SemanticTypeIdV1,
+        input_space: SemanticDisjointIndexSpaceV1,
+        output_space: SemanticDisjointIndexSpaceV1,
+        offset: u64,
+    },
     /// Bounds-checks one witness-indexed mutable access to `element`.
     DisjointSliceGetMut {
         disjoint_slice: SemanticTypeIdV1,
         index_witness: SemanticTypeIdV1,
+        element: SemanticTypeIdV1,
+        raw_index: SemanticTypeIdV1,
+    },
+    DisjointSliceGetDisjointMut {
+        disjoint_slice: SemanticTypeIdV1,
+        index_witness: SemanticTypeIdV1,
+        element: SemanticTypeIdV1,
+        raw_index: SemanticTypeIdV1,
+        index_space: SemanticDisjointIndexSpaceV1,
+    },
+    GridLeaderCurrent {
+        grid_leader: SemanticTypeIdV1,
+    },
+    DisjointSliceGetMutExclusive {
+        disjoint_slice: SemanticTypeIdV1,
+        grid_leader: SemanticTypeIdV1,
         element: SemanticTypeIdV1,
         raw_index: SemanticTypeIdV1,
     },
@@ -5985,6 +6036,7 @@ fn validate_callables(context: &mut ValidationContextV1<'_>) -> Result<(), Seman
     let mut previous_non_body = None;
     let mut contract_identities = BTreeSet::new();
     let mut intrinsic_identities = BTreeSet::new();
+    let mut intrinsic_capabilities = IntrinsicCapabilityClaimsV1::default();
     for (index, callable) in context.request.callables.iter().enumerate() {
         context.one()?;
         let callable_id = SemanticCallableIdV1(index as u32);
@@ -6040,6 +6092,7 @@ fn validate_callables(context: &mut ValidationContextV1<'_>) -> Result<(), Seman
                         *operation,
                         &binding.abi,
                     )
+                    || !record_intrinsic_capability_claims(*operation, &mut intrinsic_capabilities)
                 {
                     return Err(SemanticMirErrorV1::InvalidFunctionAbi);
                 }
@@ -6058,6 +6111,120 @@ fn validate_callables(context: &mut ValidationContextV1<'_>) -> Result<(), Seman
         validate_non_body_callable_abi(context, location, binding)?;
     }
     Ok(())
+}
+
+#[derive(Default)]
+struct IntrinsicCapabilityClaimsV1 {
+    disjoint_mappings: BTreeMap<SemanticTypeIdV1, SemanticDisjointIndexSpaceV1>,
+    grid_leader: Option<SemanticTypeIdV1>,
+}
+
+impl IntrinsicCapabilityClaimsV1 {
+    fn claim_mapping(
+        &mut self,
+        ty: SemanticTypeIdV1,
+        mapping: SemanticDisjointIndexSpaceV1,
+    ) -> bool {
+        match self.disjoint_mappings.entry(ty) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(mapping);
+                true
+            }
+            std::collections::btree_map::Entry::Occupied(entry) => *entry.get() == mapping,
+        }
+    }
+
+    fn claim_grid_leader(&mut self, ty: SemanticTypeIdV1) -> bool {
+        match self.grid_leader {
+            None => {
+                self.grid_leader = Some(ty);
+                true
+            }
+            Some(existing) => existing == ty,
+        }
+    }
+}
+
+fn record_intrinsic_capability_claims(
+    operation: SemanticCompilerIntrinsicOperationV1,
+    claims: &mut IntrinsicCapabilityClaimsV1,
+) -> bool {
+    match operation {
+        SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { index_witness, .. } => {
+            claims.claim_mapping(index_witness, SemanticDisjointIndexSpaceV1::Index1d)
+        }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint {
+            input_witness,
+            output_witness,
+            index_space,
+            ..
+        } => {
+            claims.claim_mapping(input_witness, index_space)
+                && claims.claim_mapping(output_witness, index_space)
+        }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift {
+            input_witness,
+            output_witness,
+            input_space,
+            output_space,
+            offset,
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift {
+            input_witness,
+            output_witness,
+            input_space,
+            output_space,
+            offset,
+            ..
+        } => {
+            input_space == SemanticDisjointIndexSpaceV1::Index1d
+                && output_space == SemanticDisjointIndexSpaceV1::ShiftedIndex1d { offset }
+                && claims.claim_mapping(input_witness, input_space)
+                && claims.claim_mapping(output_witness, output_space)
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointIndexGet {
+            index_witness,
+            index_space,
+            ..
+        } => claims.claim_mapping(index_witness, index_space),
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
+            disjoint_slice,
+            index_witness,
+            ..
+        } => {
+            claims.claim_mapping(disjoint_slice, SemanticDisjointIndexSpaceV1::Index1d)
+                && claims.claim_mapping(index_witness, SemanticDisjointIndexSpaceV1::Index1d)
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut {
+            disjoint_slice,
+            index_witness,
+            index_space,
+            ..
+        } => {
+            claims.claim_mapping(disjoint_slice, index_space)
+                && claims.claim_mapping(index_witness, index_space)
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive {
+            disjoint_slice,
+            grid_leader,
+            ..
+        } => {
+            claims.claim_mapping(disjoint_slice, SemanticDisjointIndexSpaceV1::GridExclusive)
+                && claims.claim_grid_leader(grid_leader)
+        }
+        SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { grid_leader } => {
+            claims.claim_grid_leader(grid_leader)
+        }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndex(_)
+        | SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(_)
+        | SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(_)
+        | SemanticCompilerIntrinsicOperationV1::GridDimension(_)
+        | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
+        | SemanticCompilerIntrinsicOperationV1::WaveBarrier
+        | SemanticCompilerIntrinsicOperationV1::FabsF32
+        | SemanticCompilerIntrinsicOperationV1::ThreadIndexGet { .. } => true,
+    }
 }
 
 fn validate_non_body_callable_abi(
@@ -6184,6 +6351,46 @@ fn compiler_intrinsic_signature_matches(
                 && transparent_index_witness_matches(request, index_witness, raw_index)
                 && shared_reference_to(request, inputs[0], index_witness)
         }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint {
+            input_witness,
+            output_witness,
+            raw_index,
+            ..
+        } => {
+            inputs.len() == 1
+                && inputs[0] == input_witness
+                && output == output_witness
+                && transparent_index_witness_matches(request, input_witness, raw_index)
+                && transparent_index_witness_matches(request, output_witness, raw_index)
+        }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift {
+            input_witness,
+            output_witness,
+            raw_index,
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift {
+            input_witness,
+            output_witness,
+            raw_index,
+            ..
+        } => {
+            inputs.len() == 1
+                && inputs[0] == input_witness
+                && transparent_index_witness_matches(request, input_witness, raw_index)
+                && transparent_index_witness_matches(request, output_witness, raw_index)
+                && option_value_result_matches(request, output, output_witness)
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointIndexGet {
+            index_witness,
+            raw_index,
+            ..
+        } => {
+            inputs.len() == 1
+                && output == raw_index
+                && transparent_index_witness_matches(request, index_witness, raw_index)
+                && shared_reference_to(request, inputs[0], index_witness)
+        }
         SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
             disjoint_slice,
             index_witness,
@@ -6198,6 +6405,48 @@ fn compiler_intrinsic_signature_matches(
                     request,
                     disjoint_slice,
                     index_witness,
+                    element,
+                    raw_index,
+                )
+                && checked_mutable_access_result_matches(request, output, element)
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut {
+            disjoint_slice,
+            index_witness,
+            element,
+            raw_index,
+            ..
+        } => {
+            inputs.len() == 2
+                && inputs[1] == index_witness
+                && transparent_index_witness_matches(request, index_witness, raw_index)
+                && mutable_reference_to(request, inputs[0], disjoint_slice)
+                && disjoint_slice_type_matches(
+                    request,
+                    disjoint_slice,
+                    index_witness,
+                    element,
+                    raw_index,
+                )
+                && checked_mutable_access_result_matches(request, output, element)
+        }
+        SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { grid_leader } => {
+            inputs.is_empty() && option_value_result_matches(request, output, grid_leader)
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive {
+            disjoint_slice,
+            grid_leader,
+            element,
+            raw_index,
+        } => {
+            inputs.len() == 3
+                && inputs[2] == raw_index
+                && is_unsigned_integer_with_bits(request, raw_index, 64)
+                && mutable_reference_to(request, inputs[0], disjoint_slice)
+                && shared_reference_to(request, inputs[1], grid_leader)
+                && exclusive_disjoint_slice_type_matches(
+                    request,
+                    disjoint_slice,
                     element,
                     raw_index,
                 )
@@ -6291,6 +6540,31 @@ fn disjoint_slice_type_matches(
     element: SemanticTypeIdV1,
     raw_index: SemanticTypeIdV1,
 ) -> bool {
+    disjoint_slice_type_matches_inner(
+        request,
+        disjoint_slice,
+        Some(index_witness),
+        element,
+        raw_index,
+    )
+}
+
+fn exclusive_disjoint_slice_type_matches(
+    request: &InertSemanticMirRequestV1,
+    disjoint_slice: SemanticTypeIdV1,
+    element: SemanticTypeIdV1,
+    raw_index: SemanticTypeIdV1,
+) -> bool {
+    disjoint_slice_type_matches_inner(request, disjoint_slice, None, element, raw_index)
+}
+
+fn disjoint_slice_type_matches_inner(
+    request: &InertSemanticMirRequestV1,
+    disjoint_slice: SemanticTypeIdV1,
+    index_witness: Option<SemanticTypeIdV1>,
+    element: SemanticTypeIdV1,
+    raw_index: SemanticTypeIdV1,
+) -> bool {
     let Some(slice_decl) = request.types.get(disjoint_slice.0 as usize) else {
         return false;
     };
@@ -6303,11 +6577,17 @@ fn disjoint_slice_type_matches(
     let SemanticTypeLayoutDetailsV1::Aggregate(slice_layout) = &slice_decl.layout.details else {
         return false;
     };
-    let Some(witness_decl) = request.types.get(index_witness.0 as usize) else {
-        return false;
-    };
-    let SemanticTypeShapeV1::Aggregate(witness_fields) = &witness_decl.shape else {
-        return false;
+    let witness_fields = match index_witness {
+        Some(index_witness) => {
+            let Some(witness_decl) = request.types.get(index_witness.0 as usize) else {
+                return false;
+            };
+            let SemanticTypeShapeV1::Aggregate(witness_fields) = &witness_decl.shape else {
+                return false;
+            };
+            Some(witness_fields)
+        }
+        None => None,
     };
 
     let mut pointer_field = None;
@@ -6383,14 +6663,39 @@ fn disjoint_slice_type_matches(
         return false;
     }
 
-    witness_fields.fields.iter().any(|field| {
-        *field != raw_index
-            && slice_markers.contains(field)
-            && request
-                .types
-                .get(field.0 as usize)
-                .is_some_and(|ty| ty.layout.size_bytes == Some(0))
+    witness_fields.map_or(!slice_markers.is_empty(), |witness_fields| {
+        witness_fields.fields.iter().any(|field| {
+            *field != raw_index
+                && slice_markers.contains(field)
+                && request
+                    .types
+                    .get(field.0 as usize)
+                    .is_some_and(|ty| ty.layout.size_bytes == Some(0))
+        })
     })
+}
+
+fn option_value_result_matches(
+    request: &InertSemanticMirRequestV1,
+    result: SemanticTypeIdV1,
+    value: SemanticTypeIdV1,
+) -> bool {
+    let Some(result_decl) = request.types.get(result.0 as usize) else {
+        return false;
+    };
+    let SemanticTypeShapeV1::Enum {
+        variants,
+        discriminant,
+    } = &result_decl.shape
+    else {
+        return false;
+    };
+    variants.len() == 2
+        && variants[0].discriminant == 0
+        && variants[0].fields.fields.is_empty()
+        && variants[1].discriminant == 1
+        && variants[1].fields.fields.as_ref() == [value]
+        && is_integer_type(request, *discriminant)
 }
 
 fn checked_mutable_access_result_matches(
@@ -11504,6 +11809,36 @@ fn enqueue_compiler_intrinsic_type_references(
             pending.push_back(index_witness);
             pending.push_back(raw_index);
         }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint {
+            input_witness,
+            output_witness,
+            raw_index,
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift {
+            input_witness,
+            output_witness,
+            raw_index,
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift {
+            input_witness,
+            output_witness,
+            raw_index,
+            ..
+        } => {
+            pending.push_back(input_witness);
+            pending.push_back(output_witness);
+            pending.push_back(raw_index);
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointIndexGet {
+            index_witness,
+            raw_index,
+            ..
+        } => {
+            pending.push_back(index_witness);
+            pending.push_back(raw_index);
+        }
         SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
             disjoint_slice,
             index_witness,
@@ -11512,6 +11847,32 @@ fn enqueue_compiler_intrinsic_type_references(
         } => {
             pending.push_back(disjoint_slice);
             pending.push_back(index_witness);
+            pending.push_back(element);
+            pending.push_back(raw_index);
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut {
+            disjoint_slice,
+            index_witness,
+            element,
+            raw_index,
+            ..
+        } => {
+            pending.push_back(disjoint_slice);
+            pending.push_back(index_witness);
+            pending.push_back(element);
+            pending.push_back(raw_index);
+        }
+        SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { grid_leader } => {
+            pending.push_back(grid_leader);
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive {
+            disjoint_slice,
+            grid_leader,
+            element,
+            raw_index,
+        } => {
+            pending.push_back(disjoint_slice);
+            pending.push_back(grid_leader);
             pending.push_back(element);
             pending.push_back(raw_index);
         }
@@ -12770,6 +13131,104 @@ fn encode_compiler_intrinsic_operation(
             writer.u32(element.0)?;
             writer.u32(raw_index.0)
         }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint {
+            input_witness,
+            output_witness,
+            raw_index,
+            index_space,
+        } => {
+            writer.u8(10)?;
+            writer.u32(input_witness.0)?;
+            writer.u32(output_witness.0)?;
+            writer.u32(raw_index.0)?;
+            encode_disjoint_index_space(writer, index_space)
+        }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift {
+            input_witness,
+            output_witness,
+            raw_index,
+            input_space,
+            output_space,
+            offset,
+        } => {
+            writer.u8(11)?;
+            writer.u32(input_witness.0)?;
+            writer.u32(output_witness.0)?;
+            writer.u32(raw_index.0)?;
+            encode_disjoint_index_space(writer, input_space)?;
+            encode_disjoint_index_space(writer, output_space)?;
+            writer.u64(offset)
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointIndexGet {
+            index_witness,
+            raw_index,
+            index_space,
+        } => {
+            writer.u8(12)?;
+            writer.u32(index_witness.0)?;
+            writer.u32(raw_index.0)?;
+            encode_disjoint_index_space(writer, index_space)
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift {
+            input_witness,
+            output_witness,
+            raw_index,
+            input_space,
+            output_space,
+            offset,
+        } => {
+            writer.u8(13)?;
+            writer.u32(input_witness.0)?;
+            writer.u32(output_witness.0)?;
+            writer.u32(raw_index.0)?;
+            encode_disjoint_index_space(writer, input_space)?;
+            encode_disjoint_index_space(writer, output_space)?;
+            writer.u64(offset)
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut {
+            disjoint_slice,
+            index_witness,
+            element,
+            raw_index,
+            index_space,
+        } => {
+            writer.u8(14)?;
+            writer.u32(disjoint_slice.0)?;
+            writer.u32(index_witness.0)?;
+            writer.u32(element.0)?;
+            writer.u32(raw_index.0)?;
+            encode_disjoint_index_space(writer, index_space)
+        }
+        SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { grid_leader } => {
+            writer.u8(15)?;
+            writer.u32(grid_leader.0)
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive {
+            disjoint_slice,
+            grid_leader,
+            element,
+            raw_index,
+        } => {
+            writer.u8(16)?;
+            writer.u32(disjoint_slice.0)?;
+            writer.u32(grid_leader.0)?;
+            writer.u32(element.0)?;
+            writer.u32(raw_index.0)
+        }
+    }
+}
+
+fn encode_disjoint_index_space(
+    writer: &mut CanonicalWriterV1,
+    index_space: SemanticDisjointIndexSpaceV1,
+) -> Result<(), SemanticMirErrorV1> {
+    match index_space {
+        SemanticDisjointIndexSpaceV1::Index1d => writer.u8(0),
+        SemanticDisjointIndexSpaceV1::ShiftedIndex1d { offset } => {
+            writer.u8(1)?;
+            writer.u64(offset)
+        }
+        SemanticDisjointIndexSpaceV1::GridExclusive => writer.u8(2),
     }
 }
 
@@ -13623,6 +14082,93 @@ mod private_tests {
         assert!(compare_exchange_failure_allowed(
             SemanticAtomicOrderingV1::AcquireRelease,
             SemanticAtomicOrderingV1::Acquire,
+        ));
+    }
+
+    #[test]
+    fn disjoint_mapping_claims_bind_witnesses_and_slices_request_wide() {
+        let raw = SemanticTypeIdV1::from_index(0);
+        let identity = SemanticTypeIdV1::from_index(1);
+        let shifted = SemanticTypeIdV1::from_index(2);
+        let slice = SemanticTypeIdV1::from_index(3);
+        let element = SemanticTypeIdV1::from_index(4);
+        let mapping = SemanticDisjointIndexSpaceV1::ShiftedIndex1d { offset: 7 };
+        let mut claims = IntrinsicCapabilityClaimsV1::default();
+
+        assert!(record_intrinsic_capability_claims(
+            SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
+                index_witness: identity,
+                raw_index: raw,
+            },
+            &mut claims,
+        ));
+        assert!(record_intrinsic_capability_claims(
+            SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift {
+                input_witness: identity,
+                output_witness: shifted,
+                raw_index: raw,
+                input_space: SemanticDisjointIndexSpaceV1::Index1d,
+                output_space: mapping,
+                offset: 7,
+            },
+            &mut claims,
+        ));
+        assert!(record_intrinsic_capability_claims(
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut {
+                disjoint_slice: slice,
+                index_witness: shifted,
+                element,
+                raw_index: raw,
+                index_space: mapping,
+            },
+            &mut claims,
+        ));
+
+        assert!(!record_intrinsic_capability_claims(
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive {
+                disjoint_slice: slice,
+                grid_leader: SemanticTypeIdV1::from_index(5),
+                element,
+                raw_index: raw,
+            },
+            &mut claims,
+        ));
+    }
+
+    #[test]
+    fn disjoint_mapping_claims_reject_malformed_checked_shift() {
+        let mut claims = IntrinsicCapabilityClaimsV1::default();
+        assert!(!record_intrinsic_capability_claims(
+            SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift {
+                input_witness: SemanticTypeIdV1::from_index(1),
+                output_witness: SemanticTypeIdV1::from_index(2),
+                raw_index: SemanticTypeIdV1::from_index(0),
+                input_space: SemanticDisjointIndexSpaceV1::Index1d,
+                output_space: SemanticDisjointIndexSpaceV1::ShiftedIndex1d { offset: 8 },
+                offset: 7,
+            },
+            &mut claims,
+        ));
+    }
+
+    #[test]
+    fn intrinsic_capability_claims_bind_one_grid_leader_type() {
+        let leader = SemanticTypeIdV1::from_index(5);
+        let mut claims = IntrinsicCapabilityClaimsV1::default();
+        assert!(record_intrinsic_capability_claims(
+            SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent {
+                grid_leader: leader,
+            },
+            &mut claims,
+        ));
+        assert!(!record_intrinsic_capability_claims(
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive {
+                disjoint_slice: SemanticTypeIdV1::from_index(3),
+                grid_leader: SemanticTypeIdV1::from_index(6),
+                element: SemanticTypeIdV1::from_index(4),
+                raw_index: SemanticTypeIdV1::from_index(0),
+            },
+            &mut claims,
         ));
     }
 

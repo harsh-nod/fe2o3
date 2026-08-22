@@ -410,12 +410,15 @@ fn validate_production_v1_descriptor_evidence(
     typed_roots: &[TypedDescriptorRootV1],
     formal: &fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
 ) -> Result<(), CompilerDescriptorError> {
-    use fe2o3_artifacts::RustcAbiClassV1;
+    use fe2o3_artifacts::{RustDisjointIndexSpaceV1, RustSourceTypeShapeV1, RustcAbiClassV1};
     use fe2o3_kernel_ir::{
         AccessMode as KirAccessMode, AddressSpace, FormalMemoryAccessKind, FormalParameterKind,
         Type as KirType,
     };
-    use fe2o3_mir_model::semantic_mir_v1::SemanticAbiPassModeV1;
+    use fe2o3_mir_model::semantic_mir_v1::{
+        SemanticAbiPassModeV1, SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1,
+        SemanticDisjointIndexSpaceV1,
+    };
 
     let [root] = typed_roots else {
         return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
@@ -488,6 +491,7 @@ fn validate_production_v1_descriptor_evidence(
         .zip(&entry.signature.parameters)
         .enumerate()
     {
+        let semantic_type_id = *semantic_type;
         let semantic_type = semantic.types().get(semantic_type.index() as usize).ok_or(
             CompilerDescriptorError::ProductionDescriptorMismatch("semantic argument type"),
         )?;
@@ -528,6 +532,72 @@ fn validate_production_v1_descriptor_evidence(
             return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
                 "semantic ABI/Kernel IR argument correspondence",
             ));
+        }
+        if matches!(
+            root_argument.kind,
+            DescriptorArgumentKindV1::DisjointSlice(_)
+        ) {
+            let RustSourceTypeShapeV1::DisjointSlice { index_space, .. } =
+                root_argument.layout.rust_type().source_type()
+            else {
+                return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                    "typed disjoint source identity",
+                ));
+            };
+            let expected_mapping = match index_space {
+                RustDisjointIndexSpaceV1::Index1D => SemanticDisjointIndexSpaceV1::Index1d,
+                RustDisjointIndexSpaceV1::ShiftedIndex1D { offset } => {
+                    SemanticDisjointIndexSpaceV1::ShiftedIndex1d { offset }
+                }
+                RustDisjointIndexSpaceV1::GridExclusive => {
+                    SemanticDisjointIndexSpaceV1::GridExclusive
+                }
+                _ => {
+                    return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                        "supported disjoint mapping identity",
+                    ));
+                }
+            };
+            let mappings = semantic
+                .callables()
+                .iter()
+                .filter_map(|callable| match callable {
+                    SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } => match operation {
+                        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
+                            disjoint_slice,
+                            ..
+                        } if *disjoint_slice == semantic_type_id => {
+                            Some(SemanticDisjointIndexSpaceV1::Index1d)
+                        }
+                        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut {
+                            disjoint_slice,
+                            index_space,
+                            ..
+                        } if *disjoint_slice == semantic_type_id => Some(*index_space),
+                        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive {
+                            disjoint_slice,
+                            ..
+                        } if *disjoint_slice == semantic_type_id => {
+                            Some(SemanticDisjointIndexSpaceV1::GridExclusive)
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                });
+            let mut found = false;
+            for mapping in mappings {
+                found = true;
+                if mapping != expected_mapping {
+                    return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                        "semantic/artifact disjoint mapping identity",
+                    ));
+                }
+            }
+            if !found {
+                return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                    "semantic disjoint accessor identity",
+                ));
+            }
         }
     }
 

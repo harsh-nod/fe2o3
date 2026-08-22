@@ -19,12 +19,12 @@ use fe2o3_kernel_ir::{
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAxisV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticCallableDeclV1,
     SemanticCastKindV1, SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1,
-    SemanticDirectCallV1, SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionRoleV1,
-    SemanticLocalRoleV1, SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1,
-    SemanticPointerMetadataV1, SemanticProjectionKindV1, SemanticRvalueKindV1,
-    SemanticScalarTypeV1, SemanticScalarValueV1, SemanticStatementKindV1, SemanticTerminatorKindV1,
-    SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
-    SemanticUnwindActionV1, SemanticVolatilityV1,
+    SemanticDirectCallV1, SemanticDisjointIndexSpaceV1, SemanticFunctionDeclV1,
+    SemanticFunctionIdV1, SemanticFunctionRoleV1, SemanticLocalRoleV1, SemanticMutabilityV1,
+    SemanticOperandV1, SemanticPlaceV1, SemanticPointerMetadataV1, SemanticProjectionKindV1,
+    SemanticRvalueKindV1, SemanticScalarTypeV1, SemanticScalarValueV1, SemanticStatementKindV1,
+    SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1,
+    SemanticUnaryOpV1, SemanticUnwindActionV1, SemanticVolatilityV1,
 };
 use fe2o3_pliron::{ProductionSemanticMirErrorV1, ProductionSemanticMirOwnerV1};
 
@@ -561,13 +561,33 @@ enum SemanticValueBindingV1 {
         pointer: ValueId,
         pointer_ty: Type,
     },
+    IndexWitness {
+        id: ValueId,
+        index_space: SemanticDisjointIndexSpaceV1,
+        disjoint: bool,
+    },
+    OptionIndexWitness {
+        present: ValueId,
+        id: ValueId,
+        index_space: SemanticDisjointIndexSpaceV1,
+    },
+    GridLeader,
+    OptionGridLeader {
+        present: ValueId,
+    },
 }
 
 impl SemanticValueBindingV1 {
     fn value(&self) -> Result<(ValueId, Type), &'static str> {
         match self {
             Self::Value { id, ty } => Ok((*id, ty.clone())),
-            Self::OptionPointer { .. } => Err("aggregate value requires a semantic projection"),
+            Self::IndexWitness { id, .. } => Ok((*id, Type::INDEX)),
+            Self::OptionPointer { .. }
+            | Self::OptionIndexWitness { .. }
+            | Self::GridLeader
+            | Self::OptionGridLeader { .. } => {
+                Err("aggregate or capability value requires a semantic projection")
+            }
         }
     }
 }
@@ -680,7 +700,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticRvalueKindV1::Discriminant(place) => {
                 match self.resolve_place(block, statement, place)? {
-                    SemanticValueBindingV1::OptionPointer { present, .. } => {
+                    SemanticValueBindingV1::OptionPointer { present, .. }
+                    | SemanticValueBindingV1::OptionIndexWitness { present, .. }
+                    | SemanticValueBindingV1::OptionGridLeader { present } => {
                         let target = lower_scalar_type(self.types, result_type)?;
                         if target == Type::BOOL {
                             Ok(SemanticValueBindingV1::Value {
@@ -706,7 +728,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                             ))
                         }
                     }
-                    SemanticValueBindingV1::Value { .. } => Err(unsupported(
+                    SemanticValueBindingV1::Value { .. }
+                    | SemanticValueBindingV1::IndexWitness { .. }
+                    | SemanticValueBindingV1::GridLeader => Err(unsupported(
                         0,
                         Some(block.index()),
                         statement,
@@ -1014,16 +1038,113 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         "thread index intrinsic has arguments",
                     ));
                 }
-                self.emit(
-                    operations,
-                    Type::INDEX,
-                    OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
-                )?
+                let (id, _) = self
+                    .emit(
+                        operations,
+                        Type::INDEX,
+                        OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
+                    )?
+                    .value()
+                    .expect("emitted index value");
+                SemanticValueBindingV1::IndexWitness {
+                    id,
+                    index_space: SemanticDisjointIndexSpaceV1::Index1d,
+                    disjoint: false,
+                }
             }
             SemanticCompilerIntrinsicOperationV1::ThreadIndexGet { .. } => {
                 self.require_call_argument_count(block, call, 1)?;
                 self.lower_operand(block, None, &call.arguments()[0], operations)?
             }
+            SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint {
+                index_space, ..
+            } => {
+                self.require_call_argument_count(block, call, 1)?;
+                let binding = self.lower_operand(block, None, &call.arguments()[0], operations)?;
+                let SemanticValueBindingV1::IndexWitness {
+                    id,
+                    index_space: actual,
+                    disjoint: false,
+                } = binding
+                else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "into_disjoint receiver is not a thread-index witness",
+                    ));
+                };
+                if actual != *index_space {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "into_disjoint mapping identity changed",
+                    ));
+                }
+                SemanticValueBindingV1::IndexWitness {
+                    id,
+                    index_space: actual,
+                    disjoint: true,
+                }
+            }
+            SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift {
+                input_space,
+                output_space,
+                offset,
+                ..
+            } => self.lower_checked_shift(
+                block,
+                call,
+                operations,
+                *input_space,
+                *output_space,
+                *offset,
+                false,
+            )?,
+            SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { index_space, .. } => {
+                self.require_call_argument_count(block, call, 1)?;
+                let binding = self.lower_operand(block, None, &call.arguments()[0], operations)?;
+                let SemanticValueBindingV1::IndexWitness {
+                    id,
+                    index_space: actual,
+                    disjoint: true,
+                } = binding
+                else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "DisjointIndex::get receiver is not disjoint authority",
+                    ));
+                };
+                if actual != *index_space {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "DisjointIndex::get mapping identity changed",
+                    ));
+                }
+                SemanticValueBindingV1::Value {
+                    id,
+                    ty: Type::INDEX,
+                }
+            }
+            SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift {
+                input_space,
+                output_space,
+                offset,
+                ..
+            } => self.lower_checked_shift(
+                block,
+                call,
+                operations,
+                *input_space,
+                *output_space,
+                *offset,
+                true,
+            )?,
             SemanticCompilerIntrinsicOperationV1::ThreadIndex(axis) => {
                 self.emit_index_intrinsic(operations, IndexKind::Local, lower_axis(*axis))?
             }
@@ -1038,38 +1159,65 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { .. } => {
                 self.require_call_argument_count(block, call, 2)?;
-                let (slice, slice_ty) = self
-                    .lower_operand(block, None, &call.arguments()[0], operations)?
-                    .value()
-                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-                let (index, index_ty) = self
-                    .lower_operand(block, None, &call.arguments()[1], operations)?
-                    .value()
-                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-                let Type::Slice(slice_type) = slice_ty else {
+                let index_binding =
+                    self.lower_operand(block, None, &call.arguments()[1], operations)?;
+                if !matches!(
+                    index_binding,
+                    SemanticValueBindingV1::IndexWitness {
+                        index_space: SemanticDisjointIndexSpaceV1::Index1d,
+                        disjoint: false,
+                        ..
+                    }
+                ) {
                     return Err(unsupported(
                         0,
                         Some(block.index()),
                         None,
-                        "DisjointSlice::get_mut receiver is not a lowered slice",
-                    ));
-                };
-                if index_ty != Type::INDEX {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "DisjointSlice::get_mut index is not the trusted global index",
+                        "DisjointSlice::get_mut requires the identity thread-index witness",
                     ));
                 }
-                let (length, _) = self
+                self.lower_checked_slice_access(block, call, operations, 0, index_binding)?
+            }
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut {
+                index_space,
+                ..
+            } => {
+                self.require_call_argument_count(block, call, 2)?;
+                let index_binding =
+                    self.lower_operand(block, None, &call.arguments()[1], operations)?;
+                if !matches!(index_binding, SemanticValueBindingV1::IndexWitness {
+                    index_space: actual,
+                    disjoint: true,
+                    ..
+                } if actual == *index_space)
+                {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "get_disjoint_mut mapping authority does not match the slice",
+                    ));
+                }
+                self.lower_checked_slice_access(block, call, operations, 0, index_binding)?
+            }
+            SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { .. } => {
+                self.require_call_argument_count(block, call, 0)?;
+                let (index, _) = self
                     .emit(
                         operations,
                         Type::INDEX,
-                        OperationKind::SliceLength { slice },
+                        OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
                     )?
                     .value()
-                    .expect("emitted scalar value");
+                    .expect("emitted index value");
+                let (one, _) = self
+                    .emit(
+                        operations,
+                        Type::INDEX,
+                        OperationKind::Constant(Constant::Index(1)),
+                    )?
+                    .value()
+                    .expect("emitted index constant");
                 let (present, _) = self
                     .emit(
                         operations,
@@ -1077,40 +1225,27 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         OperationKind::Compare {
                             predicate: ComparePredicate::LessThan,
                             lhs: index,
-                            rhs: length,
+                            rhs: one,
                         },
                     )?
                     .value()
-                    .expect("emitted scalar value");
-                let pointer_ty = Type::pointer(
-                    (*slice_type.element).clone(),
-                    slice_type.address_space,
-                    slice_type.access,
-                );
-                let (base, _) = self
-                    .emit(
-                        operations,
-                        pointer_ty.clone(),
-                        OperationKind::SliceData { slice },
-                    )?
-                    .value()
-                    .expect("emitted scalar value");
-                let (pointer, _) = self
-                    .emit(
-                        operations,
-                        pointer_ty.clone(),
-                        OperationKind::GetElementPointer {
-                            base,
-                            offset: index,
-                        },
-                    )?
-                    .value()
-                    .expect("emitted scalar value");
-                SemanticValueBindingV1::OptionPointer {
-                    present,
-                    pointer,
-                    pointer_ty,
+                    .expect("emitted leader predicate");
+                SemanticValueBindingV1::OptionGridLeader { present }
+            }
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive { .. } => {
+                self.require_call_argument_count(block, call, 3)?;
+                let leader = self.lower_operand(block, None, &call.arguments()[1], operations)?;
+                if !matches!(leader, SemanticValueBindingV1::GridLeader) {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "exclusive access lacks grid-leader authority",
+                    ));
                 }
+                let index = self.lower_operand(block, None, &call.arguments()[2], operations)?;
+                let index = self.coerce_index(block, operations, index)?;
+                self.lower_checked_slice_access(block, call, operations, 0, index)?
             }
             SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
             | SemanticCompilerIntrinsicOperationV1::WaveBarrier
@@ -1146,6 +1281,222 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "compiler intrinsic argument count changed",
             ))
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn lower_checked_shift(
+        &mut self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        operations: &mut Vec<Operation>,
+        input_space: SemanticDisjointIndexSpaceV1,
+        output_space: SemanticDisjointIndexSpaceV1,
+        offset: u64,
+        input_is_disjoint: bool,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        self.require_call_argument_count(block, call, 1)?;
+        let binding = self.lower_operand(block, None, &call.arguments()[0], operations)?;
+        let SemanticValueBindingV1::IndexWitness {
+            id,
+            index_space: actual,
+            disjoint,
+        } = binding
+        else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "checked_shift receiver is not index authority",
+            ));
+        };
+        if actual != input_space || disjoint != input_is_disjoint {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "checked_shift input mapping identity changed",
+            ));
+        }
+        let expected_output = match input_space {
+            SemanticDisjointIndexSpaceV1::Index1d => {
+                SemanticDisjointIndexSpaceV1::ShiftedIndex1d { offset }
+            }
+            SemanticDisjointIndexSpaceV1::ShiftedIndex1d { .. }
+            | SemanticDisjointIndexSpaceV1::GridExclusive => {
+                return Err(unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "checked_shift input mapping is unsupported",
+                ));
+            }
+        };
+        if output_space != expected_output {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "checked_shift output mapping identity changed",
+            ));
+        }
+        let (maximum, _) = self
+            .emit(
+                operations,
+                Type::INDEX,
+                OperationKind::Constant(Constant::Index(u64::MAX - offset)),
+            )?
+            .value()
+            .expect("emitted index constant");
+        let (present, _) = self
+            .emit(
+                operations,
+                Type::BOOL,
+                OperationKind::Compare {
+                    predicate: ComparePredicate::LessThanOrEqual,
+                    lhs: id,
+                    rhs: maximum,
+                },
+            )?
+            .value()
+            .expect("emitted checked-shift predicate");
+        let (offset_value, _) = self
+            .emit(
+                operations,
+                Type::INDEX,
+                OperationKind::Constant(Constant::Index(offset)),
+            )?
+            .value()
+            .expect("emitted index constant");
+        let (shifted, _) = self
+            .emit(
+                operations,
+                Type::INDEX,
+                OperationKind::Binary {
+                    op: BinaryOp::Add,
+                    lhs: id,
+                    rhs: offset_value,
+                },
+            )?
+            .value()
+            .expect("emitted shifted index");
+        Ok(SemanticValueBindingV1::OptionIndexWitness {
+            present,
+            id: shifted,
+            index_space: output_space,
+        })
+    }
+
+    fn coerce_index(
+        &mut self,
+        block: SemanticBlockIdV1,
+        operations: &mut Vec<Operation>,
+        binding: SemanticValueBindingV1,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        let (id, ty) = binding
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+        if ty == Type::INDEX {
+            return Ok(SemanticValueBindingV1::Value { id, ty });
+        }
+        if ty != Type::Scalar(ScalarType::U64) {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "exclusive access index is not usize",
+            ));
+        }
+        self.emit(
+            operations,
+            Type::INDEX,
+            OperationKind::Cast {
+                kind: CastKind::Bitcast,
+                value: id,
+                to: Type::INDEX,
+            },
+        )
+    }
+
+    fn lower_checked_slice_access(
+        &mut self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        operations: &mut Vec<Operation>,
+        receiver: usize,
+        index: SemanticValueBindingV1,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        let (slice, slice_ty) = self
+            .lower_operand(block, None, &call.arguments()[receiver], operations)?
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+        let (index, index_ty) = index
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+        let Type::Slice(slice_type) = slice_ty else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "checked DisjointSlice receiver is not a lowered slice",
+            ));
+        };
+        if index_ty != Type::INDEX {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "checked DisjointSlice index is not a trusted index",
+            ));
+        }
+        let (length, _) = self
+            .emit(
+                operations,
+                Type::INDEX,
+                OperationKind::SliceLength { slice },
+            )?
+            .value()
+            .expect("emitted scalar value");
+        let (present, _) = self
+            .emit(
+                operations,
+                Type::BOOL,
+                OperationKind::Compare {
+                    predicate: ComparePredicate::LessThan,
+                    lhs: index,
+                    rhs: length,
+                },
+            )?
+            .value()
+            .expect("emitted scalar value");
+        let pointer_ty = Type::pointer(
+            (*slice_type.element).clone(),
+            slice_type.address_space,
+            slice_type.access,
+        );
+        let (base, _) = self
+            .emit(
+                operations,
+                pointer_ty.clone(),
+                OperationKind::SliceData { slice },
+            )?
+            .value()
+            .expect("emitted scalar value");
+        let (pointer, _) = self
+            .emit(
+                operations,
+                pointer_ty.clone(),
+                OperationKind::GetElementPointer {
+                    base,
+                    offset: index,
+                },
+            )?
+            .value()
+            .expect("emitted scalar value");
+        Ok(SemanticValueBindingV1::OptionPointer {
+            present,
+            pointer,
+            pointer_ty,
+        })
     }
 
     fn emit_index_intrinsic(
@@ -1274,11 +1625,49 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     ty: pointer_ty,
                 },
                 (
+                    SemanticValueBindingV1::OptionIndexWitness {
+                        id, index_space, ..
+                    },
+                    SemanticProjectionKindV1::Field(_),
+                ) => SemanticValueBindingV1::IndexWitness {
+                    id,
+                    index_space,
+                    disjoint: true,
+                },
+                (
+                    SemanticValueBindingV1::OptionGridLeader { .. },
+                    SemanticProjectionKindV1::Field(_),
+                ) => SemanticValueBindingV1::GridLeader,
+                (
                     binding @ SemanticValueBindingV1::OptionPointer { .. },
                     SemanticProjectionKindV1::Downcast(_),
                 ) => binding,
                 (
+                    binding @ SemanticValueBindingV1::OptionIndexWitness { .. },
+                    SemanticProjectionKindV1::Downcast(_),
+                ) => binding,
+                (
+                    binding @ SemanticValueBindingV1::OptionGridLeader { .. },
+                    SemanticProjectionKindV1::Downcast(_),
+                ) => binding,
+                (
                     binding @ SemanticValueBindingV1::Value { .. },
+                    SemanticProjectionKindV1::Dereference
+                    | SemanticProjectionKindV1::Field(0)
+                    | SemanticProjectionKindV1::Downcast(_)
+                    | SemanticProjectionKindV1::OpaqueCast
+                    | SemanticProjectionKindV1::Subtype,
+                ) => binding,
+                (
+                    binding @ SemanticValueBindingV1::IndexWitness { .. },
+                    SemanticProjectionKindV1::Dereference
+                    | SemanticProjectionKindV1::Field(0)
+                    | SemanticProjectionKindV1::Downcast(_)
+                    | SemanticProjectionKindV1::OpaqueCast
+                    | SemanticProjectionKindV1::Subtype,
+                ) => binding,
+                (
+                    binding @ SemanticValueBindingV1::GridLeader,
                     SemanticProjectionKindV1::Dereference
                     | SemanticProjectionKindV1::Field(0)
                     | SemanticProjectionKindV1::Downcast(_)
@@ -1616,6 +2005,16 @@ fn disjoint_slice_element(
         SemanticCallableDeclV1::CompilerIntrinsic {
             operation:
                 SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
+                    disjoint_slice,
+                    element,
+                    ..
+                }
+                | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut {
+                    disjoint_slice,
+                    element,
+                    ..
+                }
+                | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive {
                     disjoint_slice,
                     element,
                     ..
