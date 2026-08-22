@@ -256,17 +256,20 @@ impl SemanticOptionDominanceV1 {
                     "an Option capability switch is not bound to its unique discriminator",
                 ));
             }
-            let [target] = targets.values() else {
-                return Err(SemanticOptionDominanceErrorV1::InexactCapability(
-                    "an Option capability switch is not an exact boolean branch",
-                ));
-            };
-            let some_target = match target.value() {
-                0 => targets.otherwise().target(),
-                1 => target.edge().target(),
+            let some_target = match targets.values() {
+                [target] => match target.value() {
+                    0 => targets.otherwise().target(),
+                    1 => target.edge().target(),
+                    _ => {
+                        return Err(SemanticOptionDominanceErrorV1::InexactCapability(
+                            "an Option capability switch has no exact Some edge",
+                        ));
+                    }
+                },
+                [zero, one] if zero.value() == 0 && one.value() == 1 => one.edge().target(),
                 _ => {
                     return Err(SemanticOptionDominanceErrorV1::InexactCapability(
-                        "an Option capability switch has no exact Some edge",
+                        "an Option capability switch is not an exact 0/1 branch",
                     ));
                 }
             };

@@ -79,6 +79,7 @@ struct ProjectedGridLeaderV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CapabilityEdgeKindV1 {
     Alias,
+    AuthenticatedOptionPayload,
     IntoDisjoint {
         mapping: SemanticDisjointIndexSpaceV1,
     },
@@ -418,6 +419,7 @@ fn project_intrinsic_contracts(
     let option_dominance = SemanticOptionDominanceV1::analyze(function, &option_producers)
         .map_err(|error| ProductionRankedProjectionErrorV1::Unsupported(error.detail()))?;
     let mut edge_count = 0_usize;
+    let mut borrowed_locals = Vec::new();
 
     for (block_index, block) in function.blocks().iter().enumerate() {
         for statement in block.statements() {
@@ -427,14 +429,34 @@ fn project_intrinsic_contracts(
             if !assignment.destination().projections().is_empty() {
                 continue;
             }
-            let Some(source) = (match assignment.value().kind() {
-                SemanticRvalueKindV1::Use(operand) => transparent_operand_place(operand),
-                _ => None,
-            }) else {
+            let (source, borrowed) = match assignment.value().kind() {
+                SemanticRvalueKindV1::Use(operand) => (transparent_operand_place(operand), false),
+                SemanticRvalueKindV1::Borrow { place, .. }
+                | SemanticRvalueKindV1::AddressOf { place, .. }
+                    if place.projections().is_empty() =>
+                {
+                    (Some(place), true)
+                }
+                _ => (None, false),
+            };
+            let Some(source) = source else {
                 continue;
             };
             let source = source.local().index() as usize;
             let destination = assignment.destination().local().index() as usize;
+            if borrowed {
+                if borrowed_locals.len() == MAX_PROJECTED_OPERATIONS_V1 {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "borrowed capability uses exceed the charged projection limit",
+                    ));
+                }
+                borrowed_locals.try_reserve(1).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "borrowed capability use storage cannot be reserved",
+                    )
+                })?;
+                borrowed_locals.push((source, block_index));
+            }
             push_capability_edge(
                 &mut edges_by_source,
                 &mut edge_count,
@@ -625,6 +647,45 @@ fn project_intrinsic_contracts(
         }
     }
 
+    // rustc may erase the move that binds an unforgeable zero-sized payload
+    // from `Option::Some`. Recover that edge only when one exact authenticated
+    // producer controls the borrow's block and its payload type matches.
+    for (borrowed_local, use_block) in borrowed_locals {
+        if grid_leaders[borrowed_local].is_some() {
+            continue;
+        }
+        let borrowed_type = function.locals()[borrowed_local].ty();
+        let use_block_id = SemanticBlockIdV1::from_index(use_block as u32);
+        let mut producer = None;
+        for (candidate_local, candidate) in grid_leaders.iter().copied().enumerate() {
+            let Some(candidate) = candidate else {
+                continue;
+            };
+            if candidate.grid_leader != borrowed_type
+                || !option_dominance.allows(candidate.availability, use_block_id)
+            {
+                continue;
+            }
+            if producer.replace(candidate_local).is_some() {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a borrowed zero-sized capability has multiple active Option producers",
+                ));
+            }
+        }
+        if let Some(producer) = producer {
+            push_capability_edge(
+                &mut edges_by_source,
+                &mut edge_count,
+                producer,
+                CapabilityEdgeV1 {
+                    destination: borrowed_local,
+                    use_block,
+                    kind: CapabilityEdgeKindV1::AuthenticatedOptionPayload,
+                },
+            )?;
+        }
+    }
+
     let mut processed_edges = 0_usize;
     while let Some(source) = index_worklist.pop_front() {
         let input = index_values[source].ok_or(ProductionRankedProjectionErrorV1::Unsupported(
@@ -641,14 +702,15 @@ fn project_intrinsic_contracts(
                     availability,
                     SemanticBlockIdV1::from_index(edge.use_block as u32),
                 )
-            }) && !matches!(edge.kind, CapabilityEdgeKindV1::Alias)
-            {
+            }) {
                 return Err(ProductionRankedProjectionErrorV1::Unsupported(
                     "an index capability is used outside its authenticated Some edge",
                 ));
             }
             let projected = match edge.kind {
-                CapabilityEdgeKindV1::Alias => input,
+                CapabilityEdgeKindV1::Alias | CapabilityEdgeKindV1::AuthenticatedOptionPayload => {
+                    input
+                }
                 CapabilityEdgeKindV1::IntoDisjoint { mapping } => {
                     ProjectedDisjointIndexV1 { mapping, ..input }
                 }
@@ -751,8 +813,19 @@ fn project_intrinsic_contracts(
             "the capability worklist lost grid-leader authority",
         ))?;
         for edge in &edges_by_source[source] {
-            if !matches!(edge.kind, CapabilityEdgeKindV1::Alias) {
+            if !matches!(
+                edge.kind,
+                CapabilityEdgeKindV1::Alias | CapabilityEdgeKindV1::AuthenticatedOptionPayload
+            ) {
                 continue;
+            }
+            if !option_dominance.allows(
+                input.availability,
+                SemanticBlockIdV1::from_index(edge.use_block as u32),
+            ) {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "grid-leader authority is aliased outside its authenticated Some edge",
+                ));
             }
             processed_edges = processed_edges.checked_add(1).ok_or(
                 ProductionRankedProjectionErrorV1::Unsupported(
@@ -3604,11 +3677,17 @@ mod tests {
                 SemanticTerminatorKindV1::SwitchInt {
                     discriminant: SemanticOperandV1::Copy(discriminator_place),
                     targets: SemanticSwitchTargetsV1::new(
-                        vec![SemanticSwitchTargetV1::new(
-                            0,
-                            cfg_edge(SemanticEdgeRoleV1::SwitchValue, 3),
-                        )],
-                        cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 2),
+                        vec![
+                            SemanticSwitchTargetV1::new(
+                                0,
+                                cfg_edge(SemanticEdgeRoleV1::SwitchValue, 3),
+                            ),
+                            SemanticSwitchTargetV1::new(
+                                1,
+                                cfg_edge(SemanticEdgeRoleV1::SwitchValue, 2),
+                            ),
+                        ],
+                        cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 3),
                     )
                     .unwrap(),
                 },
