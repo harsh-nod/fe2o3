@@ -2,24 +2,25 @@
 
 use core::{fmt, mem};
 use std::error::Error;
+use std::path::Path;
 
 use fe2o3_artifact_transaction::{
-    DurableCurrentLinkPublicationLeaseV1, DurableLinkPublicationPlanV1,
-    DurablePublishedClaimCodecErrorV3, DurablePublishedHsacoClaimV3,
-    MAX_COMPILER_MODULE_HANDOFF_BYTES_V3, MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES_V3,
-    MAX_WORKER_V3_PUBLICATION_INTENT_RECORD_BYTES_V1,
+    BuildAttempt, DurableCurrentLinkPublicationLeaseV1, DurableLinkPublicationPlanV1,
+    DurablePublishedClaimCodecErrorV3, DurablePublishedClaimReacquisitionErrorV3,
+    DurablePublishedHsacoClaimV3, MAX_COMPILER_MODULE_HANDOFF_BYTES_V3,
+    MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES_V3, MAX_WORKER_V3_PUBLICATION_INTENT_RECORD_BYTES_V1,
     MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_BYTES_V1,
-    MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_PAYLOADS_V1, WorkerV3PublicationIntentCodecErrorV1,
-    WorkerV3PublicationIntentRecordV1,
+    MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_PAYLOADS_V1, VerifiedWorkerV3LoadEnvelopeAuthorityV1,
+    WorkerV3LoadEnvelopeBindingV1, WorkerV3LoadReadinessCodecErrorV1, WorkerV3LoadReadinessErrorV1,
+    WorkerV3LoadReadinessReceiptV1, WorkerV3LoadReadinessResultV1,
+    WorkerV3PublicationIntentCodecErrorV1, WorkerV3PublicationIntentRecordV1,
+    publish_worker_v3_load_readiness_v1, reacquire_current_hsaco_publication_lease_v3,
+    recover_worker_v3_load_readiness_for_attempt_v1,
 };
+use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3;
 use fe2o3_hsaco_finalize::{
-    CompilerModuleHandoffV2, ProtectedWorkerV3CompactFinalizerReplayErrorV1,
-    ProtectedWorkerV3CompactFinalizerReplayV2, PublishedProtectedWorkerV3HsacoV1,
-    WorkerV3HsacoPublicationErrorV1,
-};
-use fe2o3_kernel_descriptor::DeviceTargetV1;
-use fe2o3_rustc_invocation::{
-    InvocationDigestV3, MAX_DESCRIPTOR_BYTES_V3, decode_descriptor_v3, encode_descriptor_v3,
+    ProtectedWorkerV3CompactFinalizerReplayErrorV1, ProtectedWorkerV3CompactFinalizerReplayV2,
+    PublishedProtectedWorkerV3HsacoV1, WorkerV3HsacoPublicationErrorV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -31,23 +32,7 @@ pub const WORKER_V3_LOAD_ENVELOPE_VERSION_V1: u16 = 1;
 const HEADER_BYTES_V1: usize = 60;
 const CHECKSUM_BYTES_V1: usize = 32;
 const PROVIDER_LENGTH_BYTES_V1: usize = 8;
-const OUTER_HEADER_BYTES_V3: usize = 40;
-const OUTER_PAIR_BYTES_V3: usize = 132;
-const OUTER_TERMINAL_IDENTITY_BYTES_V3: usize = 32;
-const CAPSULE_HEADER_BYTES_V3: usize = 24;
-const CAPSULE_RECEIPT_COUNT_V3: usize = 15;
-const CAPSULE_TERMINAL_IDENTITY_BYTES_V3: usize = 32;
-const CAPSULE_MAGIC_V3: [u8; 8] = *b"F2O3ISV3";
-const CAPSULE_VERSION_V3: u16 = 3;
-const OUTER_MAGIC_V3: [u8; 8] = *b"F2O3IHV3";
-const OUTER_VERSION_V3: u16 = 3;
-const PAIR_MAGIC_V3: [u8; 8] = *b"F2O3PBV3";
-const PAIR_VERSION_V3: u16 = 3;
-
 const LOAD_ENVELOPE_CHECKSUM_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V3/LOAD-ENVELOPE-CHECKSUM/V1\0";
-const CAPSULE_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/INERT-PRODUCTION-SEMANTIC-CAPSULE/V3\0";
-const PAIR_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/INERT-COMPILER-MODULE-PAIR-BINDING/V3\0";
-const OUTER_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/INERT-SEMANTIC-COMPILER-MODULE-HANDOFF/V3\0";
 const PROVIDER_ARCHIVE_MAGIC_V1: &[u8] = b"FE2O3-WORKER-V3-PROVIDER-PAYLOADS-V1\0";
 const PROVIDER_ARCHIVE_VERSION_V1: u16 = 1;
 const PROVIDER_ARCHIVE_CHECKSUM_DOMAIN_V1: &[u8] =
@@ -122,7 +107,6 @@ pub enum WorkerV3LoadEnvelopeBindingFieldV1 {
     RecordAttempt,
     DurablePlan,
     PublicationIntentRecord,
-    Finalization,
     FinalizedOutputHash,
     FinalizedOutputLength,
     OuterHandoffHash,
@@ -147,7 +131,10 @@ pub enum WorkerV3LoadEnvelopeErrorV1 {
     Publication(WorkerV3HsacoPublicationErrorV1),
     IntentRecord(WorkerV3PublicationIntentCodecErrorV1),
     PublishedClaim(DurablePublishedClaimCodecErrorV3),
+    PublishedClaimReacquisition(DurablePublishedClaimReacquisitionErrorV3),
     Transcript(ProtectedWorkerV3CompactFinalizerReplayErrorV1),
+    LoadReadinessCodec(WorkerV3LoadReadinessCodecErrorV1),
+    LoadReadiness(WorkerV3LoadReadinessErrorV1),
     WireTooLarge {
         actual: usize,
         max: usize,
@@ -200,7 +187,22 @@ impl fmt::Display for WorkerV3LoadEnvelopeErrorV1 {
             }
             Self::IntentRecord(error) => write!(formatter, "invalid V3 intent record: {error}"),
             Self::PublishedClaim(error) => write!(formatter, "invalid V3 published claim: {error}"),
+            Self::PublishedClaimReacquisition(error) => {
+                write!(formatter, "V3 published claim is not current: {error}")
+            }
             Self::Transcript(error) => write!(formatter, "invalid compact V2 transcript: {error}"),
+            Self::LoadReadinessCodec(error) => {
+                write!(
+                    formatter,
+                    "invalid V3 load-envelope custody binding: {error}"
+                )
+            }
+            Self::LoadReadiness(error) => {
+                write!(
+                    formatter,
+                    "failed to persist V3 load-envelope custody: {error}"
+                )
+            }
             Self::WireTooLarge { actual, max } => {
                 write!(
                     formatter,
@@ -264,7 +266,10 @@ impl Error for WorkerV3LoadEnvelopeErrorV1 {
             Self::Publication(error) => Some(error),
             Self::IntentRecord(error) => Some(error),
             Self::PublishedClaim(error) => Some(error),
+            Self::PublishedClaimReacquisition(error) => Some(error),
             Self::Transcript(error) => Some(error),
+            Self::LoadReadinessCodec(error) => Some(error),
+            Self::LoadReadiness(error) => Some(error),
             _ => None,
         }
     }
@@ -273,6 +278,18 @@ impl Error for WorkerV3LoadEnvelopeErrorV1 {
 impl From<WorkerV3HsacoPublicationErrorV1> for WorkerV3LoadEnvelopeErrorV1 {
     fn from(value: WorkerV3HsacoPublicationErrorV1) -> Self {
         Self::Publication(value)
+    }
+}
+
+impl From<WorkerV3LoadReadinessCodecErrorV1> for WorkerV3LoadEnvelopeErrorV1 {
+    fn from(value: WorkerV3LoadReadinessCodecErrorV1) -> Self {
+        Self::LoadReadinessCodec(value)
+    }
+}
+
+impl From<WorkerV3LoadReadinessErrorV1> for WorkerV3LoadEnvelopeErrorV1 {
+    fn from(value: WorkerV3LoadReadinessErrorV1) -> Self {
+        Self::LoadReadiness(value)
     }
 }
 
@@ -375,6 +392,22 @@ impl WorkerV3LoadEnvelopeV1 {
         self.wire.encode_canonical_with_budget(budget)
     }
 
+    /// Persists the exact canonical envelope beside its current V3 publication.
+    ///
+    /// The resulting receipt proves only that the envelope replay components and the separately
+    /// published finalized artifact are durably reconstructible. It authenticates no descriptor
+    /// source, performs no semantic admission, and grants no HSA load or launch authority.
+    pub fn persist_durable_replay_custody_v1(
+        &self,
+        output_dir: &Path,
+    ) -> Result<WorkerV3LoadReadinessResultV1, WorkerV3LoadEnvelopeErrorV1> {
+        let exact_envelope = self.encode_canonical()?;
+        let binding = WorkerV3LoadEnvelopeBindingV1::from_exact_bytes(&exact_envelope)?;
+        let authority = audited_replay_custody_authority_v1(binding);
+        publish_worker_v3_load_readiness_v1(output_dir, &self.wire.claim, authority, exact_envelope)
+            .map_err(Into::into)
+    }
+
     pub fn into_wire_and_current_lease(
         self,
     ) -> (
@@ -390,6 +423,26 @@ impl WorkerV3LoadEnvelopeV1 {
 
     pub const fn grants_launch_authority(&self) -> bool {
         false
+    }
+}
+
+#[allow(
+    unsafe_code,
+    reason = "one audited custody bridge follows exact live-envelope and publication validation"
+)]
+fn audited_replay_custody_authority_v1(
+    binding: WorkerV3LoadEnvelopeBindingV1,
+) -> VerifiedWorkerV3LoadEnvelopeAuthorityV1 {
+    // SAFETY: only `WorkerV3LoadEnvelopeV1::persist_durable_replay_custody_v1` calls this helper.
+    // The live owner can only be constructed by consuming a completed V3 publication; construction
+    // validates the exact intent record, claim, current lease, outer handoff, ordered providers,
+    // compact transcript, and finalized artifact. Its encoder revalidates those associations. The
+    // canonical envelope therefore retains every non-artifact replay component while the claim and
+    // current publication retain the exact finalized artifact checked by the persistence layer.
+    unsafe {
+        VerifiedWorkerV3LoadEnvelopeAuthorityV1::from_complete_compact_replay_preimages_unchecked(
+            binding,
+        )
     }
 }
 
@@ -657,6 +710,80 @@ impl WorkerV3LoadEnvelopeWireV1 {
     }
 }
 
+/// Restart-recovered live custody for one exact V3 envelope and current finalized artifact.
+///
+/// This owner is intentionally move-only. It proves durable replay custody and current artifact
+/// identity, but authenticates no descriptor source and grants no HSA load or launch authority.
+pub struct RecoveredWorkerV3LoadEnvelopeV1 {
+    wire: WorkerV3LoadEnvelopeWireV1,
+    current_lease: DurableCurrentLinkPublicationLeaseV1,
+    receipt: WorkerV3LoadReadinessReceiptV1,
+}
+
+impl fmt::Debug for RecoveredWorkerV3LoadEnvelopeV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RecoveredWorkerV3LoadEnvelopeV1")
+            .field("wire", &self.wire)
+            .field("current_lease", &self.current_lease)
+            .field("receipt", &self.receipt)
+            .finish()
+    }
+}
+
+impl RecoveredWorkerV3LoadEnvelopeV1 {
+    pub const fn wire(&self) -> &WorkerV3LoadEnvelopeWireV1 {
+        &self.wire
+    }
+
+    pub const fn current_publication_lease(&self) -> &DurableCurrentLinkPublicationLeaseV1 {
+        &self.current_lease
+    }
+
+    pub const fn receipt(&self) -> WorkerV3LoadReadinessReceiptV1 {
+        self.receipt
+    }
+
+    pub fn exact_artifact_bytes(&self) -> &[u8] {
+        self.current_lease.exact_artifact_bytes()
+    }
+
+    pub const fn authenticates_descriptor_source(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Recovers one strict V3 envelope and its exact current publication using durable state alone.
+pub fn recover_worker_v3_load_envelope_v1(
+    output_dir: &Path,
+    attempt: BuildAttempt,
+) -> Result<RecoveredWorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeErrorV1> {
+    let custody = recover_worker_v3_load_readiness_for_attempt_v1(output_dir, attempt)?;
+    let expected_claim = custody.published_claim().clone();
+    let receipt = custody.receipt();
+    let exact_envelope = custody.into_exact_envelope_bytes();
+    let wire = WorkerV3LoadEnvelopeWireV1::decode_canonical(&exact_envelope)?;
+    if wire.published_claim() != &expected_claim {
+        return binding_mismatch(WorkerV3LoadEnvelopeBindingFieldV1::DurablePlan);
+    }
+    let current_lease = reacquire_current_hsaco_publication_lease_v3(output_dir, &expected_claim)
+        .map_err(WorkerV3LoadEnvelopeErrorV1::PublishedClaimReacquisition)?;
+    wire.validate_reacquired_publication_lease_v1(&current_lease)?;
+    Ok(RecoveredWorkerV3LoadEnvelopeV1 {
+        wire,
+        current_lease,
+        receipt,
+    })
+}
+
 fn validate_components(
     record: WorkerV3PublicationIntentRecordV1,
     claim: &DurablePublishedHsacoClaimV3,
@@ -737,9 +864,6 @@ fn validate_record_claim(
     let binding = claim.worker_v3_binding();
     if binding.publication_intent_record_identity() != record.identity().as_bytes() {
         return binding_mismatch(WorkerV3LoadEnvelopeBindingFieldV1::PublicationIntentRecord);
-    }
-    if binding.finalization_identity() != *plan.finalization().as_bytes() {
-        return binding_mismatch(WorkerV3LoadEnvelopeBindingFieldV1::Finalization);
     }
     if binding.finalized_output_sha256() != record.output_sha256()
         || record.output_sha256() != *plan.finalized_output().as_bytes()
@@ -1103,202 +1227,17 @@ fn decode_sections<'a>(
 fn validate_outer_handoff(
     bytes: &[u8],
 ) -> Result<fe2o3_hsaco_finalize::CompilerClosureV2, WorkerV3LoadEnvelopeErrorV1> {
-    if bytes.len() > MAX_COMPILER_MODULE_HANDOFF_BYTES_V3 || bytes.len() < OUTER_HEADER_BYTES_V3 {
-        return invalid_outer("length");
-    }
-    let mut reader = Reader::new(bytes);
-    if reader.array::<8>()? != OUTER_MAGIC_V3 {
-        return invalid_outer("magic");
-    }
-    if reader.u16()? != OUTER_VERSION_V3 {
-        return invalid_outer("version");
-    }
-    if reader.u16()? != 0 {
-        return invalid_outer("flags");
-    }
-    let total_len = usize_from_u64(reader.u64()?, "outer semantic handoff")?;
-    if total_len != bytes.len() {
-        return invalid_outer("total length");
-    }
-    if reader.u32()? != 0 {
-        return invalid_outer("reserved");
-    }
-    let capsule_len = usize_from_u64(reader.u64()?, "semantic capsule")?;
-    let module_len = usize_from_u64(reader.u64()?, "nested V2 module handoff")?;
-    let expected = OUTER_HEADER_BYTES_V3
-        .checked_add(capsule_len)
-        .and_then(|value| value.checked_add(module_len))
-        .and_then(|value| value.checked_add(OUTER_PAIR_BYTES_V3))
-        .and_then(|value| value.checked_add(OUTER_TERMINAL_IDENTITY_BYTES_V3))
-        .ok_or(WorkerV3LoadEnvelopeErrorV1::LengthOverflow {
-            field: "outer semantic handoff",
-        })?;
-    if expected != bytes.len() {
-        return invalid_outer("component lengths");
-    }
-    let capsule = reader.take(capsule_len)?;
-    let module = reader.take(module_len)?;
-    let pair = reader.take(OUTER_PAIR_BYTES_V3)?;
-    let declared_outer_identity = reader.array::<32>()?;
-    if !reader.is_empty()
-        || domain_identity(OUTER_IDENTITY_DOMAIN_V3, &bytes[..bytes.len() - 32])
-            != declared_outer_identity
-    {
-        return invalid_outer("terminal identity");
-    }
-
-    let (compiler_closure, capsule_identity) = validate_capsule(capsule)?;
-    let nested = CompilerModuleHandoffV2::decode(module).map_err(|_| {
+    let handoff = InertSemanticCompilerModuleHandoffV3::decode(bytes).map_err(|_| {
         WorkerV3LoadEnvelopeErrorV1::NonCanonicalOuterHandoff {
-            field: "nested V2 module handoff",
+            field: "shared strict V3 decoder",
         }
     })?;
-    if nested.canonical_bytes() != module {
-        return invalid_outer("nested V2 canonical bytes");
+    if handoff.canonical_bytes() != bytes {
+        return Err(WorkerV3LoadEnvelopeErrorV1::NonCanonicalOuterHandoff {
+            field: "shared strict V3 canonical bytes",
+        });
     }
-    validate_outer_pair(pair, capsule_identity, capsule.len(), module)?;
-    Ok(compiler_closure)
-}
-
-fn validate_capsule(
-    bytes: &[u8],
-) -> Result<(fe2o3_hsaco_finalize::CompilerClosureV2, [u8; 32]), WorkerV3LoadEnvelopeErrorV1> {
-    if bytes.len() < CAPSULE_HEADER_BYTES_V3 + CAPSULE_TERMINAL_IDENTITY_BYTES_V3 {
-        return invalid_outer("semantic capsule length");
-    }
-    let mut reader = Reader::new(bytes);
-    if reader.array::<8>()? != CAPSULE_MAGIC_V3 {
-        return invalid_outer("semantic capsule magic");
-    }
-    if reader.u16()? != CAPSULE_VERSION_V3 {
-        return invalid_outer("semantic capsule version");
-    }
-    if reader.u16()? != 0 {
-        return invalid_outer("semantic capsule flags");
-    }
-    let total_len = usize_from_u64(reader.u64()?, "semantic capsule")?;
-    if total_len != bytes.len() {
-        return invalid_outer("semantic capsule total length");
-    }
-    if reader.u32()? != 0 {
-        return invalid_outer("semantic capsule reserved");
-    }
-    let invocation_len = bounded_nonzero_length(
-        u64::from(reader.u32()?),
-        "rustc invocation",
-        MAX_DESCRIPTOR_BYTES_V3,
-    )?;
-    let invocation_bytes = reader.take(invocation_len)?;
-    let invocation = decode_descriptor_v3(invocation_bytes).map_err(|_| {
-        WorkerV3LoadEnvelopeErrorV1::NonCanonicalOuterHandoff {
-            field: "rustc invocation",
-        }
-    })?;
-    let canonical_invocation = encode_descriptor_v3(&invocation).map_err(|_| {
-        WorkerV3LoadEnvelopeErrorV1::NonCanonicalOuterHandoff {
-            field: "rustc invocation",
-        }
-    })?;
-    if canonical_invocation.as_slice() != invocation_bytes {
-        return invalid_outer("rustc invocation encoding");
-    }
-    let declared_invocation = reader.array::<32>()?;
-    let actual_invocation = InvocationDigestV3::calculate(&invocation).map_err(|_| {
-        WorkerV3LoadEnvelopeErrorV1::NonCanonicalOuterHandoff {
-            field: "rustc invocation digest",
-        }
-    })?;
-    if actual_invocation.into_bytes() != declared_invocation {
-        return invalid_outer("rustc invocation digest");
-    }
-    let target_len = usize::from(reader.u16()?);
-    if target_len == 0 || target_len > 128 {
-        return invalid_outer("semantic capsule target length");
-    }
-    let target_bytes = reader.take(target_len)?;
-    let target_text = core::str::from_utf8(target_bytes).map_err(|_| {
-        WorkerV3LoadEnvelopeErrorV1::NonCanonicalOuterHandoff {
-            field: "semantic capsule target text",
-        }
-    })?;
-    let target = DeviceTargetV1::parse(target_text).map_err(|_| {
-        WorkerV3LoadEnvelopeErrorV1::NonCanonicalOuterHandoff {
-            field: "semantic capsule target",
-        }
-    })?;
-    if target.to_string() != target_text || invocation.amd_target() != target_text {
-        return invalid_outer("semantic capsule target binding");
-    }
-    for _ in 0..CAPSULE_RECEIPT_COUNT_V3 {
-        let receipt_len = usize_from_u64(u64::from(reader.u32()?), "semantic receipt")?;
-        if receipt_len == 0 {
-            return invalid_outer("semantic receipt length");
-        }
-        reader.take(receipt_len)?;
-        if reader.array::<32>()? == [0; 32] {
-            return invalid_outer("semantic receipt identity");
-        }
-    }
-    let terminal_offset = reader.consumed();
-    let capsule_identity = reader.array::<32>()?;
-    if capsule_identity == [0; 32]
-        || !reader.is_empty()
-        || domain_identity(CAPSULE_IDENTITY_DOMAIN_V3, &bytes[..terminal_offset])
-            != capsule_identity
-    {
-        return invalid_outer("semantic capsule terminal identity");
-    }
-    Ok((*invocation.compiler_closure(), capsule_identity))
-}
-
-fn validate_outer_pair(
-    pair: &[u8],
-    capsule_identity: [u8; 32],
-    capsule_len: usize,
-    module: &[u8],
-) -> Result<(), WorkerV3LoadEnvelopeErrorV1> {
-    let mut reader = Reader::new(pair);
-    if reader.array::<8>()? != PAIR_MAGIC_V3 {
-        return invalid_outer("pair magic");
-    }
-    if reader.u16()? != PAIR_VERSION_V3 || reader.u16()? != 0 {
-        return invalid_outer("pair version or flags");
-    }
-    if usize::try_from(reader.u32()?).ok() != Some(OUTER_PAIR_BYTES_V3) || reader.u32()? != 0 {
-        return invalid_outer("pair length or reserved");
-    }
-    if reader.array::<32>()? != capsule_identity
-        || usize_from_u64(reader.u64()?, "pair capsule")? != capsule_len
-    {
-        return invalid_outer("pair capsule binding");
-    }
-    let module_identity = reader.array::<32>()?;
-    if module_identity != <[u8; 32]>::from(Sha256::digest(module))
-        || usize_from_u64(reader.u64()?, "pair module")? != module.len()
-    {
-        return invalid_outer("pair module binding");
-    }
-    let terminal_offset = reader.consumed();
-    let pair_identity = reader.array::<32>()?;
-    if pair_identity == [0; 32]
-        || !reader.is_empty()
-        || domain_identity(PAIR_IDENTITY_DOMAIN_V3, &pair[..terminal_offset]) != pair_identity
-    {
-        return invalid_outer("pair terminal identity");
-    }
-    Ok(())
-}
-
-fn invalid_outer<T>(field: &'static str) -> Result<T, WorkerV3LoadEnvelopeErrorV1> {
-    Err(WorkerV3LoadEnvelopeErrorV1::NonCanonicalOuterHandoff { field })
-}
-
-fn domain_identity(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(domain);
-    digest.update((bytes.len() as u64).to_le_bytes());
-    digest.update(bytes);
-    digest.finalize().into()
+    Ok(*handoff.capsule().compiler_closure())
 }
 
 fn canonical_wire_length(
@@ -1350,10 +1289,6 @@ fn bounded_nonzero_length(
         return Err(WorkerV3LoadEnvelopeErrorV1::LengthOutOfRange { field, actual, max });
     }
     bounded_length(actual, field, max)
-}
-
-fn usize_from_u64(value: u64, field: &'static str) -> Result<usize, WorkerV3LoadEnvelopeErrorV1> {
-    usize::try_from(value).map_err(|_| WorkerV3LoadEnvelopeErrorV1::LengthOverflow { field })
 }
 
 fn as_u32(value: usize, field: &'static str) -> Result<u32, WorkerV3LoadEnvelopeErrorV1> {

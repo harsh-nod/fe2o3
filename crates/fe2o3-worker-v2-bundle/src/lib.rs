@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
 mod application_handoff;
@@ -98,7 +98,8 @@ pub use protected_v2::{
 pub use static_application::SealedStaticApplicationErrorV1;
 pub use worker_v3_load_envelope::{
     MAX_WORKER_V3_LOAD_ENVELOPE_ALLOCATION_BYTES_V1, MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1,
-    WORKER_V3_LOAD_ENVELOPE_MAGIC_V1, WORKER_V3_LOAD_ENVELOPE_VERSION_V1,
-    WorkerV3LoadEnvelopeBindingFieldV1, WorkerV3LoadEnvelopeCodecBudgetV1,
-    WorkerV3LoadEnvelopeErrorV1, WorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeWireV1,
+    RecoveredWorkerV3LoadEnvelopeV1, WORKER_V3_LOAD_ENVELOPE_MAGIC_V1,
+    WORKER_V3_LOAD_ENVELOPE_VERSION_V1, WorkerV3LoadEnvelopeBindingFieldV1,
+    WorkerV3LoadEnvelopeCodecBudgetV1, WorkerV3LoadEnvelopeErrorV1, WorkerV3LoadEnvelopeV1,
+    WorkerV3LoadEnvelopeWireV1, recover_worker_v3_load_envelope_v1,
 };
