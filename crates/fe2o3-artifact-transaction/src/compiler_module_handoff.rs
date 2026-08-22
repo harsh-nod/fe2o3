@@ -4112,7 +4112,7 @@ mod semantic_v3 {
                 .is_err()
             );
             consume_compiler_module_handoff_v3(&temp.0, &producer, attempt, handoff.identity())
-            .unwrap();
+                .unwrap();
 
             let temp = TestDirectory::new();
             let producer = self::producer("tombstone_boundary_v3");
