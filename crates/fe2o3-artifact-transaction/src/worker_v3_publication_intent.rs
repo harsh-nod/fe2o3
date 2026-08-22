@@ -1972,6 +1972,10 @@ fn authorize_occurrence_scavenge(
 }
 
 #[derive(Clone, Copy)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "retirement retains a fixed inline Copy receipt without adding a fallible allocation"
+)]
 enum RetirementAuthorizationV1 {
     SuccessorOnly,
     ExactLoadReadiness(WorkerV3LoadReadinessReceiptV1),

@@ -581,6 +581,10 @@ pub(crate) struct AttemptRecord {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "durable registry receipts stay inline and Copy so decoding has no per-record heap allocation"
+)]
 pub(crate) enum BackendReceiptV1 {
     LegacyCoordination,
     PendingProvenance(BackendPublicationReceiptV1),
@@ -2117,7 +2121,7 @@ mod tests {
             let minimum = ATTEMPT_RECORD_FIXED_BYTES + prefix.len() + 1;
             let maximum =
                 ATTEMPT_RECORD_FIXED_BYTES + MAX_STABLE_SOURCE_BYTES + MAX_CRATE_NAME_BYTES;
-            let record_bytes = if remaining <= maximum + readiness_bytes - 1 {
+            let record_bytes = if remaining < maximum + readiness_bytes {
                 remaining.saturating_sub(readiness_bytes - 1).max(minimum)
             } else {
                 maximum

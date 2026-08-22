@@ -1015,6 +1015,10 @@ pub(crate) fn validate_durable_worker_v3_load_readiness_locked_v1(
 }
 
 #[derive(Clone, Copy)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the fixed receipt stays inline and Copy across the locked publication path"
+)]
 enum RegistryReadinessState {
     Provenance,
     EnvelopeCustody(WorkerV3LoadReadinessReceiptV1),
