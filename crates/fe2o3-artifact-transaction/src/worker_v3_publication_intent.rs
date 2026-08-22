@@ -1,10 +1,10 @@
 //! Inert durable restart input for one finalized Worker V3 output.
 //!
-//! This protocol binds a deduplicated caller-designated finalizer replay set beside the exact
-//! finalized output. The set contains one exact outer handoff, each external provider payload once,
-//! and compact opaque reconstruction metadata. It deliberately does not retain raw worker output
-//! or canonical worker request/response aggregates: a higher-level finalizer must derive raw bytes
-//! from the canonical finalized output and reconstruct or stream-hash the worker wires.
+//! This protocol stores one caller-designated copy of each replay attachment beside the exact
+//! finalized output. The layout contains one exact outer handoff, each external provider payload
+//! once, and compact opaque reconstruction metadata. It deliberately does not retain raw worker
+//! output or canonical worker request/response aggregates: a higher-level finalizer must derive raw
+//! bytes from the canonical finalized output and reconstruct or stream-hash the worker wires.
 //!
 //! This crate validates storage framing and resource bounds only. It does not authenticate a
 //! component's producer, establish that metadata is a canonical finalizer transcript, derive
@@ -74,7 +74,7 @@ pub const MAX_WORKER_V3_PUBLICATION_INTENT_RECORD_BYTES_V1: usize = RECORD_BYTES
 pub const MAX_WORKER_V3_PUBLICATION_INTENT_OUTPUT_BYTES_V1: usize =
     MAX_DURABLE_FINALIZED_ARTIFACT_BYTES;
 
-/// Maximum external provider payloads in the deduplicated replay set.
+/// Maximum external provider payloads in the compact storage layout.
 ///
 /// The direct worker admits 128 total inputs. The compiler module is already present in the outer
 /// handoff, leaving at most 127 external providers.
@@ -119,7 +119,8 @@ const MAX_REPLAY_LINK_PLAN_METADATA_BYTES_V1: usize = 64
     + MAX_REPLAY_PROVENANCE_NODES_V1 * (REPLAY_CONTENT_IDENTITY_BYTES_V1 + 4)
     + MAX_REPLAY_PROVENANCE_EDGES_V1 * REPLAY_CONTENT_IDENTITY_BYTES_V1;
 
-// One deduplicated device-library provider-evidence body from the current Worker V3 response.
+// One device-library provider-evidence metadata body from a Worker V3 response. Strict V3 binds
+// bootstrap and replay responses independently, so the transcript budget includes two bodies.
 const MAX_REPLAY_PROVIDER_EVIDENCE_METADATA_BYTES_V1: usize = MAX_REPLAY_PROVIDER_IDENTITY_BYTES_V1
     + MAX_REPLAY_TARGET_BYTES_V1
     + MAX_REPLAY_SYMBOLS_V1 * (MAX_REPLAY_SYMBOL_BYTES_V1 + 4)
@@ -136,13 +137,13 @@ const MAX_REPLAY_WORKER_OPTION_METADATA_BYTES_V1: usize = 2 * MAX_REPLAY_TOOLCHA
 
 /// Maximum compact opaque finalizer reconstruction metadata retained by one intent.
 ///
-/// The formula admits one canonical link plan, one deduplicated Worker V3 provider-evidence body,
-/// both bounded diagnostic sets, worker/target/option metadata, and 64 KiB of versioned framing and
-/// fixed identities. Large handoff, provider, raw-output, and finalized-output bytes have separate
-/// attachments and must not be copied into this metadata.
+/// The formula admits one canonical link plan, two independently bound Worker V3 provider-evidence
+/// metadata bodies, both bounded diagnostic sets, worker/target/option metadata, and 64 KiB of
+/// versioned framing and fixed identities. Large handoff, provider, raw-output, and
+/// finalized-output bytes have separate attachments and must not be copied into this metadata.
 pub const MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1: usize =
     MAX_REPLAY_LINK_PLAN_METADATA_BYTES_V1
-        + MAX_REPLAY_PROVIDER_EVIDENCE_METADATA_BYTES_V1
+        + 2 * MAX_REPLAY_PROVIDER_EVIDENCE_METADATA_BYTES_V1
         + MAX_REPLAY_DIAGNOSTIC_METADATA_BYTES_V1
         + MAX_REPLAY_WORKER_OPTION_METADATA_BYTES_V1
         + MAX_REPLAY_FIXED_METADATA_BYTES_V1;
@@ -192,6 +193,20 @@ pub const MAX_WORKER_V3_PUBLICATION_INTENT_RECOVERY_BYTES_V1: usize =
         + MAX_WORKER_V3_PUBLICATION_INTENT_METADATA_BYTES_V1;
 const _: () = assert!(MAX_WORKER_V3_PUBLICATION_INTENT_RECOVERY_BYTES_V1 < 512 * 1024 * 1024);
 
+/// Hard ceiling for caller-owned `Vec` backing allocations accepted by one persist operation.
+///
+/// This is distinct from the logical recovery working-set bound. It adds the capacities of the
+/// outer handoff, transcript, finalized output, every provider payload, and the provider-list
+/// backing allocation. On a 64-bit target the formula is:
+///
+/// `handoff max + transcript max + output max + provider-payload max + 127 * size_of::<Vec<u8>>()`.
+pub const MAX_WORKER_V3_PUBLICATION_INTENT_CALLER_OWNER_CAPACITY_BYTES_V1: usize =
+    MAX_COMPILER_MODULE_HANDOFF_BYTES_V3
+        + MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1
+        + MAX_WORKER_V3_PUBLICATION_INTENT_OUTPUT_BYTES_V1
+        + MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_BYTES_V1
+        + MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_PAYLOADS_V1 * std::mem::size_of::<Vec<u8>>();
+
 /// Failure to encode or strictly decode a Worker V3 publication-intent record.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -222,6 +237,26 @@ pub enum WorkerV3PublicationIntentCodecErrorV1 {
     InvalidOutputLength { actual: u64, maximum: usize },
     /// The transcript length is outside the V3 storage bound.
     InvalidTranscriptLength { actual: u64, maximum: usize },
+    /// The outer-handoff owner reserved more backing bytes than the component permits.
+    InvalidOuterHandoffCapacity { actual: usize, maximum: usize },
+    /// The provider-list owner reserved more entries than the protocol permits.
+    InvalidExternalProviderListCapacity { actual: usize, maximum: usize },
+    /// One provider owner reserved more bytes than the aggregate provider ceiling.
+    InvalidExternalProviderPayloadCapacity {
+        index: usize,
+        actual: usize,
+        maximum: usize,
+    },
+    /// Provider payload owners collectively reserve more bytes than the provider ceiling.
+    InvalidExternalProviderAggregateCapacity { actual: usize, maximum: usize },
+    /// The transcript owner reserved more backing bytes than the component permits.
+    InvalidTranscriptCapacity { actual: usize, maximum: usize },
+    /// The finalized-output owner reserved more backing bytes than the component permits.
+    InvalidOutputCapacity { actual: usize, maximum: usize },
+    /// Checked caller-owner capacity arithmetic overflowed.
+    OwnerCapacityArithmeticOverflow,
+    /// Caller-owned backing allocations exceed the independent hard owner ceiling.
+    OwnerCapacityBudgetExceeded { required: usize, maximum: usize },
     /// The encoded plan commitment does not match the complete plan fields.
     PlanCommitmentMismatch,
     /// The separately retained output hash does not match the durable plan.
@@ -290,6 +325,40 @@ impl fmt::Display for WorkerV3PublicationIntentCodecErrorV1 {
             Self::InvalidTranscriptLength { actual, maximum } => write!(
                 formatter,
                 "Worker V3 compact finalizer replay metadata length {actual} is outside 1..={maximum}"
+            ),
+            Self::InvalidOuterHandoffCapacity { actual, maximum } => write!(
+                formatter,
+                "Worker V3 outer-handoff owner capacity {actual} exceeds {maximum}"
+            ),
+            Self::InvalidExternalProviderListCapacity { actual, maximum } => write!(
+                formatter,
+                "Worker V3 provider-list owner capacity {actual} exceeds {maximum}"
+            ),
+            Self::InvalidExternalProviderPayloadCapacity {
+                index,
+                actual,
+                maximum,
+            } => write!(
+                formatter,
+                "Worker V3 provider payload {index} owner capacity {actual} exceeds {maximum}"
+            ),
+            Self::InvalidExternalProviderAggregateCapacity { actual, maximum } => write!(
+                formatter,
+                "Worker V3 aggregate provider owner capacity {actual} exceeds {maximum}"
+            ),
+            Self::InvalidTranscriptCapacity { actual, maximum } => write!(
+                formatter,
+                "Worker V3 transcript owner capacity {actual} exceeds {maximum}"
+            ),
+            Self::InvalidOutputCapacity { actual, maximum } => write!(
+                formatter,
+                "Worker V3 finalized-output owner capacity {actual} exceeds {maximum}"
+            ),
+            Self::OwnerCapacityArithmeticOverflow => formatter
+                .write_str("Worker V3 caller-owner capacity arithmetic overflowed"),
+            Self::OwnerCapacityBudgetExceeded { required, maximum } => write!(
+                formatter,
+                "Worker V3 caller-owned backing allocations require {required} bytes, exceeding {maximum}"
             ),
             Self::PlanCommitmentMismatch => formatter.write_str(
                 "Worker V3 publication-intent plan commitment does not match its plan fields",
@@ -368,6 +437,7 @@ impl WorkerV3ExternalProviderPayloadsV1 {
                 },
             );
         }
+        provider_owner_capacity_bytes(&payloads)?;
         let payload_length = payloads.iter().try_fold(0_usize, |total, payload| {
             if payload.is_empty() {
                 return Err(
@@ -438,13 +508,17 @@ impl WorkerV3ExternalProviderPayloadsV1 {
         self.canonical_sha256
     }
 
+    fn caller_owner_capacity_bytes(&self) -> Result<usize, WorkerV3PublicationIntentCodecErrorV1> {
+        provider_owner_capacity_bytes(&self.payloads)
+    }
+
     /// Consumes the archive owner and returns each exact payload without copying it.
     pub fn into_payloads(self) -> Vec<Vec<u8>> {
         self.payloads
     }
 }
 
-/// Unique byte owners needed by a higher-level finalizer to replay one Worker V3 result.
+/// Storage-layout byte owners needed by a higher-level finalizer to replay one Worker V3 result.
 ///
 /// `canonical_replay_transcript` is compact metadata only. It must not contain copies of the outer
 /// handoff, provider payloads, finalized output, or complete canonical worker request and response
@@ -459,7 +533,7 @@ pub struct WorkerV3FinalizerReplayAttachmentsV1 {
 }
 
 impl WorkerV3FinalizerReplayAttachmentsV1 {
-    /// Validates unique replay attachments without creating complete request/response aggregates.
+    /// Validates compact replay attachments without creating request/response aggregates.
     pub fn new(
         outer_handoff: Vec<u8>,
         external_provider_payloads: Vec<Vec<u8>>,
@@ -474,6 +548,12 @@ impl WorkerV3FinalizerReplayAttachmentsV1 {
             external_providers.payload_length(),
             canonical_replay_transcript.len(),
             1,
+        )?;
+        validate_caller_owner_capacities(
+            &outer_handoff,
+            &external_providers,
+            &canonical_replay_transcript,
+            None,
         )?;
         Ok(Self {
             outer_handoff,
@@ -502,7 +582,7 @@ impl WorkerV3FinalizerReplayAttachmentsV1 {
         false
     }
 
-    /// Consumes the owner and returns its three deduplicated component owners.
+    /// Consumes the owner and returns its three storage-layout component owners.
     pub fn into_parts(self) -> (Vec<u8>, Vec<Vec<u8>>, Vec<u8>) {
         (
             self.outer_handoff,
@@ -1403,7 +1483,7 @@ fn validate_persistence_inputs(
     attempt: BuildAttempt,
     plan: DurableLinkPublicationPlanV1,
     replay_attachments: &WorkerV3FinalizerReplayAttachmentsV1,
-    exact_output: &[u8],
+    exact_output: &Vec<u8>,
 ) -> Result<(), WorkerV3PublicationIntentErrorV1> {
     if plan.attempt() != attempt {
         return Err(WorkerV3PublicationIntentErrorV1::PlanAttemptMismatch);
@@ -1420,6 +1500,12 @@ fn validate_persistence_inputs(
         replay_attachments.external_providers().payload_length(),
         replay_attachments.canonical_replay_transcript().len(),
         exact_output.len(),
+    )?;
+    validate_caller_owner_capacities(
+        &replay_attachments.outer_handoff,
+        &replay_attachments.external_providers,
+        &replay_attachments.canonical_replay_transcript,
+        Some(exact_output),
     )?;
     if sha256(exact_output) != *plan.finalized_output().as_bytes() {
         return Err(WorkerV3PublicationIntentErrorV1::OutputDigestMismatch);
@@ -2605,6 +2691,115 @@ impl FaultInjector {
     }
 }
 
+fn validate_provider_owner_capacity_values(
+    list_capacity: usize,
+    payload_capacities: impl IntoIterator<Item = usize>,
+) -> Result<usize, WorkerV3PublicationIntentCodecErrorV1> {
+    if list_capacity > MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_PAYLOADS_V1 {
+        return Err(
+            WorkerV3PublicationIntentCodecErrorV1::InvalidExternalProviderListCapacity {
+                actual: list_capacity,
+                maximum: MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_PAYLOADS_V1,
+            },
+        );
+    }
+    let mut aggregate = 0_usize;
+    for (index, capacity) in payload_capacities.into_iter().enumerate() {
+        if capacity > MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_BYTES_V1 {
+            return Err(
+                WorkerV3PublicationIntentCodecErrorV1::InvalidExternalProviderPayloadCapacity {
+                    index,
+                    actual: capacity,
+                    maximum: MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_BYTES_V1,
+                },
+            );
+        }
+        aggregate = aggregate
+            .checked_add(capacity)
+            .ok_or(WorkerV3PublicationIntentCodecErrorV1::OwnerCapacityArithmeticOverflow)?;
+    }
+    if aggregate > MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_BYTES_V1 {
+        return Err(
+            WorkerV3PublicationIntentCodecErrorV1::InvalidExternalProviderAggregateCapacity {
+                actual: aggregate,
+                maximum: MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_BYTES_V1,
+            },
+        );
+    }
+    let list_bytes = list_capacity
+        .checked_mul(std::mem::size_of::<Vec<u8>>())
+        .ok_or(WorkerV3PublicationIntentCodecErrorV1::OwnerCapacityArithmeticOverflow)?;
+    list_bytes
+        .checked_add(aggregate)
+        .ok_or(WorkerV3PublicationIntentCodecErrorV1::OwnerCapacityArithmeticOverflow)
+}
+
+fn provider_owner_capacity_bytes(
+    payloads: &Vec<Vec<u8>>,
+) -> Result<usize, WorkerV3PublicationIntentCodecErrorV1> {
+    validate_provider_owner_capacity_values(payloads.capacity(), payloads.iter().map(Vec::capacity))
+}
+
+fn validate_caller_owner_capacities(
+    outer_handoff: &Vec<u8>,
+    external_providers: &WorkerV3ExternalProviderPayloadsV1,
+    transcript: &Vec<u8>,
+    output: Option<&Vec<u8>>,
+) -> Result<usize, WorkerV3PublicationIntentCodecErrorV1> {
+    validate_caller_owner_capacity_values(
+        outer_handoff.capacity(),
+        external_providers.caller_owner_capacity_bytes()?,
+        transcript.capacity(),
+        output.map_or(0, Vec::capacity),
+    )
+}
+
+fn validate_caller_owner_capacity_values(
+    outer_handoff_capacity: usize,
+    provider_owner_capacity: usize,
+    transcript_capacity: usize,
+    output_capacity: usize,
+) -> Result<usize, WorkerV3PublicationIntentCodecErrorV1> {
+    if outer_handoff_capacity > MAX_COMPILER_MODULE_HANDOFF_BYTES_V3 {
+        return Err(
+            WorkerV3PublicationIntentCodecErrorV1::InvalidOuterHandoffCapacity {
+                actual: outer_handoff_capacity,
+                maximum: MAX_COMPILER_MODULE_HANDOFF_BYTES_V3,
+            },
+        );
+    }
+    if transcript_capacity > MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1 {
+        return Err(
+            WorkerV3PublicationIntentCodecErrorV1::InvalidTranscriptCapacity {
+                actual: transcript_capacity,
+                maximum: MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1,
+            },
+        );
+    }
+    if output_capacity > MAX_WORKER_V3_PUBLICATION_INTENT_OUTPUT_BYTES_V1 {
+        return Err(
+            WorkerV3PublicationIntentCodecErrorV1::InvalidOutputCapacity {
+                actual: output_capacity,
+                maximum: MAX_WORKER_V3_PUBLICATION_INTENT_OUTPUT_BYTES_V1,
+            },
+        );
+    }
+    let required = outer_handoff_capacity
+        .checked_add(provider_owner_capacity)
+        .and_then(|value| value.checked_add(transcript_capacity))
+        .and_then(|value| value.checked_add(output_capacity))
+        .ok_or(WorkerV3PublicationIntentCodecErrorV1::OwnerCapacityArithmeticOverflow)?;
+    if required > MAX_WORKER_V3_PUBLICATION_INTENT_CALLER_OWNER_CAPACITY_BYTES_V1 {
+        return Err(
+            WorkerV3PublicationIntentCodecErrorV1::OwnerCapacityBudgetExceeded {
+                required,
+                maximum: MAX_WORKER_V3_PUBLICATION_INTENT_CALLER_OWNER_CAPACITY_BYTES_V1,
+            },
+        );
+    }
+    Ok(required)
+}
+
 fn validate_payload_lengths(
     outer_handoff_length: usize,
     external_provider_archive_length: usize,
@@ -3082,6 +3277,112 @@ mod tests {
         assert!(matches!(
             validate_recovery_working_set(usize::MAX, 1, 0, 1, 1),
             Err(WorkerV3PublicationIntentErrorV1::WorkingSetArithmeticOverflow)
+        ));
+    }
+
+    #[test]
+    fn transcript_and_owner_capacity_formulas_are_independent_and_checked() {
+        assert_eq!(
+            MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1,
+            MAX_REPLAY_LINK_PLAN_METADATA_BYTES_V1
+                + 2 * MAX_REPLAY_PROVIDER_EVIDENCE_METADATA_BYTES_V1
+                + MAX_REPLAY_DIAGNOSTIC_METADATA_BYTES_V1
+                + MAX_REPLAY_WORKER_OPTION_METADATA_BYTES_V1
+                + MAX_REPLAY_FIXED_METADATA_BYTES_V1
+        );
+        assert_eq!(
+            validate_caller_owner_capacity_values(
+                MAX_COMPILER_MODULE_HANDOFF_BYTES_V3,
+                MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_BYTES_V1
+                    + MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_PAYLOADS_V1
+                        * std::mem::size_of::<Vec<u8>>(),
+                MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1,
+                MAX_WORKER_V3_PUBLICATION_INTENT_OUTPUT_BYTES_V1,
+            )
+            .unwrap(),
+            MAX_WORKER_V3_PUBLICATION_INTENT_CALLER_OWNER_CAPACITY_BYTES_V1
+        );
+        assert!(matches!(
+            validate_caller_owner_capacity_values(
+                MAX_COMPILER_MODULE_HANDOFF_BYTES_V3 + 1,
+                0,
+                1,
+                1,
+            ),
+            Err(WorkerV3PublicationIntentCodecErrorV1::InvalidOuterHandoffCapacity { .. })
+        ));
+        assert!(matches!(
+            validate_caller_owner_capacity_values(
+                1,
+                0,
+                MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1 + 1,
+                1,
+            ),
+            Err(WorkerV3PublicationIntentCodecErrorV1::InvalidTranscriptCapacity { .. })
+        ));
+        assert!(matches!(
+            validate_caller_owner_capacity_values(
+                1,
+                0,
+                1,
+                MAX_WORKER_V3_PUBLICATION_INTENT_OUTPUT_BYTES_V1 + 1,
+            ),
+            Err(WorkerV3PublicationIntentCodecErrorV1::InvalidOutputCapacity { .. })
+        ));
+        assert!(matches!(
+            validate_caller_owner_capacity_values(usize::MAX, usize::MAX, usize::MAX, usize::MAX),
+            Err(WorkerV3PublicationIntentCodecErrorV1::InvalidOuterHandoffCapacity { .. })
+        ));
+    }
+
+    #[test]
+    fn oversized_spare_provider_capacities_are_rejected_without_payload_bytes() {
+        assert!(matches!(
+            validate_provider_owner_capacity_values(
+                MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_PAYLOADS_V1 + 1,
+                [],
+            ),
+            Err(WorkerV3PublicationIntentCodecErrorV1::InvalidExternalProviderListCapacity { .. })
+        ));
+        assert!(matches!(
+            validate_provider_owner_capacity_values(
+                1,
+                [MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_BYTES_V1 + 1],
+            ),
+            Err(
+                WorkerV3PublicationIntentCodecErrorV1::InvalidExternalProviderPayloadCapacity {
+                    index: 0,
+                    ..
+                }
+            )
+        ));
+        assert!(matches!(
+            validate_provider_owner_capacity_values(
+                2,
+                [
+                    MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_BYTES_V1 / 2 + 1,
+                    MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_BYTES_V1 / 2 + 1,
+                ],
+            ),
+            Err(
+                WorkerV3PublicationIntentCodecErrorV1::InvalidExternalProviderAggregateCapacity { .. }
+            )
+        ));
+
+        let mut oversized_list =
+            Vec::with_capacity(MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_PAYLOADS_V1 + 1);
+        oversized_list.push(b"small payload".to_vec());
+        assert!(matches!(
+            WorkerV3ExternalProviderPayloadsV1::new(oversized_list),
+            Err(WorkerV3PublicationIntentCodecErrorV1::InvalidExternalProviderListCapacity { .. })
+        ));
+
+        let mut oversized_transcript =
+            Vec::with_capacity(MAX_WORKER_V3_FINALIZER_REPLAY_TRANSCRIPT_BYTES_V1 + 1);
+        oversized_transcript.push(1);
+        assert!(matches!(
+            WorkerV3FinalizerReplayAttachmentsV1::new(vec![1], Vec::new(), oversized_transcript,),
+            Err(WorkerV3PublicationIntentCodecErrorV1::InvalidTranscriptCapacity { .. })
         ));
     }
 
