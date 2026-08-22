@@ -5,6 +5,7 @@ mod mem2reg;
 mod semantic_constant;
 mod semantic_memory;
 pub mod semantic_mir_v1;
+mod semantic_option_dominance;
 mod semantic_type;
 pub mod semantic_type_v2;
 
@@ -56,6 +57,11 @@ pub use semantic_memory::{
     MirMemoryPermission, MirOperationProvenance, MirOverlapContract, MirPointerDistanceContract,
     MirPointerDistanceResult, MirPointerDistanceUnit, MirPointerOperandContract,
     MirProvenanceRegion, MirSemanticMemoryOperation, MirVolatileAccessContract,
+};
+pub use semantic_option_dominance::{
+    MAX_SEMANTIC_OPTION_DOMINANCE_WORK_V1, SemanticOptionAvailabilityV1,
+    SemanticOptionDominanceErrorV1, SemanticOptionDominanceV1, SemanticOptionProducerV1,
+    semantic_option_producers_v1,
 };
 pub use semantic_type::{
     MirAddressSpace, MirAggregateLayout, MirEnumEncoding, MirEnumType, MirField, MirLayout,
