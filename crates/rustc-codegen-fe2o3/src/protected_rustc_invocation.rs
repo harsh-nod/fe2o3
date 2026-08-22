@@ -36,6 +36,57 @@ impl AdmittedProtectedRustcInvocationV1 {
         self.capability.revalidate()?;
         Ok(*self.capability.descriptor().compiler_closure())
     }
+
+    /// Consumes admission immediately before protected publication, repeats
+    /// every live-process observation, and retains the sealed V3 capability.
+    pub(crate) fn finish_for_publication(
+        self,
+    ) -> Result<FinishedProtectedRustcInvocationV3, ProtectedRustcInvocationErrorV1> {
+        self.capability
+            .revalidate()
+            .map_err(ProtectedRustcInvocationErrorV1::RetainedCapabilityChanged)?;
+        let observation = RustcProcessObservationV1::capture(self.capability.descriptor())?;
+        self.finish_after_publication_observation(observation)
+    }
+
+    fn finish_for_publication_with_observation(
+        self,
+        observation: RustcProcessObservationV1,
+    ) -> Result<FinishedProtectedRustcInvocationV3, ProtectedRustcInvocationErrorV1> {
+        self.capability
+            .revalidate()
+            .map_err(ProtectedRustcInvocationErrorV1::RetainedCapabilityChanged)?;
+        self.finish_after_publication_observation(observation)
+    }
+
+    fn finish_after_publication_observation(
+        self,
+        observation: RustcProcessObservationV1,
+    ) -> Result<FinishedProtectedRustcInvocationV3, ProtectedRustcInvocationErrorV1> {
+        let admitted = validate_capability(self.capability, observation)?;
+        Ok(FinishedProtectedRustcInvocationV3 {
+            capability: admitted.capability,
+        })
+    }
+}
+
+/// Move-only custody of the exact sealed invocation after final live-process
+/// remeasurement. It is private compiler authority, not a serializable receipt.
+pub(crate) struct FinishedProtectedRustcInvocationV3 {
+    capability: RustcInvocationCapabilityV1,
+}
+
+impl FinishedProtectedRustcInvocationV3 {
+    /// Borrows the exact canonical V3 descriptor retained by the sealed image.
+    pub(crate) fn descriptor(&self) -> &RustcInvocationDescriptorV3 {
+        self.capability.descriptor()
+    }
+
+    /// Revalidates the retained immutable capability without projecting it to
+    /// a copyable publication credential.
+    pub(crate) fn revalidate(&self) -> Result<(), String> {
+        self.capability.revalidate()
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]

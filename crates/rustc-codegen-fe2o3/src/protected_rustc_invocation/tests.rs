@@ -184,6 +184,79 @@ fn present_v3_is_retained_once_and_exposes_only_the_full_closure() {
 }
 
 #[test]
+fn final_publication_transition_is_move_only_and_retains_exact_v3() {
+    let expected = baseline_descriptor();
+    let admitted = validate(expected.clone(), observation(&expected)).unwrap();
+    let finished = admitted
+        .finish_for_publication_with_observation(observation(&expected))
+        .unwrap();
+
+    assert_eq!(finished.descriptor(), &expected);
+    assert_eq!(
+        finished.descriptor().compiler_closure(),
+        expected.compiler_closure()
+    );
+    finished.revalidate().unwrap();
+}
+
+#[test]
+fn final_publication_transition_rejects_changed_process_observations() {
+    let expected = baseline_descriptor();
+
+    let mut changed = observation(&expected);
+    changed.argv[0].push_str("-changed");
+    assert!(matches!(
+        validate(expected.clone(), observation(&expected))
+            .unwrap()
+            .finish_for_publication_with_observation(changed),
+        Err(ProtectedRustcInvocationErrorV1::ArgumentsMismatch)
+    ));
+
+    let mut changed = observation(&expected);
+    changed.canonical_working_directory = "/changed".into();
+    assert!(matches!(
+        validate(expected.clone(), observation(&expected))
+            .unwrap()
+            .finish_for_publication_with_observation(changed),
+        Err(ProtectedRustcInvocationErrorV1::WorkingDirectoryMismatch)
+    ));
+
+    let mut changed = observation(&expected);
+    changed.running_rustc_sha256 = [0xa1; 32];
+    assert!(matches!(
+        validate(expected.clone(), observation(&expected))
+            .unwrap()
+            .finish_for_publication_with_observation(changed),
+        Err(ProtectedRustcInvocationErrorV1::RunningRustcMismatch)
+    ));
+
+    let mut changed = observation(&expected);
+    changed.running_codegen_backend_sha256 = [0xa2; 32];
+    assert!(matches!(
+        validate(expected.clone(), observation(&expected))
+            .unwrap()
+            .finish_for_publication_with_observation(changed),
+        Err(ProtectedRustcInvocationErrorV1::RunningCodegenBackendMismatch)
+    ));
+
+    let mut changed = observation(&expected);
+    let mut entries = changed
+        .compile_environment
+        .entries()
+        .iter()
+        .map(|entry| (OsString::from(entry.key()), OsString::from(entry.value())))
+        .collect::<Vec<_>>();
+    entries.push((OsString::from("CHANGED"), OsString::from("1")));
+    changed.compile_environment = CompileEnvironmentV2::from_child_environment(entries).unwrap();
+    assert!(matches!(
+        validate(expected.clone(), observation(&expected))
+            .unwrap()
+            .finish_for_publication_with_observation(changed),
+        Err(ProtectedRustcInvocationErrorV1::CompileEnvironmentMismatch)
+    ));
+}
+
+#[test]
 fn argv_cwd_environment_and_target_mismatches_fail_closed() {
     let descriptor = baseline_descriptor();
 
