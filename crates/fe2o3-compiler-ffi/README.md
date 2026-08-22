@@ -43,6 +43,46 @@ authenticate its producer or grant compiler, link, load, or launch authority.
 opaque owned components, allowing finalization to reuse both without interpreting wire offsets or
 reconstructing envelope fields. The decomposition does not change that authority classification.
 
+`InertSemanticCompilerModuleHandoffV3` is the strict, bounded outer content schema that joins one
+exact `InertProductionSemanticCapsuleV3` to one exact `CompilerModuleHandoffV2`. It retains both
+complete canonical byte strings and their native identities. A fixed pair-binding segment commits
+only to those already-complete inner identities under its own V3 domain; the terminal outer
+identity then commits to the header, both exact inner encodings, and the complete pair-binding
+segment under a separate V3 domain. The pair segment never refers to the outer identity, so the
+hash dependency graph is acyclic.
+
+The V3 outer decoder accepts no earlier schema or fallback. It validates the outer version, flags,
+reserved fields, both inner lengths, complete aggregate length, pair-segment length, and exported
+resource limits before decoding either inner owner or allocating the outer canonical buffer. It
+then requires strict canonical V3 capsule and V2 module-handoff decodes, exact native identity
+matches, canonical target agreement, a valid pair-binding identity, a valid terminal outer
+identity, and byte-for-byte canonical reconstruction. Truncation, trailing bytes, substitutions,
+and noncanonical encodings are rejected.
+
+The `Inert` prefix is a security boundary. Public construction can fully rehash any internally
+valid target-compatible capsule/module pair, including a cross-producer splice. Therefore this
+object establishes content identity only: it does not authenticate a producer, prove semantic
+derivation or compiler origin, establish artifact freshness, or grant compiler, artifact, worker,
+link, publication, load, or launch authority. Those capabilities require a later private
+producer-owned admission boundary.
+
+All integers below are unsigned little-endian. The canonical outer encoding is:
+
+1. `F2O3IHV3`, version `3` (`u16`), zero flags (`u16`), total length (`u64`), and zero reserved
+   bits (`u32`);
+2. capsule length (`u64`) and V2 module-handoff length (`u64`);
+3. exactly that many canonical capsule bytes and canonical V2 module-handoff bytes;
+4. the fixed pair-binding segment described below; and
+5. the terminal 32-byte outer identity.
+
+The fixed pair-binding segment is `F2O3PBV3`, version `3` (`u16`), zero flags (`u16`), fixed
+segment length (`u32`), zero reserved bits (`u32`), then the capsule SHA-256 and length, the V2
+handoff SHA-256 and length, and the terminal 32-byte pair-binding identity. The pair identity is
+`SHA-256("FE2O3/INERT-COMPILER-MODULE-PAIR-BINDING/V3\0" || u64(preimage-length) ||
+pair-preimage)`. The outer identity is
+`SHA-256("FE2O3/INERT-SEMANTIC-COMPILER-MODULE-HANDOFF/V3\0" || u64(preimage-length) ||
+complete-outer-preimage)`. Neither hash preimage contains the terminal outer identity.
+
 `CompilerModuleSymbolManifestV1` adds a bounded, canonical classification of kernel entries,
 kernel descriptor symbols, device FFI exports, internal helpers, and unresolved external imports.
 Entries use a fixed role order followed by bytewise symbol order. Construction and strict decoding

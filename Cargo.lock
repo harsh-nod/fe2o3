@@ -788,7 +788,10 @@ dependencies = [
 name = "fe2o3-compiler-ffi"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-build-authority",
+ "fe2o3-compiler-lineage",
  "fe2o3-kernel-descriptor",
+ "fe2o3-rustc-invocation",
  "reserved-fe2o3-symbols",
  "sha2 0.11.0",
 ]

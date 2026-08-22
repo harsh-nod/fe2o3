@@ -9,6 +9,11 @@ description = "Bounded neutral compiler observations for fe2o3 device FFI closur
 publish = false
 
 [dependencies]
+fe2o3-compiler-lineage.workspace = true
 fe2o3-kernel-descriptor.workspace = true
 reserved-fe2o3-symbols.workspace = true
 sha2.workspace = true
+
+[dev-dependencies]
+fe2o3-build-authority.workspace = true
+fe2o3-rustc-invocation.workspace = true
