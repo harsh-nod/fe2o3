@@ -1236,6 +1236,8 @@ dependencies = [
  "fe2o3-mir-model",
  "fe2o3-pliron-owner-core",
  "pliron",
+ "sha2 0.11.0",
+ "trybuild",
 ]
 
 [[package]]

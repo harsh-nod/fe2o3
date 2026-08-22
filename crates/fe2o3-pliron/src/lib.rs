@@ -5,8 +5,14 @@ mod production;
 
 pub use production::{
     ConstructedGraphStageV1, ConstructionRegisteredStageV1, HARD_MAX_PRODUCTION_CONSTRUCTIONS,
-    HARD_MAX_PRODUCTION_RANKED_ARGUMENTS, KernelChecksVerifiedGraphStageV1,
-    ProductionConstructionV1, ProductionPlironSessionV1, ProductionRankedBlockV1,
+    HARD_MAX_PRODUCTION_RANKED_ARGUMENTS, InertProductionMiddleEndEvidenceV3,
+    KernelChecksVerifiedGraphStageV1, MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V3,
+    MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V3, PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V3,
+    PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V3, PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V3,
+    ProductionConstructionV1, ProductionMiddleEndAssuranceV3,
+    ProductionMiddleEndEvidenceCodecErrorV3, ProductionMiddleEndEvidenceIdentityV3,
+    ProductionMiddleEndEvidencePassV3, ProductionMiddleEndEvidenceV3,
+    ProductionMiddleEndPassSuccessV3, ProductionPlironSessionV1, ProductionRankedBlockV1,
     ProductionRankedCompileErrorV1, ProductionRankedKernelErrorV1,
     ProductionRankedKernelLoweringInputV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
     ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,

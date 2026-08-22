@@ -1286,6 +1286,16 @@ impl fmt::Debug for ProductionRankedKernelLoweringInputV1 {
 }
 
 impl ProductionRankedKernelLoweringInputV1 {
+    pub(super) fn revalidate_structure(&self) -> Result<(), ProductionRankedKernelErrorV1> {
+        let tree_work = self.kernel.validate()?;
+        if tree_work != self.kernel.tree_work {
+            return Err(ProductionRankedKernelErrorV1::Materialization(
+                "validated ranked-kernel tree work changed before evidence construction",
+            ));
+        }
+        Ok(())
+    }
+
     pub const fn kernel(&self) -> &ProductionRankedKernelV1 {
         &self.kernel
     }
