@@ -19,7 +19,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const PRODUCTION_FILL_CRATE_BINDING_V1: &str =
-    "e312f9362d2c716c79f0ce963d229ea0b6dcaf8c7112a675182e764916b2839b";
+    "0cb2a43cd5d4bbc460f937577527312c307bcf718292636e045c9777f3cf8d06";
 const PRODUCTION_WORKER_ENV: &str = "FE2O3_PRODUCTION_V1_WORKER";
 const PRODUCTION_WORKER_BUILD_ID_ENV: &str = "FE2O3_PRODUCTION_V1_WORKER_BUILD_ID";
 const PRODUCTION_LLVM_BUILD_ID_ENV: &str = "FE2O3_PRODUCTION_V1_LLVM_BUILD_ID";
@@ -114,6 +114,10 @@ fn production_fill_command(target: &ScratchTarget, artifacts: &Path, backend: &P
     command
         .current_dir(workspace())
         .env("FE2O3_CODEGEN_PIPELINE", "production-v1")
+        .env(
+            "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
+            "1",
+        )
         .env("FE2O3_HSACO_DIR", artifacts)
         .env("FE2O3_TARGET", "gfx942")
         .env(
