@@ -73,6 +73,24 @@ pub(crate) struct ProductionRankedSemanticProgramV1 {
     ranked_ir: String,
 }
 
+/// Move-only custody of the exact ranked graph and all successful general
+/// kernel checks. Only the production projection can construct this owner.
+#[must_use = "dropping ranked verification abandons its production lineage"]
+pub(crate) struct AuthenticatedRankedVerificationV3 {
+    lowering: ProductionRankedKernelLoweringInputV1,
+    ranked_ir: String,
+}
+
+impl AuthenticatedRankedVerificationV3 {
+    pub(crate) const fn lowering(&self) -> &ProductionRankedKernelLoweringInputV1 {
+        &self.lowering
+    }
+
+    pub(crate) fn ranked_ir(&self) -> &str {
+        &self.ranked_ir
+    }
+}
+
 impl ProductionRankedSemanticProgramV1 {
     pub(crate) fn ranked_ir(&self) -> &str {
         &self.ranked_ir
@@ -106,14 +124,24 @@ impl ProductionRankedSemanticProgramV1 {
         false
     }
 
-    pub(crate) fn into_verified_semantic_owner(self) -> ProductionSemanticMirOwnerV1 {
+    pub(crate) fn into_verified_owners(
+        self,
+    ) -> (
+        ProductionSemanticMirOwnerV1,
+        AuthenticatedRankedVerificationV3,
+    ) {
         let Self {
             semantic,
             lowering,
             ranked_ir,
         } = self;
-        drop((lowering, ranked_ir));
-        semantic
+        (
+            semantic,
+            AuthenticatedRankedVerificationV3 {
+                lowering,
+                ranked_ir,
+            },
+        )
     }
 }
 

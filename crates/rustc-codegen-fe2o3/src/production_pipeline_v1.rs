@@ -216,6 +216,7 @@ pub(crate) struct RankedVerifiedProductionCompilationV1 {
 /// Kernel IR, correspondence evidence, and the original transaction bindings.
 pub(crate) struct TargetNeutralProductionCompilationV1 {
     lowered: fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+    ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV3,
     bindings: AuthenticatedProductionBindingsV1,
 }
 
@@ -223,6 +224,7 @@ pub(crate) struct TargetNeutralProductionCompilationV1 {
 /// Kernel IR, complete formal memory obligations, and transaction bindings.
 pub(crate) struct FormalMemoryAdmittedProductionCompilationV1 {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
+    ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV3,
     bindings: AuthenticatedProductionBindingsV1,
 }
 
@@ -230,6 +232,7 @@ pub(crate) struct FormalMemoryAdmittedProductionCompilationV1 {
 /// Kernel IR, deterministic gfx942 LLVM text, and transaction bindings.
 pub(crate) struct Gfx942LoweredProductionCompilationV1 {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
+    ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV3,
     target_module: fe2o3_kernel_ir::Module,
     llvm_ir: String,
     bindings: AuthenticatedProductionBindingsV1,
@@ -250,6 +253,9 @@ struct PreparedProductionWorkerPublicationV1 {
     output_dir: PathBuf,
     attempt: BuildAttempt,
     publication: ProductionCompilerModulePublicationV1,
+    rustc_identity_inventory: crate::collector::AuthenticatedRustcIdentityInventoryV3,
+    rustc_preflight_plan: crate::collector::AuthenticatedRustcPreflightPlanV3,
+    ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV3,
     prepared: crate::worker_v2_producer::PreparedProductionV1WorkerHandoffV1,
 }
 
@@ -277,10 +283,18 @@ impl TargetNeutralProductionCompilationV1 {
     fn admit_formal_memory(
         self,
     ) -> Result<FormalMemoryAdmittedProductionCompilationV1, ProductionPipelineErrorV1> {
-        let Self { lowered, bindings } = self;
+        let Self {
+            lowered,
+            ranked_verification,
+            bindings,
+        } = self;
         let admitted = fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1::try_admit(lowered)
             .map_err(ProductionPipelineErrorV1::FormalMemoryAdmission)?;
-        Ok(FormalMemoryAdmittedProductionCompilationV1 { admitted, bindings })
+        Ok(FormalMemoryAdmittedProductionCompilationV1 {
+            admitted,
+            ranked_verification,
+            bindings,
+        })
     }
 }
 
@@ -288,7 +302,11 @@ impl FormalMemoryAdmittedProductionCompilationV1 {
     fn lower_gfx942(
         self,
     ) -> Result<Gfx942LoweredProductionCompilationV1, ProductionPipelineErrorV1> {
-        let Self { admitted, bindings } = self;
+        let Self {
+            admitted,
+            ranked_verification,
+            bindings,
+        } = self;
         let mut target_module = admitted.semantic_kir().module().clone();
         let target = fe2o3_kernel_ir::gfx942_xnack_minus_target_capability();
         let wave = fe2o3_kernel_ir::TargetCapability::WaveWidth(fe2o3_kernel_ir::WaveWidth::Wave64);
@@ -321,6 +339,7 @@ impl FormalMemoryAdmittedProductionCompilationV1 {
             .map_err(ProductionPipelineErrorV1::UpstreamLlvmLayoutBinding)?;
         Ok(Gfx942LoweredProductionCompilationV1 {
             admitted,
+            ranked_verification,
             target_module,
             llvm_ir,
             bindings,
@@ -451,6 +470,7 @@ impl Gfx942LoweredProductionCompilationV1 {
         );
         let Self {
             admitted,
+            ranked_verification,
             target_module,
             llvm_ir,
             bindings,
@@ -483,15 +503,14 @@ impl Gfx942LoweredProductionCompilationV1 {
                 crate::worker_v2_producer::WorkerV2ProducerError::MissingBuildAttempt,
             )
         })?;
-        let _ = (
-            rustc_identity_inventory.canonical_transcript(),
-            rustc_preflight_plan.canonical_transcript(),
-        );
         Ok(PreparedProductionWorkerPublicationV1 {
             producer,
             output_dir,
             attempt,
             publication,
+            rustc_identity_inventory,
+            rustc_preflight_plan,
+            ranked_verification,
             prepared,
         })
     }
@@ -501,6 +520,11 @@ impl Gfx942LoweredProductionCompilationV1 {
     ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV1, ProductionPipelineErrorV1>
     {
         let publication = self.prepare_worker_handoff()?;
+        let _ = (
+            publication.rustc_identity_inventory.canonical_transcript(),
+            publication.rustc_preflight_plan.canonical_transcript(),
+            publication.ranked_verification.ranked_ir(),
+        );
         publication.publication.require_v1()?;
         crate::worker_v2_producer::publish_prepared_production_v1_worker_handoff(
             &publication.output_dir,
@@ -516,6 +540,11 @@ impl Gfx942LoweredProductionCompilationV1 {
     ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV2, ProductionPipelineErrorV1>
     {
         let publication = self.prepare_worker_handoff()?;
+        let _ = (
+            publication.rustc_identity_inventory.canonical_transcript(),
+            publication.rustc_preflight_plan.canonical_transcript(),
+            publication.ranked_verification.lowering(),
+        );
         let invocation = publication
             .publication
             .require_v3()?
@@ -794,12 +823,17 @@ impl RankedVerifiedProductionCompilationV1 {
         self,
     ) -> Result<TargetNeutralProductionCompilationV1, ProductionPipelineErrorV1> {
         let Self { ranked, bindings } = self;
+        let (semantic, ranked_verification) = ranked.into_verified_owners();
         let lowered = fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower(
-            ranked.into_verified_semantic_owner(),
+            semantic,
             fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
         )
         .map_err(ProductionPipelineErrorV1::TargetNeutralLowering)?;
-        Ok(TargetNeutralProductionCompilationV1 { lowered, bindings })
+        Ok(TargetNeutralProductionCompilationV1 {
+            lowered,
+            ranked_verification,
+            bindings,
+        })
     }
 }
 
