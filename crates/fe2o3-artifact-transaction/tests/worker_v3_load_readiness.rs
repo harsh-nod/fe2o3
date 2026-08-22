@@ -500,9 +500,10 @@ fn retirement_preserves_intent_when_the_separate_publication_artifact_is_not_exa
         match mutation {
             "missing" => fs::remove_file(&artifact).unwrap(),
             "replaced-inode" => {
-                fs::remove_file(&artifact).unwrap();
-                fs::write(&artifact, &exact).unwrap();
-                fs::set_permissions(&artifact, fs::Permissions::from_mode(0o600)).unwrap();
+                let replacement = artifact.with_extension("replacement");
+                fs::write(&replacement, &exact).unwrap();
+                fs::set_permissions(&replacement, fs::Permissions::from_mode(0o600)).unwrap();
+                fs::rename(replacement, &artifact).unwrap();
             }
             "mutated-bytes" => {
                 let mut changed = exact;
