@@ -340,6 +340,13 @@ pub struct InertSemanticCompilerModuleHandoffV3 {
 }
 
 impl InertSemanticCompilerModuleHandoffV3 {
+    /// Additional complete outer buffers retained by [`Self::decode_owned`].
+    pub const OWNED_DECODE_ADDITIONAL_OUTER_BUFFERS: usize = 0;
+
+    /// Maximum additional outer bytes allocated by borrowed [`Self::decode`].
+    pub const MAX_BORROWED_DECODE_ADDITIONAL_OUTER_BYTES: usize =
+        MAX_INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_BYTES_V3;
+
     /// Constructs one canonical inert outer handoff from complete inner owners.
     pub fn new(
         capsule: InertProductionSemanticCapsuleV3,
@@ -358,7 +365,7 @@ impl InertSemanticCompilerModuleHandoffV3 {
         let module_handoff_len = u64::try_from(preflight.module_handoff_bytes)
             .map_err(|_| InertSemanticCompilerModuleHandoffErrorV3::LengthOverflow)?;
 
-        let mut canonical = Vec::with_capacity(preflight.exact_outer_bytes);
+        let mut canonical = try_allocate_outer_buffer(preflight.exact_outer_bytes)?;
         canonical.extend_from_slice(&INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_MAGIC_V3);
         canonical
             .extend_from_slice(&INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_VERSION_V3.to_le_bytes());
@@ -393,103 +400,47 @@ impl InertSemanticCompilerModuleHandoffV3 {
 
     /// Strictly decodes one complete canonical outer V3 handoff with no fallback.
     ///
-    /// The complete outer and inner lengths are checked before either inner
-    /// decoder runs or the outer canonical buffer is allocated.
+    /// The complete wire image is validated before either inner decoder runs
+    /// or this borrowed input is copied into retained storage. Use
+    /// [`Self::decode_owned`] when the caller can transfer an exact boxed wire
+    /// image and avoid this outer copy.
     pub fn decode(bytes: &[u8]) -> Result<Self, InertSemanticCompilerModuleHandoffErrorV3> {
-        if bytes.len() > MAX_INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_BYTES_V3 {
-            return Err(InertSemanticCompilerModuleHandoffErrorV3::OuterByteBoundExceeded);
-        }
-        let mut reader = Reader::new(bytes);
-        if reader.fixed::<8>()? != INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_MAGIC_V3 {
-            return Err(InertSemanticCompilerModuleHandoffErrorV3::InvalidMagic);
-        }
-        let version = reader.u16()?;
-        if version != INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_VERSION_V3 {
-            return Err(InertSemanticCompilerModuleHandoffErrorV3::UnsupportedVersion(version));
-        }
-        let flags = reader.u16()?;
-        if flags != 0 {
-            return Err(InertSemanticCompilerModuleHandoffErrorV3::UnsupportedFlags(
-                flags,
-            ));
-        }
-        let declared_total_len = reader.u64()?;
-        let declared_total_len_usize = usize::try_from(declared_total_len).map_err(|_| {
-            InertSemanticCompilerModuleHandoffErrorV3::InvalidLength(declared_total_len)
-        })?;
-        if declared_total_len_usize < MIN_OUTER_BYTES_V3 {
-            return Err(InertSemanticCompilerModuleHandoffErrorV3::InvalidLength(
-                declared_total_len,
-            ));
-        }
-        if declared_total_len_usize > MAX_INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_BYTES_V3 {
-            return Err(InertSemanticCompilerModuleHandoffErrorV3::OuterByteBoundExceeded);
-        }
-        if declared_total_len_usize > bytes.len() {
-            return Err(InertSemanticCompilerModuleHandoffErrorV3::Truncated);
-        }
-        if declared_total_len_usize < bytes.len() {
-            return Err(InertSemanticCompilerModuleHandoffErrorV3::TrailingBytes);
-        }
-        if reader.u32()? != 0 {
-            return Err(InertSemanticCompilerModuleHandoffErrorV3::NonzeroReserved);
-        }
-        let capsule_len_u64 = reader.u64()?;
-        let module_handoff_len_u64 = reader.u64()?;
-        let capsule_len = checked_inner_len(
-            capsule_len_u64,
-            MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_BYTES_V3,
-            InertSemanticCompilerModuleHandoffErrorV3::CapsuleByteBoundExceeded,
-        )?;
-        let module_handoff_len = checked_inner_len(
-            module_handoff_len_u64,
-            MAX_COMPILER_MODULE_HANDOFF_BYTES_V2,
-            InertSemanticCompilerModuleHandoffErrorV3::ModuleHandoffByteBoundExceeded,
-        )?;
-        let expected_total_len = exact_outer_len(capsule_len, module_handoff_len)?;
-        if expected_total_len != declared_total_len_usize {
-            return Err(InertSemanticCompilerModuleHandoffErrorV3::InvalidLength(
-                declared_total_len,
-            ));
-        }
+        let validated = ValidatedOuterWireV3::decode(bytes)?;
+        let mut canonical_bytes = try_allocate_outer_buffer(bytes.len())?;
+        canonical_bytes.extend_from_slice(bytes);
+        Self::from_validated_wire(canonical_bytes.into_boxed_slice(), validated)
+    }
 
-        let capsule_bytes = reader.take(capsule_len)?;
-        let module_handoff_bytes = reader.take(module_handoff_len)?;
-        let pair_binding_bytes = reader.take(INERT_COMPILER_MODULE_PAIR_BINDING_BYTES_V3)?;
-        let outer_preimage_len = reader.offset();
-        let declared_outer_sha256 = reader.fixed::<SHA256_BYTES>()?;
-        if !reader.is_empty() {
-            return Err(InertSemanticCompilerModuleHandoffErrorV3::TrailingBytes);
-        }
-        if declared_outer_sha256 == [0; SHA256_BYTES] {
-            return Err(InertSemanticCompilerModuleHandoffErrorV3::ZeroIdentity {
-                field: "inert semantic compiler module handoff",
-            });
-        }
-        if derive_identity_sha256(OUTER_IDENTITY_DOMAIN_V3, &bytes[..outer_preimage_len])
-            != Some(declared_outer_sha256)
-        {
-            return Err(InertSemanticCompilerModuleHandoffErrorV3::OuterIdentityMismatch);
-        }
+    /// Strictly decodes and retains one owned canonical outer V3 handoff.
+    ///
+    /// Successful decoding retains the exact `canonical_bytes` allocation as
+    /// the outer wire image. It does not allocate or copy a second complete
+    /// outer buffer. Inner decoders still own their bounded decoded records.
+    pub fn decode_owned(
+        canonical_bytes: Box<[u8]>,
+    ) -> Result<Self, InertSemanticCompilerModuleHandoffErrorV3> {
+        let validated = ValidatedOuterWireV3::decode(&canonical_bytes)?;
+        Self::from_validated_wire(canonical_bytes, validated)
+    }
 
-        let parsed_pair_binding = ParsedPairBindingV3::decode(pair_binding_bytes)?;
-        if parsed_pair_binding.capsule_len != capsule_len_u64
-            || parsed_pair_binding.module_handoff_len != module_handoff_len_u64
-        {
-            return Err(InertSemanticCompilerModuleHandoffErrorV3::PairBindingInnerMismatch);
-        }
-        if capsule_bytes.len() < SHA256_BYTES
-            || capsule_bytes[capsule_bytes.len() - SHA256_BYTES..]
-                != parsed_pair_binding.capsule_sha256
-        {
-            return Err(InertSemanticCompilerModuleHandoffErrorV3::CapsuleIdentityMismatch);
-        }
-        let actual_module_handoff_sha256: [u8; SHA256_BYTES] =
-            Sha256::digest(module_handoff_bytes).into();
-        if actual_module_handoff_sha256 != parsed_pair_binding.module_handoff_sha256 {
-            return Err(InertSemanticCompilerModuleHandoffErrorV3::ModuleHandoffIdentityMismatch);
-        }
-
+    fn from_validated_wire(
+        canonical_bytes: Box<[u8]>,
+        validated: ValidatedOuterWireV3,
+    ) -> Result<Self, InertSemanticCompilerModuleHandoffErrorV3> {
+        let ValidatedOuterWireV3 {
+            capsule_range,
+            module_handoff_range,
+            pair_binding_range,
+            parsed_pair_binding,
+            outer_sha256,
+            total_len,
+        } = validated;
+        let capsule_bytes = canonical_bytes
+            .get(capsule_range.clone())
+            .ok_or(InertSemanticCompilerModuleHandoffErrorV3::Truncated)?;
+        let module_handoff_bytes = canonical_bytes
+            .get(module_handoff_range.clone())
+            .ok_or(InertSemanticCompilerModuleHandoffErrorV3::Truncated)?;
         let capsule = InertProductionSemanticCapsuleV3::decode(capsule_bytes)
             .map_err(InertSemanticCompilerModuleHandoffErrorV3::Capsule)?;
         let module_handoff = CompilerModuleHandoffV2::decode(module_handoff_bytes)
@@ -505,14 +456,38 @@ impl InertSemanticCompilerModuleHandoffV3 {
             return Err(InertSemanticCompilerModuleHandoffErrorV3::ModuleHandoffIdentityMismatch);
         }
 
-        let decoded = Self::new(capsule, module_handoff)?;
-        if decoded.pair_binding.canonical_bytes() != pair_binding_bytes
-            || decoded.pair_binding.identity().sha256() != &parsed_pair_binding.binding_sha256
-            || decoded.canonical_bytes() != bytes
+        let preflight =
+            preflight_inert_semantic_compiler_module_handoff_v3(&capsule, &module_handoff)?;
+        if preflight.capsule_bytes != capsule_range.len()
+            || preflight.module_handoff_bytes != module_handoff_range.len()
+            || preflight.exact_outer_bytes != canonical_bytes.len()
         {
             return Err(InertSemanticCompilerModuleHandoffErrorV3::NonCanonicalEncoding);
         }
-        Ok(decoded)
+        let pair_binding = InertCompilerModulePairBindingV3::new(
+            preflight.capsule_identity,
+            preflight.module_handoff_identity,
+        )?;
+        let pair_binding_bytes = canonical_bytes
+            .get(pair_binding_range)
+            .ok_or(InertSemanticCompilerModuleHandoffErrorV3::Truncated)?;
+        if pair_binding.canonical_bytes() != pair_binding_bytes
+            || pair_binding.identity().sha256() != &parsed_pair_binding.binding_sha256
+        {
+            return Err(InertSemanticCompilerModuleHandoffErrorV3::NonCanonicalEncoding);
+        }
+        let identity = InertSemanticCompilerModuleHandoffIdentityV3 {
+            sha256: outer_sha256,
+            byte_len: total_len,
+        };
+
+        Ok(Self {
+            capsule,
+            module_handoff,
+            pair_binding,
+            identity,
+            canonical_bytes,
+        })
     }
 
     /// Returns the exact retained inert semantic capsule.
@@ -613,6 +588,14 @@ impl<'a> TryFrom<&'a [u8]> for InertSemanticCompilerModuleHandoffV3 {
     }
 }
 
+impl TryFrom<Box<[u8]>> for InertSemanticCompilerModuleHandoffV3 {
+    type Error = InertSemanticCompilerModuleHandoffErrorV3;
+
+    fn try_from(bytes: Box<[u8]>) -> Result<Self, Self::Error> {
+        Self::decode_owned(bytes)
+    }
+}
+
 /// Failure to construct or strictly decode an inert outer V3 handoff.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -625,6 +608,8 @@ pub enum InertSemanticCompilerModuleHandoffErrorV3 {
     ModuleHandoffByteBoundExceeded,
     /// A construction-time length cannot be represented by the wire schema.
     LengthOverflow,
+    /// Retained canonical storage could not be allocated.
+    AllocationFailed,
     /// The outer magic does not identify this exact V3 schema.
     InvalidMagic,
     /// The outer version is not the one exact supported V3 version.
@@ -691,6 +676,9 @@ impl fmt::Display for InertSemanticCompilerModuleHandoffErrorV3 {
                 formatter.write_str("V2 compiler module handoff byte bound exceeded")
             }
             Self::LengthOverflow => formatter.write_str("inert outer V3 handoff length overflow"),
+            Self::AllocationFailed => {
+                formatter.write_str("could not allocate inert outer V3 handoff storage")
+            }
             Self::InvalidMagic => formatter.write_str("invalid inert outer V3 handoff magic"),
             Self::UnsupportedVersion(version) => {
                 write!(
@@ -855,6 +843,139 @@ impl ParsedPairBindingV3 {
             binding_sha256,
         })
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ValidatedOuterWireV3 {
+    capsule_range: std::ops::Range<usize>,
+    module_handoff_range: std::ops::Range<usize>,
+    pair_binding_range: std::ops::Range<usize>,
+    parsed_pair_binding: ParsedPairBindingV3,
+    outer_sha256: [u8; SHA256_BYTES],
+    total_len: u64,
+}
+
+impl ValidatedOuterWireV3 {
+    fn decode(bytes: &[u8]) -> Result<Self, InertSemanticCompilerModuleHandoffErrorV3> {
+        if bytes.len() > MAX_INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_BYTES_V3 {
+            return Err(InertSemanticCompilerModuleHandoffErrorV3::OuterByteBoundExceeded);
+        }
+        let mut reader = Reader::new(bytes);
+        if reader.fixed::<8>()? != INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_MAGIC_V3 {
+            return Err(InertSemanticCompilerModuleHandoffErrorV3::InvalidMagic);
+        }
+        let version = reader.u16()?;
+        if version != INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_VERSION_V3 {
+            return Err(InertSemanticCompilerModuleHandoffErrorV3::UnsupportedVersion(version));
+        }
+        let flags = reader.u16()?;
+        if flags != 0 {
+            return Err(InertSemanticCompilerModuleHandoffErrorV3::UnsupportedFlags(
+                flags,
+            ));
+        }
+        let declared_total_len = reader.u64()?;
+        let declared_total_len_usize = usize::try_from(declared_total_len).map_err(|_| {
+            InertSemanticCompilerModuleHandoffErrorV3::InvalidLength(declared_total_len)
+        })?;
+        if declared_total_len_usize < MIN_OUTER_BYTES_V3 {
+            return Err(InertSemanticCompilerModuleHandoffErrorV3::InvalidLength(
+                declared_total_len,
+            ));
+        }
+        if declared_total_len_usize > MAX_INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_BYTES_V3 {
+            return Err(InertSemanticCompilerModuleHandoffErrorV3::OuterByteBoundExceeded);
+        }
+        if declared_total_len_usize > bytes.len() {
+            return Err(InertSemanticCompilerModuleHandoffErrorV3::Truncated);
+        }
+        if declared_total_len_usize < bytes.len() {
+            return Err(InertSemanticCompilerModuleHandoffErrorV3::TrailingBytes);
+        }
+        if reader.u32()? != 0 {
+            return Err(InertSemanticCompilerModuleHandoffErrorV3::NonzeroReserved);
+        }
+        let capsule_len_u64 = reader.u64()?;
+        let module_handoff_len_u64 = reader.u64()?;
+        let capsule_len = checked_inner_len(
+            capsule_len_u64,
+            MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_BYTES_V3,
+            InertSemanticCompilerModuleHandoffErrorV3::CapsuleByteBoundExceeded,
+        )?;
+        let module_handoff_len = checked_inner_len(
+            module_handoff_len_u64,
+            MAX_COMPILER_MODULE_HANDOFF_BYTES_V2,
+            InertSemanticCompilerModuleHandoffErrorV3::ModuleHandoffByteBoundExceeded,
+        )?;
+        let expected_total_len = exact_outer_len(capsule_len, module_handoff_len)?;
+        if expected_total_len != declared_total_len_usize {
+            return Err(InertSemanticCompilerModuleHandoffErrorV3::InvalidLength(
+                declared_total_len,
+            ));
+        }
+
+        let capsule_start = reader.offset();
+        let capsule_bytes = reader.take(capsule_len)?;
+        let capsule_range = capsule_start..reader.offset();
+        let module_handoff_start = reader.offset();
+        let module_handoff_bytes = reader.take(module_handoff_len)?;
+        let module_handoff_range = module_handoff_start..reader.offset();
+        let pair_binding_start = reader.offset();
+        let pair_binding_bytes = reader.take(INERT_COMPILER_MODULE_PAIR_BINDING_BYTES_V3)?;
+        let pair_binding_range = pair_binding_start..reader.offset();
+        let outer_preimage_len = reader.offset();
+        let declared_outer_sha256 = reader.fixed::<SHA256_BYTES>()?;
+        if !reader.is_empty() {
+            return Err(InertSemanticCompilerModuleHandoffErrorV3::TrailingBytes);
+        }
+        if declared_outer_sha256 == [0; SHA256_BYTES] {
+            return Err(InertSemanticCompilerModuleHandoffErrorV3::ZeroIdentity {
+                field: "inert semantic compiler module handoff",
+            });
+        }
+        if derive_identity_sha256(OUTER_IDENTITY_DOMAIN_V3, &bytes[..outer_preimage_len])
+            != Some(declared_outer_sha256)
+        {
+            return Err(InertSemanticCompilerModuleHandoffErrorV3::OuterIdentityMismatch);
+        }
+
+        let parsed_pair_binding = ParsedPairBindingV3::decode(pair_binding_bytes)?;
+        if parsed_pair_binding.capsule_len != capsule_len_u64
+            || parsed_pair_binding.module_handoff_len != module_handoff_len_u64
+        {
+            return Err(InertSemanticCompilerModuleHandoffErrorV3::PairBindingInnerMismatch);
+        }
+        if capsule_bytes.len() < SHA256_BYTES
+            || capsule_bytes[capsule_bytes.len() - SHA256_BYTES..]
+                != parsed_pair_binding.capsule_sha256
+        {
+            return Err(InertSemanticCompilerModuleHandoffErrorV3::CapsuleIdentityMismatch);
+        }
+        let actual_module_handoff_sha256: [u8; SHA256_BYTES] =
+            Sha256::digest(module_handoff_bytes).into();
+        if actual_module_handoff_sha256 != parsed_pair_binding.module_handoff_sha256 {
+            return Err(InertSemanticCompilerModuleHandoffErrorV3::ModuleHandoffIdentityMismatch);
+        }
+
+        Ok(Self {
+            capsule_range,
+            module_handoff_range,
+            pair_binding_range,
+            parsed_pair_binding,
+            outer_sha256: declared_outer_sha256,
+            total_len: declared_total_len,
+        })
+    }
+}
+
+fn try_allocate_outer_buffer(
+    exact_len: usize,
+) -> Result<Vec<u8>, InertSemanticCompilerModuleHandoffErrorV3> {
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(exact_len)
+        .map_err(|_| InertSemanticCompilerModuleHandoffErrorV3::AllocationFailed)?;
+    Ok(bytes)
 }
 
 fn validate_inner_lengths(
@@ -1282,6 +1403,20 @@ mod tests_wire_adversarial {
         bytes
     }
 
+    fn assert_borrowed_and_owned_error(
+        bytes: Vec<u8>,
+        expected: InertSemanticCompilerModuleHandoffErrorV3,
+    ) {
+        assert_eq!(
+            InertSemanticCompilerModuleHandoffV3::decode(&bytes),
+            Err(expected.clone())
+        );
+        assert_eq!(
+            InertSemanticCompilerModuleHandoffV3::decode_owned(bytes.into_boxed_slice()),
+            Err(expected)
+        );
+    }
+
     #[test]
     fn round_trip_retains_exact_inner_bytes_and_native_identities() {
         let value = outer(0x10);
@@ -1330,6 +1465,84 @@ mod tests_wire_adversarial {
         assert_eq!(
             value.module_handoff().module_bytes(),
             llvm_module(0x10).as_slice()
+        );
+    }
+
+    #[test]
+    fn owned_decode_retains_the_exact_outer_allocation_and_frozen_identity() {
+        let value = outer(0x12);
+        let expected_bytes = value.canonical_bytes().to_vec();
+        let expected_identity = value.identity();
+        let owned_bytes = expected_bytes.clone().into_boxed_slice();
+        let owned_pointer = owned_bytes.as_ptr();
+
+        let decoded = InertSemanticCompilerModuleHandoffV3::decode_owned(owned_bytes).unwrap();
+        let borrowed = InertSemanticCompilerModuleHandoffV3::decode(&expected_bytes).unwrap();
+
+        assert_eq!(decoded.canonical_bytes().as_ptr(), owned_pointer);
+        assert_eq!(decoded.canonical_bytes(), expected_bytes);
+        assert_eq!(decoded.identity(), expected_identity);
+        assert_eq!(decoded, borrowed);
+        assert_eq!(
+            InertSemanticCompilerModuleHandoffV3::OWNED_DECODE_ADDITIONAL_OUTER_BUFFERS,
+            0
+        );
+    }
+
+    #[test]
+    fn owned_and_borrowed_decode_reject_hostile_lengths_identically() {
+        let encoded = outer(0x13).canonical_bytes().to_vec();
+
+        let mut impossible_total = encoded.clone();
+        impossible_total[OUTER_TOTAL_LEN_OFFSET..OUTER_TOTAL_LEN_OFFSET + 8]
+            .copy_from_slice(&u64::MAX.to_le_bytes());
+        assert_borrowed_and_owned_error(
+            impossible_total,
+            InertSemanticCompilerModuleHandoffErrorV3::OuterByteBoundExceeded,
+        );
+
+        let mut impossible_capsule = encoded.clone();
+        impossible_capsule[CAPSULE_LEN_OFFSET..CAPSULE_LEN_OFFSET + 8]
+            .copy_from_slice(&u64::MAX.to_le_bytes());
+        assert_borrowed_and_owned_error(
+            impossible_capsule,
+            InertSemanticCompilerModuleHandoffErrorV3::CapsuleByteBoundExceeded,
+        );
+
+        let mut impossible_module = encoded;
+        impossible_module[MODULE_HANDOFF_LEN_OFFSET..MODULE_HANDOFF_LEN_OFFSET + 8]
+            .copy_from_slice(&u64::MAX.to_le_bytes());
+        assert_borrowed_and_owned_error(
+            impossible_module,
+            InertSemanticCompilerModuleHandoffErrorV3::ModuleHandoffByteBoundExceeded,
+        );
+    }
+
+    #[test]
+    fn outer_allocation_budget_is_exact_and_checked() {
+        assert_eq!(
+            exact_outer_len(
+                MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_BYTES_V3,
+                MAX_COMPILER_MODULE_HANDOFF_BYTES_V2,
+            ),
+            Ok(MAX_INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_BYTES_V3)
+        );
+        assert_eq!(
+            InertSemanticCompilerModuleHandoffV3::MAX_BORROWED_DECODE_ADDITIONAL_OUTER_BYTES,
+            MAX_INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_BYTES_V3
+        );
+        assert_eq!(
+            exact_outer_len(
+                MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_BYTES_V3,
+                MAX_COMPILER_MODULE_HANDOFF_BYTES_V2
+                    .checked_add(1)
+                    .expect("fixture length fits usize"),
+            ),
+            Err(InertSemanticCompilerModuleHandoffErrorV3::OuterByteBoundExceeded)
+        );
+        assert_eq!(
+            try_allocate_outer_buffer(usize::MAX),
+            Err(InertSemanticCompilerModuleHandoffErrorV3::AllocationFailed)
         );
     }
 
