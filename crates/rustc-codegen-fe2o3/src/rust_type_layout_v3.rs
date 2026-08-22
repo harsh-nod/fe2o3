@@ -372,6 +372,38 @@ fn disjoint_index_space_v1<'tcx>(
         Some(TrustedDeviceItem::GridExclusiveIndexSpace) => Err(GeneralTypedExtractError::new(
             format!("{argument} has malformed genuine GridExclusive arguments"),
         )),
+        Some(TrustedDeviceItem::BlockedIndexSpace) => {
+            let Some(base) = arguments.first().and_then(|argument| argument.as_type()) else {
+                return Err(GeneralTypedExtractError::new(format!(
+                    "{argument} has malformed genuine Blocked index-space arguments"
+                )));
+            };
+            let lanes = arguments
+                .get(1)
+                .and_then(|argument| argument.as_const())
+                .and_then(|value| value.try_to_target_usize(tcx));
+            let elements = arguments
+                .get(2)
+                .and_then(|argument| argument.as_const())
+                .and_then(|value| value.try_to_target_usize(tcx));
+            let (Some(lanes), Some(elements)) = (lanes, elements) else {
+                return Err(GeneralTypedExtractError::new(format!(
+                    "{argument} has non-value or out-of-range Blocked dimensions"
+                )));
+            };
+            if arguments.len() != 3 || base != trusted_index1d || lanes == 0 || elements == 0 {
+                return Err(GeneralTypedExtractError::new(format!(
+                    "{argument} supports only genuine nonzero Blocked<Index1D, L, E>, found `{ty}`"
+                )));
+            }
+            lanes.checked_mul(elements).ok_or_else(|| {
+                GeneralTypedExtractError::new(format!(
+                    "{argument} has overflowing Blocked dimensions"
+                ))
+            })?;
+            Ok(RustDisjointIndexSpaceV1::blocked_index_1d(lanes, elements)
+                .expect("validated nonzero blocked dimensions"))
+        }
         _ => Err(GeneralTypedExtractError::new(format!(
             "{argument} uses unsupported or untrusted disjoint index space `{ty}`"
         ))),

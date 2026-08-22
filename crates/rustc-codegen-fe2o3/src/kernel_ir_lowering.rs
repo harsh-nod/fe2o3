@@ -1801,7 +1801,9 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | TrustedDeviceItem::ThreadIndex
                     | TrustedDeviceItem::DisjointIndex
                     | TrustedDeviceItem::ShiftedIndexSpace
+                    | TrustedDeviceItem::BlockedIndexSpace
                     | TrustedDeviceItem::GridExclusiveIndexSpace
+                    | TrustedDeviceItem::DisjointBlock
                     | TrustedDeviceItem::GridLeader
                     | TrustedDeviceItem::Gfx942CollectivesContext
                     | TrustedDeviceItem::Gfx942StaticLdsU32x256Type
@@ -1836,7 +1838,14 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | TrustedDeviceItem::DisjointIndexCheckedShift
                     | TrustedDeviceItem::GridLeaderCurrent
                     | TrustedDeviceItem::DisjointSliceGetDisjointMut
-                    | TrustedDeviceItem::DisjointSliceGetMutExclusive,
+                    | TrustedDeviceItem::DisjointSliceGetMutExclusive
+                    | TrustedDeviceItem::ThreadIndexCheckedBlock
+                    | TrustedDeviceItem::DisjointBlockComponentIndex
+                    | TrustedDeviceItem::DisjointSliceGetBlockMut
+                    | TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic
+                    | TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic
+                    | TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic
+                    | TrustedDeviceItem::DeviceGlobalMutPtrI64AsAtomic,
                 ) => {
                     return Err(diagnostic(
                         TranslationDiagnosticCode::UnsupportedCall,

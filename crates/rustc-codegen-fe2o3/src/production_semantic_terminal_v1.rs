@@ -11,12 +11,14 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     ThreadIndexGet,
     ThreadIndexIntoDisjoint,
     ThreadIndexCheckedShift,
+    ThreadIndexCheckedBlock,
     DisjointIndexGet,
     DisjointIndexCheckedShift,
     DisjointSliceGetMut,
     DisjointSliceGetDisjointMut,
     GridLeaderCurrent,
     DisjointSliceGetMutExclusive,
+    DisjointSliceGetBlockMut,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,6 +42,9 @@ impl ProductionSemanticTerminalRuleV1 {
             TrustedDeviceItem::ThreadIndexCheckedShift => {
                 Self::Expand(ProductionTerminalExpansionV1::ThreadIndexCheckedShift)
             }
+            TrustedDeviceItem::ThreadIndexCheckedBlock => {
+                Self::Expand(ProductionTerminalExpansionV1::ThreadIndexCheckedBlock)
+            }
             TrustedDeviceItem::DisjointIndexGet => {
                 Self::Expand(ProductionTerminalExpansionV1::DisjointIndexGet)
             }
@@ -57,6 +62,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             TrustedDeviceItem::DisjointSliceGetMutExclusive => {
                 Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetMutExclusive)
+            }
+            TrustedDeviceItem::DisjointSliceGetBlockMut => {
+                Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetBlockMut)
             }
             unsupported => Self::Reject(unsupported),
         }
@@ -77,6 +85,9 @@ impl ProductionSemanticTerminalRuleV1 {
             Self::Expand(ProductionTerminalExpansionV1::ThreadIndexCheckedShift) => {
                 TrustedDeviceItem::ThreadIndexCheckedShift
             }
+            Self::Expand(ProductionTerminalExpansionV1::ThreadIndexCheckedBlock) => {
+                TrustedDeviceItem::ThreadIndexCheckedBlock
+            }
             Self::Expand(ProductionTerminalExpansionV1::DisjointIndexGet) => {
                 TrustedDeviceItem::DisjointIndexGet
             }
@@ -94,6 +105,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetMutExclusive) => {
                 TrustedDeviceItem::DisjointSliceGetMutExclusive
+            }
+            Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetBlockMut) => {
+                TrustedDeviceItem::DisjointSliceGetBlockMut
             }
             Self::Reject(item) => item,
         }
@@ -168,6 +182,10 @@ mod tests {
             TrustedDeviceItem::MemoryCopyNonOverlapping,
             TrustedDeviceItem::WorkgroupSyncthreads,
             TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
+            TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic,
+            TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic,
+            TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic,
+            TrustedDeviceItem::DeviceGlobalMutPtrI64AsAtomic,
         ] {
             let rule = ProductionSemanticTerminalRuleV1::from_trusted_device_item(item);
             assert_eq!(rule, ProductionSemanticTerminalRuleV1::Reject(item));

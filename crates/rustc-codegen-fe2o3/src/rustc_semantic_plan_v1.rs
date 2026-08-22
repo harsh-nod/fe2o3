@@ -2045,6 +2045,8 @@ const fn terminal_expansion_tag_v1(expansion: ProductionTerminalExpansionV1) -> 
         ProductionTerminalExpansionV1::DisjointSliceGetDisjointMut => 7,
         ProductionTerminalExpansionV1::GridLeaderCurrent => 8,
         ProductionTerminalExpansionV1::DisjointSliceGetMutExclusive => 9,
+        ProductionTerminalExpansionV1::ThreadIndexCheckedBlock => 10,
+        ProductionTerminalExpansionV1::DisjointSliceGetBlockMut => 11,
     }
 }
 

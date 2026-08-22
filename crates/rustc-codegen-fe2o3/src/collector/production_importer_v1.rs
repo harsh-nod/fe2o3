@@ -751,6 +751,37 @@ fn terminal_operation_v1<'tcx>(
                 true,
             )
         }
+        ProductionTerminalExpansionV1::ThreadIndexCheckedBlock
+            if inputs.len() == 1 && rust_inputs.len() == 1 =>
+        {
+            let input_space =
+                rust_index_witness_space_v1(tcx, rust_inputs[0], TrustedDeviceItem::ThreadIndex)
+                    .ok_or_else(|| body_owner_table_mismatch_v1("terminal checked-block input"))?;
+            let rust_output_block = rust_option_payload_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("terminal checked-block result"))?;
+            let (output_space, lanes_per_block, elements_per_lane) =
+                rust_disjoint_block_v1(tcx, rust_output_block).ok_or_else(|| {
+                    body_owner_table_mismatch_v1("terminal checked-block witness")
+                })?;
+            if input_space != SemanticDisjointIndexSpaceV1::Index1d {
+                return Err(body_owner_table_mismatch_v1(
+                    "terminal checked-block input mapping",
+                ));
+            }
+            let output_block = option_payload_v1(types, output)?;
+            let raw_index = aggregate_field_v1(types, inputs[0], 0)?;
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedBlock {
+                    input_witness: inputs[0],
+                    output_block,
+                    raw_index,
+                    input_space,
+                    output_space,
+                    lanes_per_block,
+                    elements_per_lane,
+                },
+            )
+        }
         ProductionTerminalExpansionV1::DisjointIndexGet
             if inputs.len() == 1 && rust_inputs.len() == 1 =>
         {
@@ -879,6 +910,39 @@ fn terminal_operation_v1<'tcx>(
                 },
             )
         }
+        ProductionTerminalExpansionV1::DisjointSliceGetBlockMut
+            if inputs.len() == 3 && rust_inputs.len() == 3 =>
+        {
+            let rust_slice = rust_reference_pointee_v1(rust_inputs[0])
+                .and_then(|ty| rust_disjoint_slice_v1(tcx, ty));
+            let rust_block = rust_reference_pointee_v1(rust_inputs[1])
+                .and_then(|ty| rust_disjoint_block_v1(tcx, ty));
+            let Some((index_space, lanes_per_block, elements_per_lane)) = rust_block else {
+                return Err(body_owner_table_mismatch_v1(
+                    "terminal blocked witness identity",
+                ));
+            };
+            if rust_slice.map(|(_, space)| space) != Some(index_space) {
+                return Err(body_owner_table_mismatch_v1(
+                    "terminal blocked mapping identity",
+                ));
+            }
+            let disjoint_slice = pointer_pointee_v1(types, inputs[0])?;
+            let block_witness = pointer_pointee_v1(types, inputs[1])?;
+            let element_pointer = aggregate_field_v1(types, disjoint_slice, 0)?;
+            let element = pointer_pointee_v1(types, element_pointer)?;
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut {
+                    disjoint_slice,
+                    block_witness,
+                    element,
+                    raw_index: inputs[2],
+                    index_space,
+                    lanes_per_block,
+                    elements_per_lane,
+                },
+            )
+        }
         ProductionTerminalExpansionV1::ThreadIndex1d
         | ProductionTerminalExpansionV1::ThreadIndexGet
         | ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint
@@ -888,7 +952,9 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::DisjointSliceGetMut
         | ProductionTerminalExpansionV1::DisjointSliceGetDisjointMut
         | ProductionTerminalExpansionV1::GridLeaderCurrent
-        | ProductionTerminalExpansionV1::DisjointSliceGetMutExclusive => {
+        | ProductionTerminalExpansionV1::DisjointSliceGetMutExclusive
+        | ProductionTerminalExpansionV1::ThreadIndexCheckedBlock
+        | ProductionTerminalExpansionV1::DisjointSliceGetBlockMut => {
             Err(body_owner_table_mismatch_v1("terminal callable ABI"))
         }
     }
@@ -1022,8 +1088,60 @@ fn rust_disjoint_index_space_v1<'tcx>(
         Some(TrustedDeviceItem::GridExclusiveIndexSpace) if arguments.is_empty() => {
             Some(SemanticDisjointIndexSpaceV1::GridExclusive)
         }
+        Some(TrustedDeviceItem::BlockedIndexSpace) if arguments.len() == 3 => {
+            if arguments[0].as_type()? != trusted_index1d_type_v1(tcx)? {
+                return None;
+            }
+            let lanes_per_block = arguments[1].as_const()?.try_to_target_usize(tcx)?;
+            let elements_per_lane = arguments[2].as_const()?.try_to_target_usize(tcx)?;
+            if lanes_per_block == 0
+                || elements_per_lane == 0
+                || lanes_per_block.checked_mul(elements_per_lane).is_none()
+            {
+                return None;
+            }
+            Some(SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                lanes_per_block,
+                elements_per_lane,
+            })
+        }
         _ => None,
     }
+}
+
+fn rust_disjoint_block_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<(SemanticDisjointIndexSpaceV1, u64, u64)> {
+    let TyKind::Adt(definition, arguments) = *ty.kind() else {
+        return None;
+    };
+    if trusted_device_items::classify(tcx, definition.did())
+        != Some(TrustedDeviceItem::DisjointBlock)
+        || arguments.len() != 3
+    {
+        return None;
+    }
+    let base = arguments[0].as_type()?;
+    if base != trusted_index1d_type_v1(tcx)? {
+        return None;
+    }
+    let lanes_per_block = arguments[1].as_const()?.try_to_target_usize(tcx)?;
+    let elements_per_lane = arguments[2].as_const()?.try_to_target_usize(tcx)?;
+    if lanes_per_block == 0
+        || elements_per_lane == 0
+        || lanes_per_block.checked_mul(elements_per_lane).is_none()
+    {
+        return None;
+    }
+    Some((
+        SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+            lanes_per_block,
+            elements_per_lane,
+        },
+        lanes_per_block,
+        elements_per_lane,
+    ))
 }
 
 fn trusted_index1d_type_v1<'tcx>(tcx: TyCtxt<'tcx>) -> Option<Ty<'tcx>> {
@@ -1102,6 +1220,8 @@ const fn terminal_operation_tag_v1(
         ProductionTerminalExpansionV1::DisjointSliceGetDisjointMut => 7,
         ProductionTerminalExpansionV1::GridLeaderCurrent => 8,
         ProductionTerminalExpansionV1::DisjointSliceGetMutExclusive => 9,
+        ProductionTerminalExpansionV1::ThreadIndexCheckedBlock => 10,
+        ProductionTerminalExpansionV1::DisjointSliceGetBlockMut => 11,
     }
 }
 

@@ -1,9 +1,11 @@
 //! Bounded standard-Rust atomic surface for the reviewed gfx942 profile.
 //!
 //! These are ordinary [`core::sync::atomic`] types, not replacements. The
-//! compiler contract maps operations to Kernel IR atomics with system scope.
-//! System-scoped global operations require coherent-allocation launch evidence.
-//! The executable subset is deliberately limited to 32-bit and 64-bit integers.
+//! The compiler reserves these typed projections for eventual mapping to Kernel
+//! IR atomics with system scope. Production source import currently fails
+//! closed before lowering core atomic operation terminals; semantic atomic IR
+//! still requires target capability and coherent-allocation evidence. The
+//! intended executable subset is limited to 32-bit and 64-bit integers.
 
 use crate::DeviceGlobalMutPtr;
 
@@ -16,7 +18,8 @@ macro_rules! global_atomic_view {
             ///
             /// The returned reference cannot outlive the pointer token borrow.
             /// Every operation still names its Rust [`Ordering`] explicitly;
-            /// fe2o3 assigns those operations system scope.
+            /// fe2o3 will assign those operations system scope once the
+            /// bounded core-operation importer recognizes the terminal.
             ///
             /// The unsafe construction or compiler ABI admission of this
             /// pointer must establish that it remains live and aligned for
