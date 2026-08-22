@@ -17,7 +17,7 @@ use fe2o3_kfd::{
 
 /// Canonical scope and non-claims for the first service allocation owner.
 pub const SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-service-allocation-owner-r4-v1\n",
+    "profile=fe2o3-service-allocation-owner-r5-v1\n",
     "backend=checked-gfx942-xnack-minus-device,shared-kfd-vm-session\n",
     "device=device-local-vram-hbm,linear-unmapped-mapped-or-fixed-dispatch-kfd-custody,optional-exact-host-verified-public-device-local-initialization\n",
     "host=host-visible-coherent-gtt,linear-cpu-writable-gpu-mapped-sealed-full-initialized-or-fixed-dispatch-custody\n",
@@ -25,7 +25,7 @@ pub const SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_V1: &str = concat!(
     "views=typed-role-kind-offset-extent-alignment,no-handle-fd-gpu-address-or-persistent-raw-pointer-accessor\n",
     "cpu-write=scoped-mutable-slice-before-gpu-map,safe-caller-may-return-or-retain-raw-cpu-pointer-or-address,no-safe-post-borrow-dereference;separate-owned-full-extent-copy-mints-sealed-initialized-mapped-authority\n",
     "dispatch-ranges=device-local-or-host-visible,owner-allocation-kind-generation-ordinal-offset-and-extent-bound,no-native-address,device-ordinals-before-host-ordinals\n",
-    "subleases=one-atomic-move-only-layout-per-allocation,typed-role-kind-and-exact-generation,pairwise-disjoint-nonempty-aligned-bounded-members,legacy-ranges-denied-after-partition,replacement-stales-old-layout\n",
+    "subleases=one-atomic-move-only-layout-per-allocation,typed-role-kind-and-exact-generation,pairwise-disjoint-nonempty-aligned-bounded-members,checked-member-contained-subranges,legacy-ranges-denied-after-partition,replacement-stales-old-layout\n",
     "bounds=32-live-allocations,device-192gib,host-2gib,page-and-device-alignment-max-4096\n",
     "release=gpu-never-published-or-exact-completed-recycled-queue-return,reverse-order-unmap-then-free,consuming-owner\n",
     "failure=preflight-retains-owner,consumed-token-failure-quarantines-retained-session,no-drop-cleanup\n",
@@ -34,7 +34,7 @@ pub const SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "cb10fc69e054792fc533666f3f70925653db44e1b9f6d4bf1396a8c43ae824b8";
+    "c10eba9cbd78bb5d740a0262fd62cd20457578256ec4a6785f9570bf4c088c8e";
 
 /// Maximum live allocations owned by one service allocation session.
 const MAX_SERVICE_ALLOCATIONS_V1: usize = 32;
@@ -348,7 +348,7 @@ where
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ServiceAllocationSubleaseRangeV1 {
+pub(crate) struct ServiceAllocationSubleaseRangeV1 {
     offset_bytes: u64,
     extent_bytes: u64,
     alignment: u64,
@@ -496,6 +496,35 @@ impl ServiceDeviceDispatchRangeV1 {
     pub const fn extent_bytes(self) -> u64 {
         self.extent_bytes
     }
+
+    /// Narrows this checked range without changing its allocation generation,
+    /// data ordinal, or retained sublease-member binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServiceAllocationErrorV1::InvalidRange`] unless the result is
+    /// nonempty, wholly contained in this range, and aligned relative to the
+    /// retained allocation base.
+    pub fn checked_subrange(
+        self,
+        relative_offset_bytes: u64,
+        extent_bytes: u64,
+        alignment: u64,
+    ) -> Result<Self, ServiceAllocationErrorV1> {
+        let offset_bytes = checked_dispatch_subrange(
+            self.binding,
+            self.offset_bytes,
+            self.extent_bytes,
+            relative_offset_bytes,
+            extent_bytes,
+            alignment,
+        )?;
+        Ok(Self {
+            offset_bytes,
+            extent_bytes,
+            ..self
+        })
+    }
 }
 
 /// Addressless, owner-checked coherent host-visible range admitted for dispatch.
@@ -528,6 +557,35 @@ impl ServiceHostDispatchRangeV1 {
     /// Returns the checked byte extent.
     pub const fn extent_bytes(self) -> u64 {
         self.extent_bytes
+    }
+
+    /// Narrows this checked range while retaining its host allocation and
+    /// sublease-member bindings.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServiceAllocationErrorV1::InvalidRange`] unless the result is
+    /// nonempty, wholly contained in this range, and aligned relative to the
+    /// retained allocation base.
+    pub fn checked_subrange(
+        self,
+        relative_offset_bytes: u64,
+        extent_bytes: u64,
+        alignment: u64,
+    ) -> Result<Self, ServiceAllocationErrorV1> {
+        let offset_bytes = checked_dispatch_subrange(
+            self.binding,
+            self.offset_bytes,
+            self.extent_bytes,
+            relative_offset_bytes,
+            extent_bytes,
+            alignment,
+        )?;
+        Ok(Self {
+            offset_bytes,
+            extent_bytes,
+            ..self
+        })
     }
 }
 
@@ -610,6 +668,13 @@ pub(crate) struct ServiceQueueAllocationReplacementV1 {
     data_index: usize,
     old_binding: AllocationBindingV1,
     new_binding: AllocationBindingV1,
+    new_subleases: Option<Vec<ServiceAllocationSubleaseRangeV1>>,
+}
+
+impl ServiceQueueAllocationReplacementV1 {
+    pub(crate) const fn data_index(&self) -> usize {
+        self.data_index
+    }
 }
 
 impl ServiceQueueAllocationLedgerV1 {
@@ -712,7 +777,85 @@ impl ServiceQueueAllocationLedgerV1 {
             data_index: range.data_index,
             old_binding: range.binding,
             new_binding,
+            new_subleases: None,
         })
+    }
+
+    pub(crate) fn prepare_initialized_partition_replacement<
+        R,
+        const OLD_N: usize,
+        const NEW_N: usize,
+    >(
+        &mut self,
+        old: &ServiceAllocationSubleaseSetV1<R, DeviceLocalAllocationV1, OLD_N>,
+        extent_bytes: u64,
+        alignment: u64,
+        new_members: [(u64, u64, u64); NEW_N],
+    ) -> Result<
+        (
+            ServiceQueueAllocationReplacementV1,
+            [ServiceAllocationSubleaseRangeV1; NEW_N],
+        ),
+        ServiceAllocationErrorV1,
+    >
+    where
+        R: DeviceAllocationRoleMarkerV1,
+    {
+        let allocation_index = validate_sublease_set_binding(self.owner, &self.allocations, old)?;
+        let old_binding = self.allocations[allocation_index].binding;
+        let data_index = self
+            .device_bindings
+            .iter()
+            .position(|binding| *binding == old_binding)
+            .ok_or(ServiceAllocationErrorV1::AllocationGenerationMismatch)?;
+        if extent_bytes == 0 {
+            return Err(ServiceAllocationErrorV1::InvalidExtent);
+        }
+        if alignment == 0 || !alignment.is_power_of_two() || alignment > MAX_SERVICE_ALIGNMENT_V1 {
+            return Err(ServiceAllocationErrorV1::InvalidAlignment);
+        }
+        let retained_without_old = self
+            .device_bytes
+            .checked_sub(old_binding.extent_bytes)
+            .ok_or(ServiceAllocationErrorV1::AllocationGenerationMismatch)?;
+        if retained_without_old
+            .checked_add(extent_bytes)
+            .is_none_or(|total| total > MAX_SERVICE_DEVICE_BYTES_V1)
+        {
+            return Err(ServiceAllocationErrorV1::ByteCapacity {
+                maximum_bytes: MAX_SERVICE_DEVICE_BYTES_V1,
+            });
+        }
+        let next_allocation_id = self
+            .next_allocation_id
+            .checked_add(1)
+            .ok_or(ServiceAllocationErrorV1::AllocationGenerationMismatch)?;
+        let new_binding = AllocationBindingV1 {
+            owner: self.owner,
+            id: self.next_allocation_id,
+            generation: 1,
+            role_id: R::ROLE_ID,
+            kind_id: AllocationKindV1::DeviceLocal as u8,
+            extent_bytes,
+            alignment,
+        };
+        let ranges = validate_sublease_layout(new_binding, new_members)?;
+        let mut new_subleases = Vec::new();
+        new_subleases
+            .try_reserve_exact(NEW_N)
+            .map_err(|_| ServiceAllocationErrorV1::AllocationRegistryReservation)?;
+        new_subleases.extend_from_slice(&ranges);
+        self.next_allocation_id = next_allocation_id;
+        Ok((
+            ServiceQueueAllocationReplacementV1 {
+                allocation_index,
+                data_index,
+                old_binding,
+                new_binding,
+                new_subleases: Some(new_subleases),
+            },
+            ranges,
+        ))
     }
 
     pub(crate) fn commit_replacement_release(
@@ -731,6 +874,7 @@ impl ServiceQueueAllocationLedgerV1 {
         &mut self,
         replacement: ServiceQueueAllocationReplacementV1,
     ) -> ServiceDeviceDispatchRangeV1 {
+        debug_assert!(replacement.new_subleases.is_none());
         self.allocations.insert(
             replacement.allocation_index,
             OwnedAllocationV1 {
@@ -749,6 +893,47 @@ impl ServiceQueueAllocationLedgerV1 {
             extent_bytes: replacement.new_binding.extent_bytes,
             sublease_index: None,
         }
+    }
+
+    pub(crate) fn commit_initialized_partitioned_replacement<R, const N: usize>(
+        &mut self,
+        replacement: ServiceQueueAllocationReplacementV1,
+        ranges: [ServiceAllocationSubleaseRangeV1; N],
+    ) -> (
+        ServiceAllocationSubleaseSetV1<R, DeviceLocalAllocationV1, N>,
+        [ServiceDeviceDispatchRangeV1; N],
+    )
+    where
+        R: DeviceAllocationRoleMarkerV1,
+    {
+        let new_binding = replacement.new_binding;
+        let data_index = replacement.data_index;
+        let new_subleases = replacement
+            .new_subleases
+            .expect("partitioned replacement retains its preallocated registry");
+        debug_assert!(new_subleases.as_slice() == ranges.as_slice());
+        self.allocations.insert(
+            replacement.allocation_index,
+            OwnedAllocationV1 {
+                binding: new_binding,
+                token: None,
+                subleases: Some(new_subleases),
+            },
+        );
+        self.device_bindings.insert(data_index, new_binding);
+        self.device_bytes += new_binding.extent_bytes;
+        let subleases = ServiceAllocationSubleaseSetV1 {
+            key: key(new_binding),
+            ranges,
+        };
+        let dispatch_ranges = core::array::from_fn(|index| ServiceDeviceDispatchRangeV1 {
+            binding: new_binding,
+            data_index,
+            offset_bytes: ranges[index].offset_bytes,
+            extent_bytes: ranges[index].extent_bytes,
+            sublease_index: Some(index),
+        });
+        (subleases, dispatch_ranges)
     }
 
     pub(crate) fn restore(
@@ -1499,6 +1684,51 @@ impl ServiceAllocationSessionV1 {
         }))
     }
 
+    /// Revalidates and narrows one member of a retained logical partition.
+    ///
+    /// The returned range remains bound to the parent member index. Queue
+    /// admission accepts it only while the exact allocation generation and
+    /// partition layout remain retained, and only when the narrowed interval
+    /// stays nonempty, aligned, and wholly inside that member.
+    pub fn sublease_range<R, K, const N: usize>(
+        &self,
+        subleases: &ServiceAllocationSubleaseSetV1<R, K, N>,
+        member_index: usize,
+        relative_offset_bytes: u64,
+        extent_bytes: u64,
+        alignment: u64,
+    ) -> Result<ServiceAllocationRangeV1<R, K>, ServiceAllocationErrorV1>
+    where
+        R: ServiceAllocationRoleMarkerV1,
+        K: ServiceAllocationKindMarkerV1,
+    {
+        self.require_active()?;
+        let allocation_index =
+            validate_sublease_set_binding(self.owner.owner, &self.owner.allocations, subleases)?;
+        let allocation = &self.owner.allocations[allocation_index];
+        if !is_mapped(allocation.token.as_ref()) {
+            return Err(ServiceAllocationErrorV1::AllocationState);
+        }
+        let member = subleases
+            .ranges
+            .get(member_index)
+            .ok_or(ServiceAllocationErrorV1::SubleaseBindingMismatch)?;
+        let offset_bytes = checked_sublease_subrange(
+            subleases.key.binding,
+            *member,
+            relative_offset_bytes,
+            extent_bytes,
+            alignment,
+        )?;
+        Ok(ServiceAllocationRangeV1 {
+            key: subleases.key,
+            offset_bytes,
+            extent_bytes,
+            alignment,
+            sublease_index: Some(member_index),
+        })
+    }
+
     /// Erases a checked device role range into an addressless service-batch binding.
     ///
     /// The owner validates the exact allocation generation and mapped state.
@@ -2155,7 +2385,15 @@ fn validate_sublease_member(
             let expected = subleases
                 .get(index)
                 .ok_or(ServiceAllocationErrorV1::SubleaseBindingMismatch)?;
-            if expected.offset_bytes == offset_bytes && expected.extent_bytes == extent_bytes {
+            let expected_end = expected
+                .offset_bytes
+                .checked_add(expected.extent_bytes)
+                .ok_or(ServiceAllocationErrorV1::SubleaseBindingMismatch)?;
+            if offset_bytes >= expected.offset_bytes
+                && offset_bytes
+                    .checked_add(extent_bytes)
+                    .is_some_and(|end| end <= expected_end)
+            {
                 Ok(())
             } else {
                 Err(ServiceAllocationErrorV1::SubleaseBindingMismatch)
@@ -2163,6 +2401,63 @@ fn validate_sublease_member(
         }
         _ => Err(ServiceAllocationErrorV1::SubleaseBindingMismatch),
     }
+}
+
+fn checked_sublease_subrange(
+    binding: AllocationBindingV1,
+    member: ServiceAllocationSubleaseRangeV1,
+    relative_offset_bytes: u64,
+    extent_bytes: u64,
+    alignment: u64,
+) -> Result<u64, ServiceAllocationErrorV1> {
+    let offset_bytes = member
+        .offset_bytes
+        .checked_add(relative_offset_bytes)
+        .ok_or(ServiceAllocationErrorV1::InvalidRange)?;
+    let member_end = member
+        .offset_bytes
+        .checked_add(member.extent_bytes)
+        .ok_or(ServiceAllocationErrorV1::InvalidRange)?;
+    if extent_bytes == 0
+        || alignment == 0
+        || !alignment.is_power_of_two()
+        || alignment > binding.alignment
+        || !offset_bytes.is_multiple_of(alignment)
+        || offset_bytes
+            .checked_add(extent_bytes)
+            .is_none_or(|end| end > member_end)
+    {
+        return Err(ServiceAllocationErrorV1::InvalidRange);
+    }
+    Ok(offset_bytes)
+}
+
+fn checked_dispatch_subrange(
+    binding: AllocationBindingV1,
+    parent_offset_bytes: u64,
+    parent_extent_bytes: u64,
+    relative_offset_bytes: u64,
+    extent_bytes: u64,
+    alignment: u64,
+) -> Result<u64, ServiceAllocationErrorV1> {
+    let offset_bytes = parent_offset_bytes
+        .checked_add(relative_offset_bytes)
+        .ok_or(ServiceAllocationErrorV1::InvalidRange)?;
+    let parent_end = parent_offset_bytes
+        .checked_add(parent_extent_bytes)
+        .ok_or(ServiceAllocationErrorV1::InvalidRange)?;
+    if extent_bytes == 0
+        || alignment == 0
+        || !alignment.is_power_of_two()
+        || alignment > binding.alignment
+        || !offset_bytes.is_multiple_of(alignment)
+        || offset_bytes
+            .checked_add(extent_bytes)
+            .is_none_or(|end| end > parent_end)
+    {
+        return Err(ServiceAllocationErrorV1::InvalidRange);
+    }
+    Ok(offset_bytes)
 }
 
 fn apply_scoped_host_write<T>(bytes: &mut [u8], write: impl FnOnce(&mut [u8]) -> T) -> T {
@@ -2632,6 +2927,36 @@ mod tests {
     }
 
     #[test]
+    fn checked_sublease_subranges_are_member_bounded_and_aligned() {
+        let expected = binding(
+            AllocationRoleV1::DeviceWorkspace,
+            AllocationKindV1::DeviceLocal,
+        );
+        let member = ServiceAllocationSubleaseRangeV1 {
+            offset_bytes: 4_096,
+            extent_bytes: 8_192,
+            alignment: 4_096,
+        };
+        assert_eq!(
+            checked_sublease_subrange(expected, member, 2_048, 2_048, 2_048).unwrap(),
+            6_144
+        );
+        for (relative, extent, alignment) in [
+            (0, 0, 4_096),
+            (1, 4_096, 4_096),
+            (8_192, 1, 1),
+            (4_096, 4_097, 1),
+            (0, 4_096, 8_192),
+            (0, 4_096, 3),
+        ] {
+            assert!(matches!(
+                checked_sublease_subrange(expected, member, relative, extent, alignment),
+                Err(ServiceAllocationErrorV1::InvalidRange)
+            ));
+        }
+    }
+
+    #[test]
     fn sublease_set_is_owner_role_kind_allocation_and_layout_bound() {
         let expected = binding(
             AllocationRoleV1::DeviceWorkspace,
@@ -2780,6 +3105,39 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_subranges_preserve_generation_ordinal_and_member_binding() {
+        let expected = binding(
+            AllocationRoleV1::DeviceWorkspace,
+            AllocationKindV1::DeviceLocal,
+        );
+        let member = ServiceDeviceDispatchRangeV1 {
+            binding: expected,
+            data_index: 3,
+            offset_bytes: 4_096,
+            extent_bytes: 8_192,
+            sublease_index: Some(7),
+        };
+        let narrowed = member.checked_subrange(2_048, 2_048, 2_048).unwrap();
+        assert!(narrowed.binding == expected);
+        assert_eq!(narrowed.data_index, 3);
+        assert_eq!(narrowed.offset_bytes(), 6_144);
+        assert_eq!(narrowed.extent_bytes(), 2_048);
+        assert_eq!(narrowed.sublease_index, Some(7));
+        for (relative, extent, alignment) in [
+            (0, 0, 4_096),
+            (1, 4_096, 4_096),
+            (8_192, 1, 1),
+            (4_096, 4_097, 1),
+            (0, 4_096, 8_192),
+        ] {
+            assert!(matches!(
+                member.checked_subrange(relative, extent, alignment),
+                Err(ServiceAllocationErrorV1::InvalidRange)
+            ));
+        }
+    }
+
+    #[test]
     fn queue_range_revalidation_rejects_owner_generation_index_and_extent_drift() {
         let expected = binding(AllocationRoleV1::DeviceInput, AllocationKindV1::DeviceLocal);
         let ledger = queue_ledger(expected);
@@ -2819,7 +3177,7 @@ mod tests {
     }
 
     #[test]
-    fn partitioned_queue_admission_rejects_legacy_partial_and_duplicate_members() {
+    fn partitioned_queue_admission_accepts_member_subranges_and_rejects_escape() {
         let expected = binding(
             AllocationRoleV1::DeviceWorkspace,
             AllocationKindV1::DeviceLocal,
@@ -2854,8 +3212,12 @@ mod tests {
         ));
         let mut partial = exact;
         partial.extent_bytes = 2_048;
+        assert!(ledger.validate_range(partial).is_ok());
+        let mut escaped = partial;
+        escaped.offset_bytes = 3_072;
+        escaped.extent_bytes = 2_048;
         assert!(matches!(
-            ledger.validate_range(partial),
+            ledger.validate_range(escaped),
             Err(ServiceAllocationErrorV1::SubleaseBindingMismatch)
         ));
         let mut duplicate_member = exact;
@@ -2936,6 +3298,92 @@ mod tests {
             Err(ServiceAllocationErrorV1::AllocationGenerationMismatch)
         ));
         assert!(ledger.validate_range(new).is_ok());
+    }
+
+    #[test]
+    fn partitioned_replacement_rebinds_every_member_and_stales_prior_custody() {
+        let expected = binding(
+            AllocationRoleV1::DeviceWorkspace,
+            AllocationKindV1::DeviceLocal,
+        );
+        let mut ledger = queue_ledger(expected);
+        let old_ranges =
+            validate_sublease_layout(expected, [(0, 4_096, 4_096), (8_192, 8_192, 4_096)]).unwrap();
+        ledger.allocations[0].subleases = Some(old_ranges.to_vec());
+        let old =
+            ServiceAllocationSubleaseSetV1::<DeviceWorkspaceRoleV1, DeviceLocalAllocationV1, 2> {
+                key: key(expected),
+                ranges: old_ranges,
+            };
+
+        let (replacement, new_ranges) = ledger
+            .prepare_initialized_partition_replacement::<DeviceWorkspaceRoleV1, 2, 3>(
+                &old,
+                12_288,
+                4_096,
+                [
+                    (0, 4_096, 4_096),
+                    (4_096, 4_096, 4_096),
+                    (8_192, 4_096, 4_096),
+                ],
+            )
+            .unwrap();
+        ledger.commit_replacement_release(&replacement);
+        let (new, dispatch_ranges) = ledger
+            .commit_initialized_partitioned_replacement::<DeviceWorkspaceRoleV1, 3>(
+                replacement,
+                new_ranges,
+            );
+
+        assert_eq!(new.len(), 3);
+        assert_eq!(ledger.device_bytes, 12_288);
+        assert!(matches!(
+            validate_sublease_set_binding(ledger.owner, &ledger.allocations, &old),
+            Err(ServiceAllocationErrorV1::AllocationGenerationMismatch)
+        ));
+        assert_eq!(
+            validate_sublease_set_binding(ledger.owner, &ledger.allocations, &new).unwrap(),
+            0
+        );
+        for (index, range) in dispatch_ranges.into_iter().enumerate() {
+            assert_eq!(range.data_index, 0);
+            assert_eq!(range.offset_bytes, index as u64 * 4_096);
+            assert_eq!(range.extent_bytes, 4_096);
+            assert_eq!(range.sublease_index, Some(index));
+            assert!(ledger.validate_range(range).is_ok());
+        }
+    }
+
+    #[test]
+    fn partitioned_replacement_rejects_new_layout_before_generation_reservation() {
+        let expected = binding(
+            AllocationRoleV1::DeviceWorkspace,
+            AllocationKindV1::DeviceLocal,
+        );
+        let mut ledger = queue_ledger(expected);
+        let old_ranges = validate_sublease_layout(expected, [(0, 4_096, 4_096)]).unwrap();
+        ledger.allocations[0].subleases = Some(old_ranges.to_vec());
+        let old =
+            ServiceAllocationSubleaseSetV1::<DeviceWorkspaceRoleV1, DeviceLocalAllocationV1, 1> {
+                key: key(expected),
+                ranges: old_ranges,
+            };
+        let next_id = ledger.next_allocation_id;
+        assert!(matches!(
+            ledger.prepare_initialized_partition_replacement::<DeviceWorkspaceRoleV1, 1, 2>(
+                &old,
+                8_192,
+                4_096,
+                [(0, 4_096, 4_096), (2_048, 4_096, 2_048)],
+            ),
+            Err(ServiceAllocationErrorV1::AliasingRange)
+        ));
+        assert_eq!(ledger.next_allocation_id, next_id);
+        assert_eq!(ledger.device_bytes, expected.extent_bytes);
+        assert_eq!(
+            validate_sublease_set_binding(ledger.owner, &ledger.allocations, &old).unwrap(),
+            0
+        );
     }
 
     #[test]
