@@ -12,23 +12,49 @@ use fe2o3_artifact_transaction::{
     WorkerV3PublicationIntentBoundaryV1, WorkerV3PublicationIntentErrorV1,
     WorkerV3PublicationIntentFaultPointV1, WorkerV3PublicationIntentFaultTimingV1,
     WorkerV3PublicationIntentIdentityV1, WorkerV3PublicationIntentOptionsV1, begin_build_attempt,
-    clear_worker_v3_publication_intent_v1, persist_worker_v3_publication_intent_v1,
-    publish_exact_hsaco_evidence_for_attempt_v3, publish_worker_v3_load_readiness_v1,
-    publish_worker_v3_load_readiness_v1_with_options, recover_published_hsaco_claim_for_attempt_v3,
-    recover_worker_v3_load_readiness_for_attempt_v1, recover_worker_v3_load_readiness_v1,
-    recover_worker_v3_publication_intent_v1,
+    clear_worker_v3_publication_intent_v1, discover_worker_v3_load_readiness_attempts_v1,
+    persist_worker_v3_publication_intent_v1, publish_exact_hsaco_evidence_for_attempt_v3,
+    publish_worker_v3_load_readiness_v1, publish_worker_v3_load_readiness_v1_with_options,
+    recover_published_hsaco_claim_for_attempt_v3, recover_worker_v3_load_readiness_for_attempt_v1,
+    recover_worker_v3_load_readiness_v1, recover_worker_v3_publication_intent_v1,
     retire_worker_v3_publication_intent_after_load_readiness_v1,
+    scavenge_superseded_worker_v3_load_readiness_v1,
 };
 use fe2o3_build_authority::CompilerClosureV2;
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::num::NonZeroU8;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const CHILD_OUTPUT: &str = "FE2O3_LOAD_READY_CHILD_OUTPUT";
-const CHILD_ATTEMPT: &str = "FE2O3_LOAD_READY_CHILD_ATTEMPT";
+const ABRUPT_OUTPUT: &str = "FE2O3_LOAD_READY_ABRUPT_OUTPUT";
+const ABRUPT_CLAIM: &str = "FE2O3_LOAD_READY_ABRUPT_CLAIM";
+const ABRUPT_ENVELOPE: &str = "FE2O3_LOAD_READY_ABRUPT_ENVELOPE";
+const ABRUPT_BOUNDARY: &str = "FE2O3_LOAD_READY_ABRUPT_BOUNDARY";
+const ABRUPT_TIMING: &str = "FE2O3_LOAD_READY_ABRUPT_TIMING";
+const ABRUPT_EXIT_CODE: u8 = 86;
+
+const READINESS_BOUNDARIES: [WorkerV3LoadReadinessBoundaryV1; 16] = [
+    WorkerV3LoadReadinessBoundaryV1::CreateEnvelopeTemp,
+    WorkerV3LoadReadinessBoundaryV1::WriteEnvelopeTemp,
+    WorkerV3LoadReadinessBoundaryV1::SyncEnvelopeTemp,
+    WorkerV3LoadReadinessBoundaryV1::RenameEnvelope,
+    WorkerV3LoadReadinessBoundaryV1::SyncEnvelopeName,
+    WorkerV3LoadReadinessBoundaryV1::CreateClaimTemp,
+    WorkerV3LoadReadinessBoundaryV1::WriteClaimTemp,
+    WorkerV3LoadReadinessBoundaryV1::SyncClaimTemp,
+    WorkerV3LoadReadinessBoundaryV1::RenameClaim,
+    WorkerV3LoadReadinessBoundaryV1::SyncClaimName,
+    WorkerV3LoadReadinessBoundaryV1::CreateReceiptTemp,
+    WorkerV3LoadReadinessBoundaryV1::WriteReceiptTemp,
+    WorkerV3LoadReadinessBoundaryV1::SyncReceiptTemp,
+    WorkerV3LoadReadinessBoundaryV1::RenameReceipt,
+    WorkerV3LoadReadinessBoundaryV1::SyncReceiptName,
+    WorkerV3LoadReadinessBoundaryV1::CommitAttemptRegistry,
+];
 
 static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -71,7 +97,7 @@ impl PublishedV3 {
     }
 
     fn authority(&self) -> VerifiedWorkerV3LoadEnvelopeAuthorityV1 {
-        load_authority(&self.envelope)
+        load_authority(&self.envelope, &self.claim)
     }
 
     fn publish_readiness(&self) -> fe2o3_artifact_transaction::WorkerV3LoadReadinessResultV1 {
@@ -147,14 +173,18 @@ fn publication_binding(
     .unwrap()
 }
 
-fn load_authority(bytes: &[u8]) -> VerifiedWorkerV3LoadEnvelopeAuthorityV1 {
+fn load_authority(
+    bytes: &[u8],
+    claim: &DurablePublishedHsacoClaimV3,
+) -> VerifiedWorkerV3LoadEnvelopeAuthorityV1 {
     let binding = WorkerV3LoadEnvelopeBindingV1::from_exact_bytes(bytes).unwrap();
     // SAFETY: these transaction tests model the upstream boundary that has verified the opaque
     // envelope contains every compact replay preimage. They never treat the result as load-ready.
     unsafe {
         VerifiedWorkerV3LoadEnvelopeAuthorityV1::from_complete_compact_replay_preimages_unchecked(
-            binding,
+            binding, claim,
         )
+        .unwrap()
     }
 }
 
@@ -281,27 +311,20 @@ fn exact_publication_retry_and_restart_recovery_are_idempotent_and_inert() {
 }
 
 #[test]
+fn readiness_debug_is_bounded_and_omits_exact_envelope_bytes() {
+    let state = setup(2);
+    let readiness = state.publish_readiness();
+    let debug = format!("{readiness:?}");
+    assert!(debug.len() < 4096, "unexpectedly large debug output");
+    assert!(debug.contains("envelope_length"));
+    assert!(debug.contains(&state.envelope.len().to_string()));
+    assert!(!debug.contains(std::str::from_utf8(&state.envelope).unwrap()));
+}
+
+#[test]
 fn crash_sides_reconcile_to_one_exact_terminal_receipt() {
-    let boundaries = [
-        WorkerV3LoadReadinessBoundaryV1::CreateEnvelopeTemp,
-        WorkerV3LoadReadinessBoundaryV1::WriteEnvelopeTemp,
-        WorkerV3LoadReadinessBoundaryV1::SyncEnvelopeTemp,
-        WorkerV3LoadReadinessBoundaryV1::RenameEnvelope,
-        WorkerV3LoadReadinessBoundaryV1::SyncEnvelopeName,
-        WorkerV3LoadReadinessBoundaryV1::CreateClaimTemp,
-        WorkerV3LoadReadinessBoundaryV1::WriteClaimTemp,
-        WorkerV3LoadReadinessBoundaryV1::SyncClaimTemp,
-        WorkerV3LoadReadinessBoundaryV1::RenameClaim,
-        WorkerV3LoadReadinessBoundaryV1::SyncClaimName,
-        WorkerV3LoadReadinessBoundaryV1::CreateReceiptTemp,
-        WorkerV3LoadReadinessBoundaryV1::WriteReceiptTemp,
-        WorkerV3LoadReadinessBoundaryV1::SyncReceiptTemp,
-        WorkerV3LoadReadinessBoundaryV1::RenameReceipt,
-        WorkerV3LoadReadinessBoundaryV1::SyncReceiptName,
-        WorkerV3LoadReadinessBoundaryV1::CommitAttemptRegistry,
-    ];
     let mut index = 0_u8;
-    for boundary in boundaries {
+    for boundary in READINESS_BOUNDARIES {
         for timing in [
             WorkerV3LoadReadinessFaultTimingV1::Before,
             WorkerV3LoadReadinessFaultTimingV1::After,
@@ -314,9 +337,7 @@ fn crash_sides_reconcile_to_one_exact_terminal_receipt() {
                 &state.claim,
                 state.authority(),
                 state.envelope.clone(),
-                WorkerV3LoadReadinessOptionsV1 {
-                    injected_crash: Some(point),
-                },
+                WorkerV3LoadReadinessOptionsV1::inject_crash(point),
             )
             .unwrap_err();
             assert!(
@@ -330,9 +351,84 @@ fn crash_sides_reconcile_to_one_exact_terminal_receipt() {
 }
 
 #[test]
+fn abrupt_crash_child_terminates_at_one_exact_boundary() {
+    let Ok(output) = std::env::var(ABRUPT_OUTPUT) else {
+        return;
+    };
+    let claim = DurablePublishedHsacoClaimV3::decode_canonical(
+        &fs::read(std::env::var(ABRUPT_CLAIM).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let envelope = fs::read(std::env::var(ABRUPT_ENVELOPE).unwrap()).unwrap();
+    let boundary = READINESS_BOUNDARIES[std::env::var(ABRUPT_BOUNDARY)
+        .unwrap()
+        .parse::<usize>()
+        .unwrap()];
+    let timing = match std::env::var(ABRUPT_TIMING).unwrap().as_str() {
+        "before" => WorkerV3LoadReadinessFaultTimingV1::Before,
+        "after" => WorkerV3LoadReadinessFaultTimingV1::After,
+        value => panic!("unexpected timing {value}"),
+    };
+    let authority = load_authority(&envelope, &claim);
+    let point = WorkerV3LoadReadinessFaultPointV1 { boundary, timing };
+    let _ = publish_worker_v3_load_readiness_v1_with_options(
+        Path::new(&output),
+        &claim,
+        authority,
+        envelope,
+        WorkerV3LoadReadinessOptionsV1::inject_abrupt_exit(
+            point,
+            NonZeroU8::new(ABRUPT_EXIT_CODE).unwrap(),
+        ),
+    );
+    panic!("abrupt fault injection returned instead of terminating");
+}
+
+#[test]
+fn every_boundary_survives_abrupt_process_death_and_exact_retry() {
+    if std::env::var_os(ABRUPT_OUTPUT).is_some() {
+        return;
+    }
+    let mut seed = 100_u8;
+    for (boundary_index, _) in READINESS_BOUNDARIES.iter().enumerate() {
+        for (timing_name, timing) in [
+            ("before", WorkerV3LoadReadinessFaultTimingV1::Before),
+            ("after", WorkerV3LoadReadinessFaultTimingV1::After),
+        ] {
+            let state = setup(seed);
+            seed = seed.wrapping_add(1);
+            let claim_path = state.directory.0.join("abrupt-claim.v3");
+            let envelope_path = state.directory.0.join("abrupt-envelope.v3");
+            fs::write(&claim_path, state.claim.encode_canonical().unwrap()).unwrap();
+            fs::write(&envelope_path, &state.envelope).unwrap();
+            let status = Command::new(std::env::current_exe().unwrap())
+                .arg("--exact")
+                .arg("abrupt_crash_child_terminates_at_one_exact_boundary")
+                .arg("--nocapture")
+                .env(ABRUPT_OUTPUT, state.output())
+                .env(ABRUPT_CLAIM, claim_path)
+                .env(ABRUPT_ENVELOPE, envelope_path)
+                .env(ABRUPT_BOUNDARY, boundary_index.to_string())
+                .env(ABRUPT_TIMING, timing_name)
+                .status()
+                .unwrap();
+            assert_eq!(
+                status.code(),
+                Some(i32::from(ABRUPT_EXIT_CODE)),
+                "unexpected subprocess status at {:?} {timing:?}",
+                READINESS_BOUNDARIES[boundary_index]
+            );
+            let retried = state.publish_readiness();
+            assert_eq!(retried.exact_envelope_bytes(), state.envelope);
+            recover_worker_v3_load_readiness_v1(&state.output(), &state.claim).unwrap();
+        }
+    }
+}
+
+#[test]
 fn wrong_authority_claim_envelope_and_stale_generation_fail_closed() {
     let state = setup(30);
-    let wrong_authority = load_authority(b"different envelope");
+    let wrong_authority = load_authority(b"different envelope", &state.claim);
     assert!(matches!(
         publish_worker_v3_load_readiness_v1(
             &state.output(),
@@ -351,7 +447,7 @@ fn wrong_authority_claim_envelope_and_stale_generation_fail_closed() {
             state.authority(),
             state.envelope.clone(),
         ),
-        Err(WorkerV3LoadReadinessErrorV1::Claim(_))
+        Err(WorkerV3LoadReadinessErrorV1::AuthorityMismatch)
     ));
 
     state.publish_readiness();
@@ -360,7 +456,7 @@ fn wrong_authority_claim_envelope_and_stale_generation_fail_closed() {
         publish_worker_v3_load_readiness_v1(
             &state.output(),
             &state.claim,
-            load_authority(&wrong_bytes),
+            load_authority(&wrong_bytes, &state.claim),
             wrong_bytes,
         ),
         Err(WorkerV3LoadReadinessErrorV1::ReceiptMismatch)
@@ -586,9 +682,12 @@ fn process_restart_child_revalidates_terminal_custody() {
     let Ok(output) = std::env::var(CHILD_OUTPUT) else {
         return;
     };
-    let attempt = BuildAttempt::from_env_value(&std::env::var(CHILD_ATTEMPT).unwrap()).unwrap();
+    let attempts = discover_worker_v3_load_readiness_attempts_v1(Path::new(&output)).unwrap();
+    let [attempt] = attempts.as_slice() else {
+        panic!("expected one discoverable custody attempt, got {attempts:?}");
+    };
     let recovered =
-        recover_worker_v3_load_readiness_for_attempt_v1(Path::new(&output), attempt).unwrap();
+        recover_worker_v3_load_readiness_for_attempt_v1(Path::new(&output), *attempt).unwrap();
     assert_eq!(
         recovered.outcome(),
         WorkerV3LoadReadinessOutcomeV1::Recovered
@@ -608,8 +707,44 @@ fn process_restart_recovery_uses_only_durable_state() {
         .arg("process_restart_child_revalidates_terminal_custody")
         .arg("--nocapture")
         .env(CHILD_OUTPUT, state.output())
-        .env(CHILD_ATTEMPT, state.attempt.to_env_value())
         .status()
         .unwrap();
     assert!(status.success());
+}
+
+#[test]
+fn superseded_custody_is_scavenged_but_current_custody_is_retained() {
+    let state = setup(70);
+    let readiness = state.publish_readiness();
+    assert_eq!(
+        discover_worker_v3_load_readiness_attempts_v1(&state.output()).unwrap(),
+        vec![state.attempt]
+    );
+    assert_eq!(
+        scavenge_superseded_worker_v3_load_readiness_v1(&state.output()).unwrap(),
+        0
+    );
+    recover_worker_v3_load_readiness_v1(&state.output(), &state.claim).unwrap();
+    let claim_path = readiness_entry(&state.output(), ".claim");
+    let receipt_path = readiness_entry(&state.output(), ".receipt");
+
+    begin_build_attempt(
+        &state.output(),
+        &state.producer,
+        BuildInvocation::from_bytes(identity(0xe1)),
+        BuildSession::from_bytes([0xe2; 16]),
+    )
+    .unwrap();
+    assert!(
+        discover_worker_v3_load_readiness_attempts_v1(&state.output())
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        scavenge_superseded_worker_v3_load_readiness_v1(&state.output()).unwrap(),
+        3
+    );
+    assert!(!readiness.envelope_path().exists());
+    assert!(!claim_path.exists());
+    assert!(!receipt_path.exists());
 }

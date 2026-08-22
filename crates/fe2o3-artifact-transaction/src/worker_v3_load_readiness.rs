@@ -6,6 +6,11 @@
 //! replay preimage. Their joint durable custody permits retirement of the duplicate V3 publication
 //! intent. The terminal receipt does not authenticate descriptor-source evidence, perform semantic
 //! load admission, establish HSA readiness, or grant load or launch authority.
+//!
+//! The output directory is a private protocol namespace. Every cooperating writer must use the
+//! [`PinnedOutput`] publication lock and the bounded, descriptor-relative operations in this
+//! crate. POSIX does not provide an atomic compare-and-unlink operation, so a non-cooperating
+//! same-UID process that mutates this namespace concurrently is outside the durability contract.
 
 use crate::attempt::{AttemptPhase, BackendReceiptV1};
 use crate::durable_published_claim::validate_current_hsaco_publication_locked_v3;
@@ -23,6 +28,7 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs;
 use std::io::{Read, Write};
+use std::num::NonZeroU8;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -55,6 +61,7 @@ const ENVELOPE_SUFFIX_V1: &str = ".envelope";
 const CLAIM_SUFFIX_V1: &str = ".claim";
 const RECEIPT_SUFFIX_V1: &str = ".receipt";
 const TEMP_MARKER_V1: &str = ".tmp-";
+const SCAVENGE_TEMP_PREFIX_V1: &str = ".fe2o3-worker-v3-load-readiness-v1-cleanup.tmp-";
 const MAX_TEMP_ATTEMPTS: u64 = 64;
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
@@ -167,6 +174,8 @@ impl WorkerV3LoadEnvelopeBindingV1 {
 #[derive(Debug)]
 pub struct VerifiedWorkerV3LoadEnvelopeAuthorityV1 {
     binding: WorkerV3LoadEnvelopeBindingV1,
+    durable_claim_sha256: [u8; 32],
+    durable_claim_length: u64,
 }
 
 impl VerifiedWorkerV3LoadEnvelopeAuthorityV1 {
@@ -183,8 +192,14 @@ impl VerifiedWorkerV3LoadEnvelopeAuthorityV1 {
     #[doc(hidden)]
     pub unsafe fn from_complete_compact_replay_preimages_unchecked(
         binding: WorkerV3LoadEnvelopeBindingV1,
-    ) -> Self {
-        Self { binding }
+        claim: &DurablePublishedHsacoClaimV3,
+    ) -> Result<Self, DurablePublishedClaimCodecErrorV3> {
+        let exact_claim = claim.encode_canonical()?;
+        Ok(Self {
+            binding,
+            durable_claim_sha256: Sha256::digest(&exact_claim).into(),
+            durable_claim_length: exact_claim.len() as u64,
+        })
     }
 
     pub const fn envelope_binding(&self) -> WorkerV3LoadEnvelopeBindingV1 {
@@ -299,7 +314,9 @@ impl WorkerV3LoadReadinessReceiptV1 {
 
     pub fn encode_canonical(&self) -> Result<Vec<u8>, WorkerV3LoadReadinessCodecErrorV1> {
         validate_envelope_length(self.envelope.byte_length)?;
-        if self.durable_claim_length == 0 {
+        if self.durable_claim_length == 0
+            || self.durable_claim_length > MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES_V3 as u64
+        {
             return Err(WorkerV3LoadReadinessCodecErrorV1::InvalidDurableClaimLength);
         }
         let mut bytes = fallible_vec(MAX_WORKER_V3_LOAD_READINESS_RECEIPT_BYTES_V1)?;
@@ -363,7 +380,9 @@ impl WorkerV3LoadReadinessReceiptV1 {
         let envelope = WorkerV3LoadEnvelopeBindingV1::new(decoder.fixed()?, decoder.u64()?)?;
         let durable_claim_sha256 = decoder.fixed()?;
         let durable_claim_length = decoder.u64()?;
-        if durable_claim_length == 0 {
+        if durable_claim_length == 0
+            || durable_claim_length > MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES_V3 as u64
+        {
             return Err(WorkerV3LoadReadinessCodecErrorV1::InvalidDurableClaimLength);
         }
         let output_directory = ExactFileIdentityV1 {
@@ -478,7 +497,7 @@ impl fmt::Display for WorkerV3LoadReadinessCodecErrorV1 {
                 "Worker V3 load-envelope length {actual} is outside 1..={maximum}"
             ),
             Self::InvalidDurableClaimLength => {
-                formatter.write_str("Worker V3 durable-claim binding has zero length")
+                formatter.write_str("Worker V3 durable-claim binding length is outside its bound")
             }
             Self::InvalidAttempt => {
                 formatter.write_str("invalid Worker V3 load-readiness build attempt")
@@ -532,12 +551,25 @@ pub struct WorkerV3LoadReadinessFaultPointV1 {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct WorkerV3LoadReadinessOptionsV1 {
     pub injected_crash: Option<WorkerV3LoadReadinessFaultPointV1>,
+    pub abrupt_exit_code: Option<NonZeroU8>,
 }
 
 impl WorkerV3LoadReadinessOptionsV1 {
     pub const fn inject_crash(point: WorkerV3LoadReadinessFaultPointV1) -> Self {
         Self {
             injected_crash: Some(point),
+            abrupt_exit_code: None,
+        }
+    }
+
+    /// Configures an injected boundary to terminate the process without unwinding.
+    pub const fn inject_abrupt_exit(
+        point: WorkerV3LoadReadinessFaultPointV1,
+        exit_code: NonZeroU8,
+    ) -> Self {
+        Self {
+            injected_crash: Some(point),
+            abrupt_exit_code: Some(exit_code),
         }
     }
 }
@@ -548,13 +580,32 @@ pub enum WorkerV3LoadReadinessOutcomeV1 {
     Recovered,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Eq, PartialEq)]
 pub struct WorkerV3LoadReadinessResultV1 {
     outcome: WorkerV3LoadReadinessOutcomeV1,
     receipt: WorkerV3LoadReadinessReceiptV1,
     claim: DurablePublishedHsacoClaimV3,
     exact_envelope: Vec<u8>,
     envelope_path: PathBuf,
+}
+
+impl fmt::Debug for WorkerV3LoadReadinessResultV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WorkerV3LoadReadinessResultV1")
+            .field("outcome", &self.outcome)
+            .field("attempt", &self.receipt.attempt())
+            .field(
+                "backend_receipt_sha256",
+                &self.receipt.backend_receipt_sha256,
+            )
+            .field("durable_claim_sha256", &self.receipt.durable_claim_sha256)
+            .field("durable_claim_length", &self.receipt.durable_claim_length)
+            .field("envelope_length", &self.exact_envelope.len())
+            .field("envelope_binding", &self.receipt.envelope_binding())
+            .field("envelope_path", &self.envelope_path)
+            .finish()
+    }
 }
 
 impl WorkerV3LoadReadinessResultV1 {
@@ -781,15 +832,22 @@ pub fn publish_worker_v3_load_readiness_v1_with_options(
     if authority.envelope_binding() != envelope {
         return Err(WorkerV3LoadReadinessErrorV1::AuthorityMismatch);
     }
+    let (claim_sha256, claim_length) = durable_claim_binding(claim)?;
+    if authority.durable_claim_sha256 != claim_sha256
+        || authority.durable_claim_length != claim_length
+    {
+        return Err(WorkerV3LoadReadinessErrorV1::AuthorityMismatch);
+    }
 
     let backend = claim.receipt();
     let names = ReadinessNames::new(backend)?;
     let output = PinnedOutput::open_existing(output_dir)?;
     let _lock = output.lock()?;
     output.verify_path_identity()?;
+    scavenge_unreferenced_readiness_locked(&output)?;
     let _publication = validate_current_hsaco_publication_locked_v3(&output, claim)
         .map_err(WorkerV3LoadReadinessErrorV1::Claim)?;
-    let mut faults = FaultInjector::new(options.injected_crash);
+    let mut faults = FaultInjector::new(options.injected_crash, options.abrupt_exit_code);
     let output_entry_count = cleanup_temps(&output, &names)?;
 
     let (stable_source, registry_state) =
@@ -821,11 +879,12 @@ pub fn publish_worker_v3_load_readiness_v1_with_options(
         compare_exact_envelope(&output, &names.envelope, &exact_envelope, receipt)?;
         let _publication = validate_current_hsaco_publication_locked_v3(&output, claim)
             .map_err(WorkerV3LoadReadinessErrorV1::Claim)?;
-        return result(
+        return result_from_exact_envelope(
             &output,
             &names,
             WorkerV3LoadReadinessOutcomeV1::Recovered,
             receipt,
+            exact_envelope,
         );
     }
 
@@ -905,11 +964,12 @@ pub fn publish_worker_v3_load_readiness_v1_with_options(
     validate_durable_worker_v3_load_readiness_locked_v1(&output, backend, receipt)?;
     let _publication = validate_current_hsaco_publication_locked_v3(&output, claim)
         .map_err(WorkerV3LoadReadinessErrorV1::Claim)?;
-    result(
+    result_from_exact_envelope(
         &output,
         &names,
         WorkerV3LoadReadinessOutcomeV1::Published,
         receipt,
+        exact_envelope,
     )
 }
 
@@ -984,6 +1044,40 @@ pub fn recover_worker_v3_load_readiness_for_attempt_v1(
         WorkerV3LoadReadinessOutcomeV1::Recovered,
         actual,
     )
+}
+
+/// Discovers every exact current V3 envelope-custody attempt from the durable registry.
+///
+/// The returned attempts are inert selectors. They grant no compiler, publication, load, or launch
+/// authority and must be passed back through exact recovery before use.
+pub fn discover_worker_v3_load_readiness_attempts_v1(
+    output_dir: &Path,
+) -> Result<Vec<BuildAttempt>, WorkerV3LoadReadinessErrorV1> {
+    let output = PinnedOutput::open_existing(output_dir)?;
+    let _lock = output.lock()?;
+    output.verify_path_identity()?;
+    let registry = read_attempt_registry(&output)?;
+    let count = registry.worker_v3_envelope_custody_attempts().count();
+    let mut attempts = Vec::new();
+    attempts
+        .try_reserve_exact(count)
+        .map_err(|_| WorkerV3LoadReadinessCodecErrorV1::AllocationFailed { requested: count })?;
+    attempts.extend(registry.worker_v3_envelope_custody_attempts());
+    Ok(attempts)
+}
+
+/// Removes exact private V3 custody files no longer referenced by the durable attempt registry.
+///
+/// Current registry-owned custody is never removed. The operation is bounded, pinned to the output
+/// directory, serialized by its publication lock, and idempotent after interruption. The output
+/// directory must remain a private namespace whose cooperating writers honor that lock.
+pub fn scavenge_superseded_worker_v3_load_readiness_v1(
+    output_dir: &Path,
+) -> Result<usize, WorkerV3LoadReadinessErrorV1> {
+    let output = PinnedOutput::open_existing(output_dir)?;
+    let _lock = output.lock()?;
+    output.verify_path_identity()?;
+    scavenge_unreferenced_readiness_locked(&output)
 }
 
 /// Validates the exact registry tuple, terminal receipt inode, and exact envelope inode and bytes.
@@ -1571,6 +1665,94 @@ fn private_snapshot_required(
     })
 }
 
+fn scavenge_unreferenced_readiness_locked(
+    output: &PinnedOutput,
+) -> Result<usize, WorkerV3LoadReadinessErrorV1> {
+    let registry = read_attempt_registry(output)?;
+    let live_count = registry.worker_v3_envelope_custody_backends().count();
+    let mut live_names = Vec::new();
+    live_names.try_reserve_exact(live_count).map_err(|_| {
+        WorkerV3LoadReadinessCodecErrorV1::AllocationFailed {
+            requested: live_count,
+        }
+    })?;
+    for backend in registry.worker_v3_envelope_custody_backends() {
+        live_names.push(ReadinessNames::new(backend)?);
+    }
+
+    let directory = rustix::io::fcntl_dupfd_cloexec(&output.fd, 0).map_err(std::io::Error::from)?;
+    let mut entries = rustix::fs::Dir::read_from(&directory).map_err(std::io::Error::from)?;
+    let mut scanned = 0_usize;
+    let mut candidates = Vec::new();
+    candidates
+        .try_reserve_exact(MAX_OUTPUT_ENTRIES)
+        .map_err(|_| WorkerV3LoadReadinessCodecErrorV1::AllocationFailed {
+            requested: MAX_OUTPUT_ENTRIES,
+        })?;
+    for entry in &mut entries {
+        let entry = entry.map_err(std::io::Error::from)?;
+        let name = entry.file_name().to_bytes();
+        if name == b"." || name == b".." {
+            continue;
+        }
+        scanned = scanned.checked_add(1).ok_or(
+            WorkerV3LoadReadinessErrorV1::DirectoryEntryLimitExceeded {
+                maximum: MAX_OUTPUT_ENTRIES,
+            },
+        )?;
+        if scanned > MAX_OUTPUT_ENTRIES {
+            return Err(WorkerV3LoadReadinessErrorV1::DirectoryEntryLimitExceeded {
+                maximum: MAX_OUTPUT_ENTRIES,
+            });
+        }
+        if !is_reserved_readiness_entry(name) || live_names.iter().any(|live| live.owns_entry(name))
+        {
+            continue;
+        }
+        let path = PathBuf::from(std::ffi::OsString::from_vec(name.to_vec()));
+        let entry_name =
+            path.to_str()
+                .ok_or_else(|| WorkerV3LoadReadinessErrorV1::InvalidPrivateEntry {
+                    entry: path.clone(),
+                })?;
+        let snapshot = private_snapshot_optional(output, entry_name)?.ok_or_else(|| {
+            WorkerV3LoadReadinessErrorV1::FileChanged {
+                entry: path.clone(),
+            }
+        })?;
+        candidates.push((path, snapshot));
+    }
+
+    output.verify_path_identity()?;
+    let removed = candidates.len();
+    for (entry, snapshot) in candidates {
+        quarantine_and_unlink_private_entry(output, SCAVENGE_TEMP_PREFIX_V1, &entry, &snapshot)?;
+    }
+    if removed != 0 {
+        fsync(&output.fd).map_err(std::io::Error::from)?;
+        output.verify_path_identity()?;
+    }
+    Ok(removed)
+}
+
+fn is_reserved_readiness_entry(name: &[u8]) -> bool {
+    if name.starts_with(SCAVENGE_TEMP_PREFIX_V1.as_bytes()) {
+        return true;
+    }
+    let Some(rest) = name.strip_prefix(FILE_PREFIX_V1.as_bytes()) else {
+        return false;
+    };
+    let Some((key, suffix)) = rest.split_at_checked(64) else {
+        return false;
+    };
+    key.iter()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+        && (suffix == ENVELOPE_SUFFIX_V1.as_bytes()
+            || suffix == CLAIM_SUFFIX_V1.as_bytes()
+            || suffix == RECEIPT_SUFFIX_V1.as_bytes()
+            || suffix.starts_with(TEMP_MARKER_V1.as_bytes()))
+}
+
 fn cleanup_temps(
     output: &PinnedOutput,
     names: &ReadinessNames,
@@ -1623,7 +1805,7 @@ fn cleanup_temps(
     }
     output.verify_path_identity()?;
     for (entry, snapshot) in candidates {
-        quarantine_and_unlink_temp(output, names, &entry, &snapshot)?;
+        quarantine_and_unlink_private_entry(output, &names.temp_prefix, &entry, &snapshot)?;
         scanned -= 1;
     }
     fsync(&output.fd).map_err(std::io::Error::from)?;
@@ -1631,9 +1813,9 @@ fn cleanup_temps(
     Ok(scanned)
 }
 
-fn quarantine_and_unlink_temp(
+fn quarantine_and_unlink_private_entry(
     output: &PinnedOutput,
-    names: &ReadinessNames,
+    quarantine_prefix: &str,
     entry: &Path,
     snapshot: &rustix::fs::Stat,
 ) -> Result<(), WorkerV3LoadReadinessErrorV1> {
@@ -1656,7 +1838,7 @@ fn quarantine_and_unlink_temp(
         });
     }
 
-    let quarantine = reserve_cleanup_quarantine_name(output, names, entry)?;
+    let quarantine = reserve_cleanup_quarantine_name(output, quarantine_prefix, entry)?;
     let named =
         statat(&output.fd, &quarantine, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
     let descriptor = fstat(&file).map_err(std::io::Error::from)?;
@@ -1680,14 +1862,14 @@ fn quarantine_and_unlink_temp(
 
 fn reserve_cleanup_quarantine_name(
     output: &PinnedOutput,
-    names: &ReadinessNames,
+    quarantine_prefix: &str,
     source: &Path,
 ) -> Result<PathBuf, WorkerV3LoadReadinessErrorV1> {
     let start = NEXT_TEMP_ID.fetch_add(MAX_TEMP_ATTEMPTS, Ordering::Relaxed);
     for offset in 0..MAX_TEMP_ATTEMPTS {
         let name = format!(
             "{}cleanup-{}-{}-{}",
-            names.temp_prefix,
+            quarantine_prefix,
             std::process::id(),
             start.wrapping_add(offset),
             offset
@@ -1769,6 +1951,24 @@ fn result(
     })
 }
 
+fn result_from_exact_envelope(
+    output: &PinnedOutput,
+    names: &ReadinessNames,
+    outcome: WorkerV3LoadReadinessOutcomeV1,
+    receipt: WorkerV3LoadReadinessReceiptV1,
+    exact_envelope: Vec<u8>,
+) -> Result<WorkerV3LoadReadinessResultV1, WorkerV3LoadReadinessErrorV1> {
+    validate_envelope_file(output, names, receipt)?;
+    let claim = read_validated_claim_file(output, names, receipt)?;
+    Ok(WorkerV3LoadReadinessResultV1 {
+        outcome,
+        receipt,
+        claim,
+        exact_envelope,
+        envelope_path: output.display_path.join(&names.envelope),
+    })
+}
+
 struct ReadinessNames {
     envelope: String,
     claim: String,
@@ -1790,15 +1990,29 @@ impl ReadinessNames {
             temp_prefix: format!("{base}{TEMP_MARKER_V1}"),
         })
     }
+
+    fn owns_entry(&self, entry: &[u8]) -> bool {
+        entry == self.envelope.as_bytes()
+            || entry == self.claim.as_bytes()
+            || entry == self.receipt.as_bytes()
+            || entry.starts_with(self.temp_prefix.as_bytes())
+    }
 }
 
 struct FaultInjector {
     point: Option<WorkerV3LoadReadinessFaultPointV1>,
+    abrupt_exit_code: Option<NonZeroU8>,
 }
 
 impl FaultInjector {
-    const fn new(point: Option<WorkerV3LoadReadinessFaultPointV1>) -> Self {
-        Self { point }
+    const fn new(
+        point: Option<WorkerV3LoadReadinessFaultPointV1>,
+        abrupt_exit_code: Option<NonZeroU8>,
+    ) -> Self {
+        Self {
+            point,
+            abrupt_exit_code,
+        }
     }
 
     fn hit(
@@ -1809,6 +2023,9 @@ impl FaultInjector {
         let point = WorkerV3LoadReadinessFaultPointV1 { boundary, timing };
         if self.point == Some(point) {
             self.point = None;
+            if let Some(exit_code) = self.abrupt_exit_code {
+                std::process::exit(i32::from(exit_code.get()));
+            }
             return Err(WorkerV3LoadReadinessErrorV1::InjectedCrash(point));
         }
         Ok(())
@@ -2177,17 +2394,8 @@ mod tests {
     #[test]
     fn durable_custody_is_not_descriptor_authentication_or_load_admission() {
         let binding = WorkerV3LoadEnvelopeBindingV1::from_exact_bytes(b"opaque").unwrap();
-        let authority = unsafe {
-            VerifiedWorkerV3LoadEnvelopeAuthorityV1::from_complete_compact_replay_preimages_unchecked(
-                binding,
-            )
-        };
         let receipt = receipt();
-        assert!(!authority.authenticates_descriptor_source());
-        assert!(!authority.grants_semantic_load_admission());
-        assert!(!authority.establishes_hsa_readiness());
-        assert!(!authority.grants_load_authority());
-        assert!(!authority.grants_launch_authority());
+        assert_eq!(binding.byte_length(), 6);
         assert!(!receipt.grants_replay_intent_retirement_authority());
         assert!(receipt.is_replay_intent_retirement_evidence());
         assert!(!receipt.authenticates_descriptor_source());

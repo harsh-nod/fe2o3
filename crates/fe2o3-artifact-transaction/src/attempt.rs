@@ -926,6 +926,29 @@ impl AttemptRegistry {
         })
     }
 
+    pub(crate) fn worker_v3_envelope_custody_attempts(
+        &self,
+    ) -> impl Iterator<Item = BuildAttempt> + '_ {
+        self.records.values().filter_map(|record| {
+            matches!(
+                record.backend_receipt,
+                Some(BackendReceiptV1::EnvelopeCustodyV3(_, _))
+            )
+            .then_some(record.attempt())
+        })
+    }
+
+    pub(crate) fn worker_v3_envelope_custody_backends(
+        &self,
+    ) -> impl Iterator<Item = BackendPublicationReceiptV3> + '_ {
+        self.records
+            .values()
+            .filter_map(|record| match record.backend_receipt {
+                Some(BackendReceiptV1::EnvelopeCustodyV3(backend, _)) => Some(backend),
+                _ => None,
+            })
+    }
+
     pub(crate) fn start_or_resume(
         &mut self,
         stable_source: &str,
