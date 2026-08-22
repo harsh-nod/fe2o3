@@ -2,6 +2,8 @@
 
 #[cfg(feature = "grid_exclusive")]
 use fe2o3_device::GridExclusive;
+#[cfg(feature = "blocked")]
+use fe2o3_device::{Blocked, Index1D};
 use fe2o3_device::{DisjointSlice, kernel, thread};
 #[cfg(feature = "shifted")]
 use fe2o3_device::{Index1D, Shifted};
@@ -15,7 +17,8 @@ use fe2o3_device::{Index1D, Shifted};
     feature = "shifted",
     feature = "grid_exclusive",
     feature = "production_safe",
-    feature = "production_oob"
+    feature = "production_oob",
+    feature = "blocked"
 )))]
 pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
     let input = [value; 64];
@@ -89,5 +92,18 @@ pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
     let selected = input[64];
     if let Some(element) = output.get_mut(thread::index_1d()) {
         *element = selected;
+    }
+}
+
+#[kernel(
+    typed,
+    namespace = "fbe3edfada59d9e70dc42458b1f6992baaaca22d8d01c2d4953fef7eb69f4d2e"
+)]
+#[cfg(feature = "blocked")]
+pub fn blocked(mut output: DisjointSlice<f32, Blocked<Index1D, 1, 2>>) {
+    if let Some(block) = thread::index_1d().checked_block::<1, 2>() {
+        if let Some(element) = output.get_block_mut(&block, 1) {
+            *element = 1.0;
+        }
     }
 }

@@ -223,7 +223,9 @@ pub enum AtomicOrderingAttr {
 #[pliron_attr(name = "kernel.atomic_scope", format, verifier = "succ")]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum AtomicScopeAttr {
+    SingleThread,
     Workgroup,
+    Agent,
     Device,
     System,
 }
@@ -231,9 +233,11 @@ pub enum AtomicScopeAttr {
 impl AtomicScopeAttr {
     pub const fn rank(self) -> u8 {
         match self {
+            Self::SingleThread => 0,
             Self::Workgroup => 1,
-            Self::Device => 2,
-            Self::System => 3,
+            Self::Agent => 2,
+            Self::Device => 3,
+            Self::System => 4,
         }
     }
 }

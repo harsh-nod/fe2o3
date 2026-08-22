@@ -7,11 +7,12 @@
 use std::{collections::VecDeque, fmt};
 
 use dialect_kernel::{
-    AccessKindAttr, DYNAMIC_EXTENT, IndexBinaryKindAttr, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr,
-    SUPPORTED_ELEMENT_WIDTHS,
+    AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, DYNAMIC_EXTENT, IndexBinaryKindAttr,
+    MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, SUPPORTED_ELEMENT_WIDTHS,
 };
 use fe2o3_kernel_analysis::MAX_RANKED_BOUNDS_OPERATIONS;
 use fe2o3_mir_model::semantic_mir_v1::{
+    SemanticAtomicAccessV1, SemanticAtomicOrderingV1, SemanticAtomicScopeV1,
     SemanticCallableDeclV1, SemanticCallableIdV1, SemanticCompilerIntrinsicOperationV1,
     SemanticConstantValueV1, SemanticDirectCallV1, SemanticDirectTailCallV1,
     SemanticDisjointIndexSpaceV1, SemanticFunctionDeclV1, SemanticFunctionRoleV1,
@@ -469,6 +470,11 @@ fn project_intrinsic_contracts(
                 }
                 let source = match assignment.value().kind() {
                     SemanticRvalueKindV1::Use(operand) => transparent_operand_place(operand),
+                    SemanticRvalueKindV1::Borrow { place, .. }
+                        if place.projections().is_empty() =>
+                    {
+                        Some(place)
+                    }
                     _ => None,
                 };
                 let Some(source) = source else {
@@ -509,6 +515,31 @@ fn project_intrinsic_contracts(
                     offset,
                     ..
                 } => (*output_space, *offset, false),
+                SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedBlock {
+                    output_space,
+                    lanes_per_block,
+                    elements_per_lane,
+                    ..
+                } => {
+                    if *lanes_per_block != 1 {
+                        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                            "a blocked mapping with more than one lane before quotient facts are available",
+                        ));
+                    }
+                    let expected = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                        lanes_per_block: *lanes_per_block,
+                        elements_per_lane: *elements_per_lane,
+                    };
+                    if *output_space != expected
+                        || *elements_per_lane == 0
+                        || lanes_per_block.checked_mul(*elements_per_lane).is_none()
+                    {
+                        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                            "a malformed blocked mapping reached ranked projection",
+                        ));
+                    }
+                    (expected, 0, true)
+                }
                 _ => continue,
             };
             let destination = simple_call_destination(call)?.index() as usize;
@@ -527,7 +558,35 @@ fn project_intrinsic_contracts(
                 continue;
             };
             if passthrough {
-                index_values[destination] = Some(ProjectedDisjointIndexV1 { mapping, ..input });
+                let precondition = match mapping {
+                    SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                        lanes_per_block: 1,
+                        elements_per_lane,
+                    } => {
+                        let maximum_raw = (u64::MAX - (elements_per_lane - 1)) / elements_per_lane;
+                        reserve_operation(operations)?;
+                        let upper = next_value_id(next_value)?;
+                        operations.push(ProductionRankedOperationV1::IndexConstant {
+                            result: upper,
+                            value: maximum_raw + 1,
+                        });
+                        push_ranked_ir(
+                            ranked_ir,
+                            &format!(
+                                "  %{} = kernel.index_constant {}\n",
+                                upper.get(),
+                                maximum_raw + 1,
+                            ),
+                        )?;
+                        Some((input.value, ProductionRankedValueV1::Local(upper)))
+                    }
+                    _ => input.precondition,
+                };
+                index_values[destination] = Some(ProjectedDisjointIndexV1 {
+                    mapping,
+                    precondition,
+                    ..input
+                });
                 changed = true;
                 continue;
             }
@@ -674,6 +733,90 @@ fn project_intrinsic_contracts(
                     *element,
                     ProductionRankedValueV1::Local(index),
                     Some(precondition),
+                )
+            }
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut {
+                element,
+                index_space,
+                lanes_per_block,
+                elements_per_lane,
+                ..
+            } => {
+                let projected = projected_disjoint_operand_v1(call, 1, &index_values)?;
+                let expected = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                    lanes_per_block: *lanes_per_block,
+                    elements_per_lane: *elements_per_lane,
+                };
+                if projected.mapping != expected || *index_space != expected {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "blocked accessor mapping identity changed",
+                    ));
+                }
+                if *lanes_per_block != 1 {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a blocked mapping with more than one lane before quotient facts are available",
+                    ));
+                }
+                let component = call
+                    .arguments()
+                    .get(2)
+                    .and_then(|operand| constant_operand_value(operand, constants))
+                    .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a dynamic blocked component before ranked-value projection is available",
+                    ))?;
+                if component >= *elements_per_lane {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "a blocked component is outside the authenticated elements-per-lane bound",
+                    ));
+                }
+                reserve_operation(operations)?;
+                let elements = next_value_id(next_value)?;
+                operations.push(ProductionRankedOperationV1::IndexConstant {
+                    result: elements,
+                    value: *elements_per_lane,
+                });
+                reserve_operation(operations)?;
+                let block_base = next_value_id(next_value)?;
+                operations.push(ProductionRankedOperationV1::IndexBinary {
+                    result: block_base,
+                    kind: IndexBinaryKindAttr::Multiply,
+                    lhs: projected.value,
+                    rhs: ProductionRankedValueV1::Local(elements),
+                });
+                reserve_operation(operations)?;
+                let component_value = next_value_id(next_value)?;
+                operations.push(ProductionRankedOperationV1::IndexConstant {
+                    result: component_value,
+                    value: component,
+                });
+                reserve_operation(operations)?;
+                let index = next_value_id(next_value)?;
+                operations.push(ProductionRankedOperationV1::IndexBinary {
+                    result: index,
+                    kind: IndexBinaryKindAttr::Add,
+                    lhs: ProductionRankedValueV1::Local(block_base),
+                    rhs: ProductionRankedValueV1::Local(component_value),
+                });
+                push_ranked_ir(
+                    ranked_ir,
+                    &format!(
+                        "  %{} = kernel.index_constant {}\n  %{} = kernel.index_binary Multiply {}, %{}\n  %{} = kernel.index_constant {}\n  %{} = kernel.index_binary Add %{}, %{}\n",
+                        elements.get(),
+                        elements_per_lane,
+                        block_base.get(),
+                        ranked_value_text_v1(projected.value),
+                        elements.get(),
+                        component_value.get(),
+                        component,
+                        index.get(),
+                        block_base.get(),
+                        component_value.get(),
+                    ),
+                )?;
+                (
+                    *element,
+                    ProductionRankedValueV1::Local(index),
+                    projected.precondition,
                 )
             }
             _ => continue,
@@ -950,7 +1093,8 @@ fn checked_reference_origins(
             Some(SemanticCallableDeclV1::CompilerIntrinsic {
                 operation: SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { .. }
                     | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut { .. }
-                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive { .. },
+                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive { .. }
+                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut { .. },
                 ..
             })
         ) {
@@ -1170,7 +1314,7 @@ fn project_statement_accesses(
             )
         }
         SemanticStatementKindV1::Store(store) => {
-            project_place_access(
+            project_place_access_with_atomic(
                 types,
                 function,
                 store.destination(),
@@ -1179,6 +1323,7 @@ fn project_statement_accesses(
                 } else {
                     AccessKindAttr::Write
                 },
+                store.atomic(),
                 PlaceAccessRequirementV1::ExplicitMemory,
                 source,
                 constants,
@@ -1223,6 +1368,7 @@ fn project_statement_accesses(
                 types,
                 function,
                 atomic.address(),
+                atomic.access(),
                 source,
                 constants,
                 checked_reference_origins,
@@ -1266,6 +1412,7 @@ fn project_statement_accesses(
                 types,
                 function,
                 atomic.address(),
+                atomic.success(),
                 source,
                 constants,
                 checked_reference_origins,
@@ -1337,6 +1484,7 @@ fn project_atomic_address(
     types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     address: &SemanticPlaceV1,
+    atomic: SemanticAtomicAccessV1,
     source: SemanticSourceProvenanceV1,
     constants: &[Option<u64>],
     checked_reference_origins: &[Option<usize>],
@@ -1346,11 +1494,12 @@ fn project_atomic_address(
     next_value: &mut u32,
     ranked_ir: &mut String,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
-    project_place_access(
+    project_place_access_with_atomic(
         types,
         function,
         address,
         AccessKindAttr::AtomicReadModifyWrite,
+        Some(atomic),
         PlaceAccessRequirementV1::ExplicitMemory,
         source,
         constants,
@@ -1469,12 +1618,14 @@ fn project_direct_call_accesses(
             operation: SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { .. }
                 | SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint { .. }
                 | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift { .. }
+                | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedBlock { .. }
                 | SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { .. }
                 | SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift { .. }
                 | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { .. }
                 | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut { .. }
                 | SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { .. }
-                | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive { .. },
+                | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive { .. }
+                | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut { .. },
             ..
         })
     ) {
@@ -1810,7 +1961,7 @@ fn project_rvalue_reads(
             }
             Ok(())
         }
-        SemanticRvalueKindV1::Load(load) => project_place_access(
+        SemanticRvalueKindV1::Load(load) => project_place_access_with_atomic(
             types,
             function,
             load.source(),
@@ -1819,6 +1970,7 @@ fn project_rvalue_reads(
             } else {
                 AccessKindAttr::Read
             },
+            load.atomic(),
             PlaceAccessRequirementV1::ExplicitMemory,
             source,
             constants,
@@ -1906,6 +2058,46 @@ fn project_place_access(
     next_value: &mut u32,
     ranked_ir: &mut String,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
+    project_place_access_with_atomic(
+        types,
+        function,
+        place,
+        access,
+        None,
+        requirement,
+        source,
+        constants,
+        checked_reference_origins,
+        projected_views,
+        operations,
+        sources,
+        next_value,
+        ranked_ir,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_place_access_with_atomic(
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    place: &SemanticPlaceV1,
+    access: AccessKindAttr,
+    atomic: Option<SemanticAtomicAccessV1>,
+    requirement: PlaceAccessRequirementV1,
+    source: SemanticSourceProvenanceV1,
+    constants: &[Option<u64>],
+    checked_reference_origins: &[Option<usize>],
+    projected_views: &mut [Option<ProjectedViewV1>],
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    sources: &mut Vec<ProjectedAccessSourceV1>,
+    next_value: &mut u32,
+    ranked_ir: &mut String,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    if access.is_atomic() != atomic.is_some() {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "an atomic access whose ordering/scope contract is missing or attached to a non-atomic access",
+        ));
+    }
     if checked_reference_origin(place, checked_reference_origins).is_some() {
         return Ok(());
     }
@@ -2073,15 +2265,30 @@ fn project_place_access(
         ranked_indices.push(ProductionRankedValueV1::Local(index_id));
     }
     let operation = operations.len();
-    operations.push(ProductionRankedOperationV1::Access {
-        kind: access,
-        view: ProductionRankedValueV1::Local(view_id),
-        indices: ranked_indices.clone(),
-    });
+    if let Some(atomic) = atomic {
+        operations.push(ProductionRankedOperationV1::AtomicAccess {
+            kind: access,
+            ordering: atomic_ordering_v1(atomic.ordering()),
+            scope: atomic_scope_v1(atomic.scope()),
+            view: ProductionRankedValueV1::Local(view_id),
+            indices: ranked_indices.clone(),
+        });
+    } else {
+        operations.push(ProductionRankedOperationV1::Access {
+            kind: access,
+            view: ProductionRankedValueV1::Local(view_id),
+            indices: ranked_indices.clone(),
+        });
+    }
     push_ranked_ir(
         ranked_ir,
         &format!(
-            "  kernel.access {:?} %{}[{}]\n",
+            "  kernel.{} {:?} %{}[{}]\n",
+            if atomic.is_some() {
+                "atomic_access"
+            } else {
+                "access"
+            },
             access,
             view_id.get(),
             ranked_indices
@@ -2102,6 +2309,28 @@ fn project_place_access(
         source,
     });
     Ok(())
+}
+
+const fn atomic_ordering_v1(ordering: SemanticAtomicOrderingV1) -> AtomicOrderingAttr {
+    match ordering {
+        SemanticAtomicOrderingV1::Relaxed => AtomicOrderingAttr::Relaxed,
+        SemanticAtomicOrderingV1::Release => AtomicOrderingAttr::Release,
+        SemanticAtomicOrderingV1::Acquire => AtomicOrderingAttr::Acquire,
+        SemanticAtomicOrderingV1::AcquireRelease => AtomicOrderingAttr::AcquireRelease,
+        SemanticAtomicOrderingV1::SequentiallyConsistent => {
+            AtomicOrderingAttr::SequentiallyConsistent
+        }
+    }
+}
+
+const fn atomic_scope_v1(scope: SemanticAtomicScopeV1) -> AtomicScopeAttr {
+    match scope {
+        SemanticAtomicScopeV1::SingleThread => AtomicScopeAttr::SingleThread,
+        SemanticAtomicScopeV1::Workgroup => AtomicScopeAttr::Workgroup,
+        SemanticAtomicScopeV1::Agent => AtomicScopeAttr::Agent,
+        SemanticAtomicScopeV1::Device => AtomicScopeAttr::Device,
+        SemanticAtomicScopeV1::System => AtomicScopeAttr::System,
+    }
 }
 
 fn reserve_projected_access(
@@ -2480,7 +2709,6 @@ mod tests {
                 | ProductionRankedOperationV1::AtomicAccess { kind, .. } => Some(*kind),
                 ProductionRankedOperationV1::View { .. }
                 | ProductionRankedOperationV1::ViewInSpace { .. }
-                | ProductionRankedOperationV1::AtomicAccess { .. }
                 | ProductionRankedOperationV1::IndexConstant { .. }
                 | ProductionRankedOperationV1::InvocationIndex { .. }
                 | ProductionRankedOperationV1::IndexBinary { .. }
@@ -2738,6 +2966,24 @@ mod tests {
             vec![AccessKindAttr::AtomicReadModifyWrite, AccessKindAttr::Read,]
         );
         assert_eq!(sources.len(), 2);
+        assert!(operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::AtomicAccess {
+                kind: AccessKindAttr::AtomicReadModifyWrite,
+                ordering: AtomicOrderingAttr::Relaxed,
+                scope: AtomicScopeAttr::Agent,
+                ..
+            }
+        )));
+        assert!(!operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::Access {
+                kind: AccessKindAttr::AtomicRead
+                    | AccessKindAttr::AtomicWrite
+                    | AccessKindAttr::AtomicReadModifyWrite,
+                ..
+            }
+        )));
     }
 
     #[test]

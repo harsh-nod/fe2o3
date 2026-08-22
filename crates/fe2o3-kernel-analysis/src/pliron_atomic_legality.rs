@@ -524,7 +524,12 @@ const fn ordering_is_valid(kind: AccessKindAttr, ordering: AtomicOrderingAttr) -
 const fn scope_is_valid(memory_space: MemorySpaceAttr, scope: AtomicScopeAttr) -> bool {
     match memory_space {
         MemorySpaceAttr::Private => false,
-        MemorySpaceAttr::Workgroup => matches!(scope, AtomicScopeAttr::Workgroup),
+        MemorySpaceAttr::Workgroup => {
+            matches!(
+                scope,
+                AtomicScopeAttr::SingleThread | AtomicScopeAttr::Workgroup
+            )
+        }
         MemorySpaceAttr::Global => true,
     }
 }

@@ -85,6 +85,19 @@ fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
         exclusive.stderr,
     );
 
+    let blocked = run_feature_extraction(&ScratchTarget::new(), "blocked");
+    assert!(
+        blocked.status.success()
+            && blocked
+                .stderr
+                .contains("all mandatory kernel checks clean true")
+            && blocked.stderr.contains("kernel.index_binary Multiply")
+            && blocked.stderr.contains("kernel.index_binary Add")
+            && blocked.stderr.contains("kernel.access Write"),
+        "safe blocked disjoint access did not pass production extraction:\n{}",
+        blocked.stderr,
+    );
+
     let oob = run_extraction(&ScratchTarget::new(), true);
     assert!(
         !oob.status.success(),

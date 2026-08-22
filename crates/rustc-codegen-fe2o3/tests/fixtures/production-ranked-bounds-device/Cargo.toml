@@ -13,6 +13,7 @@ shifted = []
 grid_exclusive = []
 production_safe = []
 production_oob = []
+blocked = []
 
 [dependencies]
 fe2o3-device.workspace = true
