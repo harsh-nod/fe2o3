@@ -5026,7 +5026,7 @@ mod tests {
         let output = PinnedOutput::open_existing(&directory).unwrap();
         let names = IntentNames::new([0x51; 32], [0x52; 32]).unwrap();
         let original = b"original-marker";
-        let replacement = b"replacement--x";
+        let replacement = b"replacement---x";
         assert_eq!(original.len(), replacement.len());
         let fd = openat(
             &output.fd,
