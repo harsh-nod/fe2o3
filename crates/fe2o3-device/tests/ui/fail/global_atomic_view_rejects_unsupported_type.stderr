@@ -1,0 +1,5 @@
+error[E0599]: no method named `as_atomic` found for reference `&DeviceGlobalMutPtr<u16>` in the current scope
+ --> tests/ui/fail/global_atomic_view_rejects_unsupported_type.rs:4:21
+  |
+4 |     let _ = pointer.as_atomic();
+  |                     ^^^^^^^^^ method not found in `&DeviceGlobalMutPtr<u16>`

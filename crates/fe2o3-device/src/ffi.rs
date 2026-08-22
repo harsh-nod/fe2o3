@@ -1,8 +1,10 @@
 //! Explicit physical pointer types for reviewed device-to-device FFI.
 //!
-//! These wrappers describe an ABI address space. They do not prove that a
-//! pointer is valid, live, aligned, non-aliasing, or usable by a particular
-//! device invocation.
+//! These wrappers describe an ABI address space. Their representation alone
+//! does not prove that a pointer is valid, live, aligned, non-aliasing, or
+//! usable by a particular device invocation. Unsafe construction or compiler
+//! ABI admission must establish the complete invariant required by every safe
+//! capability subsequently used through the wrapper.
 
 use core::marker::PhantomData;
 
@@ -78,6 +80,8 @@ macro_rules! mut_pointer {
             /// The pointer must originate in the named device address space
             /// and satisfy the imported or exported function's complete
             /// semantic, lifetime, alignment, race-freedom, and alias contract.
+            /// Safe capabilities on concrete pointer specializations may state
+            /// additional parts of this construction invariant.
             pub const unsafe fn from_raw(pointer: *mut T) -> Self {
                 Self {
                     pointer,

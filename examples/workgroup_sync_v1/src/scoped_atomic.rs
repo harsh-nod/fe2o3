@@ -2,9 +2,7 @@
 
 #![allow(missing_docs)] // Generated typed-kernel modules do not carry rustdoc in V1.
 
-use fe2o3_device::atomic::{
-    AtomicU32, CORE_ATOMIC_DEFAULT_SCOPE, CoreAtomicDefaultScope, Ordering,
-};
+use fe2o3_device::atomic::{CORE_ATOMIC_DEFAULT_SCOPE, CoreAtomicDefaultScope, Ordering};
 use fe2o3_device::{DeviceGlobalMutPtr, kernel, thread};
 
 const _: CoreAtomicDefaultScope = CoreAtomicDefaultScope::System;
@@ -27,9 +25,8 @@ pub fn scoped_atomic_add_u32_v1(values: &[u32], eligible: &[u32], target: Device
         return;
     }
     if eligible[lane] != 0 {
-        // SAFETY: profile admission requires one aligned live AtomicU32 object
-        // in coherent global memory, accessed atomically for the full launch.
-        let target = unsafe { AtomicU32::from_ptr(target.as_raw()) };
-        target.fetch_add(values[lane], Ordering::Relaxed);
+        target
+            .as_atomic()
+            .fetch_add(values[lane], Ordering::Relaxed);
     }
 }

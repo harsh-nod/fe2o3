@@ -41,7 +41,7 @@ fn atomic_source_states_address_space_order_scope_and_eligibility() {
         "target: DeviceGlobalMutPtr<u32>",
         "CoreAtomicDefaultScope::System",
         "CORE_ATOMIC_DEFAULT_SCOPE",
-        "AtomicU32::from_ptr",
+        ".as_atomic()",
         "fetch_add(values[lane], Ordering::Relaxed)",
         "if eligible[lane] != 0",
     ] {
@@ -49,6 +49,9 @@ fn atomic_source_states_address_space_order_scope_and_eligibility() {
     }
     assert!(!ATOMIC_SOURCE.contains("macro_rules!"));
     assert!(!ATOMIC_SOURCE.contains("include_str!"));
+    assert!(!ATOMIC_SOURCE.contains("unsafe"));
+    assert!(!ATOMIC_SOURCE.contains("AtomicU32::from_ptr"));
+    assert!(!ATOMIC_SOURCE.contains("target.as_raw()"));
 }
 
 #[test]
