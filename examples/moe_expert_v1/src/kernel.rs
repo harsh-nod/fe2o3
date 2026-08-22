@@ -61,19 +61,15 @@ pub fn moe_expert_gemm_bf16_m16_n16_k16_v1(
 
     let lane = WaveLane::<Wave64>::current();
     let (mut activation_lds, mut weight_lds) = gfx942_lds_bf16_tile_pair_m16x16_v1();
-    let activation_staged = activation_lds.write_mfma_fragment(&lane, activation_fragment);
-    let weight_staged = weight_lds.write_mfma_fragment(&lane, weight_fragment);
-    if !activation_staged || !weight_staged {
-        fe2o3_device::trap();
-        return;
-    }
+    activation_lds.write_mfma_fragment(&lane, activation_fragment);
+    weight_lds.write_mfma_fragment(&lane, weight_fragment);
     let (activation_lds, weight_lds) =
         gfx942_publish_lds_bf16_tile_pair_m16x16_v1(activation_lds, weight_lds);
-    let Some(lhs) = activation_lds.read_mfma_fragment(lane_index) else {
+    let Some(lhs) = activation_lds.read_mfma_fragment(&lane) else {
         fe2o3_device::trap();
         return;
     };
-    let Some(rhs) = weight_lds.read_mfma_fragment(lane_index) else {
+    let Some(rhs) = weight_lds.read_mfma_fragment(&lane) else {
         fe2o3_device::trap();
         return;
     };

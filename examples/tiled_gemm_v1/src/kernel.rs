@@ -93,19 +93,15 @@ pub fn tiled_gemm_lds_slice1(
 
     let (mut a_lds, mut b_lds) = gfx942_lds_bf16_tile_pair_m16x16_v1();
 
-    let a_staged = a_lds.write_mfma_fragment(&lane, a_global);
-    let b_staged = b_lds.write_mfma_fragment(&lane, b_global);
-    if !a_staged || !b_staged {
-        fe2o3_device::trap();
-        return;
-    }
+    a_lds.write_mfma_fragment(&lane, a_global);
+    b_lds.write_mfma_fragment(&lane, b_global);
 
     let (a_lds, b_lds) = gfx942_publish_lds_bf16_tile_pair_m16x16_v1(a_lds, b_lds);
-    let Some(lhs) = a_lds.read_mfma_fragment(lane_index) else {
+    let Some(lhs) = a_lds.read_mfma_fragment(&lane) else {
         fe2o3_device::trap();
         return;
     };
-    let Some(rhs) = b_lds.read_mfma_fragment(lane_index) else {
+    let Some(rhs) = b_lds.read_mfma_fragment(&lane) else {
         fe2o3_device::trap();
         return;
     };

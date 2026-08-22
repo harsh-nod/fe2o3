@@ -1,11 +1,11 @@
 error[E0599]: no method named `read_wave_fragment` found for reference `&LdsTile16x16<'_, u32>` in the current scope
- --> tests/ui/fail/lds_tile_uninitialized_read.rs:4:18
+ --> tests/ui/fail/lds_tile_uninitialized_read.rs:7:18
   |
-4 |     let _ = tile.read_wave_fragment(0);
+7 |     let _ = tile.read_wave_fragment(lane);
   |                  ^^^^^^^^^^^^^^^^^^
   |
 help: there is a method `write_wave_fragment` with a similar name, but with different arguments
  --> src/tensor.rs
   |
-  |     pub fn write_wave_fragment(&mut self, lane: &WaveLane<Wave64>, values: [T; 4]) -> bool {
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |     pub fn write_wave_fragment(&mut self, lane: &WaveLane<Wave64>, values: [T; 4]) {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

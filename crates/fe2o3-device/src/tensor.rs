@@ -247,13 +247,12 @@ impl<T: LdsElement> LdsTile16x16<'_, T, LdsUninitialized> {
     ///
     /// The compiler-issued lane capability maps each wave64 lane to four
     /// disjoint elements during the initialization epoch.
-    pub fn write_wave_fragment(&mut self, lane: &WaveLane<Wave64>, values: [T; 4]) -> bool {
+    pub fn write_wave_fragment(&mut self, lane: &WaveLane<Wave64>, values: [T; 4]) {
         let indices = RowMajorXor4::lane_fragment_indices(lane.get() as usize)
             .expect("authenticated wave64 lane is in range");
         for (index, value) in indices.into_iter().zip(values) {
             debug_assert!(self.lds.write(index, value).is_some());
         }
-        true
     }
 }
 
@@ -267,8 +266,9 @@ impl<'workgroup, T: LdsElement> LdsTile16x16<'workgroup, T, LdsUninitialized> {
 }
 
 impl<T: LdsElement + Copy> LdsTile16x16<'_, T, LdsInitialized> {
-    pub fn read_wave_fragment(&self, lane: usize) -> Option<[T; 4]> {
-        let indices = RowMajorXor4::lane_fragment_indices(lane)?;
+    pub fn read_wave_fragment(&self, lane: &WaveLane<Wave64>) -> Option<[T; 4]> {
+        let indices = RowMajorXor4::lane_fragment_indices(lane.get() as usize)
+            .expect("authenticated wave64 lane is in range");
         Some(indices.map(|index| *self.lds.get(index).expect("bounded tile index")))
     }
 }
@@ -276,11 +276,7 @@ impl<T: LdsElement + Copy> LdsTile16x16<'_, T, LdsInitialized> {
 impl LdsTile16x16<'_, Bf16, LdsUninitialized> {
     /// Writes the four BF16 elements owned by the compiler-issued wave lane.
     #[rustc_diagnostic_item = "fe2o3_device_lds_tile16x16_write_mfma_bf16_v1"]
-    pub fn write_mfma_fragment(
-        &mut self,
-        lane: &WaveLane<Wave64>,
-        fragment: Bf16MfmaFragment,
-    ) -> bool {
+    pub fn write_mfma_fragment(&mut self, lane: &WaveLane<Wave64>, fragment: Bf16MfmaFragment) {
         self.write_wave_fragment(lane, fragment.to_array())
     }
 }
@@ -306,13 +302,16 @@ pub fn gfx942_publish_lds_bf16_tile_pair_m16x16_v1<'workgroup>(
 
 impl LdsTile16x16<'_, Bf16, LdsInitialized> {
     #[rustc_diagnostic_item = "fe2o3_device_lds_tile16x16_read_mfma_bf16_v1"]
-    pub fn read_mfma_fragment(&self, lane: usize) -> Option<Bf16MfmaFragment> {
+    pub fn read_mfma_fragment(&self, lane: &WaveLane<Wave64>) -> Option<Bf16MfmaFragment> {
         self.read_wave_fragment(lane).map(Bf16MfmaFragment::new)
     }
 }
 
 impl LdsTile16x16<'_, f32, LdsInitialized> {
-    pub fn read_accumulator_fragment(&self, lane: usize) -> Option<F32AccumulatorFragment> {
+    pub fn read_accumulator_fragment(
+        &self,
+        lane: &WaveLane<Wave64>,
+    ) -> Option<F32AccumulatorFragment> {
         self.read_wave_fragment(lane)
             .map(F32AccumulatorFragment::new)
     }
@@ -383,11 +382,12 @@ mod tests {
         let mut tile = LdsTile16x16::try_from_dynamic(lds).ok().unwrap();
         for lane in 0..64 {
             let witness = WaveLane::<Wave64>::from_model_snapshot(lane).unwrap();
-            assert!(tile.write_wave_fragment(&witness, [lane; 4]));
+            tile.write_wave_fragment(&witness, [lane; 4]);
         }
         let tile = unsafe { tile.assume_init_for_host_test() };
         for lane in 0..64 {
-            assert_eq!(tile.read_wave_fragment(lane), Some([lane as u32; 4]));
+            let witness = WaveLane::<Wave64>::from_model_snapshot(lane).unwrap();
+            assert_eq!(tile.read_wave_fragment(&witness), Some([lane as u32; 4]));
         }
     }
 
