@@ -10,7 +10,7 @@ use fe2o3_device::{Index1D, Shifted};
 
 #[kernel(
     typed,
-    namespace = "a130f76c1071b4a38d95d4243086735784efd11000f30a04ed4beaf1e6ef67d6"
+    namespace = "733de473b3b81963ce2a3b6bc3b67bfc1eb309494ed6e36435de5bbab54f28f6"
 )]
 #[cfg(not(any(
     feature = "oob",
@@ -30,7 +30,7 @@ pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
 
 #[kernel(
     typed,
-    namespace = "2071184a44bd1eb8257e5623dff35c629e517cfb6aaffb641f7c3ff32f573fc9"
+    namespace = "426635fc4a465fce5a626e5cd0b3b287bbae25ea52f301b85663b550b63945b8"
 )]
 #[cfg(feature = "oob")]
 #[allow(unconditional_panic)]
@@ -44,7 +44,7 @@ pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
 
 #[kernel(
     typed,
-    namespace = "a1c8d65df28d93d3567e3d99058431b0ada97a60637c83b5375953a36e5a6972"
+    namespace = "79c5632b023afb6feb75aee40b5dd8651b6db739828a0ac9669799ca706e19a0"
 )]
 #[cfg(feature = "shifted")]
 pub fn checked_shifted(mut output: DisjointSlice<f32, Shifted<Index1D, 4>>) {
@@ -57,7 +57,7 @@ pub fn checked_shifted(mut output: DisjointSlice<f32, Shifted<Index1D, 4>>) {
 
 #[kernel(
     typed,
-    namespace = "0a5525deac37d1126cd5a1a817512d66b7338591f913c397afffb26bc027fa01"
+    namespace = "5e13f6c884eb2e4fb53ae8ad285e07aebfd312c992620887c9ff32cc18207282"
 )]
 #[cfg(feature = "grid_exclusive")]
 pub fn grid_exclusive(mut output: DisjointSlice<f32, GridExclusive>) {
@@ -97,7 +97,7 @@ pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
 
 #[kernel(
     typed,
-    namespace = "fbe3edfada59d9e70dc42458b1f6992baaaca22d8d01c2d4953fef7eb69f4d2e"
+    namespace = "6f36aa42e529752a3f46af005c5b289a215446de5ceec61fcd6d4a2f463610a3"
 )]
 #[cfg(feature = "blocked")]
 pub fn blocked(mut output: DisjointSlice<f32, Blocked<Index1D, 1, 2>>) {
