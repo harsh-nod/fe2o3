@@ -210,14 +210,15 @@ pub use worker_v3_publication_intent::{
     MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_ARCHIVE_BYTES_V1,
     MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_BYTES_V1,
     MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_PAYLOADS_V1, RecoveredWorkerV3PublicationIntentV1,
-    WorkerV3ExternalProviderPayloadsV1, WorkerV3FinalizerReplayAttachmentsV1,
-    WorkerV3PublicationIntentBoundaryV1, WorkerV3PublicationIntentCodecErrorV1,
-    WorkerV3PublicationIntentErrorV1, WorkerV3PublicationIntentFaultPointV1,
-    WorkerV3PublicationIntentFaultTimingV1, WorkerV3PublicationIntentIdentityV1,
-    WorkerV3PublicationIntentInvalidReasonV1, WorkerV3PublicationIntentOptionsV1,
-    WorkerV3PublicationIntentOutcomeV1, WorkerV3PublicationIntentRecordV1,
+    WORKER_V3_PUBLICATION_INTENT_FINAL_ENTRY_HEADROOM_V1, WorkerV3ExternalProviderPayloadsV1,
+    WorkerV3FinalizerReplayAttachmentsV1, WorkerV3PublicationIntentBoundaryV1,
+    WorkerV3PublicationIntentCodecErrorV1, WorkerV3PublicationIntentErrorV1,
+    WorkerV3PublicationIntentFaultPointV1, WorkerV3PublicationIntentFaultTimingV1,
+    WorkerV3PublicationIntentIdentityV1, WorkerV3PublicationIntentInvalidReasonV1,
+    WorkerV3PublicationIntentOptionsV1, WorkerV3PublicationIntentOutcomeV1,
+    WorkerV3PublicationIntentRecordV1, WorkerV3PublicationIntentScavengeOutcomeV1,
     persist_worker_v3_publication_intent_v1, persist_worker_v3_publication_intent_v1_with_options,
-    recover_worker_v3_publication_intent_v1,
+    recover_worker_v3_publication_intent_v1, scavenge_worker_v3_publication_intent_occurrence_v1,
 };
 
 /// Immutable bytes captured from one finalized artifact while its publication lock was held.

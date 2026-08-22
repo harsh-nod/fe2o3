@@ -48,6 +48,9 @@ const REDO_SUFFIX: &str = ".record.redo";
 const TEMP_SUFFIX: &str = ".tmp-";
 const MAX_TEMP_ATTEMPTS: u64 = 64;
 
+/// Canonical final directory entries reserved for one complete V3 intent.
+pub const WORKER_V3_PUBLICATION_INTENT_FINAL_ENTRY_HEADROOM_V1: usize = 5;
+
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
 // magic, version, occurrence key, attempt, producer key, plan commitment, scope, seven plan
@@ -193,7 +196,7 @@ pub const MAX_WORKER_V3_PUBLICATION_INTENT_RECOVERY_BYTES_V1: usize =
         + MAX_WORKER_V3_PUBLICATION_INTENT_METADATA_BYTES_V1;
 const _: () = assert!(MAX_WORKER_V3_PUBLICATION_INTENT_RECOVERY_BYTES_V1 < 512 * 1024 * 1024);
 
-/// Hard ceiling for caller-owned `Vec` backing allocations accepted by one persist operation.
+/// Hard ceiling for caller-owned `Vec` backing allocations accepted or returned by one operation.
 ///
 /// This is distinct from the logical recovery working-set bound. It adds the capacities of the
 /// outer handoff, transcript, finalized output, every provider payload, and the provider-list
@@ -994,6 +997,15 @@ pub enum WorkerV3PublicationIntentOutcomeV1 {
     Recovered,
 }
 
+/// Result of safely scavenging one exact uncommitted V3 occurrence namespace.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkerV3PublicationIntentScavengeOutcomeV1 {
+    /// The exact namespace contained no uncommitted canonical or temporary entries.
+    NotFound,
+    /// Private entries in the exact namespace were removed and the directory was synchronized.
+    Removed { entries: usize },
+}
+
 /// Inert exact bytes recovered under the artifact-store lock.
 #[derive(Debug, Eq, PartialEq)]
 pub struct RecoveredWorkerV3PublicationIntentV1 {
@@ -1096,6 +1108,12 @@ pub enum WorkerV3PublicationIntentInvalidReasonV1 {
     RecordDisappearedAfterCommit,
     /// Temporary cleanup encountered too many artifact-directory entries.
     DirectoryEntryLimitExceeded { maximum: usize },
+    /// The artifact directory cannot accommodate every missing final intent entry.
+    DirectoryEntryHeadroomInsufficient {
+        actual: usize,
+        required: usize,
+        maximum: usize,
+    },
     /// One occurrence accumulated too many temporary entries.
     TemporaryEntryLimitExceeded { maximum: usize },
     /// All bounded private temporary names were already occupied.
@@ -1129,6 +1147,14 @@ impl fmt::Display for WorkerV3PublicationIntentInvalidReasonV1 {
             Self::DirectoryEntryLimitExceeded { maximum } => write!(
                 formatter,
                 "artifact directory exceeds the cleanup scan bound {maximum}"
+            ),
+            Self::DirectoryEntryHeadroomInsufficient {
+                actual,
+                required,
+                maximum,
+            } => write!(
+                formatter,
+                "artifact directory has {actual} entries and cannot reserve {required} missing Worker V3 final entries within {maximum}"
             ),
             Self::TemporaryEntryLimitExceeded { maximum } => write!(
                 formatter,
@@ -1233,6 +1259,10 @@ pub enum WorkerV3PublicationIntentErrorV1 {
     },
     /// The current attempt registry rejects this producer occurrence.
     Attempt { reason: String },
+    /// The attempt registry does not authorize cleanup of the requested occurrence namespace.
+    ScavengeNotAuthorized,
+    /// A committed canonical or replayable redo record prevents scavenging this occurrence.
+    CommittedIntentCannotBeScavenged,
     /// No committed canonical or replayable V3 intent exists.
     NotFound,
     /// Different exact inputs are already retained for this occurrence.
@@ -1287,6 +1317,12 @@ impl fmt::Display for WorkerV3PublicationIntentErrorV1 {
             Self::Attempt { reason } => write!(
                 formatter,
                 "invalid Worker V3 publication-intent producer occurrence: {reason}"
+            ),
+            Self::ScavengeNotAuthorized => formatter.write_str(
+                "the durable attempt registry does not authorize scavenging this Worker V3 occurrence",
+            ),
+            Self::CommittedIntentCannotBeScavenged => formatter.write_str(
+                "a committed Worker V3 publication intent cannot be scavenged",
             ),
             Self::NotFound => formatter.write_str("Worker V3 publication intent was not found"),
             Self::ConflictingIntent => formatter.write_str(
@@ -1405,6 +1441,8 @@ pub fn persist_worker_v3_publication_intent_v1_with_options(
                 .to_string(),
         });
     }
+    reconcile_uncommitted_attachments(&output, &names, &replay_attachments, &exact_output)?;
+    require_final_entry_headroom(&output, &names)?;
 
     let mut faults = FaultInjector::new(options.injected_crash);
     persist_payload(
@@ -1475,8 +1513,39 @@ pub fn recover_worker_v3_publication_intent_v1(
     let producer_key = producer_key(producer);
     let names = IntentNames::new(producer_key, occurrence_key(producer_key, attempt))?;
     cleanup_temps(&output, &names)?;
-    recover_locked(&output, &names, producer, attempt)?
-        .ok_or(WorkerV3PublicationIntentErrorV1::NotFound)
+    if let Some(recovered) = recover_locked(&output, &names, producer, attempt)? {
+        return Ok(recovered);
+    }
+    remove_uncommitted_occurrence_entries(&output, &names, false)?;
+    Err(WorkerV3PublicationIntentErrorV1::NotFound)
+}
+
+/// Removes abandoned files from one exact uncommitted V3 occurrence namespace.
+///
+/// Authorization comes only from the durable build-attempt registry: the requested occurrence
+/// must be the current same-producer attempt or be superseded by a strictly newer generation for
+/// the same stable source and exact crate name. A canonical or redo record is never removed. This
+/// operation grants no publication, loading, launch, transcript, or semantic-identity authority.
+pub fn scavenge_worker_v3_publication_intent_occurrence_v1(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    occurrence: BuildAttempt,
+) -> Result<WorkerV3PublicationIntentScavengeOutcomeV1, WorkerV3PublicationIntentErrorV1> {
+    if occurrence.session() == BuildSession::DIRECT {
+        return Err(WorkerV3PublicationIntentErrorV1::ScavengeNotAuthorized);
+    }
+    let output = PinnedOutput::open_existing(output_dir)?;
+    let _lock = output.lock()?;
+    output.verify_path_identity()?;
+    authorize_occurrence_scavenge(&output, producer, occurrence)?;
+    let producer_key = producer_key(producer);
+    let names = IntentNames::new(producer_key, occurrence_key(producer_key, occurrence))?;
+    let removed = remove_uncommitted_occurrence_entries(&output, &names, true)?;
+    if removed == 0 {
+        Ok(WorkerV3PublicationIntentScavengeOutcomeV1::NotFound)
+    } else {
+        Ok(WorkerV3PublicationIntentScavengeOutcomeV1::Removed { entries: removed })
+    }
 }
 
 fn validate_persistence_inputs(
@@ -1573,6 +1642,25 @@ fn authorize_occurrence(
     Ok(record.phase)
 }
 
+fn authorize_occurrence_scavenge(
+    output: &PinnedOutput,
+    producer: &ProducerIdentity,
+    occurrence: BuildAttempt,
+) -> Result<(), WorkerV3PublicationIntentErrorV1> {
+    let attempts = read_attempt_registry(output)?;
+    let Some(current) = attempts.record(&producer.stable_source) else {
+        return Err(WorkerV3PublicationIntentErrorV1::ScavengeNotAuthorized);
+    };
+    let exact = current.generation == occurrence.generation()
+        && current.session == occurrence.session()
+        && current.invocation == occurrence.invocation();
+    let superseded = current.generation > occurrence.generation();
+    if current.crate_name != producer.crate_name || (!exact && !superseded) {
+        return Err(WorkerV3PublicationIntentErrorV1::ScavengeNotAuthorized);
+    }
+    Ok(())
+}
+
 fn recover_locked(
     output: &PinnedOutput,
     names: &IntentNames,
@@ -1612,15 +1700,22 @@ fn recover_locked(
         record.output_sha256(),
         PayloadKind::Output,
     )?;
+    let replay_attachments = WorkerV3FinalizerReplayAttachmentsV1 {
+        outer_handoff,
+        external_providers,
+        canonical_replay_transcript,
+    };
+    validate_caller_owner_capacities(
+        &replay_attachments.outer_handoff,
+        &replay_attachments.external_providers,
+        &replay_attachments.canonical_replay_transcript,
+        Some(&exact_output),
+    )?;
     finish_committed_record_recovery(output, names, redo)?;
     Ok(Some(RecoveredWorkerV3PublicationIntentV1 {
         outcome: WorkerV3PublicationIntentOutcomeV1::Recovered,
         record,
-        replay_attachments: WorkerV3FinalizerReplayAttachmentsV1 {
-            outer_handoff,
-            external_providers,
-            canonical_replay_transcript,
-        },
+        replay_attachments,
         exact_output,
     }))
 }
@@ -1741,6 +1836,261 @@ fn read_bound_record(
     Ok(record)
 }
 
+fn reconcile_uncommitted_attachments(
+    output: &PinnedOutput,
+    names: &IntentNames,
+    attachments: &WorkerV3FinalizerReplayAttachmentsV1,
+    exact_output: &[u8],
+) -> Result<(), WorkerV3PublicationIntentErrorV1> {
+    let mut found = false;
+    let mut all_match = true;
+    for (entry, expected) in [
+        (names.outer_handoff.as_str(), attachments.outer_handoff()),
+        (
+            names.transcript.as_str(),
+            attachments.canonical_replay_transcript(),
+        ),
+        (names.output.as_str(), exact_output),
+    ] {
+        if let Some(matches) = private_file_matches_bytes(output, entry, expected)? {
+            found = true;
+            all_match &= matches;
+        }
+    }
+    if let Some(matches) =
+        provider_archive_matches_payloads(output, names, attachments.external_providers())?
+    {
+        found = true;
+        all_match &= matches;
+    }
+    if found && !all_match {
+        remove_uncommitted_occurrence_entries(output, names, false)?;
+    }
+    Ok(())
+}
+
+fn private_file_matches_bytes(
+    output: &PinnedOutput,
+    entry: &str,
+    expected: &[u8],
+) -> Result<Option<bool>, WorkerV3PublicationIntentErrorV1> {
+    let Some(snapshot) = private_entry_snapshot(output, entry)? else {
+        return Ok(None);
+    };
+    if usize::try_from(snapshot.st_size).ok() != Some(expected.len()) {
+        return Ok(Some(false));
+    }
+    let (mut file, before) = open_private_file(output, entry, expected.len())?;
+    let mut matches = true;
+    let mut buffer = [0_u8; 64 * 1024];
+    for expected_chunk in expected.chunks(buffer.len()) {
+        let actual = &mut buffer[..expected_chunk.len()];
+        file.read_exact(actual)?;
+        matches &= actual == expected_chunk;
+    }
+    finish_private_file_read(output, entry, &mut file, &before, expected.len())?;
+    Ok(Some(matches))
+}
+
+fn provider_archive_matches_payloads(
+    output: &PinnedOutput,
+    names: &IntentNames,
+    providers: &WorkerV3ExternalProviderPayloadsV1,
+) -> Result<Option<bool>, WorkerV3PublicationIntentErrorV1> {
+    let entry = &names.external_providers;
+    let Some(snapshot) = private_entry_snapshot(output, entry)? else {
+        return Ok(None);
+    };
+    if usize::try_from(snapshot.st_size).ok() != Some(providers.canonical_length()) {
+        return Ok(Some(false));
+    }
+    let (mut file, before) = open_private_file(output, entry, providers.canonical_length())?;
+    let header = provider_archive_header(providers)?;
+    let mut matches = compare_reader_bytes_match(&mut file, &header)?;
+    for payload in providers.iter() {
+        matches &= compare_reader_bytes_match(&mut file, payload)?;
+    }
+    let checksum = provider_archive_checksum(&providers.payloads, providers.payload_length());
+    matches &= compare_reader_bytes_match(&mut file, &checksum)?;
+    finish_private_file_read(
+        output,
+        entry,
+        &mut file,
+        &before,
+        providers.canonical_length(),
+    )?;
+    Ok(Some(matches))
+}
+
+fn compare_reader_bytes_match(
+    file: &mut fs::File,
+    expected: &[u8],
+) -> Result<bool, WorkerV3PublicationIntentErrorV1> {
+    let mut matches = true;
+    let mut buffer = [0_u8; 64 * 1024];
+    for expected_chunk in expected.chunks(buffer.len()) {
+        let actual = &mut buffer[..expected_chunk.len()];
+        file.read_exact(actual)?;
+        matches &= actual == expected_chunk;
+    }
+    Ok(matches)
+}
+
+struct CleanupCandidate {
+    name: PathBuf,
+    snapshot: rustix::fs::Stat,
+}
+
+fn remove_uncommitted_occurrence_entries(
+    output: &PinnedOutput,
+    names: &IntentNames,
+    include_temps: bool,
+) -> Result<usize, WorkerV3PublicationIntentErrorV1> {
+    if entry_exists(output, &names.record)? || entry_exists(output, &names.redo)? {
+        return Err(WorkerV3PublicationIntentErrorV1::CommittedIntentCannotBeScavenged);
+    }
+    let candidates = collect_uncommitted_cleanup_candidates(output, names, include_temps)?;
+    if candidates.is_empty() {
+        return Ok(0);
+    }
+    if entry_exists(output, &names.record)? || entry_exists(output, &names.redo)? {
+        return Err(WorkerV3PublicationIntentErrorV1::CommittedIntentCannotBeScavenged);
+    }
+    output.verify_path_identity()?;
+    for candidate in &candidates {
+        let current = statat(&output.fd, &candidate.name, AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(std::io::Error::from)?;
+        if !same_private_snapshot(&candidate.snapshot, &current) {
+            return Err(invalid(
+                output,
+                &candidate.name,
+                WorkerV3PublicationIntentInvalidReasonV1::FileChangedWhileRead,
+            ));
+        }
+    }
+    for candidate in &candidates {
+        unlinkat(&output.fd, &candidate.name, AtFlags::empty()).map_err(std::io::Error::from)?;
+    }
+    fsync(&output.fd).map_err(std::io::Error::from)?;
+    output.verify_path_identity()?;
+    Ok(candidates.len())
+}
+
+fn collect_uncommitted_cleanup_candidates(
+    output: &PinnedOutput,
+    names: &IntentNames,
+    include_temps: bool,
+) -> Result<Vec<CleanupCandidate>, WorkerV3PublicationIntentErrorV1> {
+    let reserve = 4_usize
+        .checked_add(if include_temps {
+            MAX_TEMP_ATTEMPTS as usize
+        } else {
+            0
+        })
+        .ok_or(WorkerV3PublicationIntentErrorV1::WorkingSetArithmeticOverflow)?;
+    let mut candidates = Vec::new();
+    candidates.try_reserve_exact(reserve).map_err(|_| {
+        WorkerV3PublicationIntentErrorV1::AllocationFailed {
+            component: "uncommitted cleanup candidates",
+            requested: reserve,
+        }
+    })?;
+    for name in [
+        &names.outer_handoff,
+        &names.external_providers,
+        &names.transcript,
+        &names.output,
+    ] {
+        if let Some(snapshot) = private_entry_snapshot(output, name)? {
+            candidates.push(CleanupCandidate {
+                name: PathBuf::from(name),
+                snapshot,
+            });
+        }
+    }
+    if !include_temps {
+        return Ok(candidates);
+    }
+
+    let directory = rustix::io::fcntl_dupfd_cloexec(&output.fd, 0).map_err(std::io::Error::from)?;
+    let mut entries = rustix::fs::Dir::read_from(&directory).map_err(std::io::Error::from)?;
+    let mut scanned_entries = 0_usize;
+    let mut temp_entries = 0_usize;
+    for entry in &mut entries {
+        let entry = entry.map_err(std::io::Error::from)?;
+        let name_bytes = entry.file_name().to_bytes();
+        if name_bytes == b"." || name_bytes == b".." {
+            continue;
+        }
+        scanned_entries = scanned_entries
+            .checked_add(1)
+            .ok_or(WorkerV3PublicationIntentErrorV1::WorkingSetArithmeticOverflow)?;
+        if scanned_entries > MAX_OUTPUT_ENTRIES {
+            return Err(invalid(
+                output,
+                &names.temp_prefix,
+                WorkerV3PublicationIntentInvalidReasonV1::DirectoryEntryLimitExceeded {
+                    maximum: MAX_OUTPUT_ENTRIES,
+                },
+            ));
+        }
+        if !name_bytes.starts_with(names.temp_prefix.as_bytes()) {
+            continue;
+        }
+        temp_entries = temp_entries
+            .checked_add(1)
+            .ok_or(WorkerV3PublicationIntentErrorV1::WorkingSetArithmeticOverflow)?;
+        if temp_entries > MAX_TEMP_ATTEMPTS as usize {
+            return Err(invalid(
+                output,
+                &names.temp_prefix,
+                WorkerV3PublicationIntentInvalidReasonV1::TemporaryEntryLimitExceeded {
+                    maximum: MAX_TEMP_ATTEMPTS as usize,
+                },
+            ));
+        }
+        let name = PathBuf::from(std::ffi::OsStr::from_bytes(name_bytes));
+        let snapshot = private_entry_snapshot(output, &name)?.ok_or_else(|| {
+            invalid(
+                output,
+                &name,
+                WorkerV3PublicationIntentInvalidReasonV1::FileChangedWhileRead,
+            )
+        })?;
+        candidates.push(CleanupCandidate { name, snapshot });
+    }
+    Ok(candidates)
+}
+
+fn private_entry_snapshot(
+    output: &PinnedOutput,
+    entry: impl AsRef<Path>,
+) -> Result<Option<rustix::fs::Stat>, WorkerV3PublicationIntentErrorV1> {
+    let entry = entry.as_ref();
+    match statat(&output.fd, entry, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(stat) if is_private_file(&stat) => Ok(Some(stat)),
+        Ok(_) => Err(invalid(
+            output,
+            entry,
+            WorkerV3PublicationIntentInvalidReasonV1::EntryNotPrivate,
+        )),
+        Err(error) if error == rustix::io::Errno::NOENT => Ok(None),
+        Err(error) => Err(std::io::Error::from(error).into()),
+    }
+}
+
+fn same_private_snapshot(left: &rustix::fs::Stat, right: &rustix::fs::Stat) -> bool {
+    is_private_file(left)
+        && is_private_file(right)
+        && left.st_dev == right.st_dev
+        && left.st_ino == right.st_ino
+        && left.st_size == right.st_size
+        && left.st_mtime == right.st_mtime
+        && left.st_mtime_nsec == right.st_mtime_nsec
+        && left.st_ctime == right.st_ctime
+        && left.st_ctime_nsec == right.st_ctime_nsec
+}
+
 #[derive(Clone, Copy)]
 enum PayloadKind {
     OuterHandoff,
@@ -1823,7 +2173,7 @@ fn persist_payload(
 ) -> Result<(), WorkerV3PublicationIntentErrorV1> {
     let entry = kind.entry(names);
     if entry_exists(output, entry)? {
-        return validate_private_file_against_bytes(output, entry, exact_bytes, kind);
+        return validate_and_resync_private_file_against_bytes(output, entry, exact_bytes, kind);
     }
     let (temp_name, mut temp) =
         create_temp(output, names, kind.label(), kind.create_boundary(), faults)?;
@@ -1865,7 +2215,7 @@ fn persist_provider_archive(
     faults: &mut FaultInjector,
 ) -> Result<(), WorkerV3PublicationIntentErrorV1> {
     if entry_exists(output, &names.external_providers)? {
-        return validate_provider_archive_against_payloads(output, names, providers);
+        return validate_and_resync_provider_archive_against_payloads(output, names, providers);
     }
     let (temp_name, mut temp) = create_temp(
         output,
@@ -2043,7 +2393,26 @@ fn validate_private_file_against_bytes(
     expected: &[u8],
     kind: PayloadKind,
 ) -> Result<(), WorkerV3PublicationIntentErrorV1> {
-    let (mut file, before) = open_private_file(output, entry, expected.len())?;
+    validate_private_file_against_bytes_with_sync(output, entry, expected, kind, false)
+}
+
+fn validate_and_resync_private_file_against_bytes(
+    output: &PinnedOutput,
+    entry: &str,
+    expected: &[u8],
+    kind: PayloadKind,
+) -> Result<(), WorkerV3PublicationIntentErrorV1> {
+    validate_private_file_against_bytes_with_sync(output, entry, expected, kind, true)
+}
+
+fn validate_private_file_against_bytes_with_sync(
+    output: &PinnedOutput,
+    entry: &str,
+    expected: &[u8],
+    kind: PayloadKind,
+    resync: bool,
+) -> Result<(), WorkerV3PublicationIntentErrorV1> {
+    let (mut file, before) = open_private_file_with_access(output, entry, expected.len(), resync)?;
     let mut buffer = [0_u8; 64 * 1024];
     for expected_chunk in expected.chunks(buffer.len()) {
         let actual = &mut buffer[..expected_chunk.len()];
@@ -2052,7 +2421,11 @@ fn validate_private_file_against_bytes(
             return Err(kind.digest_mismatch());
         }
     }
-    finish_private_file_read(output, entry, &mut file, &before, expected.len())
+    finish_private_file_read(output, entry, &mut file, &before, expected.len())?;
+    if resync {
+        resync_validated_private_file(output, entry, &file, expected.len())?;
+    }
+    Ok(())
 }
 
 fn validate_provider_archive_against_payloads(
@@ -2060,8 +2433,26 @@ fn validate_provider_archive_against_payloads(
     names: &IntentNames,
     providers: &WorkerV3ExternalProviderPayloadsV1,
 ) -> Result<(), WorkerV3PublicationIntentErrorV1> {
+    validate_provider_archive_against_payloads_with_sync(output, names, providers, false)
+}
+
+fn validate_and_resync_provider_archive_against_payloads(
+    output: &PinnedOutput,
+    names: &IntentNames,
+    providers: &WorkerV3ExternalProviderPayloadsV1,
+) -> Result<(), WorkerV3PublicationIntentErrorV1> {
+    validate_provider_archive_against_payloads_with_sync(output, names, providers, true)
+}
+
+fn validate_provider_archive_against_payloads_with_sync(
+    output: &PinnedOutput,
+    names: &IntentNames,
+    providers: &WorkerV3ExternalProviderPayloadsV1,
+    resync: bool,
+) -> Result<(), WorkerV3PublicationIntentErrorV1> {
     let entry = &names.external_providers;
-    let (mut file, before) = open_private_file(output, entry, providers.canonical_length())?;
+    let (mut file, before) =
+        open_private_file_with_access(output, entry, providers.canonical_length(), resync)?;
     let header = provider_archive_header(providers)?;
     compare_reader_bytes(&mut file, &header)?;
     for payload in providers.iter() {
@@ -2075,7 +2466,11 @@ fn validate_provider_archive_against_payloads(
         &mut file,
         &before,
         providers.canonical_length(),
-    )
+    )?;
+    if resync {
+        resync_validated_private_file(output, entry, &file, providers.canonical_length())?;
+    }
+    Ok(())
 }
 
 fn compare_reader_bytes(
@@ -2296,10 +2691,24 @@ fn open_private_file(
     entry: &str,
     exact_length: usize,
 ) -> Result<(fs::File, rustix::fs::Stat), WorkerV3PublicationIntentErrorV1> {
+    open_private_file_with_access(output, entry, exact_length, false)
+}
+
+fn open_private_file_with_access(
+    output: &PinnedOutput,
+    entry: &str,
+    exact_length: usize,
+    writable: bool,
+) -> Result<(fs::File, rustix::fs::Stat), WorkerV3PublicationIntentErrorV1> {
+    let access = if writable {
+        OFlags::RDWR
+    } else {
+        OFlags::RDONLY
+    };
     let fd = openat(
         &output.fd,
         entry,
-        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        access | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     )
     .map_err(|error| {
@@ -2335,6 +2744,19 @@ fn open_private_file(
     Ok((file, before))
 }
 
+fn resync_validated_private_file(
+    output: &PinnedOutput,
+    entry: &str,
+    file: &fs::File,
+    exact_length: usize,
+) -> Result<(), WorkerV3PublicationIntentErrorV1> {
+    file.sync_all()?;
+    validate_renamed_file(output, entry, file, exact_length)?;
+    fsync(&output.fd).map_err(std::io::Error::from)?;
+    output.verify_path_identity()?;
+    validate_renamed_file(output, entry, file, exact_length)
+}
+
 fn finish_private_file_read(
     output: &PinnedOutput,
     entry: &str,
@@ -2363,6 +2785,68 @@ fn finish_private_file_read(
         ));
     }
     Ok(())
+}
+
+fn require_final_entry_headroom(
+    output: &PinnedOutput,
+    names: &IntentNames,
+) -> Result<(), WorkerV3PublicationIntentErrorV1> {
+    let directory = rustix::io::fcntl_dupfd_cloexec(&output.fd, 0).map_err(std::io::Error::from)?;
+    let mut entries = rustix::fs::Dir::read_from(&directory).map_err(std::io::Error::from)?;
+    let mut actual = 0_usize;
+    let mut existing_final = 0_usize;
+    for entry in &mut entries {
+        let entry = entry.map_err(std::io::Error::from)?;
+        let name = entry.file_name().to_bytes();
+        if name == b"." || name == b".." {
+            continue;
+        }
+        actual = actual
+            .checked_add(1)
+            .ok_or(WorkerV3PublicationIntentErrorV1::WorkingSetArithmeticOverflow)?;
+        if actual > MAX_OUTPUT_ENTRIES {
+            return Err(invalid(
+                output,
+                &names.base,
+                WorkerV3PublicationIntentInvalidReasonV1::DirectoryEntryLimitExceeded {
+                    maximum: MAX_OUTPUT_ENTRIES,
+                },
+            ));
+        }
+        if names.is_final_entry(name) {
+            existing_final = existing_final
+                .checked_add(1)
+                .ok_or(WorkerV3PublicationIntentErrorV1::WorkingSetArithmeticOverflow)?;
+        }
+    }
+    let required = WORKER_V3_PUBLICATION_INTENT_FINAL_ENTRY_HEADROOM_V1
+        .checked_sub(existing_final)
+        .ok_or(WorkerV3PublicationIntentErrorV1::WorkingSetArithmeticOverflow)?;
+    if !final_entry_headroom_available(actual, existing_final)? {
+        return Err(invalid(
+            output,
+            &names.base,
+            WorkerV3PublicationIntentInvalidReasonV1::DirectoryEntryHeadroomInsufficient {
+                actual,
+                required,
+                maximum: MAX_OUTPUT_ENTRIES,
+            },
+        ));
+    }
+    Ok(())
+}
+
+fn final_entry_headroom_available(
+    actual: usize,
+    existing_final: usize,
+) -> Result<bool, WorkerV3PublicationIntentErrorV1> {
+    let required = WORKER_V3_PUBLICATION_INTENT_FINAL_ENTRY_HEADROOM_V1
+        .checked_sub(existing_final)
+        .ok_or(WorkerV3PublicationIntentErrorV1::WorkingSetArithmeticOverflow)?;
+    Ok(actual
+        .checked_add(required)
+        .ok_or(WorkerV3PublicationIntentErrorV1::WorkingSetArithmeticOverflow)?
+        <= MAX_OUTPUT_ENTRIES)
 }
 
 fn create_temp(
@@ -2581,6 +3065,18 @@ impl IntentNames {
             temp_prefix: append_suffix(&base, TEMP_SUFFIX, "temporary prefix")?,
             base,
         })
+    }
+
+    fn is_final_entry(&self, name: &[u8]) -> bool {
+        [
+            &self.outer_handoff,
+            &self.external_providers,
+            &self.transcript,
+            &self.output,
+            &self.record,
+        ]
+        .into_iter()
+        .any(|entry| name == entry.as_bytes())
     }
 }
 
@@ -3383,6 +3879,29 @@ mod tests {
         assert!(matches!(
             WorkerV3FinalizerReplayAttachmentsV1::new(vec![1], Vec::new(), oversized_transcript,),
             Err(WorkerV3PublicationIntentCodecErrorV1::InvalidTranscriptCapacity { .. })
+        ));
+    }
+
+    #[test]
+    fn final_entry_headroom_accepts_limit_minus_five_and_rejects_one_more() {
+        assert!(
+            final_entry_headroom_available(
+                MAX_OUTPUT_ENTRIES - WORKER_V3_PUBLICATION_INTENT_FINAL_ENTRY_HEADROOM_V1,
+                0,
+            )
+            .unwrap()
+        );
+        assert!(
+            !final_entry_headroom_available(
+                MAX_OUTPUT_ENTRIES - WORKER_V3_PUBLICATION_INTENT_FINAL_ENTRY_HEADROOM_V1 + 1,
+                0,
+            )
+            .unwrap()
+        );
+        assert!(final_entry_headroom_available(MAX_OUTPUT_ENTRIES, 5).unwrap());
+        assert!(matches!(
+            final_entry_headroom_available(MAX_OUTPUT_ENTRIES, 6),
+            Err(WorkerV3PublicationIntentErrorV1::WorkingSetArithmeticOverflow)
         ));
     }
 
