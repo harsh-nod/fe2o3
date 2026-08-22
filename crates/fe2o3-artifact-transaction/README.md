@@ -18,7 +18,7 @@ surfaces.
 | Compiler module handoff V2 | The complete canonical `CompilerClosureV2`, attempt, producer, slot, and exact module bytes are committed by V2 publish/consume APIs. | Existing protected backend and wrapper/finalizer call sites have not been migrated by this crate-only change. |
 | Compiler module handoff V3 | The native terminal identity and exact canonical bytes of `InertSemanticCompilerModuleHandoffV3` are bound to the attempt, producer, slot, and transaction identity in a separate V3 namespace. Cross-process receipt recovery validates the exact durable ready record and payload under the cooperative lock; additive currentness APIs retain pinned output/namespace/slot/record/payload descriptors in a move-only lease, mint a single-use token under the lock, and consume that token when committing the existing one-shot tombstone. | The transport, inert receipt recovery, and currentness custody are implemented and tested but production callers are not wired by this crate-only change. |
 | Worker V2 publication intent | The complete closure is committed with the attempt, producer, durable plan, upstream evidence, output identity, length, and exact retained bytes; V2 persist/recover/clear APIs reject closure mismatch. | Protected publication and restart-marker paths still persist, recover, and clear V1 intents. |
-| Worker V3 publication intent V1 | A side-by-side namespace commits one outer handoff entry, an ordered provider archive with one entry per supplied external payload, compact opaque replay metadata, one finalized output entry, the complete durable plan, and the producer occurrence. The record is committed last. | Storage and inert restart recovery are implemented here. Production finalizer wiring still requires a public compact transcript constructor/replayer; V1/V2 intent and registry wires are unchanged. |
+| Worker V3 publication intent V1 | A side-by-side namespace commits one outer handoff entry, an ordered provider archive with one entry per supplied external payload, compact opaque replay metadata, one finalized output entry, the complete durable plan, and the producer occurrence. The record is committed last. Receipt-bound clear and successor-authorized scavenge use a restartable retirement marker. | Storage, inert restart recovery, and leak-free durable retirement are implemented here. Production finalizer wiring still requires the higher-level compact transcript constructor/replayer; V1/V2 intent and registry wires are unchanged. |
 
 V1 and V2 APIs, wire formats, and byte maxima remain unchanged and are not
 silently upgraded. V3 uses the compiler-FFI V3 maximum only in its own schema
@@ -81,11 +81,35 @@ resynchronized before the record commit. If any record-absent attachment differs
 private attachment set is removed before the retry. Record-absent recovery removes validated
 uncommitted files and returns `NotFound`.
 
+`clear_worker_v3_publication_intent_v1` retires the exact record identity only after the current
+attempt registry contains a completed V1 or protected V2 backend receipt. The receipt is
+reconstructed from its upstream-evidence identity, protected compiler closure when present, exact
+producer occurrence, and the complete plan stored in the V3 record; every field must equal the
+durable registry receipt. Legacy and pending receipts cannot authorize current cleanup. A strictly
+newer same-source, same-crate generation is independent revocation authority for its predecessor.
+
+Retirement validates every record and attachment before atomically renaming `.record` or
+`.record.redo` to `.record.retiring`. That marker name is synchronized before any attachment is
+removed. Attachment removals are synchronized before the marker is removed and synchronized last.
+After an interruption, normal recovery returns `RetirementInProgress`; clear or successor
+scavenge resumes from the marker, tolerates only attachments already removed by that state machine,
+and never makes the restart inputs recoverable again. The marker replaces the normal record name,
+so steady-state and retirement both fit the existing five-final-entry budget.
+
 The exported stale-occurrence scavenge operation accepts only the exact current producer occurrence
 or an occurrence superseded by a strictly newer generation for the same stable source and exact
-crate name. It validates every exact canonical and temporary namespace entry as a private `0600`
-single-link regular file before removing any of them, never removes `.record` or `.record.redo`, and
-synchronizes the directory after cleanup. Missing registry evidence is not cleanup authority.
+crate name. Current committed records remain protected. A superseded `.record`, `.record.redo`, or
+`.record.retiring` is retired through the same ordered protocol; uncommitted exact and temporary
+entries use bounded cleanup. Missing registry evidence is not cleanup authority.
+
+Destructive cleanup opens each candidate with `O_NOFOLLOW`, binds its descriptor to a private
+single-link `0600` inode, rechecks the name immediately before moving it to a unique
+descriptor-relative quarantine name, rechecks the moved name against the open descriptor, and
+verifies that unlink reduced that inode's link count to zero. This materially narrows same-UID name
+substitution windows while retaining the pinned-directory and cooperative-lock model. Linux does
+not provide an atomic operation that unlinks a pathname only if it still names an already-open
+descriptor, so a noncooperating same-UID process racing the final check and unlink remains outside
+the guarantee.
 
 The compact transcript ceiling is a checked formula, not a request/response-sized allowance. It is
 the sum of two independent strict-V3 response metadata shells, each with its own maximum diagnostic
