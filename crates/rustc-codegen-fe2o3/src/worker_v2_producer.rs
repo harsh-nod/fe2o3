@@ -26,12 +26,12 @@ use fe2o3_artifact_transaction::{
 };
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::{
-    CodeObjectVersion, CompilerFfiContractV1, CompilerFfiEnvelopeBuilderV1,
-    CompilerFfiEnvelopeError, CompilerFfiEnvelopeV1, CompilerFfiLinkRoleV1,
-    CompilerFfiSourceOwnerV1, CompilerModuleHandoffErrorV2, CompilerModuleHandoffIdentityV2,
-    CompilerModuleHandoffV2, CompilerModuleKindV1, CompilerModuleSymbolManifestErrorV1,
-    CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1, DeviceTargetV1,
-    decode_row_softmax_compiler_sections_v1,
+    CodeObjectVersion, CompilerDescriptorSourceV1, CompilerFfiContractV1,
+    CompilerFfiEnvelopeBuilderV1, CompilerFfiEnvelopeError, CompilerFfiEnvelopeV1,
+    CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1, CompilerModuleHandoffErrorV2,
+    CompilerModuleHandoffIdentityV2, CompilerModuleHandoffV2, CompilerModuleKindV1,
+    CompilerModuleSymbolManifestErrorV1, CompilerModuleSymbolManifestV1,
+    CompilerModuleSymbolRoleV1, DeviceTargetV1, decode_row_softmax_compiler_sections_v1,
 };
 use fe2o3_kernel_ir::{
     AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
@@ -80,6 +80,28 @@ pub(crate) struct PreparedScalarGemmV1WorkerHandoffV1 {
 pub(crate) struct PreparedProductionV1WorkerHandoffV1 {
     llvm_ir_sha256: [u8; 32],
     handoff: CompilerModuleHandoffV2,
+}
+
+/// Move-only production worker preparation retaining the exact compiler
+/// descriptor source alongside the module handoff that embeds it.
+pub(crate) struct PreparedProductionLineageWorkerHandoffV3 {
+    worker_handoff: PreparedProductionV1WorkerHandoffV1,
+    compiler_descriptor_source: CompilerDescriptorSourceV1,
+}
+
+impl PreparedProductionLineageWorkerHandoffV3 {
+    pub(crate) fn into_worker_handoff(self) -> PreparedProductionV1WorkerHandoffV1 {
+        self.worker_handoff
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        PreparedProductionV1WorkerHandoffV1,
+        CompilerDescriptorSourceV1,
+    ) {
+        (self.worker_handoff, self.compiler_descriptor_source)
+    }
 }
 
 impl PreparedScalarGemmV1WorkerHandoffV1 {
@@ -727,7 +749,7 @@ fn module_asm_commitment_section(section: &str, bytes: &[u8]) -> String {
 /// linking, artifact publication, load, or launch.
 pub(crate) fn prepare_production_v1_worker_handoff(
     authenticated: crate::production_pipeline_v1::AuthenticatedProductionGfx942ModuleV1,
-) -> Result<PreparedProductionV1WorkerHandoffV1, WorkerV2ProducerError> {
+) -> Result<PreparedProductionLineageWorkerHandoffV3, WorkerV2ProducerError> {
     let (formal, module, llvm_ir, typed_roots, compiler_ffi_envelope) = authenticated.into_parts();
     let target = DeviceTargetV1::parse(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME)
         .expect("fixed production target is valid");
@@ -762,9 +784,12 @@ pub(crate) fn prepare_production_v1_worker_handoff(
         compiler_module.llvm_ir().as_bytes(),
     )
     .map_err(WorkerV2ProducerError::Handoff)?;
-    Ok(PreparedProductionV1WorkerHandoffV1 {
-        llvm_ir_sha256,
-        handoff,
+    Ok(PreparedProductionLineageWorkerHandoffV3 {
+        worker_handoff: PreparedProductionV1WorkerHandoffV1 {
+            llvm_ir_sha256,
+            handoff,
+        },
+        compiler_descriptor_source: descriptor_source,
     })
 }
 

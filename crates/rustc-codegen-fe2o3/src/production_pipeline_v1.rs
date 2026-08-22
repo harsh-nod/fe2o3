@@ -261,7 +261,7 @@ struct PreparedProductionWorkerPublicationV1 {
     rustc_identity_inventory: crate::collector::AuthenticatedRustcIdentityInventoryV3,
     rustc_preflight_plan: crate::collector::AuthenticatedRustcPreflightPlanV3,
     ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV3,
-    prepared: crate::worker_v2_producer::PreparedProductionV1WorkerHandoffV1,
+    prepared: crate::worker_v2_producer::PreparedProductionLineageWorkerHandoffV3,
 }
 
 impl AuthenticatedProductionGfx942ModuleV1 {
@@ -540,7 +540,7 @@ impl Gfx942LoweredProductionCompilationV1 {
             &publication.output_dir,
             &publication.producer,
             publication.attempt,
-            publication.prepared,
+            publication.prepared.into_worker_handoff(),
         )
         .map_err(ProductionPipelineErrorV1::WorkerHandoff)
     }
@@ -566,12 +566,14 @@ impl Gfx942LoweredProductionCompilationV1 {
             )
         })?;
         let compiler_closure = *invocation.descriptor().compiler_closure();
+        let (prepared, compiler_descriptor_source) = publication.prepared.into_parts();
+        let _ = compiler_descriptor_source.canonical_bytes();
         crate::worker_v2_producer::publish_prepared_production_v1_worker_handoff_v2(
             &publication.output_dir,
             &publication.producer,
             publication.attempt,
             compiler_closure,
-            publication.prepared,
+            prepared,
         )
         .map_err(ProductionPipelineErrorV1::WorkerHandoff)
     }
