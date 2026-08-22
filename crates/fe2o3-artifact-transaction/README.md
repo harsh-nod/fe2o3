@@ -91,10 +91,21 @@ newer same-source, same-crate generation is independent revocation authority for
 Retirement validates every record and attachment before atomically renaming `.record` or
 `.record.redo` to `.record.retiring`. That marker name is synchronized before any attachment is
 removed. Attachment removals are synchronized before the marker is removed and synchronized last.
-After an interruption, normal recovery returns `RetirementInProgress`; clear or successor
-scavenge resumes from the marker, tolerates only attachments already removed by that state machine,
-and never makes the restart inputs recoverable again. The marker replaces the normal record name,
-so steady-state and retirement both fit the existing five-final-entry budget.
+The decoded and authorized record descriptor remains pinned from its canonical, redo, or retiring
+name through the final marker deletion. After an interruption, normal recovery returns
+`RetirementInProgress`; clear or successor scavenge resumes from the marker, tolerates only
+attachments already removed by that state machine, and never makes the restart inputs recoverable
+again. `resume_worker_v3_publication_intent_retirement_v1` performs the same receipt validation
+without requiring an identity retained by the process that started cleanup, but it refuses to
+start retirement from a canonical or redo record.
+
+Each destructive removal first moves its pinned source to a unique quarantine temp. A restart
+removes an attachment quarantine and continues from the still-pinned `.record.retiring` marker. If
+the retiring record itself reached quarantine before process loss, marker-only resume decodes and
+receipt-authorizes that exact pinned temp, requires every attachment and ordinary record name to be
+absent, removes it, synchronizes the directory, and returns success. The terminal quarantine is
+therefore durable completion evidence rather than an ordinary stale temp. The marker replaces the
+normal record name, so steady-state and retirement both fit the existing five-final-entry budget.
 
 The exported stale-occurrence scavenge operation accepts only the exact current producer occurrence
 or an occurrence superseded by a strictly newer generation for the same stable source and exact
@@ -105,11 +116,11 @@ entries use bounded cleanup. Missing registry evidence is not cleanup authority.
 Destructive cleanup opens each candidate with `O_NOFOLLOW`, binds its descriptor to a private
 single-link `0600` inode, rechecks the name immediately before moving it to a unique
 descriptor-relative quarantine name, rechecks the moved name against the open descriptor, and
-verifies that unlink reduced that inode's link count to zero. This materially narrows same-UID name
-substitution windows while retaining the pinned-directory and cooperative-lock model. Linux does
-not provide an atomic operation that unlinks a pathname only if it still names an already-open
-descriptor, so a noncooperating same-UID process racing the final check and unlink remains outside
-the guarantee.
+rechecks both name and descriptor immediately before unlink, then verifies that unlink reduced that
+inode's link count to zero. This materially narrows same-UID name substitution windows while
+retaining the pinned-directory and cooperative-lock model. Linux does not provide an atomic
+operation that unlinks a pathname only if it still names an already-open descriptor, so a
+noncooperating same-UID process racing the final check and unlink remains outside the guarantee.
 
 The compact transcript ceiling is a checked formula, not a request/response-sized allowance. It is
 the sum of two independent strict-V3 response metadata shells, each with its own maximum diagnostic
