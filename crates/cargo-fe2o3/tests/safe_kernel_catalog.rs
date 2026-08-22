@@ -157,7 +157,6 @@ fn positive_example_kernel_unsafe_debt_is_frozen() {
             "examples/tiled_gemm_v1/src/kernel.rs::tiled_gemm_lds_slice1",
             "examples/wave64_collectives_v1/src/kernel.rs::wave64_collectives_v1",
             "examples/workgroup_sync_v1/src/kernel.rs::lds_publish_read_reduce_i32_v1",
-            "examples/workgroup_sync_v1/src/scoped_atomic.rs::scoped_atomic_add_u32_v1",
         ],
         "positive kernel unsafe debt changed; migrate removed entries and reject new ones"
     );
