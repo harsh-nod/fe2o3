@@ -219,7 +219,8 @@ pub use worker_v3_publication_intent::{
     WorkerV3PublicationIntentRecordV1, WorkerV3PublicationIntentScavengeOutcomeV1,
     clear_worker_v3_publication_intent_v1, clear_worker_v3_publication_intent_v1_with_options,
     persist_worker_v3_publication_intent_v1, persist_worker_v3_publication_intent_v1_with_options,
-    recover_worker_v3_publication_intent_v1, scavenge_worker_v3_publication_intent_occurrence_v1,
+    recover_worker_v3_publication_intent_v1, resume_worker_v3_publication_intent_retirement_v1,
+    scavenge_worker_v3_publication_intent_occurrence_v1,
 };
 
 /// Immutable bytes captured from one finalized artifact while its publication lock was held.

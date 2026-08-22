@@ -1205,11 +1205,16 @@ pub enum WorkerV3PublicationIntentBoundaryV1 {
     SyncCanonicalName,
     RenameRecordToRetiring,
     SyncRetiringName,
+    RenameOuterHandoffToQuarantine,
     RemoveOuterHandoff,
+    RenameExternalProvidersToQuarantine,
     RemoveExternalProviders,
+    RenameTranscriptToQuarantine,
     RemoveTranscript,
+    RenameOutputToQuarantine,
     RemoveOutput,
     SyncRetiredAttachments,
+    RenameRetiringRecordToQuarantine,
     RemoveRetiringRecord,
     SyncRetirement,
 }
@@ -1284,6 +1289,8 @@ pub enum WorkerV3PublicationIntentErrorV1 {
     ReceiptNotDurable,
     /// Durable cleanup has started and normal restart recovery is no longer available.
     RetirementInProgress,
+    /// Marker-only retirement resume was requested before a durable retirement marker existed.
+    RetirementNotInProgress,
     /// No committed canonical or replayable V3 intent exists.
     NotFound,
     /// Different exact inputs are already retained for this occurrence.
@@ -1353,6 +1360,9 @@ impl fmt::Display for WorkerV3PublicationIntentErrorV1 {
             ),
             Self::RetirementInProgress => formatter.write_str(
                 "Worker V3 publication-intent retirement is already in progress",
+            ),
+            Self::RetirementNotInProgress => formatter.write_str(
+                "Worker V3 publication-intent retirement has no durable marker to resume",
             ),
             Self::NotFound => formatter.write_str("Worker V3 publication intent was not found"),
             Self::ConflictingIntent => formatter.write_str(
@@ -1447,7 +1457,12 @@ pub fn persist_worker_v3_publication_intent_v1_with_options(
     output.verify_path_identity()?;
     let phase = authorize_occurrence(&output, producer, attempt)?;
     let names = IntentNames::new(expected.producer_key(), expected.occurrence_key())?;
-    cleanup_temps(&output, &names)?;
+    if cleanup_temps(&output, &names)?
+        .quarantined_retiring_record
+        .is_some()
+    {
+        return Err(WorkerV3PublicationIntentErrorV1::RetirementInProgress);
+    }
 
     if let Some(record) = recover_exact_locked(
         &output,
@@ -1578,6 +1593,62 @@ pub fn clear_worker_v3_publication_intent_v1_with_options(
     Ok(())
 }
 
+/// Resumes receipt-authorized cleanup from an inert durable retirement marker.
+///
+/// This operation intentionally accepts no caller-retained record identity. It decodes and pins
+/// the exact `.record.retiring` marker or its terminal quarantine temp, binds it to the requested
+/// producer occurrence, and reconstructs the exact backend-receipt authorization from durable
+/// state. Finding and removing the terminal quarantine completes this call successfully; if no
+/// marker evidence exists, the call returns [`WorkerV3PublicationIntentErrorV1::NotFound`].
+/// Canonical and redo records are rejected: callers must start their retirement with
+/// [`clear_worker_v3_publication_intent_v1`], which requires the exact record identity.
+pub fn resume_worker_v3_publication_intent_retirement_v1(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+) -> Result<(), WorkerV3PublicationIntentErrorV1> {
+    if attempt.session() == BuildSession::DIRECT {
+        return Err(WorkerV3PublicationIntentErrorV1::ReceiptNotDurable);
+    }
+    let output = PinnedOutput::open_existing(output_dir)?;
+    let _lock = output.lock()?;
+    output.verify_path_identity()?;
+    let producer_key = producer_key(producer);
+    let names = IntentNames::new(producer_key, occurrence_key(producer_key, attempt))?;
+    let cleanup = cleanup_temps(&output, &names)?;
+    if let Some(candidate) = cleanup.quarantined_retiring_record {
+        complete_quarantined_retirement_locked(
+            &output,
+            &names,
+            producer,
+            attempt,
+            candidate,
+            None,
+            RetirementAuthorizationV1::ReceiptOrSuccessor,
+        )?;
+        return Ok(());
+    }
+    let Some(pinned_record) = inspect_retirement_record_locked(&output, &names, producer, attempt)?
+    else {
+        return Err(WorkerV3PublicationIntentErrorV1::NotFound);
+    };
+    if !matches!(pinned_record.state, RetirementRecordStateV1::Retiring) {
+        return Err(WorkerV3PublicationIntentErrorV1::RetirementNotInProgress);
+    }
+    let mut faults = FaultInjector::new(None);
+    retire_pinned_occurrence_locked(
+        &output,
+        &names,
+        producer,
+        attempt,
+        pinned_record,
+        None,
+        RetirementAuthorizationV1::ReceiptOrSuccessor,
+        &mut faults,
+    )?;
+    Ok(())
+}
+
 /// Inertly recovers exact V3 output and transcript bytes after restart.
 ///
 /// Recovery independently checks that the producer occurrence remains current in the durable
@@ -1593,7 +1664,12 @@ pub fn recover_worker_v3_publication_intent_v1(
     authorize_occurrence(&output, producer, attempt)?;
     let producer_key = producer_key(producer);
     let names = IntentNames::new(producer_key, occurrence_key(producer_key, attempt))?;
-    cleanup_temps(&output, &names)?;
+    if cleanup_temps(&output, &names)?
+        .quarantined_retiring_record
+        .is_some()
+    {
+        return Err(WorkerV3PublicationIntentErrorV1::RetirementInProgress);
+    }
     if let Some(recovered) = recover_locked(&output, &names, producer, attempt)? {
         return Ok(recovered);
     }
@@ -1623,6 +1699,24 @@ pub fn scavenge_worker_v3_publication_intent_occurrence_v1(
     let authorization = authorize_occurrence_scavenge(&output, producer, occurrence)?;
     let producer_key = producer_key(producer);
     let names = IntentNames::new(producer_key, occurrence_key(producer_key, occurrence))?;
+    let cleanup = cleanup_temps(&output, &names)?;
+    if let Some(candidate) = cleanup.quarantined_retiring_record {
+        if authorization != OccurrenceScavengeAuthorizationV1::Superseded {
+            return Err(WorkerV3PublicationIntentErrorV1::CommittedIntentCannotBeScavenged);
+        }
+        let removed = complete_quarantined_retirement_locked(
+            &output,
+            &names,
+            producer,
+            occurrence,
+            candidate,
+            None,
+            RetirementAuthorizationV1::SuccessorOnly,
+        )?
+        .checked_add(cleanup.removed_entries)
+        .ok_or(WorkerV3PublicationIntentErrorV1::WorkingSetArithmeticOverflow)?;
+        return Ok(WorkerV3PublicationIntentScavengeOutcomeV1::Removed { entries: removed });
+    }
     let committed = entry_exists(&output, &names.record)?
         || entry_exists(&output, &names.redo)?
         || entry_exists(&output, &names.retiring)?;
@@ -1786,6 +1880,19 @@ enum RetirementRecordStateV1 {
     Retiring,
 }
 
+struct PinnedBoundRecordV1 {
+    record: WorkerV3PublicationIntentRecordV1,
+    file: fs::File,
+    snapshot: rustix::fs::Stat,
+}
+
+struct PinnedRetirementRecordV1 {
+    record: WorkerV3PublicationIntentRecordV1,
+    file: fs::File,
+    snapshot: rustix::fs::Stat,
+    state: RetirementRecordStateV1,
+}
+
 impl RetirementRecordStateV1 {
     fn entry(self, names: &IntentNames) -> &str {
         match self {
@@ -1805,20 +1912,125 @@ fn retire_committed_occurrence_locked(
     authorization: RetirementAuthorizationV1,
     faults: &mut FaultInjector,
 ) -> Result<usize, WorkerV3PublicationIntentErrorV1> {
-    cleanup_temps(output, names)?;
-    let Some((record, state)) = inspect_retirement_record_locked(output, names, producer, attempt)?
+    let cleanup = cleanup_temps(output, names)?;
+    if let Some(candidate) = cleanup.quarantined_retiring_record {
+        return complete_quarantined_retirement_locked(
+            output,
+            names,
+            producer,
+            attempt,
+            candidate,
+            expected_identity,
+            authorization,
+        )?
+        .checked_add(cleanup.removed_entries)
+        .ok_or(WorkerV3PublicationIntentErrorV1::WorkingSetArithmeticOverflow);
+    }
+    let Some(pinned_record) = inspect_retirement_record_locked(output, names, producer, attempt)?
     else {
         return Err(WorkerV3PublicationIntentErrorV1::NotFound);
     };
-    if expected_identity.is_some_and(|identity| identity != record.identity()) {
+    retire_pinned_occurrence_locked(
+        output,
+        names,
+        producer,
+        attempt,
+        pinned_record,
+        expected_identity,
+        authorization,
+        faults,
+    )?
+    .checked_add(cleanup.removed_entries)
+    .ok_or(WorkerV3PublicationIntentErrorV1::WorkingSetArithmeticOverflow)
+}
+
+fn complete_quarantined_retirement_locked(
+    output: &PinnedOutput,
+    names: &IntentNames,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    candidate: CleanupCandidate,
+    expected_identity: Option<WorkerV3PublicationIntentIdentityV1>,
+    authorization: RetirementAuthorizationV1,
+) -> Result<usize, WorkerV3PublicationIntentErrorV1> {
+    for entry in [
+        &names.record,
+        &names.redo,
+        &names.retiring,
+        &names.outer_handoff,
+        &names.external_providers,
+        &names.transcript,
+        &names.output,
+    ] {
+        if entry_exists(output, entry)? {
+            return Err(invalid(
+                output,
+                entry,
+                WorkerV3PublicationIntentInvalidReasonV1::CommittedAndRetiringCoexist,
+            ));
+        }
+    }
+    let entry = candidate.name.to_str().ok_or_else(|| {
+        invalid(
+            output,
+            &candidate.name,
+            WorkerV3PublicationIntentInvalidReasonV1::FileChangedWhileRead,
+        )
+    })?;
+    let pinned = read_bound_record_pinned(output, names, entry, producer, attempt)?;
+    if !same_private_snapshot(&candidate.snapshot, &pinned.snapshot) {
+        return Err(invalid(
+            output,
+            &candidate.name,
+            WorkerV3PublicationIntentInvalidReasonV1::FileChangedWhileRead,
+        ));
+    }
+    if expected_identity.is_some_and(|identity| identity != pinned.record.identity()) {
         return Err(WorkerV3PublicationIntentErrorV1::IdentityMismatch);
     }
-    authorize_retirement(output, producer, attempt, record, authorization)?;
+    authorize_retirement(output, producer, attempt, pinned.record, authorization)?;
+    let mut faults = FaultInjector::new(None);
+    unlink_pinned_private_candidate(
+        output,
+        names,
+        &candidate,
+        "retire-record",
+        WorkerV3PublicationIntentBoundaryV1::RenameRetiringRecordToQuarantine,
+        WorkerV3PublicationIntentBoundaryV1::RemoveRetiringRecord,
+        &pinned.file,
+        &mut faults,
+    )?;
+    fsync(&output.fd).map_err(std::io::Error::from)?;
+    output.verify_path_identity()?;
+    Ok(1)
+}
 
-    let require_complete = !matches!(state, RetirementRecordStateV1::Retiring);
-    let candidates = collect_retirement_candidates(output, names, record, require_complete)?;
+fn retire_pinned_occurrence_locked(
+    output: &PinnedOutput,
+    names: &IntentNames,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    mut pinned_record: PinnedRetirementRecordV1,
+    expected_identity: Option<WorkerV3PublicationIntentIdentityV1>,
+    authorization: RetirementAuthorizationV1,
+    faults: &mut FaultInjector,
+) -> Result<usize, WorkerV3PublicationIntentErrorV1> {
+    if expected_identity.is_some_and(|identity| identity != pinned_record.record.identity()) {
+        return Err(WorkerV3PublicationIntentErrorV1::IdentityMismatch);
+    }
+    authorize_retirement(
+        output,
+        producer,
+        attempt,
+        pinned_record.record,
+        authorization,
+    )?;
+
+    let require_complete = !matches!(pinned_record.state, RetirementRecordStateV1::Retiring);
+    let candidates =
+        collect_retirement_candidates(output, names, pinned_record.record, require_complete)?;
     if require_complete {
-        rename_record_to_retiring(output, names, state, faults)?;
+        rename_record_to_retiring(output, names, &mut pinned_record, faults)?;
     } else {
         // A prior process may have stopped after the rename but before its directory sync.
         faults.around(
@@ -1833,30 +2045,42 @@ fn retire_committed_occurrence_locked(
     }
 
     let mut removed = 0_usize;
-    for (candidate, purpose, boundary) in [
+    for (candidate, purpose, quarantine_boundary, remove_boundary) in [
         (
             candidates.outer_handoff,
             "retire-handoff",
+            WorkerV3PublicationIntentBoundaryV1::RenameOuterHandoffToQuarantine,
             WorkerV3PublicationIntentBoundaryV1::RemoveOuterHandoff,
         ),
         (
             candidates.external_providers,
             "retire-providers",
+            WorkerV3PublicationIntentBoundaryV1::RenameExternalProvidersToQuarantine,
             WorkerV3PublicationIntentBoundaryV1::RemoveExternalProviders,
         ),
         (
             candidates.transcript,
             "retire-transcript",
+            WorkerV3PublicationIntentBoundaryV1::RenameTranscriptToQuarantine,
             WorkerV3PublicationIntentBoundaryV1::RemoveTranscript,
         ),
         (
             candidates.output,
             "retire-output",
+            WorkerV3PublicationIntentBoundaryV1::RenameOutputToQuarantine,
             WorkerV3PublicationIntentBoundaryV1::RemoveOutput,
         ),
     ] {
         if let Some(candidate) = candidate {
-            unlink_exact_private_candidate(output, names, &candidate, purpose, boundary, faults)?;
+            unlink_exact_private_candidate(
+                output,
+                names,
+                &candidate,
+                purpose,
+                quarantine_boundary,
+                remove_boundary,
+                faults,
+            )?;
             removed = removed
                 .checked_add(1)
                 .ok_or(WorkerV3PublicationIntentErrorV1::WorkingSetArithmeticOverflow)?;
@@ -1872,22 +2096,17 @@ fn retire_committed_occurrence_locked(
     )?;
     output.verify_path_identity()?;
 
-    let retiring = private_entry_snapshot(output, &names.retiring)?.ok_or_else(|| {
-        invalid(
-            output,
-            &names.retiring,
-            WorkerV3PublicationIntentInvalidReasonV1::FileChangedWhileRead,
-        )
-    })?;
-    unlink_exact_private_candidate(
+    unlink_pinned_private_candidate(
         output,
         names,
         &CleanupCandidate {
             name: PathBuf::from(&names.retiring),
-            snapshot: retiring,
+            snapshot: pinned_record.snapshot,
         },
         "retire-record",
+        WorkerV3PublicationIntentBoundaryV1::RenameRetiringRecordToQuarantine,
         WorkerV3PublicationIntentBoundaryV1::RemoveRetiringRecord,
+        &pinned_record.file,
         faults,
     )?;
     removed = removed
@@ -1907,10 +2126,7 @@ fn inspect_retirement_record_locked(
     names: &IntentNames,
     producer: &ProducerIdentity,
     attempt: BuildAttempt,
-) -> Result<
-    Option<(WorkerV3PublicationIntentRecordV1, RetirementRecordStateV1)>,
-    WorkerV3PublicationIntentErrorV1,
-> {
+) -> Result<Option<PinnedRetirementRecordV1>, WorkerV3PublicationIntentErrorV1> {
     let canonical = entry_exists(output, &names.record)?;
     let redo = entry_exists(output, &names.redo)?;
     let retiring = entry_exists(output, &names.retiring)?;
@@ -1937,8 +2153,13 @@ fn inspect_retirement_record_locked(
     } else {
         return Ok(None);
     };
-    let record = read_bound_record(output, names, state.entry(names), producer, attempt)?;
-    Ok(Some((record, state)))
+    let pinned = read_bound_record_pinned(output, names, state.entry(names), producer, attempt)?;
+    Ok(Some(PinnedRetirementRecordV1 {
+        record: pinned.record,
+        file: pinned.file,
+        snapshot: pinned.snapshot,
+        state,
+    }))
 }
 
 fn authorize_retirement(
@@ -2174,7 +2395,20 @@ fn read_bound_record(
     producer: &ProducerIdentity,
     attempt: BuildAttempt,
 ) -> Result<WorkerV3PublicationIntentRecordV1, WorkerV3PublicationIntentErrorV1> {
-    let bytes = read_private_file(output, entry, RECORD_BYTES_V1, "record")?;
+    Ok(read_bound_record_pinned(output, names, entry, producer, attempt)?.record)
+}
+
+fn read_bound_record_pinned(
+    output: &PinnedOutput,
+    names: &IntentNames,
+    entry: &str,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+) -> Result<PinnedBoundRecordV1, WorkerV3PublicationIntentErrorV1> {
+    let (mut file, snapshot) = open_private_file(output, entry, RECORD_BYTES_V1)?;
+    let mut bytes = [0_u8; RECORD_BYTES_V1];
+    file.read_exact(&mut bytes)?;
+    finish_private_file_read(output, entry, &mut file, &snapshot, RECORD_BYTES_V1)?;
     let record = WorkerV3PublicationIntentRecordV1::decode_canonical(&bytes).map_err(|error| {
         invalid(
             output,
@@ -2195,7 +2429,11 @@ fn read_bound_record(
             WorkerV3PublicationIntentInvalidReasonV1::RecordBindingMismatch,
         ));
     }
-    Ok(record)
+    Ok(PinnedBoundRecordV1 {
+        record,
+        file,
+        snapshot,
+    })
 }
 
 fn reconcile_uncommitted_attachments(
@@ -2303,6 +2541,11 @@ struct CleanupCandidate {
     snapshot: rustix::fs::Stat,
 }
 
+struct TempCleanupOutcomeV1 {
+    removed_entries: usize,
+    quarantined_retiring_record: Option<CleanupCandidate>,
+}
+
 struct RetirementCandidatesV1 {
     outer_handoff: Option<CleanupCandidate>,
     external_providers: Option<CleanupCandidate>,
@@ -2405,29 +2648,16 @@ fn validate_optional_retirement_payload(
 fn rename_record_to_retiring(
     output: &PinnedOutput,
     names: &IntentNames,
-    state: RetirementRecordStateV1,
+    pinned_record: &mut PinnedRetirementRecordV1,
     faults: &mut FaultInjector,
 ) -> Result<(), WorkerV3PublicationIntentErrorV1> {
-    let source = state.entry(names);
-    let snapshot = private_entry_snapshot(output, source)?.ok_or_else(|| {
-        invalid(
-            output,
-            source,
-            WorkerV3PublicationIntentInvalidReasonV1::FileChangedWhileRead,
-        )
-    })?;
-    let exact_length = usize::try_from(snapshot.st_size).map_err(|_| {
-        invalid(
-            output,
-            source,
-            WorkerV3PublicationIntentInvalidReasonV1::FileLengthMismatch {
-                actual: u64::try_from(snapshot.st_size).ok(),
-                expected: RECORD_BYTES_V1,
-            },
-        )
-    })?;
-    let (file, pinned) = open_private_file(output, source, exact_length)?;
-    if !same_private_snapshot(&snapshot, &pinned) {
+    let source = pinned_record.state.entry(names);
+    let current =
+        statat(&output.fd, source, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
+    let descriptor = fstat(&pinned_record.file).map_err(std::io::Error::from)?;
+    if !same_private_snapshot(&pinned_record.snapshot, &current)
+        || !same_private_snapshot(&pinned_record.snapshot, &descriptor)
+    {
         return Err(invalid(
             output,
             source,
@@ -2441,7 +2671,10 @@ fn rename_record_to_retiring(
     output.verify_path_identity()?;
     let current =
         statat(&output.fd, source, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
-    if !same_private_snapshot(&snapshot, &current) {
+    let descriptor = fstat(&pinned_record.file).map_err(std::io::Error::from)?;
+    if !same_private_snapshot(&pinned_record.snapshot, &current)
+        || !same_private_snapshot(&pinned_record.snapshot, &descriptor)
+    {
         return Err(invalid(
             output,
             source,
@@ -2458,14 +2691,19 @@ fn rename_record_to_retiring(
     .map_err(std::io::Error::from)?;
     let named = statat(&output.fd, &names.retiring, AtFlags::SYMLINK_NOFOLLOW)
         .map_err(std::io::Error::from)?;
-    let pinned_after = fstat(&file).map_err(std::io::Error::from)?;
-    if !same_private_inode(&snapshot, &named) || !same_private_inode(&snapshot, &pinned_after) {
+    let descriptor_after = fstat(&pinned_record.file).map_err(std::io::Error::from)?;
+    if !same_private_inode(&pinned_record.snapshot, &named)
+        || !same_private_inode(&pinned_record.snapshot, &descriptor_after)
+        || !same_private_snapshot(&named, &descriptor_after)
+    {
         return Err(invalid(
             output,
             &names.retiring,
             WorkerV3PublicationIntentInvalidReasonV1::FileChangedWhileRead,
         ));
     }
+    pinned_record.snapshot = named;
+    pinned_record.state = RetirementRecordStateV1::Retiring;
     faults.hit(
         WorkerV3PublicationIntentBoundaryV1::RenameRecordToRetiring,
         WorkerV3PublicationIntentFaultTimingV1::After,
@@ -2487,20 +2725,10 @@ fn unlink_exact_private_candidate(
     names: &IntentNames,
     candidate: &CleanupCandidate,
     purpose: &str,
-    boundary: WorkerV3PublicationIntentBoundaryV1,
+    quarantine_boundary: WorkerV3PublicationIntentBoundaryV1,
+    remove_boundary: WorkerV3PublicationIntentBoundaryV1,
     faults: &mut FaultInjector,
 ) -> Result<(), WorkerV3PublicationIntentErrorV1> {
-    faults.hit(boundary, WorkerV3PublicationIntentFaultTimingV1::Before)?;
-    output.verify_path_identity()?;
-    let current = statat(&output.fd, &candidate.name, AtFlags::SYMLINK_NOFOLLOW)
-        .map_err(std::io::Error::from)?;
-    if !same_private_snapshot(&candidate.snapshot, &current) {
-        return Err(invalid(
-            output,
-            &candidate.name,
-            WorkerV3PublicationIntentInvalidReasonV1::FileChangedWhileRead,
-        ));
-    }
     let exact_length = usize::try_from(candidate.snapshot.st_size).map_err(|_| {
         invalid(
             output,
@@ -2523,13 +2751,53 @@ fn unlink_exact_private_candidate(
             WorkerV3PublicationIntentInvalidReasonV1::FileChangedWhileRead,
         ));
     }
+    unlink_pinned_private_candidate(
+        output,
+        names,
+        candidate,
+        purpose,
+        quarantine_boundary,
+        remove_boundary,
+        &file,
+        faults,
+    )
+}
+
+fn unlink_pinned_private_candidate(
+    output: &PinnedOutput,
+    names: &IntentNames,
+    candidate: &CleanupCandidate,
+    purpose: &str,
+    quarantine_boundary: WorkerV3PublicationIntentBoundaryV1,
+    remove_boundary: WorkerV3PublicationIntentBoundaryV1,
+    file: &fs::File,
+    faults: &mut FaultInjector,
+) -> Result<(), WorkerV3PublicationIntentErrorV1> {
+    faults.hit(
+        quarantine_boundary,
+        WorkerV3PublicationIntentFaultTimingV1::Before,
+    )?;
+    output.verify_path_identity()?;
+    let current = statat(&output.fd, &candidate.name, AtFlags::SYMLINK_NOFOLLOW)
+        .map_err(std::io::Error::from)?;
+    let descriptor = fstat(file).map_err(std::io::Error::from)?;
+    if !same_private_snapshot(&candidate.snapshot, &current)
+        || !same_private_snapshot(&candidate.snapshot, &descriptor)
+    {
+        return Err(invalid(
+            output,
+            &candidate.name,
+            WorkerV3PublicationIntentInvalidReasonV1::FileChangedWhileRead,
+        ));
+    }
 
     let quarantine = reserve_cleanup_quarantine_name(output, names, purpose, &candidate.name)?;
     let named =
         statat(&output.fd, &quarantine, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
-    let pinned_after = fstat(&file).map_err(std::io::Error::from)?;
+    let pinned_after = fstat(file).map_err(std::io::Error::from)?;
     if !same_private_inode(&candidate.snapshot, &named)
         || !same_private_inode(&candidate.snapshot, &pinned_after)
+        || !same_private_snapshot(&named, &pinned_after)
     {
         return Err(invalid(
             output,
@@ -2537,9 +2805,21 @@ fn unlink_exact_private_candidate(
             WorkerV3PublicationIntentInvalidReasonV1::FileChangedWhileRead,
         ));
     }
+    faults.hit(
+        quarantine_boundary,
+        WorkerV3PublicationIntentFaultTimingV1::After,
+    )?;
+    faults.hit(
+        remove_boundary,
+        WorkerV3PublicationIntentFaultTimingV1::Before,
+    )?;
+    output.verify_path_identity()?;
     let immediate =
         statat(&output.fd, &quarantine, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
-    if !same_private_inode(&candidate.snapshot, &immediate) {
+    let descriptor_immediate = fstat(file).map_err(std::io::Error::from)?;
+    if !same_private_snapshot(&named, &immediate)
+        || !same_private_snapshot(&named, &descriptor_immediate)
+    {
         return Err(invalid(
             output,
             &quarantine,
@@ -2547,7 +2827,7 @@ fn unlink_exact_private_candidate(
         ));
     }
     unlinkat(&output.fd, &quarantine, AtFlags::empty()).map_err(std::io::Error::from)?;
-    let unlinked = fstat(&file).map_err(std::io::Error::from)?;
+    let unlinked = fstat(file).map_err(std::io::Error::from)?;
     if unlinked.st_dev != candidate.snapshot.st_dev
         || unlinked.st_ino != candidate.snapshot.st_ino
         || unlinked.st_nlink != 0
@@ -2558,7 +2838,10 @@ fn unlink_exact_private_candidate(
             WorkerV3PublicationIntentInvalidReasonV1::FileChangedWhileRead,
         ));
     }
-    faults.hit(boundary, WorkerV3PublicationIntentFaultTimingV1::After)
+    faults.hit(
+        remove_boundary,
+        WorkerV3PublicationIntentFaultTimingV1::After,
+    )
 }
 
 fn reserve_cleanup_quarantine_name(
@@ -2635,6 +2918,7 @@ fn remove_uncommitted_occurrence_entries(
             names,
             candidate,
             &purpose,
+            WorkerV3PublicationIntentBoundaryV1::RenameOutputToQuarantine,
             WorkerV3PublicationIntentBoundaryV1::RemoveOutput,
             &mut faults,
         )?;
@@ -3561,7 +3845,7 @@ fn create_temp(
 fn cleanup_temps(
     output: &PinnedOutput,
     names: &IntentNames,
-) -> Result<(), WorkerV3PublicationIntentErrorV1> {
+) -> Result<TempCleanupOutcomeV1, WorkerV3PublicationIntentErrorV1> {
     let directory = rustix::io::fcntl_dupfd_cloexec(&output.fd, 0).map_err(std::io::Error::from)?;
     let mut entries = rustix::fs::Dir::read_from(&directory).map_err(std::io::Error::from)?;
     let mut temps = Vec::new();
@@ -3572,6 +3856,8 @@ fn cleanup_temps(
             requested: MAX_TEMP_ATTEMPTS as usize,
         })?;
     let mut scanned_entries = 0usize;
+    let mut temp_entries = 0usize;
+    let mut quarantined_retiring_record = None;
     for entry in &mut entries {
         let entry = entry.map_err(std::io::Error::from)?;
         let name_bytes = entry.file_name().to_bytes();
@@ -3593,7 +3879,10 @@ fn cleanup_temps(
         if !name_bytes.starts_with(names.temp_prefix.as_bytes()) {
             continue;
         }
-        if temps.len() == MAX_TEMP_ATTEMPTS as usize {
+        temp_entries = temp_entries
+            .checked_add(1)
+            .ok_or(WorkerV3PublicationIntentErrorV1::WorkingSetArithmeticOverflow)?;
+        if temp_entries > MAX_TEMP_ATTEMPTS as usize {
             return Err(invalid(
                 output,
                 &names.temp_prefix,
@@ -3610,7 +3899,19 @@ fn cleanup_temps(
                 WorkerV3PublicationIntentInvalidReasonV1::FileChangedWhileRead,
             )
         })?;
-        temps.push(CleanupCandidate { name, snapshot });
+        let candidate = CleanupCandidate { name, snapshot };
+        if is_retiring_record_quarantine(name_bytes, names) {
+            if quarantined_retiring_record.is_some() {
+                return Err(invalid(
+                    output,
+                    &candidate.name,
+                    WorkerV3PublicationIntentInvalidReasonV1::CommittedAndRetiringCoexist,
+                ));
+            }
+            quarantined_retiring_record = Some(candidate);
+        } else {
+            temps.push(candidate);
+        }
     }
     if !temps.is_empty() {
         output.verify_path_identity()?;
@@ -3622,13 +3923,38 @@ fn cleanup_temps(
                 names,
                 candidate,
                 &purpose,
+                WorkerV3PublicationIntentBoundaryV1::RenameOutputToQuarantine,
                 WorkerV3PublicationIntentBoundaryV1::RemoveOutput,
                 &mut faults,
             )?;
         }
         fsync(&output.fd).map_err(std::io::Error::from)?;
     }
-    Ok(())
+    Ok(TempCleanupOutcomeV1 {
+        removed_entries: temps.len(),
+        quarantined_retiring_record,
+    })
+}
+
+fn is_retiring_record_quarantine(name: &[u8], names: &IntentNames) -> bool {
+    let Some(suffix) = name
+        .strip_prefix(names.temp_prefix.as_bytes())
+        .and_then(|suffix| suffix.strip_prefix(b"retire-record-"))
+    else {
+        return false;
+    };
+    let mut fields = suffix.split(|byte| *byte == b'-');
+    let Some(process_id) = fields.next() else {
+        return false;
+    };
+    let Some(id) = fields.next() else {
+        return false;
+    };
+    fields.next().is_none()
+        && !process_id.is_empty()
+        && process_id.iter().all(u8::is_ascii_digit)
+        && !id.is_empty()
+        && id.iter().all(u8::is_ascii_digit)
 }
 
 fn validate_renamed_file(
@@ -4687,6 +5013,76 @@ mod tests {
             changed_boundaries.canonical_sha256()
         );
         assert_eq!(first.payload_length(), b"provider-aprovider-b".len());
+    }
+
+    #[test]
+    fn pinned_cleanup_rejects_same_name_replacement() {
+        let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "fe2o3-v3-pinned-cleanup-{}-{id}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let output = PinnedOutput::open_existing(&directory).unwrap();
+        let names = IntentNames::new([0x51; 32], [0x52; 32]).unwrap();
+        let original = b"original-marker";
+        let replacement = b"replacement--x";
+        assert_eq!(original.len(), replacement.len());
+        let fd = openat(
+            &output.fd,
+            &names.retiring,
+            OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR,
+        )
+        .unwrap();
+        let mut writer = fs::File::from(fd);
+        writer.write_all(original).unwrap();
+        writer.sync_all().unwrap();
+        drop(writer);
+        let (file, snapshot) = open_private_file(&output, &names.retiring, original.len()).unwrap();
+
+        let displaced = format!("{}.displaced", names.retiring);
+        renameat(&output.fd, &names.retiring, &output.fd, &displaced).unwrap();
+        let replacement_fd = openat(
+            &output.fd,
+            &names.retiring,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR,
+        )
+        .unwrap();
+        let mut replacement_file = fs::File::from(replacement_fd);
+        replacement_file.write_all(replacement).unwrap();
+        replacement_file.sync_all().unwrap();
+        drop(replacement_file);
+
+        let mut faults = FaultInjector::new(None);
+        assert!(matches!(
+            unlink_pinned_private_candidate(
+                &output,
+                &names,
+                &CleanupCandidate {
+                    name: PathBuf::from(&names.retiring),
+                    snapshot,
+                },
+                "test-record",
+                WorkerV3PublicationIntentBoundaryV1::RenameRetiringRecordToQuarantine,
+                WorkerV3PublicationIntentBoundaryV1::RemoveRetiringRecord,
+                &file,
+                &mut faults,
+            ),
+            Err(WorkerV3PublicationIntentErrorV1::InvalidIntent {
+                reason: WorkerV3PublicationIntentInvalidReasonV1::FileChangedWhileRead,
+                ..
+            })
+        ));
+        assert_eq!(
+            fs::read(directory.join(&names.retiring)).unwrap(),
+            replacement
+        );
+        assert_eq!(fs::read(directory.join(displaced)).unwrap(), original);
+        drop(file);
+        drop(output);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
