@@ -1597,7 +1597,7 @@ fn order_projected_block_effects(
             items.push(ProjectedBlockItemV1::Effect { operation, source });
         }
     }
-    while let Some(site) = sites.next() {
+    for site in sites {
         if site.insertion_operation != source_at.len() {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "a checked access site is outside its semantic block",

@@ -387,7 +387,7 @@ mod tests {
         let tile = unsafe { tile.assume_init_for_host_test() };
         for lane in 0..64 {
             let witness = WaveLane::<Wave64>::from_model_snapshot(lane).unwrap();
-            assert_eq!(tile.read_wave_fragment(&witness), Some([lane as u32; 4]));
+            assert_eq!(tile.read_wave_fragment(&witness), Some([lane; 4]));
         }
     }
 
@@ -420,7 +420,7 @@ mod tests {
     #[test]
     fn intrinsic_stub_fails_closed_on_host() {
         assert!(catch_unwind(DeviceMatrix::current).is_err());
-        assert!(catch_unwind(|| gfx942_lds_bf16_tile_pair_m16x16_v1()).is_err());
+        assert!(catch_unwind(gfx942_lds_bf16_tile_pair_m16x16_v1).is_err());
         let matrix = DeviceMatrix::for_host_test();
         assert!(
             catch_unwind(AssertUnwindSafe(|| {

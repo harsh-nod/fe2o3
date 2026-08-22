@@ -1301,14 +1301,14 @@ fn validate_reviewed_fe2o3_device_provider_definition_v1(
     definition: &ReviewedProviderSemanticDefinitionV1,
 ) -> Result<(), String> {
     validate_safe_execution_provider_definition_v1(definition)?;
-    if let Some(expected_definition_path) = exact_provider_compiler_definition_path_v1(item) {
-        if definition.canonical_definition_path != expected_definition_path {
-            return Err(format!(
-                "provider definition path is `{}`, expected `{expected_definition_path}` for `{}`",
-                definition.canonical_definition_path,
-                item.canonical_path()
-            ));
-        }
+    if let Some(expected_definition_path) = exact_provider_compiler_definition_path_v1(item)
+        && definition.canonical_definition_path != expected_definition_path
+    {
+        return Err(format!(
+            "provider definition path is `{}`, expected `{expected_definition_path}` for `{}`",
+            definition.canonical_definition_path,
+            item.canonical_path()
+        ));
     }
     definition.durable_semantic_identity(
         ProviderSemanticDefinitionRoleV1::SemanticTerminal,
