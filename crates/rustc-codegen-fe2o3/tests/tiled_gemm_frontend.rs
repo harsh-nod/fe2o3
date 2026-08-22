@@ -54,7 +54,7 @@ fn genuine_build(workspace: &Path, target: &str, retained_llvm: Option<&Path>) -
         .expect("run genuine tiled GEMM frontend fixture")
 }
 
-fn provider_impostor_build(workspace: &Path, package: &str) -> Output {
+fn provider_impostor_build(workspace: &Path, package: &str, managed_target: &Path) -> Output {
     let fixture =
         workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/tiled-gemm-provider-impostor");
     Command::new(env!("CARGO"))
@@ -70,7 +70,8 @@ fn provider_impostor_build(workspace: &Path, package: &str) -> Output {
             "--manifest-path",
         ])
         .arg(fixture.join("Cargo.toml"))
-        .args(["-p", package])
+        .args(["-p", package, "--target-dir"])
+        .arg(managed_target)
         .env(
             "FE2O3_BACKEND",
             cargo_target_directory(workspace).join("debug/librustc_codegen_fe2o3.so"),
@@ -171,9 +172,15 @@ fn probe_real_gfx942_hsaco(imported_llvm: &Path, output_directory: &Path) {
 fn same_name_dependency_alias_and_hostile_rust_abis_fail_at_provider_binding() {
     let _lock = backend_test_lock();
     let workspace = workspace();
+    let managed_target = std::env::temp_dir().join(format!(
+        "fe2o3-matrix-provider-impostor-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&managed_target);
     let built = Command::new(env!("CARGO"))
         .current_dir(&workspace)
         .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
+        .env("CARGO_PROFILE_DEV_DEBUG", "0")
         .output()
         .expect("build codegen backend");
     assert!(
@@ -187,7 +194,7 @@ fn same_name_dependency_alias_and_hostile_rust_abis_fail_at_provider_binding() {
         "matrix-provider-impostor-layout",
         "matrix-provider-impostor-fnabi",
     ] {
-        let rejected = provider_impostor_build(&workspace, package);
+        let rejected = provider_impostor_build(&workspace, package, &managed_target);
         let stderr = String::from_utf8_lossy(&rejected.stderr);
         assert!(
             !rejected.status.success(),
@@ -195,7 +202,7 @@ fn same_name_dependency_alias_and_hostile_rust_abis_fail_at_provider_binding() {
         );
         assert!(
             stderr.contains(
-                "trusted-provider rejection: diagnostic item `fe2o3_device_matrix_context_from_compiler_v1`"
+                "trusted-provider rejection: diagnostic item `fe2o3_device_matrix_context_current_v1`"
             ) && stderr.contains("is outside the reviewed fe2o3-device source root"),
             "external provider impostor `{package}` missed the reviewed provider boundary:\n{stderr}"
         );
@@ -204,6 +211,7 @@ fn same_name_dependency_alias_and_hostile_rust_abis_fail_at_provider_binding() {
             "external provider impostor `{package}` acquired verified Kernel IR authority:\n{stderr}"
         );
     }
+    std::fs::remove_dir_all(managed_target).expect("remove isolated provider-impostor target");
 }
 
 #[test]
@@ -338,7 +346,7 @@ fn genuine_matrix_items_reach_verified_ir_and_local_markers_fail_closed() {
     assert!(!spoof.status.success());
     assert!(
         stderr.contains(
-            "trusted-provider rejection: diagnostic item `fe2o3_device_matrix_context_from_compiler_v1`"
+            "trusted-provider rejection: diagnostic item `fe2o3_device_matrix_context_current_v1`"
         ) && stderr.contains("provider is the local compilation crate"),
         "local marker spoof missed the exact trusted-provider boundary:\n{stderr}"
     );

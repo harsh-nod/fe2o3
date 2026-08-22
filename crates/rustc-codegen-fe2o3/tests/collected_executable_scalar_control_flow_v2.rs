@@ -82,7 +82,7 @@ const ROW_PROVIDER_PATHS: [&[u8]; 8] = [
     b"fe2o3_device::ThreadIndex::get",
     b"fe2o3_device::DisjointSlice::<T>::get_mut_at",
     b"fe2o3_device::DeviceMath",
-    b"fe2o3_device::DeviceMath::from_compiler",
+    b"fe2o3_device::DeviceMath::current",
     b"fe2o3_device::DeviceMath::exp_f32",
 ];
 const ROW_ABI_DOMAIN: &[u8] = b"fe2o3.row-softmax.abi-binding.v1";
@@ -4270,10 +4270,17 @@ fn tiled_gemm_lds_slice1_source_mutations_cannot_select_canonical_ir() {
     let backend = build_collection_backend(&workspace);
     let mutations = [
         (
-            "missing-barrier",
+            "partial-tile-publish",
             TILED_GEMM_LDS_SLICE1_FIXTURE.replace(
-                "unsafe { sync::syncthreads() };",
-                "{ /* deliberately omitted */ }",
+                "    b_lds.write_mfma_fragment(&lane, b_global);\n",
+                "",
+            ),
+        ),
+        (
+            "cross-pair-publish",
+            TILED_GEMM_LDS_SLICE1_FIXTURE.replace(
+                "    let (mut a_lds, mut b_lds) = gfx942_lds_bf16_tile_pair_m16x16_v1();",
+                "    let (mut a_lds, _first_b_lds) = gfx942_lds_bf16_tile_pair_m16x16_v1();\n    let (_second_a_lds, mut b_lds) = gfx942_lds_bf16_tile_pair_m16x16_v1();",
             ),
         ),
         (
@@ -4308,7 +4315,7 @@ fn lookalike_lds_pair_v1<'workgroup>() -> (
     fe2o3_device::LdsTile16x16<'workgroup, fe2o3_device::Bf16>,
     fe2o3_device::LdsTile16x16<'workgroup, fe2o3_device::Bf16>,
 ) {
-    unsafe { gfx942_lds_bf16_tile_pair_m16x16_v1() }
+    gfx942_lds_bf16_tile_pair_m16x16_v1()
 }
 "#;
     let output = TestOutputDir::new(&workspace);

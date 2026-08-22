@@ -376,7 +376,7 @@ fn exact_phase_a_source_authenticates_complete_wave64_profile() {
     for marker in [
         "authenticated exact source bytes",
         "Phase A fallback namespace, distinct wrapper/session-derived ordinary #[kernel(typed)] root",
-        "complete reachable portable-MIR closure 3371216db973659f9901ad597895a779fb99935bf8d38a64bce75ba0b9b6aff2",
+        "complete reachable portable-MIR closure 7d3233d6761c7291a91da6ab43d0a60625668296656f782540b1672ef683b74d",
         "3 ordered collectives, 3 lane-owned outputs",
         "exact grid [1, 1, 1]",
         "reviewed source-to-profile correspondence only",
@@ -432,15 +432,15 @@ fn hostile_source_and_compiler_profile_mutations_fail_closed() {
             "collective-order",
             mutation(
                 SOURCE,
-                "let reduction = unsafe { wave.reduce_sum(&context, contribution) };\n    let inclusive = unsafe { wave.inclusive_scan_sum(&context, contribution) };",
-                "let inclusive = unsafe { wave.inclusive_scan_sum(&context, contribution) };\n    let reduction = unsafe { wave.reduce_sum(&context, contribution) };",
+                "let reduction = wave.reduce_sum(&context, contribution);\n    let inclusive = wave.inclusive_scan_sum(&context, contribution);",
+                "let inclusive = wave.inclusive_scan_sum(&context, contribution);\n    let reduction = wave.reduce_sum(&context, contribution);",
             ),
         ),
         (
             "collective-count",
             mutation(
                 SOURCE,
-                "let exclusive = unsafe { wave.exclusive_scan_sum(&context, contribution) };",
+                "let exclusive = wave.exclusive_scan_sum(&context, contribution);",
                 "let exclusive = 0.0_f32;",
             ),
         ),
@@ -452,16 +452,16 @@ fn hostile_source_and_compiler_profile_mutations_fail_closed() {
             "output-role",
             mutation(
                 SOURCE,
-                "reduction_output.get_mut_at(lane)",
-                "inclusive_output.get_mut_at(lane)",
+                "reduction_output.get_mut(lane_index)",
+                "inclusive_output.get_mut(lane_index)",
             ),
         ),
         (
             "output-ownership",
             mutation(
                 SOURCE,
-                "exclusive_output.get_mut_at(lane)",
-                "exclusive_output.get_mut_at(0)",
+                "exclusive_output.get_mut(thread::index_1d())",
+                "unsafe { exclusive_output.get_mut_at(0) }",
             ),
         ),
     ];

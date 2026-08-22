@@ -9,7 +9,7 @@ const FRONTEND_CONTRACT: &[u8] = &[
 
 #[unsafe(export_name = "fe2o3_kernel_tiled_gemm_frontend_v1")]
 pub fn kernel(lhs: Bf16MfmaFragment, rhs: Bf16MfmaFragment, accumulator: F32AccumulatorFragment) {
-    let matrix = unsafe { DeviceMatrix::from_compiler() };
+    let matrix = DeviceMatrix::current();
     let _result = unsafe { matrix.multiply_accumulate(lhs, rhs, accumulator) };
 }
 

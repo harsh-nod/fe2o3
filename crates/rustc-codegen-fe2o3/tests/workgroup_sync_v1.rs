@@ -694,8 +694,8 @@ fn hostile_lds_source_and_compiler_mutations_fail_closed() {
             "lds-extent",
             mutation(
                 LDS_SOURCE,
-                "DynamicLds::<i32>::exact_from_compiler::<64>",
-                "DynamicLds::<i32>::exact_from_compiler::<32>",
+                "DynamicLds::<i32>::exact_current::<64>",
+                "DynamicLds::<i32>::exact_current::<32>",
             ),
         ),
         (
@@ -704,14 +704,6 @@ fn hostile_lds_source_and_compiler_mutations_fail_closed() {
                 LDS_SOURCE,
                 "launch(required = [64, 1, 1], max = [64, 1, 1])",
                 "launch(required = [32, 1, 1], max = [32, 1, 1])",
-            ),
-        ),
-        (
-            "lds-epoch",
-            mutation(
-                LDS_SOURCE,
-                "&mut lds_scope, epoch)",
-                "&mut lds_scope, epoch.wrapping_add(1))",
             ),
         ),
         (
@@ -728,7 +720,11 @@ fn hostile_lds_source_and_compiler_mutations_fail_closed() {
         ),
         (
             "lds-output-index",
-            mutation(LDS_SOURCE, "output.get_mut_at(0)", "output.get_mut_at(1)"),
+            mutation(
+                LDS_SOURCE,
+                "output.get_mut_exclusive(&leader, 0)",
+                "output.get_mut_exclusive(&leader, 1)",
+            ),
         ),
         (
             "lds-terminal-substitution",

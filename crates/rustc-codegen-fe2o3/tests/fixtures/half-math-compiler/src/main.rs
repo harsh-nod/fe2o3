@@ -20,7 +20,7 @@ pub fn half_math_kernel(
     let f16_from_scalar = F16::from_f32(scalar);
     let _scalar_round_trip = f16_from_scalar.to_f32();
 
-    let math = unsafe { DeviceMath::from_compiler() };
+    let math = DeviceMath::current();
     let _root = math.sqrt_f32(scalar);
     let _sine = math.sin_f32(scalar);
     let _packed_fma = math.mul_add_bf16x2(packed, packed, packed);

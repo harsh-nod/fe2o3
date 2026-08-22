@@ -23,8 +23,8 @@ pub struct DeviceMatrix(PhantomData<*mut ()>);
 
 impl DeviceMatrix {
     #[inline(never)]
-    #[rustc_diagnostic_item = "fe2o3_device_matrix_context_from_compiler_v1"]
-    pub unsafe fn from_compiler() -> Self {
+    #[rustc_diagnostic_item = "fe2o3_device_matrix_context_current_v1"]
+    pub fn current() -> Self {
         unreachable!()
     }
 
@@ -43,7 +43,7 @@ impl DeviceMatrix {
 
 #[unsafe(export_name = "fe2o3_kernel_tiled_gemm_local_marker_spoof")]
 pub fn kernel(lhs: Bf16MfmaFragment, rhs: Bf16MfmaFragment, accumulator: F32AccumulatorFragment) {
-    let matrix = unsafe { DeviceMatrix::from_compiler() };
+    let matrix = DeviceMatrix::current();
     let _result = unsafe { matrix.multiply_accumulate(lhs, rhs, accumulator) };
 }
 

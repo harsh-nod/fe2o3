@@ -24,8 +24,8 @@ pub struct DeviceMatrix(PhantomData<*mut ()>);
 
 impl DeviceMatrix {
     #[inline(never)]
-    #[rustc_diagnostic_item = "fe2o3_device_matrix_context_from_compiler_v1"]
-    pub unsafe fn from_compiler() -> Self {
+    #[rustc_diagnostic_item = "fe2o3_device_matrix_context_current_v1"]
+    pub fn current() -> Self {
         unreachable!()
     }
 

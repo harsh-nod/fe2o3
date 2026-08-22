@@ -34,7 +34,7 @@ pub fn tiled_gemm_v1(a: &[u16], b: &[u16], c: &[f32], mut d: DisjointSlice<f32>)
         c[(depth_base + 3) * 16 + lane_column],
     ]);
 
-    let matrix = unsafe { DeviceMatrix::from_compiler() };
+    let matrix = DeviceMatrix::current();
     let result = unsafe { matrix.multiply_accumulate(lhs, rhs, accumulator) }.into_values();
 
     if let Some(output) = unsafe { d.get_mut_at(depth_base * 16 + lane_column) } {
