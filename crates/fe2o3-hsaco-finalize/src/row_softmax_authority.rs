@@ -92,7 +92,7 @@ pub const ROW_SOFTMAX_V1_PROVIDER_ITEMS: [RowSoftmaxV1ProviderItemV1;
         source_path: "math.rs",
     },
     RowSoftmaxV1ProviderItemV1 {
-        canonical_path: "fe2o3_device::DeviceMath::from_compiler",
+        canonical_path: "fe2o3_device::DeviceMath::current",
         source_path: "math.rs",
     },
     RowSoftmaxV1ProviderItemV1 {
