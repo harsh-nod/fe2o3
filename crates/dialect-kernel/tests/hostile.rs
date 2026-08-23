@@ -4,8 +4,9 @@ use dialect_kernel::{
     ITERATION_DOMAIN_ATTR_KEY, IndexConstantOp, IndexType, IndexValueAttr, IterationDomainAttr,
     KernelError, MAX_ITERATION_RANK, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp,
     RankedMemoryError, RankedViewOp, RankedViewType, RegistrationError, RegistrationOutcome,
-    SemanticOwner, StructuredAlgorithmOp, register_dialect,
+    SemanticOwner, StructuredAlgorithmOp, TensorConvergenceAttr, TensorLayoutOp, register_dialect,
 };
+use fe2o3_kernel_ir::{TensorInstructionProfileV1, TensorLayoutContractV1, TensorSymbolicMapV1};
 use pliron::{
     attribute::Attribute,
     builtin::{
@@ -25,6 +26,23 @@ use pliron::{
 
 fn kernel_name() -> DialectName {
     DialectName::try_new(DIALECT_NAME).expect("valid dialect")
+}
+
+#[test]
+fn tensor_layout_round_trips_full_opaque_identities_without_aliasing() {
+    let mut context = Context::new();
+    register_dialect(&mut context, &kernel_name()).unwrap();
+    let mut contract = TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64();
+    contract.profile = TensorInstructionProfileV1::Opaque(u32::MAX);
+    contract.a.mapping = TensorSymbolicMapV1::Opaque(u32::MAX);
+    let op = TensorLayoutOp::new(
+        &mut context,
+        &contract,
+        TensorConvergenceAttr::UniformSubgroup,
+        64,
+    );
+    verify_op(&op, &context).expect("locally well-formed opaque contract");
+    assert_eq!(op.contract(&context).unwrap(), contract);
 }
 
 #[test]

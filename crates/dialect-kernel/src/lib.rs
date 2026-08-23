@@ -31,6 +31,7 @@ pub use general_gemm::{GeneralGemmAbiSchemaAttr, GeneralGemmEpilogueSchemaAttr, 
 
 mod ranked_memory;
 mod semantic_contract;
+mod tensor_layout;
 
 pub use ranked_memory::{
     AccessKindAttr, AllocationOriginAttr, AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr,
@@ -45,6 +46,10 @@ pub use semantic_contract::{
     RequireEquivalentOp, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr,
     SemanticConstantOp, SemanticContractError, SemanticScalarType, SemanticSymbolAttr,
     SemanticSymbolOp,
+};
+pub use tensor_layout::{
+    TensorConvergenceAttr, TensorFragmentAttr, TensorInstructionAttr, TensorLayoutDialectError,
+    TensorLayoutOp,
 };
 
 /// The Pliron namespace owned by this crate.
@@ -400,6 +405,10 @@ pub fn register_dialect(
     SemanticConstantOp::register(context);
     SemanticBinaryOp::register(context);
     RequireEquivalentOp::register(context);
+    TensorConvergenceAttr::register(context);
+    TensorInstructionAttr::register(context);
+    TensorFragmentAttr::register(context);
+    TensorLayoutOp::register(context);
 
     let marker = context.aux_data.insert(Box::new(RegistrationMarker));
     context.aux_data_map.insert(marker_key, marker);

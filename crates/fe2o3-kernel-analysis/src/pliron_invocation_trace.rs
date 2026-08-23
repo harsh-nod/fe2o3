@@ -13,7 +13,7 @@ use dialect_gpu::{
 };
 use dialect_kernel::{
     AccessKindAttr, BranchOp, IndexLessThanBranchOp, MemorySpaceAttr, RankedAccessOp, RankedViewOp,
-    ReturnOp,
+    ReturnOp, TensorLayoutOp,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -48,6 +48,9 @@ pub(crate) enum PlironTraceEventV1 {
         memory_scope: MemoryScopeAttr,
         address_space: AddressSpaceAttr,
         order: MemoryOrderAttr,
+    },
+    TensorInstruction {
+        location: PlironTraceLocationV1,
     },
     Memory {
         location: PlironTraceLocationV1,
@@ -357,6 +360,13 @@ pub(crate) fn trace_pliron_invocations_v1(
                         memory_scope,
                         address_space,
                         order,
+                    });
+                } else if operation.downcast_ref::<TensorLayoutOp>().is_some() {
+                    events.push(PlironTraceEventV1::TensorInstruction {
+                        location: PlironTraceLocationV1 {
+                            block: block_index,
+                            operation: operation_index,
+                        },
                     });
                 } else if let Some(access) = operation.downcast_ref::<RankedAccessOp>() {
                     let view = access.view(context);

@@ -1,0 +1,10 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: tail-mask contract is incompatible
+builtin.func @tensor_layout_missing_tail: builtin.function <() -> ()>
+{
+  ^entry_block1v1():
+    v99 = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension 0, kernel_launch_extent: kernel.launch_extent 64]: <() -> (kernel.index )>;
+    kernel.tensor_layout () [] [kernel_tensor_a: kernel.tensor_fragment <1,16,16,1,4,1,16,16,0,1,0,0,1,0,0,4,1,1,1,1,1,1>, kernel_tensor_accumulator: kernel.tensor_fragment <3,16,16,2,4,1,16,16,0,0,4,1,1,0,1,0,0,1,1,1,2,1>, kernel_tensor_b: kernel.tensor_fragment <2,16,16,1,4,1,16,16,0,0,4,1,1,0,1,0,0,1,1,1,1,1>, kernel_tensor_convergence: kernel.tensor_convergence UniformSubgroup, kernel_tensor_instruction: kernel.tensor_instruction <1,0,64,64,4>]: <() -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

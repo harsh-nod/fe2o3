@@ -11,7 +11,8 @@ use crate::{
     LaunchExtentAttr, MemorySpaceAttr, NoAliasClassAttr, RankedAccessOp, RankedViewOp,
     RankedViewType, RequireEquivalentOp, ReturnOp, SemanticBinaryKindAttr, SemanticBinaryOp,
     SemanticConstantAttr, SemanticConstantOp, SemanticScalarType, SemanticSymbolAttr,
-    SemanticSymbolOp,
+    SemanticSymbolOp, TensorConvergenceAttr, TensorFragmentAttr, TensorInstructionAttr,
+    TensorLayoutOp,
 };
 
 fn registration_hook(
@@ -39,6 +40,9 @@ fn registration_hook(
     service.register_attribute::<SemanticSymbolAttr>()?;
     service.register_attribute::<SemanticConstantAttr>()?;
     service.register_attribute::<SemanticBinaryKindAttr>()?;
+    service.register_attribute::<TensorConvergenceAttr>()?;
+    service.register_attribute::<TensorInstructionAttr>()?;
+    service.register_attribute::<TensorFragmentAttr>()?;
     service.register_operation::<AlgorithmOp>()?;
     service.register_operation::<GeneralGemmOp>()?;
     service.register_operation::<RankedViewOp>()?;
@@ -56,6 +60,7 @@ fn registration_hook(
     service.register_operation::<SemanticConstantOp>()?;
     service.register_operation::<SemanticBinaryOp>()?;
     service.register_operation::<RequireEquivalentOp>()?;
+    service.register_operation::<TensorLayoutOp>()?;
     Ok(())
 }
 

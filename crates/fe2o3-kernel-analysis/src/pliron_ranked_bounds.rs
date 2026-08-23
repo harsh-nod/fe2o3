@@ -15,7 +15,7 @@ use dialect_kernel::{
     AccessKindAttr, AnalysisSplitOp, BranchOp, CheckedTiledIndex2DOp, DimensionOp, IndexBinaryOp,
     IndexConstantOp, IndexLessThanBranchOp, InvocationIndexOp, MAX_RANKED_MEMORY_RANK,
     RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp, SemanticBinaryOp,
-    SemanticConstantOp, SemanticSymbolOp, ranked_view_type,
+    SemanticConstantOp, SemanticSymbolOp, TensorLayoutOp, ranked_view_type,
 };
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
@@ -270,6 +270,7 @@ enum RankedOperationKind {
     SemanticConstant,
     SemanticBinary,
     RequireEquivalent,
+    TensorLayout,
 }
 
 impl RankedOperationKind {
@@ -318,6 +319,8 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         Some(RankedOperationKind::SemanticBinary)
     } else if operation.downcast_ref::<RequireEquivalentOp>().is_some() {
         Some(RankedOperationKind::RequireEquivalent)
+    } else if operation.downcast_ref::<TensorLayoutOp>().is_some() {
+        Some(RankedOperationKind::TensorLayout)
     } else {
         None
     }

@@ -28,6 +28,8 @@ mod pliron_semantic_refinement;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_sparse_index;
 #[cfg(feature = "pliron-analysis")]
+mod pliron_tensor_layout;
+#[cfg(feature = "pliron-analysis")]
 mod pliron_workgroup_memory;
 #[cfg(feature = "authenticated-machine-effect")]
 mod scalar_gemm_v1_physical_machine_effect;
@@ -63,6 +65,8 @@ pub use pliron_ranked_bounds::*;
 pub use pliron_semantic_refinement::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_sparse_index::*;
+#[cfg(feature = "pliron-analysis")]
+pub use pliron_tensor_layout::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_workgroup_memory::*;
 #[cfg(feature = "authenticated-machine-effect")]

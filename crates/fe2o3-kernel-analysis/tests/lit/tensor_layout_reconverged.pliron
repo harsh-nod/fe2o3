@@ -1,0 +1,20 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK: PASS
+builtin.func @tensor_layout_reconverged: builtin.function <() -> ()>
+{
+  ^entry_block1v1():
+    v0 = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension 0, kernel_launch_extent: kernel.launch_extent 64]: <() -> (kernel.index )>;
+    v1 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 32]: <() -> (kernel.index )>;
+    kernel.index_lt_br (v0, v1) [^left_block2v1, ^right_block3v1] []: <(kernel.index , kernel.index ) -> ()>
+
+  ^left_block2v1():
+    kernel.br () [^join_block4v1] []: <() -> ()>
+
+  ^right_block3v1():
+    kernel.br () [^join_block4v1] []: <() -> ()>
+
+  ^join_block4v1():
+    kernel.tensor_layout () [] [kernel_tensor_a: kernel.tensor_fragment <1,16,16,1,4,1,16,16,0,1,0,0,1,0,0,4,1,1,1,1,1,1>, kernel_tensor_accumulator: kernel.tensor_fragment <3,16,16,2,4,1,16,16,0,0,4,1,1,0,1,0,0,1,1,1,2,1>, kernel_tensor_b: kernel.tensor_fragment <2,16,16,1,4,1,16,16,0,0,4,1,1,0,1,0,0,1,1,1,1,1>, kernel_tensor_convergence: kernel.tensor_convergence UniformSubgroup, kernel_tensor_instruction: kernel.tensor_instruction <1,0,64,64,1>]: <() -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

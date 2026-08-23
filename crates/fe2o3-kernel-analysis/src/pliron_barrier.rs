@@ -387,6 +387,7 @@ fn barrier_trace(
             } if *execution_scope == scope => Some((*location, *address_space)),
             PlironTraceEventV1::Barrier { .. }
             | PlironTraceEventV1::Fence { .. }
+            | PlironTraceEventV1::TensorInstruction { .. }
             | PlironTraceEventV1::Memory { .. } => None,
         })
         .collect()

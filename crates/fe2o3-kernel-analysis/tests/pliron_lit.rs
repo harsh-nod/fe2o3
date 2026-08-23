@@ -2,10 +2,10 @@ use std::{fs, path::Path};
 
 use dialect_kernel::{AtomicScopeAttr, DIALECT_NAME, MemorySpaceAttr, register_dialect};
 use fe2o3_kernel_analysis::{
-    GENERAL_PLIRON_KERNEL_CHECK_PASS_ORDER_V1, KernelCheckPassKindV1,
+    KernelCheckPassKindV1, PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V1,
     PlironAtomicTargetCapabilityV1, PlironAtomicTargetContextV1,
-    require_general_pliron_kernel_checks_before_lowering_v1,
-    require_general_pliron_kernel_checks_with_atomic_target_before_lowering_v1,
+    require_production_pliron_checks_before_lowering_v1,
+    require_production_pliron_checks_with_atomic_target_before_lowering_v1,
 };
 use pliron::{
     builtin::ops::FuncOp,
@@ -93,10 +93,10 @@ fn run_fixture(path: &Path) {
         PlironAtomicTargetContextV1::new(capabilities).expect("valid bounded atomic target context")
     });
     let result = match atomic_target.as_ref() {
-        Some(target) => require_general_pliron_kernel_checks_with_atomic_target_before_lowering_v1(
+        Some(target) => require_production_pliron_checks_with_atomic_target_before_lowering_v1(
             &context, &function, target,
         ),
-        None => require_general_pliron_kernel_checks_before_lowering_v1(&context, &function),
+        None => require_production_pliron_checks_before_lowering_v1(&context, &function),
     };
     let output = match result {
         Ok(report) => {
@@ -123,8 +123,9 @@ fn run_fixture(path: &Path) {
 #[test]
 fn lit_pipeline_uses_the_fixed_workload_neutral_pass_order() {
     assert_eq!(
-        GENERAL_PLIRON_KERNEL_CHECK_PASS_ORDER_V1,
+        PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V1,
         [
+            KernelCheckPassKindV1::TensorLayout,
             KernelCheckPassKindV1::MemoryBounds,
             KernelCheckPassKindV1::AtomicLegality,
             KernelCheckPassKindV1::RaceFreedom,
@@ -134,7 +135,7 @@ fn lit_pipeline_uses_the_fixed_workload_neutral_pass_order() {
         ]
     );
     assert!(
-        GENERAL_PLIRON_KERNEL_CHECK_PASS_ORDER_V1
+        PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V1
             .iter()
             .all(|pass| !pass.name().contains("gemm"))
     );

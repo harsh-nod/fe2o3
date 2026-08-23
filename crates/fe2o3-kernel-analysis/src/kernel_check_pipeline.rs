@@ -13,9 +13,10 @@ use fe2o3_kernel_ir::{
     AddressSpace, Diagnostic as IrDiagnostic, ExplicitLaunchExtent1d, FormalBoundsRequirement,
     FormalIndexWidth, FormalMemoryIncompleteReason, FormalMemoryObligationAnalysis, Function,
     FunctionId, FunctionOperationLocation, InterInvocationConflictRequirement, KernelId,
-    MatrixLdsProfile, MatrixOperationKind, Module, OperationKind, RuntimeAliasRequirement, ValueId,
-    VerificationErrors, VerifiedKernelIrModuleV1, derive_kernel_memory_obligations_from_verified,
-    verify_module_ref,
+    MatrixLdsProfile, MatrixOperationKind, Module, OperationKind, RuntimeAliasRequirement,
+    TensorLayoutFindingV1, ValueId, VerificationErrors, VerifiedKernelIrModuleV1,
+    derive_kernel_memory_obligations_from_verified, verify_module_ref,
+    verify_tensor_layout_contract_v1,
 };
 
 use crate::{
@@ -27,9 +28,10 @@ use crate::{
 ///
 /// The order is part of the API: later passes consume facts established or
 /// cached by earlier passes, and no lowering pass may run between them.
-pub const GENERAL_KERNEL_CHECK_PASS_ORDER_V1: [KernelCheckPassKindV1; 6] = [
+pub const GENERAL_KERNEL_CHECK_PASS_ORDER_V1: [KernelCheckPassKindV1; 7] = [
     KernelCheckPassKindV1::Structural,
     KernelCheckPassKindV1::ControlFlow,
+    KernelCheckPassKindV1::TensorLayout,
     KernelCheckPassKindV1::MemoryBounds,
     KernelCheckPassKindV1::RaceFreedom,
     KernelCheckPassKindV1::BarrierConvergence,
@@ -42,6 +44,7 @@ pub enum KernelCheckPassKindV1 {
     Structural,
     ControlFlow,
     MemoryBounds,
+    TensorLayout,
     AtomicLegality,
     RaceFreedom,
     BarrierConvergence,
@@ -55,6 +58,7 @@ impl KernelCheckPassKindV1 {
             Self::Structural => "kernel-structural-v1",
             Self::ControlFlow => "kernel-control-flow-v1",
             Self::MemoryBounds => "kernel-memory-bounds-v1",
+            Self::TensorLayout => "kernel-tensor-layout-v1",
             Self::AtomicLegality => "kernel-atomic-legality-v1",
             Self::RaceFreedom => "kernel-race-freedom-v1",
             Self::BarrierConvergence => "kernel-barrier-convergence-v1",
@@ -306,6 +310,16 @@ pub enum KernelCheckFindingV1 {
     RuntimeBoundsAuthenticationRequired(FormalBoundsRequirement),
     RuntimeAliasAuthenticationRequired(RuntimeAliasRequirement),
     InterInvocationConflict(InterInvocationConflictRequirement),
+    TensorLayout {
+        function: FunctionId,
+        location: FunctionOperationLocation,
+        finding: TensorLayoutFindingV1,
+    },
+    DivergentTensorInstruction {
+        function: FunctionId,
+        location: FunctionOperationLocation,
+        control: Variation,
+    },
     DivergentBarrier {
         function: FunctionId,
         location: FunctionOperationLocation,
@@ -359,8 +373,13 @@ impl KernelCheckFindingV1 {
             Self::Structural(_)
             | Self::ControlFlow(_)
             | Self::InterInvocationConflict(_)
+            | Self::DivergentTensorInstruction { .. }
             | Self::DivergentBarrier { .. }
             | Self::WorkgroupReadBeforePublish { .. } => KernelCheckStatusV1::Rejected,
+            Self::TensorLayout { finding, .. } if !finding.is_incomplete() => {
+                KernelCheckStatusV1::Rejected
+            }
+            Self::TensorLayout { .. } => KernelCheckStatusV1::Incomplete,
             Self::MemoryAnalysisIncomplete(_)
             | Self::RuntimeBoundsAuthenticationRequired(_)
             | Self::RuntimeAliasAuthenticationRequired(_)
@@ -374,8 +393,10 @@ impl KernelCheckFindingV1 {
     pub const fn operation_location(&self) -> Option<FunctionOperationLocation> {
         match self {
             Self::RuntimeBoundsAuthenticationRequired(requirement) => Some(requirement.location()),
+            Self::TensorLayout { location, .. } => Some(*location),
             Self::InterInvocationConflict(requirement) => Some(requirement.left()),
-            Self::DivergentBarrier { location, .. }
+            Self::DivergentTensorInstruction { location, .. }
+            | Self::DivergentBarrier { location, .. }
             | Self::WorkgroupReadBeforePublish { location, .. }
             | Self::WorkgroupMemoryIncomplete { location, .. } => Some(*location),
             Self::BarrierAnalysisIncomplete {
@@ -425,6 +446,24 @@ impl fmt::Display for KernelCheckFindingV1 {
                 requirement.allocation().parameter_index(),
                 display_operation_location(requirement.left()),
                 display_operation_location(requirement.right()),
+            ),
+            Self::TensorLayout {
+                function,
+                location,
+                finding,
+            } => write!(
+                formatter,
+                "tensor layout in {function} at {}: {finding}",
+                display_operation_location(*location),
+            ),
+            Self::DivergentTensorInstruction {
+                function,
+                location,
+                control,
+            } => write!(
+                formatter,
+                "tensor instruction in {function} at {} is controlled by {control:?} data",
+                display_operation_location(*location),
             ),
             Self::DivergentBarrier {
                 function,
@@ -719,7 +758,9 @@ pub fn run_general_kernel_checks_from_verified_v1(
         .function(&kernel.entry)
         .expect("verified kernel entry exists");
     let control_flow = analyze_control_flow(entry);
+    let uniformity = analyze_function(entry);
     passes.push(control_flow_report(&control_flow));
+    passes.push(tensor_layout_report(entry, &uniformity));
 
     // One extraction is shared by the bounds and race passes.
     let memory = derive_kernel_memory_obligations_from_verified(
@@ -731,7 +772,7 @@ pub fn run_general_kernel_checks_from_verified_v1(
     .expect("verified module and selected kernel remain valid");
     passes.push(memory_bounds_report(&memory));
     passes.push(race_report(&memory));
-    passes.push(barrier_report(entry));
+    passes.push(barrier_report(entry, &uniformity));
     passes.push(match control_flow {
         Ok(control_flow) => workgroup_memory_report(entry, &control_flow),
         Err(_) => KernelCheckPassReportV1::new(
@@ -772,6 +813,56 @@ fn control_flow_report(
             .map(KernelCheckFindingV1::ControlFlow)
             .collect(),
     )
+}
+
+fn tensor_layout_report(
+    function: &Function,
+    uniformity: &crate::AnalysisReport,
+) -> KernelCheckPassReportV1 {
+    let findings =
+        function
+            .body
+            .as_ref()
+            .into_iter()
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| {
+                block.operations.iter().enumerate().filter_map(
+                    move |(operation_index, operation)| {
+                        let OperationKind::Matrix(matrix) = &operation.kind else {
+                            return None;
+                        };
+                        let MatrixOperationKind::MultiplyAccumulate { .. } = &matrix.kind else {
+                            return None;
+                        };
+                        Some((
+                            FunctionOperationLocation::new(block.id, operation_index),
+                            matrix.tensor_layout.as_ref(),
+                        ))
+                    },
+                )
+            })
+            .flat_map(|(location, contract)| {
+                let mut findings = contract
+                    .into_iter()
+                    .flat_map(verify_tensor_layout_contract_v1)
+                    .map(|finding| KernelCheckFindingV1::TensorLayout {
+                        function: function.id.clone(),
+                        location,
+                        finding,
+                    })
+                    .collect::<Vec<_>>();
+                let control = uniformity.block_control(location.block);
+                if !control.is_uniform_for(fe2o3_kernel_ir::SynchronizationScope::Subgroup) {
+                    findings.push(KernelCheckFindingV1::DivergentTensorInstruction {
+                        function: function.id.clone(),
+                        location,
+                        control,
+                    });
+                }
+                findings
+            })
+            .collect();
+    KernelCheckPassReportV1::new(KernelCheckPassKindV1::TensorLayout, findings)
 }
 
 fn memory_bounds_report(analysis: &FormalMemoryObligationAnalysis) -> KernelCheckPassReportV1 {
@@ -817,8 +908,10 @@ fn race_report(analysis: &FormalMemoryObligationAnalysis) -> KernelCheckPassRepo
     KernelCheckPassReportV1::new(KernelCheckPassKindV1::RaceFreedom, findings)
 }
 
-fn barrier_report(function: &Function) -> KernelCheckPassReportV1 {
-    let analysis = analyze_function(function);
+fn barrier_report(
+    function: &Function,
+    analysis: &crate::AnalysisReport,
+) -> KernelCheckPassReportV1 {
     let findings = analysis
         .diagnostics()
         .iter()
