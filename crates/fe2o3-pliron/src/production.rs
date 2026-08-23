@@ -223,6 +223,7 @@ pub enum ProductionSessionErrorV1 {
     WrongConstructionKind,
     RankedGraphChanged,
     RankedRecipe(ProductionRankedKernelErrorV1),
+    RankedTensorLayout(fe2o3_kernel_analysis::PlironTensorLayoutCheckErrorV1),
     RankedBounds(fe2o3_kernel_analysis::RankedBoundsCheckErrorV1),
     RankedAtomic(fe2o3_kernel_analysis::PlironAtomicLegalityCheckErrorV1),
     RankedRace(fe2o3_kernel_analysis::RankedRaceCheckErrorV1),
@@ -264,6 +265,7 @@ impl fmt::Display for ProductionSessionErrorV1 {
             Self::RankedRecipe(error) => {
                 write!(formatter, "production ranked recipe failed: {error}")
             }
+            Self::RankedTensorLayout(error) => error.fmt(formatter),
             Self::RankedBounds(error) => error.fmt(formatter),
             Self::RankedAtomic(error) => error.fmt(formatter),
             Self::RankedRace(error) => error.fmt(formatter),
@@ -280,6 +282,7 @@ impl Error for ProductionSessionErrorV1 {
         match self {
             Self::Operation(error) => Some(error),
             Self::RankedRecipe(error) => Some(error),
+            Self::RankedTensorLayout(error) => Some(error),
             Self::RankedBounds(error) => Some(error),
             Self::RankedAtomic(error) => Some(error),
             Self::RankedRace(error) => Some(error),

@@ -1,7 +1,9 @@
 use dialect_gpu::{AddressSpaceAttr, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr};
 use dialect_kernel::{
     AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, MemorySpaceAttr, SemanticBinaryKindAttr,
+    TensorConvergenceAttr,
 };
+use fe2o3_kernel_ir::{TensorInstructionProfileV1, TensorLayoutContractV1, TensorSymbolicMapV1};
 use fe2o3_pliron::{
     DialectRegistration, HARD_MAX_SESSION_OPERATION_TREE_ITEMS, ProductionConstructionV1,
     ProductionPlironSessionV1, ProductionRankedBlockV1, ProductionRankedCompileErrorV1,
@@ -113,6 +115,30 @@ fn construction(kernel: ProductionRankedKernelV1) -> ProductionConstructionV1 {
     ProductionConstructionV1::ranked_kernel("kernel_module", kernel).expect("valid construction")
 }
 
+fn tensor_kernel(contract: TensorLayoutContractV1) -> ProductionRankedKernelV1 {
+    ProductionRankedKernelV1::new(
+        "tensor_contract",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::ExecutionLayout {
+                    grid_identity: 1,
+                    global_extents: [64, 1, 1],
+                    workgroup_extents: [64, 1, 1],
+                    subgroup_size: 64,
+                },
+                ProductionRankedOperationV1::TensorLayout {
+                    contract,
+                    convergence: TensorConvergenceAttr::UniformSubgroup,
+                    active_lanes: 64,
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .expect("valid tensor recipe")
+}
+
 fn session(with_kernel_dialect: bool) -> ProductionPlironSessionV1 {
     let registrations = if with_kernel_dialect {
         vec![
@@ -136,6 +162,7 @@ fn static_non_gemm_kernel_reaches_safety_verified_lowering_input() {
 
     assert_eq!(input.kernel().function_name(), "static_copy");
     assert!(input.bounds_report().is_clean());
+    assert!(input.tensor_layout_report().is_clean());
     assert!(input.atomic_report().is_clean());
     assert!(input.race_report().is_clean());
     assert!(!input.race_report().grants_compiler_refinement_authority());
@@ -219,6 +246,64 @@ fn recipe_rejects_noalias_class_without_authenticated_origin() {
         error,
         ProductionRankedKernelErrorV1::InvalidAllocationContract
     );
+}
+
+#[test]
+fn direct_and_independently_transformed_tensor_layouts_reach_production_lowering() {
+    for contract in [
+        TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64(),
+        TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64_lds_xor4(),
+        TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64().with_b_lds_xor4(),
+        TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64()
+            .with_zero_filled_predicate_inputs(),
+    ] {
+        let input = compile_ranked_kernel_for_lowering_v1(
+            construction(tensor_kernel(contract)),
+            ProductionSessionLimitsV1::default(),
+        )
+        .expect("verified tensor contract");
+        assert!(input.tensor_layout_report().is_clean());
+        assert!(
+            !input
+                .tensor_layout_report()
+                .grants_artifact_or_launch_authority()
+        );
+    }
+}
+
+#[test]
+fn production_tensor_layout_rejects_wrong_mapping_and_fails_closed_on_opaque_forms() {
+    let mut wrong = TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64();
+    wrong.accumulator.mapping = wrong.a.mapping;
+    let error = compile_ranked_kernel_for_lowering_v1(
+        construction(tensor_kernel(wrong)),
+        ProductionSessionLimitsV1::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedTensorLayout(_))
+    ));
+    assert!(error.to_string().contains("FE2O3-TENSOR-LAYOUT-001"));
+    assert!(
+        error
+            .to_string()
+            .contains("Accumulator lane/component mapping")
+    );
+
+    let mut opaque = TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64();
+    opaque.profile = TensorInstructionProfileV1::Opaque(u32::MAX);
+    opaque.a.mapping = TensorSymbolicMapV1::Opaque(u32::MAX);
+    let error = compile_ranked_kernel_for_lowering_v1(
+        construction(tensor_kernel(opaque)),
+        ProductionSessionLimitsV1::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedTensorLayout(_))
+    ));
+    assert!(error.to_string().contains("FE2O3-TENSOR-LAYOUT-002"));
 }
 
 #[test]

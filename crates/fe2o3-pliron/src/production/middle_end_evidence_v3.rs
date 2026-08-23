@@ -13,6 +13,11 @@ use dialect_kernel::{
     SemanticBinaryKindAttr,
 };
 use fe2o3_kernel_analysis::{GENERAL_PLIRON_KERNEL_CHECK_PASS_ORDER_V1, KernelCheckPassKindV1};
+use fe2o3_kernel_ir::{
+    MatrixElement, TensorElementPackingV1, TensorFragmentLayoutV1, TensorInstructionProfileV1,
+    TensorLayoutContractV1, TensorLdsSwizzleV1, TensorMultiplicityV1, TensorOperandRoleV1,
+    TensorSymbolicMapV1, TensorTailMaskV1,
+};
 use sha2::{Digest, Sha256};
 
 use super::{
@@ -104,7 +109,9 @@ impl ProductionMiddleEndEvidencePassV3 {
             KernelCheckPassKindV1::BarrierConvergence => Some(Self::BarrierConvergence),
             KernelCheckPassKindV1::WorkgroupMemory => Some(Self::WorkgroupMemory),
             KernelCheckPassKindV1::SemanticRefinement => Some(Self::SemanticRefinement),
-            KernelCheckPassKindV1::Structural | KernelCheckPassKindV1::ControlFlow => None,
+            KernelCheckPassKindV1::Structural
+            | KernelCheckPassKindV1::ControlFlow
+            | KernelCheckPassKindV1::TensorLayout => None,
         }
     }
 }
@@ -1168,6 +1175,21 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             digest.update([address_space_tag(*address_space)]);
             digest.update([memory_order_tag(*order)]);
         }
+        ProductionRankedOperationV1::TensorLayout {
+            contract,
+            convergence,
+            active_lanes,
+        } => {
+            digest.update([15]);
+            hash_tensor_layout_contract(digest, contract);
+            digest.update([match convergence {
+                dialect_kernel::TensorConvergenceAttr::UniformSubgroup => 1,
+                dialect_kernel::TensorConvergenceAttr::Divergent => 2,
+                dialect_kernel::TensorConvergenceAttr::UniformWorkgroup => 3,
+                dialect_kernel::TensorConvergenceAttr::Opaque => 4,
+            }]);
+            digest.update(active_lanes.to_le_bytes());
+        }
         ProductionRankedOperationV1::SemanticSymbol { result, symbol } => {
             digest.update([9]);
             digest.update(result.get().to_le_bytes());
@@ -1195,6 +1217,80 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             hash_value(digest, *actual);
             hash_value(digest, *expected);
         }
+    }
+}
+
+fn hash_tensor_layout_contract(digest: &mut Sha256, contract: &TensorLayoutContractV1) {
+    match contract.profile {
+        TensorInstructionProfileV1::Gfx942MfmaBf16F32M16N16K16Wave64 => digest.update([1]),
+        TensorInstructionProfileV1::IncompatibleWave32 => digest.update([2]),
+        TensorInstructionProfileV1::Opaque(identity) => {
+            digest.update([3]);
+            digest.update(identity.to_le_bytes());
+        }
+    }
+    digest.update(contract.subgroup_width.to_le_bytes());
+    hash_tensor_fragment(digest, &contract.a);
+    hash_tensor_fragment(digest, &contract.b);
+    hash_tensor_fragment(digest, &contract.accumulator);
+    match contract.tail_mask {
+        TensorTailMaskV1::ExactPhysicalTile => digest.update([1]),
+        TensorTailMaskV1::ZeroFilledPredicateInputs => digest.update([2]),
+        TensorTailMaskV1::PredicateMask => digest.update([3]),
+        TensorTailMaskV1::Missing => digest.update([4]),
+        TensorTailMaskV1::Unsupported(code) => digest.update([5, code]),
+    }
+}
+
+fn hash_tensor_fragment(digest: &mut Sha256, fragment: &TensorFragmentLayoutV1) {
+    digest.update([match fragment.role {
+        TensorOperandRoleV1::A => 1,
+        TensorOperandRoleV1::B => 2,
+        TensorOperandRoleV1::Accumulator => 3,
+    }]);
+    for extent in fragment.shape {
+        digest.update(extent.to_le_bytes());
+    }
+    digest.update([match fragment.element {
+        MatrixElement::Bf16 => 1,
+        MatrixElement::F32 => 2,
+    }]);
+    digest.update([fragment.fragment_elements]);
+    match fragment.mapping {
+        TensorSymbolicMapV1::LaneComponentAffine {
+            lane_modulus,
+            lane_divisor,
+            axes,
+        } => {
+            digest.update([1]);
+            digest.update(lane_modulus.to_le_bytes());
+            digest.update(lane_divisor.to_le_bytes());
+            for axis in axes {
+                digest.update(axis.constant.to_le_bytes());
+                digest.update(axis.lane_mod_scale.to_le_bytes());
+                digest.update(axis.lane_div_scale.to_le_bytes());
+                digest.update(axis.component_scale.to_le_bytes());
+                digest.update([u8::from(axis.tile_origin)]);
+            }
+        }
+        TensorSymbolicMapV1::Opaque(identity) => {
+            digest.update([2]);
+            digest.update(identity.to_le_bytes());
+        }
+    }
+    match fragment.multiplicity {
+        TensorMultiplicityV1::Unique => digest.update([1]),
+        TensorMultiplicityV1::Broadcast { factor } => digest.update([2, factor]),
+    }
+    match fragment.packing {
+        TensorElementPackingV1::Bf16PairInI32 => digest.update([1]),
+        TensorElementPackingV1::F32Scalar => digest.update([2]),
+        TensorElementPackingV1::Unsupported(code) => digest.update([3, code]),
+    }
+    match fragment.lds_swizzle {
+        TensorLdsSwizzleV1::None => digest.update([1]),
+        TensorLdsSwizzleV1::Xor4 => digest.update([2]),
+        TensorLdsSwizzleV1::Unsupported(code) => digest.update([3, code]),
     }
 }
 

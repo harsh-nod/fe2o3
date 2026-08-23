@@ -15,14 +15,16 @@ use dialect_kernel::{
     IndexConstantOp, IndexLessThanBranchOp, IndexType, InvocationIndexOp, MAX_RANKED_MEMORY_RANK,
     MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp,
     SUPPORTED_ELEMENT_WIDTHS, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantOp,
-    SemanticSymbolOp,
+    SemanticSymbolOp, TensorConvergenceAttr, TensorLayoutOp,
 };
 use fe2o3_kernel_analysis::{
-    GeneralPlironKernelCheckErrorV1, GeneralPlironKernelCheckReportV1, MAX_RANKED_BOUNDS_BLOCKS,
-    MAX_RANKED_BOUNDS_OPERATIONS, PlironAtomicLegalityReportV1, PlironBarrierReportV1,
-    PlironSemanticRefinementReportV1, PlironWorkgroupMemoryReportV1, RankedBoundsReportV1,
-    RankedRaceReportV1, require_general_pliron_kernel_checks_before_lowering_v1,
+    GeneralPlironKernelCheckErrorV1, MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_OPERATIONS,
+    PlironAtomicLegalityReportV1, PlironBarrierReportV1, PlironSemanticRefinementReportV1,
+    PlironTensorLayoutReportV1, PlironWorkgroupMemoryReportV1, ProductionPlironPreloweringErrorV1,
+    ProductionPlironPreloweringReportV1, RankedBoundsReportV1, RankedRaceReportV1,
+    require_production_pliron_checks_before_lowering_v1,
 };
+use fe2o3_kernel_ir::TensorLayoutContractV1;
 use pliron::{
     basic_block::BasicBlock,
     builtin::{
@@ -152,6 +154,16 @@ pub enum ProductionRankedOperationV1 {
         memory_scope: MemoryScopeAttr,
         address_space: AddressSpaceAttr,
         order: MemoryOrderAttr,
+    },
+    /// One tensor-instruction site, not a free-standing proof annotation.
+    ///
+    /// The source projector must derive this declaration from an authenticated
+    /// semantic terminal and its dominating operand producers. Merely adding
+    /// this recipe operation never grants source-refinement or artifact authority.
+    TensorLayout {
+        contract: TensorLayoutContractV1,
+        convergence: TensorConvergenceAttr,
+        active_lanes: u32,
     },
     SemanticSymbol {
         result: ProductionRankedValueIdV1,
@@ -747,9 +759,9 @@ fn validate_operation(
             validate_access(*kind, *view, indices, argument_count, locals)?;
             Ok(None)
         }
-        ProductionRankedOperationV1::Barrier { .. } | ProductionRankedOperationV1::Fence { .. } => {
-            Ok(None)
-        }
+        ProductionRankedOperationV1::Barrier { .. }
+        | ProductionRankedOperationV1::Fence { .. }
+        | ProductionRankedOperationV1::TensorLayout { .. } => Ok(None),
         ProductionRankedOperationV1::SemanticSymbol { result, .. }
         | ProductionRankedOperationV1::SemanticConstant { result, .. } => {
             Ok(Some((*result, RecipeValueKindV1::Semantic)))
@@ -835,7 +847,7 @@ pub(super) struct ConstructedRootV1 {
     pub(super) identity: RootIdentityV1,
     pub(super) ranked_function: Option<Ptr<Operation>>,
     pub(super) ranked_kernel: Option<ProductionRankedKernelV1>,
-    pub(super) general_check_report: Option<GeneralPlironKernelCheckReportV1>,
+    pub(super) general_check_report: Option<ProductionPlironPreloweringReportV1>,
 }
 
 pub(super) struct MaterializedConstructionV1 {
@@ -863,10 +875,10 @@ impl ProductionPlironSessionV1 {
     fn run_general_kernel_checks_guarded(
         &mut self,
         function: Ptr<Operation>,
-    ) -> Result<GeneralPlironKernelCheckReportV1, ProductionSessionErrorV1> {
+    ) -> Result<ProductionPlironPreloweringReportV1, ProductionSessionErrorV1> {
         let result = catch_unwind(AssertUnwindSafe(|| {
             let function = FuncOp::from_operation(function);
-            require_general_pliron_kernel_checks_before_lowering_v1(&self.inner.context, &function)
+            require_production_pliron_checks_before_lowering_v1(&self.inner.context, &function)
         }));
         match result {
             Ok(Ok(report)) => Ok(report),
@@ -1155,6 +1167,7 @@ impl ProductionPlironSessionV1 {
                 ),
             ));
         }
+        let (tensor_layout_report, general_report) = report.into_parts();
         let (
             bounds_report,
             atomic_report,
@@ -1162,9 +1175,10 @@ impl ProductionPlironSessionV1 {
             barrier_report,
             workgroup_report,
             semantic_report,
-        ) = report.into_parts();
+        ) = general_report.into_parts();
         Ok(ProductionRankedKernelLoweringInputV1 {
             kernel,
+            tensor_layout_report,
             bounds_report,
             atomic_report,
             race_report,
@@ -1179,8 +1193,14 @@ impl ProductionPlironSessionV1 {
 }
 
 fn production_general_check_error(
-    error: GeneralPlironKernelCheckErrorV1,
+    error: ProductionPlironPreloweringErrorV1,
 ) -> ProductionSessionErrorV1 {
+    let error = match error {
+        ProductionPlironPreloweringErrorV1::TensorLayout(error) => {
+            return ProductionSessionErrorV1::RankedTensorLayout(error);
+        }
+        ProductionPlironPreloweringErrorV1::General(error) => error,
+    };
     match error {
         GeneralPlironKernelCheckErrorV1::Bounds(error) => {
             ProductionSessionErrorV1::RankedBounds(error)
@@ -1452,6 +1472,14 @@ fn materialize_operation(
             let op = FenceOp::new(context, *memory_scope, *address_space, *order);
             (op.get_operation(), None)
         }
+        ProductionRankedOperationV1::TensorLayout {
+            contract,
+            convergence,
+            active_lanes,
+        } => {
+            let op = TensorLayoutOp::new(context, contract, *convergence, *active_lanes);
+            (op.get_operation(), None)
+        }
         ProductionRankedOperationV1::SemanticSymbol { result, symbol } => {
             let op = SemanticSymbolOp::new(context, *symbol);
             (op.get_operation(), Some((*result, op.result(context))))
@@ -1553,6 +1581,7 @@ fn materialize_terminator(
 #[must_use = "safety-verified ranked input must be consumed by a checked lowering stage"]
 pub struct ProductionRankedKernelLoweringInputV1 {
     kernel: ProductionRankedKernelV1,
+    tensor_layout_report: PlironTensorLayoutReportV1,
     bounds_report: RankedBoundsReportV1,
     atomic_report: PlironAtomicLegalityReportV1,
     race_report: RankedRaceReportV1,
@@ -1594,6 +1623,10 @@ impl ProductionRankedKernelLoweringInputV1 {
         &self.bounds_report
     }
 
+    pub const fn tensor_layout_report(&self) -> &PlironTensorLayoutReportV1 {
+        &self.tensor_layout_report
+    }
+
     pub const fn atomic_report(&self) -> &PlironAtomicLegalityReportV1 {
         &self.atomic_report
     }
@@ -1615,7 +1648,8 @@ impl ProductionRankedKernelLoweringInputV1 {
     }
 
     pub fn all_mandatory_reports_are_clean(&self) -> bool {
-        self.bounds_report.is_clean()
+        self.tensor_layout_report.is_clean()
+            && self.bounds_report.is_clean()
             && self.atomic_report.is_clean()
             && self.race_report.is_clean()
             && self.barrier_report.is_clean()
