@@ -1145,6 +1145,18 @@ impl CompilerArtifactGenerationStoreV1 {
         };
         {
             let _lock = store.lock_checked()?;
+            let mut hooks = StoreHooks::new([None, None], None);
+            if let Err(error) = store.recover_scope_locked(&mut hooks) {
+                if matches!(
+                    error,
+                    CompilerArtifactGenerationErrorV1::StorageQuotaExceeded { .. }
+                        | CompilerArtifactGenerationErrorV1::ManagedEntryLimitExceeded { .. }
+                ) {
+                    store.recover_scope_locked(&mut hooks)?;
+                } else {
+                    return Err(error);
+                }
+            }
             store.reclaim_locked()?;
         }
         Ok(store)
@@ -1238,11 +1250,11 @@ impl CompilerArtifactGenerationStoreV1 {
         Ok(lease)
     }
 
-    /// Recovers and durably recommits the current generation before returning a lease.
+    /// Recovers and establishes durability for the current generation before returning a lease.
     ///
     /// Merely visible canonical state is never sufficient to mint the committed lease type. This
-    /// operation promotes a legal redo or rewrites canonical-only state through a fresh, synced
-    /// redo transaction before returning. It is therefore intentionally mutating.
+    /// operation promotes a legal redo or syncs and rereads canonical-only state before returning.
+    /// It is therefore intentionally mutating.
     pub fn open_generation_v1(
         &self,
     ) -> Result<Option<CompilerArtifactGenerationLeaseV1>, CompilerArtifactGenerationErrorV1> {
@@ -2056,37 +2068,22 @@ impl CompilerArtifactGenerationStoreV1 {
             let Some(canonical_bytes) = canonical_bytes else {
                 return Ok(None);
             };
-            let canonical = ScopeRecordV1::decode_canonical(&canonical_bytes, self.scope)?;
-            let current = self.open_generation_for_record(&canonical, hooks)?;
             hooks.record_operation = CompilerArtifactGenerationRecordOperationV1::Recover;
-            self.durable.stage_record_redo(
-                &self.names.redo,
-                &canonical_bytes,
-                MAX_COMPILER_ARTIFACT_GENERATION_SCOPE_RECORD_BYTES_V1,
-                hooks,
-            )?;
-            if let Err(quota_error) = self.ensure_actual_quota_locked() {
-                self.discard_validated_redo_locked(Some(&canonical_bytes), &canonical_bytes)?;
-                self.reclaim_locked()?;
-                return Err(quota_error);
-            }
-            self.durable.promote_validated_redo(
+            let recovered_bytes = self.durable.establish_recovered_record_durability(
                 &self.names.record,
                 &self.names.redo,
-                Some(&canonical_bytes),
                 &canonical_bytes,
                 MAX_COMPILER_ARTIFACT_GENERATION_SCOPE_RECORD_BYTES_V1,
                 hooks,
             )?;
-            if self.read_scope_record_bytes(&self.names.record)?.as_deref()
-                != Some(canonical_bytes.as_slice())
-            {
+            if recovered_bytes != canonical_bytes {
                 return Err(unsafe_entry(
                     &self.names.record,
-                    "canonical scope record changed across its recovery recommit",
+                    "canonical scope record changed across its recovery durability barrier",
                 ));
             }
-            return Ok(Some(current));
+            let canonical = ScopeRecordV1::decode_canonical(&recovered_bytes, self.scope)?;
+            return self.open_generation_for_record(&canonical, hooks).map(Some);
         };
         let redo = ScopeRecordV1::decode_canonical(&redo_bytes, self.scope)?;
         let canonical = canonical_bytes

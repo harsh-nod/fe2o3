@@ -1387,6 +1387,22 @@ fn quota_projection_deduplicates_shared_incoming_content_addresses_at_exact_boun
             request.artifact(CompilerArtifactRoleV1::SemanticMir)
         );
     }
+    drop(lease);
+    drop(exact_store);
+    let reopened = exact_directory.store_with_quota(exact_bytes, 3);
+    let reopened_lease = reopened.open_generation_v1().unwrap().unwrap();
+    assert_eq!(managed_entries(&exact_directory.path).len(), 3);
+    for role in [
+        CompilerArtifactRoleV1::SemanticMir,
+        CompilerArtifactRoleV1::NeutralKir,
+        CompilerArtifactRoleV1::TargetKir,
+        CompilerArtifactRoleV1::Lineage,
+    ] {
+        assert_eq!(
+            reopened_lease.artifact(role),
+            request.artifact(CompilerArtifactRoleV1::SemanticMir)
+        );
+    }
 
     let byte_directory = TestDirectory::new();
     let byte_store = byte_directory.store_with_quota(exact_bytes - 1, 3);
@@ -1455,6 +1471,49 @@ fn actual_allocated_bytes_are_rejected_before_scope_record_promotion() {
     assert!(!redo.exists());
     assert!(store.recover_generation_v1().unwrap().is_none());
     assert!(managed_entries(&directory.path).is_empty());
+}
+
+#[test]
+fn restart_discards_an_over_quota_redo_and_preserves_the_committed_generation() {
+    let directory = TestDirectory::new();
+    let quota = CompilerArtifactGenerationQuotaV1::new(256 * 1024, 64).unwrap();
+    let store = CompilerArtifactGenerationStoreV1::open_with_quota(&directory.path, scope(), quota)
+        .unwrap();
+    committed(store.publish_generation_v1(&request(1, true)));
+    let outcome = store.publish_generation_v1_with_options(
+        &request(2, true),
+        CompilerArtifactGenerationOptionsV1::inject_fault(
+            CompilerArtifactGenerationFaultPointV1::ScopeRecord {
+                operation: CompilerArtifactGenerationRecordOperationV1::Commit,
+                boundary: CompilerArtifactGenerationRecordBoundaryV1::SyncRedoName,
+                timing: CompilerArtifactGenerationFaultTimingV1::After,
+            },
+        ),
+    );
+    assert!(matches!(
+        outcome,
+        CompilerArtifactGenerationPublishOutcomeV1::CommitIndeterminate { .. }
+    ));
+    let redo = redo_record(&directory.path);
+    let redo_file = OpenOptions::new().write(true).open(&redo).unwrap();
+    let allocation = unsafe {
+        libc::fallocate(
+            redo_file.as_raw_fd(),
+            libc::FALLOC_FL_KEEP_SIZE,
+            0,
+            1024 * 1024,
+        )
+    };
+    assert_eq!(allocation, 0, "{}", std::io::Error::last_os_error());
+    assert!(redo_file.metadata().unwrap().blocks() * 512 > quota.maximum_bytes());
+    drop(redo_file);
+    drop(store);
+
+    let reopened =
+        CompilerArtifactGenerationStoreV1::open_with_quota(&directory.path, scope(), quota)
+            .unwrap();
+    assert!(!redo.exists());
+    assert_generation(&reopened.open_generation_v1().unwrap().unwrap(), 1, true);
 }
 
 #[test]
@@ -1754,6 +1813,74 @@ fn cross_process_store_on_replacement_root_waits_for_displaced_root_transaction(
     drop(store);
     fs::remove_file(ready).unwrap();
     fs::remove_dir_all(displaced).unwrap();
+}
+
+#[test]
+fn cross_process_store_waits_when_the_output_parent_is_replaced() {
+    let directory = TestDirectory::new();
+    let parent = directory.path.join("active-parent");
+    let root = parent.join("store");
+    fs::create_dir(&parent).unwrap();
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::create_dir(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    let displaced_parent = directory.path.join("displaced-parent");
+    let ready = directory.path.join("ancestor-replacement-contender-ready");
+    let point = CompilerArtifactGenerationFaultPointV1::ScopeRecord {
+        operation: CompilerArtifactGenerationRecordOperationV1::Commit,
+        boundary: CompilerArtifactGenerationRecordBoundaryV1::RenameRedoToCanonical,
+        timing: CompilerArtifactGenerationFaultTimingV1::Before,
+    };
+    let observation = Arc::new(CompilerArtifactGenerationObservationV1::new(point));
+    let store = Arc::new(CompilerArtifactGenerationStoreV1::open(&root, scope()).unwrap());
+    let publishing_store = Arc::clone(&store);
+    let publishing_observation = Arc::clone(&observation);
+    let publisher = thread::spawn(move || {
+        publishing_store.publish_generation_v1_with_options(
+            &request(1, true),
+            CompilerArtifactGenerationOptionsV1::observe(publishing_observation),
+        )
+    });
+    observation.wait_until_reached();
+
+    fs::rename(&parent, &displaced_parent).unwrap();
+    fs::create_dir(&parent).unwrap();
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::create_dir(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut child = subprocess_with_ready("publish", &root, Some(&ready));
+    wait_for_path(&ready);
+    thread::sleep(Duration::from_millis(200));
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "cross-process writer bypassed the stable absolute-path guard after ancestor replacement"
+    );
+    assert!(managed_entries(&root).is_empty());
+
+    observation.release();
+    assert!(matches!(
+        publisher.join().unwrap(),
+        CompilerArtifactGenerationPublishOutcomeV1::CommitIndeterminate { .. }
+    ));
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "child failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_generation(
+        &CompilerArtifactGenerationStoreV1::open(&root, scope())
+            .unwrap()
+            .open_generation_v1()
+            .unwrap()
+            .unwrap(),
+        1,
+        true,
+    );
+    assert!(store.open_generation_v1().is_err());
+    drop(store);
+    fs::remove_file(ready).unwrap();
 }
 
 #[test]
