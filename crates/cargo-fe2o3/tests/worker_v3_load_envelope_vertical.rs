@@ -51,7 +51,10 @@ use fe2o3_host::{
 use fe2o3_hsa_runtime::ReviewedHsaRuntimeAdapterV1;
 use fe2o3_kernel_descriptor::KernelId;
 use fe2o3_scalar_gemm_v1::kernel::scalar_gemm_v1_gpu;
-use fe2o3_verifier::validate_compiler_proof_binding_association_v3;
+use fe2o3_verifier::{
+    build_scalar_gemm_worker_v3_proof_input_v3, validate_compiler_proof_binding_association_v3,
+    validate_scalar_gemm_compiler_kir_v3,
+};
 use fe2o3_worker_v2_bundle::{
     RecoveredWorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeWireV1,
     recover_worker_v3_load_envelope_v1,
@@ -324,6 +327,26 @@ where
             proof_binding.receipt_identity(),
             receipts.proof_binding().identity()
         );
+        if request.marker_logical_name() == "scalar_gemm_v1" {
+            let scalar_kir =
+                validate_scalar_gemm_compiler_kir_v3(&proof_binding, receipts.kernel_ir()).expect(
+                    "scalar Worker V3 request must retain the exact reviewed canonical KIR",
+                );
+            let proof_input = build_scalar_gemm_worker_v3_proof_input_v3(
+                *request.challenge_identity().as_bytes(),
+                &proof_binding,
+                &scalar_kir,
+            )
+            .expect("scalar Worker V3 request must generate exact challenge-bound proof input");
+            assert_eq!(
+                proof_input.challenge(),
+                *request.challenge_identity().as_bytes()
+            );
+            assert!(proof_input.binds_worker_v3_challenge());
+            assert!(!proof_input.authenticates_verus_execution());
+            assert!(!proof_input.establishes_source_to_kir_refinement());
+            assert!(!proof_input.grants_artifact_or_runtime_authority());
+        }
         let mut finalized = request.finalized_hsaco_sha256();
         if self.substitute_finalized {
             finalized[0] ^= 0xff;

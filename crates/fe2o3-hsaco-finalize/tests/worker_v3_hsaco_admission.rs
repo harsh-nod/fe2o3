@@ -223,6 +223,45 @@ pub(crate) fn published_worker_v3_fixture_from_raw_hsaco(
 }
 
 #[test]
+fn scalar_fixture_retains_exact_reviewed_kir_for_request_bound_proofs() {
+    let fixture = slice_fixture_with_descriptor_table(&slice_descriptor_table());
+    let outer = outer_for_kernel(
+        EvidenceConfig::BASE.invocation_seed,
+        EvidenceConfig::BASE.module_seed,
+        &fixture.bytes,
+        "scalar_gemm_v1",
+        "scalar_gemm_v1.kd",
+        DescriptorLineageMutation::Exact,
+    );
+    let receipts = outer.capsule().receipts();
+    let association = fe2o3_verifier::validate_compiler_proof_binding_association_v3(
+        receipts.proof_binding(),
+        receipts.semantic_mir(),
+        receipts.middle_end(),
+        receipts.kernel_ir(),
+        receipts.mir_to_kir_correspondence(),
+        receipts.formal_memory(),
+    )
+    .expect("scalar fixture proof association must name its exact compiler receipts");
+    let scalar_kir =
+        fe2o3_verifier::validate_scalar_gemm_compiler_kir_v3(&association, receipts.kernel_ir())
+            .expect("scalar fixture must retain the exact reviewed canonical KIR");
+    let proof_input = fe2o3_verifier::build_scalar_gemm_worker_v3_proof_input_v3(
+        [0x5a; 32],
+        &association,
+        &scalar_kir,
+    )
+    .expect("scalar fixture must generate request-bound proof input");
+
+    assert_eq!(proof_input.challenge(), [0x5a; 32]);
+    assert!(scalar_kir.establishes_exact_scalar_gemm_kir_profile());
+    assert!(proof_input.binds_worker_v3_challenge());
+    assert!(!proof_input.authenticates_verus_execution());
+    assert!(!proof_input.establishes_source_to_kir_refinement());
+    assert!(!proof_input.grants_artifact_or_runtime_authority());
+}
+
+#[test]
 fn native_v3_inspection_retains_every_boundary_axis_without_authority() {
     let fixture = scalar_add_fixture_with(ScalarAddFixtureMutation::RequiredWorkgroup);
     let exact = fixture.bytes.clone();
@@ -1015,7 +1054,7 @@ fn outer_for_kernel(
 ) -> InertSemanticCompilerModuleHandoffV3 {
     let handoff = module_handoff_for_kernel(module_seed, hsaco, entry_symbol, descriptor_symbol);
     InertSemanticCompilerModuleHandoffV3::decode(&raw_outer(
-        &capsule_bytes(invocation_seed, &handoff, lineage_mutation),
+        &capsule_bytes(invocation_seed, &handoff, entry_symbol, lineage_mutation),
         handoff.canonical_bytes(),
     ))
     .unwrap()
@@ -1024,6 +1063,7 @@ fn outer_for_kernel(
 fn capsule_bytes(
     seed: u8,
     handoff: &CompilerModuleHandoffV2,
+    entry_symbol: &str,
     lineage_mutation: DescriptorLineageMutation,
 ) -> Vec<u8> {
     let invocation = invocation_bytes(seed);
@@ -1049,6 +1089,13 @@ fn capsule_bytes(
         })
     {
         receipts[10].0 = descriptor_source;
+    }
+    if entry_symbol == "scalar_gemm_v1" {
+        receipts[4].0 = fe2o3_kernel_ir::VerifiedCanonicalKernelIrV5::from_module(
+            fe2o3_kernel_ir::scalar_gemm_v1_module(),
+        )
+        .expect("reviewed scalar GEMM KIR must remain valid")
+        .into_canonical_bytes();
     }
     receipts[7].0 = proof_binding_association_payload(&receipts);
     receipts[11].0 = handoff.symbol_manifest().canonical_bytes().to_vec();
