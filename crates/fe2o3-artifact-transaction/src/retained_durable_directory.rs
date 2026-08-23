@@ -209,6 +209,7 @@ impl RetainedDurableDirectoryV1 {
                 display_path: PathBuf::from("<service-owned-root-fd>"),
                 device: stat.st_dev,
                 inode: stat.st_ino,
+                path_guard_key: None,
             },
             service_uid,
         })
@@ -320,6 +321,32 @@ impl RetainedDurableDirectoryV1 {
                 entry: canonical.to_owned(),
             });
         }
+        let expected_canonical = self.read_private(canonical, maximum_bytes)?;
+        self.stage_record_redo(redo, bytes, maximum_bytes, hooks)?;
+        self.promote_validated_redo(
+            canonical,
+            redo,
+            expected_canonical.as_deref(),
+            bytes,
+            maximum_bytes,
+            hooks,
+        )
+    }
+
+    /// Durably publishes exact record bytes under a private redo name without promoting it.
+    ///
+    /// Callers may inspect resource policy after this returns and before invoking
+    /// [`Self::promote_validated_redo`]. The redo is recoverable state and must either be promoted
+    /// or durably removed by the caller's serialized protocol.
+    pub fn stage_record_redo(
+        &self,
+        redo: &str,
+        bytes: &[u8],
+        maximum_bytes: usize,
+        hooks: &mut impl RetainedDurableDirectoryHooksV1,
+    ) -> Result<(), RetainedDurableDirectoryErrorV1> {
+        self.verify()?;
+        validate_name(redo)?;
         if bytes.is_empty() || bytes.len() > maximum_bytes {
             return Err(RetainedDurableDirectoryErrorV1::Size {
                 actual: bytes.len(),
@@ -381,28 +408,6 @@ impl RetainedDurableDirectoryV1 {
             RetainedDurableFaultTimingV1::After,
         )?;
         self.verify()?;
-        hit_record(
-            hooks,
-            RetainedDurableRecordBoundaryV1::RenameRedoToCanonical,
-            RetainedDurableFaultTimingV1::Before,
-        )?;
-        renameat(&self.output.fd, redo, &self.output.fd, canonical).map_err(io::Error::from)?;
-        hit_record(
-            hooks,
-            RetainedDurableRecordBoundaryV1::RenameRedoToCanonical,
-            RetainedDurableFaultTimingV1::After,
-        )?;
-        hit_record(
-            hooks,
-            RetainedDurableRecordBoundaryV1::SyncCanonicalName,
-            RetainedDurableFaultTimingV1::Before,
-        )?;
-        fsync(&self.output.fd).map_err(io::Error::from)?;
-        hit_record(
-            hooks,
-            RetainedDurableRecordBoundaryV1::SyncCanonicalName,
-            RetainedDurableFaultTimingV1::After,
-        )?;
         Ok(())
     }
 

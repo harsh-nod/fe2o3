@@ -36,8 +36,16 @@
 //!
 //! The output directory is a private protocol namespace for cooperating fe2o3 writers. Every
 //! writer that can create, rename, replace, or remove entries in that directory must use this
-//! crate's lock. POSIX record locks are advisory, and Linux has no unlink-by-file-descriptor
-//! operation. Consequently, these APIs detect substitutions observed before a destructive
+//! crate's composite Linux lock. An abstract-socket guard keyed by the admitted parent inode and
+//! root name serializes root replacement without serializing sibling outputs, a named-file OFD
+//! record lock preserves interoperability with existing cooperating writers, and a
+//! descriptor-owned lock on the root inode prevents replacement of the named lock from creating a
+//! second critical section. Closing unrelated descriptors cannot release these locks. Lock
+//! descriptors are `CLOEXEC`, but a forked child retains inherited locks until it closes those
+//! descriptors or successfully executes; pre-exec child code must not re-enter these APIs. Linux
+//! has no
+//! unlink-by-file-descriptor operation. Consequently, these APIs detect substitutions observed
+//! before a destructive
 //! operation and verify their results, but they cannot prevent arbitrary same-UID code that
 //! ignores the lock from replacing a pathname in the final check-to-unlink interval. Callers must
 //! not expose the directory to such writers. This is a coordination boundary, not a defense
@@ -162,10 +170,12 @@ pub use retained_durable_directory::{
 };
 use rustix::fd::{AsRawFd, FromRawFd, OwnedFd};
 use rustix::fs::{
-    AtFlags, Dir, FileType, FlockOperation, Mode, OFlags, fcntl_lock, fstat, fsync, mkdirat, open,
-    openat, renameat, statat, unlinkat,
+    AtFlags, Dir, FileType, Mode, OFlags, fstat, fsync, mkdirat, open, openat, renameat, statat,
+    unlinkat,
 };
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::io::{self, Read, Write};
@@ -175,6 +185,7 @@ use std::process;
 use std::sync::Weak;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::time::Duration;
 pub use worker_v2_publication_intent::{
     MAX_WORKER_V2_PUBLICATION_INTENT_CLEANUP_ESCROW_CAPSULE_BYTES_V1,
     MAX_WORKER_V2_PUBLICATION_INTENT_OUTPUT_BYTES,
@@ -2109,7 +2120,7 @@ mod tests {
     }
 
     #[test]
-    fn publication_lock_is_not_inherited_during_fork_to_exec_window() {
+    fn ofd_publication_lock_is_inherited_until_cloexec() {
         let temp = TestDirectory::new();
         let output = PinnedOutput::open(&temp.path.join("output")).unwrap();
         let lock = output.lock().unwrap();
@@ -2145,10 +2156,18 @@ mod tests {
         let mut ready = [0];
         parent_control.read_exact(&mut ready).unwrap();
         drop(lock);
-        let reacquired = output.try_lock().unwrap();
+        assert!(
+            output.try_lock().unwrap().is_none(),
+            "forked child must retain its inherited OFD lock before exec"
+        );
         parent_control.write_all(&[1]).unwrap();
         assert!(child.join().unwrap().success());
-        drop(reacquired.expect("forked child must not retain the parent's publication lock"));
+        drop(
+            output
+                .try_lock()
+                .unwrap()
+                .expect("CLOEXEC must release the forked child's OFD lock alias"),
+        );
     }
 
     #[test]
@@ -2939,6 +2958,7 @@ struct PinnedOutput {
     display_path: PathBuf,
     device: u64,
     inode: u64,
+    path_guard_key: Option<[u8; 32]>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -2961,8 +2981,10 @@ struct ProcessLockState {
     held: HashSet<ProcessLockIdentity>,
 }
 
-// POSIX record locks do not distinguish threads. This registry restores same-process exclusion
-// without making lock ownership inheritable across fork like an open-file-description flock.
+// Linux OFD locks distinguish open file descriptions, not threads. This registry avoids blocking
+// one thread in the kernel behind another lock owned by this process and drives lock observations.
+// Its PID reset handles the copied userspace registry after fork; the kernel OFD lock itself stays
+// attached to an inherited descriptor until that descriptor is closed or CLOEXEC runs.
 struct ProcessLockRegistry {
     state: Mutex<ProcessLockState>,
     released: Condvar,
@@ -3024,19 +3046,38 @@ impl PinnedOutput {
     }
 
     fn open_with_create(path: &Path, create: bool) -> Result<Self, EmitError> {
-        let fd = open_directory_walk(path, create)?;
+        let OpenedDirectoryWalk {
+            directory: fd,
+            parent,
+            leaf,
+        } = open_directory_walk_with_parent(path, create)?;
         let stat = fstat(&fd).map_err(std::io::Error::from)?;
+        let parent_stat = fstat(&parent).map_err(std::io::Error::from)?;
         if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
             return Err(EmitError::InvalidArtifactDestination {
                 path: path.to_path_buf(),
                 reason: "output path is not a directory".to_string(),
             });
         }
+        let path_guard_key = leaf.as_ref().map(|leaf| {
+            use std::os::unix::ffi::OsStrExt;
+
+            let leaf = leaf.as_os_str().as_bytes();
+            let mut digest = Sha256::new();
+            digest.update(b"FE2O3/ARTIFACT-ROOT-PATH-GUARD/V1\0");
+            digest.update(rustix::process::geteuid().as_raw().to_le_bytes());
+            digest.update(parent_stat.st_dev.to_le_bytes());
+            digest.update(parent_stat.st_ino.to_le_bytes());
+            digest.update((leaf.len() as u64).to_le_bytes());
+            digest.update(leaf);
+            digest.finalize().into()
+        });
         Ok(Self {
             fd,
             display_path: path.to_path_buf(),
             device: stat.st_dev,
             inode: stat.st_ino,
+            path_guard_key,
         })
     }
 
@@ -3057,21 +3098,21 @@ impl PinnedOutput {
             display_path: self.display_path.clone(),
             device: self.device,
             inode: self.inode,
+            path_guard_key: self.path_guard_key,
         })
     }
 
     fn lock(&self) -> Result<OutputLock, EmitError> {
-        self.lock_with(FlockOperation::LockExclusive, None)
-            .and_then(|lock| {
-                lock.ok_or_else(|| EmitError::InvalidArtifactDestination {
-                    path: self.display_path.join(LOCK_FILE),
-                    reason: "blocking lock unexpectedly reported contention".to_string(),
-                })
+        self.lock_with(false, None).and_then(|lock| {
+            lock.ok_or_else(|| EmitError::InvalidArtifactDestination {
+                path: self.display_path.join(LOCK_FILE),
+                reason: "blocking lock unexpectedly reported contention".to_string(),
             })
+        })
     }
 
     fn try_lock(&self) -> Result<Option<OutputLock>, EmitError> {
-        self.lock_with(FlockOperation::NonBlockingLockExclusive, None)
+        self.lock_with(true, None)
     }
 
     #[cfg(feature = "test-hooks")]
@@ -3079,18 +3120,17 @@ impl PinnedOutput {
         &self,
         observation: &BeginBuildAttemptLockObservationV1,
     ) -> Result<OutputLock, EmitError> {
-        self.lock_with(FlockOperation::LockExclusive, Some(observation))
-            .and_then(|lock| {
-                lock.ok_or_else(|| EmitError::InvalidArtifactDestination {
-                    path: self.display_path.join(LOCK_FILE),
-                    reason: "blocking lock unexpectedly reported contention".to_string(),
-                })
+        self.lock_with(false, Some(observation)).and_then(|lock| {
+            lock.ok_or_else(|| EmitError::InvalidArtifactDestination {
+                path: self.display_path.join(LOCK_FILE),
+                reason: "blocking lock unexpectedly reported contention".to_string(),
             })
+        })
     }
 
     fn lock_with(
         &self,
-        operation: FlockOperation,
+        nonblocking: bool,
         #[cfg(feature = "test-hooks")] observation: Option<&BeginBuildAttemptLockObservationV1>,
         #[cfg(not(feature = "test-hooks"))] _observation: Option<&()>,
     ) -> Result<Option<OutputLock>, EmitError> {
@@ -3122,7 +3162,18 @@ impl PinnedOutput {
             Ok(())
         };
 
-        let nonblocking = operation == FlockOperation::NonBlockingLockExclusive;
+        // The path guard is acquired first. A fresh cooperating writer that opens a replacement
+        // at the same root name therefore cannot enter a disjoint root critical section while a
+        // transaction still owns the displaced root descriptor.
+        let path_guard = match self.path_guard_key {
+            Some(key) => match acquire_linux_abstract_path_guard(key, nonblocking)? {
+                Some(path_guard) => Some(path_guard),
+                None => return Ok(None),
+            },
+            None => None,
+        };
+        self.verify_path_identity()?;
+
         let registry = ProcessLockRegistry::global();
         let (fd, reservation) = loop {
             let mut state = registry.state();
@@ -3175,22 +3226,50 @@ impl PinnedOutput {
             break (fd, ProcessLockReservation { identity });
         };
 
-        if let Err(error) = fcntl_lock(&fd, operation) {
-            if operation == FlockOperation::NonBlockingLockExclusive
-                && (error == rustix::io::Errno::ACCESS
-                    || error == rustix::io::Errno::AGAIN
-                    || error == rustix::io::Errno::WOULDBLOCK)
-            {
+        match acquire_linux_ofd_exclusive_lock(&fd, nonblocking) {
+            Ok(true) => {}
+            Ok(false) => {
                 drop(fd);
                 drop(reservation);
                 return Ok(None);
             }
-            drop(fd);
-            drop(reservation);
-            return Err(std::io::Error::from(error).into());
+            Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+                drop(fd);
+                drop(reservation);
+                return Err(EmitError::InvalidArtifactDestination {
+                    path: self.display_path.join(LOCK_FILE),
+                    reason: error.to_string(),
+                });
+            }
+            Err(error) => {
+                drop(fd);
+                drop(reservation);
+                return Err(error.into());
+            }
         }
+        let root_guard = match self.acquire_directory_guard(
+            &self.fd,
+            self.device,
+            self.inode,
+            nonblocking,
+            "artifact output root",
+        ) {
+            Ok(Some(root_guard)) => root_guard,
+            Ok(None) => {
+                drop(fd);
+                drop(reservation);
+                return Ok(None);
+            }
+            Err(error) => {
+                drop(fd);
+                drop(reservation);
+                return Err(error);
+            }
+        };
         let lock = OutputLock {
             fd: Some(fd),
+            root_guard: Some(root_guard),
+            path_guard,
             reservation: Some(reservation),
         };
         let locked_stat = fstat(lock.fd.as_ref().expect("lock descriptor is present"))
@@ -3198,12 +3277,216 @@ impl PinnedOutput {
         validate_lock(&locked_stat).and_then(|()| validate_path_identity(&locked_stat))?;
         Ok(Some(lock))
     }
+
+    fn acquire_directory_guard(
+        &self,
+        directory: &OwnedFd,
+        device: u64,
+        inode: u64,
+        nonblocking: bool,
+        label: &'static str,
+    ) -> Result<Option<OwnedFd>, EmitError> {
+        let descriptor = openat(
+            directory,
+            ".",
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(std::io::Error::from)?;
+        let validate_identity = |stat: &rustix::fs::Stat| -> Result<(), EmitError> {
+            if FileType::from_raw_mode(stat.st_mode) != FileType::Directory
+                || stat.st_dev != device
+                || stat.st_ino != inode
+            {
+                return Err(EmitError::OutputDirectoryChanged {
+                    path: self.display_path.clone(),
+                });
+            }
+            Ok(())
+        };
+        validate_identity(&fstat(&descriptor).map_err(std::io::Error::from)?)?;
+        match acquire_linux_descriptor_flock(&descriptor, nonblocking) {
+            Ok(true) => {}
+            Ok(false) => return Ok(None),
+            Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+                return Err(EmitError::InvalidArtifactDestination {
+                    path: self.display_path.clone(),
+                    reason: format!("{label}: {error}"),
+                });
+            }
+            Err(error) => return Err(error.into()),
+        }
+        validate_identity(&fstat(&descriptor).map_err(std::io::Error::from)?)?;
+        Ok(Some(descriptor))
+    }
+}
+
+/// Acquires a whole-file Linux open-file-description write lock.
+///
+/// The returned lock is owned by this exact open file description. Closing unrelated descriptors
+/// for the same inode cannot release it. A `fork` inherits the description and therefore retains
+/// the lock until every inherited alias is closed; all lock descriptors are `CLOEXEC`, so a
+/// successful `exec` releases the child's alias. Pre-exec child code must close inherited lock
+/// descriptors or proceed directly to `exec`, and must not call this crate's lock APIs.
+#[cfg(target_os = "linux")]
+fn acquire_linux_ofd_exclusive_lock(fd: &OwnedFd, nonblocking: bool) -> io::Result<bool> {
+    let command = if nonblocking {
+        libc::F_OFD_SETLK
+    } else {
+        libc::F_OFD_SETLKW
+    };
+    let mut lock: libc::flock = unsafe { std::mem::zeroed() };
+    lock.l_type = libc::F_WRLCK as _;
+    lock.l_whence = libc::SEEK_SET as _;
+    lock.l_start = 0;
+    lock.l_len = 0;
+    lock.l_pid = 0;
+    loop {
+        // SAFETY: `fd` is live for the call and `lock` is a fully initialized `struct flock`.
+        let result = unsafe { libc::fcntl(fd.as_raw_fd(), command, &lock) };
+        if result == 0 {
+            return Ok(true);
+        }
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::EINTR) => continue,
+            Some(libc::EACCES) | Some(libc::EAGAIN) if nonblocking => return Ok(false),
+            Some(libc::EINVAL) | Some(libc::ENOSYS) | Some(libc::EOPNOTSUPP) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "artifact publication requires Linux F_OFD_SETLK/F_OFD_SETLKW support",
+                ));
+            }
+            _ => return Err(error),
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn acquire_linux_ofd_exclusive_lock(_fd: &OwnedFd, _nonblocking: bool) -> io::Result<bool> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "artifact publication requires Linux F_OFD_SETLK/F_OFD_SETLKW support",
+    ))
+}
+
+/// Locks the stable admitted directory inode with Linux descriptor-owned `flock` semantics.
+///
+/// This guard composes with the named OFD record lock. Even if arbitrary same-UID code replaces
+/// the named entry while a critical section is active, every cooperating caller for the same
+/// pinned root still contends on this inode and cannot enter a split-brain critical section.
+#[cfg(target_os = "linux")]
+fn acquire_linux_descriptor_flock(fd: &OwnedFd, nonblocking: bool) -> io::Result<bool> {
+    let operation = libc::LOCK_EX | if nonblocking { libc::LOCK_NB } else { 0 };
+    loop {
+        // SAFETY: `fd` is live for the call and `operation` is a valid Linux flock operation.
+        if unsafe { libc::flock(fd.as_raw_fd(), operation) } == 0 {
+            return Ok(true);
+        }
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::EINTR) => continue,
+            Some(libc::EACCES) | Some(libc::EAGAIN) if nonblocking => return Ok(false),
+            Some(libc::EINVAL) | Some(libc::ENOSYS) | Some(libc::EOPNOTSUPP) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "artifact publication requires Linux descriptor-owned directory flock support",
+                ));
+            }
+            _ => return Err(error),
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn acquire_linux_descriptor_flock(_fd: &OwnedFd, _nonblocking: bool) -> io::Result<bool> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "artifact publication requires Linux descriptor-owned directory flock support",
+    ))
+}
+
+/// Acquires one crash-released Linux abstract-socket guard for a configured root path.
+#[cfg(target_os = "linux")]
+fn acquire_linux_abstract_path_guard(
+    key: [u8; 32],
+    nonblocking: bool,
+) -> Result<Option<OwnedFd>, EmitError> {
+    loop {
+        let raw = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
+        if raw < 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+        let descriptor = unsafe { OwnedFd::from_raw_fd(raw) };
+        let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+        address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+        for (destination, source) in address.sun_path[1..=key.len()].iter_mut().zip(key) {
+            *destination = source as libc::c_char;
+        }
+        let length = std::mem::offset_of!(libc::sockaddr_un, sun_path)
+            .checked_add(1 + key.len())
+            .and_then(|length| libc::socklen_t::try_from(length).ok())
+            .ok_or_else(|| EmitError::InvalidArtifactDestination {
+                path: PathBuf::from("<abstract-path-guard>"),
+                reason: "abstract path-guard address length overflowed".to_owned(),
+            })?;
+        let result = unsafe {
+            libc::bind(
+                descriptor.as_raw_fd(),
+                std::ptr::from_ref(&address).cast::<libc::sockaddr>(),
+                length,
+            )
+        };
+        if result == 0 {
+            return Ok(Some(descriptor));
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::EADDRINUSE) {
+            return Err(error.into());
+        }
+        if nonblocking {
+            return Ok(None);
+        }
+        drop(descriptor);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn acquire_linux_abstract_path_guard(
+    _key: [u8; 32],
+    _nonblocking: bool,
+) -> Result<Option<OwnedFd>, EmitError> {
+    Err(EmitError::InvalidArtifactDestination {
+        path: PathBuf::from("<abstract-path-guard>"),
+        reason: "artifact publication requires Linux abstract Unix sockets".to_owned(),
+    })
+}
+
+struct OpenedDirectoryWalk {
+    directory: OwnedFd,
+    parent: OwnedFd,
+    leaf: Option<OsString>,
 }
 
 fn open_directory_walk(path: &Path, create: bool) -> Result<OwnedFd, EmitError> {
+    Ok(open_directory_walk_with_parent(path, create)?.directory)
+}
+
+fn open_directory_walk_with_parent(
+    path: &Path,
+    create: bool,
+) -> Result<OpenedDirectoryWalk, EmitError> {
     #[cfg(target_os = "linux")]
     if let Some(directory) = duplicate_proc_self_fd_directory(path) {
-        return directory;
+        let directory = directory?;
+        let parent =
+            rustix::io::fcntl_dupfd_cloexec(&directory, 0).map_err(std::io::Error::from)?;
+        return Ok(OpenedDirectoryWalk {
+            directory,
+            parent,
+            leaf: None,
+        });
     }
 
     let absolute = path.is_absolute();
@@ -3238,7 +3521,13 @@ fn open_directory_walk(path: &Path, create: bool) -> Result<OwnedFd, EmitError> 
     )
     .map_err(std::io::Error::from)?;
 
-    for name in names {
+    let leaf = names.last().map(|name| (*name).to_owned());
+    let mut parent = rustix::io::fcntl_dupfd_cloexec(&current, 0).map_err(std::io::Error::from)?;
+    let component_count = names.len();
+    for (index, name) in names.into_iter().enumerate() {
+        if index + 1 == component_count {
+            parent = rustix::io::fcntl_dupfd_cloexec(&current, 0).map_err(std::io::Error::from)?;
+        }
         let open_component = || {
             openat(
                 &current,
@@ -3270,7 +3559,11 @@ fn open_directory_walk(path: &Path, create: bool) -> Result<OwnedFd, EmitError> 
             Err(error) => return Err(std::io::Error::from(error).into()),
         };
     }
-    Ok(current)
+    Ok(OpenedDirectoryWalk {
+        directory: current,
+        parent,
+        leaf,
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -3324,12 +3617,16 @@ fn duplicate_proc_self_fd_directory(path: &Path) -> Option<Result<OwnedFd, EmitE
 
 struct OutputLock {
     fd: Option<OwnedFd>,
+    root_guard: Option<OwnedFd>,
+    path_guard: Option<OwnedFd>,
     reservation: Option<ProcessLockReservation>,
 }
 
 impl Drop for OutputLock {
     fn drop(&mut self) {
         drop(self.fd.take());
+        drop(self.root_guard.take());
+        drop(self.path_guard.take());
         drop(self.reservation.take());
     }
 }
