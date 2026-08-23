@@ -34,7 +34,6 @@ const DATA_LAYOUT_KIND_V3: u16 = 2;
 const ABI_KIND_V3: u16 = 3;
 const AMDGPU_LOWERING_KIND_V3: u16 = 4;
 const SEMANTIC_TO_LLVM_KIND_V3: u16 = 5;
-const PROOF_BINDING_KIND_V3: u16 = 6;
 const EXPORT_MANIFEST_KIND_V3: u16 = 7;
 
 /// Exact-input association policy. It intentionally makes no refinement claim.
@@ -46,7 +45,6 @@ const DATA_LAYOUT_DOMAIN_V3: &[u8] = b"FE2O3/PRODUCTION-DATA-LAYOUT-TRANSCRIPT/V
 const ABI_DOMAIN_V3: &[u8] = b"FE2O3/PRODUCTION-ABI-TRANSCRIPT/V3\0";
 const AMDGPU_LOWERING_DOMAIN_V3: &[u8] = b"FE2O3/PRODUCTION-AMDGPU-LOWERING-TRANSCRIPT/V3\0";
 const SEMANTIC_TO_LLVM_DOMAIN_V3: &[u8] = b"FE2O3/PRODUCTION-SEMANTIC-TO-LLVM-ASSOCIATION/V3\0";
-const PROOF_BINDING_DOMAIN_V3: &[u8] = b"FE2O3/PRODUCTION-PROOF-BINDING-ASSOCIATION/V3\0";
 const EXPORT_MANIFEST_DOMAIN_V3: &[u8] = b"FE2O3/PRODUCTION-EXPORT-MANIFEST-ASSOCIATION/V3\0";
 
 const EXACT_GFX942_TARGET_V3: &str = "gfx942:xnack-";
@@ -219,16 +217,6 @@ const SEMANTIC_TO_LLVM_FIELDS_V3: &[FieldSchemaV3] = &[
     ),
 ];
 
-const PROOF_BINDING_FIELDS_V3: &[FieldSchemaV3] = &[
-    FieldSchemaV3::exact("domain", PROOF_BINDING_DOMAIN_V3.len()),
-    FieldSchemaV3::exact("claim", ASSOCIATION_ONLY_CLAIM_V3.len()),
-    FieldSchemaV3::exact("semantic MIR identity", IDENTITY_BYTES_V3),
-    FieldSchemaV3::exact("middle-end identity", IDENTITY_BYTES_V3),
-    FieldSchemaV3::exact("Kernel IR identity", IDENTITY_BYTES_V3),
-    FieldSchemaV3::exact("MIR-to-KIR correspondence identity", IDENTITY_BYTES_V3),
-    FieldSchemaV3::exact("formal memory identity", IDENTITY_BYTES_V3),
-];
-
 const EXPORT_MANIFEST_FIELDS_V3: &[FieldSchemaV3] = &[
     FieldSchemaV3::exact("domain", EXPORT_MANIFEST_DOMAIN_V3.len()),
     FieldSchemaV3::exact("claim", ASSOCIATION_ONLY_CLAIM_V3.len()),
@@ -279,13 +267,6 @@ const SEMANTIC_TO_LLVM_SCHEMA_V3: RecordSchemaV3 = RecordSchemaV3 {
     policy: ASSOCIATION_ONLY_NO_REFINEMENT_PROOF_POLICY_V3,
     domain: SEMANTIC_TO_LLVM_DOMAIN_V3,
     fields: SEMANTIC_TO_LLVM_FIELDS_V3,
-};
-const PROOF_BINDING_SCHEMA_V3: RecordSchemaV3 = RecordSchemaV3 {
-    name: "proof binding association",
-    kind: PROOF_BINDING_KIND_V3,
-    policy: ASSOCIATION_ONLY_NO_REFINEMENT_PROOF_POLICY_V3,
-    domain: PROOF_BINDING_DOMAIN_V3,
-    fields: PROOF_BINDING_FIELDS_V3,
 };
 const EXPORT_MANIFEST_SCHEMA_V3: RecordSchemaV3 = RecordSchemaV3 {
     name: "export manifest association",
@@ -1159,96 +1140,6 @@ fn validate_amdgpu_lowering_inputs_v3(
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct ProofBindingTranscriptInputsV3 {
-    pub(crate) semantic_mir: TargetLineageIdentityV3,
-    pub(crate) middle_end: TargetLineageIdentityV3,
-    pub(crate) kernel_ir: TargetLineageIdentityV3,
-    pub(crate) mir_to_kir_correspondence: TargetLineageIdentityV3,
-    pub(crate) formal_memory: TargetLineageIdentityV3,
-}
-
-/// Exact association of the five verified semantic-stage records consumed by
-/// production lowering.
-///
-/// This transcript does not claim Verus verification or a refinement proof.
-/// Its only claim is that the private production join observed these exact
-/// content identities together before the live stage owners were consumed.
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct ProofBindingTranscriptV3 {
-    record: CanonicalRecordV3,
-}
-
-impl ProofBindingTranscriptV3 {
-    pub(crate) fn new(
-        inputs: ProofBindingTranscriptInputsV3,
-    ) -> Result<Self, ProductionTargetLineageErrorV3> {
-        let identities = [
-            inputs.semantic_mir.encode(),
-            inputs.middle_end.encode(),
-            inputs.kernel_ir.encode(),
-            inputs.mir_to_kir_correspondence.encode(),
-            inputs.formal_memory.encode(),
-        ];
-        let fields: [&[u8]; 7] = [
-            PROOF_BINDING_DOMAIN_V3,
-            ASSOCIATION_ONLY_CLAIM_V3,
-            &identities[0],
-            &identities[1],
-            &identities[2],
-            &identities[3],
-            &identities[4],
-        ];
-        Ok(Self {
-            record: CanonicalRecordV3::build(&PROOF_BINDING_SCHEMA_V3, &fields)?,
-        })
-    }
-
-    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, ProductionTargetLineageErrorV3> {
-        let record = CanonicalRecordV3::decode(&PROOF_BINDING_SCHEMA_V3, bytes)?;
-        let value = Self { record };
-        let _ = value.inputs()?;
-        Ok(value)
-    }
-
-    pub(crate) fn canonical_bytes(&self) -> &[u8] {
-        self.record.canonical_bytes()
-    }
-
-    pub(crate) const fn claim(&self) -> TargetLineageClaimV3 {
-        TargetLineageClaimV3::AssociationOnlyNoRefinementProof
-    }
-
-    pub(crate) const fn establishes_refinement_proof(&self) -> bool {
-        false
-    }
-
-    pub(crate) const fn claims_verus_verification(&self) -> bool {
-        false
-    }
-
-    pub(crate) fn inputs(
-        &self,
-    ) -> Result<ProofBindingTranscriptInputsV3, ProductionTargetLineageErrorV3> {
-        Ok(ProofBindingTranscriptInputsV3 {
-            semantic_mir: self.identity_field(2, "semantic MIR identity")?,
-            middle_end: self.identity_field(3, "middle-end identity")?,
-            kernel_ir: self.identity_field(4, "Kernel IR identity")?,
-            mir_to_kir_correspondence: self
-                .identity_field(5, "MIR-to-KIR correspondence identity")?,
-            formal_memory: self.identity_field(6, "formal memory identity")?,
-        })
-    }
-
-    fn identity_field(
-        &self,
-        index: usize,
-        field: &'static str,
-    ) -> Result<TargetLineageIdentityV3, ProductionTargetLineageErrorV3> {
-        TargetLineageIdentityV3::decode(field, self.record.field(index))
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
 pub(crate) struct ExportManifestTranscriptInputsV3<'a> {
     pub(crate) semantic_mir: TargetLineageIdentityV3,
     pub(crate) target_bound_kir: TargetLineageIdentityV3,
@@ -1802,17 +1693,6 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
         .unwrap()
     }
 
-    fn proof_binding() -> ProofBindingTranscriptV3 {
-        ProofBindingTranscriptV3::new(ProofBindingTranscriptInputsV3 {
-            semantic_mir: identity(2),
-            middle_end: identity(3),
-            kernel_ir: identity(4),
-            mir_to_kir_correspondence: identity(5),
-            formal_memory: identity(6),
-        })
-        .unwrap()
-    }
-
     fn export_manifest() -> ExportManifestTranscriptV3 {
         let descriptor = descriptor_source();
         let manifest = symbol_manifest();
@@ -1897,17 +1777,6 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
             lowering.canonical_bytes()
         );
 
-        let proof_binding = proof_binding();
-        let decoded = ProofBindingTranscriptV3::decode(proof_binding.canonical_bytes()).unwrap();
-        assert_eq!(decoded.canonical_bytes(), proof_binding.canonical_bytes());
-        assert_eq!(decoded.inputs().unwrap().formal_memory, identity(6));
-        assert_eq!(
-            ProofBindingTranscriptV3::new(decoded.inputs().unwrap())
-                .unwrap()
-                .canonical_bytes(),
-            proof_binding.canonical_bytes()
-        );
-
         let export_manifest = export_manifest();
         let decoded =
             ExportManifestTranscriptV3::decode(export_manifest.canonical_bytes()).unwrap();
@@ -1965,13 +1834,6 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
             TargetLineageClaimV3::AssociationOnlyNoRefinementProof
         );
         assert!(!lowering.establishes_refinement_proof());
-        let proof_binding = proof_binding();
-        assert_eq!(
-            proof_binding.claim(),
-            TargetLineageClaimV3::AssociationOnlyNoRefinementProof
-        );
-        assert!(!proof_binding.establishes_refinement_proof());
-        assert!(!proof_binding.claims_verus_verification());
         let export_manifest = export_manifest();
         assert_eq!(
             export_manifest.claim(),
@@ -1994,7 +1856,6 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
         let layout = data_layout();
         let abi = abi();
         let lowering = lowering();
-        let proof_binding = proof_binding();
         let export_manifest = export_manifest();
         let association = association();
         let records: Vec<(&[u8], DecoderV3)> = vec![
@@ -2009,9 +1870,6 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
             }),
             (lowering.canonical_bytes(), |bytes| {
                 AmdgpuLoweringTranscriptV3::decode(bytes).is_ok()
-            }),
-            (proof_binding.canonical_bytes(), |bytes| {
-                ProofBindingTranscriptV3::decode(bytes).is_ok()
             }),
             (export_manifest.canonical_bytes(), |bytes| {
                 ExportManifestTranscriptV3::decode(bytes).is_ok()

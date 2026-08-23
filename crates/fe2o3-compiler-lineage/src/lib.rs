@@ -4,6 +4,7 @@
 
 mod capsule;
 mod error;
+mod proof_binding;
 mod receipt;
 
 pub use capsule::{
@@ -14,6 +15,12 @@ pub use capsule::{
     OrderedInertSemanticLineageReceiptsV3,
 };
 pub use error::{LineageDecodeErrorV3, LineageErrorV3};
+pub use proof_binding::{
+    INERT_PROOF_BINDING_ASSOCIATION_MAGIC_V3, INERT_PROOF_BINDING_ASSOCIATION_VERSION_V3,
+    InertLineageContentIdentityV3, InertProofBindingAssociationErrorV3,
+    InertProofBindingAssociationInputsV3, InertProofBindingAssociationV3,
+    MAX_INERT_PROOF_BINDING_ASSOCIATION_BYTES_V3,
+};
 pub use receipt::{
     InertAbiReceiptIdentityV3, InertAbiReceiptV3, InertAmdgpuLoweringReceiptIdentityV3,
     InertAmdgpuLoweringReceiptV3, InertCanonicalSemanticMirIdentityV3,

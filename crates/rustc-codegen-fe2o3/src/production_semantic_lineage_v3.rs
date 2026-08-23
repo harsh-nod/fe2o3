@@ -12,8 +12,10 @@ use fe2o3_compiler_lineage::{
     InertAbiReceiptV3, InertAmdgpuLoweringReceiptV3, InertCanonicalSemanticMirReceiptV3,
     InertDataLayoutReceiptV3, InertExportManifestReceiptV3,
     InertFinalCompilerModuleCommitmentReceiptV3, InertFormalMemoryReceiptV3,
-    InertKernelIrReceiptV3, InertMiddleEndReceiptV3, InertMirToKirCorrespondenceReceiptV3,
-    InertProductionSemanticCapsuleV3, InertProofBindingReceiptV3,
+    InertKernelIrReceiptV3, InertLineageContentIdentityV3, InertMiddleEndReceiptV3,
+    InertMirToKirCorrespondenceReceiptV3, InertProductionSemanticCapsuleV3,
+    InertProofBindingAssociationErrorV3, InertProofBindingAssociationInputsV3,
+    InertProofBindingAssociationV3, InertProofBindingReceiptV3,
     InertRustcIdentityInventoryReceiptV3, InertRustcPreflightPlanReceiptV3,
     InertSemanticToLlvmReceiptV3, InertTargetBindingReceiptV3, LineageErrorV3,
     OrderedInertSemanticLineageReceiptsV3,
@@ -31,8 +33,7 @@ use sha2::{Digest, Sha256};
 use crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV3;
 use crate::production_target_lineage_v3::{
     AmdgpuLoweringTranscriptInputsV3, AmdgpuLoweringTranscriptV3, DataLayoutTranscriptInputsV3,
-    DataLayoutTranscriptV3, ProductionTargetLineageErrorV3, ProofBindingTranscriptInputsV3,
-    ProofBindingTranscriptV3, SemanticToLlvmAssociationInputsV3,
+    DataLayoutTranscriptV3, ProductionTargetLineageErrorV3, SemanticToLlvmAssociationInputsV3,
     SemanticToLlvmAssociationTranscriptV3, TargetBindingTranscriptInputsV3,
     TargetBindingTranscriptV3, TargetLineageIdentityV3,
 };
@@ -221,13 +222,29 @@ impl PreparedProductionSemanticLineageV3 {
             self.formal_memory.identity().byte_len(),
         )?;
 
-        let proof_binding = ProofBindingTranscriptV3::new(ProofBindingTranscriptInputsV3 {
-            semantic_mir: semantic_identity,
-            middle_end: middle_end_identity,
-            kernel_ir: kernel_ir_identity,
-            mir_to_kir_correspondence: correspondence_identity,
-            formal_memory: formal_memory_identity,
-        })?;
+        let proof_binding =
+            InertProofBindingAssociationV3::new(InertProofBindingAssociationInputsV3::new(
+                proof_association_identity(
+                    self.semantic_mir.identity().sha256(),
+                    self.semantic_mir.identity().byte_len(),
+                )?,
+                proof_association_identity(
+                    self.middle_end.identity().sha256(),
+                    self.middle_end.identity().byte_len(),
+                )?,
+                proof_association_identity(
+                    self.kernel_ir.identity().sha256(),
+                    self.kernel_ir.identity().byte_len(),
+                )?,
+                proof_association_identity(
+                    self.mir_to_kir_correspondence.identity().sha256(),
+                    self.mir_to_kir_correspondence.identity().byte_len(),
+                )?,
+                proof_association_identity(
+                    self.formal_memory.identity().sha256(),
+                    self.formal_memory.identity().byte_len(),
+                )?,
+            ))?;
         let proof_binding =
             InertProofBindingReceiptV3::from_canonical_preimage(proof_binding.canonical_bytes())?;
         let proof_binding_identity = receipt_identity(
@@ -372,6 +389,13 @@ fn receipt_identity(
     TargetLineageIdentityV3::new(*sha256, byte_len).map_err(Into::into)
 }
 
+fn proof_association_identity(
+    sha256: &[u8; 32],
+    byte_len: u64,
+) -> Result<InertLineageContentIdentityV3, ProductionSemanticLineageErrorV3> {
+    InertLineageContentIdentityV3::new(*sha256, byte_len).map_err(Into::into)
+}
+
 fn exact_source_and_kir_exports(
     semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
     target_module: &Module,
@@ -491,6 +515,7 @@ pub(crate) enum ProductionSemanticLineageErrorV3 {
     CanonicalKir(VerifiedCanonicalKernelIrErrorV5),
     Evidence(ProductionLineageEvidenceErrorV3),
     Receipt(LineageErrorV3),
+    ProofBinding(InertProofBindingAssociationErrorV3),
     Transcript(ProductionTargetLineageErrorV3),
     FinalCommitment(FinalCompilerModuleCommitmentErrorV3),
     Capsule(InertSemanticCompilerModuleHandoffErrorV3),
@@ -513,6 +538,9 @@ impl fmt::Display for ProductionSemanticLineageErrorV3 {
             }
             Self::Evidence(error) => write!(formatter, "production V3 evidence failed: {error}"),
             Self::Receipt(error) => write!(formatter, "production V3 receipt failed: {error}"),
+            Self::ProofBinding(error) => {
+                write!(formatter, "production V3 proof binding failed: {error}")
+            }
             Self::Transcript(error) => {
                 write!(formatter, "production V3 transcript failed: {error}")
             }
@@ -541,6 +569,12 @@ impl From<ProductionLineageEvidenceErrorV3> for ProductionSemanticLineageErrorV3
 impl From<LineageErrorV3> for ProductionSemanticLineageErrorV3 {
     fn from(error: LineageErrorV3) -> Self {
         Self::Receipt(error)
+    }
+}
+
+impl From<InertProofBindingAssociationErrorV3> for ProductionSemanticLineageErrorV3 {
+    fn from(error: InertProofBindingAssociationErrorV3) -> Self {
+        Self::ProofBinding(error)
     }
 }
 
