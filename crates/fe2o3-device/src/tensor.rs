@@ -24,8 +24,6 @@ const TILE_ELEMENTS: usize = 16 * 16;
 
 mod sealed {
     pub trait OperandRole {}
-    pub trait OperandDistribution {}
-    pub trait CompatibleDistribution<Rhs> {}
 }
 
 /// The sole matrix-instruction profile admitted by V1.
@@ -54,32 +52,23 @@ pub enum MfmaOperandB {}
 
 impl sealed::OperandRole for MfmaOperandB {}
 
-/// Lane distribution loaded directly from a logical row-major matrix.
+/// Canonical four-register lane distribution for the supported 16x16 MFMA tile.
+///
+/// Global row-major loads and de-swizzled XOR4 LDS reads both produce this
+/// register distribution. Storage layout is tracked separately.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[rustc_diagnostic_item = "fe2o3_device_mfma_row_major_distribution_v1"]
-pub enum MfmaRowMajor {}
+#[rustc_diagnostic_item = "fe2o3_device_mfma_tile16x16_register_distribution_v1"]
+pub enum MfmaRegisterTile16x16 {}
 
-impl sealed::OperandDistribution for MfmaRowMajor {}
-
-/// Lane distribution read from a published XOR4 LDS tile.
+/// XOR4 physical storage layout used by the exact MFMA LDS tile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[rustc_diagnostic_item = "fe2o3_device_mfma_xor4_distribution_v1"]
-pub enum MfmaRowMajorXor4 {}
-
-impl sealed::OperandDistribution for MfmaRowMajorXor4 {}
+#[rustc_diagnostic_item = "fe2o3_device_mfma_lds_xor4_storage_layout_v1"]
+pub enum MfmaLdsXor4 {}
 
 /// Output distribution containing four row-major accumulator elements per lane.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[rustc_diagnostic_item = "fe2o3_device_mfma_accumulator_row_major_distribution_v1"]
 pub enum MfmaAccumulatorRowMajor {}
-
-/// Sealed relation between operand distributions accepted by one MFMA.
-pub trait CompatibleMfmaDistribution<Rhs>: sealed::CompatibleDistribution<Rhs> {}
-
-impl sealed::CompatibleDistribution<MfmaRowMajor> for MfmaRowMajor {}
-impl CompatibleMfmaDistribution<MfmaRowMajor> for MfmaRowMajor {}
-impl sealed::CompatibleDistribution<MfmaRowMajorXor4> for MfmaRowMajorXor4 {}
-impl CompatibleMfmaDistribution<MfmaRowMajorXor4> for MfmaRowMajorXor4 {}
 
 /// A role-, profile-, distribution-, and wave-associated four-value BF16 fragment.
 ///
@@ -112,13 +101,13 @@ impl<'wave, Role, Profile, Distribution, Width: WaveWidth>
     }
 }
 
-/// Direct row-major A operand for the supported BF16 MFMA profile.
-pub type Bf16MfmaAFragment<'wave, Distribution> =
-    Bf16MfmaFragment<'wave, MfmaOperandA, Bf16F32M16N16K16, Distribution, Wave64>;
+/// Canonically distributed A operand for the supported BF16 MFMA profile.
+pub type Bf16MfmaAFragment<'wave> =
+    Bf16MfmaFragment<'wave, MfmaOperandA, Bf16F32M16N16K16, MfmaRegisterTile16x16, Wave64>;
 
-/// Direct row-major B operand for the supported BF16 MFMA profile.
-pub type Bf16MfmaBFragment<'wave, Distribution> =
-    Bf16MfmaFragment<'wave, MfmaOperandB, Bf16F32M16N16K16, Distribution, Wave64>;
+/// Canonically distributed B operand for the supported BF16 MFMA profile.
+pub type Bf16MfmaBFragment<'wave> =
+    Bf16MfmaFragment<'wave, MfmaOperandB, Bf16F32M16N16K16, MfmaRegisterTile16x16, Wave64>;
 
 /// Four typed FP32 accumulator values owned by one wave lane.
 #[repr(C)]
@@ -263,7 +252,7 @@ impl<'data> Bf16MfmaMatrix<'data, MfmaOperandA> {
         lane: &'wave WaveLane<Wave64>,
         row_base: usize,
         reduction_base: usize,
-    ) -> Option<Bf16MfmaAFragment<'wave, MfmaRowMajor>> {
+    ) -> Option<Bf16MfmaAFragment<'wave>> {
         let lane_index = lane.get() as usize;
         let row = row_base.checked_add(lane_index & 15)?;
         let first_reduction = reduction_base.checked_add((lane_index >> 4) * 4)?;
@@ -299,7 +288,7 @@ impl<'data> Bf16MfmaMatrix<'data, MfmaOperandB> {
         lane: &'wave WaveLane<Wave64>,
         reduction_base: usize,
         column_base: usize,
-    ) -> Option<Bf16MfmaBFragment<'wave, MfmaRowMajor>> {
+    ) -> Option<Bf16MfmaBFragment<'wave>> {
         let lane_index = lane.get() as usize;
         let column = column_base.checked_add(lane_index & 15)?;
         let first_reduction = reduction_base.checked_add((lane_index >> 4) * 4)?;
@@ -345,16 +334,12 @@ impl DeviceMatrix {
     #[must_use]
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_matrix_mfma_bf16_f32_m16n16k16_v1"]
-    pub fn multiply_accumulate<'wave, ADistribution, BDistribution>(
+    pub fn multiply_accumulate<'wave>(
         &self,
-        lhs: Bf16MfmaAFragment<'wave, ADistribution>,
-        rhs: Bf16MfmaBFragment<'wave, BDistribution>,
+        lhs: Bf16MfmaAFragment<'wave>,
+        rhs: Bf16MfmaBFragment<'wave>,
         accumulator: F32AccumulatorFragment<'wave>,
-    ) -> F32AccumulatorFragment<'wave>
-    where
-        ADistribution: sealed::OperandDistribution + CompatibleMfmaDistribution<BDistribution>,
-        BDistribution: sealed::OperandDistribution,
-    {
+    ) -> F32AccumulatorFragment<'wave> {
         let _ = (self, lhs, rhs, accumulator);
         unreachable!("matrix operation requires provider-bound gfx942 wave64 lowering")
     }
@@ -425,17 +410,22 @@ pub struct LdsTile16x16<'workgroup, T: LdsElement, State = LdsUninitialized> {
 /// allocation as A and the second as B, while the publish transition retains
 /// both roles and changes only initialization state.
 #[rustc_diagnostic_item = "fe2o3_device_mfma_lds_tile16x16_v1"]
-pub struct MfmaLdsTile16x16<'workgroup, Role, State = LdsUninitialized> {
+pub struct MfmaLdsTile16x16<'workgroup, Role, State = LdsUninitialized, StorageLayout = MfmaLdsXor4>
+{
     tile: LdsTile16x16<'workgroup, Bf16, State>,
     _role: PhantomData<fn() -> Role>,
+    _storage_layout: PhantomData<fn() -> StorageLayout>,
 }
 
-impl<'workgroup, Role: sealed::OperandRole, State> MfmaLdsTile16x16<'workgroup, Role, State> {
+impl<'workgroup, Role: sealed::OperandRole, State>
+    MfmaLdsTile16x16<'workgroup, Role, State, MfmaLdsXor4>
+{
     #[cfg(test)]
     fn from_tile(tile: LdsTile16x16<'workgroup, Bf16, State>) -> Self {
         Self {
             tile,
             _role: PhantomData,
+            _storage_layout: PhantomData,
         }
     }
 
@@ -534,13 +524,15 @@ impl<T: LdsElement + Copy> LdsTile16x16<'_, T, LdsInitialized> {
     }
 }
 
-impl<'workgroup, Role: sealed::OperandRole> MfmaLdsTile16x16<'workgroup, Role, LdsUninitialized> {
+impl<'workgroup, Role: sealed::OperandRole>
+    MfmaLdsTile16x16<'workgroup, Role, LdsUninitialized, MfmaLdsXor4>
+{
     /// Writes the four BF16 elements owned by the compiler-issued wave lane.
     #[rustc_diagnostic_item = "fe2o3_device_lds_tile16x16_write_mfma_bf16_v1"]
     pub fn write_mfma_fragment<'wave>(
         &mut self,
         lane: &'wave WaveLane<Wave64>,
-        fragment: Bf16MfmaFragment<'wave, Role, Bf16F32M16N16K16, MfmaRowMajor, Wave64>,
+        fragment: Bf16MfmaFragment<'wave, Role, Bf16F32M16N16K16, MfmaRegisterTile16x16, Wave64>,
     ) {
         self.tile.write_wave_fragment(lane, fragment.into_array())
     }
@@ -565,12 +557,14 @@ pub fn gfx942_publish_lds_bf16_tile_pair_m16x16_v1<'workgroup>(
     unreachable!("initialized BF16 LDS tile pairs must be published by authenticated lowering")
 }
 
-impl<'workgroup, Role: sealed::OperandRole> MfmaLdsTile16x16<'workgroup, Role, LdsInitialized> {
+impl<'workgroup, Role: sealed::OperandRole>
+    MfmaLdsTile16x16<'workgroup, Role, LdsInitialized, MfmaLdsXor4>
+{
     #[rustc_diagnostic_item = "fe2o3_device_lds_tile16x16_read_mfma_bf16_v1"]
     pub fn read_mfma_fragment<'wave>(
         &self,
         lane: &'wave WaveLane<Wave64>,
-    ) -> Bf16MfmaFragment<'wave, Role, Bf16F32M16N16K16, MfmaRowMajorXor4, Wave64> {
+    ) -> Bf16MfmaFragment<'wave, Role, Bf16F32M16N16K16, MfmaRegisterTile16x16, Wave64> {
         Bf16MfmaFragment::from_values(lane, self.tile.read_wave_fragment(lane))
     }
 }
@@ -605,13 +599,9 @@ mod tests {
             (16, 16, 16)
         );
         assert_eq!(Bf16F32M16N16K16::WAVE_LANES, 64);
-        assert_eq!(size_of::<Bf16MfmaAFragment<'_, MfmaRowMajor>>(), 8);
-        assert_eq!(size_of::<Bf16MfmaBFragment<'_, MfmaRowMajor>>(), 8);
-        assert_eq!(size_of::<Bf16MfmaAFragment<'_, MfmaRowMajorXor4>>(), 8);
-        assert_eq!(
-            align_of::<Bf16MfmaAFragment<'_, MfmaRowMajor>>(),
-            align_of::<Bf16>()
-        );
+        assert_eq!(size_of::<Bf16MfmaAFragment<'_>>(), 8);
+        assert_eq!(size_of::<Bf16MfmaBFragment<'_>>(), 8);
+        assert_eq!(align_of::<Bf16MfmaAFragment<'_>>(), align_of::<Bf16>());
         assert_eq!(size_of::<F32AccumulatorFragment<'_>>(), 16);
     }
 

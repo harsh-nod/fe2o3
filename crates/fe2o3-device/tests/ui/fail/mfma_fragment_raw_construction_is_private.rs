@@ -1,5 +1,5 @@
-use fe2o3_device::{Bf16MfmaAFragment, MfmaRowMajor};
+use fe2o3_device::Bf16MfmaAFragment;
 
 fn main() {
-    let _ = Bf16MfmaAFragment::<MfmaRowMajor>::from_bits([0_u16; 4]);
+    let _ = Bf16MfmaAFragment::from_bits([0_u16; 4]);
 }

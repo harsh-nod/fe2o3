@@ -1,7 +1,7 @@
 use fe2o3_device::{
     Bf16MfmaAFragment, Bf16MfmaAMatrix, Bf16MfmaBFragment, Bf16MfmaBMatrix,
     DeviceMatrix, F32AccumulatorFragment, LdsInitialized, MfmaLdsTile16x16,
-    MfmaOperandA, MfmaRowMajor, MfmaRowMajorXor4, RowMajorXor4, Wave64, WaveLane,
+    MfmaOperandA, RowMajorXor4, Wave64, WaveLane,
 };
 
 fn type_check_direct_matrix<'wave>(
@@ -27,14 +27,11 @@ fn type_check_initialized_tile<'wave>(
     tile: &MfmaLdsTile16x16<'_, MfmaOperandA, LdsInitialized>,
     lane: &'wave WaveLane<Wave64>,
 ) {
-    let _: Bf16MfmaAFragment<'wave, MfmaRowMajorXor4> =
-        tile.read_mfma_fragment(lane);
+    let _: Bf16MfmaAFragment<'wave> = tile.read_mfma_fragment(lane);
 }
 
-fn type_check_direct_fragment<'wave>(
-    fragment: Bf16MfmaAFragment<'wave, MfmaRowMajor>,
-) {
-    let _: Bf16MfmaAFragment<'wave, MfmaRowMajor> = fragment;
+fn type_check_direct_fragment<'wave>(fragment: Bf16MfmaAFragment<'wave>) {
+    let _: Bf16MfmaAFragment<'wave> = fragment;
 }
 
 fn main() {
@@ -42,6 +39,6 @@ fn main() {
     let _ = type_check_direct_matrix;
     let _ = type_check_initialized_tile;
     let _ = type_check_direct_fragment;
-    let _: core::marker::PhantomData<Bf16MfmaBFragment<'static, MfmaRowMajor>> =
+    let _: core::marker::PhantomData<Bf16MfmaBFragment<'static>> =
         core::marker::PhantomData;
 }

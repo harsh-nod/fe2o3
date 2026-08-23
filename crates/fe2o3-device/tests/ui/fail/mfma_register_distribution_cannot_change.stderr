@@ -1,13 +1,13 @@
 error[E0308]: mismatched types
-  --> tests/ui/fail/mfma_profile_cannot_change.rs:14:40
+  --> tests/ui/fail/mfma_register_distribution_cannot_change.rs:20:40
    |
-14 |     let _ = matrix.multiply_accumulate(lhs, rhs, accumulator);
-   |                    ------------------- ^^^ expected `Bf16F32M16N16K16`, found `OtherProfile`
+20 |     let _ = matrix.multiply_accumulate(lhs, rhs, accumulator);
+   |                    ------------------- ^^^ expected `MfmaRegisterTile16x16`, found `OtherRegisterDistribution`
    |                    |
    |                    arguments to this method are incorrect
    |
    = note: expected struct `Bf16MfmaFragment<'_, MfmaOperandA, Bf16F32M16N16K16, MfmaRegisterTile16x16, Wave64>`
-              found struct `Bf16MfmaFragment<'wave, MfmaOperandA, OtherProfile, MfmaRegisterTile16x16, Wave64>`
+              found struct `Bf16MfmaFragment<'wave, MfmaOperandA, Bf16F32M16N16K16, OtherRegisterDistribution, Wave64>`
 note: method defined here
   --> src/tensor.rs
    |
