@@ -59,6 +59,10 @@ use fe2o3_worker_v2_bundle::{
     RecoveredWorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeWireV1,
     recover_worker_v3_load_envelope_v1,
 };
+use fe2o3_worker_v3_authority::{
+    PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1,
+    ProductionScalarGemmWorkerV3VerifierErrorV1, ProductionScalarGemmWorkerV3VerifierV1,
+};
 use reserved_fe2o3_symbols::{
     GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1,
     GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1,
@@ -1033,6 +1037,70 @@ fn synthetic_verifier_executes_real_scalar_gemm_through_strict_v3() {
     assert_eq!(a.to_host_vec(&stream).unwrap(), a_host);
     assert_eq!(b.to_host_vec(&stream).unwrap(), b_host);
     assert!(loaded.unload().unwrap().unload_observation().released());
+}
+
+#[test]
+#[ignore = "requires exact scalar HSACO and a protected general-GEMM Verus runtime closure"]
+fn production_verifier_retains_exact_proof_and_denies_open_authority() {
+    let hsaco_path = std::env::var_os("FE2O3_GFX942_SCALAR_GEMM_V3_RAW_HSACO")
+        .expect("FE2O3_GFX942_SCALAR_GEMM_V3_RAW_HSACO is not set");
+    let runtime_root = std::env::var_os("FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT")
+        .expect("FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT is not set");
+    let raw_hsaco = fs::read(hsaco_path).unwrap();
+    let inspection = fe2o3_hsaco_finalize::inspect_unfinalized(&raw_hsaco).unwrap();
+    let kernel_id = inspection
+        .descriptor_table()
+        .kernels()
+        .iter()
+        .find(|descriptor| descriptor.entry_name().as_str() == "scalar_gemm_v1")
+        .expect("raw HSACO contains scalar_gemm_v1")
+        .kernel_id();
+    drop(inspection);
+
+    let fixture = worker_v3_fixture::published_worker_v3_fixture_from_raw_hsaco(
+        raw_hsaco,
+        "scalar_gemm_v1",
+        "scalar_gemm_v1.kd",
+    );
+    let (_directory, recovered) = recover_published_worker_v3_fixture(fixture);
+    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
+    let admitted =
+        admit_recovered_worker_v3_descriptor_v1(recovered, kernel_id, &observed).unwrap();
+    let mut verifier = ProductionScalarGemmWorkerV3VerifierV1::<scalar_gemm_v1_gpu::Marker>::open(
+        runtime_root,
+        120,
+    )
+    .unwrap();
+
+    let error = match AuthenticatedWorkerV3ExecutableV1::<scalar_gemm_v1_gpu::Marker>::authenticate(
+        admitted,
+        &mut verifier,
+    ) {
+        Ok(_) => panic!("incomplete production proof unexpectedly granted V3 authority"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        WorkerV3VerificationAuthenticationErrorV1::Verifier(
+            ProductionScalarGemmWorkerV3VerifierErrorV1::OpenAuthorityObligations
+        )
+    ));
+    assert_eq!(
+        verifier.open_authority_obligations(),
+        PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1
+    );
+    let proof = verifier
+        .take_last_proof()
+        .expect("successful retained proof must survive the authority denial");
+    assert!(proof.authenticates_retained_verus_execution());
+    assert!(proof.binds_worker_v3_challenge());
+    assert!(proof.establishes_exact_scalar_gemm_kir_profile());
+    assert!(proof.establishes_kir_to_integer_model_refinement());
+    assert!(!proof.establishes_source_to_kir_refinement());
+    assert!(!proof.establishes_rust_or_f32_semantics());
+    assert!(!proof.establishes_emitted_machine_refinement());
+    assert!(!proof.can_enter_worker_v3_gate());
+    assert!(!proof.grants_artifact_or_runtime_authority());
 }
 
 fn scalar_gemm_reference(a: &[f32], b: &[f32], m: u32, n: u32, k: u32) -> Vec<f32> {
