@@ -31,9 +31,10 @@ const KIR_INTEGER_REFINEMENT: &[u8] =
     include_bytes!("../verus/scalar_gemm_kir_integer_refinement_v1.rs");
 const KIR_PROJECTION_REVIEW: &[u8] =
     include_bytes!("../verus/scalar_gemm_kir_projection_review_v1.rs");
+const KIR_PROJECTION_TLV: &[u8] = include_bytes!("../verus/scalar_gemm_kir_projection_tlv_v1.rs");
 const KIR_OPERATIONAL_SEMANTICS: &[u8] =
     include_bytes!("../verus/scalar_gemm_kir_operational_semantics_v1.rs");
-const EXPECTED_STDOUT: &[u8] = b"verification results:: 33 verified, 0 errors\n";
+const EXPECTED_STDOUT: &[u8] = b"verification results:: 35 verified, 0 errors\n";
 const INPUT_BINDING_DOMAIN_V3: &[u8] = b"fe2o3-scalar-gemm-worker-v3-proof-input-binding-v3\0";
 const OUTPUT_IDENTITY_DOMAIN_V3: &[u8] = b"fe2o3-scalar-gemm-worker-v3-proof-output-v3\0";
 const EXECUTION_IDENTITY_DOMAIN_V3: &[u8] = b"fe2o3-scalar-gemm-worker-v3-proof-execution-v3\0";
@@ -128,6 +129,11 @@ impl ScalarGemmWorkerV3ProofInputV3 {
 
     /// The generated source contains the reviewed six-block scalar KIR state machine.
     pub const fn includes_reviewed_kir_operational_semantics(&self) -> bool {
+        true
+    }
+
+    /// Retained Verus frames all projection bytes as exactly 370 complete TLV records.
+    pub const fn binds_exact_projection_tlv_framing(&self) -> bool {
         true
     }
 
@@ -226,6 +232,7 @@ fn generate_source(
     let mut generated = String::with_capacity(
         SOURCE_MODEL.len()
             + KIR_PROJECTION_REVIEW.len()
+            + KIR_PROJECTION_TLV.len()
             + KIR_INTEGER_REFINEMENT.len()
             + KIR_OPERATIONAL_SEMANTICS.len()
             + semantic_projection.len() * 6
@@ -286,6 +293,7 @@ fn generate_source(
     generated.extend_from_slice(SOURCE_MODEL);
     append_semantic_projection(&mut generated, semantic_projection)?;
     generated.extend_from_slice(KIR_PROJECTION_REVIEW);
+    generated.extend_from_slice(KIR_PROJECTION_TLV);
     generated.extend_from_slice(KIR_INTEGER_REFINEMENT);
     generated.extend_from_slice(KIR_OPERATIONAL_SEMANTICS);
     Ok(generated)
@@ -410,6 +418,11 @@ impl AuthenticatedScalarGemmWorkerV3ProofV3 {
 
     /// Retained Verus proved the reviewed KIR state machine refines the integer model.
     pub const fn authenticates_reviewed_kir_state_machine_refinement(&self) -> bool {
+        true
+    }
+
+    /// Retained Verus proved exact TLV boundaries and end-of-input consumption.
+    pub const fn authenticates_exact_projection_tlv_framing(&self) -> bool {
         true
     }
 
@@ -772,6 +785,26 @@ mod tests {
         source[operator] = b'-';
     }
 
+    fn substitute_first_tlv_length_in_generated_and_reviewed(source: &mut [u8]) {
+        const NEEDLE: &[u8] = b"    1, 40, 0, 0, 0,";
+        for marker in [
+            b"FE2O3_GENERATED_SCALAR_KIR_PROJECTION_V1".as_slice(),
+            b"FE2O3_REVIEWED_SCALAR_KIR_PROJECTION_V1".as_slice(),
+        ] {
+            let marker = source
+                .windows(marker.len())
+                .position(|window| window == marker)
+                .expect("projection marker is absent");
+            let length = source[marker..]
+                .windows(NEEDLE.len())
+                .position(|window| window == NEEDLE)
+                .map(|offset| marker + offset + b"    1, 4".len())
+                .expect("first TLV length is absent");
+            assert_eq!(source[length], b'0');
+            source[length] = b'1';
+        }
+    }
+
     #[test]
     fn generated_source_binds_challenge_and_every_compiler_axis() {
         let first = input([0x11; 32]);
@@ -781,6 +814,7 @@ mod tests {
         assert!(first.includes_reviewed_kir_integer_profile_equations());
         assert!(first.binds_exhaustive_decoded_kir_projection());
         assert!(first.includes_reviewed_kir_operational_semantics());
+        assert!(first.binds_exact_projection_tlv_framing());
         assert_eq!(first.semantic_projection_byte_len(), 2_927);
         assert_ne!(first.semantic_projection_identity(), [0; 32]);
         assert!(!first.grants_artifact_or_runtime_authority());
@@ -798,6 +832,7 @@ mod tests {
             "FE2O3_GENERATED_SCALAR_KIR_PROJECTION_V1",
             "FE2O3_REVIEWED_SCALAR_KIR_PROJECTION_V1",
             "scalar_kir_active_execution_refines_integer_model_v1",
+            "generated_scalar_kir_projection_has_exact_tlv_framing_v1",
         ] {
             assert!(source.contains(name), "generated source omitted {name}");
         }
@@ -893,6 +928,7 @@ mod tests {
         assert!(receipt.establishes_exact_scalar_gemm_kir_profile());
         assert!(receipt.authenticates_exact_decoded_kir_projection());
         assert!(receipt.authenticates_reviewed_kir_state_machine_refinement());
+        assert!(receipt.authenticates_exact_projection_tlv_framing());
         assert!(!receipt.establishes_kir_to_integer_model_refinement());
         assert!(!receipt.establishes_source_to_kir_refinement());
         assert!(!receipt.establishes_rust_or_f32_semantics());
@@ -957,6 +993,28 @@ mod tests {
         assert!(
             stderr.contains("scalar_kir_body_cycle_refines_dot_v1")
                 || stderr.contains("postcondition not satisfied"),
+            "unexpected verifier failure:\n{stderr}"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires FE2O3_TEST_VERUS pointing to the pinned Verus launcher"]
+    fn equal_array_tlv_length_substitution_fails_framing_proof() {
+        let mut source = input([0x47; 32]).canonical_source().to_vec();
+        substitute_first_tlv_length_in_generated_and_reviewed(&mut source);
+        let output = run_pinned_verus(&source, "tlv-length-substitution");
+        assert_ne!(
+            output.status.code(),
+            Some(0),
+            "malformed equal projections unexpectedly verified: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("generated_scalar_kir_projection_has_exact_tlv_framing_v1")
+                || (stderr.contains("scalar_kir_tlv_frame_v1")
+                    && stderr.contains("Invalid == Complete { records: 370 }"))
+                || stderr.contains("assertion failed"),
             "unexpected verifier failure:\n{stderr}"
         );
     }
