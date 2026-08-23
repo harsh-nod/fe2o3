@@ -636,6 +636,28 @@ pub fn install_begin_build_attempt_lock_probe_v1(
     BeginBuildAttemptLockProbeV1 { inner }
 }
 
+#[cfg(feature = "test-hooks")]
+fn test_artifact_fork_exec_barrier_v1() -> &'static Mutex<()> {
+    static BARRIER: OnceLock<Mutex<()>> = OnceLock::new();
+    BARRIER.get_or_init(|| Mutex::new(()))
+}
+
+/// Runs a test subprocess spawn while nonblocking artifact-lock acquisition is paused.
+///
+/// Linux children briefly retain the parent's `CLOEXEC` OFD locks between `fork` and `exec`.
+/// Holding this test-only barrier until `Command::spawn` observes successful execution prevents
+/// parallel tests from mistaking that transient inherited alias for durable external contention.
+#[cfg(feature = "test-hooks")]
+#[doc(hidden)]
+pub fn with_test_artifact_fork_exec_barrier_v1<T, E>(
+    spawn: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    let _barrier = test_artifact_fork_exec_barrier_v1()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    spawn()
+}
+
 /// Starts or resumes the durable artifact generation for one rustc invocation.
 ///
 /// A new generation is recorded before this function invalidates the producer's prior owned
@@ -1051,7 +1073,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Barrier, mpsc};
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
@@ -1695,6 +1717,26 @@ mod tests {
             drop(held);
             second.try_lock().unwrap().unwrap();
             Ok(())
+        } else if action == "configured-cross-process-holder" {
+            let output = PinnedOutput::open(&output).unwrap();
+            let held = output.lock().unwrap();
+            let ready = PathBuf::from(std::env::var_os("FE2O3_TEST_PATH_GUARD_READY").unwrap());
+            let release = PathBuf::from(std::env::var_os("FE2O3_TEST_PATH_GUARD_RELEASE").unwrap());
+            fs::write(ready, b"ready").unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !release.exists() {
+                assert!(
+                    Instant::now() < deadline,
+                    "configured path-guard holder was not released"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+            drop(held);
+            Ok(())
+        } else if action == "configured-cross-process-contender" {
+            let output = PinnedOutput::open(&output).unwrap();
+            assert!(output.try_lock().unwrap().is_none());
+            Ok(())
         } else if action == "same-namespace-accept" {
             enable_same_mount_namespace_artifact_path_guard_v1();
             PinnedOutput::open(&output).and_then(|output| output.lock().map(drop))
@@ -1702,7 +1744,11 @@ mod tests {
             PinnedOutput::open(&output).and_then(|output| output.lock().map(drop))
         };
         match action.to_str().unwrap() {
-            "accept" | "configured-alias-contention" | "same-namespace-accept" => result.unwrap(),
+            "accept"
+            | "configured-alias-contention"
+            | "configured-cross-process-holder"
+            | "configured-cross-process-contender"
+            | "same-namespace-accept" => result.unwrap(),
             "reject" | "replace-after-admission" | "replace-default-after-admission" => {
                 assert!(matches!(
                     result,
@@ -1860,6 +1906,107 @@ mod tests {
             status.success(),
             "configured alias contention helper failed"
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn configured_path_guard_serializes_distinct_outputs_across_processes() {
+        let temp = TestDirectory::new();
+        let configured = temp.path.join("shared-cross-process-path-guard-domain");
+        fs::create_dir(&configured).unwrap();
+        fs::set_permissions(&configured, fs::Permissions::from_mode(0o700)).unwrap();
+        let metadata = fs::metadata(&configured).unwrap();
+        let identity = format!("{:016x}:{:016x}", metadata.dev(), metadata.ino());
+        let first = temp.path.join("first-cross-process-output");
+        let second = temp.path.join("second-cross-process-output");
+        let ready = temp.path.join("cross-process-holder-ready");
+        let release = temp.path.join("cross-process-holder-release");
+        let helper = "tests::filesystem_path_guard_configuration_subprocess_helper";
+
+        let mut holder = process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(helper)
+            .arg("--nocapture")
+            .env(
+                "FE2O3_TEST_PATH_GUARD_ACTION",
+                "configured-cross-process-holder",
+            )
+            .env("FE2O3_TEST_PATH_GUARD_OUTPUT", &first)
+            .env("FE2O3_TEST_PATH_GUARD_READY", &ready)
+            .env("FE2O3_TEST_PATH_GUARD_RELEASE", &release)
+            .env(FILESYSTEM_PATH_GUARD_DIRECTORY_ENV, &configured)
+            .env(FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV, &identity)
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !ready.exists() {
+            if let Some(status) = holder.try_wait().unwrap() {
+                panic!("configured path-guard holder exited before readiness: {status}");
+            }
+            if Instant::now() >= deadline {
+                holder.kill().unwrap();
+                let _ = holder.wait();
+                panic!("configured path-guard holder did not become ready");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        let contender = process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(helper)
+            .arg("--nocapture")
+            .env(
+                "FE2O3_TEST_PATH_GUARD_ACTION",
+                "configured-cross-process-contender",
+            )
+            .env("FE2O3_TEST_PATH_GUARD_OUTPUT", &second)
+            .env(FILESYSTEM_PATH_GUARD_DIRECTORY_ENV, &configured)
+            .env(FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV, &identity)
+            .status()
+            .unwrap();
+        fs::write(&release, b"release").unwrap();
+        let holder = holder.wait().unwrap();
+        assert!(
+            contender.success(),
+            "configured path-guard contender failed"
+        );
+        assert!(holder.success(), "configured path-guard holder failed");
+    }
+
+    #[cfg(all(target_os = "linux", feature = "test-hooks"))]
+    #[test]
+    fn test_fork_exec_barrier_pauses_nonblocking_lock_acquisition() {
+        enable_same_mount_namespace_artifact_path_guard_v1();
+        let temp = TestDirectory::new();
+        let output = PinnedOutput::open(&temp.path.join("fork-exec-barrier-output")).unwrap();
+        let contender = output.try_clone().unwrap();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let barrier = thread::spawn(move || {
+            with_test_artifact_fork_exec_barrier_v1(|| -> Result<(), ()> {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(())
+            })
+            .unwrap();
+        });
+        entered_rx.recv().unwrap();
+
+        let (completed_tx, completed_rx) = mpsc::channel();
+        let acquisition = thread::spawn(move || {
+            let acquired = contender.try_lock().unwrap().is_some();
+            completed_tx.send(acquired).unwrap();
+        });
+        assert!(
+            completed_rx
+                .recv_timeout(Duration::from_millis(100))
+                .is_err(),
+            "nonblocking acquisition crossed the test fork/exec boundary"
+        );
+        release_tx.send(()).unwrap();
+        barrier.join().unwrap();
+        assert!(completed_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+        acquisition.join().unwrap();
     }
 
     #[cfg(target_os = "linux")]
@@ -3496,6 +3643,12 @@ impl PinnedOutput {
         #[cfg(feature = "test-hooks")] observation: Option<&BeginBuildAttemptLockObservationV1>,
         #[cfg(not(feature = "test-hooks"))] _observation: Option<&()>,
     ) -> Result<Option<OutputLock>, EmitError> {
+        #[cfg(feature = "test-hooks")]
+        let _fork_exec_barrier = nonblocking.then(|| {
+            test_artifact_fork_exec_barrier_v1()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+        });
         let validate_lock = |stat: &rustix::fs::Stat| {
             if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
                 return Err(EmitError::InvalidArtifactDestination {
@@ -3528,10 +3681,32 @@ impl PinnedOutput {
         // at the same root name therefore cannot enter a disjoint root critical section while a
         // transaction still owns the displaced root descriptor.
         let path_guard = match &self.path_guard {
-            Some(domain) => match acquire_linux_filesystem_path_guard(domain, nonblocking)? {
-                Some(path_guard) => Some(path_guard),
-                None => return Ok(None),
-            },
+            Some(domain) => {
+                #[cfg(feature = "test-hooks")]
+                let acquired = if !nonblocking {
+                    if let Some(observation) = observation {
+                        match acquire_linux_filesystem_path_guard(domain, true)? {
+                            Some(path_guard) => Some(path_guard),
+                            None => {
+                                observation
+                                    .advance_to(BeginBuildAttemptLockProbeStateV1::Contended);
+                                acquire_linux_filesystem_path_guard(domain, false)?
+                            }
+                        }
+                    } else {
+                        acquire_linux_filesystem_path_guard(domain, false)?
+                    }
+                } else {
+                    acquire_linux_filesystem_path_guard(domain, true)?
+                };
+                #[cfg(not(feature = "test-hooks"))]
+                let acquired = acquire_linux_filesystem_path_guard(domain, nonblocking)?;
+
+                match acquired {
+                    Some(path_guard) => Some(path_guard),
+                    None => return Ok(None),
+                }
+            }
             None => None,
         };
         self.verify_path_identity()?;

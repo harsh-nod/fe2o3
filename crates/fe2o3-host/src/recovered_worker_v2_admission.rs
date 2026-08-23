@@ -2810,17 +2810,19 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     fn spawn_descriptor_leak_probe(identities: &[(u64, u64)]) {
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .arg("--exact")
-            .arg("recovered_worker_v2_admission::tests::inherited_handoff_scrubs_environment_and_descriptors_in_subprocesses")
-            .arg("--nocapture")
-            .env("FE2O3_TEST_HANDOFF_SUBPROCESS_MODE", "probe")
-            .env(
-                "FE2O3_TEST_HANDOFF_DESCRIPTOR_IDENTITIES",
-                encoded_descriptor_identities(identities),
-            )
-            .output()
-            .unwrap();
+        let output = fe2o3_artifact_transaction::with_test_artifact_fork_exec_barrier_v1(|| {
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("--exact")
+                .arg("recovered_worker_v2_admission::tests::inherited_handoff_scrubs_environment_and_descriptors_in_subprocesses")
+                .arg("--nocapture")
+                .env("FE2O3_TEST_HANDOFF_SUBPROCESS_MODE", "probe")
+                .env(
+                    "FE2O3_TEST_HANDOFF_DESCRIPTOR_IDENTITIES",
+                    encoded_descriptor_identities(identities),
+                )
+                .output()
+        })
+        .unwrap();
         assert!(
             output.status.success(),
             "descriptor leak probe failed:\nstdout:\n{}\nstderr:\n{}",
@@ -2966,7 +2968,11 @@ mod tests {
                     for name in handoff_environment_names() {
                         command.env_remove(name);
                     }
-                    let output = command.output().unwrap();
+                    let output =
+                        fe2o3_artifact_transaction::with_test_artifact_fork_exec_barrier_v1(|| {
+                            command.output()
+                        })
+                        .unwrap();
                     assert!(
                         output.status.success(),
                         "{mode} handoff subprocess failed:\nstdout:\n{}\nstderr:\n{}",

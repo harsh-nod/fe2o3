@@ -5341,14 +5341,17 @@ pub(crate) mod tests {
             "unload-panic",
             "unload-observation",
         ] {
-            let status = std::process::Command::new(std::env::current_exe().unwrap())
-                .arg("--exact")
-                .arg(
-                    "hsa_executable_lifecycle::tests::adapter_unwind_and_ambiguous_unload_are_terminal",
-                )
-                .arg("--nocapture")
-                .env(CASE, case)
-                .status()
+            let status =
+                fe2o3_artifact_transaction::with_test_artifact_fork_exec_barrier_v1(|| {
+                    std::process::Command::new(std::env::current_exe().unwrap())
+                        .arg("--exact")
+                        .arg(
+                            "hsa_executable_lifecycle::tests::adapter_unwind_and_ambiguous_unload_are_terminal",
+                        )
+                        .arg("--nocapture")
+                        .env(CASE, case)
+                        .status()
+                })
                 .unwrap();
             assert_eq!(status.signal(), Some(6), "terminal case {case}: {status}");
         }
