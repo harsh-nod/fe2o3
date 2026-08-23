@@ -197,7 +197,8 @@ pub use row_softmax_v1_worker::{
 pub use scalar_gemm_v1_worker::{
     InspectedScalarGemmV1WorkerV2HsacoV1, ScalarGemmV1WorkerExchangeIdentityV1,
     ScalarGemmV1WorkerValidationErrorV1, ValidatedScalarGemmV1WorkerExchangeV1,
-    inspect_scalar_gemm_v1_worker_v2_hsaco_v1, validate_scalar_gemm_v1_worker_exchange_v1,
+    inspect_scalar_gemm_v1_worker_v2_hsaco_v1, validate_scalar_gemm_v1_kernel_descriptor_v1,
+    validate_scalar_gemm_v1_worker_exchange_v1,
 };
 pub use tiled_gemm_v1_artifact::{
     FinalizedTiledGemmV1StructuralHsacoV1, InspectedTiledGemmV1StructuralWorkerV2HsacoV1,

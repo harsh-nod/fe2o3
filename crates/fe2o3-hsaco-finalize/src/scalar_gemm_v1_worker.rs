@@ -12,7 +12,7 @@ use fe2o3_compiler_ffi::{
 };
 use fe2o3_kernel_descriptor::{
     AccessMode, AliasSemantics, BlockSizeV1, CapabilityV1, CodeObjectVersion, DeviceTargetV1,
-    OwnershipSemantics, PhysicalAbiComponentKind, ScalarTypeV1,
+    KernelDescriptorV1, OwnershipSemantics, PhysicalAbiComponentKind, ScalarTypeV1,
 };
 use fe2o3_kernel_ir::{
     SCALAR_GEMM_V1_KERNEL_ID, ScalarGemmTargetRequirementsV1, scalar_gemm_v1_module,
@@ -509,6 +509,18 @@ fn validate_scalar_gemm_v1_descriptor_source(
     {
         return Err(profile_mismatch("compiler descriptor profile"));
     }
+    validate_scalar_gemm_v1_kernel_descriptor_v1(kernel)
+}
+
+/// Validates the exact compiler-generated scalar GEMM V1 descriptor profile.
+///
+/// This is intentionally narrower than generic descriptor validation: it fixes the kernel
+/// identity, exported names, capabilities, physical ABI, launch constraints, argument ownership,
+/// access modes, aliasing, and every physical kernarg component used by the production scalar
+/// Worker V3 verifier.
+pub fn validate_scalar_gemm_v1_kernel_descriptor_v1(
+    kernel: &KernelDescriptorV1,
+) -> Result<(), ScalarGemmV1WorkerValidationErrorV1> {
     if kernel.kernel_id().as_bytes() != &SCALAR_GEMM_V1_KERNEL_BINDING
         || kernel.logical_name().as_str() != SCALAR_GEMM_V1_KERNEL_ID
         || kernel.entry_name().as_str() != SCALAR_GEMM_V1_KERNEL_ID
