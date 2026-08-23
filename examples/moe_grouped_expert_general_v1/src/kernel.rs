@@ -89,23 +89,25 @@ pub fn moe_grouped_expert_general_v1(
     let output_tile = thread_index
         .checked_tiled_2d::<64, 16, 16, 4>()
         .ok_or(KernelError::OutOfBounds)?;
-    let token_matrix = Bf16MfmaAMatrix::row_major(
+    let Ok(token_matrix) = Bf16MfmaAMatrix::row_major(
         routed_tokens,
         0,
         rows_padded as usize,
         reduction as usize,
         token_stride as usize,
-    )
-    .map_err(|_| KernelError::InvalidArgument)?;
+    ) else {
+        return Err(KernelError::InvalidArgument);
+    };
     let weight_base = expert as usize * expert_weight_stride as usize;
-    let weight_matrix = Bf16MfmaBMatrix::row_major(
+    let Ok(weight_matrix) = Bf16MfmaBMatrix::row_major(
         expert_weights,
         weight_base,
         reduction as usize,
         output_columns as usize,
         weight_stride as usize,
-    )
-    .map_err(|_| KernelError::InvalidArgument)?;
+    ) else {
+        return Err(KernelError::InvalidArgument);
+    };
     let wave_lane = WaveLane::<Wave64>::current();
     let matrix = Matrix::current();
     let mut accumulator = F32AccumulatorFragment::zero(&wave_lane);

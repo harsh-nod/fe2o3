@@ -113,22 +113,24 @@ pub fn flash_attention_general_v1(
     let output_tile = thread_index
         .checked_tiled_2d::<64, 16, 16, 4>()
         .ok_or(KernelError::OutOfBounds)?;
-    let q_matrix = Bf16MfmaAMatrix::row_major(
+    let Ok(q_matrix) = Bf16MfmaAMatrix::row_major(
         q,
         0,
         output_rows as usize,
         depth as usize,
         q_stride as usize,
-    )
-    .map_err(|_| KernelError::InvalidArgument)?;
-    let k_matrix = Bf16MfmaBMatrix::row_major(
+    ) else {
+        return Err(KernelError::InvalidArgument);
+    };
+    let Ok(k_matrix) = Bf16MfmaBMatrix::row_major(
         k_transposed,
         head * k_head_stride as usize,
         depth as usize,
         keys_padded as usize,
         k_depth_stride as usize,
-    )
-    .map_err(|_| KernelError::InvalidArgument)?;
+    ) else {
+        return Err(KernelError::InvalidArgument);
+    };
     let wave_lane = WaveLane::<Wave64>::current();
     let matrix = Matrix::current();
     let subgroup = Subgroup::current();
