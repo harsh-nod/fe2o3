@@ -19,6 +19,7 @@ struct TestDirectory {
 
 impl TestDirectory {
     fn new() -> Self {
+        fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
         loop {
             let id = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(

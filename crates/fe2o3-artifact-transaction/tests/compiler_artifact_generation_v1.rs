@@ -43,6 +43,7 @@ struct TestDirectory {
 
 impl TestDirectory {
     fn new() -> Self {
+        fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
         loop {
             let id = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(
@@ -2277,6 +2278,7 @@ fn compiler_artifact_generation_subprocess_helper() {
     let Ok(action) = std::env::var("FE2O3_GENERATION_SUBPROCESS") else {
         return;
     };
+    fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
     let root = PathBuf::from(std::env::var_os("FE2O3_GENERATION_ROOT").unwrap());
     if let Some(ready) = std::env::var_os("FE2O3_GENERATION_READY") {
         fs::write(ready, b"ready").unwrap();

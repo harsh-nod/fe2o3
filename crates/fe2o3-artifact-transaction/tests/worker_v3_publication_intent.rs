@@ -43,6 +43,7 @@ struct TestDirectory(PathBuf);
 
 impl TestDirectory {
     fn new() -> Self {
+        fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
         let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
             "fe2o3-worker-v3-publication-intent-{}-{id}",
@@ -687,6 +688,7 @@ fn marker_only_retirement_crash_helper() {
     let Some(output) = std::env::var_os(RETIREMENT_CRASH_OUTPUT) else {
         return;
     };
+    fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
     let owner = producer(
         std::env::var(RETIREMENT_CRASH_PRODUCER_SEED)
             .unwrap()
