@@ -9,14 +9,18 @@ use std::marker::PhantomData;
 use std::path::Path;
 use std::{error::Error, fmt};
 
-use fe2o3_hsaco_finalize::{FinalizationError, verify_finalized};
+use fe2o3_hsaco_finalize::{
+    FinalizationError, ScalarGemmV1WorkerValidationErrorV1,
+    validate_scalar_gemm_v1_kernel_descriptor_v1, verify_finalized,
+};
 use fe2o3_verifier::{
     AuthenticatedScalarGemmWorkerV3ProofV3, CompilerProofBindingValidationErrorV3,
     GeneralGemmRuntimeClosureErrorV2, GeneralGemmVerusRuntimeClosureLeaseV2,
     MAX_SCALAR_GEMM_VERUS_TIMEOUT_SECONDS_V2, ScalarGemmCompilerKirValidationErrorV3,
     ScalarGemmWorkerV3ProofErrorV3, ScalarGemmWorkerV3ProofInputErrorV3,
-    build_scalar_gemm_worker_v3_proof_input_v3, execute_scalar_gemm_worker_v3_proof_v3,
-    validate_compiler_proof_binding_association_v3, validate_scalar_gemm_compiler_kir_v3,
+    ScalarGemmWorkerV3ProofInputV3, build_scalar_gemm_worker_v3_proof_input_v3,
+    execute_scalar_gemm_worker_v3_proof_v3, validate_compiler_proof_binding_association_v3,
+    validate_scalar_gemm_compiler_kir_v3,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -69,6 +73,95 @@ pub const PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1:
 #[derive(Debug)]
 pub struct ProductionScalarGemmWorkerV3AuditV1 {
     proof: AuthenticatedScalarGemmWorkerV3ProofV3,
+    finalized_hsaco_sha256: [u8; 32],
+    finalized_hsaco_length: u64,
+}
+
+/// Exact, non-authoritative scalar GEMM request prepared for retained Verus execution.
+///
+/// Construction re-inspects the finalized HSACO, validates its exact descriptor, authenticates
+/// the compiler proof association and canonical scalar KIR, and generates the challenge-bound
+/// Verus input. The value is move-only and cannot be converted into host execution authority.
+#[derive(Debug)]
+#[must_use = "prepared Worker V3 proof input grants no authority and should be audited or executed"]
+pub struct PreparedProductionScalarGemmWorkerV3ProofV1 {
+    input: ScalarGemmWorkerV3ProofInputV3,
+    finalized_hsaco_sha256: [u8; 32],
+    finalized_hsaco_length: u64,
+}
+
+impl PreparedProductionScalarGemmWorkerV3ProofV1 {
+    /// Returns the exact request-bound Verus input without executing it.
+    pub const fn proof_input(&self) -> &ScalarGemmWorkerV3ProofInputV3 {
+        &self.input
+    }
+
+    /// Moves out the request-bound input and the artifact identity validated with it.
+    pub fn into_parts(self) -> (ScalarGemmWorkerV3ProofInputV3, [u8; 32], u64) {
+        (
+            self.input,
+            self.finalized_hsaco_sha256,
+            self.finalized_hsaco_length,
+        )
+    }
+
+    /// Returns the SHA-256 of the exact finalized HSACO that was re-inspected.
+    pub const fn finalized_hsaco_sha256(&self) -> [u8; 32] {
+        self.finalized_hsaco_sha256
+    }
+
+    /// Returns the length of the exact finalized HSACO that was re-inspected.
+    pub const fn finalized_hsaco_length(&self) -> u64 {
+        self.finalized_hsaco_length
+    }
+
+    /// Request preparation does not authenticate retained Verus execution.
+    pub const fn authenticates_verus_execution(&self) -> bool {
+        false
+    }
+
+    /// A prepared request cannot enter the Worker V3 authority gate.
+    pub const fn can_enter_worker_v3_gate(&self) -> bool {
+        false
+    }
+
+    /// Request preparation grants no artifact, load, or launch authority.
+    pub const fn grants_artifact_or_runtime_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Zero-runtime auditor for the exact scalar GEMM Worker V3 request.
+///
+/// This auditor executes the same request, artifact, proof-association, and KIR validation used by
+/// [`ProductionScalarGemmWorkerV3VerifierV1`], but stops before Verus execution. It exists so the
+/// complete deterministic validation stage runs in ordinary CI without weakening protected
+/// runtime-closure requirements.
+pub struct ProductionScalarGemmWorkerV3RequestAuditorV1<K> {
+    _marker: PhantomData<fn() -> K>,
+}
+
+impl<K> ProductionScalarGemmWorkerV3RequestAuditorV1<K> {
+    /// Creates one stateless, non-authoritative request auditor.
+    pub const fn new() -> Self {
+        Self {
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<K> Default for ProductionScalarGemmWorkerV3RequestAuditorV1<K> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<K> fmt::Debug for ProductionScalarGemmWorkerV3RequestAuditorV1<K> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProductionScalarGemmWorkerV3RequestAuditorV1")
+            .finish_non_exhaustive()
+    }
 }
 
 impl ProductionScalarGemmWorkerV3AuditV1 {
@@ -77,9 +170,28 @@ impl ProductionScalarGemmWorkerV3AuditV1 {
         &self.proof
     }
 
-    /// Moves out the exact retained request-bound Verus proof.
-    pub fn into_proof(self) -> AuthenticatedScalarGemmWorkerV3ProofV3 {
-        self.proof
+    /// Moves out the retained proof and the artifact identity checked with it.
+    pub fn into_parts(self) -> (AuthenticatedScalarGemmWorkerV3ProofV3, [u8; 32], u64) {
+        (
+            self.proof,
+            self.finalized_hsaco_sha256,
+            self.finalized_hsaco_length,
+        )
+    }
+
+    /// Returns the finalized HSACO identity checked in the same retained audit call.
+    pub const fn finalized_hsaco_sha256(&self) -> [u8; 32] {
+        self.finalized_hsaco_sha256
+    }
+
+    /// Returns the finalized HSACO length checked in the same retained audit call.
+    pub const fn finalized_hsaco_length(&self) -> u64 {
+        self.finalized_hsaco_length
+    }
+
+    /// Parallel retention is not yet a proof-to-executable refinement.
+    pub const fn establishes_proof_executable_binding(&self) -> bool {
+        false
     }
 
     /// Returns every authority obligation that remains open after this audit.
@@ -174,35 +286,37 @@ impl<K: CompilerGeneratedKernelExpectationV1> ProductionScalarGemmWorkerV3Verifi
     fn authenticate_exact_request(
         &mut self,
         request: &WorkerV3VerificationRequestV1<'_, K>,
-    ) -> Result<AuthenticatedScalarGemmWorkerV3ProofV3, ProductionScalarGemmWorkerV3VerifierErrorV1>
+    ) -> Result<ProductionScalarGemmWorkerV3AuditV1, ProductionScalarGemmWorkerV3VerifierErrorV1>
     {
-        validate_request_profile(request)?;
-        validate_request_bytes(request)?;
-        validate_finalized_artifact(request)?;
-
-        let receipts = request.semantic_compiler_handoff().capsule().receipts();
-        let association = validate_compiler_proof_binding_association_v3(
-            receipts.proof_binding(),
-            receipts.semantic_mir(),
-            receipts.middle_end(),
-            receipts.kernel_ir(),
-            receipts.mir_to_kir_correspondence(),
-            receipts.formal_memory(),
+        let prepared = prepare_exact_request(request)?;
+        let (proof_input, finalized_hsaco_sha256, finalized_hsaco_length) = prepared.into_parts();
+        let proof = execute_scalar_gemm_worker_v3_proof_v3(
+            &self.runtime,
+            proof_input,
+            self.timeout_seconds,
         )
-        .map_err(ProductionScalarGemmWorkerV3VerifierErrorV1::CompilerProofBinding)?;
-        let scalar_kir = validate_scalar_gemm_compiler_kir_v3(&association, receipts.kernel_ir())
-            .map_err(ProductionScalarGemmWorkerV3VerifierErrorV1::ScalarKernelIr)?;
-        let input = build_scalar_gemm_worker_v3_proof_input_v3(
-            *request.challenge_identity().as_bytes(),
-            &association,
-            &scalar_kir,
-        )
-        .map_err(ProductionScalarGemmWorkerV3VerifierErrorV1::ProofInput)?;
-        let proof =
-            execute_scalar_gemm_worker_v3_proof_v3(&self.runtime, input, self.timeout_seconds)
-                .map_err(ProductionScalarGemmWorkerV3VerifierErrorV1::ProofExecution)?;
+        .map_err(ProductionScalarGemmWorkerV3VerifierErrorV1::ProofExecution)?;
         validate_retained_proof(request, &proof)?;
-        Ok(proof)
+        Ok(ProductionScalarGemmWorkerV3AuditV1 {
+            proof,
+            finalized_hsaco_sha256,
+            finalized_hsaco_length,
+        })
+    }
+}
+
+impl<K> WorkerV3AuditorV1<K> for ProductionScalarGemmWorkerV3RequestAuditorV1<K>
+where
+    K: CompilerGeneratedKernelExpectationV1,
+{
+    type Error = ProductionScalarGemmWorkerV3VerifierErrorV1;
+    type Evidence = PreparedProductionScalarGemmWorkerV3ProofV1;
+
+    fn audit(
+        &mut self,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
+    ) -> Result<Self::Evidence, Self::Error> {
+        prepare_exact_request(request)
     }
 }
 
@@ -217,9 +331,41 @@ where
         &mut self,
         request: &WorkerV3VerificationRequestV1<'_, K>,
     ) -> Result<Self::Evidence, Self::Error> {
-        let proof = self.authenticate_exact_request(request)?;
-        Ok(ProductionScalarGemmWorkerV3AuditV1 { proof })
+        self.authenticate_exact_request(request)
     }
+}
+
+fn prepare_exact_request<K: CompilerGeneratedKernelExpectationV1>(
+    request: &WorkerV3VerificationRequestV1<'_, K>,
+) -> Result<PreparedProductionScalarGemmWorkerV3ProofV1, ProductionScalarGemmWorkerV3VerifierErrorV1>
+{
+    validate_request_profile(request)?;
+    validate_request_bytes(request)?;
+    validate_finalized_artifact(request)?;
+
+    let receipts = request.semantic_compiler_handoff().capsule().receipts();
+    let association = validate_compiler_proof_binding_association_v3(
+        receipts.proof_binding(),
+        receipts.semantic_mir(),
+        receipts.middle_end(),
+        receipts.kernel_ir(),
+        receipts.mir_to_kir_correspondence(),
+        receipts.formal_memory(),
+    )
+    .map_err(ProductionScalarGemmWorkerV3VerifierErrorV1::CompilerProofBinding)?;
+    let scalar_kir = validate_scalar_gemm_compiler_kir_v3(&association, receipts.kernel_ir())
+        .map_err(ProductionScalarGemmWorkerV3VerifierErrorV1::ScalarKernelIr)?;
+    let input = build_scalar_gemm_worker_v3_proof_input_v3(
+        *request.challenge_identity().as_bytes(),
+        &association,
+        &scalar_kir,
+    )
+    .map_err(ProductionScalarGemmWorkerV3VerifierErrorV1::ProofInput)?;
+    Ok(PreparedProductionScalarGemmWorkerV3ProofV1 {
+        input,
+        finalized_hsaco_sha256: request.finalized_hsaco_sha256(),
+        finalized_hsaco_length: request.finalized_hsaco_length(),
+    })
 }
 
 fn validate_timeout(
@@ -238,6 +384,11 @@ fn validate_request_profile<K: CompilerGeneratedKernelExpectationV1>(
         || request.marker_export_name() != SCALAR_GEMM_EXPORT_NAME_V1
     {
         return Err(ProductionScalarGemmWorkerV3VerifierErrorV1::UnsupportedKernel);
+    }
+    validate_scalar_gemm_v1_kernel_descriptor_v1(request.descriptor())
+        .map_err(ProductionScalarGemmWorkerV3VerifierErrorV1::ScalarDescriptor)?;
+    if request.descriptor().kernel_id().as_bytes() != &request.marker_binding_identity() {
+        return Err(ProductionScalarGemmWorkerV3VerifierErrorV1::MarkerDescriptorBindingMismatch);
     }
     let target = request.target();
     if target.processor() != REQUIRED_PROCESSOR_V1 || target.to_string() != REQUIRED_TARGET_V1 {
@@ -340,6 +491,10 @@ pub enum ProductionScalarGemmWorkerV3VerifierErrorV1 {
     RuntimeClosure(GeneralGemmRuntimeClosureErrorV2),
     /// The generated marker is not the exact scalar GEMM V1 profile.
     UnsupportedKernel,
+    /// The retained descriptor is not the exact scalar GEMM ABI and launch profile.
+    ScalarDescriptor(ScalarGemmV1WorkerValidationErrorV1),
+    /// The generated marker binding differs from the exact retained descriptor identity.
+    MarkerDescriptorBindingMismatch,
     /// The request is not for exact `gfx942:xnack-`.
     UnsupportedTarget,
     /// The request is not for AMDHSA code-object version 6.
@@ -380,6 +535,11 @@ impl fmt::Display for ProductionScalarGemmWorkerV3VerifierErrorV1 {
                 write!(formatter, "Verus runtime closure rejected: {error}")
             }
             Self::UnsupportedKernel => formatter.write_str("unsupported Worker V3 kernel profile"),
+            Self::ScalarDescriptor(error) => {
+                write!(formatter, "scalar GEMM descriptor rejected: {error}")
+            }
+            Self::MarkerDescriptorBindingMismatch => formatter
+                .write_str("scalar GEMM marker binding differs from retained descriptor identity"),
             Self::UnsupportedTarget => formatter.write_str("Worker V3 target is not gfx942:xnack-"),
             Self::UnsupportedCodeObjectVersion => {
                 formatter.write_str("Worker V3 artifact is not code-object version 6")
@@ -426,6 +586,7 @@ impl Error for ProductionScalarGemmWorkerV3VerifierErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::RuntimeClosure(error) => Some(error),
+            Self::ScalarDescriptor(error) => Some(error),
             Self::FinalizedInspection(error) => Some(error),
             Self::CompilerProofBinding(error) => Some(error),
             Self::ScalarKernelIr(error) => Some(error),
