@@ -27,6 +27,7 @@ const WORKER_BUILD_ID_ENV: &str = "FE2O3_SCALAR_GEMM_V1_WORKER_BUILD_ID";
 const LLVM_BUILD_ID_ENV: &str = "FE2O3_SCALAR_GEMM_V1_LLVM_BUILD_ID";
 const HANDOFF_ENV: &str = "FE2O3_SCALAR_GEMM_V1_HANDOFF";
 const OUTPUT_ENV: &str = "FE2O3_SCALAR_GEMM_V1_OUTPUT";
+const RAW_OUTPUT_ENV: &str = "FE2O3_SCALAR_GEMM_V1_RAW_OUTPUT";
 const TARGET: &str = "gfx942:xnack-";
 
 fn required_env(name: &str) -> String {
@@ -101,7 +102,7 @@ fn link_options() -> Vec<LinkOptionV1> {
     .collect()
 }
 
-fn produce_and_inspect(worker: &PinnedWorkerV1) -> Vec<u8> {
+fn produce_and_inspect(worker: &PinnedWorkerV1) -> (Vec<u8>, Vec<u8>) {
     let directory = TestDirectory::new();
     let evidence = execute_reproducible_first_build_worker_v2(
         consumed_handoff(&directory),
@@ -167,7 +168,7 @@ fn produce_and_inspect(worker: &PinnedWorkerV1) -> Vec<u8> {
             "scalar GEMM HSACO contains forbidden COMGR reference"
         );
     }
-    bytes
+    (raw_bytes, bytes)
 }
 
 #[test]
@@ -184,9 +185,27 @@ fn real_worker_produces_deterministic_finalized_scalar_gemm_v1_cov6_hsaco() {
     let worker =
         PinnedWorkerV1::open(&worker_path, measurement).expect("open measured scalar GEMM worker");
 
-    let first = produce_and_inspect(&worker);
-    let second = produce_and_inspect(&worker);
-    assert_eq!(first, second, "repeated scalar GEMM links changed bytes");
+    let (first_raw, first_finalized) = produce_and_inspect(&worker);
+    let (second_raw, second_finalized) = produce_and_inspect(&worker);
+    assert_eq!(
+        first_raw, second_raw,
+        "repeated scalar GEMM links changed raw bytes"
+    );
+    assert_eq!(
+        first_finalized, second_finalized,
+        "repeated scalar GEMM finalizations changed bytes"
+    );
+
+    if let Some(raw_output) = env::var_os(RAW_OUTPUT_ENV).map(PathBuf::from) {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&raw_output)
+            .expect("create fresh raw scalar GEMM HSACO output");
+        file.write_all(&first_raw)
+            .expect("write raw scalar GEMM HSACO");
+        file.sync_all().expect("sync raw scalar GEMM HSACO");
+    }
 
     let output = PathBuf::from(required_env(OUTPUT_ENV));
     let mut file = OpenOptions::new()
@@ -194,6 +213,7 @@ fn real_worker_produces_deterministic_finalized_scalar_gemm_v1_cov6_hsaco() {
         .create_new(true)
         .open(&output)
         .expect("create fresh scalar GEMM HSACO output");
-    file.write_all(&first).expect("write scalar GEMM HSACO");
+    file.write_all(&first_finalized)
+        .expect("write scalar GEMM HSACO");
     file.sync_all().expect("sync scalar GEMM HSACO");
 }
