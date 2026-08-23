@@ -12,10 +12,11 @@ use std::{
 
 use dialect_gpu::{BarrierOp, ExecutionLayoutOp, FenceOp};
 use dialect_kernel::{
-    AccessKindAttr, AnalysisSplitOp, BranchOp, CheckedTiledIndex2DOp, DimensionOp, IndexBinaryOp,
-    IndexConstantOp, IndexLessThanBranchOp, InvocationIndexOp, MAX_RANKED_MEMORY_RANK,
-    RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp, SemanticBinaryOp,
-    SemanticConstantOp, SemanticSymbolOp, TensorLayoutOp, ranked_view_type,
+    AccessKindAttr, AnalysisSplitOp, BranchArgsOp, BranchOp, CheckedTiledIndex2DOp, DimensionOp,
+    IndexBinaryOp, IndexConstantOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
+    InvocationIndexOp, MAX_RANKED_MEMORY_RANK, RankedAccessOp, RankedViewOp, RankedViewType,
+    RequireEquivalentOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp, SemanticSymbolOp,
+    TensorLayoutOp, ranked_view_type,
 };
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
@@ -260,8 +261,10 @@ enum RankedOperationKind {
     Dimension,
     RankedAccess,
     IndexLessThanBranch,
+    IndexLessThanBranchArgs,
     AnalysisSplit,
     Branch,
+    BranchArgs,
     Return,
     Barrier,
     ExecutionLayout,
@@ -277,7 +280,12 @@ impl RankedOperationKind {
     const fn is_terminator(self) -> bool {
         matches!(
             self,
-            Self::IndexLessThanBranch | Self::AnalysisSplit | Self::Branch | Self::Return
+            Self::IndexLessThanBranch
+                | Self::IndexLessThanBranchArgs
+                | Self::AnalysisSplit
+                | Self::Branch
+                | Self::BranchArgs
+                | Self::Return
         )
     }
 }
@@ -299,10 +307,17 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         Some(RankedOperationKind::RankedAccess)
     } else if operation.downcast_ref::<IndexLessThanBranchOp>().is_some() {
         Some(RankedOperationKind::IndexLessThanBranch)
+    } else if operation
+        .downcast_ref::<IndexLessThanBranchArgsOp>()
+        .is_some()
+    {
+        Some(RankedOperationKind::IndexLessThanBranchArgs)
     } else if operation.downcast_ref::<AnalysisSplitOp>().is_some() {
         Some(RankedOperationKind::AnalysisSplit)
     } else if operation.downcast_ref::<BranchOp>().is_some() {
         Some(RankedOperationKind::Branch)
+    } else if operation.downcast_ref::<BranchArgsOp>().is_some() {
+        Some(RankedOperationKind::BranchArgs)
     } else if operation.downcast_ref::<ReturnOp>().is_some() {
         Some(RankedOperationKind::Return)
     } else if operation.downcast_ref::<BarrierOp>().is_some() {
@@ -586,10 +601,18 @@ pub fn run_pliron_ranked_bounds_check_v1(
             return structural_failure();
         };
         let operation = Operation::get_op_dyn(terminator, context);
-        let guard_fact = if let Some(branch) = operation.downcast_ref::<IndexLessThanBranchOp>() {
+        let operands = operation
+            .downcast_ref::<IndexLessThanBranchOp>()
+            .map(|branch| (branch.lhs(context), branch.rhs(context)))
+            .or_else(|| {
+                operation
+                    .downcast_ref::<IndexLessThanBranchArgsOp>()
+                    .map(|branch| (branch.lhs(context), branch.rhs(context)))
+            });
+        let guard_fact = if let Some((lhs, rhs)) = operands {
             let fact = LessThanFact {
-                lhs: canonical_index_expr(branch.lhs(context), context),
-                rhs: canonical_index_expr(branch.rhs(context), context),
+                lhs: canonical_index_expr(lhs, context),
+                rhs: canonical_index_expr(rhs, context),
             };
             if let Some(index) = fact_indices.get(&fact).copied() {
                 Some(index)

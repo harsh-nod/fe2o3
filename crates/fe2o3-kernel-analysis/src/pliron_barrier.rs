@@ -3,7 +3,10 @@
 use std::{collections::HashMap, fmt};
 
 use dialect_gpu::{AddressSpaceAttr, BarrierOp, HierarchyAttr};
-use dialect_kernel::{AnalysisSplitOp, BranchOp, IndexLessThanBranchOp, ReturnOp};
+use dialect_kernel::{
+    AnalysisSplitOp, BranchArgsOp, BranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
+    ReturnOp,
+};
 use pliron::{
     basic_block::BasicBlock,
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
@@ -302,7 +305,11 @@ fn summarize_barrier_paths_from(
     let successors = if terminator.downcast_ref::<ReturnOp>().is_some() {
         Vec::new()
     } else if terminator.downcast_ref::<BranchOp>().is_some()
+        || terminator.downcast_ref::<BranchArgsOp>().is_some()
         || terminator.downcast_ref::<IndexLessThanBranchOp>().is_some()
+        || terminator
+            .downcast_ref::<IndexLessThanBranchArgsOp>()
+            .is_some()
         || terminator.downcast_ref::<AnalysisSplitOp>().is_some()
     {
         raw.successors()

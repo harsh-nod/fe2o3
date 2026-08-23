@@ -12,8 +12,8 @@ use dialect_gpu::{
     MemoryScopeAttr,
 };
 use dialect_kernel::{
-    AccessKindAttr, BranchOp, IndexLessThanBranchOp, MemorySpaceAttr, RankedAccessOp, RankedViewOp,
-    ReturnOp, TensorLayoutOp,
+    AccessKindAttr, BranchArgsOp, BranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
+    MemorySpaceAttr, RankedAccessOp, RankedViewOp, ReturnOp, TensorLayoutOp,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -429,9 +429,21 @@ pub(crate) fn trace_pliron_invocations_v1(
                 break;
             }
             let raw = terminator.get_operation().deref(context);
-            let successor = if terminator.downcast_ref::<BranchOp>().is_some() {
+            let successor = if terminator.downcast_ref::<BranchOp>().is_some()
+                || terminator.downcast_ref::<BranchArgsOp>().is_some()
+            {
                 raw.successors().next()
             } else if let Some(branch) = terminator.downcast_ref::<IndexLessThanBranchOp>() {
+                let lhs = sparse
+                    .fact(branch.lhs(context))
+                    .evaluate(&invocation)
+                    .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
+                let rhs = sparse
+                    .fact(branch.rhs(context))
+                    .evaluate(&invocation)
+                    .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
+                raw.successors().nth(usize::from(lhs >= rhs))
+            } else if let Some(branch) = terminator.downcast_ref::<IndexLessThanBranchArgsOp>() {
                 let lhs = sparse
                     .fact(branch.lhs(context))
                     .evaluate(&invocation)

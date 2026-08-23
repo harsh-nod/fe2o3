@@ -1,0 +1,22 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: control-dependent on subgroup-varying branch block
+builtin.func @tensor_layout_varying_induction_loop: builtin.function <(kernel.index ) -> ()>
+{
+  ^entry_block1v1(k_v0: kernel.index ):
+    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 7, gpu_execution_global_x: gpu.execution_extent 0, gpu_execution_global_y: gpu.execution_extent 1, gpu_execution_global_z: gpu.execution_extent 1, gpu_execution_workgroup_x: gpu.execution_extent 64, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 64]: <() -> ()>;
+    v1 = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension 0, kernel_launch_extent: kernel.launch_extent 0]: <() -> (kernel.index )>;
+    v2 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 16]: <() -> (kernel.index )>;
+    kernel.br_args (v1) [^header_block2v1] []: <(kernel.index ) -> ()>
+
+  ^header_block2v1(i_v3: kernel.index ):
+    kernel.index_lt_br_args (i_v3, k_v0, i_v3) [^body_block3v1, ^exit_block4v1] []: <(kernel.index , kernel.index , kernel.index ) -> ()>
+
+  ^body_block3v1(body_i_v4: kernel.index ):
+    kernel.tensor_layout () [] [kernel_tensor_a: kernel.tensor_fragment <1,16,16,1,4,1,16,16,0,1,0,0,1,0,0,4,1,1,1,1,1,1>, kernel_tensor_accumulator: kernel.tensor_fragment <3,16,16,2,4,1,16,16,0,0,4,1,1,0,1,0,0,1,1,1,2,1>, kernel_tensor_b: kernel.tensor_fragment <2,16,16,1,4,1,16,16,0,0,4,1,1,0,1,0,0,1,1,1,1,1>, kernel_tensor_convergence: kernel.tensor_convergence UniformSubgroup, kernel_tensor_instruction: kernel.tensor_instruction <1,0,64,64,1>]: <() -> ()>;
+    v5 = kernel.index_binary (body_i_v4, v2) [] [kernel_index_binary_kind: kernel.index_binary_kind Add]: <(kernel.index , kernel.index ) -> (kernel.index )>;
+    kernel.br_args (v5) [^header_block2v1] []: <(kernel.index ) -> ()>
+
+  ^exit_block4v1():
+    kernel.return () [] []: <() -> ()>
+}
