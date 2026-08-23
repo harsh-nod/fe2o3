@@ -56,8 +56,8 @@ const SOURCE_REMAP_DESTINATION: &str = "/fe2o3-reviewed-workspace/flash-attentio
 const WORKSPACE_REMAP_DESTINATION: &str = "/fe2o3-reviewed-workspace";
 const REVIEWED_ROOT_INSTANCE_IDENTITY: &str = "kernel::__fe2o3_host_kernel_v1_4cd011e31086168adc65ef2b706d5c0df66642392c149412d11e42edc718e291";
 const COMPILER_SEMANTICS_DOMAIN_V1: &[u8] = b"fe2o3.flash-attention.compiler-semantics.v1";
-const TRUSTED_DEFINITIONS_DOMAIN_V4: &[u8] =
-    b"fe2o3.flash-attention.trusted-definitions-and-terminals.v4";
+const TRUSTED_DEFINITIONS_DOMAIN_V5: &[u8] =
+    b"fe2o3.flash-attention.trusted-definitions-and-terminals.v5";
 const AUTHORITY_DOMAIN_V1: &[u8] = b"fe2o3.flash-attention.source-authority.v1";
 const FN_ABI_DOMAIN_V1: &[u8] = b"fe2o3.flash-attention.rustc-fn-abi.v1";
 const ABI_BINDING_V1: &[u8] = b"ptr64;size=64;align=8;q@0:16:8:slice-f32:shared-readonly;k@16:16:8:slice-f32:shared-readonly;v@32:16:8:slice-f32:shared-readonly;output@48:16:8:slice-f32:exclusive-readwrite";
@@ -69,7 +69,7 @@ const PROFILE_LAUNCH_BINDING_V1: &[u8] =
 const NUMERICAL_BINDING_V1: &[u8] = b"b=1;h=1;n=8;d=16;inputs=f32-finite;dot=strict-sequential-f32-d16;scale-bits=0x3e800000;mask=causal-lower-triangle-diagonal-included;online=max,sum,numerator-pair;ordered-rescale;no-contraction;divide-at-end";
 const DESCRIPTOR_BINDING_V1: &[u8] = b"logical=flash_attention_causal_f32_b1_h1_n8_d16_v1;export=flash_attention_causal_f32_b1_h1_n8_d16_v1;descriptor=flash_attention_causal_f32_b1_h1_n8_d16_v1.kd;explicit-kernarg=64;complete-cov6-kernarg=320;wg=64,1,1;wave=64;static-lds=0;dynamic-lds=0";
 const CANONICAL_IR_BINDING_V1: &[u8] = b"fe2o3::flash_attention_causal_f32_v1;args=q,k,v-shared-f32x128,output-lane-owned-f32x128;shape=b1,h1,n8,d16;causal=key<=query;ordered-recurrence=dot,scale,init,next-max,previous-exp,current-exp,denominator,numerator-pair,maximum,divide;ownership=adjacent-pair-total-injective-in-bounds";
-const CORRESPONDENCE_BINDING_V1: &[u8] = b"exact attributed source plus wrapper/session registration, exact rustc FnAbi, location-independent V4 provider-semantic definitions, identity-bound reviewed semantic terminals, and complete reachable portable-MIR modulo those terminals select a closed FlashAttention semantic sidecar;reviewed correspondence only;not generic lowering, terminal-body refinement, or a compiler-refinement proof";
+const CORRESPONDENCE_BINDING_V1: &[u8] = b"exact attributed source plus wrapper/session registration, exact rustc FnAbi, location-independent V5 provider-semantic definitions, identity-bound reviewed semantic terminals, and complete reachable portable-MIR modulo those terminals select a closed FlashAttention semantic sidecar;reviewed correspondence only;not generic lowering, terminal-body refinement, or a compiler-refinement proof";
 const EXACT_FRONTEND_CONTRACT_V1: &[u8] = &[
     70, 69, 50, 79, 51, 75, 70, 0, 1, 0, 1, 0, 52, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 64, 0, 0, 0, 1,
     0, 0, 0, 1, 0, 0, 0, 64, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
@@ -78,8 +78,8 @@ const EXACT_FRONTEND_CONTRACT_V1: &[u8] = &[
 // Filled from the pinned compiler fixture after path-independent portable-MIR
 // import. Any reachable body, call target, type, or operation drift changes it.
 const PORTABLE_MIR_CLOSURE_IDENTITY_V1: [u8; 32] = [
-    0x39, 0xdd, 0x09, 0x83, 0x2a, 0x49, 0x72, 0xb4, 0xa3, 0xa1, 0x12, 0xa8, 0x75, 0x4d, 0xb3, 0xbe,
-    0x59, 0x5d, 0x11, 0x76, 0xc0, 0x12, 0x2e, 0x1f, 0x0b, 0x66, 0xd0, 0x24, 0xdf, 0x35, 0x35, 0x91,
+    0xff, 0x60, 0x89, 0xe8, 0x86, 0x38, 0x04, 0x54, 0x82, 0x84, 0x72, 0x85, 0xd4, 0x96, 0x69, 0x24,
+    0xf3, 0x19, 0x22, 0xd0, 0xc1, 0xcd, 0xe5, 0xca, 0x30, 0x87, 0xb9, 0xe2, 0x99, 0x78, 0xb9, 0x05,
 ];
 const RUSTC_FN_ABI_IDENTITY_V1: [u8; 32] = [
     0x2c, 0x80, 0x3c, 0x84, 0xc1, 0x7a, 0x11, 0xc8, 0x34, 0xba, 0xe4, 0x53, 0x66, 0x9c, 0x09, 0xe1,
@@ -89,9 +89,9 @@ const COMPILER_SEMANTICS_IDENTITY_V1: [u8; 32] = [
     0xb9, 0x25, 0x15, 0xfa, 0x53, 0x47, 0xd9, 0x3e, 0xe9, 0x63, 0x88, 0xda, 0x9e, 0x72, 0x76, 0xaa,
     0x96, 0xcd, 0x30, 0x3e, 0x66, 0x4c, 0xa6, 0x75, 0x3b, 0x9b, 0xbd, 0x23, 0xd9, 0x1f, 0x44, 0x3b,
 ];
-const TRUSTED_TERMINAL_IDENTITY_V4: [u8; 32] = [
-    0x81, 0x56, 0x90, 0x42, 0xbe, 0x7e, 0x43, 0xc6, 0xa6, 0xbb, 0xbb, 0x12, 0xf5, 0x01, 0xfe, 0x14,
-    0x13, 0xf1, 0x6a, 0x75, 0x42, 0x87, 0x53, 0x6d, 0xe9, 0xfa, 0x36, 0x2c, 0xd5, 0x8b, 0x3d, 0x6d,
+const TRUSTED_TERMINAL_IDENTITY_V5: [u8; 32] = [
+    0x00, 0xa1, 0x97, 0x03, 0x5d, 0x7c, 0x90, 0x37, 0xf9, 0xd3, 0xaa, 0x57, 0x8d, 0x00, 0xc8, 0xb0,
+    0x00, 0xc3, 0x39, 0x58, 0x9b, 0x9b, 0x10, 0x02, 0x66, 0x76, 0xd3, 0x1b, 0x6d, 0x07, 0x2e, 0x84,
 ];
 
 const ARGUMENT_KINDS_V1: [GeneralTypedArgumentKindV3; 4] = [
@@ -105,8 +105,9 @@ const REQUIRED_TRUSTED_ITEMS_V1: &[TrustedDeviceItem] = &[
     TrustedDeviceItem::DisjointSlice,
     TrustedDeviceItem::ThreadIndex1d,
     TrustedDeviceItem::ThreadIndexGet,
+    TrustedDeviceItem::ThreadIndexCheckedBlock,
     TrustedDeviceItem::DisjointSliceLen,
-    TrustedDeviceItem::DisjointSliceGetMutAt,
+    TrustedDeviceItem::DisjointSliceGetBlockMut,
     TrustedDeviceItem::DeviceMath(dialect_amdgcn::DeviceMathDiagnosticItem::Context),
     TrustedDeviceItem::DeviceMath(dialect_amdgcn::DeviceMathDiagnosticItem::ContextFromCompiler),
     TrustedDeviceItem::DeviceMath(dialect_amdgcn::DeviceMathDiagnosticItem::F32(
@@ -118,8 +119,9 @@ const REQUIRED_TRUSTED_ITEMS_V1: &[TrustedDeviceItem] = &[
 const REVIEWED_SEMANTIC_TERMINALS_V1: &[TrustedDeviceItem] = &[
     TrustedDeviceItem::ThreadIndex1d,
     TrustedDeviceItem::ThreadIndexGet,
+    TrustedDeviceItem::ThreadIndexCheckedBlock,
     TrustedDeviceItem::DisjointSliceLen,
-    TrustedDeviceItem::DisjointSliceGetMutAt,
+    TrustedDeviceItem::DisjointSliceGetBlockMut,
     TrustedDeviceItem::DeviceMath(dialect_amdgcn::DeviceMathDiagnosticItem::ContextFromCompiler),
     TrustedDeviceItem::DeviceMath(dialect_amdgcn::DeviceMathDiagnosticItem::F32(
         fe2o3_kernel_ir::F32MathFunction::Exp,
@@ -875,7 +877,7 @@ fn trusted_definitions_and_terminals_identity<'tcx>(
     collection: &CollectionResult<'tcx>,
 ) -> Result<[u8; 32], CollectedFlashAttentionErrorV1> {
     let mut digest = Sha256::new();
-    hash_field(&mut digest, TRUSTED_DEFINITIONS_DOMAIN_V4);
+    hash_field(&mut digest, TRUSTED_DEFINITIONS_DOMAIN_V5);
     hash_field(
         &mut digest,
         COLLECTED_FLASH_ATTENTION_PIPELINE_V1.as_bytes(),
@@ -1076,10 +1078,10 @@ fn trusted_definitions_and_terminals_identity<'tcx>(
     .map_err(CollectedFlashAttentionErrorV1::TrustedDefinitions)?;
     hash_field(&mut digest, &core_terminal_identity);
     let actual: [u8; 32] = digest.finalize().into();
-    if actual != TRUSTED_TERMINAL_IDENTITY_V4 {
+    if actual != TRUSTED_TERMINAL_IDENTITY_V5 {
         return Err(CollectedFlashAttentionErrorV1::TrustedDefinitions(format!(
             "trusted-definition/semantic-terminal identity drifted: expected {}, found {}",
-            crate::encode_hex(&TRUSTED_TERMINAL_IDENTITY_V4),
+            crate::encode_hex(&TRUSTED_TERMINAL_IDENTITY_V5),
             crate::encode_hex(&actual)
         )));
     }
@@ -1273,7 +1275,7 @@ fn validate_authority(
     } else if authority.fn_abi_identity != RUSTC_FN_ABI_IDENTITY_V1 {
         Some("rustc FnAbi")
     } else if authority.compiler_semantics_identity != COMPILER_SEMANTICS_IDENTITY_V1
-        || authority.trusted_definitions_identity != TRUSTED_TERMINAL_IDENTITY_V4
+        || authority.trusted_definitions_identity != TRUSTED_TERMINAL_IDENTITY_V5
     {
         Some("compiler/trusted definition closure")
     } else if authority.frontend_contract_identity != sha256(EXACT_FRONTEND_CONTRACT_V1) {
@@ -1373,7 +1375,7 @@ mod tests {
             portable_mir_identity: PORTABLE_MIR_CLOSURE_IDENTITY_V1,
             compiler_semantics_identity: COMPILER_SEMANTICS_IDENTITY_V1,
             fn_abi_identity: RUSTC_FN_ABI_IDENTITY_V1,
-            trusted_definitions_identity: TRUSTED_TERMINAL_IDENTITY_V4,
+            trusted_definitions_identity: TRUSTED_TERMINAL_IDENTITY_V5,
             frontend_contract_identity: sha256(EXACT_FRONTEND_CONTRACT_V1),
             abi_identity: sha256(ABI_BINDING_V1),
             effects_identity: sha256(EFFECT_BINDING_V1),

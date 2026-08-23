@@ -362,8 +362,8 @@ fn exact_phase_a_source_authenticates_complete_flash_attention_profile() {
     );
     assert!(result.status.success(), "exact handoff failed:\n{stderr}");
     for marker in [
-        "exact rustc FnAbi, location-independent V4 provider-semantic definitions and reviewed semantic-terminal manifest",
-        "complete reachable portable-MIR closure modulo those identity-bound terminals 39dd09832a4972b4a3a112a8754db3be595d1176c0122e1f0b66d024df353591",
+        "exact rustc FnAbi, location-independent V5 provider-semantic definitions and reviewed semantic-terminal manifest",
+        "complete reachable portable-MIR closure modulo those identity-bound terminals ff6089e88638045482847285d4966924f31922d0c1cde5ca3087b9e29978b905",
         "closed causal FlashAttention B1/H1/N8/D16 semantic KIR with 10 ordered recurrence steps",
         "adjacent-pair output ownership",
         "published an inert Worker V2 compiler handoff",
@@ -437,7 +437,11 @@ fn hostile_source_mir_profile_and_ownership_mutations_fail_closed() {
         ),
         (
             "abi-output-type",
-            mutation(SOURCE, "mut output: DisjointSlice<f32>", "output: &[f32]"),
+            mutation(
+                SOURCE,
+                "mut output: DisjointSlice<f32, Blocked<Index1D, 1, 2>>",
+                "output: &[f32]",
+            ),
         ),
         (
             "finite-input",
@@ -508,11 +512,19 @@ fn hostile_source_mir_profile_and_ownership_mutations_fail_closed() {
             ),
         ),
         (
+            "output-block-witness",
+            mutation(
+                SOURCE,
+                "lane_index.checked_block::<1, 2>()",
+                "lane_index.checked_block::<2, 2>()",
+            ),
+        ),
+        (
             "output-index",
             mutation(
                 SOURCE,
-                "output.get_mut_at(first_output + 1)",
-                "output.get_mut_at(first_output)",
+                "output.get_block_mut(&output_block, 1)",
+                "output.get_block_mut(&output_block, 0)",
             ),
         ),
         (
@@ -615,7 +627,9 @@ fn authority_is_location_independent_and_provider_source_bound() {
     let hostile_text = command_text(&hostile);
     assert!(!hostile.status.success(), "mutated provider authenticated");
     assert!(
-        hostile_text.contains("trusted-definition/semantic-terminal identity drifted"),
-        "provider substitution did not fail at trusted identity:\n{hostile_text}"
+        hostile_text.contains(
+            "safe execution provider source closure does not match the reviewed V1 identity"
+        ),
+        "provider substitution did not fail at provider-source admission:\n{hostile_text}"
     );
 }
