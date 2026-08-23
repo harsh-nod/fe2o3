@@ -11259,7 +11259,7 @@ fn validate_statement(
             let SemanticTypeShapeV1::Enum { variants, .. } = type_shape(context, place.ty) else {
                 return invalid_type_operation(SemanticTypeOperationV1::SetDiscriminant, location);
             };
-            if *variant_index as usize >= variants.len() {
+            if inhabited_enum_variant(variants, *variant_index).is_none() {
                 return invalid_type_operation(SemanticTypeOperationV1::SetDiscriminant, location);
             }
         }
@@ -11592,8 +11592,7 @@ fn validate_aggregate_rvalue(
         (
             SemanticAggregateKindV1::EnumVariant(variant),
             SemanticTypeShapeV1::Enum { variants, .. },
-        ) => variants
-            .get(*variant as usize)
+        ) => inhabited_enum_variant(variants, *variant)
             .is_some_and(|variant| operands_match(&variant.fields.fields)),
         _ => false,
     };
@@ -11601,6 +11600,15 @@ fn validate_aggregate_rvalue(
         return invalid_type_operation(SemanticTypeOperationV1::Aggregate, location);
     }
     Ok(())
+}
+
+fn inhabited_enum_variant(
+    variants: &[SemanticEnumVariantV1],
+    variant: u32,
+) -> Option<&SemanticEnumVariantV1> {
+    variants
+        .get(variant as usize)
+        .filter(|variant| !variant.is_uninhabited())
 }
 
 fn scalar_type(
@@ -16041,6 +16049,19 @@ fn encode_assert_message(
 mod private_tests {
     use super::*;
 
+    fn test_type(
+        tag: u8,
+        layout: SemanticTypeLayoutV1,
+        shape: SemanticTypeShapeV1,
+    ) -> SemanticTypeDeclV1 {
+        SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([tag; 32]),
+            SemanticLayoutIdentityV1::from_sha256([tag; 32]),
+            layout,
+            shape,
+        )
+    }
+
     #[test]
     fn aggregate_counter_overflow_is_typed() {
         let mut totals = ValidationTotalsV1 {
@@ -16280,5 +16301,92 @@ mod private_tests {
         });
         assert_eq!(result, Err("stop"));
         assert_eq!(visits, 1);
+    }
+
+    #[test]
+    fn enum_construction_rejects_uninhabited_and_missing_variants_deterministically() {
+        let scalar = SemanticTypeIdV1::from_index(0);
+        let enum_type = SemanticTypeIdV1::from_index(1);
+        let fields = || SemanticAggregateTypeV1::new(vec![scalar]).unwrap();
+        let types = vec![
+            test_type(
+                1,
+                SemanticTypeLayoutV1::new(Some(4), 4).unwrap(),
+                SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                    signed: false,
+                    bits: 32,
+                }),
+            ),
+            test_type(
+                2,
+                SemanticTypeLayoutV1::new(Some(8), 4).unwrap(),
+                SemanticTypeShapeV1::enum_type(
+                    scalar,
+                    vec![
+                        SemanticEnumVariantV1::new(0, fields()),
+                        SemanticEnumVariantV1::new_with_inhabitedness(1, fields(), true),
+                    ],
+                )
+                .unwrap(),
+            ),
+        ];
+        let request = InertSemanticMirRequestV1::new(
+            SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([3; 32])),
+            types,
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let context = ValidationContextV1 {
+            request: &request,
+            limits: SemanticMirLimitsV1::default(),
+            totals: ValidationTotalsV1::default(),
+            work: 0,
+        };
+        let operand = SemanticOperandV1::Constant(SemanticConstantV1::new(
+            scalar,
+            SemanticConstantValueV1::ZeroSized,
+        ));
+        let aggregate = |variant| {
+            SemanticAggregateRvalueV1::new(
+                SemanticAggregateKindV1::EnumVariant(variant),
+                vec![operand.clone()],
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            validate_aggregate_rvalue(
+                &context,
+                SemanticMirLocationV1::Module,
+                enum_type,
+                &aggregate(0),
+            ),
+            Ok(())
+        );
+        let rejected = Err(SemanticMirErrorV1::InvalidTypeOperation {
+            operation: SemanticTypeOperationV1::Aggregate,
+            location: SemanticMirLocationV1::Module,
+        });
+        for variant in [1, u32::MAX, 1, u32::MAX] {
+            assert_eq!(
+                validate_aggregate_rvalue(
+                    &context,
+                    SemanticMirLocationV1::Module,
+                    enum_type,
+                    &aggregate(variant),
+                ),
+                rejected
+            );
+        }
+        let SemanticTypeShapeV1::Enum { variants, .. } =
+            request.types[enum_type.index() as usize].shape()
+        else {
+            unreachable!()
+        };
+        assert!(inhabited_enum_variant(variants, 0).is_some());
+        assert!(inhabited_enum_variant(variants, 1).is_none());
     }
 }
