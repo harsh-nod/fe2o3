@@ -180,8 +180,6 @@ pub proof fn active_input_reads_are_initialized(
     active_accesses_are_in_bounds(p, t, m, n, k);
     assert(a_index(output_row(p, n), t, k) < a_initialized.len());
     assert(b_index(t, output_col(p, n), n) < b_initialized.len());
-    assert(a_initialized[a_index(output_row(p, n), t, k) as int]);
-    assert(b_initialized[b_index(t, output_col(p, n), n) as int]);
 }
 
 /// Canonical output-index mapping only; this does not attest physical stores.

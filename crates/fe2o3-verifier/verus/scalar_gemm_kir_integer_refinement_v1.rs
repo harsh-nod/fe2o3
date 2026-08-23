@@ -5,6 +5,10 @@
 // address arithmetic, and final store. This is not a decoder or whole-KIR operational semantics,
 // and it does not model Rust MIR or IEEE-754 `f32` operations.
 
+pub mod scalar_gemm_kir_integer_profile_v1 {
+
+use super::*;
+
 verus! {
 
 /// Entry block 0, values 7 through 11: `p < zext(m) * zext(n)`.
@@ -228,3 +232,5 @@ pub proof fn scalar_kir_v5_active_invocation_refines_integer_model_v1(
 }
 
 } // verus!
+
+} // mod scalar_gemm_kir_integer_profile_v1
