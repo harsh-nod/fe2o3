@@ -1023,35 +1023,44 @@ fn transfer_tensor_statements_v1(
     let use_block = SemanticBlockIdV1::from_index(block_index as u32);
     for statement in block.statements() {
         match statement.kind() {
-            SemanticStatementKindV1::Assign(assignment)
-                if assignment.destination().projections().is_empty() =>
-            {
+            SemanticStatementKindV1::Assign(assignment) => {
                 let destination = assignment.destination().local().index() as usize;
-                let origin = match assignment.value().kind() {
-                    SemanticRvalueKindV1::Use(operand) => tensor_origin_from_assignment_operand_v1(
-                        operand,
-                        state,
-                        option_dominance,
-                        enum_payload_dominance,
-                        use_block,
-                    ),
-                    SemanticRvalueKindV1::Borrow { place, .. }
-                    | SemanticRvalueKindV1::AddressOf { place, .. }
-                        if place.projections().is_empty() =>
-                    {
-                        state.get(&(place.local().index() as usize)).copied()
+                let origin = if assignment.destination().projections().is_empty() {
+                    match assignment.value().kind() {
+                        SemanticRvalueKindV1::Use(operand) => {
+                            tensor_origin_from_assignment_operand_v1(
+                                operand,
+                                state,
+                                option_dominance,
+                                enum_payload_dominance,
+                                use_block,
+                            )
+                        }
+                        SemanticRvalueKindV1::Borrow { place, .. }
+                        | SemanticRvalueKindV1::AddressOf { place, .. }
+                            if place.projections().is_empty() =>
+                        {
+                            state.get(&(place.local().index() as usize)).copied()
+                        }
+                        SemanticRvalueKindV1::Aggregate(aggregate) => {
+                            tensor_origin_from_enum_aggregate_v1(
+                                aggregate,
+                                state,
+                                option_dominance,
+                                enum_payload_dominance,
+                                use_block,
+                            )?
+                        }
+                        _ => None,
                     }
-                    SemanticRvalueKindV1::Aggregate(aggregate) => {
-                        tensor_origin_from_enum_aggregate_v1(
-                            aggregate,
-                            state,
-                            option_dominance,
-                            enum_payload_dominance,
-                            use_block,
-                        )?
-                    }
-                    _ => None,
+                } else {
+                    None
                 };
+                consume_tensor_rvalue_operands_v1(assignment.value().kind(), state);
+                if !assignment.destination().projections().is_empty() {
+                    invalidate_tensor_local_v1(state, destination);
+                    continue;
+                }
                 match origin {
                     Some(origin) => {
                         state.insert(destination, origin);
@@ -1061,16 +1070,67 @@ fn transfer_tensor_statements_v1(
                     }
                 }
             }
-            SemanticStatementKindV1::StorageDead(local) => {
+            SemanticStatementKindV1::Store(store) => {
+                consume_tensor_operand_v1(state, store.value());
+            }
+            SemanticStatementKindV1::AtomicRmw(atomic) => {
+                consume_tensor_operand_v1(state, atomic.value());
+                invalidate_tensor_place_v1(state, atomic.destination());
+            }
+            SemanticStatementKindV1::AtomicCompareExchange(atomic) => {
+                consume_tensor_operand_v1(state, atomic.expected());
+                consume_tensor_operand_v1(state, atomic.replacement());
+                invalidate_tensor_place_v1(state, atomic.destination());
+            }
+            SemanticStatementKindV1::SetDiscriminant { place, .. }
+            | SemanticStatementKindV1::Deinitialize(place) => {
+                invalidate_tensor_place_v1(state, place);
+            }
+            SemanticStatementKindV1::StorageLive(local)
+            | SemanticStatementKindV1::StorageDead(local) => {
                 state.remove(&(local.index() as usize));
             }
-            SemanticStatementKindV1::Deinitialize(place) if place.projections().is_empty() => {
-                state.remove(&(place.local().index() as usize));
+            SemanticStatementKindV1::Assume(operand) => {
+                consume_tensor_operand_v1(state, operand);
             }
-            _ => {}
+            SemanticStatementKindV1::Nop => {}
         }
     }
     Ok(())
+}
+
+fn consume_tensor_rvalue_operands_v1(
+    rvalue: &SemanticRvalueKindV1,
+    state: &mut ProjectedTensorStateV1,
+) {
+    let _: Result<(), std::convert::Infallible> = rvalue.try_visit_operands(|operand| {
+        consume_tensor_operand_v1(state, operand);
+        Ok(())
+    });
+}
+
+fn consume_tensor_operand_v1(state: &mut ProjectedTensorStateV1, operand: &SemanticOperandV1) {
+    let place = match operand {
+        SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => place,
+        SemanticOperandV1::Constant(_) => return,
+    };
+    invalidate_tensor_place_v1(state, place);
+}
+
+fn consume_tensor_operands_v1(state: &mut ProjectedTensorStateV1, operands: &[SemanticOperandV1]) {
+    for operand in operands {
+        consume_tensor_operand_v1(state, operand);
+    }
+}
+
+fn invalidate_tensor_place_v1(state: &mut ProjectedTensorStateV1, place: &SemanticPlaceV1) {
+    invalidate_tensor_local_v1(state, place.local().index() as usize);
+}
+
+fn invalidate_tensor_local_v1(state: &mut ProjectedTensorStateV1, local: usize) {
+    if state.contains_key(&local) {
+        state.insert(local, ProjectedTensorValueV1::Invalid);
+    }
 }
 
 fn tensor_origin_from_enum_aggregate_v1(
@@ -1195,20 +1255,46 @@ fn transfer_tensor_terminator_v1(
     state: &mut ProjectedTensorStateV1,
     require_authenticated_site: bool,
 ) -> Result<Option<ProductionRankedOperationV1>, ProductionRankedProjectionErrorV1> {
-    let SemanticTerminatorKindV1::Call(call) = function.blocks()[block_index].terminator().kind()
-    else {
+    let terminator = function.blocks()[block_index].terminator().kind();
+    let SemanticTerminatorKindV1::Call(call) = terminator else {
+        match terminator {
+            SemanticTerminatorKindV1::SwitchInt { discriminant, .. } => {
+                consume_tensor_operand_v1(state, discriminant);
+            }
+            SemanticTerminatorKindV1::TailCall(call) => {
+                consume_tensor_operands_v1(state, call.arguments());
+            }
+            SemanticTerminatorKindV1::Drop { place, .. } => {
+                invalidate_tensor_place_v1(state, place);
+            }
+            SemanticTerminatorKindV1::Assert { condition, .. } => {
+                consume_tensor_operand_v1(state, condition);
+            }
+            SemanticTerminatorKindV1::Goto(_)
+            | SemanticTerminatorKindV1::FalseEdge { .. }
+            | SemanticTerminatorKindV1::Return
+            | SemanticTerminatorKindV1::UnwindResume
+            | SemanticTerminatorKindV1::UnwindTerminate
+            | SemanticTerminatorKindV1::Abort
+            | SemanticTerminatorKindV1::Unreachable => {}
+            SemanticTerminatorKindV1::Call(_) => unreachable!("matched call terminator"),
+        }
         return Ok(None);
     };
     let Some(destination) = call.destination() else {
+        consume_tensor_operands_v1(state, call.arguments());
         return Ok(None);
     };
     if !destination.place().projections().is_empty() {
+        consume_tensor_operands_v1(state, call.arguments());
+        invalidate_tensor_place_v1(state, destination.place());
         return Ok(None);
     }
     let destination_local = destination.place().local().index() as usize;
     let Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) =
         callables.get(call.callee().index() as usize)
     else {
+        consume_tensor_operands_v1(state, call.arguments());
         state.remove(&destination_local);
         return Ok(None);
     };
@@ -1336,10 +1422,12 @@ fn transfer_tensor_terminator_v1(
             Err(_) => (ProjectedTensorValueV1::Invalid, None),
         },
         _ => {
+            consume_tensor_operands_v1(state, call.arguments());
             state.remove(&destination_local);
             return Ok(None);
         }
     };
+    consume_tensor_operands_v1(state, call.arguments());
     state.insert(destination_local, origin);
     if require_authenticated_site
         && matches!(
@@ -8629,6 +8717,133 @@ mod tests {
                 "tensor enum transport exceeds the charged nesting limit"
             ))
         ));
+    }
+
+    fn tensor_move_operand(local: u32) -> SemanticOperandV1 {
+        SemanticOperandV1::Move(
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], SCALAR_TYPE)
+                .unwrap(),
+        )
+    }
+
+    fn tensor_state_origin() -> ProjectedTensorValueV1 {
+        ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Lane {
+            root: 31,
+            wave_width: 64,
+        })
+    }
+
+    #[test]
+    fn copy_and_move_transfer_tensor_origin_exactly_once() {
+        let place = |local| SemanticPlaceV1::new(local, vec![], SCALAR_TYPE).unwrap();
+        let assignment = |destination, operand| {
+            statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                place(destination),
+                SemanticRvalueV1::new(SCALAR_TYPE, SemanticRvalueKindV1::Use(operand)),
+            )))
+        };
+        for first in [tensor_operand(1), tensor_move_operand(1)] {
+            let function = projection_function_with_locals(
+                vec![block(
+                    102,
+                    vec![
+                        assignment(SemanticLocalIdV1::from_index(2), first),
+                        assignment(SemanticLocalIdV1::from_index(3), tensor_operand(1)),
+                    ],
+                    SemanticTerminatorKindV1::Return,
+                )],
+                vec![
+                    local(102, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                    local(103, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                    local(104, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                    local(105, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                ],
+            );
+            let option = SemanticOptionDominanceV1::analyze(&function, &[]).unwrap();
+            let payload =
+                SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types()).unwrap();
+            let mut state = HashMap::from([(1, tensor_state_origin())]);
+            transfer_tensor_statements_v1(&function, 0, &mut state, &option, &payload).unwrap();
+            assert_eq!(state[&1], ProjectedTensorValueV1::Invalid);
+            assert_eq!(state[&2], tensor_state_origin());
+            assert_eq!(state[&3], ProjectedTensorValueV1::Invalid);
+        }
+    }
+
+    #[test]
+    fn partial_assignment_discriminant_and_deinitialize_invalidate_enum_transport() {
+        let payload_place = match tensor_payload(1, 4) {
+            SemanticOperandV1::Move(place) => place,
+            _ => unreachable!(),
+        };
+        let statements = [
+            statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                payload_place.clone(),
+                SemanticRvalueV1::new(SCALAR_TYPE, SemanticRvalueKindV1::Use(constant(0))),
+            ))),
+            statement(SemanticStatementKindV1::SetDiscriminant {
+                place: SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], ENUM_TYPE)
+                    .unwrap(),
+                variant_index: 5,
+            }),
+            statement(SemanticStatementKindV1::Deinitialize(payload_place)),
+        ];
+        for invalidating_statement in statements {
+            let function = projection_function_with_locals(
+                vec![block(
+                    106,
+                    vec![invalidating_statement],
+                    SemanticTerminatorKindV1::Return,
+                )],
+                vec![
+                    local(106, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                    local(107, ENUM_TYPE, SemanticLocalRoleV1::Temporary),
+                ],
+            );
+            let option = SemanticOptionDominanceV1::analyze(&function, &[]).unwrap();
+            let payload =
+                SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types_with_enum())
+                    .unwrap();
+            let wrapped = wrap_tensor_enum_value_v1(tensor_state_origin(), 4).unwrap();
+            let mut state = HashMap::from([(1, wrapped)]);
+            transfer_tensor_statements_v1(&function, 0, &mut state, &option, &payload).unwrap();
+            assert_eq!(state[&1], ProjectedTensorValueV1::Invalid);
+            assert!(
+                tensor_origin_from_assignment_operand_v1(
+                    &tensor_payload(1, 4),
+                    &state,
+                    &option,
+                    &payload,
+                    SemanticBlockIdV1::from_index(0),
+                )
+                .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn call_operands_consume_tensor_origins_even_without_a_known_producer() {
+        let call = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(0),
+            vec![tensor_move_operand(1)],
+            None,
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        let function = projection_function_with_locals(
+            vec![block(108, vec![], SemanticTerminatorKindV1::Call(call))],
+            vec![
+                local(108, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(109, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        );
+        let mut state = HashMap::from([(1, tensor_state_origin())]);
+        assert!(
+            transfer_tensor_terminator_v1(&[], &function, 0, &mut state, false)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(state[&1], ProjectedTensorValueV1::Invalid);
     }
 
     #[test]
