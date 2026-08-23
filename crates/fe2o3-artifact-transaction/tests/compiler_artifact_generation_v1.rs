@@ -1072,30 +1072,49 @@ fn redo_name_is_private_single_link_and_consumed_by_recovery() {
 }
 
 #[test]
-fn canonical_only_recovery_syncs_and_rereads_without_quota_headroom() {
-    for timing in [
-        CompilerArtifactGenerationFaultTimingV1::Before,
-        CompilerArtifactGenerationFaultTimingV1::After,
+fn canonical_only_recovery_recommits_without_entry_quota_headroom() {
+    for boundary in [
+        CompilerArtifactGenerationRecordBoundaryV1::RenameCanonicalToRedo,
+        CompilerArtifactGenerationRecordBoundaryV1::SyncRedoName,
+        CompilerArtifactGenerationRecordBoundaryV1::RenameRedoToCanonical,
+        CompilerArtifactGenerationRecordBoundaryV1::SyncCanonicalName,
     ] {
-        let directory = TestDirectory::new();
-        let store = directory.store();
-        committed(store.publish_generation_v1(&request(1, true)));
-        let recovered = store.recover_generation_v1_with_options(
-            CompilerArtifactGenerationOptionsV1::inject_fault(
-                CompilerArtifactGenerationFaultPointV1::ScopeRecord {
-                    operation: CompilerArtifactGenerationRecordOperationV1::Recover,
-                    boundary: CompilerArtifactGenerationRecordBoundaryV1::SyncCanonicalName,
-                    timing,
-                },
-            ),
-        );
-        assert!(recovered.is_err(), "{timing:?}");
-        assert!(
-            entries_with_prefix(&directory.path, SCOPE_PREFIX)
-                .iter()
-                .all(|entry| !entry.to_string_lossy().ends_with(REDO_SUFFIX))
-        );
-        assert_generation(&store.recover_generation_v1().unwrap().unwrap(), 1, true);
+        for timing in [
+            CompilerArtifactGenerationFaultTimingV1::Before,
+            CompilerArtifactGenerationFaultTimingV1::After,
+        ] {
+            let directory = TestDirectory::new();
+            let store = directory.store_with_quota(
+                u64::try_from(MAX_COMPILER_ARTIFACT_GENERATION_BYTES_V1).unwrap(),
+                3,
+            );
+            let request = shared_payload_request();
+            let expected = committed(store.publish_generation_v1(&request))
+                .manifest()
+                .identity();
+            assert_eq!(managed_entries(&directory.path).len(), 3);
+
+            let recovered = store.recover_generation_v1_with_options(
+                CompilerArtifactGenerationOptionsV1::inject_fault(
+                    CompilerArtifactGenerationFaultPointV1::ScopeRecord {
+                        operation: CompilerArtifactGenerationRecordOperationV1::Recover,
+                        boundary,
+                        timing,
+                    },
+                ),
+            );
+            assert!(recovered.is_err(), "{boundary:?}/{timing:?}");
+            assert_eq!(managed_entries(&directory.path).len(), 3);
+
+            let recovered = store.recover_generation_v1().unwrap().unwrap();
+            assert_eq!(recovered.manifest().identity(), expected);
+            assert_eq!(managed_entries(&directory.path).len(), 3);
+            assert!(
+                entries_with_prefix(&directory.path, SCOPE_PREFIX)
+                    .iter()
+                    .all(|entry| !entry.to_string_lossy().ends_with(REDO_SUFFIX))
+            );
+        }
     }
 }
 
@@ -1233,7 +1252,7 @@ fn preexisting_recoverable_requested_redo_is_indeterminate_on_recovery_fault() {
 }
 
 #[test]
-fn reclamation_preserves_canonical_predecessor_and_recoverable_redo_closures() {
+fn reclamation_resolves_redo_before_pruning_its_predecessor_closure() {
     let directory = TestDirectory::new();
     let store = directory.store();
     committed(store.publish_generation_v1(&request(1, true)));
@@ -1251,16 +1270,16 @@ fn reclamation_preserves_canonical_predecessor_and_recoverable_redo_closures() {
         pending,
         CompilerArtifactGenerationPublishOutcomeV1::CommitIndeterminate { .. }
     ));
+    let redo = redo_record(&directory.path);
     let before = managed_entries(&directory.path).len();
     let report = store.reclaim_store_v1().unwrap();
-    assert_eq!(report.removed_entries(), 0);
-    assert_eq!(report.retained_entries(), before);
+    assert!(report.removed_entries() > 0);
+    assert!(report.retained_entries() < before);
     assert!(canonical_record(&directory.path).exists());
-    assert!(redo_record(&directory.path).exists());
-    assert!(blob_for(&directory.path, b"semantic-mir-generation-a").exists());
+    assert!(!redo.exists());
+    assert!(!blob_for(&directory.path, b"semantic-mir-generation-a").exists());
     assert!(blob_for(&directory.path, b"semantic-mir-generation-b").exists());
     assert_generation(&store.recover_generation_v1().unwrap().unwrap(), 2, true);
-    assert!(!blob_for(&directory.path, b"semantic-mir-generation-a").exists());
 }
 
 #[test]
@@ -1519,6 +1538,64 @@ fn restart_discards_an_over_quota_redo_and_preserves_the_committed_generation() 
             .unwrap();
     assert!(!redo.exists());
     assert_generation(&reopened.open_generation_v1().unwrap().unwrap(), 1, true);
+}
+
+#[test]
+fn foreign_scope_over_quota_redo_cannot_block_root_admission() {
+    let directory = TestDirectory::new();
+    let first_scope = scope();
+    let second_scope = CompilerArtifactGenerationScopeV1::from_bytes([0x52; 32]);
+    let first = CompilerArtifactGenerationStoreV1::open(&directory.path, first_scope).unwrap();
+    let second = CompilerArtifactGenerationStoreV1::open(&directory.path, second_scope).unwrap();
+    committed(first.publish_generation_v1(&request(1, true)));
+    committed(second.publish_generation_v1(&request(2, true)));
+    let pending = second.publish_generation_v1_with_options(
+        &request(3, true),
+        CompilerArtifactGenerationOptionsV1::inject_fault(
+            CompilerArtifactGenerationFaultPointV1::ScopeRecord {
+                operation: CompilerArtifactGenerationRecordOperationV1::Commit,
+                boundary: CompilerArtifactGenerationRecordBoundaryV1::SyncRedoName,
+                timing: CompilerArtifactGenerationFaultTimingV1::After,
+            },
+        ),
+    );
+    assert!(matches!(
+        pending,
+        CompilerArtifactGenerationPublishOutcomeV1::CommitIndeterminate { .. }
+    ));
+    let redo = redo_record(&directory.path);
+    let redo_file = OpenOptions::new().write(true).open(&redo).unwrap();
+    let allocation = unsafe {
+        libc::fallocate(
+            redo_file.as_raw_fd(),
+            libc::FALLOC_FL_KEEP_SIZE,
+            0,
+            1024 * 1024,
+        )
+    };
+    assert_eq!(allocation, 0, "{}", std::io::Error::last_os_error());
+    drop(redo_file);
+    drop(second);
+    drop(first);
+
+    let quota = CompilerArtifactGenerationQuotaV1::new(256 * 1024, 64).unwrap();
+    let reopened_first =
+        CompilerArtifactGenerationStoreV1::open_with_quota(&directory.path, first_scope, quota)
+            .unwrap();
+    assert!(!redo.exists());
+    assert_generation(
+        &reopened_first.open_generation_v1().unwrap().unwrap(),
+        1,
+        true,
+    );
+    let reopened_second =
+        CompilerArtifactGenerationStoreV1::open_with_quota(&directory.path, second_scope, quota)
+            .unwrap();
+    assert_generation(
+        &reopened_second.open_generation_v1().unwrap().unwrap(),
+        2,
+        true,
+    );
 }
 
 #[test]

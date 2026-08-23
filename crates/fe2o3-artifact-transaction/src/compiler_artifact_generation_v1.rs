@@ -99,7 +99,7 @@ pub const DEFAULT_COMPILER_ARTIFACT_STORE_ENTRIES_V1: usize = DEFAULT_MANAGED_EN
 pub const HARD_MAX_COMPILER_ARTIFACT_STORE_ENTRIES_V1: usize = MAX_DIRECTORY_ENTRIES;
 
 /// Stable publication scope selected by the caller.
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CompilerArtifactGenerationScopeV1([u8; 32]);
 
 impl CompilerArtifactGenerationScopeV1 {
@@ -496,6 +496,7 @@ pub enum CompilerArtifactGenerationRecordBoundaryV1 {
     WriteTemp,
     SyncTemp,
     RenameTempToRedo,
+    RenameCanonicalToRedo,
     SyncRedoName,
     RenameRedoToCanonical,
     SyncCanonicalName,
@@ -1146,17 +1147,8 @@ impl CompilerArtifactGenerationStoreV1 {
         {
             let _lock = store.lock_checked()?;
             let mut hooks = StoreHooks::new([None, None], None);
-            if let Err(error) = store.recover_scope_locked(&mut hooks) {
-                if matches!(
-                    error,
-                    CompilerArtifactGenerationErrorV1::StorageQuotaExceeded { .. }
-                        | CompilerArtifactGenerationErrorV1::ManagedEntryLimitExceeded { .. }
-                ) {
-                    store.recover_scope_locked(&mut hooks)?;
-                } else {
-                    return Err(error);
-                }
-            }
+            store.reconcile_scope_redos_locked(None)?;
+            store.recover_scope_locked(&mut hooks)?;
             store.reclaim_locked()?;
         }
         Ok(store)
@@ -1243,6 +1235,7 @@ impl CompilerArtifactGenerationStoreV1 {
     ) -> Result<Option<CompilerArtifactGenerationLeaseV1>, CompilerArtifactGenerationErrorV1> {
         let _lock = self.lock_checked()?;
         self.ensure_root()?;
+        self.reconcile_scope_redos_locked(Some(self.scope))?;
         let mut hooks = StoreHooks::new(options.faults, options.observation);
         let lease = self.recover_scope_locked(&mut hooks)?;
         self.reclaim_locked()?;
@@ -1253,13 +1246,14 @@ impl CompilerArtifactGenerationStoreV1 {
     /// Recovers and establishes durability for the current generation before returning a lease.
     ///
     /// Merely visible canonical state is never sufficient to mint the committed lease type. This
-    /// operation promotes a legal redo or syncs and rereads canonical-only state before returning.
-    /// It is therefore intentionally mutating.
+    /// operation promotes a legal redo or recommits canonical-only state through a fresh durable
+    /// redo transaction before returning. It is therefore intentionally mutating.
     pub fn open_generation_v1(
         &self,
     ) -> Result<Option<CompilerArtifactGenerationLeaseV1>, CompilerArtifactGenerationErrorV1> {
         let _lock = self.lock_checked()?;
         self.ensure_root()?;
+        self.reconcile_scope_redos_locked(Some(self.scope))?;
         let mut hooks = StoreHooks::new([None, None], None);
         let lease = self.recover_scope_locked(&mut hooks)?;
         self.reclaim_locked()?;
@@ -1274,6 +1268,7 @@ impl CompilerArtifactGenerationStoreV1 {
         hooks: &mut StoreHooks,
     ) -> Result<CompilerArtifactGenerationLeaseV1, CompilerArtifactGenerationErrorV1> {
         self.ensure_root()?;
+        self.reconcile_scope_redos_locked(Some(self.scope))?;
         let current = self.recover_scope_locked(hooks)?;
         if current
             .as_ref()
@@ -1370,23 +1365,93 @@ impl CompilerArtifactGenerationStoreV1 {
         expected_canonical: Option<&[u8]>,
         expected_redo: &[u8],
     ) -> Result<(), CompilerArtifactGenerationErrorV1> {
-        if self.read_scope_record_bytes(&self.names.record)?.as_deref() != expected_canonical
-            || self.read_scope_record_bytes(&self.names.redo)?.as_deref() != Some(expected_redo)
+        self.discard_validated_redo_for_names_locked(&self.names, expected_canonical, expected_redo)
+    }
+
+    fn discard_validated_redo_for_names_locked(
+        &self,
+        names: &Names,
+        expected_canonical: Option<&[u8]>,
+        expected_redo: &[u8],
+    ) -> Result<(), CompilerArtifactGenerationErrorV1> {
+        if self.read_scope_record_bytes(&names.record)?.as_deref() != expected_canonical
+            || self.read_scope_record_bytes(&names.redo)?.as_deref() != Some(expected_redo)
         {
             return Err(unsafe_entry(
-                &self.names.redo,
+                &names.redo,
                 "scope records changed before rejected redo cleanup",
             ));
         }
-        unlinkat(&self.output.fd, &self.names.redo, AtFlags::empty()).map_err(io::Error::from)?;
+        unlinkat(&self.output.fd, &names.redo, AtFlags::empty()).map_err(io::Error::from)?;
         fsync(&self.output.fd).map_err(io::Error::from)?;
-        if self.read_scope_record_bytes(&self.names.record)?.as_deref() != expected_canonical
-            || self.read_scope_record_bytes(&self.names.redo)?.is_some()
+        if self.read_scope_record_bytes(&names.record)?.as_deref() != expected_canonical
+            || self.read_scope_record_bytes(&names.redo)?.is_some()
         {
             return Err(unsafe_entry(
-                &self.names.redo,
+                &names.redo,
                 "rejected redo cleanup did not preserve exact canonical-only state",
             ));
+        }
+        Ok(())
+    }
+
+    fn reconcile_scope_redos_locked(
+        &self,
+        excluded_scope: Option<CompilerArtifactGenerationScopeV1>,
+    ) -> Result<(), CompilerArtifactGenerationErrorV1> {
+        let inventory = self.inventory_locked(None)?;
+        let mut scopes = Vec::new();
+        scopes
+            .try_reserve(inventory.managed_entries.len().min(1024))
+            .map_err(|_| allocation_error(inventory.managed_entries.len().min(1024)))?;
+        for entry in inventory
+            .managed_entries
+            .iter()
+            .filter(|entry| entry.kind == ManagedEntryKind::ScopeRedo)
+        {
+            let bytes = self
+                .read_scope_record_bytes(&entry.name)?
+                .ok_or_else(|| unsafe_entry(&entry.name, "managed redo disappeared"))?;
+            let record = ScopeRecordV1::decode_canonical_any(&bytes)?;
+            let names = Names::new(record.scope);
+            if entry.name != names.redo {
+                return Err(unsafe_entry(
+                    &entry.name,
+                    "redo name does not match its canonical scope identity",
+                ));
+            }
+            scopes
+                .try_reserve(1)
+                .map_err(|_| allocation_error(scopes.len().saturating_add(1)))?;
+            scopes.push(record.scope);
+        }
+        scopes.sort_unstable();
+        scopes.dedup();
+
+        for scope in scopes {
+            if excluded_scope == Some(scope) {
+                continue;
+            }
+            let names = Names::new(scope);
+            let mut hooks = StoreHooks::new([None, None], None);
+            match self.recover_scope_for_names_locked(scope, &names, &mut hooks) {
+                Ok(_) => {}
+                Err(
+                    CompilerArtifactGenerationErrorV1::StorageQuotaExceeded { .. }
+                    | CompilerArtifactGenerationErrorV1::ManagedEntryLimitExceeded { .. },
+                ) => {
+                    if self.read_scope_record_bytes(&names.redo)?.is_some() {
+                        return Err(
+                            CompilerArtifactGenerationErrorV1::CommitStateIndeterminate {
+                                reason: format!(
+                                    "quota rejection did not durably retire redo for scope {scope:?}"
+                                ),
+                            },
+                        );
+                    }
+                }
+                Err(error) => return Err(error),
+            }
         }
         Ok(())
     }
@@ -1402,6 +1467,7 @@ impl CompilerArtifactGenerationStoreV1 {
     ) -> Result<CompilerArtifactGenerationReclamationV1, CompilerArtifactGenerationErrorV1> {
         let _lock = self.lock_checked()?;
         self.ensure_root()?;
+        self.reconcile_scope_redos_locked(None)?;
         let result = self.reclaim_locked()?;
         self.ensure_root()?;
         Ok(result)
@@ -2062,33 +2128,42 @@ impl CompilerArtifactGenerationStoreV1 {
         &self,
         hooks: &mut StoreHooks,
     ) -> Result<Option<CompilerArtifactGenerationLeaseV1>, CompilerArtifactGenerationErrorV1> {
-        let redo_bytes = self.read_scope_record_bytes(&self.names.redo)?;
-        let canonical_bytes = self.read_scope_record_bytes(&self.names.record)?;
+        self.recover_scope_for_names_locked(self.scope, &self.names, hooks)
+    }
+
+    fn recover_scope_for_names_locked(
+        &self,
+        scope: CompilerArtifactGenerationScopeV1,
+        names: &Names,
+        hooks: &mut StoreHooks,
+    ) -> Result<Option<CompilerArtifactGenerationLeaseV1>, CompilerArtifactGenerationErrorV1> {
+        let redo_bytes = self.read_scope_record_bytes(&names.redo)?;
+        let canonical_bytes = self.read_scope_record_bytes(&names.record)?;
         let Some(redo_bytes) = redo_bytes else {
             let Some(canonical_bytes) = canonical_bytes else {
                 return Ok(None);
             };
             hooks.record_operation = CompilerArtifactGenerationRecordOperationV1::Recover;
             let recovered_bytes = self.durable.establish_recovered_record_durability(
-                &self.names.record,
-                &self.names.redo,
+                &names.record,
+                &names.redo,
                 &canonical_bytes,
                 MAX_COMPILER_ARTIFACT_GENERATION_SCOPE_RECORD_BYTES_V1,
                 hooks,
             )?;
             if recovered_bytes != canonical_bytes {
                 return Err(unsafe_entry(
-                    &self.names.record,
+                    &names.record,
                     "canonical scope record changed across its recovery durability barrier",
                 ));
             }
-            let canonical = ScopeRecordV1::decode_canonical(&recovered_bytes, self.scope)?;
+            let canonical = ScopeRecordV1::decode_canonical(&recovered_bytes, scope)?;
             return self.open_generation_for_record(&canonical, hooks).map(Some);
         };
-        let redo = ScopeRecordV1::decode_canonical(&redo_bytes, self.scope)?;
+        let redo = ScopeRecordV1::decode_canonical(&redo_bytes, scope)?;
         let canonical = canonical_bytes
             .as_deref()
-            .map(|bytes| ScopeRecordV1::decode_canonical(bytes, self.scope))
+            .map(|bytes| ScopeRecordV1::decode_canonical(bytes, scope))
             .transpose()?;
 
         let current = canonical
@@ -2118,22 +2193,25 @@ impl CompilerArtifactGenerationStoreV1 {
 
         hooks.record_operation = CompilerArtifactGenerationRecordOperationV1::Recover;
         if let Err(quota_error) = self.ensure_actual_quota_locked() {
-            self.discard_validated_redo_locked(canonical_bytes.as_deref(), &redo_bytes)?;
-            self.reclaim_locked()?;
+            self.discard_validated_redo_for_names_locked(
+                names,
+                canonical_bytes.as_deref(),
+                &redo_bytes,
+            )?;
             return Err(quota_error);
         }
         self.durable.promote_validated_redo(
-            &self.names.record,
-            &self.names.redo,
+            &names.record,
+            &names.redo,
             canonical_bytes.as_deref(),
             &redo_bytes,
             MAX_COMPILER_ARTIFACT_GENERATION_SCOPE_RECORD_BYTES_V1,
             hooks,
         )?;
-        let canonical_after = self.read_scope_record_bytes(&self.names.record)?;
+        let canonical_after = self.read_scope_record_bytes(&names.record)?;
         if canonical_after.as_deref() != Some(redo_bytes.as_slice()) {
             return Err(unsafe_entry(
-                &self.names.record,
+                &names.record,
                 "recovered scope record differs from its validated redo",
             ));
         }
@@ -2193,7 +2271,7 @@ impl CompilerArtifactGenerationStoreV1 {
         )?;
         let manifest =
             CompilerArtifactGenerationManifestV1::decode_canonical(&manifest_object.bytes)?;
-        if manifest.scope != self.scope
+        if manifest.scope != record.scope
             || manifest.identity != record.manifest
             || manifest.canonical_bytes.len() != record.manifest_length
         {
@@ -2598,6 +2676,9 @@ fn map_record_boundary(
         }
         RetainedDurableRecordBoundaryV1::RenameTempToRedo => {
             CompilerArtifactGenerationRecordBoundaryV1::RenameTempToRedo
+        }
+        RetainedDurableRecordBoundaryV1::RenameCanonicalToRedo => {
+            CompilerArtifactGenerationRecordBoundaryV1::RenameCanonicalToRedo
         }
         RetainedDurableRecordBoundaryV1::SyncRedoName => {
             CompilerArtifactGenerationRecordBoundaryV1::SyncRedoName

@@ -38,8 +38,10 @@
 //! writer that can create, rename, replace, or remove entries in that directory must use this
 //! crate's composite Linux lock. A filesystem-scoped OFD byte-range guard keyed by the normalized
 //! absolute root path serializes replacement of the root or any ancestor without serializing
-//! unrelated outputs, a named-file OFD record lock preserves interoperability with existing
-//! cooperating writers, and a
+//! unrelated outputs. Its lock file lives in a private service-owned runtime directory; writers
+//! split across mount namespaces must explicitly configure one shared, pre-provisioned guard
+//! directory with `FE2O3_ARTIFACT_PATH_GUARD_DIR`. A named-file OFD record lock preserves
+//! interoperability with existing cooperating writers, and a
 //! descriptor-owned lock on the root inode prevents replacement of the named lock from creating a
 //! second critical section. Closing unrelated descriptors cannot release these locks. Lock
 //! descriptors are `CLOEXEC`, but a forked child retains inherited locks until it closes those
@@ -1606,6 +1608,116 @@ mod tests {
     }
 
     #[test]
+    fn relative_output_is_rejected_before_descriptor_or_path_guard_identity_can_diverge() {
+        let relative = PathBuf::from(format!(
+            "fe2o3-relative-output-must-not-exist-{}",
+            std::process::id()
+        ));
+        assert!(!relative.exists());
+
+        let Err(error) = PinnedOutput::open(&relative) else {
+            panic!("relative artifact output was admitted");
+        };
+
+        assert!(matches!(
+            error,
+            EmitError::InvalidArtifactDestination { reason, .. }
+                if reason.contains("must be absolute")
+        ));
+        assert!(!relative.exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn filesystem_path_guard_directory_is_private_and_service_owned() {
+        let service_uid = rustix::process::geteuid().as_raw();
+        let (directory, path) = open_linux_filesystem_path_guard_directory(service_uid).unwrap();
+        let stat = fstat(&directory).unwrap();
+        assert!(path.is_absolute());
+        assert_eq!(FileType::from_raw_mode(stat.st_mode), FileType::Directory);
+        assert_eq!(stat.st_uid, service_uid);
+        assert_eq!(stat.st_mode & 0o7777, 0o700);
+
+        drop(acquire_linux_filesystem_path_guard([0x5a; 32], false).unwrap());
+        let lock = fs::metadata(path.join(FILESYSTEM_PATH_GUARD_FILE)).unwrap();
+        assert!(lock.file_type().is_file());
+        assert_eq!(lock.uid(), service_uid);
+        assert_eq!(lock.mode() & 0o7777, 0o600);
+        assert_eq!(lock.nlink(), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn filesystem_path_guard_configuration_subprocess_helper() {
+        let Some(action) = std::env::var_os("FE2O3_TEST_PATH_GUARD_ACTION") else {
+            return;
+        };
+        let output = PathBuf::from(std::env::var_os("FE2O3_TEST_PATH_GUARD_OUTPUT").unwrap());
+        let result = PinnedOutput::open(&output).and_then(|output| output.lock().map(drop));
+        match action.to_str().unwrap() {
+            "accept" => result.unwrap(),
+            "reject" => assert!(matches!(
+                result,
+                Err(EmitError::InvalidArtifactDestination { .. })
+            )),
+            other => panic!("unknown path-guard helper action {other}"),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn configured_path_guard_requires_a_preprovisioned_private_directory() {
+        let temp = TestDirectory::new();
+        let configured = temp.path.join("shared-path-guard");
+        fs::create_dir(&configured).unwrap();
+        fs::set_permissions(&configured, fs::Permissions::from_mode(0o700)).unwrap();
+        let configured_metadata = fs::metadata(&configured).unwrap();
+        let configured_identity = format!(
+            "{:016x}:{:016x}",
+            configured_metadata.dev(),
+            configured_metadata.ino()
+        );
+        let tmp_metadata = fs::metadata("/tmp").unwrap();
+        let tmp_identity = format!("{:016x}:{:016x}", tmp_metadata.dev(), tmp_metadata.ino());
+        let helper = "tests::filesystem_path_guard_configuration_subprocess_helper";
+
+        for (action, directory, identity, suffix) in [
+            (
+                "accept",
+                configured.as_path(),
+                configured_identity.as_str(),
+                "accepted-output",
+            ),
+            (
+                "reject",
+                configured.as_path(),
+                "0000000000000000:0000000000000000",
+                "wrong-identity-output",
+            ),
+            (
+                "reject",
+                Path::new("/tmp"),
+                tmp_identity.as_str(),
+                "public-directory-output",
+            ),
+        ] {
+            let output = temp.path.join(suffix);
+            let status = process::Command::new(std::env::current_exe().unwrap())
+                .arg("--exact")
+                .arg(helper)
+                .arg("--nocapture")
+                .env("FE2O3_TEST_PATH_GUARD_ACTION", action)
+                .env("FE2O3_TEST_PATH_GUARD_OUTPUT", &output)
+                .env(FILESYSTEM_PATH_GUARD_DIRECTORY_ENV, directory)
+                .env(FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV, identity)
+                .status()
+                .unwrap();
+            assert!(status.success(), "configured path-guard helper failed");
+            assert_eq!(output.exists(), action == "accept");
+        }
+    }
+
+    #[test]
     fn hardlinked_lock_is_rejected_without_mutating_the_other_inode() {
         let temp = TestDirectory::new();
         let output = temp.path.join("output");
@@ -3064,6 +3176,11 @@ impl PinnedOutput {
     }
 
     fn open_with_create(path: &Path, create: bool) -> Result<Self, EmitError> {
+        #[cfg(target_os = "linux")]
+        if !is_proc_self_fd_path(path) {
+            let service_uid = rustix::process::geteuid().as_raw();
+            drop(open_linux_filesystem_path_guard_directory(service_uid)?);
+        }
         let OpenedDirectoryWalk {
             directory: fd,
             path_guard_key,
@@ -3429,50 +3546,30 @@ fn acquire_linux_descriptor_flock(_fd: &OwnedFd, _nonblocking: bool) -> io::Resu
     ))
 }
 
-const FILESYSTEM_PATH_GUARD_ROOT: &str = "/tmp";
+const FILESYSTEM_PATH_GUARD_DIRECTORY_ENV: &str = "FE2O3_ARTIFACT_PATH_GUARD_DIR";
+const FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV: &str = "FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY";
+const FILESYSTEM_PATH_GUARD_RUNTIME_DIRECTORY: &str = "fe2o3-artifact-path-guards-v1";
+const FILESYSTEM_PATH_GUARD_HOME_DIRECTORY: &str = ".fe2o3-artifact-path-guards-v1";
 const FILESYSTEM_PATH_GUARD_FILE: &str = "domain.lock";
 
 /// Acquires one filesystem-visible OFD byte-range guard for a normalized root path.
 ///
-/// The private per-UID coordination file is intentionally outside the output tree, so replacing
-/// the output or any ancestor cannot split the cooperative critical section. Cooperating processes
-/// must share the `/tmp` mount. The file is retained across acquisitions; only its kernel lock is
-/// transient, so process death cannot leave a stale owner.
+/// The private service-owned coordination file is intentionally outside the output tree, so
+/// replacing the output or any ancestor cannot split the cooperative critical section. Writers in
+/// different mount namespaces must set `FE2O3_ARTIFACT_PATH_GUARD_DIR` to one pre-provisioned `0700`
+/// directory that is bind-mounted from the same inode into every namespace, and set
+/// `FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY` to that directory's exact lowercase
+/// `<16-hex-device>:<16-hex-inode>` identity. Otherwise the default is created beneath the
+/// service-owned runtime directory, or beneath the service-owned home directory when no runtime
+/// directory exists. The file is retained across acquisitions; only its kernel lock is transient,
+/// so process death cannot leave a stale owner.
 #[cfg(target_os = "linux")]
 fn acquire_linux_filesystem_path_guard(
     key: [u8; 32],
     nonblocking: bool,
 ) -> Result<Option<OwnedFd>, EmitError> {
     let service_uid = rustix::process::geteuid().as_raw();
-    let base = open(
-        Path::new(FILESYSTEM_PATH_GUARD_ROOT),
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map_err(std::io::Error::from)?;
-    let directory_name = format!(".fe2o3-artifact-path-guards-v1-{service_uid}");
-    match mkdirat(&base, &directory_name, Mode::RUSR | Mode::WUSR | Mode::XUSR) {
-        Ok(()) => {}
-        Err(error) if error == rustix::io::Errno::EXIST => {}
-        Err(error) => return Err(std::io::Error::from(error).into()),
-    }
-    let directory = openat(
-        &base,
-        &directory_name,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map_err(std::io::Error::from)?;
-    let directory_stat = fstat(&directory).map_err(std::io::Error::from)?;
-    if FileType::from_raw_mode(directory_stat.st_mode) != FileType::Directory
-        || directory_stat.st_uid != service_uid
-        || directory_stat.st_mode & 0o7777 != 0o700
-    {
-        return Err(EmitError::InvalidArtifactDestination {
-            path: Path::new(FILESYSTEM_PATH_GUARD_ROOT).join(&directory_name),
-            reason: "path-guard directory must be a private service-owned directory".to_owned(),
-        });
-    }
+    let (directory, directory_path) = open_linux_filesystem_path_guard_directory(service_uid)?;
     let descriptor = openat(
         &directory,
         FILESYSTEM_PATH_GUARD_FILE,
@@ -3487,9 +3584,7 @@ fn acquire_linux_filesystem_path_guard(
             || stat.st_nlink != 1
         {
             return Err(EmitError::InvalidArtifactDestination {
-                path: Path::new(FILESYSTEM_PATH_GUARD_ROOT)
-                    .join(&directory_name)
-                    .join(FILESYSTEM_PATH_GUARD_FILE),
+                path: directory_path.join(FILESYSTEM_PATH_GUARD_FILE),
                 reason: "path-guard file must be private, service-owned, and single-link"
                     .to_owned(),
             });
@@ -3515,13 +3610,163 @@ fn acquire_linux_filesystem_path_guard(
         != ProcessLockIdentity::from_stat(&named_stat)
     {
         return Err(EmitError::InvalidArtifactDestination {
-            path: Path::new(FILESYSTEM_PATH_GUARD_ROOT)
-                .join(directory_name)
-                .join(FILESYSTEM_PATH_GUARD_FILE),
+            path: directory_path.join(FILESYSTEM_PATH_GUARD_FILE),
             reason: "path-guard file changed while its byte range was being locked".to_owned(),
         });
     }
     Ok(Some(descriptor))
+}
+
+#[cfg(target_os = "linux")]
+fn open_linux_filesystem_path_guard_directory(
+    service_uid: u32,
+) -> Result<(OwnedFd, PathBuf), EmitError> {
+    if let Some(configured) = std::env::var_os(FILESYSTEM_PATH_GUARD_DIRECTORY_ENV) {
+        let path = PathBuf::from(configured);
+        let directory = open_directory_walk(&path, false)?;
+        validate_linux_path_guard_directory(&directory, &path, service_uid, true)?;
+        let expected = std::env::var_os(FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV)
+            .and_then(|identity| parse_linux_path_guard_directory_identity(&identity))
+            .ok_or_else(|| EmitError::InvalidArtifactDestination {
+                path: path.clone(),
+                reason: format!(
+                    "{FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV} must contain the exact lowercase <16-hex-device>:<16-hex-inode> identity"
+                ),
+            })?;
+        let stat = fstat(&directory).map_err(std::io::Error::from)?;
+        if expected != (stat.st_dev, stat.st_ino) {
+            return Err(EmitError::InvalidArtifactDestination {
+                path,
+                reason:
+                    "configured path-guard directory identity does not match its provisioned inode"
+                        .to_owned(),
+            });
+        }
+        return Ok((directory, path));
+    }
+
+    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
+        let runtime = PathBuf::from(runtime);
+        let base = open_directory_walk(&runtime, false)?;
+        validate_linux_path_guard_directory(&base, &runtime, service_uid, true)?;
+        return create_linux_path_guard_directory(
+            &base,
+            &runtime,
+            FILESYSTEM_PATH_GUARD_RUNTIME_DIRECTORY,
+            service_uid,
+        );
+    }
+
+    let runtime = PathBuf::from(format!("/run/user/{service_uid}"));
+    if let Ok(base) = open_directory_walk(&runtime, false) {
+        validate_linux_path_guard_directory(&base, &runtime, service_uid, true)?;
+        return create_linux_path_guard_directory(
+            &base,
+            &runtime,
+            FILESYSTEM_PATH_GUARD_RUNTIME_DIRECTORY,
+            service_uid,
+        );
+    }
+
+    let home = std::env::var_os("HOME").ok_or_else(|| EmitError::InvalidArtifactDestination {
+        path: PathBuf::from("<path-guard-directory>"),
+        reason: format!(
+            "{FILESYSTEM_PATH_GUARD_DIRECTORY_ENV}, XDG_RUNTIME_DIR, and HOME are all unavailable"
+        ),
+    })?;
+    let home = PathBuf::from(home);
+    let base = open_directory_walk(&home, false)?;
+    validate_linux_path_guard_directory(&base, &home, service_uid, false)?;
+    create_linux_path_guard_directory(
+        &base,
+        &home,
+        FILESYSTEM_PATH_GUARD_HOME_DIRECTORY,
+        service_uid,
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn parse_linux_path_guard_directory_identity(identity: &std::ffi::OsStr) -> Option<(u64, u64)> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let bytes = identity.as_bytes();
+    if bytes.len() != 33
+        || bytes[16] != b':'
+        || bytes
+            .iter()
+            .enumerate()
+            .any(|(index, byte)| index != 16 && !matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return None;
+    }
+    let device = std::str::from_utf8(&bytes[..16]).ok()?;
+    let inode = std::str::from_utf8(&bytes[17..]).ok()?;
+    Some((
+        u64::from_str_radix(device, 16).ok()?,
+        u64::from_str_radix(inode, 16).ok()?,
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn create_linux_path_guard_directory(
+    base: &OwnedFd,
+    base_path: &Path,
+    name: &str,
+    service_uid: u32,
+) -> Result<(OwnedFd, PathBuf), EmitError> {
+    match mkdirat(base, name, Mode::RUSR | Mode::WUSR | Mode::XUSR) {
+        Ok(()) => {}
+        Err(error) if error == rustix::io::Errno::EXIST => {}
+        Err(error) => return Err(std::io::Error::from(error).into()),
+    }
+    let path = base_path.join(name);
+    let directory = openat(
+        base,
+        name,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(std::io::Error::from)?;
+    validate_linux_path_guard_directory(&directory, &path, service_uid, true)?;
+    Ok((directory, path))
+}
+
+#[cfg(target_os = "linux")]
+fn validate_linux_path_guard_directory(
+    directory: &OwnedFd,
+    path: &Path,
+    service_uid: u32,
+    require_private: bool,
+) -> Result<(), EmitError> {
+    if !path.is_absolute() {
+        return Err(EmitError::InvalidArtifactDestination {
+            path: path.to_path_buf(),
+            reason: "path-guard directory must be absolute".to_owned(),
+        });
+    }
+    let stat = fstat(directory).map_err(std::io::Error::from)?;
+    let permissions = stat.st_mode & 0o7777;
+    let permitted = if require_private {
+        permissions == 0o700
+    } else {
+        permissions & 0o022 == 0
+    };
+    if FileType::from_raw_mode(stat.st_mode) != FileType::Directory
+        || stat.st_uid != service_uid
+        || stat.st_nlink == 0
+        || !permitted
+    {
+        return Err(EmitError::InvalidArtifactDestination {
+            path: path.to_path_buf(),
+            reason: if require_private {
+                "path-guard directory must be linked, service-owned, and mode 0700".to_owned()
+            } else {
+                "path-guard parent must be linked, service-owned, and not group/world writable"
+                    .to_owned()
+            },
+        });
+    }
+    Ok(())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -3557,7 +3802,13 @@ fn open_directory_walk_with_guard_key(
         });
     }
 
-    let absolute = path.is_absolute();
+    if !path.is_absolute() {
+        return Err(EmitError::InvalidArtifactDestination {
+            path: path.to_path_buf(),
+            reason: "artifact output paths must be absolute so path locking and descriptor traversal share one identity"
+                .to_owned(),
+        });
+    }
     let mut names = Vec::new();
     for component in path.components() {
         match component {
@@ -3579,11 +3830,7 @@ fn open_directory_walk_with_guard_key(
     }
 
     let mut current = open(
-        if absolute {
-            Path::new("/")
-        } else {
-            Path::new(".")
-        },
+        Path::new("/"),
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     )
@@ -3630,15 +3877,16 @@ fn open_directory_walk_with_guard_key(
 fn normalized_absolute_path_guard_key(path: &Path) -> Result<[u8; 32], EmitError> {
     use std::os::unix::ffi::OsStrExt;
 
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir().map_err(EmitError::Io)?.join(path)
-    };
+    if !path.is_absolute() {
+        return Err(EmitError::InvalidArtifactDestination {
+            path: path.to_path_buf(),
+            reason: "path-guard key requires an absolute Unix path".to_owned(),
+        });
+    }
     let mut digest = Sha256::new();
     digest.update(b"FE2O3/ARTIFACT-ABSOLUTE-PATH-GUARD/V1\0");
     digest.update(rustix::process::geteuid().as_raw().to_le_bytes());
-    for component in absolute.components() {
+    for component in path.components() {
         match component {
             Component::RootDir | Component::CurDir => {}
             Component::Normal(name) => {
@@ -3655,6 +3903,13 @@ fn normalized_absolute_path_guard_key(path: &Path) -> Result<[u8; 32], EmitError
         }
     }
     Ok(digest.finalize().into())
+}
+
+#[cfg(target_os = "linux")]
+fn is_proc_self_fd_path(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+
+    path.as_os_str().as_bytes().starts_with(b"/proc/self/fd/")
 }
 
 #[cfg(target_os = "linux")]

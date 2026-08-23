@@ -40,6 +40,7 @@ pub enum RetainedDurableRecordBoundaryV1 {
     WriteTemp,
     SyncTemp,
     RenameTempToRedo,
+    RenameCanonicalToRedo,
     SyncRedoName,
     RenameRedoToCanonical,
     SyncCanonicalName,
@@ -68,6 +69,12 @@ pub enum RetainedDurableArtifactBoundaryV1 {
 
 /// Test-only boundary callbacks. Production callers use [`NoRetainedDurableDirectoryHooksV1`].
 pub trait RetainedDurableDirectoryHooksV1 {
+    /// Performs one directory sync. Tests may override this method to model the sync syscall
+    /// itself returning an error; production hooks always execute the real `fsync`.
+    fn sync_directory(&mut self, directory: &OwnedFd) -> io::Result<()> {
+        fsync(directory).map_err(io::Error::from)
+    }
+
     fn record(
         &mut self,
         _boundary: RetainedDurableRecordBoundaryV1,
@@ -401,7 +408,7 @@ impl RetainedDurableDirectoryV1 {
             RetainedDurableRecordBoundaryV1::SyncRedoName,
             RetainedDurableFaultTimingV1::Before,
         )?;
-        fsync(&self.output.fd).map_err(io::Error::from)?;
+        hooks.sync_directory(&self.output.fd)?;
         hit_record(
             hooks,
             RetainedDurableRecordBoundaryV1::SyncRedoName,
@@ -446,7 +453,7 @@ impl RetainedDurableDirectoryV1 {
             RetainedDurableRecordBoundaryV1::SyncCanonicalName,
             RetainedDurableFaultTimingV1::Before,
         )?;
-        fsync(&self.output.fd).map_err(io::Error::from)?;
+        hooks.sync_directory(&self.output.fd)?;
         hit_record(
             hooks,
             RetainedDurableRecordBoundaryV1::SyncCanonicalName,
@@ -455,13 +462,15 @@ impl RetainedDurableDirectoryV1 {
         self.verify()
     }
 
-    /// Establishes durability for a recovered canonical record, then revalidates its bytes.
+    /// Recommits a recovered canonical record through a fresh durable redo transaction.
     ///
     /// A canonical name can be visible after a redo rename even when the directory sync from the
     /// original commit failed or had an ambiguous result. Recovery must not treat that visibility
-    /// as durability. This operation validates the exact visible record and redo absence, syncs
-    /// the retained directory, and only returns bytes obtained by repeating both checks after the
-    /// sync. Callers must perform their semantic validation on the returned bytes.
+    /// as durability. A later successful sync alone cannot repair a writeback error already
+    /// reported for the original transaction. This operation therefore validates the exact visible
+    /// record and redo absence, renames canonical to redo and syncs that mutation, promotes redo
+    /// back to canonical and syncs again, then repeats both byte checks. The rename cycle preserves
+    /// the managed-entry count, including at an exact persistent-entry quota.
     pub fn establish_recovered_record_durability(
         &self,
         canonical: &str,
@@ -486,18 +495,46 @@ impl RetainedDurableDirectoryV1 {
         }
         require_exact_private(self, canonical, expected_canonical, maximum_bytes)?;
         require_missing_private(self, redo, maximum_bytes)?;
-        hit_recovery(
+        hit_record(
             hooks,
-            RetainedDurableRecoveryBoundaryV1::SyncDirectory,
+            RetainedDurableRecordBoundaryV1::RenameCanonicalToRedo,
             RetainedDurableFaultTimingV1::Before,
         )?;
-        fsync(&self.output.fd).map_err(io::Error::from)?;
-        hit_recovery(
+        renameat_with(
+            &self.output.fd,
+            canonical,
+            &self.output.fd,
+            redo,
+            RenameFlags::NOREPLACE,
+        )
+        .map_err(io::Error::from)?;
+        hit_record(
             hooks,
-            RetainedDurableRecoveryBoundaryV1::SyncDirectory,
+            RetainedDurableRecordBoundaryV1::RenameCanonicalToRedo,
+            RetainedDurableFaultTimingV1::After,
+        )?;
+        hit_record(
+            hooks,
+            RetainedDurableRecordBoundaryV1::SyncRedoName,
+            RetainedDurableFaultTimingV1::Before,
+        )?;
+        hooks.sync_directory(&self.output.fd)?;
+        hit_record(
+            hooks,
+            RetainedDurableRecordBoundaryV1::SyncRedoName,
             RetainedDurableFaultTimingV1::After,
         )?;
         self.verify()?;
+        require_missing_private(self, canonical, maximum_bytes)?;
+        require_exact_private(self, redo, expected_canonical, maximum_bytes)?;
+        self.promote_validated_redo(
+            canonical,
+            redo,
+            None,
+            expected_canonical,
+            maximum_bytes,
+            hooks,
+        )?;
         let canonical_after =
             require_exact_private(self, canonical, expected_canonical, maximum_bytes)?;
         require_missing_private(self, redo, maximum_bytes)?;
@@ -569,7 +606,7 @@ impl RetainedDurableDirectoryV1 {
             RetainedDurableArtifactBoundaryV1::SyncStagedName,
             RetainedDurableFaultTimingV1::Before,
         )?;
-        fsync(&self.output.fd).map_err(io::Error::from)?;
+        hooks.sync_directory(&self.output.fd)?;
         hit_artifact(
             hooks,
             RetainedDurableArtifactBoundaryV1::SyncStagedName,
@@ -610,7 +647,7 @@ impl RetainedDurableDirectoryV1 {
                     RetainedDurableArtifactBoundaryV1::SyncFinalName,
                     RetainedDurableFaultTimingV1::Before,
                 )?;
-                fsync(&self.output.fd).map_err(io::Error::from)?;
+                hooks.sync_directory(&self.output.fd)?;
                 hit_artifact(
                     hooks,
                     RetainedDurableArtifactBoundaryV1::SyncFinalName,
@@ -687,7 +724,7 @@ impl RetainedDurableDirectoryV1 {
             RetainedDurableArtifactBoundaryV1::SyncFinalName,
             RetainedDurableFaultTimingV1::Before,
         )?;
-        fsync(&self.output.fd).map_err(io::Error::from)?;
+        hooks.sync_directory(&self.output.fd)?;
         hit_artifact(
             hooks,
             RetainedDurableArtifactBoundaryV1::SyncFinalName,
@@ -1033,17 +1070,10 @@ fn hit_artifact(
     hooks.artifact(boundary, timing).map_err(Into::into)
 }
 
-fn hit_recovery(
-    hooks: &mut impl RetainedDurableDirectoryHooksV1,
-    boundary: RetainedDurableRecoveryBoundaryV1,
-    timing: RetainedDurableFaultTimingV1,
-) -> Result<(), RetainedDurableDirectoryErrorV1> {
-    hooks.recovery(boundary, timing).map_err(Into::into)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error;
     use std::fs::File;
     use std::os::unix::fs::PermissionsExt;
 
@@ -1095,36 +1125,57 @@ mod tests {
         }
     }
 
+    type RecoveryEvent = (
+        RetainedDurableRecordBoundaryV1,
+        RetainedDurableFaultTimingV1,
+    );
+    type RecoveryAfterEvent = (
+        RetainedDurableRecordBoundaryV1,
+        RetainedDurableFaultTimingV1,
+        Box<dyn FnMut() -> io::Result<()>>,
+    );
+
     struct RecoveryHook {
-        fail_at: Option<RetainedDurableFaultTimingV1>,
-        after_sync: Option<Box<dyn FnMut() -> io::Result<()>>>,
-        events: Vec<RetainedDurableFaultTimingV1>,
+        fail_at: Option<RecoveryEvent>,
+        after_event: Option<RecoveryAfterEvent>,
+        fail_sync_call: Option<usize>,
+        sync_calls: usize,
+        events: Vec<RecoveryEvent>,
     }
 
     impl RecoveryHook {
         fn tracing() -> Self {
             Self {
                 fail_at: None,
-                after_sync: None,
+                after_event: None,
+                fail_sync_call: None,
+                sync_calls: 0,
                 events: Vec::new(),
             }
         }
     }
 
     impl RetainedDurableDirectoryHooksV1 for RecoveryHook {
-        fn recovery(
+        fn sync_directory(&mut self, directory: &OwnedFd) -> io::Result<()> {
+            self.sync_calls += 1;
+            if self.fail_sync_call == Some(self.sync_calls) {
+                return Err(io::Error::from_raw_os_error(libc::EIO));
+            }
+            fsync(directory).map_err(io::Error::from)
+        }
+
+        fn record(
             &mut self,
-            boundary: RetainedDurableRecoveryBoundaryV1,
+            boundary: RetainedDurableRecordBoundaryV1,
             timing: RetainedDurableFaultTimingV1,
         ) -> io::Result<()> {
-            assert_eq!(boundary, RetainedDurableRecoveryBoundaryV1::SyncDirectory);
-            self.events.push(timing);
-            if timing == RetainedDurableFaultTimingV1::After
-                && let Some(after_sync) = &mut self.after_sync
+            self.events.push((boundary, timing));
+            if let Some((after_boundary, after_timing, callback)) = &mut self.after_event
+                && (*after_boundary, *after_timing) == (boundary, timing)
             {
-                after_sync()?;
+                callback()?;
             }
-            if self.fail_at == Some(timing) {
+            if self.fail_at == Some((boundary, timing)) {
                 Err(io::Error::other("injected recovery barrier failure"))
             } else {
                 Ok(())
@@ -1153,7 +1204,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_barrier_syncs_and_rereads_an_ambiguous_canonical_name() {
+    fn recovery_recommits_and_rereads_an_ambiguous_canonical_name() {
         let directory = TestDirectory::new();
         let store = directory.store();
         let expected = b"canonical prepared record";
@@ -1168,42 +1219,112 @@ mod tests {
         assert_eq!(
             hook.events,
             [
-                RetainedDurableFaultTimingV1::Before,
-                RetainedDurableFaultTimingV1::After
+                (
+                    RetainedDurableRecordBoundaryV1::RenameCanonicalToRedo,
+                    RetainedDurableFaultTimingV1::Before,
+                ),
+                (
+                    RetainedDurableRecordBoundaryV1::RenameCanonicalToRedo,
+                    RetainedDurableFaultTimingV1::After,
+                ),
+                (
+                    RetainedDurableRecordBoundaryV1::SyncRedoName,
+                    RetainedDurableFaultTimingV1::Before,
+                ),
+                (
+                    RetainedDurableRecordBoundaryV1::SyncRedoName,
+                    RetainedDurableFaultTimingV1::After,
+                ),
+                (
+                    RetainedDurableRecordBoundaryV1::RenameRedoToCanonical,
+                    RetainedDurableFaultTimingV1::Before,
+                ),
+                (
+                    RetainedDurableRecordBoundaryV1::RenameRedoToCanonical,
+                    RetainedDurableFaultTimingV1::After,
+                ),
+                (
+                    RetainedDurableRecordBoundaryV1::SyncCanonicalName,
+                    RetainedDurableFaultTimingV1::Before,
+                ),
+                (
+                    RetainedDurableRecordBoundaryV1::SyncCanonicalName,
+                    RetainedDurableFaultTimingV1::After,
+                ),
             ]
         );
+        assert_eq!(hook.sync_calls, 2);
     }
 
     #[test]
     fn recovery_barrier_hook_failures_return_no_revalidated_bytes() {
-        for timing in [
-            RetainedDurableFaultTimingV1::Before,
-            RetainedDurableFaultTimingV1::After,
+        for boundary in [
+            RetainedDurableRecordBoundaryV1::RenameCanonicalToRedo,
+            RetainedDurableRecordBoundaryV1::SyncRedoName,
+            RetainedDurableRecordBoundaryV1::RenameRedoToCanonical,
+            RetainedDurableRecordBoundaryV1::SyncCanonicalName,
         ] {
+            for timing in [
+                RetainedDurableFaultTimingV1::Before,
+                RetainedDurableFaultTimingV1::After,
+            ] {
+                let directory = TestDirectory::new();
+                let store = directory.store();
+                let expected = b"canonical prepared record";
+                leave_ambiguous_canonical(&store, "record", "redo", expected);
+                let mut hook = RecoveryHook {
+                    fail_at: Some((boundary, timing)),
+                    ..RecoveryHook::tracing()
+                };
+
+                assert!(
+                    store
+                        .establish_recovered_record_durability(
+                            "record", "redo", expected, 1024, &mut hook,
+                        )
+                        .is_err()
+                );
+                assert_eq!(hook.events.last(), Some(&(boundary, timing)));
+            }
+        }
+    }
+
+    #[test]
+    fn recovery_returns_no_bytes_when_either_directory_fsync_returns_eio() {
+        for fail_sync_call in [1, 2] {
             let directory = TestDirectory::new();
             let store = directory.store();
             let expected = b"canonical prepared record";
             leave_ambiguous_canonical(&store, "record", "redo", expected);
             let mut hook = RecoveryHook {
-                fail_at: Some(timing),
+                fail_sync_call: Some(fail_sync_call),
                 ..RecoveryHook::tracing()
             };
 
-            assert!(
+            let error = store
+                .establish_recovered_record_durability("record", "redo", expected, 1024, &mut hook)
+                .unwrap_err();
+            let source = error.source().unwrap();
+            assert!(source.to_string().contains("Input/output error"));
+
+            let mut no_faults = NoRetainedDurableDirectoryHooksV1;
+            if store.read_private("redo", 1024).unwrap().is_some() {
+                store
+                    .promote_validated_redo("record", "redo", None, expected, 1024, &mut no_faults)
+                    .unwrap();
+            }
+            assert_eq!(
                 store
                     .establish_recovered_record_durability(
-                        "record", "redo", expected, 1024, &mut hook,
+                        "record",
+                        "redo",
+                        expected,
+                        1024,
+                        &mut no_faults,
                     )
-                    .is_err()
-            );
-            assert_eq!(
-                hook.events.first(),
-                Some(&RetainedDurableFaultTimingV1::Before)
-            );
-            assert_eq!(
-                hook.events.last(),
-                Some(&timing),
-                "the failure must occur at its requested sync side"
+                    .unwrap(),
+                expected,
+                "recovery after fsync call {fail_sync_call} must perform a fresh transaction",
             );
         }
     }
@@ -1219,9 +1340,11 @@ mod tests {
                 .path
                 .join(if replace_canonical { "record" } else { "redo" });
             let mut hook = RecoveryHook {
-                after_sync: Some(Box::new(move || {
-                    write_private(&target, b"hostile replacement")
-                })),
+                after_event: Some((
+                    RetainedDurableRecordBoundaryV1::SyncCanonicalName,
+                    RetainedDurableFaultTimingV1::After,
+                    Box::new(move || write_private(&target, b"hostile replacement")),
+                )),
                 ..RecoveryHook::tracing()
             };
 
@@ -1233,11 +1356,11 @@ mod tests {
                     .is_err()
             );
             assert_eq!(
-                hook.events,
-                [
-                    RetainedDurableFaultTimingV1::Before,
-                    RetainedDurableFaultTimingV1::After
-                ]
+                hook.events.last(),
+                Some(&(
+                    RetainedDurableRecordBoundaryV1::SyncCanonicalName,
+                    RetainedDurableFaultTimingV1::After,
+                ))
             );
         }
     }
