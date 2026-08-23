@@ -18,6 +18,8 @@ use fe2o3_kernel_descriptor::{
 use fe2o3_worker_v2_bundle::{RecoveredWorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeErrorV1};
 use sha2::{Digest, Sha256};
 
+#[cfg(target_os = "linux")]
+use crate::application_descriptor_handoff::RetainedWorkerV3ApplicationDescriptorsV1;
 use crate::{DeviceIdentity, ObservedContext};
 
 const WORKER_V3_HOST_LINEAGE_DOMAIN_V1: &[u8] = b"fe2o3.host.worker-v3-lineage.v1\0";
@@ -82,6 +84,8 @@ pub struct RecoveredWorkerV3PinnedDescriptorV1 {
     physical_kernel_index: usize,
     lineage: WorkerV3HostLineageEvidenceV1,
     observed: ObservedContext,
+    #[cfg(target_os = "linux")]
+    application_descriptors: Option<RetainedWorkerV3ApplicationDescriptorsV1>,
 }
 
 impl fmt::Debug for RecoveredWorkerV3PinnedDescriptorV1 {
@@ -138,7 +142,23 @@ impl RecoveredWorkerV3PinnedDescriptorV1 {
         if inspected != self.inspection {
             return Err(RecoveredWorkerV3AdmissionErrorV1::InspectionChanged);
         }
+        #[cfg(target_os = "linux")]
+        if let Some(descriptors) = &self.application_descriptors {
+            descriptors
+                .revalidate()
+                .map_err(|_| RecoveredWorkerV3AdmissionErrorV1::ApplicationDescriptorsChanged)?;
+        }
         Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn retain_application_descriptors(
+        mut self,
+        descriptors: RetainedWorkerV3ApplicationDescriptorsV1,
+    ) -> Self {
+        debug_assert!(self.application_descriptors.is_none());
+        self.application_descriptors = Some(descriptors);
+        self
     }
 
     pub fn published(&self) -> PublishedLinkArtifactV1 {
@@ -243,6 +263,8 @@ pub fn admit_recovered_worker_v3_descriptor_v1(
         physical_kernel_index,
         lineage,
         observed: observed.clone(),
+        #[cfg(target_os = "linux")]
+        application_descriptors: None,
     })
 }
 
@@ -547,6 +569,7 @@ pub enum RecoveredWorkerV3AdmissionErrorV1 {
     DescriptorBindingMismatch,
     SelectedExportMismatch,
     InspectionChanged,
+    ApplicationDescriptorsChanged,
 }
 
 impl fmt::Display for RecoveredWorkerV3AdmissionErrorV1 {
@@ -624,6 +647,9 @@ impl fmt::Display for RecoveredWorkerV3AdmissionErrorV1 {
                 .write_str("selected Worker V3 kernel is absent from the compiler export roles"),
             Self::InspectionChanged => {
                 formatter.write_str("revalidated Worker V3 HSACO inspection changed")
+            }
+            Self::ApplicationDescriptorsChanged => {
+                formatter.write_str("retained Worker V3 application descriptors changed")
             }
         }
     }

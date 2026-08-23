@@ -86,7 +86,9 @@ pub mod __hardware_test {
 
 #[cfg(target_os = "linux")]
 pub use application_descriptor_handoff::{
-    WorkerV2ApplicationDescriptorHandoffErrorV1, consume_inherited_worker_v2_application_handoff_v1,
+    WorkerV2ApplicationDescriptorHandoffErrorV1, WorkerV3ApplicationDescriptorHandoffErrorV1,
+    consume_inherited_worker_v2_application_handoff_v1,
+    consume_inherited_worker_v3_application_handoff_v1,
 };
 pub use argument_alias::{
     AliasAdmissionError, AllocationIdentity, AllocationProvenance, ArgumentAccess,
