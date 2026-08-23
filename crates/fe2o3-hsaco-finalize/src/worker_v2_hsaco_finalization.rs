@@ -13,15 +13,16 @@ use fe2o3_artifact_transaction::{
 };
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::{
-    CompilerFfiContractV1, CompilerFfiEnvelopeBuilderV1, CompilerFfiEnvelopeV1,
-    CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1, CompilerModuleSymbolManifestV1,
+    CompilerDescriptorSourceErrorV1, CompilerDescriptorSourceV1, CompilerFfiContractV1,
+    CompilerFfiEnvelopeBuilderV1, CompilerFfiEnvelopeV1, CompilerFfiLinkRoleV1,
+    CompilerFfiSourceOwnerV1, CompilerModuleSymbolManifestV1,
     InertSemanticCompilerModuleHandoffIdentityV3, InertSemanticCompilerModuleHandoffV3,
     MAX_COMPILER_FFI_ENVELOPE_BYTES_V1, MAX_COMPILER_MODULE_SYMBOL_MANIFEST_BYTES_V1,
 };
 use fe2o3_hsaco::{CodeObjectVersion as InspectedCodeObjectVersion, MAX_HSACO_BYTES};
 use fe2o3_kernel_descriptor::{
-    CanonicalCodeObjectDigest, CodeObjectVersion, DeviceDescriptorTableV1, DeviceTargetV1,
-    encode_device_descriptor_table_v1,
+    CANONICAL_CODE_OBJECT_DIGEST_OFFSET, CanonicalCodeObjectDigest, CodeObjectVersion,
+    DeviceDescriptorTableV1, DeviceTargetV1, encode_device_descriptor_table_v1,
 };
 use reserved_fe2o3_symbols::{
     DeviceFfiContractIdV1, DeviceFfiDirectionV1, MAX_DEVICE_FFI_EFFECT_BYTES_V1,
@@ -2040,6 +2041,9 @@ pub enum WorkerV2HsacoFinalizationError {
     CanonicalFinalization(FinalizationError),
     FinalizedVerification(FinalizationError),
     CanonicalDescriptorEvidence(fe2o3_kernel_descriptor::ValidationError),
+    CompilerDescriptorSource(CompilerDescriptorSourceErrorV1),
+    CompilerDescriptorSourceMismatch,
+    ExportManifestMismatch,
     FinalizedInspectionMismatch,
     TargetMismatch,
     CodeObjectVersionMismatch,
@@ -2089,6 +2093,15 @@ impl fmt::Display for WorkerV2HsacoFinalizationError {
                 formatter,
                 "canonical finalized descriptor evidence could not be encoded: {error}"
             ),
+            Self::CompilerDescriptorSource(error) => {
+                write!(formatter, "strict-V3 compiler descriptor source is invalid: {error}")
+            }
+            Self::CompilerDescriptorSourceMismatch => formatter.write_str(
+                "zero-normalized finalized descriptor differs from the exact strict-V3 compiler source",
+            ),
+            Self::ExportManifestMismatch => formatter.write_str(
+                "strict-V3 export receipt differs from the exact compiler-module symbol manifest",
+            ),
             Self::FinalizedInspectionMismatch => formatter.write_str(
                 "independent finalized inspection differs from the finalizer inspection",
             ),
@@ -2115,6 +2128,7 @@ impl Error for WorkerV2HsacoFinalizationError {
         match self {
             Self::CanonicalFinalization(error) | Self::FinalizedVerification(error) => Some(error),
             Self::CanonicalDescriptorEvidence(error) => Some(error),
+            Self::CompilerDescriptorSource(error) => Some(error),
             _ => None,
         }
     }
@@ -2162,16 +2176,37 @@ pub fn finalize_inspected_protected_worker_v2_hsaco_v2(
 pub fn finalize_inspected_protected_worker_v3_hsaco_v1(
     raw: InspectedProtectedRawWorkerV3HsacoV1,
 ) -> Result<PreparedFinalizedProtectedWorkerV3HsacoV1, WorkerV2HsacoFinalizationError> {
-    let Some(core) = finalize_worker_v2_hsaco_shared(&raw, false)? else {
+    if raw.canonical_descriptor_section() == CanonicalDescriptorSectionObservationV1::Missing {
         return Err(
             WorkerV2HsacoFinalizationError::MissingAuthenticatedProtectedDescriptorSourceEvidenceV3(
                 Box::new(MissingAuthenticatedProtectedDescriptorSourceEvidenceV3 { raw }),
             ),
         );
-    };
+    }
+    let outer = raw.outer_handoff();
+    let descriptor_source =
+        CompilerDescriptorSourceV1::decode(outer.capsule().receipts().abi().canonical_preimage())
+            .map_err(WorkerV2HsacoFinalizationError::CompilerDescriptorSource)?;
+    if outer
+        .capsule()
+        .receipts()
+        .export_manifest()
+        .canonical_preimage()
+        != outer.module_handoff().symbol_manifest().canonical_bytes()
+    {
+        return Err(WorkerV2HsacoFinalizationError::ExportManifestMismatch);
+    }
+    let core = finalize_worker_v2_hsaco_shared(&raw, false)?
+        .ok_or(WorkerV2HsacoFinalizationError::CompilerDescriptorSourceMismatch)?;
     let descriptor_bytes =
         encode_device_descriptor_table_v1(core.finalized.inspection().descriptor_table())
             .map_err(WorkerV2HsacoFinalizationError::CanonicalDescriptorEvidence)?;
+    let digest_end = CANONICAL_CODE_OBJECT_DIGEST_OFFSET + 32;
+    let mut zero_normalized_descriptor = descriptor_bytes.clone();
+    zero_normalized_descriptor[CANONICAL_CODE_OBJECT_DIGEST_OFFSET..digest_end].fill(0);
+    if zero_normalized_descriptor != descriptor_source.canonical_bytes() {
+        return Err(WorkerV2HsacoFinalizationError::CompilerDescriptorSourceMismatch);
+    }
     let canonical_descriptor_evidence = ContentIdentityV1::calculate(&descriptor_bytes);
     let identity = calculate_protected_v3_finalized_identity(
         &raw,

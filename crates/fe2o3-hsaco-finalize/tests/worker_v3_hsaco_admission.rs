@@ -17,8 +17,8 @@ use fe2o3_artifact_transaction::{
     publish_compiler_module_handoff_in_slot_v3, reacquire_current_hsaco_publication_lease_v3,
 };
 use fe2o3_compiler_ffi::{
-    CodeObjectVersion, CompilerFfiEnvelopeV1, CompilerModuleHandoffV2, CompilerModuleKindV1,
-    CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1,
+    CodeObjectVersion, CompilerDescriptorSourceV1, CompilerFfiEnvelopeV1, CompilerModuleHandoffV2,
+    CompilerModuleKindV1, CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1,
     INERT_COMPILER_MODULE_PAIR_BINDING_BYTES_V3, INERT_COMPILER_MODULE_PAIR_BINDING_MAGIC_V3,
     INERT_COMPILER_MODULE_PAIR_BINDING_VERSION_V3, INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_MAGIC_V3,
     INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_VERSION_V3, InertFinalCompilerModuleCommitmentV3,
@@ -34,7 +34,7 @@ use fe2o3_hsaco_finalize::{
     execute_protected_reproducible_first_build_worker_v3,
     finalize_inspected_protected_worker_v3_hsaco_v1,
     inspect_protected_production_v1_worker_v2_raw_hsaco_v1,
-    inspect_protected_production_v1_worker_v3_raw_hsaco_v1,
+    inspect_protected_production_v1_worker_v3_raw_hsaco_v1, inspect_unfinalized,
     persist_prepared_protected_worker_v3_hsaco_publication_v1,
     prepare_protected_worker_v3_hsaco_publication_v1,
     publish_recovered_protected_worker_v3_hsaco_v1,
@@ -133,6 +133,14 @@ struct EvidenceConfig {
     module_seed: u8,
     optimization: &'static str,
     llvm_build_identity: &'static str,
+    lineage_mutation: DescriptorLineageMutation,
+}
+
+#[derive(Clone, Copy)]
+enum DescriptorLineageMutation {
+    Exact,
+    DifferentCanonicalSource,
+    DifferentExportManifest,
 }
 
 impl EvidenceConfig {
@@ -143,6 +151,7 @@ impl EvidenceConfig {
         module_seed: 0x11,
         optimization: "2",
         llvm_build_identity: "upstream-llvm-test-build-a",
+        lineage_mutation: DescriptorLineageMutation::Exact,
     };
 }
 
@@ -302,6 +311,48 @@ fn native_v3_finalization_fails_closed_without_descriptor_source_evidence() {
     assert!(!blocker.grants_publication_authority());
     assert!(!blocker.grants_load_authority());
     assert!(!blocker.grants_launch_authority());
+}
+
+#[test]
+fn native_v3_finalization_rejects_a_different_canonical_descriptor_source() {
+    let directory = TestDirectory::new();
+    let fixture = slice_fixture_with_descriptor_table(&slice_descriptor_table());
+    let (_, source) = evidence_in_directory_for_kernel(
+        &directory,
+        fixture.bytes,
+        EvidenceConfig {
+            lineage_mutation: DescriptorLineageMutation::DifferentCanonicalSource,
+            ..EvidenceConfig::BASE
+        },
+        "vecadd",
+        "vecadd.kd",
+    );
+    let raw = inspect_protected_production_v1_worker_v3_raw_hsaco_v1(source).unwrap();
+    assert!(matches!(
+        finalize_inspected_protected_worker_v3_hsaco_v1(raw),
+        Err(WorkerV2HsacoFinalizationError::CompilerDescriptorSourceMismatch)
+    ));
+}
+
+#[test]
+fn native_v3_finalization_rejects_a_different_export_manifest_receipt() {
+    let directory = TestDirectory::new();
+    let fixture = slice_fixture_with_descriptor_table(&slice_descriptor_table());
+    let (_, source) = evidence_in_directory_for_kernel(
+        &directory,
+        fixture.bytes,
+        EvidenceConfig {
+            lineage_mutation: DescriptorLineageMutation::DifferentExportManifest,
+            ..EvidenceConfig::BASE
+        },
+        "vecadd",
+        "vecadd.kd",
+    );
+    let raw = inspect_protected_production_v1_worker_v3_raw_hsaco_v1(source).unwrap();
+    assert!(matches!(
+        finalize_inspected_protected_worker_v3_hsaco_v1(raw),
+        Err(WorkerV2HsacoFinalizationError::ExportManifestMismatch)
+    ));
 }
 
 #[test]
@@ -744,6 +795,7 @@ fn evidence_in_directory_for_kernel_and_providers(
         &hsaco,
         entry_symbol,
         descriptor_symbol,
+        config.lineage_mutation,
     );
     let receipt = publish_compiler_module_handoff_in_slot_v3(
         &directory.0,
@@ -918,16 +970,21 @@ fn outer_for_kernel(
     hsaco: &[u8],
     entry_symbol: &str,
     descriptor_symbol: &str,
+    lineage_mutation: DescriptorLineageMutation,
 ) -> InertSemanticCompilerModuleHandoffV3 {
     let handoff = module_handoff_for_kernel(module_seed, hsaco, entry_symbol, descriptor_symbol);
     InertSemanticCompilerModuleHandoffV3::decode(&raw_outer(
-        &capsule_bytes(invocation_seed, &handoff),
+        &capsule_bytes(invocation_seed, &handoff, lineage_mutation),
         handoff.canonical_bytes(),
     ))
     .unwrap()
 }
 
-fn capsule_bytes(seed: u8, handoff: &CompilerModuleHandoffV2) -> Vec<u8> {
+fn capsule_bytes(
+    seed: u8,
+    handoff: &CompilerModuleHandoffV2,
+    lineage_mutation: DescriptorLineageMutation,
+) -> Vec<u8> {
     let invocation = invocation_bytes(seed);
     let final_commitment = InertFinalCompilerModuleCommitmentV3::from_handoff(handoff).unwrap();
     let mut receipts = RECEIPTS
@@ -939,6 +996,36 @@ fn capsule_bytes(seed: u8, handoff: &CompilerModuleHandoffV2) -> Vec<u8> {
             )
         })
         .collect::<Vec<_>>();
+    let hsaco = handoff
+        .module_bytes()
+        .windows(RAW_HSACO_MARKER.len())
+        .position(|window| window == RAW_HSACO_MARKER)
+        .map(|offset| &handoff.module_bytes()[offset + RAW_HSACO_MARKER.len()..]);
+    if let Some(descriptor_source) = hsaco
+        .and_then(|bytes| inspect_unfinalized(bytes).ok())
+        .and_then(|inspection| {
+            encode_device_descriptor_table_v1(inspection.descriptor_table()).ok()
+        })
+    {
+        receipts[10].0 = descriptor_source;
+    }
+    receipts[11].0 = handoff.symbol_manifest().canonical_bytes().to_vec();
+    match lineage_mutation {
+        DescriptorLineageMutation::Exact => {}
+        DescriptorLineageMutation::DifferentCanonicalSource => {
+            let source = &mut receipts[10].0;
+            let offset = source
+                .windows(4)
+                .position(|window| window == b"test")
+                .expect("fixture descriptor has a test identity");
+            source[offset] = b'b';
+            CompilerDescriptorSourceV1::decode(source)
+                .expect("hostile source remains canonical and zero-digest");
+        }
+        DescriptorLineageMutation::DifferentExportManifest => {
+            receipts[11].0 = b"different canonical export manifest receipt".to_vec();
+        }
+    }
     receipts.push((
         final_commitment.canonical_bytes().to_vec(),
         FINAL_RECEIPT_DOMAIN_V3,

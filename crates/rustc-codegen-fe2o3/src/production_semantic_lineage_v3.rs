@@ -30,10 +30,9 @@ use sha2::{Digest, Sha256};
 
 use crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV3;
 use crate::production_target_lineage_v3::{
-    AbiTranscriptInputsV3, AbiTranscriptV3, AmdgpuLoweringTranscriptInputsV3,
-    AmdgpuLoweringTranscriptV3, DataLayoutTranscriptInputsV3, DataLayoutTranscriptV3,
-    ExportManifestTranscriptInputsV3, ExportManifestTranscriptV3, ProductionTargetLineageErrorV3,
-    ProofBindingTranscriptInputsV3, ProofBindingTranscriptV3, SemanticToLlvmAssociationInputsV3,
+    AmdgpuLoweringTranscriptInputsV3, AmdgpuLoweringTranscriptV3, DataLayoutTranscriptInputsV3,
+    DataLayoutTranscriptV3, ProductionTargetLineageErrorV3, ProofBindingTranscriptInputsV3,
+    ProofBindingTranscriptV3, SemanticToLlvmAssociationInputsV3,
     SemanticToLlvmAssociationTranscriptV3, TargetBindingTranscriptInputsV3,
     TargetBindingTranscriptV3, TargetLineageIdentityV3,
 };
@@ -283,25 +282,13 @@ impl PreparedProductionSemanticLineageV3 {
             data_layout.identity().byte_len(),
         )?;
 
-        let abi = AbiTranscriptV3::new(AbiTranscriptInputsV3 {
-            semantic_mir: semantic_identity,
-            target_bound_kir: self.bound_kir_identity,
-            formal_memory: formal_memory_identity,
-            compiler_ffi_envelope: module_handoff.envelope().canonical_bytes(),
-            compiler_descriptor_source: descriptor_source.canonical_bytes(),
-        })?;
-        let abi = InertAbiReceiptV3::from_canonical_preimage(abi.canonical_bytes())?;
+        // The finalizer must be able to recover and strictly decode the exact
+        // zero-digest descriptor source without knowing a backend-private codec.
+        let abi = InertAbiReceiptV3::from_canonical_preimage(descriptor_source.canonical_bytes())?;
         let abi_identity = receipt_identity(abi.identity().sha256(), abi.identity().byte_len())?;
 
-        let export_manifest = ExportManifestTranscriptV3::new(ExportManifestTranscriptInputsV3 {
-            semantic_mir: semantic_identity,
-            target_bound_kir: self.bound_kir_identity,
-            abi: abi_identity,
-            compiler_descriptor_source: descriptor_source.canonical_bytes(),
-            final_symbol_manifest: module_handoff.symbol_manifest().canonical_bytes(),
-        })?;
         let export_manifest = InertExportManifestReceiptV3::from_canonical_preimage(
-            export_manifest.canonical_bytes(),
+            module_handoff.symbol_manifest().canonical_bytes(),
         )?;
         let export_manifest_identity = receipt_identity(
             export_manifest.identity().sha256(),
