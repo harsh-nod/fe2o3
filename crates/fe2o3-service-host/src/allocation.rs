@@ -17,14 +17,14 @@ use fe2o3_kfd::{
 
 /// Canonical scope and non-claims for the first service allocation owner.
 pub const SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-service-allocation-owner-r7-v1\n",
+    "profile=fe2o3-service-allocation-owner-r8-v1\n",
     "backend=checked-gfx942-xnack-minus-device,shared-kfd-vm-session\n",
     "device=device-local-vram-hbm,linear-unmapped-mapped-or-fixed-dispatch-kfd-custody,optional-exact-host-verified-owned-image-or-private-recipe-complete-safe-slice-repeated-byte-public-device-local-initialization\n",
     "host=host-visible-coherent-gtt,linear-cpu-writable-gpu-mapped-sealed-full-initialized-or-fixed-dispatch-custody\n",
     "identity=service-scoped-process-local-owner-device-vm-allocation-labels-retained-beside-private-kfd-native-tokens\n",
     "views=typed-role-kind-offset-extent-alignment,no-handle-fd-gpu-address-or-persistent-raw-pointer-accessor\n",
     "cpu-write=scoped-mutable-slice-before-gpu-map,safe-caller-may-return-or-retain-raw-cpu-pointer-or-address,no-safe-post-borrow-dereference;separate-owned-full-extent-copy-or-bounded-memory-repeated-byte-fill-mints-sealed-initialized-mapped-authority\n",
-    "dispatch-ranges=device-local-or-host-visible,owner-allocation-kind-generation-ordinal-offset-and-extent-bound,no-native-address,device-ordinals-before-host-ordinals\n",
+    "dispatch-ranges=device-local-or-host-visible,owner-allocation-kind-generation-ordinal-offset-and-extent-bound,no-native-address,device-ordinals-before-host-ordinals;optional-host-snapshot-range-must-be-fully-initialized-and-strictly-enclose-one-same-generation-interior-range\n",
     "subleases=one-atomic-move-only-layout-per-allocation,typed-role-kind-and-exact-generation,pairwise-disjoint-nonempty-aligned-bounded-members,checked-member-contained-subranges,legacy-ranges-denied-after-partition,replacement-stales-old-layout\n",
     "bounds=32-live-allocations,device-192gib,host-2gib,page-and-device-alignment-max-4096\n",
     "release=gpu-never-published-or-exact-completed-recycled-queue-return,reverse-order-unmap-then-free,consuming-owner\n",
@@ -34,7 +34,7 @@ pub const SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_ALLOCATION_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "05014e4521d5392a6df2301294bd99578100de5a8c47f65ee2e3af2d261cc531";
+    "e4a4a8d8a94615dbe4234f01fb8eaa19c5f222e8fba37eb0cb239f8c202baa09";
 
 /// Maximum live allocations owned by one service allocation session.
 const MAX_SERVICE_ALLOCATIONS_V1: usize = 32;
@@ -537,6 +537,42 @@ pub struct ServiceHostDispatchRangeV1 {
     pub(crate) sublease_index: Option<usize>,
 }
 
+/// Checked fully initialized coherent range retained for completed snapshot copying.
+///
+/// This inert value carries no address or copy authority. It can be minted only
+/// by the allocation owner while the exact host-visible allocation generation
+/// retains sealed full initialization. A fixed dispatch must separately bind
+/// an inspected writable interior before a recycled queue can authorize a copy.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct ServiceHostDispatchSnapshotRangeV1 {
+    range: ServiceHostDispatchRangeV1,
+}
+
+impl fmt::Debug for ServiceHostDispatchSnapshotRangeV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ServiceHostDispatchSnapshotRangeV1")
+            .field("range", &self.range)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ServiceHostDispatchSnapshotRangeV1 {
+    /// Returns the checked byte offset without exposing a native address.
+    pub const fn offset_bytes(self) -> u64 {
+        self.range.offset_bytes
+    }
+
+    /// Returns the checked snapshot extent.
+    pub const fn extent_bytes(self) -> u64 {
+        self.range.extent_bytes
+    }
+
+    pub(crate) const fn dispatch_range(self) -> ServiceHostDispatchRangeV1 {
+        self.range
+    }
+}
+
 impl fmt::Debug for ServiceHostDispatchRangeV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -709,6 +745,16 @@ impl ServiceQueueAllocationLedgerV1 {
                 validate_host_dispatch_range(range, expected, allocation.subleases.as_deref())
             }
         }
+    }
+
+    pub(crate) fn validate_host_dispatch_snapshot(
+        &self,
+        interior: ServiceHostDispatchRangeV1,
+        snapshot: ServiceHostDispatchSnapshotRangeV1,
+    ) -> Result<(), ServiceAllocationErrorV1> {
+        self.validate_range(interior)?;
+        self.validate_range(snapshot.range)?;
+        validate_host_dispatch_snapshot(interior, snapshot.range)
     }
 
     fn dispatch_binding(&self, data_index: usize) -> Option<AllocationBindingV1> {
@@ -1874,6 +1920,48 @@ impl ServiceAllocationSessionV1 {
         })
     }
 
+    /// Marks one checked coherent range as eligible for an enclosing completed snapshot.
+    ///
+    /// The allocation must retain sealed full initialization in the exact
+    /// owner and allocation generation. This method grants no copy authority;
+    /// queue admission must still associate the range with one inspected
+    /// writable interior, and a matching generation must complete and recycle.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale, non-host, uninitialized, unmapped, or otherwise invalid
+    /// range custody.
+    pub fn host_dispatch_snapshot_range(
+        &self,
+        range: ServiceHostDispatchRangeV1,
+    ) -> Result<ServiceHostDispatchSnapshotRangeV1, ServiceAllocationErrorV1> {
+        self.validate_host_dispatch_range(range)?;
+        let allocation = self
+            .owner
+            .allocations
+            .iter()
+            .find(|allocation| allocation.binding == range.binding)
+            .ok_or(ServiceAllocationErrorV1::AllocationGenerationMismatch)?;
+        let fully_initialized = match allocation.token.as_ref() {
+            Some(AllocationTokenV1::HostMappedInitialized(_)) => true,
+            Some(AllocationTokenV1::FixedDispatch(dispatch)) => {
+                dispatch.layout().kind() == Gfx942FixedDispatchDataKindV1::HostVisibleCoherent
+                    && dispatch.is_fully_initialized()
+            }
+            Some(
+                AllocationTokenV1::DeviceUnmapped(_)
+                | AllocationTokenV1::DeviceMapped(_)
+                | AllocationTokenV1::HostCpuWritable(_)
+                | AllocationTokenV1::HostMapped(_),
+            )
+            | None => false,
+        };
+        if !fully_initialized {
+            return Err(ServiceAllocationErrorV1::AllocationState);
+        }
+        Ok(ServiceHostDispatchSnapshotRangeV1 { range })
+    }
+
     pub(crate) fn validate_device_dispatch_range(
         &self,
         range: ServiceDeviceDispatchRangeV1,
@@ -1940,6 +2028,16 @@ impl ServiceAllocationSessionV1 {
             return Err(ServiceAllocationErrorV1::AllocationGenerationMismatch);
         }
         validate_host_dispatch_range(range, allocation.binding, allocation.subleases.as_deref())
+    }
+
+    pub(crate) fn validate_host_dispatch_snapshot(
+        &self,
+        interior: ServiceHostDispatchRangeV1,
+        snapshot: ServiceHostDispatchSnapshotRangeV1,
+    ) -> Result<(), ServiceAllocationErrorV1> {
+        self.validate_host_dispatch_range(interior)?;
+        self.host_dispatch_snapshot_range(snapshot.range)?;
+        validate_host_dispatch_snapshot(interior, snapshot.range)
     }
 
     /// Checks two non-overlapping subranges of the same mapped allocation.
@@ -2337,6 +2435,29 @@ fn validate_host_dispatch_range(
         range.sublease_index,
         subleases,
     )
+}
+
+pub(crate) fn validate_host_dispatch_snapshot(
+    interior: ServiceHostDispatchRangeV1,
+    snapshot: ServiceHostDispatchRangeV1,
+) -> Result<(), ServiceAllocationErrorV1> {
+    let interior_end = interior
+        .offset_bytes
+        .checked_add(interior.extent_bytes)
+        .ok_or(ServiceAllocationErrorV1::InvalidRange)?;
+    let snapshot_end = snapshot
+        .offset_bytes
+        .checked_add(snapshot.extent_bytes)
+        .ok_or(ServiceAllocationErrorV1::InvalidRange)?;
+    if interior.binding != snapshot.binding
+        || interior.data_index != snapshot.data_index
+        || interior.sublease_index != snapshot.sublease_index
+        || snapshot.offset_bytes >= interior.offset_bytes
+        || interior_end >= snapshot_end
+    {
+        return Err(ServiceAllocationErrorV1::InvalidRange);
+    }
+    Ok(())
 }
 
 fn reserve_sublease_layout<const N: usize>(
@@ -3181,6 +3302,123 @@ mod tests {
         assert!(matches!(
             ledger.validate_range(out_of_range),
             Err(ServiceAllocationErrorV1::InvalidRange)
+        ));
+    }
+
+    #[test]
+    fn host_snapshot_ranges_require_exact_identity_and_strict_enclosure() {
+        let expected = binding(
+            AllocationRoleV1::HostDownload,
+            AllocationKindV1::HostVisible,
+        );
+        let snapshot = ServiceHostDispatchRangeV1 {
+            binding: expected,
+            data_index: 2,
+            offset_bytes: 0,
+            extent_bytes: 12_288,
+            sublease_index: Some(3),
+        };
+        let interior = ServiceHostDispatchRangeV1 {
+            offset_bytes: 4_096,
+            extent_bytes: 4_096,
+            ..snapshot
+        };
+        assert!(validate_host_dispatch_snapshot(interior, snapshot).is_ok());
+
+        let token = ServiceHostDispatchSnapshotRangeV1 { range: snapshot };
+        assert_eq!(token.offset_bytes(), 0);
+        assert_eq!(token.extent_bytes(), 12_288);
+        let buffer =
+            crate::batch::ServiceFixedDispatchBufferV1::new_host_visible_with_completed_snapshot(
+                1, interior, token,
+            )
+            .unwrap();
+        assert_eq!(buffer.explicit_argument_index(), 1);
+        assert_eq!(buffer.completed_snapshot(), Some(token));
+
+        let mut stale = snapshot;
+        stale.binding.generation += 1;
+        let mut wrong_owner = snapshot;
+        wrong_owner.binding.owner.vm_owner_generation += 1;
+        let mut wrong_ordinal = snapshot;
+        wrong_ordinal.data_index += 1;
+        let mut wrong_sublease = snapshot;
+        wrong_sublease.sublease_index = Some(4);
+        let no_prefix = ServiceHostDispatchRangeV1 {
+            offset_bytes: interior.offset_bytes,
+            ..snapshot
+        };
+        let no_suffix = ServiceHostDispatchRangeV1 {
+            extent_bytes: interior.offset_bytes + interior.extent_bytes,
+            ..snapshot
+        };
+        let overflowing = ServiceHostDispatchRangeV1 {
+            offset_bytes: u64::MAX,
+            extent_bytes: 1,
+            ..snapshot
+        };
+        for rejected in [
+            stale,
+            wrong_owner,
+            wrong_ordinal,
+            wrong_sublease,
+            no_prefix,
+            no_suffix,
+            overflowing,
+        ] {
+            assert!(matches!(
+                validate_host_dispatch_snapshot(interior, rejected),
+                Err(ServiceAllocationErrorV1::InvalidRange)
+            ));
+        }
+    }
+
+    #[test]
+    fn queue_snapshot_revalidation_rejects_stale_enclosing_authority() {
+        let expected = binding(
+            AllocationRoleV1::HostDownload,
+            AllocationKindV1::HostVisible,
+        );
+        let ledger = ServiceQueueAllocationLedgerV1 {
+            owner: expected.owner,
+            next_allocation_id: 2,
+            allocations: vec![OwnedAllocationV1 {
+                binding: expected,
+                token: None,
+                subleases: None,
+            }],
+            device_bytes: 0,
+            host_bytes: expected.extent_bytes,
+            device_bindings: vec![],
+            host_bindings: vec![expected],
+        };
+        let snapshot_range = ServiceHostDispatchRangeV1 {
+            binding: expected,
+            data_index: 0,
+            offset_bytes: 0,
+            extent_bytes: 12_288,
+            sublease_index: None,
+        };
+        let interior = ServiceHostDispatchRangeV1 {
+            offset_bytes: 4_096,
+            extent_bytes: 4_096,
+            ..snapshot_range
+        };
+        let snapshot = ServiceHostDispatchSnapshotRangeV1 {
+            range: snapshot_range,
+        };
+        assert!(
+            ledger
+                .validate_host_dispatch_snapshot(interior, snapshot)
+                .is_ok()
+        );
+
+        let mut stale_range = snapshot_range;
+        stale_range.binding.generation += 1;
+        let stale = ServiceHostDispatchSnapshotRangeV1 { range: stale_range };
+        assert!(matches!(
+            ledger.validate_host_dispatch_snapshot(interior, stale),
+            Err(ServiceAllocationErrorV1::AllocationGenerationMismatch)
         ));
     }
 

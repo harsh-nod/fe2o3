@@ -8,9 +8,9 @@ use fe2o3_aql::{AQL_MAX_FIXED_BATCH_PACKETS_V2, AqlRingCapacityV1};
 use fe2o3_kfd::{
     ComputeAqlQueueDestroyedV1, ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1,
     ComputeAqlQueueSessionV1, Gfx942CompletedDispatchBatchV1, Gfx942CompletedDispatchReadRequestV1,
-    Gfx942CompletedDispatchReadbackV1, Gfx942CompletionRecycleObservationV1,
-    Gfx942DeviceContentDescriptorV1, Gfx942DispatchBatchV1, Gfx942DispatchPollV1,
-    Gfx942FixedDispatchDataV1, Gfx942RecycledDispatchResourcesV1,
+    Gfx942CompletedDispatchReadbackV1, Gfx942CompletedDispatchSnapshotRequestV1,
+    Gfx942CompletionRecycleObservationV1, Gfx942DeviceContentDescriptorV1, Gfx942DispatchBatchV1,
+    Gfx942DispatchPollV1, Gfx942FixedDispatchDataV1, Gfx942RecycledDispatchResourcesV1,
 };
 
 use crate::allocation::{
@@ -18,22 +18,22 @@ use crate::allocation::{
     ServiceAllocationErrorV1, ServiceAllocationReleaseFailureV1,
     ServiceAllocationReleaseObservationV1, ServiceAllocationSessionV1,
     ServiceAllocationSubleaseSetV1, ServiceDeviceDispatchRangeV1, ServiceDispatchRangeV1,
-    ServiceHostDispatchRangeV1, ServiceQueueAllocationLedgerV1,
+    ServiceHostDispatchRangeV1, ServiceHostDispatchSnapshotRangeV1, ServiceQueueAllocationLedgerV1,
     ServiceQueueAllocationRestoreFailureV1,
 };
 use crate::batch::ServiceFixedBatchV1;
 
 /// Frozen claim boundary for the reusable service queue composition layer.
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-service-addressless-fixed-queue-r7-v1\n",
+    "profile=fe2o3-service-addressless-fixed-queue-r8-v1\n",
     "queue=one-long-lived-kfd-compute-aql-owner,ring-event-doorbell-and-signal-resources-retained-across-rebind\n",
-    "batch=1-through-8192-fixed-packets,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges\n",
+    "batch=1-through-8192-fixed-packets,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges,optional-initialized-enclosing-host-snapshot-associated-with-one-strict-interior\n",
     "implicit-kernarg=exact-trailing-256-byte-COV6-caller-zero-suffix,lower-owner-privately-populates-metadata-derived-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds,queue-pointer-and-runtime-service-or-address-fields-rejected\n",
     "publication=one-reservation-one-write-counter-fetch-add-one-final-doorbell-per-fixed-batch\n",
     "custody=prepared-published-completed-recycled-unbound-linear-service-types,exact-completion-and-signal-recycle-before-detach-rebind-or-attached-or-unbound-returning-destroy\n",
     "data=read-and-readwrite-require-sealed-full-initialization,write-only-may-consume-uninitialized-exclusive-storage,initialized-state-retained-after-generic-completion-without-stale-content-digest\n",
     "subleases=whole-native-allocation-owner-retained,partition-registry-transfers-with-ledger,partitioned-bindings-require-member-index-and-contained-offset-extent,detached-initialized-replacement-preflights-and-atomically-installs-an-exact-new-partition,replacement-denies-old-allocation-generation\n",
-    "readback=caller-can-mint-only-from-current-recycled-owner,request-binds-exact-dispatch-generation-and-owner-checked-host-allocation-generation,lower-owner-allows-only-one-inspected-write-or-readwrite-subrange-and-returns-owned-bytes,no-address-or-initialization-promotion\n",
+    "readback=caller-can-mint-only-from-current-recycled-owner,request-binds-exact-dispatch-generation-and-owner-checked-host-allocation-generation,lower-owner-allows-an-ordinary-range-within-one-inspected-write-or-readwrite-binding-or-one-exact-declared-initialized-enclosing-snapshot-with-an-isolated-writable-interior-and-returns-owned-bytes,no-address-or-initialization-promotion\n",
     "rebind=same-native-queue-may-consume-a-different-fixed-cardinality-program-geometry-kernarg-and-addressless-data-binding-after-exact-recycle\n",
     "release=return-attached-or-exact-ordered-detached-data-custody-after-exact-recycle,destroy-native-queue,restore-service-ledger,reverse-order-unmap-and-free\n",
     "failure=pure-rejection-recovers-input-owners,ambiguous-native-side-effect-is-terminal-and-denies-retry,opaque-quarantine-retains-available-owner-state\n",
@@ -43,7 +43,7 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "4878ee7681f919aee21c4d33fbd3f343286d138f79c0c3d7e55817f5d6bb7da0";
+    "de6c2d43ce7be0446d58bcc3577f0609cbad6d349067bb9c56f112480f255b29";
 
 /// Queue composition, transition, or teardown error.
 #[derive(Debug)]
@@ -386,6 +386,13 @@ pub struct ServiceCompletedReadRequestV1 {
     range: ServiceHostDispatchRangeV1,
 }
 
+/// Inert exact enclosing-snapshot request bound to one recycled generation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ServiceCompletedSnapshotRequestV1 {
+    dispatch_generation: u64,
+    range: ServiceHostDispatchSnapshotRangeV1,
+}
+
 /// Owned bytes copied from one generation-checked coherent dispatch range.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ServiceCompletedReadbackV1 {
@@ -451,6 +458,17 @@ impl<const N: usize> ServiceRecycledQueueSessionV1<N> {
         }
     }
 
+    /// Creates a generation-bound request for one admitted enclosing snapshot.
+    pub const fn completed_snapshot_request(
+        &self,
+        range: ServiceHostDispatchSnapshotRangeV1,
+    ) -> ServiceCompletedSnapshotRequestV1 {
+        ServiceCompletedSnapshotRequestV1 {
+            dispatch_generation: self.dispatch_generation,
+            range,
+        }
+    }
+
     /// Copies one exact inspected writable range after completion and recycle.
     pub fn read_completed(
         &mut self,
@@ -473,6 +491,34 @@ impl<const N: usize> ServiceRecycledQueueSessionV1<N> {
                 request.range.data_index,
                 request.range.offset_bytes,
                 request.range.extent_bytes,
+            ))
+            .map_err(ServiceQueueErrorV1::Kfd)?;
+        Ok(ServiceCompletedReadbackV1 { inner: readback })
+    }
+
+    /// Copies one exact admitted enclosing snapshot after completion and recycle.
+    pub fn read_completed_snapshot(
+        &mut self,
+        request: ServiceCompletedSnapshotRequestV1,
+    ) -> Result<ServiceCompletedReadbackV1, ServiceQueueErrorV1> {
+        if request.dispatch_generation != self.dispatch_generation {
+            return Err(ServiceQueueErrorV1::Kfd(
+                fe2o3_kfd::Gfx942DispatchBindingErrorV1::StaleDispatchGeneration.into(),
+            ));
+        }
+        let range = request.range.dispatch_range();
+        self.owner
+            .ledger
+            .validate_range(ServiceDispatchRangeV1::HostVisible(range))
+            .map_err(ServiceQueueErrorV1::Allocation)?;
+        let readback = self
+            .owner
+            .queue
+            .read_recycled_fixed_dispatch_snapshot(Gfx942CompletedDispatchSnapshotRequestV1::new(
+                request.dispatch_generation,
+                range.data_index,
+                range.offset_bytes,
+                range.extent_bytes,
             ))
             .map_err(ServiceQueueErrorV1::Kfd)?;
         Ok(ServiceCompletedReadbackV1 { inner: readback })
