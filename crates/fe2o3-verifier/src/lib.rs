@@ -44,6 +44,7 @@ mod row_softmax_certificate;
 mod scalar_gemm_hardware_evidence;
 mod scalar_gemm_proof;
 mod scalar_gemm_v1;
+mod scalar_gemm_verus_execution_v2;
 mod static_view_proof;
 
 pub use alpha_zeta_manifest::{
@@ -235,6 +236,12 @@ pub use scalar_gemm_v1::{
     scalar_gemm_canonical_domain_initializes_output_v1, scalar_gemm_f32_oracle_v1,
     scalar_gemm_flattened_index_is_correct_v1, scalar_gemm_output_initialized_by_invocation_v1,
     scalar_gemm_writers_are_injective_v1,
+};
+pub use scalar_gemm_verus_execution_v2::{
+    AuthenticatedScalarGemmVerusProofV2, MAX_SCALAR_GEMM_VERUS_OUTPUT_BYTES_V2,
+    MAX_SCALAR_GEMM_VERUS_TIMEOUT_SECONDS_V2, SCALAR_GEMM_VERUS_THEOREMS_V2,
+    ScalarGemmVerifiedTheoremV2, ScalarGemmVerusExecutionErrorKindV2,
+    ScalarGemmVerusExecutionErrorV2, execute_scalar_gemm_verus_proof_v2,
 };
 pub use static_view_proof::{
     STATIC_VIEW_PROOF_EVIDENCE_DOMAIN_V1, STATIC_VIEW_PROOF_OBLIGATION_DOMAIN_V1,

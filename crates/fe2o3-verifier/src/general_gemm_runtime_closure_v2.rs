@@ -22,8 +22,8 @@ pub const GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME: &str =
 
 /// SHA-256 of the byte-canonical reviewed runtime manifest.
 pub const GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256: [u8; 32] = [
-    0xf7, 0xb3, 0x49, 0x82, 0x0f, 0xd5, 0xab, 0x65, 0x0f, 0x55, 0xbe, 0x61, 0xf7, 0x96, 0x09, 0x82,
-    0x6a, 0x58, 0x82, 0x0f, 0x1a, 0x75, 0xf3, 0x91, 0x14, 0xb6, 0x9b, 0xac, 0x22, 0x29, 0x56, 0x69,
+    0x47, 0x00, 0xaa, 0x94, 0xee, 0x57, 0x27, 0x0c, 0x7e, 0x76, 0x54, 0x0b, 0x38, 0x70, 0x00, 0x4c,
+    0x89, 0x39, 0x73, 0x4b, 0x86, 0x98, 0xe7, 0x5b, 0x95, 0x04, 0xfd, 0xc6, 0x41, 0x77, 0x24, 0xfa,
 ];
 
 const MANIFEST_BYTES: &[u8] =
@@ -131,6 +131,7 @@ pub struct GeneralGemmVerusRuntimeClosureLeaseV2 {
 /// One exact proof source selected from the reviewed retained closure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GeneralGemmProofSourceV2 {
+    ScalarGemm,
     Reference,
     Vectorized,
     NumericalContract,
@@ -147,6 +148,7 @@ pub(crate) enum GeneralGemmProofSourceV2 {
 impl GeneralGemmProofSourceV2 {
     pub(crate) const fn relative_to_proof_directory(self) -> &'static str {
         match self {
+            Self::ScalarGemm => "scalar_gemm_v1.rs",
             Self::Reference => "general_gemm_reference_schedule_v1.rs",
             Self::Vectorized => "general_gemm_vectorized_schedule_v1.rs",
             Self::NumericalContract => "general_gemm_numerical_contract_v1.rs",
@@ -169,6 +171,7 @@ impl GeneralGemmProofSourceV2 {
 
     pub(crate) const fn embedded_bytes(self) -> &'static [u8] {
         match self {
+            Self::ScalarGemm => SCALAR_GEMM_SOURCE,
             Self::Reference => GENERAL_GEMM_REFERENCE_SOURCE,
             Self::Vectorized => GENERAL_GEMM_VECTORIZED_SOURCE,
             Self::NumericalContract => GENERAL_GEMM_NUMERICAL_CONTRACT_SOURCE,
@@ -301,6 +304,7 @@ fn put_blob(digest: &mut Sha256, value: &[u8]) {
 
 const GENERAL_GEMM_MODEL_SOURCE: &[u8] =
     include_bytes!("../verus/general_gemm_schedule_model_v1.rs");
+const SCALAR_GEMM_SOURCE: &[u8] = include_bytes!("../verus/scalar_gemm_v1.rs");
 const GENERAL_GEMM_REFERENCE_SOURCE: &[u8] =
     include_bytes!("../verus/general_gemm_reference_schedule_v1.rs");
 const GENERAL_GEMM_VECTORIZED_SOURCE: &[u8] =
@@ -326,7 +330,7 @@ const GENERAL_GEMM_NUMERICAL_WIDENING_WRONG_SOURCE: &[u8] =
 const GENERAL_GEMM_NUMERICAL_PROPERTY_MANIFEST_SOURCE: &[u8] =
     include_bytes!("../verus/pins/GENERAL_GEMM_NUMERICAL_PROPERTIES_V1.manifest");
 
-const REVIEWED_GENERAL_GEMM_SOURCES: [(&str, &[u8]); 13] = [
+const REVIEWED_GENERAL_GEMM_SOURCES: [(&str, &[u8]); 14] = [
     (
         "proof/general_gemm_numerical_contract_v1.rs",
         GENERAL_GEMM_NUMERICAL_CONTRACT_SOURCE,
@@ -379,6 +383,7 @@ const REVIEWED_GENERAL_GEMM_SOURCES: [(&str, &[u8]); 13] = [
         "proof/pins/GENERAL_GEMM_NUMERICAL_PROPERTIES_V1.manifest",
         GENERAL_GEMM_NUMERICAL_PROPERTY_MANIFEST_SOURCE,
     ),
+    ("proof/scalar_gemm_v1.rs", SCALAR_GEMM_SOURCE),
 ];
 
 fn validate_absolute_path(path: &Path) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
@@ -819,7 +824,7 @@ mod tests {
     fn reviewed_manifest_and_target_pins_are_canonical() {
         let manifest = ManifestV2::parse_reviewed().unwrap();
         assert_eq!(manifest.directories.len(), 11);
-        assert_eq!(manifest.files.len(), 93);
+        assert_eq!(manifest.files.len(), 94);
         assert!(manifest.interpreter.is_some());
         assert_eq!(
             Sha256::digest(MANIFEST_BYTES).as_slice(),
@@ -842,6 +847,22 @@ mod tests {
                 .unwrap_err()
                 .kind(),
             GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest
+        );
+    }
+
+    #[test]
+    fn reviewed_scalar_source_is_exactly_the_typed_retained_source() {
+        let manifest = ManifestV2::parse_reviewed().unwrap();
+        let source = manifest
+            .files
+            .iter()
+            .find(|source| source.path == Path::new("proof/scalar_gemm_v1.rs"))
+            .unwrap();
+        assert_eq!(source.size, Some(SCALAR_GEMM_SOURCE.len() as u64));
+        assert_eq!(source.sha256, Sha256::digest(SCALAR_GEMM_SOURCE).as_slice());
+        assert_eq!(
+            GeneralGemmProofSourceV2::ScalarGemm.embedded_bytes(),
+            SCALAR_GEMM_SOURCE
         );
     }
 
