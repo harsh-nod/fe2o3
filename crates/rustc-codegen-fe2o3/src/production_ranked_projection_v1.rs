@@ -3566,15 +3566,28 @@ fn projected_cfg_terminator(
                     .and_then(Clone::clone)
             });
             let Some(predicate) = predicate else {
-                if targets.values().len() != 1 {
-                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                        "a general switch with more than two reachable successors",
-                    ));
+                if targets.values().len() == 1 {
+                    return Ok(ProjectedCfgTerminatorV1::AnalysisSplit {
+                        first_block: target(targets.values()[0].edge().target())?,
+                        second_block: target(targets.otherwise().target())?,
+                    });
                 }
-                return Ok(ProjectedCfgTerminatorV1::AnalysisSplit {
-                    first_block: target(targets.values()[0].edge().target())?,
-                    second_block: target(targets.otherwise().target())?,
-                });
+                if targets.values().len() == 2
+                    && targets.values()[0].value() == 0
+                    && targets.values()[1].value() == 1
+                    && switch_fallback_is_empty_unreachable_v1(
+                        function,
+                        target(targets.otherwise().target())?,
+                    )
+                {
+                    return Ok(ProjectedCfgTerminatorV1::AnalysisSplit {
+                        first_block: target(targets.values()[0].edge().target())?,
+                        second_block: target(targets.values()[1].edge().target())?,
+                    });
+                }
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a general switch whose only extra successor is not one empty unreachable fallback",
+                ));
             };
             if targets.values().len() != 2
                 || targets.values()[0].value() != 0
@@ -3585,13 +3598,7 @@ fn projected_cfg_terminator(
                 ));
             }
             let otherwise = target(targets.otherwise().target())?;
-            let otherwise_block = &function.blocks()[otherwise];
-            if !otherwise_block.statements().is_empty()
-                || !matches!(
-                    otherwise_block.terminator().kind(),
-                    SemanticTerminatorKindV1::Unreachable
-                )
-            {
+            if !switch_fallback_is_empty_unreachable_v1(function, otherwise) {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "a checked Option switch with a reachable non-variant successor",
                 ));
@@ -3631,6 +3638,19 @@ fn projected_cfg_terminator(
         | SemanticTerminatorKindV1::Abort
         | SemanticTerminatorKindV1::Unreachable => Ok(ProjectedCfgTerminatorV1::Return),
     }
+}
+
+fn switch_fallback_is_empty_unreachable_v1(
+    function: &SemanticFunctionDeclV1,
+    block: usize,
+) -> bool {
+    function.blocks().get(block).is_some_and(|block| {
+        block.statements().is_empty()
+            && matches!(
+                block.terminator().kind(),
+                SemanticTerminatorKindV1::Unreachable
+            )
+    })
 }
 
 fn projected_block_expansion(
@@ -8651,6 +8671,78 @@ mod tests {
             .unwrap()
             .is_none()
         );
+    }
+
+    fn explicit_binary_switch_with_fallback(
+        second_variant: u128,
+        fallback_statements: Vec<SemanticStatementV1>,
+        fallback_terminator: SemanticTerminatorKindV1,
+    ) -> SemanticFunctionDeclV1 {
+        projection_function_with_locals(
+            vec![
+                block(
+                    98,
+                    vec![],
+                    SemanticTerminatorKindV1::SwitchInt {
+                        discriminant: tensor_operand(1),
+                        targets: SemanticSwitchTargetsV1::new(
+                            vec![
+                                SemanticSwitchTargetV1::new(
+                                    0,
+                                    cfg_edge(SemanticEdgeRoleV1::SwitchValue, 1),
+                                ),
+                                SemanticSwitchTargetV1::new(
+                                    second_variant,
+                                    cfg_edge(SemanticEdgeRoleV1::SwitchValue, 2),
+                                ),
+                            ],
+                            cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 3),
+                        )
+                        .unwrap(),
+                    },
+                ),
+                block(99, vec![], SemanticTerminatorKindV1::Return),
+                block(100, vec![], SemanticTerminatorKindV1::Return),
+                block(101, fallback_statements, fallback_terminator),
+            ],
+            vec![
+                local(98, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(99, SCALAR_TYPE, SemanticLocalRoleV1::Argument(0)),
+            ],
+        )
+    }
+
+    #[test]
+    fn explicit_zero_one_switch_elides_only_an_empty_unreachable_fallback() {
+        let function =
+            explicit_binary_switch_with_fallback(1, vec![], SemanticTerminatorKindV1::Unreachable);
+        assert_eq!(
+            projected_cfg_terminator(&function, 0, &[None; 2]).unwrap(),
+            ProjectedCfgTerminatorV1::AnalysisSplit {
+                first_block: 1,
+                second_block: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn explicit_binary_switch_keeps_reachable_or_malformed_fallbacks_fail_closed() {
+        for function in [
+            explicit_binary_switch_with_fallback(1, vec![], SemanticTerminatorKindV1::Return),
+            explicit_binary_switch_with_fallback(
+                1,
+                vec![statement(SemanticStatementKindV1::Nop)],
+                SemanticTerminatorKindV1::Unreachable,
+            ),
+            explicit_binary_switch_with_fallback(2, vec![], SemanticTerminatorKindV1::Unreachable),
+        ] {
+            assert!(matches!(
+                projected_cfg_terminator(&function, 0, &[None; 2]),
+                Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a general switch whose only extra successor is not one empty unreachable fallback"
+                ))
+            ));
+        }
     }
 
     fn uniform_induction_function(bound_role: SemanticLocalRoleV1) -> SemanticFunctionDeclV1 {
