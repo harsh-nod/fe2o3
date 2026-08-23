@@ -2390,7 +2390,8 @@ fn validate_public_packet_bindings(
                 pointer_offset: argument.offset(),
                 declared_access: argument.access(),
                 actual_access: argument.actual_access(),
-                pointee_alignment: argument.pointee_alignment(),
+                pointee_alignment: kernel
+                    .dispatch_pointee_alignment(binding.explicit_argument_index),
             },
         )?;
         state.referenced[binding.data_index] = true;
