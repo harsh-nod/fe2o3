@@ -528,7 +528,9 @@ fn preflight_operation(
         }
         | OperationKind::SliceData { .. }
         | OperationKind::GetElementPointer { .. } => true,
-        OperationKind::Load { access, .. } | OperationKind::Store { access, .. } => {
+        OperationKind::Load { access, .. }
+        | OperationKind::GuardedLoad { access, .. }
+        | OperationKind::Store { access, .. } => {
             access.address_space == AddressSpace::Global
                 && access.alignment == 4
                 && !access.volatile
@@ -582,6 +584,7 @@ fn operation_name(kind: &OperationKind) -> &'static str {
         OperationKind::SliceData { .. } => "slice-data",
         OperationKind::GetElementPointer { .. } => "get-element-pointer",
         OperationKind::Load { .. } => "load",
+        OperationKind::GuardedLoad { .. } => "guarded-load",
         OperationKind::Store { .. } => "store",
         OperationKind::Barrier(_) => "barrier",
         OperationKind::Atomic(_) => "atomic",
@@ -1002,36 +1005,25 @@ fn execute_operation(
             }
         }
         OperationKind::Load { pointer, access } => {
-            let RuntimeValue::Pointer {
-                argument,
-                element,
-                address_space,
-                offset,
-                ..
-            } = value(values, *pointer)?
-            else {
+            one(execute_load(*pointer, *access, arguments, values)?)
+        }
+        OperationKind::GuardedLoad {
+            pointer,
+            predicate,
+            fallback,
+            access,
+        } => {
+            let RuntimeValue::Bool(predicate) = value(values, *predicate)? else {
                 return Err(IntegerSemanticOracleErrorV1::RuntimeTypeMismatch {
-                    value: *pointer,
-                    expected: "pointer",
+                    value: *predicate,
+                    expected: "boolean guarded-load predicate",
                 });
             };
-            ensure_memory_access(*address_space, access.address_space, *pointer)?;
-            let elements = buffer(arguments, *argument)?;
-            let loaded =
-                *elements
-                    .get(*offset)
-                    .ok_or(IntegerSemanticOracleErrorV1::MemoryOutOfBounds {
-                        argument: *argument,
-                        index: *offset,
-                        length: elements.len(),
-                    })?;
-            let Type::Scalar(scalar) = element else {
-                return Err(IntegerSemanticOracleErrorV1::RuntimeTypeMismatch {
-                    value: *pointer,
-                    expected: "scalar element pointer",
-                });
-            };
-            one(checked_integer(loaded, *scalar)?)
+            if *predicate {
+                one(execute_load(*pointer, *access, arguments, values)?)
+            } else {
+                one(value(values, *fallback)?.clone())
+            }
         }
         OperationKind::Store {
             pointer,
@@ -1098,6 +1090,43 @@ fn checked_integer(
         return Err(IntegerSemanticOracleErrorV1::IntegerOutOfRange { value, ty });
     }
     Ok(RuntimeValue::Integer { value, ty })
+}
+
+fn execute_load(
+    pointer: ValueId,
+    access: crate::MemoryAccess,
+    arguments: &[IntegerSemanticOracleArgumentV1],
+    values: &BTreeMap<ValueId, RuntimeValue>,
+) -> Result<RuntimeValue, IntegerSemanticOracleErrorV1> {
+    let RuntimeValue::Pointer {
+        argument,
+        element,
+        address_space,
+        offset,
+        ..
+    } = value(values, pointer)?
+    else {
+        return Err(IntegerSemanticOracleErrorV1::RuntimeTypeMismatch {
+            value: pointer,
+            expected: "pointer",
+        });
+    };
+    ensure_memory_access(*address_space, access.address_space, pointer)?;
+    let elements = buffer(arguments, *argument)?;
+    let loaded = *elements
+        .get(*offset)
+        .ok_or(IntegerSemanticOracleErrorV1::MemoryOutOfBounds {
+            argument: *argument,
+            index: *offset,
+            length: elements.len(),
+        })?;
+    let Type::Scalar(scalar) = element else {
+        return Err(IntegerSemanticOracleErrorV1::RuntimeTypeMismatch {
+            value: pointer,
+            expected: "scalar element pointer",
+        });
+    };
+    checked_integer(loaded, *scalar)
 }
 
 fn ensure_memory_access(
@@ -1402,5 +1431,87 @@ impl Error for IntegerSemanticOracleErrorV1 {
             Self::ScalarGemmProfile(error) => Some(error),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod guarded_load_tests {
+    use super::*;
+
+    fn operation(predicate: ValueId, pointer: ValueId, fallback: ValueId) -> Operation {
+        Operation::effect_free(
+            ValueDef::new(ValueId(3), Type::Scalar(ScalarType::U32)),
+            OperationKind::GuardedLoad {
+                pointer,
+                predicate,
+                fallback,
+                access: crate::MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        )
+    }
+
+    fn values(predicate: bool, offset: usize) -> BTreeMap<ValueId, RuntimeValue> {
+        BTreeMap::from([
+            (
+                ValueId(0),
+                RuntimeValue::Pointer {
+                    argument: 0,
+                    element: Type::Scalar(ScalarType::U32),
+                    address_space: AddressSpace::Global,
+                    access: AccessMode::ReadOnly,
+                    offset,
+                },
+            ),
+            (ValueId(1), RuntimeValue::Bool(predicate)),
+            (
+                ValueId(2),
+                RuntimeValue::Integer {
+                    value: 7,
+                    ty: ScalarType::U32,
+                },
+            ),
+        ])
+    }
+
+    #[test]
+    fn false_guard_returns_fallback_without_touching_an_invalid_pointer() {
+        let mut arguments = [IntegerSemanticOracleArgumentV1::Buffer(vec![])];
+        let result = execute_operation(
+            &operation(ValueId(1), ValueId(0), ValueId(2)),
+            &mut arguments,
+            &values(false, usize::MAX),
+            0,
+            BlockId(0),
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            result,
+            vec![RuntimeValue::Integer {
+                value: 7,
+                ty: ScalarType::U32,
+            }]
+        );
+    }
+
+    #[test]
+    fn true_guard_executes_the_load() {
+        let mut arguments = [IntegerSemanticOracleArgumentV1::Buffer(vec![42])];
+        let result = execute_operation(
+            &operation(ValueId(1), ValueId(0), ValueId(2)),
+            &mut arguments,
+            &values(true, 0),
+            0,
+            BlockId(0),
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            result,
+            vec![RuntimeValue::Integer {
+                value: 42,
+                ty: ScalarType::U32,
+            }]
+        );
     }
 }

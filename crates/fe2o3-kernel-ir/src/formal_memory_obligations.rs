@@ -272,6 +272,11 @@ pub enum FormalMemoryIncompleteReason {
     UnsupportedMemoryEffect {
         location: FunctionOperationLocation,
     },
+    /// A conditional read is represented exactly in KIR, but the affine
+    /// extractor needs owner-held ranked bounds/race proof for its predicate.
+    GuardedAccessRequiresRankedProof {
+        location: FunctionOperationLocation,
+    },
     UnsupportedPointerDerivation {
         location: FunctionOperationLocation,
         pointer: ValueId,
@@ -539,6 +544,13 @@ pub fn derive_kernel_memory_obligations_from_verified(
                     ..
                 } => {}
                 OperationKind::Matrix(matrix) if matrix.memory_effects().is_empty() => {}
+                OperationKind::GuardedLoad { access, .. }
+                    if access.address_space == AddressSpace::Private => {}
+                OperationKind::GuardedLoad { .. } => {
+                    reasons.insert(
+                        FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof { location },
+                    );
+                }
                 OperationKind::Alloca { .. }
                 | OperationKind::Barrier(_)
                 | OperationKind::Atomic(_)

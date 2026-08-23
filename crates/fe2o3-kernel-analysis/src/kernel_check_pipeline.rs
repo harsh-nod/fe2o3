@@ -563,6 +563,11 @@ fn write_memory_incomplete_reason(
             "memory effect at {} is outside the modeled profile",
             display_operation_location(*location),
         ),
+        FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof { location } => write!(
+            formatter,
+            "guarded memory access at {} requires an exact ranked bounds/race proof",
+            display_operation_location(*location),
+        ),
         FormalMemoryIncompleteReason::UnsupportedPointerDerivation { location, pointer } => write!(
             formatter,
             "pointer {pointer} at {} has an unsupported derivation",

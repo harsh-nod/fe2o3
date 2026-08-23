@@ -402,6 +402,9 @@ impl Operation {
                 vec![MemoryEffect::Allocate(*address_space)]
             }
             OperationKind::Load { access, .. } => vec![MemoryEffect::Read(access.address_space)],
+            OperationKind::GuardedLoad { access, .. } => {
+                vec![MemoryEffect::Read(access.address_space)]
+            }
             OperationKind::Store { access, .. } => vec![MemoryEffect::Write(access.address_space)],
             OperationKind::Atomic(atomic) => vec![MemoryEffect::Atomic {
                 address_space: atomic.access.address_space,
@@ -591,6 +594,14 @@ pub enum OperationKind {
         pointer: ValueId,
         access: MemoryAccess,
     },
+    /// Loads only when `predicate` is true, otherwise returns `fallback` without
+    /// executing a memory access.
+    GuardedLoad {
+        pointer: ValueId,
+        predicate: ValueId,
+        fallback: ValueId,
+        access: MemoryAccess,
+    },
     Store {
         pointer: ValueId,
         value: ValueId,
@@ -649,6 +660,12 @@ impl OperationKind {
             Self::SliceLength { slice } | Self::SliceData { slice } => vec![*slice],
             Self::GetElementPointer { base, offset } => vec![*base, *offset],
             Self::Load { pointer, .. } => vec![*pointer],
+            Self::GuardedLoad {
+                pointer,
+                predicate,
+                fallback,
+                ..
+            } => vec![*pointer, *predicate, *fallback],
             Self::Store { pointer, value, .. } => vec![*pointer, *value],
             Self::Atomic(atomic) => atomic.operands(),
             Self::Wave(wave) => wave.operands(),

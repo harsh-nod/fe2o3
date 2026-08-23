@@ -544,6 +544,7 @@ fn project_operation_kind(
             project_memory_access(writer, access)
         }
         OperationKind::MemoryIntrinsic(_)
+        | OperationKind::GuardedLoad { .. }
         | OperationKind::Unary { .. }
         | OperationKind::Select { .. }
         | OperationKind::Call { .. }

@@ -734,6 +734,19 @@ fn encode_operation_kind(
             writer.u32(pointer.0)?;
             encode_memory_access(writer, *access)?;
         }
+        OperationKind::GuardedLoad {
+            pointer,
+            predicate,
+            fallback,
+            access,
+        } => {
+            require_v7(writer, "guarded load")?;
+            writer.u8(23)?;
+            writer.u32(pointer.0)?;
+            writer.u32(predicate.0)?;
+            writer.u32(fallback.0)?;
+            encode_memory_access(writer, *access)?;
+        }
         OperationKind::Store {
             pointer,
             value,
@@ -864,6 +877,12 @@ fn decode_operation_kind(reader: &mut Reader<'_>) -> Result<OperationKind, Kerne
         22 if reader.version >= KERNEL_IR_VERSION_V5 => {
             OperationKind::Matrix(decode_matrix_operation(reader)?)
         }
+        23 if reader.version >= KERNEL_IR_VERSION_V7 => OperationKind::GuardedLoad {
+            pointer: ValueId(reader.u32()?),
+            predicate: ValueId(reader.u32()?),
+            fallback: ValueId(reader.u32()?),
+            access: decode_memory_access(reader)?,
+        },
         tag => {
             return Err(KernelIrDecodeError::UnknownTag {
                 kind: "operation",
@@ -2534,6 +2553,17 @@ fn require_v5(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEnco
 
 fn require_v6(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
     if writer.version >= KERNEL_IR_VERSION_V6 {
+        Ok(())
+    } else {
+        Err(KernelIrEncodeError::UnsupportedInVersion {
+            version: writer.version,
+            feature,
+        })
+    }
+}
+
+fn require_v7(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+    if writer.version >= KERNEL_IR_VERSION_V7 {
         Ok(())
     } else {
         Err(KernelIrEncodeError::UnsupportedInVersion {

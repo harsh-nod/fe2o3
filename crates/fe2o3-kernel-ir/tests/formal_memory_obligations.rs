@@ -1051,3 +1051,31 @@ fn formal_extraction_is_deterministic() {
         assert_eq!(analyze(&module, 257), first);
     }
 }
+
+#[test]
+fn guarded_load_requires_a_distinct_ranked_proof_reason() {
+    let module = module_with_kernel(
+        vec![global_pointer(AccessMode::ReadOnly), Type::BOOL, Type::F32],
+        vec![Operation::new(
+            vec![ValueDef::new(ValueId(3), Type::F32)],
+            OperationKind::GuardedLoad {
+                pointer: ValueId(0),
+                predicate: ValueId(1),
+                fallback: ValueId(2),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        )],
+        dynamic_1d(),
+    );
+
+    let analysis = analyze(&module, 8);
+    assert_eq!(
+        analysis.incomplete_reasons(),
+        &[
+            FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof {
+                location: FunctionOperationLocation::new(BlockId(0), 0),
+            }
+        ]
+    );
+    assert!(analysis.obligations().accesses().is_empty());
+}

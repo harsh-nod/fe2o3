@@ -460,9 +460,10 @@ impl<'a> Analyzer<'a> {
             OperationKind::Call { callee, .. } if self.summarized_calls.contains(callee) => {
                 join_values(operation.kind.operands(), &self.report.values)
             }
-            OperationKind::Call { .. } | OperationKind::Load { .. } | OperationKind::Atomic(_) => {
-                Variation::Varying
-            }
+            OperationKind::Call { .. }
+            | OperationKind::Load { .. }
+            | OperationKind::GuardedLoad { .. }
+            | OperationKind::Atomic(_) => Variation::Varying,
             OperationKind::MemoryIntrinsic(
                 fe2o3_kernel_ir::MemoryIntrinsicOperation::PointerDistance { .. },
             ) => join_values(operation.kind.operands(), &self.report.values),

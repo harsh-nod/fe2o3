@@ -5114,6 +5114,16 @@ impl<'a> FunctionLowerer<'a> {
                     self.target,
                 )?;
             }
+            OperationKind::GuardedLoad {
+                pointer, access, ..
+            } => {
+                validate_memory_access(
+                    self.value_type(*pointer),
+                    access.address_space,
+                    &location,
+                    self.target,
+                )?;
+            }
             OperationKind::Store {
                 pointer, access, ..
             } => {
@@ -5614,8 +5624,30 @@ impl<'a> FunctionLowerer<'a> {
         if self.split_edges[self.edge_index(predecessor, ordinal, target)] {
             edge_label(predecessor, ordinal, target)
         } else {
-            block_label(predecessor)
+            self.block_exit_label(predecessor)
         }
+    }
+
+    fn block_exit_label(&self, block: BlockId) -> String {
+        self.function
+            .body
+            .as_ref()
+            .and_then(|body| body.blocks.iter().find(|candidate| candidate.id == block))
+            .and_then(|block| {
+                block
+                    .operations
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, operation)| {
+                        matches!(operation.kind, OperationKind::GuardedLoad { .. })
+                    })
+                    .map(|(operation, _)| operation)
+                    .next_back()
+            })
+            .map_or_else(
+                || block_label(block),
+                |operation| guarded_load_merge_label(block, operation),
+            )
     }
 
     fn value_type(&self, value: ValueId) -> &Type {
@@ -6346,6 +6378,48 @@ impl<'a> FunctionLowerer<'a> {
                     address_space,
                     pointer_name,
                     access.alignment
+                )
+                .unwrap();
+            }
+            OperationKind::GuardedLoad {
+                pointer,
+                predicate,
+                fallback,
+                access,
+            } => {
+                let result = result_name.expect("validated guarded-load result");
+                let (pointer_name, pointer_ty) = self.value(*pointer);
+                let (predicate_name, _) = self.value(*predicate);
+                let (fallback_name, fallback_ty) = self.value(*fallback);
+                let Type::Pointer(pointer_ty) = pointer_ty else {
+                    unreachable!()
+                };
+                let address_space = llvm_address_space(pointer_ty.address_space);
+                let volatile = if access.volatile { " volatile" } else { "" };
+                let true_label = guarded_load_true_label(block, operation_index);
+                let false_label = guarded_load_false_label(block, operation_index);
+                let merge_label = guarded_load_merge_label(block, operation_index);
+                writeln!(
+                    output,
+                    "  br i1 {predicate_name}, label %{true_label}, label %{false_label}"
+                )
+                .unwrap();
+                writeln!(output, "{true_label}:").unwrap();
+                writeln!(
+                    output,
+                    "  {result}.loaded = load{volatile} {}, ptr addrspace({address_space}) {pointer_name}, align {}",
+                    llvm_type(&pointer_ty.pointee),
+                    access.alignment,
+                )
+                .unwrap();
+                writeln!(output, "  br label %{merge_label}").unwrap();
+                writeln!(output, "{false_label}:").unwrap();
+                writeln!(output, "  br label %{merge_label}").unwrap();
+                writeln!(output, "{merge_label}:").unwrap();
+                writeln!(
+                    output,
+                    "  {result} = phi {} [ {result}.loaded, %{true_label} ], [ {fallback_name}, %{false_label} ]",
+                    llvm_type(fallback_ty),
                 )
                 .unwrap();
             }
@@ -7867,6 +7941,18 @@ fn ballot_intrinsic(width: WaveWidth) -> (&'static str, &'static str) {
 
 fn block_label(block: BlockId) -> String {
     format!("bb{}", block.0)
+}
+
+fn guarded_load_true_label(block: BlockId, operation: usize) -> String {
+    format!("guarded_load_bb{}_op{}_true", block.0, operation)
+}
+
+fn guarded_load_false_label(block: BlockId, operation: usize) -> String {
+    format!("guarded_load_bb{}_op{}_false", block.0, operation)
+}
+
+fn guarded_load_merge_label(block: BlockId, operation: usize) -> String {
+    format!("guarded_load_bb{}_op{}_merge", block.0, operation)
 }
 
 fn edge_label(predecessor: BlockId, ordinal: usize, target: BlockId) -> String {

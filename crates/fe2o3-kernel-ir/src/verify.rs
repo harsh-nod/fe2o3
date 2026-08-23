@@ -1049,6 +1049,20 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 };
                 self.expect_results(operation, &[pointee], location);
             }
+            OperationKind::GuardedLoad {
+                pointer,
+                predicate,
+                fallback,
+                access,
+            } => {
+                let Some(pointee) = self.verify_pointer_access(*pointer, *access, false, &location)
+                else {
+                    return;
+                };
+                self.expect_type(*predicate, &Type::BOOL, location.clone());
+                self.expect_type(*fallback, &pointee, location.clone());
+                self.expect_results(operation, &[pointee], location);
+            }
             OperationKind::Store {
                 pointer,
                 value,
