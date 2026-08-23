@@ -5,7 +5,7 @@
 //! success edge uniquely controls an access to the same slice and index.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     fmt,
 };
 
@@ -912,20 +912,12 @@ fn project_authenticated_tensor_layouts_v1(
     let mut stored_entries = 0_usize;
     let mut work = 0_usize;
     while let Some(block_index) = worklist.pop_front() {
-        work = work
-            .checked_add(
-                entries[block_index]
-                    .as_ref()
-                    .map_or(1, |state| state.len().saturating_add(1)),
-            )
-            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                "tensor producer dataflow work overflow",
-            ))?;
-        if work > MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1 {
-            return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "tensor producer dataflow exceeds the charged projection limit",
-            ));
-        }
+        charge_tensor_dataflow_work_v1(
+            &mut work,
+            entries[block_index]
+                .as_ref()
+                .map_or(1, |state| state.len().saturating_add(1)),
+        )?;
         let mut state = entries[block_index]
             .as_ref()
             .expect("queued tensor dataflow block has an entry state")
@@ -938,60 +930,63 @@ fn project_authenticated_tensor_layouts_v1(
             enum_payload_dominance,
         )?;
         transfer_tensor_terminator_v1(callables, function, block_index, &mut state, false)?;
-        work = work
-            .checked_add(function.blocks()[block_index].statements().len())
-            .and_then(|work| work.checked_add(state.len()))
-            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                "tensor producer dataflow work overflow",
-            ))?;
-        if work > MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1
-            || state.len() > MAX_PROJECTED_TENSOR_STATE_ENTRIES_V1
-        {
+        charge_tensor_dataflow_work_v1(
+            &mut work,
+            function.blocks()[block_index]
+                .statements()
+                .len()
+                .checked_add(state.len())
+                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                    "tensor producer dataflow work overflow",
+                ))?,
+        )?;
+        if state.len() > MAX_PROJECTED_TENSOR_STATE_ENTRIES_V1 {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "tensor producer dataflow exceeds the charged projection limit",
             ));
         }
-        function.blocks()[block_index]
-            .terminator()
-            .kind()
-            .try_for_each_edge::<ProductionRankedProjectionErrorV1>(|edge| {
-                let target = edge.target().index() as usize;
-                let target_entry = entries.get_mut(target).ok_or(
-                    ProductionRankedProjectionErrorV1::Unsupported(
+        let successors = charged_unique_tensor_successors_v1(
+            function.blocks()[block_index].terminator().kind(),
+            state.len(),
+            &mut work,
+        )?;
+        for target in successors {
+            let target_entry =
+                entries
+                    .get_mut(target)
+                    .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                         "a tensor producer CFG edge outside the semantic function",
-                    ),
-                )?;
-                let changed = match target_entry {
-                    None => {
-                        stored_entries = stored_entries.checked_add(state.len()).ok_or(
-                            ProductionRankedProjectionErrorV1::Unsupported(
-                                "tensor producer stored-state accounting overflow",
-                            ),
-                        )?;
-                        *target_entry = Some(state.clone());
-                        true
-                    }
-                    Some(existing) => {
-                        let before = existing.len();
-                        let changed = merge_tensor_states_v1(existing, &state)?;
-                        stored_entries = stored_entries
-                            .checked_add(existing.len().saturating_sub(before))
-                            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                                "tensor producer stored-state accounting overflow",
-                            ))?;
-                        changed
-                    }
-                };
-                if stored_entries > MAX_PROJECTED_TENSOR_STATE_ENTRIES_V1 {
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "tensor producer states exceed the charged storage limit",
-                    ));
+                    ))?;
+            let changed = match target_entry {
+                None => {
+                    stored_entries = stored_entries.checked_add(state.len()).ok_or(
+                        ProductionRankedProjectionErrorV1::Unsupported(
+                            "tensor producer stored-state accounting overflow",
+                        ),
+                    )?;
+                    *target_entry = Some(state.clone());
+                    true
                 }
-                if changed {
-                    worklist.push_back(target);
+                Some(existing) => {
+                    let before = existing.len();
+                    let changed = merge_tensor_states_v1(existing, &state)?;
+                    stored_entries = stored_entries
+                        .checked_add(existing.len().saturating_sub(before))
+                        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                            "tensor producer stored-state accounting overflow",
+                        ))?;
+                    changed
                 }
-                Ok(())
-            })?;
+            };
+            if stored_entries > MAX_PROJECTED_TENSOR_STATE_ENTRIES_V1 {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "tensor producer states exceed the charged storage limit",
+                ));
+            }
+            if changed {
+                worklist.push_back(target);
+            }
+        }
     }
 
     let mut layouts = vec![None; block_count];
@@ -1010,6 +1005,56 @@ fn project_authenticated_tensor_layouts_v1(
             transfer_tensor_terminator_v1(callables, function, block_index, &mut state, true)?;
     }
     Ok(layouts)
+}
+
+fn charge_tensor_dataflow_work_v1(
+    work: &mut usize,
+    additional: usize,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    *work = work
+        .checked_add(additional)
+        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+            "tensor producer dataflow work overflow",
+        ))?;
+    if *work > MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1 {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "tensor producer dataflow exceeds the charged projection limit",
+        ));
+    }
+    Ok(())
+}
+
+fn charged_unique_tensor_successors_v1(
+    terminator: &SemanticTerminatorKindV1,
+    state_entries: usize,
+    work: &mut usize,
+) -> Result<Vec<usize>, ProductionRankedProjectionErrorV1> {
+    let mut unique = HashSet::new();
+    terminator.try_for_each_edge::<ProductionRankedProjectionErrorV1>(|edge| {
+        charge_tensor_dataflow_work_v1(work, 1)?;
+        let target = edge.target().index() as usize;
+        if !unique.contains(&target) {
+            unique.try_reserve(1).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "tensor producer successor storage cannot be reserved",
+                )
+            })?;
+            unique.insert(target);
+        }
+        Ok(())
+    })?;
+    let mut successors = unique.into_iter().collect::<Vec<_>>();
+    successors.sort_unstable();
+    let merge_work =
+        state_entries
+            .checked_add(1)
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "tensor producer dataflow work overflow",
+            ))?;
+    for _ in &successors {
+        charge_tensor_dataflow_work_v1(work, merge_work)?;
+    }
+    Ok(successors)
 }
 
 fn transfer_tensor_statements_v1(
@@ -8857,6 +8902,62 @@ mod tests {
         )]);
         assert!(merge_tensor_states_v1(&mut current, &HashMap::new()).unwrap());
         assert_eq!(current[&7], ProjectedTensorValueV1::Invalid);
+    }
+
+    #[test]
+    fn duplicate_tensor_cfg_successors_are_charged_once_and_merged_once() {
+        let targets = (0..65_536_u128)
+            .map(|value| {
+                SemanticSwitchTargetV1::new(value, cfg_edge(SemanticEdgeRoleV1::SwitchValue, 1))
+            })
+            .collect();
+        let terminator = SemanticTerminatorKindV1::SwitchInt {
+            discriminant: constant(0),
+            targets: SemanticSwitchTargetsV1::new(
+                targets,
+                cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 2),
+            )
+            .unwrap(),
+        };
+        let mut work = 0;
+        assert_eq!(
+            charged_unique_tensor_successors_v1(&terminator, 7, &mut work).unwrap(),
+            vec![1, 2]
+        );
+        assert_eq!(work, 65_537 + 2 * (7 + 1));
+    }
+
+    #[test]
+    fn tensor_cfg_successor_deduplication_is_deterministic_and_resource_bounded() {
+        let terminator = SemanticTerminatorKindV1::SwitchInt {
+            discriminant: constant(0),
+            targets: SemanticSwitchTargetsV1::new(
+                vec![
+                    SemanticSwitchTargetV1::new(0, cfg_edge(SemanticEdgeRoleV1::SwitchValue, 3)),
+                    SemanticSwitchTargetV1::new(1, cfg_edge(SemanticEdgeRoleV1::SwitchValue, 1)),
+                    SemanticSwitchTargetV1::new(2, cfg_edge(SemanticEdgeRoleV1::SwitchValue, 3)),
+                    SemanticSwitchTargetV1::new(3, cfg_edge(SemanticEdgeRoleV1::SwitchValue, 2)),
+                ],
+                cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 2),
+            )
+            .unwrap(),
+        };
+        for _ in 0..4 {
+            let mut work = 0;
+            assert_eq!(
+                charged_unique_tensor_successors_v1(&terminator, 0, &mut work).unwrap(),
+                vec![1, 2, 3]
+            );
+            assert_eq!(work, 8);
+        }
+
+        let mut exhausted_work = MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1 - 1;
+        assert!(matches!(
+            charged_unique_tensor_successors_v1(&terminator, 0, &mut exhausted_work),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "tensor producer dataflow exceeds the charged projection limit"
+            ))
+        ));
     }
 
     #[test]
