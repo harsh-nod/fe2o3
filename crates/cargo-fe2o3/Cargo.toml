@@ -12,7 +12,7 @@ description = "Cargo subcommand for fe2o3."
 compiler-handoff-observation-test-only = []
 worker-v2-fault-injection-test-only = []
 host-consumer-fixture = ["fe2o3-host/hardware-test-hooks"]
-worker-v3-envelope-integration-test-only = []
+worker-v3-envelope-integration-test-only = ["fe2o3-host/hardware-test-hooks"]
 
 [dependencies]
 cap-primitives = "=4.0.2"

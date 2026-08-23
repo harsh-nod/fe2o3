@@ -40,6 +40,7 @@ mod protected_row_softmax_v1_lifecycle;
 mod published_direct_link;
 mod published_hsaco_inspection;
 mod recovered_worker_v2_admission;
+mod recovered_worker_v3_admission;
 mod row_softmax_protected_admission;
 mod tile_interop;
 mod worker_v2_bundle_admission;
@@ -316,6 +317,10 @@ pub use recovered_worker_v2_admission::{
     RecoveredWorkerV2SynchronousHsaScalarGemmV1PrepareResultV1,
     RecoveredWorkerV2SynchronousHsaScalarGemmV1PreparedInvocationV1,
     RecoveredWorkerV2SynchronousHsaUnloadError,
+};
+pub use recovered_worker_v3_admission::{
+    RecoveredWorkerV3AdmissionErrorV1, RecoveredWorkerV3PinnedDescriptorV1,
+    admit_recovered_worker_v3_descriptor_v1,
 };
 pub use row_softmax_protected_admission::{
     ProtectedRowSoftmaxV1HostAdmissionErrorV1, ProtectedRowSoftmaxV1HostTokenIdentityV1,

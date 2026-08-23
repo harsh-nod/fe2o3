@@ -941,6 +941,7 @@ dependencies = [
  "fe2o3-amd-target",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
+ "fe2o3-compiler-ffi",
  "fe2o3-core",
  "fe2o3-device",
  "fe2o3-hsaco",

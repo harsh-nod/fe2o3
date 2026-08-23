@@ -15,6 +15,7 @@ fe2o3-amd-target.workspace = true
 fe2o3-artifact-transaction.workspace = true
 fe2o3-artifacts.workspace = true
 fe2o3-core.workspace = true
+fe2o3-compiler-ffi.workspace = true
 fe2o3-device.workspace = true
 fe2o3-hsaco.workspace = true
 fe2o3-hsaco-finalize.workspace = true
