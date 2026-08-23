@@ -859,6 +859,7 @@ impl DispatchGenerationOwnerV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ResolvedCodeIdentityV1 {
     authenticated: KernelIdentityInputsV1,
+    dispatch_abi_identity: [u8; 32],
     materialized_sha256: [u8; 32],
     mapping: MemoryMappingKeyV1,
     descriptor_address: ObservedGpuAddressV1,
@@ -1586,6 +1587,9 @@ pub(super) fn prepare_dispatch_resources<const N: usize>(
         ))?;
     let code_identity = ResolvedCodeIdentityV1 {
         authenticated: kernel.identity_inputs(),
+        dispatch_abi_identity: kernel
+            .dispatch_abi_identity()
+            .unwrap_or_else(|| kernel.identity_inputs().closure_sha256()),
         materialized_sha256,
         mapping: code.facts().mapping(),
         descriptor_address,
@@ -1938,6 +1942,9 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
             ))?;
         code_identity.push(ResolvedCodeIdentityV1 {
             authenticated: kernel.identity_inputs(),
+            dispatch_abi_identity: kernel
+                .dispatch_abi_identity()
+                .unwrap_or_else(|| kernel.identity_inputs().closure_sha256()),
             materialized_sha256,
             mapping: allocation.facts().mapping(),
             descriptor_address,
@@ -2001,9 +2008,7 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
             kernarg_address,
             kernarg_alignment: packet.kernarg_alignment as u64,
             kernarg_mapping: kernarg.facts().mapping(),
-            kernarg_layout_identity: code_identity[packet.input.program_index]
-                .authenticated
-                .closure_sha256(),
+            kernarg_layout_identity: code_identity[packet.input.program_index].dispatch_abi_identity,
             code_index: packet.input.program_index,
         });
     }
