@@ -6,10 +6,11 @@ use std::path::PathBuf;
 #[kernel]
 pub fn raw_gather(x: &[f32], mut out: DisjointSlice<f32>) {
     let idx = thread::index_1d();
+    let raw_idx = idx.get();
     let Some(value) = out.get_mut(idx) else {
         return;
     };
-    let source = idx.get() * 2 + 1;
+    let source = raw_idx * 2 + 1;
     if source >= x.len() {
         fe2o3_device::trap();
         return;
