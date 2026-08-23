@@ -205,6 +205,7 @@ pub(crate) enum BindingWrapperError {
     MissingManagedEnvironment(&'static str),
     InvalidBuildSession,
     InvalidManagedRustcArguments(&'static str),
+    InvalidCargoPrimaryPackage,
     PinnedExecutable(PinExecutableError),
     CapabilityBroker(String),
     ChildCapability(String),
@@ -261,6 +262,11 @@ impl fmt::Display for BindingWrapperError {
             Self::InvalidManagedRustcArguments(reason) => {
                 write!(formatter, "invalid {MANAGED_RUSTC_ARGS_ENV}: {reason}")
             }
+            Self::InvalidCargoPrimaryPackage => write!(
+                formatter,
+                "Cargo rustc unit has a noncanonical {} marker",
+                crate::CARGO_PRIMARY_PACKAGE_ENV,
+            ),
             Self::PinnedExecutable(error) => {
                 write!(formatter, "failed to pin rustc executable: {error}")
             }
@@ -350,6 +356,7 @@ impl Error for BindingWrapperError {
             | Self::MissingManagedEnvironment(_)
             | Self::InvalidBuildSession
             | Self::InvalidManagedRustcArguments(_)
+            | Self::InvalidCargoPrimaryPackage
             | Self::CapabilityBroker(_)
             | Self::ChildCapability(_)
             | Self::UninspectableRustcResponseFile { .. }
@@ -395,7 +402,6 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         Err(error) => return Err(error.into()),
     };
     let pinned_rustc = pin_parent_rustc_descriptor(invocation.executable(), expected_rustc_sha256)?;
-    let protected_invocation = selected_pipeline_requires_protected_invocation();
     let (
         build_observation,
         managed_attempt,
@@ -440,10 +446,15 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             let current_dir =
                 std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
             let provisioning_selected = row_softmax_provisioning_selected(&compile);
-            let managed = if (row_softmax_provisioning_requested() && !provisioning_selected)
-                || worker_v2.as_ref().is_some_and(|config| {
-                    !config.selects(compile.crate_name(), compile.source_path(), &current_dir)
-                }) {
+            let selected_kernel_root = selected_kernel_root(
+                worker_v2.as_ref().map(|config| {
+                    config.selects(compile.crate_name(), compile.source_path(), &current_dir)
+                }),
+                std::env::var_os(crate::CARGO_PRIMARY_PACKAGE_ENV).as_deref(),
+            )?;
+            let managed = if !selected_kernel_root
+                || (row_softmax_provisioning_requested() && !provisioning_selected)
+            {
                 None
             } else {
                 Some(prepare_managed_attempt(
@@ -468,6 +479,8 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         }
         _ => return Err(BindingWrapperError::UnsupportedInvocation),
     };
+    let protected_kernel_root =
+        managed_attempt.is_some() && selected_pipeline_requires_protected_invocation();
 
     if managed_attempt
         .as_ref()
@@ -502,15 +515,17 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         )?;
         pinned_execution_directory.configure_child_fchdir(command.as_command_mut());
         if let Some(capabilities) = &compiler_capabilities {
-            if managed_attempt.is_none()
-                && std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref()
-                    == Some(OsStr::new(PRODUCTION_V1_PIPELINE))
-            {
-                capabilities.prepare_unmanaged_production_command(command.as_command_mut())?;
-            } else if protected_invocation {
+            if managed_attempt.is_none() {
+                capabilities.prepare_unmanaged_dependency_command(command.as_command_mut())?;
+            } else if protected_kernel_root {
                 capabilities.prepare_protected_command(command.as_command_mut())?;
             } else {
-                capabilities.prepare_qualification_command(command.as_command_mut())?;
+                capabilities.prepare_qualification_command(
+                    command.as_command_mut(),
+                    qualification_requires_compiler_closure_observation(
+                        std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref(),
+                    ),
+                )?;
             }
         }
         configure_build_observation_environment(command.as_command_mut(), build_observation);
@@ -601,7 +616,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                         "cannot capture inert prepared rustc invocation: {error}"
                     ))
                 })?;
-                let protected_compiler_closure = if protected_invocation {
+                let protected_compiler_closure = if protected_kernel_root {
                     capabilities.protected_compiler_closure()?
                 } else {
                     None
@@ -798,6 +813,24 @@ fn pipeline_requires_protected_invocation(
     pipeline == Some(OsStr::new(PRODUCTION_V1_PIPELINE))
         || (pipeline == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
             && !explicit_unprotected_qualification)
+}
+
+fn qualification_requires_compiler_closure_observation(pipeline: Option<&OsStr>) -> bool {
+    pipeline == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
+}
+
+fn selected_kernel_root(
+    worker_v2_selection: Option<bool>,
+    cargo_primary_package: Option<&OsStr>,
+) -> Result<bool, BindingWrapperError> {
+    if let Some(selected) = worker_v2_selection {
+        return Ok(selected);
+    }
+    match cargo_primary_package {
+        None => Ok(false),
+        Some(value) if value == OsStr::new("1") => Ok(true),
+        Some(_) => Err(BindingWrapperError::InvalidCargoPrimaryPackage),
+    }
 }
 
 fn configure_build_observation_environment(
@@ -2559,28 +2592,33 @@ impl CompilerCapabilities {
     fn prepare_qualification_command(
         &self,
         command: &mut Command,
+        compiler_closure_observation: bool,
     ) -> Result<(), BindingWrapperError> {
         self.prepare_artifact_command(command)?;
         command
             .env_remove(CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2)
             .env(
-                crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV,
-                hex(&self.compiler_closure_sha256()),
-            )
-            .env(
                 QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1,
                 hex(&self.backend.sha256()[..]),
             );
+        if compiler_closure_observation {
+            command.env(
+                crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV,
+                hex(&self.compiler_closure_sha256()),
+            );
+        } else {
+            command.env_remove(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV);
+        }
         self.inherit_invocation_authority(command)?;
         Ok(())
     }
 
-    fn prepare_unmanaged_production_command(
+    fn prepare_unmanaged_dependency_command(
         &self,
         command: &mut Command,
     ) -> Result<(), BindingWrapperError> {
         self.prepare_backend_command(command)?;
-        scope_unmanaged_production_environment(command);
+        scope_unmanaged_dependency_environment(command);
         Ok(())
     }
 
@@ -2648,7 +2686,7 @@ impl CompilerCapabilities {
     }
 }
 
-fn scope_unmanaged_production_environment(command: &mut Command) {
+fn scope_unmanaged_dependency_environment(command: &mut Command) {
     for name in [
         "FE2O3_CODEGEN_PIPELINE",
         HSACO_DIR_ENV,
@@ -2658,6 +2696,7 @@ fn scope_unmanaged_production_environment(command: &mut Command) {
         crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV,
         WORKER_V2_CONFIG_ENV,
         WORKER_V2_EXPECTED_ID_ENV,
+        crate::PROTECTED_RELEASE_ACTION_ENV,
     ] {
         command.env_remove(name);
     }
@@ -5054,10 +5093,11 @@ mod tests {
         pipeline_requires_protected_invocation, pre_spawn_failure, prepare_managed_attempt,
         prepared_rustc_command_sha256, process_start_time_ticks,
         protected_worker_v2_transition_blocker, publish_finish_and_clear,
-        publish_finish_and_clear_protected, reject_authority_linker_arguments,
-        reject_uninspectable_rustc_args, resolve_command_executable_with_path,
-        row_softmax_effective_rustc_argv_identity, row_softmax_provider_observation_json,
-        scope_unmanaged_production_environment, worker_v3_readiness_is_absent,
+        publish_finish_and_clear_protected, qualification_requires_compiler_closure_observation,
+        reject_authority_linker_arguments, reject_uninspectable_rustc_args,
+        resolve_command_executable_with_path, row_softmax_effective_rustc_argv_identity,
+        row_softmax_provider_observation_json, scope_unmanaged_dependency_environment,
+        selected_kernel_root, worker_v3_readiness_is_absent,
     };
     use crate::inert_rustc_invocation_capture::InertRustcInvocationCaptureV2;
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
@@ -6035,16 +6075,35 @@ mod tests {
             Some(OsStr::new("collected-general-gemm-v1")),
         ] {
             assert!(!pipeline_requires_protected_invocation(pipeline, false));
+            assert!(!qualification_requires_compiler_closure_observation(
+                pipeline
+            ));
         }
+        assert!(qualification_requires_compiler_closure_observation(Some(
+            OsStr::new(ROW_SOFTMAX_V1_PIPELINE)
+        )));
     }
 
     #[test]
-    fn unmanaged_dependencies_do_not_inherit_production_authority_signals() {
+    fn kernel_root_routing_prefers_exact_worker_selection_and_validates_cargo_fallback() {
+        assert!(selected_kernel_root(Some(true), None).unwrap());
+        assert!(!selected_kernel_root(Some(false), Some(OsStr::new("1"))).unwrap());
+        assert!(selected_kernel_root(None, Some(OsStr::new("1"))).unwrap());
+        assert!(!selected_kernel_root(None, None).unwrap());
+        assert!(matches!(
+            selected_kernel_root(None, Some(OsStr::new("true"))),
+            Err(BindingWrapperError::InvalidCargoPrimaryPackage)
+        ));
+    }
+
+    #[test]
+    fn unmanaged_dependencies_do_not_inherit_compiler_authority_signals() {
         let mut command = Command::new("/proc/self/fd/194");
         for (name, value) in [
             ("FE2O3_CODEGEN_PIPELINE", "production-v1"),
             ("FE2O3_HSACO_DIR", "/proc/self/fd/197"),
             ("FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2", "44"),
+            ("FE2O3_QUALIFICATION_CODEGEN_BACKEND_SHA256_V1", "45"),
             ("FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1", "55"),
             (
                 "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
@@ -6052,6 +6111,7 @@ mod tests {
             ),
             ("FE2O3_WORKER_V2_CONFIG_V2", "/workspace/worker.json"),
             ("FE2O3_WORKER_V2_EXPECTED_ID_V1", "66"),
+            ("FE2O3_PROTECTED_RELEASE_ACTION_V1", "row-softmax-v1-run"),
         ] {
             command.env(name, value);
         }
@@ -6059,7 +6119,7 @@ mod tests {
             .env("FE2O3_TARGET", "gfx942")
             .env("FE2O3_CRATE_BINDING_ID_V1", "77");
 
-        scope_unmanaged_production_environment(&mut command);
+        scope_unmanaged_dependency_environment(&mut command);
         let overrides = command
             .get_envs()
             .collect::<std::collections::BTreeMap<_, _>>();
@@ -6067,10 +6127,12 @@ mod tests {
             "FE2O3_CODEGEN_PIPELINE",
             "FE2O3_HSACO_DIR",
             "FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2",
+            "FE2O3_QUALIFICATION_CODEGEN_BACKEND_SHA256_V1",
             "FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1",
             "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
             "FE2O3_WORKER_V2_CONFIG_V2",
             "FE2O3_WORKER_V2_EXPECTED_ID_V1",
+            "FE2O3_PROTECTED_RELEASE_ACTION_V1",
         ] {
             assert_eq!(overrides.get(OsStr::new(name)), Some(&None));
         }

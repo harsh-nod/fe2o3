@@ -60,6 +60,7 @@ const MANAGED_RUSTC_ARGS_ENV: &str = "FE2O3_MANAGED_RUSTC_ARGS_V1";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
 const EXPECTED_RUSTC_SHA256_ENV: &str = "FE2O3_EXPECTED_RUSTC_SHA256_V1";
 const EXPECTED_COMPILER_CLOSURE_SHA256_ENV: &str = "FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1";
+const CARGO_PRIMARY_PACKAGE_ENV: &str = "CARGO_PRIMARY_PACKAGE";
 const AUTHORITY_CARGO_SHA256_ENV: &str = "FE2O3_AUTHORITY_CARGO_SHA256_V1";
 const AUTHORITY_RUSTC_SHA256_ENV: &str = "FE2O3_AUTHORITY_RUSTC_SHA256_V1";
 const AUTHORITY_RUSTC_PATH_ENV: &str = "FE2O3_AUTHORITY_RUSTC_PATH_V1";
@@ -912,6 +913,9 @@ fn run_cargo_with_backend(
         .env("RUSTC_WRAPPER", "")
         .env("CARGO_BUILD_RUSTC_WRAPPER", "")
         .env("RUSTC_WORKSPACE_WRAPPER", workspace_wrapper)
+        // Cargo owns this per-unit marker. Do not let the caller preselect
+        // dependency units before Cargo computes its unit graph.
+        .env_remove(CARGO_PRIMARY_PACKAGE_ENV)
         .env(BINDING_WRAPPER_MODE_ENV, "1")
         .env(MANAGED_RUSTC_ARGS_ENV, &context.managed_rustc_args)
         .env(
