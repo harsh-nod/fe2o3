@@ -26,6 +26,7 @@ impl WaveWidth for Wave32 {
 
 /// Type-level identity for a 64-lane wave.
 #[derive(Debug)]
+#[rustc_diagnostic_item = "fe2o3_device_wave64_width_v1"]
 pub enum Wave64 {}
 
 impl sealed::Sealed for Wave64 {}

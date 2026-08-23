@@ -3359,52 +3359,30 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 self.require_call_argument_count(block, call, 0)?;
                 SemanticValueBindingV1::MatrixContext
             }
-            SemanticCompilerIntrinsicOperationV1::Bf16MatrixFragmentFromBits {
-                fragment, ..
-            } => {
+            SemanticCompilerIntrinsicOperationV1::WaveLaneCurrent { .. }
+            | SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor { .. }
+            | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { .. } => {
+                return Err(unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "typed MFMA lane/view/load requires the V7 guarded-memory lowering",
+                ));
+            }
+            SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero { fragment, .. } => {
                 self.require_call_argument_count(block, call, 1)?;
-                let bits = self.lower_operand(block, None, &call.arguments()[0], operations)?;
-                let bits = require_binding_components(
-                    block,
-                    bits,
-                    Type::Scalar(ScalarType::U16),
-                    4,
-                    "BF16 matrix fragment bits",
-                )?;
                 let mut values = Vec::with_capacity(4);
-                for (value, _) in bits {
+                for _ in 0..4 {
                     let (id, ty) = self
                         .emit(
                             operations,
-                            Type::Scalar(ScalarType::Bf16),
-                            OperationKind::Cast {
-                                kind: CastKind::Bitcast,
-                                value,
-                                to: Type::Scalar(ScalarType::Bf16),
-                            },
+                            Type::Scalar(ScalarType::F32),
+                            OperationKind::Constant(Constant::F32Bits(0.0_f32.to_bits())),
                         )?
                         .value()
-                        .expect("emitted BF16 bitcast");
+                        .expect("emitted zero accumulator component");
                     values.push(ValueDef::new(id, ty));
                 }
-                binding_from_matrix_value_defs(self.types, *fragment, &values)?
-            }
-            SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorFromValues {
-                fragment,
-                ..
-            } => {
-                self.require_call_argument_count(block, call, 1)?;
-                let values = self.lower_operand(block, None, &call.arguments()[0], operations)?;
-                let values = require_binding_components(
-                    block,
-                    values,
-                    Type::Scalar(ScalarType::F32),
-                    4,
-                    "FP32 matrix accumulator values",
-                )?
-                .into_iter()
-                .map(|(id, ty)| ValueDef::new(id, ty))
-                .collect::<Vec<_>>();
                 binding_from_value_defs(self.types, *fragment, &values)?
             }
             SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues {

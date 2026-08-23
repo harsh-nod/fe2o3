@@ -1810,9 +1810,19 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | TrustedDeviceItem::GridLeader
                     | TrustedDeviceItem::Gfx942CollectivesContext
                     | TrustedDeviceItem::Gfx942StaticLdsU32x256Type
+                    | TrustedDeviceItem::WaveLane
+                    | TrustedDeviceItem::Wave64
                     | TrustedDeviceItem::DeviceMatrix
+                    | TrustedDeviceItem::Bf16MfmaProfile
+                    | TrustedDeviceItem::MfmaOperandA
+                    | TrustedDeviceItem::MfmaOperandB
+                    | TrustedDeviceItem::MfmaRegisterTile16x16
+                    | TrustedDeviceItem::MfmaLdsXor4Storage
+                    | TrustedDeviceItem::MfmaAccumulatorRowMajor
                     | TrustedDeviceItem::Bf16MfmaFragment
-                    | TrustedDeviceItem::F32AccumulatorFragment,
+                    | TrustedDeviceItem::F32AccumulatorFragment
+                    | TrustedDeviceItem::Bf16MfmaMatrixView
+                    | TrustedDeviceItem::Bf16MfmaMatrixViewError,
                 ) => {
                     return Err(diagnostic(
                         TranslationDiagnosticCode::UnsupportedCall,
@@ -1824,8 +1834,11 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     ));
                 }
                 Some(
-                    TrustedDeviceItem::Bf16MfmaFragmentFromBits
-                    | TrustedDeviceItem::F32AccumulatorFragmentFromValues
+                    TrustedDeviceItem::Bf16MfmaMatrixARowMajor
+                    | TrustedDeviceItem::Bf16MfmaMatrixBRowMajor
+                    | TrustedDeviceItem::Bf16MfmaMatrixALoad
+                    | TrustedDeviceItem::Bf16MfmaMatrixBLoad
+                    | TrustedDeviceItem::F32AccumulatorFragmentZero
                     | TrustedDeviceItem::F32AccumulatorFragmentIntoValues
                     | TrustedDeviceItem::WaveLaneCurrent
                     | TrustedDeviceItem::Gfx942LdsBf16TilePairM16x16

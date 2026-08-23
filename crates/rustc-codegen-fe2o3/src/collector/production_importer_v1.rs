@@ -10,11 +10,14 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticDisjointIndexSpaceV1, SemanticF32MathFunctionV1, SemanticFunctionAbiV1,
     SemanticFunctionIdV1, SemanticFunctionIdentityV1, SemanticFunctionRoleV1,
     SemanticKernelBindingIdentityV1, SemanticKernelEntryV1, SemanticKernelLaunchBoundsV1,
-    SemanticKernelSourceContractV1, SemanticLinkSymbolV1, SemanticMirErrorV1, SemanticMirLimitsV1,
-    SemanticMirResourceV1, SemanticNonBodyCallableBindingV1, SemanticReachableAssemblyV1,
-    SemanticSubgroupReductionKindV1, SemanticTargetDataLayoutV1, SemanticTypeDeclV1,
-    SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnsafeAssemblyDeclarationV1,
-    SemanticUnsafeAssemblyTargetV1, SemanticWorkgroupDimensionsV1,
+    SemanticKernelSourceContractV1, SemanticLinkSymbolV1, SemanticMfmaAccumulatorContractV1,
+    SemanticMfmaAccumulatorDistributionV1, SemanticMfmaOperandContractV1,
+    SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1,
+    SemanticMfmaStorageLayoutV1, SemanticMirErrorV1, SemanticMirLimitsV1, SemanticMirResourceV1,
+    SemanticNonBodyCallableBindingV1, SemanticReachableAssemblyV1, SemanticSubgroupReductionKindV1,
+    SemanticTargetDataLayoutV1, SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1,
+    SemanticUnsafeAssemblyDeclarationV1, SemanticUnsafeAssemblyTargetV1,
+    SemanticWorkgroupDimensionsV1,
 };
 use rustc_middle::ty::{FloatTy, Instance, Ty, TyCtxt, TyKind, UintTy};
 use rustc_span::sym;
@@ -904,48 +907,113 @@ fn terminal_operation_v1<'tcx>(
         {
             Ok(SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { context: output })
         }
-        ProductionTerminalExpansionV1::Bf16MatrixFragmentFromBits
-            if inputs.len() == 1
-                && rust_inputs.len() == 1
-                && rust_fixed_array_v1(tcx, rust_inputs[0], RustScalarV1::U16, 4)
-                && rust_is_trusted_adt_v1(
-                    tcx,
-                    rust_output,
-                    TrustedDeviceItem::Bf16MfmaFragment,
-                ) =>
+        ProductionTerminalExpansionV1::WaveLaneCurrent
+            if inputs.is_empty()
+                && rust_inputs.is_empty()
+                && rust_wave_lane64_v1(tcx, rust_output) =>
         {
+            Ok(SemanticCompilerIntrinsicOperationV1::WaveLaneCurrent {
+                lane: output,
+                wave_width: 64,
+            })
+        }
+        expansion @ (ProductionTerminalExpansionV1::Bf16MatrixARowMajor
+        | ProductionTerminalExpansionV1::Bf16MatrixBRowMajor)
+            if inputs.len() == 5
+                && rust_inputs.len() == 5
+                && rust_shared_u16_slice_v1(rust_inputs[0])
+                && rust_inputs[1..]
+                    .iter()
+                    .all(|ty| matches!(ty.kind(), TyKind::Uint(UintTy::Usize))) =>
+        {
+            let (rust_view, rust_error) = rust_result_payloads_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed MFMA row-major result"))?;
+            let role = rust_mfma_matrix_role_v1(tcx, rust_view)
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed MFMA row-major view"))?;
+            let expected_role = match expansion {
+                ProductionTerminalExpansionV1::Bf16MatrixARowMajor => SemanticMfmaOperandRoleV1::A,
+                ProductionTerminalExpansionV1::Bf16MatrixBRowMajor => SemanticMfmaOperandRoleV1::B,
+                _ => unreachable!("matched row-major expansion"),
+            };
+            if role != expected_role
+                || !rust_is_trusted_adt_v1(
+                    tcx,
+                    rust_error,
+                    TrustedDeviceItem::Bf16MfmaMatrixViewError,
+                )
+            {
+                return Err(body_owner_table_mismatch_v1(
+                    "typed MFMA row-major role or error",
+                ));
+            }
+            let (view, error) = semantic_result_payloads_v1(types, output)?;
             Ok(
-                SemanticCompilerIntrinsicOperationV1::Bf16MatrixFragmentFromBits {
-                    fragment: output,
-                    bits: inputs[0],
+                SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor {
+                    result: output,
+                    view,
+                    error,
+                    role,
+                    storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
                 },
             )
         }
-        ProductionTerminalExpansionV1::F32MatrixAccumulatorFromValues
+        expansion @ (ProductionTerminalExpansionV1::Bf16MatrixALoad
+        | ProductionTerminalExpansionV1::Bf16MatrixBLoad)
+            if inputs.len() == 4
+                && rust_inputs.len() == 4
+                && matches!(rust_inputs[2].kind(), TyKind::Uint(UintTy::Usize))
+                && matches!(rust_inputs[3].kind(), TyKind::Uint(UintTy::Usize)) =>
+        {
+            let rust_view = rust_reference_pointee_v1(rust_inputs[0])
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed MFMA load view borrow"))?;
+            let role = rust_mfma_matrix_role_v1(tcx, rust_view)
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed MFMA load view"))?;
+            let rust_lane = rust_reference_pointee_v1(rust_inputs[1])
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed MFMA load lane borrow"))?;
+            let rust_fragment = rust_option_payload_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed MFMA load option"))?;
+            let contract = rust_mfma_fragment_contract_v1(tcx, rust_fragment)
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed MFMA load fragment"))?;
+            let expected_role = match expansion {
+                ProductionTerminalExpansionV1::Bf16MatrixALoad => SemanticMfmaOperandRoleV1::A,
+                ProductionTerminalExpansionV1::Bf16MatrixBLoad => SemanticMfmaOperandRoleV1::B,
+                _ => unreachable!("matched MFMA load expansion"),
+            };
+            if role != expected_role
+                || contract.role != expected_role
+                || !rust_wave_lane64_v1(tcx, rust_lane)
+            {
+                return Err(body_owner_table_mismatch_v1("typed MFMA load contract"));
+            }
+            Ok(SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad {
+                option_fragment: output,
+                view: pointer_pointee_v1(types, inputs[0])?,
+                lane: pointer_pointee_v1(types, inputs[1])?,
+                fragment: semantic_option_payload_v1(types, output)?,
+                contract,
+                storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+            })
+        }
+        ProductionTerminalExpansionV1::F32MatrixAccumulatorZero
             if inputs.len() == 1
                 && rust_inputs.len() == 1
-                && rust_fixed_array_v1(tcx, rust_inputs[0], RustScalarV1::F32, 4)
-                && rust_is_trusted_adt_v1(
-                    tcx,
-                    rust_output,
-                    TrustedDeviceItem::F32AccumulatorFragment,
-                ) =>
+                && rust_reference_pointee_v1(rust_inputs[0])
+                    .is_some_and(|ty| rust_wave_lane64_v1(tcx, ty)) =>
         {
+            let contract = rust_mfma_accumulator_contract_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed MFMA zero accumulator"))?;
             Ok(
-                SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorFromValues {
+                SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
+                    lane: pointer_pointee_v1(types, inputs[0])?,
                     fragment: output,
-                    values: inputs[0],
+                    contract,
                 },
             )
         }
         ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues
             if inputs.len() == 1
                 && rust_inputs.len() == 1
-                && rust_is_trusted_adt_v1(
-                    tcx,
-                    rust_inputs[0],
-                    TrustedDeviceItem::F32AccumulatorFragment,
-                )
+                && rust_mfma_accumulator_contract_v1(tcx, rust_inputs[0]).is_some()
                 && rust_fixed_array_v1(tcx, rust_output, RustScalarV1::F32, 4) =>
         {
             Ok(
@@ -961,32 +1029,29 @@ fn terminal_operation_v1<'tcx>(
                 && rust_reference_pointee_v1(rust_inputs[0]).is_some_and(|ty| {
                     rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::DeviceMatrix)
                 })
-                && rust_is_trusted_adt_v1(
-                    tcx,
-                    rust_inputs[1],
-                    TrustedDeviceItem::Bf16MfmaFragment,
-                )
-                && rust_is_trusted_adt_v1(
-                    tcx,
-                    rust_inputs[2],
-                    TrustedDeviceItem::Bf16MfmaFragment,
-                )
-                && rust_is_trusted_adt_v1(
-                    tcx,
-                    rust_inputs[3],
-                    TrustedDeviceItem::F32AccumulatorFragment,
-                )
-                && rust_is_trusted_adt_v1(
-                    tcx,
-                    rust_output,
-                    TrustedDeviceItem::F32AccumulatorFragment,
-                ) =>
+                && rust_mfma_fragment_contract_v1(tcx, rust_inputs[1]).is_some()
+                && rust_mfma_fragment_contract_v1(tcx, rust_inputs[2]).is_some()
+                && rust_mfma_accumulator_contract_v1(tcx, rust_inputs[3]).is_some()
+                && rust_mfma_accumulator_contract_v1(tcx, rust_output).is_some() =>
         {
+            let lhs = rust_mfma_fragment_contract_v1(tcx, rust_inputs[1]).unwrap();
+            let rhs = rust_mfma_fragment_contract_v1(tcx, rust_inputs[2]).unwrap();
+            let accumulator = rust_mfma_accumulator_contract_v1(tcx, rust_inputs[3]).unwrap();
+            if lhs.role != SemanticMfmaOperandRoleV1::A
+                || rhs.role != SemanticMfmaOperandRoleV1::B
+                || Some(accumulator) != rust_mfma_accumulator_contract_v1(tcx, rust_output)
+            {
+                return Err(body_owner_table_mismatch_v1("typed MFMA argument contract"));
+            }
             Ok(
                 SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
                     context: pointer_pointee_v1(types, inputs[0])?,
-                    input_fragment: inputs[1],
+                    lhs_fragment: inputs[1],
+                    rhs_fragment: inputs[2],
                     accumulator_fragment: inputs[3],
+                    lhs,
+                    rhs,
+                    accumulator,
                 },
             )
         }
@@ -1356,9 +1421,13 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::CollectiveContextCurrent
         | ProductionTerminalExpansionV1::SubgroupReduceSumF32
         | ProductionTerminalExpansionV1::SubgroupReduceMaxF32
+        | ProductionTerminalExpansionV1::WaveLaneCurrent
         | ProductionTerminalExpansionV1::MatrixContextCurrent
-        | ProductionTerminalExpansionV1::Bf16MatrixFragmentFromBits
-        | ProductionTerminalExpansionV1::F32MatrixAccumulatorFromValues
+        | ProductionTerminalExpansionV1::Bf16MatrixARowMajor
+        | ProductionTerminalExpansionV1::Bf16MatrixBRowMajor
+        | ProductionTerminalExpansionV1::Bf16MatrixALoad
+        | ProductionTerminalExpansionV1::Bf16MatrixBLoad
+        | ProductionTerminalExpansionV1::F32MatrixAccumulatorZero
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues
         | ProductionTerminalExpansionV1::MatrixMultiplyAccumulate
         | ProductionTerminalExpansionV1::ColdPath
@@ -1459,6 +1528,14 @@ fn rust_reference_pointee_v1(ty: Ty<'_>) -> Option<Ty<'_>> {
     }
 }
 
+fn rust_shared_u16_slice_v1(ty: Ty<'_>) -> bool {
+    let Some(pointee) = rust_reference_pointee_v1(ty) else {
+        return false;
+    };
+    matches!(*pointee.kind(), TyKind::Slice(element)
+        if matches!(element.kind(), TyKind::Uint(UintTy::U16)))
+}
+
 fn rust_option_payload_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
     let TyKind::Adt(definition, arguments) = *ty.kind() else {
         return None;
@@ -1468,9 +1545,119 @@ fn rust_option_payload_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'t
         .flatten()
 }
 
+fn rust_result_payloads_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<(Ty<'tcx>, Ty<'tcx>)> {
+    let TyKind::Adt(definition, arguments) = *ty.kind() else {
+        return None;
+    };
+    (tcx.is_diagnostic_item(sym::Result, definition.did()) && arguments.len() == 2)
+        .then(|| Some((arguments[0].as_type()?, arguments[1].as_type()?)))
+        .flatten()
+}
+
 fn rust_is_trusted_adt_v1(tcx: TyCtxt<'_>, ty: Ty<'_>, item: TrustedDeviceItem) -> bool {
     matches!(*ty.kind(), TyKind::Adt(definition, arguments)
         if arguments.is_empty() && trusted_device_items::classify(tcx, definition.did()) == Some(item))
+}
+
+fn rust_trusted_adt_type_arguments_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+    item: TrustedDeviceItem,
+) -> Option<Vec<Ty<'tcx>>> {
+    let TyKind::Adt(definition, arguments) = *ty.kind() else {
+        return None;
+    };
+    (trusted_device_items::classify(tcx, definition.did()) == Some(item))
+        .then(|| arguments.types().collect())
+}
+
+fn rust_is_exact_trusted_marker_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+    item: TrustedDeviceItem,
+) -> bool {
+    rust_trusted_adt_type_arguments_v1(tcx, ty, item).is_some_and(|arguments| arguments.is_empty())
+}
+
+fn rust_wave_lane64_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    rust_trusted_adt_type_arguments_v1(tcx, ty, TrustedDeviceItem::WaveLane).is_some_and(
+        |arguments| {
+            matches!(arguments.as_slice(), [width]
+                if rust_is_exact_trusted_marker_v1(tcx, *width, TrustedDeviceItem::Wave64))
+        },
+    )
+}
+
+fn rust_mfma_fragment_contract_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<SemanticMfmaOperandContractV1> {
+    let arguments =
+        rust_trusted_adt_type_arguments_v1(tcx, ty, TrustedDeviceItem::Bf16MfmaFragment)?;
+    let [role, profile, distribution, width] = arguments.as_slice() else {
+        return None;
+    };
+    let role = if rust_is_exact_trusted_marker_v1(tcx, *role, TrustedDeviceItem::MfmaOperandA) {
+        SemanticMfmaOperandRoleV1::A
+    } else if rust_is_exact_trusted_marker_v1(tcx, *role, TrustedDeviceItem::MfmaOperandB) {
+        SemanticMfmaOperandRoleV1::B
+    } else {
+        return None;
+    };
+    rust_is_exact_trusted_marker_v1(tcx, *profile, TrustedDeviceItem::Bf16MfmaProfile)
+        .then_some(())?;
+    rust_is_exact_trusted_marker_v1(tcx, *distribution, TrustedDeviceItem::MfmaRegisterTile16x16)
+        .then_some(())?;
+    rust_is_exact_trusted_marker_v1(tcx, *width, TrustedDeviceItem::Wave64).then_some(())?;
+    Some(SemanticMfmaOperandContractV1 {
+        role,
+        profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
+        register_distribution: SemanticMfmaRegisterDistributionV1::Tile16x16,
+        wave_width: 64,
+    })
+}
+
+fn rust_mfma_accumulator_contract_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<SemanticMfmaAccumulatorContractV1> {
+    let arguments =
+        rust_trusted_adt_type_arguments_v1(tcx, ty, TrustedDeviceItem::F32AccumulatorFragment)?;
+    let [profile, distribution, width] = arguments.as_slice() else {
+        return None;
+    };
+    rust_is_exact_trusted_marker_v1(tcx, *profile, TrustedDeviceItem::Bf16MfmaProfile)
+        .then_some(())?;
+    rust_is_exact_trusted_marker_v1(
+        tcx,
+        *distribution,
+        TrustedDeviceItem::MfmaAccumulatorRowMajor,
+    )
+    .then_some(())?;
+    rust_is_exact_trusted_marker_v1(tcx, *width, TrustedDeviceItem::Wave64).then_some(())?;
+    Some(SemanticMfmaAccumulatorContractV1 {
+        profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
+        distribution: SemanticMfmaAccumulatorDistributionV1::RowMajor,
+        wave_width: 64,
+    })
+}
+
+fn rust_mfma_matrix_role_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<SemanticMfmaOperandRoleV1> {
+    let arguments =
+        rust_trusted_adt_type_arguments_v1(tcx, ty, TrustedDeviceItem::Bf16MfmaMatrixView)?;
+    let [role] = arguments.as_slice() else {
+        return None;
+    };
+    if rust_is_exact_trusted_marker_v1(tcx, *role, TrustedDeviceItem::MfmaOperandA) {
+        Some(SemanticMfmaOperandRoleV1::A)
+    } else if rust_is_exact_trusted_marker_v1(tcx, *role, TrustedDeviceItem::MfmaOperandB) {
+        Some(SemanticMfmaOperandRoleV1::B)
+    } else {
+        None
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1726,6 +1913,51 @@ fn aggregate_field_v1(
         .ok_or_else(|| body_owner_table_mismatch_v1("terminal aggregate field"))
 }
 
+fn semantic_option_payload_v1(
+    types: &[SemanticTypeDeclV1],
+    option: SemanticTypeIdV1,
+) -> Result<SemanticTypeIdV1, ProductionSemanticImportErrorV1> {
+    let Some(declaration) = types.get(option.index() as usize) else {
+        return Err(body_owner_table_mismatch_v1("semantic Option shape"));
+    };
+    let SemanticTypeShapeV1::Enum { variants, .. } = declaration.shape() else {
+        return Err(body_owner_table_mismatch_v1("semantic Option shape"));
+    };
+    if variants.len() != 2
+        || variants[0].discriminant() != 0
+        || !variants[0].fields().fields().is_empty()
+        || variants[1].discriminant() != 1
+        || variants[1].fields().fields().len() != 1
+    {
+        return Err(body_owner_table_mismatch_v1("semantic Option variants"));
+    }
+    Ok(variants[1].fields().fields()[0])
+}
+
+fn semantic_result_payloads_v1(
+    types: &[SemanticTypeDeclV1],
+    result: SemanticTypeIdV1,
+) -> Result<(SemanticTypeIdV1, SemanticTypeIdV1), ProductionSemanticImportErrorV1> {
+    let Some(declaration) = types.get(result.index() as usize) else {
+        return Err(body_owner_table_mismatch_v1("semantic Result shape"));
+    };
+    let SemanticTypeShapeV1::Enum { variants, .. } = declaration.shape() else {
+        return Err(body_owner_table_mismatch_v1("semantic Result shape"));
+    };
+    if variants.len() != 2
+        || variants[0].discriminant() != 0
+        || variants[0].fields().fields().len() != 1
+        || variants[1].discriminant() != 1
+        || variants[1].fields().fields().len() != 1
+    {
+        return Err(body_owner_table_mismatch_v1("semantic Result variants"));
+    }
+    Ok((
+        variants[0].fields().fields()[0],
+        variants[1].fields().fields()[0],
+    ))
+}
+
 fn pointer_pointee_v1(
     types: &[SemanticTypeDeclV1],
     pointer: SemanticTypeIdV1,
@@ -1795,8 +2027,6 @@ const fn terminal_operation_tag_v1(
         ProductionTerminalExpansionV1::DisjointSliceGetBlockMut => 11,
         ProductionTerminalExpansionV1::WorkgroupBarrier => 12,
         ProductionTerminalExpansionV1::MatrixContextCurrent => 26,
-        ProductionTerminalExpansionV1::Bf16MatrixFragmentFromBits => 27,
-        ProductionTerminalExpansionV1::F32MatrixAccumulatorFromValues => 28,
         ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues => 29,
         ProductionTerminalExpansionV1::MatrixMultiplyAccumulate => 30,
         ProductionTerminalExpansionV1::ThreadIndexCheckedTiled2d => 31,
@@ -1807,6 +2037,12 @@ const fn terminal_operation_tag_v1(
         ProductionTerminalExpansionV1::MathContextCurrent => 36,
         ProductionTerminalExpansionV1::MathF32(function) => 37 + f32_math_tag_v1(function),
         ProductionTerminalExpansionV1::ColdPath => 50,
+        ProductionTerminalExpansionV1::WaveLaneCurrent => 51,
+        ProductionTerminalExpansionV1::Bf16MatrixARowMajor => 52,
+        ProductionTerminalExpansionV1::Bf16MatrixBRowMajor => 53,
+        ProductionTerminalExpansionV1::Bf16MatrixALoad => 54,
+        ProductionTerminalExpansionV1::Bf16MatrixBLoad => 55,
+        ProductionTerminalExpansionV1::F32MatrixAccumulatorZero => 56,
     }
 }
 

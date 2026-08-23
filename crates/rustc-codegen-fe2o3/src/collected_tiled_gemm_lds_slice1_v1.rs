@@ -72,10 +72,14 @@ const ARGUMENT_KINDS_V1: [GeneralTypedArgumentKindV3; 3] = [
     GeneralTypedArgumentKindV3::DisjointSlice(RustScalarElementTypeV1::F32),
 ];
 
-const REQUIRED_TRUSTED_ITEMS_V1: [TrustedDeviceItem; 13] = [
+const REQUIRED_TRUSTED_ITEMS_V1: [TrustedDeviceItem; 17] = [
     TrustedDeviceItem::ThreadIndex1d,
     TrustedDeviceItem::ThreadIndexGet,
-    TrustedDeviceItem::Bf16MfmaFragmentFromBits,
+    TrustedDeviceItem::Bf16MfmaMatrixARowMajor,
+    TrustedDeviceItem::Bf16MfmaMatrixBRowMajor,
+    TrustedDeviceItem::Bf16MfmaMatrixALoad,
+    TrustedDeviceItem::Bf16MfmaMatrixBLoad,
+    TrustedDeviceItem::F32AccumulatorFragmentZero,
     TrustedDeviceItem::WaveLaneCurrent,
     TrustedDeviceItem::Gfx942LdsBf16TilePairM16x16,
     TrustedDeviceItem::LdsTile16x16WriteMfmaBf16,

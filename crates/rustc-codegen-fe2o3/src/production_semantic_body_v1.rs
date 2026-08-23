@@ -1747,18 +1747,22 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::GridDimension(_)
         | ProductionTerminalExpansionV1::MathContextCurrent
         | ProductionTerminalExpansionV1::CollectiveContextCurrent
+        | ProductionTerminalExpansionV1::WaveLaneCurrent
         | ProductionTerminalExpansionV1::MatrixContextCurrent
         | ProductionTerminalExpansionV1::ThreadIndex1d
         | ProductionTerminalExpansionV1::ColdPath => Some(0),
         ProductionTerminalExpansionV1::ThreadIndexGet
-        | ProductionTerminalExpansionV1::Bf16MatrixFragmentFromBits
-        | ProductionTerminalExpansionV1::F32MatrixAccumulatorFromValues
+        | ProductionTerminalExpansionV1::F32MatrixAccumulatorZero
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues
         | ProductionTerminalExpansionV1::DisjointSliceLen => Some(1),
         ProductionTerminalExpansionV1::SubgroupReduceSumF32
         | ProductionTerminalExpansionV1::SubgroupReduceMaxF32 => Some(2),
         ProductionTerminalExpansionV1::MathF32(function) => Some(function.arity() + 1),
         ProductionTerminalExpansionV1::MatrixMultiplyAccumulate => Some(4),
+        ProductionTerminalExpansionV1::Bf16MatrixALoad
+        | ProductionTerminalExpansionV1::Bf16MatrixBLoad => Some(4),
+        ProductionTerminalExpansionV1::Bf16MatrixARowMajor
+        | ProductionTerminalExpansionV1::Bf16MatrixBRowMajor => Some(5),
         ProductionTerminalExpansionV1::DisjointSliceGetMut => Some(2),
         ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint
         | ProductionTerminalExpansionV1::ThreadIndexCheckedShift

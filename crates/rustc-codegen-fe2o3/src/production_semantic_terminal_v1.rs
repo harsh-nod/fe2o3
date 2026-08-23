@@ -37,9 +37,13 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     CollectiveContextCurrent,
     SubgroupReduceSumF32,
     SubgroupReduceMaxF32,
+    WaveLaneCurrent,
     MatrixContextCurrent,
-    Bf16MatrixFragmentFromBits,
-    F32MatrixAccumulatorFromValues,
+    Bf16MatrixARowMajor,
+    Bf16MatrixBRowMajor,
+    Bf16MatrixALoad,
+    Bf16MatrixBLoad,
+    F32MatrixAccumulatorZero,
     F32MatrixAccumulatorIntoValues,
     MatrixMultiplyAccumulate,
     /// Rust's effect-free hint that the current path is unlikely to execute.
@@ -154,14 +158,26 @@ impl ProductionSemanticTerminalRuleV1 {
             TrustedDeviceItem::Gfx942SubgroupReduceMaxF32 => {
                 Self::Expand(ProductionTerminalExpansionV1::SubgroupReduceMaxF32)
             }
+            TrustedDeviceItem::WaveLaneCurrent => {
+                Self::Expand(ProductionTerminalExpansionV1::WaveLaneCurrent)
+            }
             TrustedDeviceItem::DeviceMatrixCurrent => {
                 Self::Expand(ProductionTerminalExpansionV1::MatrixContextCurrent)
             }
-            TrustedDeviceItem::Bf16MfmaFragmentFromBits => {
-                Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixFragmentFromBits)
+            TrustedDeviceItem::Bf16MfmaMatrixARowMajor => {
+                Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixARowMajor)
             }
-            TrustedDeviceItem::F32AccumulatorFragmentFromValues => {
-                Self::Expand(ProductionTerminalExpansionV1::F32MatrixAccumulatorFromValues)
+            TrustedDeviceItem::Bf16MfmaMatrixBRowMajor => {
+                Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixBRowMajor)
+            }
+            TrustedDeviceItem::Bf16MfmaMatrixALoad => {
+                Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixALoad)
+            }
+            TrustedDeviceItem::Bf16MfmaMatrixBLoad => {
+                Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixBLoad)
+            }
+            TrustedDeviceItem::F32AccumulatorFragmentZero => {
+                Self::Expand(ProductionTerminalExpansionV1::F32MatrixAccumulatorZero)
             }
             TrustedDeviceItem::F32AccumulatorFragmentIntoValues => {
                 Self::Expand(ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues)
@@ -275,14 +291,26 @@ impl ProductionSemanticTerminalRuleV1 {
             Self::Expand(ProductionTerminalExpansionV1::SubgroupReduceMaxF32) => {
                 TrustedDeviceItem::Gfx942SubgroupReduceMaxF32
             }
+            Self::Expand(ProductionTerminalExpansionV1::WaveLaneCurrent) => {
+                TrustedDeviceItem::WaveLaneCurrent
+            }
             Self::Expand(ProductionTerminalExpansionV1::MatrixContextCurrent) => {
                 TrustedDeviceItem::DeviceMatrixCurrent
             }
-            Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixFragmentFromBits) => {
-                TrustedDeviceItem::Bf16MfmaFragmentFromBits
+            Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixARowMajor) => {
+                TrustedDeviceItem::Bf16MfmaMatrixARowMajor
             }
-            Self::Expand(ProductionTerminalExpansionV1::F32MatrixAccumulatorFromValues) => {
-                TrustedDeviceItem::F32AccumulatorFragmentFromValues
+            Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixBRowMajor) => {
+                TrustedDeviceItem::Bf16MfmaMatrixBRowMajor
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixALoad) => {
+                TrustedDeviceItem::Bf16MfmaMatrixALoad
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixBLoad) => {
+                TrustedDeviceItem::Bf16MfmaMatrixBLoad
+            }
+            Self::Expand(ProductionTerminalExpansionV1::F32MatrixAccumulatorZero) => {
+                TrustedDeviceItem::F32AccumulatorFragmentZero
             }
             Self::Expand(ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues) => {
                 TrustedDeviceItem::F32AccumulatorFragmentIntoValues
@@ -433,16 +461,32 @@ mod tests {
                 ProductionTerminalExpansionV1::SubgroupReduceMaxF32,
             ),
             (
+                TrustedDeviceItem::WaveLaneCurrent,
+                ProductionTerminalExpansionV1::WaveLaneCurrent,
+            ),
+            (
                 TrustedDeviceItem::DeviceMatrixCurrent,
                 ProductionTerminalExpansionV1::MatrixContextCurrent,
             ),
             (
-                TrustedDeviceItem::Bf16MfmaFragmentFromBits,
-                ProductionTerminalExpansionV1::Bf16MatrixFragmentFromBits,
+                TrustedDeviceItem::Bf16MfmaMatrixARowMajor,
+                ProductionTerminalExpansionV1::Bf16MatrixARowMajor,
             ),
             (
-                TrustedDeviceItem::F32AccumulatorFragmentFromValues,
-                ProductionTerminalExpansionV1::F32MatrixAccumulatorFromValues,
+                TrustedDeviceItem::Bf16MfmaMatrixBRowMajor,
+                ProductionTerminalExpansionV1::Bf16MatrixBRowMajor,
+            ),
+            (
+                TrustedDeviceItem::Bf16MfmaMatrixALoad,
+                ProductionTerminalExpansionV1::Bf16MatrixALoad,
+            ),
+            (
+                TrustedDeviceItem::Bf16MfmaMatrixBLoad,
+                ProductionTerminalExpansionV1::Bf16MatrixBLoad,
+            ),
+            (
+                TrustedDeviceItem::F32AccumulatorFragmentZero,
+                ProductionTerminalExpansionV1::F32MatrixAccumulatorZero,
             ),
             (
                 TrustedDeviceItem::F32AccumulatorFragmentIntoValues,

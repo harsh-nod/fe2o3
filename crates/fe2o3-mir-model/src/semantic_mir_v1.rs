@@ -4893,6 +4893,55 @@ pub enum SemanticSubgroupReductionKindV1 {
     Maximum,
 }
 
+/// Operand-side meaning retained by a typed MFMA fragment.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SemanticMfmaOperandRoleV1 {
+    A,
+    B,
+}
+
+/// Hardware-independent shape and scalar profile of a cooperative matrix operation.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SemanticMfmaProfileV1 {
+    Bf16F32M16N16K16,
+}
+
+/// Register lane/component mapping after a checked load has completed.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SemanticMfmaRegisterDistributionV1 {
+    Tile16x16,
+}
+
+/// Physical source layout from which an operand fragment was populated.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SemanticMfmaStorageLayoutV1 {
+    RowMajor,
+    LdsXor4,
+}
+
+/// Register lane/component mapping of the four accumulator values.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SemanticMfmaAccumulatorDistributionV1 {
+    RowMajor,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct SemanticMfmaOperandContractV1 {
+    pub role: SemanticMfmaOperandRoleV1,
+    pub profile: SemanticMfmaProfileV1,
+    pub register_distribution: SemanticMfmaRegisterDistributionV1,
+    /// Required wave width. This is a runtime/launch obligation, not proof of participation.
+    pub wave_width: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct SemanticMfmaAccumulatorContractV1 {
+    pub profile: SemanticMfmaProfileV1,
+    pub distribution: SemanticMfmaAccumulatorDistributionV1,
+    /// Required wave width. This is a runtime/launch obligation, not proof of participation.
+    pub wave_width: u32,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticCompilerIntrinsicOperationV1 {
     ThreadIndex(SemanticAxisV1),
@@ -4925,15 +4974,33 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
     MatrixContextCurrent {
         context: SemanticTypeIdV1,
     },
-    /// Reinterprets four scalar bit patterns as one distributed BF16 fragment.
-    Bf16MatrixFragmentFromBits {
-        fragment: SemanticTypeIdV1,
-        bits: SemanticTypeIdV1,
+    /// Creates the authenticated lane capability for a requested wave width.
+    WaveLaneCurrent {
+        lane: SemanticTypeIdV1,
+        wave_width: u32,
     },
-    /// Constructs one distributed FP32 accumulator fragment from four scalars.
-    F32MatrixAccumulatorFromValues {
+    /// Checks and creates one role-specific row-major BF16 matrix view.
+    Bf16MatrixViewRowMajor {
+        result: SemanticTypeIdV1,
+        view: SemanticTypeIdV1,
+        error: SemanticTypeIdV1,
+        role: SemanticMfmaOperandRoleV1,
+        storage_layout: SemanticMfmaStorageLayoutV1,
+    },
+    /// Loads one role-specific, zero-filled operand fragment from a checked view.
+    Bf16MatrixLoad {
+        option_fragment: SemanticTypeIdV1,
+        view: SemanticTypeIdV1,
+        lane: SemanticTypeIdV1,
         fragment: SemanticTypeIdV1,
-        values: SemanticTypeIdV1,
+        contract: SemanticMfmaOperandContractV1,
+        storage_layout: SemanticMfmaStorageLayoutV1,
+    },
+    /// Creates a typed zero accumulator associated with an authenticated lane.
+    F32MatrixAccumulatorZero {
+        lane: SemanticTypeIdV1,
+        fragment: SemanticTypeIdV1,
+        contract: SemanticMfmaAccumulatorContractV1,
     },
     /// Projects the four scalar lanes from one distributed FP32 accumulator.
     F32MatrixAccumulatorIntoValues {
@@ -4943,8 +5010,12 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
     /// Performs one target-selected cooperative matrix multiply-accumulate.
     MatrixMultiplyAccumulate {
         context: SemanticTypeIdV1,
-        input_fragment: SemanticTypeIdV1,
+        lhs_fragment: SemanticTypeIdV1,
+        rhs_fragment: SemanticTypeIdV1,
         accumulator_fragment: SemanticTypeIdV1,
+        lhs: SemanticMfmaOperandContractV1,
+        rhs: SemanticMfmaOperandContractV1,
+        accumulator: SemanticMfmaAccumulatorContractV1,
     },
     /// Produces the non-duplicable logical-1D index witness backed by `raw_index`.
     ThreadIndex1d {
@@ -6888,8 +6959,10 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::SubgroupReduceF32 { .. }
         | SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { .. }
-        | SemanticCompilerIntrinsicOperationV1::Bf16MatrixFragmentFromBits { .. }
-        | SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorFromValues { .. }
+        | SemanticCompilerIntrinsicOperationV1::WaveLaneCurrent { .. }
+        | SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor { .. }
+        | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { .. }
+        | SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero { .. }
         | SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues { .. }
         | SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate { .. }
         | SemanticCompilerIntrinsicOperationV1::ThreadIndexGet { .. } => true,
@@ -7049,18 +7122,56 @@ fn compiler_intrinsic_signature_matches(
         SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { context } => {
             inputs.is_empty() && output == context
         }
-        SemanticCompilerIntrinsicOperationV1::Bf16MatrixFragmentFromBits { fragment, bits } => {
-            inputs == [bits]
-                && output == fragment
-                && fixed_scalar_array_matches(request, bits, false, 16, 4)
+        SemanticCompilerIntrinsicOperationV1::WaveLaneCurrent { lane, wave_width } => {
+            inputs.is_empty() && output == lane && wave_width == 64
         }
-        SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorFromValues {
-            fragment,
-            values,
+        SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor {
+            result,
+            view,
+            error,
+            role,
+            storage_layout,
         } => {
-            inputs == [values]
+            inputs.len() == 5
+                && output == result
+                && inputs[1..]
+                    .iter()
+                    .all(|input| is_integer_type(request, *input))
+                && result_value_error_matches(request, result, view, error)
+                && matches!(
+                    role,
+                    SemanticMfmaOperandRoleV1::A | SemanticMfmaOperandRoleV1::B
+                )
+                && storage_layout == SemanticMfmaStorageLayoutV1::RowMajor
+        }
+        SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad {
+            option_fragment,
+            view,
+            lane,
+            fragment,
+            contract,
+            storage_layout,
+        } => {
+            inputs.len() == 4
+                && output == option_fragment
+                && shared_reference_to(request, inputs[0], view)
+                && shared_reference_to(request, inputs[1], lane)
+                && inputs[2..]
+                    .iter()
+                    .all(|input| is_integer_type(request, *input))
+                && option_value_result_matches(request, option_fragment, fragment)
+                && mfma_operand_contract_valid(contract)
+                && storage_layout == SemanticMfmaStorageLayoutV1::RowMajor
+        }
+        SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
+            lane,
+            fragment,
+            contract,
+        } => {
+            inputs.len() == 1
+                && shared_reference_to(request, inputs[0], lane)
                 && output == fragment
-                && fixed_scalar_array_matches(request, values, true, 32, 4)
+                && mfma_accumulator_contract_valid(contract)
         }
         SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues {
             fragment,
@@ -7072,15 +7183,29 @@ fn compiler_intrinsic_signature_matches(
         }
         SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
             context,
-            input_fragment,
+            lhs_fragment,
+            rhs_fragment,
             accumulator_fragment,
+            lhs,
+            rhs,
+            accumulator,
         } => {
             inputs.len() == 4
                 && shared_reference_to(request, inputs[0], context)
-                && inputs[1] == input_fragment
-                && inputs[2] == input_fragment
+                && inputs[1] == lhs_fragment
+                && inputs[2] == rhs_fragment
                 && inputs[3] == accumulator_fragment
                 && output == accumulator_fragment
+                && mfma_operand_contract_valid(lhs)
+                && mfma_operand_contract_valid(rhs)
+                && mfma_accumulator_contract_valid(accumulator)
+                && lhs.role == SemanticMfmaOperandRoleV1::A
+                && rhs.role == SemanticMfmaOperandRoleV1::B
+                && lhs.profile == rhs.profile
+                && lhs.profile == accumulator.profile
+                && lhs.register_distribution == rhs.register_distribution
+                && lhs.wave_width == rhs.wave_width
+                && lhs.wave_width == accumulator.wave_width
         }
         SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
             index_witness,
@@ -7339,6 +7464,18 @@ fn compiler_intrinsic_signature_matches(
                 && checked_mutable_access_result_matches(request, output, element)
         }
     }
+}
+
+fn mfma_operand_contract_valid(contract: SemanticMfmaOperandContractV1) -> bool {
+    contract.profile == SemanticMfmaProfileV1::Bf16F32M16N16K16
+        && contract.register_distribution == SemanticMfmaRegisterDistributionV1::Tile16x16
+        && contract.wave_width == 64
+}
+
+fn mfma_accumulator_contract_valid(contract: SemanticMfmaAccumulatorContractV1) -> bool {
+    contract.profile == SemanticMfmaProfileV1::Bf16F32M16N16K16
+        && contract.distribution == SemanticMfmaAccumulatorDistributionV1::RowMajor
+        && contract.wave_width == 64
 }
 
 fn fixed_scalar_array_matches(
@@ -7656,6 +7793,30 @@ fn option_value_result_matches(
         && variants[0].fields.fields.is_empty()
         && variants[1].discriminant == 1
         && variants[1].fields.fields.as_ref() == [value]
+        && is_integer_type(request, *discriminant)
+}
+
+fn result_value_error_matches(
+    request: &InertSemanticMirRequestV1,
+    result: SemanticTypeIdV1,
+    value: SemanticTypeIdV1,
+    error: SemanticTypeIdV1,
+) -> bool {
+    let Some(result_decl) = request.types.get(result.0 as usize) else {
+        return false;
+    };
+    let SemanticTypeShapeV1::Enum {
+        variants,
+        discriminant,
+    } = &result_decl.shape
+    else {
+        return false;
+    };
+    variants.len() == 2
+        && variants[0].discriminant == 0
+        && variants[0].fields.fields.as_ref() == [value]
+        && variants[1].discriminant == 1
+        && variants[1].fields.fields.as_ref() == [error]
         && is_integer_type(request, *discriminant)
 }
 
@@ -13105,25 +13266,54 @@ fn enqueue_compiler_intrinsic_type_references(
         SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { context } => {
             pending.push_back(context);
         }
-        SemanticCompilerIntrinsicOperationV1::Bf16MatrixFragmentFromBits { fragment, bits }
-        | SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorFromValues {
-            fragment,
-            values: bits,
+        SemanticCompilerIntrinsicOperationV1::WaveLaneCurrent { lane, .. } => {
+            pending.push_back(lane);
         }
-        | SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues {
+        SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor {
+            result,
+            view,
+            error,
+            ..
+        } => {
+            pending.push_back(result);
+            pending.push_back(view);
+            pending.push_back(error);
+        }
+        SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad {
+            option_fragment,
+            view,
+            lane,
             fragment,
-            values: bits,
+            ..
+        } => {
+            pending.push_back(option_fragment);
+            pending.push_back(view);
+            pending.push_back(lane);
+            pending.push_back(fragment);
+        }
+        SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
+            lane, fragment, ..
+        } => {
+            pending.push_back(lane);
+            pending.push_back(fragment);
+        }
+        SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues {
+            fragment,
+            values,
         } => {
             pending.push_back(fragment);
-            pending.push_back(bits);
+            pending.push_back(values);
         }
         SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
             context,
-            input_fragment,
+            lhs_fragment,
+            rhs_fragment,
             accumulator_fragment,
+            ..
         } => {
             pending.push_back(context);
-            pending.push_back(input_fragment);
+            pending.push_back(lhs_fragment);
+            pending.push_back(rhs_fragment);
             pending.push_back(accumulator_fragment);
         }
         SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
@@ -14626,19 +14816,6 @@ fn encode_compiler_intrinsic_operation(
             writer.u8(20)?;
             writer.u32(context.0)
         }
-        SemanticCompilerIntrinsicOperationV1::Bf16MatrixFragmentFromBits { fragment, bits } => {
-            writer.u8(21)?;
-            writer.u32(fragment.0)?;
-            writer.u32(bits.0)
-        }
-        SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorFromValues {
-            fragment,
-            values,
-        } => {
-            writer.u8(22)?;
-            writer.u32(fragment.0)?;
-            writer.u32(values.0)
-        }
         SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues {
             fragment,
             values,
@@ -14649,13 +14826,21 @@ fn encode_compiler_intrinsic_operation(
         }
         SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
             context,
-            input_fragment,
+            lhs_fragment,
+            rhs_fragment,
             accumulator_fragment,
+            lhs,
+            rhs,
+            accumulator,
         } => {
             writer.u8(24)?;
             writer.u32(context.0)?;
-            writer.u32(input_fragment.0)?;
-            writer.u32(accumulator_fragment.0)
+            writer.u32(lhs_fragment.0)?;
+            writer.u32(rhs_fragment.0)?;
+            writer.u32(accumulator_fragment.0)?;
+            encode_mfma_operand_contract(writer, lhs)?;
+            encode_mfma_operand_contract(writer, rhs)?;
+            encode_mfma_accumulator_contract(writer, accumulator)
         }
         SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { context } => {
             writer.u8(27)?;
@@ -14698,6 +14883,51 @@ fn encode_compiler_intrinsic_operation(
             })
         }
         SemanticCompilerIntrinsicOperationV1::ColdPath => writer.u8(31),
+        SemanticCompilerIntrinsicOperationV1::WaveLaneCurrent { lane, wave_width } => {
+            writer.u8(32)?;
+            writer.u32(lane.0)?;
+            writer.u32(wave_width)
+        }
+        SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor {
+            result,
+            view,
+            error,
+            role,
+            storage_layout,
+        } => {
+            writer.u8(33)?;
+            writer.u32(result.0)?;
+            writer.u32(view.0)?;
+            writer.u32(error.0)?;
+            encode_mfma_role(writer, role)?;
+            encode_mfma_storage_layout(writer, storage_layout)
+        }
+        SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad {
+            option_fragment,
+            view,
+            lane,
+            fragment,
+            contract,
+            storage_layout,
+        } => {
+            writer.u8(34)?;
+            writer.u32(option_fragment.0)?;
+            writer.u32(view.0)?;
+            writer.u32(lane.0)?;
+            writer.u32(fragment.0)?;
+            encode_mfma_operand_contract(writer, contract)?;
+            encode_mfma_storage_layout(writer, storage_layout)
+        }
+        SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
+            lane,
+            fragment,
+            contract,
+        } => {
+            writer.u8(35)?;
+            writer.u32(lane.0)?;
+            writer.u32(fragment.0)?;
+            encode_mfma_accumulator_contract(writer, contract)
+        }
         SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift {
             input_witness,
             output_witness,
@@ -14819,6 +15049,53 @@ fn encode_compiler_intrinsic_operation(
             encode_disjoint_index_space(writer, index_space)
         }
     }
+}
+
+fn encode_mfma_role(
+    writer: &mut CanonicalWriterV1,
+    role: SemanticMfmaOperandRoleV1,
+) -> Result<(), SemanticMirErrorV1> {
+    writer.u8(match role {
+        SemanticMfmaOperandRoleV1::A => 0,
+        SemanticMfmaOperandRoleV1::B => 1,
+    })
+}
+
+fn encode_mfma_storage_layout(
+    writer: &mut CanonicalWriterV1,
+    layout: SemanticMfmaStorageLayoutV1,
+) -> Result<(), SemanticMirErrorV1> {
+    writer.u8(match layout {
+        SemanticMfmaStorageLayoutV1::RowMajor => 0,
+        SemanticMfmaStorageLayoutV1::LdsXor4 => 1,
+    })
+}
+
+fn encode_mfma_operand_contract(
+    writer: &mut CanonicalWriterV1,
+    contract: SemanticMfmaOperandContractV1,
+) -> Result<(), SemanticMirErrorV1> {
+    encode_mfma_role(writer, contract.role)?;
+    writer.u8(match contract.profile {
+        SemanticMfmaProfileV1::Bf16F32M16N16K16 => 0,
+    })?;
+    writer.u8(match contract.register_distribution {
+        SemanticMfmaRegisterDistributionV1::Tile16x16 => 0,
+    })?;
+    writer.u32(contract.wave_width)
+}
+
+fn encode_mfma_accumulator_contract(
+    writer: &mut CanonicalWriterV1,
+    contract: SemanticMfmaAccumulatorContractV1,
+) -> Result<(), SemanticMirErrorV1> {
+    writer.u8(match contract.profile {
+        SemanticMfmaProfileV1::Bf16F32M16N16K16 => 0,
+    })?;
+    writer.u8(match contract.distribution {
+        SemanticMfmaAccumulatorDistributionV1::RowMajor => 0,
+    })?;
+    writer.u32(contract.wave_width)
 }
 
 fn encode_disjoint_index_space(

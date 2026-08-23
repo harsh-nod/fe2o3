@@ -506,6 +506,8 @@ pub(crate) enum TrustedDeviceItem {
     Gfx942WorkgroupExclusiveScanSum,
     Gfx942BarrierArrive,
     Gfx942BarrierWait,
+    WaveLane,
+    Wave64,
     WaveLaneCurrent,
     Gfx942LdsBf16TilePairM16x16,
     Gfx942LdsBf16TilePairPublishM16x16,
@@ -514,11 +516,22 @@ pub(crate) enum TrustedDeviceItem {
     WorkgroupSyncthreads,
     DeviceMatrix,
     DeviceMatrixCurrent,
+    Bf16MfmaProfile,
+    MfmaOperandA,
+    MfmaOperandB,
+    MfmaRegisterTile16x16,
+    MfmaLdsXor4Storage,
+    MfmaAccumulatorRowMajor,
     Bf16MfmaFragment,
-    Bf16MfmaFragmentFromBits,
     F32AccumulatorFragment,
-    F32AccumulatorFragmentFromValues,
+    F32AccumulatorFragmentZero,
     F32AccumulatorFragmentIntoValues,
+    Bf16MfmaMatrixView,
+    Bf16MfmaMatrixViewError,
+    Bf16MfmaMatrixARowMajor,
+    Bf16MfmaMatrixBRowMajor,
+    Bf16MfmaMatrixALoad,
+    Bf16MfmaMatrixBLoad,
     DeviceMatrixMultiplyAccumulate,
     GeneralGemm(TrustedGeneralGemmSurfaceV1, TrustedGeneralGemmOperationV1),
     DeviceValue(DeviceValueDiagnosticItem),
@@ -895,6 +908,16 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::sync::gfx942_barrier_wait",
     ),
     (
+        TrustedDeviceItem::WaveLane,
+        "fe2o3_device_wave_lane",
+        "fe2o3_device::WaveLane",
+    ),
+    (
+        TrustedDeviceItem::Wave64,
+        "fe2o3_device_wave64_width_v1",
+        "fe2o3_device::Wave64",
+    ),
+    (
         TrustedDeviceItem::WaveLaneCurrent,
         "fe2o3_device_wave_lane_current",
         "fe2o3_device::WaveLane::current",
@@ -935,14 +958,39 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::DeviceMatrix::current",
     ),
     (
+        TrustedDeviceItem::Bf16MfmaProfile,
+        "fe2o3_device_mfma_bf16_f32_m16n16k16_profile_v1",
+        "fe2o3_device::Bf16F32M16N16K16",
+    ),
+    (
+        TrustedDeviceItem::MfmaOperandA,
+        "fe2o3_device_mfma_operand_a_role_v1",
+        "fe2o3_device::MfmaOperandA",
+    ),
+    (
+        TrustedDeviceItem::MfmaOperandB,
+        "fe2o3_device_mfma_operand_b_role_v1",
+        "fe2o3_device::MfmaOperandB",
+    ),
+    (
+        TrustedDeviceItem::MfmaRegisterTile16x16,
+        "fe2o3_device_mfma_tile16x16_register_distribution_v1",
+        "fe2o3_device::MfmaRegisterTile16x16",
+    ),
+    (
+        TrustedDeviceItem::MfmaLdsXor4Storage,
+        "fe2o3_device_mfma_lds_xor4_storage_layout_v1",
+        "fe2o3_device::MfmaLdsXor4",
+    ),
+    (
+        TrustedDeviceItem::MfmaAccumulatorRowMajor,
+        "fe2o3_device_mfma_accumulator_row_major_distribution_v1",
+        "fe2o3_device::MfmaAccumulatorRowMajor",
+    ),
+    (
         TrustedDeviceItem::Bf16MfmaFragment,
         "fe2o3_device_bf16_mfma_fragment_v1",
         "fe2o3_device::Bf16MfmaFragment",
-    ),
-    (
-        TrustedDeviceItem::Bf16MfmaFragmentFromBits,
-        "fe2o3_device_bf16_mfma_fragment_from_bits_v1",
-        "fe2o3_device::Bf16MfmaFragment::from_bits",
     ),
     (
         TrustedDeviceItem::F32AccumulatorFragment,
@@ -950,14 +998,44 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::F32AccumulatorFragment",
     ),
     (
-        TrustedDeviceItem::F32AccumulatorFragmentFromValues,
-        "fe2o3_device_f32_accumulator_fragment_from_values_v1",
-        "fe2o3_device::F32AccumulatorFragment::from_values",
+        TrustedDeviceItem::F32AccumulatorFragmentZero,
+        "fe2o3_device_f32_accumulator_fragment_zero_v1",
+        "fe2o3_device::F32AccumulatorFragment::zero",
     ),
     (
         TrustedDeviceItem::F32AccumulatorFragmentIntoValues,
         "fe2o3_device_f32_accumulator_fragment_into_values_v1",
         "fe2o3_device::F32AccumulatorFragment::into_values",
+    ),
+    (
+        TrustedDeviceItem::Bf16MfmaMatrixView,
+        "fe2o3_device_bf16_mfma_matrix_view_v1",
+        "fe2o3_device::Bf16MfmaMatrix",
+    ),
+    (
+        TrustedDeviceItem::Bf16MfmaMatrixViewError,
+        "fe2o3_device_bf16_mfma_matrix_view_error_v1",
+        "fe2o3_device::Bf16MatrixViewError",
+    ),
+    (
+        TrustedDeviceItem::Bf16MfmaMatrixARowMajor,
+        "fe2o3_device_bf16_mfma_matrix_a_row_major_v1",
+        "fe2o3_device::Bf16MfmaAMatrix::row_major",
+    ),
+    (
+        TrustedDeviceItem::Bf16MfmaMatrixBRowMajor,
+        "fe2o3_device_bf16_mfma_matrix_b_row_major_v1",
+        "fe2o3_device::Bf16MfmaBMatrix::row_major",
+    ),
+    (
+        TrustedDeviceItem::Bf16MfmaMatrixALoad,
+        "fe2o3_device_bf16_mfma_matrix_a_load_v1",
+        "fe2o3_device::Bf16MfmaAMatrix::load_m16k16",
+    ),
+    (
+        TrustedDeviceItem::Bf16MfmaMatrixBLoad,
+        "fe2o3_device_bf16_mfma_matrix_b_load_v1",
+        "fe2o3_device::Bf16MfmaBMatrix::load_k16n16",
     ),
     (
         TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
@@ -1554,6 +1632,8 @@ fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static 
         TrustedDeviceItem::Gfx942WorkgroupExclusiveScanSum => {
             "fe2o3_device::collective::{impl#6}::exclusive_scan_sum"
         }
+        TrustedDeviceItem::WaveLane => "fe2o3_device::wave::WaveLane",
+        TrustedDeviceItem::Wave64 => "fe2o3_device::wave::Wave64",
         TrustedDeviceItem::WaveLaneCurrent => "fe2o3_device::wave::{impl#4}::current",
         TrustedDeviceItem::Gfx942LdsBf16TilePairM16x16 => {
             "fe2o3_device::tensor::gfx942_lds_bf16_tile_pair_m16x16_v1"
@@ -1562,25 +1642,36 @@ fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static 
             "fe2o3_device::tensor::gfx942_publish_lds_bf16_tile_pair_m16x16_v1"
         }
         TrustedDeviceItem::LdsTile16x16WriteMfmaBf16 => {
-            "fe2o3_device::tensor::{impl#9}::write_mfma_fragment"
+            "fe2o3_device::tensor::{impl#16}::write_mfma_fragment"
         }
         TrustedDeviceItem::LdsTile16x16ReadMfmaBf16 => {
-            "fe2o3_device::tensor::{impl#10}::read_mfma_fragment"
+            "fe2o3_device::tensor::{impl#17}::read_mfma_fragment"
         }
         TrustedDeviceItem::WorkgroupSyncthreads => "fe2o3_device::sync::syncthreads",
         TrustedDeviceItem::DeviceMatrix => "fe2o3_device::tensor::DeviceMatrix",
-        TrustedDeviceItem::DeviceMatrixCurrent => "fe2o3_device::tensor::{impl#3}::current",
+        TrustedDeviceItem::DeviceMatrixCurrent => "fe2o3_device::tensor::{impl#9}::current",
+        TrustedDeviceItem::Bf16MfmaProfile => "fe2o3_device::tensor::Bf16F32M16N16K16",
+        TrustedDeviceItem::MfmaOperandA => "fe2o3_device::tensor::MfmaOperandA",
+        TrustedDeviceItem::MfmaOperandB => "fe2o3_device::tensor::MfmaOperandB",
+        TrustedDeviceItem::MfmaRegisterTile16x16 => "fe2o3_device::tensor::MfmaRegisterTile16x16",
+        TrustedDeviceItem::MfmaLdsXor4Storage => "fe2o3_device::tensor::MfmaLdsXor4",
+        TrustedDeviceItem::MfmaAccumulatorRowMajor => {
+            "fe2o3_device::tensor::MfmaAccumulatorRowMajor"
+        }
         TrustedDeviceItem::Bf16MfmaFragment => "fe2o3_device::tensor::Bf16MfmaFragment",
-        TrustedDeviceItem::Bf16MfmaFragmentFromBits => "fe2o3_device::tensor::{impl#1}::from_bits",
         TrustedDeviceItem::F32AccumulatorFragment => "fe2o3_device::tensor::F32AccumulatorFragment",
-        TrustedDeviceItem::F32AccumulatorFragmentFromValues => {
-            "fe2o3_device::tensor::{impl#2}::from_values"
-        }
+        TrustedDeviceItem::F32AccumulatorFragmentZero => "fe2o3_device::tensor::{impl#4}::zero",
         TrustedDeviceItem::F32AccumulatorFragmentIntoValues => {
-            "fe2o3_device::tensor::{impl#2}::into_values"
+            "fe2o3_device::tensor::{impl#5}::into_values"
         }
+        TrustedDeviceItem::Bf16MfmaMatrixView => "fe2o3_device::tensor::Bf16MfmaMatrix",
+        TrustedDeviceItem::Bf16MfmaMatrixViewError => "fe2o3_device::tensor::Bf16MatrixViewError",
+        TrustedDeviceItem::Bf16MfmaMatrixARowMajor => "fe2o3_device::tensor::{impl#7}::row_major",
+        TrustedDeviceItem::Bf16MfmaMatrixBRowMajor => "fe2o3_device::tensor::{impl#8}::row_major",
+        TrustedDeviceItem::Bf16MfmaMatrixALoad => "fe2o3_device::tensor::{impl#7}::load_m16k16",
+        TrustedDeviceItem::Bf16MfmaMatrixBLoad => "fe2o3_device::tensor::{impl#8}::load_k16n16",
         TrustedDeviceItem::DeviceMatrixMultiplyAccumulate => {
-            "fe2o3_device::tensor::{impl#3}::multiply_accumulate"
+            "fe2o3_device::tensor::{impl#9}::multiply_accumulate"
         }
         _ => item.canonical_path(),
     }
@@ -1620,6 +1711,8 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::Gfx942WorkgroupReduceSum
             | TrustedDeviceItem::Gfx942WorkgroupInclusiveScanSum
             | TrustedDeviceItem::Gfx942WorkgroupExclusiveScanSum
+            | TrustedDeviceItem::WaveLane
+            | TrustedDeviceItem::Wave64
             | TrustedDeviceItem::WaveLaneCurrent
             | TrustedDeviceItem::Gfx942LdsBf16TilePairM16x16
             | TrustedDeviceItem::Gfx942LdsBf16TilePairPublishM16x16
@@ -1628,11 +1721,22 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::WorkgroupSyncthreads
             | TrustedDeviceItem::DeviceMatrix
             | TrustedDeviceItem::DeviceMatrixCurrent
+            | TrustedDeviceItem::Bf16MfmaProfile
+            | TrustedDeviceItem::MfmaOperandA
+            | TrustedDeviceItem::MfmaOperandB
+            | TrustedDeviceItem::MfmaRegisterTile16x16
+            | TrustedDeviceItem::MfmaLdsXor4Storage
+            | TrustedDeviceItem::MfmaAccumulatorRowMajor
             | TrustedDeviceItem::Bf16MfmaFragment
-            | TrustedDeviceItem::Bf16MfmaFragmentFromBits
             | TrustedDeviceItem::F32AccumulatorFragment
-            | TrustedDeviceItem::F32AccumulatorFragmentFromValues
+            | TrustedDeviceItem::F32AccumulatorFragmentZero
             | TrustedDeviceItem::F32AccumulatorFragmentIntoValues
+            | TrustedDeviceItem::Bf16MfmaMatrixView
+            | TrustedDeviceItem::Bf16MfmaMatrixViewError
+            | TrustedDeviceItem::Bf16MfmaMatrixARowMajor
+            | TrustedDeviceItem::Bf16MfmaMatrixBRowMajor
+            | TrustedDeviceItem::Bf16MfmaMatrixALoad
+            | TrustedDeviceItem::Bf16MfmaMatrixBLoad
             | TrustedDeviceItem::DeviceMatrixMultiplyAccumulate
             | TrustedDeviceItem::Tiled2DIndexSpace
             | TrustedDeviceItem::DisjointTile2D
@@ -3551,6 +3655,8 @@ mod tests {
             TrustedDeviceItem::Gfx942WorkgroupExclusiveScanSum,
             TrustedDeviceItem::Gfx942BarrierArrive,
             TrustedDeviceItem::Gfx942BarrierWait,
+            TrustedDeviceItem::WaveLane,
+            TrustedDeviceItem::Wave64,
             TrustedDeviceItem::WaveLaneCurrent,
             TrustedDeviceItem::Gfx942LdsBf16TilePairM16x16,
             TrustedDeviceItem::Gfx942LdsBf16TilePairPublishM16x16,
@@ -3559,11 +3665,22 @@ mod tests {
             TrustedDeviceItem::WorkgroupSyncthreads,
             TrustedDeviceItem::DeviceMatrix,
             TrustedDeviceItem::DeviceMatrixCurrent,
+            TrustedDeviceItem::Bf16MfmaProfile,
+            TrustedDeviceItem::MfmaOperandA,
+            TrustedDeviceItem::MfmaOperandB,
+            TrustedDeviceItem::MfmaRegisterTile16x16,
+            TrustedDeviceItem::MfmaLdsXor4Storage,
+            TrustedDeviceItem::MfmaAccumulatorRowMajor,
             TrustedDeviceItem::Bf16MfmaFragment,
             TrustedDeviceItem::F32AccumulatorFragment,
-            TrustedDeviceItem::Bf16MfmaFragmentFromBits,
-            TrustedDeviceItem::F32AccumulatorFragmentFromValues,
+            TrustedDeviceItem::F32AccumulatorFragmentZero,
             TrustedDeviceItem::F32AccumulatorFragmentIntoValues,
+            TrustedDeviceItem::Bf16MfmaMatrixView,
+            TrustedDeviceItem::Bf16MfmaMatrixViewError,
+            TrustedDeviceItem::Bf16MfmaMatrixARowMajor,
+            TrustedDeviceItem::Bf16MfmaMatrixBRowMajor,
+            TrustedDeviceItem::Bf16MfmaMatrixALoad,
+            TrustedDeviceItem::Bf16MfmaMatrixBLoad,
             TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
             TrustedDeviceItem::GeneralGemm(
                 TrustedGeneralGemmSurfaceV1::Typestate,

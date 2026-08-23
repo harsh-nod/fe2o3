@@ -1346,7 +1346,7 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        Ok(match self.tagged("compiler intrinsic", 31)? {
+        Ok(match self.tagged("compiler intrinsic", 35)? {
             0 => SemanticCompilerIntrinsicOperationV1::ThreadIndex(self.axis()?),
             1 => SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(self.axis()?),
             2 => SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(self.axis()?),
@@ -1438,22 +1438,25 @@ impl<'a> CanonicalDecoderV1<'a> {
             20 => SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent {
                 context: SemanticTypeIdV1(self.u32()?),
             },
-            21 => SemanticCompilerIntrinsicOperationV1::Bf16MatrixFragmentFromBits {
-                fragment: SemanticTypeIdV1(self.u32()?),
-                bits: SemanticTypeIdV1(self.u32()?),
-            },
-            22 => SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorFromValues {
-                fragment: SemanticTypeIdV1(self.u32()?),
-                values: SemanticTypeIdV1(self.u32()?),
-            },
+            21 | 22 => {
+                return Err(SemanticMirDecodeErrorV1::InvalidTag {
+                    context: "retired raw matrix fragment compiler intrinsic",
+                    offset: self.offset - 1,
+                    value: self.bytes[self.offset - 1],
+                });
+            }
             23 => SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues {
                 fragment: SemanticTypeIdV1(self.u32()?),
                 values: SemanticTypeIdV1(self.u32()?),
             },
             24 => SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
                 context: SemanticTypeIdV1(self.u32()?),
-                input_fragment: SemanticTypeIdV1(self.u32()?),
+                lhs_fragment: SemanticTypeIdV1(self.u32()?),
+                rhs_fragment: SemanticTypeIdV1(self.u32()?),
                 accumulator_fragment: SemanticTypeIdV1(self.u32()?),
+                lhs: self.mfma_operand_contract()?,
+                rhs: self.mfma_operand_contract()?,
+                accumulator: self.mfma_accumulator_contract()?,
             },
             25 => SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedTiled2d {
                 input_witness: SemanticTypeIdV1(self.u32()?),
@@ -1512,7 +1515,89 @@ impl<'a> CanonicalDecoderV1<'a> {
                 },
             },
             31 => SemanticCompilerIntrinsicOperationV1::ColdPath,
+            32 => SemanticCompilerIntrinsicOperationV1::WaveLaneCurrent {
+                lane: SemanticTypeIdV1(self.u32()?),
+                wave_width: self.u32()?,
+            },
+            33 => SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor {
+                result: SemanticTypeIdV1(self.u32()?),
+                view: SemanticTypeIdV1(self.u32()?),
+                error: SemanticTypeIdV1(self.u32()?),
+                role: self.mfma_role()?,
+                storage_layout: self.mfma_storage_layout()?,
+            },
+            34 => SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad {
+                option_fragment: SemanticTypeIdV1(self.u32()?),
+                view: SemanticTypeIdV1(self.u32()?),
+                lane: SemanticTypeIdV1(self.u32()?),
+                fragment: SemanticTypeIdV1(self.u32()?),
+                contract: self.mfma_operand_contract()?,
+                storage_layout: self.mfma_storage_layout()?,
+            },
+            35 => SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
+                lane: SemanticTypeIdV1(self.u32()?),
+                fragment: SemanticTypeIdV1(self.u32()?),
+                contract: self.mfma_accumulator_contract()?,
+            },
             _ => unreachable!(),
+        })
+    }
+
+    fn mfma_role(&mut self) -> Result<SemanticMfmaOperandRoleV1, SemanticMirDecodeErrorV1> {
+        Ok(match self.tagged("MFMA operand role", 1)? {
+            0 => SemanticMfmaOperandRoleV1::A,
+            1 => SemanticMfmaOperandRoleV1::B,
+            _ => unreachable!(),
+        })
+    }
+
+    fn mfma_storage_layout(
+        &mut self,
+    ) -> Result<SemanticMfmaStorageLayoutV1, SemanticMirDecodeErrorV1> {
+        Ok(match self.tagged("MFMA storage layout", 1)? {
+            0 => SemanticMfmaStorageLayoutV1::RowMajor,
+            1 => SemanticMfmaStorageLayoutV1::LdsXor4,
+            _ => unreachable!(),
+        })
+    }
+
+    fn mfma_operand_contract(
+        &mut self,
+    ) -> Result<SemanticMfmaOperandContractV1, SemanticMirDecodeErrorV1> {
+        let role = self.mfma_role()?;
+        let profile = match self.tagged("MFMA profile", 0)? {
+            0 => SemanticMfmaProfileV1::Bf16F32M16N16K16,
+            _ => unreachable!(),
+        };
+        let register_distribution = match self.tagged("MFMA register distribution", 0)? {
+            0 => SemanticMfmaRegisterDistributionV1::Tile16x16,
+            _ => unreachable!(),
+        };
+        let wave_width = self.u32()?;
+        Ok(SemanticMfmaOperandContractV1 {
+            role,
+            profile,
+            register_distribution,
+            wave_width,
+        })
+    }
+
+    fn mfma_accumulator_contract(
+        &mut self,
+    ) -> Result<SemanticMfmaAccumulatorContractV1, SemanticMirDecodeErrorV1> {
+        let profile = match self.tagged("MFMA profile", 0)? {
+            0 => SemanticMfmaProfileV1::Bf16F32M16N16K16,
+            _ => unreachable!(),
+        };
+        let distribution = match self.tagged("MFMA accumulator distribution", 0)? {
+            0 => SemanticMfmaAccumulatorDistributionV1::RowMajor,
+            _ => unreachable!(),
+        };
+        let wave_width = self.u32()?;
+        Ok(SemanticMfmaAccumulatorContractV1 {
+            profile,
+            distribution,
+            wave_width,
         })
     }
 
