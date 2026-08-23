@@ -28,6 +28,7 @@ const MANIFEST_PREFIX: &str = ".fe2o3-compiler-generation-v1-manifest-";
 const SCOPE_PREFIX: &str = ".fe2o3-compiler-generation-v1-scope-";
 const RECORD_SUFFIX: &str = ".record";
 const REDO_SUFFIX: &str = ".redo";
+const RECOVERY_SUFFIX: &str = ".recovery";
 const LOCK_FILE: &str = ".fe2o3-artifacts.lock";
 const MANIFEST_ENTRY_BYTES: usize = 1 + 8 + 32;
 const SCOPE_RECORD_MAGIC: &[u8] = b"FE2O3-COMPILER-ARTIFACT-SCOPE-V1\0";
@@ -1074,7 +1075,6 @@ fn redo_name_is_private_single_link_and_consumed_by_recovery() {
 #[test]
 fn canonical_only_recovery_recommits_without_entry_quota_headroom() {
     for boundary in [
-        CompilerArtifactGenerationRecordBoundaryV1::RenameCanonicalToRedo,
         CompilerArtifactGenerationRecordBoundaryV1::SyncRedoName,
         CompilerArtifactGenerationRecordBoundaryV1::RenameRedoToCanonical,
         CompilerArtifactGenerationRecordBoundaryV1::SyncCanonicalName,
@@ -1116,6 +1116,66 @@ fn canonical_only_recovery_recommits_without_entry_quota_headroom() {
             );
         }
     }
+}
+
+#[test]
+fn generation_two_recovery_record_restarts_without_predecessor_wedge() {
+    let directory = TestDirectory::new();
+    let store = directory.store();
+    committed(store.publish_generation_v1(&request(1, true)));
+    let second = committed(store.publish_generation_v1(&request(2, true)));
+    let expected = second.manifest().identity();
+    drop(second);
+
+    let canonical = canonical_record(&directory.path);
+    let recovery = PathBuf::from(format!("{}{RECOVERY_SUFFIX}", canonical.display()));
+    fs::rename(&canonical, &recovery).unwrap();
+    let directory_fd = OpenOptions::new().read(true).open(&directory.path).unwrap();
+    rustix::fs::fsync(directory_fd).unwrap();
+    assert!(!canonical.exists());
+    assert!(recovery.exists());
+
+    let recovered = store.recover_generation_v1().unwrap().unwrap();
+    assert_eq!(recovered.manifest().identity(), expected);
+    assert_generation(&recovered, 2, true);
+    assert!(canonical.exists());
+    assert!(!recovery.exists());
+}
+
+#[test]
+fn foreign_scope_recovery_record_is_reconciled_before_admission() {
+    let directory = TestDirectory::new();
+    let first_scope = scope();
+    let second_scope = CompilerArtifactGenerationScopeV1::from_bytes([0x52; 32]);
+    let first = CompilerArtifactGenerationStoreV1::open(&directory.path, first_scope).unwrap();
+    let second = CompilerArtifactGenerationStoreV1::open(&directory.path, second_scope).unwrap();
+    committed(first.publish_generation_v1(&request(1, true)));
+    committed(second.publish_generation_v1(&request(1, true)));
+    let expected = committed(second.publish_generation_v1(&request(2, true)))
+        .manifest()
+        .identity();
+
+    let canonical = canonical_record_for_scope(&directory.path, second_scope);
+    let recovery = PathBuf::from(format!("{}{RECOVERY_SUFFIX}", canonical.display()));
+    fs::rename(&canonical, &recovery).unwrap();
+    let directory_fd = OpenOptions::new().read(true).open(&directory.path).unwrap();
+    rustix::fs::fsync(directory_fd).unwrap();
+    drop(second);
+    drop(first);
+
+    let reopened_first = CompilerArtifactGenerationStoreV1::open(&directory.path, first_scope)
+        .expect("foreign recovery state must not block root admission");
+    assert_generation(
+        &reopened_first.open_generation_v1().unwrap().unwrap(),
+        1,
+        true,
+    );
+    let reopened_second =
+        CompilerArtifactGenerationStoreV1::open(&directory.path, second_scope).unwrap();
+    let recovered = reopened_second.open_generation_v1().unwrap().unwrap();
+    assert_eq!(recovered.manifest().identity(), expected);
+    assert_generation(&recovered, 2, true);
+    assert!(!recovery.exists());
 }
 
 #[test]

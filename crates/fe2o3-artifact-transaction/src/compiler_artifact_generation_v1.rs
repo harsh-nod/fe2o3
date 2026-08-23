@@ -50,6 +50,7 @@ const SCOPE_PREFIX: &str = ".fe2o3-compiler-generation-v1-scope-";
 const CONTENT_SUFFIX: &str = ".bin";
 const RECORD_SUFFIX: &str = ".record";
 const REDO_SUFFIX: &str = ".redo";
+const RECOVERY_SUFFIX: &str = ".recovery";
 const STAGED_SUFFIX: &str = ".staged";
 const CONTENT_MODE: u32 = 0o400;
 const MAX_DIRECTORY_ENTRIES: usize = 32_768;
@@ -496,7 +497,6 @@ pub enum CompilerArtifactGenerationRecordBoundaryV1 {
     WriteTemp,
     SyncTemp,
     RenameTempToRedo,
-    RenameCanonicalToRedo,
     SyncRedoName,
     RenameRedoToCanonical,
     SyncCanonicalName,
@@ -951,6 +951,7 @@ enum ExpectedGenerationState {
 struct Names {
     record: String,
     redo: String,
+    recovery: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -976,7 +977,12 @@ impl Names {
         let identity: [u8; 32] = digest.finalize().into();
         let record = format!("{SCOPE_PREFIX}{}{RECORD_SUFFIX}", encode_hex(&identity));
         let redo = format!("{record}{REDO_SUFFIX}");
-        Self { record, redo }
+        let recovery = format!("{record}{RECOVERY_SUFFIX}");
+        Self {
+            record,
+            redo,
+            recovery,
+        }
     }
 }
 
@@ -986,6 +992,7 @@ enum ManagedEntryKind {
     Manifest,
     ScopeRecord,
     ScopeRedo,
+    ScopeRecovery,
     Staged,
     Temporary,
 }
@@ -1050,6 +1057,7 @@ struct StoreInventory {
 struct ScopeRecords {
     canonical: Option<ScopeRecordV1>,
     redo: Option<ScopeRecordV1>,
+    recovery: Option<ScopeRecordV1>,
 }
 
 #[derive(Clone, Copy)]
@@ -1404,20 +1412,26 @@ impl CompilerArtifactGenerationStoreV1 {
         scopes
             .try_reserve(inventory.managed_entries.len().min(1024))
             .map_err(|_| allocation_error(inventory.managed_entries.len().min(1024)))?;
-        for entry in inventory
-            .managed_entries
-            .iter()
-            .filter(|entry| entry.kind == ManagedEntryKind::ScopeRedo)
-        {
+        for entry in inventory.managed_entries.iter().filter(|entry| {
+            matches!(
+                entry.kind,
+                ManagedEntryKind::ScopeRedo | ManagedEntryKind::ScopeRecovery
+            )
+        }) {
             let bytes = self
                 .read_scope_record_bytes(&entry.name)?
                 .ok_or_else(|| unsafe_entry(&entry.name, "managed redo disappeared"))?;
             let record = ScopeRecordV1::decode_canonical_any(&bytes)?;
             let names = Names::new(record.scope);
-            if entry.name != names.redo {
+            let expected_name = match entry.kind {
+                ManagedEntryKind::ScopeRedo => &names.redo,
+                ManagedEntryKind::ScopeRecovery => &names.recovery,
+                _ => unreachable!(),
+            };
+            if &entry.name != expected_name {
                 return Err(unsafe_entry(
                     &entry.name,
-                    "redo name does not match its canonical scope identity",
+                    "redo or recovery name does not match its canonical scope identity",
                 ));
             }
             scopes
@@ -1440,6 +1454,15 @@ impl CompilerArtifactGenerationStoreV1 {
                     CompilerArtifactGenerationErrorV1::StorageQuotaExceeded { .. }
                     | CompilerArtifactGenerationErrorV1::ManagedEntryLimitExceeded { .. },
                 ) => {
+                    if self.read_scope_record_bytes(&names.recovery)?.is_some() {
+                        return Err(
+                            CompilerArtifactGenerationErrorV1::CommitStateIndeterminate {
+                                reason: format!(
+                                    "quota rejection cannot discard committed recovery state for scope {scope:?}"
+                                ),
+                            },
+                        );
+                    }
                     if self.read_scope_record_bytes(&names.redo)?.is_some() {
                         return Err(
                             CompilerArtifactGenerationErrorV1::CommitStateIndeterminate {
@@ -1507,6 +1530,26 @@ impl CompilerArtifactGenerationStoreV1 {
             Ok(bytes) => bytes,
             Err(_) => return ExpectedGenerationState::Uncertain,
         };
+        let recovery_bytes = match self.read_scope_record_bytes(&self.names.recovery) {
+            Ok(bytes) => bytes,
+            Err(_) => return ExpectedGenerationState::Uncertain,
+        };
+        if let Some(recovery_bytes) = recovery_bytes {
+            if canonical_bytes.is_some() || redo_bytes.is_some() {
+                return ExpectedGenerationState::Uncertain;
+            }
+            let recovery = match ScopeRecordV1::decode_canonical(&recovery_bytes, self.scope) {
+                Ok(record) => record,
+                Err(_) => return ExpectedGenerationState::Uncertain,
+            };
+            if recovery.manifest != expected {
+                return ExpectedGenerationState::Absent;
+            }
+            return match self.open_generation_for_record(&recovery, hooks) {
+                Ok(_) => ExpectedGenerationState::Recoverable,
+                Err(_) => ExpectedGenerationState::Uncertain,
+            };
+        }
         let canonical = match canonical_bytes.as_deref() {
             Some(bytes) => match ScopeRecordV1::decode_canonical(bytes, self.scope) {
                 Ok(record) => Some(record),
@@ -1832,7 +1875,9 @@ impl CompilerArtifactGenerationStoreV1 {
         for entry in &inventory.managed_entries {
             if !matches!(
                 entry.kind,
-                ManagedEntryKind::ScopeRecord | ManagedEntryKind::ScopeRedo
+                ManagedEntryKind::ScopeRecord
+                    | ManagedEntryKind::ScopeRedo
+                    | ManagedEntryKind::ScopeRecovery
             ) {
                 continue;
             }
@@ -1844,6 +1889,7 @@ impl CompilerArtifactGenerationStoreV1 {
             let expected_name = match entry.kind {
                 ManagedEntryKind::ScopeRecord => &names.record,
                 ManagedEntryKind::ScopeRedo => &names.redo,
+                ManagedEntryKind::ScopeRecovery => &names.recovery,
                 _ => unreachable!(),
             };
             if &entry.name != expected_name {
@@ -1857,6 +1903,7 @@ impl CompilerArtifactGenerationStoreV1 {
             let destination = match entry.kind {
                 ManagedEntryKind::ScopeRecord => &mut slot.canonical,
                 ManagedEntryKind::ScopeRedo => &mut slot.redo,
+                ManagedEntryKind::ScopeRecovery => &mut slot.recovery,
                 _ => unreachable!(),
             };
             if destination.replace(record).is_some() {
@@ -1865,6 +1912,13 @@ impl CompilerArtifactGenerationStoreV1 {
         }
 
         for records in scopes.values() {
+            if records.recovery.is_some() && (records.canonical.is_some() || records.redo.is_some())
+            {
+                return Err(CompilerArtifactGenerationErrorV1::ConflictingRedo {
+                    reason: "namespace maintenance found recovery state mixed with canonical or redo state"
+                        .to_owned(),
+                });
+            }
             if let Some(redo) = &records.redo {
                 let legal = match &records.canonical {
                     Some(current) if current.manifest == redo.manifest => {
@@ -1890,6 +1944,14 @@ impl CompilerArtifactGenerationStoreV1 {
             if let Some(redo) = &records.redo {
                 self.protect_record_generation(
                     redo,
+                    &inventory.managed_entries,
+                    &by_name,
+                    &mut protected,
+                )?;
+            }
+            if let Some(recovery) = &records.recovery {
+                self.protect_record_generation(
+                    recovery,
                     &inventory.managed_entries,
                     &by_name,
                     &mut protected,
@@ -2137,8 +2199,40 @@ impl CompilerArtifactGenerationStoreV1 {
         names: &Names,
         hooks: &mut StoreHooks,
     ) -> Result<Option<CompilerArtifactGenerationLeaseV1>, CompilerArtifactGenerationErrorV1> {
+        let recovery_bytes = self.read_scope_record_bytes(&names.recovery)?;
         let redo_bytes = self.read_scope_record_bytes(&names.redo)?;
         let canonical_bytes = self.read_scope_record_bytes(&names.record)?;
+        if let Some(recovery_bytes) = recovery_bytes {
+            if canonical_bytes.is_some() || redo_bytes.is_some() {
+                return Err(CompilerArtifactGenerationErrorV1::ConflictingRedo {
+                    reason: "recovery record coexists with a canonical or publication redo record"
+                        .to_owned(),
+                });
+            }
+            let recovery = ScopeRecordV1::decode_canonical(&recovery_bytes, scope)?;
+            let generation = self.open_generation_for_record(&recovery, hooks)?;
+            self.ensure_actual_quota_locked()?;
+            hooks.record_operation = CompilerArtifactGenerationRecordOperationV1::Recover;
+            self.durable.promote_validated_redo(
+                &names.record,
+                &names.recovery,
+                None,
+                &recovery_bytes,
+                MAX_COMPILER_ARTIFACT_GENERATION_SCOPE_RECORD_BYTES_V1,
+                hooks,
+            )?;
+            if self.read_scope_record_bytes(&names.record)?.as_deref()
+                != Some(recovery_bytes.as_slice())
+                || self.read_scope_record_bytes(&names.recovery)?.is_some()
+            {
+                return Err(unsafe_entry(
+                    &names.record,
+                    "recovered canonical differs from its validated recovery record",
+                ));
+            }
+            self.ensure_root()?;
+            return Ok(Some(generation));
+        }
         let Some(redo_bytes) = redo_bytes else {
             let Some(canonical_bytes) = canonical_bytes else {
                 return Ok(None);
@@ -2146,7 +2240,7 @@ impl CompilerArtifactGenerationStoreV1 {
             hooks.record_operation = CompilerArtifactGenerationRecordOperationV1::Recover;
             let recovered_bytes = self.durable.establish_recovered_record_durability(
                 &names.record,
-                &names.redo,
+                &names.recovery,
                 &canonical_bytes,
                 MAX_COMPILER_ARTIFACT_GENERATION_SCOPE_RECORD_BYTES_V1,
                 hooks,
@@ -2677,9 +2771,6 @@ fn map_record_boundary(
         RetainedDurableRecordBoundaryV1::RenameTempToRedo => {
             CompilerArtifactGenerationRecordBoundaryV1::RenameTempToRedo
         }
-        RetainedDurableRecordBoundaryV1::RenameCanonicalToRedo => {
-            CompilerArtifactGenerationRecordBoundaryV1::RenameCanonicalToRedo
-        }
         RetainedDurableRecordBoundaryV1::SyncRedoName => {
             CompilerArtifactGenerationRecordBoundaryV1::SyncRedoName
         }
@@ -2860,6 +2951,14 @@ fn classify_managed_name(
     if exact_hash_name(name, SCOPE_PREFIX.as_bytes(), record_redo_suffix.as_bytes()) {
         return Ok(Some(ManagedEntryKind::ScopeRedo));
     }
+    let record_recovery_suffix = format!("{RECORD_SUFFIX}{RECOVERY_SUFFIX}");
+    if exact_hash_name(
+        name,
+        SCOPE_PREFIX.as_bytes(),
+        record_recovery_suffix.as_bytes(),
+    ) {
+        return Ok(Some(ManagedEntryKind::ScopeRecovery));
+    }
     if let Some(base) = name.strip_suffix(STAGED_SUFFIX.as_bytes())
         && (exact_hash_name(base, BLOB_PREFIX.as_bytes(), CONTENT_SUFFIX.as_bytes())
             || exact_hash_name(base, MANIFEST_PREFIX.as_bytes(), CONTENT_SUFFIX.as_bytes()))
@@ -2939,7 +3038,9 @@ fn validate_managed_inventory_stat(
             MAX_COMPILER_ARTIFACT_GENERATION_MANIFEST_BYTES_V1 as u64,
             false,
         ),
-        ManagedEntryKind::ScopeRecord | ManagedEntryKind::ScopeRedo => (
+        ManagedEntryKind::ScopeRecord
+        | ManagedEntryKind::ScopeRedo
+        | ManagedEntryKind::ScopeRecovery => (
             stat.st_mode & 0o7777 == 0o600,
             MAX_COMPILER_ARTIFACT_GENERATION_SCOPE_RECORD_BYTES_V1 as u64,
             false,
