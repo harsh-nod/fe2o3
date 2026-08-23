@@ -64,12 +64,14 @@ const V3_ENVELOPE_NAME_BYTES: usize = V3_ENVELOPE_PREFIX.len() + 64 + V3_ENVELOP
 const MAX_ENVELOPE_CANDIDATES: usize = 256;
 const MAX_PENDING_APPLICATION_REAPS: usize = 8;
 const REAPER_POLL_INTERVAL: Duration = Duration::from_millis(10);
+// V3 performs durable recovery and semantic admission before acknowledging the transfer.
+const WORKER_V3_PRODUCTION_ACK_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
 const TEST_ACK_READY_FD_ENV: &str = "FE2O3_INTERNAL_TEST_ACK_READY_FD";
 #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
 const TEST_ACK_STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ApplicationTimeouts {
     ack: Duration,
     cleanup: Duration,
@@ -84,6 +86,13 @@ impl ApplicationTimeouts {
         #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
         wait_for_test_ready: false,
     };
+
+    fn for_worker_v3(mut self) -> Self {
+        if self == Self::PRODUCTION {
+            self.ack = WORKER_V3_PRODUCTION_ACK_TIMEOUT;
+        }
+        self
+    }
 
     #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
     pub(crate) const TEST_SHORT: Self = Self {
@@ -907,6 +916,11 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
                     challenge,
                 }
             }
+        };
+        let timeouts = if matches!(protocol, ApplicationHandoffExpectationV1::WorkerV3 { .. }) {
+            timeouts.for_worker_v3()
+        } else {
+            timeouts
         };
         let directory_device = directory_stat.st_dev;
         let directory_inode = directory_stat.st_ino;
@@ -2913,6 +2927,20 @@ mod tests {
         assert!(
             ApplicationTimeouts::TEST_SCHEDULER_TOLERANT.cleanup
                 > ApplicationTimeouts::PRODUCTION.cleanup
+        );
+        assert_eq!(
+            ApplicationTimeouts::PRODUCTION.for_worker_v3().ack,
+            WORKER_V3_PRODUCTION_ACK_TIMEOUT
+        );
+        assert_eq!(
+            ApplicationTimeouts::TEST_SHORT.for_worker_v3().ack,
+            ApplicationTimeouts::TEST_SHORT.ack
+        );
+        assert_eq!(
+            ApplicationTimeouts::TEST_SCHEDULER_TOLERANT
+                .for_worker_v3()
+                .ack,
+            ApplicationTimeouts::TEST_SCHEDULER_TOLERANT.ack
         );
     }
 }

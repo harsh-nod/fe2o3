@@ -5,6 +5,10 @@
 
 use std::{
     convert::Infallible,
+    fs,
+    os::unix::fs::{MetadataExt, PermissionsExt},
+    path::{Path, PathBuf},
+    process::Command,
     sync::{
         Arc, OnceLock,
         atomic::{AtomicUsize, Ordering},
@@ -44,6 +48,58 @@ mod worker_v3_fixture;
 
 const TEST_MARKER_BINDING: [u8; 32] = [0xb1; 32];
 const TEST_HOST_CONTRACT: [u8; 32] = [0xb2; 32];
+
+fn static_host_consumer_application_fixture() -> &'static Path {
+    static FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+    FIXTURE.get_or_init(|| {
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let target = std::env::temp_dir().join(format!(
+            "cargo-fe2o3-v3-static-host-consumer-{}",
+            std::process::id()
+        ));
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let built = Command::new(cargo)
+            .current_dir(workspace)
+            .env(
+                "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS",
+                "-C target-feature=+crt-static",
+            )
+            .env("FE2O3_HIP_SYS_DISABLE", "1")
+            .args([
+                "build",
+                "--target",
+                "x86_64-unknown-linux-gnu",
+                "--target-dir",
+            ])
+            .arg(&target)
+            .args([
+                "-p",
+                "cargo-fe2o3",
+                "--features",
+                "host-consumer-fixture",
+                "--bin",
+                "cargo-fe2o3-host-consumer-app-fixture",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            built.status.success(),
+            "failed to build static V3 host consumer: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        target.join("x86_64-unknown-linux-gnu/debug/cargo-fe2o3-host-consumer-app-fixture")
+    })
+}
+
+fn lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
+}
 
 struct WorkerV3VecAddMarker;
 
@@ -286,6 +342,75 @@ fn recovered_host_fixture() -> (
     drop(envelope);
     let recovered = recover_worker_v3_load_envelope_v1(&directory.0, attempt).unwrap();
     (directory, recovered)
+}
+
+#[test]
+fn cargo_supervisor_and_static_host_consumer_complete_strict_v3_handoff() {
+    let worker_v3_fixture::PublishedWorkerV3Fixture {
+        directory,
+        producer,
+        attempt,
+        published,
+    } = worker_v3_fixture::published_worker_v3_fixture();
+    let envelope = WorkerV3LoadEnvelopeV1::from_published_hsaco_v1(published).unwrap();
+    let intent = envelope.wire().publication_intent_record().identity();
+    let readiness = envelope
+        .persist_durable_replay_custody_v1(&directory.0)
+        .unwrap();
+    retire_worker_v3_publication_intent_after_load_readiness_v1(
+        &directory.0,
+        &producer,
+        attempt,
+        intent,
+        readiness.receipt(),
+    )
+    .unwrap();
+    drop(envelope);
+
+    fs::set_permissions(&directory.0, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut owner = b"fe2o3-owned-v1\0".to_vec();
+    owner.extend_from_slice(&[0x55; 16]);
+    let owner_path = directory.0.join(".fe2o3-owned-v1");
+    fs::write(&owner_path, owner).unwrap();
+    fs::set_permissions(&owner_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let kernel = directory.0.join("v3-application.kernel-id");
+    let report = directory.0.join("v3-application-report.json");
+    fs::write(&kernel, "a1".repeat(32)).unwrap();
+    let metadata = fs::metadata(&directory.0).unwrap();
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    let runner_context = "3-test-scheduler-tolerant";
+    #[cfg(not(feature = "worker-v2-fault-injection-test-only"))]
+    let runner_context = "3";
+    let completed = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+        .arg("__fe2o3-runner-v1")
+        .arg(runner_context)
+        .arg(lower_hex(directory.0.as_os_str().as_encoded_bytes()))
+        .arg(metadata.dev().to_string())
+        .arg(metadata.ino().to_string())
+        .arg("required")
+        .arg("0")
+        .arg(static_host_consumer_application_fixture())
+        .arg("--worker-v3")
+        .arg(&kernel)
+        .arg("gfx942:xnack-")
+        .arg(&report)
+        .output()
+        .unwrap();
+    assert!(
+        completed.status.success(),
+        "strict V3 application handoff failed: {}; report: {}",
+        String::from_utf8_lossy(&completed.stderr),
+        fs::read_to_string(&report).unwrap_or_else(|error| format!("unavailable ({error})"))
+    );
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
+    assert_eq!(report["host_consumer"], true);
+    assert_eq!(report["loader_environment_clear"], true);
+    assert_eq!(report["admitted"], true);
+    assert_eq!(report["current"], true);
+
+    let recovered = recover_worker_v3_load_envelope_v1(&directory.0, attempt).unwrap();
+    assert_eq!(recovered.receipt(), readiness.receipt());
 }
 
 #[test]
