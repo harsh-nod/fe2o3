@@ -353,6 +353,8 @@ pub struct ProductionSemanticKirOwnerV1 {
     semantic: ProductionSemanticMirOwnerV1,
     module: Module,
     correspondence: SemanticKirCorrespondenceV1,
+    limits: ProductionSemanticKirLimitsV1,
+    discharge_ranked_bounds: bool,
     generic_checks: Option<RetainedGenericKernelChecksV1>,
 }
 
@@ -369,6 +371,8 @@ impl fmt::Debug for ProductionSemanticKirOwnerV1 {
             .debug_struct("ProductionSemanticKirOwnerV1")
             .field("module", &self.module.id)
             .field("correspondence", &self.correspondence)
+            .field("limits", &self.limits)
+            .field("discharge_ranked_bounds", &self.discharge_ranked_bounds)
             .field("retains_generic_checks", &self.generic_checks.is_some())
             .finish_non_exhaustive()
     }
@@ -389,6 +393,8 @@ impl ProductionSemanticKirOwnerV1 {
             semantic,
             module,
             correspondence,
+            limits,
+            discharge_ranked_bounds: false,
             generic_checks: None,
         };
         owner.verify_equivalence()?;
@@ -425,6 +431,8 @@ impl ProductionSemanticKirOwnerV1 {
             semantic,
             module,
             correspondence,
+            limits,
+            discharge_ranked_bounds: true,
             generic_checks: Some(RetainedGenericKernelChecksV1 {
                 semantic_sha256,
                 function_name,
@@ -442,18 +450,9 @@ impl ProductionSemanticKirOwnerV1 {
             .verify_equivalence()
             .map_err(ProductionSemanticKirErrorV1::SemanticOwner)?;
         verify_module(&self.module).map_err(ProductionSemanticKirErrorV1::InvalidKernelIr)?;
-        if self.correspondence.semantic_sha256
-            != *self.semantic.semantic().semantic_sha256().as_bytes()
-            || self.correspondence.function_count != self.semantic.semantic().functions().len()
-            || self.correspondence.blocks.len()
-                != self
-                    .semantic
-                    .semantic()
-                    .functions()
-                    .iter()
-                    .map(|function| function.blocks().len())
-                    .sum::<usize>()
-        {
+        let (rederived_module, rederived_correspondence) =
+            lower_module(&self.semantic, self.limits, self.discharge_ranked_bounds)?;
+        if self.module != rederived_module || self.correspondence != rederived_correspondence {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
         if let Some(generic_checks) = &self.generic_checks {
