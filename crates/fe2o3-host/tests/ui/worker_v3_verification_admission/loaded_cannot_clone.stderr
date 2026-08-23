@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `LoadedWorkerV3HsaExecutableV1<K, A>` in the current scope
+  --> tests/ui/worker_v3_verification_admission/loaded_cannot_clone.rs:11:29
+   |
+11 |     let _duplicate = loaded.clone();
+   |                             ^^^^^ method not found in `LoadedWorkerV3HsaExecutableV1<K, A>`

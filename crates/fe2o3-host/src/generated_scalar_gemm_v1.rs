@@ -14,10 +14,10 @@ use crate::{
     ArtifactKernelIdentityV1, CompilerGeneratedArgumentLayoutV1,
     CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
     GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
-    GeneratedArgumentPackingPlanV1, HsaCompletedDispatchV1, HsaExecutableLoadError,
-    HsaGeneratedDispatchError, HsaLaunchAuthorizationError, HsaLaunchGeometryV1,
-    LoadedHsaExecutableV1, ObservedContext, PhysicalMetadataValueV1, RegionError,
-    ReviewedHsaExecutableLifecycleAdapterV1, ReviewedHsaImplicitKernargAdapterV1,
+    GeneratedArgumentPackingPlanV1, GeneratedSliceArgumentPairV1, HsaCompletedDispatchV1,
+    HsaExecutableLoadError, HsaGeneratedDispatchError, HsaLaunchAuthorizationError,
+    HsaLaunchGeometryV1, LoadedHsaExecutableV1, ObservedContext, PhysicalMetadataValueV1,
+    RegionError, ReviewedHsaExecutableLifecycleAdapterV1, ReviewedHsaImplicitKernargAdapterV1,
     WorkerV2ExecutableAuthenticationError, WorkerV2PrerequisiteAuthenticatorV1,
     WorkerV2TypedKernelSelectionError,
 };
@@ -127,6 +127,18 @@ impl<'allocation> GeneratedScalarGemmV1ReadDeviceSlice<'allocation> {
             ArgumentAccessMode::SharedRead,
         )
     }
+
+    #[doc(hidden)]
+    pub fn bind_argument_pair(
+        &self,
+        plan: &GeneratedArgumentPackingPlanV1,
+        argument_index: usize,
+    ) -> Result<GeneratedSliceArgumentPairV1<'allocation>, GeneratedArgumentPackError> {
+        Ok(GeneratedSliceArgumentPairV1::new(
+            self.bind_input_v1(plan, argument_index)?,
+            self.argument_access_v1(),
+        ))
+    }
 }
 
 /// Generated exclusive initialized `f32` device-slice capability for Scalar
@@ -210,6 +222,18 @@ impl<'allocation> GeneratedScalarGemmV1ReadWriteDeviceSlice<'allocation> {
             self.metadata.checked_region(),
             ArgumentAccessMode::ExclusiveReadWrite,
         )
+    }
+
+    #[doc(hidden)]
+    pub fn bind_argument_pair(
+        &self,
+        plan: &GeneratedArgumentPackingPlanV1,
+        argument_index: usize,
+    ) -> Result<GeneratedSliceArgumentPairV1<'allocation>, GeneratedArgumentPackError> {
+        Ok(GeneratedSliceArgumentPairV1::new(
+            self.bind_input_v1(plan, argument_index)?,
+            self.argument_access_v1(),
+        ))
     }
 }
 

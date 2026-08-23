@@ -22,6 +22,7 @@ mod generated_wave64_collectives_v1_lifecycle;
 #[cfg(test)]
 mod generated_wave64_collectives_v1_lifecycle_tests;
 mod generated_worker_v2_vecadd;
+mod generated_worker_v3_dispatch;
 mod generated_workgroup_lds_reduction_v1;
 mod generated_workgroup_scoped_atomic_v1;
 mod generated_workgroup_sync_v1_lifecycle;
@@ -50,8 +51,12 @@ mod worker_v3_verification_admission;
 #[doc(hidden)]
 pub mod __hardware_test {
     use fe2o3_artifact_transaction::DurableCurrentLinkPublicationTokenV1;
+    use fe2o3_artifacts::{Access, AddressSpace, PointerWidth};
 
-    use crate::ObservedContext;
+    use crate::{
+        AllocationProvenance, ArgumentAccess, ArgumentAccessMode, GeneratedSliceArgumentPairV1,
+        ObservedContext,
+    };
 
     pub use crate::worker_v2_bundle_admission::tests::{
         TestDirectory, TestPublicationTurnover,
@@ -81,6 +86,48 @@ pub mod __hardware_test {
     /// Constructs inert device facts for a descriptor-handoff integration fixture.
     pub fn application_handoff_observed_context_fixture_v1(target: &str) -> ObservedContext {
         ObservedContext::for_test(0xf3_02, 0, target, 1_024, 65_536)
+    }
+
+    /// Constructs one shared-`f32` argument pair for an envelope integration test.
+    ///
+    /// # Safety
+    ///
+    /// Either `address..address + length * 4` must denote one live device allocation owned by
+    /// `owner` in `observed` for the returned value's lifetime, or every value derived from this
+    /// fixture must remain inside an inert test path whose adapter cannot submit work or access
+    /// device memory. The latter case must not be passed to a live HSA adapter.
+    pub unsafe fn generated_shared_f32_argument_pair_fixture_v1<'allocation, Owner: ?Sized>(
+        observed: &ObservedContext,
+        owner: &'allocation Owner,
+        plan: &crate::GeneratedArgumentPackingPlanV1,
+        argument_index: usize,
+        address: usize,
+        length: usize,
+    ) -> GeneratedSliceArgumentPairV1<'allocation> {
+        let byte_length = length.checked_mul(size_of::<f32>()).unwrap();
+        // SAFETY: upheld by this test-only function's live-allocation-or-inert-adapter contract.
+        let provenance = unsafe {
+            AllocationProvenance::from_raw_parts(observed, owner, address as *mut u8, byte_length)
+        }
+        .unwrap();
+        let access = ArgumentAccess::new(
+            provenance.region(0, byte_length).unwrap(),
+            ArgumentAccessMode::SharedRead,
+        );
+        // SAFETY: the test caller supplies the retained allocation or confines the value to an
+        // inert adapter; the validated plan still checks index, physical width, space, and effect.
+        let input = unsafe {
+            plan.slice(
+                argument_index,
+                address as *const (),
+                u64::try_from(length).unwrap(),
+                PointerWidth::Bits64,
+                AddressSpace::Global,
+                Access::ReadOnly,
+            )
+        }
+        .unwrap();
+        GeneratedSliceArgumentPairV1::new(input, access)
     }
 }
 
@@ -207,6 +254,12 @@ pub use generated_worker_v2_vecadd::{
     GeneratedWorkerV2VecAddExecutorV1, GeneratedWorkerV2VecAddPrepareError,
     GeneratedWorkerV2VecAddPreparedV1,
 };
+#[doc(hidden)]
+pub use generated_worker_v3_dispatch::{
+    CompilerGeneratedWorkerV3ArgumentsV1, GeneratedWorkerV3ArgumentBindingV1,
+    GeneratedWorkerV3ArgumentErrorV1, GeneratedWorkerV3PrepareErrorV1,
+    GeneratedWorkerV3PreparedInvocationV1,
+};
 pub use generated_workgroup_lds_reduction_v1::{
     GeneratedWorkgroupLdsReductionV1HostAdapterErrorV1,
     GeneratedWorkgroupLdsReductionV1HostAdapterV1, WorkgroupLdsReductionBufferRoleV1,
@@ -236,19 +289,20 @@ pub use gfx942_ocml::{
 };
 pub use hsa_executable_lifecycle::{
     AuthenticatedWorkerV2ExecutableV1, AuthorizedHsaLoadV1, AuthorizedWorkerV3HsaLoadV1,
-    HsaAgentIdentityV1, HsaCodeObjectLoadObservationV1, HsaCompletedDispatchV1, HsaDispatchError,
-    HsaDispatchObservationV1, HsaEnvironmentMismatch, HsaEnvironmentObservationV1,
-    HsaExecutableLoadError, HsaExecutableObjectIdentityV1, HsaExecutableUnloadError,
-    HsaGeneratedDispatchError, HsaImplicitKernargInitializationObservationV1,
-    HsaKernelLaunchAuthorizationV1, HsaKernelObjectIdentityV1, HsaKernelResolutionObservationV1,
-    HsaLaunchAuthorizationError, HsaLaunchGeometryV1, HsaLoadAuthorizationError,
-    HsaObservationError, HsaPhysicalDeviceIdentityV1, HsaRuntimeIdentityV1, HsaUnloadObservationV1,
+    HsaAgentIdentityV1, HsaCodeObjectLoadObservationV1, HsaCompletedDispatchV1,
+    HsaCompletedWorkerV3DispatchV1, HsaDispatchError, HsaDispatchObservationV1,
+    HsaEnvironmentMismatch, HsaEnvironmentObservationV1, HsaExecutableLoadError,
+    HsaExecutableObjectIdentityV1, HsaExecutableUnloadError, HsaGeneratedDispatchError,
+    HsaImplicitKernargInitializationObservationV1, HsaKernelLaunchAuthorizationV1,
+    HsaKernelObjectIdentityV1, HsaKernelResolutionObservationV1, HsaLaunchAuthorizationError,
+    HsaLaunchGeometryV1, HsaLoadAuthorizationError, HsaObservationError,
+    HsaPhysicalDeviceIdentityV1, HsaRuntimeIdentityV1, HsaUnloadObservationV1,
     InertLoadedWorkerV2KernelSelectionV1, LoadedHsaExecutableV1, LoadedWorkerV3HsaExecutableV1,
     ReviewedHsaExecutableLifecycleAdapterV1, ReviewedHsaImplicitKernargAdapterV1,
     UnloadedHsaExecutableV1, WorkerV2ExecutableAuthenticationError,
     WorkerV2PrerequisiteAuthenticatorV1, WorkerV2PrerequisiteDecisionV1, WorkerV2PrerequisiteError,
     WorkerV2PrerequisiteRequestV1, WorkerV2RequiredProfileError, WorkerV2SafetyPropertiesV1,
-    WorkerV2SafetyPropertyV1, WorkerV3HsaExecutableLoadErrorV1,
+    WorkerV2SafetyPropertyV1, WorkerV3GeneratedDispatchErrorV1, WorkerV3HsaExecutableLoadErrorV1,
     WorkerV3HsaLoadAuthorizationErrorV1,
 };
 #[doc(hidden)]
@@ -361,33 +415,36 @@ pub mod __generated {
         CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelContractV1,
         CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
         CompilerGeneratedScalarGemmV1Arguments, CompilerGeneratedSemanticWitnessErrorV1,
-        GeneratedAdmittedLaunch, GeneratedAlphaZetaCov6ArgumentBindingV1,
-        GeneratedAlphaZetaCov6ArgumentError, GeneratedAlphaZetaCov6CompletionV1,
-        GeneratedAlphaZetaCov6GeometryError, GeneratedAlphaZetaCov6PhysicalKernargError,
-        GeneratedAlphaZetaCov6PrepareError, GeneratedAlphaZetaCov6PrepareResultV1,
-        GeneratedAlphaZetaCov6PreparedInvocationV1, GeneratedArgumentFieldProperty,
-        GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
-        GeneratedArgumentPackingPlanV1, GeneratedArtifactAuthenticationError,
-        GeneratedDeviceScalarV1, GeneratedKernelBindingV1, GeneratedKernelProfileError,
-        GeneratedLdsGemmSlice1HostAdapterErrorV1, GeneratedLdsGemmSlice1HostAdapterV1,
-        GeneratedMarkerBindingError, GeneratedPackingComponentKindV1, GeneratedPackingComponentV1,
-        GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice,
-        GeneratedScalarGemmV1ArgumentBinding, GeneratedScalarGemmV1Completion,
-        GeneratedScalarGemmV1PrepareError, GeneratedScalarGemmV1PrepareResult,
-        GeneratedScalarGemmV1PreparedInvocation, GeneratedScalarGemmV1ReadDeviceSlice,
-        GeneratedScalarGemmV1ReadWriteDeviceSlice, GeneratedSliceArgumentPairV1,
-        GeneratedVecAddKernelV1, GeneratedVecAddLoadError, GeneratedVecAddPrepareError,
-        GeneratedVecAddPreparedV1, GeneratedVecAddProfileError, GeneratedWorkerV2VecAddBindError,
-        GeneratedWorkerV2VecAddCompletionV1, GeneratedWorkerV2VecAddExecutorV1,
-        GeneratedWorkerV2VecAddPrepareError, GeneratedWorkerV2VecAddPreparedV1,
-        GeneratedWriteDeviceSlice, LoadedKernelLoadError, ScalarGemmV1ArgumentError,
-        ScalarGemmV1DispatchIdentity, ScalarGemmV1GeometryError, ScalarGemmV1PhysicalKernargError,
-        ScalarGemmV1ProfileError, ValidatedCompilerGeneratedSemanticWitnessV1,
-        semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
+        CompilerGeneratedWorkerV3ArgumentsV1, GeneratedAdmittedLaunch,
+        GeneratedAlphaZetaCov6ArgumentBindingV1, GeneratedAlphaZetaCov6ArgumentError,
+        GeneratedAlphaZetaCov6CompletionV1, GeneratedAlphaZetaCov6GeometryError,
+        GeneratedAlphaZetaCov6PhysicalKernargError, GeneratedAlphaZetaCov6PrepareError,
+        GeneratedAlphaZetaCov6PrepareResultV1, GeneratedAlphaZetaCov6PreparedInvocationV1,
+        GeneratedArgumentFieldProperty, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
+        GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1,
+        GeneratedArtifactAuthenticationError, GeneratedDeviceScalarV1, GeneratedKernelBindingV1,
+        GeneratedKernelProfileError, GeneratedLdsGemmSlice1HostAdapterErrorV1,
+        GeneratedLdsGemmSlice1HostAdapterV1, GeneratedMarkerBindingError,
+        GeneratedPackingComponentKindV1, GeneratedPackingComponentV1, GeneratedReadDeviceSlice,
+        GeneratedReadWriteDeviceSlice, GeneratedScalarGemmV1ArgumentBinding,
+        GeneratedScalarGemmV1Completion, GeneratedScalarGemmV1PrepareError,
+        GeneratedScalarGemmV1PrepareResult, GeneratedScalarGemmV1PreparedInvocation,
+        GeneratedScalarGemmV1ReadDeviceSlice, GeneratedScalarGemmV1ReadWriteDeviceSlice,
+        GeneratedSliceArgumentPairV1, GeneratedVecAddKernelV1, GeneratedVecAddLoadError,
+        GeneratedVecAddPrepareError, GeneratedVecAddPreparedV1, GeneratedVecAddProfileError,
+        GeneratedWorkerV2VecAddBindError, GeneratedWorkerV2VecAddCompletionV1,
+        GeneratedWorkerV2VecAddExecutorV1, GeneratedWorkerV2VecAddPrepareError,
+        GeneratedWorkerV2VecAddPreparedV1, GeneratedWorkerV3ArgumentBindingV1,
+        GeneratedWorkerV3ArgumentErrorV1, GeneratedWorkerV3PrepareErrorV1,
+        GeneratedWorkerV3PreparedInvocationV1, GeneratedWriteDeviceSlice, LoadedKernelLoadError,
+        ScalarGemmV1ArgumentError, ScalarGemmV1DispatchIdentity, ScalarGemmV1GeometryError,
+        ScalarGemmV1PhysicalKernargError, ScalarGemmV1ProfileError,
+        ValidatedCompilerGeneratedSemanticWitnessV1, semantic_witness_from_backend_v1,
+        validate_compiler_generated_semantic_witness_v1,
     };
     pub use fe2o3_artifacts::{
         AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, Mutability, Name,
-        PointerWidth, ScalarType,
+        PointerWidth, RustDisjointIndexSpaceV1, ScalarType,
     };
 
     /// Constructs the exact immutable slice promised by a generated backend

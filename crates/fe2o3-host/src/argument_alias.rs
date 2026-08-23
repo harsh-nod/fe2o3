@@ -786,6 +786,13 @@ pub struct GeneratedSliceArgumentPairV1<'allocation> {
 }
 
 impl<'allocation> GeneratedSliceArgumentPairV1<'allocation> {
+    pub(crate) const fn new(
+        input: GeneratedArgumentInputV1<'allocation>,
+        access: ArgumentAccess<'allocation>,
+    ) -> Self {
+        Self { input, access }
+    }
+
     pub(crate) fn into_parts(
         self,
     ) -> (

@@ -10,6 +10,11 @@ use fe2o3_artifacts::{
     ScalarType, TypeIdentity, ValidationError,
 };
 use fe2o3_core::DeviceCopy;
+use fe2o3_kernel_descriptor::{
+    AccessMode as DescriptorAccessMode, AliasSemantics as DescriptorAliasSemantics,
+    DeviceDescriptorTableV1, KernelDescriptorV1, LogicalArgumentV1,
+    OwnershipSemantics as DescriptorOwnershipSemantics, PhysicalAbiComponentKind, ScalarTypeV1,
+};
 use std::{fmt, marker::PhantomData, num::NonZeroU64, sync::Arc};
 
 mod generated_device_scalar_seal {
@@ -43,7 +48,12 @@ pub trait GeneratedDeviceScalarV1: generated_device_scalar_seal::Sealed + Device
 
     #[doc(hidden)]
     fn disjoint_slice_type_identity_v1(pointer_width: PointerWidth) -> TypeIdentity {
-        canonical_slice_layout_v1(Self::RUST_SCALAR_TYPE, pointer_width, true).type_identity()
+        canonical_disjoint_slice_layout_v1(
+            Self::RUST_SCALAR_TYPE,
+            pointer_width,
+            RustDisjointIndexSpaceV1::Index1D,
+        )
+        .type_identity()
     }
 
     #[doc(hidden)]
@@ -1264,6 +1274,7 @@ impl std::error::Error for GeneratedArgumentPackError {}
 #[doc(hidden)]
 #[non_exhaustive]
 pub enum GeneratedArgumentFieldProperty {
+    SourceIndex,
     Name,
     Offset,
     Size,
@@ -1280,6 +1291,7 @@ pub enum GeneratedArgumentFieldProperty {
 impl fmt::Display for GeneratedArgumentFieldProperty {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::SourceIndex => "source index",
             Self::Name => "name",
             Self::Offset => "offset",
             Self::Size => "size",
@@ -1759,15 +1771,310 @@ pub(crate) fn validate_argument_packing(
         }
     }
 
-    Ok(GeneratedArgumentPackingPlanV1 {
+    Ok(packing_plan_from_layout(kernel_id, manifest))
+}
+
+/// Validates a compiler-generated host layout against one independently admitted Worker V3
+/// descriptor before producing the existing inert packing plan.
+///
+/// Worker V3 deliberately uses a descriptor schema independent from `AbiLayout`. The V3 verifier
+/// authenticates the exact generated Rust type/layout contract against that descriptor and final
+/// executable. This bridge separately compares every representable physical ABI and effect fact;
+/// it never derives a safe Rust signature from descriptor bytes.
+pub(crate) fn validate_worker_v3_argument_packing(
+    table: &DeviceDescriptorTableV1,
+    descriptor: &KernelDescriptorV1,
+    generated: &CompilerGeneratedArgumentLayoutV1,
+) -> Result<GeneratedArgumentPackingPlanV1, GeneratedArgumentPackingError> {
+    let expected = &generated.layout;
+    let descriptor_abi = descriptor.abi_layout();
+    let manifest_size = u64::from(descriptor_abi.explicit_argument_size());
+    if expected.size() != manifest_size {
+        return Err(GeneratedArgumentPackingError::KernargSize {
+            generated: expected.size(),
+            manifest: manifest_size,
+        });
+    }
+    let manifest_alignment = descriptor_abi.kernarg_segment_alignment();
+    if expected.alignment() != manifest_alignment {
+        return Err(GeneratedArgumentPackingError::KernargAlignment {
+            generated: expected.alignment(),
+            manifest: manifest_alignment,
+        });
+    }
+    if expected.pointer_width() != PointerWidth::Bits64 {
+        return Err(GeneratedArgumentPackingError::PointerWidth {
+            generated: expected.pointer_width(),
+            manifest: PointerWidth::Bits64,
+        });
+    }
+    if expected.fields().len() != descriptor.arguments().len() {
+        return Err(GeneratedArgumentPackingError::ArgumentCount {
+            generated: expected.fields().len(),
+            manifest: descriptor.arguments().len(),
+        });
+    }
+
+    for (index, (field, argument)) in expected
+        .fields()
+        .iter()
+        .zip(descriptor.arguments())
+        .enumerate()
+    {
+        if let Some(property) = worker_v3_field_mismatch(table, index, field, argument) {
+            return Err(GeneratedArgumentPackingError::FieldMismatch { index, property });
+        }
+    }
+
+    Ok(packing_plan_from_layout(descriptor.kernel_id(), expected))
+}
+
+fn packing_plan_from_layout(
+    kernel_id: KernelId,
+    layout: &AbiLayout,
+) -> GeneratedArgumentPackingPlanV1 {
+    GeneratedArgumentPackingPlanV1 {
         kernel_id,
         seal: Arc::new(GeneratedArgumentPackingPlanSealV1),
-        kernarg_size: manifest.size(),
-        kernarg_alignment: manifest.alignment(),
-        pointer_width: manifest.pointer_width(),
-        fields: manifest.fields().to_vec().into_boxed_slice(),
-        components: packing_components(manifest).into_boxed_slice(),
-    })
+        kernarg_size: layout.size(),
+        kernarg_alignment: layout.alignment(),
+        pointer_width: layout.pointer_width(),
+        fields: layout.fields().to_vec().into_boxed_slice(),
+        components: packing_components(layout).into_boxed_slice(),
+    }
+}
+
+fn worker_v3_field_mismatch(
+    table: &DeviceDescriptorTableV1,
+    index: usize,
+    field: &AbiField,
+    argument: &LogicalArgumentV1,
+) -> Option<GeneratedArgumentFieldProperty> {
+    let expected_ownership = match argument.ownership() {
+        DescriptorOwnershipSemantics::ByValue => ArgumentOwnership::ByValue,
+        DescriptorOwnershipSemantics::SharedBorrow => ArgumentOwnership::SharedBorrow,
+        DescriptorOwnershipSemantics::UniqueBorrow => ArgumentOwnership::UniqueBorrow,
+    };
+    let expected_access = match argument.access() {
+        DescriptorAccessMode::ByValue => Access::ByValue,
+        DescriptorAccessMode::ReadOnly => Access::ReadOnly,
+        DescriptorAccessMode::WriteOnly => Access::WriteOnly,
+        DescriptorAccessMode::ReadWrite => Access::ReadWrite,
+    };
+    let expected_alias = match argument.alias() {
+        DescriptorAliasSemantics::Value => AliasClass::Value,
+        DescriptorAliasSemantics::SharedReadOnly => AliasClass::SharedReadOnly,
+        DescriptorAliasSemantics::Exclusive => AliasClass::Exclusive,
+    };
+    let expected_mutability = match argument.ownership() {
+        DescriptorOwnershipSemantics::UniqueBorrow => Mutability::Mutable,
+        DescriptorOwnershipSemantics::ByValue | DescriptorOwnershipSemantics::SharedBorrow => {
+            Mutability::Immutable
+        }
+    };
+    let expected_address_space = match argument.ownership() {
+        DescriptorOwnershipSemantics::ByValue => AddressSpace::Value,
+        DescriptorOwnershipSemantics::SharedBorrow | DescriptorOwnershipSemantics::UniqueBorrow => {
+            AddressSpace::Global
+        }
+    };
+
+    let source = table
+        .type_records()
+        .iter()
+        .find(|record| record.identity() == argument.source_type())
+        .map(|record| record.descriptor());
+    let device_layout = table
+        .layout_records()
+        .iter()
+        .find(|record| record.identity() == argument.device_layout())
+        .map(|record| record.descriptor());
+    let expected_type_identity = source.map(|source| {
+        let scalar = descriptor_scalar_to_rust_layout(source.scalar_type());
+        if source.is_scalar() {
+            canonical_scalar_layout_v1(scalar, PointerWidth::Bits64).type_identity()
+        } else if source.is_shared_slice() {
+            canonical_slice_layout_v1(scalar, PointerWidth::Bits64, false).type_identity()
+        } else {
+            // V3 descriptor V1 preserves `DisjointSlice` but not a mapped index-space type.
+            // Only canonical Index1D can therefore enter the safe dispatch bridge.
+            canonical_disjoint_slice_layout_v1(
+                scalar,
+                PointerWidth::Bits64,
+                RustDisjointIndexSpaceV1::Index1D,
+            )
+            .type_identity()
+        }
+    });
+    let layout_matches = match (source, device_layout) {
+        (Some(source), Some(layout)) => {
+            source.scalar_type() == layout.scalar_type()
+                && layout.size_bytes() as u64 == field.size()
+                && layout.alignment_bytes() as u32 == field.alignment()
+                && (source.is_scalar()
+                    || (layout.pointer_width_bytes() == 8 && layout.length_width_bytes() == 8))
+        }
+        _ => false,
+    };
+
+    for (matches, property) in [
+        (
+            usize::from(argument.source_index()) == index,
+            GeneratedArgumentFieldProperty::SourceIndex,
+        ),
+        (
+            argument.name().as_str() == field.name().as_str(),
+            GeneratedArgumentFieldProperty::Name,
+        ),
+        (
+            expected_type_identity == Some(field.type_identity()) && layout_matches,
+            GeneratedArgumentFieldProperty::TypeIdentity,
+        ),
+        (
+            field.mutability() == expected_mutability,
+            GeneratedArgumentFieldProperty::Mutability,
+        ),
+        (
+            field.access() == expected_access,
+            GeneratedArgumentFieldProperty::Access,
+        ),
+        (
+            field.address_space() == expected_address_space,
+            GeneratedArgumentFieldProperty::AddressSpace,
+        ),
+        (
+            field.ownership() == expected_ownership,
+            GeneratedArgumentFieldProperty::Ownership,
+        ),
+        (
+            field.alias_class() == expected_alias,
+            GeneratedArgumentFieldProperty::AliasClass,
+        ),
+    ] {
+        if !matches {
+            return Some(property);
+        }
+    }
+
+    let components = argument.physical_components().collect::<Vec<_>>();
+    match (field.kind(), components.as_slice()) {
+        (
+            AbiKind::Scalar(scalar),
+            [(PhysicalAbiComponentKind::ScalarByValue(actual), offset, size, alignment)],
+        ) => {
+            if descriptor_scalar_to_artifact(*actual) != scalar {
+                return Some(GeneratedArgumentFieldProperty::Kind);
+            }
+            first_worker_v3_component_mismatch(field, *offset, *size, *alignment)
+        }
+        (
+            AbiKind::Slice { .. },
+            [
+                (
+                    PhysicalAbiComponentKind::GlobalPointer,
+                    pointer_offset,
+                    pointer_size,
+                    pointer_alignment,
+                ),
+                (
+                    PhysicalAbiComponentKind::SliceLengthU64,
+                    length_offset,
+                    length_size,
+                    length_alignment,
+                ),
+            ],
+        ) => {
+            if u64::from(*pointer_offset) != field.offset()
+                || u64::from(*pointer_size) != PointerWidth::Bits64.bytes()
+                || u32::from(*pointer_alignment) != field.alignment()
+                || u64::from(*length_offset)
+                    != field.offset().checked_add(PointerWidth::Bits64.bytes())?
+                || u64::from(*length_size) != PointerWidth::Bits64.bytes()
+                || u32::from(*length_alignment) != field.alignment()
+                || field.size() != PointerWidth::Bits64.bytes() * 2
+            {
+                worker_v3_component_property(
+                    field,
+                    *pointer_offset,
+                    *pointer_size,
+                    *pointer_alignment,
+                )
+                .or(Some(GeneratedArgumentFieldProperty::Kind))
+            } else {
+                None
+            }
+        }
+        (
+            AbiKind::Pointer { .. },
+            [(PhysicalAbiComponentKind::GlobalPointer, offset, size, alignment)],
+        ) => first_worker_v3_component_mismatch(field, *offset, *size, *alignment),
+        _ => Some(GeneratedArgumentFieldProperty::Kind),
+    }
+}
+
+fn first_worker_v3_component_mismatch(
+    field: &AbiField,
+    offset: u32,
+    size: u16,
+    alignment: u16,
+) -> Option<GeneratedArgumentFieldProperty> {
+    worker_v3_component_property(field, offset, size, alignment)
+}
+
+fn worker_v3_component_property(
+    field: &AbiField,
+    offset: u32,
+    size: u16,
+    alignment: u16,
+) -> Option<GeneratedArgumentFieldProperty> {
+    [
+        (
+            field.offset() == u64::from(offset),
+            GeneratedArgumentFieldProperty::Offset,
+        ),
+        (
+            field.size() == u64::from(size),
+            GeneratedArgumentFieldProperty::Size,
+        ),
+        (
+            field.alignment() == u32::from(alignment),
+            GeneratedArgumentFieldProperty::Alignment,
+        ),
+    ]
+    .into_iter()
+    .find_map(|(matches, property)| (!matches).then_some(property))
+}
+
+const fn descriptor_scalar_to_artifact(value: ScalarTypeV1) -> ScalarType {
+    match value {
+        ScalarTypeV1::I8 => ScalarType::I8,
+        ScalarTypeV1::U8 => ScalarType::U8,
+        ScalarTypeV1::I16 => ScalarType::I16,
+        ScalarTypeV1::U16 => ScalarType::U16,
+        ScalarTypeV1::I32 => ScalarType::I32,
+        ScalarTypeV1::U32 => ScalarType::U32,
+        ScalarTypeV1::I64 => ScalarType::I64,
+        ScalarTypeV1::U64 => ScalarType::U64,
+        ScalarTypeV1::F16 => ScalarType::F16,
+        ScalarTypeV1::F32 => ScalarType::F32,
+        ScalarTypeV1::F64 => ScalarType::F64,
+    }
+}
+
+const fn descriptor_scalar_to_rust_layout(value: ScalarTypeV1) -> RustScalarElementTypeV1 {
+    match value {
+        ScalarTypeV1::I8 => RustScalarElementTypeV1::I8,
+        ScalarTypeV1::U8 => RustScalarElementTypeV1::U8,
+        ScalarTypeV1::I16 => RustScalarElementTypeV1::I16,
+        ScalarTypeV1::U16 => RustScalarElementTypeV1::U16,
+        ScalarTypeV1::I32 => RustScalarElementTypeV1::I32,
+        ScalarTypeV1::U32 => RustScalarElementTypeV1::U32,
+        ScalarTypeV1::I64 => RustScalarElementTypeV1::I64,
+        ScalarTypeV1::U64 => RustScalarElementTypeV1::U64,
+        ScalarTypeV1::F16 => RustScalarElementTypeV1::F16,
+        ScalarTypeV1::F32 => RustScalarElementTypeV1::F32,
+        ScalarTypeV1::F64 => RustScalarElementTypeV1::F64,
+    }
 }
 
 fn first_field_mismatch(
@@ -1882,12 +2189,22 @@ mod tests {
         GeneratedArgumentFieldProperty, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
         GeneratedArgumentPackingError, GeneratedArgumentValueV1, GeneratedDeviceScalarV1,
         GeneratedPackingComponentKindV1, validate_argument_packing,
+        validate_worker_v3_argument_packing,
     };
     use crate::{KernelId, argument_alias::generated_argument_borrow_for_test};
+    use fe2o3_amd_target::AmdTargetId;
     use fe2o3_artifacts::{
         AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
         DeclaredRustLayoutIdentity, DeclaredRustTypeIdentity, DigestBytes, Mutability, Name,
-        PointerWidth, ScalarType, TypeIdentity,
+        PointerWidth, RustDisjointIndexSpaceV1, ScalarType, TypeIdentity,
+    };
+    use fe2o3_kernel_descriptor::{
+        AccessMode, BlockSizeV1, BuildEvidenceV1, CanonicalCodeObjectDigest, CodeObjectVersion,
+        CompilerIdentityV1, DeviceDescriptorTableV1, DeviceLayoutDescriptorV1,
+        DeviceLayoutRecordV1, DeviceTargetV1, DimensionsV1, EvidenceDigest, EvidenceIdentity,
+        KernelAbiLayoutV1, KernelDescriptorV1, LaunchConstraintsV1, LogicalArgumentV1,
+        ProducerIdentityV1, ScalarTypeV1, SourceTypeDescriptorV1, SourceTypeRecordV1, Text,
+        ValidName,
     };
 
     const KERNEL_ID: KernelId = KernelId::from_bytes([9; 32]);
@@ -2138,6 +2455,180 @@ mod tests {
         generated: &CompilerGeneratedArgumentLayoutV1,
     ) -> Result<super::GeneratedArgumentPackingPlanV1, GeneratedArgumentPackingError> {
         validate_argument_packing(KERNEL_ID, manifest, generated)
+    }
+
+    fn descriptor_name(value: &str) -> ValidName {
+        ValidName::new(value).unwrap()
+    }
+
+    fn worker_v3_table(disjoint: bool) -> DeviceDescriptorTableV1 {
+        let source = SourceTypeRecordV1::new(if disjoint {
+            SourceTypeDescriptorV1::disjoint_slice(ScalarTypeV1::F32)
+        } else {
+            SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32)
+        });
+        let layout = DeviceLayoutRecordV1::new(if disjoint {
+            DeviceLayoutDescriptorV1::disjoint_slice(ScalarTypeV1::F32)
+        } else {
+            DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32)
+        });
+        let argument = if disjoint {
+            LogicalArgumentV1::disjoint_slice(
+                0,
+                descriptor_name("values"),
+                &source,
+                &layout,
+                AccessMode::ReadWrite,
+                0,
+            )
+            .unwrap()
+        } else {
+            LogicalArgumentV1::shared_slice(0, descriptor_name("values"), &source, &layout, 0)
+                .unwrap()
+        };
+        let evidence = |identity, digest| {
+            BuildEvidenceV1::new(
+                EvidenceIdentity::from_opaque_bytes([identity; 32]),
+                EvidenceDigest::from_sha256_bytes([digest; 32]),
+            )
+        };
+        let kernel = KernelDescriptorV1::new(
+            KERNEL_ID,
+            descriptor_name("worker_v3_test"),
+            descriptor_name("worker_v3_test"),
+            descriptor_name("worker_v3_test.kd"),
+            evidence(1, 2),
+            evidence(3, 4),
+            vec![],
+            KernelAbiLayoutV1::new(16, 272, 8).unwrap(),
+            LaunchConstraintsV1::new(
+                1,
+                BlockSizeV1::Any,
+                DimensionsV1::new(u32::MAX, 1, 1).unwrap(),
+                1024,
+                0,
+                0,
+            )
+            .unwrap(),
+            vec![argument],
+        )
+        .unwrap();
+        DeviceDescriptorTableV1::new(
+            CanonicalCodeObjectDigest::from_bytes([5; 32]),
+            CodeObjectVersion::V6,
+            CompilerIdentityV1::new(
+                Text::new("rustc").unwrap(),
+                Text::new("test").unwrap(),
+                [6; 20],
+            ),
+            ProducerIdentityV1::new(
+                Text::new("cargo-fe2o3").unwrap(),
+                Text::new("test").unwrap(),
+            ),
+            DeviceTargetV1::new(AmdTargetId::parse("gfx942").unwrap()),
+            vec![source],
+            vec![layout],
+            vec![kernel],
+        )
+        .unwrap()
+    }
+
+    fn validate_worker_v3(
+        table: &DeviceDescriptorTableV1,
+        generated: &CompilerGeneratedArgumentLayoutV1,
+    ) -> Result<super::GeneratedArgumentPackingPlanV1, GeneratedArgumentPackingError> {
+        validate_worker_v3_argument_packing(table, &table.kernels()[0], generated)
+    }
+
+    #[test]
+    fn worker_v3_bridge_accepts_exact_shared_slice_layout() {
+        let table = worker_v3_table(false);
+        let plan = validate_worker_v3(
+            &table,
+            &generated(
+                vec![canonical_slice::<f32>("values", false, Access::ReadOnly)],
+                16,
+                8,
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(plan.kernel_id(), KERNEL_ID);
+        assert_eq!(plan.kernarg_size(), 16);
+        assert_eq!(plan.component_count(), 2);
+    }
+
+    #[test]
+    fn worker_v3_bridge_rejects_same_width_element_substitution() {
+        let table = worker_v3_table(false);
+        assert_eq!(
+            validate_worker_v3(
+                &table,
+                &generated(
+                    vec![canonical_slice::<u32>("values", false, Access::ReadOnly)],
+                    16,
+                    8,
+                ),
+            ),
+            Err(GeneratedArgumentPackingError::FieldMismatch {
+                index: 0,
+                property: GeneratedArgumentFieldProperty::TypeIdentity,
+            })
+        );
+    }
+
+    #[test]
+    fn worker_v3_bridge_rejects_unrepresented_mapped_index_space() {
+        let table = worker_v3_table(true);
+        let mapped = AbiField::new(
+            Name::new("values").unwrap(),
+            0,
+            16,
+            8,
+            AbiKind::Slice {
+                element_size: 4,
+                element_alignment: 4,
+            },
+            Mutability::Mutable,
+            Access::ReadWrite,
+            AddressSpace::Global,
+            super::canonical_disjoint_slice_layout_v1(
+                super::RustScalarElementTypeV1::F32,
+                PointerWidth::Bits64,
+                RustDisjointIndexSpaceV1::ShiftedIndex1D { offset: 1 },
+            )
+            .type_identity(),
+            ArgumentOwnership::UniqueBorrow,
+            AliasClass::Exclusive,
+        )
+        .unwrap();
+
+        assert_eq!(
+            validate_worker_v3(&table, &generated(vec![mapped], 16, 8)),
+            Err(GeneratedArgumentPackingError::FieldMismatch {
+                index: 0,
+                property: GeneratedArgumentFieldProperty::TypeIdentity,
+            })
+        );
+    }
+
+    #[test]
+    fn worker_v3_bridge_rejects_argument_name_substitution() {
+        let table = worker_v3_table(false);
+        assert_eq!(
+            validate_worker_v3(
+                &table,
+                &generated(
+                    vec![canonical_slice::<f32>("other", false, Access::ReadOnly)],
+                    16,
+                    8,
+                ),
+            ),
+            Err(GeneratedArgumentPackingError::FieldMismatch {
+                index: 0,
+                property: GeneratedArgumentFieldProperty::Name,
+            })
+        );
     }
 
     #[test]

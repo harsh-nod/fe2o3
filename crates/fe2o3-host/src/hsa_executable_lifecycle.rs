@@ -1,4 +1,6 @@
-use crate::generated_argument_plan::validate_argument_packing;
+use crate::generated_argument_plan::{
+    validate_argument_packing, validate_worker_v3_argument_packing,
+};
 use crate::{
     AdmittedFinalizedWorkerV2BundleV1, AdmittedWorkerV2TypedKernelV1, ArtifactKernelIdentityV1,
     AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedArgumentLayoutV1,
@@ -14,8 +16,8 @@ use fe2o3_artifact_transaction::DurableCurrentLinkPublicationTokenV1;
 use fe2o3_artifacts::{
     AbiLayout, BlockSize, DigestAlgorithm, DigestBytes, LaunchContract, PayloadDigest,
 };
-use fe2o3_hsaco::CodeObjectVersion;
-use fe2o3_kernel_descriptor::KernelId;
+use fe2o3_hsaco::{CodeObjectVersion, InspectedKernel};
+use fe2o3_kernel_descriptor::{BlockSizeV1, KernelDescriptorV1, KernelId};
 use std::fmt;
 use std::marker::PhantomData;
 
@@ -1407,11 +1409,31 @@ pub enum WorkerV3HsaExecutableLoadErrorV1<E> {
     KernelObservationMismatch { field: &'static str },
 }
 
+/// Failure while synchronously dispatching one compiler-generated Worker V3 invocation.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum WorkerV3GeneratedDispatchErrorV1<E> {
+    CurrentPublication(RecoveredWorkerV3AdmissionErrorV1),
+    LaunchAuthorization(HsaLaunchAuthorizationError),
+    KernargSize,
+    KernargAlignment,
+    ImplicitAdapter(E),
+    ExplicitKernargMutation,
+    ImplicitObservationMismatch(&'static str),
+    DispatchAdapter(E),
+    DispatchObservationMismatch(&'static str),
+    PostDispatchCurrentPublication {
+        source: Box<RecoveredWorkerV3AdmissionErrorV1>,
+        lineage: crate::WorkerV3HostLineageIdentityV1,
+        kernel_id: KernelId,
+        completed: Box<HsaCompletedDispatchV1>,
+    },
+}
+
 /// Loaded and resolved HSA authority for one exact verified Worker V3 kernel.
 ///
-/// The native handles and exact durable currentness token are private. This first V3 runtime slice
-/// intentionally exposes unload but no dispatch transition; generated argument and launch
-/// authority are wired in the next layer.
+/// Native handles and the exact durable currentness token remain private. Dispatch is available
+/// only through a compiler-generated typed argument implementation and a linear prepared value.
 pub struct LoadedWorkerV3HsaExecutableV1<K, A: ReviewedHsaExecutableLifecycleAdapterV1> {
     authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
     current: DurableCurrentLinkPublicationTokenV1,
@@ -1465,6 +1487,45 @@ impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaExecutableLifecycleA
             .revalidate_retained_currentness_token(&self.current)
     }
 
+    pub(crate) fn descriptor(&self) -> &KernelDescriptorV1 {
+        self.authenticated.descriptor()
+    }
+
+    pub(crate) fn physical_kernel(&self) -> &InspectedKernel {
+        self.authenticated.admission().physical_kernel()
+    }
+
+    pub(crate) fn matches_observed_context(&self, observed: &crate::ObservedContext) -> bool {
+        let admitted = self.authenticated.admission().observed_context();
+        observed.device() == admitted.device()
+            && observed.same_context(admitted)
+            && observed.same_launch_limits(admitted)
+            && observed.same_hip_capabilities(admitted)
+            && observed.device().ordinal() == self.environment.physical_device().hip_ordinal()
+            && observed
+                .device()
+                .target_id()
+                .is_compatible_with_observed(&self.environment.physical_device().target())
+    }
+
+    pub(crate) fn validate_worker_v3_launch_geometry(
+        &self,
+        geometry: HsaLaunchGeometryV1,
+    ) -> Result<(), HsaLaunchAuthorizationError> {
+        validate_worker_v3_launch_geometry(self.descriptor(), self.physical_kernel(), geometry)
+    }
+
+    pub(crate) unsafe fn validate_worker_v3_argument_packing(
+        &self,
+        generated: &CompilerGeneratedArgumentLayoutV1,
+    ) -> Result<GeneratedArgumentPackingPlanV1, GeneratedArgumentPackingError> {
+        validate_worker_v3_argument_packing(
+            self.authenticated.admission().descriptor_table(),
+            self.descriptor(),
+            generated,
+        )
+    }
+
     pub fn unload(mut self) -> Result<UnloadedHsaExecutableV1, HsaExecutableUnloadError<A::Error>> {
         self.revalidate_currentness()
             .map_err(|_| HsaExecutableUnloadError::ObservationMismatch("current publication"))?;
@@ -1482,6 +1543,152 @@ impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaExecutableLifecycleA
             agent: self.environment.agent.clone(),
             unload,
         })
+    }
+}
+
+impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaImplicitKernargAdapterV1>
+    LoadedWorkerV3HsaExecutableV1<K, A>
+{
+    /// Completes the physical COV6 kernarg and synchronously dispatches one generated invocation.
+    ///
+    /// # Safety
+    ///
+    /// `kernarg` must contain the exact compiler-generated explicit ABI, and every referenced
+    /// allocation must remain live under its admitted ownership and alias contract until return.
+    /// The safe generated prepared-invocation API is the only caller of this crate-private SPI.
+    pub(crate) unsafe fn dispatch_generated_and_wait(
+        &mut self,
+        geometry: HsaLaunchGeometryV1,
+        kernarg: &mut [u8],
+        explicit_byte_len: usize,
+        implicit_byte_offset: usize,
+        implicit_byte_len: usize,
+    ) -> Result<HsaCompletedWorkerV3DispatchV1<K>, WorkerV3GeneratedDispatchErrorV1<A::Error>> {
+        self.revalidate_currentness()
+            .map_err(WorkerV3GeneratedDispatchErrorV1::CurrentPublication)?;
+        self.validate_worker_v3_launch_geometry(geometry)
+            .map_err(WorkerV3GeneratedDispatchErrorV1::LaunchAuthorization)?;
+
+        let expected_size = usize::try_from(self.resolution.kernarg_segment_size)
+            .map_err(|_| WorkerV3GeneratedDispatchErrorV1::KernargSize)?;
+        let expected_explicit =
+            usize::try_from(self.descriptor().abi_layout().explicit_argument_size())
+                .map_err(|_| WorkerV3GeneratedDispatchErrorV1::KernargSize)?;
+        let physical = self.physical_kernel();
+        if kernarg.len() != expected_size
+            || expected_size
+                != usize::try_from(physical.kernarg_segment_size()).unwrap_or(usize::MAX)
+            || explicit_byte_len != expected_explicit
+            || explicit_byte_len != implicit_byte_offset
+            || physical.implicit_argument_offset() != Some(implicit_byte_offset as u64)
+            || physical.implicit_argument_size() != implicit_byte_len as u64
+            || implicit_byte_offset
+                .checked_add(implicit_byte_len)
+                .is_none_or(|end| end != expected_size)
+        {
+            return Err(WorkerV3GeneratedDispatchErrorV1::KernargSize);
+        }
+        let alignment = usize::try_from(self.resolution.kernarg_segment_alignment)
+            .map_err(|_| WorkerV3GeneratedDispatchErrorV1::KernargAlignment)?;
+        if !kernarg.as_ptr().addr().is_multiple_of(alignment) {
+            return Err(WorkerV3GeneratedDispatchErrorV1::KernargAlignment);
+        }
+
+        let explicit = kernarg[..explicit_byte_len].to_vec();
+        let executable = self
+            .executable
+            .as_ref()
+            .expect("loaded Worker V3 state retains its executable");
+        let kernel = self
+            .kernel
+            .as_ref()
+            .expect("loaded Worker V3 state retains its resolved kernel");
+        // SAFETY: the caller retains all generated argument resources, and the adapter is the
+        // reviewed exact lifecycle instance bound to these private handles.
+        let implicit = reviewed_adapter_call(|| unsafe {
+            self.adapter.initialize_implicit_kernarg(
+                executable,
+                kernel,
+                geometry,
+                explicit_byte_len,
+                implicit_byte_offset,
+                implicit_byte_len,
+                kernarg,
+            )
+        })
+        .map_err(WorkerV3GeneratedDispatchErrorV1::ImplicitAdapter)?;
+        if kernarg[..explicit_byte_len] != *explicit {
+            return Err(WorkerV3GeneratedDispatchErrorV1::ExplicitKernargMutation);
+        }
+        validate_implicit_kernarg_observation(
+            &self.load,
+            &self.resolution,
+            geometry,
+            explicit_byte_len,
+            implicit_byte_offset,
+            implicit_byte_len,
+            &implicit,
+        )
+        .map_err(WorkerV3GeneratedDispatchErrorV1::ImplicitObservationMismatch)?;
+
+        // SAFETY: complete explicit and implicit storage is validated, and the reviewed adapter
+        // can return only before publication or after all submitted effects are quiescent.
+        let dispatch = reviewed_adapter_call(|| unsafe {
+            self.adapter
+                .launch_and_wait(executable, kernel, geometry, kernarg)
+        })
+        .map_err(WorkerV3GeneratedDispatchErrorV1::DispatchAdapter)?;
+        validate_dispatch_observation(&self.load, &self.resolution, geometry, &dispatch)
+            .map_err(WorkerV3GeneratedDispatchErrorV1::DispatchObservationMismatch)?;
+        let lineage = self.authenticated.verification().lineage_identity();
+        let kernel_id = self.descriptor().kernel_id();
+        let completed = HsaCompletedDispatchV1 {
+            finalized_digest: self.load.finalized_digest,
+            executable_object: self.load.executable_object,
+            kernel_object: self.resolution.kernel_object,
+            geometry,
+            dispatch,
+        };
+        if let Err(source) = self.revalidate_currentness() {
+            return Err(
+                WorkerV3GeneratedDispatchErrorV1::PostDispatchCurrentPublication {
+                    source: Box::new(source),
+                    lineage,
+                    kernel_id,
+                    completed: Box::new(completed),
+                },
+            );
+        }
+
+        Ok(HsaCompletedWorkerV3DispatchV1 {
+            lineage,
+            kernel_id,
+            completed,
+            _marker: PhantomData,
+        })
+    }
+}
+
+/// Quiescent completion evidence for one exact Worker V3 kernel occurrence.
+#[derive(Debug)]
+pub struct HsaCompletedWorkerV3DispatchV1<K> {
+    lineage: crate::WorkerV3HostLineageIdentityV1,
+    kernel_id: KernelId,
+    completed: HsaCompletedDispatchV1,
+    _marker: PhantomData<fn() -> K>,
+}
+
+impl<K> HsaCompletedWorkerV3DispatchV1<K> {
+    pub const fn lineage_identity(&self) -> crate::WorkerV3HostLineageIdentityV1 {
+        self.lineage
+    }
+
+    pub const fn kernel_id(&self) -> KernelId {
+        self.kernel_id
+    }
+
+    pub const fn completed_dispatch(&self) -> &HsaCompletedDispatchV1 {
+        &self.completed
     }
 }
 
@@ -2792,6 +2999,86 @@ pub(crate) fn validate_launch_geometry_contract(
     if geometry.dynamic_shared_memory_bytes != 0
         && physical.dynamic_shared_memory_indicator() != PhysicalMetadataValueV1::Known(true)
     {
+        return Err(HsaLaunchAuthorizationError::DynamicSharedMemoryNotRepresented);
+    }
+    Ok(())
+}
+
+fn validate_worker_v3_launch_geometry(
+    descriptor: &KernelDescriptorV1,
+    physical: &InspectedKernel,
+    geometry: HsaLaunchGeometryV1,
+) -> Result<(), HsaLaunchAuthorizationError> {
+    let grid = geometry.grid();
+    let workgroup = geometry.workgroup();
+    if grid.contains(&0) || workgroup.contains(&0) {
+        return Err(HsaLaunchAuthorizationError::ZeroDimension);
+    }
+    let workgroup_product = product(workgroup)?;
+    product(grid)?;
+    if workgroup.into_iter().any(|axis| axis > u32::from(u16::MAX)) {
+        return Err(HsaLaunchAuthorizationError::WorkgroupExceedsPhysicalLimit);
+    }
+    for (blocks, threads) in grid.into_iter().zip(workgroup) {
+        blocks
+            .checked_mul(threads)
+            .ok_or(HsaLaunchAuthorizationError::DimensionOverflow)?;
+    }
+
+    let source = descriptor.launch();
+    if (source.rank() < 2 && (grid[1] != 1 || workgroup[1] != 1))
+        || (source.rank() < 3 && (grid[2] != 1 || workgroup[2] != 1))
+    {
+        return Err(HsaLaunchAuthorizationError::RankMismatch);
+    }
+    let max_grid = source.max_grid();
+    if grid[0] > max_grid.x() || grid[1] > max_grid.y() || grid[2] > max_grid.z() {
+        return Err(HsaLaunchAuthorizationError::GridExceedsContract);
+    }
+    match source.block_size() {
+        BlockSizeV1::Any => {}
+        BlockSizeV1::Exact(block) if workgroup == [block.x(), block.y(), block.z()] => {}
+        BlockSizeV1::Exact(_) => return Err(HsaLaunchAuthorizationError::WorkgroupMismatch),
+        BlockSizeV1::AtMost(block)
+            if workgroup[0] <= block.x()
+                && workgroup[1] <= block.y()
+                && workgroup[2] <= block.z() => {}
+        BlockSizeV1::AtMost(_) => {
+            return Err(HsaLaunchAuthorizationError::WorkgroupExceedsContract);
+        }
+    }
+    if workgroup_product > u64::from(source.max_flat_workgroup_size())
+        || workgroup_product > u64::from(physical.max_flat_workgroup_size())
+    {
+        return Err(HsaLaunchAuthorizationError::WorkgroupExceedsPhysicalLimit);
+    }
+    match (source.block_size(), physical.required_workgroup_size()) {
+        (BlockSizeV1::Exact(_), Some(required)) if required == workgroup => {}
+        (BlockSizeV1::Exact(_), Some(_)) => {
+            return Err(HsaLaunchAuthorizationError::WorkgroupMismatch);
+        }
+        (BlockSizeV1::Exact(_), None) => {
+            return Err(HsaLaunchAuthorizationError::PhysicalWorkgroupRequirementUnknown);
+        }
+        (BlockSizeV1::Any | BlockSizeV1::AtMost(_), None) => {}
+        (BlockSizeV1::Any | BlockSizeV1::AtMost(_), Some(_)) => {
+            return Err(HsaLaunchAuthorizationError::WorkgroupMismatch);
+        }
+    }
+    for (actual, maximum) in grid.into_iter().zip(physical.max_workgroups()) {
+        if maximum.is_some_and(|maximum| actual > maximum) {
+            return Err(HsaLaunchAuthorizationError::GridExceedsContract);
+        }
+    }
+    if physical.group_segment_fixed_size() != u64::from(source.static_shared_memory_bytes()) {
+        return Err(HsaLaunchAuthorizationError::DynamicSharedMemoryNotRepresented);
+    }
+    if geometry.dynamic_shared_memory_bytes() > source.max_dynamic_shared_memory_bytes() {
+        return Err(HsaLaunchAuthorizationError::DynamicSharedMemoryExceedsContract);
+    }
+    // Generic dynamic-LDS argument association is not yet represented in the V3 descriptor-to-host
+    // bridge. Fail closed until that physical binding is authenticated explicitly.
+    if geometry.dynamic_shared_memory_bytes() != 0 {
         return Err(HsaLaunchAuthorizationError::DynamicSharedMemoryNotRepresented);
     }
     Ok(())

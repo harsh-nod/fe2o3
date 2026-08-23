@@ -12,7 +12,7 @@ use fe2o3_hsaco_finalize::{
     verify_finalized,
 };
 use fe2o3_kernel_descriptor::{
-    CANONICAL_CODE_OBJECT_DIGEST_OFFSET, KernelDescriptorV1, KernelId,
+    CANONICAL_CODE_OBJECT_DIGEST_OFFSET, DeviceDescriptorTableV1, KernelDescriptorV1, KernelId,
     encode_device_descriptor_table_v1,
 };
 use fe2o3_worker_v2_bundle::{RecoveredWorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeErrorV1};
@@ -169,6 +169,10 @@ impl RecoveredWorkerV3PinnedDescriptorV1 {
         &self.inspection.descriptor_table().kernels()[self.descriptor_index]
     }
 
+    pub(crate) fn descriptor_table(&self) -> &DeviceDescriptorTableV1 {
+        self.inspection.descriptor_table()
+    }
+
     pub fn physical_kernel(&self) -> &InspectedKernel {
         &self.inspection.hsaco().kernels()[self.physical_kernel_index]
     }
@@ -187,6 +191,10 @@ impl RecoveredWorkerV3PinnedDescriptorV1 {
 
     pub const fn device(&self) -> &DeviceIdentity {
         self.observed.device()
+    }
+
+    pub(crate) const fn observed_context(&self) -> &ObservedContext {
+        &self.observed
     }
 
     pub fn target(&self) -> fe2o3_amd_target::AmdTargetId {

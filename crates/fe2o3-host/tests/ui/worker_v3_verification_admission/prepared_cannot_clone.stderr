@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `fe2o3_host::GeneratedWorkerV3PreparedInvocationV1<'loaded, 'allocation, K, A, Arguments>` in the current scope
+  --> tests/ui/worker_v3_verification_admission/prepared_cannot_clone.rs:13:31
+   |
+13 |     let _duplicate = prepared.clone();
+   |                               ^^^^^ method not found in `fe2o3_host::GeneratedWorkerV3PreparedInvocationV1<'_, '_, K, A, Arguments>`
