@@ -92,12 +92,8 @@ pub fn tiled_gemm_general_v1(
     let mut accumulator = F32AccumulatorFragment::zero(&wave_lane);
     let mut phase = 0_usize;
     while phase < k as usize {
-        let lhs = a_matrix
-            .load_m16k16(&wave_lane, tile_row * 16, phase)
-            .ok_or(KernelError::OutOfBounds)?;
-        let rhs = b_matrix
-            .load_k16n16(&wave_lane, phase, tile_column * 16)
-            .ok_or(KernelError::OutOfBounds)?;
+        let lhs = a_matrix.load_m16k16(&wave_lane, tile_row * 16, phase);
+        let rhs = b_matrix.load_k16n16(&wave_lane, phase, tile_column * 16);
         accumulator = matrix.multiply_accumulate(lhs, rhs, accumulator);
         phase += 16;
     }

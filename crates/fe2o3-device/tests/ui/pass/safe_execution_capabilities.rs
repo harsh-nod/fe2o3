@@ -24,8 +24,8 @@ fn safe_execution_surface(lhs_bits: &[u16], rhs_bits: &[u16]) {
 
     let lhs_view = Bf16MfmaAMatrix::row_major(lhs_bits, 0, 16, 16, 16).unwrap();
     let rhs_view = Bf16MfmaBMatrix::row_major(rhs_bits, 0, 16, 16, 16).unwrap();
-    let lhs_fragment = lhs_view.load_m16k16(&lane, 0, 0).unwrap();
-    let rhs_fragment = rhs_view.load_k16n16(&lane, 0, 0).unwrap();
+    let lhs_fragment = lhs_view.load_m16k16(&lane, 0, 0);
+    let rhs_fragment = rhs_view.load_k16n16(&lane, 0, 0);
     let (mut lhs, mut rhs) = gfx942_lds_bf16_tile_pair_m16x16_v1();
     lhs.write_mfma_fragment(&lane, lhs_fragment);
     rhs.write_mfma_fragment(&lane, rhs_fragment);

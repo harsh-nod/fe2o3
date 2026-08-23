@@ -1,0 +1,14 @@
+error[E0308]: mismatched types
+  --> tests/ui/fail/zero_filled_matrix_load_is_not_optional.rs:10:5
+   |
+ 9 | ) -> Option<Bf16MfmaAFragment<'wave>> {
+   |      -------------------------------- expected `Option<Bf16MfmaFragment<'wave, MfmaOperandA, Bf16F32M16N16K16, MfmaRegisterTile16x16, Wave64>>` because of return type
+10 |     matrix.load_m16k16(lane, usize::MAX, usize::MAX)
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Option<...>`, found `Bf16MfmaFragment<'_, ..., ..., ..., ...>`
+   |
+   = note: expected enum `Option<Bf16MfmaFragment<'wave, MfmaOperandA, Bf16F32M16N16K16, MfmaRegisterTile16x16, Wave64>>`
+            found struct `Bf16MfmaFragment<'_, MfmaOperandA, Bf16F32M16N16K16, MfmaRegisterTile16x16, Wave64>`
+help: try wrapping the expression in `Some`
+   |
+10 |     Some(matrix.load_m16k16(lane, usize::MAX, usize::MAX))
+   |     +++++                                                +

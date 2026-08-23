@@ -146,12 +146,8 @@ pub fn flash_attention_general_v1(
         let mut scores = F32AccumulatorFragment::zero(&wave_lane);
         let mut phase = 0_usize;
         while phase < depth as usize {
-            let lhs = q_matrix
-                .load_m16k16(&wave_lane, query_row_base, phase)
-                .ok_or(KernelError::OutOfBounds)?;
-            let rhs = k_matrix
-                .load_k16n16(&wave_lane, phase, key_base)
-                .ok_or(KernelError::OutOfBounds)?;
+            let lhs = q_matrix.load_m16k16(&wave_lane, query_row_base, phase);
+            let rhs = k_matrix.load_k16n16(&wave_lane, phase, key_base);
             scores = matrix.multiply_accumulate(lhs, rhs, scores);
             phase += 16;
         }
@@ -194,12 +190,8 @@ pub fn flash_attention_general_v1(
         let mut scores = F32AccumulatorFragment::zero(&wave_lane);
         let mut phase = 0_usize;
         while phase < depth as usize {
-            let lhs = q_matrix
-                .load_m16k16(&wave_lane, query_row_base, phase)
-                .ok_or(KernelError::OutOfBounds)?;
-            let rhs = k_matrix
-                .load_k16n16(&wave_lane, phase, key_base)
-                .ok_or(KernelError::OutOfBounds)?;
+            let lhs = q_matrix.load_m16k16(&wave_lane, query_row_base, phase);
+            let rhs = k_matrix.load_k16n16(&wave_lane, phase, key_base);
             scores = matrix.multiply_accumulate(lhs, rhs, scores);
             phase += 16;
         }

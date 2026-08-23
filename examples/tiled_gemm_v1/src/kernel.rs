@@ -81,14 +81,8 @@ pub fn tiled_gemm_lds_slice1(
         fe2o3_device::trap();
         return;
     };
-    let Some(a_global) = a_matrix.load_m16k16(&lane, 0, 0) else {
-        fe2o3_device::trap();
-        return;
-    };
-    let Some(b_global) = b_matrix.load_k16n16(&lane, 0, 0) else {
-        fe2o3_device::trap();
-        return;
-    };
+    let a_global = a_matrix.load_m16k16(&lane, 0, 0);
+    let b_global = b_matrix.load_k16n16(&lane, 0, 0);
 
     let (mut a_lds, mut b_lds) = gfx942_lds_bf16_tile_pair_m16x16_v1();
 

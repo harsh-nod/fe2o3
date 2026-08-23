@@ -218,15 +218,20 @@ impl<'data, Role: sealed::OperandRole> Bf16MfmaMatrix<'data, Role> {
         })
     }
 
-    fn value_or_zero(&self, row: usize, column: usize) -> Option<Bf16> {
+    fn value_or_zero(&self, row: Option<usize>, column: Option<usize>) -> Bf16 {
+        let (Some(row), Some(column)) = (row, column) else {
+            return Bf16::ZERO;
+        };
         if row >= self.rows || column >= self.columns {
-            return Some(Bf16::ZERO);
+            return Bf16::ZERO;
         }
-        let index = self
-            .offset
-            .checked_add(row.checked_mul(self.stride)?)?
-            .checked_add(column)?;
-        self.bits.get(index).copied().map(Bf16::from_bits)
+        row.checked_mul(self.stride)
+            .and_then(|row_offset| self.offset.checked_add(row_offset))
+            .and_then(|index| index.checked_add(column))
+            .and_then(|index| self.bits.get(index))
+            .copied()
+            .map(Bf16::from_bits)
+            .unwrap_or(Bf16::ZERO)
     }
 }
 
@@ -245,24 +250,28 @@ impl<'data> Bf16MfmaMatrix<'data, MfmaOperandA> {
     }
 
     /// Loads this lane's four values from one logical M16xK16 A tile.
+    /// Logical out-of-bounds and overflowed coordinates are zero-filled.
     #[inline(never)]
-    #[rustc_diagnostic_item = "fe2o3_device_bf16_mfma_matrix_a_load_v1"]
+    #[rustc_diagnostic_item = "fe2o3_device_bf16_mfma_matrix_a_load_zero_filled_v2"]
     pub fn load_m16k16<'wave>(
         &self,
         lane: &'wave WaveLane<Wave64>,
         row_base: usize,
         reduction_base: usize,
-    ) -> Option<Bf16MfmaAFragment<'wave>> {
+    ) -> Bf16MfmaAFragment<'wave> {
         let lane_index = lane.get() as usize;
-        let row = row_base.checked_add(lane_index & 15)?;
-        let first_reduction = reduction_base.checked_add((lane_index >> 4) * 4)?;
+        let row = row_base.checked_add(lane_index & 15);
+        let first_reduction = reduction_base.checked_add((lane_index >> 4) * 4);
         let mut values = [Bf16::ZERO; 4];
         let mut component = 0;
         while component < 4 {
-            values[component] = self.value_or_zero(row, first_reduction.checked_add(component)?)?;
+            values[component] = self.value_or_zero(
+                row,
+                first_reduction.and_then(|base| base.checked_add(component)),
+            );
             component += 1;
         }
-        Some(Bf16MfmaFragment::from_values(lane, values))
+        Bf16MfmaFragment::from_values(lane, values)
     }
 }
 
@@ -281,25 +290,28 @@ impl<'data> Bf16MfmaMatrix<'data, MfmaOperandB> {
     }
 
     /// Loads this lane's four values from one logical K16xN16 B tile.
+    /// Logical out-of-bounds and overflowed coordinates are zero-filled.
     #[inline(never)]
-    #[rustc_diagnostic_item = "fe2o3_device_bf16_mfma_matrix_b_load_v1"]
+    #[rustc_diagnostic_item = "fe2o3_device_bf16_mfma_matrix_b_load_zero_filled_v2"]
     pub fn load_k16n16<'wave>(
         &self,
         lane: &'wave WaveLane<Wave64>,
         reduction_base: usize,
         column_base: usize,
-    ) -> Option<Bf16MfmaBFragment<'wave>> {
+    ) -> Bf16MfmaBFragment<'wave> {
         let lane_index = lane.get() as usize;
-        let column = column_base.checked_add(lane_index & 15)?;
-        let first_reduction = reduction_base.checked_add((lane_index >> 4) * 4)?;
+        let column = column_base.checked_add(lane_index & 15);
+        let first_reduction = reduction_base.checked_add((lane_index >> 4) * 4);
         let mut values = [Bf16::ZERO; 4];
         let mut component = 0;
         while component < 4 {
-            values[component] =
-                self.value_or_zero(first_reduction.checked_add(component)?, column)?;
+            values[component] = self.value_or_zero(
+                first_reduction.and_then(|base| base.checked_add(component)),
+                column,
+            );
             component += 1;
         }
-        Some(Bf16MfmaFragment::from_values(lane, values))
+        Bf16MfmaFragment::from_values(lane, values)
     }
 }
 
@@ -638,17 +650,11 @@ mod tests {
         for (lane, expected_a, expected_b) in cases {
             let lane = WaveLane::<Wave64>::from_model_snapshot(lane).unwrap();
             assert_eq!(
-                a.load_m16k16(&lane, 0, 0)
-                    .unwrap()
-                    .into_array()
-                    .map(Bf16::to_bits),
+                a.load_m16k16(&lane, 0, 0).into_array().map(Bf16::to_bits),
                 expected_a
             );
             assert_eq!(
-                b.load_k16n16(&lane, 0, 0)
-                    .unwrap()
-                    .into_array()
-                    .map(Bf16::to_bits),
+                b.load_k16n16(&lane, 0, 0).into_array().map(Bf16::to_bits),
                 expected_b
             );
         }
@@ -661,15 +667,29 @@ mod tests {
         let lane0 = WaveLane::<Wave64>::from_model_snapshot(0).unwrap();
         let lane2 = WaveLane::<Wave64>::from_model_snapshot(2).unwrap();
         assert_eq!(
-            a.load_m16k16(&lane0, 0, 0)
-                .unwrap()
-                .into_array()
-                .map(Bf16::to_bits),
+            a.load_m16k16(&lane0, 0, 0).into_array().map(Bf16::to_bits),
             [1, 2, 3, 0]
         );
         assert_eq!(
-            a.load_m16k16(&lane2, 0, 0)
-                .unwrap()
+            a.load_m16k16(&lane2, 0, 0).into_array().map(Bf16::to_bits),
+            [0; 4]
+        );
+    }
+
+    #[test]
+    fn direct_matrix_loads_zero_fill_coordinate_overflow() {
+        let bits = [1_u16; 16];
+        let a = Bf16MfmaAMatrix::row_major(&bits, 0, 1, 16, 16).unwrap();
+        let b = Bf16MfmaBMatrix::row_major(&bits, 0, 16, 1, 1).unwrap();
+        let lane = WaveLane::<Wave64>::from_model_snapshot(63).unwrap();
+        assert_eq!(
+            a.load_m16k16(&lane, usize::MAX, usize::MAX)
+                .into_array()
+                .map(Bf16::to_bits),
+            [0; 4]
+        );
+        assert_eq!(
+            b.load_k16n16(&lane, usize::MAX, usize::MAX)
                 .into_array()
                 .map(Bf16::to_bits),
             [0; 4]
@@ -760,8 +780,8 @@ mod tests {
         let a = Bf16MfmaAMatrix::row_major(&bits, 0, 16, 16, 16).unwrap();
         let b = Bf16MfmaBMatrix::row_major(&bits, 0, 16, 16, 16).unwrap();
         let lane = WaveLane::<Wave64>::from_model_snapshot(0).unwrap();
-        let lhs = a.load_m16k16(&lane, 0, 0).unwrap();
-        let rhs = b.load_k16n16(&lane, 0, 0).unwrap();
+        let lhs = a.load_m16k16(&lane, 0, 0);
+        let rhs = b.load_k16n16(&lane, 0, 0);
         let accumulator = F32AccumulatorFragment::zero(&lane);
         assert!(
             catch_unwind(AssertUnwindSafe(|| {

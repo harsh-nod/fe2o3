@@ -64,14 +64,8 @@ pub fn moe_expert_gemm_bf16_m16_n16_k16_v1(
         fe2o3_device::trap();
         return;
     };
-    let Some(activation_fragment) = activation_matrix.load_m16k16(&lane, 0, 0) else {
-        fe2o3_device::trap();
-        return;
-    };
-    let Some(weight_fragment) = weight_matrix.load_k16n16(&lane, 0, 0) else {
-        fe2o3_device::trap();
-        return;
-    };
+    let activation_fragment = activation_matrix.load_m16k16(&lane, 0, 0);
+    let weight_fragment = weight_matrix.load_k16n16(&lane, 0, 0);
     let (mut activation_lds, mut weight_lds) = gfx942_lds_bf16_tile_pair_m16x16_v1();
     activation_lds.write_mfma_fragment(&lane, activation_fragment);
     weight_lds.write_mfma_fragment(&lane, weight_fragment);

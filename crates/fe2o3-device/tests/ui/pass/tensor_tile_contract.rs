@@ -12,12 +12,10 @@ fn type_check_direct_matrix<'wave>(
 ) {
     let lhs = Bf16MfmaAMatrix::row_major(lhs_bits, 0, 16, 16, 16)
         .unwrap()
-        .load_m16k16(lane, 0, 0)
-        .unwrap();
+        .load_m16k16(lane, 0, 0);
     let rhs = Bf16MfmaBMatrix::row_major(rhs_bits, 0, 16, 16, 16)
         .unwrap()
-        .load_k16n16(lane, 0, 0)
-        .unwrap();
+        .load_k16n16(lane, 0, 0);
     let accumulator = F32AccumulatorFragment::zero(lane);
     let _: F32AccumulatorFragment<'wave> =
         matrix.multiply_accumulate(lhs, rhs, accumulator);
