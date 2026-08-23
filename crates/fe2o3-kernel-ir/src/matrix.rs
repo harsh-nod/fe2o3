@@ -302,6 +302,514 @@ pub enum MatrixLayout {
     RowMajorXor4,
 }
 
+/// Operand position within a cooperative tensor instruction.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum TensorOperandRoleV1 {
+    A,
+    B,
+    Accumulator,
+}
+
+/// Target packing consumed by one instruction operand.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum TensorElementPackingV1 {
+    Bf16PairInI32,
+    F32Scalar,
+    Unsupported(u8),
+}
+
+/// Whether the symbolic map owns each coordinate or intentionally broadcasts it.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum TensorMultiplicityV1 {
+    Unique,
+    Broadcast { factor: u8 },
+}
+
+/// Operand-local LDS storage-to-register transform applied before MFMA.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum TensorLdsSwizzleV1 {
+    None,
+    Xor4,
+    Unsupported(u8),
+}
+
+/// Tail participation contract at the tensor-instruction boundary.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum TensorTailMaskV1 {
+    /// The physical M/N/K tile is fully inside all logical tensors.
+    ExactPhysicalTile,
+    /// Declares that out-of-range A/B components are zero before the full instruction.
+    ///
+    /// The source projector must authenticate the dominating zero-fill;
+    /// retaining this enum alone is not evidence.
+    ZeroFilledPredicateInputs,
+    PredicateMask,
+    Missing,
+    Unsupported(u8),
+}
+
+/// A reviewed target instruction profile or an explicitly opaque future one.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum TensorInstructionProfileV1 {
+    Gfx942MfmaBf16F32M16N16K16Wave64,
+    IncompatibleWave32,
+    Opaque(u32),
+}
+
+/// One logical coordinate expression:
+/// `constant + lane % M * mod_scale + lane / D * div_scale + component * component_scale`.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct TensorCoordinateExprV1 {
+    pub constant: u16,
+    pub lane_mod_scale: u16,
+    pub lane_div_scale: u16,
+    pub component_scale: u16,
+    pub tile_origin: bool,
+}
+
+impl TensorCoordinateExprV1 {
+    pub const fn new(lane_mod_scale: u16, lane_div_scale: u16, component_scale: u16) -> Self {
+        Self {
+            constant: 0,
+            lane_mod_scale,
+            lane_div_scale,
+            component_scale,
+            tile_origin: true,
+        }
+    }
+}
+
+/// Closed symbolic forms understood by the bounded verifier.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum TensorSymbolicMapV1 {
+    LaneComponentAffine {
+        lane_modulus: u16,
+        lane_divisor: u16,
+        axes: [TensorCoordinateExprV1; 2],
+    },
+    /// Preserved for future extensions, but never accepted as a proof.
+    Opaque(u32),
+}
+
+/// Explicit distribution of one instruction operand over subgroup lanes/register components.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct TensorFragmentLayoutV1 {
+    pub role: TensorOperandRoleV1,
+    pub shape: [u16; 2],
+    pub element: MatrixElement,
+    pub fragment_elements: u8,
+    pub mapping: TensorSymbolicMapV1,
+    pub multiplicity: TensorMultiplicityV1,
+    pub packing: TensorElementPackingV1,
+    /// Storage transform for this operand only; it does not alter the register map.
+    pub lds_swizzle: TensorLdsSwizzleV1,
+}
+
+/// Workload-neutral layout contract for one cooperative tensor instruction.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct TensorLayoutContractV1 {
+    pub profile: TensorInstructionProfileV1,
+    pub subgroup_width: u16,
+    pub a: TensorFragmentLayoutV1,
+    pub b: TensorFragmentLayoutV1,
+    pub accumulator: TensorFragmentLayoutV1,
+    pub tail_mask: TensorTailMaskV1,
+}
+
+impl TensorLayoutContractV1 {
+    pub const fn gfx942_mfma_bf16_f32_m16n16k16_wave64() -> Self {
+        Self {
+            profile: TensorInstructionProfileV1::Gfx942MfmaBf16F32M16N16K16Wave64,
+            subgroup_width: 64,
+            a: canonical_fragment(TensorOperandRoleV1::A),
+            b: canonical_fragment(TensorOperandRoleV1::B),
+            accumulator: canonical_fragment(TensorOperandRoleV1::Accumulator),
+            tail_mask: TensorTailMaskV1::ExactPhysicalTile,
+        }
+    }
+
+    pub const fn gfx942_mfma_bf16_f32_m16n16k16_wave64_lds_xor4() -> Self {
+        let mut contract = Self::gfx942_mfma_bf16_f32_m16n16k16_wave64();
+        contract.a.lds_swizzle = TensorLdsSwizzleV1::Xor4;
+        contract.b.lds_swizzle = TensorLdsSwizzleV1::Xor4;
+        contract
+    }
+
+    /// Declares an XOR4 LDS storage transform for operand A only.
+    pub const fn with_a_lds_xor4(mut self) -> Self {
+        self.a.lds_swizzle = TensorLdsSwizzleV1::Xor4;
+        self
+    }
+
+    /// Declares an XOR4 LDS storage transform for operand B only.
+    pub const fn with_b_lds_xor4(mut self) -> Self {
+        self.b.lds_swizzle = TensorLdsSwizzleV1::Xor4;
+        self
+    }
+
+    pub const fn with_zero_filled_predicate_inputs(mut self) -> Self {
+        self.tail_mask = TensorTailMaskV1::ZeroFilledPredicateInputs;
+        self
+    }
+}
+
+const fn canonical_fragment(role: TensorOperandRoleV1) -> TensorFragmentLayoutV1 {
+    let (element, packing, first, second) = match role {
+        TensorOperandRoleV1::A => (
+            MatrixElement::Bf16,
+            TensorElementPackingV1::Bf16PairInI32,
+            TensorCoordinateExprV1::new(1, 0, 0),
+            TensorCoordinateExprV1::new(0, 4, 1),
+        ),
+        TensorOperandRoleV1::B => (
+            MatrixElement::Bf16,
+            TensorElementPackingV1::Bf16PairInI32,
+            TensorCoordinateExprV1::new(0, 4, 1),
+            TensorCoordinateExprV1::new(1, 0, 0),
+        ),
+        TensorOperandRoleV1::Accumulator => (
+            MatrixElement::F32,
+            TensorElementPackingV1::F32Scalar,
+            TensorCoordinateExprV1::new(0, 4, 1),
+            TensorCoordinateExprV1::new(1, 0, 0),
+        ),
+    };
+    TensorFragmentLayoutV1 {
+        role,
+        shape: [16, 16],
+        element,
+        fragment_elements: 4,
+        mapping: TensorSymbolicMapV1::LaneComponentAffine {
+            lane_modulus: 16,
+            lane_divisor: 16,
+            axes: [first, second],
+        },
+        multiplicity: TensorMultiplicityV1::Unique,
+        packing,
+        lds_swizzle: TensorLdsSwizzleV1::None,
+    }
+}
+
+impl TensorFragmentLayoutV1 {
+    /// Evaluates the reviewed affine form relative to the symbolic tile origin.
+    pub fn logical_coordinate(self, lane: u16, component: u8) -> Option<[u64; 2]> {
+        if lane >= 64 || component >= self.fragment_elements {
+            return None;
+        }
+        let TensorSymbolicMapV1::LaneComponentAffine {
+            lane_modulus,
+            lane_divisor,
+            axes,
+        } = self.mapping
+        else {
+            return None;
+        };
+        if lane_modulus == 0 || lane_divisor == 0 {
+            return None;
+        }
+        evaluate_tensor_coordinate_v1(
+            u64::from(lane),
+            u64::from(component),
+            lane_modulus,
+            lane_divisor,
+            axes,
+        )
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TensorLayoutFindingV1 {
+    UnsupportedProfile,
+    ProfileMismatch {
+        field: &'static str,
+    },
+    RoleMismatch {
+        position: TensorOperandRoleV1,
+        actual: TensorOperandRoleV1,
+    },
+    ShapeOrElementMismatch {
+        role: TensorOperandRoleV1,
+    },
+    FragmentWidthMismatch {
+        role: TensorOperandRoleV1,
+        actual: u8,
+    },
+    UnsupportedSymbolicMap {
+        role: TensorOperandRoleV1,
+    },
+    MalformedSymbolicMap {
+        role: TensorOperandRoleV1,
+    },
+    SymbolicMapMismatch {
+        role: TensorOperandRoleV1,
+    },
+    CoordinateOutOfBounds {
+        role: TensorOperandRoleV1,
+    },
+    DuplicateCoordinate {
+        role: TensorOperandRoleV1,
+    },
+    IncompleteCoverage {
+        role: TensorOperandRoleV1,
+    },
+    BroadcastContractMismatch {
+        role: TensorOperandRoleV1,
+    },
+    PackingMismatch {
+        role: TensorOperandRoleV1,
+    },
+    SwizzleMismatch {
+        role: TensorOperandRoleV1,
+    },
+    TailMaskMismatch,
+}
+
+impl TensorLayoutFindingV1 {
+    pub const fn is_incomplete(&self) -> bool {
+        matches!(
+            self,
+            Self::UnsupportedProfile | Self::UnsupportedSymbolicMap { .. }
+        )
+    }
+}
+
+impl std::fmt::Display for TensorLayoutFindingV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsupportedProfile => formatter.write_str("unsupported tensor target profile"),
+            Self::ProfileMismatch { field } => {
+                write!(
+                    formatter,
+                    "tensor instruction profile has incompatible {field}"
+                )
+            }
+            Self::RoleMismatch { position, actual } => write!(
+                formatter,
+                "tensor operand position {position:?} carries role {actual:?}"
+            ),
+            Self::ShapeOrElementMismatch { role } => write!(
+                formatter,
+                "tensor {role:?} fragment shape or element type is incompatible with the instruction profile"
+            ),
+            Self::FragmentWidthMismatch { role, actual } => write!(
+                formatter,
+                "tensor {role:?} fragment has {actual} register components; expected 4"
+            ),
+            Self::UnsupportedSymbolicMap { role } => {
+                write!(
+                    formatter,
+                    "tensor {role:?} fragment uses an unsupported symbolic map"
+                )
+            }
+            Self::MalformedSymbolicMap { role } => write!(
+                formatter,
+                "tensor {role:?} fragment has a zero divisor or overflowing symbolic map"
+            ),
+            Self::SymbolicMapMismatch { role } => write!(
+                formatter,
+                "tensor {role:?} lane/component mapping does not match the target operand profile"
+            ),
+            Self::CoordinateOutOfBounds { role } => write!(
+                formatter,
+                "tensor {role:?} lane/component mapping produces an out-of-bounds logical coordinate"
+            ),
+            Self::DuplicateCoordinate { role } => write!(
+                formatter,
+                "tensor {role:?} lane/component mapping aliases a logical coordinate without declared broadcast"
+            ),
+            Self::IncompleteCoverage { role } => write!(
+                formatter,
+                "tensor {role:?} lane/component mapping does not cover its logical fragment"
+            ),
+            Self::BroadcastContractMismatch { role } => write!(
+                formatter,
+                "tensor {role:?} broadcast multiplicity does not match observed lane coverage"
+            ),
+            Self::PackingMismatch { role } => {
+                write!(
+                    formatter,
+                    "tensor {role:?} target register packing is incompatible"
+                )
+            }
+            Self::SwizzleMismatch { role } => {
+                write!(
+                    formatter,
+                    "tensor {role:?} LDS swizzle is incompatible with its layout"
+                )
+            }
+            Self::TailMaskMismatch => formatter.write_str(
+                "tensor instruction tail-mask contract is incompatible with the exact-tile profile",
+            ),
+        }
+    }
+}
+
+/// Bounded verification shared by canonical Kernel IR and ranked PLIRON.
+pub fn verify_tensor_layout_contract_v1(
+    contract: &TensorLayoutContractV1,
+) -> Vec<TensorLayoutFindingV1> {
+    let mut findings = Vec::new();
+    match contract.profile {
+        TensorInstructionProfileV1::Gfx942MfmaBf16F32M16N16K16Wave64 => {}
+        TensorInstructionProfileV1::IncompatibleWave32 => {
+            findings.push(TensorLayoutFindingV1::ProfileMismatch {
+                field: "wave32 target profile",
+            });
+            return findings;
+        }
+        TensorInstructionProfileV1::Opaque(_) => {
+            findings.push(TensorLayoutFindingV1::UnsupportedProfile);
+            return findings;
+        }
+    }
+    if contract.subgroup_width != 64 {
+        findings.push(TensorLayoutFindingV1::ProfileMismatch {
+            field: "subgroup width",
+        });
+    }
+    for (position, fragment) in [
+        (TensorOperandRoleV1::A, &contract.a),
+        (TensorOperandRoleV1::B, &contract.b),
+        (TensorOperandRoleV1::Accumulator, &contract.accumulator),
+    ] {
+        verify_tensor_fragment_v1(position, fragment, contract.subgroup_width, &mut findings);
+    }
+    if !matches!(
+        contract.tail_mask,
+        TensorTailMaskV1::ExactPhysicalTile | TensorTailMaskV1::ZeroFilledPredicateInputs
+    ) {
+        findings.push(TensorLayoutFindingV1::TailMaskMismatch);
+    }
+    for (role, storage_transform) in [
+        (TensorOperandRoleV1::A, contract.a.lds_swizzle),
+        (TensorOperandRoleV1::B, contract.b.lds_swizzle),
+    ] {
+        if !matches!(
+            storage_transform,
+            TensorLdsSwizzleV1::None | TensorLdsSwizzleV1::Xor4
+        ) {
+            findings.push(TensorLayoutFindingV1::SwizzleMismatch { role });
+        }
+    }
+    if contract.accumulator.lds_swizzle != TensorLdsSwizzleV1::None {
+        findings.push(TensorLayoutFindingV1::SwizzleMismatch {
+            role: TensorOperandRoleV1::Accumulator,
+        });
+    }
+    findings
+}
+
+fn verify_tensor_fragment_v1(
+    position: TensorOperandRoleV1,
+    fragment: &TensorFragmentLayoutV1,
+    subgroup_width: u16,
+    findings: &mut Vec<TensorLayoutFindingV1>,
+) {
+    if fragment.role != position {
+        findings.push(TensorLayoutFindingV1::RoleMismatch {
+            position,
+            actual: fragment.role,
+        });
+    }
+    let expected = canonical_fragment(position);
+    if fragment.shape != expected.shape || fragment.element != expected.element {
+        findings.push(TensorLayoutFindingV1::ShapeOrElementMismatch { role: position });
+    }
+    if fragment.fragment_elements != 4 {
+        findings.push(TensorLayoutFindingV1::FragmentWidthMismatch {
+            role: position,
+            actual: fragment.fragment_elements,
+        });
+        return;
+    }
+    if fragment.packing != expected.packing {
+        findings.push(TensorLayoutFindingV1::PackingMismatch { role: position });
+    }
+    let TensorSymbolicMapV1::LaneComponentAffine {
+        lane_modulus,
+        lane_divisor,
+        axes,
+    } = fragment.mapping
+    else {
+        findings.push(TensorLayoutFindingV1::UnsupportedSymbolicMap { role: position });
+        return;
+    };
+    if lane_modulus == 0 || lane_divisor == 0 {
+        findings.push(TensorLayoutFindingV1::MalformedSymbolicMap { role: position });
+        return;
+    }
+    if fragment.mapping != expected.mapping {
+        findings.push(TensorLayoutFindingV1::SymbolicMapMismatch { role: position });
+    }
+
+    let mut coordinates = std::collections::BTreeMap::<[u64; 2], u16>::new();
+    for lane in 0..u64::from(subgroup_width.min(64)) {
+        for component in 0..u64::from(fragment.fragment_elements) {
+            let Some(coordinate) =
+                evaluate_tensor_coordinate_v1(lane, component, lane_modulus, lane_divisor, axes)
+            else {
+                findings.push(TensorLayoutFindingV1::MalformedSymbolicMap { role: position });
+                return;
+            };
+            if coordinate[0] >= u64::from(fragment.shape[0])
+                || coordinate[1] >= u64::from(fragment.shape[1])
+            {
+                findings.push(TensorLayoutFindingV1::CoordinateOutOfBounds { role: position });
+                return;
+            }
+            let count = coordinates.entry(coordinate).or_default();
+            *count = count.saturating_add(1);
+        }
+    }
+    let expected_coordinates = usize::from(fragment.shape[0]) * usize::from(fragment.shape[1]);
+    match fragment.multiplicity {
+        TensorMultiplicityV1::Unique => {
+            if coordinates.values().any(|count| *count != 1) {
+                findings.push(TensorLayoutFindingV1::DuplicateCoordinate { role: position });
+            }
+            if coordinates.len() != expected_coordinates {
+                findings.push(TensorLayoutFindingV1::IncompleteCoverage { role: position });
+            }
+        }
+        TensorMultiplicityV1::Broadcast { factor } => {
+            if factor == 0
+                || coordinates.len() != expected_coordinates
+                || coordinates
+                    .values()
+                    .any(|count| *count != u16::from(factor))
+            {
+                findings.push(TensorLayoutFindingV1::BroadcastContractMismatch { role: position });
+            }
+        }
+    }
+}
+
+fn evaluate_tensor_coordinate_v1(
+    lane: u64,
+    component: u64,
+    lane_modulus: u16,
+    lane_divisor: u16,
+    axes: [TensorCoordinateExprV1; 2],
+) -> Option<[u64; 2]> {
+    let mut result = [0; 2];
+    for (index, axis) in axes.into_iter().enumerate() {
+        // Tile origins are symbolic translations. They do not change relative
+        // coverage, but must be explicitly retained on both logical axes.
+        if !axis.tile_origin {
+            return None;
+        }
+        result[index] = u64::from(axis.constant)
+            .checked_add(
+                (lane % u64::from(lane_modulus)).checked_mul(u64::from(axis.lane_mod_scale))?,
+            )?
+            .checked_add(
+                (lane / u64::from(lane_divisor)).checked_mul(u64::from(axis.lane_div_scale))?,
+            )?
+            .checked_add(component.checked_mul(u64::from(axis.component_scale))?)?;
+    }
+    Some(result)
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct MatrixMultiplyProfile {
     pub m: u16,
@@ -401,6 +909,7 @@ pub struct MatrixOperation {
     pub active_lanes: u32,
     pub convergence: Convergence,
     pub frontend_binding: Option<MatrixFrontendBindingV2>,
+    pub tensor_layout: Option<TensorLayoutContractV1>,
 }
 
 impl MatrixOperation {
@@ -438,7 +947,18 @@ impl MatrixOperation {
             active_lanes: 64,
             convergence: Convergence::uniform(SynchronizationScope::Subgroup),
             frontend_binding: None,
+            tensor_layout: None,
         }
+    }
+
+    /// Retains a declared layout/tail contract on this instruction occurrence.
+    ///
+    /// This builder grants no source-provenance, artifact, or launch authority.
+    /// A production frontend must derive the declaration from authenticated
+    /// semantic terminals and operand dominance before constructing Kernel IR.
+    pub fn with_declared_tensor_layout(mut self, contract: TensorLayoutContractV1) -> Self {
+        self.tensor_layout = Some(contract);
+        self
     }
 
     pub fn with_frontend_binding(mut self, binding: MatrixFrontendBindingV2) -> Self {
@@ -555,8 +1075,26 @@ impl MatrixOperation {
                 for actual in operand_types.iter().skip(8) {
                     expect_type(actual, Type::F32, &mut issues);
                 }
+                match &self.tensor_layout {
+                    Some(contract) => {
+                        for finding in verify_tensor_layout_contract_v1(contract)
+                            .into_iter()
+                            .filter(|finding| !finding.is_incomplete())
+                        {
+                            issues.push(MatrixVerificationIssue::structure(finding.to_string()));
+                        }
+                    }
+                    None => issues.push(MatrixVerificationIssue::structure(
+                        "matrix multiply requires an explicit tensor layout contract",
+                    )),
+                }
             }
             MatrixOperationKind::LdsLoad { profile, .. } => {
+                if self.tensor_layout.is_some() {
+                    issues.push(MatrixVerificationIssue::structure(
+                        "matrix LDS operations cannot carry an instruction layout contract",
+                    ));
+                }
                 if self.frontend_binding.is_some() {
                     issues.push(MatrixVerificationIssue::structure(
                         "matrix frontend ABI binding is valid only on multiply-accumulate",
@@ -565,6 +1103,11 @@ impl MatrixOperation {
                 verify_lds_profile(profile, false, operand_types.first(), &mut issues);
             }
             MatrixOperationKind::LdsStore { profile, .. } => {
+                if self.tensor_layout.is_some() {
+                    issues.push(MatrixVerificationIssue::structure(
+                        "matrix LDS operations cannot carry an instruction layout contract",
+                    ));
+                }
                 if self.frontend_binding.is_some() {
                     issues.push(MatrixVerificationIssue::structure(
                         "matrix frontend ABI binding is valid only on multiply-accumulate",

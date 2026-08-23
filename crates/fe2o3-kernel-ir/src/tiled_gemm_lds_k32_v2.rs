@@ -19,9 +19,9 @@ use crate::{
     ComparePredicate, Constant, Convergence, Function, IndexKind, IntrinsicKind,
     IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, MatrixElement, MatrixOperation,
     MemoryOrdering, Operation, OperationKind, ScalarType, Signature, SynchronizationScope,
-    TargetCapability, Terminator, Type, ValueDef, ValueId, VerificationErrors, WaveWidth,
-    WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
-    gfx942_xnack_minus_target_capability, verify_module,
+    TargetCapability, TensorLayoutContractV1, Terminator, Type, ValueDef, ValueId,
+    VerificationErrors, WaveWidth, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent,
+    WorkgroupSize, gfx942_xnack_minus_target_capability, verify_module,
 };
 
 pub const TILED_GEMM_LDS_K32_V2_MODULE_ID: &str = "fe2o3::tiled_gemm_lds_k32_v2";
@@ -334,11 +334,12 @@ pub fn tiled_gemm_lds_k32_v2_module() -> crate::Module {
         .matrix(MatrixOperation::lds_load(b_lds, MatrixElement::Bf16))
         .try_into()
         .expect("fixed four-value authenticated B LDS fragment");
-    let results = graph.matrix(MatrixOperation::multiply_accumulate(
-        lhs,
-        rhs,
-        accumulators.map(|value| value.id),
-    ));
+    let results = graph.matrix(
+        MatrixOperation::multiply_accumulate(lhs, rhs, accumulators.map(|value| value.id))
+            .with_declared_tensor_layout(
+                TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64_lds_xor4(),
+            ),
+    );
     let result_ids: [ValueId; 4] = results
         .try_into()
         .expect("fixed four-value carried C fragment");

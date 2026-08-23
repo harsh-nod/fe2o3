@@ -31,7 +31,8 @@ fn matrix_module() -> Module {
         [ValueId(7), ValueId(8), ValueId(9), ValueId(10)],
         [ValueId(11), ValueId(12), ValueId(13), ValueId(14)],
         [ValueId(0), ValueId(1), ValueId(2), ValueId(3)],
-    );
+    )
+    .with_declared_tensor_layout(TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64());
     let store = MatrixOperation::lds_store(
         ValueId(6),
         [ValueId(15), ValueId(16), ValueId(17), ValueId(18)],
@@ -277,6 +278,200 @@ fn profile_shape_wave_and_convergence_mutations_fail_closed() {
         verify_module(&wrong_tile)
             .unwrap_err()
             .contains(DiagnosticCode::InvalidSemanticOperation)
+    );
+}
+
+#[test]
+fn tensor_layout_contract_matches_exact_mfma_lane_coordinates() {
+    let direct = TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64();
+    assert!(verify_tensor_layout_contract_v1(&direct).is_empty());
+    let lds = TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64_lds_xor4();
+    assert!(verify_tensor_layout_contract_v1(&lds).is_empty());
+    let tail = direct.with_zero_filled_predicate_inputs();
+    assert!(verify_tensor_layout_contract_v1(&tail).is_empty());
+
+    for (lane, component, a, b, accumulator) in [
+        (0, 0, [0, 0], [0, 0], [0, 0]),
+        (0, 3, [0, 3], [3, 0], [3, 0]),
+        (1, 0, [1, 0], [0, 1], [0, 1]),
+        (1, 3, [1, 3], [3, 1], [3, 1]),
+        (16, 0, [0, 4], [4, 0], [4, 0]),
+        (16, 3, [0, 7], [7, 0], [7, 0]),
+        (63, 0, [15, 12], [12, 15], [12, 15]),
+        (63, 3, [15, 15], [15, 15], [15, 15]),
+    ] {
+        assert_eq!(direct.a.logical_coordinate(lane, component), Some(a));
+        assert_eq!(direct.b.logical_coordinate(lane, component), Some(b));
+        assert_eq!(
+            direct.accumulator.logical_coordinate(lane, component),
+            Some(accumulator)
+        );
+    }
+}
+
+#[test]
+fn tensor_layout_rejects_transpose_permutation_width_role_profile_and_packing() {
+    let canonical = TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64();
+    let mut cases = Vec::new();
+
+    let mut transpose = canonical;
+    transpose.b.mapping = transpose.a.mapping;
+    cases.push((
+        transpose,
+        TensorLayoutFindingV1::SymbolicMapMismatch {
+            role: TensorOperandRoleV1::B,
+        },
+    ));
+
+    let mut lane_permutation = canonical;
+    let TensorSymbolicMapV1::LaneComponentAffine { axes, .. } =
+        &mut lane_permutation.accumulator.mapping
+    else {
+        unreachable!()
+    };
+    axes.swap(0, 1);
+    cases.push((
+        lane_permutation,
+        TensorLayoutFindingV1::SymbolicMapMismatch {
+            role: TensorOperandRoleV1::Accumulator,
+        },
+    ));
+
+    let mut width = canonical;
+    width.a.fragment_elements = 8;
+    cases.push((
+        width,
+        TensorLayoutFindingV1::FragmentWidthMismatch {
+            role: TensorOperandRoleV1::A,
+            actual: 8,
+        },
+    ));
+
+    let mut role = canonical;
+    role.a.role = TensorOperandRoleV1::B;
+    cases.push((
+        role,
+        TensorLayoutFindingV1::RoleMismatch {
+            position: TensorOperandRoleV1::A,
+            actual: TensorOperandRoleV1::B,
+        },
+    ));
+
+    let mut profile = canonical;
+    profile.profile = TensorInstructionProfileV1::IncompatibleWave32;
+    cases.push((
+        profile,
+        TensorLayoutFindingV1::ProfileMismatch {
+            field: "wave32 target profile",
+        },
+    ));
+
+    let mut packing = canonical;
+    packing.a.packing = TensorElementPackingV1::F32Scalar;
+    cases.push((
+        packing,
+        TensorLayoutFindingV1::PackingMismatch {
+            role: TensorOperandRoleV1::A,
+        },
+    ));
+
+    for (contract, expected) in cases {
+        assert!(verify_tensor_layout_contract_v1(&contract).contains(&expected));
+    }
+}
+
+#[test]
+fn tensor_layout_accepts_independent_storage_transforms_and_rejects_invalid_contracts() {
+    let canonical = TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64();
+
+    let mut mixed_swizzle = canonical;
+    mixed_swizzle.a.lds_swizzle = TensorLdsSwizzleV1::Xor4;
+    assert!(verify_tensor_layout_contract_v1(&mixed_swizzle).is_empty());
+
+    let mut accumulator_swizzle = canonical;
+    accumulator_swizzle.accumulator.lds_swizzle = TensorLdsSwizzleV1::Xor4;
+    assert!(
+        verify_tensor_layout_contract_v1(&accumulator_swizzle).contains(
+            &TensorLayoutFindingV1::SwizzleMismatch {
+                role: TensorOperandRoleV1::Accumulator,
+            }
+        )
+    );
+
+    let mut tail = canonical;
+    tail.tail_mask = TensorTailMaskV1::Missing;
+    assert!(
+        verify_tensor_layout_contract_v1(&tail).contains(&TensorLayoutFindingV1::TailMaskMismatch)
+    );
+
+    let mut alias = canonical;
+    alias.a.mapping = TensorSymbolicMapV1::LaneComponentAffine {
+        lane_modulus: 16,
+        lane_divisor: 16,
+        axes: [
+            TensorCoordinateExprV1::new(0, 0, 0),
+            TensorCoordinateExprV1::new(0, 0, 0),
+        ],
+    };
+    let alias_findings = verify_tensor_layout_contract_v1(&alias);
+    assert!(
+        alias_findings.contains(&TensorLayoutFindingV1::DuplicateCoordinate {
+            role: TensorOperandRoleV1::A,
+        })
+    );
+    assert!(
+        alias_findings.contains(&TensorLayoutFindingV1::IncompleteCoverage {
+            role: TensorOperandRoleV1::A,
+        })
+    );
+
+    let mut shape = canonical;
+    shape.b.shape = [16, 8];
+    assert!(verify_tensor_layout_contract_v1(&shape).contains(
+        &TensorLayoutFindingV1::ShapeOrElementMismatch {
+            role: TensorOperandRoleV1::B,
+        }
+    ));
+
+    let mut opaque = canonical;
+    opaque.a.mapping = TensorSymbolicMapV1::Opaque(7);
+    let findings = verify_tensor_layout_contract_v1(&opaque);
+    assert_eq!(findings.len(), 1);
+    assert!(findings[0].is_incomplete());
+}
+
+#[test]
+fn matrix_operation_rejects_mutated_tensor_layout_and_frozen_wire_refuses_it() {
+    let mut module = matrix_module();
+    let layout = operation_mut(&mut module, 2)
+        .tensor_layout
+        .as_mut()
+        .unwrap();
+    layout.accumulator.mapping = layout.a.mapping;
+    assert!(
+        verify_module(&module)
+            .unwrap_err()
+            .contains(DiagnosticCode::InvalidSemanticOperation)
+    );
+    assert!(matches!(
+        encode_module_v6(&module),
+        Err(KernelIrEncodeError::UnsupportedInVersion {
+            feature: "tensor layout contract",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn bare_matrix_multiply_never_invents_layout_or_tail_provenance() {
+    let mut module = matrix_module();
+    operation_mut(&mut module, 2).tensor_layout = None;
+    let diagnostics = verify_module(&module).unwrap_err();
+    assert!(diagnostics.contains(DiagnosticCode::InvalidSemanticOperation));
+    assert!(
+        diagnostics
+            .to_string()
+            .contains("explicit tensor layout contract")
     );
 }
 

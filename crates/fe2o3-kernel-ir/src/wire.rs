@@ -12,8 +12,11 @@ use crate::{
     MatrixLayout, MatrixLdsProfile, MatrixMultiplyProfile, MatrixOperation, MatrixOperationKind,
     MemoryAccess, MemoryOrdering, Module, ModuleId, Operation, OperationKind, PointerType,
     ScalarType, Signature, SliceType, SwitchCase, SynchronizationScope, TargetCapability,
-    Terminator, Type, UnaryOp, ValueDef, ValueId, WaveOperation, WaveOperationKind, WaveWidth,
-    WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
+    TensorCoordinateExprV1, TensorElementPackingV1, TensorFragmentLayoutV1,
+    TensorInstructionProfileV1, TensorLayoutContractV1, TensorLdsSwizzleV1, TensorMultiplicityV1,
+    TensorOperandRoleV1, TensorSymbolicMapV1, TensorTailMaskV1, Terminator, Type, UnaryOp,
+    ValueDef, ValueId, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
+    WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
 };
 
 /// Fixed magic at the start of every canonical kernel IR module.
@@ -30,10 +33,14 @@ pub const KERNEL_IR_VERSION_V4: u16 = 4;
 pub const KERNEL_IR_VERSION_V5: u16 = 5;
 /// Kernel IR V6 adds exact two-result checked integer arithmetic.
 pub const KERNEL_IR_VERSION_V6: u16 = 6;
+/// Kernel IR V7 adds the full checked tensor-layout instruction contract.
+pub const KERNEL_IR_VERSION_V7: u16 = 7;
 /// Domain separator for identities derived from canonical Kernel IR V5 bytes.
 pub const KERNEL_IR_DOMAIN_V5: &[u8] = b"FE2O3/KERNEL-IR/V5\0";
 /// Domain separator for identities derived from canonical Kernel IR V6 bytes.
 pub const KERNEL_IR_DOMAIN_V6: &[u8] = b"FE2O3/KERNEL-IR/V6\0";
+/// Domain separator for identities derived from canonical Kernel IR V7 bytes.
+pub const KERNEL_IR_DOMAIN_V7: &[u8] = b"FE2O3/KERNEL-IR/V7\0";
 /// Maximum size of one encoded kernel IR module.
 pub const MAX_MODULE_BYTES_V1: usize = 16 * 1024 * 1024;
 /// Maximum UTF-8 byte length of any identifier or extension component.
@@ -237,6 +244,11 @@ pub fn encode_module_v6(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError>
     encode_module(module, KERNEL_IR_VERSION_V6)
 }
 
+/// Encodes a module in the bounded canonical kernel IR V7 wire format.
+pub fn encode_module_v7(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
+    encode_module(module, KERNEL_IR_VERSION_V7)
+}
+
 fn encode_module(module: &Module, version: u16) -> Result<Vec<u8>, KernelIrEncodeError> {
     let mut writer = Writer::new(version);
     writer.bytes(&KERNEL_IR_MAGIC_V1)?;
@@ -301,6 +313,11 @@ pub fn decode_module_v5(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
 /// Decodes canonical V1 through V6 bytes using the latest bounded reader.
 pub fn decode_module_v6(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
     decode_module(bytes, KERNEL_IR_VERSION_V6, true)
+}
+
+/// Decodes canonical V1 through V7 bytes using the latest bounded reader.
+pub fn decode_module_v7(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
+    decode_module(bytes, KERNEL_IR_VERSION_V7, true)
 }
 
 fn decode_module(
@@ -1440,6 +1457,12 @@ fn encode_matrix_operation(
             feature: "matrix frontend binding",
         });
     }
+    if writer.version < KERNEL_IR_VERSION_V7 && matrix.tensor_layout.is_some() {
+        return Err(KernelIrEncodeError::UnsupportedInVersion {
+            version: writer.version,
+            feature: "tensor layout contract",
+        });
+    }
     writer.u32(matrix.active_lanes)?;
     encode_convergence(writer, matrix.convergence)?;
     match &matrix.kind {
@@ -1469,6 +1492,15 @@ fn encode_matrix_operation(
             writer.u32(base.0)?;
             encode_matrix_values(writer, values)?;
             encode_matrix_lds_profile(writer, *profile)?;
+        }
+    }
+    if writer.version >= KERNEL_IR_VERSION_V7 {
+        match matrix.tensor_layout {
+            None => writer.u8(0)?,
+            Some(contract) => {
+                writer.u8(1)?;
+                encode_tensor_layout_contract_v1(writer, contract)?;
+            }
         }
     }
     Ok(())
@@ -1502,11 +1534,257 @@ fn decode_matrix_operation(
             });
         }
     };
+    let tensor_layout = if reader.version >= KERNEL_IR_VERSION_V7 {
+        match reader.u8()? {
+            0 => None,
+            1 => Some(decode_tensor_layout_contract_v1(reader)?),
+            tag => {
+                return Err(KernelIrDecodeError::UnknownTag {
+                    kind: "matrix tensor layout presence",
+                    tag,
+                });
+            }
+        }
+    } else {
+        None
+    };
     Ok(MatrixOperation {
         kind,
         active_lanes,
         convergence,
         frontend_binding: None,
+        tensor_layout,
+    })
+}
+
+fn encode_tensor_layout_contract_v1(
+    writer: &mut Writer,
+    contract: TensorLayoutContractV1,
+) -> Result<(), KernelIrEncodeError> {
+    match contract.profile {
+        TensorInstructionProfileV1::Gfx942MfmaBf16F32M16N16K16Wave64 => writer.u8(1)?,
+        TensorInstructionProfileV1::IncompatibleWave32 => writer.u8(2)?,
+        TensorInstructionProfileV1::Opaque(identity) => {
+            writer.u8(3)?;
+            writer.u32(identity)?;
+        }
+    }
+    writer.u16(contract.subgroup_width)?;
+    encode_tensor_fragment_layout_v1(writer, contract.a)?;
+    encode_tensor_fragment_layout_v1(writer, contract.b)?;
+    encode_tensor_fragment_layout_v1(writer, contract.accumulator)?;
+    match contract.tail_mask {
+        TensorTailMaskV1::ExactPhysicalTile => writer.u8(1)?,
+        TensorTailMaskV1::ZeroFilledPredicateInputs => writer.u8(2)?,
+        TensorTailMaskV1::PredicateMask => writer.u8(3)?,
+        TensorTailMaskV1::Missing => writer.u8(4)?,
+        TensorTailMaskV1::Unsupported(code) => {
+            writer.u8(5)?;
+            writer.u8(code)?;
+        }
+    }
+    Ok(())
+}
+
+fn decode_tensor_layout_contract_v1(
+    reader: &mut Reader<'_>,
+) -> Result<TensorLayoutContractV1, KernelIrDecodeError> {
+    let profile = match reader.u8()? {
+        1 => TensorInstructionProfileV1::Gfx942MfmaBf16F32M16N16K16Wave64,
+        2 => TensorInstructionProfileV1::IncompatibleWave32,
+        3 => TensorInstructionProfileV1::Opaque(reader.u32()?),
+        tag => {
+            return Err(KernelIrDecodeError::UnknownTag {
+                kind: "tensor instruction profile",
+                tag,
+            });
+        }
+    };
+    let subgroup_width = reader.u16()?;
+    let a = decode_tensor_fragment_layout_v1(reader)?;
+    let b = decode_tensor_fragment_layout_v1(reader)?;
+    let accumulator = decode_tensor_fragment_layout_v1(reader)?;
+    let tail_mask = match reader.u8()? {
+        1 => TensorTailMaskV1::ExactPhysicalTile,
+        2 => TensorTailMaskV1::ZeroFilledPredicateInputs,
+        3 => TensorTailMaskV1::PredicateMask,
+        4 => TensorTailMaskV1::Missing,
+        5 => TensorTailMaskV1::Unsupported(reader.u8()?),
+        tag => {
+            return Err(KernelIrDecodeError::UnknownTag {
+                kind: "tensor tail-mask contract",
+                tag,
+            });
+        }
+    };
+    Ok(TensorLayoutContractV1 {
+        profile,
+        subgroup_width,
+        a,
+        b,
+        accumulator,
+        tail_mask,
+    })
+}
+
+fn encode_tensor_fragment_layout_v1(
+    writer: &mut Writer,
+    fragment: TensorFragmentLayoutV1,
+) -> Result<(), KernelIrEncodeError> {
+    writer.u8(match fragment.role {
+        TensorOperandRoleV1::A => 1,
+        TensorOperandRoleV1::B => 2,
+        TensorOperandRoleV1::Accumulator => 3,
+    })?;
+    writer.u16(fragment.shape[0])?;
+    writer.u16(fragment.shape[1])?;
+    writer.u8(matrix_element_tag(fragment.element))?;
+    writer.u8(fragment.fragment_elements)?;
+    match fragment.mapping {
+        TensorSymbolicMapV1::LaneComponentAffine {
+            lane_modulus,
+            lane_divisor,
+            axes,
+        } => {
+            writer.u8(1)?;
+            writer.u16(lane_modulus)?;
+            writer.u16(lane_divisor)?;
+            for axis in axes {
+                writer.u16(axis.constant)?;
+                writer.u16(axis.lane_mod_scale)?;
+                writer.u16(axis.lane_div_scale)?;
+                writer.u16(axis.component_scale)?;
+                writer.u8(u8::from(axis.tile_origin))?;
+            }
+        }
+        TensorSymbolicMapV1::Opaque(identity) => {
+            writer.u8(2)?;
+            writer.u32(identity)?;
+        }
+    }
+    match fragment.multiplicity {
+        TensorMultiplicityV1::Unique => writer.u8(1)?,
+        TensorMultiplicityV1::Broadcast { factor } => {
+            writer.u8(2)?;
+            writer.u8(factor)?;
+        }
+    }
+    match fragment.packing {
+        TensorElementPackingV1::Bf16PairInI32 => writer.u8(1)?,
+        TensorElementPackingV1::F32Scalar => writer.u8(2)?,
+        TensorElementPackingV1::Unsupported(code) => {
+            writer.u8(3)?;
+            writer.u8(code)?;
+        }
+    }
+    match fragment.lds_swizzle {
+        TensorLdsSwizzleV1::None => writer.u8(1)?,
+        TensorLdsSwizzleV1::Xor4 => writer.u8(2)?,
+        TensorLdsSwizzleV1::Unsupported(code) => {
+            writer.u8(3)?;
+            writer.u8(code)?;
+        }
+    }
+    Ok(())
+}
+
+fn decode_tensor_fragment_layout_v1(
+    reader: &mut Reader<'_>,
+) -> Result<TensorFragmentLayoutV1, KernelIrDecodeError> {
+    let role = match reader.u8()? {
+        1 => TensorOperandRoleV1::A,
+        2 => TensorOperandRoleV1::B,
+        3 => TensorOperandRoleV1::Accumulator,
+        tag => {
+            return Err(KernelIrDecodeError::UnknownTag {
+                kind: "tensor operand role",
+                tag,
+            });
+        }
+    };
+    let shape = [reader.u16()?, reader.u16()?];
+    let element = decode_matrix_element(reader.u8()?)?;
+    let fragment_elements = reader.u8()?;
+    let mapping = match reader.u8()? {
+        1 => {
+            let lane_modulus = reader.u16()?;
+            let lane_divisor = reader.u16()?;
+            let mut axes = [TensorCoordinateExprV1::new(0, 0, 0); 2];
+            for axis in &mut axes {
+                *axis = TensorCoordinateExprV1 {
+                    constant: reader.u16()?,
+                    lane_mod_scale: reader.u16()?,
+                    lane_div_scale: reader.u16()?,
+                    component_scale: reader.u16()?,
+                    tile_origin: match reader.u8()? {
+                        0 => false,
+                        1 => true,
+                        tag => {
+                            return Err(KernelIrDecodeError::UnknownTag {
+                                kind: "tensor tile-origin flag",
+                                tag,
+                            });
+                        }
+                    },
+                };
+            }
+            TensorSymbolicMapV1::LaneComponentAffine {
+                lane_modulus,
+                lane_divisor,
+                axes,
+            }
+        }
+        2 => TensorSymbolicMapV1::Opaque(reader.u32()?),
+        tag => {
+            return Err(KernelIrDecodeError::UnknownTag {
+                kind: "tensor symbolic map",
+                tag,
+            });
+        }
+    };
+    let multiplicity = match reader.u8()? {
+        1 => TensorMultiplicityV1::Unique,
+        2 => TensorMultiplicityV1::Broadcast {
+            factor: reader.u8()?,
+        },
+        tag => {
+            return Err(KernelIrDecodeError::UnknownTag {
+                kind: "tensor multiplicity",
+                tag,
+            });
+        }
+    };
+    let packing = match reader.u8()? {
+        1 => TensorElementPackingV1::Bf16PairInI32,
+        2 => TensorElementPackingV1::F32Scalar,
+        3 => TensorElementPackingV1::Unsupported(reader.u8()?),
+        tag => {
+            return Err(KernelIrDecodeError::UnknownTag {
+                kind: "tensor element packing",
+                tag,
+            });
+        }
+    };
+    let lds_swizzle = match reader.u8()? {
+        1 => TensorLdsSwizzleV1::None,
+        2 => TensorLdsSwizzleV1::Xor4,
+        3 => TensorLdsSwizzleV1::Unsupported(reader.u8()?),
+        tag => {
+            return Err(KernelIrDecodeError::UnknownTag {
+                kind: "tensor LDS storage transform",
+                tag,
+            });
+        }
+    };
+    Ok(TensorFragmentLayoutV1 {
+        role,
+        shape,
+        element,
+        fragment_elements,
+        mapping,
+        multiplicity,
+        packing,
+        lds_swizzle,
     })
 }
 

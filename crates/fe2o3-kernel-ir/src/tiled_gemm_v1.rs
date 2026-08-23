@@ -12,9 +12,9 @@ use std::fmt;
 use crate::{
     AccessMode, AddressSpace, Axis, BasicBlock, BinaryOp, BlockId, Constant, Function, IndexKind,
     IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, MatrixOperation,
-    Operation, OperationKind, ScalarType, Signature, TargetCapability, Terminator, Type, ValueDef,
-    ValueId, VerificationErrors, WaveWidth, WorkgroupSize, gfx942_xnack_minus_target_capability,
-    verify_module,
+    Operation, OperationKind, ScalarType, Signature, TargetCapability, TensorLayoutContractV1,
+    Terminator, Type, ValueDef, ValueId, VerificationErrors, WaveWidth, WorkgroupSize,
+    gfx942_xnack_minus_target_capability, verify_module,
 };
 
 pub const TILED_GEMM_V1_MODULE_ID: &str = "fe2o3::tiled_gemm_v1";
@@ -247,7 +247,10 @@ pub fn tiled_gemm_v1_module() -> crate::Module {
     let accumulator: [ValueId; 4] = accumulator
         .try_into()
         .expect("fixed four-value accumulator fragment");
-    let matrix = MatrixOperation::multiply_accumulate(lhs, rhs, accumulator);
+    let matrix = MatrixOperation::multiply_accumulate(lhs, rhs, accumulator)
+        .with_declared_tensor_layout(
+            TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64(),
+        );
     let results = matrix
         .result_types()
         .into_iter()

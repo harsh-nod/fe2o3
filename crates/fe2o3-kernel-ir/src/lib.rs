@@ -13,8 +13,10 @@
 //! adds explicit bounded matrix operations without changing the frozen V1-V4
 //! encodings. [`encode_module_v6`] adds checked integer add/subtract/multiply
 //! with explicit value and overflow results without changing the frozen V1-V5
-//! encodings. Decoding establishes wire well-formedness only; consumers must
-//! call [`verify_module`] before relying on semantic invariants. V1-V6
+//! encodings. [`encode_module_v7`] adds the complete checked tensor-layout
+//! contract without changing the frozen V1-V6 encodings. Decoding establishes
+//! wire well-formedness only; consumers must call [`verify_module`] before
+//! relying on semantic invariants. V1-V7
 //! reconstruct kernel-entry and import roles from their legacy records; they
 //! reject device-FFI exports because the frozen function records cannot
 //! distinguish those definitions from internal helpers.
@@ -25,6 +27,7 @@
 
 mod canonical_kir_v5;
 mod canonical_kir_v6;
+mod canonical_kir_v7;
 mod control_flow;
 mod effect_extraction;
 mod flash_attention_v1;
@@ -56,6 +59,7 @@ mod workgroup_sync_v1;
 
 pub use canonical_kir_v5::*;
 pub use canonical_kir_v6::*;
+pub use canonical_kir_v7::*;
 pub use control_flow::*;
 pub use effect_extraction::*;
 pub use flash_attention_v1::*;

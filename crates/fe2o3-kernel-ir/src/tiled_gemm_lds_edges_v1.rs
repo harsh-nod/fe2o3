@@ -26,9 +26,9 @@ use crate::{
     ComparePredicate, Constant, Convergence, Function, IndexKind, IntrinsicKind,
     IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, MatrixElement, MatrixLayout,
     MatrixOperation, MemoryOrdering, Operation, OperationKind, ScalarType, Signature,
-    SynchronizationScope, TargetCapability, Terminator, Type, ValueDef, ValueId,
-    VerificationErrors, WaveWidth, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent,
-    WorkgroupSize, gfx942_xnack_minus_target_capability, verify_module,
+    SynchronizationScope, TargetCapability, TensorLayoutContractV1, Terminator, Type, ValueDef,
+    ValueId, VerificationErrors, WaveWidth, WorkgroupBarrier, WorkgroupMemory,
+    WorkgroupMemoryExtent, WorkgroupSize, gfx942_xnack_minus_target_capability, verify_module,
 };
 
 pub const TILED_GEMM_LDS_EDGES_V1_MODULE_ID: &str = "fe2o3::tiled_gemm_lds_edges_v1";
@@ -637,11 +637,14 @@ pub fn tiled_gemm_lds_edges_v1_module() -> crate::Module {
                 .try_into()
                 .expect("four B LDS fragment values");
             let results: [ValueId; 4] = graph
-                .matrix(MatrixOperation::multiply_accumulate(
-                    lhs,
-                    rhs,
-                    accumulator_ids,
-                ))
+                .matrix(
+                    MatrixOperation::multiply_accumulate(lhs, rhs, accumulator_ids)
+                        .with_declared_tensor_layout(
+                            TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64_lds_xor4(
+                            )
+                            .with_zero_filled_predicate_inputs(),
+                        ),
+                )
                 .try_into()
                 .expect("four carried accumulator values");
             graph.workgroup_lds_barrier();

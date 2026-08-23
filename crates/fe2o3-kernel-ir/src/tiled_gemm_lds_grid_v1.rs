@@ -23,9 +23,10 @@ use crate::{
     AccessMode, AddressSpace, Axis, BarrierSemantics, BasicBlock, BinaryOp, BlockId, Constant,
     Convergence, Function, IndexKind, IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain,
     LaunchExtent, MatrixElement, MatrixOperation, MemoryOrdering, Operation, OperationKind,
-    ScalarType, Signature, SynchronizationScope, TargetCapability, Terminator, Type, ValueDef,
-    ValueId, VerificationErrors, WaveWidth, WorkgroupBarrier, WorkgroupMemory,
-    WorkgroupMemoryExtent, WorkgroupSize, gfx942_xnack_minus_target_capability, verify_module,
+    ScalarType, Signature, SynchronizationScope, TargetCapability, TensorLayoutContractV1,
+    Terminator, Type, ValueDef, ValueId, VerificationErrors, WaveWidth, WorkgroupBarrier,
+    WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize, gfx942_xnack_minus_target_capability,
+    verify_module,
 };
 
 pub const TILED_GEMM_LDS_GRID_V1_MODULE_ID: &str = "fe2o3::tiled_gemm_lds_grid_v1";
@@ -373,7 +374,11 @@ pub fn tiled_gemm_lds_grid_v1_module() -> crate::Module {
         Type::F32,
         OperationKind::Constant(Constant::F32Bits(0.0f32.to_bits())),
     );
-    let results = graph.matrix(MatrixOperation::multiply_accumulate(lhs, rhs, [zero; 4]));
+    let results = graph.matrix(
+        MatrixOperation::multiply_accumulate(lhs, rhs, [zero; 4]).with_declared_tensor_layout(
+            TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64_lds_xor4(),
+        ),
+    );
     let result_ids: [ValueId; 4] = results.try_into().expect("fixed four-value C fragment");
 
     for (index, value) in c_indices.into_iter().zip(result_ids) {

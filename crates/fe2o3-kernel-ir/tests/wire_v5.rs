@@ -38,6 +38,7 @@ fn matrix_fixture() -> Module {
         active_lanes: 64,
         convergence: Convergence::uniform(SynchronizationScope::Subgroup),
         frontend_binding: None,
+        tensor_layout: None,
     };
     let store = MatrixOperation {
         kind: MatrixOperationKind::LdsStore {
@@ -48,6 +49,7 @@ fn matrix_fixture() -> Module {
         active_lanes: 32,
         convergence: Convergence::uniform(SynchronizationScope::Workgroup),
         frontend_binding: None,
+        tensor_layout: None,
     };
     let multiply = MatrixOperation {
         kind: MatrixOperationKind::MultiplyAccumulate {
@@ -59,6 +61,7 @@ fn matrix_fixture() -> Module {
         active_lanes: 64,
         convergence: Convergence::uniform(SynchronizationScope::Subgroup),
         frontend_binding: None,
+        tensor_layout: None,
     };
 
     let mut block = BasicBlock::new(BlockId(0));
@@ -140,15 +143,15 @@ fn v5_exports_domain_and_round_trips_every_matrix_variant_deterministically() {
 }
 
 #[test]
-fn exact_tiled_gemm_lds_v1_module_has_a_stable_v5_round_trip() {
+fn exact_tiled_gemm_lds_v1_requires_v7_for_its_layout_contract() {
     let module = tiled_gemm_lds_v1_module();
-    let bytes = encode_module_v5(&module).expect("exact LDS GEMM encodes as V5");
-    assert_eq!(encode_module_v5(&module).unwrap(), bytes);
-
-    let decoded = decode_module_v5(&bytes).expect("exact LDS GEMM decodes from V5");
-    assert_eq!(decoded, module);
-    assert_eq!(decoded, tiled_gemm_lds_v1_module());
-    assert_eq!(encode_module_v5(&decoded).unwrap(), bytes);
+    assert_eq!(
+        encode_module_v5(&module),
+        Err(KernelIrEncodeError::UnsupportedInVersion {
+            version: KERNEL_IR_VERSION_V5,
+            feature: "tensor layout contract",
+        })
+    );
 }
 
 #[test]
