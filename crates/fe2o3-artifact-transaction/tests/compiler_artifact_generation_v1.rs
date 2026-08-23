@@ -1072,7 +1072,7 @@ fn redo_name_is_private_single_link_and_consumed_by_recovery() {
 }
 
 #[test]
-fn canonical_only_recovery_recommits_through_a_fresh_synced_redo() {
+fn canonical_only_recovery_syncs_and_rereads_without_quota_headroom() {
     for timing in [
         CompilerArtifactGenerationFaultTimingV1::Before,
         CompilerArtifactGenerationFaultTimingV1::After,
@@ -1090,6 +1090,11 @@ fn canonical_only_recovery_recommits_through_a_fresh_synced_redo() {
             ),
         );
         assert!(recovered.is_err(), "{timing:?}");
+        assert!(
+            entries_with_prefix(&directory.path, SCOPE_PREFIX)
+                .iter()
+                .all(|entry| !entry.to_string_lossy().ends_with(REDO_SUFFIX))
+        );
         assert_generation(&store.recover_generation_v1().unwrap().unwrap(), 1, true);
     }
 }
@@ -1158,7 +1163,7 @@ fn existing_canonical_and_identical_redo_faults_never_report_not_committed() {
         CompilerArtifactGenerationOptionsV1::inject_fault(
             CompilerArtifactGenerationFaultPointV1::ScopeRecord {
                 operation: CompilerArtifactGenerationRecordOperationV1::Recover,
-                boundary: CompilerArtifactGenerationRecordBoundaryV1::CreateTemp,
+                boundary: CompilerArtifactGenerationRecordBoundaryV1::SyncCanonicalName,
                 timing: CompilerArtifactGenerationFaultTimingV1::Before,
             },
         ),
@@ -2079,6 +2084,7 @@ fn abrupt_death_after_canonical_rename_requires_restart_durability_recovery() {
             CompilerArtifactGenerationFaultTimingV1::After,
         ] {
             let directory = TestDirectory::new();
+            let store = directory.store();
             let output = subprocess(action, &directory.path)
                 .wait_with_output()
                 .unwrap();
@@ -2090,7 +2096,6 @@ fn abrupt_death_after_canonical_rename_requires_restart_durability_recovery() {
                 String::from_utf8_lossy(&output.stderr)
             );
             assert!(canonical_record(&directory.path).exists());
-            let store = directory.store();
             assert!(
                 store
                     .recover_generation_v1_with_options(

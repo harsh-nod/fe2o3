@@ -2527,10 +2527,18 @@ impl RetainedDurableDirectoryHooksV1 for StoreHooks {
 
     fn recovery(
         &mut self,
-        _boundary: RetainedDurableRecoveryBoundaryV1,
-        _timing: RetainedDurableFaultTimingV1,
+        boundary: RetainedDurableRecoveryBoundaryV1,
+        timing: RetainedDurableFaultTimingV1,
     ) -> io::Result<()> {
-        Ok(())
+        match boundary {
+            RetainedDurableRecoveryBoundaryV1::SyncDirectory => {
+                self.hit(CompilerArtifactGenerationFaultPointV1::ScopeRecord {
+                    operation: CompilerArtifactGenerationRecordOperationV1::Recover,
+                    boundary: CompilerArtifactGenerationRecordBoundaryV1::SyncCanonicalName,
+                    timing: map_timing(timing),
+                })
+            }
+        }
     }
 }
 
