@@ -525,9 +525,9 @@ impl Gfx942CompletedDispatchReadbackV1 {
 
 /// Frozen claim boundary for the addressless fixed-dispatch binding slice.
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r8-v1\n",
+    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r9-v1\n",
     "target=gfx942:xnack-,COV6,one-selected-current-device-vm-and-queue-generation\n",
-    "code=1-through-32-validated-amdhsa-kernel-envelopes,content-and-selected-descriptor-identity,exact-zero-then-copy-materialization-into-owned-gtt,read-only-seal-before-map,per-packet-program-selection,descriptor-resolution-with-checked-relative-arithmetic\n",
+    "code=1-through-32-validated-amdhsa-kernel-envelopes,content-and-selected-descriptor-identity,exact-zero-then-copy-materialization-into-owned-gtt,read-only-seal-before-map,per-packet-program-selection,unused-inspected-programs-retained-without-publication,descriptor-resolution-with-checked-relative-arithmetic\n",
     "kernarg=public-inert-complete-byte-images,exact-inspected-size-and-power-of-two-alignment,optional-exact-trailing-256-byte-COV6-implicit-suffix-must-be-caller-zero,metadata-declared-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds-only,queue-pointer-and-runtime-service-or-address-fields-rejected,all-global-buffer-fields-zero,checked-nonoverlapping-8-byte-internal-device-pointer-patches,one-owned-kernarg-gtt-arena-with-N-distinct-checked-aligned-slices,private-initialization-before-map\n",
     "geometry=block-count-floor-grid-div-workgroup,remainder-grid-mod-workgroup,inactive-dimensions-count-and-group-one-remainder-zero,uniform-workgroup-rejects-any-nonzero-remainder\n",
     "data=1-through-16-actual-linear-mapped-device-local-or-host-visible-coherent-authorities,exact-device-vm-and-allocation-generation,complete-device-local-live-set,checked-bounded-subranges,inspected-actual-access-derived-internally,read-or-readwrite-requires-sealed-full-extent-initialization,write-only-admits-uninitialized-exclusive-storage,optional-enclosing-snapshot-requires-coherent-full-initialization\n",
@@ -544,7 +544,7 @@ pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1`].
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1: &str =
-    "30335cb85c5991bf97b2236dec28c5b6501caa133d59d024be362e3cd62e0096";
+    "c2a6dc42c42f471c6bfc6dabf1e8e3786196b1edcb867835e9c87f4ea3bf8a74";
 
 type CodeAuthority = SharedGttQueueResourceAuthorityV1<
     AqlDispatchCodeResourceRoleV1,
@@ -1740,6 +1740,21 @@ struct Cov6ImplicitKernargValuesV1 {
     dynamic_lds_size: u32,
 }
 
+fn validate_packet_program_indices<const N: usize>(
+    program_count: usize,
+    packets: &[Gfx942FixedDispatchPacketV1; N],
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    for (packet, input) in packets.iter().enumerate() {
+        if input.program_index >= program_count {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet,
+                detail: "program index",
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Consumes inspected executable custody and exact mapped data authorities,
 /// then prepares one addressless fixed batch without publishing it.
 pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
@@ -1761,6 +1776,7 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
             maximum: MAX_DISPATCH_DATA_LEASES_V1,
         });
     }
+    validate_packet_program_indices(programs.len(), &packets)?;
     let data_layouts: Vec<_> = data.iter().map(Gfx942FixedDispatchDataV1::layout).collect();
     let data_initialized: Vec<_> = data
         .iter()
@@ -1803,7 +1819,6 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
         });
     }
 
-    let mut referenced_programs = vec![false; programs.len()];
     let mut referenced_data = vec![false; data.len()];
     let mut data_effects = vec![None; data.len()];
     let mut data_writable_ranges = vec![Vec::new(); data.len()];
@@ -1818,7 +1833,6 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
             },
         )?;
         let kernel = &programs[input.program_index];
-        referenced_programs[input.program_index] = true;
         let kernarg_size = usize::try_from(program_plan.resources.kernarg_segment_size())
             .map_err(|_| Gfx942DispatchBindingErrorV1::InvalidCode("kernarg size conversion"))?;
         if input.kernarg_bytes.len() != kernarg_size {
@@ -1886,13 +1900,6 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
             private_segment_size,
             group_segment_size,
         });
-    }
-    if let Some(index) = referenced_programs.iter().position(|value| !value) {
-        return Err(Gfx942DispatchBindingErrorV1::InvalidCode(if index == 0 {
-            "unreferenced first program"
-        } else {
-            "unreferenced program"
-        }));
     }
     if let Some(index) = referenced_data.iter().position(|value| !value) {
         return Err(Gfx942DispatchBindingErrorV1::InvalidData {
@@ -3726,6 +3733,25 @@ mod tests {
         assert!(matches!(
             owner.next(),
             Err(Gfx942DispatchBindingErrorV1::Poisoned)
+        ));
+    }
+
+    #[test]
+    fn fixed_batch_may_select_one_program_from_a_larger_inspected_roster() {
+        let packets = [Gfx942FixedDispatchPacketV1::new(
+            11,
+            AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+            0,
+            Vec::new().into_boxed_slice(),
+            Vec::new().into_boxed_slice(),
+        )];
+        validate_packet_program_indices(12, &packets).unwrap();
+        assert!(matches!(
+            validate_packet_program_indices(11, &packets),
+            Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet: 0,
+                detail: "program index",
+            })
         ));
     }
 
