@@ -16,8 +16,10 @@ use fe2o3_kernel_ir::{
     IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
     MAX_OPERATIONS_V1 as MAX_BLOCK_OPERATIONS_V1, MatrixOperation, MemoryAccess, MemoryOrdering,
     Module, Operation, OperationKind, ScalarType, Signature, SwitchCase, SynchronizationScope,
-    Terminator, Type, UnaryOp, ValueDef, ValueId, VerificationErrors, WaveOperation,
-    WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupSize, verify_module,
+    Terminator, Type, UnaryOp, ValueDef, ValueId, VerificationErrors,
+    VerifiedCanonicalKernelIrErrorV6, VerifiedCanonicalKernelIrIdentityV6,
+    VerifiedCanonicalKernelIrV6, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
+    WorkgroupSize, verify_module,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAssertMessageV1, SemanticAxisV1, SemanticBinaryOpV1, SemanticBlockIdV1,
@@ -357,6 +359,8 @@ pub enum ProductionSemanticKirErrorV1 {
     },
     /// The constructed Kernel IR failed structural or semantic verification.
     InvalidKernelIr(VerificationErrors),
+    /// The lowered module could not become exact verified canonical Kernel IR V6.
+    CanonicalKernelIrV6(VerifiedCanonicalKernelIrErrorV6),
     /// Retained correspondence no longer matches the exact source owner.
     CorrespondenceMismatch,
 }
@@ -396,6 +400,12 @@ impl fmt::Display for ProductionSemanticKirErrorV1 {
                 "semantic-to-Kernel-IR lowering rejected function {function}, block {block}, statement {statement:?}: local {local} has no path-available SSA definition",
             ),
             Self::InvalidKernelIr(error) => error.fmt(formatter),
+            Self::CanonicalKernelIrV6(error) => {
+                write!(
+                    formatter,
+                    "canonical Kernel IR V6 admission failed: {error}"
+                )
+            }
             Self::CorrespondenceMismatch => formatter.write_str(
                 "semantic-to-Kernel-IR correspondence no longer matches its exact owner",
             ),
@@ -408,6 +418,7 @@ impl Error for ProductionSemanticKirErrorV1 {
         match self {
             Self::SemanticOwner(error) => Some(error),
             Self::InvalidKernelIr(error) => Some(error),
+            Self::CanonicalKernelIrV6(error) => Some(error),
             Self::ResourceLimit { .. }
             | Self::AllocationFailure { .. }
             | Self::Unsupported { .. }
@@ -538,6 +549,7 @@ impl ProductionRankedSemanticProjectionReceiptV1 {
 pub struct ProductionSemanticKirOwnerV1 {
     semantic: ProductionSemanticMirOwnerV1,
     module: Module,
+    canonical_kernel_ir_v6: VerifiedCanonicalKernelIrV6,
     correspondence: SemanticKirCorrespondenceV1,
     limits: ProductionSemanticKirLimitsV1,
     discharge_ranked_bounds: bool,
@@ -556,6 +568,10 @@ impl fmt::Debug for ProductionSemanticKirOwnerV1 {
         formatter
             .debug_struct("ProductionSemanticKirOwnerV1")
             .field("module", &self.module.id)
+            .field(
+                "canonical_kernel_ir_v6_identity",
+                self.canonical_kernel_ir_v6.identity(),
+            )
             .field("correspondence", &self.correspondence)
             .field("limits", &self.limits)
             .field("discharge_ranked_bounds", &self.discharge_ranked_bounds)
@@ -574,10 +590,12 @@ impl ProductionSemanticKirOwnerV1 {
             .verify_equivalence()
             .map_err(ProductionSemanticKirErrorV1::SemanticOwner)?;
         let (module, correspondence) = lower_module(&semantic, limits, false)?;
-        verify_module(&module).map_err(ProductionSemanticKirErrorV1::InvalidKernelIr)?;
+        let canonical_kernel_ir_v6 = VerifiedCanonicalKernelIrV6::from_module(module.clone())
+            .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV6)?;
         let owner = Self {
             semantic,
             module,
+            canonical_kernel_ir_v6,
             correspondence,
             limits,
             discharge_ranked_bounds: false,
@@ -612,10 +630,12 @@ impl ProductionSemanticKirOwnerV1 {
             ));
         }
         let (module, correspondence) = lower_module(&semantic, limits, true)?;
-        verify_module(&module).map_err(ProductionSemanticKirErrorV1::InvalidKernelIr)?;
+        let canonical_kernel_ir_v6 = VerifiedCanonicalKernelIrV6::from_module(module.clone())
+            .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV6)?;
         let owner = Self {
             semantic,
             module,
+            canonical_kernel_ir_v6,
             correspondence,
             limits,
             discharge_ranked_bounds: true,
@@ -635,10 +655,21 @@ impl ProductionSemanticKirOwnerV1 {
         self.semantic
             .verify_equivalence()
             .map_err(ProductionSemanticKirErrorV1::SemanticOwner)?;
+        self.canonical_kernel_ir_v6
+            .revalidate()
+            .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV6)?;
         verify_module(&self.module).map_err(ProductionSemanticKirErrorV1::InvalidKernelIr)?;
         let (rederived_module, rederived_correspondence) =
             lower_module(&self.semantic, self.limits, self.discharge_ranked_bounds)?;
-        if self.module != rederived_module || self.correspondence != rederived_correspondence {
+        let rederived_canonical_kernel_ir_v6 =
+            VerifiedCanonicalKernelIrV6::from_module(rederived_module.clone())
+                .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV6)?;
+        if self.module != rederived_module
+            || self.correspondence != rederived_correspondence
+            || self.canonical_kernel_ir_v6.identity() != rederived_canonical_kernel_ir_v6.identity()
+            || self.canonical_kernel_ir_v6.canonical_bytes()
+                != rederived_canonical_kernel_ir_v6.canonical_bytes()
+        {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
         if let Some(generic_checks) = &self.generic_checks {
@@ -664,6 +695,16 @@ impl ProductionSemanticKirOwnerV1 {
     /// Borrows the structurally verified Kernel IR module.
     pub const fn module(&self) -> &Module {
         &self.module
+    }
+
+    /// Borrows the authoritative exact, semantically verified Kernel IR V6 bytes.
+    pub const fn canonical_kernel_ir_v6(&self) -> &VerifiedCanonicalKernelIrV6 {
+        &self.canonical_kernel_ir_v6
+    }
+
+    /// Borrows the typed identity of the authoritative canonical Kernel IR V6 bytes.
+    pub const fn canonical_kernel_ir_v6_identity(&self) -> &VerifiedCanonicalKernelIrIdentityV6 {
+        self.canonical_kernel_ir_v6.identity()
     }
 
     /// Borrows pointer-independent source correspondence evidence.

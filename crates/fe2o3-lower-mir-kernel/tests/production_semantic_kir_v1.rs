@@ -1,6 +1,6 @@
 use fe2o3_kernel_ir::{
     BinaryOp, BlockId, CheckedBinaryOperator, LaunchDomain, OperationKind, ScalarType, Type,
-    WorkgroupSize, verify_module,
+    WorkgroupSize, decode_module_v6, verify_module,
 };
 use fe2o3_lower_mir_kernel::{
     PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1, ProductionFormalMemoryOwnerV1,
@@ -728,6 +728,23 @@ fn independent_lowerings_are_deterministic() {
     .unwrap();
     assert_eq!(first.module(), second.module());
     assert_eq!(first.correspondence(), second.correspondence());
+    assert_eq!(
+        first.canonical_kernel_ir_v6().canonical_bytes(),
+        second.canonical_kernel_ir_v6().canonical_bytes(),
+    );
+    assert_eq!(
+        first.canonical_kernel_ir_v6_identity(),
+        second.canonical_kernel_ir_v6_identity(),
+    );
+    assert_eq!(
+        first.canonical_kernel_ir_v6_identity().canonical_length(),
+        first.canonical_kernel_ir_v6().canonical_bytes().len() as u64,
+    );
+    assert_eq!(
+        decode_module_v6(first.canonical_kernel_ir_v6().canonical_bytes()).unwrap(),
+        *first.module(),
+    );
+    first.canonical_kernel_ir_v6().revalidate().unwrap();
 }
 
 #[test]
@@ -740,6 +757,16 @@ fn formal_memory_admission_retains_exact_kir_without_authority() {
     let admitted = ProductionFormalMemoryOwnerV1::try_admit(lowered).unwrap();
 
     admitted.verify_equivalence().unwrap();
+    assert_eq!(
+        decode_module_v6(
+            admitted
+                .semantic_kir()
+                .canonical_kernel_ir_v6()
+                .canonical_bytes(),
+        )
+        .unwrap(),
+        *admitted.semantic_kir().module(),
+    );
     assert_eq!(
         admitted.witness_extent(),
         PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1,

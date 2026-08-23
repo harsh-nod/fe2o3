@@ -1,6 +1,6 @@
 use fe2o3_kernel_ir::{
     BinaryOp, BlockId, CheckedBinaryOperator, Operation, OperationKind, ScalarType, Terminator,
-    Type, verify_module,
+    Type, decode_module_v6, verify_module,
 };
 use fe2o3_lower_mir_kernel::{
     ProductionSemanticKirErrorV1, ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1,
@@ -704,6 +704,32 @@ fn checked_lowering_is_deterministic_in_module_and_correspondence_order() {
     .unwrap();
     assert_eq!(first.module(), second.module());
     assert_eq!(first.correspondence(), second.correspondence());
+    assert_eq!(
+        first.canonical_kernel_ir_v6().canonical_bytes(),
+        second.canonical_kernel_ir_v6().canonical_bytes(),
+    );
+    assert_eq!(
+        first.canonical_kernel_ir_v6_identity(),
+        second.canonical_kernel_ir_v6_identity(),
+    );
+    let decoded = decode_module_v6(first.canonical_kernel_ir_v6().canonical_bytes()).unwrap();
+    assert_eq!(decoded, *first.module());
+    assert!(
+        decoded.functions[0]
+            .body
+            .as_ref()
+            .unwrap()
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .any(|operation| matches!(
+                operation.kind,
+                OperationKind::Binary {
+                    op: BinaryOp::Checked(_),
+                    ..
+                }
+            ) && operation.results.len() == 2)
+    );
 }
 
 #[test]
