@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/ui/fail/mfma_wave_width_cannot_change.rs:18:40
+   |
+18 |     let _ = matrix.multiply_accumulate(lhs, rhs, accumulator);
+   |                    ------------------- ^^^ expected `Bf16MfmaFragment<'_, ..., ..., _, ...>`, found `Bf16MfmaFragment<'_, ..., ..., ..., ...>`
+   |                    |
+   |                    arguments to this method are incorrect
+   |
+   = note: expected struct `Bf16MfmaFragment<'_, MfmaOperandA, Bf16F32M16N16K16, _, Wave64>`
+              found struct `Bf16MfmaFragment<'wave, MfmaOperandA, Bf16F32M16N16K16, MfmaRowMajor, Wave32>`
+note: method defined here
+  --> src/tensor.rs
+   |
+   |     pub fn multiply_accumulate<'wave, ADistribution, BDistribution>(
+   |            ^^^^^^^^^^^^^^^^^^^

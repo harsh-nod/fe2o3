@@ -94,17 +94,18 @@ fn source_forbids_unsafe_and_contains_matrix_tiling_and_epilogue() {
     assert_eq!(facts.unsafe_functions, 0);
     assert!(facts.function_calls.iter().any(|call| call == "index_1d"));
     for required in [
-        "Bf16MfmaFragment::from_bits",
-        "F32AccumulatorFragment::from_values",
+        "Bf16MfmaAMatrix::row_major",
+        "Bf16MfmaBMatrix::row_major",
+        "F32AccumulatorFragment::zero",
         "while phase < k as usize",
-        "a_row * lda as usize",
-        "depth0 * ldb as usize",
         "alpha * values[0] + beta * *output",
     ] {
         assert!(KERNEL_SOURCE.contains(required), "missing `{required}`");
     }
     for required in [
         "checked_tiled_2d",
+        "load_m16k16",
+        "load_k16n16",
         "multiply_accumulate",
         "into_values",
         "get_tiled_2d_mut",

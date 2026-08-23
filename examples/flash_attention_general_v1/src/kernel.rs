@@ -3,8 +3,8 @@
 #![allow(missing_docs)]
 
 use fe2o3_device::{
-    Bf16MfmaFragment, DisjointSlice, F32AccumulatorFragment, Index1D, KernelError, KernelResult,
-    Math, Matrix, Subgroup, Tiled2D, kernel, thread,
+    Bf16MfmaAMatrix, Bf16MfmaBMatrix, DisjointSlice, F32AccumulatorFragment, Index1D, KernelError,
+    KernelResult, Math, Matrix, Subgroup, Tiled2D, Wave64, WaveLane, kernel, thread,
 };
 
 pub const FLASH_ATTENTION_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
@@ -105,15 +105,31 @@ pub fn flash_attention_general_v1(
     let raw = thread_index.get();
     let lane = raw % 64;
     let lane_column = lane % 16;
-    let depth_offset = (lane / 16) * 4;
     let query_tile = raw / 64;
     let tiles_per_head = query_rows_padded as usize / 16;
     let head = query_tile / tiles_per_head;
-    let query_row = query_tile * 16 + lane_column;
+    let query_row_base = query_tile * 16;
     let score_row_base = query_tile * 16 + (lane / 16) * 4;
     let output_tile = thread_index
         .checked_tiled_2d::<64, 16, 16, 4>()
         .ok_or(KernelError::OutOfBounds)?;
+    let q_matrix = Bf16MfmaAMatrix::row_major(
+        q,
+        0,
+        output_rows as usize,
+        depth as usize,
+        q_stride as usize,
+    )
+    .map_err(|_| KernelError::InvalidArgument)?;
+    let k_matrix = Bf16MfmaBMatrix::row_major(
+        k_transposed,
+        head * k_head_stride as usize,
+        depth as usize,
+        keys_padded as usize,
+        k_depth_stride as usize,
+    )
+    .map_err(|_| KernelError::InvalidArgument)?;
+    let wave_lane = WaveLane::<Wave64>::current();
     let matrix = Matrix::current();
     let subgroup = Subgroup::current();
     let math = Math::current();
@@ -125,58 +141,15 @@ pub fn flash_attention_general_v1(
     let mut key_base = 0_usize;
     while key_base < keys_padded as usize {
         let key_column = key_base + lane_column;
-        let mut scores = F32AccumulatorFragment::from_values([0.0; 4]);
+        let mut scores = F32AccumulatorFragment::zero(&wave_lane);
         let mut phase = 0_usize;
         while phase < depth as usize {
-            let d0 = phase + depth_offset;
-            let d1 = d0 + 1;
-            let d2 = d0 + 2;
-            let d3 = d0 + 3;
-            let lhs = Bf16MfmaFragment::from_bits([
-                if d0 < depth as usize {
-                    q[query_row * q_stride as usize + d0]
-                } else {
-                    0
-                },
-                if d1 < depth as usize {
-                    q[query_row * q_stride as usize + d1]
-                } else {
-                    0
-                },
-                if d2 < depth as usize {
-                    q[query_row * q_stride as usize + d2]
-                } else {
-                    0
-                },
-                if d3 < depth as usize {
-                    q[query_row * q_stride as usize + d3]
-                } else {
-                    0
-                },
-            ]);
-            let k_head = head * k_head_stride as usize;
-            let rhs = Bf16MfmaFragment::from_bits([
-                if d0 < depth as usize {
-                    k_transposed[k_head + d0 * k_depth_stride as usize + key_column]
-                } else {
-                    0
-                },
-                if d1 < depth as usize {
-                    k_transposed[k_head + d1 * k_depth_stride as usize + key_column]
-                } else {
-                    0
-                },
-                if d2 < depth as usize {
-                    k_transposed[k_head + d2 * k_depth_stride as usize + key_column]
-                } else {
-                    0
-                },
-                if d3 < depth as usize {
-                    k_transposed[k_head + d3 * k_depth_stride as usize + key_column]
-                } else {
-                    0
-                },
-            ]);
+            let lhs = q_matrix
+                .load_m16k16(&wave_lane, query_row_base, phase)
+                .ok_or(KernelError::OutOfBounds)?;
+            let rhs = k_matrix
+                .load_k16n16(&wave_lane, phase, key_base)
+                .ok_or(KernelError::OutOfBounds)?;
             scores = matrix.multiply_accumulate(lhs, rhs, scores);
             phase += 16;
         }
@@ -216,58 +189,15 @@ pub fn flash_attention_general_v1(
     key_base = 0;
     while key_base < keys_padded as usize {
         let key_column = key_base + lane_column;
-        let mut scores = F32AccumulatorFragment::from_values([0.0; 4]);
+        let mut scores = F32AccumulatorFragment::zero(&wave_lane);
         let mut phase = 0_usize;
         while phase < depth as usize {
-            let d0 = phase + depth_offset;
-            let d1 = d0 + 1;
-            let d2 = d0 + 2;
-            let d3 = d0 + 3;
-            let lhs = Bf16MfmaFragment::from_bits([
-                if d0 < depth as usize {
-                    q[query_row * q_stride as usize + d0]
-                } else {
-                    0
-                },
-                if d1 < depth as usize {
-                    q[query_row * q_stride as usize + d1]
-                } else {
-                    0
-                },
-                if d2 < depth as usize {
-                    q[query_row * q_stride as usize + d2]
-                } else {
-                    0
-                },
-                if d3 < depth as usize {
-                    q[query_row * q_stride as usize + d3]
-                } else {
-                    0
-                },
-            ]);
-            let k_head = head * k_head_stride as usize;
-            let rhs = Bf16MfmaFragment::from_bits([
-                if d0 < depth as usize {
-                    k_transposed[k_head + d0 * k_depth_stride as usize + key_column]
-                } else {
-                    0
-                },
-                if d1 < depth as usize {
-                    k_transposed[k_head + d1 * k_depth_stride as usize + key_column]
-                } else {
-                    0
-                },
-                if d2 < depth as usize {
-                    k_transposed[k_head + d2 * k_depth_stride as usize + key_column]
-                } else {
-                    0
-                },
-                if d3 < depth as usize {
-                    k_transposed[k_head + d3 * k_depth_stride as usize + key_column]
-                } else {
-                    0
-                },
-            ]);
+            let lhs = q_matrix
+                .load_m16k16(&wave_lane, query_row_base, phase)
+                .ok_or(KernelError::OutOfBounds)?;
+            let rhs = k_matrix
+                .load_k16n16(&wave_lane, phase, key_base)
+                .ok_or(KernelError::OutOfBounds)?;
             scores = matrix.multiply_accumulate(lhs, rhs, scores);
             phase += 16;
         }

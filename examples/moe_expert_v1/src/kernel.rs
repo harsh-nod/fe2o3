@@ -6,8 +6,8 @@
 #![allow(missing_docs)] // V1 generated typed-kernel modules lack rustdoc.
 
 use fe2o3_device::{
-    Bf16MfmaFragment, Blocked, DeviceMatrix, DisjointSlice, F32AccumulatorFragment, Index1D,
-    Wave64, WaveLane, gfx942_lds_bf16_tile_pair_m16x16_v1,
+    Bf16MfmaAMatrix, Bf16MfmaBMatrix, Blocked, DeviceMatrix, DisjointSlice,
+    F32AccumulatorFragment, Index1D, Wave64, WaveLane, gfx942_lds_bf16_tile_pair_m16x16_v1,
     gfx942_publish_lds_bf16_tile_pair_m16x16_v1, kernel, thread,
 };
 
@@ -43,23 +43,35 @@ pub fn moe_expert_gemm_bf16_m16_n16_k16_v1(
         return;
     }
 
-    let lane_column = lane_index % MOE_EXPERT_OUTPUT_WIDTH_V1;
-    let depth_base = (lane_index / MOE_EXPERT_OUTPUT_WIDTH_V1) * 4;
-    let activation_row_base = lane_column * MOE_EXPERT_INPUT_WIDTH_V1;
-    let activation_fragment = Bf16MfmaFragment::from_bits([
-        activations[activation_row_base + depth_base],
-        activations[activation_row_base + depth_base + 1],
-        activations[activation_row_base + depth_base + 2],
-        activations[activation_row_base + depth_base + 3],
-    ]);
-    let weight_fragment = Bf16MfmaFragment::from_bits([
-        weights[depth_base * MOE_EXPERT_OUTPUT_WIDTH_V1 + lane_column],
-        weights[(depth_base + 1) * MOE_EXPERT_OUTPUT_WIDTH_V1 + lane_column],
-        weights[(depth_base + 2) * MOE_EXPERT_OUTPUT_WIDTH_V1 + lane_column],
-        weights[(depth_base + 3) * MOE_EXPERT_OUTPUT_WIDTH_V1 + lane_column],
-    ]);
-
     let lane = WaveLane::<Wave64>::current();
+    let Ok(activation_matrix) = Bf16MfmaAMatrix::row_major(
+        activations,
+        0,
+        MOE_EXPERT_OUTPUT_WIDTH_V1,
+        MOE_EXPERT_INPUT_WIDTH_V1,
+        MOE_EXPERT_INPUT_WIDTH_V1,
+    ) else {
+        fe2o3_device::trap();
+        return;
+    };
+    let Ok(weight_matrix) = Bf16MfmaBMatrix::row_major(
+        weights,
+        0,
+        MOE_EXPERT_INPUT_WIDTH_V1,
+        MOE_EXPERT_OUTPUT_WIDTH_V1,
+        MOE_EXPERT_OUTPUT_WIDTH_V1,
+    ) else {
+        fe2o3_device::trap();
+        return;
+    };
+    let Some(activation_fragment) = activation_matrix.load_m16k16(&lane, 0, 0) else {
+        fe2o3_device::trap();
+        return;
+    };
+    let Some(weight_fragment) = weight_matrix.load_k16n16(&lane, 0, 0) else {
+        fe2o3_device::trap();
+        return;
+    };
     let (mut activation_lds, mut weight_lds) = gfx942_lds_bf16_tile_pair_m16x16_v1();
     activation_lds.write_mfma_fragment(&lane, activation_fragment);
     weight_lds.write_mfma_fragment(&lane, weight_fragment);
@@ -69,7 +81,7 @@ pub fn moe_expert_gemm_bf16_m16_n16_k16_v1(
     let rhs = weight_lds.read_mfma_fragment(&lane);
     let matrix = DeviceMatrix::current();
     let result = matrix
-        .multiply_accumulate(lhs, rhs, F32AccumulatorFragment::ZERO)
+        .multiply_accumulate(lhs, rhs, F32AccumulatorFragment::zero(&lane))
         .into_values();
     let Some(output_block) = thread_index.checked_block::<16, 4>() else {
         fe2o3_device::trap();

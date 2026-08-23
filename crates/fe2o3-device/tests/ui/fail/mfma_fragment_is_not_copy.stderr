@@ -1,0 +1,11 @@
+error[E0277]: the trait bound `Bf16MfmaFragment<'static, MfmaOperandA, Bf16F32M16N16K16, MfmaRowMajor, Wave64>: Copy` is not satisfied
+ --> tests/ui/fail/mfma_fragment_is_not_copy.rs:6:20
+  |
+6 |     require_copy::<Bf16MfmaAFragment<'static, MfmaRowMajor>>();
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Copy` is not implemented for `Bf16MfmaFragment<'static, MfmaOperandA, Bf16F32M16N16K16, MfmaRowMajor, Wave64>`
+  |
+note: required by a bound in `require_copy`
+ --> tests/ui/fail/mfma_fragment_is_not_copy.rs:3:20
+  |
+3 | fn require_copy<T: Copy>() {}
+  |                    ^^^^ required by this bound in `require_copy`

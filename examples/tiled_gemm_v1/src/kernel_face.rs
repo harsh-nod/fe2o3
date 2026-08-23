@@ -20,7 +20,8 @@
 
 use fe2o3_device::{
     BF16_F32_MFMA_M, BF16_F32_MFMA_N, BF16_F32_MFMA_REDUCTION, BF16_F32_MFMA_WAVE_LANES,
-    Bf16MfmaFragment, DeviceMatrix, F32AccumulatorFragment,
+    Bf16MfmaAFragment, Bf16MfmaBFragment, DeviceMatrix, F32AccumulatorFragment,
+    MfmaRowMajorXor4,
 };
 
 use crate::contract::{TILE_K_V1, TILE_M_V1, TILE_N_V1, WAVE_LANES_V1};
@@ -40,11 +41,11 @@ const _: () = assert!(BF16_F32_MFMA_WAVE_LANES == WAVE_LANES_V1 as usize);
 /// The compiler verifies that all lanes invoke this operation in converged
 /// control flow with fragments from the same matrix operation.
 #[must_use]
-pub fn accumulate_fragment_v1(
+pub fn accumulate_fragment_v1<'wave>(
     matrix: &DeviceMatrix,
-    lhs: Bf16MfmaFragment,
-    rhs: Bf16MfmaFragment,
-    accumulator: F32AccumulatorFragment,
-) -> F32AccumulatorFragment {
+    lhs: Bf16MfmaAFragment<'wave, MfmaRowMajorXor4>,
+    rhs: Bf16MfmaBFragment<'wave, MfmaRowMajorXor4>,
+    accumulator: F32AccumulatorFragment<'wave>,
+) -> F32AccumulatorFragment<'wave> {
     matrix.multiply_accumulate(lhs, rhs, accumulator)
 }

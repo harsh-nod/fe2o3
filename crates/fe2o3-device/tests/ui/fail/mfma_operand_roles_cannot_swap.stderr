@@ -1,0 +1,18 @@
+error[E0308]: arguments to this method are incorrect
+  --> tests/ui/fail/mfma_operand_roles_cannot_swap.rs:12:20
+   |
+12 |     let _ = matrix.multiply_accumulate(lhs, rhs, accumulator);
+   |                    ^^^^^^^^^^^^^^^^^^^ ---  --- expected `Bf16MfmaFragment<'_, MfmaOperandB, Bf16F32M16N16K16, _, Wave64>`, found `Bf16MfmaFragment<'wave, MfmaOperandA, Bf16F32M16N16K16, MfmaRowMajor, Wave64>`
+   |                                        |
+   |                                        expected `Bf16MfmaFragment<'_, MfmaOperandA, Bf16F32M16N16K16, _, Wave64>`, found `Bf16MfmaFragment<'wave, MfmaOperandB, Bf16F32M16N16K16, MfmaRowMajor, Wave64>`
+   |
+note: method defined here
+  --> src/tensor.rs
+   |
+   |     pub fn multiply_accumulate<'wave, ADistribution, BDistribution>(
+   |            ^^^^^^^^^^^^^^^^^^^
+help: swap these arguments
+   |
+12 -     let _ = matrix.multiply_accumulate(lhs, rhs, accumulator);
+12 +     let _ = matrix.multiply_accumulate(rhs, lhs, accumulator);
+   |

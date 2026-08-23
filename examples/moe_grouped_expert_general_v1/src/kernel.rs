@@ -3,8 +3,8 @@
 #![allow(missing_docs)]
 
 use fe2o3_device::{
-    Bf16MfmaFragment, DisjointSlice, F32AccumulatorFragment, Index1D, KernelError, KernelResult,
-    Matrix, Tiled2D, kernel, thread,
+    Bf16MfmaAMatrix, Bf16MfmaBMatrix, DisjointSlice, F32AccumulatorFragment, Index1D, KernelError,
+    KernelResult, Matrix, Tiled2D, Wave64, WaveLane, kernel, thread,
 };
 
 pub const MOE_EXPERT_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
@@ -81,69 +81,42 @@ pub fn moe_grouped_expert_general_v1(
     let raw = thread_index.get();
     let lane = raw % 64;
     let lane_column = lane % 16;
-    let depth_offset = (lane / 16) * 4;
     let tiles_per_row = (output_columns as usize + 15) / 16;
     let tile = raw / 64;
     let tile_row = tile / tiles_per_row;
     let tile_column = tile % tiles_per_row;
-    let token_row = tile_row * 16 + lane_column;
     let output_column = tile_column * 16 + lane_column;
     let output_tile = thread_index
         .checked_tiled_2d::<64, 16, 16, 4>()
         .ok_or(KernelError::OutOfBounds)?;
+    let token_matrix = Bf16MfmaAMatrix::row_major(
+        routed_tokens,
+        0,
+        rows_padded as usize,
+        reduction as usize,
+        token_stride as usize,
+    )
+    .map_err(|_| KernelError::InvalidArgument)?;
+    let weight_base = expert as usize * expert_weight_stride as usize;
+    let weight_matrix = Bf16MfmaBMatrix::row_major(
+        expert_weights,
+        weight_base,
+        reduction as usize,
+        output_columns as usize,
+        weight_stride as usize,
+    )
+    .map_err(|_| KernelError::InvalidArgument)?;
+    let wave_lane = WaveLane::<Wave64>::current();
     let matrix = Matrix::current();
-    let mut accumulator = F32AccumulatorFragment::from_values([0.0; 4]);
+    let mut accumulator = F32AccumulatorFragment::zero(&wave_lane);
     let mut phase = 0_usize;
     while phase < reduction as usize {
-        let d0 = phase + depth_offset;
-        let d1 = d0 + 1;
-        let d2 = d0 + 2;
-        let d3 = d0 + 3;
-        let lhs = Bf16MfmaFragment::from_bits([
-            if d0 < reduction as usize {
-                routed_tokens[token_row * token_stride as usize + d0]
-            } else {
-                0
-            },
-            if d1 < reduction as usize {
-                routed_tokens[token_row * token_stride as usize + d1]
-            } else {
-                0
-            },
-            if d2 < reduction as usize {
-                routed_tokens[token_row * token_stride as usize + d2]
-            } else {
-                0
-            },
-            if d3 < reduction as usize {
-                routed_tokens[token_row * token_stride as usize + d3]
-            } else {
-                0
-            },
-        ]);
-        let weight_base = expert as usize * expert_weight_stride as usize;
-        let rhs = Bf16MfmaFragment::from_bits([
-            if d0 < reduction as usize && output_column < output_columns as usize {
-                expert_weights[weight_base + d0 * weight_stride as usize + output_column]
-            } else {
-                0
-            },
-            if d1 < reduction as usize && output_column < output_columns as usize {
-                expert_weights[weight_base + d1 * weight_stride as usize + output_column]
-            } else {
-                0
-            },
-            if d2 < reduction as usize && output_column < output_columns as usize {
-                expert_weights[weight_base + d2 * weight_stride as usize + output_column]
-            } else {
-                0
-            },
-            if d3 < reduction as usize && output_column < output_columns as usize {
-                expert_weights[weight_base + d3 * weight_stride as usize + output_column]
-            } else {
-                0
-            },
-        ]);
+        let lhs = token_matrix
+            .load_m16k16(&wave_lane, tile_row * 16, phase)
+            .ok_or(KernelError::OutOfBounds)?;
+        let rhs = weight_matrix
+            .load_k16n16(&wave_lane, phase, tile_column * 16)
+            .ok_or(KernelError::OutOfBounds)?;
         accumulator = matrix.multiply_accumulate(lhs, rhs, accumulator);
         phase += 16;
     }

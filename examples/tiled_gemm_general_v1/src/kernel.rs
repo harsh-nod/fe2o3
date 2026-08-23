@@ -3,8 +3,8 @@
 #![allow(missing_docs)] // Generated typed-kernel modules lack rustdoc in V1.
 
 use fe2o3_device::{
-    Bf16MfmaFragment, DisjointSlice, F32AccumulatorFragment, Index1D, KernelError, KernelResult,
-    Matrix, Tiled2D, kernel, thread,
+    Bf16MfmaAMatrix, Bf16MfmaBMatrix, DisjointSlice, F32AccumulatorFragment, Index1D, KernelError,
+    KernelResult, Matrix, Tiled2D, Wave64, WaveLane, kernel, thread,
 };
 
 /// Exact workgroup dimensions required by the wave64 matrix profile.
@@ -58,7 +58,6 @@ pub fn tiled_gemm_general_v1(
 
     let thread_index = thread::index_1d();
     let raw_index = thread_index.get();
-    let lane = raw_index % 64;
     let tiles_per_row = (n as usize + 15) / 16;
     if tiles_per_row == 0 {
         return Ok(());
@@ -66,66 +65,37 @@ pub fn tiled_gemm_general_v1(
     let tile = raw_index / 64;
     let tile_row = tile / tiles_per_row;
     let tile_column = tile % tiles_per_row;
-    let lane_column = lane % 16;
-    let depth_offset = (lane / 16) * 4;
-    let a_row = tile_row * 16 + lane_column;
-    let b_column = tile_column * 16 + lane_column;
 
     let output_tile = thread_index
         .checked_tiled_2d::<64, 16, 16, 4>()
         .ok_or(KernelError::OutOfBounds)?;
+    let a_matrix = Bf16MfmaAMatrix::row_major(
+        a,
+        0,
+        m as usize,
+        k as usize,
+        lda as usize,
+    )
+    .map_err(|_| KernelError::InvalidArgument)?;
+    let b_matrix = Bf16MfmaBMatrix::row_major(
+        b,
+        0,
+        k as usize,
+        n as usize,
+        ldb as usize,
+    )
+    .map_err(|_| KernelError::InvalidArgument)?;
+    let wave_lane = WaveLane::<Wave64>::current();
     let matrix = Matrix::current();
-    let mut accumulator = F32AccumulatorFragment::from_values([0.0; 4]);
+    let mut accumulator = F32AccumulatorFragment::zero(&wave_lane);
     let mut phase = 0_usize;
     while phase < k as usize {
-        let depth0 = phase + depth_offset;
-        let depth1 = depth0 + 1;
-        let depth2 = depth0 + 2;
-        let depth3 = depth0 + 3;
-        let lhs = Bf16MfmaFragment::from_bits([
-            if a_row < m as usize && depth0 < k as usize {
-                a[a_row * lda as usize + depth0]
-            } else {
-                0
-            },
-            if a_row < m as usize && depth1 < k as usize {
-                a[a_row * lda as usize + depth1]
-            } else {
-                0
-            },
-            if a_row < m as usize && depth2 < k as usize {
-                a[a_row * lda as usize + depth2]
-            } else {
-                0
-            },
-            if a_row < m as usize && depth3 < k as usize {
-                a[a_row * lda as usize + depth3]
-            } else {
-                0
-            },
-        ]);
-        let rhs = Bf16MfmaFragment::from_bits([
-            if depth0 < k as usize && b_column < n as usize {
-                b[depth0 * ldb as usize + b_column]
-            } else {
-                0
-            },
-            if depth1 < k as usize && b_column < n as usize {
-                b[depth1 * ldb as usize + b_column]
-            } else {
-                0
-            },
-            if depth2 < k as usize && b_column < n as usize {
-                b[depth2 * ldb as usize + b_column]
-            } else {
-                0
-            },
-            if depth3 < k as usize && b_column < n as usize {
-                b[depth3 * ldb as usize + b_column]
-            } else {
-                0
-            },
-        ]);
+        let lhs = a_matrix
+            .load_m16k16(&wave_lane, tile_row * 16, phase)
+            .ok_or(KernelError::OutOfBounds)?;
+        let rhs = b_matrix
+            .load_k16n16(&wave_lane, phase, tile_column * 16)
+            .ok_or(KernelError::OutOfBounds)?;
         accumulator = matrix.multiply_accumulate(lhs, rhs, accumulator);
         phase += 16;
     }

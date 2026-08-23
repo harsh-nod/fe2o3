@@ -1,0 +1,5 @@
+error[E0599]: no associated function or constant named `from_bits` found for struct `Bf16MfmaFragment<'wave, Role, Profile, Distribution, Width>` in the current scope
+ --> tests/ui/fail/mfma_fragment_raw_construction_is_private.rs:4:48
+  |
+4 |     let _ = Bf16MfmaAFragment::<MfmaRowMajor>::from_bits([0_u16; 4]);
+  |                                                ^^^^^^^^^ associated function or constant not found in `Bf16MfmaFragment<'_, MfmaOperandA, Bf16F32M16N16K16, MfmaRowMajor, Wave64>`

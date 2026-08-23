@@ -1,6 +1,7 @@
 use fe2o3_device::{
     BF16_F32_MFMA_M, BF16_F32_MFMA_N, BF16_F32_MFMA_REDUCTION, BF16_F32_MFMA_WAVE_LANES,
-    Bf16MfmaFragment, DeviceMatrix, F32AccumulatorFragment,
+    Bf16MfmaAFragment, Bf16MfmaBFragment, DeviceMatrix, F32AccumulatorFragment,
+    MfmaRowMajorXor4,
 };
 use fe2o3_tiled_gemm_v1::contract::{TILE_K_V1, TILE_M_V1, TILE_N_V1, WAVE_LANES_V1};
 use fe2o3_tiled_gemm_v1::kernel_face::accumulate_fragment_v1;
@@ -15,12 +16,12 @@ fn host_contract_reuses_the_device_matrix_profile_exactly() {
 
 #[test]
 fn kernel_boundary_has_only_the_existing_fragment_signature() {
-    let _: fn(
+    let _: for<'wave> fn(
         &DeviceMatrix,
-        Bf16MfmaFragment,
-        Bf16MfmaFragment,
-        F32AccumulatorFragment,
-    ) -> F32AccumulatorFragment = accumulate_fragment_v1;
+        Bf16MfmaAFragment<'wave, MfmaRowMajorXor4>,
+        Bf16MfmaBFragment<'wave, MfmaRowMajorXor4>,
+        F32AccumulatorFragment<'wave>,
+    ) -> F32AccumulatorFragment<'wave> = accumulate_fragment_v1;
 }
 
 #[test]

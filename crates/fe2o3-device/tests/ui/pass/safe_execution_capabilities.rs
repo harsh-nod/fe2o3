@@ -1,11 +1,12 @@
 use fe2o3_device::{
-    Bf16MfmaFragment, DeviceMatrix, DynamicLds, F32AccumulatorFragment, Gfx942Collectives,
-    Invocation3D, SubgroupTile, Wave64, WaveLane, Workgroup, WorkgroupCollectiveScratch,
-    WorkgroupLdsScope, gfx942_lds_bf16_tile_pair_m16x16_v1,
+    Bf16MfmaAMatrix, Bf16MfmaBMatrix, DeviceMatrix, DynamicLds,
+    F32AccumulatorFragment, Gfx942Collectives, Invocation3D, SubgroupTile, Wave64,
+    WaveLane, Workgroup, WorkgroupCollectiveScratch, WorkgroupLdsScope,
+    gfx942_lds_bf16_tile_pair_m16x16_v1,
     gfx942_publish_lds_bf16_tile_pair_m16x16_v1, sync,
 };
 
-fn safe_execution_surface() {
+fn safe_execution_surface(lhs_bits: &[u16], rhs_bits: &[u16]) {
     let lane = WaveLane::<Wave64>::current();
     let wave = SubgroupTile::<64>::from_wave64_snapshot(&lane);
     let invocation = Invocation3D::current();
@@ -21,16 +22,21 @@ fn safe_execution_surface() {
     let mut scratch = WorkgroupCollectiveScratch::from_dynamic_lds(&group, lds).unwrap();
     let _ = group.reduce_sum(&collectives, &mut scratch, 7_i32);
 
+    let lhs_view = Bf16MfmaAMatrix::row_major(lhs_bits, 0, 16, 16, 16).unwrap();
+    let rhs_view = Bf16MfmaBMatrix::row_major(rhs_bits, 0, 16, 16, 16).unwrap();
+    let lhs_fragment = lhs_view.load_m16k16(&lane, 0, 0).unwrap();
+    let rhs_fragment = rhs_view.load_k16n16(&lane, 0, 0).unwrap();
     let (mut lhs, mut rhs) = gfx942_lds_bf16_tile_pair_m16x16_v1();
-    let _: () = lhs.write_mfma_fragment(&lane, Bf16MfmaFragment::ZERO);
-    let _: () = rhs.write_mfma_fragment(&lane, Bf16MfmaFragment::ZERO);
+    lhs.write_mfma_fragment(&lane, lhs_fragment);
+    rhs.write_mfma_fragment(&lane, rhs_fragment);
     let (lhs, rhs) = gfx942_publish_lds_bf16_tile_pair_m16x16_v1(lhs, rhs);
     let lhs = lhs.read_mfma_fragment(&lane);
     let rhs = rhs.read_mfma_fragment(&lane);
     let matrix = DeviceMatrix::current();
-    let _ = matrix.multiply_accumulate(lhs, rhs, F32AccumulatorFragment::ZERO);
+    let accumulator = F32AccumulatorFragment::zero(&lane);
+    let _ = matrix.multiply_accumulate(lhs, rhs, accumulator);
 }
 
 fn main() {
-    let _ = safe_execution_surface as fn();
+    let _ = safe_execution_surface as fn(&[u16], &[u16]);
 }

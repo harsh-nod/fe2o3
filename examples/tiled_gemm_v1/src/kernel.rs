@@ -8,8 +8,8 @@
 #![allow(missing_docs)] // Generated typed-kernel modules lack rustdoc in V1.
 
 use fe2o3_device::{
-    Bf16MfmaFragment, Blocked, DeviceMatrix, DisjointSlice, F32AccumulatorFragment, Index1D,
-    Wave64, WaveLane, gfx942_lds_bf16_tile_pair_m16x16_v1,
+    Bf16MfmaAMatrix, Bf16MfmaBMatrix, Blocked, DeviceMatrix, DisjointSlice,
+    F32AccumulatorFragment, Index1D, Wave64, WaveLane, gfx942_lds_bf16_tile_pair_m16x16_v1,
     gfx942_publish_lds_bf16_tile_pair_m16x16_v1, kernel, thread,
 };
 
@@ -72,24 +72,23 @@ pub fn tiled_gemm_lds_slice1(
         return;
     }
 
-    let lane_column = lane_index % 16;
-    let depth_base = (lane_index / 16) * 4;
-    let a_row_base = lane_column * 16;
-
-    let a_global = Bf16MfmaFragment::from_bits([
-        a[a_row_base + depth_base],
-        a[a_row_base + depth_base + 1],
-        a[a_row_base + depth_base + 2],
-        a[a_row_base + depth_base + 3],
-    ]);
-    let b_global = Bf16MfmaFragment::from_bits([
-        b[depth_base * 16 + lane_column],
-        b[(depth_base + 1) * 16 + lane_column],
-        b[(depth_base + 2) * 16 + lane_column],
-        b[(depth_base + 3) * 16 + lane_column],
-    ]);
-
     let lane = WaveLane::<Wave64>::current();
+    let Ok(a_matrix) = Bf16MfmaAMatrix::row_major(a, 0, 16, 16, 16) else {
+        fe2o3_device::trap();
+        return;
+    };
+    let Ok(b_matrix) = Bf16MfmaBMatrix::row_major(b, 0, 16, 16, 16) else {
+        fe2o3_device::trap();
+        return;
+    };
+    let Some(a_global) = a_matrix.load_m16k16(&lane, 0, 0) else {
+        fe2o3_device::trap();
+        return;
+    };
+    let Some(b_global) = b_matrix.load_k16n16(&lane, 0, 0) else {
+        fe2o3_device::trap();
+        return;
+    };
 
     let (mut a_lds, mut b_lds) = gfx942_lds_bf16_tile_pair_m16x16_v1();
 
@@ -102,7 +101,7 @@ pub fn tiled_gemm_lds_slice1(
 
     let matrix = DeviceMatrix::current();
     let result = matrix
-        .multiply_accumulate(lhs, rhs, F32AccumulatorFragment::ZERO)
+        .multiply_accumulate(lhs, rhs, F32AccumulatorFragment::zero(&lane))
         .into_values();
     let Some(output_block) = thread_index.checked_block::<16, 4>() else {
         fe2o3_device::trap();
