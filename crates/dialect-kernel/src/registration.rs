@@ -7,12 +7,12 @@ use crate::{
     AtomicOrderingAttr, AtomicScopeAttr, BranchArgsOp, BranchOp, CheckedTiledIndex2DOp,
     DIALECT_NAME, DimensionAttr, DimensionOp, GeneralGemmAbiSchemaAttr,
     GeneralGemmEpilogueSchemaAttr, GeneralGemmOp, IndexBinaryKindAttr, IndexBinaryOp,
-    IndexConstantOp, IndexLessThanBranchOp, IndexType, IndexValueAttr, InvocationDimensionAttr,
-    InvocationIndexOp, IterationDomainAttr, LaunchExtentAttr, MemorySpaceAttr, NoAliasClassAttr,
-    RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp,
-    SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr, SemanticConstantOp,
-    SemanticScalarType, SemanticSymbolAttr, SemanticSymbolOp, TensorConvergenceAttr,
-    TensorFragmentAttr, TensorInstructionAttr, TensorLayoutOp,
+    IndexConstantOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexType, IndexValueAttr,
+    InvocationDimensionAttr, InvocationIndexOp, IterationDomainAttr, LaunchExtentAttr,
+    MemorySpaceAttr, NoAliasClassAttr, RankedAccessOp, RankedViewOp, RankedViewType,
+    RequireEquivalentOp, ReturnOp, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr,
+    SemanticConstantOp, SemanticScalarType, SemanticSymbolAttr, SemanticSymbolOp,
+    TensorConvergenceAttr, TensorFragmentAttr, TensorInstructionAttr, TensorLayoutOp,
 };
 
 fn registration_hook(
@@ -53,6 +53,7 @@ fn registration_hook(
     service.register_operation::<DimensionOp>()?;
     service.register_operation::<RankedAccessOp>()?;
     service.register_operation::<IndexLessThanBranchOp>()?;
+    service.register_operation::<IndexLessThanBranchArgsOp>()?;
     service.register_operation::<AnalysisSplitOp>()?;
     service.register_operation::<BranchOp>()?;
     service.register_operation::<BranchArgsOp>()?;

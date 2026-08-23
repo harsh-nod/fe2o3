@@ -36,11 +36,11 @@ mod tensor_layout;
 pub use ranked_memory::{
     AccessKindAttr, AllocationOriginAttr, AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr,
     BranchArgsOp, BranchOp, CheckedTiledIndex2DOp, DYNAMIC_EXTENT, DimensionAttr, DimensionOp,
-    IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp, IndexType,
-    IndexValueAttr, InvocationDimensionAttr, InvocationIndexOp, LaunchExtentAttr,
-    MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, NoAliasClassAttr, RankedAccessOp, RankedMemoryError,
-    RankedViewOp, RankedViewType, ReturnOp, SUPPORTED_ELEMENT_WIDTHS, is_index_type,
-    ranked_view_type,
+    IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexLessThanBranchArgsOp,
+    IndexLessThanBranchOp, IndexType, IndexValueAttr, InvocationDimensionAttr, InvocationIndexOp,
+    LaunchExtentAttr, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, NoAliasClassAttr, RankedAccessOp,
+    RankedMemoryError, RankedViewOp, RankedViewType, ReturnOp, SUPPORTED_ELEMENT_WIDTHS,
+    is_index_type, ranked_view_type,
 };
 pub use semantic_contract::{
     RequireEquivalentOp, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr,

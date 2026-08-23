@@ -657,7 +657,8 @@ impl Verify for IndexBinaryOp {
             );
         }
         require_index_operand(self, context, 0)?;
-        require_index_operand(self, context, 1)
+        require_index_operand(self, context, 1)?;
+        require_zero_successor_arguments(self, context)
     }
 }
 
@@ -1055,6 +1056,131 @@ impl Verify for IndexLessThanBranchOp {
     }
 }
 
+/// Index comparison branch carrying exact SSA values to both successors.
+#[pliron_op(
+    name = "kernel.index_lt_br_args",
+    format,
+    interfaces = [IsTerminatorInterface, NResultsInterface<0>, NRegionsInterface<0>]
+)]
+pub struct IndexLessThanBranchArgsOp;
+
+impl IndexLessThanBranchArgsOp {
+    pub fn new(
+        context: &mut Context,
+        lhs: Value,
+        rhs: Value,
+        true_arguments: Vec<Value>,
+        false_arguments: Vec<Value>,
+        true_successor: Ptr<pliron::basic_block::BasicBlock>,
+        false_successor: Ptr<pliron::basic_block::BasicBlock>,
+    ) -> Self {
+        let mut operands = Vec::with_capacity(2 + true_arguments.len() + false_arguments.len());
+        operands.push(lhs);
+        operands.push(rhs);
+        operands.extend(true_arguments);
+        operands.extend(false_arguments);
+        Self::from_operation(Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![],
+            operands,
+            vec![true_successor, false_successor],
+            0,
+        ))
+    }
+
+    pub fn lhs(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_operand(0)
+    }
+
+    pub fn rhs(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_operand(1)
+    }
+
+    pub fn true_arguments(&self, context: &Context) -> Vec<Value> {
+        let operation = self.get_operation();
+        let operation = operation.deref(context);
+        let count = operation
+            .get_successor(0)
+            .deref(context)
+            .get_num_arguments();
+        (0..count)
+            .map(|index| operation.get_operand(2 + index))
+            .collect()
+    }
+
+    pub fn false_arguments(&self, context: &Context) -> Vec<Value> {
+        let operation = self.get_operation();
+        let operation = operation.deref(context);
+        let true_count = operation
+            .get_successor(0)
+            .deref(context)
+            .get_num_arguments();
+        let false_count = operation
+            .get_successor(1)
+            .deref(context)
+            .get_num_arguments();
+        (0..false_count)
+            .map(|index| operation.get_operand(2 + true_count + index))
+            .collect()
+    }
+}
+
+impl Verify for IndexLessThanBranchArgsOp {
+    fn verify(&self, context: &Context) -> PlironResult<()> {
+        verify_no_regions_results_successors(self, context, 0, 2)?;
+        let operation = self.get_operation();
+        let operation = operation.deref(context);
+        let true_successor = operation.get_successor(0);
+        let false_successor = operation.get_successor(1);
+        let true_count = true_successor.deref(context).get_num_arguments();
+        let false_count = false_successor.deref(context).get_num_arguments();
+        let expected = 2 + true_count + false_count;
+        let actual = operation.get_num_operands();
+        if actual != expected {
+            return verify_err!(
+                self.loc(context),
+                RankedMemoryError::OperandCountMismatch { expected, actual }
+            );
+        }
+        require_index_operand(self, context, 0)?;
+        require_index_operand(self, context, 1)?;
+        for index in 0..true_count {
+            if operation.get_operand(2 + index).get_type(context)
+                != true_successor
+                    .deref(context)
+                    .get_argument(index)
+                    .get_type(context)
+            {
+                return verify_err!(
+                    self.loc(context),
+                    RankedMemoryError::MalformedPayload(
+                        "kernel.index_lt_br_args true-edge types differ",
+                    )
+                );
+            }
+        }
+        for index in 0..false_count {
+            if operation
+                .get_operand(2 + true_count + index)
+                .get_type(context)
+                != false_successor
+                    .deref(context)
+                    .get_argument(index)
+                    .get_type(context)
+            {
+                return verify_err!(
+                    self.loc(context),
+                    RankedMemoryError::MalformedPayload(
+                        "kernel.index_lt_br_args false-edge types differ",
+                    )
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Target-neutral two-way split used when safety analysis retains control-flow
 /// topology but intentionally does not claim a predicate fact.
 #[pliron_op(
@@ -1090,7 +1216,7 @@ impl Verify for AnalysisSplitOp {
                 RankedMemoryError::MalformedPayload("kernel.analysis_split cannot carry operands")
             );
         }
-        Ok(())
+        require_zero_successor_arguments(self, context)
     }
 }
 
@@ -1124,7 +1250,7 @@ impl Verify for BranchOp {
                 RankedMemoryError::MalformedPayload("kernel.br cannot carry operands")
             );
         }
-        Ok(())
+        require_zero_successor_arguments(self, context)
     }
 }
 
@@ -1278,6 +1404,21 @@ fn require_index_operand(
         return verify_err!(
             operation.loc(context),
             RankedMemoryError::ForeignIndexType { operand }
+        );
+    }
+    Ok(())
+}
+
+fn require_zero_successor_arguments(operation: &dyn Op, context: &Context) -> PlironResult<()> {
+    let raw = operation.get_operation();
+    let raw = raw.deref(context);
+    if raw
+        .successors()
+        .any(|successor| successor.deref(context).get_num_arguments() != 0)
+    {
+        return verify_err!(
+            operation.loc(context),
+            RankedMemoryError::MalformedPayload("branch omits required successor block arguments",)
         );
     }
     Ok(())
