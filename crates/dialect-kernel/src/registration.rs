@@ -4,15 +4,15 @@ use fe2o3_pliron_owner_core::{
 
 use crate::{
     AccessKindAttr, AlgorithmOp, AlgorithmType, AllocationOriginAttr, AnalysisSplitOp,
-    AtomicOrderingAttr, AtomicScopeAttr, BranchOp, CheckedTiledIndex2DOp, DIALECT_NAME,
-    DimensionAttr, DimensionOp, GeneralGemmAbiSchemaAttr, GeneralGemmEpilogueSchemaAttr,
-    GeneralGemmOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp,
-    IndexType, IndexValueAttr, InvocationDimensionAttr, InvocationIndexOp, IterationDomainAttr,
-    LaunchExtentAttr, MemorySpaceAttr, NoAliasClassAttr, RankedAccessOp, RankedViewOp,
-    RankedViewType, RequireEquivalentOp, ReturnOp, SemanticBinaryKindAttr, SemanticBinaryOp,
-    SemanticConstantAttr, SemanticConstantOp, SemanticScalarType, SemanticSymbolAttr,
-    SemanticSymbolOp, TensorConvergenceAttr, TensorFragmentAttr, TensorInstructionAttr,
-    TensorLayoutOp,
+    AtomicOrderingAttr, AtomicScopeAttr, BranchArgsOp, BranchOp, CheckedTiledIndex2DOp,
+    DIALECT_NAME, DimensionAttr, DimensionOp, GeneralGemmAbiSchemaAttr,
+    GeneralGemmEpilogueSchemaAttr, GeneralGemmOp, IndexBinaryKindAttr, IndexBinaryOp,
+    IndexConstantOp, IndexLessThanBranchOp, IndexType, IndexValueAttr, InvocationDimensionAttr,
+    InvocationIndexOp, IterationDomainAttr, LaunchExtentAttr, MemorySpaceAttr, NoAliasClassAttr,
+    RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp,
+    SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr, SemanticConstantOp,
+    SemanticScalarType, SemanticSymbolAttr, SemanticSymbolOp, TensorConvergenceAttr,
+    TensorFragmentAttr, TensorInstructionAttr, TensorLayoutOp,
 };
 
 fn registration_hook(
@@ -55,6 +55,7 @@ fn registration_hook(
     service.register_operation::<IndexLessThanBranchOp>()?;
     service.register_operation::<AnalysisSplitOp>()?;
     service.register_operation::<BranchOp>()?;
+    service.register_operation::<BranchArgsOp>()?;
     service.register_operation::<ReturnOp>()?;
     service.register_operation::<SemanticSymbolOp>()?;
     service.register_operation::<SemanticConstantOp>()?;

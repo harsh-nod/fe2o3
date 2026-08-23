@@ -35,7 +35,7 @@ mod tensor_layout;
 
 pub use ranked_memory::{
     AccessKindAttr, AllocationOriginAttr, AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr,
-    BranchOp, CheckedTiledIndex2DOp, DYNAMIC_EXTENT, DimensionAttr, DimensionOp,
+    BranchArgsOp, BranchOp, CheckedTiledIndex2DOp, DYNAMIC_EXTENT, DimensionAttr, DimensionOp,
     IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp, IndexType,
     IndexValueAttr, InvocationDimensionAttr, InvocationIndexOp, LaunchExtentAttr,
     MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, NoAliasClassAttr, RankedAccessOp, RankedMemoryError,

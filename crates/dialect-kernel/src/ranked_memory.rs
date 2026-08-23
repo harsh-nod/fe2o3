@@ -1128,6 +1128,68 @@ impl Verify for BranchOp {
     }
 }
 
+/// Unconditional branch carrying exact SSA values to successor block arguments.
+#[pliron_op(
+    name = "kernel.br_args",
+    format,
+    interfaces = [IsTerminatorInterface, NResultsInterface<0>, NRegionsInterface<0>]
+)]
+pub struct BranchArgsOp;
+
+impl BranchArgsOp {
+    pub fn new(
+        context: &mut Context,
+        arguments: Vec<Value>,
+        successor: Ptr<pliron::basic_block::BasicBlock>,
+    ) -> Self {
+        Self::from_operation(Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![],
+            arguments,
+            vec![successor],
+            0,
+        ))
+    }
+
+    pub fn arguments(&self, context: &Context) -> Vec<Value> {
+        self.get_operation().deref(context).operands().collect()
+    }
+}
+
+impl Verify for BranchArgsOp {
+    fn verify(&self, context: &Context) -> PlironResult<()> {
+        verify_no_regions_results_successors(self, context, 0, 1)?;
+        let operation = self.get_operation();
+        let operation = operation.deref(context);
+        let successor = operation.get_successor(0);
+        let expected = successor.deref(context).get_num_arguments();
+        let actual = operation.get_num_operands();
+        if actual != expected {
+            return verify_err!(
+                self.loc(context),
+                RankedMemoryError::OperandCountMismatch { expected, actual }
+            );
+        }
+        for index in 0..actual {
+            if operation.get_operand(index).get_type(context)
+                != successor
+                    .deref(context)
+                    .get_argument(index)
+                    .get_type(context)
+            {
+                return verify_err!(
+                    self.loc(context),
+                    RankedMemoryError::MalformedPayload(
+                        "kernel.br_args operand and successor argument types differ",
+                    )
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Terminates a void target-neutral kernel function.
 #[pliron_op(
     name = "kernel.return",
