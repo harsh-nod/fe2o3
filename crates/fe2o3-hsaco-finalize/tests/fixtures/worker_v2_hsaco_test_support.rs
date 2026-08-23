@@ -581,11 +581,19 @@ pub(crate) fn scalar_add_fixture_with(mutation: ScalarAddFixtureMutation) -> Fix
 
 #[allow(dead_code)]
 pub(crate) fn slice_fixture_with_descriptor_table(descriptor_table: &[u8]) -> Fixture {
+    slice_fixture_with_descriptor_table_and_workgroup(descriptor_table, 64)
+}
+
+#[allow(dead_code)]
+pub(crate) fn slice_fixture_with_descriptor_table_and_workgroup(
+    descriptor_table: &[u8],
+    workgroup_size: u32,
+) -> Fixture {
     let mut options = FixtureOptions::valid();
     options.target = "gfx942:xnack-";
     options.include_export = false;
-    options.required_workgroup_size = [64, 1, 1];
-    options.max_flat_workgroup_size = 64;
+    options.required_workgroup_size = [workgroup_size, 1, 1];
+    options.max_flat_workgroup_size = workgroup_size;
     fixture_with_descriptor_table(options, Some(descriptor_table))
 }
 

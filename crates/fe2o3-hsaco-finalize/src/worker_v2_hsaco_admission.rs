@@ -23,21 +23,21 @@ use fe2o3_hsaco::{
     InspectedKernelBindings, KernelBindingError, inspect_and_bind_kernel_descriptors,
 };
 use fe2o3_kernel_descriptor::{
-    CodeObjectVersion, DeviceTargetV1, ROW_SOFTMAX_V1_MAX_FLAT_WORKGROUP_SIZE,
-    ROW_SOFTMAX_V1_WORKGROUP_SIZE, TILED_GEMM_V1_MAX_FLAT_WORKGROUP_SIZE,
-    TILED_GEMM_V1_WORKGROUP_SIZE,
+    BlockSizeV1, CodeObjectVersion, DeviceTargetV1, KernelDescriptorV1,
+    ROW_SOFTMAX_V1_MAX_FLAT_WORKGROUP_SIZE, ROW_SOFTMAX_V1_WORKGROUP_SIZE,
+    TILED_GEMM_V1_MAX_FLAT_WORKGROUP_SIZE, TILED_GEMM_V1_WORKGROUP_SIZE,
 };
 use object::{Object, ObjectSection, ObjectSymbol};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ContentIdentityV1, DEVICE_DESCRIPTOR_SECTION_NAME, FirstBuildWorkerV2IdentityV1,
-    InertFirstBuildWorkerV2EvidenceV1, InertProtectedFirstBuildWorkerV2EvidenceV1,
-    InertProtectedFirstBuildWorkerV3EvidenceV1, MAX_WORKER_SYMBOLS, MultiInputLinkPlanV1,
-    ProtectedCompilerHandoffBindingIdentityV3, ProtectedCompilerHandoffExpectationV3,
-    ProtectedFirstBuildWorkerV2IdentityV1, ProtectedFirstBuildWorkerV3IdentityV1,
-    WorkerCompilerFfiEnvelopeIdentityV2, WorkerMeasurementV1,
-    request_construction::decode_link_options,
+    ContentIdentityV1, DEVICE_DESCRIPTOR_SECTION_NAME, FinalizationError,
+    FirstBuildWorkerV2IdentityV1, InertFirstBuildWorkerV2EvidenceV1,
+    InertProtectedFirstBuildWorkerV2EvidenceV1, InertProtectedFirstBuildWorkerV3EvidenceV1,
+    MAX_WORKER_SYMBOLS, MultiInputLinkPlanV1, ProtectedCompilerHandoffBindingIdentityV3,
+    ProtectedCompilerHandoffExpectationV3, ProtectedFirstBuildWorkerV2IdentityV1,
+    ProtectedFirstBuildWorkerV3IdentityV1, WorkerCompilerFfiEnvelopeIdentityV2,
+    WorkerMeasurementV1, request_construction::decode_link_options,
 };
 
 const EXPECTED_PROCESSOR: &str = "gfx942";
@@ -847,6 +847,7 @@ pub enum WorkerV2RawHsacoInspectionError {
         actual: u32,
         expected: u32,
     },
+    StrictV3DescriptorLaunchContract(&'static str),
     TiledGemmV1RequiredWorkgroupSizeMismatch {
         kernel: String,
         actual: Option<[u32; 3]>,
@@ -1060,6 +1061,12 @@ impl fmt::Display for WorkerV2RawHsacoInspectionError {
                 formatter,
                 "production-v1 kernel {kernel} descriptor wavefront is {actual}, expected {expected}"
             ),
+            Self::StrictV3DescriptorLaunchContract(field) => {
+                write!(
+                    formatter,
+                    "strict V3 descriptor launch contract rejected {field}"
+                )
+            }
             Self::TiledGemmV1RequiredWorkgroupSizeMismatch {
                 kernel,
                 actual,
@@ -1320,17 +1327,20 @@ pub fn inspect_protected_production_v1_worker_v2_raw_hsaco_v1(
     )
 }
 
-/// Consumes native strict-V3 first-build evidence under the fixed production-v1 contract.
+/// Consumes native strict-V3 first-build evidence under its descriptor-bound production contract.
 ///
 /// The complete V3 transaction and outer semantic handoff remain owned by the result. This route
-/// neither constructs protected V2 evidence nor falls back to a V1/V2 admission entry.
+/// neither constructs protected V2 evidence nor falls back to a V1/V2 admission entry. When the
+/// raw artifact has a canonical descriptor table, its exact physically cross-checked launch facts
+/// define the inspection policy; callers cannot inject or weaken those facts.
 pub fn inspect_protected_production_v1_worker_v3_raw_hsaco_v1(
     source: InertProtectedFirstBuildWorkerV3EvidenceV1,
 ) -> Result<InspectedProtectedRawWorkerV3HsacoV1, WorkerV2RawHsacoInspectionError> {
     validate_protected_v3_lineage(&source)?;
+    let launch = strict_v3_launch_contract(&source)?;
     let raw = inspect_worker_v2_raw_hsaco_shared_v1(
         &source,
-        WorkerV2RawLaunchContractV1::PRODUCTION_V1,
+        launch,
         WorkerV2RawLaunchDiagnosticProfileV1::ProductionV1,
     )?;
     let response_identity =
@@ -1345,6 +1355,61 @@ pub fn inspect_protected_production_v1_worker_v3_raw_hsaco_v1(
         resource_observation_preimage: raw.resource_observation_preimage,
         policy: raw.policy,
         source,
+    })
+}
+
+fn strict_v3_launch_contract(
+    source: &InertProtectedFirstBuildWorkerV3EvidenceV1,
+) -> Result<WorkerV2RawLaunchContractV1, WorkerV2RawHsacoInspectionError> {
+    let inspection = match crate::inspect_unfinalized(source.output_bytes()) {
+        Ok(inspection) => inspection,
+        // Preserve the existing descriptive inspection stage for legacy tests that deliberately
+        // omit compiler descriptor-source evidence. Finalization still rejects those artifacts.
+        Err(FinalizationError::MissingDescriptorSection) => {
+            return Ok(WorkerV2RawLaunchContractV1::PRODUCTION_V1);
+        }
+        Err(_) => {
+            return Err(
+                WorkerV2RawHsacoInspectionError::StrictV3DescriptorLaunchContract(
+                    "embedded descriptor inspection",
+                ),
+            );
+        }
+    };
+    let mut kernels = inspection.descriptor_table().kernels().iter();
+    let first = kernels
+        .next()
+        .ok_or(WorkerV2RawHsacoInspectionError::StrictV3DescriptorLaunchContract("kernel set"))?;
+    let expected = strict_v3_kernel_launch_contract(first)?;
+    for kernel in kernels {
+        if strict_v3_kernel_launch_contract(kernel)? != expected {
+            return Err(
+                WorkerV2RawHsacoInspectionError::StrictV3DescriptorLaunchContract(
+                    "heterogeneous per-kernel launch policy",
+                ),
+            );
+        }
+    }
+    Ok(expected)
+}
+
+fn strict_v3_kernel_launch_contract(
+    kernel: &KernelDescriptorV1,
+) -> Result<WorkerV2RawLaunchContractV1, WorkerV2RawHsacoInspectionError> {
+    let block = match kernel.launch().block_size() {
+        BlockSizeV1::Exact(block) => block,
+        BlockSizeV1::Any | BlockSizeV1::AtMost(_) => {
+            return Err(
+                WorkerV2RawHsacoInspectionError::StrictV3DescriptorLaunchContract(
+                    "non-exact block size",
+                ),
+            );
+        }
+    };
+    Ok(WorkerV2RawLaunchContractV1 {
+        required_workgroup_size: [block.x(), block.y(), block.z()],
+        max_flat_workgroup_size: kernel.launch().max_flat_workgroup_size(),
+        wavefront_size: REQUIRED_WAVEFRONT_SIZE,
     })
 }
 

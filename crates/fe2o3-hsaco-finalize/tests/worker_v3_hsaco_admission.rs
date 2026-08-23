@@ -55,6 +55,7 @@ mod hsaco_fixture;
 
 use hsaco_fixture::{
     ScalarAddFixtureMutation, scalar_add_fixture_with, slice_fixture_with_descriptor_table,
+    slice_fixture_with_descriptor_table_and_workgroup,
 };
 
 const TARGET: &str = "gfx942:xnack-";
@@ -155,6 +156,7 @@ impl EvidenceConfig {
     };
 }
 
+#[allow(dead_code)]
 pub(crate) struct PublishedWorkerV3Fixture {
     pub(crate) directory: TestDirectory,
     pub(crate) producer: ProducerIdentity,
@@ -162,11 +164,13 @@ pub(crate) struct PublishedWorkerV3Fixture {
     pub(crate) published: fe2o3_hsaco_finalize::PublishedProtectedWorkerV3HsacoV1,
 }
 
+#[allow(dead_code)]
 pub(crate) fn published_worker_v3_fixture() -> PublishedWorkerV3Fixture {
     let fixture = slice_fixture_with_descriptor_table(&slice_descriptor_table());
     published_worker_v3_fixture_from_raw_hsaco(fixture.bytes, "vecadd", "vecadd.kd")
 }
 
+#[allow(dead_code)]
 pub(crate) fn published_worker_v3_fixture_from_raw_hsaco(
     raw_hsaco: Vec<u8>,
     entry_symbol: &str,
@@ -277,6 +281,28 @@ fn native_v3_inspection_retains_every_boundary_axis_without_authority() {
     assert!(!inspected.grants_publication_authority());
     assert!(!inspected.grants_load_authority());
     assert!(!inspected.grants_launch_authority());
+}
+
+#[test]
+fn strict_v3_inspection_derives_wg256_from_the_bound_descriptor() {
+    let directory = TestDirectory::new();
+    let descriptor = slice_descriptor_table_with_workgroup(256);
+    let fixture = slice_fixture_with_descriptor_table_and_workgroup(&descriptor, 256);
+    let (_, source) = evidence_in_directory_for_kernel(
+        &directory,
+        fixture.bytes,
+        EvidenceConfig::BASE,
+        "vecadd",
+        "vecadd.kd",
+    );
+
+    let inspected = inspect_protected_production_v1_worker_v3_raw_hsaco_v1(source).unwrap();
+
+    assert_eq!(
+        inspected.policy().launch().required_workgroup_size(),
+        [256, 1, 1]
+    );
+    assert_eq!(inspected.policy().launch().max_flat_workgroup_size(), 256);
 }
 
 #[test]
@@ -852,6 +878,10 @@ fn target() -> DeviceTargetV1 {
 }
 
 fn slice_descriptor_table() -> Vec<u8> {
+    slice_descriptor_table_with_workgroup(64)
+}
+
+fn slice_descriptor_table_with_workgroup(workgroup_size: u32) -> Vec<u8> {
     let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32));
     let layout =
         DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32));
@@ -872,9 +902,9 @@ fn slice_descriptor_table() -> Vec<u8> {
         KernelAbiLayoutV1::new(16, 272, 8).unwrap(),
         LaunchConstraintsV1::new(
             1,
-            BlockSizeV1::Exact(DimensionsV1::new(64, 1, 1).unwrap()),
+            BlockSizeV1::Exact(DimensionsV1::new(workgroup_size, 1, 1).unwrap()),
             DimensionsV1::new(u32::MAX, 1, 1).unwrap(),
-            64,
+            workgroup_size,
             0,
             64 * 1024,
         )
