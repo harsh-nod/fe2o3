@@ -28,7 +28,7 @@ fn accessed_extent(rows: u32, columns: u32, stride: u32) -> usize {
 /// checked tiled output witness suppresses stores outside logical M and N.
 #[kernel(
     typed,
-    namespace = "3cc6dcf60a079a6257a12a57681920196ce00f130ff594ba56c8d8ec984a564a",
+    namespace = "62ba887120a59fdac1b06e5e2be82d3817b557f57f282283dfcf1f957d1ec0d9",
     launch(required = [64, 1, 1], max = [64, 1, 1]),
     control_flow(loop_bounds(4294967295))
 )]
