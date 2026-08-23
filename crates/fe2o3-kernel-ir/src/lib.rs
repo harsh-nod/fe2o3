@@ -27,6 +27,7 @@ mod effect_extraction;
 mod flash_attention_v1;
 mod formal_memory_obligations;
 mod general_gemm_kir_v1;
+mod integer_semantic_oracle_v1;
 mod ir;
 #[allow(dead_code)]
 #[path = "launch_kernel_v2.rs"]
@@ -56,6 +57,7 @@ pub use effect_extraction::*;
 pub use flash_attention_v1::*;
 pub use formal_memory_obligations::*;
 pub use general_gemm_kir_v1::*;
+pub use integer_semantic_oracle_v1::*;
 pub use ir::*;
 #[doc(hidden)]
 pub use launch_kernel_contract_v2::{
