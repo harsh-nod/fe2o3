@@ -36,9 +36,10 @@
 //!
 //! The output directory is a private protocol namespace for cooperating fe2o3 writers. Every
 //! writer that can create, rename, replace, or remove entries in that directory must use this
-//! crate's composite Linux lock. An abstract-socket guard keyed by the admitted parent inode and
-//! root name serializes root replacement without serializing sibling outputs, a named-file OFD
-//! record lock preserves interoperability with existing cooperating writers, and a
+//! crate's composite Linux lock. A filesystem-scoped OFD byte-range guard keyed by the normalized
+//! absolute root path serializes replacement of the root or any ancestor without serializing
+//! unrelated outputs, a named-file OFD record lock preserves interoperability with existing
+//! cooperating writers, and a
 //! descriptor-owned lock on the root inode prevents replacement of the named lock from creating a
 //! second critical section. Closing unrelated descriptors cannot release these locks. Lock
 //! descriptors are `CLOEXEC`, but a forked child retains inherited locks until it closes those
@@ -175,7 +176,6 @@ use rustix::fs::{
 };
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::io::{self, Read, Write};
@@ -185,7 +185,6 @@ use std::process;
 use std::sync::Weak;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
-use std::time::Duration;
 pub use worker_v2_publication_intent::{
     MAX_WORKER_V2_PUBLICATION_INTENT_CLEANUP_ESCROW_CAPSULE_BYTES_V1,
     MAX_WORKER_V2_PUBLICATION_INTENT_OUTPUT_BYTES,
@@ -3048,30 +3047,15 @@ impl PinnedOutput {
     fn open_with_create(path: &Path, create: bool) -> Result<Self, EmitError> {
         let OpenedDirectoryWalk {
             directory: fd,
-            parent,
-            leaf,
-        } = open_directory_walk_with_parent(path, create)?;
+            path_guard_key,
+        } = open_directory_walk_with_guard_key(path, create)?;
         let stat = fstat(&fd).map_err(std::io::Error::from)?;
-        let parent_stat = fstat(&parent).map_err(std::io::Error::from)?;
         if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
             return Err(EmitError::InvalidArtifactDestination {
                 path: path.to_path_buf(),
                 reason: "output path is not a directory".to_string(),
             });
         }
-        let path_guard_key = leaf.as_ref().map(|leaf| {
-            use std::os::unix::ffi::OsStrExt;
-
-            let leaf = leaf.as_os_str().as_bytes();
-            let mut digest = Sha256::new();
-            digest.update(b"FE2O3/ARTIFACT-ROOT-PATH-GUARD/V1\0");
-            digest.update(rustix::process::geteuid().as_raw().to_le_bytes());
-            digest.update(parent_stat.st_dev.to_le_bytes());
-            digest.update(parent_stat.st_ino.to_le_bytes());
-            digest.update((leaf.len() as u64).to_le_bytes());
-            digest.update(leaf);
-            digest.finalize().into()
-        });
         Ok(Self {
             fd,
             display_path: path.to_path_buf(),
@@ -3166,7 +3150,7 @@ impl PinnedOutput {
         // at the same root name therefore cannot enter a disjoint root critical section while a
         // transaction still owns the displaced root descriptor.
         let path_guard = match self.path_guard_key {
-            Some(key) => match acquire_linux_abstract_path_guard(key, nonblocking)? {
+            Some(key) => match acquire_linux_filesystem_path_guard(key, nonblocking)? {
                 Some(path_guard) => Some(path_guard),
                 None => return Ok(None),
             },
@@ -3330,6 +3314,16 @@ impl PinnedOutput {
 /// descriptors or proceed directly to `exec`, and must not call this crate's lock APIs.
 #[cfg(target_os = "linux")]
 fn acquire_linux_ofd_exclusive_lock(fd: &OwnedFd, nonblocking: bool) -> io::Result<bool> {
+    acquire_linux_ofd_exclusive_range(fd, 0, 0, nonblocking)
+}
+
+#[cfg(target_os = "linux")]
+fn acquire_linux_ofd_exclusive_range(
+    fd: &OwnedFd,
+    start: u64,
+    length: u64,
+    nonblocking: bool,
+) -> io::Result<bool> {
     let command = if nonblocking {
         libc::F_OFD_SETLK
     } else {
@@ -3338,8 +3332,18 @@ fn acquire_linux_ofd_exclusive_lock(fd: &OwnedFd, nonblocking: bool) -> io::Resu
     let mut lock: libc::flock = unsafe { std::mem::zeroed() };
     lock.l_type = libc::F_WRLCK as _;
     lock.l_whence = libc::SEEK_SET as _;
-    lock.l_start = 0;
-    lock.l_len = 0;
+    lock.l_start = libc::off_t::try_from(start).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "OFD lock start is out of range",
+        )
+    })?;
+    lock.l_len = libc::off_t::try_from(length).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "OFD lock length is out of range",
+        )
+    })?;
     lock.l_pid = 0;
     loop {
         // SAFETY: `fd` is live for the call and `lock` is a fully initialized `struct flock`.
@@ -3406,86 +3410,131 @@ fn acquire_linux_descriptor_flock(_fd: &OwnedFd, _nonblocking: bool) -> io::Resu
     ))
 }
 
-/// Acquires one crash-released Linux abstract-socket guard for a configured root path.
+const FILESYSTEM_PATH_GUARD_ROOT: &str = "/tmp";
+const FILESYSTEM_PATH_GUARD_FILE: &str = "domain.lock";
+
+/// Acquires one filesystem-visible OFD byte-range guard for a normalized root path.
+///
+/// The private per-UID coordination file is intentionally outside the output tree, so replacing
+/// the output or any ancestor cannot split the cooperative critical section. Cooperating processes
+/// must share the `/tmp` mount. The file is retained across acquisitions; only its kernel lock is
+/// transient, so process death cannot leave a stale owner.
 #[cfg(target_os = "linux")]
-fn acquire_linux_abstract_path_guard(
+fn acquire_linux_filesystem_path_guard(
     key: [u8; 32],
     nonblocking: bool,
 ) -> Result<Option<OwnedFd>, EmitError> {
-    loop {
-        let raw = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
-        if raw < 0 {
-            return Err(io::Error::last_os_error().into());
-        }
-        let descriptor = unsafe { OwnedFd::from_raw_fd(raw) };
-        let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
-        address.sun_family = libc::AF_UNIX as libc::sa_family_t;
-        for (destination, source) in address.sun_path[1..=key.len()].iter_mut().zip(key) {
-            *destination = source as libc::c_char;
-        }
-        let length = std::mem::offset_of!(libc::sockaddr_un, sun_path)
-            .checked_add(1 + key.len())
-            .and_then(|length| libc::socklen_t::try_from(length).ok())
-            .ok_or_else(|| EmitError::InvalidArtifactDestination {
-                path: PathBuf::from("<abstract-path-guard>"),
-                reason: "abstract path-guard address length overflowed".to_owned(),
-            })?;
-        let result = unsafe {
-            libc::bind(
-                descriptor.as_raw_fd(),
-                std::ptr::from_ref(&address).cast::<libc::sockaddr>(),
-                length,
-            )
-        };
-        if result == 0 {
-            return Ok(Some(descriptor));
-        }
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::EADDRINUSE) {
-            return Err(error.into());
-        }
-        if nonblocking {
-            return Ok(None);
-        }
-        drop(descriptor);
-        std::thread::sleep(Duration::from_millis(1));
+    let service_uid = rustix::process::geteuid().as_raw();
+    let base = open(
+        Path::new(FILESYSTEM_PATH_GUARD_ROOT),
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(std::io::Error::from)?;
+    let directory_name = format!(".fe2o3-artifact-path-guards-v1-{service_uid}");
+    match mkdirat(&base, &directory_name, Mode::RUSR | Mode::WUSR | Mode::XUSR) {
+        Ok(()) => {}
+        Err(error) if error == rustix::io::Errno::EXIST => {}
+        Err(error) => return Err(std::io::Error::from(error).into()),
     }
+    let directory = openat(
+        &base,
+        &directory_name,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(std::io::Error::from)?;
+    let directory_stat = fstat(&directory).map_err(std::io::Error::from)?;
+    if FileType::from_raw_mode(directory_stat.st_mode) != FileType::Directory
+        || directory_stat.st_uid != service_uid
+        || directory_stat.st_mode & 0o7777 != 0o700
+    {
+        return Err(EmitError::InvalidArtifactDestination {
+            path: Path::new(FILESYSTEM_PATH_GUARD_ROOT).join(&directory_name),
+            reason: "path-guard directory must be a private service-owned directory".to_owned(),
+        });
+    }
+    let descriptor = openat(
+        &directory,
+        FILESYSTEM_PATH_GUARD_FILE,
+        OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::RUSR | Mode::WUSR,
+    )
+    .map_err(std::io::Error::from)?;
+    let validate_guard = |stat: &rustix::fs::Stat| -> Result<(), EmitError> {
+        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
+            || stat.st_uid != service_uid
+            || stat.st_mode & 0o7777 != 0o600
+            || stat.st_nlink != 1
+        {
+            return Err(EmitError::InvalidArtifactDestination {
+                path: Path::new(FILESYSTEM_PATH_GUARD_ROOT)
+                    .join(&directory_name)
+                    .join(FILESYSTEM_PATH_GUARD_FILE),
+                reason: "path-guard file must be private, service-owned, and single-link"
+                    .to_owned(),
+            });
+        }
+        Ok(())
+    };
+    let descriptor_stat = fstat(&descriptor).map_err(std::io::Error::from)?;
+    validate_guard(&descriptor_stat)?;
+    let mut offset_bytes = [0_u8; 8];
+    offset_bytes.copy_from_slice(&key[..8]);
+    let offset = u64::from_le_bytes(offset_bytes) & (i64::MAX as u64);
+    if !acquire_linux_ofd_exclusive_range(&descriptor, offset, 1, nonblocking)? {
+        return Ok(None);
+    }
+    let named_stat = statat(
+        &directory,
+        FILESYSTEM_PATH_GUARD_FILE,
+        AtFlags::SYMLINK_NOFOLLOW,
+    )
+    .map_err(std::io::Error::from)?;
+    validate_guard(&named_stat)?;
+    if ProcessLockIdentity::from_stat(&descriptor_stat)
+        != ProcessLockIdentity::from_stat(&named_stat)
+    {
+        return Err(EmitError::InvalidArtifactDestination {
+            path: Path::new(FILESYSTEM_PATH_GUARD_ROOT)
+                .join(directory_name)
+                .join(FILESYSTEM_PATH_GUARD_FILE),
+            reason: "path-guard file changed while its byte range was being locked".to_owned(),
+        });
+    }
+    Ok(Some(descriptor))
 }
 
 #[cfg(not(target_os = "linux"))]
-fn acquire_linux_abstract_path_guard(
+fn acquire_linux_filesystem_path_guard(
     _key: [u8; 32],
     _nonblocking: bool,
 ) -> Result<Option<OwnedFd>, EmitError> {
     Err(EmitError::InvalidArtifactDestination {
-        path: PathBuf::from("<abstract-path-guard>"),
-        reason: "artifact publication requires Linux abstract Unix sockets".to_owned(),
+        path: PathBuf::from("<filesystem-path-guard>"),
+        reason: "artifact publication requires Linux OFD byte-range locks".to_owned(),
     })
 }
 
 struct OpenedDirectoryWalk {
     directory: OwnedFd,
-    parent: OwnedFd,
-    leaf: Option<OsString>,
+    path_guard_key: Option<[u8; 32]>,
 }
 
 fn open_directory_walk(path: &Path, create: bool) -> Result<OwnedFd, EmitError> {
-    Ok(open_directory_walk_with_parent(path, create)?.directory)
+    Ok(open_directory_walk_with_guard_key(path, create)?.directory)
 }
 
-fn open_directory_walk_with_parent(
+fn open_directory_walk_with_guard_key(
     path: &Path,
     create: bool,
 ) -> Result<OpenedDirectoryWalk, EmitError> {
     #[cfg(target_os = "linux")]
     if let Some(directory) = duplicate_proc_self_fd_directory(path) {
         let directory = directory?;
-        let parent =
-            rustix::io::fcntl_dupfd_cloexec(&directory, 0).map_err(std::io::Error::from)?;
         return Ok(OpenedDirectoryWalk {
             directory,
-            parent,
-            leaf: None,
+            path_guard_key: None,
         });
     }
 
@@ -3521,13 +3570,7 @@ fn open_directory_walk_with_parent(
     )
     .map_err(std::io::Error::from)?;
 
-    let leaf = names.last().map(|name| (*name).to_owned());
-    let mut parent = rustix::io::fcntl_dupfd_cloexec(&current, 0).map_err(std::io::Error::from)?;
-    let component_count = names.len();
-    for (index, name) in names.into_iter().enumerate() {
-        if index + 1 == component_count {
-            parent = rustix::io::fcntl_dupfd_cloexec(&current, 0).map_err(std::io::Error::from)?;
-        }
+    for name in names {
         let open_component = || {
             openat(
                 &current,
@@ -3561,9 +3604,38 @@ fn open_directory_walk_with_parent(
     }
     Ok(OpenedDirectoryWalk {
         directory: current,
-        parent,
-        leaf,
+        path_guard_key: Some(normalized_absolute_path_guard_key(path)?),
     })
+}
+
+fn normalized_absolute_path_guard_key(path: &Path) -> Result<[u8; 32], EmitError> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().map_err(EmitError::Io)?.join(path)
+    };
+    let mut digest = Sha256::new();
+    digest.update(b"FE2O3/ARTIFACT-ABSOLUTE-PATH-GUARD/V1\0");
+    digest.update(rustix::process::geteuid().as_raw().to_le_bytes());
+    for component in absolute.components() {
+        match component {
+            Component::RootDir | Component::CurDir => {}
+            Component::Normal(name) => {
+                let bytes = name.as_bytes();
+                digest.update((bytes.len() as u64).to_le_bytes());
+                digest.update(bytes);
+            }
+            Component::ParentDir | Component::Prefix(_) => {
+                return Err(EmitError::InvalidArtifactDestination {
+                    path: path.to_path_buf(),
+                    reason: "path-guard key requires a normalized Unix path".to_owned(),
+                });
+            }
+        }
+    }
+    Ok(digest.finalize().into())
 }
 
 #[cfg(target_os = "linux")]
