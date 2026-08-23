@@ -4906,6 +4906,15 @@ pub enum SemanticMfmaProfileV1 {
     Bf16F32M16N16K16,
 }
 
+impl SemanticMfmaProfileV1 {
+    /// Physical BF16 register components populated per wave lane for one operand.
+    pub const fn operand_components_per_lane(self) -> usize {
+        match self {
+            Self::Bf16F32M16N16K16 => 4,
+        }
+    }
+}
+
 /// Register lane/component mapping after a checked load has completed.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticMfmaRegisterDistributionV1 {

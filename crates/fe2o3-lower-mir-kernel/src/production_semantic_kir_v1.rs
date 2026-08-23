@@ -12,13 +12,13 @@ use std::{error::Error, fmt};
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, Axis, BarrierSemantics, BasicBlock,
     BinaryOp, BlockId, CastKind, CheckedBinaryOperator, ComparePredicate, Constant, Convergence,
-    F32MathFunction, FloatOperation, Function, FunctionId, IndexKind, IntrinsicKind,
-    IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
+    F32MathFunction, FloatOperation, Function, FunctionId, FunctionOperationLocation, IndexKind,
+    IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
     MAX_OPERATIONS_V1 as MAX_BLOCK_OPERATIONS_V1, MatrixOperation, MemoryAccess, MemoryOrdering,
     Module, Operation, OperationKind, ScalarType, Signature, SwitchCase, SynchronizationScope,
-    Terminator, Type, UnaryOp, ValueDef, ValueId, VerificationErrors,
-    VerifiedCanonicalKernelIrErrorV6, VerifiedCanonicalKernelIrIdentityV6,
-    VerifiedCanonicalKernelIrV6, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
+    TensorLayoutContractV1, Terminator, Type, UnaryOp, ValueDef, ValueId, VerificationErrors,
+    VerifiedCanonicalKernelIrErrorV7, VerifiedCanonicalKernelIrIdentityV7,
+    VerifiedCanonicalKernelIrV7, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
     WorkgroupSize, verify_module,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
@@ -27,7 +27,8 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1, SemanticDirectCallV1,
     SemanticDisjointIndexSpaceV1, SemanticEnumEncodingV1, SemanticEnumVariantV1,
     SemanticF32MathFunctionV1, SemanticFieldsShapeV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
-    SemanticLocalRoleV1, SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1,
+    SemanticLocalRoleV1, SemanticMfmaAccumulatorContractV1, SemanticMfmaOperandContractV1,
+    SemanticMfmaStorageLayoutV1, SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1,
     SemanticPointerMetadataV1, SemanticProjectionKindV1, SemanticRustcVariantsV1,
     SemanticRvalueKindV1, SemanticScalarTypeV1, SemanticScalarValueV1, SemanticStatementKindV1,
     SemanticSubgroupReductionKindV1, SemanticTerminatorKindV1, SemanticTypeDeclV1,
@@ -36,7 +37,8 @@ use fe2o3_mir_model::semantic_mir_v1::{
     semantic_direct_enum_variant_v1, semantic_scalar_enum_variant_v1,
 };
 use fe2o3_mir_model::{
-    SemanticOptionAvailabilityV1, SemanticOptionDominanceV1, semantic_option_producers_v1,
+    SemanticEnumPayloadDominanceV1, SemanticOptionAvailabilityV1, SemanticOptionDominanceV1,
+    semantic_option_producers_v1,
 };
 use fe2o3_pliron::{
     ProductionRankedKernelLoweringInputV1, ProductionSemanticMirErrorV1,
@@ -365,8 +367,8 @@ pub enum ProductionSemanticKirErrorV1 {
     },
     /// The constructed Kernel IR failed structural or semantic verification.
     InvalidKernelIr(VerificationErrors),
-    /// The lowered module could not become exact verified canonical Kernel IR V6.
-    CanonicalKernelIrV6(VerifiedCanonicalKernelIrErrorV6),
+    /// The lowered module could not become exact verified canonical Kernel IR V7.
+    CanonicalKernelIrV7(VerifiedCanonicalKernelIrErrorV7),
     /// Retained correspondence no longer matches the exact source owner.
     CorrespondenceMismatch,
 }
@@ -406,10 +408,10 @@ impl fmt::Display for ProductionSemanticKirErrorV1 {
                 "semantic-to-Kernel-IR lowering rejected function {function}, block {block}, statement {statement:?}: local {local} has no path-available SSA definition",
             ),
             Self::InvalidKernelIr(error) => error.fmt(formatter),
-            Self::CanonicalKernelIrV6(error) => {
+            Self::CanonicalKernelIrV7(error) => {
                 write!(
                     formatter,
-                    "canonical Kernel IR V6 admission failed: {error}"
+                    "canonical Kernel IR V7 admission failed: {error}"
                 )
             }
             Self::CorrespondenceMismatch => formatter.write_str(
@@ -424,7 +426,7 @@ impl Error for ProductionSemanticKirErrorV1 {
         match self {
             Self::SemanticOwner(error) => Some(error),
             Self::InvalidKernelIr(error) => Some(error),
-            Self::CanonicalKernelIrV6(error) => Some(error),
+            Self::CanonicalKernelIrV7(error) => Some(error),
             Self::ResourceLimit { .. }
             | Self::AllocationFailure { .. }
             | Self::Unsupported { .. }
@@ -555,7 +557,7 @@ impl ProductionRankedSemanticProjectionReceiptV1 {
 pub struct ProductionSemanticKirOwnerV1 {
     semantic: ProductionSemanticMirOwnerV1,
     module: Module,
-    canonical_kernel_ir_v6: VerifiedCanonicalKernelIrV6,
+    canonical_kernel_ir_v7: VerifiedCanonicalKernelIrV7,
     correspondence: SemanticKirCorrespondenceV1,
     limits: ProductionSemanticKirLimitsV1,
     discharge_ranked_bounds: bool,
@@ -575,8 +577,8 @@ impl fmt::Debug for ProductionSemanticKirOwnerV1 {
             .debug_struct("ProductionSemanticKirOwnerV1")
             .field("module", &self.module.id)
             .field(
-                "canonical_kernel_ir_v6_identity",
-                self.canonical_kernel_ir_v6.identity(),
+                "canonical_kernel_ir_v7_identity",
+                self.canonical_kernel_ir_v7.identity(),
             )
             .field("correspondence", &self.correspondence)
             .field("limits", &self.limits)
@@ -596,12 +598,12 @@ impl ProductionSemanticKirOwnerV1 {
             .verify_equivalence()
             .map_err(ProductionSemanticKirErrorV1::SemanticOwner)?;
         let (module, correspondence) = lower_module(&semantic, limits, false)?;
-        let canonical_kernel_ir_v6 = VerifiedCanonicalKernelIrV6::from_module(module.clone())
-            .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV6)?;
+        let canonical_kernel_ir_v7 = VerifiedCanonicalKernelIrV7::from_module(module.clone())
+            .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV7)?;
         let owner = Self {
             semantic,
             module,
-            canonical_kernel_ir_v6,
+            canonical_kernel_ir_v7,
             correspondence,
             limits,
             discharge_ranked_bounds: false,
@@ -636,12 +638,12 @@ impl ProductionSemanticKirOwnerV1 {
             ));
         }
         let (module, correspondence) = lower_module(&semantic, limits, true)?;
-        let canonical_kernel_ir_v6 = VerifiedCanonicalKernelIrV6::from_module(module.clone())
-            .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV6)?;
+        let canonical_kernel_ir_v7 = VerifiedCanonicalKernelIrV7::from_module(module.clone())
+            .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV7)?;
         let owner = Self {
             semantic,
             module,
-            canonical_kernel_ir_v6,
+            canonical_kernel_ir_v7,
             correspondence,
             limits,
             discharge_ranked_bounds: true,
@@ -661,20 +663,20 @@ impl ProductionSemanticKirOwnerV1 {
         self.semantic
             .verify_equivalence()
             .map_err(ProductionSemanticKirErrorV1::SemanticOwner)?;
-        self.canonical_kernel_ir_v6
+        self.canonical_kernel_ir_v7
             .revalidate()
-            .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV6)?;
+            .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV7)?;
         verify_module(&self.module).map_err(ProductionSemanticKirErrorV1::InvalidKernelIr)?;
         let (rederived_module, rederived_correspondence) =
             lower_module(&self.semantic, self.limits, self.discharge_ranked_bounds)?;
-        let rederived_canonical_kernel_ir_v6 =
-            VerifiedCanonicalKernelIrV6::from_module(rederived_module.clone())
-                .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV6)?;
+        let rederived_canonical_kernel_ir_v7 =
+            VerifiedCanonicalKernelIrV7::from_module(rederived_module.clone())
+                .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV7)?;
         if self.module != rederived_module
             || self.correspondence != rederived_correspondence
-            || self.canonical_kernel_ir_v6.identity() != rederived_canonical_kernel_ir_v6.identity()
-            || self.canonical_kernel_ir_v6.canonical_bytes()
-                != rederived_canonical_kernel_ir_v6.canonical_bytes()
+            || self.canonical_kernel_ir_v7.identity() != rederived_canonical_kernel_ir_v7.identity()
+            || self.canonical_kernel_ir_v7.canonical_bytes()
+                != rederived_canonical_kernel_ir_v7.canonical_bytes()
         {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
@@ -703,14 +705,14 @@ impl ProductionSemanticKirOwnerV1 {
         &self.module
     }
 
-    /// Borrows the authoritative exact, semantically verified Kernel IR V6 bytes.
-    pub const fn canonical_kernel_ir_v6(&self) -> &VerifiedCanonicalKernelIrV6 {
-        &self.canonical_kernel_ir_v6
+    /// Borrows the authoritative exact, semantically verified Kernel IR V7 bytes.
+    pub const fn canonical_kernel_ir_v7(&self) -> &VerifiedCanonicalKernelIrV7 {
+        &self.canonical_kernel_ir_v7
     }
 
-    /// Borrows the typed identity of the authoritative canonical Kernel IR V6 bytes.
-    pub const fn canonical_kernel_ir_v6_identity(&self) -> &VerifiedCanonicalKernelIrIdentityV6 {
-        self.canonical_kernel_ir_v6.identity()
+    /// Borrows the typed identity of the authoritative canonical Kernel IR V7 bytes.
+    pub const fn canonical_kernel_ir_v7_identity(&self) -> &VerifiedCanonicalKernelIrIdentityV7 {
+        self.canonical_kernel_ir_v7.identity()
     }
 
     /// Borrows pointer-independent source correspondence evidence.
@@ -728,19 +730,125 @@ impl ProductionSemanticKirOwnerV1 {
             .as_ref()
             .is_some_and(|checks| mandatory_generic_checks_are_clean(&checks.lowering))
     }
+
+    pub(crate) fn retained_generic_checks_discharge_guarded_accesses(
+        &self,
+        guarded_locations: &[FunctionOperationLocation],
+    ) -> bool {
+        self.generic_checks
+            .as_ref()
+            .is_some_and(|checks| mandatory_generic_checks_are_clean(&checks.lowering))
+            && guarded_accesses_match_authenticated_load_spans(self, guarded_locations)
+    }
     /// Exact target-neutral lowering evidence is not artifact or launch authority.
     pub const fn grants_artifact_or_launch_authority(&self) -> bool {
         false
     }
 }
 
+fn guarded_accesses_match_authenticated_load_spans(
+    owner: &ProductionSemanticKirOwnerV1,
+    guarded_locations: &[FunctionOperationLocation],
+) -> bool {
+    let semantic = owner.semantic.semantic();
+    let mut expected = BTreeSet::new();
+    for span in owner.correspondence.terminator_operation_spans() {
+        let Some(function) = semantic
+            .functions()
+            .get(span.semantic_function().index() as usize)
+        else {
+            return false;
+        };
+        let Some(block) = function
+            .blocks()
+            .get(span.semantic_block().index() as usize)
+        else {
+            return false;
+        };
+        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+            continue;
+        };
+        let Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) =
+            semantic.callables().get(call.callee().index() as usize)
+        else {
+            continue;
+        };
+        let SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { contract, .. } = operation
+        else {
+            continue;
+        };
+        let expected_guarded_count = contract.profile.operand_components_per_lane();
+        let Some(target) = owner
+            .module
+            .functions
+            .first()
+            .and_then(|function| function.body.as_ref())
+            .and_then(|body| {
+                body.blocks
+                    .iter()
+                    .find(|target| target.id == span.kernel_ir_block())
+            })
+        else {
+            return false;
+        };
+        let Ok(first) = usize::try_from(span.first_operation_ordinal()) else {
+            return false;
+        };
+        let Ok(count) = usize::try_from(span.operation_count()) else {
+            return false;
+        };
+        let Some(end) = first.checked_add(count) else {
+            return false;
+        };
+        let Some(operations) = target.operations.get(first..end) else {
+            return false;
+        };
+        let guarded = operations
+            .iter()
+            .enumerate()
+            .filter(|(_, operation)| matches!(operation.kind, OperationKind::GuardedLoad { .. }))
+            .map(|(relative, _)| FunctionOperationLocation::new(target.id, first + relative))
+            .collect::<Vec<_>>();
+        if guarded.len() != expected_guarded_count {
+            return false;
+        }
+        expected.extend(guarded);
+    }
+
+    let actual = owner
+        .module
+        .functions
+        .first()
+        .and_then(|function| function.body.as_ref())
+        .into_iter()
+        .flat_map(|body| &body.blocks)
+        .flat_map(|block| {
+            block
+                .operations
+                .iter()
+                .enumerate()
+                .filter(|(_, operation)| {
+                    matches!(operation.kind, OperationKind::GuardedLoad { .. })
+                })
+                .map(|(ordinal, _)| FunctionOperationLocation::new(block.id, ordinal))
+        })
+        .collect::<BTreeSet<_>>();
+    let provided = guarded_locations.iter().copied().collect::<BTreeSet<_>>();
+    exact_guarded_access_join(&expected, &actual, &provided)
+}
+
+fn exact_guarded_access_join(
+    authenticated_terminal_accesses: &BTreeSet<FunctionOperationLocation>,
+    kernel_ir_accesses: &BTreeSet<FunctionOperationLocation>,
+    formal_incomplete_accesses: &BTreeSet<FunctionOperationLocation>,
+) -> bool {
+    !authenticated_terminal_accesses.is_empty()
+        && authenticated_terminal_accesses == kernel_ir_accesses
+        && kernel_ir_accesses == formal_incomplete_accesses
+}
+
 fn mandatory_generic_checks_are_clean(lowering: &ProductionRankedKernelLoweringInputV1) -> bool {
-    lowering.bounds_report().is_clean()
-        && lowering.atomic_report().is_clean()
-        && lowering.race_report().is_clean()
-        && lowering.barrier_report().is_clean()
-        && lowering.workgroup_report().is_clean()
-        && lowering.semantic_report().is_clean()
+    lowering.all_mandatory_reports_are_clean()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1736,11 +1844,23 @@ enum SemanticValueBindingV1 {
         discriminant_ty: Type,
         semantic_type: SemanticTypeIdV1,
         variant: Option<u32>,
+        payload_variant: Option<u32>,
         fields: Vec<SemanticValueBindingV1>,
     },
     MathContext,
     CollectiveContext,
     MatrixContext,
+    MatrixFragment {
+        values: Vec<(ValueId, Type)>,
+        contract: SemanticMfmaOperandContractV1,
+        storage_layout: SemanticMfmaStorageLayoutV1,
+        lane: ValueId,
+    },
+    AccumulatorFragment {
+        values: Vec<(ValueId, Type)>,
+        contract: SemanticMfmaAccumulatorContractV1,
+        lane: ValueId,
+    },
     Value {
         id: ValueId,
         ty: Type,
@@ -1782,6 +1902,21 @@ enum SemanticValueBindingV1 {
     },
 }
 
+fn project_enum_payload_field(
+    selected_variant: u32,
+    payload_variant: Option<u32>,
+    fields: &[SemanticValueBindingV1],
+    field: u32,
+) -> Result<SemanticValueBindingV1, &'static str> {
+    if payload_variant != Some(selected_variant) {
+        return Err("enum variant has no authenticated payload storage");
+    }
+    fields
+        .get(field as usize)
+        .cloned()
+        .ok_or("enum payload field is unavailable in this block")
+}
+
 impl SemanticValueBindingV1 {
     fn value(&self) -> Result<(ValueId, Type), &'static str> {
         match self {
@@ -1793,6 +1928,8 @@ impl SemanticValueBindingV1 {
             | Self::MathContext
             | Self::CollectiveContext
             | Self::MatrixContext
+            | Self::MatrixFragment { .. }
+            | Self::AccumulatorFragment { .. }
             | Self::OptionPointer { .. }
             | Self::OptionIndexWitness { .. }
             | Self::ComponentWitness { .. }
@@ -1819,6 +1956,14 @@ impl SemanticValueBindingV1 {
                     field.append_values(values)?;
                 }
             }
+            Self::MatrixFragment {
+                values: components, ..
+            }
+            | Self::AccumulatorFragment {
+                values: components, ..
+            } => {
+                values.extend(components.iter().cloned());
+            }
             Self::Enum {
                 discriminant,
                 discriminant_ty,
@@ -1841,20 +1986,34 @@ impl SemanticValueBindingV1 {
     }
 }
 
-fn require_binding_components(
+fn require_components(
     block: SemanticBlockIdV1,
-    binding: SemanticValueBindingV1,
+    values: Vec<(ValueId, Type)>,
     expected_type: Type,
     expected_count: usize,
     description: &'static str,
 ) -> Result<Vec<(ValueId, Type)>, ProductionSemanticKirErrorV1> {
-    let values = binding
-        .values()
-        .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
     if values.len() != expected_count || values.iter().any(|(_, actual)| actual != &expected_type) {
         return Err(unsupported(0, Some(block.index()), None, description));
     }
     Ok(values)
+}
+
+fn require_single_u32_component(
+    block: SemanticBlockIdV1,
+    binding: SemanticValueBindingV1,
+    description: &'static str,
+) -> Result<ValueId, ProductionSemanticKirErrorV1> {
+    Ok(require_components(
+        block,
+        binding
+            .values()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?,
+        Type::Scalar(ScalarType::U32),
+        1,
+        description,
+    )?[0]
+        .0)
 }
 
 struct SemanticFunctionLoweringV1<'a> {
@@ -1863,6 +2022,7 @@ struct SemanticFunctionLoweringV1<'a> {
     function: &'a SemanticFunctionDeclV1,
     locals: Vec<Option<SemanticValueBindingV1>>,
     option_dominance: SemanticOptionDominanceV1,
+    enum_payload_dominance: SemanticEnumPayloadDominanceV1,
     control_flow_ssa: SemanticControlFlowSsaPlanV1,
     block_parameters: BTreeMap<u32, BTreeMap<u32, Vec<ValueDef>>>,
     next_value: u32,
@@ -1892,6 +2052,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         let option_producers = semantic_option_producers_v1(function, callables)
             .map_err(|error| unsupported(0, None, None, error.detail()))?;
         let option_dominance = SemanticOptionDominanceV1::analyze(function, &option_producers)
+            .map_err(|error| unsupported(0, None, None, error.detail()))?;
+        let enum_payload_dominance = SemanticEnumPayloadDominanceV1::analyze(function, types)
             .map_err(|error| unsupported(0, None, None, error.detail()))?;
         for ((_, local, _), (value, ty)) in parameters
             .declarations
@@ -1934,6 +2096,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             function,
             locals,
             option_dominance,
+            enum_payload_dominance,
             control_flow_ssa,
             block_parameters,
             next_value,
@@ -2157,6 +2320,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     | SemanticValueBindingV1::MathContext
                     | SemanticValueBindingV1::CollectiveContext
                     | SemanticValueBindingV1::MatrixContext
+                    | SemanticValueBindingV1::MatrixFragment { .. }
+                    | SemanticValueBindingV1::AccumulatorFragment { .. }
                     | SemanticValueBindingV1::Value { .. }
                     | SemanticValueBindingV1::IndexWitness { .. }
                     | SemanticValueBindingV1::ComponentWitness { .. }
@@ -2470,6 +2635,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     discriminant_ty,
                     semantic_type: result_type,
                     variant: Some(*variant),
+                    payload_variant: Some(*variant),
                     fields,
                 })
             }
@@ -2572,6 +2738,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         discriminant_ty,
                         semantic_type: constant.ty(),
                         variant: Some(variant),
+                        payload_variant: Some(variant),
                         fields: Vec::new(),
                     });
                 }
@@ -3025,6 +3192,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     discriminant_ty,
                     semantic_type: ty,
                     variant: Some(variant_index),
+                    payload_variant: Some(variant_index),
                     fields,
                 })
             }
@@ -3359,18 +3527,58 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 self.require_call_argument_count(block, call, 0)?;
                 SemanticValueBindingV1::MatrixContext
             }
-            SemanticCompilerIntrinsicOperationV1::WaveLaneCurrent { .. }
-            | SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor { .. }
-            | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { .. } => {
-                return Err(unsupported(
-                    0,
-                    Some(block.index()),
-                    None,
-                    "typed MFMA lane/view/load requires the V7 guarded-memory lowering",
-                ));
+            SemanticCompilerIntrinsicOperationV1::WaveLaneCurrent { lane, wave_width } => {
+                self.require_call_argument_count(block, call, 0)?;
+                if *wave_width != 64 {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "typed MFMA lane requires the authenticated wave64 profile",
+                    ));
+                }
+                let lane_id = self.emit_results(
+                    operations,
+                    vec![Type::Scalar(ScalarType::U32)],
+                    OperationKind::Wave(WaveOperation::full(
+                        WaveOperationKind::LaneId,
+                        WaveWidth::Wave64,
+                    )),
+                )?;
+                binding_from_value_defs(self.types, *lane, &lane_id)?
             }
-            SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero { fragment, .. } => {
+            SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor {
+                result,
+                view,
+                error,
+                ..
+            } => self.lower_bf16_matrix_view(block, call, operations, *result, *view, *error)?,
+            SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad {
+                option_fragment,
+                fragment,
+                contract,
+                storage_layout,
+                ..
+            } => self.lower_bf16_matrix_load(
+                block,
+                call,
+                operations,
+                *option_fragment,
+                *fragment,
+                *contract,
+                *storage_layout,
+            )?,
+            SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
+                fragment,
+                contract,
+                ..
+            } => {
                 self.require_call_argument_count(block, call, 1)?;
+                let lane = require_single_u32_component(
+                    block,
+                    self.lower_operand(block, None, &call.arguments()[0], operations)?,
+                    "zero accumulator lane",
+                )?;
                 let mut values = Vec::with_capacity(4);
                 for _ in 0..4 {
                     let (id, ty) = self
@@ -3381,16 +3589,32 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         )?
                         .value()
                         .expect("emitted zero accumulator component");
-                    values.push(ValueDef::new(id, ty));
+                    values.push((id, ty));
                 }
-                binding_from_value_defs(self.types, *fragment, &values)?
+                let _ = fragment;
+                SemanticValueBindingV1::AccumulatorFragment {
+                    values,
+                    contract: *contract,
+                    lane,
+                }
             }
             SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues {
                 values, ..
             } => {
                 self.require_call_argument_count(block, call, 1)?;
                 let fragment = self.lower_operand(block, None, &call.arguments()[0], operations)?;
-                let fragment = require_binding_components(
+                let SemanticValueBindingV1::AccumulatorFragment {
+                    values: fragment, ..
+                } = fragment
+                else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "FP32 matrix accumulator lacks typed producer metadata",
+                    ));
+                };
+                let fragment = require_components(
                     block,
                     fragment,
                     Type::Scalar(ScalarType::F32),
@@ -3404,6 +3628,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
                 accumulator_fragment,
+                lhs: expected_lhs,
+                rhs: expected_rhs,
+                accumulator: expected_accumulator,
                 ..
             } => {
                 self.require_call_argument_count(block, call, 4)?;
@@ -3416,23 +3643,81 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         "matrix operation lacks compiler-issued context authority",
                     ));
                 }
-                let lhs = require_binding_components(
+                let lhs = self.lower_operand(block, None, &call.arguments()[1], operations)?;
+                let rhs = self.lower_operand(block, None, &call.arguments()[2], operations)?;
+                let accumulator =
+                    self.lower_operand(block, None, &call.arguments()[3], operations)?;
+                let SemanticValueBindingV1::MatrixFragment {
+                    values: lhs,
+                    contract: lhs_contract,
+                    storage_layout: lhs_storage,
+                    lane: lhs_lane,
+                } = lhs
+                else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "matrix lhs lacks an authenticated checked-load producer",
+                    ));
+                };
+                let SemanticValueBindingV1::MatrixFragment {
+                    values: rhs,
+                    contract: rhs_contract,
+                    storage_layout: rhs_storage,
+                    lane: rhs_lane,
+                } = rhs
+                else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "matrix rhs lacks an authenticated checked-load producer",
+                    ));
+                };
+                let SemanticValueBindingV1::AccumulatorFragment {
+                    values: accumulator,
+                    contract: accumulator_contract,
+                    lane: accumulator_lane,
+                } = accumulator
+                else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "matrix accumulator lacks an authenticated zero/MFMA producer",
+                    ));
+                };
+                if lhs_contract != *expected_lhs
+                    || rhs_contract != *expected_rhs
+                    || accumulator_contract != *expected_accumulator
+                    || lhs_lane != rhs_lane
+                    || lhs_lane != accumulator_lane
+                {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "matrix operand producer contracts or wave associations differ",
+                    ));
+                }
+                let lhs = require_components(
                     block,
-                    self.lower_operand(block, None, &call.arguments()[1], operations)?,
+                    lhs,
                     Type::Scalar(ScalarType::Bf16),
                     4,
                     "matrix lhs fragment",
                 )?;
-                let rhs = require_binding_components(
+                let rhs = require_components(
                     block,
-                    self.lower_operand(block, None, &call.arguments()[2], operations)?,
+                    rhs,
                     Type::Scalar(ScalarType::Bf16),
                     4,
                     "matrix rhs fragment",
                 )?;
-                let accumulator = require_binding_components(
+                let accumulator = require_components(
                     block,
-                    self.lower_operand(block, None, &call.arguments()[3], operations)?,
+                    accumulator,
                     Type::Scalar(ScalarType::F32),
                     4,
                     "matrix accumulator fragment",
@@ -3455,16 +3740,32 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     .collect::<Vec<_>>()
                     .try_into()
                     .expect("four checked accumulator components");
+                let mut tensor_layout =
+                    TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64()
+                        .with_zero_filled_predicate_inputs();
+                if lhs_storage == SemanticMfmaStorageLayoutV1::LdsXor4 {
+                    tensor_layout = tensor_layout.with_a_lds_xor4();
+                }
+                if rhs_storage == SemanticMfmaStorageLayoutV1::LdsXor4 {
+                    tensor_layout = tensor_layout.with_b_lds_xor4();
+                }
                 let results = self.emit_results(
                     operations,
                     vec![Type::Scalar(ScalarType::F32); 4],
-                    OperationKind::Matrix(MatrixOperation::multiply_accumulate(
-                        lhs,
-                        rhs,
-                        accumulator,
-                    )),
+                    OperationKind::Matrix(
+                        MatrixOperation::multiply_accumulate(lhs, rhs, accumulator)
+                            .with_declared_tensor_layout(tensor_layout),
+                    ),
                 )?;
-                binding_from_value_defs(self.types, *accumulator_fragment, &results)?
+                let _ = accumulator_fragment;
+                SemanticValueBindingV1::AccumulatorFragment {
+                    values: results
+                        .into_iter()
+                        .map(|value| (value.id, value.ty))
+                        .collect(),
+                    contract: accumulator_contract,
+                    lane: accumulator_lane,
+                }
             }
             SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { .. } => {
                 if !call.arguments().is_empty() {
@@ -4098,6 +4399,425 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         Ok(SemanticValueBindingV1::Value {
             id: reduced,
             ty: Type::Scalar(ScalarType::F32),
+        })
+    }
+
+    fn lower_bf16_matrix_view(
+        &mut self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        operations: &mut Vec<Operation>,
+        result_type: SemanticTypeIdV1,
+        view_type: SemanticTypeIdV1,
+        error_type: SemanticTypeIdV1,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        self.require_call_argument_count(block, call, 5)?;
+        let bits = self.lower_operand(block, None, &call.arguments()[0], operations)?;
+        let (bits, bits_ty) = bits
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+        let Type::Slice(slice) = &bits_ty else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "BF16 matrix view storage is not a slice",
+            ));
+        };
+        if slice.address_space != AddressSpace::Global
+            || slice.access != AccessMode::ReadOnly
+            || *slice.element != Type::Scalar(ScalarType::U16)
+        {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "BF16 matrix view storage must be a read-only global u16 slice",
+            ));
+        }
+        let mut indices = Vec::with_capacity(4);
+        for argument in &call.arguments()[1..] {
+            let binding = self.lower_operand(block, None, argument, operations)?;
+            indices.push(
+                self.coerce_index(block, operations, binding)?
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
+                    .0,
+            );
+        }
+        let [offset, rows, columns, stride] = indices
+            .try_into()
+            .expect("four checked row-major view indices");
+        let zero = self.emit_index_constant(operations, 0)?;
+        let one = self.emit_index_constant(operations, 1)?;
+        let rows_zero = self.emit_compare(operations, ComparePredicate::Equal, rows, zero)?;
+        let columns_zero = self.emit_compare(operations, ComparePredicate::Equal, columns, zero)?;
+        let empty = self.emit_bool_or(operations, rows_zero, columns_zero)?;
+        let stride_wide_enough = self.emit_compare(
+            operations,
+            ComparePredicate::LessThanOrEqual,
+            columns,
+            stride,
+        )?;
+        let stride_valid = self.emit_bool_or(operations, empty, stride_wide_enough)?;
+
+        let (rows_minus_one, rows_safe) =
+            self.emit_checked_index(operations, CheckedBinaryOperator::Subtract, rows, one)?;
+        let (row_extent, multiply_safe) = self.emit_checked_index(
+            operations,
+            CheckedBinaryOperator::Multiply,
+            rows_minus_one,
+            stride,
+        )?;
+        let (matrix_extent, columns_safe) =
+            self.emit_checked_index(operations, CheckedBinaryOperator::Add, row_extent, columns)?;
+        let (required_nonempty, offset_safe) = self.emit_checked_index(
+            operations,
+            CheckedBinaryOperator::Add,
+            offset,
+            matrix_extent,
+        )?;
+        let arithmetic_safe = self.emit_bool_and(operations, rows_safe, multiply_safe)?;
+        let arithmetic_safe = self.emit_bool_and(operations, arithmetic_safe, columns_safe)?;
+        let arithmetic_safe = self.emit_bool_and(operations, arithmetic_safe, offset_safe)?;
+        let arithmetic_safe = self.emit_bool_or(operations, empty, arithmetic_safe)?;
+        let required = self.emit_select_index(operations, empty, offset, required_nonempty)?;
+        let length = self.emit_id(
+            operations,
+            Type::INDEX,
+            OperationKind::SliceLength { slice: bits },
+        )?;
+        let in_bounds = self.emit_compare(
+            operations,
+            ComparePredicate::LessThanOrEqual,
+            required,
+            length,
+        )?;
+        let valid = self.emit_bool_and(operations, stride_valid, arithmetic_safe)?;
+        let valid = self.emit_bool_and(operations, valid, in_bounds)?;
+
+        let (discriminant_type, variants) = semantic_enum_shape(self.types, result_type)?;
+        let ok_variant = unique_enum_variant_with_field(variants, view_type).ok_or_else(|| {
+            unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "matrix view Result has no unique Ok payload",
+            )
+        })?;
+        let error_variant =
+            unique_enum_variant_with_field(variants, error_type).ok_or_else(|| {
+                unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "matrix view Result has no unique error payload",
+                )
+            })?;
+        let discriminant_ty = lower_scalar_type(self.types, discriminant_type)?;
+        let ok_discriminant = self.emit_id(
+            operations,
+            discriminant_ty.clone(),
+            OperationKind::Constant(integer_constant(
+                &discriminant_ty,
+                variants[ok_variant as usize].discriminant(),
+            )?),
+        )?;
+        let error_discriminant = self.emit_id(
+            operations,
+            discriminant_ty.clone(),
+            OperationKind::Constant(integer_constant(
+                &discriminant_ty,
+                variants[error_variant as usize].discriminant(),
+            )?),
+        )?;
+        let discriminant = self.emit_id(
+            operations,
+            discriminant_ty.clone(),
+            OperationKind::Select {
+                condition: valid,
+                true_value: ok_discriminant,
+                false_value: error_discriminant,
+            },
+        )?;
+        let view = SemanticValueBindingV1::Aggregate(vec![
+            SemanticValueBindingV1::Value {
+                id: bits,
+                ty: bits_ty,
+            },
+            SemanticValueBindingV1::Value {
+                id: offset,
+                ty: Type::INDEX,
+            },
+            SemanticValueBindingV1::Value {
+                id: rows,
+                ty: Type::INDEX,
+            },
+            SemanticValueBindingV1::Value {
+                id: columns,
+                ty: Type::INDEX,
+            },
+            SemanticValueBindingV1::Value {
+                id: stride,
+                ty: Type::INDEX,
+            },
+        ]);
+        Ok(SemanticValueBindingV1::Enum {
+            discriminant,
+            discriminant_ty,
+            semantic_type: result_type,
+            variant: None,
+            payload_variant: Some(ok_variant),
+            fields: vec![view],
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn lower_bf16_matrix_load(
+        &mut self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        operations: &mut Vec<Operation>,
+        option_type: SemanticTypeIdV1,
+        fragment_type: SemanticTypeIdV1,
+        contract: SemanticMfmaOperandContractV1,
+        storage_layout: SemanticMfmaStorageLayoutV1,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        self.require_call_argument_count(block, call, 4)?;
+        let view = self.lower_operand(block, None, &call.arguments()[0], operations)?;
+        let view = view
+            .values()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+        if view.len() != 5 {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "BF16 matrix load view has no exact checked representation",
+            ));
+        }
+        let (bits, bits_ty) = view[0].clone();
+        let Type::Slice(slice) = &bits_ty else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "BF16 matrix load view storage is not a slice",
+            ));
+        };
+        if *slice.element != Type::Scalar(ScalarType::U16) {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "BF16 matrix load view element type changed",
+            ));
+        }
+        let [(_, _), (offset, _), (rows, _), (columns, _), (stride, _)] = view.as_slice() else {
+            unreachable!("checked five-component view");
+        };
+        let offset = *offset;
+        let rows = *rows;
+        let columns = *columns;
+        let stride = *stride;
+        let lane = require_single_u32_component(
+            block,
+            self.lower_operand(block, None, &call.arguments()[1], operations)?,
+            "typed matrix load lane",
+        )?;
+        let lane_index = self.emit_id(
+            operations,
+            Type::INDEX,
+            OperationKind::Cast {
+                kind: CastKind::ZeroExtend,
+                value: lane,
+                to: Type::INDEX,
+            },
+        )?;
+        let first_base = self.lower_operand(block, None, &call.arguments()[2], operations)?;
+        let first_base = self
+            .coerce_index(block, operations, first_base)?
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
+            .0;
+        let second_base = self.lower_operand(block, None, &call.arguments()[3], operations)?;
+        let second_base = self
+            .coerce_index(block, operations, second_base)?
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
+            .0;
+        let fifteen = self.emit_index_constant(operations, 15)?;
+        let sixteen = self.emit_index_constant(operations, 16)?;
+        let four = self.emit_index_constant(operations, 4)?;
+        let lane_minor =
+            self.emit_index_binary(operations, BinaryOp::BitAnd, lane_index, fifteen)?;
+        let lane_group =
+            self.emit_index_binary(operations, BinaryOp::Divide, lane_index, sixteen)?;
+        let lane_group =
+            self.emit_index_binary(operations, BinaryOp::Multiply, lane_group, four)?;
+        let (row_or_column, minor_safe) = self.emit_checked_index(
+            operations,
+            CheckedBinaryOperator::Add,
+            first_base,
+            lane_minor,
+        )?;
+        let (first_reduction, reduction_safe) = self.emit_checked_index(
+            operations,
+            CheckedBinaryOperator::Add,
+            second_base,
+            lane_group,
+        )?;
+        let mut present = self.emit_bool_and(operations, minor_safe, reduction_safe)?;
+        let data = self.emit_id(
+            operations,
+            Type::pointer(
+                Type::Scalar(ScalarType::U16),
+                slice.address_space,
+                slice.access,
+            ),
+            OperationKind::SliceData { slice: bits },
+        )?;
+        let length = self.emit_id(
+            operations,
+            Type::INDEX,
+            OperationKind::SliceLength { slice: bits },
+        )?;
+        let zero_index = self.emit_index_constant(operations, 0)?;
+        let zero_bits = self.emit_id(
+            operations,
+            Type::Scalar(ScalarType::U16),
+            OperationKind::Constant(Constant::U16(0)),
+        )?;
+        let component_count = contract.profile.operand_components_per_lane();
+        let mut values = Vec::with_capacity(component_count);
+        for component in 0..u64::try_from(component_count).expect("MFMA component count fits u64") {
+            let component_value = self.emit_index_constant(operations, component)?;
+            let (reduction, component_safe) = self.emit_checked_index(
+                operations,
+                CheckedBinaryOperator::Add,
+                first_reduction,
+                component_value,
+            )?;
+            present = self.emit_bool_and(operations, present, component_safe)?;
+            let (row, column) = match contract.role {
+                fe2o3_mir_model::semantic_mir_v1::SemanticMfmaOperandRoleV1::A => {
+                    (row_or_column, reduction)
+                }
+                fe2o3_mir_model::semantic_mir_v1::SemanticMfmaOperandRoleV1::B => {
+                    (reduction, row_or_column)
+                }
+            };
+            let row_valid = self.emit_compare(operations, ComparePredicate::LessThan, row, rows)?;
+            let column_valid =
+                self.emit_compare(operations, ComparePredicate::LessThan, column, columns)?;
+            let (row_offset, row_safe) =
+                self.emit_checked_index(operations, CheckedBinaryOperator::Multiply, row, stride)?;
+            let (index, offset_safe) = self.emit_checked_index(
+                operations,
+                CheckedBinaryOperator::Add,
+                offset,
+                row_offset,
+            )?;
+            let (index, column_safe) =
+                self.emit_checked_index(operations, CheckedBinaryOperator::Add, index, column)?;
+            let index_in_bounds =
+                self.emit_compare(operations, ComparePredicate::LessThan, index, length)?;
+            let mut guard = self.emit_bool_and(operations, present, row_valid)?;
+            guard = self.emit_bool_and(operations, guard, column_valid)?;
+            guard = self.emit_bool_and(operations, guard, row_safe)?;
+            guard = self.emit_bool_and(operations, guard, offset_safe)?;
+            guard = self.emit_bool_and(operations, guard, column_safe)?;
+            guard = self.emit_bool_and(operations, guard, index_in_bounds)?;
+            let safe_index = self.emit_select_index(operations, guard, index, zero_index)?;
+            let pointer = self.emit_id(
+                operations,
+                Type::pointer(
+                    Type::Scalar(ScalarType::U16),
+                    slice.address_space,
+                    slice.access,
+                ),
+                OperationKind::GetElementPointer {
+                    base: data,
+                    offset: safe_index,
+                },
+            )?;
+            let loaded = self.emit_id(
+                operations,
+                Type::Scalar(ScalarType::U16),
+                OperationKind::GuardedLoad {
+                    pointer,
+                    predicate: guard,
+                    fallback: zero_bits,
+                    access: MemoryAccess::new(slice.address_space, 2),
+                },
+            )?;
+            let value = self.emit_id(
+                operations,
+                Type::Scalar(ScalarType::Bf16),
+                OperationKind::Cast {
+                    kind: CastKind::Bitcast,
+                    value: loaded,
+                    to: Type::Scalar(ScalarType::Bf16),
+                },
+            )?;
+            values.push((value, Type::Scalar(ScalarType::Bf16)));
+        }
+        let (discriminant_type, variants) = semantic_enum_shape(self.types, option_type)?;
+        let some_variant =
+            unique_enum_variant_with_field(variants, fragment_type).ok_or_else(|| {
+                unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "typed matrix load Option has no unique fragment payload",
+                )
+            })?;
+        let none_variant = unique_fieldless_enum_variant(variants).ok_or_else(|| {
+            unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "typed matrix load Option has no unique fieldless variant",
+            )
+        })?;
+        let discriminant_ty = lower_scalar_type(self.types, discriminant_type)?;
+        let some_discriminant = self.emit_id(
+            operations,
+            discriminant_ty.clone(),
+            OperationKind::Constant(integer_constant(
+                &discriminant_ty,
+                variants[some_variant as usize].discriminant(),
+            )?),
+        )?;
+        let none_discriminant = self.emit_id(
+            operations,
+            discriminant_ty.clone(),
+            OperationKind::Constant(integer_constant(
+                &discriminant_ty,
+                variants[none_variant as usize].discriminant(),
+            )?),
+        )?;
+        let discriminant = self.emit_id(
+            operations,
+            discriminant_ty.clone(),
+            OperationKind::Select {
+                condition: present,
+                true_value: some_discriminant,
+                false_value: none_discriminant,
+            },
+        )?;
+        Ok(SemanticValueBindingV1::Enum {
+            discriminant,
+            discriminant_ty,
+            semantic_type: option_type,
+            variant: None,
+            payload_variant: Some(some_variant),
+            fields: vec![SemanticValueBindingV1::MatrixFragment {
+                values,
+                contract,
+                storage_layout,
+                lane,
+            }],
         })
     }
 
@@ -5210,6 +5930,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         discriminant_ty,
                         semantic_type,
                         variant,
+                        payload_variant,
                         fields,
                     },
                     SemanticProjectionKindV1::Downcast(expected),
@@ -5222,29 +5943,40 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                             "enum downcast does not match its known variant",
                         ));
                     }
+                    if variant.is_none()
+                        && self
+                            .enum_payload_dominance
+                            .availability(place.local(), expected)
+                            .is_none_or(|availability| {
+                                !self.enum_payload_dominance.allows(availability, block)
+                            })
+                    {
+                        return Err(unsupported(
+                            0,
+                            Some(block.index()),
+                            statement,
+                            "enum payload is used outside its exact discriminant edge",
+                        ));
+                    }
                     SemanticValueBindingV1::Enum {
                         discriminant,
                         discriminant_ty,
                         semantic_type,
                         variant: Some(expected),
+                        payload_variant,
                         fields,
                     }
                 }
                 (
                     SemanticValueBindingV1::Enum {
-                        variant: Some(_),
+                        variant: Some(variant),
+                        payload_variant,
                         fields,
                         ..
                     },
                     SemanticProjectionKindV1::Field(field),
-                ) => fields.get(field as usize).cloned().ok_or_else(|| {
-                    unsupported(
-                        0,
-                        Some(block.index()),
-                        statement,
-                        "enum payload field is unavailable in this block",
-                    )
-                })?,
+                ) => project_enum_payload_field(variant, payload_variant, &fields, field)
+                    .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?,
                 (
                     binding @ SemanticValueBindingV1::Enum { .. },
                     SemanticProjectionKindV1::OpaqueCast | SemanticProjectionKindV1::Subtype,
@@ -5399,6 +6131,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             | SemanticValueBindingV1::MathContext
             | SemanticValueBindingV1::CollectiveContext
             | SemanticValueBindingV1::MatrixContext
+            | SemanticValueBindingV1::MatrixFragment { .. }
+            | SemanticValueBindingV1::AccumulatorFragment { .. }
             | SemanticValueBindingV1::Value { .. }
             | SemanticValueBindingV1::OptionPointer { .. }
             | SemanticValueBindingV1::IndexWitness {
@@ -5628,6 +6362,52 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 rhs,
             },
         )
+    }
+
+    fn emit_bool_or(
+        &mut self,
+        operations: &mut Vec<Operation>,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> Result<ValueId, ProductionSemanticKirErrorV1> {
+        self.emit_id(
+            operations,
+            Type::BOOL,
+            OperationKind::Binary {
+                op: BinaryOp::BitOr,
+                lhs,
+                rhs,
+            },
+        )
+    }
+
+    fn emit_checked_index(
+        &mut self,
+        operations: &mut Vec<Operation>,
+        operator: CheckedBinaryOperator,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> Result<(ValueId, ValueId), ProductionSemanticKirErrorV1> {
+        let SemanticValueBindingV1::Aggregate(parts) =
+            self.emit_checked_binary(operations, Type::INDEX, operator, lhs, rhs)?
+        else {
+            unreachable!("checked binary lowering returns value and overflow");
+        };
+        let (value, _) = parts[0]
+            .value()
+            .expect("checked binary value has plain representation");
+        let (overflow, _) = parts[1]
+            .value()
+            .expect("checked binary overflow has plain representation");
+        let safe = self.emit_id(
+            operations,
+            Type::BOOL,
+            OperationKind::Unary {
+                op: UnaryOp::Not,
+                operand: overflow,
+            },
+        )?;
+        Ok((value, safe))
     }
 
     fn emit_results(
@@ -5948,14 +6728,6 @@ fn binding_from_value_defs(
     binding_from_value_defs_with_validation(types, ty, values, true)
 }
 
-fn binding_from_matrix_value_defs(
-    types: &[SemanticTypeDeclV1],
-    ty: SemanticTypeIdV1,
-    values: &[ValueDef],
-) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
-    binding_from_value_defs_with_validation(types, ty, values, false)
-}
-
 fn binding_from_value_defs_with_validation(
     types: &[SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,
@@ -6011,6 +6783,7 @@ fn binding_from_value_defs_with_validation(
                     discriminant_ty: value.ty.clone(),
                     semantic_type: ty,
                     variant: None,
+                    payload_variant: None,
                     fields: Vec::new(),
                 })
             }
@@ -6457,6 +7230,25 @@ fn semantic_enum_shape(
     Ok((*discriminant, variants))
 }
 
+fn unique_enum_variant_with_field(
+    variants: &[SemanticEnumVariantV1],
+    field: SemanticTypeIdV1,
+) -> Option<u32> {
+    let mut matches = variants.iter().enumerate().filter_map(|(index, variant)| {
+        (variant.fields().fields() == [field]).then_some(index as u32)
+    });
+    let found = matches.next()?;
+    matches.next().is_none().then_some(found)
+}
+
+fn unique_fieldless_enum_variant(variants: &[SemanticEnumVariantV1]) -> Option<u32> {
+    let mut matches = variants.iter().enumerate().filter_map(|(index, variant)| {
+        variant.fields().fields().is_empty().then_some(index as u32)
+    });
+    let found = matches.next()?;
+    matches.next().is_none().then_some(found)
+}
+
 fn integer_constant(ty: &Type, bits: u128) -> Result<Constant, ProductionSemanticKirErrorV1> {
     match ty.as_scalar() {
         Some(ScalarType::Bool) if bits <= 1 => Ok(Constant::Bool(bits != 0)),
@@ -6899,6 +7691,58 @@ mod resource_tests {
             &terminators,
             &synthetic,
             Some(SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap),
+        ));
+    }
+
+    #[test]
+    fn semantic_result_err_projection_cannot_reuse_ok_view_storage() {
+        let ok_view = SemanticValueBindingV1::Value {
+            id: ValueId(17),
+            ty: Type::INDEX,
+        };
+
+        assert!(matches!(
+            project_enum_payload_field(0, Some(0), std::slice::from_ref(&ok_view), 0),
+            Ok(SemanticValueBindingV1::Value {
+                id: ValueId(17),
+                ..
+            })
+        ));
+        assert_eq!(
+            project_enum_payload_field(1, Some(0), &[ok_view], 0).unwrap_err(),
+            "enum variant has no authenticated payload storage"
+        );
+    }
+
+    #[test]
+    fn guarded_access_authority_requires_an_exact_authenticated_terminal_join() {
+        let first = FunctionOperationLocation::new(BlockId(4), 7);
+        let second = FunctionOperationLocation::new(BlockId(4), 8);
+        let authenticated = BTreeSet::from([first, second]);
+        let kernel_ir = authenticated.clone();
+        let formal = authenticated.clone();
+        assert!(exact_guarded_access_join(
+            &authenticated,
+            &kernel_ir,
+            &formal
+        ));
+
+        let mut extra_kernel_ir = kernel_ir.clone();
+        extra_kernel_ir.insert(FunctionOperationLocation::new(BlockId(9), 0));
+        assert!(!exact_guarded_access_join(
+            &authenticated,
+            &extra_kernel_ir,
+            &formal
+        ));
+        assert!(!exact_guarded_access_join(
+            &authenticated,
+            &kernel_ir,
+            &BTreeSet::from([first])
+        ));
+        assert!(!exact_guarded_access_join(
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new()
         ));
     }
 }

@@ -202,21 +202,34 @@ fn derive_admitted_obligations(
         FormalMemoryObligationAnalysis::Complete(obligations) => {
             (obligations, Vec::new().into_boxed_slice())
         }
-        FormalMemoryObligationAnalysis::Incomplete { partial, reasons }
-            if semantic_kir.retained_generic_checks_discharge_dynamic_indices()
-                && reasons.iter().all(|reason| {
-                    matches!(
-                        reason,
-                        FormalMemoryIncompleteReason::UnsupportedIndexExpression { .. }
-                    )
-                }) =>
-        {
-            (partial, reasons.into_boxed_slice())
-        }
-        analysis => {
-            return Err(ProductionFormalMemoryErrorV1::Incomplete {
-                reasons: analysis.incomplete_reasons().to_vec().into_boxed_slice(),
+        FormalMemoryObligationAnalysis::Incomplete { partial, reasons } => {
+            let guarded_locations = reasons
+                .iter()
+                .filter_map(|reason| match reason {
+                    FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof { location } => {
+                        Some(*location)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let reasons_are_ranked_dischargeable = reasons.iter().all(|reason| {
+                matches!(
+                    reason,
+                    FormalMemoryIncompleteReason::UnsupportedIndexExpression { .. }
+                        | FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof { .. }
+                )
             });
+            if !semantic_kir.retained_generic_checks_discharge_dynamic_indices()
+                || !reasons_are_ranked_dischargeable
+                || (!guarded_locations.is_empty()
+                    && !semantic_kir
+                        .retained_generic_checks_discharge_guarded_accesses(&guarded_locations))
+            {
+                return Err(ProductionFormalMemoryErrorV1::Incomplete {
+                    reasons: reasons.into_boxed_slice(),
+                });
+            }
+            (partial, reasons.into_boxed_slice())
         }
     };
     if !obligations.inter_invocation_conflicts().is_empty() {

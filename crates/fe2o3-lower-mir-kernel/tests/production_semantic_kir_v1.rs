@@ -1,6 +1,6 @@
 use fe2o3_kernel_ir::{
     BinaryOp, BlockId, CheckedBinaryOperator, LaunchDomain, OperationKind, ScalarType, Type,
-    WorkgroupSize, decode_module_v6, verify_module,
+    WorkgroupSize, decode_module_v7, verify_module,
 };
 use fe2o3_lower_mir_kernel::{
     PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1, ProductionFormalMemoryOwnerV1,
@@ -842,22 +842,22 @@ fn independent_lowerings_are_deterministic() {
     assert_eq!(first.module(), second.module());
     assert_eq!(first.correspondence(), second.correspondence());
     assert_eq!(
-        first.canonical_kernel_ir_v6().canonical_bytes(),
-        second.canonical_kernel_ir_v6().canonical_bytes(),
+        first.canonical_kernel_ir_v7().canonical_bytes(),
+        second.canonical_kernel_ir_v7().canonical_bytes(),
     );
     assert_eq!(
-        first.canonical_kernel_ir_v6_identity(),
-        second.canonical_kernel_ir_v6_identity(),
+        first.canonical_kernel_ir_v7_identity(),
+        second.canonical_kernel_ir_v7_identity(),
     );
     assert_eq!(
-        first.canonical_kernel_ir_v6_identity().canonical_length(),
-        first.canonical_kernel_ir_v6().canonical_bytes().len() as u64,
+        first.canonical_kernel_ir_v7_identity().canonical_length(),
+        first.canonical_kernel_ir_v7().canonical_bytes().len() as u64,
     );
     assert_eq!(
-        decode_module_v6(first.canonical_kernel_ir_v6().canonical_bytes()).unwrap(),
+        decode_module_v7(first.canonical_kernel_ir_v7().canonical_bytes()).unwrap(),
         *first.module(),
     );
-    first.canonical_kernel_ir_v6().revalidate().unwrap();
+    first.canonical_kernel_ir_v7().revalidate().unwrap();
 }
 
 #[test]
@@ -871,10 +871,10 @@ fn formal_memory_admission_retains_exact_kir_without_authority() {
 
     admitted.verify_equivalence().unwrap();
     assert_eq!(
-        decode_module_v6(
+        decode_module_v7(
             admitted
                 .semantic_kir()
-                .canonical_kernel_ir_v6()
+                .canonical_kernel_ir_v7()
                 .canonical_bytes(),
         )
         .unwrap(),
