@@ -3589,10 +3589,9 @@ fn projected_cfg_terminator(
                     "a general switch whose only extra successor is not one empty unreachable fallback",
                 ));
             };
-            if targets.values().len() != 2
-                || targets.values()[0].value() != 0
-                || targets.values()[1].value() != 1
-            {
+            let zero = targets.values().iter().find(|target| target.value() == 0);
+            let one = targets.values().iter().find(|target| target.value() == 1);
+            if targets.values().len() != 2 || zero.is_none() || one.is_none() {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "a checked Option switch whose exact 0/1 variants were not retained",
                 ));
@@ -3605,8 +3604,8 @@ fn projected_cfg_terminator(
             }
             Ok(ProjectedCfgTerminatorV1::Predicate {
                 predicate,
-                true_block: target(targets.values()[1].edge().target())?,
-                false_block: target(targets.values()[0].edge().target())?,
+                true_block: target(one.expect("checked exact variant").edge().target())?,
+                false_block: target(zero.expect("checked exact variant").edge().target())?,
             })
         }
         SemanticTerminatorKindV1::Call(call) => {
@@ -8674,7 +8673,7 @@ mod tests {
     }
 
     fn explicit_binary_switch_with_fallback(
-        second_variant: u128,
+        variants: [u128; 2],
         fallback_statements: Vec<SemanticStatementV1>,
         fallback_terminator: SemanticTerminatorKindV1,
     ) -> SemanticFunctionDeclV1 {
@@ -8688,11 +8687,11 @@ mod tests {
                         targets: SemanticSwitchTargetsV1::new(
                             vec![
                                 SemanticSwitchTargetV1::new(
-                                    0,
+                                    variants[0],
                                     cfg_edge(SemanticEdgeRoleV1::SwitchValue, 1),
                                 ),
                                 SemanticSwitchTargetV1::new(
-                                    second_variant,
+                                    variants[1],
                                     cfg_edge(SemanticEdgeRoleV1::SwitchValue, 2),
                                 ),
                             ],
@@ -8714,8 +8713,11 @@ mod tests {
 
     #[test]
     fn explicit_zero_one_switch_elides_only_an_empty_unreachable_fallback() {
-        let function =
-            explicit_binary_switch_with_fallback(1, vec![], SemanticTerminatorKindV1::Unreachable);
+        let function = explicit_binary_switch_with_fallback(
+            [0, 1],
+            vec![],
+            SemanticTerminatorKindV1::Unreachable,
+        );
         assert_eq!(
             projected_cfg_terminator(&function, 0, &[None; 2]).unwrap(),
             ProjectedCfgTerminatorV1::AnalysisSplit {
@@ -8728,13 +8730,17 @@ mod tests {
     #[test]
     fn explicit_binary_switch_keeps_reachable_or_malformed_fallbacks_fail_closed() {
         for function in [
-            explicit_binary_switch_with_fallback(1, vec![], SemanticTerminatorKindV1::Return),
+            explicit_binary_switch_with_fallback([0, 1], vec![], SemanticTerminatorKindV1::Return),
             explicit_binary_switch_with_fallback(
-                1,
+                [0, 1],
                 vec![statement(SemanticStatementKindV1::Nop)],
                 SemanticTerminatorKindV1::Unreachable,
             ),
-            explicit_binary_switch_with_fallback(2, vec![], SemanticTerminatorKindV1::Unreachable),
+            explicit_binary_switch_with_fallback(
+                [0, 2],
+                vec![],
+                SemanticTerminatorKindV1::Unreachable,
+            ),
         ] {
             assert!(matches!(
                 projected_cfg_terminator(&function, 0, &[None; 2]),
@@ -8743,6 +8749,29 @@ mod tests {
                 ))
             ));
         }
+    }
+
+    #[test]
+    fn checked_option_switch_uses_variant_values_independent_of_target_order() {
+        let function = explicit_binary_switch_with_fallback(
+            [1, 0],
+            vec![],
+            SemanticTerminatorKindV1::Unreachable,
+        );
+        let predicate = GuardPredicateV1 {
+            comparisons: vec![(
+                ProductionRankedValueV1::Argument(0),
+                ProductionRankedValueV1::Argument(1),
+            )],
+        };
+        assert_eq!(
+            projected_cfg_terminator(&function, 0, &[None, Some(predicate.clone())]).unwrap(),
+            ProjectedCfgTerminatorV1::Predicate {
+                predicate,
+                true_block: 1,
+                false_block: 2,
+            }
+        );
     }
 
     fn uniform_induction_function(bound_role: SemanticLocalRoleV1) -> SemanticFunctionDeclV1 {
