@@ -10,7 +10,8 @@ use fe2o3_kfd::{Gfx942DispatchBufferBindingV1, Gfx942FixedDispatchPacketV1};
 
 use crate::allocation::{
     ServiceAllocationErrorV1, ServiceAllocationSessionV1, ServiceDeviceDispatchRangeV1,
-    ServiceDispatchRangeV1, ServiceHostDispatchRangeV1, ServiceQueueAllocationLedgerV1,
+    ServiceDispatchRangeV1, ServiceHostDispatchRangeV1, ServiceHostDispatchSnapshotRangeV1,
+    ServiceQueueAllocationLedgerV1, validate_host_dispatch_snapshot,
 };
 
 /// One inert explicit kernarg-buffer binding to a checked service allocation range.
@@ -33,6 +34,7 @@ use crate::allocation::{
 pub struct ServiceFixedDispatchBufferV1 {
     explicit_argument_index: usize,
     range: ServiceDispatchRangeV1,
+    completed_snapshot: Option<ServiceHostDispatchSnapshotRangeV1>,
 }
 
 impl ServiceFixedDispatchBufferV1 {
@@ -41,6 +43,7 @@ impl ServiceFixedDispatchBufferV1 {
         Self {
             explicit_argument_index,
             range: ServiceDispatchRangeV1::Device(range),
+            completed_snapshot: None,
         }
     }
 
@@ -52,7 +55,32 @@ impl ServiceFixedDispatchBufferV1 {
         Self {
             explicit_argument_index,
             range: ServiceDispatchRangeV1::HostVisible(range),
+            completed_snapshot: None,
         }
+    }
+
+    /// Describes one host-visible interior pointer and initialized enclosing snapshot.
+    ///
+    /// This association is inert. Inspected metadata must independently
+    /// establish a write or read-write effect for the interior, and only a
+    /// matching completed and recycled generation can copy the exact snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Rejects ranges from different allocation identities, generations,
+    /// ordinals, or subleases, and snapshots that do not strictly enclose the
+    /// interior on both sides.
+    pub fn new_host_visible_with_completed_snapshot(
+        explicit_argument_index: usize,
+        interior: ServiceHostDispatchRangeV1,
+        snapshot: ServiceHostDispatchSnapshotRangeV1,
+    ) -> Result<Self, ServiceAllocationErrorV1> {
+        validate_host_dispatch_snapshot(interior, snapshot.dispatch_range())?;
+        Ok(Self {
+            explicit_argument_index,
+            range: ServiceDispatchRangeV1::HostVisible(interior),
+            completed_snapshot: Some(snapshot),
+        })
     }
 
     /// Returns the explicit argument ordinal.
@@ -65,13 +93,28 @@ impl ServiceFixedDispatchBufferV1 {
         self.range
     }
 
+    /// Returns the optional enclosing completed-snapshot descriptor.
+    pub const fn completed_snapshot(&self) -> Option<ServiceHostDispatchSnapshotRangeV1> {
+        self.completed_snapshot
+    }
+
     fn into_kfd(self) -> Gfx942DispatchBufferBindingV1 {
-        Gfx942DispatchBufferBindingV1::new(
-            self.explicit_argument_index,
-            self.range.data_index(),
-            self.range.offset_bytes(),
-            self.range.extent_bytes(),
-        )
+        match self.completed_snapshot {
+            Some(snapshot) => Gfx942DispatchBufferBindingV1::new_with_completed_snapshot(
+                self.explicit_argument_index,
+                self.range.data_index(),
+                self.range.offset_bytes(),
+                self.range.extent_bytes(),
+                snapshot.offset_bytes(),
+                snapshot.extent_bytes(),
+            ),
+            None => Gfx942DispatchBufferBindingV1::new(
+                self.explicit_argument_index,
+                self.range.data_index(),
+                self.range.offset_bytes(),
+                self.range.extent_bytes(),
+            ),
+        }
     }
 }
 
@@ -134,6 +177,15 @@ impl ServiceFixedDispatchPacketV1 {
     ) -> Result<(), ServiceAllocationErrorV1> {
         for buffer in &self.buffers {
             ledger.validate_range(buffer.range)?;
+            match (buffer.range, buffer.completed_snapshot) {
+                (ServiceDispatchRangeV1::HostVisible(interior), Some(snapshot)) => {
+                    ledger.validate_host_dispatch_snapshot(interior, snapshot)?;
+                }
+                (ServiceDispatchRangeV1::Device(_), Some(_)) => {
+                    return Err(ServiceAllocationErrorV1::KindMismatch);
+                }
+                (_, None) => {}
+            }
         }
         Ok(())
     }
@@ -231,7 +283,10 @@ impl<'a, const N: usize> ServiceFixedBatchV1<'a, N> {
                         allocation.validate_device_dispatch_range(range)?
                     }
                     ServiceDispatchRangeV1::HostVisible(range) => {
-                        allocation.validate_host_dispatch_range(range)?
+                        allocation.validate_host_dispatch_range(range)?;
+                        if let Some(snapshot) = buffer.completed_snapshot {
+                            allocation.validate_host_dispatch_snapshot(range, snapshot)?;
+                        }
                     }
                 }
             }

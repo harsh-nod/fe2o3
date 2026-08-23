@@ -24,11 +24,12 @@ use super::completion::{
 use super::dispatch_binding::{
     DeviceDataAllocationInputV1, DispatchGeometryV1, DispatchResourceOwnerV1,
     Gfx942CompletedDispatchBatchV1, Gfx942CompletedDispatchReadRequestV1,
-    Gfx942CompletedDispatchReadbackV1, Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1,
-    Gfx942DispatchPollV1, Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1,
-    Gfx942FixedDispatchStorageIdentityV1, ReturnedDispatchDataV1, TypedKernargImageV1,
-    prepare_dispatch_resources, prepare_public_fixed_dispatch_resources, unwrap_completed,
-    unwrap_published, validate_fixed_batch_ring, wrap_completed, wrap_poll, wrap_published,
+    Gfx942CompletedDispatchReadbackV1, Gfx942CompletedDispatchSnapshotRequestV1,
+    Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1, Gfx942DispatchPollV1,
+    Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1, Gfx942FixedDispatchStorageIdentityV1,
+    ReturnedDispatchDataV1, TypedKernargImageV1, prepare_dispatch_resources,
+    prepare_public_fixed_dispatch_resources, unwrap_completed, unwrap_published,
+    validate_fixed_batch_ring, wrap_completed, wrap_poll, wrap_published,
 };
 use super::submit::{
     NativeAqlSubmissionBackendV1, NativeAqlSubmissionErrorV1, NativeAqlSubmissionOwnerV1,
@@ -60,14 +61,14 @@ static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and fixed-batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r16-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r17-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
     "memory_profile_sha256=286ad8af398b666217d5ec8c0a19390a4736cfcf6624e363214c7488b8e2e535\n",
     "queue_resource_profile_sha256=b8317e4288e14c6d7546b53887ec2a10e1938ffba9595271d174a2a652320f4f\n",
     "aql_dispatch_schema_sha256=b691e0df36e2c1f0695f49a19d49d3fbbe4380e8e9999b01368df02783952edf\n",
     "aql_fixed_batch_schema_sha256=e989398f327c97df8108855a9c97316dd5c6b6b5af68704a14da64990dc4aa8a\n",
     "aql_completion_schema_sha256=abb0fe30cddd4a93bf36ba3df4dea38bd899339e9e62eaacceeb5bbc5208378b\n",
-    "dispatch_binding_schema_sha256=e2514abead2b8d453b9e1af9f4fbc1c3bc28733ee359307fee4b9e746a554483\n",
+    "dispatch_binding_schema_sha256=30335cb85c5991bf97b2236dec28c5b6501caa133d59d024be362e3cd62e0096\n",
     "event_schema_sha256=8d754af12ed2fcd0c238e1f9e38fbbdab053f44fc5d613b227fdcdd616fcc849\n",
     "runtime_enable_schema_sha256=4c762d1e35a5940f0972290151de51e6e19722f81874a6446c66ddc70a062ac1\n",
     "source.rocr.queues.c=b7ead541340ac996c2305b2e9660cb3176edcd61ee509d4880f02659fbb6f32b\n",
@@ -83,7 +84,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "submission=crate-private-non-clone-single-producer,aql-fixed-batch-v2-count-1-through-8192-and-ring-capacity-bounded,heap-owned-fixed-cardinality-state,no-mapped-slice-or-raw-pointer-escape,rptr-wptr-acquire,one-actual-wptr-acq-rel-fetch-add-by-count,all-invalid-bodies-before-any-ordered-u32-release-headers,release-fence-x86-sfence,one-final-volatile-u64-doorbell-store-of-last-packet-id\n",
     "completion=crate-private-non-clone-generation-bound-batches,unique-signal-per-packet,signal-code-kernarg-dispatch-and-queue-generations-retained,bounded-atomic-acquire-poll,pending-ready-fault-timeout-distinct,release-reset-only-after-all-signals-zero\n",
     "dispatch=public-addressless-linear-fixed-batch,1-through-32-inspected-programs,1-through-8192-packets,validated-code-materialization,zero-pointer-kernarg-internal-injection,metadata-derived-COV6-geometry-and-dynamic-lds-implicit-subset-with-caller-zero-suffix,queue-pointer-and-runtime-address-fields-rejected,exact-mapped-data-set,inspected-access-and-sealed-initialization-gates,ordinary-release-or-exact-recycle-gated-attached-or-detached-return-after-destroy\n",
-    "readback=coherent-host-data-only,owned-bounded-copy-after-exact-acquire-observed-completion-and-signal-recycle,exact-dispatch-generation-and-one-inspected-write-or-readwrite-binding,no-native-address-or-mapped-borrow,no-whole-allocation-initialization-promotion\n",
+    "readback=coherent-host-data-only,owned-bounded-copy-after-exact-acquire-observed-completion-and-signal-recycle,exact-dispatch-generation,ordinary-range-within-one-inspected-write-or-readwrite-binding-or-exact-admitted-initialized-enclosing-snapshot,no-native-address-or-mapped-borrow,no-whole-allocation-initialization-promotion\n",
     "rebinding=exact-completion-and-signal-recycle-before-detach,code-and-kernarg-released,queue-ring-signal-event-doorbell-and-runtime-remain-live,exact-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,new-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest\n",
     "doorbell=complete-8192-byte-kfd-slice,exact-returned-offset,madv-dontfork,no-public-address-pointer-or-mmio-accessor\n",
     "lifecycle=runtime-enable,event-create,queue-create;all-completion-batches-observed-and-recycled;queue-destroy,event-destroy,runtime-disable,doorbell-release,cwsr-queue-resource-and-completion-arena-release;no-drop-ioctl-store-munmap-or-free\n",
@@ -98,7 +99,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "0f3ff908248c2316523709e4b0fb8f3b0e427f7d3e27b9a4e0dcdc406bf1736e";
+    "0d6324d542151c13fd9ca1c382c547c2589cafe24372b38d062563f5e68507af";
 
 type RingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -1547,6 +1548,38 @@ impl ComputeAqlQueueSessionV1 {
         result.map_err(Into::into)
     }
 
+    /// Copies one exact admitted enclosing snapshot from coherent host-visible data.
+    ///
+    /// The exact attached dispatch must have completed and recycled. Admission
+    /// requires a retained fully initialized range strictly enclosing one
+    /// isolated inspected writable binding. Subranges, stale generations,
+    /// device-local storage, and undeclared ranges fail before bytes are exposed.
+    pub fn read_recycled_fixed_dispatch_snapshot(
+        &mut self,
+        request: Gfx942CompletedDispatchSnapshotRequestV1,
+    ) -> Result<Gfx942CompletedDispatchReadbackV1, ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+        }
+        let dispatch = self
+            .dispatch
+            .as_ref()
+            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?;
+        let memory = &mut self
+            .engine
+            .as_mut()
+            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                "missing queue engine",
+            ))?
+            .backend
+            .session;
+        let result = dispatch.read_completed_host_visible_snapshot(memory, request);
+        if matches!(result, Err(Gfx942DispatchBindingErrorV1::Memory(_))) {
+            self.poison_terminal();
+        }
+        result.map_err(Into::into)
+    }
+
     #[allow(dead_code)]
     pub(crate) fn poll_completion_batch<const N: usize>(
         &mut self,
@@ -2398,7 +2431,7 @@ mod tests {
         );
         assert_eq!(
             super::super::dispatch_binding::GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1,
-            "e2514abead2b8d453b9e1af9f4fbc1c3bc28733ee359307fee4b9e746a554483"
+            "30335cb85c5991bf97b2236dec28c5b6501caa133d59d024be362e3cd62e0096"
         );
         assert_eq!(
             SHARED_GTT_MEMORY_PROFILE_SHA256_V1,
