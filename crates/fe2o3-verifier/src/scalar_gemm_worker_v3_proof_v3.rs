@@ -1,9 +1,10 @@
 //! Request-bound generated Verus input for the strict scalar GEMM Worker V3 path.
 //!
 //! The generated source embeds the exact Worker V3 challenge and compiler/KIR identities, then
-//! includes the reviewed scalar source model, an exact decoded-KIR projection, and exact-profile
-//! KIR integer equations. Its retained execution closes request-to-transcript and projection
-//! identity binding, but decoded-KIR operational refinement, Rust/MIR-to-model, IEEE `f32`, and
+//! includes the reviewed scalar source model, an exact decoded-KIR projection, exact-profile KIR
+//! integer equations, and a total reviewed KIR state machine. Its retained execution closes
+//! request-to-transcript and projection identity binding and proves the reviewed state machine
+//! refines the integer model. Projection-byte decoding, Rust/MIR-to-model, IEEE `f32`, and
 //! emitted-machine refinement remain explicit obligations.
 
 use std::fmt::Write as _;
@@ -30,7 +31,9 @@ const KIR_INTEGER_REFINEMENT: &[u8] =
     include_bytes!("../verus/scalar_gemm_kir_integer_refinement_v1.rs");
 const KIR_PROJECTION_REVIEW: &[u8] =
     include_bytes!("../verus/scalar_gemm_kir_projection_review_v1.rs");
-const EXPECTED_STDOUT: &[u8] = b"verification results:: 26 verified, 0 errors\n";
+const KIR_OPERATIONAL_SEMANTICS: &[u8] =
+    include_bytes!("../verus/scalar_gemm_kir_operational_semantics_v1.rs");
+const EXPECTED_STDOUT: &[u8] = b"verification results:: 33 verified, 0 errors\n";
 const INPUT_BINDING_DOMAIN_V3: &[u8] = b"fe2o3-scalar-gemm-worker-v3-proof-input-binding-v3\0";
 const OUTPUT_IDENTITY_DOMAIN_V3: &[u8] = b"fe2o3-scalar-gemm-worker-v3-proof-output-v3\0";
 const EXECUTION_IDENTITY_DOMAIN_V3: &[u8] = b"fe2o3-scalar-gemm-worker-v3-proof-execution-v3\0";
@@ -120,6 +123,11 @@ impl ScalarGemmWorkerV3ProofInputV3 {
 
     /// The generated source carries every byte of the checked decoded-KIR projection.
     pub const fn binds_exhaustive_decoded_kir_projection(&self) -> bool {
+        true
+    }
+
+    /// The generated source contains the reviewed six-block scalar KIR state machine.
+    pub const fn includes_reviewed_kir_operational_semantics(&self) -> bool {
         true
     }
 
@@ -219,6 +227,7 @@ fn generate_source(
         SOURCE_MODEL.len()
             + KIR_PROJECTION_REVIEW.len()
             + KIR_INTEGER_REFINEMENT.len()
+            + KIR_OPERATIONAL_SEMANTICS.len()
             + semantic_projection.len() * 6
             + 4096,
     );
@@ -278,6 +287,7 @@ fn generate_source(
     append_semantic_projection(&mut generated, semantic_projection)?;
     generated.extend_from_slice(KIR_PROJECTION_REVIEW);
     generated.extend_from_slice(KIR_INTEGER_REFINEMENT);
+    generated.extend_from_slice(KIR_OPERATIONAL_SEMANTICS);
     Ok(generated)
 }
 
@@ -395,6 +405,11 @@ impl AuthenticatedScalarGemmWorkerV3ProofV3 {
 
     /// Retained Verus checked equality of the generated and reviewed exhaustive projections.
     pub const fn authenticates_exact_decoded_kir_projection(&self) -> bool {
+        true
+    }
+
+    /// Retained Verus proved the reviewed KIR state machine refines the integer model.
+    pub const fn authenticates_reviewed_kir_state_machine_refinement(&self) -> bool {
         true
     }
 
@@ -746,6 +761,17 @@ mod tests {
         source[first_byte] = b'0';
     }
 
+    fn substitute_operational_accumulation(source: &mut [u8]) {
+        const NEEDLE: &[u8] = b"state.acc\n                        + a[";
+        let operator = source
+            .windows(NEEDLE.len())
+            .position(|window| window == NEEDLE)
+            .map(|offset| offset + b"state.acc\n                        ".len())
+            .expect("operational accumulation is absent");
+        assert_eq!(source[operator], b'+');
+        source[operator] = b'-';
+    }
+
     #[test]
     fn generated_source_binds_challenge_and_every_compiler_axis() {
         let first = input([0x11; 32]);
@@ -754,6 +780,7 @@ mod tests {
         assert!(!first.establishes_source_to_kir_refinement());
         assert!(first.includes_reviewed_kir_integer_profile_equations());
         assert!(first.binds_exhaustive_decoded_kir_projection());
+        assert!(first.includes_reviewed_kir_operational_semantics());
         assert_eq!(first.semantic_projection_byte_len(), 2_927);
         assert_ne!(first.semantic_projection_identity(), [0; 32]);
         assert!(!first.grants_artifact_or_runtime_authority());
@@ -770,11 +797,13 @@ mod tests {
             "FE2O3_SCALAR_KIR_SEMANTIC_PROJECTION_IDENTITY_V1",
             "FE2O3_GENERATED_SCALAR_KIR_PROJECTION_V1",
             "FE2O3_REVIEWED_SCALAR_KIR_PROJECTION_V1",
+            "scalar_kir_active_execution_refines_integer_model_v1",
         ] {
             assert!(source.contains(name), "generated source omitted {name}");
         }
         assert!(source.contains(std::str::from_utf8(SOURCE_MODEL).unwrap()));
-        assert!(source.ends_with(std::str::from_utf8(KIR_INTEGER_REFINEMENT).unwrap()));
+        assert!(source.contains(std::str::from_utf8(KIR_INTEGER_REFINEMENT).unwrap()));
+        assert!(source.ends_with(std::str::from_utf8(KIR_OPERATIONAL_SEMANTICS).unwrap()));
         let challenge_substitution = input([0x12; 32]);
         assert_ne!(
             first.source_identity(),
@@ -863,6 +892,7 @@ mod tests {
         assert!(receipt.binds_worker_v3_challenge());
         assert!(receipt.establishes_exact_scalar_gemm_kir_profile());
         assert!(receipt.authenticates_exact_decoded_kir_projection());
+        assert!(receipt.authenticates_reviewed_kir_state_machine_refinement());
         assert!(!receipt.establishes_kir_to_integer_model_refinement());
         assert!(!receipt.establishes_source_to_kir_refinement());
         assert!(!receipt.establishes_rust_or_f32_semantics());
@@ -907,6 +937,26 @@ mod tests {
         assert!(
             stderr.contains("generated_scalar_kir_projection_is_exact_v1")
                 || stderr.contains("assertion failed"),
+            "unexpected verifier failure:\n{stderr}"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires FE2O3_TEST_VERUS pointing to the pinned Verus launcher"]
+    fn arithmetic_semantics_substitution_fails_verus() {
+        let mut source = input([0x46; 32]).canonical_source().to_vec();
+        substitute_operational_accumulation(&mut source);
+        let output = run_pinned_verus(&source, "arithmetic-substitution");
+        assert_ne!(
+            output.status.code(),
+            Some(0),
+            "mutated arithmetic semantics unexpectedly verified: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("scalar_kir_body_cycle_refines_dot_v1")
+                || stderr.contains("postcondition not satisfied"),
             "unexpected verifier failure:\n{stderr}"
         );
     }
