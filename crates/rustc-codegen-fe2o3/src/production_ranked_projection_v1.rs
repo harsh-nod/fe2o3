@@ -2799,9 +2799,6 @@ fn project_intrinsic_contracts(
                 continue;
             };
             let destination = assignment.destination().local().index() as usize;
-            if local_definitions.get(destination).copied() != Some(1) {
-                continue;
-            }
             let Some(lhs) = project_uniform_switch_operand_v1(
                 left,
                 constants,
@@ -2830,9 +2827,16 @@ fn project_intrinsic_contracts(
             else {
                 continue;
             };
-            direct_switch_predicates[destination] = Some(GuardPredicateV1 {
-                comparisons: vec![(lhs, rhs)],
-            });
+            retain_identical_direct_switch_predicate_v1(
+                direct_switch_predicates.get_mut(destination).ok_or(
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "a direct switch predicate outside the semantic local table",
+                    ),
+                )?,
+                GuardPredicateV1 {
+                    comparisons: vec![(lhs, rhs)],
+                },
+            )?;
         }
     }
     let uniform_inductions = project_uniform_inductions_v1(
@@ -2867,6 +2871,22 @@ fn project_intrinsic_contracts(
         uniform_inductions,
         tensor_layouts,
     })
+}
+
+fn retain_identical_direct_switch_predicate_v1(
+    slot: &mut Option<GuardPredicateV1>,
+    candidate: GuardPredicateV1,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    match slot {
+        None => *slot = Some(candidate),
+        Some(existing) if *existing == candidate => {}
+        Some(_) => {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "one comparison local has conflicting source definitions",
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -9121,6 +9141,32 @@ mod tests {
             .unwrap()
             .is_none()
         );
+    }
+
+    #[test]
+    fn repeated_comparison_definitions_must_be_identical() {
+        let first = GuardPredicateV1 {
+            comparisons: vec![(
+                ProductionRankedValueV1::Argument(1),
+                ProductionRankedValueV1::Argument(2),
+            )],
+        };
+        let conflicting = GuardPredicateV1 {
+            comparisons: vec![(
+                ProductionRankedValueV1::Argument(2),
+                ProductionRankedValueV1::Argument(1),
+            )],
+        };
+        let mut slot = None;
+        retain_identical_direct_switch_predicate_v1(&mut slot, first.clone()).unwrap();
+        retain_identical_direct_switch_predicate_v1(&mut slot, first.clone()).unwrap();
+        assert_eq!(slot, Some(first));
+        assert!(matches!(
+            retain_identical_direct_switch_predicate_v1(&mut slot, conflicting),
+            Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "one comparison local has conflicting source definitions"
+            ))
+        ));
     }
 
     fn explicit_binary_switch_with_fallback(
