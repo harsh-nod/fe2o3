@@ -2,8 +2,8 @@
 //
 // This state machine models the six reviewed blocks, the loop-carried SSA
 // values, guarded input reads, and the final output store over mathematical
-// integers. The separately verified projection decoder must still establish
-// that retained projection bytes decode to this exact machine.
+// integers. A separately retained correspondence module admits these semantics
+// only after projection bytes decode to the independently reviewed exact AST.
 
 pub mod scalar_gemm_kir_operational_semantics_v1 {
 

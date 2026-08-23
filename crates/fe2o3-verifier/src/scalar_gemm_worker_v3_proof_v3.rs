@@ -39,7 +39,9 @@ const KIR_PROJECTION_EXACT: &[u8] =
     include_bytes!("../verus/scalar_gemm_kir_projection_exact_v1.rs");
 const KIR_OPERATIONAL_SEMANTICS: &[u8] =
     include_bytes!("../verus/scalar_gemm_kir_operational_semantics_v1.rs");
-const EXPECTED_STDOUT: &[u8] = b"verification results:: 49 verified, 0 errors\n";
+const KIR_PROJECTION_OPERATIONAL_CORRESPONDENCE: &[u8] =
+    include_bytes!("../verus/scalar_gemm_kir_projection_operational_correspondence_v1.rs");
+const EXPECTED_STDOUT: &[u8] = b"verification results:: 52 verified, 0 errors\n";
 const INPUT_BINDING_DOMAIN_V3: &[u8] = b"fe2o3-scalar-gemm-worker-v3-proof-input-binding-v3\0";
 const OUTPUT_IDENTITY_DOMAIN_V3: &[u8] = b"fe2o3-scalar-gemm-worker-v3-proof-output-v3\0";
 const EXECUTION_IDENTITY_DOMAIN_V3: &[u8] = b"fe2o3-scalar-gemm-worker-v3-proof-execution-v3\0";
@@ -157,6 +159,11 @@ impl ScalarGemmWorkerV3ProofInputV3 {
         true
     }
 
+    /// Generated source binds exact projection execution to the reviewed state machine.
+    pub const fn binds_projection_operational_correspondence(&self) -> bool {
+        true
+    }
+
     pub const fn grants_artifact_or_runtime_authority(&self) -> bool {
         false
     }
@@ -258,6 +265,7 @@ fn generate_source(
             + KIR_PROJECTION_EXACT.len()
             + KIR_INTEGER_REFINEMENT.len()
             + KIR_OPERATIONAL_SEMANTICS.len()
+            + KIR_PROJECTION_OPERATIONAL_CORRESPONDENCE.len()
             + semantic_projection.len() * 6
             + 4096,
     );
@@ -322,6 +330,7 @@ fn generate_source(
     generated.extend_from_slice(KIR_PROJECTION_EXACT);
     generated.extend_from_slice(KIR_INTEGER_REFINEMENT);
     generated.extend_from_slice(KIR_OPERATIONAL_SEMANTICS);
+    generated.extend_from_slice(KIR_PROJECTION_OPERATIONAL_CORRESPONDENCE);
     Ok(generated)
 }
 
@@ -467,9 +476,14 @@ impl AuthenticatedScalarGemmWorkerV3ProofV3 {
         true
     }
 
-    /// The decoded KIR graph is not yet projected into a formal operational semantics.
+    /// Retained Verus connected exact projection execution to the reviewed machine.
+    pub const fn authenticates_projection_operational_correspondence(&self) -> bool {
+        true
+    }
+
+    /// Exact projection execution refines the retained bounded-integer GEMM model.
     pub const fn establishes_kir_to_integer_model_refinement(&self) -> bool {
-        false
+        true
     }
 
     /// The integer model is not a proof that ordinary Rust/MIR produced the retained KIR.
@@ -937,6 +951,7 @@ mod tests {
         assert!(first.binds_total_typed_projection_token_decoding());
         assert!(first.binds_total_structural_projection_ast_decoding());
         assert!(first.binds_reviewed_exact_projection_ast());
+        assert!(first.binds_projection_operational_correspondence());
         assert_eq!(first.semantic_projection_byte_len(), 2_927);
         assert_ne!(first.semantic_projection_identity(), [0; 32]);
         assert!(!first.grants_artifact_or_runtime_authority());
@@ -959,12 +974,17 @@ mod tests {
             "scalar_kir_typed_constant_contexts_fail_closed_v1",
             "generated_scalar_kir_projection_decodes_to_structural_ast_v1",
             "generated_scalar_kir_projection_decodes_to_exact_ast_v1",
+            "generated_scalar_kir_projection_active_refines_integer_model_v1",
+            "generated_scalar_kir_projection_inactive_performs_no_store_v1",
         ] {
             assert!(source.contains(name), "generated source omitted {name}");
         }
         assert!(source.contains(std::str::from_utf8(SOURCE_MODEL).unwrap()));
         assert!(source.contains(std::str::from_utf8(KIR_INTEGER_REFINEMENT).unwrap()));
-        assert!(source.ends_with(std::str::from_utf8(KIR_OPERATIONAL_SEMANTICS).unwrap()));
+        assert!(
+            source
+                .ends_with(std::str::from_utf8(KIR_PROJECTION_OPERATIONAL_CORRESPONDENCE).unwrap())
+        );
         let challenge_substitution = input([0x12; 32]);
         assert_ne!(
             first.source_identity(),
@@ -1042,7 +1062,7 @@ mod tests {
     }
 
     #[test]
-    fn request_bound_execution_receipt_does_not_overclaim_refinement() {
+    fn request_bound_execution_receipt_limits_refinement_to_retained_kir() {
         let receipt = AuthenticatedScalarGemmWorkerV3ProofV3 {
             input: input([0x33; 32]),
             runtime_closure_identity: Digest::from_bytes([1; 32]),
@@ -1058,7 +1078,8 @@ mod tests {
         assert!(receipt.authenticates_total_typed_projection_token_decoding());
         assert!(receipt.authenticates_total_structural_projection_ast_decoding());
         assert!(receipt.authenticates_reviewed_exact_projection_ast());
-        assert!(!receipt.establishes_kir_to_integer_model_refinement());
+        assert!(receipt.authenticates_projection_operational_correspondence());
+        assert!(receipt.establishes_kir_to_integer_model_refinement());
         assert!(!receipt.establishes_source_to_kir_refinement());
         assert!(!receipt.establishes_rust_or_f32_semantics());
         assert!(!receipt.establishes_emitted_machine_refinement());
