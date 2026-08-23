@@ -24,6 +24,7 @@
 //! instance codecs do not alter or extend any frozen module wire format.
 
 mod canonical_kir_v5;
+mod canonical_kir_v6;
 mod control_flow;
 mod effect_extraction;
 mod flash_attention_v1;
@@ -54,6 +55,7 @@ mod wire;
 mod workgroup_sync_v1;
 
 pub use canonical_kir_v5::*;
+pub use canonical_kir_v6::*;
 pub use control_flow::*;
 pub use effect_extraction::*;
 pub use flash_attention_v1::*;

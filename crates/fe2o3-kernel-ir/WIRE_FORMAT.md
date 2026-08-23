@@ -36,6 +36,28 @@ owner and allow future verification-policy changes to produce distinct
 identities even for unchanged bytes. Neither identity is a proof-discharge,
 artifact-publication, executable, or runtime-launch authority.
 
+Exact V6 production ownership is established only by
+`VerifiedCanonicalKernelIrV6`. The owner admits exact V6 bytes only after the
+bounded decoder reproduces them byte-for-byte with the V6 encoder and
+`verify_module` accepts the resulting typed module. Its policy V1 identity is
+SHA-256 of this exact tuple:
+
+```text
+u32(len("FE2O3/VERIFIED-CANONICAL-KERNEL-IR/V6\0")) ||
+"FE2O3/VERIFIED-CANONICAL-KERNEL-IR/V6\0" ||
+u16(VERIFIED_CANONICAL_KERNEL_IR_V6_IDENTITY_POLICY_V1) ||
+u64(canonical_v6_byte_length) ||
+canonical_v6_bytes
+```
+
+All integers are little-endian. The domain is exactly 38 bytes, the policy is
+frozen at 1, and the complete 20-byte V6 envelope is part of the retained and
+hashed canonical bytes. The identity retains the same framed canonical length
+alongside the digest for explicit custody comparisons. Only the non-`Clone`
+owner establishes typed canonicality and semantic validity; its copyable
+identity remains an inert identifier. It does not establish source-to-KIR
+refinement, proof discharge, publication, executable, or launch authority.
+
 ## Trust Boundary
 
 The decoder accepts untrusted bytes. It checks the total byte bound, every
