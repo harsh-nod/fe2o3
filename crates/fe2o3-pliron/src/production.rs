@@ -527,7 +527,10 @@ mod tests {
     fn ranked_session() -> ProductionPlironSessionV1 {
         ProductionPlironSessionV1::new(
             ProductionSessionLimitsV1::default(),
-            [dialect_kernel::dialect_registration().expect("kernel registration")],
+            [
+                dialect_gpu::dialect_registration().expect("gpu registration"),
+                dialect_kernel::dialect_registration().expect("kernel registration"),
+            ],
         )
         .expect("fresh ranked production session")
     }
