@@ -22,6 +22,7 @@ pub use canonical_decode::SemanticMirDecodeErrorV1;
 
 const MAGIC: &[u8] = b"fe2o3.inert-semantic-mir";
 pub const INERT_SEMANTIC_MIR_VERSION_V2: u16 = 2;
+pub const INERT_SEMANTIC_MIR_VERSION_V3: u16 = 3;
 
 pub const HARD_MAX_TYPES_V1: u64 = 16_384;
 pub const HARD_MAX_FUNCTIONS_V1: u64 = 4_096;
@@ -63,6 +64,11 @@ pub enum SemanticMirResourceV1 {
     ConstantBytes,
     LinkSymbolBytes,
     CanonicalBytes,
+    /// Steps charged by semantic admission validation only.
+    ///
+    /// Canonical parsing and reencoding are independently bounded by
+    /// [`SemanticMirResourceV1::CanonicalBytes`] and the structural resource
+    /// limits. They are deliberately not accumulated into this counter.
     ValidationWork,
 }
 
@@ -92,6 +98,13 @@ impl SemanticMirResourceV1 {
     }
 }
 
+/// Independent hard-capped limits for semantic structure, canonical bytes,
+/// and semantic validation traversal.
+///
+/// `ValidationWork` is not an end-to-end wall-clock or decoder-instruction
+/// budget. Canonical parsing and reencoding are linear in bounded canonical
+/// bytes and structural records; admission validation has its own exact
+/// charged traversal counter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SemanticMirLimitsV1 {
     types: u64,
@@ -3790,6 +3803,51 @@ pub enum SemanticBinaryOpV1 {
     Offset,
 }
 
+/// Integer arithmetic that returns rustc's exact `(value, overflow)` result.
+///
+/// This is intentionally distinct from [`SemanticBinaryOpV1`]: checked
+/// arithmetic produces two semantically significant results and supports only
+/// the operations represented by rustc's checked binary MIR rvalue.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SemanticCheckedBinaryOpV1 {
+    Add,
+    Subtract,
+    Multiply,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SemanticCheckedBinaryRvalueV1 {
+    operation: SemanticCheckedBinaryOpV1,
+    left: SemanticOperandV1,
+    right: SemanticOperandV1,
+}
+
+impl SemanticCheckedBinaryRvalueV1 {
+    pub const fn new(
+        operation: SemanticCheckedBinaryOpV1,
+        left: SemanticOperandV1,
+        right: SemanticOperandV1,
+    ) -> Self {
+        Self {
+            operation,
+            left,
+            right,
+        }
+    }
+
+    pub const fn operation(&self) -> SemanticCheckedBinaryOpV1 {
+        self.operation
+    }
+
+    pub const fn left(&self) -> &SemanticOperandV1 {
+        &self.left
+    }
+
+    pub const fn right(&self) -> &SemanticOperandV1 {
+        &self.right
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticCastKindV1 {
     Integer,
@@ -3931,6 +3989,7 @@ pub enum SemanticRvalueKindV1 {
         left: SemanticOperandV1,
         right: SemanticOperandV1,
     },
+    CheckedBinary(SemanticCheckedBinaryRvalueV1),
     Cast {
         kind: SemanticCastKindV1,
         operand: SemanticOperandV1,
@@ -3957,6 +4016,41 @@ impl SemanticRvalueKindV1 {
         Ok(Self::Aggregate(SemanticAggregateRvalueV1::new(
             kind, operands,
         )?))
+    }
+
+    /// Visits every operand in semantic evaluation order without allocating.
+    ///
+    /// Place-only rvalues do not invoke the visitor. Checked arithmetic visits
+    /// the value operands left-to-right; its overflow result is represented by
+    /// the enclosing rvalue's result tuple and is not an input operand.
+    pub fn try_visit_operands<E>(
+        &self,
+        mut visitor: impl FnMut(&SemanticOperandV1) -> Result<(), E>,
+    ) -> Result<(), E> {
+        match self {
+            Self::Use(operand) | Self::Unary { operand, .. } | Self::Cast { operand, .. } => {
+                visitor(operand)
+            }
+            Self::Binary { left, right, .. } => {
+                visitor(left)?;
+                visitor(right)
+            }
+            Self::CheckedBinary(checked) => {
+                visitor(&checked.left)?;
+                visitor(&checked.right)
+            }
+            Self::Aggregate(aggregate) => {
+                for operand in &aggregate.operands {
+                    visitor(operand)?;
+                }
+                Ok(())
+            }
+            Self::Borrow { .. }
+            | Self::AddressOf { .. }
+            | Self::Length(_)
+            | Self::Discriminant(_)
+            | Self::Load(_) => Ok(()),
+        }
     }
 }
 
@@ -5433,6 +5527,7 @@ pub enum SemanticTypeOperationV1 {
     Constant,
     Unary,
     Binary,
+    CheckedBinary,
     Cast,
     Borrow,
     Length,
@@ -10716,6 +10811,27 @@ fn validate_rvalue(
                 return invalid_type_operation(SemanticTypeOperationV1::Binary, location);
             }
         }
+        SemanticRvalueKindV1::CheckedBinary(checked) => {
+            validate_operand(context, function, location, &checked.left)?;
+            validate_operand(context, function, location, &checked.right)?;
+            let result_fields = match type_shape(context, rvalue.result_type) {
+                SemanticTypeShapeV1::Tuple(fields) => fields.fields(),
+                _ => {
+                    return invalid_type_operation(
+                        SemanticTypeOperationV1::CheckedBinary,
+                        location,
+                    );
+                }
+            };
+            let valid = checked.left.ty() == checked.right.ty()
+                && is_plain_integer_type(context.request, checked.left.ty())
+                && matches!(result_fields, [value, overflow]
+                    if *value == checked.left.ty()
+                        && is_bool_type(context.request, *overflow));
+            if !valid {
+                return invalid_type_operation(SemanticTypeOperationV1::CheckedBinary, location);
+            }
+        }
         SemanticRvalueKindV1::Cast { kind, operand } => {
             validate_operand(context, function, location, operand)?;
             let input = operand.ty();
@@ -10931,6 +11047,13 @@ fn is_integer_type(request: &InertSemanticMirRequestV1, ty: SemanticTypeIdV1) ->
     matches!(
         scalar_type(request, ty),
         Some(SemanticScalarTypeV1::Integer { .. })
+    )
+}
+
+fn is_plain_integer_type(request: &InertSemanticMirRequestV1, ty: SemanticTypeIdV1) -> bool {
+    matches!(
+        &request.types[ty.0 as usize].shape,
+        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer { .. })
     )
 }
 
@@ -12559,6 +12682,10 @@ fn enqueue_rvalue_type_references(
             enqueue_operand_type_references(left, pending);
             enqueue_operand_type_references(right, pending);
         }
+        SemanticRvalueKindV1::CheckedBinary(checked) => {
+            enqueue_operand_type_references(&checked.left, pending);
+            enqueue_operand_type_references(&checked.right, pending);
+        }
         SemanticRvalueKindV1::Borrow { place, .. }
         | SemanticRvalueKindV1::AddressOf { place, .. }
         | SemanticRvalueKindV1::Length(place)
@@ -12737,6 +12864,10 @@ fn enqueue_rvalue_closure_references(
             enqueue_operand_closure_references(context, left, pending)?;
             enqueue_operand_closure_references(context, right, pending)?;
         }
+        SemanticRvalueKindV1::CheckedBinary(checked) => {
+            enqueue_operand_closure_references(context, &checked.left, pending)?;
+            enqueue_operand_closure_references(context, &checked.right, pending)?;
+        }
         SemanticRvalueKindV1::Aggregate(aggregate) => {
             for operand in &aggregate.operands {
                 enqueue_operand_closure_references(context, operand, pending)?;
@@ -12867,7 +12998,7 @@ fn encode_request(
 ) -> Result<Vec<u8>, SemanticMirErrorV1> {
     let mut writer = CanonicalWriterV1::new(limits.limit(SemanticMirResourceV1::CanonicalBytes));
     writer.raw(MAGIC)?;
-    writer.u16(INERT_SEMANTIC_MIR_VERSION_V2)?;
+    writer.u16(required_wire_version(request))?;
     writer.identity(request.target.identity.0)?;
     writer.u8(match request.target.architecture {
         SemanticTargetArchitectureV1::AmdGpuGfx942 => 0,
@@ -12902,6 +13033,30 @@ fn encode_request(
         writer.u32(root.0)?;
     }
     Ok(writer.finish())
+}
+
+fn required_wire_version(request: &InertSemanticMirRequestV1) -> u16 {
+    let uses_checked_arithmetic = request.functions.iter().any(|function| {
+        function.blocks.iter().any(|block| {
+            block.statements.iter().any(|statement| {
+                matches!(
+                    &statement.kind,
+                    SemanticStatementKindV1::Assign(SemanticAssignmentV1 {
+                        value: SemanticRvalueV1 {
+                            kind: SemanticRvalueKindV1::CheckedBinary(_),
+                            ..
+                        },
+                        ..
+                    })
+                )
+            })
+        })
+    });
+    if uses_checked_arithmetic {
+        INERT_SEMANTIC_MIR_VERSION_V3
+    } else {
+        INERT_SEMANTIC_MIR_VERSION_V2
+    }
 }
 
 struct CanonicalWriterV1 {
@@ -14558,6 +14713,16 @@ fn encode_rvalue(
             encode_binary_op(writer, *operation)?;
             encode_operand(writer, left)?;
             encode_operand(writer, right)
+        }
+        SemanticRvalueKindV1::CheckedBinary(checked) => {
+            writer.u8(10)?;
+            writer.u8(match checked.operation {
+                SemanticCheckedBinaryOpV1::Add => 0,
+                SemanticCheckedBinaryOpV1::Subtract => 1,
+                SemanticCheckedBinaryOpV1::Multiply => 2,
+            })?;
+            encode_operand(writer, &checked.left)?;
+            encode_operand(writer, &checked.right)
         }
         SemanticRvalueKindV1::Cast { kind, operand } => {
             writer.u8(3)?;

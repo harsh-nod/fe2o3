@@ -113,9 +113,11 @@ impl AdmittedInertSemanticMirV1 {
     /// Declared resource counts are checked before their records are read, the
     /// existing semantic admission validator is run, and its canonical output
     /// must exactly equal `bytes`. The returned value remains inert and grants
-    /// no authority. Parser-owned vector reservations are fallible; the
-    /// existing admission and canonicalization implementation retains its own
-    /// allocation behavior.
+    /// no authority. Parser-owned vector reservations are fallible. Parsing
+    /// and exact reencoding are linear in the independently bounded canonical
+    /// byte stream and structural resources; `ValidationWork` applies only to
+    /// the semantic admission traversal and is not presented as a combined
+    /// parser/validator/encoder instruction budget.
     pub fn decode_canonical(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -150,12 +152,12 @@ struct DecodeTotalsV1 {
     relocations: u64,
     constant_bytes: u64,
     link_symbol_bytes: u64,
-    work: u64,
 }
 
 struct CanonicalDecoderV1<'a> {
     bytes: &'a [u8],
     offset: usize,
+    wire_version: u16,
     limits: SemanticMirLimitsV1,
     totals: DecodeTotalsV1,
 }
@@ -165,6 +167,7 @@ impl<'a> CanonicalDecoderV1<'a> {
         Self {
             bytes,
             offset: 0,
+            wire_version: INERT_SEMANTIC_MIR_VERSION_V3,
             limits,
             totals: DecodeTotalsV1::default(),
         }
@@ -175,9 +178,13 @@ impl<'a> CanonicalDecoderV1<'a> {
             return Err(SemanticMirDecodeErrorV1::InvalidMagic);
         }
         let version = self.u16()?;
-        if version != INERT_SEMANTIC_MIR_VERSION_V2 {
+        if !matches!(
+            version,
+            INERT_SEMANTIC_MIR_VERSION_V2 | INERT_SEMANTIC_MIR_VERSION_V3
+        ) {
             return Err(SemanticMirDecodeErrorV1::UnsupportedVersion(version));
         }
+        self.wire_version = version;
         let layout_identity = SemanticLayoutIdentityV1(self.identity()?);
         let architecture = match self.tag("target architecture")? {
             0 => SemanticTargetArchitectureV1::AmdGpuGfx942,
@@ -362,7 +369,6 @@ impl<'a> CanonicalDecoderV1<'a> {
         if let Some(resource) = resource {
             self.charge(resource, u64::from(count))?;
         }
-        self.charge_work(u64::from(count))?;
         let count = usize::try_from(count)
             .map_err(|_| SemanticMirDecodeErrorV1::LengthOverflow { context })?;
         if count > self.remaining() {
@@ -445,17 +451,6 @@ impl<'a> CanonicalDecoderV1<'a> {
             .ok_or(SemanticMirErrorV1::ArithmeticOverflow { resource })?;
         let actual = *slot;
         self.require_count(resource, actual)
-    }
-
-    fn charge_work(&mut self, amount: u64) -> Result<(), SemanticMirDecodeErrorV1> {
-        self.totals.work =
-            self.totals
-                .work
-                .checked_add(amount)
-                .ok_or(SemanticMirErrorV1::ArithmeticOverflow {
-                    resource: SemanticMirResourceV1::ValidationWork,
-                })?;
-        self.require_count(SemanticMirResourceV1::ValidationWork, self.totals.work)
     }
 
     fn source(&mut self) -> Result<SemanticSourceProvenanceV1, SemanticMirDecodeErrorV1> {
@@ -1590,6 +1585,10 @@ impl<'a> CanonicalDecoderV1<'a> {
 
     fn operand(&mut self) -> Result<SemanticOperandV1, SemanticMirDecodeErrorV1> {
         self.charge(SemanticMirResourceV1::Operands, 1)?;
+        self.operand_uncharged()
+    }
+
+    fn operand_uncharged(&mut self) -> Result<SemanticOperandV1, SemanticMirDecodeErrorV1> {
         Ok(match self.tagged("operand", 2)? {
             0 => SemanticOperandV1::Copy(self.place()?),
             1 => SemanticOperandV1::Move(self.place()?),
@@ -1644,7 +1643,12 @@ impl<'a> CanonicalDecoderV1<'a> {
 
     fn rvalue(&mut self) -> Result<SemanticRvalueV1, SemanticMirDecodeErrorV1> {
         let result_type = SemanticTypeIdV1(self.u32()?);
-        let kind = match self.tagged("rvalue", 9)? {
+        let maximum_tag = if self.wire_version >= INERT_SEMANTIC_MIR_VERSION_V3 {
+            10
+        } else {
+            9
+        };
+        let kind = match self.tagged("rvalue", maximum_tag)? {
             0 => SemanticRvalueKindV1::Use(self.operand()?),
             1 => SemanticRvalueKindV1::Unary {
                 operation: match self.tagged("unary operation", 2)? {
@@ -1706,6 +1710,20 @@ impl<'a> CanonicalDecoderV1<'a> {
                 self.volatility()?,
                 self.optional_atomic_access()?,
             )),
+            10 => {
+                let operation = match self.tagged("checked binary operation", 2)? {
+                    0 => SemanticCheckedBinaryOpV1::Add,
+                    1 => SemanticCheckedBinaryOpV1::Subtract,
+                    2 => SemanticCheckedBinaryOpV1::Multiply,
+                    _ => unreachable!(),
+                };
+                self.charge(SemanticMirResourceV1::Operands, 2)?;
+                SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
+                    operation,
+                    self.operand_uncharged()?,
+                    self.operand_uncharged()?,
+                ))
+            }
             _ => unreachable!(),
         };
         Ok(SemanticRvalueV1::new(result_type, kind))
@@ -2247,7 +2265,102 @@ mod tests {
     }
 
     #[test]
-    fn malformed_tags_booleans_lengths_and_all_resource_counters_are_bounded() {
+    fn checked_operands_are_precharged_atomically_before_nested_payloads() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.push(10);
+        bytes.push(0);
+        bytes.push(u8::MAX);
+        let limits = SemanticMirLimitsV1::default()
+            .with_limit(SemanticMirResourceV1::Operands, 1)
+            .unwrap();
+        let mut decoder = CanonicalDecoderV1::new(&bytes, limits);
+
+        assert_eq!(
+            decoder.rvalue(),
+            Err(SemanticMirDecodeErrorV1::Validation(
+                SemanticMirErrorV1::LimitExceeded {
+                    resource: SemanticMirResourceV1::Operands,
+                    actual: 2,
+                    max: 1,
+                }
+            ))
+        );
+        assert_eq!(
+            decoder.offset, 6,
+            "the hostile first operand tag must not be parsed"
+        );
+    }
+
+    #[test]
+    fn checked_nested_operand_and_constant_tags_fail_closed() {
+        let prefix = || {
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(&0_u32.to_le_bytes());
+            bytes.push(10);
+            bytes.push(0);
+            bytes
+        };
+
+        let mut invalid_operand = prefix();
+        invalid_operand.push(u8::MAX);
+        let mut decoder = CanonicalDecoderV1::new(&invalid_operand, SemanticMirLimitsV1::default());
+        assert_eq!(
+            decoder.rvalue(),
+            Err(SemanticMirDecodeErrorV1::InvalidTag {
+                context: "operand",
+                offset: 6,
+                value: u8::MAX,
+            })
+        );
+
+        let mut invalid_constant = prefix();
+        invalid_constant.push(2);
+        invalid_constant.extend_from_slice(&0_u32.to_le_bytes());
+        invalid_constant.push(5);
+        let mut decoder =
+            CanonicalDecoderV1::new(&invalid_constant, SemanticMirLimitsV1::default());
+        assert_eq!(
+            decoder.rvalue(),
+            Err(SemanticMirDecodeErrorV1::InvalidTag {
+                context: "constant",
+                offset: 11,
+                value: 5,
+            })
+        );
+    }
+
+    #[test]
+    fn checked_hostile_byte_constant_is_bounded_before_payload_read() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.push(10);
+        bytes.push(0);
+        bytes.push(2);
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.push(2);
+        bytes.extend_from_slice(&u64::MAX.to_le_bytes());
+        let mut decoder = CanonicalDecoderV1::new(&bytes, SemanticMirLimitsV1::default());
+
+        assert!(matches!(
+            decoder.rvalue(),
+            Err(SemanticMirDecodeErrorV1::Validation(
+                SemanticMirErrorV1::LimitExceeded {
+                    resource: SemanticMirResourceV1::ConstantBytes,
+                    actual: u64::MAX,
+                    max: HARD_MAX_CONSTANT_BYTES_V1,
+                }
+            ))
+        ));
+        assert_eq!(
+            decoder.offset,
+            bytes.len(),
+            "only the hostile length field may be consumed"
+        );
+    }
+
+    #[test]
+    fn malformed_tags_booleans_lengths_and_decoder_resources_are_bounded() {
         let mut invalid_boolean = CanonicalDecoderV1::new(&[2], SemanticMirLimitsV1::default());
         assert_eq!(
             invalid_boolean.boolean(),
@@ -2300,7 +2413,6 @@ mod tests {
             SemanticMirResourceV1::ConstantBytes,
             SemanticMirResourceV1::LinkSymbolBytes,
             SemanticMirResourceV1::CanonicalBytes,
-            SemanticMirResourceV1::ValidationWork,
         ] {
             let limits = SemanticMirLimitsV1::default()
                 .with_limit(resource, 0)
@@ -3343,6 +3455,15 @@ mod tests {
                 left: operand(),
                 right: operand(),
             });
+        }
+        for operation in [
+            SemanticCheckedBinaryOpV1::Add,
+            SemanticCheckedBinaryOpV1::Subtract,
+            SemanticCheckedBinaryOpV1::Multiply,
+        ] {
+            rvalues.push(SemanticRvalueKindV1::CheckedBinary(
+                SemanticCheckedBinaryRvalueV1::new(operation, operand(), operand()),
+            ));
         }
         for kind in [
             SemanticCastKindV1::Integer,

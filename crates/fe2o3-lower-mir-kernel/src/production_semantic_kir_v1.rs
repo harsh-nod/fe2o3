@@ -1573,6 +1573,10 @@ fn collect_rvalue_uses_v1(
             collect_operand_use_v1(left, promoted, defs, uses);
             collect_operand_use_v1(right, promoted, defs, uses);
         }
+        SemanticRvalueKindV1::CheckedBinary(checked) => {
+            collect_operand_use_v1(checked.left(), promoted, defs, uses);
+            collect_operand_use_v1(checked.right(), promoted, defs, uses);
+        }
         SemanticRvalueKindV1::Borrow { place, .. }
         | SemanticRvalueKindV1::AddressOf { place, .. }
         | SemanticRvalueKindV1::Length(place)
@@ -2211,6 +2215,12 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     ))
                 }
             }
+            SemanticRvalueKindV1::CheckedBinary(_) => Err(unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "semantic checked arithmetic has no exact Kernel IR aggregate lowering rule",
+            )),
             SemanticRvalueKindV1::Cast { kind, operand } => {
                 let (input, input_ty) = self
                     .lower_operand(block, statement, operand, operations)?
@@ -4941,6 +4951,9 @@ fn unsupported_rvalue_detail(value: &SemanticRvalueKindV1) -> &'static str {
         }
         SemanticRvalueKindV1::Binary { .. } => {
             "semantic assignment/binary has no exact Kernel IR lowering rule"
+        }
+        SemanticRvalueKindV1::CheckedBinary(_) => {
+            "semantic checked arithmetic has no exact Kernel IR aggregate lowering rule"
         }
         SemanticRvalueKindV1::Cast { .. } => {
             "semantic assignment/cast has no exact Kernel IR lowering rule"

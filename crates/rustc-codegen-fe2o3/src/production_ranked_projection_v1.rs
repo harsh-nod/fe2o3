@@ -3868,6 +3868,42 @@ fn project_rvalue_reads(
                 ranked_ir,
             )
         }
+        SemanticRvalueKindV1::CheckedBinary(checked) => {
+            project_operand_read(
+                types,
+                function,
+                block_index,
+                bounds_checks,
+                checked.left(),
+                source,
+                constants,
+                checked_reference_origins,
+                guarded_accesses,
+                guarded_sites,
+                projected_views,
+                operations,
+                sources,
+                next_value,
+                ranked_ir,
+            )?;
+            project_operand_read(
+                types,
+                function,
+                block_index,
+                bounds_checks,
+                checked.right(),
+                source,
+                constants,
+                checked_reference_origins,
+                guarded_accesses,
+                guarded_sites,
+                projected_views,
+                operations,
+                sources,
+                next_value,
+                ranked_ir,
+            )
+        }
         SemanticRvalueKindV1::Aggregate(aggregate) => {
             for operand in aggregate.operands() {
                 project_operand_read(
@@ -5066,6 +5102,54 @@ mod tests {
                 "two effects on one semantic allocation created different PLIRON views",
             );
         }
+    }
+
+    #[test]
+    fn checked_binary_projects_copy_and_move_operand_reads_in_order() {
+        let checked = SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
+            SemanticCheckedBinaryOpV1::Multiply,
+            SemanticOperandV1::Copy(ranked_place(0)),
+            SemanticOperandV1::Move(ranked_place(1)),
+        ));
+        let function =
+            projection_function(vec![block(30, vec![], SemanticTerminatorKindV1::Return)]);
+        let types = projection_types();
+        let mut operations = Vec::new();
+        let mut sources = Vec::new();
+        let mut guarded_sites = Vec::new();
+        let mut projected_views = vec![None; function.locals().len()];
+        let mut next_value = 0;
+        let mut ranked_ir = String::new();
+
+        project_rvalue_reads(
+            &types,
+            &function,
+            0,
+            &[],
+            &checked,
+            SemanticSourceProvenanceV1::unavailable(),
+            &[None; 4],
+            &[],
+            &[],
+            &mut guarded_sites,
+            &mut projected_views,
+            &mut operations,
+            &mut sources,
+            &mut next_value,
+            &mut ranked_ir,
+        )
+        .unwrap();
+
+        assert_eq!(
+            access_kinds(&operations),
+            vec![AccessKindAttr::Read, AccessKindAttr::Read]
+        );
+        assert_eq!(sources.len(), 2);
+        assert_eq!(
+            ranked_ir.matches("kernel.access").count(),
+            2,
+            "both checked operands must survive ranked projection"
+        );
     }
 
     #[test]

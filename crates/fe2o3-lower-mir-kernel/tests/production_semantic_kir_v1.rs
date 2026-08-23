@@ -220,6 +220,111 @@ fn scalar_loop_owner() -> ProductionSemanticMirOwnerV1 {
         .unwrap()
 }
 
+fn checked_arithmetic_owner() -> ProductionSemanticMirOwnerV1 {
+    let unit = SemanticTypeIdV1::from_index(0);
+    let u32_ty = SemanticTypeIdV1::from_index(1);
+    let bool_ty = SemanticTypeIdV1::from_index(2);
+    let checked_ty = SemanticTypeIdV1::from_index(3);
+    let checked_type = SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256(bytes(42)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(42)),
+        SemanticTypeLayoutV1::aggregate(
+            Some(8),
+            4,
+            SemanticAggregateLayoutV1::new(vec![0, 4], vec![SemanticPaddingV1::new(5, 3).unwrap()])
+                .unwrap(),
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Tuple(SemanticAggregateTypeV1::new(vec![u32_ty, bool_ty]).unwrap()),
+    );
+    let statement = SemanticStatementV1::new(
+        SemanticSourceProvenanceV1::unavailable(),
+        SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            local_place(3, checked_ty),
+            SemanticRvalueV1::new(
+                checked_ty,
+                SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
+                    SemanticCheckedBinaryOpV1::Multiply,
+                    SemanticOperandV1::Copy(local_place(1, u32_ty)),
+                    SemanticOperandV1::Move(local_place(2, u32_ty)),
+                )),
+            ),
+        )),
+    );
+    let abi = SemanticFunctionAbiV1::from_rustc(
+        SemanticAbiIdentityV1::from_sha256(bytes(43)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(250)),
+        SemanticCanonAbiV1::GpuKernel,
+        SemanticExternAbiV1::GpuKernel,
+        false,
+        false,
+        0,
+        vec![],
+        SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+    )
+    .unwrap();
+    let locals = [unit, u32_ty, u32_ty, checked_ty]
+        .into_iter()
+        .enumerate()
+        .map(|(index, ty)| {
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(44 + index as u8)),
+                ty,
+                if index == 0 {
+                    SemanticLocalRoleV1::Return
+                } else {
+                    SemanticLocalRoleV1::Temporary
+                },
+                SemanticSourceProvenanceV1::unavailable(),
+            )
+        })
+        .collect();
+    let function = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256(bytes(48)),
+        SemanticFunctionRoleV1::KernelRoot,
+        SemanticItemDefinitionIdentityV1::from_sha256(bytes(48)),
+        SemanticMonomorphizationIdentityV1::from_sha256(bytes(48)),
+        SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(48)),
+        SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(48)),
+        SemanticSourceProvenanceV1::unavailable(),
+        abi,
+        locals,
+        SemanticBlockIdV1::from_index(0),
+        vec![block(49, vec![statement], SemanticTerminatorKindV1::Return)],
+    )
+    .unwrap()
+    .with_kernel_entry(SemanticKernelEntryV1::new(
+        SemanticLinkSymbolV1::new(b"semantic_checked_arithmetic_test".to_vec()).unwrap(),
+        SemanticKernelBindingIdentityV1::from_sha256(bytes(49)),
+        SemanticKernelSourceContractV1::new(None, None, None).unwrap(),
+    ));
+    let admitted = InertSemanticMirRequestV1::new(
+        SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(250))),
+        vec![
+            unit_type(),
+            scalar_type(
+                40,
+                SemanticScalarTypeV1::Integer {
+                    signed: false,
+                    bits: 32,
+                },
+            ),
+            scalar_type(41, SemanticScalarTypeV1::Bool),
+            checked_type,
+        ],
+        vec![],
+        vec![],
+        vec![],
+        vec![function],
+        vec![SemanticFunctionIdV1::from_index(0)],
+    )
+    .unwrap()
+    .admit(SemanticMirLimitsV1::default())
+    .unwrap();
+    ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+        .unwrap()
+}
+
 fn block(
     tag: u8,
     statements: Vec<SemanticStatementV1>,
@@ -668,6 +773,22 @@ fn unsupported_statement_and_terminator_fail_closed() {
         Err(ProductionSemanticKirErrorV1::Unsupported {
             block: Some(1),
             statement: None,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn checked_arithmetic_is_retained_for_liveness_and_fails_before_kir_emission() {
+    assert!(matches!(
+        ProductionSemanticKirOwnerV1::try_lower(
+            checked_arithmetic_owner(),
+            ProductionSemanticKirLimitsV1::default(),
+        ),
+        Err(ProductionSemanticKirErrorV1::Unsupported {
+            block: Some(0),
+            statement: Some(0),
+            detail: "semantic checked arithmetic has no exact Kernel IR aggregate lowering rule",
             ..
         })
     ));
