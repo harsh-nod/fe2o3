@@ -12,6 +12,8 @@ use std::time::Instant;
 
 use sha2::{Digest, Sha256};
 
+use crate::CanonicalGeneratedVerusProofInputV3;
+
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[path = "general_gemm_runtime_closure_v2_linux.rs"]
 mod linux;
@@ -283,6 +285,25 @@ impl GeneralGemmVerusRuntimeClosureLeaseV2 {
         let result = Err(GeneralGemmRuntimeClosureErrorV2::new(
             GeneralGemmRuntimeClosureErrorKindV2::UnsupportedPlatform,
             "direct retained rust_verify execution requires Linux x86-64",
+        ));
+        self.revalidate()?;
+        result
+    }
+
+    pub(crate) fn execute_generated_rust_verify(
+        &self,
+        source: &CanonicalGeneratedVerusProofInputV3,
+        deadline: Instant,
+        output_limit: usize,
+    ) -> Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2> {
+        self.revalidate()?;
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        let result =
+            linux::execute_generated_rust_verify(&self.retained, source, deadline, output_limit);
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        let result = Err(GeneralGemmRuntimeClosureErrorV2::new(
+            GeneralGemmRuntimeClosureErrorKindV2::UnsupportedPlatform,
+            "sealed generated rust_verify execution requires Linux x86-64",
         ));
         self.revalidate()?;
         result

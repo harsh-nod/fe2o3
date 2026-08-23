@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::io;
+use std::io::{self, Write};
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::process::CommandExt;
@@ -10,11 +10,12 @@ use std::process::{Command, Stdio};
 use std::time::Instant;
 
 use rustix::fs::{
-    AtFlags, FileType, Mode, OFlags, ResolveFlags, fstat, inotify, open, openat, openat2,
-    readlinkat, statat,
+    AtFlags, FileType, MemfdFlags, Mode, OFlags, ResolveFlags, SealFlags, fchmod, fcntl_add_seals,
+    fcntl_get_seals, fstat, inotify, memfd_create, open, openat, openat2, readlinkat, statat,
 };
 use sha2::{Digest, Sha256};
 
+use crate::CanonicalGeneratedVerusProofInputV3;
 use crate::authenticated_verus_execution_v2::{
     ADDRESS_SPACE_LIMIT_V2, BoundedProcessGroupFailureV2, CORE_LIMIT_V2, DATA_LIMIT_V2,
     FILE_LIMIT_V2, supervise_bounded_process_group_v2, validate_controller_security_v2,
@@ -37,6 +38,12 @@ const TOOLCHAIN_DIRECTORY_FD: RawFd = 183;
 const TOOLCHAIN_LIB_DIRECTORY_FD: RawFd = 184;
 const SYSTEM_LIB_DIRECTORY_FD: RawFd = 185;
 const PROOF_DIRECTORY_FD: RawFd = 186;
+const GENERATED_PROOF_SOURCE_FD: RawFd = 187;
+
+const GENERATED_PROOF_SOURCE_SEALS: SealFlags = SealFlags::WRITE
+    .union(SealFlags::GROW)
+    .union(SealFlags::SHRINK)
+    .union(SealFlags::SEAL);
 
 const CLOSE_RANGE_CLOEXEC: u32 = 1 << 2;
 const F_SETFD: i32 = 2;
@@ -476,6 +483,44 @@ pub(super) fn execute_rust_verify(
     deadline: Instant,
     output_limit: usize,
 ) -> Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2> {
+    execute_rust_verify_common(
+        runtime,
+        &format!(
+            "/proc/self/fd/{PROOF_DIRECTORY_FD}/{}",
+            source.relative_to_proof_directory()
+        ),
+        None,
+        deadline,
+        output_limit,
+    )
+}
+
+pub(super) fn execute_generated_rust_verify(
+    runtime: &RetainedRuntimeClosureV2,
+    source: &CanonicalGeneratedVerusProofInputV3,
+    deadline: Instant,
+    output_limit: usize,
+) -> Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2> {
+    let sealed = SealedGeneratedProofSourceV3::create(source)?;
+    sealed.revalidate(source)?;
+    let result = execute_rust_verify_common(
+        runtime,
+        &format!("/proc/self/fd/{GENERATED_PROOF_SOURCE_FD}"),
+        Some(&sealed.file),
+        deadline,
+        output_limit,
+    );
+    sealed.revalidate(source)?;
+    result
+}
+
+fn execute_rust_verify_common(
+    runtime: &RetainedRuntimeClosureV2,
+    source_argument: &str,
+    generated_source: Option<&File>,
+    deadline: Instant,
+    output_limit: usize,
+) -> Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2> {
     validate_controller_security_v2().map_err(|failure| {
         process_error(
             format!("authenticated controller preflight failed: {failure}"),
@@ -506,7 +551,7 @@ pub(super) fn execute_rust_verify(
 
     // Normalize all source descriptors above the fixed child map. This prevents an ambient
     // descriptor allocation pattern from making one dup2 destination overwrite a later source.
-    let sources = duplicate_child_sources([
+    let mut source_files = vec![
         rust_verify,
         z3,
         dist,
@@ -515,8 +560,12 @@ pub(super) fn execute_rust_verify(
         system_lib,
         proof,
         empty,
-    ])?;
-    let inherited = [
+    ];
+    if let Some(generated_source) = generated_source {
+        source_files.push(generated_source);
+    }
+    let sources = duplicate_child_sources(&source_files)?;
+    let mut inherited = vec![
         (sources[0].as_raw_fd(), RUST_VERIFY_FD, true),
         (sources[1].as_raw_fd(), Z3_FD, false),
         (sources[2].as_raw_fd(), DIST_DIRECTORY_FD, false),
@@ -525,14 +574,14 @@ pub(super) fn execute_rust_verify(
         (sources[5].as_raw_fd(), SYSTEM_LIB_DIRECTORY_FD, false),
         (sources[6].as_raw_fd(), PROOF_DIRECTORY_FD, false),
     ];
+    if generated_source.is_some() {
+        inherited.push((sources[8].as_raw_fd(), GENERATED_PROOF_SOURCE_FD, false));
+    }
     let empty_descriptor = sources[7].as_raw_fd();
 
     let mut command = Command::new(format!("/proc/self/fd/{RUST_VERIFY_FD}"));
     command
-        .arg(format!(
-            "/proc/self/fd/{PROOF_DIRECTORY_FD}/{}",
-            source.relative_to_proof_directory()
-        ))
+        .arg(source_argument)
         .args([
             "--crate-type",
             "lib",
@@ -593,9 +642,9 @@ pub(super) fn execute_rust_verify(
     })
 }
 
-fn duplicate_child_sources<const N: usize>(
-    files: [&File; N],
-) -> Result<[OwnedFd; N], GeneralGemmRuntimeClosureErrorV2> {
+fn duplicate_child_sources(
+    files: &[&File],
+) -> Result<Vec<OwnedFd>, GeneralGemmRuntimeClosureErrorV2> {
     let mut next = 200;
     let mut descriptors = Vec::with_capacity(files.len());
     for file in files {
@@ -609,12 +658,72 @@ fn duplicate_child_sources<const N: usize>(
         })?;
         descriptors.push(descriptor);
     }
-    descriptors.try_into().map_err(|_| {
-        error(
-            GeneralGemmRuntimeClosureErrorKindV2::Process,
-            "proof child descriptor normalization was incomplete",
+    Ok(descriptors)
+}
+
+struct SealedGeneratedProofSourceV3 {
+    file: File,
+    snapshot: ObjectSnapshotV2,
+}
+
+impl SealedGeneratedProofSourceV3 {
+    fn create(
+        source: &CanonicalGeneratedVerusProofInputV3,
+    ) -> Result<Self, GeneralGemmRuntimeClosureErrorV2> {
+        let mut file = memfd_create(
+            "fe2o3-generated-verus-proof-v3",
+            MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
         )
-    })
+        .map(File::from)
+        .map_err(|error| io_error("create generated proof memfd", error))?;
+        fchmod(&file, Mode::RUSR)
+            .map_err(|error| io_error("protect generated proof memfd", error))?;
+        file.write_all(source.source())
+            .and_then(|()| file.flush())
+            .and_then(|()| file.sync_all())
+            .map_err(|error| io_std_error("write generated proof memfd", error))?;
+        fcntl_add_seals(
+            &file,
+            SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK,
+        )
+        .and_then(|()| fcntl_add_seals(&file, SealFlags::SEAL))
+        .map_err(|error| io_error("seal generated proof memfd", error))?;
+        let snapshot = ObjectSnapshotV2::capture(&file, "generated proof memfd")?;
+        let sealed = Self { file, snapshot };
+        sealed.revalidate(source)?;
+        Ok(sealed)
+    }
+
+    fn revalidate(
+        &self,
+        source: &CanonicalGeneratedVerusProofInputV3,
+    ) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+        let current = ObjectSnapshotV2::capture(&self.file, "generated proof memfd")?;
+        if current != self.snapshot
+            || current.file_type() != FileType::RegularFile
+            || current.permissions() != 0o400
+            || current.size < 0
+            || current.size as u64 != source.byte_len()
+        {
+            return Err(changed("generated proof memfd metadata changed"));
+        }
+        let seals = fcntl_get_seals(&self.file)
+            .map_err(|error| io_error("inspect generated proof memfd seals", error))?;
+        if seals != GENERATED_PROOF_SOURCE_SEALS {
+            return Err(changed(
+                "generated proof memfd lost its exact immutable seals",
+            ));
+        }
+        if read_exact_file(
+            &self.file,
+            source.byte_len(),
+            Path::new("generated-proof-v3.rs"),
+        )? != source.source()
+        {
+            return Err(changed("generated proof memfd content changed"));
+        }
+        Ok(())
+    }
 }
 
 fn prepare_proof_child(
@@ -1598,21 +1707,59 @@ mod tests {
     }
 
     #[test]
+    fn generated_proof_source_is_exactly_sealed_and_immutable() {
+        let source = CanonicalGeneratedVerusProofInputV3::new(
+            b"verus! { proof fn generated() {} }\n".to_vec(),
+        )
+        .unwrap();
+        let sealed = SealedGeneratedProofSourceV3::create(&source).unwrap();
+        sealed.revalidate(&source).unwrap();
+        assert_eq!(
+            fcntl_get_seals(&sealed.file).unwrap(),
+            GENERATED_PROOF_SOURCE_SEALS
+        );
+        assert_eq!(
+            read_exact_file(
+                &sealed.file,
+                source.byte_len(),
+                Path::new("generated-proof-v3.rs")
+            )
+            .unwrap(),
+            source.source()
+        );
+        assert!(rustix::io::pwrite(&sealed.file, b"x", 0).is_err());
+        sealed.revalidate(&source).unwrap();
+    }
+
+    #[test]
     fn proof_child_boundary_clears_environment_and_installs_only_explicit_inputs() {
         let tree = TestClosure::new();
         let empty = File::open(tree.root.join("empty")).unwrap();
         let source = File::open(tree.root.join("lib")).unwrap();
+        let generated_input = CanonicalGeneratedVerusProofInputV3::new(
+            b"verus! { proof fn generated() {} }\n".to_vec(),
+        )
+        .unwrap();
+        let generated = SealedGeneratedProofSourceV3::create(&generated_input).unwrap();
         let normalized = rustix::io::fcntl_dupfd_cloexec(&source, 200).unwrap();
+        let normalized_generated =
+            rustix::io::fcntl_dupfd_cloexec(&generated.file, normalized.as_raw_fd() + 1).unwrap();
         let source_descriptor = normalized.as_raw_fd();
+        let generated_descriptor = normalized_generated.as_raw_fd();
         let empty_descriptor = empty.as_raw_fd();
         let empty_path = tree.root.join("empty");
-        let inherited = [(source_descriptor, PROOF_DIRECTORY_FD, false)];
+        let inherited = [
+            (source_descriptor, PROOF_DIRECTORY_FD, false),
+            (generated_descriptor, GENERATED_PROOF_SOURCE_FD, false),
+        ];
         let script = format!(
             "test \"$ONLY_EXACT_ENV\" = retained && \
              test -z \"${{HOME+x}}\" && \
              test \"$(pwd -P)\" = \"{}\" && \
              test \"$(/usr/bin/cat /proc/self/fd/{PROOF_DIRECTORY_FD}/data)\" = vstd-data-v2 && \
+             test \"$(/usr/bin/cat /proc/self/fd/{GENERATED_PROOF_SOURCE_FD})\" = 'verus! {{ proof fn generated() {{}} }}' && \
              test ! -e /proc/self/fd/{source_descriptor} && \
+             test ! -e /proc/self/fd/{generated_descriptor} && \
              test \"$(umask)\" = 0077 && \
              /usr/bin/grep -q '^NoNewPrivs:[[:space:]]*1$' /proc/self/status && \
              printf prepared",

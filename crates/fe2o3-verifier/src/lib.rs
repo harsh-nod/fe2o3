@@ -31,6 +31,7 @@ mod general_gemm_proof_numerical_evidence_v1;
 mod general_gemm_proof_v1;
 mod general_gemm_property_closure_v1;
 mod general_gemm_runtime_closure_v2;
+mod generated_verus_proof_input_v3;
 mod model;
 mod moe_expert_compact_plan_v1;
 mod moe_routing_memory_v1;
@@ -46,6 +47,7 @@ mod scalar_gemm_kir_binding_v3;
 mod scalar_gemm_proof;
 mod scalar_gemm_v1;
 mod scalar_gemm_verus_execution_v2;
+mod scalar_gemm_worker_v3_proof_v3;
 mod static_view_proof;
 
 pub use alpha_zeta_manifest::{
@@ -140,6 +142,10 @@ pub use general_gemm_proof_numerical_evidence_v1::*;
 pub use general_gemm_proof_v1::*;
 pub use general_gemm_property_closure_v1::*;
 pub use general_gemm_runtime_closure_v2::*;
+pub use generated_verus_proof_input_v3::{
+    CanonicalGeneratedVerusProofInputV3, GeneratedVerusProofInputErrorV3,
+    GeneratedVerusProofInputIdentityV3, MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3,
+};
 pub use model::{
     AxiomPolicy, Configuration, ConfigurationEntry, CorrelationId, Digest, ExecutionTools,
     MAX_CONFIGURATION_ENTRIES, MAX_PROPERTIES, MAX_TEXT_BYTES, MAX_TRUSTED_ITEMS,
@@ -247,6 +253,12 @@ pub use scalar_gemm_verus_execution_v2::{
     MAX_SCALAR_GEMM_VERUS_TIMEOUT_SECONDS_V2, SCALAR_GEMM_VERUS_THEOREMS_V2,
     ScalarGemmVerifiedTheoremV2, ScalarGemmVerusExecutionErrorKindV2,
     ScalarGemmVerusExecutionErrorV2, execute_scalar_gemm_verus_proof_v2,
+};
+pub use scalar_gemm_worker_v3_proof_v3::{
+    AuthenticatedScalarGemmWorkerV3ProofV3, ScalarGemmWorkerV3ProofErrorKindV3,
+    ScalarGemmWorkerV3ProofErrorV3, ScalarGemmWorkerV3ProofInputErrorV3,
+    ScalarGemmWorkerV3ProofInputV3, build_scalar_gemm_worker_v3_proof_input_v3,
+    execute_scalar_gemm_worker_v3_proof_v3,
 };
 pub use static_view_proof::{
     STATIC_VIEW_PROOF_EVIDENCE_DOMAIN_V1, STATIC_VIEW_PROOF_OBLIGATION_DOMAIN_V1,
