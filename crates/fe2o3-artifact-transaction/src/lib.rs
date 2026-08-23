@@ -54,6 +54,7 @@
 
 mod attempt;
 mod attempt_scoped_hsaco_publication;
+mod compiler_artifact_generation_v1;
 mod compiler_module_handoff;
 mod durable_link_publication;
 mod durable_published_claim;
@@ -102,6 +103,24 @@ pub use attempt_scoped_hsaco_publication::{
     recover_published_hsaco_claim_for_attempt_v1, recover_published_hsaco_claim_for_attempt_v2,
     recover_published_hsaco_claim_for_attempt_v3, validate_backend_publication_receipt_v1,
     validate_backend_publication_receipt_v2, validate_backend_publication_receipt_v3,
+};
+pub use compiler_artifact_generation_v1::{
+    CompilerArtifactGenerationErrorV1, CompilerArtifactGenerationFaultPointV1,
+    CompilerArtifactGenerationFaultTimingV1, CompilerArtifactGenerationLeaseV1,
+    CompilerArtifactGenerationManifestEntryV1, CompilerArtifactGenerationManifestIdentityV1,
+    CompilerArtifactGenerationManifestV1, CompilerArtifactGenerationObjectBoundaryV1,
+    CompilerArtifactGenerationObjectV1, CompilerArtifactGenerationObservationV1,
+    CompilerArtifactGenerationOptionsV1, CompilerArtifactGenerationPublishOutcomeV1,
+    CompilerArtifactGenerationQuotaV1, CompilerArtifactGenerationReclamationV1,
+    CompilerArtifactGenerationRecordBoundaryV1, CompilerArtifactGenerationRecordOperationV1,
+    CompilerArtifactGenerationRequestV1, CompilerArtifactGenerationScopeV1,
+    CompilerArtifactGenerationStoreV1, CompilerArtifactRoleV1,
+    DEFAULT_COMPILER_ARTIFACT_STORE_BYTES_V1, DEFAULT_COMPILER_ARTIFACT_STORE_ENTRIES_V1,
+    HARD_MAX_COMPILER_ARTIFACT_STORE_BYTES_V1, HARD_MAX_COMPILER_ARTIFACT_STORE_ENTRIES_V1,
+    MAX_COMPILER_ARTIFACT_GENERATION_BYTES_V1, MAX_COMPILER_ARTIFACT_GENERATION_MANIFEST_BYTES_V1,
+    MAX_COMPILER_ARTIFACT_GENERATION_SCOPE_RECORD_BYTES_V1, MAX_COMPILER_HSACO_BYTES_V1,
+    MAX_COMPILER_LINEAGE_BYTES_V1, MAX_COMPILER_NEUTRAL_KIR_BYTES_V1,
+    MAX_COMPILER_SEMANTIC_MIR_BYTES_V1, MAX_COMPILER_TARGET_KIR_BYTES_V1,
 };
 pub use compiler_module_handoff::{
     CompilerModuleHandoffConsumptionTokenV3, CompilerModuleHandoffCurrentnessLeaseV3,
