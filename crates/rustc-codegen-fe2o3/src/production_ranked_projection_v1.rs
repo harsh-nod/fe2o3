@@ -8719,7 +8719,7 @@ mod tests {
             SemanticTerminatorKindV1::Unreachable,
         );
         assert_eq!(
-            projected_cfg_terminator(&function, 0, &[None; 2]).unwrap(),
+            projected_cfg_terminator(&function, 0, &[const { None }; 2]).unwrap(),
             ProjectedCfgTerminatorV1::AnalysisSplit {
                 first_block: 1,
                 second_block: 2,
@@ -8743,7 +8743,7 @@ mod tests {
             ),
         ] {
             assert!(matches!(
-                projected_cfg_terminator(&function, 0, &[None; 2]),
+                projected_cfg_terminator(&function, 0, &[const { None }; 2]),
                 Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "a general switch whose only extra successor is not one empty unreachable fallback"
                 ))
