@@ -11,22 +11,22 @@ use std::{error::Error, fmt};
 
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, Axis, BarrierSemantics, BasicBlock,
-    BinaryOp, BlockId, CastKind, ComparePredicate, Constant, Convergence, F32MathFunction,
-    FloatOperation, Function, FunctionId, IndexKind, IntrinsicKind, IntrinsicOperation, Kernel,
-    LaunchDomain, LaunchExtent, MAX_OPERATIONS_V1 as MAX_BLOCK_OPERATIONS_V1, MatrixOperation,
-    MemoryAccess, MemoryOrdering, Module, Operation, OperationKind, ScalarType, Signature,
-    SwitchCase, SynchronizationScope, Terminator, Type, UnaryOp, ValueDef, ValueId,
-    VerificationErrors, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
-    WorkgroupSize, verify_module,
+    BinaryOp, BlockId, CastKind, CheckedBinaryOperator, ComparePredicate, Constant, Convergence,
+    F32MathFunction, FloatOperation, Function, FunctionId, IndexKind, IntrinsicKind,
+    IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
+    MAX_OPERATIONS_V1 as MAX_BLOCK_OPERATIONS_V1, MatrixOperation, MemoryAccess, MemoryOrdering,
+    Module, Operation, OperationKind, ScalarType, Signature, SwitchCase, SynchronizationScope,
+    Terminator, Type, UnaryOp, ValueDef, ValueId, VerificationErrors, WaveOperation,
+    WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupSize, verify_module,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAssertMessageV1, SemanticAxisV1, SemanticBinaryOpV1, SemanticBlockIdV1,
-    SemanticCallableDeclV1, SemanticCastKindV1, SemanticCompilerIntrinsicOperationV1,
-    SemanticConstantValueV1, SemanticDirectCallV1, SemanticDisjointIndexSpaceV1,
-    SemanticF32MathFunctionV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
-    SemanticFunctionRoleV1, SemanticLocalRoleV1, SemanticMutabilityV1, SemanticOperandV1,
-    SemanticPlaceV1, SemanticPointerMetadataV1, SemanticProjectionKindV1, SemanticRvalueKindV1,
-    SemanticScalarTypeV1, SemanticScalarValueV1, SemanticStatementKindV1,
+    SemanticCallableDeclV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
+    SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1, SemanticDirectCallV1,
+    SemanticDisjointIndexSpaceV1, SemanticF32MathFunctionV1, SemanticFunctionDeclV1,
+    SemanticFunctionIdV1, SemanticFunctionRoleV1, SemanticLocalRoleV1, SemanticMutabilityV1,
+    SemanticOperandV1, SemanticPlaceV1, SemanticPointerMetadataV1, SemanticProjectionKindV1,
+    SemanticRvalueKindV1, SemanticScalarTypeV1, SemanticScalarValueV1, SemanticStatementKindV1,
     SemanticSubgroupReductionKindV1, SemanticTerminatorKindV1, SemanticTypeDeclV1,
     SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1, SemanticUnwindActionV1,
     SemanticVolatilityV1,
@@ -1963,21 +1963,42 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         match kind {
             SemanticStatementKindV1::Assign(assignment) => {
-                let value = self.lower_rvalue(
+                let checked_checkpoint = matches!(
+                    assignment.value().kind(),
+                    SemanticRvalueKindV1::CheckedBinary(_)
+                )
+                .then_some((
+                    operations.len(),
+                    self.next_value,
+                    self.emitted_operations,
+                ));
+                let result = self.lower_rvalue(
                     block,
                     statement,
                     assignment.value().result_type(),
                     assignment.value().kind(),
                     operations,
-                )?;
-                self.assign_place(
-                    block,
-                    statement,
-                    assignment.destination(),
-                    value,
-                    SemanticVolatilityV1::NonVolatile,
-                    operations,
-                )
+                );
+                let result = match result {
+                    Ok(value) => self.assign_place(
+                        block,
+                        statement,
+                        assignment.destination(),
+                        value,
+                        SemanticVolatilityV1::NonVolatile,
+                        operations,
+                    ),
+                    Err(error) => Err(error),
+                };
+                if result.is_err()
+                    && let Some((operation_count, next_value, emitted_operations)) =
+                        checked_checkpoint
+                {
+                    operations.truncate(operation_count);
+                    self.next_value = next_value;
+                    self.emitted_operations = emitted_operations;
+                }
+                result
             }
             SemanticStatementKindV1::Store(store) if store.atomic().is_none() => {
                 let value = self.lower_operand(block, statement, store.value(), operations)?;
@@ -2215,12 +2236,51 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     ))
                 }
             }
-            SemanticRvalueKindV1::CheckedBinary(_) => Err(unsupported(
-                0,
-                Some(block.index()),
-                statement,
-                "semantic checked arithmetic has no exact Kernel IR aggregate lowering rule",
-            )),
+            SemanticRvalueKindV1::CheckedBinary(checked) => {
+                let semantic_operand_ty = semantic_operand_type(checked.left());
+                if semantic_operand_ty != semantic_operand_type(checked.right()) {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "semantic checked arithmetic operand types differ",
+                    ));
+                }
+                let operand_type =
+                    checked_binary_result_type(self.types, semantic_operand_ty, result_type)
+                        .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+                let left = self.lower_operand(block, statement, checked.left(), operations)?;
+                let (left, left_type) = self.normalize_checked_operand(
+                    block,
+                    statement,
+                    left,
+                    &operand_type,
+                    operations,
+                )?;
+                let right = self.lower_operand(block, statement, checked.right(), operations)?;
+                let (right, right_type) = self.normalize_checked_operand(
+                    block,
+                    statement,
+                    right,
+                    &operand_type,
+                    operations,
+                )?;
+                if left_type != right_type {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "lowered checked arithmetic operand types differ",
+                    ));
+                }
+                self.emit_checked_binary(
+                    operations,
+                    left_type,
+                    lower_checked_binary(checked.operation()),
+                    left,
+                    right,
+                )
+            }
             SemanticRvalueKindV1::Cast { kind, operand } => {
                 let (input, input_ty) = self
                     .lower_operand(block, statement, operand, operations)?
@@ -2357,6 +2417,42 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 )
             }
         }
+    }
+
+    fn normalize_checked_operand(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        binding: SemanticValueBindingV1,
+        expected_type: &Type,
+        operations: &mut Vec<Operation>,
+    ) -> Result<(ValueId, Type), ProductionSemanticKirErrorV1> {
+        let (value, actual_type) = binding
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+        if &actual_type == expected_type {
+            return Ok((value, actual_type));
+        }
+        if actual_type == Type::INDEX && *expected_type == Type::Scalar(ScalarType::U64) {
+            return self
+                .emit(
+                    operations,
+                    expected_type.clone(),
+                    OperationKind::Cast {
+                        kind: CastKind::Bitcast,
+                        value,
+                        to: expected_type.clone(),
+                    },
+                )?
+                .value()
+                .map_err(|detail| unsupported(0, Some(block.index()), statement, detail));
+        }
+        Err(unsupported(
+            0,
+            Some(block.index()),
+            statement,
+            "checked arithmetic operand has no exact plain-integer representation",
+        ))
     }
 
     fn lower_terminator(
@@ -4676,6 +4772,43 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         Ok(SemanticValueBindingV1::Value { id, ty })
     }
 
+    fn emit_checked_binary(
+        &mut self,
+        operations: &mut Vec<Operation>,
+        ty: Type,
+        operator: CheckedBinaryOperator,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        let value = ValueId(self.next_value);
+        let overflow = ValueId(
+            self.next_value
+                .checked_add(1)
+                .ok_or_else(|| unsupported(0, None, None, "Kernel IR SSA identity overflow"))?,
+        );
+        let next_value = self
+            .next_value
+            .checked_add(2)
+            .ok_or_else(|| unsupported(0, None, None, "Kernel IR SSA identity overflow"))?;
+        self.push_operation(operations, || {
+            Operation::checked_binary(
+                ValueDef::new(value, ty.clone()),
+                ValueDef::new(overflow, Type::BOOL),
+                operator,
+                lhs,
+                rhs,
+            )
+        })?;
+        self.next_value = next_value;
+        Ok(SemanticValueBindingV1::Aggregate(vec![
+            SemanticValueBindingV1::Value { id: value, ty },
+            SemanticValueBindingV1::Value {
+                id: overflow,
+                ty: Type::BOOL,
+            },
+        ]))
+    }
+
     fn emit_float_operation(
         &mut self,
         operations: &mut Vec<Operation>,
@@ -4953,7 +5086,7 @@ fn unsupported_rvalue_detail(value: &SemanticRvalueKindV1) -> &'static str {
             "semantic assignment/binary has no exact Kernel IR lowering rule"
         }
         SemanticRvalueKindV1::CheckedBinary(_) => {
-            "semantic checked arithmetic has no exact Kernel IR aggregate lowering rule"
+            "internally supported semantic checked arithmetic reached unsupported diagnostics"
         }
         SemanticRvalueKindV1::Cast { .. } => {
             "semantic assignment/cast has no exact Kernel IR lowering rule"
@@ -5338,6 +5471,58 @@ const fn semantic_operand_type(operand: &SemanticOperandV1) -> SemanticTypeIdV1 
     match operand {
         SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => place.ty(),
         SemanticOperandV1::Constant(constant) => constant.ty(),
+    }
+}
+
+fn checked_binary_result_type(
+    types: &[SemanticTypeDeclV1],
+    operand_type: SemanticTypeIdV1,
+    result_type: SemanticTypeIdV1,
+) -> Result<Type, &'static str> {
+    let operand_shape = types
+        .get(operand_type.index() as usize)
+        .ok_or("semantic checked arithmetic operand type is missing")?
+        .shape();
+    let SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer { signed, bits }) = operand_shape
+    else {
+        return Err("semantic checked arithmetic operand is not a plain integer");
+    };
+    if !matches!(bits, 8 | 16 | 32 | 64 | 128) {
+        return Err("semantic checked arithmetic integer width is unsupported");
+    }
+    let result_shape = types
+        .get(result_type.index() as usize)
+        .ok_or("semantic checked arithmetic result type is missing")?
+        .shape();
+    let SemanticTypeShapeV1::Tuple(fields) = result_shape else {
+        return Err("semantic checked arithmetic result is not a tuple");
+    };
+    let [value_type, overflow_type] = fields.fields() else {
+        return Err("semantic checked arithmetic result is not a two-field tuple");
+    };
+    if *value_type != operand_type {
+        return Err("semantic checked arithmetic value result type differs from its operands");
+    }
+    if !matches!(
+        types
+            .get(overflow_type.index() as usize)
+            .map(SemanticTypeDeclV1::shape),
+        Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool))
+    ) {
+        return Err("semantic checked arithmetic overflow result is not bool");
+    }
+    lower_scalar_kind(SemanticScalarTypeV1::Integer {
+        signed: *signed,
+        bits: *bits,
+    })
+    .map_err(|_| "semantic checked arithmetic integer width is unsupported")
+}
+
+const fn lower_checked_binary(operation: SemanticCheckedBinaryOpV1) -> CheckedBinaryOperator {
+    match operation {
+        SemanticCheckedBinaryOpV1::Add => CheckedBinaryOperator::Add,
+        SemanticCheckedBinaryOpV1::Subtract => CheckedBinaryOperator::Subtract,
+        SemanticCheckedBinaryOpV1::Multiply => CheckedBinaryOperator::Multiply,
     }
 }
 

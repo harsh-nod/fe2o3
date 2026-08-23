@@ -1,4 +1,7 @@
-use fe2o3_kernel_ir::{BlockId, LaunchDomain, WorkgroupSize, verify_module};
+use fe2o3_kernel_ir::{
+    BinaryOp, BlockId, CheckedBinaryOperator, LaunchDomain, OperationKind, ScalarType, Type,
+    WorkgroupSize, verify_module,
+};
 use fe2o3_lower_mir_kernel::{
     PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1, ProductionFormalMemoryOwnerV1,
     ProductionRankedSemanticProjectionReceiptV1, ProductionSemanticKirErrorV1,
@@ -240,13 +243,13 @@ fn checked_arithmetic_owner() -> ProductionSemanticMirOwnerV1 {
     let statement = SemanticStatementV1::new(
         SemanticSourceProvenanceV1::unavailable(),
         SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
-            local_place(3, checked_ty),
+            local_place(1, checked_ty),
             SemanticRvalueV1::new(
                 checked_ty,
                 SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
                     SemanticCheckedBinaryOpV1::Multiply,
-                    SemanticOperandV1::Copy(local_place(1, u32_ty)),
-                    SemanticOperandV1::Move(local_place(2, u32_ty)),
+                    scalar_constant(u32_ty, 7, 4),
+                    scalar_constant(u32_ty, 9, 4),
                 )),
             ),
         )),
@@ -263,7 +266,7 @@ fn checked_arithmetic_owner() -> ProductionSemanticMirOwnerV1 {
         SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
     )
     .unwrap();
-    let locals = [unit, u32_ty, u32_ty, checked_ty]
+    let locals = [unit, checked_ty]
         .into_iter()
         .enumerate()
         .map(|(index, ty)| {
@@ -779,19 +782,37 @@ fn unsupported_statement_and_terminator_fail_closed() {
 }
 
 #[test]
-fn checked_arithmetic_is_retained_for_liveness_and_fails_before_kir_emission() {
+fn checked_arithmetic_lowers_to_ordered_v6_results_with_exact_span() {
+    let lowered = ProductionSemanticKirOwnerV1::try_lower(
+        checked_arithmetic_owner(),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    lowered.verify_equivalence().unwrap();
+    verify_module(lowered.module()).unwrap();
+
+    let body = lowered.module().functions[0].body.as_ref().unwrap();
+    let operations = &body.blocks[0].operations;
+    assert_eq!(operations.len(), 3);
+    let checked = &operations[2];
     assert!(matches!(
-        ProductionSemanticKirOwnerV1::try_lower(
-            checked_arithmetic_owner(),
-            ProductionSemanticKirLimitsV1::default(),
-        ),
-        Err(ProductionSemanticKirErrorV1::Unsupported {
-            block: Some(0),
-            statement: Some(0),
-            detail: "semantic checked arithmetic has no exact Kernel IR aggregate lowering rule",
-            ..
-        })
+        checked.kind,
+        OperationKind::Binary {
+            op: BinaryOp::Checked(CheckedBinaryOperator::Multiply),
+            lhs,
+            rhs,
+        } if lhs == operations[0].results[0].id && rhs == operations[1].results[0].id
     ));
+    assert_eq!(checked.results.len(), 2);
+    assert_eq!(checked.results[0].ty, Type::Scalar(ScalarType::U32));
+    assert_eq!(checked.results[1].ty, Type::BOOL);
+    assert_ne!(checked.results[0].id, checked.results[1].id);
+
+    let [span] = lowered.correspondence().statement_operation_spans() else {
+        panic!("checked assignment must have one statement span");
+    };
+    assert_eq!(span.first_operation_ordinal(), 0);
+    assert_eq!(span.operation_count(), 3);
 }
 
 #[test]
