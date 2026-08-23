@@ -96,6 +96,7 @@ impl SemanticOptionProducerV1 {
                 | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedTiled2d { .. }
                 | SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift { .. }
                 | SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { .. }
+                | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { .. }
         ) {
             return Ok(None);
         }
