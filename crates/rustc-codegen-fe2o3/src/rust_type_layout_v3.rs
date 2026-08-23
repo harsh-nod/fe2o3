@@ -779,12 +779,19 @@ fn trusted_index1d_type<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Ty<'tcx>, GeneralType
                 "missing trusted diagnostic item `{INDEX_1D_DIAGNOSTIC_ITEM}`"
             ))
         })?;
-    if trusted_device_items::classify(tcx, marker) != Some(TrustedDeviceItem::ThreadIndex1d)
-        || tcx.def_kind(marker) != DefKind::Fn
-    {
+    if tcx.def_kind(marker) != DefKind::Fn {
         return Err(GeneralTypedExtractError::new(
-            "Index1D diagnostic item does not resolve to the trusted function",
+            "Index1D diagnostic item does not resolve to a function",
         ));
+    }
+    if trusted_device_items::classify(tcx, marker) != Some(TrustedDeviceItem::ThreadIndex1d) {
+        let reason = trusted_device_items::rejected_provider(tcx, marker).map_or_else(
+            || "provider is not registered as trusted".to_owned(),
+            |rejection| rejection.reason,
+        );
+        return Err(GeneralTypedExtractError::new(format!(
+            "Index1D diagnostic item does not resolve to the trusted function: {reason}"
+        )));
     }
     let signature =
         tcx.instantiate_bound_regions_with_erased(tcx.fn_sig(marker).instantiate_identity());

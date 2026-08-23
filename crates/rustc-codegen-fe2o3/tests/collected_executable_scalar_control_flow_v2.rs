@@ -1039,6 +1039,10 @@ fn compile_scalar_gemm(
         .env("FE2O3_VERBOSE", "1")
         .env("FE2O3_DUMP_LLVM", "1")
         .env("CARGO_MANIFEST_DIR", manifest_directory)
+        .env(
+            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
+            "7cfd53537e4e74e68c2800f807b8d8a4b04507b5653d07b38ab3e99ace8d2740",
+        )
         .env("FE2O3_TARGET", target)
         .env("FE2O3_CODEGEN_PIPELINE", SCALAR_GEMM_PIPELINE)
         .env("FE2O3_BUILD_ATTEMPT_V1", attempt.to_env_value())
