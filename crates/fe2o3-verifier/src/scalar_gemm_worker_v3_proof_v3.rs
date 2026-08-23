@@ -35,9 +35,11 @@ const KIR_PROJECTION_TLV: &[u8] = include_bytes!("../verus/scalar_gemm_kir_proje
 const KIR_PROJECTION_TYPED: &[u8] =
     include_bytes!("../verus/scalar_gemm_kir_projection_typed_v1.rs");
 const KIR_PROJECTION_AST: &[u8] = include_bytes!("../verus/scalar_gemm_kir_projection_ast_v1.rs");
+const KIR_PROJECTION_EXACT: &[u8] =
+    include_bytes!("../verus/scalar_gemm_kir_projection_exact_v1.rs");
 const KIR_OPERATIONAL_SEMANTICS: &[u8] =
     include_bytes!("../verus/scalar_gemm_kir_operational_semantics_v1.rs");
-const EXPECTED_STDOUT: &[u8] = b"verification results:: 48 verified, 0 errors\n";
+const EXPECTED_STDOUT: &[u8] = b"verification results:: 49 verified, 0 errors\n";
 const INPUT_BINDING_DOMAIN_V3: &[u8] = b"fe2o3-scalar-gemm-worker-v3-proof-input-binding-v3\0";
 const OUTPUT_IDENTITY_DOMAIN_V3: &[u8] = b"fe2o3-scalar-gemm-worker-v3-proof-output-v3\0";
 const EXECUTION_IDENTITY_DOMAIN_V3: &[u8] = b"fe2o3-scalar-gemm-worker-v3-proof-execution-v3\0";
@@ -150,6 +152,11 @@ impl ScalarGemmWorkerV3ProofInputV3 {
         true
     }
 
+    /// Generated source binds the decoded AST to an independent exact scalar specification.
+    pub const fn binds_reviewed_exact_projection_ast(&self) -> bool {
+        true
+    }
+
     pub const fn grants_artifact_or_runtime_authority(&self) -> bool {
         false
     }
@@ -248,6 +255,7 @@ fn generate_source(
             + KIR_PROJECTION_TLV.len()
             + KIR_PROJECTION_TYPED.len()
             + KIR_PROJECTION_AST.len()
+            + KIR_PROJECTION_EXACT.len()
             + KIR_INTEGER_REFINEMENT.len()
             + KIR_OPERATIONAL_SEMANTICS.len()
             + semantic_projection.len() * 6
@@ -311,6 +319,7 @@ fn generate_source(
     generated.extend_from_slice(KIR_PROJECTION_TLV);
     generated.extend_from_slice(KIR_PROJECTION_TYPED);
     generated.extend_from_slice(KIR_PROJECTION_AST);
+    generated.extend_from_slice(KIR_PROJECTION_EXACT);
     generated.extend_from_slice(KIR_INTEGER_REFINEMENT);
     generated.extend_from_slice(KIR_OPERATIONAL_SEMANTICS);
     Ok(generated)
@@ -450,6 +459,11 @@ impl AuthenticatedScalarGemmWorkerV3ProofV3 {
 
     /// Retained Verus completed count-driven structural decoding with exact consumption.
     pub const fn authenticates_total_structural_projection_ast_decoding(&self) -> bool {
+        true
+    }
+
+    /// Retained Verus equated every decoded structural field with the reviewed scalar AST.
+    pub const fn authenticates_reviewed_exact_projection_ast(&self) -> bool {
         true
     }
 
@@ -898,6 +912,18 @@ mod tests {
         substitute_projection_sequence_in_generated_and_reviewed(source, FUNCTION_COUNT_RECORD, 2);
     }
 
+    fn substitute_accumulation_add_in_generated_and_reviewed(source: &mut [u8]) {
+        const ACCUMULATION_ADD_RECORD: &[u8] = &[
+            28, 4, 0, 0, 0, 1, 0, 0, 0, 23, 4, 0, 0, 0, 32, 0, 0, 0, 24, 1, 0, 0, 0, 2, 25, 1, 0,
+            0, 0, 15, 29, 1, 0, 0, 0, 3, 35, 1, 0, 0, 0, 1,
+        ];
+        substitute_projection_sequence_in_generated_and_reviewed(
+            source,
+            ACCUMULATION_ADD_RECORD,
+            2,
+        );
+    }
+
     #[test]
     fn generated_source_binds_challenge_and_every_compiler_axis() {
         let first = input([0x11; 32]);
@@ -910,6 +936,7 @@ mod tests {
         assert!(first.binds_exact_projection_tlv_framing());
         assert!(first.binds_total_typed_projection_token_decoding());
         assert!(first.binds_total_structural_projection_ast_decoding());
+        assert!(first.binds_reviewed_exact_projection_ast());
         assert_eq!(first.semantic_projection_byte_len(), 2_927);
         assert_ne!(first.semantic_projection_identity(), [0; 32]);
         assert!(!first.grants_artifact_or_runtime_authority());
@@ -931,6 +958,7 @@ mod tests {
             "generated_scalar_kir_projection_decodes_to_typed_records_v1",
             "scalar_kir_typed_constant_contexts_fail_closed_v1",
             "generated_scalar_kir_projection_decodes_to_structural_ast_v1",
+            "generated_scalar_kir_projection_decodes_to_exact_ast_v1",
         ] {
             assert!(source.contains(name), "generated source omitted {name}");
         }
@@ -1029,6 +1057,7 @@ mod tests {
         assert!(receipt.authenticates_exact_projection_tlv_framing());
         assert!(receipt.authenticates_total_typed_projection_token_decoding());
         assert!(receipt.authenticates_total_structural_projection_ast_decoding());
+        assert!(receipt.authenticates_reviewed_exact_projection_ast());
         assert!(!receipt.establishes_kir_to_integer_model_refinement());
         assert!(!receipt.establishes_source_to_kir_refinement());
         assert!(!receipt.establishes_rust_or_f32_semantics());
@@ -1159,6 +1188,27 @@ mod tests {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             stderr.contains("generated_scalar_kir_projection_decodes_to_structural_ast_v1")
+                || stderr.contains("assertion failed")
+                || stderr.contains("expression simplifies to false"),
+            "unexpected verifier failure:\n{stderr}"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires FE2O3_TEST_VERUS pointing to the pinned Verus launcher"]
+    fn equal_array_accumulation_substitution_fails_exact_ast_proof() {
+        let mut source = input([0x4a; 32]).canonical_source().to_vec();
+        substitute_accumulation_add_in_generated_and_reviewed(&mut source);
+        let output = run_pinned_verus(&source, "projection-accumulation-substitution");
+        assert_ne!(
+            output.status.code(),
+            Some(0),
+            "semantically substituted equal projections unexpectedly verified: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("generated_scalar_kir_projection_decodes_to_exact_ast_v1")
                 || stderr.contains("assertion failed")
                 || stderr.contains("expression simplifies to false"),
             "unexpected verifier failure:\n{stderr}"
