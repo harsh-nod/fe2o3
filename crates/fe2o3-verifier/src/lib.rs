@@ -42,6 +42,7 @@ mod proof_capsule;
 mod result;
 mod row_softmax_certificate;
 mod scalar_gemm_hardware_evidence;
+mod scalar_gemm_kir_binding_v3;
 mod scalar_gemm_proof;
 mod scalar_gemm_v1;
 mod scalar_gemm_verus_execution_v2;
@@ -215,6 +216,10 @@ pub use scalar_gemm_hardware_evidence::{
     ScalarGemmKernelAdmissionObservationV1, ScalarGemmOutputObservationV1,
     ScalarGemmProtectedHardwareEvidenceV1, ScalarGemmUnloadObservationV1,
     ScalarGemmWorkerExchangeObservationV1,
+};
+pub use scalar_gemm_kir_binding_v3::{
+    ScalarGemmCompilerKirValidationErrorV3, ValidatedScalarGemmCompilerKirV3,
+    validate_scalar_gemm_compiler_kir_v3,
 };
 pub use scalar_gemm_proof::{
     MAX_SCALAR_GEMM_PROOF_REVIEWS_V1, MAX_SCALAR_GEMM_PROOF_SOURCE_BYTES_V1,
