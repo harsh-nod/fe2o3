@@ -1,4 +1,7 @@
-use fe2o3_amdgcn_model::{ScalarGemmLoweringErrorV1, lower_scalar_gemm_v1_to_gfx942_llvm_ir};
+use fe2o3_amdgcn_model::{
+    GFX942_UPSTREAM_LLVM_DATA_LAYOUT_V1, ScalarGemmLoweringErrorV1,
+    lower_scalar_gemm_v1_to_gfx942_llvm_ir,
+};
 use fe2o3_kernel_ir::*;
 
 fn requirements() -> ScalarGemmTargetRequirementsV1 {
@@ -11,6 +14,9 @@ fn lowers_exact_cyclic_ssa_gemm_to_strict_gfx942_llvm() {
         .expect("canonical scalar GEMM LLVM");
     assert_eq!(output.requirements(), requirements());
     let llvm = output.as_str();
+    assert!(llvm.starts_with(&format!(
+        "target triple = \"amdgcn-amd-amdhsa\"\ntarget datalayout = \"{GFX942_UPSTREAM_LLVM_DATA_LAYOUT_V1}\"\n"
+    )));
 
     assert!(llvm.contains(concat!(
         "define amdgpu_kernel void @scalar_gemm_v1(",
@@ -22,7 +28,7 @@ fn lowers_exact_cyclic_ssa_gemm_to_strict_gfx942_llvm() {
 
     for required in [
         "target triple = \"amdgcn-amd-amdhsa\"",
-        "target datalayout = \"e-p:64:64-p1:64:64",
+        "target datalayout = \"e-m:e-p:64:64-p1:64:64",
         "define amdgpu_kernel void @scalar_gemm_v1(",
         "ptr addrspace(1) %arg0.data, i64 %arg0.len",
         "i32 %arg3, i32 %arg4, i32 %arg5",

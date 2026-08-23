@@ -44,8 +44,11 @@ const MAX_COMPILER_MODULE_CALL_EDGES: usize = 131_072;
 /// Maximum textual LLVM bytes returned by compiler-module construction.
 pub const MAX_COMPILER_MODULE_TEXT_BYTES: usize = 16 * 1024 * 1024;
 
-/// Canonical LLVM data layout for the exact gfx942:xnack- device profile.
+/// Legacy layout retained for reviewed profiles not yet migrated to live LLVM.
 pub const GFX942_XNACK_MINUS_DATA_LAYOUT: &str = "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
+/// Exact gfx942 layout measured from the pinned upstream LLVM target machine.
+pub const GFX942_UPSTREAM_LLVM_DATA_LAYOUT_V1: &str =
+    fe2o3_llvm_handoff::GFX942_AMDHSA_DATA_LAYOUT_V1;
 
 const ROW_SOFTMAX_MODULE_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.row-softmax.canonical-module.v1";
 const REVIEWED_ROW_SOFTMAX_MODULE_V4_COMMITMENT: [u8; 32] = [
@@ -129,9 +132,9 @@ impl LoweringTarget {
 
     const fn data_layout(self) -> Option<&'static str> {
         match self {
+            Self::Gfx942ScalarGemmV1 => Some(GFX942_UPSTREAM_LLVM_DATA_LAYOUT_V1),
             Self::Gfx942XnackMinusV1
             | Self::Gfx942RowSoftmaxV1
-            | Self::Gfx942ScalarGemmV1
             | Self::Gfx942TiledGemmV1
             | Self::Gfx942TiledGemmLdsV1
             | Self::Gfx942TiledGemmLdsK32V2
@@ -684,8 +687,13 @@ pub fn lower_scalar_gemm_v1_to_gfx942_llvm_ir(
 }
 
 fn audit_scalar_gemm_v1_llvm(llvm: &str) -> Result<(), ScalarGemmLoweringErrorV1> {
+    let exact_layout = format!("target datalayout = \"{GFX942_UPSTREAM_LLVM_DATA_LAYOUT_V1}\"");
+    if !llvm.contains(&exact_layout) {
+        return Err(ScalarGemmLoweringErrorV1::NonCanonicalOutput(
+            "missing exact upstream LLVM 22 gfx942 data layout",
+        ));
+    }
     let required = [
-        ("target datalayout =", "missing exact gfx942 data layout"),
         (
             "\"target-cpu\"=\"gfx942\"",
             "missing gfx942 processor binding",

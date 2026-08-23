@@ -973,6 +973,38 @@ mod tests {
     }
 
     #[test]
+    fn legacy_layout_cannot_enter_the_upstream_llvm_scalar_profile() {
+        let exact = exact_request();
+        let canonical = std::str::from_utf8(exact.compiler_module().bytes()).unwrap();
+        let legacy = canonical.replacen(
+            "target datalayout = \"e-m:e-p:",
+            "target datalayout = \"e-p:",
+            1,
+        );
+        assert_ne!(legacy.as_bytes(), exact.compiler_module().bytes());
+        let request = request_with(
+            legacy.into_bytes(),
+            exact_target(),
+            CodeObjectVersion::V6,
+            exact.options(),
+            Vec::new(),
+            exact.final_symbols().to_vec(),
+            exact.compiler_envelope_identity(),
+        );
+        let exchange = exchange(&request, &success_diagnostics());
+        assert!(matches!(
+            validate_exchange_parts(
+                &exchange,
+                &exact_compiler_envelope().unwrap(),
+                &exact_symbol_manifest().unwrap(),
+            ),
+            Err(ScalarGemmV1WorkerValidationErrorV1::ProfileMismatch(
+                "canonical compiler-module prefix"
+            ))
+        ));
+    }
+
+    #[test]
     fn descriptor_and_frontend_commitment_substitutions_fail_closed() {
         let mut descriptor = test_descriptor_source().canonical_bytes().to_vec();
         let binding = descriptor
