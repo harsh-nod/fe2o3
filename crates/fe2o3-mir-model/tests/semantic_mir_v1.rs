@@ -1972,7 +1972,16 @@ fn production_fill_intrinsics_preserve_typed_safety_relationships_and_pinned_enc
     let admitted = fill_intrinsic_request(fill_intrinsic_operations())
         .admit(SemanticMirLimitsV1::default())
         .unwrap();
+    let decoded = AdmittedInertSemanticMirV1::decode_canonical(
+        admitted.canonical_encoding(),
+        SemanticMirLimitsV1::default(),
+    )
+    .unwrap();
     assert_eq!(admitted.callables().len(), 4);
+    assert_eq!(decoded.canonical_encoding(), admitted.canonical_encoding());
+    assert_eq!(decoded.functions(), admitted.functions());
+    assert_eq!(decoded.callables(), admitted.callables());
+    assert_eq!(decoded.roots(), admitted.roots());
     assert_eq!(
         admitted.semantic_sha256().as_bytes(),
         &[

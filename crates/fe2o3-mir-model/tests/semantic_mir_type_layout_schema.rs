@@ -862,6 +862,25 @@ fn canonical_catalog_covers_every_semantic_type_and_exact_layout_form() {
 }
 
 #[test]
+fn canonical_catalog_decodes_losslessly_through_the_public_bounded_api() {
+    let original = catalog_request(CatalogOptions::default())
+        .admit(SemanticMirLimitsV1::default())
+        .unwrap();
+    let decoded = AdmittedInertSemanticMirV1::decode_canonical(
+        original.canonical_encoding(),
+        SemanticMirLimitsV1::default(),
+    )
+    .unwrap();
+
+    assert_eq!(decoded.canonical_encoding(), original.canonical_encoding());
+    assert_eq!(decoded.semantic_sha256(), original.semantic_sha256());
+    assert_eq!(decoded.types(), original.types());
+    assert_eq!(decoded.functions(), original.functions());
+    assert_eq!(decoded.callables(), original.callables());
+    assert_eq!(decoded.roots(), original.roots());
+}
+
+#[test]
 fn canonical_encoding_is_pinned_deterministic_and_semantically_complete() {
     let left = catalog_request(CatalogOptions::default())
         .admit(SemanticMirLimitsV1::default())

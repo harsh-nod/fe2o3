@@ -16,6 +16,10 @@ use std::fmt;
 
 use sha2::{Digest, Sha256};
 
+mod canonical_decode;
+
+pub use canonical_decode::SemanticMirDecodeErrorV1;
+
 const MAGIC: &[u8] = b"fe2o3.inert-semantic-mir";
 pub const INERT_SEMANTIC_MIR_VERSION_V2: u16 = 2;
 
