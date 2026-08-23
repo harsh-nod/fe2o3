@@ -179,6 +179,7 @@ const SCALAR_V1_PROGRAM_COUNT: usize = 8;
 enum FixtureAbi {
     SliceF32,
     ScalarAddV1,
+    ScalarGemmV1,
     TiledGemmV1,
     RowSoftmaxV1,
 }
@@ -594,6 +595,19 @@ pub(crate) fn slice_fixture_with_descriptor_table_and_workgroup(
     options.include_export = false;
     options.required_workgroup_size = [workgroup_size, 1, 1];
     options.max_flat_workgroup_size = workgroup_size;
+    fixture_with_descriptor_table(options, Some(descriptor_table))
+}
+
+#[allow(dead_code)]
+pub(crate) fn scalar_gemm_fixture_with_descriptor_table(descriptor_table: &[u8]) -> Fixture {
+    let mut options = FixtureOptions::valid();
+    options.target = "gfx942:xnack-";
+    options.entry = "scalar_gemm_v1";
+    options.descriptor = "scalar_gemm_v1.kd";
+    options.include_export = false;
+    options.required_workgroup_size = [256, 1, 1];
+    options.max_flat_workgroup_size = 256;
+    options.abi = FixtureAbi::ScalarGemmV1;
     fixture_with_descriptor_table(options, Some(descriptor_table))
 }
 
@@ -2177,6 +2191,7 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
     let explicit_bytes = match options.abi {
         FixtureAbi::SliceF32 => 16,
         FixtureAbi::ScalarAddV1 => 24,
+        FixtureAbi::ScalarGemmV1 => 64,
         FixtureAbi::TiledGemmV1 => 64,
         FixtureAbi::RowSoftmaxV1 => 32,
     };
@@ -2219,6 +2234,7 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
             ),
             explicit_argument(Some("addend"), 16, 4, None, "by_value", None),
         ],
+        FixtureAbi::ScalarGemmV1 => scalar_gemm_metadata_arguments(),
         FixtureAbi::TiledGemmV1 => (0..4)
             .flat_map(|index| {
                 let base = if index == 0 {
@@ -2483,12 +2499,33 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
     encoded
 }
 
+fn scalar_gemm_metadata_arguments() -> Vec<Value> {
+    let mut arguments = ["a", "b", "c"]
+        .into_iter()
+        .enumerate()
+        .flat_map(|(index, name)| {
+            let base = (index * 16) as u64;
+            [
+                typed_explicit_pointer_argument(&format!("{name}.data"), base, Some(8), "f32"),
+                typed_explicit_argument(&format!("{name}.len"), base + 8, 8, Some(8), "u64"),
+            ]
+        })
+        .collect::<Vec<_>>();
+    arguments.extend(
+        [("m", 48), ("n", 52), ("k", 56)]
+            .into_iter()
+            .map(|(name, offset)| typed_explicit_argument(name, offset, 4, Some(4), "u32")),
+    );
+    arguments
+}
+
 fn kernarg_segment_size(options: FixtureOptions<'_>) -> u64 {
     options
         .kernarg_segment_size_override
         .unwrap_or(match options.abi {
             FixtureAbi::SliceF32 => 272,
             FixtureAbi::ScalarAddV1 => 280,
+            FixtureAbi::ScalarGemmV1 => 320,
             FixtureAbi::TiledGemmV1 => 320,
             FixtureAbi::RowSoftmaxV1 => 288,
         })
