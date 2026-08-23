@@ -1070,6 +1070,7 @@ mod tests {
 
     impl TestDirectory {
         fn new() -> Self {
+            fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
             let path = std::env::temp_dir().join(format!(
                 "fe2o3-recovered-worker-v2-admission-{}-{}",
                 std::process::id(),

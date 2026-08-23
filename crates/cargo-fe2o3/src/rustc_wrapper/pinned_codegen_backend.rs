@@ -1228,6 +1228,7 @@ mod platform {
 
         impl TestDirectory {
             fn new() -> Self {
+                fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
                 let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
                 let path = std::env::temp_dir().join(format!(
                     "cargo-fe2o3-pinned-codegen-backend-{}-{id}",

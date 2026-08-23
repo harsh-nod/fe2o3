@@ -116,6 +116,7 @@ struct TestDirectory(
 
 impl TestDirectory {
     fn new() -> Self {
+        fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
         Self::with_permit(VerticalFixturePermit::acquire())
     }
 
