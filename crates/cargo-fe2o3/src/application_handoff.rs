@@ -19,16 +19,24 @@ use std::time::{Duration, Instant};
 
 use fe2o3_artifact_transaction::{
     DurableCurrentLinkPublicationLeaseV1, reacquire_current_hsaco_publication_lease_v1,
+    reacquire_current_hsaco_publication_lease_v3,
 };
 use fe2o3_worker_v2_bundle::{
     MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1, MAX_WORKER_V2_LOAD_ENVELOPE_BYTES,
-    WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1, WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
-    WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1, WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
-    WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+    MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1, WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
+    WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1, WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1,
+    WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
     WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WORKER_V2_LOAD_ENVELOPE_NAME_PREFIX_V1,
-    WORKER_V2_LOAD_ENVELOPE_NAME_SUFFIX_V1, WorkerV2ApplicationHandoffAckV1,
-    WorkerV2ApplicationHandoffChallengeV1, WorkerV2ApplicationHandoffExpectationV1,
-    WorkerV2ApplicationIdentityV1, WorkerV2LoadEnvelopeV1, worker_v2_load_envelope_name_v1,
+    WORKER_V2_LOAD_ENVELOPE_NAME_SUFFIX_V1, WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
+    WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1, WORKER_V3_APPLICATION_HANDOFF_ACK_BYTES_V1,
+    WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+    WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1,
+    WorkerV2ApplicationHandoffAckV1, WorkerV2ApplicationHandoffChallengeV1,
+    WorkerV2ApplicationHandoffExpectationV1, WorkerV2ApplicationIdentityV1, WorkerV2LoadEnvelopeV1,
+    WorkerV3ApplicationHandoffAckV1, WorkerV3ApplicationHandoffChallengeV1,
+    WorkerV3ApplicationHandoffExpectationV1, WorkerV3ApplicationIdentityV1,
+    WorkerV3ApplicationInputOccurrenceV1, WorkerV3ApplicationOccurrenceV1,
+    WorkerV3LoadEnvelopeIdentityV1, WorkerV3LoadEnvelopeWireV1, worker_v2_load_envelope_name_v1,
 };
 use rustix::fs::{AtFlags, FileType, Mode, OFlags, ResolveFlags, fstat, openat2, statat};
 
@@ -50,6 +58,9 @@ pub(crate) const RUNNER_EXPECTS_NO_ENVELOPE: &str = "none";
 const ENVELOPE_PREFIX: &[u8] = WORKER_V2_LOAD_ENVELOPE_NAME_PREFIX_V1.as_bytes();
 const ENVELOPE_SUFFIX: &[u8] = WORKER_V2_LOAD_ENVELOPE_NAME_SUFFIX_V1.as_bytes();
 const ENVELOPE_NAME_BYTES: usize = ENVELOPE_PREFIX.len() + 64 + ENVELOPE_SUFFIX.len();
+const V3_ENVELOPE_PREFIX: &[u8] = b".fe2o3-worker-v3-load-readiness-v1-";
+const V3_ENVELOPE_SUFFIX: &[u8] = b".envelope";
+const V3_ENVELOPE_NAME_BYTES: usize = V3_ENVELOPE_PREFIX.len() + 64 + V3_ENVELOPE_SUFFIX.len();
 const MAX_ENVELOPE_CANDIDATES: usize = 256;
 const MAX_PENDING_APPLICATION_REAPS: usize = 8;
 const REAPER_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -539,9 +550,32 @@ pub(crate) struct PinnedApplicationEnvelope<'directory> {
     file: File,
     snapshot: FileSnapshot,
     exact_bytes: Vec<u8>,
-    envelope: WorkerV2LoadEnvelopeV1,
+    envelope: ApplicationEnvelopeWireV1,
     artifact_directory_file: File,
     current_lease: Option<DurableCurrentLinkPublicationLeaseV1>,
+}
+
+enum ApplicationEnvelopeWireV1 {
+    WorkerV2(Box<WorkerV2LoadEnvelopeV1>),
+    WorkerV3(Box<WorkerV3LoadEnvelopeWireV1>),
+}
+
+impl ApplicationEnvelopeWireV1 {
+    const fn schema_name(&self) -> &'static str {
+        match self {
+            Self::WorkerV2(_) => "Worker V2",
+            Self::WorkerV3(_) => "Worker V3",
+        }
+    }
+
+    fn encode_canonical(&self) -> Result<Vec<u8>, String> {
+        match self {
+            Self::WorkerV2(envelope) => Ok(envelope.to_bytes()),
+            Self::WorkerV3(envelope) => envelope
+                .encode_canonical()
+                .map_err(|error| format!("failed to encode canonical Worker V3 envelope: {error}")),
+        }
+    }
 }
 
 impl<'directory> PinnedApplicationEnvelope<'directory> {
@@ -552,6 +586,8 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
             return Ok(None);
         }
 
+        validate_single_envelope_schema(&names)?;
+
         let mut current = None;
         let mut rejected = Vec::new();
         for name in names {
@@ -560,7 +596,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
                 Ok(candidate) if current.is_none() => current = Some(candidate),
                 Ok(_) => {
                     return Err(
-                        "multiple canonical Worker V2 envelopes claim the current publication"
+                        "multiple canonical application envelopes claim the current publication"
                             .to_string(),
                     );
                 }
@@ -570,7 +606,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         directory.validate_path("Cargo application artifact directory")?;
         current.map(Some).ok_or_else(|| {
             format!(
-                "canonical Worker V2 envelopes exist but none is current: {}",
+                "canonical application envelopes exist but none is current: {}",
                 rejected
                     .first()
                     .map(String::as_str)
@@ -580,6 +616,13 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
     }
 
     fn open(directory: &'directory PinnedDirectory, name: String) -> Result<Self, String> {
+        let schema = if is_canonical_v2_envelope_name(name.as_bytes()) {
+            "Worker V2"
+        } else if is_canonical_v3_envelope_name(name.as_bytes()) {
+            "Worker V3"
+        } else {
+            return Err("application envelope name has no admitted schema".to_string());
+        };
         let descriptor = openat2(
             directory.file(),
             Path::new(&name),
@@ -590,7 +633,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
                 | ResolveFlags::NO_MAGICLINKS
                 | ResolveFlags::NO_XDEV,
         )
-        .map_err(|error| format!("failed to open canonical Worker V2 envelope {name}: {error}"))?;
+        .map_err(|error| format!("failed to open canonical {schema} envelope {name}: {error}"))?;
         let flags = rustix::io::fcntl_getfd(&descriptor)
             .map_err(|error| format!("failed to inspect envelope descriptor flags: {error}"))?;
         let status = rustix::fs::fcntl_getfl(&descriptor)
@@ -598,44 +641,67 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         if !flags.contains(rustix::io::FdFlags::CLOEXEC)
             || status & OFlags::ACCMODE != OFlags::RDONLY
         {
-            return Err("canonical Worker V2 envelope descriptor is not read-only CLOEXEC".into());
+            return Err(format!(
+                "canonical {schema} envelope descriptor is not read-only CLOEXEC"
+            ));
         }
         let initial = fstat(&descriptor)
-            .map_err(|error| format!("failed to inspect canonical Worker V2 envelope: {error}"))?;
+            .map_err(|error| format!("failed to inspect canonical {schema} envelope: {error}"))?;
         validate_envelope_stat(directory, &name, &initial)?;
         let snapshot = FileSnapshot::from_stat(&initial);
         let size = usize::try_from(initial.st_size).map_err(|_| {
-            "canonical Worker V2 envelope has a negative or unrepresentable size".to_string()
+            format!("canonical {schema} envelope has a negative or unrepresentable size")
         })?;
-        if size == 0 || size > MAX_WORKER_V2_LOAD_ENVELOPE_BYTES {
+        let maximum = if schema == "Worker V2" {
+            MAX_WORKER_V2_LOAD_ENVELOPE_BYTES
+        } else {
+            MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1
+        };
+        if size == 0 || size > maximum {
             return Err(format!(
-                "canonical Worker V2 envelope size {size} is outside 1..={MAX_WORKER_V2_LOAD_ENVELOPE_BYTES}"
+                "canonical {schema} envelope size {size} is outside 1..={maximum}"
             ));
         }
         let mut file = File::from(descriptor);
         let mut exact_bytes = Vec::with_capacity(size.saturating_add(1));
         Read::by_ref(&mut file)
-            .take((MAX_WORKER_V2_LOAD_ENVELOPE_BYTES + 1) as u64)
+            .take((maximum + 1) as u64)
             .read_to_end(&mut exact_bytes)
             .map_err(|error| format!("failed to read canonical Worker V2 envelope: {error}"))?;
         let final_stat = fstat(&file).map_err(|error| {
             format!("failed to re-inspect canonical Worker V2 envelope: {error}")
         })?;
         if FileSnapshot::from_stat(&final_stat) != snapshot || exact_bytes.len() != size {
-            return Err("canonical Worker V2 envelope changed while it was read".to_string());
+            return Err(format!(
+                "canonical {schema} envelope changed while it was read"
+            ));
         }
-        let envelope = WorkerV2LoadEnvelopeV1::from_bytes(&exact_bytes)
-            .map_err(|error| format!("invalid canonical Worker V2 envelope {name}: {error}"))?;
-        if envelope.to_bytes() != exact_bytes {
-            return Err("Worker V2 envelope encoding is not canonical".to_string());
-        }
-        if name
-            != worker_v2_load_envelope_name_v1(
-                envelope.published_claim().receipt().publication_identity(),
-            )
-        {
-            return Err("Worker V2 envelope filename does not bind its publication".to_string());
-        }
+        let envelope = if schema == "Worker V2" {
+            let envelope = WorkerV2LoadEnvelopeV1::from_bytes(&exact_bytes)
+                .map_err(|error| format!("invalid canonical Worker V2 envelope {name}: {error}"))?;
+            if envelope.to_bytes() != exact_bytes {
+                return Err("Worker V2 envelope encoding is not canonical".to_string());
+            }
+            if name
+                != worker_v2_load_envelope_name_v1(
+                    envelope.published_claim().receipt().publication_identity(),
+                )
+            {
+                return Err("Worker V2 envelope filename does not bind its publication".to_string());
+            }
+            ApplicationEnvelopeWireV1::WorkerV2(Box::new(envelope))
+        } else {
+            let envelope = WorkerV3LoadEnvelopeWireV1::decode_canonical(&exact_bytes)
+                .map_err(|error| format!("invalid canonical Worker V3 envelope {name}: {error}"))?;
+            if envelope
+                .encode_canonical()
+                .map_err(|error| format!("failed to re-encode Worker V3 envelope: {error}"))?
+                != exact_bytes
+            {
+                return Err("Worker V3 envelope encoding is not canonical".to_string());
+            }
+            ApplicationEnvelopeWireV1::WorkerV3(Box::new(envelope))
+        };
         file.seek(SeekFrom::Start(0))
             .map_err(|error| format!("failed to rewind canonical Worker V2 envelope: {error}"))?;
         let artifact_directory_file = directory.try_clone_for_transfer()?;
@@ -652,11 +718,22 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
     }
 
     fn retain_current_lease(mut self) -> Result<Self, String> {
-        let lease = reacquire_current_hsaco_publication_lease_v1(
-            &self.directory.child_path(),
-            self.envelope.published_claim(),
-        )
-        .map_err(|error| format!("{}: {error}", self.name))?;
+        let lease = match &self.envelope {
+            ApplicationEnvelopeWireV1::WorkerV2(envelope) => {
+                reacquire_current_hsaco_publication_lease_v1(
+                    &self.directory.child_path(),
+                    envelope.published_claim(),
+                )
+                .map_err(|error| format!("{}: {error}", self.name))?
+            }
+            ApplicationEnvelopeWireV1::WorkerV3(envelope) => {
+                reacquire_current_hsaco_publication_lease_v3(
+                    &self.directory.child_path(),
+                    envelope.published_claim(),
+                )
+                .map_err(|error| format!("{}: {error}", self.name))?
+            }
+        };
         self.current_lease = Some(lease);
         Ok(self)
     }
@@ -678,19 +755,23 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
             .map_err(|error| format!("failed to rewind inherited envelope: {error}"))?;
         let mut bytes = Vec::with_capacity(self.exact_bytes.len().saturating_add(1));
         Read::by_ref(&mut self.file)
-            .take((MAX_WORKER_V2_LOAD_ENVELOPE_BYTES + 1) as u64)
+            .take((self.exact_bytes.len() + 1) as u64)
             .read_to_end(&mut bytes)
             .map_err(|error| format!("failed to re-read inherited envelope: {error}"))?;
         let stat = fstat(&self.file)
             .map_err(|error| format!("failed to re-inspect inherited envelope: {error}"))?;
         validate_envelope_stat(self.directory, &self.name, &stat)?;
         if FileSnapshot::from_stat(&stat) != self.snapshot || bytes != self.exact_bytes {
-            return Err("inherited Worker V2 envelope changed after validation".to_string());
+            return Err(format!(
+                "inherited {} envelope changed after validation",
+                self.envelope.schema_name()
+            ));
         }
-        let decoded = WorkerV2LoadEnvelopeV1::from_bytes(&bytes)
-            .map_err(|error| format!("inherited Worker V2 envelope is no longer valid: {error}"))?;
-        if decoded != self.envelope || decoded.to_bytes() != bytes {
-            return Err("inherited Worker V2 envelope identity changed".to_string());
+        if self.envelope.encode_canonical()? != bytes {
+            return Err(format!(
+                "inherited {} envelope identity changed",
+                self.envelope.schema_name()
+            ));
         }
         self.validate_retained_currentness()?;
         self.directory
@@ -704,13 +785,12 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
     pub(crate) fn configure_child_with_timeouts(
         &mut self,
         command: &mut Command,
-        application: WorkerV2ApplicationIdentityV1,
+        application_v2: WorkerV2ApplicationIdentityV1,
+        application_v3: WorkerV3ApplicationIdentityV1,
         timeouts: ApplicationTimeouts,
     ) -> Result<PendingApplicationAck, String> {
         self.revalidate()?;
         let reaper = application_reaper().reserve()?;
-        let expectation = WorkerV2ApplicationHandoffExpectationV1::new(&self.envelope, application);
-        let challenge = random_challenge()?;
         ensure_child_subreaper()?;
         let (ack_read, ack_write) = cloexec_pipe()?;
         #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
@@ -728,29 +808,106 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
         let test_ready_fd = test_ready_write.as_ref().map(AsRawFd::as_raw_fd);
         let expected = self.snapshot;
-        command
-            .env(
-                WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
-                envelope_fd.to_string(),
-            )
-            .env(
-                WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
-                artifact_directory_fd.to_string(),
-            )
-            .env(
-                WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
-                expectation.commitment().to_hex(),
-            )
-            .env(
-                WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
-                ack_fd.to_string(),
-            )
-            .env(
-                WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
-                challenge.to_hex(),
-            );
         let directory_stat = fstat(&self.artifact_directory_file)
             .map_err(|error| format!("failed to inspect inherited artifact directory: {error}"))?;
+        let ack_stat = fstat(&ack_write)
+            .map_err(|error| format!("failed to inspect application acknowledgment: {error}"))?;
+        let protocol = match &self.envelope {
+            ApplicationEnvelopeWireV1::WorkerV2(envelope) => {
+                let expectation =
+                    WorkerV2ApplicationHandoffExpectationV1::new(envelope, application_v2);
+                let challenge = random_v2_challenge()?;
+                command
+                    .env(
+                        WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
+                        envelope_fd.to_string(),
+                    )
+                    .env(
+                        WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
+                        artifact_directory_fd.to_string(),
+                    )
+                    .env(
+                        WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
+                        expectation.commitment().to_hex(),
+                    )
+                    .env(
+                        WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
+                        ack_fd.to_string(),
+                    )
+                    .env(
+                        WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+                        challenge.to_hex(),
+                    );
+                ApplicationHandoffExpectationV1::WorkerV2 {
+                    expectation,
+                    challenge,
+                }
+            }
+            ApplicationEnvelopeWireV1::WorkerV3(_) => {
+                let envelope = WorkerV3LoadEnvelopeIdentityV1::from_exact_bytes(&self.exact_bytes)
+                    .map_err(|error| format!("failed to identify exact V3 envelope: {error}"))?;
+                let envelope_stat = fstat(&self.file)
+                    .map_err(|error| format!("failed to inspect inherited V3 envelope: {error}"))?;
+                let inputs = [
+                    descriptor_occurrence(1, &envelope_stat)?,
+                    descriptor_occurrence(2, &directory_stat)?,
+                    descriptor_occurrence(3, &ack_stat)?,
+                ];
+                let occurrence = WorkerV3ApplicationOccurrenceV1::new(
+                    application_v3,
+                    random_identity_bytes()?,
+                    &inputs,
+                )
+                .map_err(|error| format!("failed to bind V3 application occurrence: {error}"))?;
+                let expectation =
+                    WorkerV3ApplicationHandoffExpectationV1::new(envelope, &occurrence);
+                let challenge =
+                    WorkerV3ApplicationHandoffChallengeV1::from_bytes(random_identity_bytes()?)
+                        .map_err(|error| format!("invalid V3 application challenge: {error}"))?;
+                command
+                    .env(
+                        WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1,
+                        envelope_fd.to_string(),
+                    )
+                    .env(
+                        WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
+                        artifact_directory_fd.to_string(),
+                    )
+                    .env(
+                        WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
+                        ack_fd.to_string(),
+                    )
+                    .env(
+                        WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1,
+                        encode_lower_hex(&occurrence.encode_canonical().map_err(|error| {
+                            format!("failed to encode V3 application occurrence: {error}")
+                        })?),
+                    )
+                    .env(
+                        WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
+                        encode_lower_hex(
+                            &expectation
+                                .commitment()
+                                .encode_canonical()
+                                .map_err(|error| {
+                                    format!("failed to encode V3 commitment: {error}")
+                                })?,
+                        ),
+                    )
+                    .env(
+                        WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+                        encode_lower_hex(
+                            &challenge.encode_canonical().map_err(|error| {
+                                format!("failed to encode V3 challenge: {error}")
+                            })?,
+                        ),
+                    );
+                ApplicationHandoffExpectationV1::WorkerV3 {
+                    expectation,
+                    challenge,
+                }
+            }
+        };
         let directory_device = directory_stat.st_dev;
         let directory_inode = directory_stat.st_ino;
         let seccomp_filter = no_fork_application_filter();
@@ -816,8 +973,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         Ok(PendingApplicationAck {
             read: ack_read,
             parent_write: Some(ack_write),
-            expectation,
-            challenge,
+            protocol,
             sandbox: Some(sandbox),
             reaper: Some(reaper),
             timeouts,
@@ -928,8 +1084,7 @@ impl ApplicationHandoffFailure {
 pub(crate) struct PendingApplicationAck {
     read: File,
     parent_write: Option<File>,
-    expectation: WorkerV2ApplicationHandoffExpectationV1,
-    challenge: WorkerV2ApplicationHandoffChallengeV1,
+    protocol: ApplicationHandoffExpectationV1,
     sandbox: Option<PendingApplicationSandbox>,
     reaper: Option<ReaperReservation>,
     timeouts: ApplicationTimeouts,
@@ -937,6 +1092,46 @@ pub(crate) struct PendingApplicationAck {
     test_ready_read: Option<File>,
     #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
     test_ready_parent_write: Option<File>,
+}
+
+#[derive(Clone, Copy)]
+enum ApplicationHandoffExpectationV1 {
+    WorkerV2 {
+        expectation: WorkerV2ApplicationHandoffExpectationV1,
+        challenge: WorkerV2ApplicationHandoffChallengeV1,
+    },
+    WorkerV3 {
+        expectation: WorkerV3ApplicationHandoffExpectationV1,
+        challenge: WorkerV3ApplicationHandoffChallengeV1,
+    },
+}
+
+impl ApplicationHandoffExpectationV1 {
+    const fn maximum_ack_bytes(self) -> usize {
+        match self {
+            Self::WorkerV2 { .. } => WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1,
+            Self::WorkerV3 { .. } => WORKER_V3_APPLICATION_HANDOFF_ACK_BYTES_V1,
+        }
+    }
+
+    fn validate_ack(self, bytes: &[u8]) -> Result<(), String> {
+        match self {
+            Self::WorkerV2 {
+                expectation,
+                challenge,
+            } => WorkerV2ApplicationHandoffAckV1::decode_canonical(bytes)
+                .map_err(|error| format!("invalid Worker V2 application acknowledgment: {error}"))?
+                .validate(expectation, challenge)
+                .map_err(|error| format!("rejected Worker V2 application acknowledgment: {error}")),
+            Self::WorkerV3 {
+                expectation,
+                challenge,
+            } => WorkerV3ApplicationHandoffAckV1::decode_canonical(bytes)
+                .map_err(|error| format!("invalid Worker V3 application acknowledgment: {error}"))?
+                .validate(expectation, challenge)
+                .map_err(|error| format!("rejected Worker V3 application acknowledgment: {error}")),
+        }
+    }
 }
 
 impl PendingApplicationAck {
@@ -965,17 +1160,13 @@ impl PendingApplicationAck {
         {
             return Err(self.failure(message, Some(sandbox)));
         }
-        let result = read_application_handoff_ack(&mut self.read, child, self.timeouts.ack)
-            .and_then(|bytes| {
-                WorkerV2ApplicationHandoffAckV1::decode_canonical(&bytes)
-                    .map_err(|error| format!("invalid application handoff acknowledgment: {error}"))
-            })
-            .and_then(|ack| {
-                ack.validate(self.expectation, self.challenge)
-                    .map_err(|error| {
-                        format!("rejected application handoff acknowledgment: {error}")
-                    })
-            });
+        let result = read_application_handoff_ack(
+            &mut self.read,
+            child,
+            self.timeouts.ack,
+            self.protocol.maximum_ack_bytes(),
+        )
+        .and_then(|bytes| self.protocol.validate_ack(&bytes));
         match result {
             Ok(()) => Ok(ApplicationHandoffGuard {
                 cleanup: Some(self.cleanup(Some(sandbox))),
@@ -1013,11 +1204,12 @@ fn read_application_handoff_ack(
     read: &mut File,
     child: &Child,
     timeout: Duration,
+    maximum_bytes: usize,
 ) -> Result<Vec<u8>, String> {
     let deadline = Instant::now()
         .checked_add(timeout)
         .ok_or_else(|| "application handoff acknowledgment deadline overflowed".to_string())?;
-    let mut bytes = Vec::with_capacity(WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1 + 1);
+    let mut bytes = Vec::with_capacity(maximum_bytes + 1);
     loop {
         poll_readable(read.as_raw_fd(), deadline)?;
         let mut chunk = [0_u8; 256];
@@ -1025,7 +1217,7 @@ fn read_application_handoff_ack(
             Ok(0) => break,
             Ok(count) => {
                 bytes.extend_from_slice(&chunk[..count]);
-                if bytes.len() > WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1 {
+                if bytes.len() > maximum_bytes {
                     return Err("application handoff acknowledgment has extra bytes".to_string());
                 }
             }
@@ -1154,7 +1346,7 @@ fn cloexec_pipe() -> Result<(File, File), String> {
     })
 }
 
-fn random_challenge() -> Result<WorkerV2ApplicationHandoffChallengeV1, String> {
+fn random_identity_bytes() -> Result<[u8; 32], String> {
     let mut bytes = [0_u8; 32];
     let mut offset = 0;
     while offset != bytes.len() {
@@ -1174,8 +1366,35 @@ fn random_challenge() -> Result<WorkerV2ApplicationHandoffChallengeV1, String> {
             "failed to generate application handoff challenge: {error}"
         ));
     }
-    WorkerV2ApplicationHandoffChallengeV1::from_bytes(bytes)
+    Ok(bytes)
+}
+
+fn random_v2_challenge() -> Result<WorkerV2ApplicationHandoffChallengeV1, String> {
+    WorkerV2ApplicationHandoffChallengeV1::from_bytes(random_identity_bytes()?)
         .map_err(|error| format!("invalid application handoff challenge: {error}"))
+}
+
+fn descriptor_occurrence(
+    slot: u16,
+    stat: &rustix::fs::Stat,
+) -> Result<WorkerV3ApplicationInputOccurrenceV1, String> {
+    WorkerV3ApplicationInputOccurrenceV1::from_linux_descriptor_v1(
+        slot,
+        stat.st_dev,
+        stat.st_ino,
+        stat.st_mode,
+    )
+    .map_err(|error| format!("failed to identify application descriptor slot {slot}: {error}"))
+}
+
+fn encode_lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
 }
 
 fn poll_readable(descriptor: RawFd, deadline: Instant) -> Result<(), String> {
@@ -1483,11 +1702,21 @@ fn collect_envelope_names(
                 "artifact directory exceeds {MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1} visible entries"
             ));
         }
-        if !bytes.starts_with(ENVELOPE_PREFIX) {
+        let canonical = if bytes.starts_with(ENVELOPE_PREFIX) {
+            if !is_canonical_v2_envelope_name(bytes) {
+                return Err("malformed Worker V2 envelope publication name".to_string());
+            }
+            true
+        } else if bytes.starts_with(V3_ENVELOPE_PREFIX) && bytes.ends_with(V3_ENVELOPE_SUFFIX) {
+            if !is_canonical_v3_envelope_name(bytes) {
+                return Err("malformed Worker V3 envelope publication name".to_string());
+            }
+            true
+        } else {
+            false
+        };
+        if !canonical {
             return Ok(());
-        }
-        if !is_canonical_envelope_name(bytes) {
-            return Err("malformed Worker V2 envelope publication name".to_string());
         }
         if names.len() == MAX_ENVELOPE_CANDIDATES {
             return Err(format!(
@@ -1505,7 +1734,7 @@ fn collect_envelope_names(
     Ok(names)
 }
 
-fn is_canonical_envelope_name(bytes: &[u8]) -> bool {
+fn is_canonical_v2_envelope_name(bytes: &[u8]) -> bool {
     bytes.len() == ENVELOPE_NAME_BYTES
         && bytes.starts_with(ENVELOPE_PREFIX)
         && bytes.ends_with(ENVELOPE_SUFFIX)
@@ -1514,13 +1743,35 @@ fn is_canonical_envelope_name(bytes: &[u8]) -> bool {
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
+fn is_canonical_v3_envelope_name(bytes: &[u8]) -> bool {
+    bytes.len() == V3_ENVELOPE_NAME_BYTES
+        && bytes.starts_with(V3_ENVELOPE_PREFIX)
+        && bytes.ends_with(V3_ENVELOPE_SUFFIX)
+        && bytes[V3_ENVELOPE_PREFIX.len()..V3_ENVELOPE_PREFIX.len() + 64]
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn validate_single_envelope_schema(names: &[String]) -> Result<(), String> {
+    let v2_names = names
+        .iter()
+        .filter(|name| is_canonical_v2_envelope_name(name.as_bytes()))
+        .count();
+    if v2_names != 0 && v2_names != names.len() {
+        Err("Worker V2 and Worker V3 application envelopes cannot coexist".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_envelope_stat(
     directory: &PinnedDirectory,
     name: &str,
     opened: &rustix::fs::Stat,
 ) -> Result<(), String> {
-    let linked = statat(directory.file(), name, AtFlags::SYMLINK_NOFOLLOW)
-        .map_err(|error| format!("failed to inspect linked Worker V2 envelope {name}: {error}"))?;
+    let linked = statat(directory.file(), name, AtFlags::SYMLINK_NOFOLLOW).map_err(|error| {
+        format!("failed to inspect linked application envelope {name}: {error}")
+    })?;
     if FileType::from_raw_mode(opened.st_mode) != FileType::RegularFile
         || opened.st_dev != linked.st_dev
         || opened.st_ino != linked.st_ino
@@ -1528,7 +1779,7 @@ fn validate_envelope_stat(
         || opened.st_uid != unsafe { libc::geteuid() }
         || opened.st_mode & 0o077 != 0
     {
-        return Err(format!("refusing unsafe Worker V2 envelope {name}"));
+        return Err(format!("refusing unsafe application envelope {name}"));
     }
     Ok(())
 }
@@ -1651,6 +1902,15 @@ mod tests {
         name
     }
 
+    fn canonical_v3_envelope_name(fill: u8) -> Vec<u8> {
+        assert!(fill.is_ascii_hexdigit() && !fill.is_ascii_uppercase());
+        let mut name = Vec::with_capacity(V3_ENVELOPE_NAME_BYTES);
+        name.extend_from_slice(V3_ENVELOPE_PREFIX);
+        name.extend(std::iter::repeat_n(fill, 64));
+        name.extend_from_slice(V3_ENVELOPE_SUFFIX);
+        name
+    }
+
     #[test]
     fn artifact_scan_accepts_exact_total_entry_bound() {
         let mut visited = 0_usize;
@@ -1712,6 +1972,41 @@ mod tests {
                 String::from_utf8(first).unwrap(),
                 String::from_utf8(last).unwrap(),
             ]
+        );
+    }
+
+    #[test]
+    fn artifact_scan_finds_v3_envelopes_and_ignores_v3_readiness_siblings() {
+        let envelope = canonical_v3_envelope_name(b'a');
+        let claim = format!(
+            "{}{}.claim",
+            std::str::from_utf8(V3_ENVELOPE_PREFIX).unwrap(),
+            "b".repeat(64)
+        );
+        let receipt = format!(
+            "{}{}.receipt",
+            std::str::from_utf8(V3_ENVELOPE_PREFIX).unwrap(),
+            "c".repeat(64)
+        );
+        let names = collect_envelope_names(|visit| {
+            visit(claim.as_bytes())?;
+            visit(&envelope)?;
+            visit(receipt.as_bytes())
+        })
+        .unwrap();
+        assert_eq!(names, [String::from_utf8(envelope).unwrap()]);
+        validate_single_envelope_schema(&names).unwrap();
+    }
+
+    #[test]
+    fn application_handoff_rejects_v2_v3_envelope_coexistence() {
+        let names = [
+            String::from_utf8(canonical_envelope_name(b'a')).unwrap(),
+            String::from_utf8(canonical_v3_envelope_name(b'b')).unwrap(),
+        ];
+        assert_eq!(
+            validate_single_envelope_schema(&names),
+            Err("Worker V2 and Worker V3 application envelopes cannot coexist".to_string())
         );
     }
 
@@ -1949,9 +2244,13 @@ mod tests {
         drop(ack_write);
 
         await_nonreaping_exit(&application);
-        let bytes =
-            read_application_handoff_ack(&mut ack_read, &application, Duration::from_secs(1))
-                .unwrap();
+        let bytes = read_application_handoff_ack(
+            &mut ack_read,
+            &application,
+            Duration::from_secs(1),
+            WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1,
+        )
+        .unwrap();
         assert_eq!(bytes, b"x");
         assert!(WorkerV2ApplicationHandoffAckV1::decode_canonical(&bytes).is_err());
         assert_eq!(
@@ -2149,9 +2448,14 @@ mod tests {
         let child = command.spawn().unwrap();
         drop(ack_write);
         assert!(
-            read_application_handoff_ack(&mut ack_read, &child, Duration::from_secs(1))
-                .unwrap()
-                .is_empty()
+            read_application_handoff_ack(
+                &mut ack_read,
+                &child,
+                Duration::from_secs(1),
+                WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1,
+            )
+            .unwrap()
+            .is_empty()
         );
         await_nonreaping_exit(&child);
         assert_eq!(

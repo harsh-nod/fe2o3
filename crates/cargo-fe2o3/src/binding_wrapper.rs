@@ -2849,11 +2849,11 @@ enum ManagedWorkerV2 {
         compiler_closure: CompilerClosureV2,
     },
     RecoveryV3 {
-        recovered: RecoveredProtectedWorkerV3HsacoPublicationV1,
+        recovered: Box<RecoveredProtectedWorkerV3HsacoPublicationV1>,
         compiler_closure: CompilerClosureV2,
     },
     RecoveryReadyV3 {
-        envelope: RecoveredWorkerV3LoadEnvelopeV1,
+        envelope: Box<RecoveredWorkerV3LoadEnvelopeV1>,
     },
 }
 
@@ -3119,7 +3119,9 @@ fn prepare_managed_attempt(
             if let Some(envelope) = recovered_envelope {
                 (
                     attempt,
-                    Some(ManagedWorkerV2::RecoveryReadyV3 { envelope }),
+                    Some(ManagedWorkerV2::RecoveryReadyV3 {
+                        envelope: Box::new(envelope),
+                    }),
                     false,
                 )
             } else {
@@ -3129,7 +3131,7 @@ fn prepare_managed_attempt(
                     Ok(recovered) => (
                         attempt,
                         Some(ManagedWorkerV2::RecoveryV3 {
-                            recovered,
+                            recovered: Box::new(recovered),
                             compiler_closure,
                         }),
                         false,
@@ -3381,9 +3383,9 @@ fn complete_managed_attempt_inner(
             ManagedWorkerV2::RecoveryV3 {
                 recovered,
                 compiler_closure,
-            } => complete_recovered_production_worker_v3(managed, recovered, compiler_closure),
+            } => complete_recovered_production_worker_v3(managed, *recovered, compiler_closure),
             ManagedWorkerV2::RecoveryReadyV3 { envelope } => {
-                complete_ready_production_worker_v3(managed, envelope)
+                complete_ready_production_worker_v3(managed, *envelope)
             }
         };
     }

@@ -18,7 +18,9 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use fe2o3_worker_v2_bundle::SealedStaticApplicationErrorV1;
+use fe2o3_worker_v2_bundle::{
+    SealedStaticApplicationErrorV1, WorkerV3ApplicationHandoffProtocolErrorV1,
+};
 
 /// A deliberately bounded read prevents a selected tool path from causing unbounded hashing work.
 pub(crate) const MAX_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
@@ -86,6 +88,10 @@ pub(crate) enum PinExecutableError {
     UnsealedApplicationRuntime {
         path: PathBuf,
         source: SealedStaticApplicationErrorV1,
+    },
+    InvalidV3ApplicationIdentity {
+        path: PathBuf,
+        source: WorkerV3ApplicationHandoffProtocolErrorV1,
     },
 }
 
@@ -180,6 +186,11 @@ impl fmt::Display for PinExecutableError {
                 "application {} does not satisfy the sealed-static runtime profile: {source}",
                 path.display()
             ),
+            Self::InvalidV3ApplicationIdentity { path, source } => write!(
+                formatter,
+                "application {} has no valid Worker V3 application identity: {source}",
+                path.display()
+            ),
         }
     }
 }
@@ -193,6 +204,7 @@ impl Error for PinExecutableError {
             | Self::Rewind { source, .. }
             | Self::ExecutionStrategy { source, .. } => Some(source),
             Self::UnsealedApplicationRuntime { source, .. } => Some(source),
+            Self::InvalidV3ApplicationIdentity { source, .. } => Some(source),
             Self::UnsupportedPlatform
             | Self::NotRegular { .. }
             | Self::NotExecutable { .. }
@@ -295,6 +307,7 @@ mod platform {
         snapshot: ObjectSnapshot,
         seals: SealFlags,
         identity: fe2o3_worker_v2_bundle::WorkerV2ApplicationIdentityV1,
+        identity_v3: fe2o3_worker_v2_bundle::WorkerV3ApplicationIdentityV1,
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -810,6 +823,16 @@ mod platform {
                         source,
                     }
                 })?;
+            let identity_v3 =
+                fe2o3_worker_v2_bundle::WorkerV3ApplicationIdentityV1::from_sealed_static_elf_v1(
+                    &bytes,
+                )
+                .map_err(|source| {
+                    PinExecutableError::InvalidV3ApplicationIdentity {
+                        path: self.display_path.clone(),
+                        source,
+                    }
+                })?;
 
             let writable_path = PathBuf::from(format!("/proc/self/fd/{}", image.as_raw_fd()));
             let read_only_fd = rustix::fs::open(
@@ -841,6 +864,7 @@ mod platform {
                 snapshot,
                 seals,
                 identity,
+                identity_v3,
             })
         }
 
@@ -917,6 +941,12 @@ mod platform {
             &self,
         ) -> fe2o3_worker_v2_bundle::WorkerV2ApplicationIdentityV1 {
             self.identity
+        }
+
+        pub(crate) const fn identity_v3(
+            &self,
+        ) -> fe2o3_worker_v2_bundle::WorkerV3ApplicationIdentityV1 {
+            self.identity_v3
         }
 
         pub(crate) fn command(&self) -> Result<PinnedCommand<'_>, PinExecutableError> {

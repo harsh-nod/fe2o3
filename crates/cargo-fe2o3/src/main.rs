@@ -1503,6 +1503,7 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
         let pending_ack = handoff.configure_child_with_timeouts(
             child.as_command_mut(),
             application_identity,
+            sealed_application.identity_v3(),
             application_timeouts,
         )?;
         let mut process = child
