@@ -11,10 +11,11 @@ use dialect_gpu::{
 };
 use dialect_kernel::{
     AccessKindAttr, AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr, BranchArgsOp, BranchOp,
-    CheckedTiledIndex2DOp, DYNAMIC_EXTENT, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp,
-    IndexConstantOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexType,
-    InvocationIndexOp, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp, RankedViewOp,
-    RankedViewType, RequireEquivalentOp, ReturnOp, SUPPORTED_ELEMENT_WIDTHS,
+    CheckedTiledIndex2DOp, DYNAMIC_EXTENT, DeterministicJoinOp, DimensionOp, IndexBinaryKindAttr,
+    IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
+    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexType, InvocationIndexOp,
+    MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp,
+    RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp, SUPPORTED_ELEMENT_WIDTHS,
     SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantOp, SemanticSymbolOp,
     TensorConvergenceAttr, TensorLayoutOp,
 };
@@ -117,6 +118,14 @@ pub enum ProductionRankedOperationV1 {
         lhs: ProductionRankedValueV1,
         rhs: ProductionRankedValueV1,
     },
+    /// Abstract result of a source-authenticated total deterministic operation.
+    ///
+    /// The recipe retains dependencies only. It does not itself authenticate
+    /// source semantics or grant compiler, artifact, or launch authority.
+    DeterministicJoin {
+        result: ProductionRankedValueIdV1,
+        dependencies: Vec<ProductionRankedValueV1>,
+    },
     CheckedTiledIndex2D {
         result: ProductionRankedValueIdV1,
         invocation: ProductionRankedValueV1,
@@ -196,6 +205,20 @@ pub enum ProductionRankedTerminatorV1 {
         false_block: u32,
     },
     IndexLessThanArgs {
+        lhs: ProductionRankedValueV1,
+        rhs: ProductionRankedValueV1,
+        true_arguments: Vec<ProductionRankedValueV1>,
+        false_arguments: Vec<ProductionRankedValueV1>,
+        true_block: u32,
+        false_block: u32,
+    },
+    IndexEqual {
+        lhs: ProductionRankedValueV1,
+        rhs: ProductionRankedValueV1,
+        true_block: u32,
+        false_block: u32,
+    },
+    IndexEqualArgs {
         lhs: ProductionRankedValueV1,
         rhs: ProductionRankedValueV1,
         true_arguments: Vec<ProductionRankedValueV1>,
@@ -759,6 +782,22 @@ fn validate_operation(
             require_index(*rhs, argument_count, locals)?;
             Ok(Some((*result, RecipeValueKindV1::Index)))
         }
+        ProductionRankedOperationV1::DeterministicJoin {
+            result,
+            dependencies,
+        } => {
+            if !(1..=MAX_DETERMINISTIC_JOIN_INPUTS_V1).contains(&dependencies.len()) {
+                return Err(ProductionRankedKernelErrorV1::ResourceLimit {
+                    resource: "deterministic dependency",
+                    limit: MAX_DETERMINISTIC_JOIN_INPUTS_V1,
+                    actual: dependencies.len(),
+                });
+            }
+            for dependency in dependencies {
+                require_index(*dependency, argument_count, locals)?;
+            }
+            Ok(Some((*result, RecipeValueKindV1::Index)))
+        }
         ProductionRankedOperationV1::CheckedTiledIndex2D {
             result,
             invocation,
@@ -913,6 +952,11 @@ fn validate_block_argument_values_v1(
             validate(*lhs)?;
             validate(*rhs)?;
         }
+        ProductionRankedOperationV1::DeterministicJoin { dependencies, .. } => {
+            for dependency in dependencies {
+                validate(*dependency)?;
+            }
+        }
         ProductionRankedOperationV1::CheckedTiledIndex2D {
             invocation,
             component,
@@ -957,6 +1001,7 @@ fn validate_terminator_block_argument_values_v1(
     let validate = |value| validate_block_argument_value_v1(value, current_block, blocks);
     match terminator {
         ProductionRankedTerminatorV1::IndexLessThan { lhs, rhs, .. }
+        | ProductionRankedTerminatorV1::IndexEqual { lhs, rhs, .. }
         | ProductionRankedTerminatorV1::BranchArgsAdd {
             value: lhs,
             step: rhs,
@@ -966,6 +1011,13 @@ fn validate_terminator_block_argument_values_v1(
             validate(*rhs)
         }
         ProductionRankedTerminatorV1::IndexLessThanArgs {
+            lhs,
+            rhs,
+            true_arguments,
+            false_arguments,
+            ..
+        }
+        | ProductionRankedTerminatorV1::IndexEqualArgs {
             lhs,
             rhs,
             true_arguments,
@@ -1021,6 +1073,12 @@ fn validate_terminator(
             rhs,
             true_block,
             false_block,
+        }
+        | ProductionRankedTerminatorV1::IndexEqual {
+            lhs,
+            rhs,
+            true_block,
+            false_block,
         } => {
             require_index(*lhs, argument_count, locals)?;
             require_index(*rhs, argument_count, locals)?;
@@ -1028,6 +1086,14 @@ fn validate_terminator(
             target_without_arguments(*false_block)
         }
         ProductionRankedTerminatorV1::IndexLessThanArgs {
+            lhs,
+            rhs,
+            true_arguments,
+            false_arguments,
+            true_block,
+            false_block,
+        }
+        | ProductionRankedTerminatorV1::IndexEqualArgs {
             lhs,
             rhs,
             true_arguments,
@@ -1657,6 +1723,17 @@ fn materialize_operation(
             );
             (op.get_operation(), Some((*result, op.result(context))))
         }
+        ProductionRankedOperationV1::DeterministicJoin {
+            result,
+            dependencies,
+        } => {
+            let dependencies = dependencies
+                .iter()
+                .map(|value| resolve_value(*value, arguments, locals, block_arguments))
+                .collect::<Result<Vec<_>, _>>()?;
+            let op = DeterministicJoinOp::new(context, dependencies);
+            (op.get_operation(), Some((*result, op.result(context))))
+        }
         ProductionRankedOperationV1::Dimension {
             result,
             view,
@@ -1827,6 +1904,42 @@ fn materialize_terminator(
             true_block,
             false_block,
         } => IndexLessThanBranchArgsOp::new(
+            context,
+            resolve_value(*lhs, arguments, locals, block_arguments)?,
+            resolve_value(*rhs, arguments, locals, block_arguments)?,
+            true_arguments
+                .iter()
+                .map(|value| resolve_value(*value, arguments, locals, block_arguments))
+                .collect::<Result<Vec<_>, _>>()?,
+            false_arguments
+                .iter()
+                .map(|value| resolve_value(*value, arguments, locals, block_arguments))
+                .collect::<Result<Vec<_>, _>>()?,
+            blocks[*true_block as usize],
+            blocks[*false_block as usize],
+        )
+        .get_operation(),
+        ProductionRankedTerminatorV1::IndexEqual {
+            lhs,
+            rhs,
+            true_block,
+            false_block,
+        } => IndexEqualBranchOp::new(
+            context,
+            resolve_value(*lhs, arguments, locals, block_arguments)?,
+            resolve_value(*rhs, arguments, locals, block_arguments)?,
+            blocks[*true_block as usize],
+            blocks[*false_block as usize],
+        )
+        .get_operation(),
+        ProductionRankedTerminatorV1::IndexEqualArgs {
+            lhs,
+            rhs,
+            true_arguments,
+            false_arguments,
+            true_block,
+            false_block,
+        } => IndexEqualBranchArgsOp::new(
             context,
             resolve_value(*lhs, arguments, locals, block_arguments)?,
             resolve_value(*rhs, arguments, locals, block_arguments)?,

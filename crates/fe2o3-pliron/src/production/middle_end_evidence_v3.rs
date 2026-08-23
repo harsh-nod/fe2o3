@@ -1096,6 +1096,14 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             hash_value(digest, *lhs);
             hash_value(digest, *rhs);
         }
+        ProductionRankedOperationV1::DeterministicJoin {
+            result,
+            dependencies,
+        } => {
+            digest.update([17]);
+            digest.update(result.get().to_le_bytes());
+            hash_values(digest, dependencies);
+        }
         ProductionRankedOperationV1::CheckedTiledIndex2D {
             result,
             invocation,
@@ -1318,6 +1326,34 @@ fn hash_ranked_terminator(digest: &mut Sha256, terminator: &ProductionRankedTerm
             false_block,
         } => {
             digest.update([7]);
+            hash_value(digest, *lhs);
+            hash_value(digest, *rhs);
+            hash_values(digest, true_arguments);
+            hash_values(digest, false_arguments);
+            digest.update(true_block.to_le_bytes());
+            digest.update(false_block.to_le_bytes());
+        }
+        ProductionRankedTerminatorV1::IndexEqual {
+            lhs,
+            rhs,
+            true_block,
+            false_block,
+        } => {
+            digest.update([8]);
+            hash_value(digest, *lhs);
+            hash_value(digest, *rhs);
+            digest.update(true_block.to_le_bytes());
+            digest.update(false_block.to_le_bytes());
+        }
+        ProductionRankedTerminatorV1::IndexEqualArgs {
+            lhs,
+            rhs,
+            true_arguments,
+            false_arguments,
+            true_block,
+            false_block,
+        } => {
+            digest.update([9]);
             hash_value(digest, *lhs);
             hash_value(digest, *rhs);
             hash_values(digest, true_arguments);
