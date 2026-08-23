@@ -136,6 +136,7 @@ pub struct F32AccumulatorFragment<
 
 impl<'wave> F32AccumulatorFragment<'wave> {
     /// Creates the zero accumulator associated with one authenticated wave lane.
+    #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_f32_accumulator_fragment_zero_v1"]
     pub fn zero(lane: &'wave WaveLane<Wave64>) -> Self {
         Self::from_values_for_wave(lane, [0.0; 4])
@@ -162,6 +163,7 @@ impl<'wave, Profile, Distribution, Width: WaveWidth>
 
 /// Rejection while establishing one checked row-major BF16 matrix view.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[rustc_diagnostic_item = "fe2o3_device_bf16_mfma_matrix_view_error_v1"]
 pub enum Bf16MatrixViewError {
     /// A nonempty matrix has a stride smaller than its logical column count.
     InvalidStride,
