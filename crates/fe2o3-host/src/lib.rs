@@ -399,10 +399,11 @@ pub use worker_v2_bundle_admission::{
     WorkerV2FullLineagePrerequisiteChallengeIdentityV2, WorkerV2TypedKernelSelectionError,
 };
 pub use worker_v3_verification_admission::{
-    AuthenticatedWorkerV3ExecutableV1, WorkerV3SafetyPropertiesV1, WorkerV3SafetyPropertyV1,
+    AuthenticatedWorkerV3ExecutableV1, WorkerV3AuditorV1, WorkerV3SafetyPropertiesV1,
+    WorkerV3SafetyPropertyV1, WorkerV3VerificationAuditErrorV1,
     WorkerV3VerificationAuthenticationErrorV1, WorkerV3VerificationChallengeIdentityV1,
     WorkerV3VerificationDecisionErrorV1, WorkerV3VerificationDecisionV1,
-    WorkerV3VerificationRequestV1, WorkerV3VerifierV1,
+    WorkerV3VerificationRequestV1, WorkerV3VerifierV1, audit_recovered_worker_v3_verification_v1,
 };
 
 /// Compiler-generated host bindings. This is an unstable implementation SPI,

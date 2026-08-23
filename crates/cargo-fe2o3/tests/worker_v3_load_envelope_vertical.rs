@@ -43,10 +43,11 @@ use fe2o3_host::{
     HsaRuntimeIdentityV1, HsaUnloadObservationV1, ObservedContext,
     RecoveredWorkerV3AdmissionErrorV1, ReviewedHsaExecutableLifecycleAdapterV1,
     ReviewedHsaImplicitKernargAdapterV1, ValidatedCompilerGeneratedSemanticWitnessV1,
-    WorkerV3GeneratedDispatchErrorV1, WorkerV3SafetyPropertiesV1,
+    WorkerV3AuditorV1, WorkerV3GeneratedDispatchErrorV1, WorkerV3SafetyPropertiesV1,
     WorkerV3VerificationAuthenticationErrorV1, WorkerV3VerificationDecisionErrorV1,
     WorkerV3VerificationDecisionV1, WorkerV3VerificationRequestV1, WorkerV3VerifierV1,
-    admit_recovered_worker_v3_descriptor_v1, semantic_witness_from_backend_v1,
+    admit_recovered_worker_v3_descriptor_v1, audit_recovered_worker_v3_verification_v1,
+    semantic_witness_from_backend_v1,
 };
 use fe2o3_hsa_runtime::ReviewedHsaRuntimeAdapterV1;
 use fe2o3_kernel_descriptor::KernelId;
@@ -60,8 +61,7 @@ use fe2o3_worker_v2_bundle::{
     recover_worker_v3_load_envelope_v1,
 };
 use fe2o3_worker_v3_authority::{
-    PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1,
-    ProductionScalarGemmWorkerV3VerifierErrorV1, ProductionScalarGemmWorkerV3VerifierV1,
+    PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1, ProductionScalarGemmWorkerV3VerifierV1,
 };
 use reserved_fe2o3_symbols::{
     GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1,
@@ -285,6 +285,29 @@ unsafe impl<'allocation> CompilerGeneratedWorkerV3ArgumentsV1<'allocation, Worke
 
 struct ReviewedTestWorkerV3Verifier {
     substitute_finalized: bool,
+}
+
+struct ReviewedTestWorkerV3Auditor;
+
+impl<K> WorkerV3AuditorV1<K> for ReviewedTestWorkerV3Auditor
+where
+    K: CompilerGeneratedKernelExpectationV1,
+{
+    type Error = Infallible;
+    type Evidence = ([u8; 32], u64);
+
+    fn audit(
+        &mut self,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
+    ) -> Result<Self::Evidence, Self::Error> {
+        let finalized_sha256: [u8; 32] = Sha256::digest(request.finalized_hsaco_bytes()).into();
+        assert_eq!(finalized_sha256, request.finalized_hsaco_sha256());
+        assert_eq!(
+            u64::try_from(request.finalized_hsaco_bytes().len()).unwrap(),
+            request.finalized_hsaco_length()
+        );
+        Ok((finalized_sha256, request.finalized_hsaco_length()))
+    }
 }
 
 // SAFETY: this synthetic verifier is confined to test-only fixtures. It mirrors every requested
@@ -1041,7 +1064,7 @@ fn synthetic_verifier_executes_real_scalar_gemm_through_strict_v3() {
 
 #[test]
 #[ignore = "requires exact scalar HSACO and a protected general-GEMM Verus runtime closure"]
-fn production_verifier_retains_exact_proof_and_denies_open_authority() {
+fn production_verifier_audits_exact_proof_and_preserves_admission_custody() {
     let hsaco_path = std::env::var_os("FE2O3_GFX942_SCALAR_GEMM_V3_RAW_HSACO")
         .expect("FE2O3_GFX942_SCALAR_GEMM_V3_RAW_HSACO is not set");
     let runtime_root = std::env::var_os("FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT")
@@ -1072,26 +1095,22 @@ fn production_verifier_retains_exact_proof_and_denies_open_authority() {
     )
     .unwrap();
 
-    let error = match AuthenticatedWorkerV3ExecutableV1::<scalar_gemm_v1_gpu::Marker>::authenticate(
-        admitted,
+    let audit = audit_recovered_worker_v3_verification_v1::<scalar_gemm_v1_gpu::Marker, _>(
+        &admitted,
         &mut verifier,
-    ) {
-        Ok(_) => panic!("incomplete production proof unexpectedly granted V3 authority"),
-        Err(error) => error,
-    };
-    assert!(matches!(
-        error,
-        WorkerV3VerificationAuthenticationErrorV1::Verifier(
-            ProductionScalarGemmWorkerV3VerifierErrorV1::OpenAuthorityObligations
-        )
-    ));
+    )
+    .unwrap();
+    admitted.revalidate_currentness().unwrap();
+    assert!(!admitted.authenticates_verification_authority());
+    assert!(!admitted.grants_load_authority());
+    assert!(!admitted.grants_launch_authority());
     assert_eq!(
-        verifier.open_authority_obligations(),
+        audit.open_authority_obligations(),
         PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1
     );
-    let proof = verifier
-        .take_last_proof()
-        .expect("successful retained proof must survive the authority denial");
+    assert!(!audit.can_enter_worker_v3_gate());
+    assert!(!audit.grants_artifact_or_runtime_authority());
+    let proof = audit.proof();
     assert!(proof.authenticates_retained_verus_execution());
     assert!(proof.binds_worker_v3_challenge());
     assert!(proof.establishes_exact_scalar_gemm_kir_profile());
@@ -1142,6 +1161,31 @@ fn v3_host_admission_rejects_incompatible_observed_target_features() {
         ),
         Err(RecoveredWorkerV3AdmissionErrorV1::ObservedTargetMismatch)
     ));
+}
+
+#[test]
+fn borrowed_v3_audit_preserves_exact_admission_custody_without_authority() {
+    let (_directory, recovered) = recovered_host_fixture();
+    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
+    let admitted = admit_recovered_worker_v3_descriptor_v1(
+        recovered,
+        KernelId::from_bytes([0xa1; 32]),
+        &observed,
+    )
+    .unwrap();
+    let lineage = admitted.lineage_identity();
+    let (finalized_sha256, finalized_length) = audit_recovered_worker_v3_verification_v1::<
+        WorkerV3VecAddMarker,
+        _,
+    >(&admitted, &mut ReviewedTestWorkerV3Auditor)
+    .unwrap();
+    assert_ne!(finalized_sha256, [0; 32]);
+    assert_ne!(finalized_length, 0);
+    assert_eq!(admitted.lineage_identity(), lineage);
+    admitted.revalidate_currentness().unwrap();
+    assert!(!admitted.authenticates_verification_authority());
+    assert!(!admitted.grants_load_authority());
+    assert!(!admitted.grants_launch_authority());
 }
 
 #[test]

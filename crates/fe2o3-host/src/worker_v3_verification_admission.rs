@@ -1,5 +1,6 @@
 use std::{error::Error, fmt, marker::PhantomData};
 
+use fe2o3_artifact_transaction::DurableCurrentLinkPublicationTokenV1;
 use fe2o3_hsaco::CodeObjectVersion;
 use fe2o3_kernel_descriptor::{KernelDescriptorV1, KernelId};
 use sha2::{Digest, Sha256};
@@ -222,6 +223,22 @@ pub unsafe trait WorkerV3VerifierV1<K: CompilerGeneratedKernelExpectationV1> {
     ) -> Result<WorkerV3VerificationDecisionV1, Self::Error>;
 }
 
+/// Non-authoritative review of one exact V3 verification request.
+///
+/// Implementing this safe trait cannot grant load or launch authority. The host retains admission
+/// custody, pins the current publication for the complete call, and returns only caller-defined
+/// evidence after revalidating currentness.
+pub trait WorkerV3AuditorV1<K: CompilerGeneratedKernelExpectationV1> {
+    type Error;
+    type Evidence;
+
+    /// Audits exact request bytes without constructing a verification decision.
+    fn audit(
+        &mut self,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
+    ) -> Result<Self::Evidence, Self::Error>;
+}
+
 /// Descriptive result returned by a reviewed V3 verifier.
 ///
 /// Public construction grants no authority. Only the private promotion transition can compare
@@ -338,38 +355,28 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
         admission: RecoveredWorkerV3PinnedDescriptorV1,
         verifier: &mut V,
     ) -> Result<Self, WorkerV3VerificationAuthenticationErrorV1<V::Error>> {
-        validate_compiler_generated_semantic_witness_v1::<K>()
-            .map_err(WorkerV3VerificationAuthenticationErrorV1::SemanticWitness)?;
-        validate_marker::<K>(admission.descriptor())
-            .map_err(WorkerV3VerificationAuthenticationErrorV1::Marker)?;
         let current = admission
             .acquire_retained_currentness_token()
             .map_err(WorkerV3VerificationAuthenticationErrorV1::CurrentPublication)?;
-        let lineage = admission.lineage_evidence();
-        let generated_host_contract = generated_host_contract::<K>();
-        if generated_host_contract == [0; 32] {
-            return Err(WorkerV3VerificationAuthenticationErrorV1::UnsupportedGeneratedProfile);
-        }
-        let challenge = derive_challenge::<K>(lineage.identity(), generated_host_contract);
-        let request = WorkerV3VerificationRequestV1 {
-            challenge,
-            lineage,
-            handoff: admission.outer_handoff(),
-            finalized_hsaco: current.exact_artifact_bytes(),
-            descriptor: admission.descriptor(),
-            target: admission.target(),
-            code_object_version: admission.code_object_version(),
-            device: admission.device(),
-            generated_host_contract,
-            _marker: PhantomData,
-        };
+        let request = prepare_request::<K>(&admission, &current).map_err(|error| match error {
+            WorkerV3VerificationRequestPreparationErrorV1::SemanticWitness(error) => {
+                WorkerV3VerificationAuthenticationErrorV1::SemanticWitness(error)
+            }
+            WorkerV3VerificationRequestPreparationErrorV1::Marker(field) => {
+                WorkerV3VerificationAuthenticationErrorV1::Marker(field)
+            }
+            WorkerV3VerificationRequestPreparationErrorV1::UnsupportedGeneratedProfile => {
+                WorkerV3VerificationAuthenticationErrorV1::UnsupportedGeneratedProfile
+            }
+        })?;
         // SAFETY: safe callers cannot implement the verifier trait. Every returned field is
         // independently compared to the exact admitted request below.
-        let verification = unsafe { verifier.verify(&request) }
-            .map_err(WorkerV3VerificationAuthenticationErrorV1::Verifier)?;
+        let verification = unsafe { verifier.verify(&request) };
         admission
             .revalidate_retained_currentness_token(&current)
             .map_err(WorkerV3VerificationAuthenticationErrorV1::CurrentPublication)?;
+        let verification =
+            verification.map_err(WorkerV3VerificationAuthenticationErrorV1::Verifier)?;
         validate_decision::<K>(&request, &verification)
             .map_err(WorkerV3VerificationAuthenticationErrorV1::Decision)?;
         drop(current);
@@ -425,6 +432,77 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
     pub(crate) const fn admission(&self) -> &RecoveredWorkerV3PinnedDescriptorV1 {
         &self.admission
     }
+}
+
+/// Borrows one admitted V3 artifact for non-authoritative compiler/proof auditing.
+///
+/// Unlike [`AuthenticatedWorkerV3ExecutableV1::authenticate`], this operation does not consume
+/// admission custody and cannot produce a load-authorizing state. The exact current artifact is
+/// pinned and revalidated around the complete audit call.
+pub fn audit_recovered_worker_v3_verification_v1<K, A>(
+    admission: &RecoveredWorkerV3PinnedDescriptorV1,
+    auditor: &mut A,
+) -> Result<A::Evidence, WorkerV3VerificationAuditErrorV1<A::Error>>
+where
+    K: CompilerGeneratedKernelExpectationV1,
+    A: WorkerV3AuditorV1<K>,
+{
+    let current = admission
+        .acquire_retained_currentness_token()
+        .map_err(WorkerV3VerificationAuditErrorV1::CurrentPublication)?;
+    let request = prepare_request::<K>(admission, &current).map_err(|error| match error {
+        WorkerV3VerificationRequestPreparationErrorV1::SemanticWitness(error) => {
+            WorkerV3VerificationAuditErrorV1::SemanticWitness(error)
+        }
+        WorkerV3VerificationRequestPreparationErrorV1::Marker(field) => {
+            WorkerV3VerificationAuditErrorV1::Marker(field)
+        }
+        WorkerV3VerificationRequestPreparationErrorV1::UnsupportedGeneratedProfile => {
+            WorkerV3VerificationAuditErrorV1::UnsupportedGeneratedProfile
+        }
+    })?;
+    let evidence = auditor.audit(&request);
+    admission
+        .revalidate_retained_currentness_token(&current)
+        .map_err(WorkerV3VerificationAuditErrorV1::CurrentPublication)?;
+    evidence.map_err(WorkerV3VerificationAuditErrorV1::Auditor)
+}
+
+fn prepare_request<'admission, K: CompilerGeneratedKernelExpectationV1>(
+    admission: &'admission RecoveredWorkerV3PinnedDescriptorV1,
+    current: &'admission DurableCurrentLinkPublicationTokenV1,
+) -> Result<
+    WorkerV3VerificationRequestV1<'admission, K>,
+    WorkerV3VerificationRequestPreparationErrorV1,
+> {
+    validate_compiler_generated_semantic_witness_v1::<K>()
+        .map_err(WorkerV3VerificationRequestPreparationErrorV1::SemanticWitness)?;
+    validate_marker::<K>(admission.descriptor())
+        .map_err(WorkerV3VerificationRequestPreparationErrorV1::Marker)?;
+    let lineage = admission.lineage_evidence();
+    let generated_host_contract = generated_host_contract::<K>();
+    if generated_host_contract == [0; 32] {
+        return Err(WorkerV3VerificationRequestPreparationErrorV1::UnsupportedGeneratedProfile);
+    }
+    let challenge = derive_challenge::<K>(lineage.identity(), generated_host_contract);
+    Ok(WorkerV3VerificationRequestV1 {
+        challenge,
+        lineage,
+        handoff: admission.outer_handoff(),
+        finalized_hsaco: current.exact_artifact_bytes(),
+        descriptor: admission.descriptor(),
+        target: admission.target(),
+        code_object_version: admission.code_object_version(),
+        device: admission.device(),
+        generated_host_contract,
+        _marker: PhantomData,
+    })
+}
+
+enum WorkerV3VerificationRequestPreparationErrorV1 {
+    SemanticWitness(CompilerGeneratedSemanticWitnessErrorV1),
+    Marker(&'static str),
+    UnsupportedGeneratedProfile,
 }
 
 fn validate_marker<K: CompilerGeneratedKernelExpectationV1>(
@@ -576,6 +654,16 @@ pub enum WorkerV3VerificationAuthenticationErrorV1<E> {
     Decision(WorkerV3VerificationDecisionErrorV1),
 }
 
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum WorkerV3VerificationAuditErrorV1<E> {
+    SemanticWitness(CompilerGeneratedSemanticWitnessErrorV1),
+    Marker(&'static str),
+    UnsupportedGeneratedProfile,
+    CurrentPublication(RecoveredWorkerV3AdmissionErrorV1),
+    Auditor(E),
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum WorkerV3VerificationDecisionErrorV1 {
@@ -617,6 +705,25 @@ impl fmt::Display for WorkerV3VerificationDecisionErrorV1 {
     }
 }
 
+impl<E: fmt::Display> fmt::Display for WorkerV3VerificationAuditErrorV1<E> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SemanticWitness(error) => write!(formatter, "invalid generated witness: {error}"),
+            Self::Marker(field) => write!(formatter, "generated marker {field} mismatch"),
+            Self::UnsupportedGeneratedProfile => {
+                formatter.write_str("Worker V3 audit requires a generated host-contract identity")
+            }
+            Self::CurrentPublication(error) => {
+                write!(
+                    formatter,
+                    "Worker V3 publication revalidation failed: {error}"
+                )
+            }
+            Self::Auditor(error) => write!(formatter, "reviewed V3 audit failed: {error}"),
+        }
+    }
+}
+
 impl<E> Error for WorkerV3VerificationAuthenticationErrorV1<E>
 where
     E: Error + 'static,
@@ -633,3 +740,17 @@ where
 }
 
 impl Error for WorkerV3VerificationDecisionErrorV1 {}
+
+impl<E> Error for WorkerV3VerificationAuditErrorV1<E>
+where
+    E: Error + 'static,
+{
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::SemanticWitness(error) => Some(error),
+            Self::CurrentPublication(error) => Some(error),
+            Self::Auditor(error) => Some(error),
+            Self::Marker(_) | Self::UnsupportedGeneratedProfile => None,
+        }
+    }
+}

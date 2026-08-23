@@ -21,8 +21,7 @@ use fe2o3_verifier::{
 use sha2::{Digest as _, Sha256};
 
 use fe2o3_host::{
-    CompilerGeneratedKernelExpectationV1, WorkerV3VerificationDecisionV1,
-    WorkerV3VerificationRequestV1, WorkerV3VerifierV1,
+    CompilerGeneratedKernelExpectationV1, WorkerV3AuditorV1, WorkerV3VerificationRequestV1,
 };
 
 const SCALAR_GEMM_LOGICAL_NAME_V1: &str = "scalar_gemm_v1";
@@ -63,13 +62,52 @@ pub const PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1:
     ProductionScalarGemmWorkerV3OpenObligationV1::RustEffectContract,
 ];
 
-/// Production owner for exact scalar GEMM Worker V3 verification.
+/// Non-authoritative result of auditing one exact scalar GEMM Worker V3 request.
 ///
-/// The verifier owns a retained, protected Verus runtime closure. Each invocation clears stale
-/// evidence, independently checks the request bytes and final artifact, executes a newly generated
-/// challenge-bound proof, and retains the resulting move-only evidence. Until all obligations in
-/// [`PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1`] are mechanically closed, the unsafe
-/// verifier boundary always returns [`ProductionScalarGemmWorkerV3VerifierErrorV1::OpenAuthorityObligations`].
+/// The result is move-only and remains bound to the host-derived challenge carried by its proof.
+/// It cannot be converted into a host verification decision.
+#[derive(Debug)]
+pub struct ProductionScalarGemmWorkerV3AuditV1 {
+    proof: AuthenticatedScalarGemmWorkerV3ProofV3,
+}
+
+impl ProductionScalarGemmWorkerV3AuditV1 {
+    /// Returns the exact retained request-bound Verus proof.
+    pub const fn proof(&self) -> &AuthenticatedScalarGemmWorkerV3ProofV3 {
+        &self.proof
+    }
+
+    /// Moves out the exact retained request-bound Verus proof.
+    pub fn into_proof(self) -> AuthenticatedScalarGemmWorkerV3ProofV3 {
+        self.proof
+    }
+
+    /// Returns every authority obligation that remains open after this audit.
+    pub const fn open_authority_obligations(
+        &self,
+    ) -> &'static [ProductionScalarGemmWorkerV3OpenObligationV1] {
+        &PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1
+    }
+
+    /// A non-authoritative audit can never enter the Worker V3 authority gate.
+    pub const fn can_enter_worker_v3_gate(&self) -> bool {
+        false
+    }
+
+    /// A non-authoritative audit grants no artifact, load, or launch authority.
+    pub const fn grants_artifact_or_runtime_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Production owner for exact scalar GEMM Worker V3 auditing.
+///
+/// The verifier owns a retained, protected Verus runtime closure. Each invocation independently
+/// checks the request bytes and final artifact, executes a newly generated challenge-bound proof,
+/// and returns move-only audit evidence. It implements only the safe,
+/// non-authoritative host auditor interface. No production implementation of the unsafe authority
+/// trait exists until all obligations in
+/// [`PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1`] are mechanically closed.
 ///
 /// The verifier is move-only because it retains open runtime objects and the most recent proof:
 ///
@@ -82,7 +120,6 @@ pub const PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1:
 pub struct ProductionScalarGemmWorkerV3VerifierV1<K> {
     runtime: GeneralGemmVerusRuntimeClosureLeaseV2,
     timeout_seconds: u32,
-    last_proof: Option<AuthenticatedScalarGemmWorkerV3ProofV3>,
     _marker: PhantomData<fn() -> K>,
 }
 
@@ -92,7 +129,6 @@ impl<K> fmt::Debug for ProductionScalarGemmWorkerV3VerifierV1<K> {
             .debug_struct("ProductionScalarGemmWorkerV3VerifierV1")
             .field("runtime", &self.runtime)
             .field("timeout_seconds", &self.timeout_seconds)
-            .field("has_last_proof", &self.last_proof.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -109,7 +145,6 @@ impl<K> ProductionScalarGemmWorkerV3VerifierV1<K> {
         Ok(Self {
             runtime,
             timeout_seconds,
-            last_proof: None,
             _marker: PhantomData,
         })
     }
@@ -123,7 +158,6 @@ impl<K> ProductionScalarGemmWorkerV3VerifierV1<K> {
         Ok(Self {
             runtime,
             timeout_seconds,
-            last_proof: None,
             _marker: PhantomData,
         })
     }
@@ -134,16 +168,6 @@ impl<K> ProductionScalarGemmWorkerV3VerifierV1<K> {
     ) -> &'static [ProductionScalarGemmWorkerV3OpenObligationV1] {
         &PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1
     }
-
-    /// Returns the most recent authenticated proof retained after an authority denial.
-    pub const fn last_proof(&self) -> Option<&AuthenticatedScalarGemmWorkerV3ProofV3> {
-        self.last_proof.as_ref()
-    }
-
-    /// Moves out the most recent authenticated proof retained after an authority denial.
-    pub fn take_last_proof(&mut self) -> Option<AuthenticatedScalarGemmWorkerV3ProofV3> {
-        self.last_proof.take()
-    }
 }
 
 impl<K: CompilerGeneratedKernelExpectationV1> ProductionScalarGemmWorkerV3VerifierV1<K> {
@@ -152,7 +176,6 @@ impl<K: CompilerGeneratedKernelExpectationV1> ProductionScalarGemmWorkerV3Verifi
         request: &WorkerV3VerificationRequestV1<'_, K>,
     ) -> Result<AuthenticatedScalarGemmWorkerV3ProofV3, ProductionScalarGemmWorkerV3VerifierErrorV1>
     {
-        self.last_proof = None;
         validate_request_profile(request)?;
         validate_request_bytes(request)?;
         validate_finalized_artifact(request)?;
@@ -183,24 +206,19 @@ impl<K: CompilerGeneratedKernelExpectationV1> ProductionScalarGemmWorkerV3Verifi
     }
 }
 
-// SAFETY: this implementation never returns a decision and therefore cannot promote incomplete
-// evidence into native-code authority. It authenticates and retains the currently closed proof
-// subset, then fails with a typed open-obligations error. A future implementation may return a
-// decision only after every unsafe-trait obligation is mechanically derived from exact inputs.
-#[allow(unsafe_code)]
-unsafe impl<K> WorkerV3VerifierV1<K> for ProductionScalarGemmWorkerV3VerifierV1<K>
+impl<K> WorkerV3AuditorV1<K> for ProductionScalarGemmWorkerV3VerifierV1<K>
 where
     K: CompilerGeneratedKernelExpectationV1,
 {
     type Error = ProductionScalarGemmWorkerV3VerifierErrorV1;
+    type Evidence = ProductionScalarGemmWorkerV3AuditV1;
 
-    unsafe fn verify(
+    fn audit(
         &mut self,
         request: &WorkerV3VerificationRequestV1<'_, K>,
-    ) -> Result<WorkerV3VerificationDecisionV1, Self::Error> {
+    ) -> Result<Self::Evidence, Self::Error> {
         let proof = self.authenticate_exact_request(request)?;
-        self.last_proof = Some(proof);
-        Err(ProductionScalarGemmWorkerV3VerifierErrorV1::OpenAuthorityObligations)
+        Ok(ProductionScalarGemmWorkerV3AuditV1 { proof })
     }
 }
 
@@ -352,15 +370,15 @@ pub enum ProductionScalarGemmWorkerV3VerifierErrorV1 {
     ProofExecution(ScalarGemmWorkerV3ProofErrorV3),
     /// An invariant expected from the authenticated retained proof was absent.
     RetainedProofInvariant,
-    /// Verification succeeded only through KIR-to-integer semantics; authority remains denied.
-    OpenAuthorityObligations,
 }
 
 impl fmt::Display for ProductionScalarGemmWorkerV3VerifierErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidTimeout => formatter.write_str("invalid scalar Worker V3 proof timeout"),
-            Self::RuntimeClosure(error) => write!(formatter, "Verus runtime closure rejected: {error}"),
+            Self::RuntimeClosure(error) => {
+                write!(formatter, "Verus runtime closure rejected: {error}")
+            }
             Self::UnsupportedKernel => formatter.write_str("unsupported Worker V3 kernel profile"),
             Self::UnsupportedTarget => formatter.write_str("Worker V3 target is not gfx942:xnack-"),
             Self::UnsupportedCodeObjectVersion => {
@@ -381,23 +399,25 @@ impl fmt::Display for ProductionScalarGemmWorkerV3VerifierErrorV1 {
             Self::FinalizedIdentityMismatch => {
                 formatter.write_str("finalized HSACO bytes do not match retained identity")
             }
-            Self::FinalizedInspection(error) => write!(formatter, "finalized HSACO rejected: {error}"),
+            Self::FinalizedInspection(error) => {
+                write!(formatter, "finalized HSACO rejected: {error}")
+            }
             Self::FinalizedProfileMismatch => {
                 formatter.write_str("finalized HSACO profile differs from the verifier request")
             }
             Self::FinalizedDescriptorMismatch => {
                 formatter.write_str("finalized HSACO descriptor differs from the verifier request")
             }
-            Self::CompilerProofBinding(error) => write!(formatter, "compiler proof binding rejected: {error}"),
+            Self::CompilerProofBinding(error) => {
+                write!(formatter, "compiler proof binding rejected: {error}")
+            }
             Self::ScalarKernelIr(error) => write!(formatter, "scalar Kernel IR rejected: {error}"),
             Self::ProofInput(error) => write!(formatter, "scalar proof input rejected: {error}"),
-            Self::ProofExecution(error) => write!(formatter, "scalar proof execution rejected: {error}"),
-            Self::RetainedProofInvariant => {
-                formatter.write_str("retained scalar proof omitted a required established invariant")
+            Self::ProofExecution(error) => {
+                write!(formatter, "scalar proof execution rejected: {error}")
             }
-            Self::OpenAuthorityObligations => formatter.write_str(
-                "scalar Worker V3 proof completed, but production authority obligations remain open",
-            ),
+            Self::RetainedProofInvariant => formatter
+                .write_str("retained scalar proof omitted a required established invariant"),
         }
     }
 }
