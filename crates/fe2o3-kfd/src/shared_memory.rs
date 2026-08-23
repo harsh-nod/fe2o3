@@ -38,6 +38,9 @@ pub const MAX_AQL_QUEUE_BYTES_V1: u64 = 1 << 31;
 pub const MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1: usize = 64;
 pub const MAX_GFX942_DEVICE_MEMORY_BYTES_V1: u64 = 192 << 30;
 pub const MAX_GFX942_DEVICE_MEMORY_ALIGNMENT_V1: u64 = HOST_VISIBLE_MEMORY_PAGE_BYTES_V1;
+const PUBLIC_DEVICE_PARALLEL_FILL_THRESHOLD_BYTES_V1: usize = 64 << 20;
+const PUBLIC_DEVICE_PARALLEL_FILL_BYTES_PER_WORKER_V1: usize = 16 << 20;
+const MAX_PUBLIC_DEVICE_PARALLEL_FILL_WORKERS_V1: usize = 16;
 
 /// Canonical contract for bounded device-local allocation leases.
 pub const GFX942_DEVICE_MEMORY_LEASE_MANIFEST_V1: &str = concat!(
@@ -1157,7 +1160,10 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             lease,
             bytes.len(),
             content,
-            |mapped| mapped.copy_from_slice(bytes),
+            |mapped| {
+                mapped.copy_from_slice(bytes);
+                Ok(())
+            },
             true,
         )
     }
@@ -1179,7 +1185,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             lease,
             expected_len,
             content,
-            |mapped| mapped.fill(initialization.repeated_byte()),
+            |mapped| fill_public_device_mapping(mapped, initialization.repeated_byte()),
             false,
         )
     }
@@ -1189,7 +1195,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
         expected_len: usize,
         content: Gfx942DeviceContentDescriptorV1,
-        write: impl FnOnce(&mut [u8]),
+        write: impl FnOnce(&mut [u8]) -> Result<(), MemorySessionError>,
         verify_readback: bool,
     ) -> Result<Gfx942InitializedDeviceMemoryV1, MemorySessionError> {
         let index = self.device_memory_index(&lease, DeviceMemoryPhaseV1::Unmapped)?;
@@ -1221,20 +1227,28 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         if let Err(error) = prepare_result {
             return self.quarantine(error);
         }
-        let observed: Option<[u8; 32]> = {
+        let write_result = {
             let record = &mut self.device_memory[index];
             let mapping = record
                 .mapping
                 .as_mut()
                 .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)?;
-            B::with_bytes_mut(mapping, expected_len, write);
-            if verify_readback {
-                Some(B::with_bytes(mapping, expected_len, |mapped| {
-                    Sha256::digest(mapped).into()
-                }))
-            } else {
-                None
-            }
+            B::with_bytes_mut(mapping, expected_len, write)
+        };
+        if let Err(error) = write_result {
+            return self.quarantine(error);
+        }
+        let observed: Option<[u8; 32]> = if verify_readback {
+            let record = &self.device_memory[index];
+            let mapping = record
+                .mapping
+                .as_ref()
+                .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)?;
+            Some(B::with_bytes(mapping, expected_len, |mapped| {
+                Sha256::digest(mapped).into()
+            }))
+        } else {
+            None
         };
         if observed.is_some_and(|observed| observed != content.sha256()) {
             return self.quarantine(MemorySessionError::DeviceContentMismatch);
@@ -1843,6 +1857,95 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
                 "shared retained GPU VA accounting",
             ))?;
         Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RepeatedByteFillPlanV1 {
+    chunk_bytes: usize,
+    chunk_count: usize,
+}
+
+fn public_device_fill_worker_count(byte_len: usize, available_workers: usize) -> usize {
+    if byte_len == 0 {
+        return 0;
+    }
+    if byte_len < PUBLIC_DEVICE_PARALLEL_FILL_THRESHOLD_BYTES_V1 {
+        return 1;
+    }
+    let useful_workers = byte_len.div_ceil(PUBLIC_DEVICE_PARALLEL_FILL_BYTES_PER_WORKER_V1);
+    available_workers
+        .clamp(1, MAX_PUBLIC_DEVICE_PARALLEL_FILL_WORKERS_V1)
+        .min(useful_workers)
+}
+
+fn repeated_byte_fill_plan(
+    byte_len: usize,
+    requested_workers: usize,
+) -> Option<RepeatedByteFillPlanV1> {
+    if byte_len == 0 {
+        return None;
+    }
+    let worker_limit = requested_workers
+        .clamp(1, MAX_PUBLIC_DEVICE_PARALLEL_FILL_WORKERS_V1)
+        .min(byte_len);
+    let chunk_bytes = byte_len.div_ceil(worker_limit);
+    Some(RepeatedByteFillPlanV1 {
+        chunk_bytes,
+        chunk_count: byte_len.div_ceil(chunk_bytes),
+    })
+}
+
+/// Fills a public device-local CPU mapping using only disjoint safe slices.
+///
+/// Thread count and chunk size are bounded before any worker is started. A
+/// spawn failure leaves the allocation retained and is promoted by the caller
+/// to whole-session quarantine, so partial initialization cannot mint content
+/// authority.
+fn fill_public_device_mapping(
+    bytes: &mut [u8],
+    repeated_byte: u8,
+) -> Result<(), MemorySessionError> {
+    let available_workers = std::thread::available_parallelism().map_or(1, usize::from);
+    let worker_count = public_device_fill_worker_count(bytes.len(), available_workers);
+    fill_repeated_byte_with_workers(bytes, repeated_byte, worker_count)
+}
+
+fn fill_repeated_byte_with_workers(
+    bytes: &mut [u8],
+    repeated_byte: u8,
+    requested_workers: usize,
+) -> Result<(), MemorySessionError> {
+    write_disjoint_repeated_byte_partitions(bytes, requested_workers, move |chunk| {
+        chunk.fill(repeated_byte);
+    })
+}
+
+fn write_disjoint_repeated_byte_partitions(
+    bytes: &mut [u8],
+    requested_workers: usize,
+    write: impl Fn(&mut [u8]) + Copy + Send + Sync,
+) -> Result<(), MemorySessionError> {
+    let Some(plan) = repeated_byte_fill_plan(bytes.len(), requested_workers) else {
+        return Ok(());
+    };
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if plan.chunk_count == 1 {
+            write(bytes);
+            return Ok(());
+        }
+        std::thread::scope(|scope| {
+            for chunk in bytes.chunks_mut(plan.chunk_bytes) {
+                std::thread::Builder::new()
+                    .spawn_scoped(scope, move || write(chunk))
+                    .map_err(|_| MemorySessionError::DeviceInitializationWriteFailed)?;
+            }
+            Ok(())
+        })
+    }));
+    match outcome {
+        Ok(result) => result,
+        Err(_) => Err(MemorySessionError::DeviceInitializationWriteFailed),
     }
 }
 
@@ -3674,6 +3777,7 @@ mod tests {
         assert_eq!(engine.backend.flags, vec![0xa000_0001]);
         assert_eq!(engine.backend.map_cpu_calls, 1);
         assert_eq!(engine.backend.map_gpu_calls, 1);
+        assert_eq!(engine.backend.last_unmapped_readback_calls, 1);
         assert!(engine.device_memory[0].mapping.is_none());
         assert_eq!(engine.device_memory[0].phase, DeviceMemoryPhaseV1::Mapped);
         assert_eq!(initialized.content(), descriptor);
@@ -3689,6 +3793,80 @@ mod tests {
     fn repeated_content(byte_len: u64, repeated_byte: u8) -> Gfx942RepeatedByteContentV1 {
         let role = crate::Gfx942DeviceContentRoleV1::new([0x62; 32], 8).unwrap();
         Gfx942RepeatedByteContentV1::new(role, byte_len, repeated_byte).unwrap()
+    }
+
+    #[test]
+    fn repeated_byte_fill_plan_is_bounded_and_covers_uneven_extents() {
+        assert_eq!(repeated_byte_fill_plan(0, 0), None);
+        assert_eq!(
+            repeated_byte_fill_plan(67, 4),
+            Some(RepeatedByteFillPlanV1 {
+                chunk_bytes: 17,
+                chunk_count: 4,
+            })
+        );
+        assert_eq!(
+            repeated_byte_fill_plan(3, usize::MAX),
+            Some(RepeatedByteFillPlanV1 {
+                chunk_bytes: 1,
+                chunk_count: 3,
+            })
+        );
+
+        let mut bytes = (0_u8..67).collect::<Vec<_>>();
+        fill_repeated_byte_with_workers(&mut bytes, 0xa5, 4).unwrap();
+        assert_eq!(bytes, vec![0xa5; 67]);
+    }
+
+    #[test]
+    fn repeated_byte_fill_threshold_keeps_small_inputs_serial() {
+        assert_eq!(
+            public_device_fill_worker_count(
+                PUBLIC_DEVICE_PARALLEL_FILL_THRESHOLD_BYTES_V1 - 1,
+                usize::MAX,
+            ),
+            1
+        );
+        assert_eq!(
+            public_device_fill_worker_count(
+                PUBLIC_DEVICE_PARALLEL_FILL_THRESHOLD_BYTES_V1,
+                usize::MAX,
+            ),
+            4
+        );
+        assert_eq!(
+            public_device_fill_worker_count(PUBLIC_DEVICE_PARALLEL_FILL_THRESHOLD_BYTES_V1, 0,),
+            1
+        );
+        assert_eq!(
+            public_device_fill_worker_count(usize::MAX, usize::MAX),
+            MAX_PUBLIC_DEVICE_PARALLEL_FILL_WORKERS_V1
+        );
+    }
+
+    #[test]
+    fn repeated_byte_fill_handles_empty_and_hostile_worker_bounds_without_panicking() {
+        let mut empty = [];
+        fill_repeated_byte_with_workers(&mut empty, 0x11, 0).unwrap();
+        fill_repeated_byte_with_workers(&mut empty, 0x22, usize::MAX).unwrap();
+
+        let mut single = [0_u8];
+        fill_repeated_byte_with_workers(&mut single, 0x33, 0).unwrap();
+        assert_eq!(single, [0x33]);
+        fill_repeated_byte_with_workers(&mut single, 0x44, usize::MAX).unwrap();
+        assert_eq!(single, [0x44]);
+    }
+
+    #[test]
+    fn repeated_byte_worker_panic_becomes_a_typed_failure() {
+        let mut bytes = [0_u8; 17];
+        let result = write_disjoint_repeated_byte_partitions(&mut bytes, 4, |_| {
+            panic!("injected repeated-byte writer panic");
+        });
+        assert!(matches!(
+            result,
+            Err(MemorySessionError::DeviceInitializationWriteFailed)
+        ));
     }
 
     #[test]
@@ -3745,6 +3923,40 @@ mod tests {
             assert_eq!(engine.retained_device_memory_bytes, 0);
             assert_eq!(engine.device_memory[0].phase, DeviceMemoryPhaseV1::Released);
         }
+    }
+
+    #[test]
+    fn repeated_byte_write_failure_quarantines_before_unmap_or_gpu_map() {
+        let mut engine = acquired();
+        let (device, vm) = device_vm(7);
+        let byte_len = 4097_u64;
+        let initialization = repeated_content(byte_len, 0x5a);
+        let lease = engine
+            .allocate_device_memory_with_flags(
+                device,
+                vm,
+                byte_len,
+                4096,
+                KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
+            )
+            .unwrap();
+
+        let result = engine.initialize_public_device_memory_after_preflight(
+            lease,
+            byte_len as usize,
+            initialization.content(),
+            |_| Err(MemorySessionError::DeviceInitializationWriteFailed),
+            false,
+        );
+
+        assert!(matches!(
+            result,
+            Err(MemorySessionError::DeviceInitializationWriteFailed)
+        ));
+        assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert_eq!(engine.backend.map_gpu_calls, 0);
+        assert!(engine.device_memory[0].mapping.is_some());
+        assert_eq!(engine.device_memory[0].phase, DeviceMemoryPhaseV1::Unmapped);
     }
 
     #[test]
