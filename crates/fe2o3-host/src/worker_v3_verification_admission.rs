@@ -259,6 +259,14 @@ impl WorkerV3VerificationDecisionV1 {
     pub const fn safety_properties(&self) -> WorkerV3SafetyPropertiesV1 {
         self.safety_properties
     }
+
+    pub const fn finalized_hsaco_sha256(&self) -> [u8; 32] {
+        self.finalized_sha256
+    }
+
+    pub const fn finalized_hsaco_length(&self) -> u64 {
+        self.finalized_length
+    }
 }
 
 /// Authenticated compiler/Verus state for one exact V3 executable.
@@ -342,6 +350,16 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
         self.admission.revalidate_currentness()
     }
 
+    pub fn authorize_hsa_load<A: crate::ReviewedHsaExecutableLifecycleAdapterV1>(
+        self,
+        adapter: A,
+    ) -> Result<
+        crate::AuthorizedWorkerV3HsaLoadV1<K, A>,
+        crate::WorkerV3HsaLoadAuthorizationErrorV1<A::Error>,
+    > {
+        crate::hsa_executable_lifecycle::authorize_worker_v3_hsa_load_v1(self, adapter)
+    }
+
     pub const fn authenticates_verification_authority(&self) -> bool {
         true
     }
@@ -352,6 +370,10 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
 
     pub const fn grants_launch_authority(&self) -> bool {
         false
+    }
+
+    pub(crate) const fn admission(&self) -> &RecoveredWorkerV3PinnedDescriptorV1 {
+        &self.admission
     }
 }
 

@@ -1,10 +1,11 @@
 use crate::generated_argument_plan::validate_argument_packing;
 use crate::{
     AdmittedFinalizedWorkerV2BundleV1, AdmittedWorkerV2TypedKernelV1, ArtifactKernelIdentityV1,
-    CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationV1,
-    CompilerGeneratedSemanticWitnessErrorV1, DeviceIdentity, FinalizedWorkerV2BundleAdmissionError,
-    GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1, PhysicalMetadataValueV1,
-    PublishedKernelPhysicalLayoutV1, PublishedPhysicalLaunchLayoutV1,
+    AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedArgumentLayoutV1,
+    CompilerGeneratedKernelExpectationV1, CompilerGeneratedSemanticWitnessErrorV1, DeviceIdentity,
+    FinalizedWorkerV2BundleAdmissionError, GeneratedArgumentPackingError,
+    GeneratedArgumentPackingPlanV1, PhysicalMetadataValueV1, PublishedKernelPhysicalLayoutV1,
+    PublishedPhysicalLaunchLayoutV1, RecoveredWorkerV3AdmissionErrorV1,
     WorkerV2FullLineagePrerequisiteChallengeIdentityV2, WorkerV2TypedKernelSelectionError,
     validate_compiler_generated_semantic_witness_v1,
 };
@@ -1262,6 +1263,238 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> AuthorizedHsaLoadV1<K, A> {
     }
 }
 
+/// Environment-authenticated permission to load one exact verified Worker V3 executable.
+///
+/// The value is linear. Loading acquires and retains the durable publication lock through native
+/// executable unload; no stale generation can be loaded or turned over while native state lives.
+pub struct AuthorizedWorkerV3HsaLoadV1<K, A: ReviewedHsaExecutableLifecycleAdapterV1> {
+    authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
+    adapter: A,
+    environment: HsaEnvironmentObservationV1,
+}
+
+pub(crate) fn authorize_worker_v3_hsa_load_v1<
+    K: CompilerGeneratedKernelExpectationV1,
+    A: ReviewedHsaExecutableLifecycleAdapterV1,
+>(
+    authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
+    mut adapter: A,
+) -> Result<AuthorizedWorkerV3HsaLoadV1<K, A>, WorkerV3HsaLoadAuthorizationErrorV1<A::Error>> {
+    authenticated
+        .revalidate_currentness()
+        .map_err(WorkerV3HsaLoadAuthorizationErrorV1::CurrentPublication)?;
+    // SAFETY: only an unsafe reviewed adapter can enter this boundary. Its complete observation
+    // is checked against the admitted target and HIP device before load authority is returned.
+    let environment = reviewed_adapter_call(|| unsafe { adapter.observe_environment() })
+        .map_err(WorkerV3HsaLoadAuthorizationErrorV1::Adapter)?;
+    validate_environment_facts(authenticated.target(), authenticated.device(), &environment)
+        .map_err(WorkerV3HsaLoadAuthorizationErrorV1::Environment)?;
+    Ok(AuthorizedWorkerV3HsaLoadV1 {
+        authenticated,
+        adapter,
+        environment,
+    })
+}
+
+impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> AuthorizedWorkerV3HsaLoadV1<K, A> {
+    pub const fn grants_load_authority(&self) -> bool {
+        true
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn environment(&self) -> &HsaEnvironmentObservationV1 {
+        &self.environment
+    }
+}
+
+impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaExecutableLifecycleAdapterV1>
+    AuthorizedWorkerV3HsaLoadV1<K, A>
+{
+    pub fn load(
+        mut self,
+    ) -> Result<LoadedWorkerV3HsaExecutableV1<K, A>, WorkerV3HsaExecutableLoadErrorV1<A::Error>>
+    {
+        let current = self
+            .authenticated
+            .admission()
+            .acquire_retained_currentness_token()
+            .map_err(WorkerV3HsaExecutableLoadErrorV1::CurrentPublication)?;
+        let bytes = current.exact_artifact_bytes();
+        let verification = self.authenticated.verification();
+        if u64::try_from(bytes.len()).ok() != Some(verification.finalized_hsaco_length()) {
+            return Err(WorkerV3HsaExecutableLoadErrorV1::ExactBytesChanged);
+        }
+        let digest = PayloadDigest::new(
+            DigestAlgorithm::Sha256,
+            DigestBytes::from_bytes(verification.finalized_hsaco_sha256()),
+        );
+        digest
+            .verify(bytes)
+            .map_err(|_| WorkerV3HsaExecutableLoadErrorV1::ExactBytesChanged)?;
+
+        // SAFETY: the verified authority, reviewed environment, retained currentness token, and
+        // exact digest all remain live. Adapter observations are checked before they advance.
+        let (executable, load) =
+            reviewed_adapter_call(|| unsafe { self.adapter.load_executable(bytes, digest) })
+                .map_err(WorkerV3HsaExecutableLoadErrorV1::AdapterLoad)?;
+        if let Err(field) = validate_load_observation(
+            &self.environment,
+            digest,
+            verification.finalized_hsaco_length(),
+            &load,
+        ) {
+            terminal_unload(&mut self.adapter, executable, &self.environment, &load);
+            return Err(WorkerV3HsaExecutableLoadErrorV1::LoadObservationMismatch { field });
+        }
+
+        let descriptor = self.authenticated.descriptor();
+        let physical = self.authenticated.admission().physical_kernel();
+        let symbol = descriptor.entry_name().as_str();
+        // SAFETY: the exact executable and admitted symbol are retained by this linear state.
+        let (kernel, resolution) = match reviewed_adapter_call(|| unsafe {
+            self.adapter.resolve_kernel(&executable, symbol)
+        }) {
+            Ok(resolved) => resolved,
+            Err(source) => {
+                terminal_unload(&mut self.adapter, executable, &self.environment, &load);
+                return Err(WorkerV3HsaExecutableLoadErrorV1::KernelResolution(source));
+            }
+        };
+        if let Err(field) = validate_kernel_resolution_fields(
+            symbol,
+            physical.kernarg_segment_size(),
+            physical.kernarg_segment_alignment(),
+            load.executable_object(),
+            &resolution,
+        ) {
+            drop(kernel);
+            terminal_unload(&mut self.adapter, executable, &self.environment, &load);
+            return Err(WorkerV3HsaExecutableLoadErrorV1::KernelObservationMismatch { field });
+        }
+
+        Ok(LoadedWorkerV3HsaExecutableV1 {
+            authenticated: self.authenticated,
+            current,
+            adapter: self.adapter,
+            environment: self.environment,
+            executable: Some(executable),
+            kernel: Some(kernel),
+            load,
+            resolution,
+        })
+    }
+}
+
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum WorkerV3HsaLoadAuthorizationErrorV1<E> {
+    CurrentPublication(RecoveredWorkerV3AdmissionErrorV1),
+    Adapter(E),
+    Environment(HsaEnvironmentMismatch),
+}
+
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum WorkerV3HsaExecutableLoadErrorV1<E> {
+    CurrentPublication(RecoveredWorkerV3AdmissionErrorV1),
+    ExactBytesChanged,
+    AdapterLoad(E),
+    LoadObservationMismatch { field: &'static str },
+    KernelResolution(E),
+    KernelObservationMismatch { field: &'static str },
+}
+
+/// Loaded and resolved HSA authority for one exact verified Worker V3 kernel.
+///
+/// The native handles and exact durable currentness token are private. This first V3 runtime slice
+/// intentionally exposes unload but no dispatch transition; generated argument and launch
+/// authority are wired in the next layer.
+pub struct LoadedWorkerV3HsaExecutableV1<K, A: ReviewedHsaExecutableLifecycleAdapterV1> {
+    authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
+    current: DurableCurrentLinkPublicationTokenV1,
+    adapter: A,
+    environment: HsaEnvironmentObservationV1,
+    executable: Option<A::Executable>,
+    kernel: Option<A::Kernel>,
+    load: HsaCodeObjectLoadObservationV1,
+    resolution: HsaKernelResolutionObservationV1,
+}
+
+impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaExecutableLifecycleAdapterV1> fmt::Debug
+    for LoadedWorkerV3HsaExecutableV1<K, A>
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LoadedWorkerV3HsaExecutableV1")
+            .field(
+                "lineage",
+                &self.authenticated.verification().lineage_identity(),
+            )
+            .field("environment", &self.environment)
+            .field("load", &self.load)
+            .field("resolution", &self.resolution)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaExecutableLifecycleAdapterV1>
+    LoadedWorkerV3HsaExecutableV1<K, A>
+{
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn load_observation(&self) -> &HsaCodeObjectLoadObservationV1 {
+        &self.load
+    }
+
+    pub const fn kernel_observation(&self) -> &HsaKernelResolutionObservationV1 {
+        &self.resolution
+    }
+
+    pub fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
+        self.authenticated
+            .admission()
+            .revalidate_retained_currentness_token(&self.current)
+    }
+
+    pub fn unload(mut self) -> Result<UnloadedHsaExecutableV1, HsaExecutableUnloadError<A::Error>> {
+        self.revalidate_currentness()
+            .map_err(|_| HsaExecutableUnloadError::ObservationMismatch("current publication"))?;
+        self.kernel.take();
+        let executable = self
+            .executable
+            .take()
+            .expect("loaded Worker V3 state must own an executable");
+        let unload = terminal_unload(&mut self.adapter, executable, &self.environment, &self.load);
+        Ok(UnloadedHsaExecutableV1 {
+            finalized_digest: self.load.finalized_digest,
+            executable_object: self.load.executable_object,
+            runtime: self.environment.runtime.clone(),
+            physical_device: self.environment.physical_device.clone(),
+            agent: self.environment.agent.clone(),
+            unload,
+        })
+    }
+}
+
+impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> Drop for LoadedWorkerV3HsaExecutableV1<K, A> {
+    fn drop(&mut self) {
+        self.kernel.take();
+        let Some(executable) = self.executable.take() else {
+            return;
+        };
+        terminal_unload(&mut self.adapter, executable, &self.environment, &self.load);
+    }
+}
+
 /// Failure while binding an authenticated executable to an HSA environment.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -1284,7 +1517,14 @@ fn validate_environment(
     admission: &AdmittedFinalizedWorkerV2BundleV1,
     environment: &HsaEnvironmentObservationV1,
 ) -> Result<(), HsaEnvironmentMismatch> {
-    let expected_target = admission.target();
+    validate_environment_facts(admission.target(), admission.device(), environment)
+}
+
+fn validate_environment_facts(
+    expected_target: AmdTargetId,
+    device: &DeviceIdentity,
+    environment: &HsaEnvironmentObservationV1,
+) -> Result<(), HsaEnvironmentMismatch> {
     let actual_target = environment.physical_device.target;
     let required_runtime_target = AmdTargetId::parse(REQUIRED_RUNTIME_TARGET)
         .expect("reviewed runtime target ID is a valid static constant");
@@ -1297,9 +1537,9 @@ fn validate_environment(
             actual: actual_target.to_string(),
         });
     }
-    if environment.physical_device.hip_ordinal != admission.device().ordinal() {
+    if environment.physical_device.hip_ordinal != device.ordinal() {
         return Err(HsaEnvironmentMismatch::DeviceOrdinal {
-            expected: admission.device().ordinal(),
+            expected: device.ordinal(),
             actual: environment.physical_device.hip_ordinal,
         });
     }
@@ -1365,20 +1605,34 @@ fn validate_kernel_resolution(
 ) -> Result<(), &'static str> {
     let selected = admission.selected_kernel();
     let physical = selected.launch();
-    let expected_hsa_alignment = physical
-        .kernarg_segment_alignment()
-        .max(HSA_MINIMUM_KERNARG_ALIGNMENT);
+    validate_kernel_resolution_fields(
+        selected.export_symbol(),
+        physical.kernarg_segment_size(),
+        physical.kernarg_segment_alignment(),
+        executable,
+        resolution,
+    )
+}
+
+fn validate_kernel_resolution_fields(
+    export_symbol: &str,
+    kernarg_segment_size: u64,
+    kernarg_segment_alignment: u64,
+    executable: HsaExecutableObjectIdentityV1,
+    resolution: &HsaKernelResolutionObservationV1,
+) -> Result<(), &'static str> {
+    let expected_hsa_alignment = kernarg_segment_alignment.max(HSA_MINIMUM_KERNARG_ALIGNMENT);
     for (matches, field) in [
         (
             resolution.executable_object == executable,
             "HSA executable object",
         ),
         (
-            resolution.export_symbol.as_ref() == selected.export_symbol(),
+            resolution.export_symbol.as_ref() == export_symbol,
             "HSA kernel symbol",
         ),
         (
-            resolution.kernarg_segment_size == physical.kernarg_segment_size(),
+            resolution.kernarg_segment_size == kernarg_segment_size,
             "kernarg segment size",
         ),
         (

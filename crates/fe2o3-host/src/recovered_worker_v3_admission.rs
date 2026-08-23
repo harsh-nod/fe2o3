@@ -1,5 +1,6 @@
 use std::{error::Error, fmt};
 
+use fe2o3_artifact_transaction::DurableCurrentLinkPublicationTokenV1;
 use fe2o3_artifact_transaction::{DurableLinkPublicationError, PublishedLinkArtifactV1};
 use fe2o3_compiler_ffi::{
     CompilerDescriptorSourceErrorV1, CompilerDescriptorSourceV1, CompilerModuleSymbolRoleV1,
@@ -100,18 +101,36 @@ impl fmt::Debug for RecoveredWorkerV3PinnedDescriptorV1 {
 impl RecoveredWorkerV3PinnedDescriptorV1 {
     /// Revalidates the current durable generation and exact pinned artifact occurrence.
     pub fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
-        self.envelope
-            .wire()
-            .validate_reacquired_publication_lease_v1(self.envelope.current_publication_lease())
-            .map_err(RecoveredWorkerV3AdmissionErrorV1::Envelope)?;
+        let current = self.acquire_retained_currentness_token()?;
+        drop(current);
+        Ok(())
+    }
+
+    pub(crate) fn acquire_retained_currentness_token(
+        &self,
+    ) -> Result<DurableCurrentLinkPublicationTokenV1, RecoveredWorkerV3AdmissionErrorV1> {
         let current = self
             .envelope
             .current_publication_lease()
             .acquire_current_token()
             .map_err(RecoveredWorkerV3AdmissionErrorV1::CurrentPublication)?;
-        current
-            .revalidate_locked_currentness()
+        self.revalidate_retained_currentness_token(&current)?;
+        Ok(current)
+    }
+
+    pub(crate) fn revalidate_retained_currentness_token(
+        &self,
+        current: &DurableCurrentLinkPublicationTokenV1,
+    ) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
+        self.envelope
+            .current_publication_lease()
+            .validate_current_token(current)
+            .and_then(|()| current.revalidate_locked_currentness())
             .map_err(RecoveredWorkerV3AdmissionErrorV1::CurrentPublication)?;
+        self.envelope
+            .wire()
+            .validate_reacquired_publication_lease_v1(self.envelope.current_publication_lease())
+            .map_err(RecoveredWorkerV3AdmissionErrorV1::Envelope)?;
         let inspected = validate_finalized_identity(
             self.envelope.wire().publication_intent_record(),
             current.exact_artifact_bytes(),

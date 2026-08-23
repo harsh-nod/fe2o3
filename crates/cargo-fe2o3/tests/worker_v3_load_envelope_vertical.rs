@@ -3,19 +3,30 @@
     feature = "worker-v3-envelope-integration-test-only"
 ))]
 
-use std::{convert::Infallible, sync::OnceLock};
+use std::{
+    convert::Infallible,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
+use fe2o3_amd_target::AmdTargetId;
 use fe2o3_artifact_transaction::retire_worker_v3_publication_intent_after_load_readiness_v1;
+use fe2o3_artifacts::{DigestAlgorithm, DigestBytes, PayloadDigest};
 use fe2o3_device::KernelMarkerV1;
 use fe2o3_host::{
     __hardware_test::application_handoff_observed_context_fixture_v1,
     AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedKernelExpectationV1,
-    CompilerGeneratedKernelProfileV1, CompilerGeneratedSemanticWitnessErrorV1,
-    RecoveredWorkerV3AdmissionErrorV1, ValidatedCompilerGeneratedSemanticWitnessV1,
-    WorkerV3SafetyPropertiesV1, WorkerV3VerificationAuthenticationErrorV1,
-    WorkerV3VerificationDecisionErrorV1, WorkerV3VerificationDecisionV1,
-    WorkerV3VerificationRequestV1, WorkerV3VerifierV1, admit_recovered_worker_v3_descriptor_v1,
-    semantic_witness_from_backend_v1,
+    CompilerGeneratedKernelProfileV1, CompilerGeneratedSemanticWitnessErrorV1, HsaAgentIdentityV1,
+    HsaCodeObjectLoadObservationV1, HsaDispatchObservationV1, HsaEnvironmentObservationV1,
+    HsaExecutableObjectIdentityV1, HsaKernelObjectIdentityV1, HsaKernelResolutionObservationV1,
+    HsaLaunchGeometryV1, HsaPhysicalDeviceIdentityV1, HsaRuntimeIdentityV1, HsaUnloadObservationV1,
+    RecoveredWorkerV3AdmissionErrorV1, ReviewedHsaExecutableLifecycleAdapterV1,
+    ValidatedCompilerGeneratedSemanticWitnessV1, WorkerV3SafetyPropertiesV1,
+    WorkerV3VerificationAuthenticationErrorV1, WorkerV3VerificationDecisionErrorV1,
+    WorkerV3VerificationDecisionV1, WorkerV3VerificationRequestV1, WorkerV3VerifierV1,
+    admit_recovered_worker_v3_descriptor_v1, semantic_witness_from_backend_v1,
 };
 use fe2o3_kernel_descriptor::KernelId;
 use fe2o3_worker_v2_bundle::{
@@ -120,6 +131,131 @@ unsafe impl WorkerV3VerifierV1<WorkerV3VecAddMarker> for ReviewedTestWorkerV3Ver
             [0xc4; 32],
             [0xc5; 32],
             WorkerV3SafetyPropertiesV1::required(),
+        ))
+    }
+}
+
+#[derive(Debug)]
+struct ReviewedTestHsaExecutable {
+    identity: HsaExecutableObjectIdentityV1,
+}
+
+#[derive(Debug)]
+struct ReviewedTestHsaKernel;
+
+struct ReviewedTestHsaAdapter {
+    environment: HsaEnvironmentObservationV1,
+    unloads: Arc<AtomicUsize>,
+    substitute_load_digest: bool,
+}
+
+impl ReviewedTestHsaAdapter {
+    fn new() -> (Self, Arc<AtomicUsize>) {
+        let target = AmdTargetId::parse("gfx942:sramecc+:xnack-").unwrap();
+        let runtime = HsaRuntimeIdentityV1::new(
+            "test-hsa",
+            "v1",
+            PayloadDigest::new(DigestAlgorithm::Sha256, DigestBytes::from_bytes([0xd1; 32])),
+            [0xd2; 16],
+        )
+        .unwrap();
+        let physical = HsaPhysicalDeviceIdentityV1::new([0xd3; 16], 1, 0, target).unwrap();
+        let agent =
+            HsaAgentIdentityV1::new(runtime.instance(), 0xd4, physical.uuid(), target).unwrap();
+        let environment = HsaEnvironmentObservationV1::new(runtime, physical, agent).unwrap();
+        let unloads = Arc::new(AtomicUsize::new(0));
+        (
+            Self {
+                environment,
+                unloads: unloads.clone(),
+                substitute_load_digest: false,
+            },
+            unloads,
+        )
+    }
+
+    fn with_substituted_load_digest() -> (Self, Arc<AtomicUsize>) {
+        let (mut adapter, unloads) = Self::new();
+        adapter.substitute_load_digest = true;
+        (adapter, unloads)
+    }
+
+    fn executable_identity() -> HsaExecutableObjectIdentityV1 {
+        HsaExecutableObjectIdentityV1::new([0xd5; 32]).unwrap()
+    }
+}
+
+// SAFETY: this test adapter is deterministic, synchronous, and retains no native authority.
+unsafe impl ReviewedHsaExecutableLifecycleAdapterV1 for ReviewedTestHsaAdapter {
+    type Executable = ReviewedTestHsaExecutable;
+    type Kernel = ReviewedTestHsaKernel;
+    type Error = &'static str;
+
+    unsafe fn observe_environment(&mut self) -> Result<HsaEnvironmentObservationV1, Self::Error> {
+        Ok(self.environment.clone())
+    }
+
+    unsafe fn load_executable(
+        &mut self,
+        bytes: &[u8],
+        finalized_digest: PayloadDigest,
+    ) -> Result<(Self::Executable, HsaCodeObjectLoadObservationV1), Self::Error> {
+        let identity = Self::executable_identity();
+        let observed_digest = if self.substitute_load_digest {
+            PayloadDigest::new(DigestAlgorithm::Sha256, DigestBytes::from_bytes([0xdf; 32]))
+        } else {
+            finalized_digest
+        };
+        Ok((
+            ReviewedTestHsaExecutable { identity },
+            HsaCodeObjectLoadObservationV1::new(
+                observed_digest,
+                u64::try_from(bytes.len()).unwrap(),
+                self.environment.runtime().instance(),
+                self.environment.agent().agent_handle(),
+                identity,
+            ),
+        ))
+    }
+
+    unsafe fn resolve_kernel(
+        &mut self,
+        executable: &Self::Executable,
+        export_symbol: &str,
+    ) -> Result<(Self::Kernel, HsaKernelResolutionObservationV1), Self::Error> {
+        Ok((
+            ReviewedTestHsaKernel,
+            HsaKernelResolutionObservationV1::new(
+                executable.identity,
+                HsaKernelObjectIdentityV1::new([0xd6; 32]).unwrap(),
+                export_symbol,
+                272,
+                16,
+            )
+            .unwrap(),
+        ))
+    }
+
+    unsafe fn launch_and_wait(
+        &mut self,
+        _executable: &Self::Executable,
+        _kernel: &Self::Kernel,
+        _geometry: HsaLaunchGeometryV1,
+        _kernarg: &mut [u8],
+    ) -> Result<HsaDispatchObservationV1, Self::Error> {
+        Err("V3 launch authority is intentionally unavailable")
+    }
+
+    unsafe fn unload_executable(
+        &mut self,
+        executable: Self::Executable,
+    ) -> Result<HsaUnloadObservationV1, Self::Error> {
+        self.unloads.fetch_add(1, Ordering::SeqCst);
+        Ok(HsaUnloadObservationV1::new(
+            executable.identity,
+            self.environment.runtime().instance(),
+            self.environment.agent().agent_handle(),
+            true,
         ))
     }
 }
@@ -249,6 +385,21 @@ fn completed_v3_publication_becomes_restartable_inert_envelope_custody() {
     assert!(!authenticated.grants_load_authority());
     assert!(!authenticated.grants_launch_authority());
     authenticated.revalidate_currentness().unwrap();
+
+    let (adapter, unloads) = ReviewedTestHsaAdapter::new();
+    let authorized = authenticated.authorize_hsa_load(adapter).unwrap();
+    assert!(authorized.grants_load_authority());
+    assert!(!authorized.grants_launch_authority());
+    let loaded = authorized.load().unwrap();
+    assert!(!loaded.grants_load_authority());
+    assert!(!loaded.grants_launch_authority());
+    assert_eq!(loaded.kernel_observation().export_symbol(), "vecadd");
+    loaded.revalidate_currentness().unwrap();
+    let unloaded = loaded.unload().unwrap();
+    assert!(unloaded.unload_observation().released());
+    assert!(!unloaded.grants_load_authority());
+    assert!(!unloaded.grants_launch_authority());
+    assert_eq!(unloads.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -300,4 +451,33 @@ fn v3_verification_rejects_a_substituted_finalized_hsaco_identity() {
             WorkerV3VerificationDecisionErrorV1::IdentityMismatch("finalized HSACO")
         ))
     ));
+}
+
+#[test]
+fn v3_hsa_load_rejects_and_cleans_up_a_substituted_adapter_digest() {
+    let (_directory, recovered) = recovered_host_fixture();
+    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
+    let admitted = admit_recovered_worker_v3_descriptor_v1(
+        recovered,
+        KernelId::from_bytes([0xa1; 32]),
+        &observed,
+    )
+    .unwrap();
+    let authenticated = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+        admitted,
+        &mut ReviewedTestWorkerV3Verifier {
+            substitute_finalized: false,
+        },
+    )
+    .unwrap();
+    let (adapter, unloads) = ReviewedTestHsaAdapter::with_substituted_load_digest();
+    assert!(matches!(
+        authenticated.authorize_hsa_load(adapter).unwrap().load(),
+        Err(
+            fe2o3_host::WorkerV3HsaExecutableLoadErrorV1::LoadObservationMismatch {
+                field: "finalized digest"
+            }
+        )
+    ));
+    assert_eq!(unloads.load(Ordering::SeqCst), 1);
 }

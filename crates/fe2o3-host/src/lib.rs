@@ -233,20 +233,21 @@ pub use gfx942_ocml::{
     Gfx942OcmlSinF32KernelV1,
 };
 pub use hsa_executable_lifecycle::{
-    AuthenticatedWorkerV2ExecutableV1, AuthorizedHsaLoadV1, HsaAgentIdentityV1,
-    HsaCodeObjectLoadObservationV1, HsaCompletedDispatchV1, HsaDispatchError,
+    AuthenticatedWorkerV2ExecutableV1, AuthorizedHsaLoadV1, AuthorizedWorkerV3HsaLoadV1,
+    HsaAgentIdentityV1, HsaCodeObjectLoadObservationV1, HsaCompletedDispatchV1, HsaDispatchError,
     HsaDispatchObservationV1, HsaEnvironmentMismatch, HsaEnvironmentObservationV1,
     HsaExecutableLoadError, HsaExecutableObjectIdentityV1, HsaExecutableUnloadError,
     HsaGeneratedDispatchError, HsaImplicitKernargInitializationObservationV1,
     HsaKernelLaunchAuthorizationV1, HsaKernelObjectIdentityV1, HsaKernelResolutionObservationV1,
     HsaLaunchAuthorizationError, HsaLaunchGeometryV1, HsaLoadAuthorizationError,
     HsaObservationError, HsaPhysicalDeviceIdentityV1, HsaRuntimeIdentityV1, HsaUnloadObservationV1,
-    InertLoadedWorkerV2KernelSelectionV1, LoadedHsaExecutableV1,
+    InertLoadedWorkerV2KernelSelectionV1, LoadedHsaExecutableV1, LoadedWorkerV3HsaExecutableV1,
     ReviewedHsaExecutableLifecycleAdapterV1, ReviewedHsaImplicitKernargAdapterV1,
     UnloadedHsaExecutableV1, WorkerV2ExecutableAuthenticationError,
     WorkerV2PrerequisiteAuthenticatorV1, WorkerV2PrerequisiteDecisionV1, WorkerV2PrerequisiteError,
     WorkerV2PrerequisiteRequestV1, WorkerV2RequiredProfileError, WorkerV2SafetyPropertiesV1,
-    WorkerV2SafetyPropertyV1,
+    WorkerV2SafetyPropertyV1, WorkerV3HsaExecutableLoadErrorV1,
+    WorkerV3HsaLoadAuthorizationErrorV1,
 };
 #[doc(hidden)]
 pub use launch_kernel_v2_bridge::{

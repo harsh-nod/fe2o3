@@ -300,6 +300,7 @@ name = "cargo-fe2o3"
 version = "0.1.0"
 dependencies = [
  "cap-primitives",
+ "fe2o3-amd-target",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
  "fe2o3-build-authority",
