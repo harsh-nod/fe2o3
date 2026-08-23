@@ -214,6 +214,12 @@ struct ProjectedMfmaAccumulatorV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProjectedTensorLoadResultV1 {
+    LegacyOption,
+    DirectFragment,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ProjectedTensorOriginV1 {
     MatrixContext { root: u64 },
     Lane { root: u64, wave_width: u32 },
@@ -1398,19 +1404,35 @@ fn transfer_tensor_terminator_v1(
             contract,
             storage_layout,
             ..
-        } => {
-            let loaded = authenticate_tensor_load_v1(call, state, *contract, *storage_layout);
-            let origin = if destination.place().ty() == *option_fragment {
-                loaded
-                    .map(|fragment| {
-                        ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::LoadOption(fragment))
-                    })
-                    .unwrap_or(ProjectedTensorValueV1::Invalid)
-            } else {
-                ProjectedTensorValueV1::Invalid
-            };
-            (origin, None)
-        }
+        } => (
+            project_tensor_load_origin_v1(
+                call,
+                state,
+                destination.place().ty(),
+                *option_fragment,
+                *contract,
+                *storage_layout,
+                ProjectedTensorLoadResultV1::LegacyOption,
+            ),
+            None,
+        ),
+        SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
+            fragment,
+            contract,
+            storage_layout,
+            ..
+        } => (
+            project_tensor_load_origin_v1(
+                call,
+                state,
+                destination.place().ty(),
+                *fragment,
+                *contract,
+                *storage_layout,
+                ProjectedTensorLoadResultV1::DirectFragment,
+            ),
+            None,
+        ),
         SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
             fragment,
             contract,
@@ -1517,6 +1539,28 @@ fn authenticate_tensor_load_v1(
             storage_layout,
             lane_root,
         })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_tensor_load_origin_v1(
+    call: &SemanticDirectCallV1,
+    state: &ProjectedTensorStateV1,
+    destination_type: SemanticTypeIdV1,
+    expected_output_type: SemanticTypeIdV1,
+    contract: SemanticMfmaOperandContractV1,
+    storage_layout: SemanticMfmaStorageLayoutV1,
+    result: ProjectedTensorLoadResultV1,
+) -> ProjectedTensorValueV1 {
+    if destination_type != expected_output_type {
+        return ProjectedTensorValueV1::Invalid;
+    }
+    let Some(fragment) = authenticate_tensor_load_v1(call, state, contract, storage_layout) else {
+        return ProjectedTensorValueV1::Invalid;
+    };
+    ProjectedTensorValueV1::Known(match result {
+        ProjectedTensorLoadResultV1::LegacyOption => ProjectedTensorOriginV1::LoadOption(fragment),
+        ProjectedTensorLoadResultV1::DirectFragment => ProjectedTensorOriginV1::Operand(fragment),
+    })
 }
 
 fn authenticate_tensor_instruction_v1(
@@ -8374,6 +8418,77 @@ mod tests {
             distribution: SemanticMfmaAccumulatorDistributionV1::RowMajor,
             wave_width: 64,
         }
+    }
+
+    #[test]
+    fn zero_filled_v2_load_is_a_direct_authenticated_operand() {
+        let call = tensor_test_call();
+        let contract = mfma_operand_contract(SemanticMfmaOperandRoleV1::A);
+        let state = HashMap::from([
+            (
+                0,
+                ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::View(ProjectedMfmaViewV1 {
+                    role: SemanticMfmaOperandRoleV1::A,
+                    storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                })),
+            ),
+            (
+                1,
+                ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Lane {
+                    root: 20,
+                    wave_width: 64,
+                }),
+            ),
+        ]);
+
+        assert!(matches!(
+            project_tensor_load_origin_v1(
+                &call,
+                &state,
+                SCALAR_TYPE,
+                SCALAR_TYPE,
+                contract,
+                SemanticMfmaStorageLayoutV1::RowMajor,
+                ProjectedTensorLoadResultV1::DirectFragment,
+            ),
+            ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Operand(_))
+        ));
+        assert!(matches!(
+            project_tensor_load_origin_v1(
+                &call,
+                &state,
+                SCALAR_TYPE,
+                SCALAR_TYPE,
+                contract,
+                SemanticMfmaStorageLayoutV1::RowMajor,
+                ProjectedTensorLoadResultV1::LegacyOption,
+            ),
+            ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::LoadOption(_))
+        ));
+        assert_eq!(
+            project_tensor_load_origin_v1(
+                &call,
+                &state,
+                ARRAY_TYPE,
+                SCALAR_TYPE,
+                contract,
+                SemanticMfmaStorageLayoutV1::RowMajor,
+                ProjectedTensorLoadResultV1::DirectFragment,
+            ),
+            ProjectedTensorValueV1::Invalid
+        );
+        assert_eq!(
+            project_tensor_load_origin_v1(
+                &call,
+                &state,
+                SCALAR_TYPE,
+                SCALAR_TYPE,
+                mfma_operand_contract(SemanticMfmaOperandRoleV1::B),
+                SemanticMfmaStorageLayoutV1::RowMajor,
+                ProjectedTensorLoadResultV1::DirectFragment,
+            ),
+            ProjectedTensorValueV1::Invalid
+        );
     }
 
     fn authenticated_tensor_state(
