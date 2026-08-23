@@ -393,14 +393,23 @@ pub open spec fn scalar_kir_typed_decode_record_v1(
             }
         },
         ScalarKirTypedContextV1::ConstantValue { kind, width } => {
-            if tag == 31 && payload.len() == width {
-                ScalarKirTypedRecordDecodeV1::Decoded {
-                    token: ScalarKirTypedTokenV1::ConstantBits {
-                        kind,
-                        width,
-                        value: scalar_kir_typed_payload_value_v1(payload),
-                    },
-                    next_context: ScalarKirTypedContextV1::Idle,
+            if tag == 31
+                && width == scalar_kir_typed_constant_width_v1(kind)
+                && width > 0
+                && payload.len() == width
+            {
+                let value = scalar_kir_typed_payload_value_v1(payload);
+                if kind == 1 && value > 1 {
+                    ScalarKirTypedRecordDecodeV1::Invalid
+                } else {
+                    ScalarKirTypedRecordDecodeV1::Decoded {
+                        token: ScalarKirTypedTokenV1::ConstantBits {
+                            kind,
+                            width,
+                            value,
+                        },
+                        next_context: ScalarKirTypedContextV1::Idle,
+                    }
                 }
             } else {
                 ScalarKirTypedRecordDecodeV1::Invalid
@@ -476,6 +485,35 @@ pub open spec fn scalar_kir_typed_records_v1(
         ScalarKirTypedDecodeV1::Complete { records } => records,
         ScalarKirTypedDecodeV1::Invalid => seq![],
     }
+}
+
+pub proof fn scalar_kir_typed_constant_contexts_fail_closed_v1()
+    ensures
+        scalar_kir_typed_decode_record_v1(
+            31,
+            seq![2u8],
+            ScalarKirTypedContextV1::ConstantValue { kind: 1, width: 1 },
+        ) == ScalarKirTypedRecordDecodeV1::Invalid,
+        scalar_kir_typed_decode_record_v1(
+            31,
+            seq![0u8, 0u8, 0u8],
+            ScalarKirTypedContextV1::ConstantValue { kind: 8, width: 3 },
+        ) == ScalarKirTypedRecordDecodeV1::Invalid,
+{
+    assert(
+        scalar_kir_typed_decode_record_v1(
+            31,
+            seq![2u8],
+            ScalarKirTypedContextV1::ConstantValue { kind: 1, width: 1 },
+        ) == ScalarKirTypedRecordDecodeV1::Invalid
+    ) by (compute);
+    assert(
+        scalar_kir_typed_decode_record_v1(
+            31,
+            seq![0u8, 0u8, 0u8],
+            ScalarKirTypedContextV1::ConstantValue { kind: 8, width: 3 },
+        ) == ScalarKirTypedRecordDecodeV1::Invalid
+    ) by (compute);
 }
 
 pub proof fn generated_scalar_kir_projection_decodes_to_typed_records_v1()

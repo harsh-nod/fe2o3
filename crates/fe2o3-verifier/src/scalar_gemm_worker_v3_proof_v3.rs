@@ -34,9 +34,10 @@ const KIR_PROJECTION_REVIEW: &[u8] =
 const KIR_PROJECTION_TLV: &[u8] = include_bytes!("../verus/scalar_gemm_kir_projection_tlv_v1.rs");
 const KIR_PROJECTION_TYPED: &[u8] =
     include_bytes!("../verus/scalar_gemm_kir_projection_typed_v1.rs");
+const KIR_PROJECTION_AST: &[u8] = include_bytes!("../verus/scalar_gemm_kir_projection_ast_v1.rs");
 const KIR_OPERATIONAL_SEMANTICS: &[u8] =
     include_bytes!("../verus/scalar_gemm_kir_operational_semantics_v1.rs");
-const EXPECTED_STDOUT: &[u8] = b"verification results:: 37 verified, 0 errors\n";
+const EXPECTED_STDOUT: &[u8] = b"verification results:: 48 verified, 0 errors\n";
 const INPUT_BINDING_DOMAIN_V3: &[u8] = b"fe2o3-scalar-gemm-worker-v3-proof-input-binding-v3\0";
 const OUTPUT_IDENTITY_DOMAIN_V3: &[u8] = b"fe2o3-scalar-gemm-worker-v3-proof-output-v3\0";
 const EXECUTION_IDENTITY_DOMAIN_V3: &[u8] = b"fe2o3-scalar-gemm-worker-v3-proof-execution-v3\0";
@@ -144,6 +145,11 @@ impl ScalarGemmWorkerV3ProofInputV3 {
         true
     }
 
+    /// Generated source binds total structural parsing and exact token consumption obligations.
+    pub const fn binds_total_structural_projection_ast_decoding(&self) -> bool {
+        true
+    }
+
     pub const fn grants_artifact_or_runtime_authority(&self) -> bool {
         false
     }
@@ -241,6 +247,7 @@ fn generate_source(
             + KIR_PROJECTION_REVIEW.len()
             + KIR_PROJECTION_TLV.len()
             + KIR_PROJECTION_TYPED.len()
+            + KIR_PROJECTION_AST.len()
             + KIR_INTEGER_REFINEMENT.len()
             + KIR_OPERATIONAL_SEMANTICS.len()
             + semantic_projection.len() * 6
@@ -303,6 +310,7 @@ fn generate_source(
     generated.extend_from_slice(KIR_PROJECTION_REVIEW);
     generated.extend_from_slice(KIR_PROJECTION_TLV);
     generated.extend_from_slice(KIR_PROJECTION_TYPED);
+    generated.extend_from_slice(KIR_PROJECTION_AST);
     generated.extend_from_slice(KIR_INTEGER_REFINEMENT);
     generated.extend_from_slice(KIR_OPERATIONAL_SEMANTICS);
     Ok(generated)
@@ -437,6 +445,11 @@ impl AuthenticatedScalarGemmWorkerV3ProofV3 {
 
     /// Retained Verus completed typed token decoding with no pending context.
     pub const fn authenticates_total_typed_projection_token_decoding(&self) -> bool {
+        true
+    }
+
+    /// Retained Verus completed count-driven structural decoding with exact consumption.
+    pub const fn authenticates_total_structural_projection_ast_decoding(&self) -> bool {
         true
     }
 
@@ -819,8 +832,14 @@ mod tests {
         }
     }
 
-    fn substitute_first_wave_width_in_generated_and_reviewed(source: &mut [u8]) {
-        const WAVE_WIDTH_RECORD: &[u8] = &[7, 1, 0, 0, 0, 12, 8, 1, 0, 0, 0, 2];
+    fn substitute_projection_sequence_in_generated_and_reviewed(
+        source: &mut [u8],
+        sequence: &[u8],
+        replacement: u8,
+    ) {
+        assert!(!sequence.is_empty());
+        assert!(sequence[sequence.len() - 1] < 10);
+        assert!(replacement < 10);
         for marker in [
             b"FE2O3_GENERATED_SCALAR_KIR_PROJECTION_V1".as_slice(),
             b"FE2O3_REVIEWED_SCALAR_KIR_PROJECTION_V1".as_slice(),
@@ -854,19 +873,29 @@ mod tests {
                     cursor += 1;
                 }
             }
-            let wave_width = values
-                .windows(WAVE_WIDTH_RECORD.len())
+            let target = values
+                .windows(sequence.len())
                 .position(|window| {
                     window
                         .iter()
                         .map(|(value, _)| *value)
-                        .eq(WAVE_WIDTH_RECORD.iter().copied())
+                        .eq(sequence.iter().copied())
                 })
-                .map(|offset| values[offset + WAVE_WIDTH_RECORD.len() - 1].1)
-                .expect("first wave-width record is absent");
-            assert_eq!(source[wave_width], b'2');
-            source[wave_width] = b'3';
+                .map(|offset| values[offset + sequence.len() - 1].1)
+                .expect("projection sequence is absent");
+            assert_eq!(source[target], b'0' + sequence[sequence.len() - 1]);
+            source[target] = b'0' + replacement;
         }
+    }
+
+    fn substitute_first_wave_width_in_generated_and_reviewed(source: &mut [u8]) {
+        const WAVE_WIDTH_RECORD: &[u8] = &[7, 1, 0, 0, 0, 12, 8, 1, 0, 0, 0, 2];
+        substitute_projection_sequence_in_generated_and_reviewed(source, WAVE_WIDTH_RECORD, 3);
+    }
+
+    fn substitute_function_count_in_generated_and_reviewed(source: &mut [u8]) {
+        const FUNCTION_COUNT_RECORD: &[u8] = &[5, 4, 0, 0, 0, 1];
+        substitute_projection_sequence_in_generated_and_reviewed(source, FUNCTION_COUNT_RECORD, 2);
     }
 
     #[test]
@@ -880,6 +909,7 @@ mod tests {
         assert!(first.includes_reviewed_kir_operational_semantics());
         assert!(first.binds_exact_projection_tlv_framing());
         assert!(first.binds_total_typed_projection_token_decoding());
+        assert!(first.binds_total_structural_projection_ast_decoding());
         assert_eq!(first.semantic_projection_byte_len(), 2_927);
         assert_ne!(first.semantic_projection_identity(), [0; 32]);
         assert!(!first.grants_artifact_or_runtime_authority());
@@ -899,6 +929,8 @@ mod tests {
             "scalar_kir_active_execution_refines_integer_model_v1",
             "generated_scalar_kir_projection_has_exact_tlv_framing_v1",
             "generated_scalar_kir_projection_decodes_to_typed_records_v1",
+            "scalar_kir_typed_constant_contexts_fail_closed_v1",
+            "generated_scalar_kir_projection_decodes_to_structural_ast_v1",
         ] {
             assert!(source.contains(name), "generated source omitted {name}");
         }
@@ -996,6 +1028,7 @@ mod tests {
         assert!(receipt.authenticates_reviewed_kir_state_machine_refinement());
         assert!(receipt.authenticates_exact_projection_tlv_framing());
         assert!(receipt.authenticates_total_typed_projection_token_decoding());
+        assert!(receipt.authenticates_total_structural_projection_ast_decoding());
         assert!(!receipt.establishes_kir_to_integer_model_refinement());
         assert!(!receipt.establishes_source_to_kir_refinement());
         assert!(!receipt.establishes_rust_or_f32_semantics());
@@ -1039,7 +1072,9 @@ mod tests {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             stderr.contains("generated_scalar_kir_projection_is_exact_v1")
-                || stderr.contains("assertion failed"),
+                || stderr.contains("generated_scalar_kir_projection_decodes_to_structural_ast_v1")
+                || stderr.contains("assertion failed")
+                || stderr.contains("expression simplifies to false"),
             "unexpected verifier failure:\n{stderr}"
         );
     }
@@ -1081,7 +1116,9 @@ mod tests {
             stderr.contains("generated_scalar_kir_projection_has_exact_tlv_framing_v1")
                 || (stderr.contains("scalar_kir_tlv_frame_v1")
                     && stderr.contains("Invalid == Complete { records: 370 }"))
-                || stderr.contains("assertion failed"),
+                || stderr.contains("generated_scalar_kir_projection_decodes_to_structural_ast_v1")
+                || stderr.contains("assertion failed")
+                || stderr.contains("expression simplifies to false"),
             "unexpected verifier failure:\n{stderr}"
         );
     }
@@ -1101,6 +1138,27 @@ mod tests {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             stderr.contains("generated_scalar_kir_projection_decodes_to_typed_records_v1")
+                || stderr.contains("assertion failed")
+                || stderr.contains("expression simplifies to false"),
+            "unexpected verifier failure:\n{stderr}"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires FE2O3_TEST_VERUS pointing to the pinned Verus launcher"]
+    fn equal_array_function_count_substitution_fails_structural_decoder() {
+        let mut source = input([0x49; 32]).canonical_source().to_vec();
+        substitute_function_count_in_generated_and_reviewed(&mut source);
+        let output = run_pinned_verus(&source, "function-count-substitution");
+        assert_ne!(
+            output.status.code(),
+            Some(0),
+            "structurally malformed equal projections unexpectedly verified: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("generated_scalar_kir_projection_decodes_to_structural_ast_v1")
                 || stderr.contains("assertion failed")
                 || stderr.contains("expression simplifies to false"),
             "unexpected verifier failure:\n{stderr}"
