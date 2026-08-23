@@ -18,6 +18,7 @@ mod artifact_record;
 mod authenticated_execution;
 mod authenticated_proof_binding;
 mod authenticated_verus_execution_v2;
+mod compiler_proof_binding_v3;
 mod control_flow_binding;
 mod executor;
 mod flash_attention_memory_v1;
@@ -86,6 +87,10 @@ pub use authenticated_verus_execution_v2::{
     AuthenticatedVerusProcessOccurrenceV2, AuthenticatedVerusToolExecutionV2,
     BoundExecutionPayloadV2, ProcessFailureV2, RuntimeClosureMeasurementV2,
     RuntimeExecutableBaselineV2, VerusExecutionRoleV2, execute_authenticated_verus_v2,
+};
+pub use compiler_proof_binding_v3::{
+    CompilerProofBindingValidationErrorV3, ValidatedCompilerProofBindingAssociationV3,
+    validate_compiler_proof_binding_association_v3,
 };
 // Deprecated compatibility exports. Despite their Verus-oriented names, these
 // authenticate and execute only the recorder; they do not show that Verus or a

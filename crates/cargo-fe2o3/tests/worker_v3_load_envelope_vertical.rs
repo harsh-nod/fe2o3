@@ -51,6 +51,7 @@ use fe2o3_host::{
 use fe2o3_hsa_runtime::ReviewedHsaRuntimeAdapterV1;
 use fe2o3_kernel_descriptor::KernelId;
 use fe2o3_scalar_gemm_v1::kernel::scalar_gemm_v1_gpu;
+use fe2o3_verifier::validate_compiler_proof_binding_association_v3;
 use fe2o3_worker_v2_bundle::{
     RecoveredWorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeWireV1,
     recover_worker_v3_load_envelope_v1,
@@ -308,6 +309,20 @@ where
         assert_eq!(
             capsule.receipts().proof_binding().canonical_preimage(),
             request.proof_binding_receipt_bytes()
+        );
+        let receipts = capsule.receipts();
+        let proof_binding = validate_compiler_proof_binding_association_v3(
+            receipts.proof_binding(),
+            receipts.semantic_mir(),
+            receipts.middle_end(),
+            receipts.kernel_ir(),
+            receipts.mir_to_kir_correspondence(),
+            receipts.formal_memory(),
+        )
+        .expect("production compiler proof association must match exact retained receipts");
+        assert_eq!(
+            proof_binding.receipt_identity(),
+            receipts.proof_binding().identity()
         );
         let mut finalized = request.finalized_hsaco_sha256();
         if self.substitute_finalized {
