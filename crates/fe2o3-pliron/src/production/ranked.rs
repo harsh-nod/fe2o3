@@ -10,12 +10,13 @@ use dialect_gpu::{
     MemoryScopeAttr,
 };
 use dialect_kernel::{
-    AccessKindAttr, AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr, BranchOp,
+    AccessKindAttr, AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr, BranchArgsOp, BranchOp,
     CheckedTiledIndex2DOp, DYNAMIC_EXTENT, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp,
-    IndexConstantOp, IndexLessThanBranchOp, IndexType, InvocationIndexOp, MAX_RANKED_MEMORY_RANK,
-    MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp,
-    SUPPORTED_ELEMENT_WIDTHS, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantOp,
-    SemanticSymbolOp, TensorConvergenceAttr, TensorLayoutOp,
+    IndexConstantOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexType,
+    InvocationIndexOp, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp, RankedViewOp,
+    RankedViewType, RequireEquivalentOp, ReturnOp, SUPPORTED_ELEMENT_WIDTHS,
+    SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantOp, SemanticSymbolOp,
+    TensorConvergenceAttr, TensorLayoutOp,
 };
 use fe2o3_kernel_analysis::{
     GeneralPlironKernelCheckErrorV1, MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_OPERATIONS,
@@ -68,6 +69,7 @@ impl ProductionRankedValueIdV1 {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ProductionRankedValueV1 {
     Argument(u32),
+    BlockArgument { block: u32, argument: u32 },
     Local(ProductionRankedValueIdV1),
 }
 
@@ -193,6 +195,14 @@ pub enum ProductionRankedTerminatorV1 {
         true_block: u32,
         false_block: u32,
     },
+    IndexLessThanArgs {
+        lhs: ProductionRankedValueV1,
+        rhs: ProductionRankedValueV1,
+        true_arguments: Vec<ProductionRankedValueV1>,
+        false_arguments: Vec<ProductionRankedValueV1>,
+        true_block: u32,
+        false_block: u32,
+    },
     AnalysisSplit {
         first_block: u32,
         second_block: u32,
@@ -200,11 +210,21 @@ pub enum ProductionRankedTerminatorV1 {
     Branch {
         target: u32,
     },
+    BranchArgs {
+        arguments: Vec<ProductionRankedValueV1>,
+        target: u32,
+    },
+    BranchArgsAdd {
+        value: ProductionRankedValueV1,
+        step: ProductionRankedValueV1,
+        target: u32,
+    },
     Return,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProductionRankedBlockV1 {
+    index_argument_count: u32,
     operations: Vec<ProductionRankedOperationV1>,
     terminator: ProductionRankedTerminatorV1,
 }
@@ -215,9 +235,26 @@ impl ProductionRankedBlockV1 {
         terminator: ProductionRankedTerminatorV1,
     ) -> Self {
         Self {
+            index_argument_count: 0,
             operations,
             terminator,
         }
+    }
+
+    pub fn with_index_arguments(
+        index_argument_count: u32,
+        operations: Vec<ProductionRankedOperationV1>,
+        terminator: ProductionRankedTerminatorV1,
+    ) -> Self {
+        Self {
+            index_argument_count,
+            operations,
+            terminator,
+        }
+    }
+
+    pub const fn index_argument_count(&self) -> u32 {
+        self.index_argument_count
     }
 
     pub fn operations(&self) -> &[ProductionRankedOperationV1] {
@@ -283,7 +320,12 @@ impl ProductionRankedKernelV1 {
             });
         }
         let operation_count = self.blocks.iter().try_fold(0_usize, |total, block| {
-            total.checked_add(block.operations.len() + 1)
+            total
+                .checked_add(block.operations.len() + 1)?
+                .checked_add(usize::from(matches!(
+                    block.terminator,
+                    ProductionRankedTerminatorV1::BranchArgsAdd { .. }
+                )))
         });
         let Some(operation_count) = operation_count else {
             return Err(ProductionRankedKernelErrorV1::ResourceLimit {
@@ -317,8 +359,33 @@ impl ProductionRankedKernelV1 {
         let mut locals = Vec::new();
         let mut saw_execution_layout = false;
         let mut allocation_classes = HashMap::new();
+        let mut total_block_arguments = 0_usize;
         for (block_index, block) in self.blocks.iter().enumerate() {
+            if block_index == 0 && block.index_argument_count != 0
+                || block.index_argument_count as usize > HARD_MAX_PRODUCTION_RANKED_ARGUMENTS
+            {
+                return Err(ProductionRankedKernelErrorV1::ResourceLimit {
+                    resource: "block argument",
+                    limit: HARD_MAX_PRODUCTION_RANKED_ARGUMENTS,
+                    actual: block.index_argument_count as usize,
+                });
+            }
+            total_block_arguments = total_block_arguments
+                .checked_add(block.index_argument_count as usize)
+                .ok_or(ProductionRankedKernelErrorV1::ResourceLimit {
+                    resource: "total block argument",
+                    limit: MAX_RANKED_BOUNDS_OPERATIONS,
+                    actual: usize::MAX,
+                })?;
+            if total_block_arguments > MAX_RANKED_BOUNDS_OPERATIONS {
+                return Err(ProductionRankedKernelErrorV1::ResourceLimit {
+                    resource: "total block argument",
+                    limit: MAX_RANKED_BOUNDS_OPERATIONS,
+                    actual: total_block_arguments,
+                });
+            }
             for (operation_index, operation) in block.operations.iter().enumerate() {
+                validate_block_argument_values_v1(operation, block_index, &self.blocks)?;
                 if let ProductionRankedOperationV1::ExecutionLayout {
                     workgroup_extents,
                     subgroup_size,
@@ -388,7 +455,8 @@ impl ProductionRankedKernelV1 {
                 &block.terminator,
                 self.argument_count,
                 &locals,
-                self.blocks.len(),
+                &self.blocks,
+                block_index,
             )?;
         }
         Ok(tree_work)
@@ -565,6 +633,7 @@ fn require_value(
             .get(identity.get() as usize)
             .copied()
             .ok_or(ProductionRankedKernelErrorV1::UndefinedValue(value)),
+        ProductionRankedValueV1::BlockArgument { .. } => Ok(RecipeValueKindV1::Index),
         ProductionRankedValueV1::Argument(_) => {
             Err(ProductionRankedKernelErrorV1::UndefinedValue(value))
         }
@@ -804,18 +873,147 @@ fn validate_access(
     Ok(())
 }
 
+fn validate_block_argument_value_v1(
+    value: ProductionRankedValueV1,
+    current_block: usize,
+    blocks: &[ProductionRankedBlockV1],
+) -> Result<(), ProductionRankedKernelErrorV1> {
+    let ProductionRankedValueV1::BlockArgument { block, argument } = value else {
+        return Ok(());
+    };
+    if block as usize != current_block
+        || blocks
+            .get(block as usize)
+            .is_none_or(|recipe| argument >= recipe.index_argument_count)
+    {
+        return Err(ProductionRankedKernelErrorV1::UndefinedValue(value));
+    }
+    Ok(())
+}
+
+fn validate_block_argument_values_v1(
+    operation: &ProductionRankedOperationV1,
+    current_block: usize,
+    blocks: &[ProductionRankedBlockV1],
+) -> Result<(), ProductionRankedKernelErrorV1> {
+    let mut validate = |value| validate_block_argument_value_v1(value, current_block, blocks);
+    match operation {
+        ProductionRankedOperationV1::View {
+            dynamic_extents, ..
+        }
+        | ProductionRankedOperationV1::ViewInSpace {
+            dynamic_extents, ..
+        } => {
+            for value in dynamic_extents {
+                validate(*value)?;
+            }
+        }
+        ProductionRankedOperationV1::IndexBinary { lhs, rhs, .. }
+        | ProductionRankedOperationV1::SemanticBinary { lhs, rhs, .. } => {
+            validate(*lhs)?;
+            validate(*rhs)?;
+        }
+        ProductionRankedOperationV1::CheckedTiledIndex2D {
+            invocation,
+            component,
+            rows,
+            columns,
+            row_stride,
+            ..
+        } => {
+            for value in [invocation, component, rows, columns, row_stride] {
+                validate(*value)?;
+            }
+        }
+        ProductionRankedOperationV1::Dimension { view, .. } => validate(*view)?,
+        ProductionRankedOperationV1::Access { view, indices, .. }
+        | ProductionRankedOperationV1::AtomicAccess { view, indices, .. } => {
+            validate(*view)?;
+            for value in indices {
+                validate(*value)?;
+            }
+        }
+        ProductionRankedOperationV1::RequireEquivalent { actual, expected } => {
+            validate(*actual)?;
+            validate(*expected)?;
+        }
+        ProductionRankedOperationV1::ExecutionLayout { .. }
+        | ProductionRankedOperationV1::IndexConstant { .. }
+        | ProductionRankedOperationV1::InvocationIndex { .. }
+        | ProductionRankedOperationV1::Barrier { .. }
+        | ProductionRankedOperationV1::Fence { .. }
+        | ProductionRankedOperationV1::TensorLayout { .. }
+        | ProductionRankedOperationV1::SemanticSymbol { .. }
+        | ProductionRankedOperationV1::SemanticConstant { .. } => {}
+    }
+    Ok(())
+}
+
+fn validate_terminator_block_argument_values_v1(
+    terminator: &ProductionRankedTerminatorV1,
+    current_block: usize,
+    blocks: &[ProductionRankedBlockV1],
+) -> Result<(), ProductionRankedKernelErrorV1> {
+    let validate = |value| validate_block_argument_value_v1(value, current_block, blocks);
+    match terminator {
+        ProductionRankedTerminatorV1::IndexLessThan { lhs, rhs, .. }
+        | ProductionRankedTerminatorV1::BranchArgsAdd {
+            value: lhs,
+            step: rhs,
+            ..
+        } => {
+            validate(*lhs)?;
+            validate(*rhs)
+        }
+        ProductionRankedTerminatorV1::IndexLessThanArgs {
+            lhs,
+            rhs,
+            true_arguments,
+            false_arguments,
+            ..
+        } => {
+            validate(*lhs)?;
+            validate(*rhs)?;
+            for value in true_arguments.iter().chain(false_arguments) {
+                validate(*value)?;
+            }
+            Ok(())
+        }
+        ProductionRankedTerminatorV1::BranchArgs { arguments, .. } => {
+            for value in arguments {
+                validate(*value)?;
+            }
+            Ok(())
+        }
+        ProductionRankedTerminatorV1::AnalysisSplit { .. }
+        | ProductionRankedTerminatorV1::Branch { .. }
+        | ProductionRankedTerminatorV1::Return => Ok(()),
+    }
+}
+
 fn validate_terminator(
     terminator: &ProductionRankedTerminatorV1,
     argument_count: usize,
     locals: &[RecipeValueKindV1],
-    block_count: usize,
+    blocks: &[ProductionRankedBlockV1],
+    current_block: usize,
 ) -> Result<(), ProductionRankedKernelErrorV1> {
     let target = |target: u32| {
         usize::try_from(target)
             .ok()
-            .filter(|target| *target < block_count)
+            .filter(|target| *target < blocks.len())
             .map(|_| ())
             .ok_or(ProductionRankedKernelErrorV1::InvalidBlockTarget(target))
+    };
+    validate_terminator_block_argument_values_v1(terminator, current_block, blocks)?;
+    let target_without_arguments = |destination: u32| {
+        target(destination)?;
+        if blocks[destination as usize].index_argument_count != 0 {
+            return Err(ProductionRankedKernelErrorV1::Materialization(
+                "ranked branch omits required successor arguments",
+            ));
+        }
+        Ok(())
     };
     match terminator {
         ProductionRankedTerminatorV1::IndexLessThan {
@@ -826,19 +1024,74 @@ fn validate_terminator(
         } => {
             require_index(*lhs, argument_count, locals)?;
             require_index(*rhs, argument_count, locals)?;
+            target_without_arguments(*true_block)?;
+            target_without_arguments(*false_block)
+        }
+        ProductionRankedTerminatorV1::IndexLessThanArgs {
+            lhs,
+            rhs,
+            true_arguments,
+            false_arguments,
+            true_block,
+            false_block,
+        } => {
+            require_index(*lhs, argument_count, locals)?;
+            require_index(*rhs, argument_count, locals)?;
             target(*true_block)?;
-            target(*false_block)
+            target(*false_block)?;
+            if true_arguments.len() != blocks[*true_block as usize].index_argument_count as usize
+                || false_arguments.len()
+                    != blocks[*false_block as usize].index_argument_count as usize
+            {
+                return Err(ProductionRankedKernelErrorV1::Materialization(
+                    "ranked conditional branch arguments do not match successors",
+                ));
+            }
+            for value in true_arguments.iter().chain(false_arguments) {
+                require_index(*value, argument_count, locals)?;
+            }
+            Ok(())
         }
         ProductionRankedTerminatorV1::AnalysisSplit {
             first_block,
             second_block,
         } => {
-            target(*first_block)?;
-            target(*second_block)
+            target_without_arguments(*first_block)?;
+            target_without_arguments(*second_block)
         }
         ProductionRankedTerminatorV1::Branch {
             target: destination,
-        } => target(*destination),
+        } => target_without_arguments(*destination),
+        ProductionRankedTerminatorV1::BranchArgs {
+            arguments,
+            target: destination,
+        } => {
+            target(*destination)?;
+            let expected = blocks[*destination as usize].index_argument_count as usize;
+            if arguments.len() != expected {
+                return Err(ProductionRankedKernelErrorV1::Materialization(
+                    "ranked branch argument count does not match its successor",
+                ));
+            }
+            for argument in arguments {
+                require_index(*argument, argument_count, locals)?;
+            }
+            Ok(())
+        }
+        ProductionRankedTerminatorV1::BranchArgsAdd {
+            value,
+            step,
+            target: destination,
+        } => {
+            target(*destination)?;
+            if blocks[*destination as usize].index_argument_count != 1 {
+                return Err(ProductionRankedKernelErrorV1::Materialization(
+                    "ranked induction backedge requires one successor index argument",
+                ));
+            }
+            require_index(*value, argument_count, locals)?;
+            require_index(*step, argument_count, locals)
+        }
         ProductionRankedTerminatorV1::Return => Ok(()),
     }
 }
@@ -1010,7 +1263,11 @@ impl ProductionPlironSessionV1 {
                             ),
                         )
                     })?;
-            let block = BasicBlock::new(&mut self.inner.context, Some(label), vec![]);
+            let block = BasicBlock::new(
+                &mut self.inner.context,
+                Some(label),
+                vec![index; kernel.blocks[block_index].index_argument_count as usize],
+            );
             block.insert_at_back(
                 function.get_region(&self.inner.context),
                 &self.inner.context,
@@ -1022,6 +1279,14 @@ impl ProductionPlironSessionV1 {
             .deref(&self.inner.context)
             .arguments()
             .collect::<Vec<_>>();
+        let mut block_arguments = HashMap::new();
+        for (block_index, block) in blocks.iter().copied().enumerate().skip(1) {
+            for (argument_index, argument) in
+                block.deref(&self.inner.context).arguments().enumerate()
+            {
+                block_arguments.insert((block_index as u32, argument_index as u32), argument);
+            }
+        }
         let mut locals = Vec::new();
         for (block_index, recipe_block) in kernel.blocks.iter().enumerate() {
             let block = blocks[block_index];
@@ -1032,6 +1297,7 @@ impl ProductionPlironSessionV1 {
                     recipe,
                     &arguments,
                     &mut locals,
+                    &block_arguments,
                 )
                 .map_err(ProductionSessionErrorV1::RankedRecipe)?;
             }
@@ -1042,6 +1308,7 @@ impl ProductionPlironSessionV1 {
                 &blocks,
                 &arguments,
                 &locals,
+                &block_arguments,
             )
             .map_err(ProductionSessionErrorV1::RankedRecipe)?;
         }
@@ -1225,6 +1492,7 @@ fn resolve_value(
     value: ProductionRankedValueV1,
     arguments: &[Value],
     locals: &[Value],
+    block_arguments: &HashMap<(u32, u32), Value>,
 ) -> Result<Value, ProductionRankedKernelErrorV1> {
     match value {
         ProductionRankedValueV1::Argument(argument) => arguments
@@ -1233,6 +1501,10 @@ fn resolve_value(
             .ok_or(ProductionRankedKernelErrorV1::UndefinedValue(value)),
         ProductionRankedValueV1::Local(identity) => locals
             .get(identity.get() as usize)
+            .copied()
+            .ok_or(ProductionRankedKernelErrorV1::UndefinedValue(value)),
+        ProductionRankedValueV1::BlockArgument { block, argument } => block_arguments
+            .get(&(block, argument))
             .copied()
             .ok_or(ProductionRankedKernelErrorV1::UndefinedValue(value)),
     }
@@ -1244,6 +1516,7 @@ fn materialize_operation(
     recipe: &ProductionRankedOperationV1,
     arguments: &[Value],
     locals: &mut Vec<Value>,
+    block_arguments: &HashMap<(u32, u32), Value>,
 ) -> Result<(), ProductionRankedKernelErrorV1> {
     let (operation, result) = match recipe {
         ProductionRankedOperationV1::ExecutionLayout {
@@ -1278,7 +1551,7 @@ fn materialize_operation(
                 })?;
             let dynamic_extents = dynamic_extents
                 .iter()
-                .map(|value| resolve_value(*value, arguments, locals))
+                .map(|value| resolve_value(*value, arguments, locals, block_arguments))
                 .collect::<Result<Vec<_>, _>>()?;
             let op = RankedViewOp::new_in_space_with_allocation_contract(
                 context,
@@ -1309,11 +1582,11 @@ fn materialize_operation(
         } => {
             let op = CheckedTiledIndex2DOp::new(
                 context,
-                resolve_value(*invocation, arguments, locals)?,
-                resolve_value(*component, arguments, locals)?,
-                resolve_value(*rows, arguments, locals)?,
-                resolve_value(*columns, arguments, locals)?,
-                resolve_value(*row_stride, arguments, locals)?,
+                resolve_value(*invocation, arguments, locals, block_arguments)?,
+                resolve_value(*component, arguments, locals, block_arguments)?,
+                resolve_value(*rows, arguments, locals, block_arguments)?,
+                resolve_value(*columns, arguments, locals, block_arguments)?,
+                resolve_value(*row_stride, arguments, locals, block_arguments)?,
                 [
                     *lanes_per_tile,
                     *tile_rows,
@@ -1341,7 +1614,7 @@ fn materialize_operation(
                 })?;
             let dynamic_extents = dynamic_extents
                 .iter()
-                .map(|value| resolve_value(*value, arguments, locals))
+                .map(|value| resolve_value(*value, arguments, locals, block_arguments))
                 .collect::<Result<Vec<_>, _>>()?;
             let op = RankedViewOp::new_in_space_with_allocation_contract(
                 context,
@@ -1379,8 +1652,8 @@ fn materialize_operation(
             let op = IndexBinaryOp::new(
                 context,
                 *kind,
-                resolve_value(*lhs, arguments, locals)?,
-                resolve_value(*rhs, arguments, locals)?,
+                resolve_value(*lhs, arguments, locals, block_arguments)?,
+                resolve_value(*rhs, arguments, locals, block_arguments)?,
             );
             (op.get_operation(), Some((*result, op.result(context))))
         }
@@ -1391,7 +1664,7 @@ fn materialize_operation(
         } => {
             let op = DimensionOp::new(
                 context,
-                resolve_value(*view, arguments, locals)?,
+                resolve_value(*view, arguments, locals, block_arguments)?,
                 *dimension,
             )
             .map_err(|_| {
@@ -1408,12 +1681,12 @@ fn materialize_operation(
         } => {
             let indices = indices
                 .iter()
-                .map(|value| resolve_value(*value, arguments, locals))
+                .map(|value| resolve_value(*value, arguments, locals, block_arguments))
                 .collect::<Result<Vec<_>, _>>()?;
             let op = RankedAccessOp::new(
                 context,
                 *kind,
-                resolve_value(*view, arguments, locals)?,
+                resolve_value(*view, arguments, locals, block_arguments)?,
                 indices,
             )
             .map_err(|_| {
@@ -1432,14 +1705,14 @@ fn materialize_operation(
         } => {
             let indices = indices
                 .iter()
-                .map(|value| resolve_value(*value, arguments, locals))
+                .map(|value| resolve_value(*value, arguments, locals, block_arguments))
                 .collect::<Result<Vec<_>, _>>()?;
             let op = RankedAccessOp::new_atomic(
                 context,
                 *kind,
                 *ordering,
                 *scope,
-                resolve_value(*view, arguments, locals)?,
+                resolve_value(*view, arguments, locals, block_arguments)?,
                 indices,
             )
             .map_err(|_| {
@@ -1497,16 +1770,16 @@ fn materialize_operation(
             let op = SemanticBinaryOp::new(
                 context,
                 *kind,
-                resolve_value(*lhs, arguments, locals)?,
-                resolve_value(*rhs, arguments, locals)?,
+                resolve_value(*lhs, arguments, locals, block_arguments)?,
+                resolve_value(*rhs, arguments, locals, block_arguments)?,
             );
             (op.get_operation(), Some((*result, op.result(context))))
         }
         ProductionRankedOperationV1::RequireEquivalent { actual, expected } => {
             let op = RequireEquivalentOp::new(
                 context,
-                resolve_value(*actual, arguments, locals)?,
-                resolve_value(*expected, arguments, locals)?,
+                resolve_value(*actual, arguments, locals, block_arguments)?,
+                resolve_value(*expected, arguments, locals, block_arguments)?,
             );
             (op.get_operation(), None)
         }
@@ -1530,6 +1803,7 @@ fn materialize_terminator(
     blocks: &[Ptr<BasicBlock>],
     arguments: &[Value],
     locals: &[Value],
+    block_arguments: &HashMap<(u32, u32), Value>,
 ) -> Result<(), ProductionRankedKernelErrorV1> {
     let operation = match terminator {
         ProductionRankedTerminatorV1::IndexLessThan {
@@ -1539,8 +1813,31 @@ fn materialize_terminator(
             false_block,
         } => IndexLessThanBranchOp::new(
             context,
-            resolve_value(*lhs, arguments, locals)?,
-            resolve_value(*rhs, arguments, locals)?,
+            resolve_value(*lhs, arguments, locals, block_arguments)?,
+            resolve_value(*rhs, arguments, locals, block_arguments)?,
+            blocks[*true_block as usize],
+            blocks[*false_block as usize],
+        )
+        .get_operation(),
+        ProductionRankedTerminatorV1::IndexLessThanArgs {
+            lhs,
+            rhs,
+            true_arguments,
+            false_arguments,
+            true_block,
+            false_block,
+        } => IndexLessThanBranchArgsOp::new(
+            context,
+            resolve_value(*lhs, arguments, locals, block_arguments)?,
+            resolve_value(*rhs, arguments, locals, block_arguments)?,
+            true_arguments
+                .iter()
+                .map(|value| resolve_value(*value, arguments, locals, block_arguments))
+                .collect::<Result<Vec<_>, _>>()?,
+            false_arguments
+                .iter()
+                .map(|value| resolve_value(*value, arguments, locals, block_arguments))
+                .collect::<Result<Vec<_>, _>>()?,
             blocks[*true_block as usize],
             blocks[*false_block as usize],
         )
@@ -1556,6 +1853,37 @@ fn materialize_terminator(
         .get_operation(),
         ProductionRankedTerminatorV1::Branch { target } => {
             BranchOp::new(context, blocks[*target as usize]).get_operation()
+        }
+        ProductionRankedTerminatorV1::BranchArgs {
+            arguments: edge_arguments,
+            target,
+        } => BranchArgsOp::new(
+            context,
+            edge_arguments
+                .iter()
+                .map(|value| resolve_value(*value, arguments, locals, block_arguments))
+                .collect::<Result<Vec<_>, _>>()?,
+            blocks[*target as usize],
+        )
+        .get_operation(),
+        ProductionRankedTerminatorV1::BranchArgsAdd {
+            value,
+            step,
+            target,
+        } => {
+            let next = IndexBinaryOp::new(
+                context,
+                IndexBinaryKindAttr::Add,
+                resolve_value(*value, arguments, locals, block_arguments)?,
+                resolve_value(*step, arguments, locals, block_arguments)?,
+            );
+            next.get_operation().insert_at_back(block, context);
+            BranchArgsOp::new(
+                context,
+                vec![next.result(context)],
+                blocks[*target as usize],
+            )
+            .get_operation()
         }
         ProductionRankedTerminatorV1::Return => ReturnOp::new(context).get_operation(),
     };

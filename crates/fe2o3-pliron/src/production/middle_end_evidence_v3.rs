@@ -1003,6 +1003,7 @@ fn derive_ranked_kernel_identity(
     hash_usize(&mut digest, kernel.argument_count());
     hash_usize(&mut digest, kernel.blocks().len());
     for block in kernel.blocks() {
+        digest.update(block.index_argument_count().to_le_bytes());
         hash_usize(&mut digest, block.operations().len());
         for operation in block.operations() {
             hash_ranked_operation(&mut digest, operation);
@@ -1308,6 +1309,22 @@ fn hash_ranked_terminator(digest: &mut Sha256, terminator: &ProductionRankedTerm
             digest.update(true_block.to_le_bytes());
             digest.update(false_block.to_le_bytes());
         }
+        ProductionRankedTerminatorV1::IndexLessThanArgs {
+            lhs,
+            rhs,
+            true_arguments,
+            false_arguments,
+            true_block,
+            false_block,
+        } => {
+            digest.update([7]);
+            hash_value(digest, *lhs);
+            hash_value(digest, *rhs);
+            hash_values(digest, true_arguments);
+            hash_values(digest, false_arguments);
+            digest.update(true_block.to_le_bytes());
+            digest.update(false_block.to_le_bytes());
+        }
         ProductionRankedTerminatorV1::AnalysisSplit {
             first_block,
             second_block,
@@ -1318,6 +1335,21 @@ fn hash_ranked_terminator(digest: &mut Sha256, terminator: &ProductionRankedTerm
         }
         ProductionRankedTerminatorV1::Branch { target } => {
             digest.update([2]);
+            digest.update(target.to_le_bytes());
+        }
+        ProductionRankedTerminatorV1::BranchArgs { arguments, target } => {
+            digest.update([5]);
+            hash_values(digest, arguments);
+            digest.update(target.to_le_bytes());
+        }
+        ProductionRankedTerminatorV1::BranchArgsAdd {
+            value,
+            step,
+            target,
+        } => {
+            digest.update([6]);
+            hash_value(digest, *value);
+            hash_value(digest, *step);
             digest.update(target.to_le_bytes());
         }
         ProductionRankedTerminatorV1::Return => digest.update([3]),
@@ -1333,6 +1365,11 @@ fn hash_value(digest: &mut Sha256, value: ProductionRankedValueV1) {
         ProductionRankedValueV1::Local(identity) => {
             digest.update([2]);
             digest.update(identity.get().to_le_bytes());
+        }
+        ProductionRankedValueV1::BlockArgument { block, argument } => {
+            digest.update([3]);
+            digest.update(block.to_le_bytes());
+            digest.update(argument.to_le_bytes());
         }
     }
 }

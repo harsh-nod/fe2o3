@@ -4,12 +4,15 @@
 //! Dynamic slice facts come only from canonical Rust bounds asserts whose
 //! success edge uniquely controls an access to the same slice and index.
 
-use std::{collections::VecDeque, fmt};
+use std::{
+    collections::{HashMap, VecDeque},
+    fmt,
+};
 
 use dialect_gpu::{AddressSpaceAttr, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr};
 use dialect_kernel::{
     AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, DYNAMIC_EXTENT, IndexBinaryKindAttr,
-    MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, SUPPORTED_ELEMENT_WIDTHS,
+    MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, SUPPORTED_ELEMENT_WIDTHS, TensorConvergenceAttr,
 };
 use fe2o3_kernel_analysis::MAX_RANKED_BOUNDS_OPERATIONS;
 use fe2o3_lower_mir_kernel::{
@@ -22,10 +25,12 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticCallableIdV1, SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1,
     SemanticDirectCallV1, SemanticDirectTailCallV1, SemanticDisjointIndexSpaceV1,
     SemanticFunctionDeclV1, SemanticFunctionRoleV1, SemanticLocalIdV1, SemanticLocalRoleV1,
-    SemanticOperandV1, SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1,
-    SemanticSourceProvenanceV1, SemanticStatementKindV1, SemanticTargetArchitectureV1,
-    SemanticTerminatorKindV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
-    SemanticUnwindActionV1,
+    SemanticMfmaAccumulatorContractV1, SemanticMfmaAccumulatorDistributionV1,
+    SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1,
+    SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1, SemanticOperandV1,
+    SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticSourceProvenanceV1,
+    SemanticStatementKindV1, SemanticTargetArchitectureV1, SemanticTerminatorKindV1,
+    SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1, SemanticUnwindActionV1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
@@ -45,6 +50,8 @@ const ROOT_NAME_V1: &str = "semantic_safety_module";
 const MAX_PROJECTED_OPERATIONS_V1: usize = MAX_RANKED_BOUNDS_OPERATIONS - 1;
 // Diagnostics are retained only until this bounded projection is consumed.
 const MAX_PROJECTED_RANKED_IR_BYTES_V1: usize = MAX_RANKED_BOUNDS_OPERATIONS * 256;
+const MAX_PROJECTED_TENSOR_STATE_ENTRIES_V1: usize = MAX_RANKED_BOUNDS_OPERATIONS * 4;
+const MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1: usize = MAX_RANKED_BOUNDS_OPERATIONS * 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ProjectedAccessSourceV1 {
@@ -169,8 +176,60 @@ struct IntrinsicProjectionV1 {
     local_contracts: ProjectionLocalContractsV1,
     guarded_accesses: Vec<GuardedRankedAccessV1>,
     option_predicates: Vec<Option<GuardPredicateV1>>,
+    direct_switch_predicates: Vec<Option<GuardPredicateV1>>,
+    uniform_inductions: Vec<ProjectedUniformInductionV1>,
+    tensor_layouts: Vec<Option<ProductionRankedOperationV1>>,
     extent_argument_count: usize,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProjectedUniformInductionV1 {
+    preheader: usize,
+    header: usize,
+    body_and_latch: usize,
+    exit: usize,
+    initial: ProductionRankedValueV1,
+    bound: ProductionRankedValueV1,
+    step: ProductionRankedValueV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProjectedMfmaViewV1 {
+    role: SemanticMfmaOperandRoleV1,
+    storage_layout: SemanticMfmaStorageLayoutV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProjectedMfmaOperandV1 {
+    contract: SemanticMfmaOperandContractV1,
+    storage_layout: SemanticMfmaStorageLayoutV1,
+    lane_root: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProjectedMfmaAccumulatorV1 {
+    contract: SemanticMfmaAccumulatorContractV1,
+    lane_root: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProjectedTensorOriginV1 {
+    MatrixContext { root: u64 },
+    Lane { root: u64, wave_width: u32 },
+    ViewResult(ProjectedMfmaViewV1),
+    View(ProjectedMfmaViewV1),
+    LoadOption(ProjectedMfmaOperandV1),
+    Operand(ProjectedMfmaOperandV1),
+    Accumulator(ProjectedMfmaAccumulatorV1),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProjectedTensorValueV1 {
+    Known(ProjectedTensorOriginV1),
+    Invalid,
+}
+
+type ProjectedTensorStateV1 = HashMap<usize, ProjectedTensorValueV1>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct AllocationContractV1 {
@@ -473,7 +532,11 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         &mut discarded_ir,
     )?;
     let bounds_checks = project_rust_bounds_checks(function, intrinsic.extent_argument_count)?;
-    let switch_predicates = switch_predicates(function, &intrinsic.option_predicates)?;
+    let switch_predicates = switch_predicates(
+        function,
+        &intrinsic.option_predicates,
+        &intrinsic.direct_switch_predicates,
+    )?;
     let mut projected_blocks = Vec::new();
     let mut projected_effect_count = 0_usize;
     for (block_index, block) in function.blocks().iter().enumerate() {
@@ -522,6 +585,13 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
             ),
             &mut incomplete,
         )?;
+        if let Some(tensor_layout) = intrinsic.tensor_layouts.get(block_index).cloned().flatten() {
+            reserve_operation(&mut operations)?;
+            // This records contract consistency for the mandatory verifier. It
+            // carries no load-refinement or artifact authority by itself; that
+            // authority is joined later with the exact semantic owner and KIR.
+            operations.push(tensor_layout);
+        }
         let projected = order_projected_block_effects(
             operations,
             guarded_sites,
@@ -580,6 +650,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     let (blocks, sources) = build_ranked_cfg(
         function,
         &switch_predicates,
+        &intrinsic.uniform_inductions,
         entry_operations,
         projected_blocks,
     )?;
@@ -812,6 +883,538 @@ fn project_rust_bounds_checks(
     })
 }
 
+fn project_authenticated_tensor_layouts_v1(
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
+    option_dominance: &SemanticOptionDominanceV1,
+    enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
+) -> Result<Vec<Option<ProductionRankedOperationV1>>, ProductionRankedProjectionErrorV1> {
+    let block_count = function.blocks().len();
+    let entry = function.entry().index() as usize;
+    if entry >= block_count {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "a tensor projection entry outside the semantic CFG",
+        ));
+    }
+    let mut entries: Vec<Option<ProjectedTensorStateV1>> = vec![None; block_count];
+    entries[entry] = Some(HashMap::new());
+    let mut worklist = VecDeque::from([entry]);
+    let mut stored_entries = 0_usize;
+    let mut work = 0_usize;
+    while let Some(block_index) = worklist.pop_front() {
+        work = work
+            .checked_add(
+                entries[block_index]
+                    .as_ref()
+                    .map_or(1, |state| state.len().saturating_add(1)),
+            )
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "tensor producer dataflow work overflow",
+            ))?;
+        if work > MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1 {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "tensor producer dataflow exceeds the charged projection limit",
+            ));
+        }
+        let mut state = entries[block_index]
+            .as_ref()
+            .expect("queued tensor dataflow block has an entry state")
+            .clone();
+        transfer_tensor_statements_v1(
+            function,
+            block_index,
+            &mut state,
+            option_dominance,
+            enum_payload_dominance,
+        )?;
+        transfer_tensor_terminator_v1(callables, function, block_index, &mut state, false)?;
+        work = work
+            .checked_add(function.blocks()[block_index].statements().len())
+            .and_then(|work| work.checked_add(state.len()))
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "tensor producer dataflow work overflow",
+            ))?;
+        if work > MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1
+            || state.len() > MAX_PROJECTED_TENSOR_STATE_ENTRIES_V1
+        {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "tensor producer dataflow exceeds the charged projection limit",
+            ));
+        }
+        function.blocks()[block_index]
+            .terminator()
+            .kind()
+            .try_for_each_edge::<ProductionRankedProjectionErrorV1>(|edge| {
+                let target = edge.target().index() as usize;
+                let target_entry = entries.get_mut(target).ok_or(
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "a tensor producer CFG edge outside the semantic function",
+                    ),
+                )?;
+                let changed = match target_entry {
+                    None => {
+                        stored_entries = stored_entries.checked_add(state.len()).ok_or(
+                            ProductionRankedProjectionErrorV1::Unsupported(
+                                "tensor producer stored-state accounting overflow",
+                            ),
+                        )?;
+                        *target_entry = Some(state.clone());
+                        true
+                    }
+                    Some(existing) => {
+                        let before = existing.len();
+                        let changed = merge_tensor_states_v1(existing, &state)?;
+                        stored_entries = stored_entries
+                            .checked_add(existing.len().saturating_sub(before))
+                            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                                "tensor producer stored-state accounting overflow",
+                            ))?;
+                        changed
+                    }
+                };
+                if stored_entries > MAX_PROJECTED_TENSOR_STATE_ENTRIES_V1 {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "tensor producer states exceed the charged storage limit",
+                    ));
+                }
+                if changed {
+                    worklist.push_back(target);
+                }
+                Ok(())
+            })?;
+    }
+
+    let mut layouts = vec![None; block_count];
+    for (block_index, entry_state) in entries.into_iter().enumerate() {
+        let Some(mut state) = entry_state else {
+            continue;
+        };
+        transfer_tensor_statements_v1(
+            function,
+            block_index,
+            &mut state,
+            option_dominance,
+            enum_payload_dominance,
+        )?;
+        layouts[block_index] =
+            transfer_tensor_terminator_v1(callables, function, block_index, &mut state, true)?;
+    }
+    Ok(layouts)
+}
+
+fn transfer_tensor_statements_v1(
+    function: &SemanticFunctionDeclV1,
+    block_index: usize,
+    state: &mut ProjectedTensorStateV1,
+    option_dominance: &SemanticOptionDominanceV1,
+    enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    let block = &function.blocks()[block_index];
+    let use_block = SemanticBlockIdV1::from_index(block_index as u32);
+    for statement in block.statements() {
+        match statement.kind() {
+            SemanticStatementKindV1::Assign(assignment)
+                if assignment.destination().projections().is_empty() =>
+            {
+                let destination = assignment.destination().local().index() as usize;
+                let origin = match assignment.value().kind() {
+                    SemanticRvalueKindV1::Use(operand) => tensor_origin_from_assignment_operand_v1(
+                        operand,
+                        state,
+                        option_dominance,
+                        enum_payload_dominance,
+                        use_block,
+                    ),
+                    SemanticRvalueKindV1::Borrow { place, .. }
+                    | SemanticRvalueKindV1::AddressOf { place, .. }
+                        if place.projections().is_empty() =>
+                    {
+                        state.get(&(place.local().index() as usize)).copied()
+                    }
+                    _ => None,
+                };
+                match origin {
+                    Some(origin) => {
+                        state.insert(destination, origin);
+                    }
+                    None => {
+                        state.remove(&destination);
+                    }
+                }
+            }
+            SemanticStatementKindV1::StorageDead(local) => {
+                state.remove(&(local.index() as usize));
+            }
+            SemanticStatementKindV1::Deinitialize(place) if place.projections().is_empty() => {
+                state.remove(&(place.local().index() as usize));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn tensor_origin_from_assignment_operand_v1(
+    operand: &SemanticOperandV1,
+    state: &ProjectedTensorStateV1,
+    option_dominance: &SemanticOptionDominanceV1,
+    enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
+    use_block: SemanticBlockIdV1,
+) -> Option<ProjectedTensorValueV1> {
+    let place = raw_operand_place(operand)?;
+    if place.projections().is_empty() {
+        return state.get(&(place.local().index() as usize)).copied();
+    }
+    let (carrier, variant) = enum_payload_projection(place)?;
+    match state.get(&carrier).copied()? {
+        ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::ViewResult(view))
+            if variant == 0
+                && enum_payload_dominance
+                    .availability(SemanticLocalIdV1::from_index(carrier as u32), variant)
+                    .is_some_and(|availability| {
+                        enum_payload_dominance.allows(availability, use_block)
+                    }) =>
+        {
+            Some(ProjectedTensorValueV1::Known(
+                ProjectedTensorOriginV1::View(view),
+            ))
+        }
+        ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::LoadOption(fragment))
+            if variant == 1
+                && option_dominance
+                    .availability(SemanticLocalIdV1::from_index(carrier as u32))
+                    .is_some_and(|availability| {
+                        option_dominance.allows(availability, use_block)
+                    }) =>
+        {
+            Some(ProjectedTensorValueV1::Known(
+                ProjectedTensorOriginV1::Operand(fragment),
+            ))
+        }
+        ProjectedTensorValueV1::Invalid => Some(ProjectedTensorValueV1::Invalid),
+        _ => None,
+    }
+}
+
+fn transfer_tensor_terminator_v1(
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
+    block_index: usize,
+    state: &mut ProjectedTensorStateV1,
+    require_authenticated_site: bool,
+) -> Result<Option<ProductionRankedOperationV1>, ProductionRankedProjectionErrorV1> {
+    let SemanticTerminatorKindV1::Call(call) = function.blocks()[block_index].terminator().kind()
+    else {
+        return Ok(None);
+    };
+    let Some(destination) = call.destination() else {
+        return Ok(None);
+    };
+    if !destination.place().projections().is_empty() {
+        return Ok(None);
+    }
+    let destination_local = destination.place().local().index() as usize;
+    let Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) =
+        callables.get(call.callee().index() as usize)
+    else {
+        state.remove(&destination_local);
+        return Ok(None);
+    };
+    if matches!(call.unwind(), SemanticUnwindActionV1::Cleanup(_)) {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "a typed tensor producer with cleanup control flow",
+        ));
+    }
+    let root = ((block_index as u64) << 32) | destination_local as u64;
+    let (origin, layout) = match operation {
+        SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { context } => {
+            if !call.arguments().is_empty() || destination.place().ty() != *context {
+                (ProjectedTensorValueV1::Invalid, None)
+            } else {
+                (
+                    ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::MatrixContext { root }),
+                    None,
+                )
+            }
+        }
+        SemanticCompilerIntrinsicOperationV1::WaveLaneCurrent { lane, wave_width } => {
+            if !call.arguments().is_empty() || destination.place().ty() != *lane {
+                (ProjectedTensorValueV1::Invalid, None)
+            } else {
+                (
+                    ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Lane {
+                        root,
+                        wave_width: *wave_width,
+                    }),
+                    None,
+                )
+            }
+        }
+        SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor {
+            result,
+            role,
+            storage_layout,
+            ..
+        } => {
+            if call.arguments().len() != 5 || destination.place().ty() != *result {
+                (ProjectedTensorValueV1::Invalid, None)
+            } else {
+                (
+                    ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::ViewResult(
+                        ProjectedMfmaViewV1 {
+                            role: *role,
+                            storage_layout: *storage_layout,
+                        },
+                    )),
+                    None,
+                )
+            }
+        }
+        SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad {
+            option_fragment,
+            contract,
+            storage_layout,
+            ..
+        } => {
+            let loaded = authenticate_tensor_load_v1(call, state, *contract, *storage_layout);
+            let origin = if destination.place().ty() == *option_fragment {
+                loaded
+                    .map(|fragment| {
+                        ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::LoadOption(fragment))
+                    })
+                    .unwrap_or(ProjectedTensorValueV1::Invalid)
+            } else {
+                ProjectedTensorValueV1::Invalid
+            };
+            (origin, None)
+        }
+        SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
+            fragment,
+            contract,
+            ..
+        } => {
+            let lane = call
+                .arguments()
+                .first()
+                .and_then(|operand| tensor_known_origin_v1(state, operand));
+            let origin = match lane {
+                Some(ProjectedTensorOriginV1::Lane {
+                    root: lane_root,
+                    wave_width,
+                }) if call.arguments().len() == 1
+                    && destination.place().ty() == *fragment
+                    && wave_width == contract.wave_width =>
+                {
+                    ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Accumulator(
+                        ProjectedMfmaAccumulatorV1 {
+                            contract: *contract,
+                            lane_root,
+                        },
+                    ))
+                }
+                _ => ProjectedTensorValueV1::Invalid,
+            };
+            (origin, None)
+        }
+        SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
+            accumulator_fragment,
+            lhs,
+            rhs,
+            accumulator,
+            ..
+        } => match authenticate_tensor_instruction_v1(call, state, *lhs, *rhs, *accumulator) {
+            Ok((accumulator_origin, contract))
+                if destination.place().ty() == *accumulator_fragment =>
+            {
+                (
+                    ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Accumulator(
+                        accumulator_origin,
+                    )),
+                    Some(ProductionRankedOperationV1::TensorLayout {
+                        contract,
+                        convergence: TensorConvergenceAttr::UniformSubgroup,
+                        active_lanes: u32::from(contract.subgroup_width),
+                    }),
+                )
+            }
+            Ok(_) => (ProjectedTensorValueV1::Invalid, None),
+            Err(detail) if require_authenticated_site => {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(detail));
+            }
+            Err(_) => (ProjectedTensorValueV1::Invalid, None),
+        },
+        _ => {
+            state.remove(&destination_local);
+            return Ok(None);
+        }
+    };
+    state.insert(destination_local, origin);
+    if require_authenticated_site
+        && matches!(
+            operation,
+            SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate { .. }
+        )
+        && layout.is_none()
+    {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "an MFMA call whose result type does not match its authenticated accumulator contract",
+        ));
+    }
+    Ok(layout)
+}
+
+fn authenticate_tensor_load_v1(
+    call: &SemanticDirectCallV1,
+    state: &ProjectedTensorStateV1,
+    contract: SemanticMfmaOperandContractV1,
+    storage_layout: SemanticMfmaStorageLayoutV1,
+) -> Option<ProjectedMfmaOperandV1> {
+    if call.arguments().len() != 4 {
+        return None;
+    }
+    let view = tensor_known_origin_v1(state, &call.arguments()[0])?;
+    let lane = tensor_known_origin_v1(state, &call.arguments()[1])?;
+    let ProjectedTensorOriginV1::View(view) = view else {
+        return None;
+    };
+    let ProjectedTensorOriginV1::Lane {
+        root: lane_root,
+        wave_width,
+    } = lane
+    else {
+        return None;
+    };
+    (view.role == contract.role
+        && view.storage_layout == storage_layout
+        && wave_width == contract.wave_width)
+        .then_some(ProjectedMfmaOperandV1 {
+            contract,
+            storage_layout,
+            lane_root,
+        })
+}
+
+fn authenticate_tensor_instruction_v1(
+    call: &SemanticDirectCallV1,
+    state: &ProjectedTensorStateV1,
+    lhs_contract: SemanticMfmaOperandContractV1,
+    rhs_contract: SemanticMfmaOperandContractV1,
+    accumulator_contract: SemanticMfmaAccumulatorContractV1,
+) -> Result<
+    (
+        ProjectedMfmaAccumulatorV1,
+        fe2o3_kernel_ir::TensorLayoutContractV1,
+    ),
+    &'static str,
+> {
+    if call.arguments().len() != 4 {
+        return Err("an MFMA call without its exact context and three typed operands");
+    }
+    if !matches!(
+        tensor_known_origin_v1(state, &call.arguments()[0]),
+        Some(ProjectedTensorOriginV1::MatrixContext { .. })
+    ) {
+        return Err("an MFMA call without dominating compiler-issued matrix context");
+    }
+    let Some(ProjectedTensorOriginV1::Operand(lhs)) =
+        tensor_known_origin_v1(state, &call.arguments()[1])
+    else {
+        return Err("an MFMA lhs without one dominating checked typed-load payload");
+    };
+    let Some(ProjectedTensorOriginV1::Operand(rhs)) =
+        tensor_known_origin_v1(state, &call.arguments()[2])
+    else {
+        return Err("an MFMA rhs without one dominating checked typed-load payload");
+    };
+    let Some(ProjectedTensorOriginV1::Accumulator(accumulator)) =
+        tensor_known_origin_v1(state, &call.arguments()[3])
+    else {
+        return Err("an MFMA accumulator without dominating zero or compatible prior MFMA");
+    };
+    if lhs.contract != lhs_contract || rhs.contract != rhs_contract {
+        return Err("an MFMA call whose operand metadata does not match its exact load producers");
+    }
+    if accumulator.contract != accumulator_contract {
+        return Err("an MFMA call whose accumulator metadata changed from its producer");
+    }
+    if lhs_contract.role != SemanticMfmaOperandRoleV1::A
+        || rhs_contract.role != SemanticMfmaOperandRoleV1::B
+    {
+        return Err("an MFMA call with swapped or incompatible operand roles");
+    }
+    if lhs_contract.profile != SemanticMfmaProfileV1::Bf16F32M16N16K16
+        || rhs_contract.profile != lhs_contract.profile
+        || accumulator_contract.profile != lhs_contract.profile
+    {
+        return Err("an MFMA call with incompatible instruction profiles");
+    }
+    if lhs_contract.register_distribution != SemanticMfmaRegisterDistributionV1::Tile16x16
+        || rhs_contract.register_distribution != SemanticMfmaRegisterDistributionV1::Tile16x16
+        || accumulator_contract.distribution != SemanticMfmaAccumulatorDistributionV1::RowMajor
+    {
+        return Err("an MFMA call with incompatible register distributions");
+    }
+    if lhs_contract.wave_width != 64
+        || rhs_contract.wave_width != 64
+        || accumulator_contract.wave_width != 64
+        || lhs.lane_root != rhs.lane_root
+        || lhs.lane_root != accumulator.lane_root
+    {
+        return Err("an MFMA call whose operands do not share one authenticated wave64 lane");
+    }
+    let mut contract =
+        fe2o3_kernel_ir::TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64()
+            .with_zero_filled_predicate_inputs();
+    if lhs.storage_layout == SemanticMfmaStorageLayoutV1::LdsXor4 {
+        contract = contract.with_a_lds_xor4();
+    }
+    if rhs.storage_layout == SemanticMfmaStorageLayoutV1::LdsXor4 {
+        contract = contract.with_b_lds_xor4();
+    }
+    Ok((accumulator, contract))
+}
+
+fn tensor_known_origin_v1(
+    state: &ProjectedTensorStateV1,
+    operand: &SemanticOperandV1,
+) -> Option<ProjectedTensorOriginV1> {
+    let local = simple_operand_local(operand)?.index() as usize;
+    match state.get(&local) {
+        Some(ProjectedTensorValueV1::Known(origin)) => Some(*origin),
+        Some(ProjectedTensorValueV1::Invalid) | None => None,
+    }
+}
+
+fn merge_tensor_states_v1(
+    current: &mut ProjectedTensorStateV1,
+    incoming: &ProjectedTensorStateV1,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    let mut changed = false;
+    let current_keys = current.keys().copied().collect::<Vec<_>>();
+    for key in current_keys {
+        let merged = match (current.get(&key).copied(), incoming.get(&key).copied()) {
+            (Some(existing), Some(candidate)) if existing == candidate => existing,
+            (Some(_), Some(_)) | (Some(_), None) => ProjectedTensorValueV1::Invalid,
+            (None, _) => unreachable!("collected current tensor-state key disappeared"),
+        };
+        if current.get(&key).copied() != Some(merged) {
+            current.insert(key, merged);
+            changed = true;
+        }
+    }
+    for (&key, &candidate) in incoming {
+        if let std::collections::hash_map::Entry::Vacant(entry) = current.entry(key) {
+            entry.insert(match candidate {
+                ProjectedTensorValueV1::Known(_) | ProjectedTensorValueV1::Invalid => {
+                    ProjectedTensorValueV1::Invalid
+                }
+            });
+            changed = true;
+        }
+    }
+    Ok(changed)
+}
+
 fn project_intrinsic_contracts(
     callables: &[SemanticCallableDeclV1],
     types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
@@ -834,6 +1437,12 @@ fn project_intrinsic_contracts(
         .map_err(|error| ProductionRankedProjectionErrorV1::Unsupported(error.detail()))?;
     let enum_payload_dominance = SemanticEnumPayloadDominanceV1::analyze(function, types)
         .map_err(|error| ProductionRankedProjectionErrorV1::Unsupported(error.detail()))?;
+    let tensor_layouts = project_authenticated_tensor_layouts_v1(
+        callables,
+        function,
+        &option_dominance,
+        &enum_payload_dominance,
+    )?;
     let mut edge_count = 0_usize;
     let mut borrowed_locals = Vec::new();
     let stable_argument_origins = local_stable_argument_origins(function)?;
@@ -1901,6 +2510,71 @@ fn project_intrinsic_contracts(
         guarded_accesses.push(access);
     }
 
+    let mut direct_switch_predicates = vec![None; local_count];
+    for block in function.blocks() {
+        for statement in block.statements() {
+            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                continue;
+            };
+            if !assignment.destination().projections().is_empty() {
+                continue;
+            }
+            let SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::LessThan,
+                left,
+                right,
+            } = assignment.value().kind()
+            else {
+                continue;
+            };
+            let destination = assignment.destination().local().index() as usize;
+            if local_definitions.get(destination).copied() != Some(1) {
+                continue;
+            }
+            let Some(lhs) = project_uniform_switch_operand_v1(
+                left,
+                constants,
+                &stable_argument_origins,
+                &local_definitions,
+                function,
+                &mut runtime_index_arguments,
+                &mut next_runtime_argument,
+                operations,
+                next_value,
+            )?
+            else {
+                continue;
+            };
+            let Some(rhs) = project_uniform_switch_operand_v1(
+                right,
+                constants,
+                &stable_argument_origins,
+                &local_definitions,
+                function,
+                &mut runtime_index_arguments,
+                &mut next_runtime_argument,
+                operations,
+                next_value,
+            )?
+            else {
+                continue;
+            };
+            direct_switch_predicates[destination] = Some(GuardPredicateV1 {
+                comparisons: vec![(lhs, rhs)],
+            });
+        }
+    }
+    let uniform_inductions = project_uniform_inductions_v1(
+        function,
+        constants,
+        &stable_argument_origins,
+        &local_definitions,
+        &mut runtime_index_arguments,
+        &mut next_runtime_argument,
+        operations,
+        next_value,
+    )?;
+
     let local_contracts = ProjectionLocalContractsV1 {
         checked_reference_origins: checked_reference_origins(
             function,
@@ -1911,14 +2585,252 @@ fn project_intrinsic_contracts(
     };
     Ok(IntrinsicProjectionV1 {
         local_contracts,
-        extent_argument_count: if guarded_accesses.is_empty() {
+        extent_argument_count: if guarded_accesses.is_empty() && next_runtime_argument == 1 {
             0
         } else {
             next_runtime_argument
         },
         guarded_accesses,
         option_predicates,
+        direct_switch_predicates,
+        uniform_inductions,
+        tensor_layouts,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_uniform_inductions_v1(
+    function: &SemanticFunctionDeclV1,
+    constants: &[Option<u64>],
+    stable_argument_origins: &[Option<u32>],
+    local_definitions: &[u8],
+    arguments: &mut [Option<u32>],
+    next_argument: &mut usize,
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+) -> Result<Vec<ProjectedUniformInductionV1>, ProductionRankedProjectionErrorV1> {
+    let mut inductions = Vec::new();
+    for (header, block) in function.blocks().iter().enumerate() {
+        let SemanticTerminatorKindV1::SwitchInt {
+            discriminant,
+            targets,
+        } = block.terminator().kind()
+        else {
+            continue;
+        };
+        let Some(discriminant) = simple_operand_local(discriminant) else {
+            continue;
+        };
+        if targets.values().len() != 1 || targets.values()[0].value() != 0 {
+            continue;
+        }
+        let Some((induction, bound_operand)) = block.statements().iter().find_map(|statement| {
+            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                return None;
+            };
+            if !assignment.destination().projections().is_empty()
+                || assignment.destination().local() != discriminant
+            {
+                return None;
+            }
+            let SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::LessThan,
+                left,
+                right,
+            } = assignment.value().kind()
+            else {
+                return None;
+            };
+            Some((simple_operand_local(left)?, right))
+        }) else {
+            continue;
+        };
+        if local_definitions.get(induction.index() as usize).copied() != Some(2) {
+            continue;
+        }
+        let body_and_latch = targets.otherwise().target().index() as usize;
+        let exit = targets.values()[0].edge().target().index() as usize;
+        if body_and_latch >= function.blocks().len() || exit >= function.blocks().len() {
+            continue;
+        }
+        let mut initial = None;
+        let mut step = None;
+        let mut preheader = None;
+        for (candidate, candidate_block) in function.blocks().iter().enumerate() {
+            for statement in candidate_block.statements() {
+                let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                    continue;
+                };
+                if !assignment.destination().projections().is_empty()
+                    || assignment.destination().local() != induction
+                {
+                    continue;
+                }
+                match assignment.value().kind() {
+                    SemanticRvalueKindV1::Use(operand) => {
+                        initial = Some(operand);
+                        preheader = Some(candidate);
+                    }
+                    SemanticRvalueKindV1::Binary {
+                        operation: SemanticBinaryOpV1::Add,
+                        left,
+                        right,
+                    } if simple_operand_local(left) == Some(induction) => {
+                        step = Some((candidate, right));
+                    }
+                    SemanticRvalueKindV1::Binary {
+                        operation: SemanticBinaryOpV1::Add,
+                        left,
+                        right,
+                    } if simple_operand_local(right) == Some(induction) => {
+                        step = Some((candidate, left));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let (Some(initial), Some(preheader), Some((latch, step))) = (initial, preheader, step)
+        else {
+            continue;
+        };
+        if latch != body_and_latch
+            || !matches!(
+                function.blocks()[preheader].terminator().kind(),
+                SemanticTerminatorKindV1::Goto(edge) if edge.target().index() as usize == header
+            )
+            || !matches!(
+                function.blocks()[latch].terminator().kind(),
+                SemanticTerminatorKindV1::Goto(edge) if edge.target().index() as usize == header
+            )
+        {
+            continue;
+        }
+        let Some(initial) = project_uniform_switch_operand_v1(
+            initial,
+            constants,
+            stable_argument_origins,
+            local_definitions,
+            function,
+            arguments,
+            next_argument,
+            operations,
+            next_value,
+        )?
+        else {
+            continue;
+        };
+        let Some(bound) = project_uniform_switch_operand_v1(
+            bound_operand,
+            constants,
+            stable_argument_origins,
+            local_definitions,
+            function,
+            arguments,
+            next_argument,
+            operations,
+            next_value,
+        )?
+        else {
+            continue;
+        };
+        let Some(step) = project_uniform_switch_operand_v1(
+            step,
+            constants,
+            stable_argument_origins,
+            local_definitions,
+            function,
+            arguments,
+            next_argument,
+            operations,
+            next_value,
+        )?
+        else {
+            continue;
+        };
+        if inductions
+            .iter()
+            .any(|existing: &ProjectedUniformInductionV1| {
+                [existing.preheader, existing.header, existing.body_and_latch].contains(&preheader)
+                    || [preheader, header, body_and_latch].contains(&existing.preheader)
+            })
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "overlapping uniform induction regions",
+            ));
+        }
+        inductions.push(ProjectedUniformInductionV1 {
+            preheader,
+            header,
+            body_and_latch,
+            exit,
+            initial,
+            bound,
+            step,
+        });
+    }
+    Ok(inductions)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_uniform_switch_operand_v1(
+    operand: &SemanticOperandV1,
+    constants: &[Option<u64>],
+    stable_argument_origins: &[Option<u32>],
+    local_definitions: &[u8],
+    function: &SemanticFunctionDeclV1,
+    arguments: &mut [Option<u32>],
+    next_argument: &mut usize,
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+) -> Result<Option<ProductionRankedValueV1>, ProductionRankedProjectionErrorV1> {
+    if let Some(value) = constant_operand_value(operand, constants) {
+        reserve_operation(operations)?;
+        let result = next_value_id(next_value)?;
+        operations.push(ProductionRankedOperationV1::IndexConstant { result, value });
+        return Ok(Some(ProductionRankedValueV1::Local(result)));
+    }
+    let Some(local) = simple_operand_local(operand) else {
+        return Ok(None);
+    };
+    let local_index = local.index() as usize;
+    let origin = stable_argument_origins
+        .get(local_index)
+        .copied()
+        .flatten()
+        .or_else(|| {
+            (local_definitions.get(local_index).copied() == Some(0)
+                && function
+                    .locals()
+                    .get(local_index)
+                    .is_some_and(|local| matches!(local.role(), SemanticLocalRoleV1::Argument(_))))
+            .then_some(local.index())
+        });
+    let Some(origin) = origin.map(|origin| origin as usize) else {
+        return Ok(None);
+    };
+    let slot = arguments
+        .get_mut(origin)
+        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+            "a uniform switch argument origin outside the semantic local table",
+        ))?;
+    let argument = match *slot {
+        Some(argument) => argument,
+        None => {
+            let argument = u32::try_from(*next_argument).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "too many uniform switch ranked arguments",
+                )
+            })?;
+            *next_argument = next_argument.checked_add(1).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "uniform switch ranked argument count overflow",
+                ),
+            )?;
+            *slot = Some(argument);
+            argument
+        }
+    };
+    Ok(Some(ProductionRankedValueV1::Argument(argument)))
 }
 
 fn project_runtime_index_operand_v1(
@@ -2378,14 +3290,23 @@ fn ranked_value_text_v1(value: ProductionRankedValueV1) -> String {
     match value {
         ProductionRankedValueV1::Local(identity) => format!("%{}", identity.get()),
         ProductionRankedValueV1::Argument(argument) => format!("%arg{argument}"),
+        ProductionRankedValueV1::BlockArgument { block, argument } => {
+            format!("%bb{block}_arg{argument}")
+        }
     }
 }
 
 fn switch_predicates(
     function: &SemanticFunctionDeclV1,
     option_predicates: &[Option<GuardPredicateV1>],
+    direct_switch_predicates: &[Option<GuardPredicateV1>],
 ) -> Result<Vec<Option<GuardPredicateV1>>, ProductionRankedProjectionErrorV1> {
-    let mut predicates = vec![None; function.locals().len()];
+    if direct_switch_predicates.len() != function.locals().len() {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "direct switch predicates do not match the semantic local table",
+        ));
+    }
+    let mut predicates = direct_switch_predicates.to_vec();
     for block in function.blocks() {
         for statement in block.statements() {
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
@@ -2645,6 +3566,7 @@ fn projected_block_expansion(
 fn build_ranked_cfg(
     function: &SemanticFunctionDeclV1,
     switch_predicates: &[Option<GuardPredicateV1>],
+    uniform_inductions: &[ProjectedUniformInductionV1],
     entry_operations: Vec<ProductionRankedOperationV1>,
     projected_blocks: Vec<ProjectedSemanticBlockV1>,
 ) -> Result<
@@ -2661,6 +3583,24 @@ fn build_ranked_cfg(
         .collect::<Result<Vec<_>, _>>()?;
     let entry = function.entry().index() as usize;
     let reachable = reachable_projected_blocks(entry, &terminators)?;
+    for induction in uniform_inductions {
+        for semantic_block in [
+            induction.preheader,
+            induction.header,
+            induction.body_and_latch,
+        ] {
+            let block = projected_blocks.get(semantic_block).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "a uniform induction block outside the semantic CFG",
+                ),
+            )?;
+            if projected_block_expansion(block, &terminators[semantic_block])? != 1 {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a uniform induction region containing expanded guarded control",
+                ));
+            }
+        }
+    }
     let mut base_blocks = vec![None; projected_blocks.len()];
     let mut block_count = 1_usize;
     for (index, (block, terminator)) in projected_blocks.iter().zip(&terminators).enumerate() {
@@ -2757,6 +3697,70 @@ fn build_ranked_cfg(
                     operations = Vec::new();
                 }
             }
+        }
+        if let Some(induction) = uniform_inductions
+            .iter()
+            .find(|induction| induction.preheader == semantic_index)
+        {
+            push_block_at(
+                &mut blocks,
+                current,
+                operations,
+                ProductionRankedTerminatorV1::BranchArgs {
+                    arguments: vec![induction.initial],
+                    target: ranked_block_id(projected_target(&base_blocks, induction.header)?)?,
+                },
+            )?;
+            continue;
+        }
+        if let Some(induction) = uniform_inductions
+            .iter()
+            .find(|induction| induction.header == semantic_index)
+        {
+            let header = ranked_block_id(current)?;
+            let body = projected_target(&base_blocks, induction.body_and_latch)?;
+            push_block_at_with_index_arguments(
+                &mut blocks,
+                current,
+                1,
+                operations,
+                ProductionRankedTerminatorV1::IndexLessThanArgs {
+                    lhs: ProductionRankedValueV1::BlockArgument {
+                        block: header,
+                        argument: 0,
+                    },
+                    rhs: induction.bound,
+                    true_arguments: vec![ProductionRankedValueV1::BlockArgument {
+                        block: header,
+                        argument: 0,
+                    }],
+                    false_arguments: vec![],
+                    true_block: ranked_block_id(body)?,
+                    false_block: ranked_block_id(projected_target(&base_blocks, induction.exit)?)?,
+                },
+            )?;
+            continue;
+        }
+        if let Some(induction) = uniform_inductions
+            .iter()
+            .find(|induction| induction.body_and_latch == semantic_index)
+        {
+            let body = ranked_block_id(current)?;
+            push_block_at_with_index_arguments(
+                &mut blocks,
+                current,
+                1,
+                operations,
+                ProductionRankedTerminatorV1::BranchArgsAdd {
+                    value: ProductionRankedValueV1::BlockArgument {
+                        block: body,
+                        argument: 0,
+                    },
+                    step: induction.step,
+                    target: ranked_block_id(projected_target(&base_blocks, induction.header)?)?,
+                },
+            )?;
+            continue;
         }
         match terminator {
             ProjectedCfgTerminatorV1::Branch(target) => push_block_at(
@@ -2932,6 +3936,26 @@ fn push_block_at(
     Ok(())
 }
 
+fn push_block_at_with_index_arguments(
+    blocks: &mut Vec<ProductionRankedBlockV1>,
+    expected: usize,
+    index_argument_count: u32,
+    operations: Vec<ProductionRankedOperationV1>,
+    terminator: ProductionRankedTerminatorV1,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    if blocks.len() != expected {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "semantic CFG projection produced non-canonical block numbering",
+        ));
+    }
+    blocks.push(ProductionRankedBlockV1::with_index_arguments(
+        index_argument_count,
+        operations,
+        terminator,
+    ));
+    Ok(())
+}
+
 fn ranked_block_id(block: usize) -> Result<u32, ProductionRankedProjectionErrorV1> {
     u32::try_from(block).map_err(|_| {
         ProductionRankedProjectionErrorV1::Unsupported(
@@ -2947,7 +3971,19 @@ fn format_ranked_cfg(
     let mut output = String::new();
     push_ranked_ir(&mut output, &format!("func @{function_name} {{\n"))?;
     for (block_index, block) in blocks.iter().enumerate() {
-        push_ranked_ir(&mut output, &format!("^bb{block_index}:\n"))?;
+        let arguments = (0..block.index_argument_count())
+            .map(|argument| format!("%bb{block_index}_arg{argument}: index"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        push_ranked_ir(
+            &mut output,
+            &format!(
+                "^bb{block_index}{}:\n",
+                (!arguments.is_empty())
+                    .then(|| format!("({arguments})"))
+                    .unwrap_or_default()
+            ),
+        )?;
         for operation in block.operations() {
             push_ranked_ir(&mut output, &format_ranked_operation(operation))?;
         }
@@ -2964,6 +4000,22 @@ fn format_ranked_cfg(
                 true_block,
                 false_block,
             ),
+            ProductionRankedTerminatorV1::IndexLessThanArgs {
+                lhs,
+                rhs,
+                true_arguments,
+                false_arguments,
+                true_block,
+                false_block,
+            } => format!(
+                "  kernel.index_lt_br_args {}, {} ({}) ^bb{}, ({}) ^bb{}\n",
+                ranked_value_text_v1(*lhs),
+                ranked_value_text_v1(*rhs),
+                format_ranked_values(true_arguments),
+                true_block,
+                format_ranked_values(false_arguments),
+                false_block,
+            ),
             ProductionRankedTerminatorV1::AnalysisSplit {
                 first_block,
                 second_block,
@@ -2971,6 +4023,21 @@ fn format_ranked_cfg(
             ProductionRankedTerminatorV1::Branch { target } => {
                 format!("  kernel.br ^bb{target}\n")
             }
+            ProductionRankedTerminatorV1::BranchArgs { arguments, target } => format!(
+                "  kernel.br_args ({}) ^bb{}\n",
+                format_ranked_values(arguments),
+                target,
+            ),
+            ProductionRankedTerminatorV1::BranchArgsAdd {
+                value,
+                step,
+                target,
+            } => format!(
+                "  kernel.br_args_add {}, {} ^bb{}\n",
+                ranked_value_text_v1(*value),
+                ranked_value_text_v1(*step),
+                target,
+            ),
             ProductionRankedTerminatorV1::Return => "  kernel.return\n".to_owned(),
         };
         push_ranked_ir(&mut output, &terminator)?;
@@ -4842,6 +5909,9 @@ fn project_place_access_with_atomic(
                 .map(|value| match value {
                     ProductionRankedValueV1::Local(identity) => format!("%{}", identity.get()),
                     ProductionRankedValueV1::Argument(argument) => format!("%arg{argument}"),
+                    ProductionRankedValueV1::BlockArgument { block, argument } => {
+                        format!("%bb{block}_arg{argument}")
+                    }
                 })
                 .collect::<Vec<_>>()
                 .join(", "),
@@ -5559,6 +6629,7 @@ mod tests {
         let (blocks, sources) = build_ranked_cfg(
             &function,
             &vec![None; function.locals().len()],
+            &[],
             entry,
             vec![ProjectedSemanticBlockV1 {
                 items: vec![ProjectedBlockItemV1::Guarded(access)],
@@ -5867,6 +6938,7 @@ mod tests {
         let (after_blocks, _) = build_ranked_cfg(
             &function,
             &vec![None; function.locals().len()],
+            &[],
             vec![],
             vec![
                 ProjectedSemanticBlockV1 {
@@ -5888,6 +6960,7 @@ mod tests {
         let (before_blocks, _) = build_ranked_cfg(
             &function,
             &vec![None; function.locals().len()],
+            &[],
             vec![],
             vec![
                 ProjectedSemanticBlockV1 {
@@ -6972,6 +8045,524 @@ mod tests {
         assert_eq!(
             source_label(SemanticSourceProvenanceV1::unavailable()),
             "Rust source location unavailable",
+        );
+    }
+
+    fn tensor_operand(local: u32) -> SemanticOperandV1 {
+        SemanticOperandV1::Copy(
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], SCALAR_TYPE)
+                .unwrap(),
+        )
+    }
+
+    fn tensor_payload(carrier: u32, variant: u32) -> SemanticOperandV1 {
+        SemanticOperandV1::Move(
+            SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(carrier),
+                vec![
+                    SemanticProjectionV1::new(
+                        SemanticProjectionKindV1::Downcast(variant),
+                        ENUM_TYPE,
+                    )
+                    .unwrap(),
+                    SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), SCALAR_TYPE)
+                        .unwrap(),
+                ],
+                SCALAR_TYPE,
+            )
+            .unwrap(),
+        )
+    }
+
+    fn tensor_test_call() -> SemanticDirectCallV1 {
+        SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(0),
+            vec![
+                tensor_operand(0),
+                tensor_operand(1),
+                tensor_operand(2),
+                tensor_operand(3),
+            ],
+            Some(SemanticCallDestinationV1::new(
+                SemanticPlaceV1::new(SemanticLocalIdV1::from_index(4), vec![], SCALAR_TYPE)
+                    .unwrap(),
+                cfg_edge(SemanticEdgeRoleV1::CallReturn, 0),
+            )),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap()
+    }
+
+    fn mfma_operand_contract(role: SemanticMfmaOperandRoleV1) -> SemanticMfmaOperandContractV1 {
+        SemanticMfmaOperandContractV1 {
+            role,
+            profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
+            register_distribution: SemanticMfmaRegisterDistributionV1::Tile16x16,
+            wave_width: 64,
+        }
+    }
+
+    fn mfma_accumulator_contract() -> SemanticMfmaAccumulatorContractV1 {
+        SemanticMfmaAccumulatorContractV1 {
+            profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
+            distribution: SemanticMfmaAccumulatorDistributionV1::RowMajor,
+            wave_width: 64,
+        }
+    }
+
+    fn authenticated_tensor_state(
+        lhs_storage: SemanticMfmaStorageLayoutV1,
+        rhs_storage: SemanticMfmaStorageLayoutV1,
+    ) -> ProjectedTensorStateV1 {
+        HashMap::from([
+            (
+                0,
+                ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::MatrixContext { root: 10 }),
+            ),
+            (
+                1,
+                ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Operand(
+                    ProjectedMfmaOperandV1 {
+                        contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
+                        storage_layout: lhs_storage,
+                        lane_root: 20,
+                    },
+                )),
+            ),
+            (
+                2,
+                ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Operand(
+                    ProjectedMfmaOperandV1 {
+                        contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::B),
+                        storage_layout: rhs_storage,
+                        lane_root: 20,
+                    },
+                )),
+            ),
+            (
+                3,
+                ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Accumulator(
+                    ProjectedMfmaAccumulatorV1 {
+                        contract: mfma_accumulator_contract(),
+                        lane_root: 20,
+                    },
+                )),
+            ),
+        ])
+    }
+
+    #[test]
+    fn authenticated_mfma_producers_derive_independent_storage_and_zero_fill() {
+        let call = tensor_test_call();
+        let state = authenticated_tensor_state(
+            SemanticMfmaStorageLayoutV1::LdsXor4,
+            SemanticMfmaStorageLayoutV1::RowMajor,
+        );
+        let (_, contract) = authenticate_tensor_instruction_v1(
+            &call,
+            &state,
+            mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
+            mfma_operand_contract(SemanticMfmaOperandRoleV1::B),
+            mfma_accumulator_contract(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            contract.a.lds_swizzle,
+            fe2o3_kernel_ir::TensorLdsSwizzleV1::Xor4
+        );
+        assert_eq!(
+            contract.b.lds_swizzle,
+            fe2o3_kernel_ir::TensorLdsSwizzleV1::None
+        );
+        assert_eq!(
+            contract.tail_mask,
+            fe2o3_kernel_ir::TensorTailMaskV1::ZeroFilledPredicateInputs
+        );
+    }
+
+    #[test]
+    fn swapped_missing_and_cross_lane_mfma_producers_fail_closed() {
+        let call = tensor_test_call();
+        let mut state = authenticated_tensor_state(
+            SemanticMfmaStorageLayoutV1::RowMajor,
+            SemanticMfmaStorageLayoutV1::RowMajor,
+        );
+        assert!(
+            authenticate_tensor_instruction_v1(
+                &call,
+                &state,
+                mfma_operand_contract(SemanticMfmaOperandRoleV1::B),
+                mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
+                mfma_accumulator_contract(),
+            )
+            .unwrap_err()
+            .contains("metadata")
+        );
+
+        state.remove(&1);
+        assert!(
+            authenticate_tensor_instruction_v1(
+                &call,
+                &state,
+                mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
+                mfma_operand_contract(SemanticMfmaOperandRoleV1::B),
+                mfma_accumulator_contract(),
+            )
+            .unwrap_err()
+            .contains("lhs")
+        );
+
+        let mut state = authenticated_tensor_state(
+            SemanticMfmaStorageLayoutV1::RowMajor,
+            SemanticMfmaStorageLayoutV1::RowMajor,
+        );
+        let ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Operand(rhs)) = state[&2] else {
+            unreachable!()
+        };
+        state.insert(
+            2,
+            ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Operand(
+                ProjectedMfmaOperandV1 {
+                    lane_root: 21,
+                    ..rhs
+                },
+            )),
+        );
+        assert!(
+            authenticate_tensor_instruction_v1(
+                &call,
+                &state,
+                mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
+                mfma_operand_contract(SemanticMfmaOperandRoleV1::B),
+                mfma_accumulator_contract(),
+            )
+            .unwrap_err()
+            .contains("authenticated wave64 lane")
+        );
+    }
+
+    #[test]
+    fn result_ok_and_option_some_payloads_require_their_exact_dominating_edges() {
+        let carrier = SemanticLocalIdV1::from_index(1);
+        let discriminator = SemanticLocalIdV1::from_index(2);
+        let discriminator_place = SemanticPlaceV1::new(discriminator, vec![], SCALAR_TYPE).unwrap();
+        let result_function = projection_function_with_locals(
+            vec![
+                block(
+                    90,
+                    vec![
+                        enum_definition(carrier, 0),
+                        enum_discriminant(carrier, discriminator),
+                    ],
+                    SemanticTerminatorKindV1::SwitchInt {
+                        discriminant: SemanticOperandV1::Copy(discriminator_place),
+                        targets: SemanticSwitchTargetsV1::new(
+                            vec![SemanticSwitchTargetV1::new(
+                                0,
+                                cfg_edge(SemanticEdgeRoleV1::SwitchValue, 1),
+                            )],
+                            cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 2),
+                        )
+                        .unwrap(),
+                    },
+                ),
+                block(91, vec![], SemanticTerminatorKindV1::Return),
+                block(92, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(90, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(91, ENUM_TYPE, SemanticLocalRoleV1::Temporary),
+                local(92, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        );
+        let result_dominance = SemanticEnumPayloadDominanceV1::analyze(
+            &result_function,
+            &projection_types_with_enum(),
+        )
+        .unwrap();
+        let empty_option = SemanticOptionDominanceV1::analyze(&result_function, &[]).unwrap();
+        let result_state = HashMap::from([(
+            1,
+            ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::ViewResult(
+                ProjectedMfmaViewV1 {
+                    role: SemanticMfmaOperandRoleV1::A,
+                    storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                },
+            )),
+        )]);
+        assert!(matches!(
+            tensor_origin_from_assignment_operand_v1(
+                &tensor_payload(1, 0),
+                &result_state,
+                &empty_option,
+                &result_dominance,
+                SemanticBlockIdV1::from_index(1),
+            ),
+            Some(ProjectedTensorValueV1::Known(
+                ProjectedTensorOriginV1::View(_)
+            ))
+        ));
+        assert!(
+            tensor_origin_from_assignment_operand_v1(
+                &tensor_payload(1, 0),
+                &result_state,
+                &empty_option,
+                &result_dominance,
+                SemanticBlockIdV1::from_index(2),
+            )
+            .is_none()
+        );
+
+        let (option_function, producers) = option_dominance_chain(1);
+        let option_dominance =
+            SemanticOptionDominanceV1::analyze(&option_function, &producers).unwrap();
+        let enum_dominance =
+            SemanticEnumPayloadDominanceV1::analyze(&option_function, &projection_types()).unwrap();
+        let option_state = HashMap::from([(
+            1,
+            ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::LoadOption(
+                ProjectedMfmaOperandV1 {
+                    contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
+                    storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                    lane_root: 20,
+                },
+            )),
+        )]);
+        assert!(matches!(
+            tensor_origin_from_assignment_operand_v1(
+                &tensor_payload(1, 1),
+                &option_state,
+                &option_dominance,
+                &enum_dominance,
+                SemanticBlockIdV1::from_index(2),
+            ),
+            Some(ProjectedTensorValueV1::Known(
+                ProjectedTensorOriginV1::Operand(_)
+            ))
+        ));
+        assert!(
+            tensor_origin_from_assignment_operand_v1(
+                &tensor_payload(1, 1),
+                &option_state,
+                &option_dominance,
+                &enum_dominance,
+                SemanticBlockIdV1::from_index(1),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn tensor_origin_on_only_one_predecessor_becomes_invalid_at_the_join() {
+        let mut current = HashMap::from([(
+            7,
+            ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Lane {
+                root: 1,
+                wave_width: 64,
+            }),
+        )]);
+        assert!(merge_tensor_states_v1(&mut current, &HashMap::new()).unwrap());
+        assert_eq!(current[&7], ProjectedTensorValueV1::Invalid);
+    }
+
+    #[test]
+    fn uniform_switch_projection_accepts_only_immutable_arguments_or_constants() {
+        let function = projection_function_with_locals(
+            vec![block(93, vec![], SemanticTerminatorKindV1::Return)],
+            vec![
+                local(93, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(94, SCALAR_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(95, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        );
+        let definitions = local_definition_counts(&function);
+        let origins = local_stable_argument_origins(&function).unwrap();
+        let mut arguments = vec![None; function.locals().len()];
+        let mut next_argument = 1;
+        let mut operations = Vec::new();
+        let mut next_value = 0;
+        assert!(matches!(
+            project_uniform_switch_operand_v1(
+                &tensor_operand(1),
+                &[None; 3],
+                &origins,
+                &definitions,
+                &function,
+                &mut arguments,
+                &mut next_argument,
+                &mut operations,
+                &mut next_value,
+            )
+            .unwrap(),
+            Some(ProductionRankedValueV1::Argument(1))
+        ));
+        assert!(
+            project_uniform_switch_operand_v1(
+                &tensor_operand(2),
+                &[None; 3],
+                &origins,
+                &definitions,
+                &function,
+                &mut arguments,
+                &mut next_argument,
+                &mut operations,
+                &mut next_value,
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    fn uniform_induction_function(bound_role: SemanticLocalRoleV1) -> SemanticFunctionDeclV1 {
+        let induction = SemanticLocalIdV1::from_index(1);
+        let predicate = SemanticLocalIdV1::from_index(2);
+        let bound = SemanticLocalIdV1::from_index(3);
+        let place = |local| SemanticPlaceV1::new(local, vec![], SCALAR_TYPE).unwrap();
+        let operand = |local| SemanticOperandV1::Copy(place(local));
+        let assign = |destination, value| {
+            statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                place(destination),
+                SemanticRvalueV1::new(SCALAR_TYPE, value),
+            )))
+        };
+        projection_function_with_locals(
+            vec![
+                block(
+                    100,
+                    vec![assign(induction, SemanticRvalueKindV1::Use(constant(0)))],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(
+                    101,
+                    vec![assign(
+                        predicate,
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::LessThan,
+                            left: operand(induction),
+                            right: operand(bound),
+                        },
+                    )],
+                    SemanticTerminatorKindV1::SwitchInt {
+                        discriminant: operand(predicate),
+                        targets: SemanticSwitchTargetsV1::new(
+                            vec![SemanticSwitchTargetV1::new(
+                                0,
+                                cfg_edge(SemanticEdgeRoleV1::SwitchValue, 3),
+                            )],
+                            cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 2),
+                        )
+                        .unwrap(),
+                    },
+                ),
+                block(
+                    102,
+                    vec![assign(
+                        induction,
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::Add,
+                            left: operand(induction),
+                            right: constant(16),
+                        },
+                    )],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(103, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(100, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(101, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(102, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(103, SCALAR_TYPE, bound_role),
+            ],
+        )
+    }
+
+    #[test]
+    fn dynamic_parameter_induction_projects_to_legal_ranked_ssa_edges() {
+        let function = uniform_induction_function(SemanticLocalRoleV1::Argument(0));
+        let constants = constant_locals(&function);
+        let origins = local_stable_argument_origins(&function).unwrap();
+        let definitions = local_definition_counts(&function);
+        let mut arguments = vec![None; function.locals().len()];
+        let mut next_argument = 1;
+        let mut entry_operations = Vec::new();
+        let mut next_value = 0;
+        let inductions = project_uniform_inductions_v1(
+            &function,
+            &constants,
+            &origins,
+            &definitions,
+            &mut arguments,
+            &mut next_argument,
+            &mut entry_operations,
+            &mut next_value,
+        )
+        .unwrap();
+        assert_eq!(inductions.len(), 1);
+
+        let (blocks, _) = build_ranked_cfg(
+            &function,
+            &vec![None; function.locals().len()],
+            &inductions,
+            entry_operations,
+            (0..function.blocks().len())
+                .map(|_| ProjectedSemanticBlockV1 { items: vec![] })
+                .collect(),
+        )
+        .unwrap();
+        assert_eq!(blocks[2].index_argument_count(), 1);
+        assert_eq!(blocks[3].index_argument_count(), 1);
+        assert!(matches!(
+            blocks[2].terminator(),
+            ProductionRankedTerminatorV1::IndexLessThanArgs { .. }
+        ));
+        assert!(matches!(
+            blocks[3].terminator(),
+            ProductionRankedTerminatorV1::BranchArgsAdd { .. }
+        ));
+        ProductionRankedKernelV1::new("uniform_dynamic_loop", next_argument, blocks).unwrap();
+    }
+
+    #[test]
+    fn lane_derived_induction_bound_cannot_mint_uniform_control() {
+        let function = uniform_induction_function(SemanticLocalRoleV1::Temporary);
+        let constants = constant_locals(&function);
+        let origins = local_stable_argument_origins(&function).unwrap();
+        let definitions = local_definition_counts(&function);
+        let mut arguments = vec![None; function.locals().len()];
+        let mut next_argument = 1;
+        let mut operations = Vec::new();
+        let mut next_value = 0;
+        assert!(
+            project_uniform_inductions_v1(
+                &function,
+                &constants,
+                &origins,
+                &definitions,
+                &mut arguments,
+                &mut next_argument,
+                &mut operations,
+                &mut next_value,
+            )
+            .unwrap()
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn adversarial_tensor_state_growth_has_explicit_budgets() {
+        assert!(MAX_PROJECTED_TENSOR_STATE_ENTRIES_V1 < HARD_MAX_LOCALS_V1 as usize * 2);
+        assert!(MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1 < HARD_MAX_VALIDATION_WORK_V1 as usize);
+        assert!(
+            MAX_PROJECTED_TENSOR_STATE_ENTRIES_V1
+                .checked_add(1)
+                .is_some_and(|entries| entries > MAX_PROJECTED_TENSOR_STATE_ENTRIES_V1)
+        );
+        assert!(
+            MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1
+                .checked_add(1)
+                .is_some_and(|work| work > MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1)
         );
     }
 }
