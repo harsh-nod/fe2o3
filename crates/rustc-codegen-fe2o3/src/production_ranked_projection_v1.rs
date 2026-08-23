@@ -4346,6 +4346,34 @@ fn format_ranked_cfg(
                 format_ranked_values(false_arguments),
                 false_block,
             ),
+            ProductionRankedTerminatorV1::IndexEqual {
+                lhs,
+                rhs,
+                true_block,
+                false_block,
+            } => format!(
+                "  kernel.index_eq_br {}, {} ^bb{}, ^bb{}\n",
+                ranked_value_text_v1(*lhs),
+                ranked_value_text_v1(*rhs),
+                true_block,
+                false_block,
+            ),
+            ProductionRankedTerminatorV1::IndexEqualArgs {
+                lhs,
+                rhs,
+                true_arguments,
+                false_arguments,
+                true_block,
+                false_block,
+            } => format!(
+                "  kernel.index_eq_br_args {}, {} ({}) ^bb{}, ({}) ^bb{}\n",
+                ranked_value_text_v1(*lhs),
+                ranked_value_text_v1(*rhs),
+                format_ranked_values(true_arguments),
+                true_block,
+                format_ranked_values(false_arguments),
+                false_block,
+            ),
             ProductionRankedTerminatorV1::AnalysisSplit {
                 first_block,
                 second_block,
@@ -4453,6 +4481,14 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             kind,
             ranked_value_text_v1(*lhs),
             ranked_value_text_v1(*rhs),
+        ),
+        ProductionRankedOperationV1::DeterministicJoin {
+            result,
+            dependencies,
+        } => format!(
+            "  %{} = kernel.deterministic_join ({})\n",
+            result.get(),
+            format_ranked_values(dependencies),
         ),
         ProductionRankedOperationV1::CheckedTiledIndex2D {
             result,
