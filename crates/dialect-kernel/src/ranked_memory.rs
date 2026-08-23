@@ -657,8 +657,7 @@ impl Verify for IndexBinaryOp {
             );
         }
         require_index_operand(self, context, 0)?;
-        require_index_operand(self, context, 1)?;
-        require_zero_successor_arguments(self, context)
+        require_index_operand(self, context, 1)
     }
 }
 
@@ -1052,7 +1051,8 @@ impl Verify for IndexLessThanBranchOp {
             );
         }
         require_index_operand(self, context, 0)?;
-        require_index_operand(self, context, 1)
+        require_index_operand(self, context, 1)?;
+        require_zero_successor_arguments(self, context)
     }
 }
 

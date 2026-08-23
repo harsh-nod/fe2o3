@@ -1,14 +1,16 @@
 use dialect_kernel::{
-    AccessKindAttr, AlgorithmOp, AlgorithmType, AtomicOrderingAttr, AtomicScopeAttr,
-    CheckedTiledIndex2DOp, DIALECT_NAME, DYNAMIC_EXTENT, DimensionAttr, DimensionOp,
-    ITERATION_DOMAIN_ATTR_KEY, IndexConstantOp, IndexType, IndexValueAttr, IterationDomainAttr,
-    KernelError, MAX_ITERATION_RANK, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp,
-    RankedMemoryError, RankedViewOp, RankedViewType, RegistrationError, RegistrationOutcome,
-    SemanticOwner, StructuredAlgorithmOp, TensorConvergenceAttr, TensorLayoutOp, register_dialect,
+    AccessKindAttr, AlgorithmOp, AlgorithmType, AtomicOrderingAttr, AtomicScopeAttr, BranchArgsOp,
+    BranchOp, CheckedTiledIndex2DOp, DIALECT_NAME, DYNAMIC_EXTENT, DimensionAttr, DimensionOp,
+    ITERATION_DOMAIN_ATTR_KEY, IndexConstantOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
+    IndexType, IndexValueAttr, IterationDomainAttr, KernelError, MAX_ITERATION_RANK,
+    MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp, RankedMemoryError, RankedViewOp,
+    RankedViewType, RegistrationError, RegistrationOutcome, SemanticOwner, StructuredAlgorithmOp,
+    TensorConvergenceAttr, TensorLayoutOp, register_dialect,
 };
 use fe2o3_kernel_ir::{TensorInstructionProfileV1, TensorLayoutContractV1, TensorSymbolicMapV1};
 use pliron::{
     attribute::Attribute,
+    basic_block::BasicBlock,
     builtin::{
         attributes::BytesAttr, op_interfaces::SingleBlockRegionInterface, ops::ModuleOp,
         types::UnitType,
@@ -23,6 +25,54 @@ use pliron::{
     printable::Printable,
     r#type::{TypeHandle, Typed},
 };
+
+#[test]
+fn branches_require_exact_successor_arguments() {
+    let context = &mut Context::new();
+    register_dialect(context, &kernel_name()).unwrap();
+    let index: TypeHandle = IndexType::get(context).into();
+    let zero = IndexConstantOp::new(context, 0);
+    let one = IndexConstantOp::new(context, 1);
+    let argument_target = BasicBlock::new(context, None, vec![index]);
+    let empty_target = BasicBlock::new(context, None, vec![]);
+
+    assert!(verify_op(&BranchOp::new(context, argument_target), context).is_err());
+    assert!(
+        verify_op(
+            &IndexLessThanBranchOp::new(
+                context,
+                zero.result(context),
+                one.result(context),
+                argument_target,
+                empty_target,
+            ),
+            context,
+        )
+        .is_err()
+    );
+    assert!(
+        verify_op(
+            &BranchArgsOp::new(context, vec![], argument_target),
+            context
+        )
+        .is_err()
+    );
+    assert!(
+        verify_op(
+            &IndexLessThanBranchArgsOp::new(
+                context,
+                zero.result(context),
+                one.result(context),
+                vec![],
+                vec![],
+                argument_target,
+                empty_target,
+            ),
+            context,
+        )
+        .is_err()
+    );
+}
 
 fn kernel_name() -> DialectName {
     DialectName::try_new(DIALECT_NAME).expect("valid dialect")
