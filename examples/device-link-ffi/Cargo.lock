@@ -70,6 +70,7 @@ name = "fe2o3-artifact-transaction"
 version = "0.1.0"
 dependencies = [
  "fe2o3-build-authority",
+ "fe2o3-compiler-ffi",
  "libc",
  "rustix",
  "sha2",
@@ -91,6 +92,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-compiler-ffi"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-compiler-lineage",
+ "fe2o3-kernel-descriptor",
+ "reserved-fe2o3-symbols",
+ "sha2",
+]
+
+[[package]]
+name = "fe2o3-compiler-lineage"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-build-authority",
+ "fe2o3-kernel-descriptor",
+ "fe2o3-rustc-invocation",
+ "sha2",
+]
+
+[[package]]
 name = "fe2o3-device-link-ffi"
 version = "0.1.0"
 dependencies = [
@@ -106,6 +127,15 @@ name = "fe2o3-kernel-descriptor"
 version = "0.1.0"
 dependencies = [
  "fe2o3-amd-target",
+ "sha2",
+]
+
+[[package]]
+name = "fe2o3-rustc-invocation"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-amd-target",
+ "fe2o3-build-authority",
  "sha2",
 ]
 
@@ -158,6 +188,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
 dependencies = [
  "proc-macro2",
+]
+
+[[package]]
+name = "reserved-fe2o3-symbols"
+version = "0.1.0"
+dependencies = [
+ "sha2",
 ]
 
 [[package]]
