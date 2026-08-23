@@ -282,6 +282,8 @@ fn compiler_authority_and_collective_hooks_panic_closed_on_host() {
     let context = Gfx942Collectives::for_host_test();
     assert!(catch_unwind(|| context.static_lds_u32x256()).is_err());
     assert!(catch_unwind(|| context.wave64_reduce_sum_active_u32(1, 7)).is_err());
+    assert!(catch_unwind(|| context.subgroup_reduce_sum_f32::<16>(1.0)).is_err());
+    assert!(catch_unwind(|| context.subgroup_reduce_max_f32::<16>(1.0)).is_err());
     let lane = WaveLane::<Wave64>::from_model_snapshot(7).unwrap();
     let tile = SubgroupTile::<64>::from_wave64_snapshot(&lane);
     assert!(catch_unwind(AssertUnwindSafe(|| tile.reduce_sum(&context, 7_u32))).is_err());

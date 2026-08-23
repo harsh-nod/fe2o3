@@ -1,6 +1,6 @@
 use dialect_kernel::{
-    DIALECT_NAME, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
-    InvocationIndexOp, RankedViewOp, RankedViewType, ReturnOp, register_dialect,
+    CheckedTiledIndex2DOp, DIALECT_NAME, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp,
+    IndexConstantOp, InvocationIndexOp, RankedViewOp, RankedViewType, ReturnOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
     SparseIndexFactV1, SparseIndexFailureV1, analyze_pliron_sparse_indices_v1,
@@ -160,6 +160,52 @@ fn nonzero_remainder_is_exact_and_zero_remainder_is_unknown() {
         analysis.fact(invalid.result(context)),
         SparseIndexFactV1::Unknown
     );
+}
+
+#[test]
+fn checked_tiled_fact_preserves_a_dynamic_component_value() {
+    let context = &mut setup();
+    let function = function(context, "dynamic_tiled_component");
+    let entry = function.get_entry_block(context);
+    let invocation = InvocationIndexOp::new(context, 0, 64);
+    let four = IndexConstantOp::new(context, 4);
+    let sixteen = IndexConstantOp::new(context, 16);
+    let component = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Remainder,
+        invocation.result(context),
+        four.result(context),
+    );
+    let tiled = CheckedTiledIndex2DOp::new(
+        context,
+        invocation.result(context),
+        component.result(context),
+        sixteen.result(context),
+        sixteen.result(context),
+        sixteen.result(context),
+        [64, 16, 16, 4],
+    );
+    let ret = ReturnOp::new(context);
+    for operation in [
+        invocation.get_operation(),
+        four.get_operation(),
+        sixteen.get_operation(),
+        component.get_operation(),
+        tiled.get_operation(),
+        ret.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+
+    let analysis = analyze_pliron_sparse_indices_v1(context, &function).unwrap();
+    let fact = analysis
+        .fact(tiled.result(context))
+        .checked_tiled_2d()
+        .cloned()
+        .expect("checked tiled fact");
+    assert_eq!(fact.component(), component.result(context));
+    assert_eq!(fact.runtime_layout(), [sixteen.result(context); 3]);
+    assert_eq!(fact.geometry(), [64, 16, 16, 4]);
 }
 
 #[test]

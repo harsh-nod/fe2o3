@@ -3058,7 +3058,9 @@ fn validate_convergent_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), Lowering
                 .filter_map(|(operation, value)| {
                     matches!(
                         value.kind,
-                        OperationKind::WorkgroupBarrier(_) | OperationKind::Matrix(_)
+                        OperationKind::WorkgroupBarrier(_)
+                            | OperationKind::Wave(_)
+                            | OperationKind::Matrix(_)
                     )
                     .then_some((block.id, operation))
                 })
@@ -3087,6 +3089,7 @@ fn validate_convergent_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), Lowering
         let operation_value = &lowerer.block(block).operations[operation];
         let scope = match &operation_value.kind {
             OperationKind::WorkgroupBarrier(barrier) => barrier.convergence.scope(),
+            OperationKind::Wave(wave) => wave.convergence.scope(),
             OperationKind::Matrix(matrix) => matrix.convergence.scope(),
             _ => unreachable!("convergent operation inventory is exact"),
         };

@@ -1,0 +1,279 @@
+use fe2o3_core::{DeviceBuffer, GpuContext, GpuModule, LaunchConfig, Stream};
+use fe2o3_device::Bf16;
+use fe2o3_host::launch;
+use std::path::PathBuf;
+
+#[derive(Clone, Copy)]
+struct Case {
+    name: &'static str,
+    batch_heads: u32,
+    queries: u32,
+    query_rows_padded: u32,
+    keys: u32,
+    keys_padded: u32,
+    depth: u32,
+    value_dimension: u32,
+    q_stride: u32,
+    k_depth_stride: u32,
+    v_stride: u32,
+    mask_stride: u32,
+    output_stride: u32,
+}
+
+const CASES: [Case; 2] = [
+    Case {
+        name: "tails-and-strides",
+        batch_heads: 1,
+        queries: 16,
+        query_rows_padded: 16,
+        keys: 13,
+        keys_padded: 16,
+        depth: 18,
+        value_dimension: 7,
+        q_stride: 23,
+        k_depth_stride: 19,
+        v_stride: 11,
+        mask_stride: 20,
+        output_stride: 13,
+    },
+    Case {
+        name: "multi-head-multi-tile",
+        batch_heads: 2,
+        queries: 17,
+        query_rows_padded: 32,
+        keys: 19,
+        keys_padded: 32,
+        depth: 33,
+        value_dimension: 16,
+        q_stride: 37,
+        k_depth_stride: 35,
+        v_stride: 19,
+        mask_stride: 37,
+        output_stride: 21,
+    },
+];
+
+fn sample(seed: u32, modulus: u32, center: i32, scale: f32) -> f32 {
+    ((seed % modulus) as i32 - center) as f32 * scale
+}
+
+fn launch_case(
+    stream: &Stream,
+    module: &std::sync::Arc<GpuModule>,
+    q: &DeviceBuffer<u16>,
+    k: &DeviceBuffer<u16>,
+    v: &DeviceBuffer<f32>,
+    mask: &DeviceBuffer<f32>,
+    output: &DeviceBuffer<f32>,
+    case: Case,
+    k_head_stride: u32,
+    v_head_stride: u32,
+    output_rows: u32,
+    scale: f32,
+) -> fe2o3_core::Result<()> {
+    let workgroups = case.batch_heads * (case.query_rows_padded / 16);
+    // SAFETY: buffers match five slice ABI pairs and the scalar list below
+    // exactly; all allocations remain live through the synchronous readback.
+    unsafe {
+        launch! {
+            kernel: flash_attention_general_v1,
+            stream: stream,
+            module: module,
+            config: LaunchConfig {
+                grid_dim: (workgroups, 1, 1),
+                block_dim: (64, 1, 1),
+                shared_mem_bytes: 0,
+            },
+            args: [
+                slice(q),
+                slice(k),
+                slice(v),
+                slice(mask),
+                slice_mut(output),
+                scalar(case.batch_heads),
+                scalar(case.query_rows_padded),
+                scalar(case.keys_padded),
+                scalar(case.depth),
+                scalar(case.value_dimension),
+                scalar(case.q_stride),
+                scalar(case.k_depth_stride),
+                scalar(k_head_stride),
+                scalar(case.v_stride),
+                scalar(v_head_stride),
+                scalar(case.mask_stride),
+                scalar(case.output_stride),
+                scalar(output_rows),
+                scalar(scale),
+            ]
+        }
+    }
+}
+
+fn run_case(
+    context: &std::sync::Arc<GpuContext>,
+    module: &std::sync::Arc<GpuModule>,
+    case: Case,
+) -> fe2o3_core::Result<()> {
+    let stream = context.default_stream();
+    let output_rows = case.batch_heads * case.query_rows_padded;
+    let k_head_stride = case.depth * case.k_depth_stride + 7;
+    let v_head_stride = case.keys_padded * case.v_stride + 5;
+    let q_len = output_rows as usize * case.q_stride as usize;
+    let k_len = case.batch_heads as usize * k_head_stride as usize;
+    let v_len = case.batch_heads as usize * v_head_stride as usize;
+    let mask_len = output_rows as usize * case.mask_stride as usize;
+    let output_len = output_rows as usize * case.output_stride as usize;
+    let mut q = vec![Bf16::ZERO.to_bits(); q_len];
+    let mut k = vec![Bf16::ZERO.to_bits(); k_len];
+    let mut v = vec![0.0_f32; v_len];
+    let mut mask = vec![f32::NEG_INFINITY; mask_len];
+    let sentinel = -77.0_f32;
+    let output = vec![sentinel; output_len];
+
+    for head in 0..case.batch_heads {
+        for row in 0..case.query_rows_padded {
+            let global_row = head * case.query_rows_padded + row;
+            for d in 0..case.depth {
+                q[global_row as usize * case.q_stride as usize + d as usize] =
+                    Bf16::from_f32(sample(head * 101 + row * 17 + d * 7, 31, 15, 0.03125))
+                        .to_bits();
+            }
+            for key in 0..case.keys {
+                let visible = row >= case.queries || key <= row;
+                if visible {
+                    mask[global_row as usize * case.mask_stride as usize + key as usize] = 0.0;
+                }
+            }
+        }
+        for d in 0..case.depth {
+            for key in 0..case.keys_padded {
+                k[head as usize * k_head_stride as usize
+                    + d as usize * case.k_depth_stride as usize
+                    + key as usize] = Bf16::from_f32(if key < case.keys {
+                    sample(head * 79 + d * 11 + key * 5, 29, 14, 0.03125)
+                } else {
+                    0.0
+                })
+                .to_bits();
+            }
+        }
+        for key in 0..case.keys_padded {
+            for d in 0..case.value_dimension {
+                v[head as usize * v_head_stride as usize
+                    + key as usize * case.v_stride as usize
+                    + d as usize] = if key < case.keys {
+                    sample(head * 67 + key * 13 + d * 3, 23, 11, 0.0625)
+                } else {
+                    0.0
+                };
+            }
+        }
+    }
+
+    let scale = 1.0 / (case.depth as f32).sqrt();
+    let q_device = DeviceBuffer::from_host(&stream, &q)?;
+    let k_device = DeviceBuffer::from_host(&stream, &k)?;
+    let v_device = DeviceBuffer::from_host(&stream, &v)?;
+    let mask_device = DeviceBuffer::from_host(&stream, &mask)?;
+    let output_device = DeviceBuffer::from_host(&stream, &output)?;
+    launch_case(
+        &stream,
+        module,
+        &q_device,
+        &k_device,
+        &v_device,
+        &mask_device,
+        &output_device,
+        case,
+        k_head_stride,
+        v_head_stride,
+        output_rows,
+        scale,
+    )?;
+    let actual = output_device.to_host_vec(&stream)?;
+
+    let mut max_error = 0.0_f32;
+    for head in 0..case.batch_heads {
+        for row in 0..case.queries {
+            let global_row = head * case.query_rows_padded + row;
+            let mut scores = vec![f32::NEG_INFINITY; case.keys as usize];
+            for key in 0..case.keys {
+                if mask[global_row as usize * case.mask_stride as usize + key as usize].is_finite()
+                {
+                    let mut score = 0.0_f32;
+                    for d in 0..case.depth {
+                        score += Bf16::from_bits(
+                            q[global_row as usize * case.q_stride as usize + d as usize],
+                        )
+                        .to_f32()
+                            * Bf16::from_bits(
+                                k[head as usize * k_head_stride as usize
+                                    + d as usize * case.k_depth_stride as usize
+                                    + key as usize],
+                            )
+                            .to_f32();
+                    }
+                    scores[key as usize] = score * scale;
+                }
+            }
+            let maximum = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            let denominator = scores
+                .iter()
+                .map(|score| (*score - maximum).exp())
+                .sum::<f32>();
+            for d in 0..case.value_dimension {
+                let mut expected = 0.0_f32;
+                for key in 0..case.keys {
+                    expected += ((scores[key as usize] - maximum).exp() / denominator)
+                        * v[head as usize * v_head_stride as usize
+                            + key as usize * case.v_stride as usize
+                            + d as usize];
+                }
+                let observed =
+                    actual[global_row as usize * case.output_stride as usize + d as usize];
+                let error = (observed - expected).abs();
+                max_error = max_error.max(error);
+                assert!(
+                    error <= 2.0e-4,
+                    "{} head {head} row {row} dim {d}: actual={observed} expected={expected}",
+                    case.name
+                );
+            }
+        }
+    }
+    for row in 0..output_rows as usize {
+        assert!(
+            actual[row * case.output_stride as usize + case.value_dimension as usize
+                ..(row + 1) * case.output_stride as usize]
+                .iter()
+                .all(|value| *value == sentinel),
+            "{} wrote output padding",
+            case.name
+        );
+    }
+    println!(
+        "PASS {:<24} heads={} queries={}/{} keys={}/{} depth={} value_dim={} max_error={max_error}",
+        case.name,
+        case.batch_heads,
+        case.queries,
+        case.query_rows_padded,
+        case.keys,
+        case.keys_padded,
+        case.depth,
+        case.value_dimension,
+    );
+    Ok(())
+}
+
+fn main() -> fe2o3_core::Result<()> {
+    let hsaco = std::env::var_os("FE2O3_FLASH_ATTENTION_HSACO")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("target/fe2o3-gfx942/flash_attention_general_v1.hsaco"));
+    let context = GpuContext::new(0)?;
+    // SAFETY: this executable is the explicit qualification boundary.
+    let module = unsafe { context.load_module_from_file_unchecked(hsaco) }?;
+    for case in CASES {
+        run_case(&context, &module, case)?;
+    }
+    Ok(())
+}

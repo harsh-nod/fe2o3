@@ -1,7 +1,8 @@
 use crate::{AnalysisReport, Diagnostic, UnsupportedReason, Variation};
 use fe2o3_kernel_ir::{
-    AddressSpace, BasicBlock, BlockId, Function, FunctionBody, IndexKind, IntrinsicKind, Module,
-    Operation, OperationKind, Terminator, ValueId, WaveOperationKind,
+    AddressSpace, AmdGpuDiagnosticOperation, BasicBlock, BlockId, FloatOperation, Function,
+    FunctionBody, IndexKind, IntrinsicKind, Module, Operation, OperationKind, Terminator, ValueId,
+    WaveOperationKind,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -12,7 +13,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 /// and produce diagnostics. Function parameters are varying because kernel IR
 /// v1 has no uniform-argument metadata. Loads and atomic results are varying
 /// because it has no immutable-region or inter-thread value summaries. Calls
-/// are unsupported because it has no convergence or return-value summaries.
+/// are unsupported unless they are closed compiler intrinsics or reachable
+/// helpers whose bodies can be summarized as pure.
 /// Postdominance is established only for CFG regions with a path to an exit.
 /// Divergent loop-exiting control remains active beyond the loop, while
 /// branches that reconverge within the same natural-loop nest use their normal
@@ -31,8 +33,12 @@ pub fn analyze_kernel_entry(module: &Module, function: &Function) -> AnalysisRep
     let mut visiting = BTreeSet::new();
     if let Some(body) = &function.body {
         for operation in body.blocks.iter().flat_map(|block| &block.operations) {
-            if let OperationKind::Call { callee, .. } = &operation.kind {
-                summarize_pure_helper(module, callee, &mut visiting, &mut summarized_calls);
+            if let OperationKind::Call { callee, arguments } = &operation.kind {
+                if FloatOperation::from_intrinsic_call(callee, arguments).is_some() {
+                    summarized_calls.insert(callee.clone());
+                } else {
+                    summarize_pure_helper(module, callee, &mut visiting, &mut summarized_calls);
+                }
             }
         }
     }
@@ -92,6 +98,12 @@ fn summarize_pure_helper(
                         .operations
                         .iter()
                         .all(|operation| match &operation.kind {
+                            OperationKind::Call { callee, arguments }
+                                if FloatOperation::from_intrinsic_call(callee, arguments)
+                                    .is_some() =>
+                            {
+                                true
+                            }
                             OperationKind::Call { callee, .. } => {
                                 summarize_pure_helper(module, callee, visiting, summarized)
                             }
@@ -251,8 +263,9 @@ impl<'a> Analyzer<'a> {
         let mut unknown = BTreeSet::new();
         for block in &self.body.blocks {
             for (operation_index, operation) in block.operations.iter().enumerate() {
-                if let OperationKind::Call { callee, .. } = &operation.kind
+                if let OperationKind::Call { callee, arguments } = &operation.kind
                     && !self.summarized_calls.contains(callee)
+                    && AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments).is_none()
                 {
                     self.report.diagnostics.push(Diagnostic::Unsupported {
                         block: Some(block.id),

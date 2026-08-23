@@ -1911,6 +1911,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 }
                 Some(
                     TrustedDeviceItem::Gfx942CollectivesCurrent
+                    | TrustedDeviceItem::Gfx942SubgroupReduceSumF32
+                    | TrustedDeviceItem::Gfx942SubgroupReduceMaxF32
                     | TrustedDeviceItem::Gfx942StaticLdsU32x256
                     | TrustedDeviceItem::Gfx942Wave64ReduceActiveU32
                     | TrustedDeviceItem::Gfx942Workgroup256ReduceActiveU32

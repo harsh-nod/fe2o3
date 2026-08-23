@@ -1718,6 +1718,8 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::WorkgroupIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupDimension(_)
         | ProductionTerminalExpansionV1::GridDimension(_)
+        | ProductionTerminalExpansionV1::MathContextCurrent
+        | ProductionTerminalExpansionV1::CollectiveContextCurrent
         | ProductionTerminalExpansionV1::MatrixContextCurrent
         | ProductionTerminalExpansionV1::ThreadIndex1d => Some(0),
         ProductionTerminalExpansionV1::ThreadIndexGet
@@ -1725,6 +1727,9 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorFromValues
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues
         | ProductionTerminalExpansionV1::DisjointSliceLen => Some(1),
+        ProductionTerminalExpansionV1::SubgroupReduceSumF32
+        | ProductionTerminalExpansionV1::SubgroupReduceMaxF32 => Some(2),
+        ProductionTerminalExpansionV1::MathF32(function) => Some(function.arity() + 1),
         ProductionTerminalExpansionV1::MatrixMultiplyAccumulate => Some(4),
         ProductionTerminalExpansionV1::DisjointSliceGetMut => Some(2),
         ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint

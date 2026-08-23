@@ -1719,13 +1719,15 @@ fn project_runtime_index_operand_v1(
             "a tiled-2d runtime index is not a constant or one exact kernel argument",
         ))?;
     let local_index = local.index() as usize;
+    // Preserve stable kernel-argument aliases when available. Other exact MIR
+    // locals are projected as opaque ranked arguments: the checked tiled
+    // operation still proves its own component and extent bounds, while the
+    // analysis makes no unsound claim about how that dynamic value was formed.
     let origin = stable_argument_origins
         .get(local_index)
         .copied()
         .flatten()
-        .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-            "a tiled-2d runtime index is not derived from one stable kernel argument",
-        ))? as usize;
+        .unwrap_or(local.index()) as usize;
     let slot = arguments
         .get_mut(origin)
         .ok_or(ProductionRankedProjectionErrorV1::Unsupported(

@@ -3,6 +3,8 @@
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 
+use dialect_amdgcn::DeviceMathDiagnosticItem;
+use fe2o3_kernel_ir::F32MathFunction;
 use fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1;
 
 use crate::trusted_device_items::{self, TrustedDeviceItem};
@@ -29,6 +31,11 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     DisjointSliceGetBlockMut,
     DisjointSliceGetTiled2dMut,
     WorkgroupBarrier,
+    MathContextCurrent,
+    MathF32(F32MathFunction),
+    CollectiveContextCurrent,
+    SubgroupReduceSumF32,
+    SubgroupReduceMaxF32,
     MatrixContextCurrent,
     Bf16MatrixFragmentFromBits,
     F32MatrixAccumulatorFromValues,
@@ -128,6 +135,21 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             TrustedDeviceItem::WorkgroupSyncthreads => {
                 Self::Expand(ProductionTerminalExpansionV1::WorkgroupBarrier)
+            }
+            TrustedDeviceItem::DeviceMath(DeviceMathDiagnosticItem::ContextFromCompiler) => {
+                Self::Expand(ProductionTerminalExpansionV1::MathContextCurrent)
+            }
+            TrustedDeviceItem::DeviceMath(DeviceMathDiagnosticItem::F32(function)) => {
+                Self::Expand(ProductionTerminalExpansionV1::MathF32(function))
+            }
+            TrustedDeviceItem::Gfx942CollectivesCurrent => {
+                Self::Expand(ProductionTerminalExpansionV1::CollectiveContextCurrent)
+            }
+            TrustedDeviceItem::Gfx942SubgroupReduceSumF32 => {
+                Self::Expand(ProductionTerminalExpansionV1::SubgroupReduceSumF32)
+            }
+            TrustedDeviceItem::Gfx942SubgroupReduceMaxF32 => {
+                Self::Expand(ProductionTerminalExpansionV1::SubgroupReduceMaxF32)
             }
             TrustedDeviceItem::DeviceMatrixCurrent => {
                 Self::Expand(ProductionTerminalExpansionV1::MatrixContextCurrent)
@@ -234,6 +256,21 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::WorkgroupBarrier) => {
                 TrustedDeviceItem::WorkgroupSyncthreads
+            }
+            Self::Expand(ProductionTerminalExpansionV1::MathContextCurrent) => {
+                TrustedDeviceItem::DeviceMath(DeviceMathDiagnosticItem::ContextFromCompiler)
+            }
+            Self::Expand(ProductionTerminalExpansionV1::MathF32(function)) => {
+                TrustedDeviceItem::DeviceMath(DeviceMathDiagnosticItem::F32(function))
+            }
+            Self::Expand(ProductionTerminalExpansionV1::CollectiveContextCurrent) => {
+                TrustedDeviceItem::Gfx942CollectivesCurrent
+            }
+            Self::Expand(ProductionTerminalExpansionV1::SubgroupReduceSumF32) => {
+                TrustedDeviceItem::Gfx942SubgroupReduceSumF32
+            }
+            Self::Expand(ProductionTerminalExpansionV1::SubgroupReduceMaxF32) => {
+                TrustedDeviceItem::Gfx942SubgroupReduceMaxF32
             }
             Self::Expand(ProductionTerminalExpansionV1::MatrixContextCurrent) => {
                 TrustedDeviceItem::DeviceMatrixCurrent
@@ -362,6 +399,26 @@ mod tests {
             (
                 TrustedDeviceItem::WorkgroupSyncthreads,
                 ProductionTerminalExpansionV1::WorkgroupBarrier,
+            ),
+            (
+                TrustedDeviceItem::DeviceMath(DeviceMathDiagnosticItem::ContextFromCompiler),
+                ProductionTerminalExpansionV1::MathContextCurrent,
+            ),
+            (
+                TrustedDeviceItem::DeviceMath(DeviceMathDiagnosticItem::F32(F32MathFunction::Exp)),
+                ProductionTerminalExpansionV1::MathF32(F32MathFunction::Exp),
+            ),
+            (
+                TrustedDeviceItem::Gfx942CollectivesCurrent,
+                ProductionTerminalExpansionV1::CollectiveContextCurrent,
+            ),
+            (
+                TrustedDeviceItem::Gfx942SubgroupReduceSumF32,
+                ProductionTerminalExpansionV1::SubgroupReduceSumF32,
+            ),
+            (
+                TrustedDeviceItem::Gfx942SubgroupReduceMaxF32,
+                ProductionTerminalExpansionV1::SubgroupReduceMaxF32,
             ),
             (
                 TrustedDeviceItem::DeviceMatrixCurrent,

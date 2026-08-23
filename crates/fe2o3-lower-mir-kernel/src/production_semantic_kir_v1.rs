@@ -11,21 +11,24 @@ use std::{error::Error, fmt};
 
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, Axis, BarrierSemantics, BasicBlock,
-    BinaryOp, BlockId, CastKind, ComparePredicate, Constant, Convergence, Function, FunctionId,
-    IndexKind, IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
-    MatrixOperation, MemoryAccess, MemoryOrdering, Module, Operation, OperationKind, ScalarType,
-    Signature, SwitchCase, SynchronizationScope, Terminator, Type, UnaryOp, ValueDef, ValueId,
-    VerificationErrors, WorkgroupBarrier, WorkgroupSize, verify_module,
+    BinaryOp, BlockId, CastKind, ComparePredicate, Constant, Convergence, F32MathFunction,
+    FloatOperation, Function, FunctionId, IndexKind, IntrinsicKind, IntrinsicOperation, Kernel,
+    LaunchDomain, LaunchExtent, MatrixOperation, MemoryAccess, MemoryOrdering, Module, Operation,
+    OperationKind, ScalarType, Signature, SwitchCase, SynchronizationScope, Terminator, Type,
+    UnaryOp, ValueDef, ValueId, VerificationErrors, WaveOperation, WaveOperationKind, WaveWidth,
+    WorkgroupBarrier, WorkgroupSize, verify_module,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAssertMessageV1, SemanticAxisV1, SemanticBinaryOpV1, SemanticBlockIdV1,
     SemanticCallableDeclV1, SemanticCastKindV1, SemanticCompilerIntrinsicOperationV1,
     SemanticConstantValueV1, SemanticDirectCallV1, SemanticDisjointIndexSpaceV1,
-    SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionRoleV1, SemanticLocalRoleV1,
-    SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1, SemanticPointerMetadataV1,
-    SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticScalarTypeV1, SemanticScalarValueV1,
-    SemanticStatementKindV1, SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1,
-    SemanticTypeShapeV1, SemanticUnaryOpV1, SemanticUnwindActionV1, SemanticVolatilityV1,
+    SemanticF32MathFunctionV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
+    SemanticFunctionRoleV1, SemanticLocalRoleV1, SemanticMutabilityV1, SemanticOperandV1,
+    SemanticPlaceV1, SemanticPointerMetadataV1, SemanticProjectionKindV1, SemanticRvalueKindV1,
+    SemanticScalarTypeV1, SemanticScalarValueV1, SemanticStatementKindV1,
+    SemanticSubgroupReductionKindV1, SemanticTerminatorKindV1, SemanticTypeDeclV1,
+    SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1, SemanticUnwindActionV1,
+    SemanticVolatilityV1,
 };
 use fe2o3_mir_model::{
     SemanticOptionAvailabilityV1, SemanticOptionDominanceV1, semantic_option_producers_v1,
@@ -699,6 +702,20 @@ fn lower_module(
         .flat_map(|block| block.operations.iter())
         .flat_map(Operation::required_capabilities)
         .collect::<BTreeSet<_>>();
+    let float_declarations = blocks
+        .iter()
+        .flat_map(|block| block.operations.iter())
+        .filter_map(|operation| match &operation.kind {
+            OperationKind::Call { callee, arguments } => {
+                FloatOperation::from_intrinsic_call(callee, arguments)
+            }
+            _ => None,
+        })
+        .map(|operation| {
+            let declaration = operation.declaration();
+            (declaration.id.clone(), declaration)
+        })
+        .collect::<BTreeMap<_, _>>();
 
     let function_id = FunctionId::new(symbol);
     let mut module = Module::new(format!(
@@ -729,6 +746,7 @@ fn lower_module(
         .required_capabilities
         .extend(operation_capabilities.iter().cloned());
     module.functions.push(entry_function);
+    module.functions.extend(float_declarations.into_values());
     if has_runtime_assert {
         module.functions.push(trap.declaration());
     }
@@ -1199,6 +1217,8 @@ fn collect_place_use_v1(
 enum SemanticValueBindingV1 {
     Unit,
     Aggregate(Vec<SemanticValueBindingV1>),
+    MathContext,
+    CollectiveContext,
     MatrixContext,
     Value {
         id: ValueId,
@@ -1248,6 +1268,8 @@ impl SemanticValueBindingV1 {
             Self::IndexWitness { id, .. } => Ok((*id, Type::INDEX)),
             Self::Unit
             | Self::Aggregate(_)
+            | Self::MathContext
+            | Self::CollectiveContext
             | Self::MatrixContext
             | Self::OptionPointer { .. }
             | Self::OptionIndexWitness { .. }
@@ -1276,7 +1298,9 @@ impl SemanticValueBindingV1 {
                 }
             }
             Self::Unit => {}
-            Self::MatrixContext
+            Self::MathContext
+            | Self::CollectiveContext
+            | Self::MatrixContext
             | Self::OptionPointer { .. }
             | Self::OptionIndexWitness { .. }
             | Self::ComponentWitness { .. }
@@ -1565,6 +1589,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     }
                     SemanticValueBindingV1::Unit
                     | SemanticValueBindingV1::Aggregate(_)
+                    | SemanticValueBindingV1::MathContext
+                    | SemanticValueBindingV1::CollectiveContext
                     | SemanticValueBindingV1::MatrixContext
                     | SemanticValueBindingV1::Value { .. }
                     | SemanticValueBindingV1::IndexWitness { .. }
@@ -2064,6 +2090,65 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             )
         })?;
         let binding = match operation {
+            SemanticCompilerIntrinsicOperationV1::MathContextCurrent { .. } => {
+                self.require_call_argument_count(block, call, 0)?;
+                SemanticValueBindingV1::MathContext
+            }
+            SemanticCompilerIntrinsicOperationV1::MathF32 { function, .. } => {
+                self.require_call_argument_count(block, call, function.arity() + 1)?;
+                let context = self.lower_operand(block, None, &call.arguments()[0], operations)?;
+                if !matches!(context, SemanticValueBindingV1::MathContext) {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "device math operation lacks compiler-issued math authority",
+                    ));
+                }
+                let function = lower_f32_math_function(*function);
+                let mut arguments = Vec::with_capacity(function.arity());
+                for argument in &call.arguments()[1..] {
+                    let (id, ty) = self
+                        .lower_operand(block, None, argument, operations)?
+                        .value()
+                        .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                    if ty != Type::Scalar(ScalarType::F32) {
+                        return Err(unsupported(
+                            0,
+                            Some(block.index()),
+                            None,
+                            "device math argument is not f32",
+                        ));
+                    }
+                    arguments.push(id);
+                }
+                self.emit_float_operation(
+                    operations,
+                    FloatOperation::F32Math {
+                        function,
+                        implementation: function.required_implementation(),
+                        arguments,
+                    },
+                )?
+            }
+            SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { .. } => {
+                self.require_call_argument_count(block, call, 0)?;
+                SemanticValueBindingV1::CollectiveContext
+            }
+            SemanticCompilerIntrinsicOperationV1::SubgroupReduceF32 { width, kind, .. } => {
+                self.require_call_argument_count(block, call, 2)?;
+                let context = self.lower_operand(block, None, &call.arguments()[0], operations)?;
+                if !matches!(context, SemanticValueBindingV1::CollectiveContext) {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "subgroup reduction lacks compiler-issued collective authority",
+                    ));
+                }
+                let value = self.lower_operand(block, None, &call.arguments()[1], operations)?;
+                self.lower_subgroup_reduce_f32(block, operations, value, *width, *kind)?
+            }
             SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { .. } => {
                 self.require_call_argument_count(block, call, 0)?;
                 SemanticValueBindingV1::MatrixContext
@@ -2658,6 +2743,171 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         Ok(Terminator::Branch {
             target: BlockId(destination.edge().target().index()),
             arguments: self.edge_arguments(block, destination.edge().target())?,
+        })
+    }
+
+    fn lower_subgroup_reduce_f32(
+        &mut self,
+        block: SemanticBlockIdV1,
+        operations: &mut Vec<Operation>,
+        value: SemanticValueBindingV1,
+        width: u32,
+        kind: SemanticSubgroupReductionKindV1,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        if width == 0 || !width.is_power_of_two() || width > 64 {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "subgroup reduction width must be a power of two in 1..=64",
+            ));
+        }
+        let (mut reduced, ty) = value
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+        if ty != Type::Scalar(ScalarType::F32) {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "subgroup reduction input is not f32",
+            ));
+        }
+        let (lane, _) = self
+            .emit(
+                operations,
+                Type::Scalar(ScalarType::U32),
+                OperationKind::Wave(WaveOperation::full(
+                    WaveOperationKind::LaneId,
+                    WaveWidth::Wave64,
+                )),
+            )?
+            .value()
+            .expect("emitted lane id");
+        let width_value = self.emit_id(
+            operations,
+            Type::Scalar(ScalarType::U32),
+            OperationKind::Constant(Constant::U32(width)),
+        )?;
+        let local_lane = self.emit_id(
+            operations,
+            Type::Scalar(ScalarType::U32),
+            OperationKind::Binary {
+                op: BinaryOp::Remainder,
+                lhs: lane,
+                rhs: width_value,
+            },
+        )?;
+        let subgroup = self.emit_id(
+            operations,
+            Type::Scalar(ScalarType::U32),
+            OperationKind::Binary {
+                op: BinaryOp::Divide,
+                lhs: lane,
+                rhs: width_value,
+            },
+        )?;
+        let subgroup_base = self.emit_id(
+            operations,
+            Type::Scalar(ScalarType::U32),
+            OperationKind::Binary {
+                op: BinaryOp::Multiply,
+                lhs: subgroup,
+                rhs: width_value,
+            },
+        )?;
+
+        let mut offset = width / 2;
+        while offset != 0 {
+            let offset_value = self.emit_id(
+                operations,
+                Type::Scalar(ScalarType::U32),
+                OperationKind::Constant(Constant::U32(offset)),
+            )?;
+            let source_local = self.emit_id(
+                operations,
+                Type::Scalar(ScalarType::U32),
+                OperationKind::Binary {
+                    op: BinaryOp::BitXor,
+                    lhs: local_lane,
+                    rhs: offset_value,
+                },
+            )?;
+            let source_lane = self.emit_id(
+                operations,
+                Type::Scalar(ScalarType::U32),
+                OperationKind::Binary {
+                    op: BinaryOp::Add,
+                    lhs: subgroup_base,
+                    rhs: source_local,
+                },
+            )?;
+            let bits = self.emit_id(
+                operations,
+                Type::Scalar(ScalarType::U32),
+                OperationKind::Cast {
+                    kind: CastKind::Bitcast,
+                    value: reduced,
+                    to: Type::Scalar(ScalarType::U32),
+                },
+            )?;
+            let peer_bits = self.emit_id(
+                operations,
+                Type::Scalar(ScalarType::U32),
+                OperationKind::Wave(WaveOperation::full(
+                    WaveOperationKind::ShuffleIndex {
+                        value: bits,
+                        source_lane,
+                        tile_width: width,
+                    },
+                    WaveWidth::Wave64,
+                )),
+            )?;
+            let peer = self.emit_id(
+                operations,
+                Type::Scalar(ScalarType::F32),
+                OperationKind::Cast {
+                    kind: CastKind::Bitcast,
+                    value: peer_bits,
+                    to: Type::Scalar(ScalarType::F32),
+                },
+            )?;
+            reduced = match kind {
+                SemanticSubgroupReductionKindV1::Sum => self.emit_id(
+                    operations,
+                    Type::Scalar(ScalarType::F32),
+                    OperationKind::Binary {
+                        op: BinaryOp::Add,
+                        lhs: reduced,
+                        rhs: peer,
+                    },
+                )?,
+                SemanticSubgroupReductionKindV1::Maximum => {
+                    let take_peer = self.emit_id(
+                        operations,
+                        Type::BOOL,
+                        OperationKind::Compare {
+                            predicate: ComparePredicate::LessThan,
+                            lhs: reduced,
+                            rhs: peer,
+                        },
+                    )?;
+                    self.emit_id(
+                        operations,
+                        Type::Scalar(ScalarType::F32),
+                        OperationKind::Select {
+                            condition: take_peer,
+                            true_value: peer,
+                            false_value: reduced,
+                        },
+                    )?
+                }
+            };
+            offset /= 2;
+        }
+        Ok(SemanticValueBindingV1::Value {
+            id: reduced,
+            ty: Type::Scalar(ScalarType::F32),
         })
     }
 
@@ -3740,6 +3990,18 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     SemanticProjectionKindV1::OpaqueCast | SemanticProjectionKindV1::Subtype,
                 ) => SemanticValueBindingV1::MatrixContext,
                 (
+                    SemanticValueBindingV1::MathContext,
+                    SemanticProjectionKindV1::Dereference
+                    | SemanticProjectionKindV1::OpaqueCast
+                    | SemanticProjectionKindV1::Subtype,
+                ) => SemanticValueBindingV1::MathContext,
+                (
+                    SemanticValueBindingV1::CollectiveContext,
+                    SemanticProjectionKindV1::Dereference
+                    | SemanticProjectionKindV1::OpaqueCast
+                    | SemanticProjectionKindV1::Subtype,
+                ) => SemanticValueBindingV1::CollectiveContext,
+                (
                     SemanticValueBindingV1::Aggregate(fields),
                     SemanticProjectionKindV1::Field(field),
                 ) => fields.get(field as usize).cloned().ok_or_else(|| {
@@ -3896,6 +4158,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             SemanticValueBindingV1::ComponentWitness { availability, .. } => Some(*availability),
             SemanticValueBindingV1::Unit
             | SemanticValueBindingV1::Aggregate(_)
+            | SemanticValueBindingV1::MathContext
+            | SemanticValueBindingV1::CollectiveContext
             | SemanticValueBindingV1::MatrixContext
             | SemanticValueBindingV1::Value { .. }
             | SemanticValueBindingV1::OptionPointer { .. }
@@ -3931,6 +4195,21 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             .checked_add(1)
             .ok_or_else(|| unsupported(0, None, None, "Kernel IR SSA identity overflow"))?;
         operations.push(Operation::effect_free(ValueDef::new(id, ty.clone()), kind));
+        Ok(SemanticValueBindingV1::Value { id, ty })
+    }
+
+    fn emit_float_operation(
+        &mut self,
+        operations: &mut Vec<Operation>,
+        operation: FloatOperation,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        let id = ValueId(self.next_value);
+        self.next_value = self
+            .next_value
+            .checked_add(1)
+            .ok_or_else(|| unsupported(0, None, None, "Kernel IR SSA identity overflow"))?;
+        let ty = operation.result_type();
+        operations.push(operation.operation(id));
         Ok(SemanticValueBindingV1::Value { id, ty })
     }
 
@@ -4286,7 +4565,7 @@ fn lower_ssa_value_types(
                         0,
                         None,
                         None,
-                        "aggregate SSA value exceeds the structural limit",
+                        "aggregate SSA array length is too large",
                     ));
                 }
                 for _ in 0..length {
@@ -4403,7 +4682,7 @@ fn binding_from_value_defs_with_validation(
                         0,
                         None,
                         None,
-                        "aggregate SSA binding exceeds the structural limit",
+                        "aggregate SSA array length is too large",
                     ));
                 }
                 let mut fields = Vec::with_capacity(length);
@@ -4528,6 +4807,24 @@ const fn semantic_operand_type(operand: &SemanticOperandV1) -> SemanticTypeIdV1 
     match operand {
         SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => place.ty(),
         SemanticOperandV1::Constant(constant) => constant.ty(),
+    }
+}
+
+const fn lower_f32_math_function(function: SemanticF32MathFunctionV1) -> F32MathFunction {
+    match function {
+        SemanticF32MathFunctionV1::Sqrt => F32MathFunction::Sqrt,
+        SemanticF32MathFunctionV1::FusedMultiplyAdd => F32MathFunction::FusedMultiplyAdd,
+        SemanticF32MathFunctionV1::Floor => F32MathFunction::Floor,
+        SemanticF32MathFunctionV1::Ceil => F32MathFunction::Ceil,
+        SemanticF32MathFunctionV1::Truncate => F32MathFunction::Truncate,
+        SemanticF32MathFunctionV1::RoundTiesEven => F32MathFunction::RoundTiesEven,
+        SemanticF32MathFunctionV1::Sin => F32MathFunction::Sin,
+        SemanticF32MathFunctionV1::Cos => F32MathFunction::Cos,
+        SemanticF32MathFunctionV1::Exp => F32MathFunction::Exp,
+        SemanticF32MathFunctionV1::Exp2 => F32MathFunction::Exp2,
+        SemanticF32MathFunctionV1::Ln => F32MathFunction::Ln,
+        SemanticF32MathFunctionV1::Log2 => F32MathFunction::Log2,
+        SemanticF32MathFunctionV1::Log10 => F32MathFunction::Log10,
     }
 }
 

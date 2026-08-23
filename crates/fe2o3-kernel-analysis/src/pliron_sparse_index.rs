@@ -133,7 +133,7 @@ pub enum SparseIndexFactV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SparseCheckedTiledIndex2DV1 {
     invocation: SparseAffineIndexV1,
-    component: u64,
+    component: Value,
     rows: Value,
     columns: Value,
     row_stride: Value,
@@ -145,7 +145,7 @@ impl SparseCheckedTiledIndex2DV1 {
         &self.invocation
     }
 
-    pub const fn component(&self) -> u64 {
+    pub const fn component(&self) -> Value {
         self.component
     }
 
@@ -399,18 +399,9 @@ fn derive_fact(
         let Some(invocation) = facts.get(&invocation).and_then(SparseIndexFactV1::affine) else {
             return Ok(SparseIndexFactV1::Unknown);
         };
-        let Some(component) = facts
-            .get(&component)
-            .and_then(SparseIndexFactV1::constant_value)
-        else {
-            return Ok(SparseIndexFactV1::Unknown);
-        };
         let Some(geometry) = tiled.geometry(context) else {
             return Ok(SparseIndexFactV1::Unknown);
         };
-        if component >= geometry[3] {
-            return Ok(SparseIndexFactV1::Unknown);
-        }
         return Ok(SparseIndexFactV1::CheckedTiled2D(
             SparseCheckedTiledIndex2DV1 {
                 invocation: invocation.clone(),

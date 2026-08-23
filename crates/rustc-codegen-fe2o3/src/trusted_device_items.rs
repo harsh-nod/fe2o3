@@ -41,8 +41,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x68, 0x76, 0x04, 0xfb, 0x50, 0xe3, 0x98, 0x0b, 0x16, 0x9f, 0xab, 0x4a, 0x2f, 0xe0, 0xa4, 0xc0,
-    0xff, 0xa0, 0xca, 0xaa, 0xe3, 0x7f, 0x4b, 0x00, 0xe7, 0x32, 0xd6, 0x8a, 0xfb, 0x82, 0xf2, 0x17,
+    0x93, 0x76, 0xcb, 0x56, 0x93, 0x19, 0xd0, 0xec, 0x98, 0x6e, 0xa5, 0xe5, 0xb8, 0xc8, 0x83, 0x8d,
+    0xbe, 0x05, 0x5e, 0x71, 0x2e, 0xd7, 0x52, 0x8f, 0x44, 0xa5, 0x6b, 0x36, 0xc4, 0x2a, 0xfb, 0x49,
 ];
 #[allow(
     dead_code,
@@ -79,8 +79,8 @@ const REVIEWED_GENERAL_GEMM_PROOF_DEFINITION_SOURCE_V1: [u8; 32] = [
 // Portable semantic identity of the reviewed `fe2o3_device::DisjointSlice`
 // definition and reference source closure used by the store signatures.
 const REVIEWED_GENERAL_GEMM_DISJOINT_SLICE_DEPENDENCY_V1: [u8; 32] = [
-    0x50, 0x52, 0x58, 0x0f, 0x95, 0xc6, 0x4e, 0x53, 0xa2, 0xdf, 0xbd, 0x9e, 0x35, 0x76, 0x56, 0x8e,
-    0xed, 0xbd, 0xde, 0x59, 0x2f, 0x79, 0x47, 0x27, 0xb0, 0x7f, 0x20, 0xda, 0x1e, 0xdc, 0x73, 0x3b,
+    0xe7, 0x54, 0xa4, 0x5b, 0x98, 0xea, 0x5e, 0x66, 0xd9, 0x3c, 0xc3, 0xbd, 0x8e, 0x4e, 0xe4, 0x2c,
+    0xd0, 0xad, 0x82, 0x09, 0xb2, 0xe5, 0x06, 0x36, 0x21, 0xcf, 0x12, 0xae, 0x35, 0x13, 0x32, 0xfe,
 ];
 
 #[cfg(test)]
@@ -492,6 +492,8 @@ pub(crate) enum TrustedDeviceItem {
     MemoryCopyNonOverlapping,
     Gfx942CollectivesContext,
     Gfx942CollectivesCurrent,
+    Gfx942SubgroupReduceSumF32,
+    Gfx942SubgroupReduceMaxF32,
     Gfx942StaticLdsU32x256,
     Gfx942StaticLdsU32x256Type,
     Gfx942Wave64ReduceActiveU32,
@@ -821,6 +823,16 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::Gfx942CollectivesCurrent,
         "fe2o3_device_gfx942_collectives_current_v1",
         "fe2o3_device::Gfx942Collectives::current",
+    ),
+    (
+        TrustedDeviceItem::Gfx942SubgroupReduceSumF32,
+        "fe2o3_device_gfx942_subgroup_reduce_sum_f32_v1",
+        "fe2o3_device::Gfx942Collectives::subgroup_reduce_sum_f32",
+    ),
+    (
+        TrustedDeviceItem::Gfx942SubgroupReduceMaxF32,
+        "fe2o3_device_gfx942_subgroup_reduce_max_f32_v1",
+        "fe2o3_device::Gfx942Collectives::subgroup_reduce_max_f32",
     ),
     (
         TrustedDeviceItem::Gfx942StaticLdsU32x256,
@@ -1506,6 +1518,12 @@ fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static 
         TrustedDeviceItem::Gfx942CollectivesCurrent => {
             "fe2o3_device::collective::{impl#0}::current"
         }
+        TrustedDeviceItem::Gfx942SubgroupReduceSumF32 => {
+            "fe2o3_device::collective::{impl#0}::subgroup_reduce_sum_f32"
+        }
+        TrustedDeviceItem::Gfx942SubgroupReduceMaxF32 => {
+            "fe2o3_device::collective::{impl#0}::subgroup_reduce_max_f32"
+        }
         TrustedDeviceItem::Gfx942StaticLdsU32x256 => {
             "fe2o3_device::collective::{impl#0}::static_lds_u32x256"
         }
@@ -1590,6 +1608,8 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::GridDimensionZ
             | TrustedDeviceItem::Gfx942CollectivesContext
             | TrustedDeviceItem::Gfx942CollectivesCurrent
+            | TrustedDeviceItem::Gfx942SubgroupReduceSumF32
+            | TrustedDeviceItem::Gfx942SubgroupReduceMaxF32
             | TrustedDeviceItem::Gfx942StaticLdsU32x256
             | TrustedDeviceItem::Gfx942StaticLdsU32x256Type
             | TrustedDeviceItem::Gfx942Wave64ReduceActiveU32
@@ -2802,7 +2822,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("687604fb50e3980b169fab4a2fe0a4c0ffa0caaae37f4b00e732d68afb82f217")
+            digest("9376cb569319d0ec986ea5e5b8c8838dbe055e712ed7528f44a56b36c42afb49")
         );
 
         let definition = semantic_definition(
@@ -3520,6 +3540,8 @@ mod tests {
             TrustedDeviceItem::MemoryCopyNonOverlapping,
             TrustedDeviceItem::Gfx942CollectivesContext,
             TrustedDeviceItem::Gfx942CollectivesCurrent,
+            TrustedDeviceItem::Gfx942SubgroupReduceSumF32,
+            TrustedDeviceItem::Gfx942SubgroupReduceMaxF32,
             TrustedDeviceItem::Gfx942StaticLdsU32x256,
             TrustedDeviceItem::Gfx942StaticLdsU32x256Type,
             TrustedDeviceItem::Gfx942Wave64ReduceActiveU32,
@@ -3705,6 +3727,8 @@ mod tests {
             TrustedDeviceItem::Invocation3DCurrent,
             TrustedDeviceItem::Gfx942CollectivesContext,
             TrustedDeviceItem::Gfx942CollectivesCurrent,
+            TrustedDeviceItem::Gfx942SubgroupReduceSumF32,
+            TrustedDeviceItem::Gfx942SubgroupReduceMaxF32,
             TrustedDeviceItem::Gfx942StaticLdsU32x256,
             TrustedDeviceItem::Gfx942Wave64ReduceActiveU32,
             TrustedDeviceItem::Gfx942Workgroup256ReduceActiveU32,

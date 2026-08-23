@@ -1,8 +1,11 @@
-use fe2o3_kernel_analysis::{Diagnostic, UnsupportedReason, Variation, analyze_function};
+use fe2o3_kernel_analysis::{
+    Diagnostic, UnsupportedReason, Variation, analyze_function, analyze_kernel_entry,
+};
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, Axis, Barrier, BarrierSemantics, BasicBlock, BinaryOp, BlockId,
-    ComparePredicate, Constant, Convergence, Function, FunctionId, IndexKind, IntrinsicKind,
-    IntrinsicOperation, MemoryAccess, MemoryOrdering, Operation, OperationKind, Signature,
+    AccessMode, AddressSpace, AmdGpuDiagnosticOperation, Axis, Barrier, BarrierSemantics,
+    BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant, Convergence, F32MathFunction,
+    FloatOperation, Function, FunctionId, IndexKind, IntrinsicKind, IntrinsicOperation,
+    MemoryAccess, MemoryOrdering, Module, Operation, OperationKind, Signature,
     SynchronizationScope, Terminator, Type, ValueDef, ValueId, WaveOperation, WaveOperationKind,
     WaveWidth, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent,
 };
@@ -789,6 +792,58 @@ fn parameters_calls_and_unknown_values_fail_closed() {
         operation_index: None,
         reason: UnsupportedReason::UnknownValue { value: ValueId(99) },
     }));
+}
+
+#[test]
+fn closed_float_intrinsics_and_pure_math_helpers_are_summarized() {
+    let exp = FloatOperation::F32Math {
+        function: F32MathFunction::Exp,
+        implementation: F32MathFunction::Exp.required_implementation(),
+        arguments: vec![ValueId(10)],
+    };
+    let mut helper_block = returning(1);
+    helper_block.operations.push(exp.operation(ValueId(11)));
+    helper_block.terminator = Some(Terminator::Return {
+        values: vec![ValueId(11)],
+    });
+    let helper = Function::definition(
+        "math_helper",
+        Signature::new(vec![Type::F32], vec![Type::F32]),
+        vec![ValueId(10)],
+        vec![helper_block],
+    );
+
+    let mut entry = returning(0);
+    entry.operations = vec![
+        constant(0, Constant::F32Bits(1.0_f32.to_bits())),
+        Operation::effect_free(
+            ValueDef::new(ValueId(1), Type::F32),
+            OperationKind::Call {
+                callee: helper.id.clone(),
+                arguments: vec![ValueId(0)],
+            },
+        ),
+    ];
+    let kernel = function(vec![], vec![entry]);
+    let mut module = Module::new("uniformity_math_helper");
+    module.functions = vec![kernel.clone(), helper, exp.declaration()];
+
+    let report = analyze_kernel_entry(&module, &kernel);
+    assert_eq!(report.value(ValueId(1)), Variation::GridUniform);
+    assert!(report.diagnostics().is_empty());
+}
+
+#[test]
+fn known_diagnostic_call_is_accepted_but_remains_lane_local() {
+    let mut entry = returning(0);
+    entry
+        .operations
+        .push(AmdGpuDiagnosticOperation::Clock32.operation(Some(ValueId(0))));
+    let kernel = function(vec![], vec![entry]);
+
+    let report = analyze_function(&kernel);
+    assert_eq!(report.value(ValueId(0)), Variation::Varying);
+    assert!(report.diagnostics().is_empty());
 }
 
 #[test]

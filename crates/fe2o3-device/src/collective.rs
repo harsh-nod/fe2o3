@@ -204,6 +204,30 @@ impl Gfx942Collectives {
         unreachable!("gfx942 wave64 reduction must be lowered by the fe2o3 backend")
     }
 
+    /// Reduces `value` by addition within each contiguous subgroup.
+    ///
+    /// `WIDTH` must be a power of two in `1..=64`. Every physical lane must
+    /// execute the call convergently; the result is returned to every lane in
+    /// the same subgroup. Unsupported widths fail during compiler lowering.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_gfx942_subgroup_reduce_sum_f32_v1"]
+    pub fn subgroup_reduce_sum_f32<const WIDTH: u32>(&self, value: f32) -> f32 {
+        let _ = value;
+        unreachable!("gfx942 subgroup sum must be lowered by the fe2o3 backend")
+    }
+
+    /// Reduces `value` by maximum within each contiguous subgroup.
+    ///
+    /// The convergence and width requirements match
+    /// [`Self::subgroup_reduce_sum_f32`]. The operation uses ordered `f32`
+    /// maximum semantics; callers must establish any NaN policy explicitly.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_gfx942_subgroup_reduce_max_f32_v1"]
+    pub fn subgroup_reduce_max_f32<const WIDTH: u32>(&self, value: f32) -> f32 {
+        let _ = value;
+        unreachable!("gfx942 subgroup maximum must be lowered by the fe2o3 backend")
+    }
+
     /// Reduces logically active `u32` values across one 256-thread workgroup.
     ///
     /// Every thread writes exactly one statically allocated LDS slot. A fixed

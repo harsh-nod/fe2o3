@@ -600,10 +600,6 @@ fn tiled_2d_effect_family_is_injective(
     let Some(first) = first_fact.checked_tiled_2d() else {
         return false;
     };
-    let [_, _, _, elements_per_lane] = first.geometry();
-    if first.component() >= elements_per_lane {
-        return false;
-    }
     for effect in effects.iter().skip(1) {
         let index_fact = sparse.fact(effect.indices[0]);
         let Some(index) = index_fact.checked_tiled_2d() else {
@@ -612,7 +608,6 @@ fn tiled_2d_effect_family_is_injective(
         if index.invocation() != first.invocation()
             || index.runtime_layout() != first.runtime_layout()
             || index.geometry() != first.geometry()
-            || index.component() >= elements_per_lane
         {
             return false;
         }

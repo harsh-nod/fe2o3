@@ -2106,6 +2106,30 @@ const fn terminal_expansion_tag_v1(expansion: ProductionTerminalExpansionV1) -> 
         ProductionTerminalExpansionV1::MatrixMultiplyAccumulate => 30,
         ProductionTerminalExpansionV1::ThreadIndexCheckedTiled2d => 31,
         ProductionTerminalExpansionV1::DisjointSliceGetTiled2dMut => 32,
+        ProductionTerminalExpansionV1::CollectiveContextCurrent => 33,
+        ProductionTerminalExpansionV1::SubgroupReduceSumF32 => 34,
+        ProductionTerminalExpansionV1::SubgroupReduceMaxF32 => 35,
+        ProductionTerminalExpansionV1::MathContextCurrent => 36,
+        ProductionTerminalExpansionV1::MathF32(function) => 37 + f32_math_tag_v1(function),
+    }
+}
+
+const fn f32_math_tag_v1(function: fe2o3_kernel_ir::F32MathFunction) -> u8 {
+    use fe2o3_kernel_ir::F32MathFunction as Function;
+    match function {
+        Function::Sqrt => 0,
+        Function::FusedMultiplyAdd => 1,
+        Function::Floor => 2,
+        Function::Ceil => 3,
+        Function::Truncate => 4,
+        Function::RoundTiesEven => 5,
+        Function::Sin => 6,
+        Function::Cos => 7,
+        Function::Exp => 8,
+        Function::Exp2 => 9,
+        Function::Ln => 10,
+        Function::Log2 => 11,
+        Function::Log10 => 12,
     }
 }
 

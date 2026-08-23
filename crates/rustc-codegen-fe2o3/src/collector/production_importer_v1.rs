@@ -7,12 +7,13 @@ use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, HARD_MAX_FUNCTIONS_V1, HARD_MAX_ROOTS_V1,
     InertSemanticMirRequestV1, SemanticCallableDeclV1, SemanticCallableIdV1,
     SemanticCompilerIntrinsicIdentityV1, SemanticCompilerIntrinsicOperationV1,
-    SemanticDisjointIndexSpaceV1, SemanticFunctionAbiV1, SemanticFunctionIdV1,
-    SemanticFunctionIdentityV1, SemanticFunctionRoleV1, SemanticKernelBindingIdentityV1,
-    SemanticKernelEntryV1, SemanticKernelLaunchBoundsV1, SemanticKernelSourceContractV1,
-    SemanticLinkSymbolV1, SemanticMirErrorV1, SemanticMirLimitsV1, SemanticMirResourceV1,
-    SemanticNonBodyCallableBindingV1, SemanticReachableAssemblyV1, SemanticTargetDataLayoutV1,
-    SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnsafeAssemblyDeclarationV1,
+    SemanticDisjointIndexSpaceV1, SemanticF32MathFunctionV1, SemanticFunctionAbiV1,
+    SemanticFunctionIdV1, SemanticFunctionIdentityV1, SemanticFunctionRoleV1,
+    SemanticKernelBindingIdentityV1, SemanticKernelEntryV1, SemanticKernelLaunchBoundsV1,
+    SemanticKernelSourceContractV1, SemanticLinkSymbolV1, SemanticMirErrorV1, SemanticMirLimitsV1,
+    SemanticMirResourceV1, SemanticNonBodyCallableBindingV1, SemanticReachableAssemblyV1,
+    SemanticSubgroupReductionKindV1, SemanticTargetDataLayoutV1, SemanticTypeDeclV1,
+    SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnsafeAssemblyDeclarationV1,
     SemanticUnsafeAssemblyTargetV1, SemanticWorkgroupDimensionsV1,
 };
 use rustc_middle::ty::{FloatTy, Instance, Ty, TyCtxt, TyKind, UintTy};
@@ -816,6 +817,79 @@ fn terminal_operation_v1<'tcx>(
         {
             Ok(SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier)
         }
+        ProductionTerminalExpansionV1::MathContextCurrent
+            if inputs.is_empty()
+                && rust_inputs.is_empty()
+                && rust_is_trusted_adt_v1(
+                    tcx,
+                    rust_output,
+                    TrustedDeviceItem::DeviceMath(
+                        dialect_amdgcn::DeviceMathDiagnosticItem::Context,
+                    ),
+                ) =>
+        {
+            Ok(SemanticCompilerIntrinsicOperationV1::MathContextCurrent { context: output })
+        }
+        ProductionTerminalExpansionV1::MathF32(function)
+            if inputs.len() == function.arity() + 1
+                && rust_inputs.len() == function.arity() + 1
+                && rust_reference_pointee_v1(rust_inputs[0]).is_some_and(|ty| {
+                    rust_is_trusted_adt_v1(
+                        tcx,
+                        ty,
+                        TrustedDeviceItem::DeviceMath(
+                            dialect_amdgcn::DeviceMathDiagnosticItem::Context,
+                        ),
+                    )
+                })
+                && rust_inputs[1..]
+                    .iter()
+                    .all(|ty| matches!(ty.kind(), TyKind::Float(FloatTy::F32)))
+                && matches!(rust_output.kind(), TyKind::Float(FloatTy::F32)) =>
+        {
+            Ok(SemanticCompilerIntrinsicOperationV1::MathF32 {
+                context: pointer_pointee_v1(types, inputs[0])?,
+                function: semantic_f32_math_function_v1(function),
+            })
+        }
+        ProductionTerminalExpansionV1::CollectiveContextCurrent
+            if inputs.is_empty()
+                && rust_inputs.is_empty()
+                && rust_is_trusted_adt_v1(
+                    tcx,
+                    rust_output,
+                    TrustedDeviceItem::Gfx942CollectivesContext,
+                ) =>
+        {
+            Ok(SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { context: output })
+        }
+        ProductionTerminalExpansionV1::SubgroupReduceSumF32
+        | ProductionTerminalExpansionV1::SubgroupReduceMaxF32
+            if inputs.len() == 2
+                && rust_inputs.len() == 2
+                && rust_reference_pointee_v1(rust_inputs[0]).is_some_and(|ty| {
+                    rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::Gfx942CollectivesContext)
+                })
+                && matches!(rust_inputs[1].kind(), TyKind::Float(FloatTy::F32))
+                && matches!(rust_output.kind(), TyKind::Float(FloatTy::F32)) =>
+        {
+            let width = single_const_u32_v1(instance)
+                .ok_or_else(|| body_owner_table_mismatch_v1("subgroup reduction width"))?;
+            let kind = match expansion {
+                ProductionTerminalExpansionV1::SubgroupReduceSumF32 => {
+                    SemanticSubgroupReductionKindV1::Sum
+                }
+                ProductionTerminalExpansionV1::SubgroupReduceMaxF32 => {
+                    SemanticSubgroupReductionKindV1::Maximum
+                }
+                _ => unreachable!("matched subgroup reduction expansion"),
+            };
+            Ok(SemanticCompilerIntrinsicOperationV1::SubgroupReduceF32 {
+                context: pointer_pointee_v1(types, inputs[0])?,
+                width,
+                kind,
+            })
+        }
         ProductionTerminalExpansionV1::MatrixContextCurrent
             if inputs.is_empty()
                 && rust_inputs.is_empty()
@@ -1270,6 +1344,11 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::ThreadIndexCheckedTiled2d
         | ProductionTerminalExpansionV1::DisjointSliceGetBlockMut
         | ProductionTerminalExpansionV1::DisjointSliceGetTiled2dMut
+        | ProductionTerminalExpansionV1::MathContextCurrent
+        | ProductionTerminalExpansionV1::MathF32(_)
+        | ProductionTerminalExpansionV1::CollectiveContextCurrent
+        | ProductionTerminalExpansionV1::SubgroupReduceSumF32
+        | ProductionTerminalExpansionV1::SubgroupReduceMaxF32
         | ProductionTerminalExpansionV1::MatrixContextCurrent
         | ProductionTerminalExpansionV1::Bf16MatrixFragmentFromBits
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorFromValues
@@ -1279,6 +1358,38 @@ fn terminal_operation_v1<'tcx>(
             Err(body_owner_table_mismatch_v1("terminal callable ABI"))
         }
     }
+}
+
+const fn semantic_f32_math_function_v1(
+    function: fe2o3_kernel_ir::F32MathFunction,
+) -> SemanticF32MathFunctionV1 {
+    use fe2o3_kernel_ir::F32MathFunction as Kernel;
+    match function {
+        Kernel::Sqrt => SemanticF32MathFunctionV1::Sqrt,
+        Kernel::FusedMultiplyAdd => SemanticF32MathFunctionV1::FusedMultiplyAdd,
+        Kernel::Floor => SemanticF32MathFunctionV1::Floor,
+        Kernel::Ceil => SemanticF32MathFunctionV1::Ceil,
+        Kernel::Truncate => SemanticF32MathFunctionV1::Truncate,
+        Kernel::RoundTiesEven => SemanticF32MathFunctionV1::RoundTiesEven,
+        Kernel::Sin => SemanticF32MathFunctionV1::Sin,
+        Kernel::Cos => SemanticF32MathFunctionV1::Cos,
+        Kernel::Exp => SemanticF32MathFunctionV1::Exp,
+        Kernel::Exp2 => SemanticF32MathFunctionV1::Exp2,
+        Kernel::Ln => SemanticF32MathFunctionV1::Ln,
+        Kernel::Log2 => SemanticF32MathFunctionV1::Log2,
+        Kernel::Log10 => SemanticF32MathFunctionV1::Log10,
+    }
+}
+
+fn single_const_u32_v1(instance: Instance<'_>) -> Option<u32> {
+    let mut values = instance
+        .args
+        .iter()
+        .filter_map(|argument| argument.as_const())
+        .filter_map(|value| value.try_to_leaf())
+        .map(|value| value.to_bits(value.size()));
+    let value = u32::try_from(values.next()?).ok()?;
+    values.next().is_none().then_some(value)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1682,6 +1793,30 @@ const fn terminal_operation_tag_v1(
         ProductionTerminalExpansionV1::MatrixMultiplyAccumulate => 30,
         ProductionTerminalExpansionV1::ThreadIndexCheckedTiled2d => 31,
         ProductionTerminalExpansionV1::DisjointSliceGetTiled2dMut => 32,
+        ProductionTerminalExpansionV1::CollectiveContextCurrent => 33,
+        ProductionTerminalExpansionV1::SubgroupReduceSumF32 => 34,
+        ProductionTerminalExpansionV1::SubgroupReduceMaxF32 => 35,
+        ProductionTerminalExpansionV1::MathContextCurrent => 36,
+        ProductionTerminalExpansionV1::MathF32(function) => 37 + f32_math_tag_v1(function),
+    }
+}
+
+const fn f32_math_tag_v1(function: fe2o3_kernel_ir::F32MathFunction) -> u8 {
+    use fe2o3_kernel_ir::F32MathFunction as Function;
+    match function {
+        Function::Sqrt => 0,
+        Function::FusedMultiplyAdd => 1,
+        Function::Floor => 2,
+        Function::Ceil => 3,
+        Function::Truncate => 4,
+        Function::RoundTiesEven => 5,
+        Function::Sin => 6,
+        Function::Cos => 7,
+        Function::Exp => 8,
+        Function::Exp2 => 9,
+        Function::Ln => 10,
+        Function::Log2 => 11,
+        Function::Log10 => 12,
     }
 }
 

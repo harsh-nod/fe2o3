@@ -4670,6 +4670,40 @@ pub enum SemanticDisjointIndexSpaceV1 {
     GridExclusive,
 }
 
+/// Scalar `f32` operation requested from the compiler-issued math context.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SemanticF32MathFunctionV1 {
+    Sqrt,
+    FusedMultiplyAdd,
+    Floor,
+    Ceil,
+    Truncate,
+    RoundTiesEven,
+    Sin,
+    Cos,
+    Exp,
+    Exp2,
+    Ln,
+    Log2,
+    Log10,
+}
+
+impl SemanticF32MathFunctionV1 {
+    pub const fn arity(self) -> usize {
+        match self {
+            Self::FusedMultiplyAdd => 3,
+            _ => 1,
+        }
+    }
+}
+
+/// Associative operation used by one convergent subgroup reduction.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SemanticSubgroupReductionKindV1 {
+    Sum,
+    Maximum,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticCompilerIntrinsicOperationV1 {
     ThreadIndex(SemanticAxisV1),
@@ -4679,6 +4713,25 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
     WorkgroupBarrier,
     WaveBarrier,
     FabsF32,
+    /// Creates compiler-issued authority for scalar device math.
+    MathContextCurrent {
+        context: SemanticTypeIdV1,
+    },
+    /// Applies one authenticated scalar `f32` math operation.
+    MathF32 {
+        context: SemanticTypeIdV1,
+        function: SemanticF32MathFunctionV1,
+    },
+    /// Creates compiler-issued authority for target-neutral subgroup collectives.
+    CollectiveContextCurrent {
+        context: SemanticTypeIdV1,
+    },
+    /// Reduces one scalar across each contiguous subgroup of `width` lanes.
+    SubgroupReduceF32 {
+        context: SemanticTypeIdV1,
+        width: u32,
+        kind: SemanticSubgroupReductionKindV1,
+    },
     /// Creates the compiler-issued capability for one supported matrix profile.
     MatrixContextCurrent {
         context: SemanticTypeIdV1,
@@ -6406,6 +6459,10 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
         | SemanticCompilerIntrinsicOperationV1::WaveBarrier
         | SemanticCompilerIntrinsicOperationV1::FabsF32
+        | SemanticCompilerIntrinsicOperationV1::MathContextCurrent { .. }
+        | SemanticCompilerIntrinsicOperationV1::MathF32 { .. }
+        | SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { .. }
+        | SemanticCompilerIntrinsicOperationV1::SubgroupReduceF32 { .. }
         | SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::Bf16MatrixFragmentFromBits { .. }
         | SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorFromValues { .. }
@@ -6536,6 +6593,33 @@ fn compiler_intrinsic_signature_matches(
                     scalar_type(request, output),
                     Some(SemanticScalarTypeV1::Float { bits: 32 })
                 )
+        }
+        SemanticCompilerIntrinsicOperationV1::MathContextCurrent { context } => {
+            inputs.is_empty() && output == context
+        }
+        SemanticCompilerIntrinsicOperationV1::MathF32 { context, function } => {
+            inputs.len() == function.arity() + 1
+                && shared_reference_to(request, inputs[0], context)
+                && inputs[1..].iter().all(|input| *input == output)
+                && matches!(
+                    scalar_type(request, output),
+                    Some(SemanticScalarTypeV1::Float { bits: 32 })
+                )
+        }
+        SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { context } => {
+            inputs.is_empty() && output == context
+        }
+        SemanticCompilerIntrinsicOperationV1::SubgroupReduceF32 { context, width, .. } => {
+            inputs.len() == 2
+                && shared_reference_to(request, inputs[0], context)
+                && inputs[1] == output
+                && matches!(
+                    scalar_type(request, output),
+                    Some(SemanticScalarTypeV1::Float { bits: 32 })
+                )
+                && width != 0
+                && width.is_power_of_two()
+                && width <= 64
         }
         SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { context } => {
             inputs.is_empty() && output == context
@@ -12255,6 +12339,14 @@ fn enqueue_compiler_intrinsic_type_references(
         | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
         | SemanticCompilerIntrinsicOperationV1::WaveBarrier
         | SemanticCompilerIntrinsicOperationV1::FabsF32 => {}
+        SemanticCompilerIntrinsicOperationV1::MathContextCurrent { context }
+        | SemanticCompilerIntrinsicOperationV1::MathF32 { context, .. } => {
+            pending.push_back(context);
+        }
+        SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { context }
+        | SemanticCompilerIntrinsicOperationV1::SubgroupReduceF32 { context, .. } => {
+            pending.push_back(context);
+        }
         SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { context } => {
             pending.push_back(context);
         }
@@ -13756,6 +13848,46 @@ fn encode_compiler_intrinsic_operation(
             writer.u32(context.0)?;
             writer.u32(input_fragment.0)?;
             writer.u32(accumulator_fragment.0)
+        }
+        SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { context } => {
+            writer.u8(27)?;
+            writer.u32(context.0)
+        }
+        SemanticCompilerIntrinsicOperationV1::SubgroupReduceF32 {
+            context,
+            width,
+            kind,
+        } => {
+            writer.u8(28)?;
+            writer.u32(context.0)?;
+            writer.u32(width)?;
+            writer.u8(match kind {
+                SemanticSubgroupReductionKindV1::Sum => 0,
+                SemanticSubgroupReductionKindV1::Maximum => 1,
+            })
+        }
+        SemanticCompilerIntrinsicOperationV1::MathContextCurrent { context } => {
+            writer.u8(29)?;
+            writer.u32(context.0)
+        }
+        SemanticCompilerIntrinsicOperationV1::MathF32 { context, function } => {
+            writer.u8(30)?;
+            writer.u32(context.0)?;
+            writer.u8(match function {
+                SemanticF32MathFunctionV1::Sqrt => 0,
+                SemanticF32MathFunctionV1::FusedMultiplyAdd => 1,
+                SemanticF32MathFunctionV1::Floor => 2,
+                SemanticF32MathFunctionV1::Ceil => 3,
+                SemanticF32MathFunctionV1::Truncate => 4,
+                SemanticF32MathFunctionV1::RoundTiesEven => 5,
+                SemanticF32MathFunctionV1::Sin => 6,
+                SemanticF32MathFunctionV1::Cos => 7,
+                SemanticF32MathFunctionV1::Exp => 8,
+                SemanticF32MathFunctionV1::Exp2 => 9,
+                SemanticF32MathFunctionV1::Ln => 10,
+                SemanticF32MathFunctionV1::Log2 => 11,
+                SemanticF32MathFunctionV1::Log10 => 12,
+            })
         }
         SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift {
             input_witness,
