@@ -61,14 +61,14 @@ static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and fixed-batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r17-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r18-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
     "memory_profile_sha256=286ad8af398b666217d5ec8c0a19390a4736cfcf6624e363214c7488b8e2e535\n",
     "queue_resource_profile_sha256=b8317e4288e14c6d7546b53887ec2a10e1938ffba9595271d174a2a652320f4f\n",
     "aql_dispatch_schema_sha256=b691e0df36e2c1f0695f49a19d49d3fbbe4380e8e9999b01368df02783952edf\n",
     "aql_fixed_batch_schema_sha256=e989398f327c97df8108855a9c97316dd5c6b6b5af68704a14da64990dc4aa8a\n",
     "aql_completion_schema_sha256=abb0fe30cddd4a93bf36ba3df4dea38bd899339e9e62eaacceeb5bbc5208378b\n",
-    "dispatch_binding_schema_sha256=30335cb85c5991bf97b2236dec28c5b6501caa133d59d024be362e3cd62e0096\n",
+    "dispatch_binding_schema_sha256=c2a6dc42c42f471c6bfc6dabf1e8e3786196b1edcb867835e9c87f4ea3bf8a74\n",
     "event_schema_sha256=8d754af12ed2fcd0c238e1f9e38fbbdab053f44fc5d613b227fdcdd616fcc849\n",
     "runtime_enable_schema_sha256=4c762d1e35a5940f0972290151de51e6e19722f81874a6446c66ddc70a062ac1\n",
     "source.rocr.queues.c=b7ead541340ac996c2305b2e9660cb3176edcd61ee509d4880f02659fbb6f32b\n",
@@ -99,7 +99,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "0d6324d542151c13fd9ca1c382c547c2589cafe24372b38d062563f5e68507af";
+    "390111808b6cc4260aac7dd14d25ca1adb11c302f674abe0732d434c43745928";
 
 type RingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -690,8 +690,10 @@ impl SharedGttMemorySessionV1 {
     ///
     /// The operation does not expose native addresses. Inspected global-buffer
     /// access determines whether each move-only storage input must carry sealed
-    /// initialization authority. Queue creation does not establish kernel
-    /// numerical correctness, memory-effect refinement, or hardware execution.
+    /// initialization authority. Every inspected program is retained even when
+    /// no packet in this batch selects it. Queue creation does not establish
+    /// kernel numerical correctness, memory-effect refinement, or hardware
+    /// execution.
     pub fn create_compute_aql_queue_with_fixed_dispatch<const N: usize>(
         self,
         ring_bytes: u32,
@@ -966,7 +968,9 @@ impl ComputeAqlQueueSessionV1 {
     ///
     /// The queue must have no attached batch. The complete detached data set is
     /// rebound, and its device-local subset is revalidated against the retained
-    /// KFD session before the new owner is installed. This does not publish.
+    /// KFD session before the new owner is installed. Every inspected program
+    /// is retained even when no packet in this batch selects it. This does not
+    /// publish.
     pub fn bind_fixed_dispatch<const N: usize>(
         &mut self,
         programs: Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>>,
@@ -2431,7 +2435,7 @@ mod tests {
         );
         assert_eq!(
             super::super::dispatch_binding::GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1,
-            "30335cb85c5991bf97b2236dec28c5b6501caa133d59d024be362e3cd62e0096"
+            "c2a6dc42c42f471c6bfc6dabf1e8e3786196b1edcb867835e9c87f4ea3bf8a74"
         );
         assert_eq!(
             SHARED_GTT_MEMORY_PROFILE_SHA256_V1,
