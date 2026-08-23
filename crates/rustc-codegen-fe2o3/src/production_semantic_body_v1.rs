@@ -1759,8 +1759,8 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::SubgroupReduceMaxF32 => Some(2),
         ProductionTerminalExpansionV1::MathF32(function) => Some(function.arity() + 1),
         ProductionTerminalExpansionV1::MatrixMultiplyAccumulate => Some(4),
-        ProductionTerminalExpansionV1::Bf16MatrixALoad
-        | ProductionTerminalExpansionV1::Bf16MatrixBLoad => Some(4),
+        ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2
+        | ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2 => Some(4),
         ProductionTerminalExpansionV1::Bf16MatrixARowMajor
         | ProductionTerminalExpansionV1::Bf16MatrixBRowMajor => Some(5),
         ProductionTerminalExpansionV1::DisjointSliceGetMut => Some(2),

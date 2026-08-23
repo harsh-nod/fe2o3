@@ -1836,8 +1836,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 Some(
                     TrustedDeviceItem::Bf16MfmaMatrixARowMajor
                     | TrustedDeviceItem::Bf16MfmaMatrixBRowMajor
-                    | TrustedDeviceItem::Bf16MfmaMatrixALoad
-                    | TrustedDeviceItem::Bf16MfmaMatrixBLoad
+                    | TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2
+                    | TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2
                     | TrustedDeviceItem::F32AccumulatorFragmentZero
                     | TrustedDeviceItem::F32AccumulatorFragmentIntoValues
                     | TrustedDeviceItem::WaveLaneCurrent

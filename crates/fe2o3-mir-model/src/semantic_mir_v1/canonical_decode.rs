@@ -1346,7 +1346,7 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        Ok(match self.tagged("compiler intrinsic", 35)? {
+        Ok(match self.tagged("compiler intrinsic", 36)? {
             0 => SemanticCompilerIntrinsicOperationV1::ThreadIndex(self.axis()?),
             1 => SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(self.axis()?),
             2 => SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(self.axis()?),
@@ -1538,6 +1538,13 @@ impl<'a> CanonicalDecoderV1<'a> {
                 lane: SemanticTypeIdV1(self.u32()?),
                 fragment: SemanticTypeIdV1(self.u32()?),
                 contract: self.mfma_accumulator_contract()?,
+            },
+            36 => SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
+                fragment: SemanticTypeIdV1(self.u32()?),
+                view: SemanticTypeIdV1(self.u32()?),
+                lane: SemanticTypeIdV1(self.u32()?),
+                contract: self.mfma_operand_contract()?,
+                storage_layout: self.mfma_storage_layout()?,
             },
             _ => unreachable!(),
         })
@@ -2791,6 +2798,21 @@ mod tests {
             );
         }
 
+        let lhs = SemanticMfmaOperandContractV1 {
+            role: SemanticMfmaOperandRoleV1::A,
+            profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
+            register_distribution: SemanticMfmaRegisterDistributionV1::Tile16x16,
+            wave_width: 64,
+        };
+        let rhs = SemanticMfmaOperandContractV1 {
+            role: SemanticMfmaOperandRoleV1::B,
+            ..lhs
+        };
+        let accumulator = SemanticMfmaAccumulatorContractV1 {
+            profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
+            distribution: SemanticMfmaAccumulatorDistributionV1::RowMajor,
+            wave_width: 64,
+        };
         let mut operations = vec![
             SemanticCompilerIntrinsicOperationV1::ThreadIndex(SemanticAxisV1::X),
             SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(SemanticAxisV1::Y),
@@ -2880,13 +2902,36 @@ mod tests {
                 index_space: index_spaces[1],
             },
             SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { context: t(0) },
-            SemanticCompilerIntrinsicOperationV1::Bf16MatrixFragmentFromBits {
-                fragment: t(0),
-                bits: t(1),
+            SemanticCompilerIntrinsicOperationV1::WaveLaneCurrent {
+                lane: t(0),
+                wave_width: 64,
             },
-            SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorFromValues {
+            SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor {
+                result: t(0),
+                view: t(1),
+                error: t(2),
+                role: SemanticMfmaOperandRoleV1::A,
+                storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+            },
+            SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad {
+                option_fragment: t(0),
+                view: t(1),
+                lane: t(2),
+                fragment: t(3),
+                contract: lhs,
+                storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+            },
+            SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
                 fragment: t(0),
-                values: t(1),
+                view: t(1),
+                lane: t(2),
+                contract: rhs,
+                storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+            },
+            SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
+                lane: t(0),
+                fragment: t(1),
+                contract: accumulator,
             },
             SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues {
                 fragment: t(0),
@@ -2894,8 +2939,12 @@ mod tests {
             },
             SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
                 context: t(0),
-                input_fragment: t(1),
-                accumulator_fragment: t(2),
+                lhs_fragment: t(1),
+                rhs_fragment: t(2),
+                accumulator_fragment: t(3),
+                lhs,
+                rhs,
+                accumulator,
             },
             SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedTiled2d {
                 input_witness: t(0),

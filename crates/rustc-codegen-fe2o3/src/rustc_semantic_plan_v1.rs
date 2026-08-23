@@ -2150,8 +2150,8 @@ const fn terminal_expansion_tag_v1(expansion: ProductionTerminalExpansionV1) -> 
         ProductionTerminalExpansionV1::WaveLaneCurrent => 51,
         ProductionTerminalExpansionV1::Bf16MatrixARowMajor => 52,
         ProductionTerminalExpansionV1::Bf16MatrixBRowMajor => 53,
-        ProductionTerminalExpansionV1::Bf16MatrixALoad => 54,
-        ProductionTerminalExpansionV1::Bf16MatrixBLoad => 55,
+        ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2 => 54,
+        ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2 => 55,
         ProductionTerminalExpansionV1::F32MatrixAccumulatorZero => 56,
     }
 }

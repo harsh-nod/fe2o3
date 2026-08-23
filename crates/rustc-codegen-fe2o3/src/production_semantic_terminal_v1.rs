@@ -41,8 +41,8 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     MatrixContextCurrent,
     Bf16MatrixARowMajor,
     Bf16MatrixBRowMajor,
-    Bf16MatrixALoad,
-    Bf16MatrixBLoad,
+    Bf16MatrixALoadZeroFilledV2,
+    Bf16MatrixBLoadZeroFilledV2,
     F32MatrixAccumulatorZero,
     F32MatrixAccumulatorIntoValues,
     MatrixMultiplyAccumulate,
@@ -170,11 +170,11 @@ impl ProductionSemanticTerminalRuleV1 {
             TrustedDeviceItem::Bf16MfmaMatrixBRowMajor => {
                 Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixBRowMajor)
             }
-            TrustedDeviceItem::Bf16MfmaMatrixALoad => {
-                Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixALoad)
+            TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2 => {
+                Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2)
             }
-            TrustedDeviceItem::Bf16MfmaMatrixBLoad => {
-                Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixBLoad)
+            TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2 => {
+                Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2)
             }
             TrustedDeviceItem::F32AccumulatorFragmentZero => {
                 Self::Expand(ProductionTerminalExpansionV1::F32MatrixAccumulatorZero)
@@ -303,11 +303,11 @@ impl ProductionSemanticTerminalRuleV1 {
             Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixBRowMajor) => {
                 TrustedDeviceItem::Bf16MfmaMatrixBRowMajor
             }
-            Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixALoad) => {
-                TrustedDeviceItem::Bf16MfmaMatrixALoad
+            Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2) => {
+                TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2
             }
-            Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixBLoad) => {
-                TrustedDeviceItem::Bf16MfmaMatrixBLoad
+            Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2) => {
+                TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2
             }
             Self::Expand(ProductionTerminalExpansionV1::F32MatrixAccumulatorZero) => {
                 TrustedDeviceItem::F32AccumulatorFragmentZero
@@ -477,12 +477,12 @@ mod tests {
                 ProductionTerminalExpansionV1::Bf16MatrixBRowMajor,
             ),
             (
-                TrustedDeviceItem::Bf16MfmaMatrixALoad,
-                ProductionTerminalExpansionV1::Bf16MatrixALoad,
+                TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2,
+                ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2,
             ),
             (
-                TrustedDeviceItem::Bf16MfmaMatrixBLoad,
-                ProductionTerminalExpansionV1::Bf16MatrixBLoad,
+                TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2,
+                ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2,
             ),
             (
                 TrustedDeviceItem::F32AccumulatorFragmentZero,

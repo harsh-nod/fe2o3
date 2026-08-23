@@ -773,9 +773,12 @@ fn guarded_accesses_match_authenticated_load_spans(
         else {
             continue;
         };
-        let SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { contract, .. } = operation
-        else {
-            continue;
+        let contract = match operation {
+            SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { contract, .. }
+            | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
+                contract, ..
+            } => contract,
+            _ => continue,
         };
         let expected_guarded_count = contract.profile.operand_components_per_lane();
         let Some(target) = owner
@@ -3563,8 +3566,19 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 block,
                 call,
                 operations,
-                *option_fragment,
-                *fragment,
+                Some((*option_fragment, *fragment)),
+                *contract,
+                *storage_layout,
+            )?,
+            SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
+                contract,
+                storage_layout,
+                ..
+            } => self.lower_bf16_matrix_load(
+                block,
+                call,
+                operations,
+                None,
                 *contract,
                 *storage_layout,
             )?,
@@ -4578,8 +4592,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         block: SemanticBlockIdV1,
         call: &SemanticDirectCallV1,
         operations: &mut Vec<Operation>,
-        option_type: SemanticTypeIdV1,
-        fragment_type: SemanticTypeIdV1,
+        legacy_option: Option<(SemanticTypeIdV1, SemanticTypeIdV1)>,
         contract: SemanticMfmaOperandContractV1,
         storage_layout: SemanticMfmaStorageLayoutV1,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
@@ -4762,6 +4775,15 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             )?;
             values.push((value, Type::Scalar(ScalarType::Bf16)));
         }
+        let fragment = SemanticValueBindingV1::MatrixFragment {
+            values,
+            contract,
+            storage_layout,
+            lane,
+        };
+        let Some((option_type, fragment_type)) = legacy_option else {
+            return Ok(fragment);
+        };
         let (discriminant_type, variants) = semantic_enum_shape(self.types, option_type)?;
         let some_variant =
             unique_enum_variant_with_field(variants, fragment_type).ok_or_else(|| {
@@ -4812,12 +4834,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             semantic_type: option_type,
             variant: None,
             payload_variant: Some(some_variant),
-            fields: vec![SemanticValueBindingV1::MatrixFragment {
-                values,
-                contract,
-                storage_layout,
-                lane,
-            }],
+            fields: vec![fragment],
         })
     }
 

@@ -41,8 +41,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0xf7, 0xe5, 0x06, 0xad, 0xa4, 0x3b, 0xc1, 0xd3, 0x29, 0x33, 0x6c, 0x0f, 0x81, 0xd4, 0xaf, 0xc0,
-    0x18, 0xf6, 0x4a, 0xa9, 0x65, 0x17, 0x99, 0x1a, 0x69, 0x5d, 0xb9, 0xc5, 0xfc, 0x8c, 0x54, 0xb6,
+    0x96, 0xfb, 0x58, 0x11, 0x75, 0xe2, 0xf3, 0x6e, 0x47, 0x13, 0x47, 0x20, 0x9c, 0x53, 0xf7, 0x75,
+    0xc6, 0xe7, 0xad, 0xc2, 0x04, 0xc9, 0x5d, 0x6e, 0x8e, 0x45, 0x3d, 0x57, 0x27, 0x8e, 0xb7, 0xfa,
 ];
 #[allow(
     dead_code,
@@ -530,8 +530,8 @@ pub(crate) enum TrustedDeviceItem {
     Bf16MfmaMatrixViewError,
     Bf16MfmaMatrixARowMajor,
     Bf16MfmaMatrixBRowMajor,
-    Bf16MfmaMatrixALoad,
-    Bf16MfmaMatrixBLoad,
+    Bf16MfmaMatrixALoadZeroFilledV2,
+    Bf16MfmaMatrixBLoadZeroFilledV2,
     DeviceMatrixMultiplyAccumulate,
     GeneralGemm(TrustedGeneralGemmSurfaceV1, TrustedGeneralGemmOperationV1),
     DeviceValue(DeviceValueDiagnosticItem),
@@ -1028,13 +1028,13 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::Bf16MfmaBMatrix::row_major",
     ),
     (
-        TrustedDeviceItem::Bf16MfmaMatrixALoad,
-        "fe2o3_device_bf16_mfma_matrix_a_load_v1",
+        TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2,
+        "fe2o3_device_bf16_mfma_matrix_a_load_zero_filled_v2",
         "fe2o3_device::Bf16MfmaAMatrix::load_m16k16",
     ),
     (
-        TrustedDeviceItem::Bf16MfmaMatrixBLoad,
-        "fe2o3_device_bf16_mfma_matrix_b_load_v1",
+        TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2,
+        "fe2o3_device_bf16_mfma_matrix_b_load_zero_filled_v2",
         "fe2o3_device::Bf16MfmaBMatrix::load_k16n16",
     ),
     (
@@ -1668,8 +1668,12 @@ fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static 
         TrustedDeviceItem::Bf16MfmaMatrixViewError => "fe2o3_device::tensor::Bf16MatrixViewError",
         TrustedDeviceItem::Bf16MfmaMatrixARowMajor => "fe2o3_device::tensor::{impl#7}::row_major",
         TrustedDeviceItem::Bf16MfmaMatrixBRowMajor => "fe2o3_device::tensor::{impl#8}::row_major",
-        TrustedDeviceItem::Bf16MfmaMatrixALoad => "fe2o3_device::tensor::{impl#7}::load_m16k16",
-        TrustedDeviceItem::Bf16MfmaMatrixBLoad => "fe2o3_device::tensor::{impl#8}::load_k16n16",
+        TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2 => {
+            "fe2o3_device::tensor::{impl#7}::load_m16k16"
+        }
+        TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2 => {
+            "fe2o3_device::tensor::{impl#8}::load_k16n16"
+        }
         TrustedDeviceItem::DeviceMatrixMultiplyAccumulate => {
             "fe2o3_device::tensor::{impl#9}::multiply_accumulate"
         }
@@ -1735,8 +1739,8 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::Bf16MfmaMatrixViewError
             | TrustedDeviceItem::Bf16MfmaMatrixARowMajor
             | TrustedDeviceItem::Bf16MfmaMatrixBRowMajor
-            | TrustedDeviceItem::Bf16MfmaMatrixALoad
-            | TrustedDeviceItem::Bf16MfmaMatrixBLoad
+            | TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2
+            | TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2
             | TrustedDeviceItem::DeviceMatrixMultiplyAccumulate
             | TrustedDeviceItem::Tiled2DIndexSpace
             | TrustedDeviceItem::DisjointTile2D
@@ -3679,8 +3683,8 @@ mod tests {
             TrustedDeviceItem::Bf16MfmaMatrixViewError,
             TrustedDeviceItem::Bf16MfmaMatrixARowMajor,
             TrustedDeviceItem::Bf16MfmaMatrixBRowMajor,
-            TrustedDeviceItem::Bf16MfmaMatrixALoad,
-            TrustedDeviceItem::Bf16MfmaMatrixBLoad,
+            TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2,
+            TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2,
             TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
             TrustedDeviceItem::GeneralGemm(
                 TrustedGeneralGemmSurfaceV1::Typestate,
@@ -3856,6 +3860,8 @@ mod tests {
             TrustedDeviceItem::WorkgroupSyncthreads,
             TrustedDeviceItem::DeviceMatrix,
             TrustedDeviceItem::DeviceMatrixCurrent,
+            TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2,
+            TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2,
             TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
         ];
         let mut paths = BTreeSet::new();

@@ -5005,6 +5005,17 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         contract: SemanticMfmaOperandContractV1,
         storage_layout: SemanticMfmaStorageLayoutV1,
     },
+    /// Loads one role-specific, zero-filled operand fragment from a checked view.
+    ///
+    /// Unlike the legacy `Bf16MatrixLoad`, checked coordinate overflow and logical
+    /// matrix edges are represented by zero-filled lanes rather than `None`.
+    Bf16MatrixLoadZeroFilledV2 {
+        fragment: SemanticTypeIdV1,
+        view: SemanticTypeIdV1,
+        lane: SemanticTypeIdV1,
+        contract: SemanticMfmaOperandContractV1,
+        storage_layout: SemanticMfmaStorageLayoutV1,
+    },
     /// Creates a typed zero accumulator associated with an authenticated lane.
     F32MatrixAccumulatorZero {
         lane: SemanticTypeIdV1,
@@ -6971,6 +6982,7 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::WaveLaneCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor { .. }
         | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { .. }
+        | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 { .. }
         | SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero { .. }
         | SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues { .. }
         | SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate { .. }
@@ -7169,6 +7181,23 @@ fn compiler_intrinsic_signature_matches(
                     .iter()
                     .all(|input| is_integer_type(request, *input))
                 && option_value_result_matches(request, option_fragment, fragment)
+                && mfma_operand_contract_valid(contract)
+                && storage_layout == SemanticMfmaStorageLayoutV1::RowMajor
+        }
+        SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
+            fragment,
+            view,
+            lane,
+            contract,
+            storage_layout,
+        } => {
+            inputs.len() == 4
+                && output == fragment
+                && shared_reference_to(request, inputs[0], view)
+                && shared_reference_to(request, inputs[1], lane)
+                && inputs[2..]
+                    .iter()
+                    .all(|input| is_integer_type(request, *input))
                 && mfma_operand_contract_valid(contract)
                 && storage_layout == SemanticMfmaStorageLayoutV1::RowMajor
         }
@@ -13300,6 +13329,16 @@ fn enqueue_compiler_intrinsic_type_references(
             pending.push_back(lane);
             pending.push_back(fragment);
         }
+        SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
+            fragment,
+            view,
+            lane,
+            ..
+        } => {
+            pending.push_back(fragment);
+            pending.push_back(view);
+            pending.push_back(lane);
+        }
         SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
             lane, fragment, ..
         } => {
@@ -14936,6 +14975,20 @@ fn encode_compiler_intrinsic_operation(
             writer.u32(lane.0)?;
             writer.u32(fragment.0)?;
             encode_mfma_accumulator_contract(writer, contract)
+        }
+        SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
+            fragment,
+            view,
+            lane,
+            contract,
+            storage_layout,
+        } => {
+            writer.u8(36)?;
+            writer.u32(fragment.0)?;
+            writer.u32(view.0)?;
+            writer.u32(lane.0)?;
+            encode_mfma_operand_contract(writer, contract)?;
+            encode_mfma_storage_layout(writer, storage_layout)
         }
         SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift {
             input_witness,

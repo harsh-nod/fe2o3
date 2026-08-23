@@ -957,8 +957,8 @@ fn terminal_operation_v1<'tcx>(
                 },
             )
         }
-        expansion @ (ProductionTerminalExpansionV1::Bf16MatrixALoad
-        | ProductionTerminalExpansionV1::Bf16MatrixBLoad)
+        expansion @ (ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2
+        | ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2)
             if inputs.len() == 4
                 && rust_inputs.len() == 4
                 && matches!(rust_inputs[2].kind(), TyKind::Uint(UintTy::Usize))
@@ -970,13 +970,15 @@ fn terminal_operation_v1<'tcx>(
                 .ok_or_else(|| body_owner_table_mismatch_v1("typed MFMA load view"))?;
             let rust_lane = rust_reference_pointee_v1(rust_inputs[1])
                 .ok_or_else(|| body_owner_table_mismatch_v1("typed MFMA load lane borrow"))?;
-            let rust_fragment = rust_option_payload_v1(tcx, rust_output)
-                .ok_or_else(|| body_owner_table_mismatch_v1("typed MFMA load option"))?;
-            let contract = rust_mfma_fragment_contract_v1(tcx, rust_fragment)
+            let contract = rust_mfma_fragment_contract_v1(tcx, rust_output)
                 .ok_or_else(|| body_owner_table_mismatch_v1("typed MFMA load fragment"))?;
             let expected_role = match expansion {
-                ProductionTerminalExpansionV1::Bf16MatrixALoad => SemanticMfmaOperandRoleV1::A,
-                ProductionTerminalExpansionV1::Bf16MatrixBLoad => SemanticMfmaOperandRoleV1::B,
+                ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2 => {
+                    SemanticMfmaOperandRoleV1::A
+                }
+                ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2 => {
+                    SemanticMfmaOperandRoleV1::B
+                }
                 _ => unreachable!("matched MFMA load expansion"),
             };
             if role != expected_role
@@ -985,14 +987,15 @@ fn terminal_operation_v1<'tcx>(
             {
                 return Err(body_owner_table_mismatch_v1("typed MFMA load contract"));
             }
-            Ok(SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad {
-                option_fragment: output,
-                view: pointer_pointee_v1(types, inputs[0])?,
-                lane: pointer_pointee_v1(types, inputs[1])?,
-                fragment: semantic_option_payload_v1(types, output)?,
-                contract,
-                storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
-            })
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
+                    fragment: output,
+                    view: pointer_pointee_v1(types, inputs[0])?,
+                    lane: pointer_pointee_v1(types, inputs[1])?,
+                    contract,
+                    storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                },
+            )
         }
         ProductionTerminalExpansionV1::F32MatrixAccumulatorZero
             if inputs.len() == 1
@@ -1425,8 +1428,8 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::MatrixContextCurrent
         | ProductionTerminalExpansionV1::Bf16MatrixARowMajor
         | ProductionTerminalExpansionV1::Bf16MatrixBRowMajor
-        | ProductionTerminalExpansionV1::Bf16MatrixALoad
-        | ProductionTerminalExpansionV1::Bf16MatrixBLoad
+        | ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2
+        | ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorZero
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues
         | ProductionTerminalExpansionV1::MatrixMultiplyAccumulate
@@ -1903,27 +1906,6 @@ fn aggregate_field_v1(
         .ok_or_else(|| body_owner_table_mismatch_v1("terminal aggregate field"))
 }
 
-fn semantic_option_payload_v1(
-    types: &[SemanticTypeDeclV1],
-    option: SemanticTypeIdV1,
-) -> Result<SemanticTypeIdV1, ProductionSemanticImportErrorV1> {
-    let Some(declaration) = types.get(option.index() as usize) else {
-        return Err(body_owner_table_mismatch_v1("semantic Option shape"));
-    };
-    let SemanticTypeShapeV1::Enum { variants, .. } = declaration.shape() else {
-        return Err(body_owner_table_mismatch_v1("semantic Option shape"));
-    };
-    if variants.len() != 2
-        || variants[0].discriminant() != 0
-        || !variants[0].fields().fields().is_empty()
-        || variants[1].discriminant() != 1
-        || variants[1].fields().fields().len() != 1
-    {
-        return Err(body_owner_table_mismatch_v1("semantic Option variants"));
-    }
-    Ok(variants[1].fields().fields()[0])
-}
-
 fn semantic_result_payloads_v1(
     types: &[SemanticTypeDeclV1],
     result: SemanticTypeIdV1,
@@ -2030,8 +2012,8 @@ const fn terminal_operation_tag_v1(
         ProductionTerminalExpansionV1::WaveLaneCurrent => 51,
         ProductionTerminalExpansionV1::Bf16MatrixARowMajor => 52,
         ProductionTerminalExpansionV1::Bf16MatrixBRowMajor => 53,
-        ProductionTerminalExpansionV1::Bf16MatrixALoad => 54,
-        ProductionTerminalExpansionV1::Bf16MatrixBLoad => 55,
+        ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2 => 54,
+        ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2 => 55,
         ProductionTerminalExpansionV1::F32MatrixAccumulatorZero => 56,
     }
 }
