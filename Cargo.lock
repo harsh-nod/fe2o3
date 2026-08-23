@@ -315,6 +315,7 @@ dependencies = [
  "fe2o3-kernel-descriptor",
  "fe2o3-process-identity",
  "fe2o3-rustc-invocation",
+ "fe2o3-scalar-gemm-v1",
  "fe2o3-verifier",
  "fe2o3-worker-v2-bundle",
  "libc",

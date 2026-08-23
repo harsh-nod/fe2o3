@@ -163,9 +163,17 @@ pub(crate) struct PublishedWorkerV3Fixture {
 }
 
 pub(crate) fn published_worker_v3_fixture() -> PublishedWorkerV3Fixture {
+    let fixture = slice_fixture_with_descriptor_table(&slice_descriptor_table());
+    published_worker_v3_fixture_from_raw_hsaco(fixture.bytes, "vecadd", "vecadd.kd")
+}
+
+pub(crate) fn published_worker_v3_fixture_from_raw_hsaco(
+    raw_hsaco: Vec<u8>,
+    entry_symbol: &str,
+    descriptor_symbol: &str,
+) -> PublishedWorkerV3Fixture {
     let directory = TestDirectory::new();
     let producer = producer();
-    let fixture = slice_fixture_with_descriptor_table(&slice_descriptor_table());
     let provider = WorkerInputV1::new(
         WorkerInputKindV1::AmdGpuRelocatable,
         b"worker-v3-load-envelope-provider".to_vec(),
@@ -173,10 +181,10 @@ pub(crate) fn published_worker_v3_fixture() -> PublishedWorkerV3Fixture {
     .unwrap();
     let (attempt, source) = evidence_in_directory_for_kernel_and_providers(
         &directory,
-        fixture.bytes,
+        raw_hsaco,
         EvidenceConfig::BASE,
-        "vecadd",
-        "vecadd.kd",
+        entry_symbol,
+        descriptor_symbol,
         vec![provider],
     );
     let inspected = inspect_protected_production_v1_worker_v3_raw_hsaco_v1(source).unwrap();

@@ -21,7 +21,11 @@ use fe2o3_artifacts::{
     AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, DigestAlgorithm,
     DigestBytes, Mutability, Name, PayloadDigest, PointerWidth,
 };
+use fe2o3_core::{DeviceBuffer, GpuContext};
 use fe2o3_device::KernelMarkerV1;
+use fe2o3_host::__generated::{
+    GeneratedScalarGemmV1ReadDeviceSlice, GeneratedScalarGemmV1ReadWriteDeviceSlice,
+};
 use fe2o3_host::{
     __hardware_test::{
         application_handoff_observed_context_fixture_v1,
@@ -36,15 +40,17 @@ use fe2o3_host::{
     HsaEnvironmentObservationV1, HsaExecutableObjectIdentityV1,
     HsaImplicitKernargInitializationObservationV1, HsaKernelObjectIdentityV1,
     HsaKernelResolutionObservationV1, HsaLaunchGeometryV1, HsaPhysicalDeviceIdentityV1,
-    HsaRuntimeIdentityV1, HsaUnloadObservationV1, RecoveredWorkerV3AdmissionErrorV1,
-    ReviewedHsaExecutableLifecycleAdapterV1, ReviewedHsaImplicitKernargAdapterV1,
-    ValidatedCompilerGeneratedSemanticWitnessV1, WorkerV3GeneratedDispatchErrorV1,
-    WorkerV3SafetyPropertiesV1, WorkerV3VerificationAuthenticationErrorV1,
-    WorkerV3VerificationDecisionErrorV1, WorkerV3VerificationDecisionV1,
-    WorkerV3VerificationRequestV1, WorkerV3VerifierV1, admit_recovered_worker_v3_descriptor_v1,
-    semantic_witness_from_backend_v1,
+    HsaRuntimeIdentityV1, HsaUnloadObservationV1, ObservedContext,
+    RecoveredWorkerV3AdmissionErrorV1, ReviewedHsaExecutableLifecycleAdapterV1,
+    ReviewedHsaImplicitKernargAdapterV1, ValidatedCompilerGeneratedSemanticWitnessV1,
+    WorkerV3GeneratedDispatchErrorV1, WorkerV3SafetyPropertiesV1,
+    WorkerV3VerificationAuthenticationErrorV1, WorkerV3VerificationDecisionErrorV1,
+    WorkerV3VerificationDecisionV1, WorkerV3VerificationRequestV1, WorkerV3VerifierV1,
+    admit_recovered_worker_v3_descriptor_v1, semantic_witness_from_backend_v1,
 };
+use fe2o3_hsa_runtime::ReviewedHsaRuntimeAdapterV1;
 use fe2o3_kernel_descriptor::KernelId;
+use fe2o3_scalar_gemm_v1::kernel::scalar_gemm_v1_gpu;
 use fe2o3_worker_v2_bundle::{
     RecoveredWorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeWireV1,
     recover_worker_v3_load_envelope_v1,
@@ -60,6 +66,37 @@ mod worker_v3_fixture;
 
 const TEST_MARKER_BINDING: [u8; 32] = [0xb1; 32];
 const TEST_HOST_CONTRACT: [u8; 32] = [0xb2; 32];
+const SCALAR_GEMM_MARKER_BINDING: [u8; 32] = [
+    0x78, 0x9a, 0xde, 0xdf, 0xdc, 0x3b, 0xe1, 0xfb, 0x60, 0x51, 0x8d, 0xd2, 0xc7, 0x46, 0x0c, 0x3e,
+    0xf8, 0xe6, 0xb9, 0x00, 0x52, 0x7d, 0x1b, 0xcb, 0x22, 0x89, 0xba, 0xa1, 0xe0, 0x14, 0x69, 0x3e,
+];
+
+#[unsafe(export_name = "__fe2o3_semantic_witness_v1_789adedfdc3be1fb60518dd2c7460c3ef8e6b900527d1bcb2289baa1e014693e_ptr")]
+extern "C" fn scalar_gemm_semantic_witness_pointer_v1() -> *const u8 {
+    scalar_gemm_semantic_witness_v1().as_ptr()
+}
+
+#[unsafe(export_name = "__fe2o3_semantic_witness_v1_789adedfdc3be1fb60518dd2c7460c3ef8e6b900527d1bcb2289baa1e014693e_len")]
+extern "C" fn scalar_gemm_semantic_witness_length_v1() -> usize {
+    scalar_gemm_semantic_witness_v1().len()
+}
+
+fn scalar_gemm_semantic_witness_v1() -> &'static [u8] {
+    static WITNESS: OnceLock<Vec<u8>> = OnceLock::new();
+    WITNESS.get_or_init(|| {
+        assert_eq!(
+            scalar_gemm_v1_gpu::Marker::KERNEL_BINDING_ID_V1,
+            SCALAR_GEMM_MARKER_BINDING
+        );
+        let generated_host_contract_identity = match scalar_gemm_v1_gpu::Marker::PROFILE {
+            CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
+                generated_host_contract_identity,
+            } => generated_host_contract_identity,
+            _ => panic!("Scalar GEMM marker no longer uses the general typed V3 profile"),
+        };
+        encode_semantic_witness_v1(SCALAR_GEMM_MARKER_BINDING, generated_host_contract_identity)
+    })
+}
 
 fn static_host_consumer_application_fixture() -> &'static Path {
     static FIXTURE: OnceLock<PathBuf> = OnceLock::new();
@@ -113,6 +150,25 @@ fn lower_hex(bytes: &[u8]) -> String {
     encoded
 }
 
+fn encode_semantic_witness_v1(
+    marker_binding: [u8; 32],
+    generated_host_contract: [u8; 32],
+) -> Vec<u8> {
+    let profile = TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3.as_bytes();
+    let length = GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1 + profile.len();
+    let mut bytes = Vec::with_capacity(length);
+    bytes.extend_from_slice(&GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1.to_le_bytes());
+    bytes.extend_from_slice(&GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1.to_le_bytes());
+    bytes.extend_from_slice(&GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1.to_le_bytes());
+    bytes.extend_from_slice(&(length as u32).to_le_bytes());
+    bytes.extend_from_slice(&marker_binding);
+    bytes.extend_from_slice(&generated_host_contract);
+    bytes.extend_from_slice(&(profile.len() as u16).to_le_bytes());
+    bytes.extend_from_slice(profile);
+    assert_eq!(bytes.len(), length);
+    bytes
+}
+
 struct WorkerV3VecAddMarker;
 
 fn worker_v3_marker_function() {}
@@ -138,21 +194,8 @@ unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3VecAddMarker {
     -> Result<ValidatedCompilerGeneratedSemanticWitnessV1, CompilerGeneratedSemanticWitnessErrorV1>
     {
         static WITNESS: OnceLock<Vec<u8>> = OnceLock::new();
-        let bytes = WITNESS.get_or_init(|| {
-            let profile = TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3.as_bytes();
-            let length = GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1 + profile.len();
-            let mut bytes = Vec::with_capacity(length);
-            bytes.extend_from_slice(&GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1.to_le_bytes());
-            bytes.extend_from_slice(&GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1.to_le_bytes());
-            bytes.extend_from_slice(&GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1.to_le_bytes());
-            bytes.extend_from_slice(&(length as u32).to_le_bytes());
-            bytes.extend_from_slice(&TEST_MARKER_BINDING);
-            bytes.extend_from_slice(&TEST_HOST_CONTRACT);
-            bytes.extend_from_slice(&(profile.len() as u16).to_le_bytes());
-            bytes.extend_from_slice(profile);
-            assert_eq!(bytes.len(), length);
-            bytes
-        });
+        let bytes = WITNESS
+            .get_or_init(|| encode_semantic_witness_v1(TEST_MARKER_BINDING, TEST_HOST_CONTRACT));
         // SAFETY: `OnceLock` retains these immutable initialized bytes for the process lifetime.
         unsafe {
             semantic_witness_from_backend_v1(
@@ -235,12 +278,17 @@ struct ReviewedTestWorkerV3Verifier {
     substitute_finalized: bool,
 }
 
-unsafe impl WorkerV3VerifierV1<WorkerV3VecAddMarker> for ReviewedTestWorkerV3Verifier {
+// SAFETY: this synthetic verifier is confined to test-only fixtures. It mirrors every requested
+// identity and must never be used as production proof authority.
+unsafe impl<K> WorkerV3VerifierV1<K> for ReviewedTestWorkerV3Verifier
+where
+    K: CompilerGeneratedKernelExpectationV1,
+{
     type Error = Infallible;
 
     unsafe fn verify(
         &mut self,
-        request: &WorkerV3VerificationRequestV1<'_, WorkerV3VecAddMarker>,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
     ) -> Result<WorkerV3VerificationDecisionV1, Self::Error> {
         let mut finalized = request.finalized_hsaco_sha256();
         if self.substitute_finalized {
@@ -477,12 +525,21 @@ fn recovered_host_fixture() -> (
     worker_v3_fixture::TestDirectory,
     RecoveredWorkerV3LoadEnvelopeV1,
 ) {
+    recover_published_worker_v3_fixture(worker_v3_fixture::published_worker_v3_fixture())
+}
+
+fn recover_published_worker_v3_fixture(
+    fixture: worker_v3_fixture::PublishedWorkerV3Fixture,
+) -> (
+    worker_v3_fixture::TestDirectory,
+    RecoveredWorkerV3LoadEnvelopeV1,
+) {
     let worker_v3_fixture::PublishedWorkerV3Fixture {
         directory,
         producer,
         attempt,
         published,
-    } = worker_v3_fixture::published_worker_v3_fixture();
+    } = fixture;
     let envelope = WorkerV3LoadEnvelopeV1::from_published_hsaco_v1(published).unwrap();
     let intent = envelope.wire().publication_intent_record().identity();
     let readiness = envelope
@@ -727,29 +784,25 @@ fn completed_v3_publication_becomes_restartable_inert_envelope_custody() {
             )
             .unwrap()
             .dispatch();
-        let rejected_at_expected_stage = match (fault, result) {
+        let rejected_at_expected_stage = matches!(
+            (fault, result),
             (
                 ReviewedTestHsaFault::ImplicitError,
                 Err(WorkerV3GeneratedDispatchErrorV1::ImplicitAdapter(_)),
-            )
-            | (
+            ) | (
                 ReviewedTestHsaFault::MutateExplicit,
                 Err(WorkerV3GeneratedDispatchErrorV1::ExplicitKernargMutation),
-            )
-            | (
+            ) | (
                 ReviewedTestHsaFault::ImplicitKernel,
                 Err(WorkerV3GeneratedDispatchErrorV1::ImplicitObservationMismatch(_)),
-            )
-            | (
+            ) | (
                 ReviewedTestHsaFault::DispatchError,
                 Err(WorkerV3GeneratedDispatchErrorV1::DispatchAdapter(_)),
-            )
-            | (
+            ) | (
                 ReviewedTestHsaFault::DispatchIncomplete,
                 Err(WorkerV3GeneratedDispatchErrorV1::DispatchObservationMismatch(_)),
-            ) => true,
-            _ => false,
-        };
+            )
+        );
         assert!(rejected_at_expected_stage);
     }
     assert_eq!(
@@ -806,6 +859,125 @@ fn completed_v3_publication_becomes_restartable_inert_envelope_custody() {
     assert!(!unloaded.grants_load_authority());
     assert!(!unloaded.grants_launch_authority());
     assert_eq!(adapter_state.unloads.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+#[ignore = "requires FE2O3_GFX942_SCALAR_GEMM_V3_RAW_HSACO and a gfx942:xnack- GPU"]
+fn synthetic_verifier_executes_real_scalar_gemm_through_strict_v3() {
+    const M: u32 = 3;
+    const N: u32 = 5;
+    const K: u32 = 7;
+    const CANARY: f32 = f32::from_bits(0x7fc0_5a5a);
+
+    let path = std::env::var_os("FE2O3_GFX942_SCALAR_GEMM_V3_RAW_HSACO")
+        .expect("FE2O3_GFX942_SCALAR_GEMM_V3_RAW_HSACO is not set");
+    let raw_hsaco = fs::read(path).unwrap();
+    let inspection = fe2o3_hsaco_finalize::inspect_unfinalized(&raw_hsaco).unwrap();
+    assert_eq!(
+        inspection
+            .descriptor_table()
+            .device_target()
+            .as_amd_target_id()
+            .processor(),
+        "gfx942"
+    );
+    let descriptor = inspection
+        .descriptor_table()
+        .kernels()
+        .iter()
+        .find(|descriptor| descriptor.entry_name().as_str() == "scalar_gemm_v1")
+        .expect("raw HSACO contains scalar_gemm_v1");
+    let kernel_id = descriptor.kernel_id();
+    drop(inspection);
+
+    let fixture = worker_v3_fixture::published_worker_v3_fixture_from_raw_hsaco(
+        raw_hsaco,
+        "scalar_gemm_v1",
+        "scalar_gemm_v1.kd",
+    );
+    let (_directory, recovered) = recover_published_worker_v3_fixture(fixture);
+
+    let context = GpuContext::new(0).unwrap();
+    let observed = ObservedContext::observe(&context).unwrap();
+    let admitted =
+        admit_recovered_worker_v3_descriptor_v1(recovered, kernel_id, &observed).unwrap();
+    let authenticated =
+        AuthenticatedWorkerV3ExecutableV1::<scalar_gemm_v1_gpu::Marker>::authenticate(
+            admitted,
+            &mut ReviewedTestWorkerV3Verifier {
+                substitute_finalized: false,
+            },
+        )
+        .unwrap();
+    let adapter = ReviewedHsaRuntimeAdapterV1::new(context.clone()).unwrap();
+    let mut loaded = authenticated
+        .authorize_hsa_load(adapter)
+        .unwrap()
+        .load()
+        .unwrap();
+
+    let stream = context.default_stream();
+    let a_host = (0..usize::try_from(M * K).unwrap())
+        .map(|index| (index % 11) as f32 - 5.0)
+        .collect::<Vec<_>>();
+    let b_host = (0..usize::try_from(K * N).unwrap())
+        .map(|index| (index % 7) as f32 - 3.0)
+        .collect::<Vec<_>>();
+    let expected = scalar_gemm_reference(&a_host, &b_host, M, N, K);
+    let a = DeviceBuffer::from_host(&stream, &a_host).unwrap();
+    let b = DeviceBuffer::from_host(&stream, &b_host).unwrap();
+    let mut guarded = DeviceBuffer::from_host(
+        &stream,
+        &std::iter::once(CANARY)
+            .chain(std::iter::repeat_n(CANARY, expected.len()))
+            .chain(std::iter::once(CANARY))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+
+    {
+        let (_left, output, _right) = guarded.split_range_mut(1..1 + expected.len()).unwrap();
+        let arguments = scalar_gemm_v1_gpu::Arguments::new(
+            GeneratedScalarGemmV1ReadDeviceSlice::new(&observed, &a).unwrap(),
+            GeneratedScalarGemmV1ReadDeviceSlice::new(&observed, &b).unwrap(),
+            GeneratedScalarGemmV1ReadWriteDeviceSlice::from_view_mut(&observed, output).unwrap(),
+            M,
+            N,
+            K,
+        );
+        let geometry = HsaLaunchGeometryV1::new([1, 1, 1], [256, 1, 1], 0);
+        let completed = arguments
+            .prepare_worker_v3(&mut loaded, &observed, geometry)
+            .unwrap()
+            .dispatch()
+            .unwrap();
+        assert_eq!(completed.kernel_id(), kernel_id);
+        assert_eq!(completed.completed_dispatch().geometry(), geometry);
+        assert!(completed.completed_dispatch().dispatch().completed());
+    }
+
+    let guarded_after = guarded.to_host_vec(&stream).unwrap();
+    assert_eq!(guarded_after[0].to_bits(), CANARY.to_bits());
+    assert_eq!(guarded_after.last().unwrap().to_bits(), CANARY.to_bits());
+    for (actual, expected) in guarded_after[1..1 + expected.len()].iter().zip(&expected) {
+        assert_eq!(actual.to_bits(), expected.to_bits());
+    }
+    assert_eq!(a.to_host_vec(&stream).unwrap(), a_host);
+    assert_eq!(b.to_host_vec(&stream).unwrap(), b_host);
+    assert!(loaded.unload().unwrap().unload_observation().released());
+}
+
+fn scalar_gemm_reference(a: &[f32], b: &[f32], m: u32, n: u32, k: u32) -> Vec<f32> {
+    let mut output = vec![0.0; usize::try_from(m * n).unwrap()];
+    for row in 0..usize::try_from(m).unwrap() {
+        for column in 0..usize::try_from(n).unwrap() {
+            for inner in 0..usize::try_from(k).unwrap() {
+                output[row * n as usize + column] +=
+                    a[row * k as usize + inner] * b[inner * n as usize + column];
+            }
+        }
+    }
+    output
 }
 
 #[test]
