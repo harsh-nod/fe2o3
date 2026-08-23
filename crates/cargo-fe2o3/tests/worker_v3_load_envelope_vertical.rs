@@ -64,6 +64,7 @@ use reserved_fe2o3_symbols::{
     GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1,
     TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
 };
+use sha2::{Digest as _, Sha256};
 
 #[path = "../../fe2o3-hsaco-finalize/tests/worker_v3_hsaco_admission.rs"]
 mod worker_v3_fixture;
@@ -297,6 +298,12 @@ where
         let capsule = request.semantic_compiler_handoff().capsule();
         assert_eq!(*capsule.identity().sha256(), request.capsule_sha256());
         assert_eq!(capsule.canonical_bytes(), request.semantic_capsule_bytes());
+        let finalized_sha256: [u8; 32] = Sha256::digest(request.finalized_hsaco_bytes()).into();
+        assert_eq!(finalized_sha256, request.finalized_hsaco_sha256());
+        assert_eq!(
+            u64::try_from(request.finalized_hsaco_bytes().len()).unwrap(),
+            request.finalized_hsaco_length()
+        );
         assert_eq!(
             *capsule.receipts().formal_memory().identity().sha256(),
             request.formal_memory_receipt_sha256()

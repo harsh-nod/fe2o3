@@ -83,6 +83,7 @@ pub struct WorkerV3VerificationRequestV1<'admission, K> {
     challenge: WorkerV3VerificationChallengeIdentityV1,
     lineage: WorkerV3HostLineageEvidenceV1,
     handoff: &'admission fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
+    finalized_hsaco: &'admission [u8],
     descriptor: &'admission KernelDescriptorV1,
     target: fe2o3_amd_target::AmdTargetId,
     code_object_version: CodeObjectVersion,
@@ -135,6 +136,15 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerificationRequestV1<'_, 
             .receipts()
             .proof_binding()
             .canonical_preimage()
+    }
+
+    /// Returns the exact finalized HSACO bytes retained by the current-publication token.
+    ///
+    /// The host keeps that token alive for the complete verifier call and revalidates it before
+    /// promoting the returned decision. A reviewed verifier must use these bytes, rather than a
+    /// caller-supplied path or digest projection, for executable inspection and machine refinement.
+    pub const fn finalized_hsaco_bytes(&self) -> &[u8] {
+        self.finalized_hsaco
     }
 
     pub const fn capsule_sha256(&self) -> [u8; 32] {
@@ -332,8 +342,8 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
             .map_err(WorkerV3VerificationAuthenticationErrorV1::SemanticWitness)?;
         validate_marker::<K>(admission.descriptor())
             .map_err(WorkerV3VerificationAuthenticationErrorV1::Marker)?;
-        admission
-            .revalidate_currentness()
+        let current = admission
+            .acquire_retained_currentness_token()
             .map_err(WorkerV3VerificationAuthenticationErrorV1::CurrentPublication)?;
         let lineage = admission.lineage_evidence();
         let generated_host_contract = generated_host_contract::<K>();
@@ -345,6 +355,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
             challenge,
             lineage,
             handoff: admission.outer_handoff(),
+            finalized_hsaco: current.exact_artifact_bytes(),
             descriptor: admission.descriptor(),
             target: admission.target(),
             code_object_version: admission.code_object_version(),
@@ -356,8 +367,12 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
         // independently compared to the exact admitted request below.
         let verification = unsafe { verifier.verify(&request) }
             .map_err(WorkerV3VerificationAuthenticationErrorV1::Verifier)?;
+        admission
+            .revalidate_retained_currentness_token(&current)
+            .map_err(WorkerV3VerificationAuthenticationErrorV1::CurrentPublication)?;
         validate_decision::<K>(&request, &verification)
             .map_err(WorkerV3VerificationAuthenticationErrorV1::Decision)?;
+        drop(current);
         Ok(Self {
             admission,
             verification,
