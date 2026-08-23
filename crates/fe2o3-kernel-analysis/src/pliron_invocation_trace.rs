@@ -55,6 +55,9 @@ pub(crate) enum PlironTraceEventV1 {
         memory_space: MemorySpaceAttr,
         access: AccessKindAttr,
         indices: Vec<Option<u64>>,
+        allocation_origin: u64,
+        noalias_class: u64,
+        view_signature: (u32, Vec<u64>),
     },
 }
 
@@ -398,6 +401,15 @@ pub(crate) fn trace_pliron_invocations_v1(
                         memory_space,
                         access: access_kind,
                         indices,
+                        allocation_origin: view_op.allocation_origin(context).unwrap_or(0),
+                        noalias_class: view_op.noalias_class(context).unwrap_or(0),
+                        view_signature: view_op
+                            .view_type(context)
+                            .map(|ty| {
+                                let ty = ty.deref(context);
+                                (ty.element_width(), ty.shape().to_vec())
+                            })
+                            .unwrap_or_default(),
                     });
                 }
             }

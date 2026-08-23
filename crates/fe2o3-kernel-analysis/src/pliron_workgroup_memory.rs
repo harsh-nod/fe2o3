@@ -149,8 +149,16 @@ impl std::error::Error for PlironWorkgroupMemoryCheckErrorV1 {}
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct AddressV1 {
-    view: Value,
+    allocation_class: u64,
     indices: Vec<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ViewContractV1 {
+    allocation_origin: u64,
+    noalias_class: u64,
+    signature: (u32, Vec<u64>),
+    writes_memory: bool,
 }
 
 #[derive(Clone)]
@@ -306,6 +314,12 @@ pub fn require_pliron_workgroup_memory_safety_before_lowering_v1(
 }
 
 fn analyze_scoped_traces(traces: Vec<PlironInvocationTraceV1>) -> PlironWorkgroupMemoryReportV1 {
+    let has_unknown_alias = match validate_workgroup_allocation_contract(&traces) {
+        Ok(has_unknown_alias) => has_unknown_alias,
+        Err(detail) => {
+            return one(PlironWorkgroupMemoryFindingV1::AnalysisIncomplete { detail });
+        }
+    };
     let mut by_workgroup: BTreeMap<(u64, u64), Vec<PlironInvocationTraceV1>> = BTreeMap::new();
     for trace in traces {
         by_workgroup
@@ -315,7 +329,7 @@ fn analyze_scoped_traces(traces: Vec<PlironInvocationTraceV1>) -> PlironWorkgrou
     }
     let mut findings = Vec::new();
     for traces in by_workgroup.values() {
-        let report = analyze_workgroup_traces(traces);
+        let report = analyze_workgroup_traces(traces, has_unknown_alias);
         for finding in report.findings {
             if findings.len() == MAX_PLIRON_WORKGROUP_FINDINGS_V1 {
                 return one(PlironWorkgroupMemoryFindingV1::FindingLimitExceeded);
@@ -326,7 +340,101 @@ fn analyze_scoped_traces(traces: Vec<PlironInvocationTraceV1>) -> PlironWorkgrou
     PlironWorkgroupMemoryReportV1 { findings }
 }
 
-fn analyze_workgroup_traces(traces: &[PlironInvocationTraceV1]) -> PlironWorkgroupMemoryReportV1 {
+fn validate_workgroup_allocation_contract(
+    traces: &[PlironInvocationTraceV1],
+) -> Result<bool, String> {
+    let mut contracts = HashMap::<Value, ViewContractV1>::new();
+    for event in traces.iter().flat_map(|trace| &trace.events) {
+        let PlironTraceEventV1::Memory {
+            view,
+            memory_space: MemorySpaceAttr::Workgroup,
+            access,
+            allocation_origin,
+            noalias_class,
+            view_signature,
+            ..
+        } = event
+        else {
+            continue;
+        };
+        let candidate = ViewContractV1 {
+            allocation_origin: *allocation_origin,
+            noalias_class: *noalias_class,
+            signature: view_signature.clone(),
+            writes_memory: access.writes_memory(),
+        };
+        if let Some(previous) = contracts.get_mut(view) {
+            if previous.allocation_origin != candidate.allocation_origin
+                || previous.noalias_class != candidate.noalias_class
+                || previous.signature != candidate.signature
+            {
+                return Err(
+                    "one workgroup view carries inconsistent allocation metadata".to_owned(),
+                );
+            }
+            previous.writes_memory |= candidate.writes_memory;
+        } else {
+            contracts.insert(*view, candidate);
+        }
+    }
+
+    let mut classes_by_origin = HashMap::new();
+    for contract in contracts.values() {
+        if contract.noalias_class != 0 && contract.allocation_origin == 0 {
+            return Err(format!(
+                "workgroup view claims no-alias class {} without a compiler-issued allocation origin",
+                contract.noalias_class
+            ));
+        }
+        if contract.allocation_origin != 0
+            && classes_by_origin
+                .insert(contract.allocation_origin, contract.noalias_class)
+                .is_some_and(|previous| previous != contract.noalias_class)
+        {
+            return Err(format!(
+                "workgroup allocation origin {} is assigned inconsistent no-alias classes",
+                contract.allocation_origin
+            ));
+        }
+    }
+
+    let has_unknown_alias = contracts
+        .values()
+        .any(|contract| contract.noalias_class == 0);
+    let effective_class = |contract: &ViewContractV1| {
+        if has_unknown_alias {
+            0
+        } else {
+            contract.noalias_class
+        }
+    };
+    let classes_with_writes = contracts
+        .values()
+        .filter_map(|contract| contract.writes_memory.then_some(effective_class(contract)))
+        .collect::<HashSet<_>>();
+    let mut signatures_by_class = HashMap::new();
+    for contract in contracts.values() {
+        let class = effective_class(contract);
+        if !classes_with_writes.contains(&class) {
+            continue;
+        }
+        if signatures_by_class
+            .insert(class, contract.signature.clone())
+            .is_some_and(|previous| previous != contract.signature)
+        {
+            return Err(
+                "potentially aliasing workgroup views have incompatible element widths or rank/shapes"
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(has_unknown_alias)
+}
+
+fn analyze_workgroup_traces(
+    traces: &[PlironInvocationTraceV1],
+    has_unknown_alias: bool,
+) -> PlironWorkgroupMemoryReportV1 {
     let mut published = HashSet::new();
     let mut cursors = vec![0_usize; traces.len()];
     let mut findings = Vec::new();
@@ -357,9 +465,9 @@ fn analyze_workgroup_traces(traces: &[PlironInvocationTraceV1]) -> PlironWorkgro
                         if *memory_space != MemorySpaceAttr::Workgroup => {}
                     PlironTraceEventV1::Memory {
                         location,
-                        view,
                         access,
                         indices,
+                        noalias_class,
                         ..
                     } => {
                         let Some(indices) = indices.iter().copied().collect::<Option<Vec<_>>>()
@@ -372,7 +480,7 @@ fn analyze_workgroup_traces(traces: &[PlironInvocationTraceV1]) -> PlironWorkgro
                             });
                         };
                         let address = AddressV1 {
-                            view: *view,
+                            allocation_class: if has_unknown_alias { 0 } else { *noalias_class },
                             indices: indices.clone(),
                         };
                         if access.reads_memory()

@@ -73,6 +73,24 @@ fn view(context: &mut Context) -> RankedViewOp {
     RankedViewOp::new_in_space(context, ty, vec![], MemorySpaceAttr::Workgroup).unwrap()
 }
 
+fn view_with_contract(
+    context: &mut Context,
+    shape: Vec<u64>,
+    allocation_origin: u64,
+    noalias_class: u64,
+) -> RankedViewOp {
+    let ty = RankedViewType::new(context, 32, true, shape).unwrap();
+    RankedViewOp::new_in_space_with_allocation_contract(
+        context,
+        ty,
+        vec![],
+        MemorySpaceAttr::Workgroup,
+        allocation_origin,
+        noalias_class,
+    )
+    .unwrap()
+}
+
 fn barrier(context: &mut Context, address_space: AddressSpaceAttr) -> BarrierOp {
     BarrierOp::new(
         context,
@@ -329,6 +347,50 @@ fn duplicate_plain_writes_race_but_atomic_writes_do_not() {
             )));
         }
     }
+}
+
+fn cross_view_lds_alias_is_clean(first_class: u64, second_class: u64) -> bool {
+    let context = &mut setup();
+    let function = function_with_layout(context, "cross_view_lds_alias", 2, 2);
+    let entry = function.get_entry_block(context);
+    let first = view_with_contract(context, vec![3], 311, first_class);
+    let second = view_with_contract(context, vec![3], 312, second_class);
+    let invocation = InvocationIndexOp::new(context, 0, 2);
+    let one = IndexConstantOp::new(context, 1);
+    let shifted = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        invocation.result(context),
+        one.result(context),
+    );
+    let first_write = access(
+        context,
+        AccessKindAttr::Write,
+        &first,
+        invocation.result(context),
+    );
+    let second_write = access(
+        context,
+        AccessKindAttr::Write,
+        &second,
+        shifted.result(context),
+    );
+    let ret = ReturnOp::new(context);
+    append(context, entry, &first);
+    append(context, entry, &second);
+    append(context, entry, &invocation);
+    append(context, entry, &one);
+    append(context, entry, &shifted);
+    append(context, entry, &first_write);
+    append(context, entry, &second_write);
+    append(context, entry, &ret);
+    run_pliron_workgroup_memory_check_v1(context, &function).is_clean()
+}
+
+#[test]
+fn lds_alias_contract_applies_across_distinct_ssa_views() {
+    assert!(!cross_view_lds_alias_is_clean(31, 31));
+    assert!(cross_view_lds_alias_is_clean(32, 33));
 }
 
 #[test]
