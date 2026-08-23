@@ -957,7 +957,16 @@ struct PreparedDispatchPacketV1 {
     kernarg_alignment: u64,
     kernarg_mapping: MemoryMappingKeyV1,
     kernarg_layout_identity: [u8; 32],
+    code_bound_kernarg_layout: bool,
     code_index: usize,
+}
+
+fn prepared_kernarg_layout_matches_code(
+    code_bound: bool,
+    kernarg_layout_identity: [u8; 32],
+    dispatch_abi_identity: [u8; 32],
+) -> bool {
+    !code_bound || kernarg_layout_identity == dispatch_abi_identity
 }
 
 /// Queue-retained real resource owner for one prepared batch shape.
@@ -1007,10 +1016,21 @@ impl DispatchResourceOwnerV1 {
         let templates: Vec<_> = self
             .packets
             .iter()
-            .map(|packet| {
+            .enumerate()
+            .map(|(packet_index, packet)| {
                 let code = self.code_identity.get(packet.code_index).ok_or(
                     Gfx942DispatchBindingErrorV1::InvalidCode("packet program index"),
                 )?;
+                if !prepared_kernarg_layout_matches_code(
+                    packet.code_bound_kernarg_layout,
+                    packet.kernarg_layout_identity,
+                    code.dispatch_abi_identity,
+                ) {
+                    return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                        packet: packet_index,
+                        detail: "prepared kernarg dispatch ABI identity",
+                    });
+                }
                 Ok(CompletionPacketTemplateV1::new(
                     packet.geometry,
                     packet.private_segment_size,
@@ -1656,6 +1676,7 @@ pub(super) fn prepare_dispatch_resources<const N: usize>(
             kernarg_alignment: kernarg_alignment as u64,
             kernarg_mapping: kernarg.facts().mapping(),
             kernarg_layout_identity: typed.layout_identity,
+            code_bound_kernarg_layout: false,
             code_index: 0,
         });
     }
@@ -2008,7 +2029,9 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
             kernarg_address,
             kernarg_alignment: packet.kernarg_alignment as u64,
             kernarg_mapping: kernarg.facts().mapping(),
-            kernarg_layout_identity: code_identity[packet.input.program_index].dispatch_abi_identity,
+            kernarg_layout_identity: code_identity[packet.input.program_index]
+                .dispatch_abi_identity,
+            code_bound_kernarg_layout: true,
             code_index: packet.input.program_index,
         });
     }
@@ -2394,7 +2417,7 @@ fn validate_public_packet_bindings(
             InspectedBufferContractV1 {
                 pointer_offset: argument.offset(),
                 declared_access: argument.access(),
-                actual_access: argument.actual_access(),
+                actual_access: kernel.dispatch_actual_access(binding.explicit_argument_index),
                 pointee_alignment: kernel
                     .dispatch_pointee_alignment(binding.explicit_argument_index),
             },
@@ -2943,6 +2966,19 @@ fn ranges_overlap_usize(left: usize, left_len: usize, right: usize, right_len: u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn code_bound_kernarg_layout_requires_exact_dispatch_abi_identity() {
+        assert!(prepared_kernarg_layout_matches_code(
+            true, [0x41; 32], [0x41; 32]
+        ));
+        assert!(!prepared_kernarg_layout_matches_code(
+            true, [0x41; 32], [0x42; 32]
+        ));
+        assert!(prepared_kernarg_layout_matches_code(
+            false, [0x41; 32], [0x42; 32]
+        ));
+    }
 
     fn premise(seed: u8, effect: DeviceDataEffectV1) -> DeviceDataPremiseV1 {
         DeviceDataPremiseV1::new([seed; 32], 4096, effect)
