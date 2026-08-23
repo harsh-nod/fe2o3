@@ -3,14 +3,15 @@ use fe2o3_pliron_owner_core::{
 };
 
 use crate::{
-    AccessKindAttr, AlgorithmOp, AlgorithmType, AnalysisSplitOp, AtomicOrderingAttr,
-    AtomicScopeAttr, BranchOp, CheckedTiledIndex2DOp, DIALECT_NAME, DimensionAttr, DimensionOp,
-    GeneralGemmAbiSchemaAttr, GeneralGemmEpilogueSchemaAttr, GeneralGemmOp, IndexBinaryKindAttr,
-    IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp, IndexType, IndexValueAttr,
-    InvocationDimensionAttr, InvocationIndexOp, IterationDomainAttr, LaunchExtentAttr,
-    MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp,
-    SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr, SemanticConstantOp,
-    SemanticScalarType, SemanticSymbolAttr, SemanticSymbolOp,
+    AccessKindAttr, AlgorithmOp, AlgorithmType, AllocationOriginAttr, AnalysisSplitOp,
+    AtomicOrderingAttr, AtomicScopeAttr, BranchOp, CheckedTiledIndex2DOp, DIALECT_NAME,
+    DimensionAttr, DimensionOp, GeneralGemmAbiSchemaAttr, GeneralGemmEpilogueSchemaAttr,
+    GeneralGemmOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp,
+    IndexType, IndexValueAttr, InvocationDimensionAttr, InvocationIndexOp, IterationDomainAttr,
+    LaunchExtentAttr, MemorySpaceAttr, NoAliasClassAttr, RankedAccessOp, RankedViewOp,
+    RankedViewType, RequireEquivalentOp, ReturnOp, SemanticBinaryKindAttr, SemanticBinaryOp,
+    SemanticConstantAttr, SemanticConstantOp, SemanticScalarType, SemanticSymbolAttr,
+    SemanticSymbolOp,
 };
 
 fn registration_hook(
@@ -30,6 +31,8 @@ fn registration_hook(
     service.register_attribute::<AtomicOrderingAttr>()?;
     service.register_attribute::<AtomicScopeAttr>()?;
     service.register_attribute::<MemorySpaceAttr>()?;
+    service.register_attribute::<AllocationOriginAttr>()?;
+    service.register_attribute::<NoAliasClassAttr>()?;
     service.register_attribute::<InvocationDimensionAttr>()?;
     service.register_attribute::<LaunchExtentAttr>()?;
     service.register_attribute::<IndexBinaryKindAttr>()?;

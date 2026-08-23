@@ -34,12 +34,28 @@ fn function_with_layout(
     workgroup_size: u64,
     subgroup_size: u64,
 ) -> FuncOp {
+    function_with_domain(context, name, workgroup_size, workgroup_size, subgroup_size)
+}
+
+fn function_with_domain(
+    context: &mut Context,
+    name: &str,
+    global_extent: u64,
+    workgroup_size: u64,
+    subgroup_size: u64,
+) -> FuncOp {
     let function = FuncOp::new(
         context,
         name.try_into().unwrap(),
         FunctionType::get(context, vec![], vec![]),
     );
-    let layout = ExecutionLayoutOp::new(context, 7, workgroup_size, subgroup_size);
+    let layout = ExecutionLayoutOp::new(
+        context,
+        7,
+        [global_extent, 1, 1],
+        [workgroup_size, 1, 1],
+        subgroup_size,
+    );
     append(context, function.get_entry_block(context), &layout);
     function
 }
@@ -67,7 +83,7 @@ fn barrier(context: &mut Context) -> BarrierOp {
 #[test]
 fn unconditional_barrier_is_convergent_for_a_static_launch() {
     let context = &mut setup();
-    let function = function(context, "uniform_barrier");
+    let function = function_with_domain(context, "uniform_barrier", 64, 4, 4);
     let entry = function.get_entry_block(context);
     let invocation = InvocationIndexOp::new(context, 0, 64);
     let sync = barrier(context);
@@ -114,8 +130,8 @@ fn invocation_varying_branch_reports_exact_divergent_witnesses() {
     ));
     let diagnostic = error.to_string();
     assert!(diagnostic.contains("error[FE2O3-BARRIER-001]"));
-    assert!(diagnostic.contains("invocation [0]"));
-    assert!(diagnostic.contains("invocation [2]"));
+    assert!(diagnostic.contains("invocation [0, 0, 0]"));
+    assert!(diagnostic.contains("invocation [2, 0, 0]"));
     assert!(diagnostic.contains("move the barrier out of invocation-varying control flow"));
 }
 
@@ -153,7 +169,7 @@ fn unresolved_branch_that_reconverges_before_barrier_is_clean() {
 #[test]
 fn unresolved_divergent_paths_are_rejected_without_inventing_a_trace() {
     let context = &mut setup();
-    let function = function(context, "unresolved_divergent_barrier");
+    let function = function_with_domain(context, "unresolved_divergent_barrier", 0, 4, 4);
     let entry = function.get_entry_block(context);
     let sync_block = block(context, &function, "sync");
     let exit = block(context, &function, "exit");
@@ -307,7 +323,7 @@ fn subgroup_collective_protocol_is_checked_per_wave() {
 #[test]
 fn ordinary_grid_barrier_is_reported_as_unsupported() {
     let context = &mut setup();
-    let function = function(context, "unsupported_grid_barrier");
+    let function = function_with_domain(context, "unsupported_grid_barrier", 128, 4, 4);
     let entry = function.get_entry_block(context);
     let invocation = InvocationIndexOp::new(context, 0, 128);
     let sync = BarrierOp::new(
@@ -333,7 +349,7 @@ fn ordinary_grid_barrier_is_reported_as_unsupported() {
 fn workgroup_barrier_requires_a_full_physical_participant_set() {
     for (extent, clean) in [(65, false), (128, true)] {
         let context = &mut setup();
-        let function = function_with_layout(context, "full_workgroups", 64, 64);
+        let function = function_with_domain(context, "full_workgroups", extent, 64, 64);
         let entry = function.get_entry_block(context);
         let invocation = InvocationIndexOp::new(context, 0, extent);
         let sync = barrier(context);
@@ -351,7 +367,47 @@ fn workgroup_barrier_requires_a_full_physical_participant_set() {
             assert!(matches!(
                 report.findings(),
                 [PlironBarrierFindingV1::AnalysisIncomplete { detail }]
-                    if detail.contains("not a multiple of participant width 64")
+                    if detail.contains("global extent 65")
+                        && detail.contains("workgroup extent 64")
+            ));
+        }
+    }
+}
+
+#[test]
+fn partial_workgroups_are_rejected_per_axis_not_by_linear_volume() {
+    for (global_x, clean) in [(65, false), (128, true)] {
+        let context = &mut setup();
+        let function = FuncOp::new(
+            context,
+            "two_dimensional_workgroups".try_into().unwrap(),
+            FunctionType::get(context, vec![], vec![]),
+        );
+        let entry = function.get_entry_block(context);
+        let layout = ExecutionLayoutOp::new(context, 8, [global_x, 64, 1], [64, 1, 1], 64);
+        let x = InvocationIndexOp::new(context, 0, global_x);
+        let y = InvocationIndexOp::new(context, 1, 64);
+        let sync = barrier(context);
+        let ret = ReturnOp::new(context);
+        append(context, entry, &layout);
+        append(context, entry, &x);
+        append(context, entry, &y);
+        append(context, entry, &sync);
+        append(context, entry, &ret);
+
+        let report = run_pliron_barrier_convergence_check_v1(context, &function);
+        assert_eq!(
+            report.is_clean(),
+            clean,
+            "unexpected result for x={global_x}"
+        );
+        if !clean {
+            assert!(matches!(
+                report.findings(),
+                [PlironBarrierFindingV1::AnalysisIncomplete { detail }]
+                    if detail.contains("axis 0")
+                        && detail.contains("global extent 65")
+                        && detail.contains("workgroup extent 64")
             ));
         }
     }

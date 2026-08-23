@@ -128,13 +128,16 @@ impl GridIdentityAttr {
     }
 }
 
-/// Linear workgroup size retained by the target-neutral execution model.
-#[pliron_attr(name = "gpu.workgroup_size", format = "$0", verifier = "succ")]
+/// One axis extent retained by the target-neutral execution model.
+///
+/// A zero global extent denotes a dynamic axis. Workgroup extents are always
+/// required to be nonzero by `gpu.execution_layout`.
+#[pliron_attr(name = "gpu.execution_extent", format = "$0", verifier = "succ")]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct WorkgroupSizeAttr(pub u64);
+pub struct ExecutionExtentAttr(pub u64);
 
-impl WorkgroupSizeAttr {
-    pub const fn size(self) -> u64 {
+impl ExecutionExtentAttr {
+    pub const fn extent(self) -> u64 {
         self.0
     }
 }
@@ -286,12 +289,14 @@ impl Verify for HierarchyIdOp {
     }
 }
 
-/// Closed linear execution hierarchy for scoped concurrency reasoning.
+/// Closed three-dimensional execution hierarchy for scoped concurrency reasoning.
 ///
 /// The operation does not authorize a launch. It records the compiler's
-/// retained mapping from a linear invocation identity to workgroup, subgroup,
-/// and lane identities. At most one operation may appear in a kernel entry;
-/// the scoped concurrency analysis enforces that function-level invariant.
+/// retained global domain and physical workgroup shape independently from any
+/// SSA use of an invocation coordinate. A zero global extent denotes a dynamic
+/// axis; workgroup extents and subgroup width are static and nonzero. At most
+/// one operation may appear in a kernel entry; scoped concurrency analysis
+/// enforces that function-level invariant.
 #[pliron_op(
     name = "gpu.execution_layout",
     format,
@@ -303,7 +308,12 @@ impl Verify for HierarchyIdOp {
     ],
     attributes = (
         gpu_execution_grid_identity: GridIdentityAttr,
-        gpu_execution_workgroup_size: WorkgroupSizeAttr,
+        gpu_execution_global_x: ExecutionExtentAttr,
+        gpu_execution_global_y: ExecutionExtentAttr,
+        gpu_execution_global_z: ExecutionExtentAttr,
+        gpu_execution_workgroup_x: ExecutionExtentAttr,
+        gpu_execution_workgroup_y: ExecutionExtentAttr,
+        gpu_execution_workgroup_z: ExecutionExtentAttr,
         gpu_execution_subgroup_size: SubgroupSizeAttr
     )
 )]
@@ -313,7 +323,8 @@ impl ExecutionLayoutOp {
     pub fn new(
         context: &mut Context,
         grid_identity: u64,
-        workgroup_size: u64,
+        global_extents: [u64; 3],
+        workgroup_extents: [u64; 3],
         subgroup_size: u64,
     ) -> Self {
         let operation = Operation::new(
@@ -326,7 +337,12 @@ impl ExecutionLayoutOp {
         );
         let op = Self::from_operation(operation);
         op.set_attr_gpu_execution_grid_identity(context, GridIdentityAttr(grid_identity));
-        op.set_attr_gpu_execution_workgroup_size(context, WorkgroupSizeAttr(workgroup_size));
+        op.set_attr_gpu_execution_global_x(context, ExecutionExtentAttr(global_extents[0]));
+        op.set_attr_gpu_execution_global_y(context, ExecutionExtentAttr(global_extents[1]));
+        op.set_attr_gpu_execution_global_z(context, ExecutionExtentAttr(global_extents[2]));
+        op.set_attr_gpu_execution_workgroup_x(context, ExecutionExtentAttr(workgroup_extents[0]));
+        op.set_attr_gpu_execution_workgroup_y(context, ExecutionExtentAttr(workgroup_extents[1]));
+        op.set_attr_gpu_execution_workgroup_z(context, ExecutionExtentAttr(workgroup_extents[2]));
         op.set_attr_gpu_execution_subgroup_size(context, SubgroupSizeAttr(subgroup_size));
         op
     }
@@ -336,9 +352,20 @@ impl ExecutionLayoutOp {
             .map(|value| value.identity())
     }
 
-    pub fn workgroup_size(&self, context: &Context) -> Option<u64> {
-        self.get_attr_gpu_execution_workgroup_size(context)
-            .map(|value| value.size())
+    pub fn global_extents(&self, context: &Context) -> Option<[u64; 3]> {
+        Some([
+            self.get_attr_gpu_execution_global_x(context)?.extent(),
+            self.get_attr_gpu_execution_global_y(context)?.extent(),
+            self.get_attr_gpu_execution_global_z(context)?.extent(),
+        ])
+    }
+
+    pub fn workgroup_extents(&self, context: &Context) -> Option<[u64; 3]> {
+        Some([
+            self.get_attr_gpu_execution_workgroup_x(context)?.extent(),
+            self.get_attr_gpu_execution_workgroup_y(context)?.extent(),
+            self.get_attr_gpu_execution_workgroup_z(context)?.extent(),
+        ])
     }
 
     pub fn subgroup_size(&self, context: &Context) -> Option<u64> {
@@ -349,19 +376,25 @@ impl ExecutionLayoutOp {
 
 impl Verify for ExecutionLayoutOp {
     fn verify(&self, context: &Context) -> Result<()> {
-        verify_closed_shape(self, context, 0, 0, 3)?;
+        verify_closed_shape(self, context, 0, 0, 8)?;
         let grid_identity = required_attr(
             self,
             context,
             self.get_attr_gpu_execution_grid_identity(context),
             "grid_identity",
         )?;
-        let workgroup_size = required_attr(
-            self,
-            context,
-            self.get_attr_gpu_execution_workgroup_size(context),
-            "workgroup_size",
-        )?;
+        let Some(_global_extents) = self.global_extents(context) else {
+            return verify_err!(
+                self.loc(context),
+                "gpu.execution_layout is missing global extents"
+            );
+        };
+        let Some(workgroup_extents) = self.workgroup_extents(context) else {
+            return verify_err!(
+                self.loc(context),
+                "gpu.execution_layout is missing workgroup extents"
+            );
+        };
         let subgroup_size = required_attr(
             self,
             context,
@@ -369,14 +402,18 @@ impl Verify for ExecutionLayoutOp {
             "subgroup_size",
         )?;
         let _ = grid_identity;
-        if workgroup_size.size() == 0
+        let workgroup_size = workgroup_extents
+            .into_iter()
+            .try_fold(1_u64, u64::checked_mul);
+        if workgroup_extents.contains(&0)
+            || workgroup_size.is_none()
             || subgroup_size.size() == 0
-            || subgroup_size.size() > workgroup_size.size()
-            || !workgroup_size.size().is_multiple_of(subgroup_size.size())
+            || workgroup_size.is_some_and(|size| subgroup_size.size() > size)
+            || workgroup_size.is_some_and(|size| !size.is_multiple_of(subgroup_size.size()))
         {
             return verify_err!(
                 self.loc(context),
-                "gpu.execution_layout requires nonzero subgroup/workgroup sizes and an integral number of subgroups"
+                "gpu.execution_layout requires nonzero workgroup axes and an integral number of subgroups"
             );
         }
         Ok(())
@@ -761,7 +798,7 @@ pub fn register_dialect(
     <MemoryScopeAttr as Attribute>::register::<MemoryScopeAttr>(context);
     <MemoryOrderAttr as Attribute>::register::<MemoryOrderAttr>(context);
     <GridIdentityAttr as Attribute>::register::<GridIdentityAttr>(context);
-    <WorkgroupSizeAttr as Attribute>::register::<WorkgroupSizeAttr>(context);
+    <ExecutionExtentAttr as Attribute>::register::<ExecutionExtentAttr>(context);
     <SubgroupSizeAttr as Attribute>::register::<SubgroupSizeAttr>(context);
     <GeneralGemmRuntimeAbiAttr as Attribute>::register::<GeneralGemmRuntimeAbiAttr>(context);
     <GeneralGemmGridMappingAttr as Attribute>::register::<GeneralGemmGridMappingAttr>(context);

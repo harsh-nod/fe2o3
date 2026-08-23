@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     error::Error,
     fmt,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -74,7 +75,8 @@ pub enum ProductionRankedOperationV1 {
     /// concurrency analysis. It carries no launch authority.
     ExecutionLayout {
         grid_identity: u64,
-        workgroup_size: u64,
+        global_extents: [u64; 3],
+        workgroup_extents: [u64; 3],
         subgroup_size: u64,
     },
     View {
@@ -83,6 +85,8 @@ pub enum ProductionRankedOperationV1 {
         writable: bool,
         shape: Vec<u64>,
         dynamic_extents: Vec<ProductionRankedValueV1>,
+        allocation_origin: u64,
+        noalias_class: u64,
     },
     ViewInSpace {
         result: ProductionRankedValueIdV1,
@@ -91,6 +95,8 @@ pub enum ProductionRankedOperationV1 {
         shape: Vec<u64>,
         dynamic_extents: Vec<ProductionRankedValueV1>,
         memory_space: MemorySpaceAttr,
+        allocation_origin: u64,
+        noalias_class: u64,
     },
     IndexConstant {
         result: ProductionRankedValueIdV1,
@@ -298,25 +304,50 @@ impl ProductionRankedKernelV1 {
 
         let mut locals = Vec::new();
         let mut saw_execution_layout = false;
+        let mut allocation_classes = HashMap::new();
         for (block_index, block) in self.blocks.iter().enumerate() {
             for (operation_index, operation) in block.operations.iter().enumerate() {
                 if let ProductionRankedOperationV1::ExecutionLayout {
-                    workgroup_size,
+                    workgroup_extents,
                     subgroup_size,
                     ..
                 } = operation
                 {
+                    let workgroup_size = workgroup_extents
+                        .iter()
+                        .try_fold(1_u64, |volume, extent| volume.checked_mul(*extent));
                     if block_index != 0
                         || operation_index != 0
                         || saw_execution_layout
-                        || *workgroup_size == 0
+                        || workgroup_extents.contains(&0)
+                        || workgroup_size.is_none()
                         || *subgroup_size == 0
-                        || *subgroup_size > *workgroup_size
-                        || !workgroup_size.is_multiple_of(*subgroup_size)
+                        || workgroup_size.is_some_and(|size| *subgroup_size > size)
+                        || workgroup_size.is_some_and(|size| !size.is_multiple_of(*subgroup_size))
                     {
                         return Err(ProductionRankedKernelErrorV1::InvalidExecutionLayout);
                     }
                     saw_execution_layout = true;
+                }
+                if let ProductionRankedOperationV1::View {
+                    allocation_origin,
+                    noalias_class,
+                    ..
+                }
+                | ProductionRankedOperationV1::ViewInSpace {
+                    allocation_origin,
+                    noalias_class,
+                    ..
+                } = operation
+                {
+                    if *noalias_class != 0 && *allocation_origin == 0
+                        || *allocation_origin != 0
+                            && allocation_classes
+                                .insert(*allocation_origin, *noalias_class)
+                                .is_some_and(|previous| previous != *noalias_class)
+                    {
+                        return Err(ProductionRankedKernelErrorV1::InvalidAllocationContract);
+                    }
                 }
                 let result = validate_operation(operation, self.argument_count, &locals)?;
                 if let Some((identity, kind)) = result {
@@ -370,6 +401,7 @@ pub enum ProductionRankedKernelErrorV1 {
     },
     InvalidShape,
     InvalidExecutionLayout,
+    InvalidAllocationContract,
     UnsupportedElementWidth(u32),
     DynamicExtentCountMismatch {
         expected: usize,
@@ -424,7 +456,10 @@ impl fmt::Display for ProductionRankedKernelErrorV1 {
                 "ranked view rank must be within 1..={MAX_RANKED_MEMORY_RANK}"
             ),
             Self::InvalidExecutionLayout => formatter.write_str(
-                "ranked execution layout must be the unique first entry operation with nonzero integral subgroup/workgroup sizes",
+                "ranked execution layout must be the unique first entry operation with nonzero workgroup axes and an integral subgroup width",
+            ),
+            Self::InvalidAllocationContract => formatter.write_str(
+                "ranked views require consistent allocation origins and no-alias classes",
             ),
             Self::UnsupportedElementWidth(width) => write!(
                 formatter,
@@ -580,6 +615,7 @@ fn validate_operation(
             writable,
             shape,
             dynamic_extents,
+            ..
         }
         | ProductionRankedOperationV1::ViewInSpace {
             result,
@@ -1192,11 +1228,17 @@ fn materialize_operation(
     let (operation, result) = match recipe {
         ProductionRankedOperationV1::ExecutionLayout {
             grid_identity,
-            workgroup_size,
+            global_extents,
+            workgroup_extents,
             subgroup_size,
         } => {
-            let op =
-                ExecutionLayoutOp::new(context, *grid_identity, *workgroup_size, *subgroup_size);
+            let op = ExecutionLayoutOp::new(
+                context,
+                *grid_identity,
+                *global_extents,
+                *workgroup_extents,
+                *subgroup_size,
+            );
             (op.get_operation(), None)
         }
         ProductionRankedOperationV1::View {
@@ -1205,6 +1247,8 @@ fn materialize_operation(
             writable,
             shape,
             dynamic_extents,
+            allocation_origin,
+            noalias_class,
         } => {
             let view_type = RankedViewType::new(context, *element_width, *writable, shape.clone())
                 .map_err(|_| {
@@ -1216,7 +1260,15 @@ fn materialize_operation(
                 .iter()
                 .map(|value| resolve_value(*value, arguments, locals))
                 .collect::<Result<Vec<_>, _>>()?;
-            let op = RankedViewOp::new(context, view_type, dynamic_extents).map_err(|_| {
+            let op = RankedViewOp::new_in_space_with_allocation_contract(
+                context,
+                view_type,
+                dynamic_extents,
+                MemorySpaceAttr::Global,
+                *allocation_origin,
+                *noalias_class,
+            )
+            .map_err(|_| {
                 ProductionRankedKernelErrorV1::Materialization(
                     "validated ranked view operation failed materialization",
                 )
@@ -1258,6 +1310,8 @@ fn materialize_operation(
             shape,
             dynamic_extents,
             memory_space,
+            allocation_origin,
+            noalias_class,
         } => {
             let view_type = RankedViewType::new(context, *element_width, *writable, shape.clone())
                 .map_err(|_| {
@@ -1269,12 +1323,19 @@ fn materialize_operation(
                 .iter()
                 .map(|value| resolve_value(*value, arguments, locals))
                 .collect::<Result<Vec<_>, _>>()?;
-            let op = RankedViewOp::new_in_space(context, view_type, dynamic_extents, *memory_space)
-                .map_err(|_| {
-                    ProductionRankedKernelErrorV1::Materialization(
-                        "validated ranked view operation failed materialization",
-                    )
-                })?;
+            let op = RankedViewOp::new_in_space_with_allocation_contract(
+                context,
+                view_type,
+                dynamic_extents,
+                *memory_space,
+                *allocation_origin,
+                *noalias_class,
+            )
+            .map_err(|_| {
+                ProductionRankedKernelErrorV1::Materialization(
+                    "validated ranked view operation failed materialization",
+                )
+            })?;
             (op.get_operation(), Some((*result, op.result(context))))
         }
         ProductionRankedOperationV1::IndexConstant { result, value } => {

@@ -278,6 +278,32 @@ pub enum MemorySpaceAttr {
     Global,
 }
 
+/// Stable compiler-issued identity for the source allocation behind a view.
+/// Zero is the fail-closed unknown origin used by legacy or unauthenticated IR.
+#[pliron_attr(name = "kernel.allocation_origin", format = "$0", verifier = "succ")]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct AllocationOriginAttr(pub u64);
+
+impl AllocationOriginAttr {
+    pub const fn identity(self) -> u64 {
+        self.0
+    }
+}
+
+/// Compiler-issued no-alias partition for ranked allocations.
+///
+/// Zero may alias every partition. Distinct nonzero classes are proven
+/// disjoint; views in the same class remain conservatively may-alias.
+#[pliron_attr(name = "kernel.noalias_class", format = "$0", verifier = "succ")]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct NoAliasClassAttr(pub u64);
+
+impl NoAliasClassAttr {
+    pub const fn identity(self) -> u64 {
+        self.0
+    }
+}
+
 /// One logical launch dimension selected by [`InvocationIndexOp`].
 #[pliron_attr(name = "kernel.invocation_dimension", format = "$0", verifier = "succ")]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -315,7 +341,11 @@ pub enum IndexBinaryKindAttr {
     name = "kernel.ranked_view",
     format,
     interfaces = [NResultsInterface<1>, NRegionsInterface<0>],
-    attributes = (kernel_memory_space: MemorySpaceAttr)
+    attributes = (
+        kernel_memory_space: MemorySpaceAttr,
+        kernel_allocation_origin: AllocationOriginAttr,
+        kernel_noalias_class: NoAliasClassAttr
+    )
 )]
 pub struct RankedViewOp;
 
@@ -334,6 +364,24 @@ impl RankedViewOp {
         dynamic_extents: Vec<Value>,
         memory_space: MemorySpaceAttr,
     ) -> Result<Self, RankedMemoryError> {
+        Self::new_in_space_with_allocation_contract(
+            context,
+            view_type,
+            dynamic_extents,
+            memory_space,
+            0,
+            0,
+        )
+    }
+
+    pub fn new_in_space_with_allocation_contract(
+        context: &mut Context,
+        view_type: TypedHandle<RankedViewType>,
+        dynamic_extents: Vec<Value>,
+        memory_space: MemorySpaceAttr,
+        allocation_origin: u64,
+        noalias_class: u64,
+    ) -> Result<Self, RankedMemoryError> {
         let expected = view_type.deref(context).dynamic_extent_count();
         if dynamic_extents.len() != expected {
             return Err(RankedMemoryError::DynamicExtentCountMismatch {
@@ -351,6 +399,8 @@ impl RankedViewOp {
         );
         let op = Self::from_operation(operation);
         op.set_attr_kernel_memory_space(context, memory_space);
+        op.set_attr_kernel_allocation_origin(context, AllocationOriginAttr(allocation_origin));
+        op.set_attr_kernel_noalias_class(context, NoAliasClassAttr(noalias_class));
         Ok(op)
     }
 
@@ -365,6 +415,18 @@ impl RankedViewOp {
     pub fn memory_space(&self, context: &Context) -> Option<MemorySpaceAttr> {
         self.get_attr_kernel_memory_space(context)
             .map(|space| *space)
+    }
+
+    pub fn allocation_origin(&self, context: &Context) -> Option<u64> {
+        self.get_attr_kernel_allocation_origin(context)
+            .map(|origin| origin.identity())
+            .or(Some(0))
+    }
+
+    pub fn noalias_class(&self, context: &Context) -> Option<u64> {
+        self.get_attr_kernel_noalias_class(context)
+            .map(|class| class.identity())
+            .or(Some(0))
     }
 
     /// Returns the runtime extent bound to one dynamic shape dimension.
@@ -392,9 +454,17 @@ impl Verify for RankedViewOp {
         let expected = view_type.deref(context).dynamic_extent_count();
         let operation = self.get_operation();
         let operation = operation.deref(context);
+        let has_origin = self.get_attr_kernel_allocation_origin(context).is_some();
+        let has_class = self.get_attr_kernel_noalias_class(context).is_some();
         if operation.get_num_operands() != expected
-            || payload_attribute_count(&operation) != 1
+            || !matches!(payload_attribute_count(&operation), 1 | 3)
+            || has_origin != has_class
             || self.memory_space(context).is_none()
+            || self.allocation_origin(context).is_none()
+            || self.noalias_class(context).is_none()
+            || self
+                .noalias_class(context)
+                .is_some_and(|class| class != 0 && self.allocation_origin(context) == Some(0))
         {
             return verify_err!(
                 self.loc(context),
@@ -1169,6 +1239,8 @@ fn verify_no_regions_results_successors(
                     | "kernel_atomic_ordering"
                     | "kernel_atomic_scope"
                     | "kernel_memory_space"
+                    | "kernel_allocation_origin"
+                    | "kernel_noalias_class"
                     | "kernel_invocation_dimension"
                     | "kernel_launch_extent"
                     | "kernel_index_binary_kind"

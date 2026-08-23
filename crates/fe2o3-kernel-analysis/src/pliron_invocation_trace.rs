@@ -98,8 +98,9 @@ pub(crate) enum PlironTraceFailureV1 {
     },
     PartialBarrierParticipants {
         scope: HierarchyAttr,
-        invocations: u64,
-        participant_width: u64,
+        dimension: usize,
+        global_extent: u64,
+        workgroup_extent: u64,
     },
     ResourceLimit,
 }
@@ -107,8 +108,38 @@ pub(crate) enum PlironTraceFailureV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlironExecutionLayoutV1 {
     pub(crate) grid: u64,
-    pub(crate) workgroup_size: u64,
+    pub(crate) global_extents: [u64; 3],
+    pub(crate) workgroup_extents: [u64; 3],
     pub(crate) subgroup_size: u64,
+}
+
+impl PlironExecutionLayoutV1 {
+    pub(crate) fn scoped_identity(self, invocation: &[u64]) -> Option<(u64, u64, u64)> {
+        let invocation: [u64; 3] = invocation.try_into().ok()?;
+        let mut workgroup = [0_u64; 3];
+        let mut local = [0_u64; 3];
+        let mut workgroup_counts = [0_u64; 3];
+        for dimension in 0..3 {
+            let workgroup_extent = self.workgroup_extents[dimension];
+            if workgroup_extent == 0 || self.global_extents[dimension] == 0 {
+                return None;
+            }
+            workgroup[dimension] = invocation[dimension] / workgroup_extent;
+            local[dimension] = invocation[dimension] % workgroup_extent;
+            workgroup_counts[dimension] = self.global_extents[dimension].div_ceil(workgroup_extent);
+        }
+        let workgroup = workgroup[0].checked_add(workgroup_counts[0].checked_mul(
+            workgroup[1].checked_add(workgroup_counts[1].checked_mul(workgroup[2])?)?,
+        )?)?;
+        let local = local[0].checked_add(self.workgroup_extents[0].checked_mul(
+            local[1].checked_add(self.workgroup_extents[1].checked_mul(local[2])?)?,
+        )?)?;
+        Some((
+            workgroup,
+            local / self.subgroup_size,
+            local % self.subgroup_size,
+        ))
+    }
 }
 
 pub(crate) fn pliron_execution_layout_v1(
@@ -130,23 +161,29 @@ pub(crate) fn pliron_execution_layout_v1(
             if block_index != 0 || layout.is_some() {
                 return Err(PlironTraceFailureV1::InvalidExecutionLayout);
             }
-            let (Some(grid), Some(workgroup_size), Some(subgroup_size)) = (
+            let (Some(grid), Some(global_extents), Some(workgroup_extents), Some(subgroup_size)) = (
                 candidate.grid_identity(context),
-                candidate.workgroup_size(context),
+                candidate.global_extents(context),
+                candidate.workgroup_extents(context),
                 candidate.subgroup_size(context),
             ) else {
                 return Err(PlironTraceFailureV1::InvalidExecutionLayout);
             };
-            if workgroup_size == 0
+            let workgroup_size = workgroup_extents
+                .into_iter()
+                .try_fold(1_u64, u64::checked_mul);
+            if workgroup_extents.contains(&0)
+                || workgroup_size.is_none()
                 || subgroup_size == 0
-                || subgroup_size > workgroup_size
-                || !workgroup_size.is_multiple_of(subgroup_size)
+                || workgroup_size.is_some_and(|size| subgroup_size > size)
+                || workgroup_size.is_some_and(|size| !size.is_multiple_of(subgroup_size))
             {
                 return Err(PlironTraceFailureV1::InvalidExecutionLayout);
             }
             layout = Some(PlironExecutionLayoutV1 {
                 grid,
-                workgroup_size,
+                global_extents,
+                workgroup_extents,
                 subgroup_size,
             });
         }
@@ -179,19 +216,30 @@ pub(crate) fn trace_pliron_invocations_v1(
     if needs_scoped_layout && layout.is_none() {
         return Err(PlironTraceFailureV1::MissingExecutionLayout);
     }
-    if let Some(dimension) = sparse
-        .launch_extents()
-        .iter()
-        .position(|extent| *extent == 0)
-    {
+    let launch_extents = if let Some(layout) = layout {
+        for dimension in 0..sparse.launch_extents().len().max(3) {
+            if let Some(declared) = sparse.declared_launch_extent(dimension) {
+                let Some(layout_extent) = layout.global_extents.get(dimension).copied() else {
+                    return Err(PlironTraceFailureV1::InvalidExecutionLayout);
+                };
+                if declared != 0 && layout_extent != declared {
+                    return Err(PlironTraceFailureV1::InvalidExecutionLayout);
+                }
+            }
+        }
+        layout.global_extents.to_vec()
+    } else {
+        sparse.launch_extents().to_vec()
+    };
+    if let Some(dimension) = launch_extents.iter().position(|extent| *extent == 0) {
         return Err(PlironTraceFailureV1::DynamicLaunch { dimension });
     }
-    let invocation_count =
-        sparse
-            .invocation_count()
-            .ok_or(PlironTraceFailureV1::LaunchTooLarge {
-                invocations: u64::MAX,
-            })?;
+    let invocation_count = launch_extents
+        .iter()
+        .try_fold(1_u64, |total, extent| total.checked_mul(*extent))
+        .ok_or(PlironTraceFailureV1::LaunchTooLarge {
+            invocations: u64::MAX,
+        })?;
     if invocation_count > MAX_PLIRON_RACE_INVOCATIONS_V1 {
         return Err(PlironTraceFailureV1::LaunchTooLarge {
             invocations: invocation_count,
@@ -210,17 +258,21 @@ pub(crate) fn trace_pliron_invocations_v1(
                             .is_some_and(|barrier| barrier.execution_scope(context) == Some(scope))
                     })
                 });
-            let participant_width = if scope == HierarchyAttr::Workgroup {
-                layout.workgroup_size
-            } else {
-                layout.subgroup_size
-            };
-            if has_scope && !invocation_count.is_multiple_of(participant_width) {
-                return Err(PlironTraceFailureV1::PartialBarrierParticipants {
-                    scope,
-                    invocations: invocation_count,
-                    participant_width,
-                });
+            if has_scope {
+                for (dimension, (global_extent, workgroup_extent)) in launch_extents
+                    .iter()
+                    .zip(layout.workgroup_extents)
+                    .enumerate()
+                {
+                    if !global_extent.is_multiple_of(workgroup_extent) {
+                        return Err(PlironTraceFailureV1::PartialBarrierParticipants {
+                            scope,
+                            dimension,
+                            global_extent: *global_extent,
+                            workgroup_extent,
+                        });
+                    }
+                }
             }
         }
     }
@@ -238,7 +290,7 @@ pub(crate) fn trace_pliron_invocations_v1(
     let mut traces = Vec::with_capacity(invocation_count as usize);
     let mut total_steps = 0_usize;
     for linear in 0..invocation_count {
-        let invocation = decode_invocation(linear, sparse.launch_extents());
+        let invocation = decode_invocation(linear, &launch_extents);
         let mut events = Vec::new();
         let mut block_index = 0_usize;
         let mut visited = HashSet::new();
@@ -376,15 +428,14 @@ pub(crate) fn trace_pliron_invocations_v1(
                 .copied()
                 .ok_or(PlironTraceFailureV1::UnsupportedTerminator { block: block_index })?;
         }
-        let (grid, workgroup, subgroup, lane) = layout.map_or((0, 0, 0, linear), |layout| {
-            let local = linear % layout.workgroup_size;
-            (
-                layout.grid,
-                linear / layout.workgroup_size,
-                local / layout.subgroup_size,
-                local % layout.subgroup_size,
-            )
-        });
+        let (grid, workgroup, subgroup, lane) = if let Some(layout) = layout {
+            let (workgroup, subgroup, lane) = layout
+                .scoped_identity(&invocation)
+                .ok_or(PlironTraceFailureV1::InvalidExecutionLayout)?;
+            (layout.grid, workgroup, subgroup, lane)
+        } else {
+            (0, 0, 0, linear)
+        };
         traces.push(PlironInvocationTraceV1 {
             invocation,
             grid,

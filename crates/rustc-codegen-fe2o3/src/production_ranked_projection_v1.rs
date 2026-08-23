@@ -1809,6 +1809,8 @@ fn project_intrinsic_contracts(
                     shape: vec![DYNAMIC_EXTENT],
                     dynamic_extents: vec![ProductionRankedValueV1::Argument(0)],
                     memory_space: MemorySpaceAttr::Global,
+                    allocation_origin: 0,
+                    noalias_class: 0,
                 });
                 push_ranked_ir(
                     ranked_ir,
@@ -2844,11 +2846,12 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
     match operation {
         ProductionRankedOperationV1::ExecutionLayout {
             grid_identity,
-            workgroup_size,
+            global_extents,
+            workgroup_extents,
             subgroup_size,
         } => format!(
-            "  gpu.execution_layout <grid={}, workgroup={}, subgroup={}>\n",
-            grid_identity, workgroup_size, subgroup_size,
+            "  gpu.execution_layout <grid={}, global={:?}, workgroup={:?}, subgroup={}>\n",
+            grid_identity, global_extents, workgroup_extents, subgroup_size,
         ),
         ProductionRankedOperationV1::View {
             result,
@@ -2856,12 +2859,16 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             writable,
             shape,
             dynamic_extents,
+            allocation_origin,
+            noalias_class,
         } => format!(
-            "  %{} = kernel.ranked_view <{}, {}, {:?}>({})\n",
+            "  %{} = kernel.ranked_view <{}, {}, {:?}, origin={}, noalias={}>({})\n",
             result.get(),
             element_width,
             writable,
             shape,
+            allocation_origin,
+            noalias_class,
             format_ranked_values(dynamic_extents),
         ),
         ProductionRankedOperationV1::ViewInSpace {
@@ -2871,13 +2878,17 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             shape,
             dynamic_extents,
             memory_space,
+            allocation_origin,
+            noalias_class,
         } => format!(
-            "  %{} = kernel.ranked_view <{}, {}, {:?}, {:?}>({})\n",
+            "  %{} = kernel.ranked_view <{}, {}, {:?}, {:?}, origin={}, noalias={}>({})\n",
             result.get(),
             element_width,
             writable,
             shape,
             memory_space,
+            allocation_origin,
+            noalias_class,
             format_ranked_values(dynamic_extents),
         ),
         ProductionRankedOperationV1::IndexConstant { result, value } => {
@@ -4551,6 +4562,8 @@ fn project_place_access_with_atomic(
             shape: shape.clone(),
             dynamic_extents: dynamic_extents.clone(),
             memory_space,
+            allocation_origin: 0,
+            noalias_class: 0,
         });
         push_ranked_ir(
             ranked_ir,
@@ -5473,6 +5486,8 @@ mod tests {
                 shape: vec![DYNAMIC_EXTENT],
                 dynamic_extents: vec![ProductionRankedValueV1::Argument(0)],
                 memory_space: MemorySpaceAttr::Global,
+                allocation_origin: 0,
+                noalias_class: 0,
             },
         ];
         let guarded = GuardedRankedAccessV1 {
@@ -5717,6 +5732,8 @@ mod tests {
                 shape: vec![DYNAMIC_EXTENT],
                 dynamic_extents: vec![ProductionRankedValueV1::Argument(0)],
                 memory_space: MemorySpaceAttr::Global,
+                allocation_origin: 0,
+                noalias_class: 0,
             },
         ];
         let guarded = GuardedRankedAccessV1 {

@@ -206,6 +206,7 @@ impl SparseIndexFactV1 {
 pub struct SparseIndexAnalysisV1 {
     facts: HashMap<Value, SparseIndexFactV1>,
     launch_extents: Vec<u64>,
+    declared_launch_extents: Vec<Option<u64>>,
 }
 
 impl SparseIndexAnalysisV1 {
@@ -224,6 +225,20 @@ impl SparseIndexAnalysisV1 {
         self.launch_extents
             .iter()
             .try_fold(1_u64, |total, extent| total.checked_mul(*extent))
+    }
+
+    /// Returns the extent explicitly carried by an invocation-coordinate
+    /// producer. The execution layout remains the authoritative full domain;
+    /// this records only consistency constraints from SSA coordinate uses.
+    pub fn declared_launch_extent(&self, dimension: usize) -> Option<u64> {
+        self.declared_launch_extents
+            .get(dimension)
+            .copied()
+            .flatten()
+    }
+
+    pub fn has_declared_launch_extent(&self) -> bool {
+        self.declared_launch_extents.iter().any(Option::is_some)
     }
 }
 
@@ -299,6 +314,7 @@ pub fn analyze_pliron_sparse_indices_v1(
             }
         }
     }
+    let declared_launch_extents = launch_extents.clone();
     let launch_extents = if launch_extents.is_empty() {
         vec![1]
     } else {
@@ -310,6 +326,7 @@ pub fn analyze_pliron_sparse_indices_v1(
     Ok(SparseIndexAnalysisV1 {
         facts,
         launch_extents,
+        declared_launch_extents,
     })
 }
 

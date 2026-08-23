@@ -38,12 +38,28 @@ fn function_with_layout(
     workgroup_size: u64,
     subgroup_size: u64,
 ) -> FuncOp {
+    function_with_domain(context, name, workgroup_size, workgroup_size, subgroup_size)
+}
+
+fn function_with_domain(
+    context: &mut Context,
+    name: &str,
+    global_extent: u64,
+    workgroup_size: u64,
+    subgroup_size: u64,
+) -> FuncOp {
     let function = FuncOp::new(
         context,
         name.try_into().unwrap(),
         FunctionType::get(context, vec![], vec![]),
     );
-    let layout = ExecutionLayoutOp::new(context, 7, workgroup_size, subgroup_size);
+    let layout = ExecutionLayoutOp::new(
+        context,
+        7,
+        [global_extent, 1, 1],
+        [workgroup_size, 1, 1],
+        subgroup_size,
+    );
     append(context, function.get_entry_block(context), &layout);
     function
 }
@@ -96,7 +112,7 @@ fn access(
 #[test]
 fn read_before_any_write_is_rejected_with_exact_invocation_and_address() {
     let context = &mut setup();
-    let function = function(context, "read_before_write");
+    let function = function_with_layout(context, "read_before_write", 8, 8);
     let entry = function.get_entry_block(context);
     let shared = view(context);
     let invocation = InvocationIndexOp::new(context, 0, 8);
@@ -120,7 +136,7 @@ fn read_before_any_write_is_rejected_with_exact_invocation_and_address() {
     ));
     let diagnostic = error.to_string();
     assert!(diagnostic.contains("error[FE2O3-WORKGROUP-001]"));
-    assert!(diagnostic.contains("invocation [0]"));
+    assert!(diagnostic.contains("invocation [0, 0, 0]"));
     assert!(diagnostic.contains("address [0]"));
 }
 
@@ -132,7 +148,7 @@ fn atomic_reads_and_read_modify_write_require_initialization_but_atomic_store_do
         (AccessKindAttr::AtomicWrite, false),
     ] {
         let context = &mut setup();
-        let function = function(context, "atomic_initialization");
+        let function = function_with_layout(context, "atomic_initialization", 8, 8);
         let entry = function.get_entry_block(context);
         let shared = view(context);
         let invocation = InvocationIndexOp::new(context, 0, 8);
@@ -292,7 +308,7 @@ fn duplicate_plain_writes_race_but_atomic_writes_do_not() {
         (AccessKindAttr::AtomicWrite, true),
     ] {
         let context = &mut setup();
-        let function = function(context, "duplicate_shared_write");
+        let function = function_with_layout(context, "duplicate_shared_write", 8, 8);
         let entry = function.get_entry_block(context);
         let shared = view(context);
         let invocation = InvocationIndexOp::new(context, 0, 8);
@@ -413,7 +429,7 @@ fn two_waves_share_initialized_lds_only_after_a_workgroup_barrier() {
 #[test]
 fn distinct_workgroups_have_distinct_lds_allocations() {
     let context = &mut setup();
-    let function = function_with_layout(context, "workgroup_local_lds", 64, 64);
+    let function = function_with_domain(context, "workgroup_local_lds", 128, 64, 64);
     let entry = function.get_entry_block(context);
     let shared = view(context);
     let invocation = InvocationIndexOp::new(context, 0, 128);
@@ -475,8 +491,11 @@ fn subgroup_local_lds_publication_is_explicitly_incomplete() {
     let context = &mut setup();
     let function = function_with_layout(context, "subgroup_lds", 128, 64);
     let entry = function.get_entry_block(context);
-    let shared = view(context);
-    let invocation = InvocationIndexOp::new(context, 0, 64);
+    let shared = {
+        let ty = RankedViewType::new(context, 32, true, vec![128]).unwrap();
+        RankedViewOp::new_in_space(context, ty, vec![], MemorySpaceAttr::Workgroup).unwrap()
+    };
+    let invocation = InvocationIndexOp::new(context, 0, 128);
     let zero = IndexConstantOp::new(context, 0);
     let write = access(
         context,

@@ -1009,12 +1009,18 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
     match operation {
         ProductionRankedOperationV1::ExecutionLayout {
             grid_identity,
-            workgroup_size,
+            global_extents,
+            workgroup_extents,
             subgroup_size,
         } => {
             digest.update([15]);
             digest.update(grid_identity.to_le_bytes());
-            digest.update(workgroup_size.to_le_bytes());
+            for extent in global_extents {
+                digest.update(extent.to_le_bytes());
+            }
+            for extent in workgroup_extents {
+                digest.update(extent.to_le_bytes());
+            }
             digest.update(subgroup_size.to_le_bytes());
         }
         ProductionRankedOperationV1::View {
@@ -1023,6 +1029,8 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             writable,
             shape,
             dynamic_extents,
+            allocation_origin,
+            noalias_class,
         } => {
             digest.update([1]);
             digest.update(result.get().to_le_bytes());
@@ -1030,6 +1038,8 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             digest.update([u8::from(*writable)]);
             hash_u64_slice(digest, shape);
             hash_values(digest, dynamic_extents);
+            digest.update(allocation_origin.to_le_bytes());
+            digest.update(noalias_class.to_le_bytes());
         }
         ProductionRankedOperationV1::ViewInSpace {
             result,
@@ -1038,6 +1048,8 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             shape,
             dynamic_extents,
             memory_space,
+            allocation_origin,
+            noalias_class,
         } => {
             digest.update([2]);
             digest.update(result.get().to_le_bytes());
@@ -1046,6 +1058,8 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             hash_u64_slice(digest, shape);
             hash_values(digest, dynamic_extents);
             digest.update([memory_space_tag(*memory_space)]);
+            digest.update(allocation_origin.to_le_bytes());
+            digest.update(noalias_class.to_le_bytes());
         }
         ProductionRankedOperationV1::IndexConstant { result, value } => {
             digest.update([3]);

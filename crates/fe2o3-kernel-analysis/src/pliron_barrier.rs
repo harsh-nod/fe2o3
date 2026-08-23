@@ -483,10 +483,11 @@ pub(crate) fn trace_failure_detail(failure: PlironTraceFailureV1) -> String {
         }
         PlironTraceFailureV1::PartialBarrierParticipants {
             scope,
-            invocations,
-            participant_width,
+            dimension,
+            global_extent,
+            workgroup_extent,
         } => format!(
-            "{scope:?} barrier has {invocations} logical invocations, which is not a multiple of participant width {participant_width}; rounded physical lanes and their activity paths are not represented"
+            "{scope:?} barrier has global extent {global_extent} on axis {dimension}, which is not a multiple of workgroup extent {workgroup_extent}; rounded physical lanes and their activity paths are not represented"
         ),
         PlironTraceFailureV1::ResourceLimit => "trace resource limit exceeded".to_owned(),
     }

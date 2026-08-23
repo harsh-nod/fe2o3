@@ -130,6 +130,9 @@ pub enum RankedRaceFindingV1 {
     ExecutionLayoutUnavailable {
         detail: String,
     },
+    AllocationContractUnavailable {
+        detail: String,
+    },
     InsufficientAtomicScope {
         view: String,
         indices: Vec<u64>,
@@ -197,6 +200,10 @@ impl fmt::Display for RankedRaceFindingV1 {
             Self::ExecutionLayoutUnavailable { detail } => write!(
                 formatter,
                 "error[FE2O3-RACE-002]: scoped concurrency analysis is incomplete: {detail}",
+            ),
+            Self::AllocationContractUnavailable { detail } => write!(
+                formatter,
+                "error[FE2O3-RACE-002]: allocation alias analysis is incomplete: {detail}",
             ),
             Self::InsufficientAtomicScope {
                 view,
@@ -294,6 +301,9 @@ struct EffectV1 {
     indices: Vec<Value>,
     atomic_scope: Option<AtomicScopeAttr>,
     atomic_ordering: Option<AtomicOrderingAttr>,
+    allocation_origin: u64,
+    noalias_class: u64,
+    view_signature: (u32, Vec<u64>),
 }
 
 impl RankedRaceFindingV1 {
@@ -307,6 +317,7 @@ impl RankedRaceFindingV1 {
                 | Self::EffectInstanceLimitExceeded { .. }
                 | Self::FindingLimitExceeded { .. }
                 | Self::ExecutionLayoutUnavailable { .. }
+                | Self::AllocationContractUnavailable { .. }
                 | Self::HappensBeforeIncomplete { .. }
         )
     }
@@ -314,7 +325,7 @@ impl RankedRaceFindingV1 {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct AddressKeyV1 {
-    view: Value,
+    allocation_class: u64,
     indices: Vec<u64>,
 }
 
@@ -457,11 +468,114 @@ pub(crate) fn run_pliron_ranked_race_check_after_bounds_v1(
                 indices: access.indices(context),
                 atomic_scope: access.atomic_scope(context),
                 atomic_ordering: access.atomic_ordering(context),
+                allocation_origin: view_op.allocation_origin(context).unwrap_or(0),
+                noalias_class: view_op.noalias_class(context).unwrap_or(0),
+                view_signature: view_op
+                    .view_type(context)
+                    .map(|ty| {
+                        let ty = ty.deref(context);
+                        (ty.element_width(), ty.shape().to_vec())
+                    })
+                    .unwrap_or_default(),
             });
         }
     }
 
-    if symbolically_proves_disjoint(&effects, &sparse) {
+    let mut classes_by_origin = HashMap::new();
+    for effect in &effects {
+        if effect.noalias_class != 0 && effect.allocation_origin == 0 {
+            return one(RankedRaceFindingV1::AllocationContractUnavailable {
+                detail: format!(
+                    "view {} claims no-alias class {} without a compiler-issued allocation origin",
+                    effect.view_name, effect.noalias_class
+                ),
+            });
+        }
+        if effect.allocation_origin != 0
+            && classes_by_origin
+                .insert(effect.allocation_origin, effect.noalias_class)
+                .is_some_and(|previous| previous != effect.noalias_class)
+        {
+            return one(RankedRaceFindingV1::AllocationContractUnavailable {
+                detail: format!(
+                    "allocation origin {} is assigned inconsistent no-alias classes",
+                    effect.allocation_origin
+                ),
+            });
+        }
+    }
+    let has_unknown_alias = effects.iter().any(|effect| effect.noalias_class == 0);
+    for effect in &mut effects {
+        if has_unknown_alias {
+            effect.noalias_class = 0;
+        }
+    }
+    let classes_with_writes = effects
+        .iter()
+        .filter_map(|effect| effect.kind.writes_memory().then_some(effect.noalias_class))
+        .collect::<HashSet<_>>();
+    let mut signatures_by_class = HashMap::new();
+    for effect in &effects {
+        if !classes_with_writes.contains(&effect.noalias_class) {
+            continue;
+        }
+        if signatures_by_class
+            .insert(effect.noalias_class, effect.view_signature.clone())
+            .is_some_and(|previous| previous != effect.view_signature)
+        {
+            return one(RankedRaceFindingV1::AllocationContractUnavailable {
+                detail: format!(
+                    "potentially aliasing view {} has an incompatible element width or rank/shape",
+                    effect.view_name
+                ),
+            });
+        }
+    }
+
+    let layout = match pliron_execution_layout_v1(context, function) {
+        Ok(layout) => layout,
+        Err(failure) => {
+            return one(RankedRaceFindingV1::ExecutionLayoutUnavailable {
+                detail: match failure {
+                    PlironTraceFailureV1::InvalidExecutionLayout => {
+                        "gpu.execution_layout is malformed or duplicated".to_owned()
+                    }
+                    _ => format!("execution layout extraction failed: {failure:?}"),
+                },
+            });
+        }
+    };
+    let launch_extents = if let Some(layout) = layout {
+        for dimension in 0..sparse.launch_extents().len().max(3) {
+            if let Some(declared) = sparse.declared_launch_extent(dimension) {
+                let Some(layout_extent) = layout.global_extents.get(dimension).copied() else {
+                    return one(RankedRaceFindingV1::ExecutionLayoutUnavailable {
+                        detail: format!(
+                            "invocation coordinate axis {dimension} is outside the three-dimensional gpu.execution_layout"
+                        ),
+                    });
+                };
+                if declared != 0 && layout_extent != declared {
+                    return one(RankedRaceFindingV1::ExecutionLayoutUnavailable {
+                        detail: format!(
+                            "invocation coordinate axis {dimension} declares extent {declared}, inconsistent with gpu.execution_layout"
+                        ),
+                    });
+                }
+            }
+        }
+        layout.global_extents.to_vec()
+    } else if sparse.has_declared_launch_extent() {
+        sparse.launch_extents().to_vec()
+    } else if effects.is_empty() {
+        vec![1]
+    } else {
+        return one(RankedRaceFindingV1::ExecutionLayoutUnavailable {
+            detail: "concurrent memory effects require a declared execution domain even when the kernel does not read an invocation coordinate".to_owned(),
+        });
+    };
+
+    if symbolically_proves_disjoint(&effects, &sparse, &launch_extents) {
         return clean();
     }
     let release_signal_views = effects
@@ -480,7 +594,7 @@ pub(crate) fn run_pliron_ranked_race_check_after_bounds_v1(
                 && effect
                     .atomic_scope
                     .is_some_and(|scope| scope.rank() >= AtomicScopeAttr::Agent.rank()))
-            .then_some(effect.view)
+            .then_some(effect.noalias_class)
         })
         .collect::<HashSet<_>>();
     let acquire_signal_views = effects
@@ -499,21 +613,20 @@ pub(crate) fn run_pliron_ranked_race_check_after_bounds_v1(
                 && effect
                     .atomic_scope
                     .is_some_and(|scope| scope.rank() >= AtomicScopeAttr::Agent.rank()))
-            .then_some(effect.view)
+            .then_some(effect.noalias_class)
         })
         .collect::<HashSet<_>>();
     let atomic_signal_views = release_signal_views
         .intersection(&acquire_signal_views)
         .copied()
         .collect::<HashSet<_>>();
-    if let Some(dimension) = sparse
-        .launch_extents()
-        .iter()
-        .position(|extent| *extent == 0)
-    {
+    if let Some(dimension) = launch_extents.iter().position(|extent| *extent == 0) {
         return one(RankedRaceFindingV1::DynamicLaunchExtent { dimension });
     }
-    let Some(invocation_count) = sparse.invocation_count() else {
+    let Some(invocation_count) = launch_extents
+        .iter()
+        .try_fold(1_u64, |total, extent| total.checked_mul(*extent))
+    else {
         return one(RankedRaceFindingV1::LaunchDomainTooLarge {
             invocations: u64::MAX,
             limit: MAX_PLIRON_RACE_INVOCATIONS_V1,
@@ -529,21 +642,7 @@ pub(crate) fn run_pliron_ranked_race_check_after_bounds_v1(
         return clean();
     }
 
-    let layout = match pliron_execution_layout_v1(context, function) {
-        Ok(layout) => layout,
-        Err(failure) => {
-            return one(RankedRaceFindingV1::ExecutionLayoutUnavailable {
-                detail: match failure {
-                    PlironTraceFailureV1::InvalidExecutionLayout => {
-                        "gpu.execution_layout is malformed or duplicated".to_owned()
-                    }
-                    _ => format!("execution layout extraction failed: {failure:?}"),
-                },
-            });
-        }
-    };
-
-    let zero_invocation = vec![0; sparse.launch_extents().len()];
+    let zero_invocation = vec![0; launch_extents.len()];
     for effect in &effects {
         for (dimension, index) in effect.indices.iter().copied().enumerate() {
             if sparse.fact(index).evaluate(&zero_invocation).is_none() {
@@ -562,7 +661,7 @@ pub(crate) fn run_pliron_ranked_race_check_after_bounds_v1(
     let mut conflict_classes = HashSet::new();
     let mut effect_instances = 0_usize;
     for linear_invocation in 0..invocation_count {
-        let invocation = decode_invocation(linear_invocation, sparse.launch_extents());
+        let invocation = decode_invocation(linear_invocation, &launch_extents);
         for effect in &effects {
             effect_instances = effect_instances.saturating_add(1);
             if effect_instances > MAX_PLIRON_RACE_EFFECT_INSTANCES_V1 {
@@ -578,21 +677,18 @@ pub(crate) fn run_pliron_ranked_race_check_after_bounds_v1(
                 .collect::<Option<Vec<_>>>()
                 .expect("prechecked sparse index remains evaluable");
             let key = AddressKeyV1 {
-                view: effect.view,
+                allocation_class: effect.noalias_class,
                 indices,
             };
+            let scoped_identity = layout.and_then(|layout| layout.scoped_identity(&invocation));
             let witness = RankedRaceWitnessV1 {
                 location: effect.location,
                 access: effect.kind,
                 invocation: invocation.clone(),
                 grid: layout.map_or(0, |layout| layout.grid),
-                workgroup: layout.map(|layout| linear_invocation / layout.workgroup_size),
-                subgroup: layout.map(|layout| {
-                    (linear_invocation % layout.workgroup_size) / layout.subgroup_size
-                }),
-                lane: layout.map(|layout| {
-                    (linear_invocation % layout.workgroup_size) % layout.subgroup_size
-                }),
+                workgroup: scoped_identity.map(|identity| identity.0),
+                subgroup: scoped_identity.map(|identity| identity.1),
+                lane: scoped_identity.map(|identity| identity.2),
                 atomic_scope: effect.atomic_scope,
             };
             let state = addresses.entry(key.clone()).or_default();
@@ -623,11 +719,16 @@ pub(crate) fn run_pliron_ranked_race_check_after_bounds_v1(
                             }
                         }
                     } else if has_global_fence
-                        || atomic_signal_views.iter().any(|view| *view != effect.view)
+                        || atomic_signal_views
+                            .iter()
+                            .any(|class| *class != effect.noalias_class)
                     {
                         RankedRaceFindingV1::HappensBeforeIncomplete {
                             view: effect.view_name.clone(),
-                            detail: if atomic_signal_views.iter().any(|view| *view != effect.view) {
+                            detail: if atomic_signal_views
+                                .iter()
+                                .any(|class| *class != effect.noalias_class)
+                            {
                                 "release/acquire atomics require an authenticated read-from relation before they can publish ordinary memory across invocations".to_owned()
                             } else {
                                 "a non-collective fence alone does not establish a cross-invocation synchronizes-with edge".to_owned()
@@ -759,10 +860,17 @@ fn insert_witness(state: &mut AddressStateV1, witness: RankedRaceWitnessV1) {
     }
 }
 
-fn symbolically_proves_disjoint(effects: &[EffectV1], sparse: &SparseIndexAnalysisV1) -> bool {
-    let mut by_view: HashMap<Value, Vec<&EffectV1>> = HashMap::new();
+fn symbolically_proves_disjoint(
+    effects: &[EffectV1],
+    sparse: &SparseIndexAnalysisV1,
+    launch_extents: &[u64],
+) -> bool {
+    let mut by_view: HashMap<u64, Vec<&EffectV1>> = HashMap::new();
     for effect in effects {
-        by_view.entry(effect.view).or_default().push(effect);
+        by_view
+            .entry(effect.noalias_class)
+            .or_default()
+            .push(effect);
     }
     for effects in by_view.values() {
         let has_plain_write = effects
@@ -779,22 +887,19 @@ fn symbolically_proves_disjoint(effects: &[EffectV1], sparse: &SparseIndexAnalys
         });
         if !has_plain_write && !has_plain_read && has_atomic_write {
             if effects.iter().all(|effect| {
-                !effect.kind.writes_memory()
-                    || matches!(
-                        effect.atomic_scope,
-                        Some(
-                            AtomicScopeAttr::Agent
-                                | AtomicScopeAttr::Device
-                                | AtomicScopeAttr::System
-                        )
+                matches!(
+                    effect.atomic_scope,
+                    Some(
+                        AtomicScopeAttr::Agent | AtomicScopeAttr::Device | AtomicScopeAttr::System
                     )
+                )
             }) {
                 continue;
             }
             let mut representative = None;
             for effect in effects {
                 let Some(first) = representative else {
-                    if !affine_map_is_injective(&effect.indices, sparse) {
+                    if !affine_map_is_injective(&effect.indices, sparse, launch_extents) {
                         return false;
                     }
                     representative = Some(&effect.indices);
@@ -821,13 +926,13 @@ fn symbolically_proves_disjoint(effects: &[EffectV1], sparse: &SparseIndexAnalys
                     )
             })
             .collect::<Vec<_>>();
-        if tiled_2d_effect_family_is_injective(&relevant, sparse) {
+        if tiled_2d_effect_family_is_injective(&relevant, sparse, launch_extents) {
             continue;
         }
         let mut representative = None;
         for effect in relevant {
             let Some(first) = representative else {
-                if !affine_map_is_injective(&effect.indices, sparse) {
+                if !affine_map_is_injective(&effect.indices, sparse, launch_extents) {
                     return false;
                 }
                 representative = Some(&effect.indices);
@@ -844,6 +949,7 @@ fn symbolically_proves_disjoint(effects: &[EffectV1], sparse: &SparseIndexAnalys
 fn tiled_2d_effect_family_is_injective(
     effects: &[&EffectV1],
     sparse: &SparseIndexAnalysisV1,
+    launch_extents: &[u64],
 ) -> bool {
     let Some(first_index) = effects.first().and_then(|effect| effect.indices.first()) else {
         return false;
@@ -867,7 +973,7 @@ fn tiled_2d_effect_family_is_injective(
             return false;
         }
     }
-    affine_facts_are_injective(&[first.invocation().clone()], sparse)
+    affine_facts_are_injective(&[first.invocation().clone()], launch_extents)
 }
 
 fn same_index_formula(first: &[Value], second: &[Value], sparse: &SparseIndexAnalysisV1) -> bool {
@@ -878,20 +984,20 @@ fn same_index_formula(first: &[Value], second: &[Value], sparse: &SparseIndexAna
             .all(|(first, second)| sparse.fact(*first) == sparse.fact(*second))
 }
 
-fn affine_map_is_injective(indices: &[Value], sparse: &SparseIndexAnalysisV1) -> bool {
+fn affine_map_is_injective(
+    indices: &[Value],
+    sparse: &SparseIndexAnalysisV1,
+    launch_extents: &[u64],
+) -> bool {
     let facts = indices
         .iter()
         .map(|index| sparse.fact(*index).affine().cloned())
         .collect::<Option<Vec<_>>>();
-    facts.is_some_and(|facts| affine_facts_are_injective(&facts, sparse))
+    facts.is_some_and(|facts| affine_facts_are_injective(&facts, launch_extents))
 }
 
-fn affine_facts_are_injective(
-    facts: &[SparseAffineIndexV1],
-    sparse: &SparseIndexAnalysisV1,
-) -> bool {
-    let active_dimensions = sparse
-        .launch_extents()
+fn affine_facts_are_injective(facts: &[SparseAffineIndexV1], launch_extents: &[u64]) -> bool {
+    let active_dimensions = launch_extents
         .iter()
         .enumerate()
         .filter_map(|(dimension, extent)| (*extent != 1).then_some(dimension))

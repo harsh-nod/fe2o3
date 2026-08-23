@@ -23,12 +23,20 @@ fn static_kernel(index: u64, extent: u64) -> ProductionRankedKernelV1 {
         0,
         vec![ProductionRankedBlockV1::new(
             vec![
+                ProductionRankedOperationV1::ExecutionLayout {
+                    grid_identity: 1,
+                    global_extents: [1, 1, 1],
+                    workgroup_extents: [1, 1, 1],
+                    subgroup_size: 1,
+                },
                 ProductionRankedOperationV1::View {
                     result: VIEW,
                     element_width: 32,
                     writable: false,
                     shape: vec![extent],
                     dynamic_extents: vec![],
+                    allocation_origin: 1,
+                    noalias_class: 1,
                 },
                 ProductionRankedOperationV1::IndexConstant {
                     result: INDEX,
@@ -53,6 +61,8 @@ fn dynamic_kernel(guarded: bool) -> ProductionRankedKernelV1 {
         writable: false,
         shape: vec![0],
         dynamic_extents: vec![ProductionRankedValueV1::Argument(1)],
+        allocation_origin: 1,
+        noalias_class: 1,
     };
     let access = ProductionRankedOperationV1::Access {
         kind: AccessKindAttr::Read,
@@ -62,7 +72,15 @@ fn dynamic_kernel(guarded: bool) -> ProductionRankedKernelV1 {
     let blocks = if guarded {
         vec![
             ProductionRankedBlockV1::new(
-                vec![view],
+                vec![
+                    ProductionRankedOperationV1::ExecutionLayout {
+                        grid_identity: 1,
+                        global_extents: [1, 1, 1],
+                        workgroup_extents: [1, 1, 1],
+                        subgroup_size: 1,
+                    },
+                    view,
+                ],
                 ProductionRankedTerminatorV1::IndexLessThan {
                     lhs: ProductionRankedValueV1::Argument(0),
                     rhs: ProductionRankedValueV1::Argument(1),
@@ -75,7 +93,16 @@ fn dynamic_kernel(guarded: bool) -> ProductionRankedKernelV1 {
         ]
     } else {
         vec![ProductionRankedBlockV1::new(
-            vec![view, access],
+            vec![
+                ProductionRankedOperationV1::ExecutionLayout {
+                    grid_identity: 1,
+                    global_extents: [1, 1, 1],
+                    workgroup_extents: [1, 1, 1],
+                    subgroup_size: 1,
+                },
+                view,
+                access,
+            ],
             ProductionRankedTerminatorV1::Return,
         )]
     };
@@ -88,7 +115,10 @@ fn construction(kernel: ProductionRankedKernelV1) -> ProductionConstructionV1 {
 
 fn session(with_kernel_dialect: bool) -> ProductionPlironSessionV1 {
     let registrations = if with_kernel_dialect {
-        vec![dialect_kernel::dialect_registration().expect("registration")]
+        vec![
+            dialect_kernel::dialect_registration().expect("kernel registration"),
+            dialect_gpu::dialect_registration().expect("gpu registration"),
+        ]
     } else {
         Vec::<DialectRegistration>::new()
     };
@@ -118,6 +148,80 @@ fn static_non_gemm_kernel_reaches_safety_verified_lowering_input() {
 }
 
 #[test]
+fn declared_multi_invocation_domain_checks_constant_write_without_index_use() {
+    let kernel = ProductionRankedKernelV1::new(
+        "constant_multi_invocation_write",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::ExecutionLayout {
+                    grid_identity: 2,
+                    global_extents: [64, 1, 1],
+                    workgroup_extents: [64, 1, 1],
+                    subgroup_size: 64,
+                },
+                ProductionRankedOperationV1::View {
+                    result: VIEW,
+                    element_width: 32,
+                    writable: true,
+                    shape: vec![1],
+                    dynamic_extents: vec![],
+                    allocation_origin: 2,
+                    noalias_class: 2,
+                },
+                ProductionRankedOperationV1::IndexConstant {
+                    result: INDEX,
+                    value: 0,
+                },
+                ProductionRankedOperationV1::Access {
+                    kind: AccessKindAttr::Write,
+                    view: local(VIEW),
+                    indices: vec![local(INDEX)],
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .expect("valid constant-write recipe");
+
+    let error = compile_ranked_kernel_for_lowering_v1(
+        construction(kernel),
+        ProductionSessionLimitsV1::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedRace(_))
+    ));
+    assert!(error.to_string().contains("error[FE2O3-RACE-001]"));
+}
+
+#[test]
+fn recipe_rejects_noalias_class_without_authenticated_origin() {
+    let error = ProductionRankedKernelV1::new(
+        "forged_noalias",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![ProductionRankedOperationV1::View {
+                result: VIEW,
+                element_width: 32,
+                writable: true,
+                shape: vec![1],
+                dynamic_extents: vec![],
+                allocation_origin: 0,
+                noalias_class: 9,
+            }],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        ProductionRankedKernelErrorV1::InvalidAllocationContract
+    );
+}
+
+#[test]
 fn production_atomic_recipe_retains_its_contract_and_fails_closed_without_target_context() {
     let legacy = ProductionRankedKernelV1::new(
         "legacy_atomic",
@@ -130,6 +234,8 @@ fn production_atomic_recipe_retains_its_contract_and_fails_closed_without_target
                     writable: true,
                     shape: vec![1],
                     dynamic_extents: vec![],
+                    allocation_origin: 1,
+                    noalias_class: 1,
                     memory_space: MemorySpaceAttr::Global,
                 },
                 ProductionRankedOperationV1::IndexConstant {
@@ -161,6 +267,8 @@ fn production_atomic_recipe_retains_its_contract_and_fails_closed_without_target
                     writable: true,
                     shape: vec![1],
                     dynamic_extents: vec![],
+                    allocation_origin: 1,
+                    noalias_class: 1,
                     memory_space: MemorySpaceAttr::Global,
                 },
                 ProductionRankedOperationV1::IndexConstant {
@@ -270,7 +378,8 @@ fn divergent_barrier_is_terminal_in_the_closed_production_pipeline() {
                 vec![
                     ProductionRankedOperationV1::ExecutionLayout {
                         grid_identity: 7,
-                        workgroup_size: 4,
+                        global_extents: [4, 1, 1],
+                        workgroup_extents: [4, 1, 1],
                         subgroup_size: 4,
                     },
                     ProductionRankedOperationV1::InvocationIndex {
@@ -326,7 +435,8 @@ fn uninitialized_workgroup_read_is_terminal_before_lowering() {
             vec![
                 ProductionRankedOperationV1::ExecutionLayout {
                     grid_identity: 7,
-                    workgroup_size: 8,
+                    global_extents: [8, 1, 1],
+                    workgroup_extents: [8, 1, 1],
                     subgroup_size: 8,
                 },
                 ProductionRankedOperationV1::ViewInSpace {
@@ -335,6 +445,8 @@ fn uninitialized_workgroup_read_is_terminal_before_lowering() {
                     writable: true,
                     shape: vec![8],
                     dynamic_extents: vec![],
+                    allocation_origin: 1,
+                    noalias_class: 1,
                     memory_space: MemorySpaceAttr::Workgroup,
                 },
                 ProductionRankedOperationV1::InvocationIndex {
@@ -387,6 +499,8 @@ fn concurrent_write_kernel(indexed_by_invocation: bool) -> ProductionRankedKerne
             writable: true,
             shape: vec![64],
             dynamic_extents: vec![],
+            allocation_origin: 1,
+            noalias_class: 1,
             memory_space: MemorySpaceAttr::Global,
         },
         invocation,
@@ -452,7 +566,8 @@ fn production_fence_does_not_authorize_cross_workgroup_plain_overlap() {
             vec![
                 ProductionRankedOperationV1::ExecutionLayout {
                     grid_identity: 19,
-                    workgroup_size: 64,
+                    global_extents: [128, 1, 1],
+                    workgroup_extents: [64, 1, 1],
                     subgroup_size: 64,
                 },
                 ProductionRankedOperationV1::ViewInSpace {
@@ -461,6 +576,8 @@ fn production_fence_does_not_authorize_cross_workgroup_plain_overlap() {
                     writable: true,
                     shape: vec![1],
                     dynamic_extents: vec![],
+                    allocation_origin: 1,
+                    noalias_class: 1,
                     memory_space: MemorySpaceAttr::Global,
                 },
                 ProductionRankedOperationV1::InvocationIndex {
@@ -513,7 +630,8 @@ fn execution_layout_is_unique_canonical_and_checked() {
         vec![ProductionRankedBlockV1::new(
             vec![ProductionRankedOperationV1::ExecutionLayout {
                 grid_identity: 1,
-                workgroup_size: 96,
+                global_extents: [96, 1, 1],
+                workgroup_extents: [96, 1, 1],
                 subgroup_size: 64,
             }],
             ProductionRankedTerminatorV1::Return,
@@ -532,12 +650,14 @@ fn execution_layout_is_unique_canonical_and_checked() {
             vec![
                 ProductionRankedOperationV1::ExecutionLayout {
                     grid_identity: 1,
-                    workgroup_size: 64,
+                    global_extents: [64, 1, 1],
+                    workgroup_extents: [64, 1, 1],
                     subgroup_size: 64,
                 },
                 ProductionRankedOperationV1::ExecutionLayout {
                     grid_identity: 2,
-                    workgroup_size: 64,
+                    global_extents: [64, 1, 1],
+                    workgroup_extents: [64, 1, 1],
                     subgroup_size: 64,
                 },
             ],
@@ -565,7 +685,7 @@ fn static_oob_is_a_terminal_compile_time_diagnostic_before_lowering() {
     ));
     assert_eq!(
         error.to_string(),
-        "error[FE2O3-BOUNDS-001]: statically out-of-bounds Read at block 0 op 2; access: v0 dimension 0; required: 64 < 64",
+        "error[FE2O3-BOUNDS-001]: statically out-of-bounds Read at block 0 op 3; access: v0 dimension 0; required: 64 < 64",
     );
 }
 
@@ -596,6 +716,8 @@ fn arbitrary_control_flow_split_never_manufactures_a_bounds_fact() {
         writable: false,
         shape: vec![0],
         dynamic_extents: vec![ProductionRankedValueV1::Argument(1)],
+        allocation_origin: 1,
+        noalias_class: 1,
     };
     let access = ProductionRankedOperationV1::Access {
         kind: AccessKindAttr::Read,
@@ -640,12 +762,20 @@ fn rank_two_static_shapes_are_checked_without_gemm_semantics() {
         0,
         vec![ProductionRankedBlockV1::new(
             vec![
+                ProductionRankedOperationV1::ExecutionLayout {
+                    grid_identity: 1,
+                    global_extents: [1, 1, 1],
+                    workgroup_extents: [1, 1, 1],
+                    subgroup_size: 1,
+                },
                 ProductionRankedOperationV1::View {
                     result: VIEW,
                     element_width: 8,
                     writable: true,
                     shape: vec![32, 64],
                     dynamic_extents: vec![],
+                    allocation_origin: 1,
+                    noalias_class: 1,
                 },
                 ProductionRankedOperationV1::IndexConstant {
                     result: row,
@@ -807,6 +937,8 @@ fn recipe_rejects_shape_rank_and_access_type_mismatches() {
                 writable: false,
                 shape: vec![0, 4],
                 dynamic_extents: vec![],
+                allocation_origin: 1,
+                noalias_class: 1,
             }],
             ProductionRankedTerminatorV1::Return,
         )],
@@ -830,6 +962,8 @@ fn recipe_rejects_shape_rank_and_access_type_mismatches() {
                     writable: false,
                     shape: vec![4],
                     dynamic_extents: vec![],
+                    allocation_origin: 1,
+                    noalias_class: 1,
                 },
                 ProductionRankedOperationV1::Access {
                     kind: AccessKindAttr::Write,

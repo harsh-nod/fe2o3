@@ -1,8 +1,8 @@
 use dialect_gpu::{
-    AddressSpaceAttr, BarrierOp, FenceOp, HierarchyAttr, HierarchyIdOp, HierarchyIndexType,
-    MemoryOrderAttr, MemoryScopeAttr, MemorySpaceOp, MemorySpaceType, RegistrationError,
-    RegistrationOutcome, SynchronizationOpInterface, TargetNeutralGpuOpInterface,
-    barrier_op_attr_names, register_dialect,
+    AddressSpaceAttr, BarrierOp, ExecutionLayoutOp, FenceOp, HierarchyAttr, HierarchyIdOp,
+    HierarchyIndexType, MemoryOrderAttr, MemoryScopeAttr, MemorySpaceOp, MemorySpaceType,
+    RegistrationError, RegistrationOutcome, SynchronizationOpInterface,
+    TargetNeutralGpuOpInterface, barrier_op_attr_names, register_dialect,
 };
 use pliron::{
     attribute::AttrObj,
@@ -189,6 +189,23 @@ fn verifier_rejects_mismatched_result_types_and_attributes() {
     let malformed = MemorySpaceOp::from_operation(operation);
     malformed.set_attr_gpu_memory_space_address_space(&context, AddressSpaceAttr::Private);
     assert!(verify_op(&malformed, &context).is_err());
+}
+
+#[test]
+fn execution_layout_distinguishes_dynamic_global_axes_from_physical_workgroups() {
+    let mut context = Context::new();
+    register_dialect(&mut context).expect("gpu registration");
+
+    let dynamic = ExecutionLayoutOp::new(&mut context, 9, [0, 128, 1], [8, 8, 1], 64);
+    verify_op(&dynamic, &context).expect("dynamic global extent is retained explicitly");
+    assert_eq!(dynamic.global_extents(&context), Some([0, 128, 1]));
+    assert_eq!(dynamic.workgroup_extents(&context), Some([8, 8, 1]));
+    assert_eq!(dynamic.subgroup_size(&context), Some(64));
+
+    let zero_workgroup = ExecutionLayoutOp::new(&mut context, 9, [64, 1, 1], [0, 1, 1], 1);
+    assert!(verify_op(&zero_workgroup, &context).is_err());
+    let partial_subgroup = ExecutionLayoutOp::new(&mut context, 9, [64, 1, 1], [8, 8, 1], 48);
+    assert!(verify_op(&partial_subgroup, &context).is_err());
 }
 
 #[test]

@@ -57,6 +57,25 @@ fn view(context: &mut Context, shape: Vec<u64>, memory_space: MemorySpaceAttr) -
     RankedViewOp::new_in_space(context, view_type, vec![], memory_space).expect("ranked view")
 }
 
+fn view_with_contract(
+    context: &mut Context,
+    shape: Vec<u64>,
+    memory_space: MemorySpaceAttr,
+    allocation_origin: u64,
+    noalias_class: u64,
+) -> RankedViewOp {
+    let view_type = RankedViewType::new(context, 32, true, shape).expect("ranked view type");
+    RankedViewOp::new_in_space_with_allocation_contract(
+        context,
+        view_type,
+        vec![],
+        memory_space,
+        allocation_origin,
+        noalias_class,
+    )
+    .expect("ranked view")
+}
+
 fn access(
     context: &mut Context,
     kind: AccessKindAttr,
@@ -290,7 +309,7 @@ fn cross_workgroup_atomic_overlap_requires_agent_or_wider_scope() {
         let context = &mut setup();
         let function = function(context, "cross_workgroup_atomic");
         let entry = function.get_entry_block(context);
-        let layout = ExecutionLayoutOp::new(context, 41, 64, 64);
+        let layout = ExecutionLayoutOp::new(context, 41, [128, 1, 1], [64, 1, 1], 64);
         let memory = view(context, vec![1], MemorySpaceAttr::Global);
         let invocation = InvocationIndexOp::new(context, 0, 128);
         let zero = IndexConstantOp::new(context, 0);
@@ -358,7 +377,7 @@ fn fence_only_publication_is_incomplete_without_synchronizes_with() {
     let context = &mut setup();
     let function = function(context, "plain_grid_fence");
     let entry = function.get_entry_block(context);
-    let layout = ExecutionLayoutOp::new(context, 42, 64, 64);
+    let layout = ExecutionLayoutOp::new(context, 42, [128, 1, 1], [64, 1, 1], 64);
     let memory = view(context, vec![1], MemorySpaceAttr::Global);
     let invocation = InvocationIndexOp::new(context, 0, 128);
     let zero = IndexConstantOp::new(context, 0);
@@ -412,9 +431,9 @@ fn release_store_acquire_load_signaling_needs_a_read_from_proof() {
     let context = &mut setup();
     let function = function(context, "atomic_signal_publication");
     let entry = function.get_entry_block(context);
-    let layout = ExecutionLayoutOp::new(context, 43, 64, 64);
-    let data = view(context, vec![1], MemorySpaceAttr::Global);
-    let signal = view(context, vec![1], MemorySpaceAttr::Global);
+    let layout = ExecutionLayoutOp::new(context, 43, [128, 1, 1], [64, 1, 1], 64);
+    let data = view_with_contract(context, vec![1], MemorySpaceAttr::Global, 431, 431);
+    let signal = view_with_contract(context, vec![1], MemorySpaceAttr::Global, 432, 432);
     let invocation = InvocationIndexOp::new(context, 0, 128);
     let zero = IndexConstantOp::new(context, 0);
     let data_write = RankedAccessOp::new(
@@ -745,6 +764,295 @@ fn oversized_static_launch_is_rejected_before_effect_enumeration() {
             invocations: 65_537,
             ..
         }]
+    ));
+}
+
+#[test]
+fn declared_layout_checks_constant_effect_without_invocation_index() {
+    let context = &mut setup();
+    let function = function(context, "constant_without_index");
+    let entry = function.get_entry_block(context);
+    let layout = ExecutionLayoutOp::new(context, 50, [64, 1, 1], [64, 1, 1], 64);
+    let memory = view_with_contract(context, vec![1], MemorySpaceAttr::Global, 50, 50);
+    let zero = IndexConstantOp::new(context, 0);
+    let write = RankedAccessOp::new(
+        context,
+        AccessKindAttr::Write,
+        memory.result(context),
+        vec![zero.result(context)],
+    )
+    .unwrap();
+    let ret = ReturnOp::new(context);
+    append(context, entry, &layout);
+    append(context, entry, &memory);
+    append(context, entry, &zero);
+    append(context, entry, &write);
+    append(context, entry, &ret);
+
+    let report = run_pliron_ranked_race_check_v1(context, &function);
+    assert_eq!(report.status(), RankedRaceStatusV1::Rejected);
+    assert!(matches!(
+        report.findings(),
+        [RankedRaceFindingV1::ConflictingEffects { first, second, .. }]
+            if first.invocation() == [0, 0, 0] && second.invocation() == [1, 0, 0]
+    ));
+}
+
+#[test]
+fn overlapping_atomics_require_both_scopes_to_cover_the_pair() {
+    let context = &mut setup();
+    let function = function(context, "mixed_atomic_scopes");
+    let entry = function.get_entry_block(context);
+    let layout = ExecutionLayoutOp::new(context, 51, [128, 1, 1], [64, 1, 1], 64);
+    let memory = view_with_contract(context, vec![1], MemorySpaceAttr::Global, 51, 51);
+    let zero = IndexConstantOp::new(context, 0);
+    let agent_write = RankedAccessOp::new_atomic(
+        context,
+        AccessKindAttr::AtomicWrite,
+        AtomicOrderingAttr::Release,
+        AtomicScopeAttr::Agent,
+        memory.result(context),
+        vec![zero.result(context)],
+    )
+    .unwrap();
+    let workgroup_read = RankedAccessOp::new_atomic(
+        context,
+        AccessKindAttr::AtomicRead,
+        AtomicOrderingAttr::Acquire,
+        AtomicScopeAttr::Workgroup,
+        memory.result(context),
+        vec![zero.result(context)],
+    )
+    .unwrap();
+    let ret = ReturnOp::new(context);
+    append(context, entry, &layout);
+    append(context, entry, &memory);
+    append(context, entry, &zero);
+    append(context, entry, &agent_write);
+    append(context, entry, &workgroup_read);
+    append(context, entry, &ret);
+
+    let report = run_pliron_ranked_race_check_v1(context, &function);
+    assert_eq!(report.status(), RankedRaceStatusV1::Rejected);
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        RankedRaceFindingV1::InsufficientAtomicScope { first, second, .. }
+            if first.workgroup() == Some(0) && second.workgroup() == Some(1)
+    )));
+}
+
+fn cross_view_alias_report(first_class: u64, second_class: u64) -> RankedRaceStatusV1 {
+    let context = &mut setup();
+    let function = function(context, "cross_view_alias");
+    let entry = function.get_entry_block(context);
+    let layout = ExecutionLayoutOp::new(context, 52, [2, 1, 1], [2, 1, 1], 2);
+    let first = view_with_contract(context, vec![3], MemorySpaceAttr::Global, 521, first_class);
+    let second = view_with_contract(context, vec![3], MemorySpaceAttr::Global, 522, second_class);
+    let invocation = InvocationIndexOp::new(context, 0, 2);
+    let one = IndexConstantOp::new(context, 1);
+    let shifted = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        invocation.result(context),
+        one.result(context),
+    );
+    let first_write = access(
+        context,
+        AccessKindAttr::Write,
+        first.result(context),
+        invocation.result(context),
+    );
+    let second_write = access(
+        context,
+        AccessKindAttr::Write,
+        second.result(context),
+        shifted.result(context),
+    );
+    let ret = ReturnOp::new(context);
+    append(context, entry, &layout);
+    append(context, entry, &first);
+    append(context, entry, &second);
+    append(context, entry, &invocation);
+    append(context, entry, &one);
+    append(context, entry, &shifted);
+    append(context, entry, &first_write);
+    append(context, entry, &second_write);
+    append(context, entry, &ret);
+    run_pliron_ranked_race_check_v1(context, &function).status()
+}
+
+#[test]
+fn same_noalias_class_collides_across_distinct_ssa_views() {
+    assert_eq!(
+        cross_view_alias_report(53, 53),
+        RankedRaceStatusV1::Rejected
+    );
+}
+
+#[test]
+fn distinct_authenticated_noalias_classes_are_disjoint() {
+    assert_eq!(cross_view_alias_report(54, 55), RankedRaceStatusV1::Clean);
+}
+
+#[test]
+fn incompatible_potentially_aliasing_view_signatures_fail_closed() {
+    let context = &mut setup();
+    let function = function(context, "incompatible_alias_views");
+    let entry = function.get_entry_block(context);
+    let first = view(context, vec![2], MemorySpaceAttr::Global);
+    let second_type = RankedViewType::new(context, 64, true, vec![2]).expect("ranked view type");
+    let second = RankedViewOp::new_in_space(context, second_type, vec![], MemorySpaceAttr::Global)
+        .expect("ranked view");
+    let zero = IndexConstantOp::new(context, 0);
+    let first_write = access(
+        context,
+        AccessKindAttr::Write,
+        first.result(context),
+        zero.result(context),
+    );
+    let second_write = access(
+        context,
+        AccessKindAttr::Write,
+        second.result(context),
+        zero.result(context),
+    );
+    let ret = ReturnOp::new(context);
+    append(context, entry, &first);
+    append(context, entry, &second);
+    append(context, entry, &zero);
+    append(context, entry, &first_write);
+    append(context, entry, &second_write);
+    append(context, entry, &ret);
+
+    let report = run_pliron_ranked_race_check_v1(context, &function);
+    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert!(matches!(
+        report.findings(),
+        [RankedRaceFindingV1::AllocationContractUnavailable { .. }]
+    ));
+}
+
+#[test]
+fn heterogeneous_read_only_views_in_one_alias_class_are_clean() {
+    let context = &mut setup();
+    let function = function(context, "heterogeneous_shared_inputs");
+    let entry = function.get_entry_block(context);
+    let layout = ExecutionLayoutOp::new(context, 57, [64, 1, 1], [64, 1, 1], 64);
+    let first_type = RankedViewType::new(context, 16, false, vec![4]).expect("ranked view type");
+    let first = RankedViewOp::new_in_space_with_allocation_contract(
+        context,
+        first_type,
+        vec![],
+        MemorySpaceAttr::Global,
+        571,
+        57,
+    )
+    .expect("ranked view");
+    let second_type = RankedViewType::new(context, 32, false, vec![8]).expect("ranked view type");
+    let second = RankedViewOp::new_in_space_with_allocation_contract(
+        context,
+        second_type,
+        vec![],
+        MemorySpaceAttr::Global,
+        572,
+        57,
+    )
+    .expect("ranked view");
+    let zero = IndexConstantOp::new(context, 0);
+    let first_read = access(
+        context,
+        AccessKindAttr::Read,
+        first.result(context),
+        zero.result(context),
+    );
+    let second_read = access(
+        context,
+        AccessKindAttr::Read,
+        second.result(context),
+        zero.result(context),
+    );
+    let ret = ReturnOp::new(context);
+    append(context, entry, &layout);
+    append(context, entry, &first);
+    append(context, entry, &second);
+    append(context, entry, &zero);
+    append(context, entry, &first_read);
+    append(context, entry, &second_read);
+    append(context, entry, &ret);
+
+    assert!(run_pliron_ranked_race_check_v1(context, &function).is_clean());
+}
+
+#[test]
+fn multidimensional_workgroup_identity_is_componentwise() {
+    let context = &mut setup();
+    let function = function(context, "multidimensional_scope");
+    let entry = function.get_entry_block(context);
+    let layout = ExecutionLayoutOp::new(context, 56, [16, 16, 1], [8, 8, 1], 64);
+    let memory = view_with_contract(context, vec![1], MemorySpaceAttr::Global, 56, 56);
+    let x = InvocationIndexOp::new(context, 0, 16);
+    let y = InvocationIndexOp::new(context, 1, 16);
+    let zero = IndexConstantOp::new(context, 0);
+    let atomic = RankedAccessOp::new_atomic(
+        context,
+        AccessKindAttr::AtomicReadModifyWrite,
+        AtomicOrderingAttr::AcquireRelease,
+        AtomicScopeAttr::Workgroup,
+        memory.result(context),
+        vec![zero.result(context)],
+    )
+    .unwrap();
+    let ret = ReturnOp::new(context);
+    append(context, entry, &layout);
+    append(context, entry, &memory);
+    append(context, entry, &x);
+    append(context, entry, &y);
+    append(context, entry, &zero);
+    append(context, entry, &atomic);
+    append(context, entry, &ret);
+
+    let report = run_pliron_ranked_race_check_v1(context, &function);
+    assert_eq!(report.status(), RankedRaceStatusV1::Rejected);
+    assert!(matches!(
+        report.findings(),
+        [RankedRaceFindingV1::InsufficientAtomicScope { first, second, .. }]
+            if first.invocation() == [0, 0, 0]
+                && second.invocation() == [8, 0, 0]
+                && first.workgroup() == Some(0)
+                && second.workgroup() == Some(1)
+    ));
+}
+
+#[test]
+fn invocation_axis_outside_retained_layout_fails_closed() {
+    let context = &mut setup();
+    let function = function(context, "unsupported_fourth_axis");
+    let entry = function.get_entry_block(context);
+    let layout = ExecutionLayoutOp::new(context, 58, [1, 1, 1], [1, 1, 1], 1);
+    let memory = view_with_contract(context, vec![1], MemorySpaceAttr::Global, 58, 58);
+    let fourth_axis = InvocationIndexOp::new(context, 3, 0);
+    let zero = IndexConstantOp::new(context, 0);
+    let read = access(
+        context,
+        AccessKindAttr::Read,
+        memory.result(context),
+        zero.result(context),
+    );
+    let ret = ReturnOp::new(context);
+    append(context, entry, &layout);
+    append(context, entry, &memory);
+    append(context, entry, &fourth_axis);
+    append(context, entry, &zero);
+    append(context, entry, &read);
+    append(context, entry, &ret);
+
+    let report = run_pliron_ranked_race_check_v1(context, &function);
+    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert!(matches!(
+        report.findings(),
+        [RankedRaceFindingV1::ExecutionLayoutUnavailable { detail }]
+            if detail.contains("axis 3")
+                && detail.contains("outside the three-dimensional gpu.execution_layout")
     ));
 }
 

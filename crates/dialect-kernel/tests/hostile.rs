@@ -2,9 +2,9 @@ use dialect_kernel::{
     AccessKindAttr, AlgorithmOp, AlgorithmType, AtomicOrderingAttr, AtomicScopeAttr,
     CheckedTiledIndex2DOp, DIALECT_NAME, DYNAMIC_EXTENT, DimensionAttr, DimensionOp,
     ITERATION_DOMAIN_ATTR_KEY, IndexConstantOp, IndexType, IndexValueAttr, IterationDomainAttr,
-    KernelError, MAX_ITERATION_RANK, MAX_RANKED_MEMORY_RANK, RankedAccessOp, RankedMemoryError,
-    RankedViewOp, RankedViewType, RegistrationError, RegistrationOutcome, SemanticOwner,
-    StructuredAlgorithmOp, register_dialect,
+    KernelError, MAX_ITERATION_RANK, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp,
+    RankedMemoryError, RankedViewOp, RankedViewType, RegistrationError, RegistrationOutcome,
+    SemanticOwner, StructuredAlgorithmOp, register_dialect,
 };
 use pliron::{
     attribute::Attribute,
@@ -175,6 +175,37 @@ fn ranked_view_constructors_enforce_rank_width_and_dynamic_extent_count() {
     let foreign_extent =
         RankedViewOp::new(context, foreign_extent_type, vec![foreign_result]).unwrap();
     assert!(verify_op(&foreign_extent, context).is_err());
+}
+
+#[test]
+fn ranked_view_allocation_contract_is_explicit_and_fail_closed() {
+    let context = &mut Context::new();
+    register_dialect(context, &kernel_name()).unwrap();
+    let ty = RankedViewType::new(context, 32, true, vec![16]).unwrap();
+    let authenticated = RankedViewOp::new_in_space_with_allocation_contract(
+        context,
+        ty,
+        vec![],
+        MemorySpaceAttr::Global,
+        17,
+        23,
+    )
+    .unwrap();
+    verify_op(&authenticated, context).unwrap();
+    assert_eq!(authenticated.allocation_origin(context), Some(17));
+    assert_eq!(authenticated.noalias_class(context), Some(23));
+
+    let ty = RankedViewType::new(context, 32, true, vec![16]).unwrap();
+    let forged = RankedViewOp::new_in_space_with_allocation_contract(
+        context,
+        ty,
+        vec![],
+        MemorySpaceAttr::Global,
+        0,
+        23,
+    )
+    .unwrap();
+    assert!(verify_op(&forged, context).is_err());
 }
 
 #[test]
