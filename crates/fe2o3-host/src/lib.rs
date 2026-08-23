@@ -44,6 +44,7 @@ mod recovered_worker_v3_admission;
 mod row_softmax_protected_admission;
 mod tile_interop;
 mod worker_v2_bundle_admission;
+mod worker_v3_verification_admission;
 
 #[cfg(feature = "hardware-test-hooks")]
 #[doc(hidden)]
@@ -320,7 +321,7 @@ pub use recovered_worker_v2_admission::{
 };
 pub use recovered_worker_v3_admission::{
     RecoveredWorkerV3AdmissionErrorV1, RecoveredWorkerV3PinnedDescriptorV1,
-    admit_recovered_worker_v3_descriptor_v1,
+    WorkerV3HostLineageIdentityV1, admit_recovered_worker_v3_descriptor_v1,
 };
 pub use row_softmax_protected_admission::{
     ProtectedRowSoftmaxV1HostAdmissionErrorV1, ProtectedRowSoftmaxV1HostTokenIdentityV1,
@@ -339,6 +340,12 @@ pub use worker_v2_bundle_admission::{
     MissingFinalizedWorkerV2LoadPrerequisiteV1,
     WORKER_V2_FULL_LINEAGE_PREREQUISITE_CHALLENGE_VERSION_V2,
     WorkerV2FullLineagePrerequisiteChallengeIdentityV2, WorkerV2TypedKernelSelectionError,
+};
+pub use worker_v3_verification_admission::{
+    AuthenticatedWorkerV3ExecutableV1, WorkerV3SafetyPropertiesV1, WorkerV3SafetyPropertyV1,
+    WorkerV3VerificationAuthenticationErrorV1, WorkerV3VerificationChallengeIdentityV1,
+    WorkerV3VerificationDecisionErrorV1, WorkerV3VerificationDecisionV1,
+    WorkerV3VerificationRequestV1, WorkerV3VerifierV1,
 };
 
 /// Compiler-generated host bindings. This is an unstable implementation SPI,

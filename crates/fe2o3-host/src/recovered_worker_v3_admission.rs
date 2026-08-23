@@ -19,6 +19,55 @@ use sha2::{Digest, Sha256};
 
 use crate::{DeviceIdentity, ObservedContext};
 
+const WORKER_V3_HOST_LINEAGE_DOMAIN_V1: &[u8] = b"fe2o3.host.worker-v3-lineage.v1\0";
+
+/// Canonical identity of every V3 compiler, publication, descriptor, and selected-kernel axis
+/// independently retained by host admission.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct WorkerV3HostLineageIdentityV1([u8; 32]);
+
+impl WorkerV3HostLineageIdentityV1 {
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorkerV3HostLineageEvidenceV1 {
+    identity: WorkerV3HostLineageIdentityV1,
+    capsule_sha256: [u8; 32],
+    formal_memory_sha256: [u8; 32],
+    proof_binding_sha256: [u8; 32],
+    finalized_sha256: [u8; 32],
+    finalized_length: u64,
+}
+
+impl WorkerV3HostLineageEvidenceV1 {
+    pub(crate) const fn identity(self) -> WorkerV3HostLineageIdentityV1 {
+        self.identity
+    }
+
+    pub(crate) const fn capsule_sha256(self) -> [u8; 32] {
+        self.capsule_sha256
+    }
+
+    pub(crate) const fn formal_memory_sha256(self) -> [u8; 32] {
+        self.formal_memory_sha256
+    }
+
+    pub(crate) const fn proof_binding_sha256(self) -> [u8; 32] {
+        self.proof_binding_sha256
+    }
+
+    pub(crate) const fn finalized_sha256(self) -> [u8; 32] {
+        self.finalized_sha256
+    }
+
+    pub(crate) const fn finalized_length(self) -> u64 {
+        self.finalized_length
+    }
+}
+
 /// Read-only host admission for one restart-recovered Worker V3 publication.
 ///
 /// Construction independently binds the exact durable artifact to the linked precursor,
@@ -30,6 +79,7 @@ pub struct RecoveredWorkerV3PinnedDescriptorV1 {
     inspection: FinalizedDescriptorInspection,
     descriptor_index: usize,
     physical_kernel_index: usize,
+    lineage: WorkerV3HostLineageEvidenceV1,
     observed: ObservedContext,
 }
 
@@ -41,6 +91,7 @@ impl fmt::Debug for RecoveredWorkerV3PinnedDescriptorV1 {
             .field("descriptor", self.descriptor())
             .field("target", &self.target())
             .field("code_object_version", &self.code_object_version())
+            .field("lineage", &self.lineage.identity)
             .field("device", self.device())
             .finish_non_exhaustive()
     }
@@ -85,6 +136,14 @@ impl RecoveredWorkerV3PinnedDescriptorV1 {
 
     pub fn descriptor_binding(&self) -> KernelDescriptorBinding {
         self.inspection.kernel_bindings().bindings()[self.physical_kernel_index]
+    }
+
+    pub const fn lineage_identity(&self) -> WorkerV3HostLineageIdentityV1 {
+        self.lineage.identity
+    }
+
+    pub(crate) const fn lineage_evidence(&self) -> WorkerV3HostLineageEvidenceV1 {
+        self.lineage
     }
 
     pub const fn device(&self) -> &DeviceIdentity {
@@ -150,6 +209,12 @@ pub fn admit_recovered_worker_v3_descriptor_v1(
     validate_target_and_code_object(&outer, &inspection, observed)?;
     let (descriptor_index, physical_kernel_index) =
         select_exact_kernel(&outer, &inspection, kernel_id)?;
+    let lineage = derive_host_lineage_identity(
+        &outer,
+        envelope.wire().publication_intent_record(),
+        &inspection,
+        kernel_id,
+    );
     drop(current);
 
     Ok(RecoveredWorkerV3PinnedDescriptorV1 {
@@ -157,8 +222,145 @@ pub fn admit_recovered_worker_v3_descriptor_v1(
         inspection,
         descriptor_index,
         physical_kernel_index,
+        lineage,
         observed: observed.clone(),
     })
+}
+
+fn derive_host_lineage_identity(
+    outer: &InertSemanticCompilerModuleHandoffV3,
+    record: fe2o3_artifact_transaction::WorkerV3PublicationIntentRecordV1,
+    inspection: &FinalizedDescriptorInspection,
+    kernel_id: KernelId,
+) -> WorkerV3HostLineageEvidenceV1 {
+    let capsule = outer.capsule();
+    let receipts = capsule.receipts();
+    let capsule_identity = capsule.identity();
+    let outer_identity = outer.identity();
+    let module_identity = outer.module_handoff().identity();
+    let formal_memory = receipts.formal_memory().identity();
+    let proof_binding = receipts.proof_binding().identity();
+    let finalized_length = u64::try_from(record.output_length())
+        .expect("durable publication output length is bounded below u64::MAX");
+    let mut digest = Sha256::new();
+    digest.update(WORKER_V3_HOST_LINEAGE_DOMAIN_V1);
+    digest.update(record.identity().as_bytes());
+    update_identity(
+        &mut digest,
+        outer_identity.sha256(),
+        outer_identity.byte_len(),
+    );
+    update_identity(
+        &mut digest,
+        capsule_identity.sha256(),
+        capsule_identity.byte_len(),
+    );
+    update_identity(
+        &mut digest,
+        module_identity.sha256(),
+        module_identity.byte_len(),
+    );
+    digest.update(15_u16.to_le_bytes());
+    update_identity(
+        &mut digest,
+        receipts.rustc_identity_inventory().identity().sha256(),
+        receipts.rustc_identity_inventory().identity().byte_len(),
+    );
+    update_identity(
+        &mut digest,
+        receipts.rustc_preflight_plan().identity().sha256(),
+        receipts.rustc_preflight_plan().identity().byte_len(),
+    );
+    update_identity(
+        &mut digest,
+        receipts.semantic_mir().identity().sha256(),
+        receipts.semantic_mir().identity().byte_len(),
+    );
+    update_identity(
+        &mut digest,
+        receipts.middle_end().identity().sha256(),
+        receipts.middle_end().identity().byte_len(),
+    );
+    update_identity(
+        &mut digest,
+        receipts.kernel_ir().identity().sha256(),
+        receipts.kernel_ir().identity().byte_len(),
+    );
+    update_identity(
+        &mut digest,
+        receipts.mir_to_kir_correspondence().identity().sha256(),
+        receipts.mir_to_kir_correspondence().identity().byte_len(),
+    );
+    update_identity(
+        &mut digest,
+        formal_memory.sha256(),
+        formal_memory.byte_len(),
+    );
+    update_identity(
+        &mut digest,
+        proof_binding.sha256(),
+        proof_binding.byte_len(),
+    );
+    update_identity(
+        &mut digest,
+        receipts.target_binding().identity().sha256(),
+        receipts.target_binding().identity().byte_len(),
+    );
+    update_identity(
+        &mut digest,
+        receipts.data_layout().identity().sha256(),
+        receipts.data_layout().identity().byte_len(),
+    );
+    update_identity(
+        &mut digest,
+        receipts.abi().identity().sha256(),
+        receipts.abi().identity().byte_len(),
+    );
+    update_identity(
+        &mut digest,
+        receipts.export_manifest().identity().sha256(),
+        receipts.export_manifest().identity().byte_len(),
+    );
+    update_identity(
+        &mut digest,
+        receipts.amdgpu_lowering().identity().sha256(),
+        receipts.amdgpu_lowering().identity().byte_len(),
+    );
+    update_identity(
+        &mut digest,
+        receipts.semantic_to_llvm().identity().sha256(),
+        receipts.semantic_to_llvm().identity().byte_len(),
+    );
+    update_identity(
+        &mut digest,
+        receipts
+            .final_compiler_module_commitment()
+            .identity()
+            .sha256(),
+        receipts
+            .final_compiler_module_commitment()
+            .identity()
+            .byte_len(),
+    );
+    digest.update(record.plan().linked_output().as_bytes());
+    digest.update(record.output_sha256());
+    digest.update(finalized_length.to_le_bytes());
+    digest.update(inspection.digest().as_bytes());
+    digest.update(kernel_id.as_bytes());
+
+    WorkerV3HostLineageEvidenceV1 {
+        identity: WorkerV3HostLineageIdentityV1(digest.finalize().into()),
+        capsule_sha256: *capsule_identity.sha256(),
+        formal_memory_sha256: *formal_memory.sha256(),
+        proof_binding_sha256: *proof_binding.sha256(),
+        finalized_sha256: record.output_sha256(),
+        finalized_length,
+    }
+}
+
+fn update_identity(digest: &mut Sha256, sha256: &[u8; 32], byte_len: u64) {
+    digest.update(sha256);
+    digest.update(byte_len.to_le_bytes());
 }
 
 fn validate_finalized_identity(

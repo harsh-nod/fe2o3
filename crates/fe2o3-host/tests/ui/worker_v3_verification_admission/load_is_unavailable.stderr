@@ -1,0 +1,5 @@
+error[E0599]: no method named `load` found for struct `AuthenticatedWorkerV3ExecutableV1<K>` in the current scope
+ --> tests/ui/worker_v3_verification_admission/load_is_unavailable.rs:4:11
+  |
+4 |     value.load();
+  |           ^^^^ method not found in `AuthenticatedWorkerV3ExecutableV1<K>`
