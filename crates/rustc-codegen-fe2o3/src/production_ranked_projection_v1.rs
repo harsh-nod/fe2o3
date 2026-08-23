@@ -16,15 +16,16 @@ use fe2o3_lower_mir_kernel::{
     ProductionRankedSemanticProjectionReceiptV1, ProductionSemanticKirErrorV1,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticAggregateKindV1, SemanticAssertMessageV1, SemanticAtomicAccessV1,
-    SemanticAtomicOrderingV1, SemanticAtomicScopeV1, SemanticBinaryOpV1, SemanticBlockIdV1,
-    SemanticCallableDeclV1, SemanticCallableIdV1, SemanticCompilerIntrinsicOperationV1,
-    SemanticConstantValueV1, SemanticDirectCallV1, SemanticDirectTailCallV1,
-    SemanticDisjointIndexSpaceV1, SemanticFunctionDeclV1, SemanticFunctionRoleV1,
-    SemanticLocalIdV1, SemanticLocalRoleV1, SemanticOperandV1, SemanticPlaceV1,
-    SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticSourceProvenanceV1,
-    SemanticStatementKindV1, SemanticTerminatorKindV1, SemanticTypeIdV1, SemanticTypeShapeV1,
-    SemanticUnaryOpV1, SemanticUnwindActionV1,
+    SemanticAbiPassModeV1, SemanticAbiPointeeKindV1, SemanticAggregateKindV1,
+    SemanticAssertMessageV1, SemanticAtomicAccessV1, SemanticAtomicOrderingV1,
+    SemanticAtomicScopeV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticCallableDeclV1,
+    SemanticCallableIdV1, SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1,
+    SemanticDirectCallV1, SemanticDirectTailCallV1, SemanticDisjointIndexSpaceV1,
+    SemanticFunctionDeclV1, SemanticFunctionRoleV1, SemanticLocalIdV1, SemanticLocalRoleV1,
+    SemanticOperandV1, SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1,
+    SemanticSourceProvenanceV1, SemanticStatementKindV1, SemanticTargetArchitectureV1,
+    SemanticTerminatorKindV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
+    SemanticUnwindActionV1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
@@ -165,10 +166,22 @@ struct CapabilityEdgeV1 {
 }
 
 struct IntrinsicProjectionV1 {
-    checked_reference_origins: Vec<Option<usize>>,
+    local_contracts: ProjectionLocalContractsV1,
     guarded_accesses: Vec<GuardedRankedAccessV1>,
     option_predicates: Vec<Option<GuardPredicateV1>>,
     extent_argument_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AllocationContractV1 {
+    allocation_origin: u64,
+    noalias_class: u64,
+    writable: bool,
+}
+
+struct ProjectionLocalContractsV1 {
+    checked_reference_origins: Vec<Option<usize>>,
+    allocations: Vec<Option<AllocationContractV1>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -189,9 +202,12 @@ struct ProjectedBoundsChecksV1 {
 struct ProjectedViewV1 {
     result: ProductionRankedValueIdV1,
     element_width: u32,
+    writable: bool,
     shape: Vec<u64>,
     dynamic_extents: Vec<ProductionRankedValueV1>,
     memory_space: MemorySpaceAttr,
+    allocation_origin: u64,
+    noalias_class: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -439,7 +455,10 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     }
 
     let constants = constant_locals(function);
-    let mut entry_operations = Vec::new();
+    let mut entry_operations = vec![source_execution_layout_v1(
+        semantic.target().architecture(),
+        root_function,
+    )?];
     let mut next_value = 0_u32;
     let mut incomplete = None;
     let mut projected_views = vec![None; function.locals().len()];
@@ -470,7 +489,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
                     &bounds_checks.checks,
                     statement,
                     &constants,
-                    &intrinsic.checked_reference_origins,
+                    &intrinsic.local_contracts,
                     &intrinsic.guarded_accesses,
                     &mut guarded_sites,
                     &mut projected_views,
@@ -492,7 +511,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
                 block.terminator().kind(),
                 block.terminator().source(),
                 &constants,
-                &intrinsic.checked_reference_origins,
+                &intrinsic.local_contracts,
                 &intrinsic.guarded_accesses,
                 &mut guarded_sites,
                 &mut projected_views,
@@ -820,7 +839,10 @@ fn project_intrinsic_contracts(
     let stable_argument_origins = local_stable_argument_origins(function)?;
     let mut runtime_index_arguments = vec![None; local_count];
     let mut next_runtime_argument = 1_usize;
-    let launch_extent = required_launch_extent_x(function);
+    // Workgroup geometry and the runtime grid domain are independent. The
+    // source launch contract authenticates the former; the latter remains
+    // dynamic until host launch evidence is joined.
+    let launch_extent = 0;
     let local_definitions = local_definition_counts(function);
 
     for (block_index, block) in function.blocks().iter().enumerate() {
@@ -1460,8 +1482,8 @@ fn project_intrinsic_contracts(
     }
 
     let allocation_origins = local_allocation_origins(function)?;
+    let local_allocations = local_allocation_contracts(types, function, &allocation_origins)?;
     let mut views_by_origin: Vec<Option<ProjectedViewV1>> = vec![None; function.locals().len()];
-    let mut admitted_writable_origin = None;
     let mut guarded_accesses = Vec::new();
     for (block_index, block) in function.blocks().iter().enumerate() {
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
@@ -1780,20 +1802,33 @@ fn project_intrinsic_contracts(
                 "a checked disjoint receiver without one exact local",
             ))?
             .index() as usize;
-        let allocation_origin = allocation_origins.get(receiver).copied().flatten().ok_or(
+        let allocation_contract = local_allocations.get(receiver).copied().flatten().ok_or(
             ProductionRankedProjectionErrorV1::Incomplete(
                 "a checked disjoint receiver without one authenticated kernel-argument origin",
             ),
         )?;
-        admit_writable_origin(&mut admitted_writable_origin, allocation_origin)?;
-
-        let origin_index = allocation_origin as usize;
+        if !allocation_contract.writable {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a checked mutable access is rooted in a read-only Rust allocation",
+            ));
+        }
+        let origin_index = allocation_contract.allocation_origin as usize;
         let element_width = type_width(types, element)?;
         let view = match views_by_origin
             .get(origin_index)
             .and_then(|view| view.as_ref())
         {
-            Some(view) if view.element_width == element_width => view.result,
+            Some(view)
+                if view.element_width == element_width
+                    && view.writable
+                    && view.shape == [DYNAMIC_EXTENT]
+                    && view.dynamic_extents == [ProductionRankedValueV1::Argument(0)]
+                    && view.memory_space == MemorySpaceAttr::Global
+                    && view.allocation_origin == allocation_contract.allocation_origin
+                    && view.noalias_class == allocation_contract.noalias_class =>
+            {
+                view.result
+            }
             Some(_) => {
                 return Err(ProductionRankedProjectionErrorV1::Unsupported(
                     "one allocation origin was projected with conflicting element widths",
@@ -1809,8 +1844,8 @@ fn project_intrinsic_contracts(
                     shape: vec![DYNAMIC_EXTENT],
                     dynamic_extents: vec![ProductionRankedValueV1::Argument(0)],
                     memory_space: MemorySpaceAttr::Global,
-                    allocation_origin: 0,
-                    noalias_class: 0,
+                    allocation_origin: allocation_contract.allocation_origin,
+                    noalias_class: allocation_contract.noalias_class,
                 });
                 push_ranked_ir(
                     ranked_ir,
@@ -1828,9 +1863,12 @@ fn project_intrinsic_contracts(
                 *slot = Some(ProjectedViewV1 {
                     result: view,
                     element_width,
+                    writable: true,
                     shape: vec![DYNAMIC_EXTENT],
                     dynamic_extents: vec![ProductionRankedValueV1::Argument(0)],
                     memory_space: MemorySpaceAttr::Global,
+                    allocation_origin: allocation_contract.allocation_origin,
+                    noalias_class: allocation_contract.noalias_class,
                 });
                 view
             }
@@ -1863,10 +1901,16 @@ fn project_intrinsic_contracts(
         guarded_accesses.push(access);
     }
 
-    let checked_reference_origins =
-        checked_reference_origins(function, callables, guarded_accesses.len())?;
+    let local_contracts = ProjectionLocalContractsV1 {
+        checked_reference_origins: checked_reference_origins(
+            function,
+            callables,
+            guarded_accesses.len(),
+        )?,
+        allocations: local_allocations,
+    };
     Ok(IntrinsicProjectionV1 {
-        checked_reference_origins,
+        local_contracts,
         extent_argument_count: if guarded_accesses.is_empty() {
             0
         } else {
@@ -2000,29 +2044,41 @@ fn assign_index_capability(
     Ok(())
 }
 
-fn required_launch_extent_x(function: &SemanticFunctionDeclV1) -> u64 {
-    function
+fn source_execution_layout_v1(
+    architecture: SemanticTargetArchitectureV1,
+    function: &SemanticFunctionDeclV1,
+) -> Result<ProductionRankedOperationV1, ProductionRankedProjectionErrorV1> {
+    let entry = function
         .kernel_entry()
-        .and_then(|entry| entry.source_contract().launch())
+        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+            "a semantic kernel root is missing its authenticated entry contract",
+        ))?;
+    let required = entry
+        .source_contract()
+        .launch()
         .and_then(|launch| launch.required())
-        .map(|dimensions| u64::from(dimensions.as_array()[0]))
-        .unwrap_or(0)
-}
-
-fn admit_writable_origin(
-    admitted: &mut Option<u32>,
-    candidate: u32,
-) -> Result<(), ProductionRankedProjectionErrorV1> {
-    match *admitted {
-        None => *admitted = Some(candidate),
-        Some(existing) if existing == candidate => {}
-        Some(_) => {
-            return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "multiple writable global allocation origins require an authenticated runtime no-alias obligation",
-            ));
-        }
-    }
-    Ok(())
+        .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+            "concurrency verification requires exact source workgroup dimensions",
+        ))?
+        .as_array();
+    let workgroup_extents = required.map(u64::from);
+    let subgroup_size = match architecture {
+        SemanticTargetArchitectureV1::AmdGpuGfx942 => 64,
+    };
+    let identity = entry.kernel_binding_identity().as_bytes()[..8]
+        .try_into()
+        .map(u64::from_le_bytes)
+        .map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "the authenticated kernel identity cannot form a grid identity",
+            )
+        })?;
+    Ok(ProductionRankedOperationV1::ExecutionLayout {
+        grid_identity: identity,
+        global_extents: [0; 3],
+        workgroup_extents,
+        subgroup_size,
+    })
 }
 
 fn local_stable_argument_origins(
@@ -2186,6 +2242,87 @@ fn local_allocation_origins(
     }
     Ok(origins)
 }
+
+fn local_allocation_contracts(
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    origins: &[Option<u32>],
+) -> Result<Vec<Option<AllocationContractV1>>, ProductionRankedProjectionErrorV1> {
+    if origins.len() != function.locals().len() {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "allocation-origin and semantic-local tables have different lengths",
+        ));
+    }
+    let source_types = function.abi().source_input_types();
+    let abi_arguments = function.abi().adjusted_arguments();
+    let mut arguments = vec![None; source_types.len()];
+    for (argument_index, &ty) in source_types.iter().enumerate() {
+        let type_decl = types.get(ty.index() as usize).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "a kernel argument type is outside the semantic type table",
+            ),
+        )?;
+        let abi_argument = abi_arguments.get(argument_index).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "a kernel source argument is missing its authenticated FnAbi record",
+            ),
+        )?;
+        let pointee = abi_argument
+            .value()
+            .pointee_override()
+            .or(type_decl.abi_properties().first_pointee());
+        let allocation_origin = u64::try_from(argument_index)
+            .ok()
+            .and_then(|index| index.checked_add(1))
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "a kernel argument index does not fit the allocation identity space",
+            ))?;
+        let first_pointer_noalias = match abi_argument.mode() {
+            SemanticAbiPassModeV1::Direct(attributes) => attributes.regular().no_alias(),
+            SemanticAbiPassModeV1::Pair { first, .. } => first.regular().no_alias(),
+            SemanticAbiPassModeV1::Ignore
+            | SemanticAbiPassModeV1::Cast { .. }
+            | SemanticAbiPassModeV1::Indirect { .. } => false,
+        };
+        let Some(pointee) = pointee else {
+            continue;
+        };
+        arguments[argument_index] = Some(allocation_contract_from_pointee(
+            pointee.kind(),
+            first_pointer_noalias,
+            allocation_origin,
+        ));
+    }
+    Ok(origins
+        .iter()
+        .map(|origin| origin.and_then(|origin| arguments.get(origin as usize).copied().flatten()))
+        .collect())
+}
+
+fn allocation_contract_from_pointee(
+    pointee: SemanticAbiPointeeKindV1,
+    first_pointer_noalias: bool,
+    allocation_origin: u64,
+) -> AllocationContractV1 {
+    let (noalias_class, writable) = match pointee {
+        SemanticAbiPointeeKindV1::SharedReference { frozen } => (1, !frozen),
+        SemanticAbiPointeeKindV1::MutableReference { .. }
+        | SemanticAbiPointeeKindV1::Box { .. }
+            if first_pointer_noalias =>
+        {
+            (allocation_origin + 1, true)
+        }
+        SemanticAbiPointeeKindV1::MutableReference { .. }
+        | SemanticAbiPointeeKindV1::Box { .. }
+        | SemanticAbiPointeeKindV1::Raw => (0, true),
+    };
+    AllocationContractV1 {
+        allocation_origin,
+        noalias_class,
+        writable,
+    }
+}
+
 fn projected_disjoint_operand_v1(
     call: &SemanticDirectCallV1,
     argument: usize,
@@ -2995,6 +3132,14 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             "  gpu.fence <{:?}, {:?}, {:?}>\n",
             memory_scope, address_space, order,
         ),
+        ProductionRankedOperationV1::TensorLayout {
+            contract,
+            convergence,
+            active_lanes,
+        } => format!(
+            "  kernel.tensor_layout <{:?}, {:?}, active_lanes={}>\n",
+            contract, convergence, active_lanes,
+        ),
         ProductionRankedOperationV1::SemanticSymbol { result, symbol } => {
             format!("  %{} = kernel.semantic_symbol {}\n", result.get(), symbol)
         }
@@ -3299,7 +3444,7 @@ fn project_statement_accesses(
     bounds_checks: &[ProjectedBoundsCheckV1],
     statement: &fe2o3_mir_model::semantic_mir_v1::SemanticStatementV1,
     constants: &[Option<u64>],
-    checked_reference_origins: &[Option<usize>],
+    local_contracts: &ProjectionLocalContractsV1,
     guarded_accesses: &[GuardedRankedAccessV1],
     guarded_sites: &mut Vec<GuardedAccessSiteV1>,
     projected_views: &mut [Option<ProjectedViewV1>],
@@ -3321,7 +3466,7 @@ fn project_statement_accesses(
                 PlaceAccessRequirementV1::IfMemory,
                 source,
                 constants,
-                checked_reference_origins,
+                local_contracts,
                 guarded_accesses,
                 guarded_sites,
                 projected_views,
@@ -3338,7 +3483,7 @@ fn project_statement_accesses(
                 assignment.value().kind(),
                 source,
                 constants,
-                checked_reference_origins,
+                local_contracts,
                 guarded_accesses,
                 guarded_sites,
                 projected_views,
@@ -3364,7 +3509,7 @@ fn project_statement_accesses(
                 PlaceAccessRequirementV1::ExplicitMemory,
                 source,
                 constants,
-                checked_reference_origins,
+                local_contracts,
                 guarded_accesses,
                 guarded_sites,
                 projected_views,
@@ -3381,7 +3526,7 @@ fn project_statement_accesses(
                 store.value(),
                 source,
                 constants,
-                checked_reference_origins,
+                local_contracts,
                 guarded_accesses,
                 guarded_sites,
                 projected_views,
@@ -3402,7 +3547,7 @@ fn project_statement_accesses(
                 PlaceAccessRequirementV1::IfMemory,
                 source,
                 constants,
-                checked_reference_origins,
+                local_contracts,
                 guarded_accesses,
                 guarded_sites,
                 projected_views,
@@ -3420,7 +3565,7 @@ fn project_statement_accesses(
                 atomic.access(),
                 source,
                 constants,
-                checked_reference_origins,
+                local_contracts,
                 guarded_accesses,
                 guarded_sites,
                 projected_views,
@@ -3437,7 +3582,7 @@ fn project_statement_accesses(
                 atomic.value(),
                 source,
                 constants,
-                checked_reference_origins,
+                local_contracts,
                 guarded_accesses,
                 guarded_sites,
                 projected_views,
@@ -3458,7 +3603,7 @@ fn project_statement_accesses(
                 PlaceAccessRequirementV1::IfMemory,
                 source,
                 constants,
-                checked_reference_origins,
+                local_contracts,
                 guarded_accesses,
                 guarded_sites,
                 projected_views,
@@ -3476,7 +3621,7 @@ fn project_statement_accesses(
                 atomic.success(),
                 source,
                 constants,
-                checked_reference_origins,
+                local_contracts,
                 guarded_accesses,
                 guarded_sites,
                 projected_views,
@@ -3493,7 +3638,7 @@ fn project_statement_accesses(
                 atomic.expected(),
                 source,
                 constants,
-                checked_reference_origins,
+                local_contracts,
                 guarded_accesses,
                 guarded_sites,
                 projected_views,
@@ -3510,7 +3655,7 @@ fn project_statement_accesses(
                 atomic.replacement(),
                 source,
                 constants,
-                checked_reference_origins,
+                local_contracts,
                 guarded_accesses,
                 guarded_sites,
                 projected_views,
@@ -3531,7 +3676,7 @@ fn project_statement_accesses(
             PlaceAccessRequirementV1::IfMemory,
             source,
             constants,
-            checked_reference_origins,
+            local_contracts,
             guarded_accesses,
             guarded_sites,
             projected_views,
@@ -3558,7 +3703,7 @@ fn project_statement_accesses(
             condition,
             source,
             constants,
-            checked_reference_origins,
+            local_contracts,
             guarded_accesses,
             guarded_sites,
             projected_views,
@@ -3581,7 +3726,7 @@ fn project_atomic_address(
     atomic: SemanticAtomicAccessV1,
     source: SemanticSourceProvenanceV1,
     constants: &[Option<u64>],
-    checked_reference_origins: &[Option<usize>],
+    local_contracts: &ProjectionLocalContractsV1,
     guarded_accesses: &[GuardedRankedAccessV1],
     guarded_sites: &mut Vec<GuardedAccessSiteV1>,
     projected_views: &mut [Option<ProjectedViewV1>],
@@ -3601,7 +3746,7 @@ fn project_atomic_address(
         PlaceAccessRequirementV1::ExplicitMemory,
         source,
         constants,
-        checked_reference_origins,
+        local_contracts,
         guarded_accesses,
         guarded_sites,
         projected_views,
@@ -3622,7 +3767,7 @@ fn project_terminator_accesses(
     terminator: &SemanticTerminatorKindV1,
     source: SemanticSourceProvenanceV1,
     constants: &[Option<u64>],
-    checked_reference_origins: &[Option<usize>],
+    local_contracts: &ProjectionLocalContractsV1,
     guarded_accesses: &[GuardedRankedAccessV1],
     guarded_sites: &mut Vec<GuardedAccessSiteV1>,
     projected_views: &mut [Option<ProjectedViewV1>],
@@ -3640,7 +3785,7 @@ fn project_terminator_accesses(
             discriminant,
             source,
             constants,
-            checked_reference_origins,
+            local_contracts,
             guarded_accesses,
             guarded_sites,
             projected_views,
@@ -3658,7 +3803,7 @@ fn project_terminator_accesses(
             call,
             source,
             constants,
-            checked_reference_origins,
+            local_contracts,
             guarded_accesses,
             guarded_sites,
             projected_views,
@@ -3676,7 +3821,7 @@ fn project_terminator_accesses(
             call,
             source,
             constants,
-            checked_reference_origins,
+            local_contracts,
             guarded_accesses,
             guarded_sites,
             projected_views,
@@ -3698,7 +3843,7 @@ fn project_terminator_accesses(
             condition,
             source,
             constants,
-            checked_reference_origins,
+            local_contracts,
             guarded_accesses,
             guarded_sites,
             projected_views,
@@ -3727,7 +3872,7 @@ fn project_direct_call_accesses(
     call: &SemanticDirectCallV1,
     source: SemanticSourceProvenanceV1,
     constants: &[Option<u64>],
-    checked_reference_origins: &[Option<usize>],
+    local_contracts: &ProjectionLocalContractsV1,
     guarded_accesses: &[GuardedRankedAccessV1],
     guarded_sites: &mut Vec<GuardedAccessSiteV1>,
     projected_views: &mut [Option<ProjectedViewV1>],
@@ -3785,7 +3930,7 @@ fn project_direct_call_accesses(
             argument,
             source,
             constants,
-            checked_reference_origins,
+            local_contracts,
             guarded_accesses,
             guarded_sites,
             projected_views,
@@ -3806,7 +3951,7 @@ fn project_direct_call_accesses(
             PlaceAccessRequirementV1::IfMemory,
             source,
             constants,
-            checked_reference_origins,
+            local_contracts,
             guarded_accesses,
             guarded_sites,
             projected_views,
@@ -3829,7 +3974,7 @@ fn project_tail_call_accesses(
     call: &SemanticDirectTailCallV1,
     source: SemanticSourceProvenanceV1,
     constants: &[Option<u64>],
-    checked_reference_origins: &[Option<usize>],
+    local_contracts: &ProjectionLocalContractsV1,
     guarded_accesses: &[GuardedRankedAccessV1],
     guarded_sites: &mut Vec<GuardedAccessSiteV1>,
     projected_views: &mut [Option<ProjectedViewV1>],
@@ -3848,7 +3993,7 @@ fn project_tail_call_accesses(
             argument,
             source,
             constants,
-            checked_reference_origins,
+            local_contracts,
             guarded_accesses,
             guarded_sites,
             projected_views,
@@ -4043,7 +4188,7 @@ fn project_rvalue_reads(
     value: &SemanticRvalueKindV1,
     source: SemanticSourceProvenanceV1,
     constants: &[Option<u64>],
-    checked_reference_origins: &[Option<usize>],
+    local_contracts: &ProjectionLocalContractsV1,
     guarded_accesses: &[GuardedRankedAccessV1],
     guarded_sites: &mut Vec<GuardedAccessSiteV1>,
     projected_views: &mut [Option<ProjectedViewV1>],
@@ -4061,7 +4206,7 @@ fn project_rvalue_reads(
             operand,
             source,
             constants,
-            checked_reference_origins,
+            local_contracts,
             guarded_accesses,
             guarded_sites,
             projected_views,
@@ -4079,7 +4224,7 @@ fn project_rvalue_reads(
             operand,
             source,
             constants,
-            checked_reference_origins,
+            local_contracts,
             guarded_accesses,
             guarded_sites,
             projected_views,
@@ -4097,7 +4242,7 @@ fn project_rvalue_reads(
                 left,
                 source,
                 constants,
-                checked_reference_origins,
+                local_contracts,
                 guarded_accesses,
                 guarded_sites,
                 projected_views,
@@ -4114,7 +4259,7 @@ fn project_rvalue_reads(
                 right,
                 source,
                 constants,
-                checked_reference_origins,
+                local_contracts,
                 guarded_accesses,
                 guarded_sites,
                 projected_views,
@@ -4140,7 +4285,7 @@ fn project_rvalue_reads(
                 left,
                 source,
                 constants,
-                checked_reference_origins,
+                local_contracts,
                 guarded_accesses,
                 guarded_sites,
                 projected_views,
@@ -4157,7 +4302,7 @@ fn project_rvalue_reads(
                 right,
                 source,
                 constants,
-                checked_reference_origins,
+                local_contracts,
                 guarded_accesses,
                 guarded_sites,
                 projected_views,
@@ -4177,7 +4322,7 @@ fn project_rvalue_reads(
                     operand,
                     source,
                     constants,
-                    checked_reference_origins,
+                    local_contracts,
                     guarded_accesses,
                     guarded_sites,
                     projected_views,
@@ -4204,7 +4349,7 @@ fn project_rvalue_reads(
             PlaceAccessRequirementV1::ExplicitMemory,
             source,
             constants,
-            checked_reference_origins,
+            local_contracts,
             guarded_accesses,
             guarded_sites,
             projected_views,
@@ -4226,7 +4371,7 @@ fn project_rvalue_reads(
             PlaceAccessRequirementV1::IfMemory,
             source,
             constants,
-            checked_reference_origins,
+            local_contracts,
             guarded_accesses,
             guarded_sites,
             projected_views,
@@ -4247,7 +4392,7 @@ fn project_operand_read(
     operand: &SemanticOperandV1,
     source: SemanticSourceProvenanceV1,
     constants: &[Option<u64>],
-    checked_reference_origins: &[Option<usize>],
+    local_contracts: &ProjectionLocalContractsV1,
     guarded_accesses: &[GuardedRankedAccessV1],
     guarded_sites: &mut Vec<GuardedAccessSiteV1>,
     projected_views: &mut [Option<ProjectedViewV1>],
@@ -4267,7 +4412,7 @@ fn project_operand_read(
             PlaceAccessRequirementV1::IfMemory,
             source,
             constants,
-            checked_reference_origins,
+            local_contracts,
             guarded_accesses,
             guarded_sites,
             projected_views,
@@ -4327,7 +4472,7 @@ fn project_place_access(
     requirement: PlaceAccessRequirementV1,
     source: SemanticSourceProvenanceV1,
     constants: &[Option<u64>],
-    checked_reference_origins: &[Option<usize>],
+    local_contracts: &ProjectionLocalContractsV1,
     guarded_accesses: &[GuardedRankedAccessV1],
     guarded_sites: &mut Vec<GuardedAccessSiteV1>,
     projected_views: &mut [Option<ProjectedViewV1>],
@@ -4347,7 +4492,7 @@ fn project_place_access(
         requirement,
         source,
         constants,
-        checked_reference_origins,
+        local_contracts,
         guarded_accesses,
         guarded_sites,
         projected_views,
@@ -4370,7 +4515,7 @@ fn project_place_access_with_atomic(
     requirement: PlaceAccessRequirementV1,
     source: SemanticSourceProvenanceV1,
     constants: &[Option<u64>],
-    checked_reference_origins: &[Option<usize>],
+    local_contracts: &ProjectionLocalContractsV1,
     guarded_accesses: &[GuardedRankedAccessV1],
     guarded_sites: &mut Vec<GuardedAccessSiteV1>,
     projected_views: &mut [Option<ProjectedViewV1>],
@@ -4384,7 +4529,9 @@ fn project_place_access_with_atomic(
             "an atomic access whose ordering/scope contract is missing or attached to a non-atomic access",
         ));
     }
-    if let Some(origin) = checked_reference_origin(place, checked_reference_origins) {
+    if let Some(origin) =
+        checked_reference_origin(place, &local_contracts.checked_reference_origins)
+    {
         if atomic.is_some() {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "an atomic access through a checked disjoint reference before exact atomic capability projection",
@@ -4537,6 +4684,34 @@ fn project_place_access_with_atomic(
             "workgroup memory before exact semantic CFG projection is available",
         ));
     }
+    let allocation_contract = match memory_space {
+        MemorySpaceAttr::Global => local_contracts
+            .allocations
+            .get(place.local().index() as usize)
+            .copied()
+            .flatten()
+            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "an indexed global allocation lacks authenticated Rust pointer provenance",
+            ))?,
+        MemorySpaceAttr::Private => {
+            let identity = u64::from(place.local().index()).checked_add(1).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "a private allocation identity overflowed",
+                ),
+            )?;
+            AllocationContractV1 {
+                allocation_origin: identity,
+                noalias_class: identity,
+                writable: true,
+            }
+        }
+        MemorySpaceAttr::Workgroup => unreachable!(),
+    };
+    if access.writes_memory() && !allocation_contract.writable {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "a write is rooted in a read-only Rust allocation",
+        ));
+    }
     let view_slot = projected_views
         .get_mut(place.local().index() as usize)
         .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
@@ -4544,9 +4719,12 @@ fn project_place_access_with_atomic(
         ))?;
     let view_id = if let Some(view) = view_slot {
         if view.element_width != element_width
+            || view.writable != allocation_contract.writable
             || view.shape != shape
             || view.dynamic_extents != dynamic_extents
             || view.memory_space != memory_space
+            || view.allocation_origin != allocation_contract.allocation_origin
+            || view.noalias_class != allocation_contract.noalias_class
         {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "one semantic allocation used through inconsistent ranked views",
@@ -4558,29 +4736,35 @@ fn project_place_access_with_atomic(
         operations.push(ProductionRankedOperationV1::ViewInSpace {
             result: view_id,
             element_width,
-            writable: true,
+            writable: allocation_contract.writable,
             shape: shape.clone(),
             dynamic_extents: dynamic_extents.clone(),
             memory_space,
-            allocation_origin: 0,
-            noalias_class: 0,
+            allocation_origin: allocation_contract.allocation_origin,
+            noalias_class: allocation_contract.noalias_class,
         });
         push_ranked_ir(
             ranked_ir,
             &format!(
-                "  %{} = kernel.ranked_view <{}, true, {:?}, {:?}>\n",
+                "  %{} = kernel.ranked_view <{}, {}, {:?}, {:?}, origin={}, noalias={}>\n",
                 view_id.get(),
                 element_width,
+                allocation_contract.writable,
                 shape,
                 memory_space,
+                allocation_contract.allocation_origin,
+                allocation_contract.noalias_class,
             ),
         )?;
         *view_slot = Some(ProjectedViewV1 {
             result: view_id,
             element_width,
+            writable: allocation_contract.writable,
             shape: shape.clone(),
             dynamic_extents: dynamic_extents.clone(),
             memory_space,
+            allocation_origin: allocation_contract.allocation_origin,
+            noalias_class: allocation_contract.noalias_class,
         });
         view_id
     };
@@ -5269,6 +5453,7 @@ mod tests {
         let mut guarded_sites = Vec::new();
         let mut next_value = 0;
         let mut ranked_ir = String::new();
+        let local_contracts = synthetic_local_contracts(function);
         for (block_index, basic_block) in function.blocks().iter().enumerate() {
             for semantic_statement in basic_block.statements() {
                 project_statement_accesses(
@@ -5278,7 +5463,7 @@ mod tests {
                     &[],
                     semantic_statement,
                     &constants,
-                    &[],
+                    &local_contracts,
                     &[],
                     &mut guarded_sites,
                     &mut projected_views,
@@ -5297,7 +5482,7 @@ mod tests {
                 basic_block.terminator().kind(),
                 basic_block.terminator().source(),
                 &constants,
-                &[],
+                &local_contracts,
                 &[],
                 &mut guarded_sites,
                 &mut projected_views,
@@ -5308,6 +5493,22 @@ mod tests {
             )?;
         }
         Ok((operations, sources, ranked_ir))
+    }
+
+    fn synthetic_local_contracts(function: &SemanticFunctionDeclV1) -> ProjectionLocalContractsV1 {
+        ProjectionLocalContractsV1 {
+            checked_reference_origins: vec![None; function.locals().len()],
+            allocations: (0..function.locals().len())
+                .map(|local| {
+                    let identity = local as u64 + 1;
+                    Some(AllocationContractV1 {
+                        allocation_origin: identity,
+                        noalias_class: identity,
+                        writable: true,
+                    })
+                })
+                .collect(),
+        }
     }
 
     fn audit_statements(
@@ -5336,6 +5537,7 @@ mod tests {
                 | ProductionRankedOperationV1::Dimension { .. }
                 | ProductionRankedOperationV1::Barrier { .. }
                 | ProductionRankedOperationV1::Fence { .. }
+                | ProductionRankedOperationV1::TensorLayout { .. }
                 | ProductionRankedOperationV1::SemanticSymbol { .. }
                 | ProductionRankedOperationV1::SemanticConstant { .. }
                 | ProductionRankedOperationV1::SemanticBinary { .. }
@@ -5437,6 +5639,7 @@ mod tests {
         let mut projected_views = vec![None; function.locals().len()];
         let mut next_value = 0;
         let mut ranked_ir = String::new();
+        let local_contracts = synthetic_local_contracts(&function);
 
         project_rvalue_reads(
             &types,
@@ -5446,7 +5649,7 @@ mod tests {
             &checked,
             SemanticSourceProvenanceV1::unavailable(),
             &[None; 4],
-            &[],
+            &local_contracts,
             &[],
             &mut guarded_sites,
             &mut projected_views,
@@ -5603,12 +5806,20 @@ mod tests {
             "safe_syncthreads",
             0,
             vec![ProductionRankedBlockV1::new(
-                vec![ProductionRankedOperationV1::Barrier {
-                    execution_scope: HierarchyAttr::Workgroup,
-                    memory_scope: MemoryScopeAttr::Workgroup,
-                    address_space: AddressSpaceAttr::Workgroup,
-                    order: MemoryOrderAttr::AcquireRelease,
-                }],
+                vec![
+                    ProductionRankedOperationV1::ExecutionLayout {
+                        grid_identity: 1,
+                        global_extents: [64, 1, 1],
+                        workgroup_extents: [64, 1, 1],
+                        subgroup_size: 64,
+                    },
+                    ProductionRankedOperationV1::Barrier {
+                        execution_scope: HierarchyAttr::Workgroup,
+                        memory_scope: MemoryScopeAttr::Workgroup,
+                        address_space: AddressSpaceAttr::Workgroup,
+                        order: MemoryOrderAttr::AcquireRelease,
+                    },
+                ],
                 ProductionRankedTerminatorV1::Return,
             )],
         )
@@ -6296,19 +6507,65 @@ mod tests {
     }
 
     #[test]
-    fn distinct_writable_origins_cannot_share_an_unqualified_ranked_graph() {
-        let mut admitted = None;
-        admit_writable_origin(&mut admitted, 0).unwrap();
-        admit_writable_origin(&mut admitted, 0).unwrap();
-        let error = admit_writable_origin(&mut admitted, 1).unwrap_err();
+    fn rust_pointee_kinds_define_conservative_alias_classes() {
+        let shared = allocation_contract_from_pointee(
+            SemanticAbiPointeeKindV1::SharedReference { frozen: true },
+            true,
+            2,
+        );
+        let shared_interior_mutable = allocation_contract_from_pointee(
+            SemanticAbiPointeeKindV1::SharedReference { frozen: false },
+            false,
+            5,
+        );
+        let unique = allocation_contract_from_pointee(
+            SemanticAbiPointeeKindV1::MutableReference { unpin: true },
+            true,
+            3,
+        );
+        let unqualified = allocation_contract_from_pointee(
+            SemanticAbiPointeeKindV1::MutableReference { unpin: false },
+            false,
+            4,
+        );
 
-        assert!(matches!(
-            error,
-            ProductionRankedProjectionErrorV1::Incomplete(
-                "multiple writable global allocation origins require an authenticated runtime no-alias obligation"
-            )
-        ));
+        assert_eq!(shared.noalias_class, 1);
+        assert!(!shared.writable);
+        assert_eq!(shared_interior_mutable.noalias_class, 1);
+        assert!(shared_interior_mutable.writable);
+        assert_eq!(unique.noalias_class, 4);
+        assert!(unique.writable);
+        assert_eq!(unqualified.noalias_class, 0);
+        assert!(unqualified.writable);
     }
+
+    #[test]
+    fn source_execution_layout_keeps_grid_extents_dynamic() {
+        let dimensions = SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap();
+        let launch =
+            SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None).unwrap();
+        let source_contract =
+            SemanticKernelSourceContractV1::new(Some(launch), None, None).unwrap();
+        let function =
+            projection_function(vec![block(30, vec![], SemanticTerminatorKindV1::Return)])
+                .with_kernel_entry(SemanticKernelEntryV1::new(
+                    SemanticLinkSymbolV1::new(b"typed_kernel".to_vec()).unwrap(),
+                    SemanticKernelBindingIdentityV1::from_sha256(bytes(42)),
+                    source_contract,
+                ));
+
+        assert_eq!(
+            source_execution_layout_v1(SemanticTargetArchitectureV1::AmdGpuGfx942, &function)
+                .unwrap(),
+            ProductionRankedOperationV1::ExecutionLayout {
+                grid_identity: u64::from_le_bytes([42; 8]),
+                global_extents: [0; 3],
+                workgroup_extents: [64, 1, 1],
+                subgroup_size: 64,
+            }
+        );
+    }
+
     #[test]
     fn checked_reference_provenance_covers_only_the_exact_pointee() {
         let origins = [None, None, None, Some(7)];
@@ -6640,6 +6897,7 @@ mod tests {
         let mut guarded_sites = Vec::new();
         let mut next_value = 0;
         let mut ranked_ir = String::new();
+        let local_contracts = synthetic_local_contracts(&function);
         let error = project_statement_accesses(
             &types,
             &function,
@@ -6647,7 +6905,7 @@ mod tests {
             &[],
             &semantic_statement,
             &[None; 4],
-            &[],
+            &local_contracts,
             &[],
             &mut guarded_sites,
             &mut projected_views,

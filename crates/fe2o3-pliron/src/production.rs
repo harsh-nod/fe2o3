@@ -540,12 +540,20 @@ mod tests {
             0,
             vec![ProductionRankedBlockV1::new(
                 vec![
+                    ProductionRankedOperationV1::ExecutionLayout {
+                        grid_identity: 1,
+                        global_extents: [1, 1, 1],
+                        workgroup_extents: [1, 1, 1],
+                        subgroup_size: 1,
+                    },
                     ProductionRankedOperationV1::View {
                         result: view,
                         element_width: 32,
                         writable: false,
                         shape: vec![1],
                         dynamic_extents: vec![],
+                        allocation_origin: 1,
+                        noalias_class: 1,
                     },
                     ProductionRankedOperationV1::IndexConstant {
                         result: index,

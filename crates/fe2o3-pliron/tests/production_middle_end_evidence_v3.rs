@@ -140,12 +140,20 @@ fn ranked_input(index: u64) -> ProductionRankedKernelLoweringInputV1 {
         0,
         vec![ProductionRankedBlockV1::new(
             vec![
+                ProductionRankedOperationV1::ExecutionLayout {
+                    grid_identity: 1,
+                    global_extents: [1, 1, 1],
+                    workgroup_extents: [1, 1, 1],
+                    subgroup_size: 1,
+                },
                 ProductionRankedOperationV1::View {
                     result: view,
                     element_width: 32,
                     writable: false,
                     shape: vec![64],
                     dynamic_extents: vec![],
+                    allocation_origin: 1,
+                    noalias_class: 1,
                 },
                 ProductionRankedOperationV1::IndexConstant {
                     result: coordinate,
@@ -319,8 +327,8 @@ fn construction_is_deterministic_and_binds_typed_kernel_and_ranked_ir() {
     assert_eq!(
         *first.identity().sha256(),
         [
-            28, 172, 192, 14, 55, 233, 89, 175, 124, 242, 60, 196, 109, 150, 69, 205, 30, 19, 158,
-            31, 81, 70, 207, 224, 203, 95, 119, 185, 108, 154, 142, 32,
+            159, 58, 253, 230, 248, 16, 252, 163, 179, 27, 253, 148, 220, 233, 17, 42, 27, 114,
+            205, 152, 125, 162, 40, 32, 125, 245, 239, 13, 190, 8, 143, 8,
         ]
     );
 
