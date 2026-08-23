@@ -627,7 +627,6 @@ impl PreparedWorkerV2Config {
         )
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn preflight_protected_v3(
         &self,
         handoff: &InertSemanticCompilerModuleHandoffV3,
@@ -647,7 +646,6 @@ impl PreparedWorkerV2Config {
         )
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn execute_preflighted_protected_v3(
         &self,
         parent_consumed: ParentConsumedCompilerModuleHandoffV3,

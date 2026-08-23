@@ -180,14 +180,13 @@ impl ParentConsumedCompilerModuleHandoffV3 {
 
 /// Explicit selection of the protected compiler-module transport schema.
 ///
-/// Production remains on `ProtectedV2`. `ProtectedV3` is an additive, fail-closed intake path that
-/// derives the expected terminal identity from the exact durable V3 receipt under the cooperative
-/// lock. Neither variant authenticates compiler authorship.
+/// Production preselects `ProtectedV3`; legacy protected qualification routes remain on
+/// `ProtectedV2`. V3 derives the expected terminal identity from the exact durable receipt under
+/// the cooperative lock. Neither variant authenticates compiler authorship.
 pub(crate) enum ProtectedCompilerModuleHandoffIntake {
     ProtectedV2 {
         compiler_closure: Box<CompilerClosureV2>,
     },
-    #[cfg_attr(not(test), allow(dead_code))]
     ProtectedV3,
 }
 
@@ -198,7 +197,6 @@ impl ProtectedCompilerModuleHandoffIntake {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const fn protected_v3() -> Self {
         Self::ProtectedV3
     }

@@ -21,25 +21,33 @@ use fe2o3_artifact_transaction::{
     PersistedBackendReceiptV1, PersistedBackendReceiptV2, ProducerIdentity,
     RecoveredWorkerV2PublicationIntentV1, RecoveredWorkerV2PublicationIntentV2,
     WorkerV2PublicationIntentErrorV1, WorkerV2PublicationIntentErrorV2,
-    WorkerV2PublicationIntentRecordV2, begin_build_attempt, clear_worker_v2_publication_intent_v1,
-    clear_worker_v2_publication_intent_v2, consume_compiler_module_handoff_v1, fail_build_attempt,
-    finish_build_attempt, publish_exact_hsaco_evidence_for_attempt_v1,
-    publish_exact_hsaco_evidence_for_attempt_v2, read_backend_publication_receipt_v1,
-    read_backend_publication_receipt_v2, recover_published_hsaco_claim_for_attempt_v1,
-    recover_published_hsaco_claim_for_attempt_v2,
+    WorkerV2PublicationIntentRecordV2, WorkerV3PublicationIntentErrorV1, begin_build_attempt,
+    clear_worker_v2_publication_intent_v1, clear_worker_v2_publication_intent_v2,
+    consume_compiler_module_handoff_v1, fail_build_attempt, finish_build_attempt,
+    publish_exact_hsaco_evidence_for_attempt_v1, publish_exact_hsaco_evidence_for_attempt_v2,
+    read_backend_publication_receipt_v1, read_backend_publication_receipt_v2,
+    recover_published_hsaco_claim_for_attempt_v1, recover_published_hsaco_claim_for_attempt_v2,
+    retire_worker_v3_publication_intent_after_load_readiness_v1,
 };
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::{CompilerModuleHandoffV2, decode_row_softmax_compiler_sections_v1};
 use fe2o3_hsaco_finalize::{
-    CanonicalDescriptorSectionObservationV1, ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT,
+    CanonicalDescriptorSectionObservationV1, PublishedProtectedWorkerV3HsacoV1,
+    ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT, RecoveredProtectedWorkerV3HsacoPublicationV1,
     RowSoftmaxV1AuthorityPolicyV1, RowSoftmaxV1CompilerClosurePolicyV1,
     RowSoftmaxV1DirectWorkerExpectationV1, RowSoftmaxV1ProviderManifestV1,
-    derive_row_softmax_v1_provider_source_identity_v1,
-    finalize_inspected_protected_worker_v2_hsaco_v2, inspect_production_v1_worker_v2_raw_hsaco_v1,
+    WorkerV3HsacoPublicationErrorV1, derive_row_softmax_v1_provider_source_identity_v1,
+    finalize_inspected_protected_worker_v2_hsaco_v2,
+    finalize_inspected_protected_worker_v3_hsaco_v1, inspect_production_v1_worker_v2_raw_hsaco_v1,
     inspect_protected_production_v1_worker_v2_raw_hsaco_v1,
+    inspect_protected_production_v1_worker_v3_raw_hsaco_v1,
     inspect_protected_worker_v2_raw_hsaco_v1, inspect_worker_v2_raw_hsaco_v1,
+    persist_prepared_protected_worker_v3_hsaco_publication_v1,
     prepare_finalized_protected_worker_v2_hsaco_publication_v2,
     prepare_protected_worker_v2_hsaco_publication_v2,
+    prepare_protected_worker_v3_hsaco_publication_v1,
+    publish_recovered_protected_worker_v3_hsaco_v1,
+    recover_protected_worker_v3_hsaco_publication_v1,
 };
 use fe2o3_kernel_descriptor::CodeObjectVersion;
 use fe2o3_process_identity::{
@@ -50,7 +58,10 @@ use fe2o3_rustc_invocation::{
     RustcArgsErrorV2, RustcCompileInvocationV2, RustcInvocationV2, classify_rustc_invocation_v2,
     is_rustc_codegen_backend_selector_v2, is_rustc_option_terminator_v2,
 };
-use fe2o3_worker_v2_bundle::{WorkerV2EnvelopeInputsV1, WorkerV2ProducerBindingV2};
+use fe2o3_worker_v2_bundle::{
+    RecoveredWorkerV3LoadEnvelopeV1, WorkerV2EnvelopeInputsV1, WorkerV2ProducerBindingV2,
+    WorkerV3LoadEnvelopeErrorV1, WorkerV3LoadEnvelopeV1, recover_worker_v3_load_envelope_v1,
+};
 use reserved_fe2o3_symbols::{
     CRATE_BINDING_ID_ENV_V1, CrateBindingIdV1, derive_crate_binding_id_v1,
 };
@@ -2750,19 +2761,38 @@ struct RowSoftmaxReleaseContext {
 enum WorkerV2BindingSchema {
     OrdinaryV1,
     ProtectedV2,
+    ProductionV3,
 }
 
 impl WorkerV2BindingSchema {
-    const fn from_compiler_closure(compiler_closure: Option<CompilerClosureV2>) -> Self {
-        match compiler_closure {
-            Some(_) => Self::ProtectedV2,
-            None => Self::OrdinaryV1,
+    const fn select(
+        compiler_closure: Option<CompilerClosureV2>,
+        production_v1: bool,
+    ) -> Result<Self, &'static str> {
+        match (compiler_closure, production_v1) {
+            (Some(_), true) => Ok(Self::ProductionV3),
+            (Some(_), false) => Ok(Self::ProtectedV2),
+            (None, false) => Ok(Self::OrdinaryV1),
+            (None, true) => Err(
+                "production-v1 requires protected V3 compiler-closure custody before route selection",
+            ),
         }
     }
 
     const fn is_protected(self) -> bool {
-        matches!(self, Self::ProtectedV2)
+        matches!(self, Self::ProtectedV2 | Self::ProductionV3)
     }
+}
+
+fn worker_v3_readiness_is_absent(error: &WorkerV3LoadEnvelopeErrorV1) -> bool {
+    matches!(
+        error,
+        WorkerV3LoadEnvelopeErrorV1::LoadReadiness(
+            fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::MissingEnvelope
+                | fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::MissingClaim
+                | fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::MissingReceipt
+        )
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2814,6 +2844,17 @@ enum ManagedWorkerV2 {
         compiler_closure: CompilerClosureV2,
         producer_binding: WorkerV2ProducerBindingV2,
     },
+    FreshV3 {
+        config: Box<PreparedWorkerV2Config>,
+        compiler_closure: CompilerClosureV2,
+    },
+    RecoveryV3 {
+        recovered: RecoveredProtectedWorkerV3HsacoPublicationV1,
+        compiler_closure: CompilerClosureV2,
+    },
+    RecoveryReadyV3 {
+        envelope: RecoveredWorkerV3LoadEnvelopeV1,
+    },
 }
 
 enum CompletionFailure {
@@ -2825,7 +2866,12 @@ impl ManagedAttempt {
     fn is_worker_v2_recovery(&self) -> bool {
         matches!(
             self.worker_v2,
-            Some(ManagedWorkerV2::RecoveryV1 { .. } | ManagedWorkerV2::RecoveryV2 { .. })
+            Some(
+                ManagedWorkerV2::RecoveryV1 { .. }
+                    | ManagedWorkerV2::RecoveryV2 { .. }
+                    | ManagedWorkerV2::RecoveryV3 { .. }
+                    | ManagedWorkerV2::RecoveryReadyV3 { .. }
+            )
         )
     }
 
@@ -2835,9 +2881,16 @@ impl ManagedAttempt {
                 config.source_debug_profile()
             }
             Some(
-                ManagedWorkerV2::FreshV1 { config, .. } | ManagedWorkerV2::FreshV2 { config, .. },
+                ManagedWorkerV2::FreshV1 { config, .. }
+                | ManagedWorkerV2::FreshV2 { config, .. }
+                | ManagedWorkerV2::FreshV3 { config, .. },
             ) => config.source_debug_profile(),
-            Some(ManagedWorkerV2::RecoveryV1 { .. } | ManagedWorkerV2::RecoveryV2 { .. })
+            Some(
+                ManagedWorkerV2::RecoveryV1 { .. }
+                | ManagedWorkerV2::RecoveryV2 { .. }
+                | ManagedWorkerV2::RecoveryV3 { .. }
+                | ManagedWorkerV2::RecoveryReadyV3 { .. },
+            )
             | None => None,
         }
     }
@@ -2863,7 +2916,10 @@ impl ManagedAttempt {
                 ManagedWorkerV2::FreshV1 { .. }
                 | ManagedWorkerV2::RecoveryV1 { .. }
                 | ManagedWorkerV2::FreshV2 { .. }
-                | ManagedWorkerV2::RecoveryV2 { .. },
+                | ManagedWorkerV2::RecoveryV2 { .. }
+                | ManagedWorkerV2::FreshV3 { .. }
+                | ManagedWorkerV2::RecoveryV3 { .. }
+                | ManagedWorkerV2::RecoveryReadyV3 { .. },
             )
             | None => None,
         }
@@ -2879,7 +2935,9 @@ impl ManagedAttempt {
     ) -> Result<Option<WorkerV2BuildObservation<'_>>, BindingWrapperError> {
         match &self.worker_v2 {
             Some(
-                ManagedWorkerV2::FreshV1 { config, .. } | ManagedWorkerV2::FreshV2 { config, .. },
+                ManagedWorkerV2::FreshV1 { config, .. }
+                | ManagedWorkerV2::FreshV2 { config, .. }
+                | ManagedWorkerV2::FreshV3 { config, .. },
             ) if config.source_debug_profile().is_some() => {
                 let cargo_fe2o3_executable_sha256 =
                     measure_build_executable("/proc/self/exe", "cargo-fe2o3 wrapper")?;
@@ -2905,6 +2963,9 @@ impl ManagedAttempt {
             | Some(ManagedWorkerV2::RecoveryV1 { .. })
             | Some(ManagedWorkerV2::FreshV2 { .. })
             | Some(ManagedWorkerV2::RecoveryV2 { .. })
+            | Some(ManagedWorkerV2::FreshV3 { .. })
+            | Some(ManagedWorkerV2::RecoveryV3 { .. })
+            | Some(ManagedWorkerV2::RecoveryReadyV3 { .. })
             | None => Ok(None),
         }
     }
@@ -2969,8 +3030,12 @@ fn prepare_managed_attempt(
         )
     };
     let protected_compiler_closure = compiler_capabilities.protected_compiler_closure()?;
+    let production_v1_worker = worker_v2
+        .as_ref()
+        .is_some_and(PreparedWorkerV2Config::is_production_v1);
     let worker_v2_binding_schema =
-        WorkerV2BindingSchema::from_compiler_closure(protected_compiler_closure);
+        WorkerV2BindingSchema::select(protected_compiler_closure, production_v1_worker)
+            .map_err(|error| BindingWrapperError::BuildObservation(error.to_owned()))?;
     let release_action = std::env::var_os(crate::PROTECTED_RELEASE_ACTION_ENV);
     let row_softmax_provision =
         release_action.as_deref() == Some(OsStr::new(ROW_SOFTMAX_V1_PROVISION_VALUE));
@@ -3037,6 +3102,55 @@ fn prepare_managed_attempt(
                 }),
                 true,
             )
+        } else if worker_v2_binding_schema == WorkerV2BindingSchema::ProductionV3 {
+            let compiler_closure = protected_compiler_closure
+                .expect("production V3 schema retains its exact compiler closure");
+            let attempt = begin_build_attempt(output_dir, &producer, invocation, session)
+                .map_err(BindingWrapperError::Artifact)?;
+            let recovered_envelope = match recover_worker_v3_load_envelope_v1(output_dir, attempt) {
+                Ok(envelope) => Some(envelope),
+                Err(error) if worker_v3_readiness_is_absent(&error) => None,
+                Err(error) => {
+                    return Err(BindingWrapperError::BuildObservation(format!(
+                        "production V3 load-readiness recovery failed closed: {error}"
+                    )));
+                }
+            };
+            if let Some(envelope) = recovered_envelope {
+                (
+                    attempt,
+                    Some(ManagedWorkerV2::RecoveryReadyV3 { envelope }),
+                    false,
+                )
+            } else {
+                match recover_protected_worker_v3_hsaco_publication_v1(
+                    output_dir, &producer, attempt,
+                ) {
+                    Ok(recovered) => (
+                        attempt,
+                        Some(ManagedWorkerV2::RecoveryV3 {
+                            recovered,
+                            compiler_closure,
+                        }),
+                        false,
+                    ),
+                    Err(WorkerV3HsacoPublicationErrorV1::Storage(
+                        WorkerV3PublicationIntentErrorV1::NotFound,
+                    )) => (
+                        attempt,
+                        Some(ManagedWorkerV2::FreshV3 {
+                            config: Box::new(config),
+                            compiler_closure,
+                        }),
+                        true,
+                    ),
+                    Err(error) => {
+                        return Err(BindingWrapperError::BuildObservation(format!(
+                            "production V3 restart recovery failed closed: {error}"
+                        )));
+                    }
+                }
+            }
         } else if worker_v2_binding_schema == WorkerV2BindingSchema::ProtectedV2 {
             let compiler_closure = protected_compiler_closure
                 .expect("protected schema retains its exact compiler closure");
@@ -3178,9 +3292,9 @@ fn complete_managed_attempt(
                 ))
             })?;
             debug_assert!(!custody.grants_compiler_authority());
-            complete_managed_attempt_inner(&mut managed)
+            complete_managed_attempt_inner(&mut managed, Some(custody))
         }),
-        None => complete_managed_attempt_inner(&mut managed),
+        None => complete_managed_attempt_inner(&mut managed, None),
     };
 
     match completion {
@@ -3199,7 +3313,10 @@ fn complete_managed_attempt(
     }
 }
 
-fn complete_managed_attempt_inner(managed: &mut ManagedAttempt) -> Result<(), CompletionFailure> {
+fn complete_managed_attempt_inner(
+    managed: &mut ManagedAttempt,
+    parent_custody: Option<&ParentRustcInvocationCustody>,
+) -> Result<(), CompletionFailure> {
     if managed.row_softmax_provision {
         return complete_row_softmax_v1_provision(managed);
     }
@@ -3247,6 +3364,27 @@ fn complete_managed_attempt_inner(managed: &mut ManagedAttempt) -> Result<(), Co
                 compiler_closure,
                 &producer_binding,
             ),
+            ManagedWorkerV2::FreshV3 {
+                config,
+                compiler_closure,
+            } => complete_fresh_production_worker_v3(
+                managed,
+                &config,
+                compiler_closure,
+                parent_custody.ok_or_else(|| {
+                    CompletionFailure::Uncommitted(
+                        "production V3 completion lost exact parent rustc invocation custody"
+                            .to_owned(),
+                    )
+                })?,
+            ),
+            ManagedWorkerV2::RecoveryV3 {
+                recovered,
+                compiler_closure,
+            } => complete_recovered_production_worker_v3(managed, recovered, compiler_closure),
+            ManagedWorkerV2::RecoveryReadyV3 { envelope } => {
+                complete_ready_production_worker_v3(managed, envelope)
+            }
         };
     }
     finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(|error| {
@@ -3457,6 +3595,162 @@ fn complete_fresh_worker_v2(
         &worker_v2_request_identity,
     )?;
     publish_finish_and_clear(managed, resume, persisted.publication, persisted.intent)
+}
+
+fn complete_fresh_production_worker_v3(
+    managed: &ManagedAttempt,
+    worker: &PreparedWorkerV2Config,
+    compiler_closure: CompilerClosureV2,
+    parent_custody: &ParentRustcInvocationCustody,
+) -> Result<(), CompletionFailure> {
+    if !worker.is_production_v1() {
+        return Err(CompletionFailure::Uncommitted(
+            "strict V3 compiler intake accepts only the preselected production-v1 worker"
+                .to_owned(),
+        ));
+    }
+    let intake = ProtectedCompilerModuleHandoffIntake::protected_v3();
+    let (consumed, preflight) = intake
+        .consume_v3_after_preflight(
+            &managed.output_dir,
+            &managed.producer,
+            managed.attempt,
+            parent_custody,
+            |handoff, receipt, observed_closure| {
+                if observed_closure != compiler_closure {
+                    return Err(
+                        fe2o3_hsaco_finalize::ProtectedFirstBuildWorkerV3Error::ReplayValidation {
+                            field: "Cargo compiler closure changed before V3 worker preflight",
+                        },
+                    );
+                }
+                worker.preflight_protected_v3(handoff, receipt, observed_closure)
+            },
+        )
+        .map_err(|error| {
+            CompletionFailure::Uncommitted(format!(
+                "strict V3 compiler-module preflight/consumption failed: {error}"
+            ))
+        })?;
+    let evidence = worker
+        .execute_preflighted_protected_v3(consumed, preflight)
+        .map_err(|error| {
+            CompletionFailure::Uncommitted(format!(
+                "strict V3 reproducible worker execution failed: {error}"
+            ))
+        })?;
+    let inspected =
+        inspect_protected_production_v1_worker_v3_raw_hsaco_v1(evidence).map_err(|error| {
+            CompletionFailure::Uncommitted(format!(
+                "independent strict V3 raw-HSACO inspection failed: {error}"
+            ))
+        })?;
+    let finalized =
+        finalize_inspected_protected_worker_v3_hsaco_v1(inspected).map_err(|error| {
+            CompletionFailure::Uncommitted(format!(
+                "strict V3 canonical HSACO finalization failed: {error}"
+            ))
+        })?;
+    let prepared = prepare_protected_worker_v3_hsaco_publication_v1(&managed.producer, finalized)
+        .map_err(|error| {
+        CompletionFailure::Uncommitted(format!(
+            "strict V3 durable publication preparation failed: {error}"
+        ))
+    })?;
+    let recovered = persist_prepared_protected_worker_v3_hsaco_publication_v1(
+        &managed.output_dir,
+        &managed.producer,
+        prepared,
+    )
+    .map_err(|error| {
+        CompletionFailure::PreserveAttempt(format!(
+            "strict V3 durable publication persistence failed: {error}"
+        ))
+    })?;
+    complete_recovered_production_worker_v3(managed, recovered, compiler_closure)
+}
+
+fn complete_recovered_production_worker_v3(
+    managed: &ManagedAttempt,
+    recovered: RecoveredProtectedWorkerV3HsacoPublicationV1,
+    compiler_closure: CompilerClosureV2,
+) -> Result<(), CompletionFailure> {
+    let published = publish_recovered_protected_worker_v3_hsaco_v1(
+        &managed.output_dir,
+        &managed.producer,
+        compiler_closure,
+        recovered,
+    )
+    .map_err(|error| {
+        CompletionFailure::PreserveAttempt(format!(
+            "strict V3 finalized-HSACO publication failed: {error}"
+        ))
+    })?;
+    complete_published_production_worker_v3(managed, published)
+}
+
+fn complete_published_production_worker_v3(
+    managed: &ManagedAttempt,
+    published: PublishedProtectedWorkerV3HsacoV1,
+) -> Result<(), CompletionFailure> {
+    let intent_identity = published.recovered_evidence().storage_record().identity();
+    let envelope = WorkerV3LoadEnvelopeV1::from_published_hsaco_v1(published).map_err(|error| {
+        CompletionFailure::PreserveAttempt(format!(
+            "strict V3 load-envelope custody construction failed: {error}"
+        ))
+    })?;
+    let readiness = envelope
+        .persist_durable_replay_custody_v1(&managed.output_dir)
+        .map_err(|error| {
+            CompletionFailure::PreserveAttempt(format!(
+                "strict V3 load-envelope custody persistence failed: {error}"
+            ))
+        })?;
+    retire_worker_v3_publication_intent_after_load_readiness_v1(
+        &managed.output_dir,
+        &managed.producer,
+        managed.attempt,
+        intent_identity,
+        readiness.receipt(),
+    )
+    .map_err(|error| {
+        CompletionFailure::PreserveAttempt(format!(
+            "strict V3 publication-intent retirement failed: {error}"
+        ))
+    })?;
+    drop(envelope);
+    finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(|error| {
+        CompletionFailure::PreserveAttempt(format!(
+            "strict V3 build-attempt completion failed: {error}"
+        ))
+    })
+}
+
+fn complete_ready_production_worker_v3(
+    managed: &ManagedAttempt,
+    envelope: RecoveredWorkerV3LoadEnvelopeV1,
+) -> Result<(), CompletionFailure> {
+    let intent_identity = envelope.wire().publication_intent_record().identity();
+    match retire_worker_v3_publication_intent_after_load_readiness_v1(
+        &managed.output_dir,
+        &managed.producer,
+        managed.attempt,
+        intent_identity,
+        envelope.receipt(),
+    ) {
+        Ok(()) | Err(WorkerV3PublicationIntentErrorV1::NotFound) => {}
+        Err(error) => {
+            return Err(CompletionFailure::PreserveAttempt(format!(
+                "recovered strict V3 publication-intent retirement failed: {error}"
+            )));
+        }
+    }
+    drop(envelope);
+    finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(|error| {
+        CompletionFailure::PreserveAttempt(format!(
+            "recovered strict V3 build-attempt completion failed: {error}"
+        ))
+    })
 }
 
 fn complete_fresh_protected_worker_v2(
@@ -4754,7 +5048,7 @@ mod tests {
         publish_finish_and_clear_protected, reject_authority_linker_arguments,
         reject_uninspectable_rustc_args, resolve_command_executable_with_path,
         row_softmax_effective_rustc_argv_identity, row_softmax_provider_observation_json,
-        scope_unmanaged_production_environment,
+        scope_unmanaged_production_environment, worker_v3_readiness_is_absent,
     };
     use crate::inert_rustc_invocation_capture::InertRustcInvocationCaptureV2;
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
@@ -4808,6 +5102,7 @@ mod tests {
         ContentIdentityV1, ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT,
         ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1,
     };
+    use fe2o3_worker_v2_bundle::WorkerV3LoadEnvelopeErrorV1;
     use fe2o3_worker_v2_bundle::{
         ExactRawHsacoV1, WorkerV2EnvelopeInputsV1, WorkerV2ProducerBindingV2,
     };
@@ -8141,7 +8436,7 @@ mod tests {
     #[test]
     fn ordinary_binding_selection_retains_the_v1_resume_schema_and_bytes() {
         assert_eq!(
-            WorkerV2BindingSchema::from_compiler_closure(None),
+            WorkerV2BindingSchema::select(None, false).unwrap(),
             WorkerV2BindingSchema::OrdinaryV1
         );
         let directory = test_artifact_directory("ordinary-v1");
@@ -8179,9 +8474,14 @@ mod tests {
     fn protected_binding_recovers_only_the_exact_v2_compiler_closure() {
         let closure = protected_test_closure(0x51);
         assert_eq!(
-            WorkerV2BindingSchema::from_compiler_closure(Some(closure)),
+            WorkerV2BindingSchema::select(Some(closure), false).unwrap(),
             WorkerV2BindingSchema::ProtectedV2
         );
+        assert_eq!(
+            WorkerV2BindingSchema::select(Some(closure), true).unwrap(),
+            WorkerV2BindingSchema::ProductionV3
+        );
+        assert!(WorkerV2BindingSchema::select(None, true).is_err());
         let directory = test_artifact_directory("protected-v2");
         let producer = ProducerIdentity::from_codegen(
             "protected_v2",
@@ -8228,6 +8528,23 @@ mod tests {
         assert_eq!(reopened.load().unwrap(), Some(pending));
         drop(reopened);
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn production_v3_readiness_recovery_distinguishes_absence_from_corruption() {
+        assert!(worker_v3_readiness_is_absent(
+            &WorkerV3LoadEnvelopeErrorV1::LoadReadiness(
+                fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::MissingEnvelope,
+            ),
+        ));
+        assert!(worker_v3_readiness_is_absent(
+            &WorkerV3LoadEnvelopeErrorV1::LoadReadiness(
+                fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::MissingClaim,
+            ),
+        ));
+        assert!(!worker_v3_readiness_is_absent(
+            &WorkerV3LoadEnvelopeErrorV1::BadMagic,
+        ));
     }
 
     #[test]
