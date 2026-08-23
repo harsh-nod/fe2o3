@@ -13,10 +13,11 @@ use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, Axis, BarrierSemantics, BasicBlock,
     BinaryOp, BlockId, CastKind, ComparePredicate, Constant, Convergence, F32MathFunction,
     FloatOperation, Function, FunctionId, IndexKind, IntrinsicKind, IntrinsicOperation, Kernel,
-    LaunchDomain, LaunchExtent, MatrixOperation, MemoryAccess, MemoryOrdering, Module, Operation,
-    OperationKind, ScalarType, Signature, SwitchCase, SynchronizationScope, Terminator, Type,
-    UnaryOp, ValueDef, ValueId, VerificationErrors, WaveOperation, WaveOperationKind, WaveWidth,
-    WorkgroupBarrier, WorkgroupSize, verify_module,
+    LaunchDomain, LaunchExtent, MAX_OPERATIONS_V1 as MAX_BLOCK_OPERATIONS_V1, MatrixOperation,
+    MemoryAccess, MemoryOrdering, Module, Operation, OperationKind, ScalarType, Signature,
+    SwitchCase, SynchronizationScope, Terminator, Type, UnaryOp, ValueDef, ValueId,
+    VerificationErrors, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
+    WorkgroupSize, verify_module,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAssertMessageV1, SemanticAxisV1, SemanticBinaryOpV1, SemanticBlockIdV1,
@@ -41,6 +42,7 @@ use fe2o3_pliron::{
 const DEFAULT_MAX_FUNCTIONS_V1: usize = 1_024;
 const DEFAULT_MAX_BLOCKS_V1: usize = 16_384;
 const DEFAULT_MAX_STATEMENTS_V1: usize = 1_048_576;
+const DEFAULT_MAX_OPERATIONS_V1: usize = 1_048_576;
 
 /// Independent work limits for semantic-MIR-to-Kernel-IR lowering.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,25 +50,43 @@ pub struct ProductionSemanticKirLimitsV1 {
     max_functions: usize,
     max_blocks: usize,
     max_statements: usize,
+    max_operations: usize,
 }
 
 impl ProductionSemanticKirLimitsV1 {
     /// Constructs explicit lowering limits.
     pub const fn new(max_functions: usize, max_blocks: usize, max_statements: usize) -> Self {
+        Self::new_with_max_operations(
+            max_functions,
+            max_blocks,
+            max_statements,
+            DEFAULT_MAX_OPERATIONS_V1,
+        )
+    }
+
+    /// Constructs explicit lowering limits, including the module-wide emitted-operation budget.
+    pub const fn new_with_max_operations(
+        max_functions: usize,
+        max_blocks: usize,
+        max_statements: usize,
+        max_operations: usize,
+    ) -> Self {
         Self {
             max_functions,
             max_blocks,
             max_statements,
+            max_operations,
         }
     }
 }
 
 impl Default for ProductionSemanticKirLimitsV1 {
     fn default() -> Self {
-        Self::new(
+        Self::new_with_max_operations(
             DEFAULT_MAX_FUNCTIONS_V1,
             DEFAULT_MAX_BLOCKS_V1,
             DEFAULT_MAX_STATEMENTS_V1,
+            DEFAULT_MAX_OPERATIONS_V1,
         )
     }
 }
@@ -80,6 +100,8 @@ pub enum ProductionSemanticKirResourceV1 {
     Blocks,
     /// Semantic statements inspected.
     Statements,
+    /// Kernel IR operations emitted across all blocks.
+    Operations,
 }
 
 /// Pointer-independent evidence relating one source block to one Kernel IR block.
@@ -113,12 +135,139 @@ impl SemanticKirBlockCorrespondenceV1 {
     }
 }
 
-/// Stable evidence binding one Kernel IR module to exact admitted semantics.
+/// Exact Kernel IR operation span emitted by one semantic MIR statement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SemanticKirStatementOperationSpanV1 {
+    semantic_function: SemanticFunctionIdV1,
+    semantic_block: SemanticBlockIdV1,
+    statement_ordinal: u32,
+    kernel_ir_block: BlockId,
+    first_operation_ordinal: u32,
+    operation_count: u32,
+}
+
+impl SemanticKirStatementOperationSpanV1 {
+    /// Returns the exact semantic function locator.
+    pub const fn semantic_function(self) -> SemanticFunctionIdV1 {
+        self.semantic_function
+    }
+
+    /// Returns the exact semantic block locator.
+    pub const fn semantic_block(self) -> SemanticBlockIdV1 {
+        self.semantic_block
+    }
+
+    /// Returns the zero-based statement ordinal within the semantic block.
+    pub const fn statement_ordinal(self) -> u32 {
+        self.statement_ordinal
+    }
+
+    /// Returns the Kernel IR block that contains the emitted operations.
+    pub const fn kernel_ir_block(self) -> BlockId {
+        self.kernel_ir_block
+    }
+
+    /// Returns the zero-based ordinal of the first emitted operation.
+    pub const fn first_operation_ordinal(self) -> u32 {
+        self.first_operation_ordinal
+    }
+
+    /// Returns the exact number of emitted operations, including zero.
+    pub const fn operation_count(self) -> u32 {
+        self.operation_count
+    }
+}
+
+/// Exact Kernel IR operation span emitted while lowering one semantic MIR terminator.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SemanticKirTerminatorOperationSpanV1 {
+    semantic_function: SemanticFunctionIdV1,
+    semantic_block: SemanticBlockIdV1,
+    kernel_ir_block: BlockId,
+    first_operation_ordinal: u32,
+    operation_count: u32,
+}
+
+impl SemanticKirTerminatorOperationSpanV1 {
+    /// Returns the exact semantic function locator.
+    pub const fn semantic_function(self) -> SemanticFunctionIdV1 {
+        self.semantic_function
+    }
+
+    /// Returns the exact semantic block locator.
+    pub const fn semantic_block(self) -> SemanticBlockIdV1 {
+        self.semantic_block
+    }
+
+    /// Returns the Kernel IR block that contains the emitted operations.
+    pub const fn kernel_ir_block(self) -> BlockId {
+        self.kernel_ir_block
+    }
+
+    /// Returns the zero-based ordinal of the first emitted operation.
+    pub const fn first_operation_ordinal(self) -> u32 {
+        self.first_operation_ordinal
+    }
+
+    /// Returns the exact number of operations emitted by the terminator.
+    pub const fn operation_count(self) -> u32 {
+        self.operation_count
+    }
+}
+
+/// Closed lowering rule responsible for operations without a semantic MIR source construct.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SemanticKirSyntheticOperationRuleV1 {
+    /// The canonical trap operation in the shared runtime-assert failure block.
+    RuntimeAssertFailureTrap,
+}
+
+/// Exact Kernel IR operation span emitted by one typed synthetic lowering rule.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SemanticKirSyntheticOperationSpanV1 {
+    rule: SemanticKirSyntheticOperationRuleV1,
+    kernel_ir_block: BlockId,
+    first_operation_ordinal: u32,
+    operation_count: u32,
+}
+
+impl SemanticKirSyntheticOperationSpanV1 {
+    /// Returns the closed synthetic lowering rule.
+    pub const fn rule(self) -> SemanticKirSyntheticOperationRuleV1 {
+        self.rule
+    }
+
+    /// Returns the Kernel IR block that contains the synthetic operations.
+    pub const fn kernel_ir_block(self) -> BlockId {
+        self.kernel_ir_block
+    }
+
+    /// Returns the zero-based ordinal of the first synthetic operation.
+    pub const fn first_operation_ordinal(self) -> u32 {
+        self.first_operation_ordinal
+    }
+
+    /// Returns the exact number of operations emitted by the synthetic rule.
+    pub const fn operation_count(self) -> u32 {
+        self.operation_count
+    }
+}
+
+/// Stable operation-attribution trace retained by one live lowering owner.
+///
+/// Span records identify which lowering invocation emitted each operation. They
+/// do not independently prove that an operation implements its source
+/// construct. Semantic authority remains with [`ProductionSemanticKirOwnerV1`],
+/// whose equivalence check replays lowering and compares the complete module
+/// and trace.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticKirCorrespondenceV1 {
     semantic_sha256: [u8; 32],
     function_count: usize,
     blocks: Box<[SemanticKirBlockCorrespondenceV1]>,
+    statement_operation_spans: Box<[SemanticKirStatementOperationSpanV1]>,
+    terminator_operation_spans: Box<[SemanticKirTerminatorOperationSpanV1]>,
+    synthetic_operation_spans: Box<[SemanticKirSyntheticOperationSpanV1]>,
 }
 
 impl SemanticKirCorrespondenceV1 {
@@ -136,6 +285,33 @@ impl SemanticKirCorrespondenceV1 {
     pub fn blocks(&self) -> &[SemanticKirBlockCorrespondenceV1] {
         &self.blocks
     }
+
+    /// Returns exact source-statement operation spans in lowering order.
+    ///
+    /// Zero-operation statements are represented by an explicit zero-length
+    /// span at the current operation ordinal.
+    pub fn statement_operation_spans(&self) -> &[SemanticKirStatementOperationSpanV1] {
+        &self.statement_operation_spans
+    }
+
+    /// Returns exact source-terminator operation spans in lowering order.
+    pub fn terminator_operation_spans(&self) -> &[SemanticKirTerminatorOperationSpanV1] {
+        &self.terminator_operation_spans
+    }
+
+    /// Returns operation spans introduced by closed synthetic lowering rules.
+    pub fn synthetic_operation_spans(&self) -> &[SemanticKirSyntheticOperationSpanV1] {
+        &self.synthetic_operation_spans
+    }
+
+    fn validate_layout_against(
+        &self,
+        semantic_owner: &ProductionSemanticMirOwnerV1,
+        module: &Module,
+        discharge_ranked_bounds: bool,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        validate_semantic_kir_correspondence(semantic_owner, module, self, discharge_ranked_bounds)
+    }
 }
 
 /// Fail-closed diagnostics from production target-neutral lowering.
@@ -151,6 +327,11 @@ pub enum ProductionSemanticKirErrorV1 {
         actual: usize,
         /// Configured maximum.
         limit: usize,
+    },
+    /// Storage for a bounded lowering resource could not be reserved.
+    AllocationFailure {
+        /// Resource whose bounded storage reservation failed.
+        resource: ProductionSemanticKirResourceV1,
     },
     /// A semantic construct has no exact lowering rule.
     Unsupported {
@@ -192,6 +373,10 @@ impl fmt::Display for ProductionSemanticKirErrorV1 {
                 formatter,
                 "semantic-to-Kernel-IR {resource:?} work {actual} exceeds limit {limit}",
             ),
+            Self::AllocationFailure { resource } => write!(
+                formatter,
+                "semantic-to-Kernel-IR could not reserve bounded {resource:?} storage",
+            ),
             Self::Unsupported {
                 function,
                 block,
@@ -224,6 +409,7 @@ impl Error for ProductionSemanticKirErrorV1 {
             Self::SemanticOwner(error) => Some(error),
             Self::InvalidKernelIr(error) => Some(error),
             Self::ResourceLimit { .. }
+            | Self::AllocationFailure { .. }
             | Self::Unsupported { .. }
             | Self::MissingLocalDefinition { .. }
             | Self::CorrespondenceMismatch => None,
@@ -510,6 +696,242 @@ fn mandatory_generic_checks_are_clean(lowering: &ProductionRankedKernelLoweringI
         && lowering.semantic_report().is_clean()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ExpectedSemanticKirBlockCoverageV1 {
+    semantic_function: SemanticFunctionIdV1,
+    semantic_block: SemanticBlockIdV1,
+    kernel_ir_block: BlockId,
+    source_statement_count: u32,
+}
+
+fn validate_semantic_kir_correspondence(
+    owner: &ProductionSemanticMirOwnerV1,
+    module: &Module,
+    correspondence: &SemanticKirCorrespondenceV1,
+    discharge_ranked_bounds: bool,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    let semantic = owner.semantic();
+    if correspondence.semantic_sha256 != *semantic.semantic_sha256().as_bytes()
+        || correspondence.function_count != semantic.functions().len()
+        || semantic.functions().len() != 1
+    {
+        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+    }
+    let function = &semantic.functions()[0];
+    let synthetic_rule =
+        semantic_requires_runtime_assert_failure(function, discharge_ranked_bounds)
+            .then_some(SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap);
+    let order = semantic_cfg_preorder(function)
+        .map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+    let expected = order
+        .into_iter()
+        .map(|semantic_block| {
+            let block_index = usize::try_from(semantic_block.index())
+                .map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            let source = function
+                .blocks()
+                .get(block_index)
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            Ok(ExpectedSemanticKirBlockCoverageV1 {
+                semantic_function: SemanticFunctionIdV1::from_index(0),
+                semantic_block,
+                kernel_ir_block: BlockId(semantic_block.index()),
+                source_statement_count: u32::try_from(source.statements().len())
+                    .map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+            })
+        })
+        .collect::<Result<Vec<_>, ProductionSemanticKirErrorV1>>()?;
+    let mut function_bodies = module
+        .functions
+        .iter()
+        .filter_map(|function| function.body.as_ref());
+    let target_blocks = function_bodies
+        .next()
+        .map(|body| body.blocks.as_slice())
+        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+    if function_bodies.next().is_some() {
+        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+    }
+    if validate_operation_correspondence_layout(
+        &expected,
+        target_blocks,
+        &correspondence.blocks,
+        &correspondence.statement_operation_spans,
+        &correspondence.terminator_operation_spans,
+        &correspondence.synthetic_operation_spans,
+        synthetic_rule,
+    ) {
+        Ok(())
+    } else {
+        Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch)
+    }
+}
+
+fn validate_operation_correspondence_layout(
+    expected: &[ExpectedSemanticKirBlockCoverageV1],
+    target_blocks: &[BasicBlock],
+    blocks: &[SemanticKirBlockCorrespondenceV1],
+    statements: &[SemanticKirStatementOperationSpanV1],
+    terminators: &[SemanticKirTerminatorOperationSpanV1],
+    synthetic: &[SemanticKirSyntheticOperationSpanV1],
+    synthetic_rule: Option<SemanticKirSyntheticOperationRuleV1>,
+) -> bool {
+    let expected_synthetic_count = usize::from(synthetic_rule.is_some());
+    let Some(expected_target_blocks) = expected.len().checked_add(expected_synthetic_count) else {
+        return false;
+    };
+    if blocks.len() != expected.len()
+        || terminators.len() != expected.len()
+        || synthetic.len() != expected_synthetic_count
+        || target_blocks.len() != expected_target_blocks
+    {
+        return false;
+    }
+
+    let mut statement_index = 0_usize;
+    for (block_index, expected_block) in expected.iter().enumerate() {
+        let Some(target) = target_blocks.get(block_index) else {
+            return false;
+        };
+        let expected_block_record = SemanticKirBlockCorrespondenceV1 {
+            semantic_function: expected_block.semantic_function,
+            semantic_block: expected_block.semantic_block,
+            kernel_ir_block: expected_block.kernel_ir_block,
+            source_statement_count: expected_block.source_statement_count,
+        };
+        if blocks.get(block_index) != Some(&expected_block_record)
+            || target.id != expected_block.kernel_ir_block
+            || target.terminator.is_none()
+        {
+            return false;
+        }
+
+        let mut next_operation = 0_usize;
+        for statement_ordinal in 0..expected_block.source_statement_count {
+            let Some(span) = statements.get(statement_index) else {
+                return false;
+            };
+            if span.semantic_function != expected_block.semantic_function
+                || span.semantic_block != expected_block.semantic_block
+                || span.statement_ordinal != statement_ordinal
+                || span.kernel_ir_block != expected_block.kernel_ir_block
+                || usize::try_from(span.first_operation_ordinal) != Ok(next_operation)
+            {
+                return false;
+            }
+            let Some(end) = checked_operation_span_end(
+                span.first_operation_ordinal,
+                span.operation_count,
+                target.operations.len(),
+            ) else {
+                return false;
+            };
+            next_operation = end;
+            statement_index += 1;
+        }
+
+        let Some(terminator) = terminators.get(block_index) else {
+            return false;
+        };
+        if terminator.semantic_function != expected_block.semantic_function
+            || terminator.semantic_block != expected_block.semantic_block
+            || terminator.kernel_ir_block != expected_block.kernel_ir_block
+            || usize::try_from(terminator.first_operation_ordinal) != Ok(next_operation)
+        {
+            return false;
+        }
+        let Some(end) = checked_operation_span_end(
+            terminator.first_operation_ordinal,
+            terminator.operation_count,
+            target.operations.len(),
+        ) else {
+            return false;
+        };
+        if end != target.operations.len() {
+            return false;
+        }
+    }
+    if statement_index != statements.len() {
+        return false;
+    }
+
+    let canonical_trap = AmdGpuDiagnosticOperation::Trap.operation(None);
+    for (synthetic_index, span) in synthetic.iter().enumerate() {
+        let Some(target) = target_blocks.get(expected.len() + synthetic_index) else {
+            return false;
+        };
+        if Some(span.rule) != synthetic_rule
+            || span.kernel_ir_block != target.id
+            || span.first_operation_ordinal != 0
+            || span.operation_count != 1
+            || target.operations.as_slice() != [canonical_trap.clone()]
+            || !matches!(target.terminator.as_ref(), Some(Terminator::Unreachable))
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn checked_operation_span_end(first: u32, count: u32, operation_len: usize) -> Option<usize> {
+    let first = usize::try_from(first).ok()?;
+    let count = usize::try_from(count).ok()?;
+    first.checked_add(count).filter(|end| *end <= operation_len)
+}
+
+fn measured_operation_span(
+    first: usize,
+    after: usize,
+    block: BlockId,
+    statement: Option<u32>,
+) -> Result<(u32, u32), ProductionSemanticKirErrorV1> {
+    let count = after.checked_sub(first).ok_or_else(|| {
+        unsupported(
+            0,
+            Some(block.0),
+            statement,
+            "Kernel IR operation count moved backwards during lowering",
+        )
+    })?;
+    Ok((
+        u32::try_from(first).map_err(|_| {
+            unsupported(
+                0,
+                Some(block.0),
+                statement,
+                "Kernel IR operation ordinal is too large",
+            )
+        })?,
+        u32::try_from(count).map_err(|_| {
+            unsupported(
+                0,
+                Some(block.0),
+                statement,
+                "Kernel IR operation span is too large",
+            )
+        })?,
+    ))
+}
+
+fn semantic_requires_runtime_assert_failure(
+    function: &SemanticFunctionDeclV1,
+    discharge_ranked_bounds: bool,
+) -> bool {
+    function
+        .blocks()
+        .iter()
+        .any(|block| match block.terminator().kind() {
+            SemanticTerminatorKindV1::Assert {
+                message: SemanticAssertMessageV1::BoundsCheck { .. },
+                ..
+            } if discharge_ranked_bounds => false,
+            SemanticTerminatorKindV1::Assert { .. }
+            | SemanticTerminatorKindV1::Abort
+            | SemanticTerminatorKindV1::UnwindTerminate => true,
+            _ => false,
+        })
+}
+
 fn lower_module(
     owner: &ProductionSemanticMirOwnerV1,
     limits: ProductionSemanticKirLimitsV1,
@@ -558,19 +980,7 @@ fn lower_module(
         .map_err(|_| unsupported(0, None, None, "kernel export symbol is not UTF-8"))?;
 
     let has_runtime_assert =
-        function
-            .blocks()
-            .iter()
-            .any(|block| match block.terminator().kind() {
-                SemanticTerminatorKindV1::Assert {
-                    message: SemanticAssertMessageV1::BoundsCheck { .. },
-                    ..
-                } if discharge_ranked_bounds => false,
-                SemanticTerminatorKindV1::Assert { .. }
-                | SemanticTerminatorKindV1::Abort
-                | SemanticTerminatorKindV1::UnwindTerminate => true,
-                _ => false,
-            });
+        semantic_requires_runtime_assert_failure(function, discharge_ranked_bounds);
     let lowered_block_count = function
         .blocks()
         .len()
@@ -647,11 +1057,15 @@ fn lower_module(
         },
         has_runtime_assert.then(|| BlockId(function.blocks().len() as u32)),
         discharge_ranked_bounds,
+        limits.max_operations,
     )?;
 
     let order = semantic_cfg_preorder(function)?;
     let mut blocks = Vec::with_capacity(order.len());
     let mut correspondence = Vec::with_capacity(order.len());
+    let mut statement_operation_spans = Vec::with_capacity(statement_count);
+    let mut terminator_operation_spans = Vec::with_capacity(order.len());
+    let mut synthetic_operation_spans = Vec::with_capacity(usize::from(has_runtime_assert));
     for semantic_block in order {
         let index = usize::try_from(semantic_block.index())
             .map_err(|_| unsupported(0, None, None, "block identity does not fit this host"))?;
@@ -661,18 +1075,51 @@ fn lower_module(
         let mut target = BasicBlock::new(BlockId(semantic_block.index()));
         lowering.begin_block(semantic_block, &mut target)?;
         for (statement, operation) in source.statements().iter().enumerate() {
+            let statement = u32::try_from(statement).map_err(|_| {
+                unsupported(
+                    0,
+                    Some(semantic_block.index()),
+                    None,
+                    "statement ordinal is too large",
+                )
+            })?;
+            let first = target.operations.len();
             lowering.lower_statement(
                 semantic_block,
-                u32::try_from(statement).ok(),
+                Some(statement),
                 operation.kind(),
                 &mut target.operations,
             )?;
+            let (first_operation_ordinal, operation_count) = measured_operation_span(
+                first,
+                target.operations.len(),
+                target.id,
+                Some(statement),
+            )?;
+            statement_operation_spans.push(SemanticKirStatementOperationSpanV1 {
+                semantic_function: SemanticFunctionIdV1::from_index(0),
+                semantic_block,
+                statement_ordinal: statement,
+                kernel_ir_block: target.id,
+                first_operation_ordinal,
+                operation_count,
+            });
         }
+        let terminator_first = target.operations.len();
         target.terminator = Some(lowering.lower_terminator(
             semantic_block,
             source.terminator().kind(),
             &mut target.operations,
         )?);
+        let (first_operation_ordinal, operation_count) =
+            measured_operation_span(terminator_first, target.operations.len(), target.id, None)?;
+        terminator_operation_spans.push(SemanticKirTerminatorOperationSpanV1 {
+            semantic_function: SemanticFunctionIdV1::from_index(0),
+            semantic_block,
+            kernel_ir_block: target.id,
+            first_operation_ordinal,
+            operation_count,
+        });
         blocks.push(target);
         correspondence.push(SemanticKirBlockCorrespondenceV1 {
             semantic_function: SemanticFunctionIdV1::from_index(0),
@@ -690,9 +1137,18 @@ fn lower_module(
     }
     if let Some(failure_block) = lowering.assert_failure_block {
         let mut block = BasicBlock::new(failure_block);
-        block
-            .operations
-            .push(AmdGpuDiagnosticOperation::Trap.operation(None));
+        let first = block.operations.len();
+        lowering.push_operation(&mut block.operations, || {
+            AmdGpuDiagnosticOperation::Trap.operation(None)
+        })?;
+        let (first_operation_ordinal, operation_count) =
+            measured_operation_span(first, block.operations.len(), failure_block, None)?;
+        synthetic_operation_spans.push(SemanticKirSyntheticOperationSpanV1 {
+            rule: SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap,
+            kernel_ir_block: failure_block,
+            first_operation_ordinal,
+            operation_count,
+        });
         block.terminator = Some(Terminator::Unreachable);
         blocks.push(block);
     }
@@ -772,14 +1228,16 @@ fn lower_module(
     kernel.required_capabilities.extend(operation_capabilities);
     module.kernels.push(kernel);
 
-    Ok((
-        module,
-        SemanticKirCorrespondenceV1 {
-            semantic_sha256: *semantic.semantic_sha256().as_bytes(),
-            function_count: semantic.functions().len(),
-            blocks: correspondence.into_boxed_slice(),
-        },
-    ))
+    let correspondence = SemanticKirCorrespondenceV1 {
+        semantic_sha256: *semantic.semantic_sha256().as_bytes(),
+        function_count: semantic.functions().len(),
+        blocks: correspondence.into_boxed_slice(),
+        statement_operation_spans: statement_operation_spans.into_boxed_slice(),
+        terminator_operation_spans: terminator_operation_spans.into_boxed_slice(),
+        synthetic_operation_spans: synthetic_operation_spans.into_boxed_slice(),
+    };
+    correspondence.validate_layout_against(owner, &module, discharge_ranked_bounds)?;
+    Ok((module, correspondence))
 }
 
 fn semantic_cfg_preorder(
@@ -1340,6 +1798,8 @@ struct SemanticFunctionLoweringV1<'a> {
     next_value: u32,
     assert_failure_block: Option<BlockId>,
     discharge_ranked_bounds: bool,
+    max_operations: usize,
+    emitted_operations: usize,
 }
 
 struct SemanticParameterBindingsV1<'a> {
@@ -1356,6 +1816,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         parameters: SemanticParameterBindingsV1<'_>,
         assert_failure_block: Option<BlockId>,
         discharge_ranked_bounds: bool,
+        max_operations: usize,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         let mut locals = vec![None; function.locals().len()];
         let option_producers = semantic_option_producers_v1(function, callables)
@@ -1408,6 +1869,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             next_value,
             assert_failure_block,
             discharge_ranked_bounds,
+            max_operations,
+            emitted_operations: 0,
         })
     }
 
@@ -2715,17 +3178,19 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier => {
                 self.require_call_argument_count(block, call, 0)?;
-                operations.push(Operation::new(
-                    Vec::new(),
-                    OperationKind::WorkgroupBarrier(WorkgroupBarrier {
-                        memory_scope: SynchronizationScope::Workgroup,
-                        semantics: BarrierSemantics::new(
-                            MemoryOrdering::AcquireRelease,
-                            [AddressSpace::Workgroup],
-                        ),
-                        convergence: Convergence::uniform(SynchronizationScope::Workgroup),
-                    }),
-                ));
+                self.push_operation(operations, || {
+                    Operation::new(
+                        Vec::new(),
+                        OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+                            memory_scope: SynchronizationScope::Workgroup,
+                            semantics: BarrierSemantics::new(
+                                MemoryOrdering::AcquireRelease,
+                                [AddressSpace::Workgroup],
+                            ),
+                            convergence: Convergence::uniform(SynchronizationScope::Workgroup),
+                        }),
+                    )
+                })?;
                 SemanticValueBindingV1::Unit
             }
             SemanticCompilerIntrinsicOperationV1::WaveBarrier
@@ -3818,14 +4283,16 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         let mut access =
             memory_access_for_type(self.types, destination.ty(), pointer_type.address_space)?;
         access.volatile = volatility == SemanticVolatilityV1::Volatile;
-        operations.push(Operation::new(
-            vec![],
-            OperationKind::Store {
-                pointer,
-                value,
-                access,
-            },
-        ));
+        self.push_operation(operations, || {
+            Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer,
+                    value,
+                    access,
+                },
+            )
+        })?;
         Ok(())
     }
 
@@ -4193,7 +4660,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             .next_value
             .checked_add(1)
             .ok_or_else(|| unsupported(0, None, None, "Kernel IR SSA identity overflow"))?;
-        operations.push(Operation::effect_free(ValueDef::new(id, ty.clone()), kind));
+        self.push_operation(operations, || {
+            Operation::effect_free(ValueDef::new(id, ty.clone()), kind)
+        })?;
         Ok(SemanticValueBindingV1::Value { id, ty })
     }
 
@@ -4208,8 +4677,57 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             .checked_add(1)
             .ok_or_else(|| unsupported(0, None, None, "Kernel IR SSA identity overflow"))?;
         let ty = operation.result_type();
-        operations.push(operation.operation(id));
+        self.push_operation(operations, || operation.operation(id))?;
         Ok(SemanticValueBindingV1::Value { id, ty })
+    }
+
+    fn reserve_operation(
+        &mut self,
+        operations: &mut Vec<Operation>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        let block_actual =
+            operations
+                .len()
+                .checked_add(1)
+                .ok_or(ProductionSemanticKirErrorV1::ResourceLimit {
+                    resource: ProductionSemanticKirResourceV1::Operations,
+                    actual: usize::MAX,
+                    limit: MAX_BLOCK_OPERATIONS_V1,
+                })?;
+        enforce_limit(
+            ProductionSemanticKirResourceV1::Operations,
+            block_actual,
+            MAX_BLOCK_OPERATIONS_V1,
+        )?;
+        let total_actual = self.emitted_operations.checked_add(1).ok_or(
+            ProductionSemanticKirErrorV1::ResourceLimit {
+                resource: ProductionSemanticKirResourceV1::Operations,
+                actual: usize::MAX,
+                limit: self.max_operations,
+            },
+        )?;
+        enforce_limit(
+            ProductionSemanticKirResourceV1::Operations,
+            total_actual,
+            self.max_operations,
+        )?;
+        operations
+            .try_reserve(1)
+            .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
+                resource: ProductionSemanticKirResourceV1::Operations,
+            })?;
+        self.emitted_operations = total_actual;
+        Ok(())
+    }
+
+    fn push_operation(
+        &mut self,
+        operations: &mut Vec<Operation>,
+        build: impl FnOnce() -> Operation,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        self.reserve_operation(operations)?;
+        operations.push(build());
+        Ok(())
     }
 
     fn emit_id(
@@ -4309,6 +4827,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         types: Vec<Type>,
         kind: OperationKind,
     ) -> Result<Vec<ValueDef>, ProductionSemanticKirErrorV1> {
+        self.reserve_operation(operations)?;
         let mut results = Vec::with_capacity(types.len());
         for ty in types {
             let id = ValueId(self.next_value);
@@ -5162,6 +5681,68 @@ mod resource_tests {
         )
     }
 
+    struct OperationSpanFixture {
+        expected: [ExpectedSemanticKirBlockCoverageV1; 1],
+        target: Vec<BasicBlock>,
+        blocks: [SemanticKirBlockCorrespondenceV1; 1],
+        statements: [SemanticKirStatementOperationSpanV1; 2],
+        terminators: [SemanticKirTerminatorOperationSpanV1; 1],
+    }
+
+    fn operation_span_fixture() -> OperationSpanFixture {
+        let semantic_function = SemanticFunctionIdV1::from_index(0);
+        let semantic_block = SemanticBlockIdV1::from_index(7);
+        let kernel_ir_block = BlockId(7);
+        let expected = [ExpectedSemanticKirBlockCoverageV1 {
+            semantic_function,
+            semantic_block,
+            kernel_ir_block,
+            source_statement_count: 2,
+        }];
+        let blocks = [SemanticKirBlockCorrespondenceV1 {
+            semantic_function,
+            semantic_block,
+            kernel_ir_block,
+            source_statement_count: 2,
+        }];
+        let statements = [
+            SemanticKirStatementOperationSpanV1 {
+                semantic_function,
+                semantic_block,
+                statement_ordinal: 0,
+                kernel_ir_block,
+                first_operation_ordinal: 0,
+                operation_count: 0,
+            },
+            SemanticKirStatementOperationSpanV1 {
+                semantic_function,
+                semantic_block,
+                statement_ordinal: 1,
+                kernel_ir_block,
+                first_operation_ordinal: 0,
+                operation_count: 2,
+            },
+        ];
+        let terminators = [SemanticKirTerminatorOperationSpanV1 {
+            semantic_function,
+            semantic_block,
+            kernel_ir_block,
+            first_operation_ordinal: 2,
+            operation_count: 1,
+        }];
+        let operation = AmdGpuDiagnosticOperation::Trap.operation(None);
+        let mut target = BasicBlock::new(kernel_ir_block);
+        target.operations = vec![operation; 3];
+        target.terminator = Some(Terminator::Return { values: vec![] });
+        OperationSpanFixture {
+            expected,
+            target: vec![target],
+            blocks,
+            statements,
+            terminators,
+        }
+    }
+
     #[test]
     fn zero_sized_arrays_are_bounded_by_structure_not_only_scalar_components() {
         let unit = unit_type();
@@ -5183,5 +5764,181 @@ mod resource_tests {
         let binding = binding_from_value_defs(&types, SemanticTypeIdV1::from_index(1), &[])
             .expect_err("huge zero-sized binding must fail before allocation");
         assert!(binding.to_string().contains("array length is too large"));
+    }
+
+    #[test]
+    fn operation_spans_cover_zero_multi_and_terminator_emission_exactly_once() {
+        let fixture = operation_span_fixture();
+        assert!(validate_operation_correspondence_layout(
+            &fixture.expected,
+            &fixture.target,
+            &fixture.blocks,
+            &fixture.statements,
+            &fixture.terminators,
+            &[],
+            None,
+        ));
+    }
+
+    #[test]
+    fn operation_span_validation_rejects_statement_omission() {
+        let fixture = operation_span_fixture();
+        assert!(!validate_operation_correspondence_layout(
+            &fixture.expected,
+            &fixture.target,
+            &fixture.blocks,
+            &fixture.statements[..1],
+            &fixture.terminators,
+            &[],
+            None,
+        ));
+    }
+
+    #[test]
+    fn operation_span_validation_rejects_overlap() {
+        let mut fixture = operation_span_fixture();
+        fixture.statements[0].operation_count = 1;
+        assert!(!validate_operation_correspondence_layout(
+            &fixture.expected,
+            &fixture.target,
+            &fixture.blocks,
+            &fixture.statements,
+            &fixture.terminators,
+            &[],
+            None,
+        ));
+    }
+
+    #[test]
+    fn operation_span_validation_rejects_terminator_gaps_and_trailing_operations() {
+        let mut gap = operation_span_fixture();
+        gap.terminators[0].first_operation_ordinal = 1;
+        assert!(!validate_operation_correspondence_layout(
+            &gap.expected,
+            &gap.target,
+            &gap.blocks,
+            &gap.statements,
+            &gap.terminators,
+            &[],
+            None,
+        ));
+
+        let mut trailing = operation_span_fixture();
+        trailing.target[0]
+            .operations
+            .push(AmdGpuDiagnosticOperation::Trap.operation(None));
+        assert!(!validate_operation_correspondence_layout(
+            &trailing.expected,
+            &trailing.target,
+            &trailing.blocks,
+            &trailing.statements,
+            &trailing.terminators,
+            &[],
+            None,
+        ));
+    }
+
+    #[test]
+    fn operation_span_validation_rejects_target_block_substitution() {
+        let mut fixture = operation_span_fixture();
+        fixture.target[0].id = BlockId(8);
+        assert!(!validate_operation_correspondence_layout(
+            &fixture.expected,
+            &fixture.target,
+            &fixture.blocks,
+            &fixture.statements,
+            &fixture.terminators,
+            &[],
+            None,
+        ));
+    }
+
+    #[test]
+    fn operation_span_validation_rejects_source_substitution() {
+        let mut fixture = operation_span_fixture();
+        fixture.statements[1].statement_ordinal = 0;
+        assert!(!validate_operation_correspondence_layout(
+            &fixture.expected,
+            &fixture.target,
+            &fixture.blocks,
+            &fixture.statements,
+            &fixture.terminators,
+            &[],
+            None,
+        ));
+    }
+
+    #[test]
+    fn synthetic_trap_rule_has_exact_block_and_operation_coverage() {
+        let semantic_function = SemanticFunctionIdV1::from_index(0);
+        let semantic_block = SemanticBlockIdV1::from_index(0);
+        let expected = [ExpectedSemanticKirBlockCoverageV1 {
+            semantic_function,
+            semantic_block,
+            kernel_ir_block: BlockId(0),
+            source_statement_count: 0,
+        }];
+        let blocks = [SemanticKirBlockCorrespondenceV1 {
+            semantic_function,
+            semantic_block,
+            kernel_ir_block: BlockId(0),
+            source_statement_count: 0,
+        }];
+        let terminators = [SemanticKirTerminatorOperationSpanV1 {
+            semantic_function,
+            semantic_block,
+            kernel_ir_block: BlockId(0),
+            first_operation_ordinal: 0,
+            operation_count: 0,
+        }];
+        let mut source = BasicBlock::new(BlockId(0));
+        source.terminator = Some(Terminator::Branch {
+            target: BlockId(1),
+            arguments: vec![],
+        });
+        let mut synthetic_block = BasicBlock::new(BlockId(1));
+        synthetic_block
+            .operations
+            .push(AmdGpuDiagnosticOperation::Trap.operation(None));
+        synthetic_block.terminator = Some(Terminator::Unreachable);
+        let target = [source, synthetic_block];
+        let synthetic = [SemanticKirSyntheticOperationSpanV1 {
+            rule: SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap,
+            kernel_ir_block: BlockId(1),
+            first_operation_ordinal: 0,
+            operation_count: 1,
+        }];
+
+        assert!(validate_operation_correspondence_layout(
+            &expected,
+            &target,
+            &blocks,
+            &[],
+            &terminators,
+            &synthetic,
+            Some(SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap),
+        ));
+        assert!(!validate_operation_correspondence_layout(
+            &expected,
+            &target,
+            &blocks,
+            &[],
+            &terminators,
+            &[],
+            Some(SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap),
+        ));
+
+        let mut wrong_trap = target.clone();
+        wrong_trap[1].operations[0] =
+            Operation::new(Vec::new(), OperationKind::Constant(Constant::Bool(false)));
+        assert!(!validate_operation_correspondence_layout(
+            &expected,
+            &wrong_trap,
+            &blocks,
+            &[],
+            &terminators,
+            &synthetic,
+            Some(SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap),
+        ));
     }
 }

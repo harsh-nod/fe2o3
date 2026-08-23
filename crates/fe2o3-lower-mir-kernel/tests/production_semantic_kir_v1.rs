@@ -3,6 +3,7 @@ use fe2o3_lower_mir_kernel::{
     PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1, ProductionFormalMemoryOwnerV1,
     ProductionRankedSemanticProjectionReceiptV1, ProductionSemanticKirErrorV1,
     ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1, ProductionSemanticKirResourceV1,
+    SemanticKirSyntheticOperationRuleV1,
 };
 use fe2o3_mir_model::semantic_mir_v1::*;
 use fe2o3_pliron::{
@@ -233,6 +234,116 @@ fn block(
     .unwrap()
 }
 
+fn owner_from_parts(
+    types: Vec<SemanticTypeDeclV1>,
+    locals: Vec<SemanticLocalDeclV1>,
+    entry: u32,
+    blocks: Vec<SemanticBasicBlockV1>,
+    symbol: &[u8],
+) -> ProductionSemanticMirOwnerV1 {
+    let unit = SemanticTypeIdV1::from_index(0);
+    let abi = SemanticFunctionAbiV1::from_rustc(
+        SemanticAbiIdentityV1::from_sha256(bytes(60)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(250)),
+        SemanticCanonAbiV1::GpuKernel,
+        SemanticExternAbiV1::GpuKernel,
+        false,
+        false,
+        0,
+        vec![],
+        SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+    )
+    .unwrap();
+    let dimensions = SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap();
+    let launch =
+        SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None).unwrap();
+    let contract = SemanticKernelSourceContractV1::new(Some(launch), None, None).unwrap();
+    let function = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256(bytes(60)),
+        SemanticFunctionRoleV1::KernelRoot,
+        SemanticItemDefinitionIdentityV1::from_sha256(bytes(60)),
+        SemanticMonomorphizationIdentityV1::from_sha256(bytes(60)),
+        SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(60)),
+        SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(60)),
+        SemanticSourceProvenanceV1::unavailable(),
+        abi,
+        locals,
+        SemanticBlockIdV1::from_index(entry),
+        blocks,
+    )
+    .unwrap()
+    .with_kernel_entry(SemanticKernelEntryV1::new(
+        SemanticLinkSymbolV1::new(symbol.to_vec()).unwrap(),
+        SemanticKernelBindingIdentityV1::from_sha256(bytes(61)),
+        contract,
+    ));
+    let admitted = InertSemanticMirRequestV1::new(
+        SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(250))),
+        types,
+        vec![],
+        vec![],
+        vec![],
+        vec![function],
+        vec![SemanticFunctionIdV1::from_index(0)],
+    )
+    .unwrap()
+    .admit(SemanticMirLimitsV1::default())
+    .unwrap();
+    ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+        .unwrap()
+}
+
+fn return_local() -> SemanticLocalDeclV1 {
+    SemanticLocalDeclV1::new(
+        SemanticLocalIdentityV1::from_sha256(bytes(62)),
+        SemanticTypeIdV1::from_index(0),
+        SemanticLocalRoleV1::Return,
+        SemanticSourceProvenanceV1::unavailable(),
+    )
+}
+
+fn terminator_emission_owner() -> ProductionSemanticMirOwnerV1 {
+    let bool_ty = SemanticTypeIdV1::from_index(1);
+    let target = SemanticControlFlowEdgeV1::new(
+        SemanticEdgeRoleV1::SwitchOtherwise,
+        SemanticBlockIdV1::from_index(0),
+    );
+    let switch = SemanticTerminatorKindV1::SwitchInt {
+        discriminant: scalar_constant(bool_ty, 1, 1),
+        targets: SemanticSwitchTargetsV1::new(
+            vec![SemanticSwitchTargetV1::new(
+                1,
+                SemanticControlFlowEdgeV1::new(
+                    SemanticEdgeRoleV1::SwitchValue,
+                    SemanticBlockIdV1::from_index(0),
+                ),
+            )],
+            target,
+        )
+        .unwrap(),
+    };
+    owner_from_parts(
+        vec![unit_type(), scalar_type(63, SemanticScalarTypeV1::Bool)],
+        vec![return_local()],
+        1,
+        vec![
+            block(64, vec![], SemanticTerminatorKindV1::Return),
+            block(65, vec![], switch),
+        ],
+        b"semantic_terminator_emission_test",
+    )
+}
+
+fn abort_owner() -> ProductionSemanticMirOwnerV1 {
+    owner_from_parts(
+        vec![unit_type()],
+        vec![return_local()],
+        0,
+        vec![block(66, vec![], SemanticTerminatorKindV1::Abort)],
+        b"semantic_abort_test",
+    )
+}
+
 fn admitted(effectful_statement: bool, unsupported_terminator: bool) -> AdmittedInertSemanticMirV1 {
     let type_id = SemanticTypeIdV1::from_index(0);
     let abi = SemanticFunctionAbiV1::from_rustc(
@@ -350,6 +461,30 @@ fn exact_nonzero_entry_lowers_to_verified_kir_with_correspondence() {
         lowered.correspondence().blocks()[1].source_statement_count(),
         1
     );
+    let statement_spans = lowered.correspondence().statement_operation_spans();
+    assert_eq!(statement_spans.len(), 1);
+    assert_eq!(statement_spans[0].semantic_block().index(), 0);
+    assert_eq!(statement_spans[0].statement_ordinal(), 0);
+    assert_eq!(statement_spans[0].kernel_ir_block(), BlockId(0));
+    assert_eq!(statement_spans[0].first_operation_ordinal(), 0);
+    assert_eq!(statement_spans[0].operation_count(), 0);
+    assert_eq!(
+        lowered.correspondence().terminator_operation_spans().len(),
+        2
+    );
+    assert!(
+        lowered
+            .correspondence()
+            .terminator_operation_spans()
+            .iter()
+            .all(|span| span.operation_count() == 0)
+    );
+    assert!(
+        lowered
+            .correspondence()
+            .synthetic_operation_spans()
+            .is_empty()
+    );
     assert_eq!(
         lowered.module().kernels[0].domain,
         LaunchDomain::D1 {
@@ -381,6 +516,60 @@ fn mutable_scalar_loop_uses_block_parameters_and_backedge_arguments() {
         fe2o3_kernel_ir::Terminator::Branch { target, arguments }
             if *target == BlockId(1) && arguments.len() == 1
     ));
+    let body_statement = lowered
+        .correspondence()
+        .statement_operation_spans()
+        .iter()
+        .find(|span| span.semantic_block().index() == 2 && span.statement_ordinal() == 0)
+        .copied()
+        .unwrap();
+    assert_eq!(body_statement.first_operation_ordinal(), 0);
+    assert_eq!(body_statement.operation_count(), 2);
+}
+
+#[test]
+fn terminator_emission_has_its_own_exact_operation_span() {
+    let lowered = ProductionSemanticKirOwnerV1::try_lower(
+        terminator_emission_owner(),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    let span = lowered
+        .correspondence()
+        .terminator_operation_spans()
+        .iter()
+        .find(|span| span.semantic_block().index() == 1)
+        .copied()
+        .unwrap();
+    assert_eq!(span.kernel_ir_block(), BlockId(1));
+    assert_eq!(span.first_operation_ordinal(), 0);
+    assert_eq!(span.operation_count(), 1);
+    lowered.verify_equivalence().unwrap();
+}
+
+#[test]
+fn runtime_assert_failure_trap_has_typed_synthetic_coverage() {
+    let lowered = ProductionSemanticKirOwnerV1::try_lower(
+        abort_owner(),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    let [span] = lowered.correspondence().synthetic_operation_spans() else {
+        panic!("runtime abort must retain one synthetic trap span");
+    };
+    assert_eq!(
+        span.rule(),
+        SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap
+    );
+    assert_eq!(span.kernel_ir_block(), BlockId(1));
+    assert_eq!(span.first_operation_ordinal(), 0);
+    assert_eq!(span.operation_count(), 1);
+    assert_eq!(
+        lowered.correspondence().terminator_operation_spans()[0].operation_count(),
+        0
+    );
+    lowered.verify_equivalence().unwrap();
+    assert!(!lowered.grants_artifact_or_launch_authority());
 }
 
 #[test]
@@ -493,6 +682,21 @@ fn lowering_limits_are_enforced_before_materialization() {
         ),
         Err(ProductionSemanticKirErrorV1::ResourceLimit {
             resource: ProductionSemanticKirResourceV1::Blocks,
+            actual: 2,
+            limit: 1,
+        })
+    ));
+}
+
+#[test]
+fn emitted_operations_are_charged_before_storage() {
+    assert!(matches!(
+        ProductionSemanticKirOwnerV1::try_lower(
+            scalar_loop_owner(),
+            ProductionSemanticKirLimitsV1::new_with_max_operations(1, 4, 16, 1),
+        ),
+        Err(ProductionSemanticKirErrorV1::ResourceLimit {
+            resource: ProductionSemanticKirResourceV1::Operations,
             actual: 2,
             limit: 1,
         })
