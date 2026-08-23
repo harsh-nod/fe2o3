@@ -10,27 +10,39 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::{
-        Arc, OnceLock,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicUsize, Ordering},
     },
 };
 
 use fe2o3_amd_target::AmdTargetId;
 use fe2o3_artifact_transaction::retire_worker_v3_publication_intent_after_load_readiness_v1;
-use fe2o3_artifacts::{DigestAlgorithm, DigestBytes, PayloadDigest};
+use fe2o3_artifacts::{
+    AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, DigestAlgorithm,
+    DigestBytes, Mutability, Name, PayloadDigest, PointerWidth,
+};
 use fe2o3_device::KernelMarkerV1;
 use fe2o3_host::{
-    __hardware_test::application_handoff_observed_context_fixture_v1,
-    AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedKernelExpectationV1,
-    CompilerGeneratedKernelProfileV1, CompilerGeneratedSemanticWitnessErrorV1, HsaAgentIdentityV1,
-    HsaCodeObjectLoadObservationV1, HsaDispatchObservationV1, HsaEnvironmentObservationV1,
-    HsaExecutableObjectIdentityV1, HsaKernelObjectIdentityV1, HsaKernelResolutionObservationV1,
-    HsaLaunchGeometryV1, HsaPhysicalDeviceIdentityV1, HsaRuntimeIdentityV1, HsaUnloadObservationV1,
-    RecoveredWorkerV3AdmissionErrorV1, ReviewedHsaExecutableLifecycleAdapterV1,
-    ValidatedCompilerGeneratedSemanticWitnessV1, WorkerV3SafetyPropertiesV1,
-    WorkerV3VerificationAuthenticationErrorV1, WorkerV3VerificationDecisionErrorV1,
-    WorkerV3VerificationDecisionV1, WorkerV3VerificationRequestV1, WorkerV3VerifierV1,
-    admit_recovered_worker_v3_descriptor_v1, semantic_witness_from_backend_v1,
+    __hardware_test::{
+        application_handoff_observed_context_fixture_v1,
+        generated_shared_f32_argument_pair_fixture_v1,
+    },
+    AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedArgumentLayoutV1,
+    CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
+    CompilerGeneratedSemanticWitnessErrorV1, CompilerGeneratedWorkerV3ArgumentsV1,
+    GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingPlanV1,
+    GeneratedDeviceScalarV1, GeneratedWorkerV3ArgumentBindingV1, GeneratedWorkerV3PrepareErrorV1,
+    HsaAgentIdentityV1, HsaCodeObjectLoadObservationV1, HsaDispatchObservationV1,
+    HsaEnvironmentObservationV1, HsaExecutableObjectIdentityV1,
+    HsaImplicitKernargInitializationObservationV1, HsaKernelObjectIdentityV1,
+    HsaKernelResolutionObservationV1, HsaLaunchGeometryV1, HsaPhysicalDeviceIdentityV1,
+    HsaRuntimeIdentityV1, HsaUnloadObservationV1, RecoveredWorkerV3AdmissionErrorV1,
+    ReviewedHsaExecutableLifecycleAdapterV1, ReviewedHsaImplicitKernargAdapterV1,
+    ValidatedCompilerGeneratedSemanticWitnessV1, WorkerV3GeneratedDispatchErrorV1,
+    WorkerV3SafetyPropertiesV1, WorkerV3VerificationAuthenticationErrorV1,
+    WorkerV3VerificationDecisionErrorV1, WorkerV3VerificationDecisionV1,
+    WorkerV3VerificationRequestV1, WorkerV3VerifierV1, admit_recovered_worker_v3_descriptor_v1,
+    semantic_witness_from_backend_v1,
 };
 use fe2o3_kernel_descriptor::KernelId;
 use fe2o3_worker_v2_bundle::{
@@ -153,6 +165,72 @@ unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3VecAddMarker {
     }
 }
 
+struct WorkerV3VecAddArguments<'allocation> {
+    owner: &'allocation (),
+    address: usize,
+    length: usize,
+}
+
+// SAFETY: this integration fixture mirrors the independently produced descriptor's one exact
+// shared-`f32` source argument and retains the inert allocation owner through completion.
+unsafe impl<'allocation> CompilerGeneratedWorkerV3ArgumentsV1<'allocation, WorkerV3VecAddMarker>
+    for WorkerV3VecAddArguments<'allocation>
+{
+    fn generated_argument_layout_v1()
+    -> Result<CompilerGeneratedArgumentLayoutV1, GeneratedArgumentLayoutError> {
+        CompilerGeneratedArgumentLayoutV1::new(
+            16,
+            8,
+            PointerWidth::Bits64,
+            vec![
+                AbiField::new(
+                    Name::new("values").unwrap(),
+                    0,
+                    16,
+                    8,
+                    AbiKind::Slice {
+                        element_size: 4,
+                        element_alignment: 4,
+                    },
+                    Mutability::Immutable,
+                    Access::ReadOnly,
+                    AddressSpace::Global,
+                    <f32 as GeneratedDeviceScalarV1>::shared_slice_type_identity_v1(
+                        PointerWidth::Bits64,
+                    ),
+                    ArgumentOwnership::SharedBorrow,
+                    AliasClass::SharedReadOnly,
+                )
+                .unwrap(),
+            ],
+        )
+    }
+
+    fn bind_arguments_v1(
+        &self,
+        plan: &GeneratedArgumentPackingPlanV1,
+    ) -> Result<GeneratedWorkerV3ArgumentBindingV1<'allocation>, GeneratedArgumentPackError> {
+        // SAFETY: the inert numeric allocation is retained by `self.owner` for this integration
+        // test and is never dereferenced by either fake runtime stage.
+        let values = unsafe {
+            generated_shared_f32_argument_pair_fixture_v1(
+                &application_handoff_observed_context_fixture_v1("gfx942:xnack-"),
+                self.owner,
+                plan,
+                0,
+                self.address,
+                self.length,
+            )
+        };
+        Ok(
+            GeneratedWorkerV3ArgumentBindingV1::from_compiler_generated_parts_v1(
+                vec![],
+                vec![values],
+            ),
+        )
+    }
+}
+
 struct ReviewedTestWorkerV3Verifier {
     substitute_finalized: bool,
 }
@@ -197,16 +275,39 @@ struct ReviewedTestHsaExecutable {
 }
 
 #[derive(Debug)]
-struct ReviewedTestHsaKernel;
+struct ReviewedTestHsaKernel {
+    identity: HsaKernelObjectIdentityV1,
+}
+
+#[derive(Default)]
+struct ReviewedTestHsaState {
+    unloads: AtomicUsize,
+    implicit_initializations: AtomicUsize,
+    dispatches: AtomicUsize,
+    dispatched_kernarg: Mutex<Option<Vec<u8>>>,
+    dispatched_geometry: Mutex<Option<HsaLaunchGeometryV1>>,
+    fault: Mutex<ReviewedTestHsaFault>,
+}
+
+#[derive(Clone, Copy, Default)]
+enum ReviewedTestHsaFault {
+    #[default]
+    None,
+    ImplicitError,
+    MutateExplicit,
+    ImplicitKernel,
+    DispatchError,
+    DispatchIncomplete,
+}
 
 struct ReviewedTestHsaAdapter {
     environment: HsaEnvironmentObservationV1,
-    unloads: Arc<AtomicUsize>,
+    state: Arc<ReviewedTestHsaState>,
     substitute_load_digest: bool,
 }
 
 impl ReviewedTestHsaAdapter {
-    fn new() -> (Self, Arc<AtomicUsize>) {
+    fn new() -> (Self, Arc<ReviewedTestHsaState>) {
         let target = AmdTargetId::parse("gfx942:sramecc+:xnack-").unwrap();
         let runtime = HsaRuntimeIdentityV1::new(
             "test-hsa",
@@ -219,21 +320,21 @@ impl ReviewedTestHsaAdapter {
         let agent =
             HsaAgentIdentityV1::new(runtime.instance(), 0xd4, physical.uuid(), target).unwrap();
         let environment = HsaEnvironmentObservationV1::new(runtime, physical, agent).unwrap();
-        let unloads = Arc::new(AtomicUsize::new(0));
+        let state = Arc::new(ReviewedTestHsaState::default());
         (
             Self {
                 environment,
-                unloads: unloads.clone(),
+                state: state.clone(),
                 substitute_load_digest: false,
             },
-            unloads,
+            state,
         )
     }
 
-    fn with_substituted_load_digest() -> (Self, Arc<AtomicUsize>) {
-        let (mut adapter, unloads) = Self::new();
+    fn with_substituted_load_digest() -> (Self, Arc<ReviewedTestHsaState>) {
+        let (mut adapter, state) = Self::new();
         adapter.substitute_load_digest = true;
-        (adapter, unloads)
+        (adapter, state)
     }
 
     fn executable_identity() -> HsaExecutableObjectIdentityV1 {
@@ -279,11 +380,12 @@ unsafe impl ReviewedHsaExecutableLifecycleAdapterV1 for ReviewedTestHsaAdapter {
         executable: &Self::Executable,
         export_symbol: &str,
     ) -> Result<(Self::Kernel, HsaKernelResolutionObservationV1), Self::Error> {
+        let identity = HsaKernelObjectIdentityV1::new([0xd6; 32]).unwrap();
         Ok((
-            ReviewedTestHsaKernel,
+            ReviewedTestHsaKernel { identity },
             HsaKernelResolutionObservationV1::new(
                 executable.identity,
-                HsaKernelObjectIdentityV1::new([0xd6; 32]).unwrap(),
+                identity,
                 export_symbol,
                 272,
                 16,
@@ -294,23 +396,78 @@ unsafe impl ReviewedHsaExecutableLifecycleAdapterV1 for ReviewedTestHsaAdapter {
 
     unsafe fn launch_and_wait(
         &mut self,
-        _executable: &Self::Executable,
-        _kernel: &Self::Kernel,
-        _geometry: HsaLaunchGeometryV1,
-        _kernarg: &mut [u8],
+        executable: &Self::Executable,
+        kernel: &Self::Kernel,
+        geometry: HsaLaunchGeometryV1,
+        kernarg: &mut [u8],
     ) -> Result<HsaDispatchObservationV1, Self::Error> {
-        Err("V3 launch authority is intentionally unavailable")
+        self.state.dispatches.fetch_add(1, Ordering::SeqCst);
+        let fault = *self.state.fault.lock().unwrap();
+        if matches!(fault, ReviewedTestHsaFault::DispatchError) {
+            return Err("fixture dispatch failure");
+        }
+        *self.state.dispatched_kernarg.lock().unwrap() = Some(kernarg.to_vec());
+        *self.state.dispatched_geometry.lock().unwrap() = Some(geometry);
+        HsaDispatchObservationV1::new(
+            [0xd7; 16],
+            executable.identity,
+            kernel.identity,
+            geometry,
+            !matches!(fault, ReviewedTestHsaFault::DispatchIncomplete),
+        )
+        .map_err(|_| "invalid fixture dispatch observation")
     }
 
     unsafe fn unload_executable(
         &mut self,
         executable: Self::Executable,
     ) -> Result<HsaUnloadObservationV1, Self::Error> {
-        self.unloads.fetch_add(1, Ordering::SeqCst);
+        self.state.unloads.fetch_add(1, Ordering::SeqCst);
         Ok(HsaUnloadObservationV1::new(
             executable.identity,
             self.environment.runtime().instance(),
             self.environment.agent().agent_handle(),
+            true,
+        ))
+    }
+}
+
+// SAFETY: this fake initializer preserves the explicit prefix, initializes the complete supplied
+// suffix synchronously, and reports only identities derived from the exact private handles.
+unsafe impl ReviewedHsaImplicitKernargAdapterV1 for ReviewedTestHsaAdapter {
+    unsafe fn initialize_implicit_kernarg(
+        &mut self,
+        executable: &Self::Executable,
+        kernel: &Self::Kernel,
+        geometry: HsaLaunchGeometryV1,
+        explicit_byte_len: usize,
+        implicit_byte_offset: usize,
+        implicit_byte_len: usize,
+        kernarg: &mut [u8],
+    ) -> Result<HsaImplicitKernargInitializationObservationV1, Self::Error> {
+        self.state
+            .implicit_initializations
+            .fetch_add(1, Ordering::SeqCst);
+        let fault = *self.state.fault.lock().unwrap();
+        if matches!(fault, ReviewedTestHsaFault::ImplicitError) {
+            return Err("fixture implicit initialization failure");
+        }
+        kernarg[implicit_byte_offset..implicit_byte_offset + implicit_byte_len].fill(0xa5);
+        if matches!(fault, ReviewedTestHsaFault::MutateExplicit) {
+            kernarg[0] ^= 0xff;
+        }
+        let kernel_identity = if matches!(fault, ReviewedTestHsaFault::ImplicitKernel) {
+            HsaKernelObjectIdentityV1::new([0xde; 32]).unwrap()
+        } else {
+            kernel.identity
+        };
+        Ok(HsaImplicitKernargInitializationObservationV1::new(
+            executable.identity,
+            kernel_identity,
+            geometry,
+            u64::try_from(explicit_byte_len).unwrap(),
+            u64::try_from(implicit_byte_offset).unwrap(),
+            u64::try_from(implicit_byte_len).unwrap(),
             true,
         ))
     }
@@ -511,20 +668,144 @@ fn completed_v3_publication_becomes_restartable_inert_envelope_custody() {
     assert!(!authenticated.grants_launch_authority());
     authenticated.revalidate_currentness().unwrap();
 
-    let (adapter, unloads) = ReviewedTestHsaAdapter::new();
+    let (adapter, adapter_state) = ReviewedTestHsaAdapter::new();
     let authorized = authenticated.authorize_hsa_load(adapter).unwrap();
     assert!(authorized.grants_load_authority());
     assert!(!authorized.grants_launch_authority());
-    let loaded = authorized.load().unwrap();
+    let mut loaded = authorized.load().unwrap();
     assert!(!loaded.grants_load_authority());
     assert!(!loaded.grants_launch_authority());
     assert_eq!(loaded.kernel_observation().export_symbol(), "vecadd");
     loaded.revalidate_currentness().unwrap();
+
+    let owner = ();
+    for rejected_geometry in [
+        HsaLaunchGeometryV1::new([0, 1, 1], [64, 1, 1], 0),
+        HsaLaunchGeometryV1::new([5, 1, 1], [257, 1, 1], 0),
+        HsaLaunchGeometryV1::new([5, 1, 1], [64, 1, 1], 1),
+    ] {
+        match loaded.prepare_generated_worker_v3_v1(
+            &observed,
+            rejected_geometry,
+            WorkerV3VecAddArguments {
+                owner: &owner,
+                address: 0x10_000,
+                length: 257,
+            },
+        ) {
+            Err(GeneratedWorkerV3PrepareErrorV1::LaunchAuthorization(_)) => {}
+            Err(other) => panic!("unexpected rejected-geometry error: {other:?}"),
+            Ok(_) => panic!("rejected geometry unexpectedly prepared"),
+        }
+    }
+    assert_eq!(
+        adapter_state
+            .implicit_initializations
+            .load(Ordering::SeqCst),
+        0
+    );
+    assert_eq!(adapter_state.dispatches.load(Ordering::SeqCst), 0);
+
+    let geometry = HsaLaunchGeometryV1::new([5, 1, 1], [64, 1, 1], 0);
+    for fault in [
+        ReviewedTestHsaFault::ImplicitError,
+        ReviewedTestHsaFault::MutateExplicit,
+        ReviewedTestHsaFault::ImplicitKernel,
+        ReviewedTestHsaFault::DispatchError,
+        ReviewedTestHsaFault::DispatchIncomplete,
+    ] {
+        *adapter_state.fault.lock().unwrap() = fault;
+        let result = loaded
+            .prepare_generated_worker_v3_v1(
+                &observed,
+                geometry,
+                WorkerV3VecAddArguments {
+                    owner: &owner,
+                    address: 0x10_000,
+                    length: 257,
+                },
+            )
+            .unwrap()
+            .dispatch();
+        let rejected_at_expected_stage = match (fault, result) {
+            (
+                ReviewedTestHsaFault::ImplicitError,
+                Err(WorkerV3GeneratedDispatchErrorV1::ImplicitAdapter(_)),
+            )
+            | (
+                ReviewedTestHsaFault::MutateExplicit,
+                Err(WorkerV3GeneratedDispatchErrorV1::ExplicitKernargMutation),
+            )
+            | (
+                ReviewedTestHsaFault::ImplicitKernel,
+                Err(WorkerV3GeneratedDispatchErrorV1::ImplicitObservationMismatch(_)),
+            )
+            | (
+                ReviewedTestHsaFault::DispatchError,
+                Err(WorkerV3GeneratedDispatchErrorV1::DispatchAdapter(_)),
+            )
+            | (
+                ReviewedTestHsaFault::DispatchIncomplete,
+                Err(WorkerV3GeneratedDispatchErrorV1::DispatchObservationMismatch(_)),
+            ) => true,
+            _ => false,
+        };
+        assert!(rejected_at_expected_stage);
+    }
+    assert_eq!(
+        adapter_state
+            .implicit_initializations
+            .load(Ordering::SeqCst),
+        5
+    );
+    assert_eq!(adapter_state.dispatches.load(Ordering::SeqCst), 2);
+    *adapter_state.fault.lock().unwrap() = ReviewedTestHsaFault::None;
+
+    let prepared = loaded
+        .prepare_generated_worker_v3_v1(
+            &observed,
+            geometry,
+            WorkerV3VecAddArguments {
+                owner: &owner,
+                address: 0x10_000,
+                length: 257,
+            },
+        )
+        .unwrap();
+    assert_eq!(prepared.geometry(), geometry);
+    assert_eq!(prepared.explicit_byte_len(), 16);
+    assert_eq!(prepared.implicit_byte_len(), 256);
+    assert_eq!(prepared.physical_kernarg_byte_len(), 272);
+    assert_eq!(prepared.physical_kernarg_alignment(), 16);
+
+    let completed = prepared.dispatch().unwrap();
+    assert_eq!(completed.kernel_id().as_bytes(), &[0xa1; 32]);
+    assert_eq!(completed.completed_dispatch().geometry(), geometry);
+    assert!(completed.completed_dispatch().dispatch().completed());
+    loaded.revalidate_currentness().unwrap();
+    assert_eq!(
+        adapter_state
+            .implicit_initializations
+            .load(Ordering::SeqCst),
+        6
+    );
+    assert_eq!(adapter_state.dispatches.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        *adapter_state.dispatched_geometry.lock().unwrap(),
+        Some(geometry)
+    );
+    let kernarg_guard = adapter_state.dispatched_kernarg.lock().unwrap();
+    let kernarg = kernarg_guard.as_ref().unwrap();
+    assert_eq!(&kernarg[..8], &0x10_000_u64.to_le_bytes());
+    assert_eq!(&kernarg[8..16], &257_u64.to_le_bytes());
+    assert!(kernarg[16..].iter().all(|byte| *byte == 0xa5));
+    drop(kernarg_guard);
+
     let unloaded = loaded.unload().unwrap();
     assert!(unloaded.unload_observation().released());
     assert!(!unloaded.grants_load_authority());
     assert!(!unloaded.grants_launch_authority());
-    assert_eq!(unloads.load(Ordering::SeqCst), 1);
+    assert_eq!(adapter_state.unloads.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -595,7 +876,7 @@ fn v3_hsa_load_rejects_and_cleans_up_a_substituted_adapter_digest() {
         },
     )
     .unwrap();
-    let (adapter, unloads) = ReviewedTestHsaAdapter::with_substituted_load_digest();
+    let (adapter, adapter_state) = ReviewedTestHsaAdapter::with_substituted_load_digest();
     assert!(matches!(
         authenticated.authorize_hsa_load(adapter).unwrap().load(),
         Err(
@@ -604,5 +885,5 @@ fn v3_hsa_load_rejects_and_cleans_up_a_substituted_adapter_digest() {
             }
         )
     ));
-    assert_eq!(unloads.load(Ordering::SeqCst), 1);
+    assert_eq!(adapter_state.unloads.load(Ordering::SeqCst), 1);
 }
