@@ -1,15 +1,17 @@
 //! Request-bound generated Verus input for the strict scalar GEMM Worker V3 path.
 //!
 //! The generated source embeds the exact Worker V3 challenge and compiler/KIR identities, then
-//! includes the reviewed scalar source model and exact-profile KIR integer equations. Its retained
-//! execution closes request-to-transcript binding, but decoded-KIR operational refinement,
-//! Rust/MIR-to-model, IEEE `f32`, and emitted-machine refinement remain explicit obligations.
+//! includes the reviewed scalar source model, an exact decoded-KIR projection, and exact-profile
+//! KIR integer equations. Its retained execution closes request-to-transcript and projection
+//! identity binding, but decoded-KIR operational refinement, Rust/MIR-to-model, IEEE `f32`, and
+//! emitted-machine refinement remain explicit obligations.
 
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 use std::{error::Error, fmt};
 
 use fe2o3_compiler_lineage::InertLineageContentIdentityV3;
+use fe2o3_kernel_ir::ScalarGemmSemanticProjectionErrorV1;
 use sha2::{Digest as _, Sha256};
 
 use crate::general_gemm_runtime_closure_v2::{
@@ -26,10 +28,19 @@ use crate::{
 const SOURCE_MODEL: &[u8] = include_bytes!("../verus/scalar_gemm_v1.rs");
 const KIR_INTEGER_REFINEMENT: &[u8] =
     include_bytes!("../verus/scalar_gemm_kir_integer_refinement_v1.rs");
-const EXPECTED_STDOUT: &[u8] = b"verification results:: 23 verified, 0 errors\n";
+const KIR_PROJECTION_REVIEW: &[u8] =
+    include_bytes!("../verus/scalar_gemm_kir_projection_review_v1.rs");
+const EXPECTED_STDOUT: &[u8] = b"verification results:: 26 verified, 0 errors\n";
 const INPUT_BINDING_DOMAIN_V3: &[u8] = b"fe2o3-scalar-gemm-worker-v3-proof-input-binding-v3\0";
 const OUTPUT_IDENTITY_DOMAIN_V3: &[u8] = b"fe2o3-scalar-gemm-worker-v3-proof-output-v3\0";
 const EXECUTION_IDENTITY_DOMAIN_V3: &[u8] = b"fe2o3-scalar-gemm-worker-v3-proof-execution-v3\0";
+
+#[derive(Clone, Copy, Debug)]
+struct ScalarGemmKirProofBindingV3 {
+    canonical_kir_identity: [u8; 32],
+    semantic_projection_identity: [u8; 32],
+    semantic_projection_byte_len: u64,
+}
 
 /// Exact generated source and identity bindings for one scalar Worker V3 request.
 #[derive(Debug)]
@@ -40,6 +51,8 @@ pub struct ScalarGemmWorkerV3ProofInputV3 {
     proof_binding_sha256: [u8; 32],
     proof_binding_byte_len: u64,
     canonical_kir_identity: [u8; 32],
+    semantic_projection_identity: [u8; 32],
+    semantic_projection_byte_len: u64,
     binding_identity: Digest,
     source: CanonicalGeneratedVerusProofInputV3,
 }
@@ -63,6 +76,14 @@ impl ScalarGemmWorkerV3ProofInputV3 {
 
     pub const fn canonical_kir_identity(&self) -> [u8; 32] {
         self.canonical_kir_identity
+    }
+
+    pub const fn semantic_projection_identity(&self) -> [u8; 32] {
+        self.semantic_projection_identity
+    }
+
+    pub const fn semantic_projection_byte_len(&self) -> u64 {
+        self.semantic_projection_byte_len
     }
 
     pub const fn binding_identity(&self) -> Digest {
@@ -94,6 +115,11 @@ impl ScalarGemmWorkerV3ProofInputV3 {
 
     /// The generated source includes reviewed profile equations for the KIR integer model.
     pub const fn includes_reviewed_kir_integer_profile_equations(&self) -> bool {
+        true
+    }
+
+    /// The generated source carries every byte of the checked decoded-KIR projection.
+    pub const fn binds_exhaustive_decoded_kir_projection(&self) -> bool {
         true
     }
 
@@ -132,12 +158,30 @@ pub fn build_scalar_gemm_worker_v3_proof_input_v3(
     let proof_binding_sha256 = *proof_binding.sha256();
     let proof_binding_byte_len = proof_binding.byte_len();
     let canonical_kir_identity = scalar_kir.canonical_kir_identity();
+    let semantic_projection = scalar_kir.semantic_projection();
+    semantic_projection
+        .revalidate()
+        .map_err(ScalarGemmWorkerV3ProofInputErrorV3::SemanticProjection)?;
+    if semantic_projection.source_kir_identity().digest() != &canonical_kir_identity {
+        return Err(ScalarGemmWorkerV3ProofInputErrorV3::AssociationSubstitution);
+    }
+    let semantic_projection_identity = *semantic_projection.identity().digest();
+    let semantic_projection_byte_len =
+        u64::try_from(semantic_projection.canonical_token_preimage().len())
+            .map_err(|_| ScalarGemmWorkerV3ProofInputErrorV3::Formatting)?;
+    let kir_binding = ScalarGemmKirProofBindingV3 {
+        canonical_kir_identity,
+        semantic_projection_identity,
+        semantic_projection_byte_len,
+    };
     let generated = generate_source(
         challenge,
         compiler_inputs,
         proof_binding_sha256,
         proof_binding_byte_len,
         canonical_kir_identity,
+        semantic_projection_identity,
+        semantic_projection.canonical_token_preimage(),
     )?;
     let source = CanonicalGeneratedVerusProofInputV3::new(generated)
         .map_err(ScalarGemmWorkerV3ProofInputErrorV3::GeneratedSource)?;
@@ -146,7 +190,7 @@ pub fn build_scalar_gemm_worker_v3_proof_input_v3(
         &compiler_inputs,
         proof_binding_sha256,
         proof_binding_byte_len,
-        canonical_kir_identity,
+        kir_binding,
         source.identity(),
     );
     Ok(ScalarGemmWorkerV3ProofInputV3 {
@@ -155,6 +199,8 @@ pub fn build_scalar_gemm_worker_v3_proof_input_v3(
         proof_binding_sha256,
         proof_binding_byte_len,
         canonical_kir_identity,
+        semantic_projection_identity,
+        semantic_projection_byte_len,
         binding_identity,
         source,
     })
@@ -166,9 +212,16 @@ fn generate_source(
     proof_binding_sha256: [u8; 32],
     proof_binding_byte_len: u64,
     canonical_kir_identity: [u8; 32],
+    semantic_projection_identity: [u8; 32],
+    semantic_projection: &[u8],
 ) -> Result<Vec<u8>, ScalarGemmWorkerV3ProofInputErrorV3> {
-    let mut generated =
-        String::with_capacity(SOURCE_MODEL.len() + KIR_INTEGER_REFINEMENT.len() + 4096);
+    let mut generated = String::with_capacity(
+        SOURCE_MODEL.len()
+            + KIR_PROJECTION_REVIEW.len()
+            + KIR_INTEGER_REFINEMENT.len()
+            + semantic_projection.len() * 6
+            + 4096,
+    );
     generated.push_str("// @generated by fe2o3 scalar Worker V3 proof input V3\n");
     generated.push_str(
         "pub const FE2O3_PROOF_INPUT_SCHEMA_V3: &str = \"fe2o3.scalar-gemm.worker-v3-proof-input.v3\";\n",
@@ -208,11 +261,55 @@ fn generate_source(
         "FE2O3_CANONICAL_KIR_IDENTITY_V5",
         canonical_kir_identity,
     )?;
+    push_digest(
+        &mut generated,
+        "FE2O3_SCALAR_KIR_SEMANTIC_PROJECTION_IDENTITY_V1",
+        semantic_projection_identity,
+    )?;
+    writeln!(
+        generated,
+        "pub const FE2O3_SCALAR_KIR_SEMANTIC_PROJECTION_BYTE_LEN_V1: u64 = {};",
+        semantic_projection.len()
+    )
+    .map_err(|_| ScalarGemmWorkerV3ProofInputErrorV3::Formatting)?;
     generated.push('\n');
     let mut generated = generated.into_bytes();
     generated.extend_from_slice(SOURCE_MODEL);
+    append_semantic_projection(&mut generated, semantic_projection)?;
+    generated.extend_from_slice(KIR_PROJECTION_REVIEW);
     generated.extend_from_slice(KIR_INTEGER_REFINEMENT);
     Ok(generated)
+}
+
+fn append_semantic_projection(
+    output: &mut Vec<u8>,
+    projection: &[u8],
+) -> Result<(), ScalarGemmWorkerV3ProofInputErrorV3> {
+    let mut source = String::with_capacity(projection.len() * 6 + 256);
+    source.push_str("\npub mod scalar_gemm_kir_projection_generated_v1 {\n\n");
+    source.push_str("use vstd::prelude::*;\n\n");
+    writeln!(source, "verus! {{\n").map_err(|_| ScalarGemmWorkerV3ProofInputErrorV3::Formatting)?;
+    writeln!(
+        source,
+        "pub const FE2O3_GENERATED_SCALAR_KIR_PROJECTION_V1: [u8; {}] = [",
+        projection.len()
+    )
+    .map_err(|_| ScalarGemmWorkerV3ProofInputErrorV3::Formatting)?;
+    for chunk in projection.chunks(24) {
+        source.push_str("    ");
+        for (index, byte) in chunk.iter().enumerate() {
+            if index != 0 {
+                source.push_str(", ");
+            }
+            write!(source, "{byte}")
+                .map_err(|_| ScalarGemmWorkerV3ProofInputErrorV3::Formatting)?;
+        }
+        source.push_str(",\n");
+    }
+    source.push_str("];\n\n} // verus!\n\n");
+    source.push_str("} // mod scalar_gemm_kir_projection_generated_v1\n");
+    output.extend_from_slice(source.as_bytes());
+    Ok(())
 }
 
 fn push_digest(
@@ -238,7 +335,7 @@ fn input_binding_identity(
     compiler_inputs: &[InertLineageContentIdentityV3; 5],
     proof_binding_sha256: [u8; 32],
     proof_binding_byte_len: u64,
-    canonical_kir_identity: [u8; 32],
+    kir_binding: ScalarGemmKirProofBindingV3,
     source_identity: GeneratedVerusProofInputIdentityV3,
 ) -> Digest {
     let mut digest = Sha256::new();
@@ -250,7 +347,9 @@ fn input_binding_identity(
     }
     digest.update(proof_binding_sha256);
     digest.update(proof_binding_byte_len.to_le_bytes());
-    digest.update(canonical_kir_identity);
+    digest.update(kir_binding.canonical_kir_identity);
+    digest.update(kir_binding.semantic_projection_identity);
+    digest.update(kir_binding.semantic_projection_byte_len.to_le_bytes());
     digest.update(source_identity.as_bytes());
     Digest::from_bytes(digest.finalize().into())
 }
@@ -291,6 +390,11 @@ impl AuthenticatedScalarGemmWorkerV3ProofV3 {
     }
 
     pub const fn establishes_exact_scalar_gemm_kir_profile(&self) -> bool {
+        true
+    }
+
+    /// Retained Verus checked equality of the generated and reviewed exhaustive projections.
+    pub const fn authenticates_exact_decoded_kir_projection(&self) -> bool {
         true
     }
 
@@ -412,6 +516,7 @@ pub enum ScalarGemmWorkerV3ProofInputErrorV3 {
     ZeroChallenge,
     AssociationSubstitution,
     Formatting,
+    SemanticProjection(ScalarGemmSemanticProjectionErrorV1),
     GeneratedSource(GeneratedVerusProofInputErrorV3),
 }
 
@@ -424,6 +529,7 @@ impl fmt::Display for ScalarGemmWorkerV3ProofInputErrorV3 {
 impl Error for ScalarGemmWorkerV3ProofInputErrorV3 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::SemanticProjection(error) => Some(error),
             Self::GeneratedSource(error) => Some(error),
             _ => None,
         }
@@ -501,7 +607,7 @@ impl Error for ScalarGemmWorkerV3ProofErrorV3 {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::process::Command;
+    use std::process::{Command, Output};
 
     use fe2o3_compiler_lineage::{
         InertCanonicalSemanticMirReceiptV3, InertFormalMemoryReceiptV3, InertKernelIrReceiptV3,
@@ -601,6 +707,45 @@ mod tests {
         }
     }
 
+    fn run_pinned_verus(source: &[u8], suffix: &str) -> Output {
+        let verus = std::env::var_os("FE2O3_TEST_VERUS").expect("FE2O3_TEST_VERUS is not set");
+        let path = std::env::temp_dir().join(format!(
+            "fe2o3-scalar-worker-v3-proof-{}-{suffix}.rs",
+            std::process::id()
+        ));
+        fs::write(&path, source).unwrap();
+        let output = Command::new(verus)
+            .arg(&path)
+            .args([
+                "--crate-type",
+                "lib",
+                "--triggers-mode",
+                "silent",
+                "--no-cheating",
+                "--num-threads",
+                "1",
+            ])
+            .output()
+            .unwrap();
+        fs::remove_file(path).unwrap();
+        output
+    }
+
+    fn substitute_first_generated_projection_byte(source: &mut [u8]) {
+        const MARKER: &[u8] = b"FE2O3_GENERATED_SCALAR_KIR_PROJECTION_V1";
+        let marker = source
+            .windows(MARKER.len())
+            .position(|window| window == MARKER)
+            .expect("generated projection marker is absent");
+        let first_byte = source[marker..]
+            .windows(b"= [\n    1,".len())
+            .position(|window| window == b"= [\n    1,")
+            .map(|offset| marker + offset + b"= [\n    ".len())
+            .expect("generated projection first byte is absent");
+        assert_eq!(source[first_byte], b'1');
+        source[first_byte] = b'0';
+    }
+
     #[test]
     fn generated_source_binds_challenge_and_every_compiler_axis() {
         let first = input([0x11; 32]);
@@ -608,6 +753,9 @@ mod tests {
         assert!(!first.authenticates_verus_execution());
         assert!(!first.establishes_source_to_kir_refinement());
         assert!(first.includes_reviewed_kir_integer_profile_equations());
+        assert!(first.binds_exhaustive_decoded_kir_projection());
+        assert_eq!(first.semantic_projection_byte_len(), 2_927);
+        assert_ne!(first.semantic_projection_identity(), [0; 32]);
         assert!(!first.grants_artifact_or_runtime_authority());
         let source = std::str::from_utf8(first.canonical_source()).unwrap();
         for name in [
@@ -619,6 +767,9 @@ mod tests {
             "FE2O3_FORMAL_MEMORY_SHA256_V3",
             "FE2O3_PROOF_BINDING_SHA256_V3",
             "FE2O3_CANONICAL_KIR_IDENTITY_V5",
+            "FE2O3_SCALAR_KIR_SEMANTIC_PROJECTION_IDENTITY_V1",
+            "FE2O3_GENERATED_SCALAR_KIR_PROJECTION_V1",
+            "FE2O3_REVIEWED_SCALAR_KIR_PROJECTION_V1",
         ] {
             assert!(source.contains(name), "generated source omitted {name}");
         }
@@ -711,6 +862,7 @@ mod tests {
         assert!(receipt.authenticates_retained_verus_execution());
         assert!(receipt.binds_worker_v3_challenge());
         assert!(receipt.establishes_exact_scalar_gemm_kir_profile());
+        assert!(receipt.authenticates_exact_decoded_kir_projection());
         assert!(!receipt.establishes_kir_to_integer_model_refinement());
         assert!(!receipt.establishes_source_to_kir_refinement());
         assert!(!receipt.establishes_rust_or_f32_semantics());
@@ -722,27 +874,8 @@ mod tests {
     #[test]
     #[ignore = "requires FE2O3_TEST_VERUS pointing to the pinned Verus launcher"]
     fn generated_request_bound_source_verifies_with_pinned_verus() {
-        let verus = std::env::var_os("FE2O3_TEST_VERUS").expect("FE2O3_TEST_VERUS is not set");
         let source = input([0x44; 32]);
-        let path = std::env::temp_dir().join(format!(
-            "fe2o3-scalar-worker-v3-proof-{}.rs",
-            std::process::id()
-        ));
-        fs::write(&path, source.canonical_source()).unwrap();
-        let output = Command::new(verus)
-            .arg(&path)
-            .args([
-                "--crate-type",
-                "lib",
-                "--triggers-mode",
-                "silent",
-                "--no-cheating",
-                "--num-threads",
-                "1",
-            ])
-            .output()
-            .unwrap();
-        fs::remove_file(path).unwrap();
+        let output = run_pinned_verus(source.canonical_source(), "positive");
         assert_eq!(
             output.status.code(),
             Some(0),
@@ -755,6 +888,26 @@ mod tests {
             output.stderr.is_empty(),
             "{}",
             String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    #[ignore = "requires FE2O3_TEST_VERUS pointing to the pinned Verus launcher"]
+    fn one_byte_projection_substitution_fails_verus() {
+        let mut source = input([0x45; 32]).canonical_source().to_vec();
+        substitute_first_generated_projection_byte(&mut source);
+        let output = run_pinned_verus(&source, "projection-substitution");
+        assert_ne!(
+            output.status.code(),
+            Some(0),
+            "mutated projection unexpectedly verified: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("generated_scalar_kir_projection_is_exact_v1")
+                || stderr.contains("assertion failed"),
+            "unexpected verifier failure:\n{stderr}"
         );
     }
 }

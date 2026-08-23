@@ -11,6 +11,7 @@ use fe2o3_compiler_lineage::{
     InertProofBindingReceiptIdentityV3,
 };
 use fe2o3_kernel_ir::{
+    CheckedScalarGemmSemanticProjectionV1, ScalarGemmSemanticProjectionErrorV1,
     VerifiedCanonicalKernelIrErrorV5, VerifiedCanonicalKernelIrV5, scalar_gemm_v1_module,
 };
 
@@ -23,6 +24,7 @@ pub struct ValidatedScalarGemmCompilerKirV3 {
     proof_binding_receipt_identity: InertProofBindingReceiptIdentityV3,
     kernel_ir_receipt_identity: InertKernelIrReceiptIdentityV3,
     canonical_kir_identity: [u8; 32],
+    semantic_projection: CheckedScalarGemmSemanticProjectionV1,
 }
 
 impl ValidatedScalarGemmCompilerKirV3 {
@@ -41,8 +43,18 @@ impl ValidatedScalarGemmCompilerKirV3 {
         self.canonical_kir_identity
     }
 
+    /// Returns the exhaustive bounded Rust-TCB projection of the decoded graph.
+    pub const fn semantic_projection(&self) -> &CheckedScalarGemmSemanticProjectionV1 {
+        &self.semantic_projection
+    }
+
     /// The decoded graph is byte-exactly the reviewed scalar GEMM V1 KIR.
     pub const fn establishes_exact_scalar_gemm_kir_profile(&self) -> bool {
+        true
+    }
+
+    /// Every supported decoded graph field is represented in the checked projection.
+    pub const fn establishes_exhaustive_rust_tcb_projection(&self) -> bool {
         true
     }
 
@@ -92,11 +104,16 @@ pub fn validate_scalar_gemm_compiler_kir_v3(
     observed
         .revalidate()
         .map_err(ScalarGemmCompilerKirValidationErrorV3::InvalidCanonicalKernelIr)?;
+    let semantic_projection = CheckedScalarGemmSemanticProjectionV1::from_canonical_kir_v5_bytes(
+        observed.canonical_bytes().to_vec(),
+    )
+    .map_err(ScalarGemmCompilerKirValidationErrorV3::InvalidSemanticProjection)?;
 
     Ok(ValidatedScalarGemmCompilerKirV3 {
         proof_binding_receipt_identity: association.receipt_identity(),
         kernel_ir_receipt_identity: kernel_ir.identity(),
         canonical_kir_identity: *observed.identity().digest(),
+        semantic_projection,
     })
 }
 
@@ -110,6 +127,8 @@ pub enum ScalarGemmCompilerKirValidationErrorV3 {
     InvalidCanonicalKernelIr(VerifiedCanonicalKernelIrErrorV5),
     /// The in-tree reviewed scalar profile could not be canonicalized.
     InvalidReviewedProfile(VerifiedCanonicalKernelIrErrorV5),
+    /// The exact decoded graph could not be exhaustively projected.
+    InvalidSemanticProjection(ScalarGemmSemanticProjectionErrorV1),
     /// The valid KIR is not the exact reviewed scalar GEMM graph.
     NonCanonicalScalarGemmProfile,
 }
@@ -129,6 +148,12 @@ impl fmt::Display for ScalarGemmCompilerKirValidationErrorV3 {
                     "reviewed scalar GEMM profile is invalid: {error}"
                 )
             }
+            Self::InvalidSemanticProjection(error) => {
+                write!(
+                    formatter,
+                    "scalar GEMM semantic projection is invalid: {error}"
+                )
+            }
             Self::NonCanonicalScalarGemmProfile => formatter
                 .write_str("compiler Kernel IR is not the exact reviewed scalar GEMM V1 graph"),
         }
@@ -141,6 +166,7 @@ impl Error for ScalarGemmCompilerKirValidationErrorV3 {
             Self::InvalidCanonicalKernelIr(error) | Self::InvalidReviewedProfile(error) => {
                 Some(error)
             }
+            Self::InvalidSemanticProjection(error) => Some(error),
             Self::AssociatedKernelIrMismatch | Self::NonCanonicalScalarGemmProfile => None,
         }
     }
@@ -253,7 +279,21 @@ mod tests {
             fixture.kernel_ir.identity()
         );
         assert_ne!(validated.canonical_kir_identity(), [0; 32]);
+        assert_eq!(
+            validated
+                .semantic_projection()
+                .source_kir_identity()
+                .digest(),
+            &validated.canonical_kir_identity()
+        );
+        assert!(
+            !validated
+                .semantic_projection()
+                .canonical_token_preimage()
+                .is_empty()
+        );
         assert!(validated.establishes_exact_scalar_gemm_kir_profile());
+        assert!(validated.establishes_exhaustive_rust_tcb_projection());
         assert!(!validated.establishes_verus_model_correspondence());
         assert!(!validated.establishes_emitted_machine_refinement());
         assert!(!validated.can_enter_worker_v3_gate());

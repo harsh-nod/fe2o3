@@ -257,6 +257,7 @@ fn scalar_fixture_retains_exact_reviewed_kir_for_request_bound_proofs() {
     assert!(scalar_kir.establishes_exact_scalar_gemm_kir_profile());
     assert!(proof_input.binds_worker_v3_challenge());
     assert!(proof_input.includes_reviewed_kir_integer_profile_equations());
+    assert!(proof_input.binds_exhaustive_decoded_kir_projection());
     assert!(!proof_input.authenticates_verus_execution());
     assert!(!proof_input.establishes_source_to_kir_refinement());
     assert!(!proof_input.grants_artifact_or_runtime_authority());
