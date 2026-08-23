@@ -104,7 +104,8 @@ fn name(value: &str) -> Name {
 }
 
 fn synthetic_recorder_fixture() -> &'static str {
-    env!("CARGO_BIN_EXE_fe2o3-verifier-test-recorder")
+    option_env!("CARGO_BIN_EXE_fe2o3-verifier-test-recorder")
+        .expect("Cargo did not provide the verifier test recorder")
 }
 
 #[cfg(target_os = "linux")]

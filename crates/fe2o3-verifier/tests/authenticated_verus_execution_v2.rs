@@ -32,7 +32,8 @@ fn sha256(bytes: &[u8]) -> Digest {
 }
 
 fn fixture() -> &'static str {
-    env!("CARGO_BIN_EXE_fe2o3-verus-execution-v2-fixture")
+    option_env!("CARGO_BIN_EXE_fe2o3-verus-execution-v2-fixture")
+        .expect("Cargo did not provide the Verus execution fixture")
 }
 
 fn configuration() -> Configuration {

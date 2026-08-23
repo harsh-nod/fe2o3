@@ -60,7 +60,8 @@ fn plan(temp: &TempDirectory, mode: &str, timeout_seconds: u32) -> fe2o3_verifie
         temp,
         mode,
         timeout_seconds,
-        env!("CARGO_BIN_EXE_fe2o3-verifier-test-recorder"),
+        option_env!("CARGO_BIN_EXE_fe2o3-verifier-test-recorder")
+            .expect("Cargo did not provide the verifier test recorder"),
     )
 }
 
