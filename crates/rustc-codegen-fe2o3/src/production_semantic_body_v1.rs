@@ -11,11 +11,12 @@ use std::fmt;
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAggregateKindV1, SemanticAssertMessageV1, SemanticAssignmentV1, SemanticBasicBlockV1,
     SemanticBinaryOpV1, SemanticBlockIdV1, SemanticBlockIdentityV1, SemanticBorrowKindV1,
-    SemanticCallDestinationV1, SemanticCallableIdV1, SemanticCastKindV1,
-    SemanticConstGenericArgumentsIdentityV1, SemanticConstantBytesV1, SemanticConstantV1,
-    SemanticConstantValueV1, SemanticControlFlowEdgeV1, SemanticDirectCallV1, SemanticEdgeRoleV1,
-    SemanticFunctionAbiV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
-    SemanticFunctionIdentityV1, SemanticFunctionRoleV1, SemanticGenericTypeArgumentsIdentityV1,
+    SemanticCallDestinationV1, SemanticCallableIdV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
+    SemanticCheckedBinaryRvalueV1, SemanticConstGenericArgumentsIdentityV1,
+    SemanticConstantBytesV1, SemanticConstantV1, SemanticConstantValueV1,
+    SemanticControlFlowEdgeV1, SemanticDirectCallV1, SemanticEdgeRoleV1, SemanticFunctionAbiV1,
+    SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionIdentityV1,
+    SemanticFunctionRoleV1, SemanticGenericTypeArgumentsIdentityV1,
     SemanticItemDefinitionIdentityV1, SemanticKernelEntryV1, SemanticLinkSymbolV1,
     SemanticLocalDeclV1, SemanticLocalIdV1, SemanticLocalIdentityV1, SemanticLocalRoleV1,
     SemanticMemoryLoadV1, SemanticMirErrorV1, SemanticMirLimitsV1, SemanticMirResourceV1,
@@ -888,12 +889,21 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 operand: self.construct_operand(operand, block, statement)?,
             },
             Rvalue::BinaryOp(operation, operands) => {
-                let operation = semantic_binary_operation(*operation)
-                    .ok_or_else(|| unsupported("unsupported BinaryOp rvalue", block, statement))?;
-                SemanticRvalueKindV1::Binary {
-                    operation,
-                    left: self.construct_operand(&operands.0, block, statement)?,
-                    right: self.construct_operand(&operands.1, block, statement)?,
+                let left = self.construct_operand(&operands.0, block, statement)?;
+                let right = self.construct_operand(&operands.1, block, statement)?;
+                if let Some(operation) = semantic_checked_binary_operation(*operation) {
+                    SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
+                        operation, left, right,
+                    ))
+                } else {
+                    let operation = semantic_binary_operation(*operation).ok_or_else(|| {
+                        unsupported("unsupported BinaryOp rvalue", block, statement)
+                    })?;
+                    SemanticRvalueKindV1::Binary {
+                        operation,
+                        left,
+                        right,
+                    }
                 }
             }
             Rvalue::UnaryOp(operation, operand) => SemanticRvalueKindV1::Unary {
@@ -1778,6 +1788,15 @@ fn semantic_binary_operation(operation: BinOp) -> Option<SemanticBinaryOpV1> {
     }
 }
 
+fn semantic_checked_binary_operation(operation: BinOp) -> Option<SemanticCheckedBinaryOpV1> {
+    match operation {
+        BinOp::AddWithOverflow => Some(SemanticCheckedBinaryOpV1::Add),
+        BinOp::SubWithOverflow => Some(SemanticCheckedBinaryOpV1::Subtract),
+        BinOp::MulWithOverflow => Some(SemanticCheckedBinaryOpV1::Multiply),
+        _ => None,
+    }
+}
+
 fn try_vec_v1<T>(
     capacity: usize,
     resource: SemanticMirResourceV1,
@@ -1971,6 +1990,32 @@ mod tests {
                     ..
                 }
             ));
+        }
+    }
+
+    #[test]
+    fn checked_binary_mapping_is_exact_and_never_aliases_plain_or_unchecked_arithmetic() {
+        assert_eq!(
+            semantic_checked_binary_operation(BinOp::AddWithOverflow),
+            Some(SemanticCheckedBinaryOpV1::Add)
+        );
+        assert_eq!(
+            semantic_checked_binary_operation(BinOp::SubWithOverflow),
+            Some(SemanticCheckedBinaryOpV1::Subtract)
+        );
+        assert_eq!(
+            semantic_checked_binary_operation(BinOp::MulWithOverflow),
+            Some(SemanticCheckedBinaryOpV1::Multiply)
+        );
+        for operation in [
+            BinOp::Add,
+            BinOp::Sub,
+            BinOp::Mul,
+            BinOp::AddUnchecked,
+            BinOp::SubUnchecked,
+            BinOp::MulUnchecked,
+        ] {
+            assert_eq!(semantic_checked_binary_operation(operation), None);
         }
     }
 }
