@@ -8808,15 +8808,15 @@ mod tests {
             let mut state = HashMap::from([(1, wrapped)]);
             transfer_tensor_statements_v1(&function, 0, &mut state, &option, &payload).unwrap();
             assert_eq!(state[&1], ProjectedTensorValueV1::Invalid);
-            assert!(
+            assert_eq!(
                 tensor_origin_from_assignment_operand_v1(
                     &tensor_payload(1, 4),
                     &state,
                     &option,
                     &payload,
                     SemanticBlockIdV1::from_index(0),
-                )
-                .is_none()
+                ),
+                Some(ProjectedTensorValueV1::Invalid)
             );
         }
     }
