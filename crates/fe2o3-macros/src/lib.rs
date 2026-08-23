@@ -1317,9 +1317,9 @@ fn expand_general_typed_kernel_with_imports(
                 pattern.mutability = None;
             }
         }
-        input.block = Box::new(parse_quote!({
+        *input.block = parse_quote!({
             let _: #result_device_path::KernelResult = #body_ident(#(#argument_names),*);
-        }));
+        });
         Some(helper)
     } else {
         input.sig.ident = internal_ident.clone();
