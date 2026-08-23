@@ -896,7 +896,7 @@ fn validate_block_argument_values_v1(
     current_block: usize,
     blocks: &[ProductionRankedBlockV1],
 ) -> Result<(), ProductionRankedKernelErrorV1> {
-    let mut validate = |value| validate_block_argument_value_v1(value, current_block, blocks);
+    let validate = |value| validate_block_argument_value_v1(value, current_block, blocks);
     match operation {
         ProductionRankedOperationV1::View {
             dynamic_extents, ..

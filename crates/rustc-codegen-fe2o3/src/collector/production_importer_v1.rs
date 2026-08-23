@@ -1014,7 +1014,7 @@ fn terminal_operation_v1<'tcx>(
             if inputs.len() == 1
                 && rust_inputs.len() == 1
                 && rust_mfma_accumulator_contract_v1(tcx, rust_inputs[0]).is_some()
-                && rust_fixed_array_v1(tcx, rust_output, RustScalarV1::F32, 4) =>
+                && rust_f32_array_v1(tcx, rust_output, 4) =>
         {
             Ok(
                 SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues {
@@ -1660,26 +1660,16 @@ fn rust_mfma_matrix_role_v1<'tcx>(
     }
 }
 
-#[derive(Clone, Copy)]
-enum RustScalarV1 {
-    U16,
-    F32,
-}
-
-fn rust_fixed_array_v1<'tcx>(
+fn rust_f32_array_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: Ty<'tcx>,
-    scalar: RustScalarV1,
     expected_length: u64,
 ) -> bool {
     let TyKind::Array(element, length) = *ty.kind() else {
         return false;
     };
-    let scalar_matches = match scalar {
-        RustScalarV1::U16 => matches!(element.kind(), TyKind::Uint(UintTy::U16)),
-        RustScalarV1::F32 => matches!(element.kind(), TyKind::Float(FloatTy::F32)),
-    };
-    scalar_matches && length.try_to_target_usize(tcx) == Some(expected_length)
+    matches!(element.kind(), TyKind::Float(FloatTy::F32))
+        && length.try_to_target_usize(tcx) == Some(expected_length)
 }
 
 fn rust_disjoint_slice_v1<'tcx>(
