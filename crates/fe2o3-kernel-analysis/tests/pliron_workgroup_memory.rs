@@ -1,4 +1,7 @@
-use dialect_gpu::{AddressSpaceAttr, BarrierOp, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr};
+use dialect_gpu::{
+    AddressSpaceAttr, BarrierOp, ExecutionLayoutOp, FenceOp, HierarchyAttr, MemoryOrderAttr,
+    MemoryScopeAttr,
+};
 use dialect_kernel::{
     AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, DIALECT_NAME, IndexBinaryKindAttr,
     IndexBinaryOp, IndexConstantOp, InvocationIndexOp, MemorySpaceAttr, RankedAccessOp,
@@ -26,11 +29,23 @@ fn setup() -> Context {
 }
 
 fn function(context: &mut Context, name: &str) -> FuncOp {
-    FuncOp::new(
+    function_with_layout(context, name, 64, 64)
+}
+
+fn function_with_layout(
+    context: &mut Context,
+    name: &str,
+    workgroup_size: u64,
+    subgroup_size: u64,
+) -> FuncOp {
+    let function = FuncOp::new(
         context,
         name.try_into().unwrap(),
         FunctionType::get(context, vec![], vec![]),
-    )
+    );
+    let layout = ExecutionLayoutOp::new(context, 7, workgroup_size, subgroup_size);
+    append(context, function.get_entry_block(context), &layout);
+    function
 }
 
 fn append<O: Op>(context: &Context, block: Ptr<BasicBlock>, operation: &O) {
@@ -225,7 +240,7 @@ fn convergent_publish_makes_neighbor_values_initialized() {
 fn missing_or_wrong_space_barrier_does_not_publish_neighbor_values() {
     for address_space in [None, Some(AddressSpaceAttr::Global)] {
         let context = &mut setup();
-        let function = function(context, "missing_publish");
+        let function = function_with_layout(context, "missing_publish", 2, 2);
         let entry = function.get_entry_block(context);
         let shared = view(context);
         let invocation = InvocationIndexOp::new(context, 0, 2);
@@ -328,4 +343,204 @@ fn workgroup_barrier_starts_a_new_race_epoch() {
     append(context, entry, &second);
     append(context, entry, &ret);
     assert!(run_pliron_workgroup_memory_check_v1(context, &function).is_clean());
+}
+
+#[test]
+fn two_waves_share_initialized_lds_only_after_a_workgroup_barrier() {
+    for (scope, clean, incomplete) in [
+        (Some(HierarchyAttr::Workgroup), true, false),
+        (Some(HierarchyAttr::Subgroup), false, true),
+        (None, false, false),
+    ] {
+        let context = &mut setup();
+        let function = function_with_layout(context, "cross_wave_publish", 128, 64);
+        let entry = function.get_entry_block(context);
+        let shared = {
+            let ty = RankedViewType::new(context, 32, true, vec![128]).unwrap();
+            RankedViewOp::new_in_space(context, ty, vec![], MemorySpaceAttr::Workgroup).unwrap()
+        };
+        let invocation = InvocationIndexOp::new(context, 0, 128);
+        let wave_one = IndexConstantOp::new(context, 64);
+        let write = access(
+            context,
+            AccessKindAttr::Write,
+            &shared,
+            invocation.result(context),
+        );
+        let read = access(
+            context,
+            AccessKindAttr::Read,
+            &shared,
+            wave_one.result(context),
+        );
+        let ret = ReturnOp::new(context);
+        append(context, entry, &shared);
+        append(context, entry, &invocation);
+        append(context, entry, &wave_one);
+        append(context, entry, &write);
+        if let Some(scope) = scope {
+            let sync = BarrierOp::new(
+                context,
+                scope,
+                if scope == HierarchyAttr::Workgroup {
+                    MemoryScopeAttr::Workgroup
+                } else {
+                    MemoryScopeAttr::Subgroup
+                },
+                AddressSpaceAttr::Workgroup,
+                MemoryOrderAttr::AcquireRelease,
+            );
+            append(context, entry, &sync);
+        }
+        append(context, entry, &read);
+        append(context, entry, &ret);
+        let report = run_pliron_workgroup_memory_check_v1(context, &function);
+        assert_eq!(
+            report.is_clean(),
+            clean,
+            "unexpected publication result for {scope:?}",
+        );
+        if incomplete {
+            assert!(matches!(
+                report.findings(),
+                [PlironWorkgroupMemoryFindingV1::AnalysisIncomplete { detail }]
+                    if detail.contains("never publishes to sibling waves")
+            ));
+        }
+    }
+}
+
+#[test]
+fn distinct_workgroups_have_distinct_lds_allocations() {
+    let context = &mut setup();
+    let function = function_with_layout(context, "workgroup_local_lds", 64, 64);
+    let entry = function.get_entry_block(context);
+    let shared = view(context);
+    let invocation = InvocationIndexOp::new(context, 0, 128);
+    let extent = IndexConstantOp::new(context, 64);
+    let local = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Remainder,
+        invocation.result(context),
+        extent.result(context),
+    );
+    let write = access(
+        context,
+        AccessKindAttr::Write,
+        &shared,
+        local.result(context),
+    );
+    let ret = ReturnOp::new(context);
+    append(context, entry, &shared);
+    append(context, entry, &invocation);
+    append(context, entry, &extent);
+    append(context, entry, &local);
+    append(context, entry, &write);
+    append(context, entry, &ret);
+    assert!(run_pliron_workgroup_memory_check_v1(context, &function).is_clean());
+}
+
+#[test]
+fn missing_scoped_layout_fails_incomplete_instead_of_assuming_one_workgroup() {
+    let context = &mut setup();
+    let function = FuncOp::new(
+        context,
+        "missing_layout".try_into().unwrap(),
+        FunctionType::get(context, vec![], vec![]),
+    );
+    let entry = function.get_entry_block(context);
+    let shared = view(context);
+    let invocation = InvocationIndexOp::new(context, 0, 64);
+    let write = access(
+        context,
+        AccessKindAttr::Write,
+        &shared,
+        invocation.result(context),
+    );
+    let ret = ReturnOp::new(context);
+    append(context, entry, &shared);
+    append(context, entry, &invocation);
+    append(context, entry, &write);
+    append(context, entry, &ret);
+    let report = run_pliron_workgroup_memory_check_v1(context, &function);
+    assert!(matches!(
+        report.findings(),
+        [PlironWorkgroupMemoryFindingV1::AnalysisIncomplete { detail }]
+            if detail.contains("gpu.execution_layout")
+    ));
+}
+
+#[test]
+fn subgroup_local_lds_publication_is_explicitly_incomplete() {
+    let context = &mut setup();
+    let function = function_with_layout(context, "subgroup_lds", 128, 64);
+    let entry = function.get_entry_block(context);
+    let shared = view(context);
+    let invocation = InvocationIndexOp::new(context, 0, 64);
+    let zero = IndexConstantOp::new(context, 0);
+    let write = access(
+        context,
+        AccessKindAttr::Write,
+        &shared,
+        invocation.result(context),
+    );
+    let sync = BarrierOp::new(
+        context,
+        HierarchyAttr::Subgroup,
+        MemoryScopeAttr::Subgroup,
+        AddressSpaceAttr::Workgroup,
+        MemoryOrderAttr::AcquireRelease,
+    );
+    let read = access(context, AccessKindAttr::Read, &shared, zero.result(context));
+    let ret = ReturnOp::new(context);
+    append(context, entry, &shared);
+    append(context, entry, &invocation);
+    append(context, entry, &zero);
+    append(context, entry, &write);
+    append(context, entry, &sync);
+    append(context, entry, &read);
+    append(context, entry, &ret);
+    let report = run_pliron_workgroup_memory_check_v1(context, &function);
+    assert!(matches!(
+        report.findings(),
+        [PlironWorkgroupMemoryFindingV1::AnalysisIncomplete { detail }]
+            if detail.contains("per-subgroup epoch/read-from relation")
+    ));
+}
+
+#[test]
+fn fence_only_lds_publication_is_explicitly_incomplete() {
+    let context = &mut setup();
+    let function = function(context, "fenced_lds");
+    let entry = function.get_entry_block(context);
+    let shared = view(context);
+    let invocation = InvocationIndexOp::new(context, 0, 64);
+    let zero = IndexConstantOp::new(context, 0);
+    let write = access(
+        context,
+        AccessKindAttr::Write,
+        &shared,
+        invocation.result(context),
+    );
+    let fence = FenceOp::new(
+        context,
+        MemoryScopeAttr::Workgroup,
+        AddressSpaceAttr::Workgroup,
+        MemoryOrderAttr::Release,
+    );
+    let read = access(context, AccessKindAttr::Read, &shared, zero.result(context));
+    let ret = ReturnOp::new(context);
+    append(context, entry, &shared);
+    append(context, entry, &invocation);
+    append(context, entry, &zero);
+    append(context, entry, &write);
+    append(context, entry, &fence);
+    append(context, entry, &read);
+    append(context, entry, &ret);
+    let report = run_pliron_workgroup_memory_check_v1(context, &function);
+    assert!(matches!(
+        report.findings(),
+        [PlironWorkgroupMemoryFindingV1::AnalysisIncomplete { detail }]
+            if detail.contains("non-collective fence is not a workgroup barrier")
+    ));
 }

@@ -117,6 +117,39 @@ pub enum MemoryOrderAttr {
     SequentiallyConsistent,
 }
 
+/// Stable identity of the dispatch grid analyzed by scoped concurrency passes.
+#[pliron_attr(name = "gpu.grid_identity", format = "$0", verifier = "succ")]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct GridIdentityAttr(pub u64);
+
+impl GridIdentityAttr {
+    pub const fn identity(self) -> u64 {
+        self.0
+    }
+}
+
+/// Linear workgroup size retained by the target-neutral execution model.
+#[pliron_attr(name = "gpu.workgroup_size", format = "$0", verifier = "succ")]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct WorkgroupSizeAttr(pub u64);
+
+impl WorkgroupSizeAttr {
+    pub const fn size(self) -> u64 {
+        self.0
+    }
+}
+
+/// Linear subgroup size retained by the target-neutral execution model.
+#[pliron_attr(name = "gpu.subgroup_size", format = "$0", verifier = "succ")]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct SubgroupSizeAttr(pub u64);
+
+impl SubgroupSizeAttr {
+    pub const fn size(self) -> u64 {
+        self.0
+    }
+}
+
 impl MemoryOrderAttr {
     fn includes_release(self) -> bool {
         matches!(
@@ -247,6 +280,103 @@ impl Verify for HierarchyIdOp {
             return verify_err!(
                 self.loc(context),
                 "gpu.hierarchy_id attribute and result hierarchy must match"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Closed linear execution hierarchy for scoped concurrency reasoning.
+///
+/// The operation does not authorize a launch. It records the compiler's
+/// retained mapping from a linear invocation identity to workgroup, subgroup,
+/// and lane identities. At most one operation may appear in a kernel entry;
+/// the scoped concurrency analysis enforces that function-level invariant.
+#[pliron_op(
+    name = "gpu.execution_layout",
+    format,
+    interfaces = [
+        TargetNeutralGpuOpInterface,
+        NOpdsInterface<0>,
+        NResultsInterface<0>,
+        NRegionsInterface<0>
+    ],
+    attributes = (
+        gpu_execution_grid_identity: GridIdentityAttr,
+        gpu_execution_workgroup_size: WorkgroupSizeAttr,
+        gpu_execution_subgroup_size: SubgroupSizeAttr
+    )
+)]
+pub struct ExecutionLayoutOp;
+
+impl ExecutionLayoutOp {
+    pub fn new(
+        context: &mut Context,
+        grid_identity: u64,
+        workgroup_size: u64,
+        subgroup_size: u64,
+    ) -> Self {
+        let operation = Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![],
+            vec![],
+            vec![],
+            0,
+        );
+        let op = Self::from_operation(operation);
+        op.set_attr_gpu_execution_grid_identity(context, GridIdentityAttr(grid_identity));
+        op.set_attr_gpu_execution_workgroup_size(context, WorkgroupSizeAttr(workgroup_size));
+        op.set_attr_gpu_execution_subgroup_size(context, SubgroupSizeAttr(subgroup_size));
+        op
+    }
+
+    pub fn grid_identity(&self, context: &Context) -> Option<u64> {
+        self.get_attr_gpu_execution_grid_identity(context)
+            .map(|value| value.identity())
+    }
+
+    pub fn workgroup_size(&self, context: &Context) -> Option<u64> {
+        self.get_attr_gpu_execution_workgroup_size(context)
+            .map(|value| value.size())
+    }
+
+    pub fn subgroup_size(&self, context: &Context) -> Option<u64> {
+        self.get_attr_gpu_execution_subgroup_size(context)
+            .map(|value| value.size())
+    }
+}
+
+impl Verify for ExecutionLayoutOp {
+    fn verify(&self, context: &Context) -> Result<()> {
+        verify_closed_shape(self, context, 0, 0, 3)?;
+        let grid_identity = required_attr(
+            self,
+            context,
+            self.get_attr_gpu_execution_grid_identity(context),
+            "grid_identity",
+        )?;
+        let workgroup_size = required_attr(
+            self,
+            context,
+            self.get_attr_gpu_execution_workgroup_size(context),
+            "workgroup_size",
+        )?;
+        let subgroup_size = required_attr(
+            self,
+            context,
+            self.get_attr_gpu_execution_subgroup_size(context),
+            "subgroup_size",
+        )?;
+        let _ = grid_identity;
+        if workgroup_size.size() == 0
+            || subgroup_size.size() == 0
+            || subgroup_size.size() > workgroup_size.size()
+            || !workgroup_size.size().is_multiple_of(subgroup_size.size())
+        {
+            return verify_err!(
+                self.loc(context),
+                "gpu.execution_layout requires nonzero subgroup/workgroup sizes and an integral number of subgroups"
             );
         }
         Ok(())
@@ -408,11 +538,11 @@ impl Verify for BarrierOp {
 
         if !matches!(
             execution_scope,
-            HierarchyAttr::Workgroup | HierarchyAttr::Subgroup
+            HierarchyAttr::Grid | HierarchyAttr::Workgroup | HierarchyAttr::Subgroup
         ) {
             return verify_err!(
                 self.loc(context),
-                "gpu.barrier execution scope must be workgroup or subgroup"
+                "gpu.barrier execution scope must be grid, workgroup, or subgroup"
             );
         }
         if memory_scope_rank(memory_scope) < hierarchy_memory_rank(execution_scope) {
@@ -485,6 +615,20 @@ impl FenceOp {
         op.set_attr_gpu_fence_address_space(context, address_space);
         op.set_attr_gpu_fence_order(context, order);
         op
+    }
+
+    pub fn memory_scope(&self, context: &Context) -> Option<MemoryScopeAttr> {
+        self.get_attr_gpu_fence_memory_scope(context)
+            .map(|value| *value)
+    }
+
+    pub fn address_space(&self, context: &Context) -> Option<AddressSpaceAttr> {
+        self.get_attr_gpu_fence_address_space(context)
+            .map(|value| *value)
+    }
+
+    pub fn order(&self, context: &Context) -> Option<MemoryOrderAttr> {
+        self.get_attr_gpu_fence_order(context).map(|value| *value)
     }
 }
 
@@ -616,6 +760,9 @@ pub fn register_dialect(
     <AddressSpaceAttr as Attribute>::register::<AddressSpaceAttr>(context);
     <MemoryScopeAttr as Attribute>::register::<MemoryScopeAttr>(context);
     <MemoryOrderAttr as Attribute>::register::<MemoryOrderAttr>(context);
+    <GridIdentityAttr as Attribute>::register::<GridIdentityAttr>(context);
+    <WorkgroupSizeAttr as Attribute>::register::<WorkgroupSizeAttr>(context);
+    <SubgroupSizeAttr as Attribute>::register::<SubgroupSizeAttr>(context);
     <GeneralGemmRuntimeAbiAttr as Attribute>::register::<GeneralGemmRuntimeAbiAttr>(context);
     <GeneralGemmGridMappingAttr as Attribute>::register::<GeneralGemmGridMappingAttr>(context);
     <GeneralGemmPhaseLoopAttr as Attribute>::register::<GeneralGemmPhaseLoopAttr>(context);
@@ -629,6 +776,7 @@ pub fn register_dialect(
     <HierarchyIndexType as Type>::register(context);
     <MemorySpaceType as Type>::register(context);
     <HierarchyIdOp as Op>::register(context);
+    <ExecutionLayoutOp as Op>::register(context);
     <MemorySpaceOp as Op>::register(context);
     <BarrierOp as Op>::register(context);
     <FenceOp as Op>::register(context);

@@ -225,7 +225,11 @@ pub enum AtomicOrderingAttr {
 pub enum AtomicScopeAttr {
     SingleThread,
     Workgroup,
+    /// All workgroups executing on one GPU agent. This covers distinct
+    /// workgroups within the same retained grid identity.
     Agent,
+    /// Device-wide scope retained by source languages that distinguish it
+    /// from the HSA agent scope. It is at least as wide as `Agent`.
     Device,
     System,
 }

@@ -1,11 +1,11 @@
 //! Workgroup-memory initialization, publication, and race verification.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt,
 };
 
-use dialect_gpu::AddressSpaceAttr;
+use dialect_gpu::{AddressSpaceAttr, HierarchyAttr};
 use dialect_kernel::{AccessKindAttr, MemorySpaceAttr, RankedViewOp};
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
@@ -247,7 +247,38 @@ pub(crate) fn run_pliron_workgroup_memory_check_after_prerequisites_v1(
             });
         }
     };
-    analyze_traces(&traces)
+    if traces.iter().any(|trace| {
+        trace.events.iter().any(|event| {
+            matches!(
+                event,
+                PlironTraceEventV1::Barrier {
+                    execution_scope: HierarchyAttr::Subgroup,
+                    address_space: AddressSpaceAttr::Workgroup,
+                    ..
+                }
+            )
+        })
+    }) {
+        return one(PlironWorkgroupMemoryFindingV1::AnalysisIncomplete {
+            detail: "subgroup-local LDS publication requires a retained per-subgroup epoch/read-from relation; a subgroup barrier never publishes to sibling waves".to_owned(),
+        });
+    }
+    if traces.iter().any(|trace| {
+        trace.events.iter().any(|event| {
+            matches!(
+                event,
+                PlironTraceEventV1::Fence {
+                    address_space: AddressSpaceAttr::Workgroup,
+                    ..
+                }
+            )
+        })
+    }) {
+        return one(PlironWorkgroupMemoryFindingV1::AnalysisIncomplete {
+            detail: "fence-mediated LDS publication requires a retained read-from/synchronizes-with relation; a non-collective fence is not a workgroup barrier".to_owned(),
+        });
+    }
+    analyze_scoped_traces(traces)
 }
 
 pub(crate) fn require_pliron_workgroup_memory_after_prerequisites_v1(
@@ -274,7 +305,28 @@ pub fn require_pliron_workgroup_memory_safety_before_lowering_v1(
     }
 }
 
-fn analyze_traces(traces: &[PlironInvocationTraceV1]) -> PlironWorkgroupMemoryReportV1 {
+fn analyze_scoped_traces(traces: Vec<PlironInvocationTraceV1>) -> PlironWorkgroupMemoryReportV1 {
+    let mut by_workgroup: BTreeMap<(u64, u64), Vec<PlironInvocationTraceV1>> = BTreeMap::new();
+    for trace in traces {
+        by_workgroup
+            .entry((trace.grid, trace.workgroup))
+            .or_default()
+            .push(trace);
+    }
+    let mut findings = Vec::new();
+    for traces in by_workgroup.values() {
+        let report = analyze_workgroup_traces(traces);
+        for finding in report.findings {
+            if findings.len() == MAX_PLIRON_WORKGROUP_FINDINGS_V1 {
+                return one(PlironWorkgroupMemoryFindingV1::FindingLimitExceeded);
+            }
+            findings.push(finding);
+        }
+    }
+    PlironWorkgroupMemoryReportV1 { findings }
+}
+
+fn analyze_workgroup_traces(traces: &[PlironInvocationTraceV1]) -> PlironWorkgroupMemoryReportV1 {
     let mut published = HashSet::new();
     let mut cursors = vec![0_usize; traces.len()];
     let mut findings = Vec::new();
@@ -290,13 +342,17 @@ fn analyze_traces(traces: &[PlironInvocationTraceV1]) -> PlironWorkgroupMemoryRe
                 cursors[trace_index] += 1;
                 any_event = true;
                 match event {
-                    PlironTraceEventV1::Barrier { address_space, .. }
-                        if *address_space == AddressSpaceAttr::Workgroup =>
+                    PlironTraceEventV1::Barrier {
+                        execution_scope,
+                        address_space,
+                        ..
+                    } if *execution_scope == HierarchyAttr::Workgroup
+                        && *address_space == AddressSpaceAttr::Workgroup =>
                     {
                         saw_workgroup_barrier = true;
                         break;
                     }
-                    PlironTraceEventV1::Barrier { .. } => {}
+                    PlironTraceEventV1::Barrier { .. } | PlironTraceEventV1::Fence { .. } => {}
                     PlironTraceEventV1::Memory { memory_space, .. }
                         if *memory_space != MemorySpaceAttr::Workgroup => {}
                     PlironTraceEventV1::Memory {

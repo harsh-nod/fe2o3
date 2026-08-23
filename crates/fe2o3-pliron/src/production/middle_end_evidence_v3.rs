@@ -1007,6 +1007,16 @@ fn derive_ranked_kernel_identity(
 
 fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperationV1) {
     match operation {
+        ProductionRankedOperationV1::ExecutionLayout {
+            grid_identity,
+            workgroup_size,
+            subgroup_size,
+        } => {
+            digest.update([15]);
+            digest.update(grid_identity.to_le_bytes());
+            digest.update(workgroup_size.to_le_bytes());
+            digest.update(subgroup_size.to_le_bytes());
+        }
         ProductionRankedOperationV1::View {
             result,
             element_width,
@@ -1130,6 +1140,16 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
         } => {
             digest.update([8]);
             digest.update([hierarchy_tag(*execution_scope)]);
+            digest.update([memory_scope_tag(*memory_scope)]);
+            digest.update([address_space_tag(*address_space)]);
+            digest.update([memory_order_tag(*order)]);
+        }
+        ProductionRankedOperationV1::Fence {
+            memory_scope,
+            address_space,
+            order,
+        } => {
+            digest.update([16]);
             digest.update([memory_scope_tag(*memory_scope)]);
             digest.update([address_space_tag(*address_space)]);
             digest.update([memory_order_tag(*order)]);

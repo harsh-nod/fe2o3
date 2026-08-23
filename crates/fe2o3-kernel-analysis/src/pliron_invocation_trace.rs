@@ -7,7 +7,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use dialect_gpu::{AddressSpaceAttr, BarrierOp};
+use dialect_gpu::{
+    AddressSpaceAttr, BarrierOp, ExecutionLayoutOp, FenceOp, HierarchyAttr, MemoryOrderAttr,
+    MemoryScopeAttr,
+};
 use dialect_kernel::{
     AccessKindAttr, BranchOp, IndexLessThanBranchOp, MemorySpaceAttr, RankedAccessOp, RankedViewOp,
     ReturnOp,
@@ -37,7 +40,14 @@ pub(crate) struct PlironTraceLocationV1 {
 pub(crate) enum PlironTraceEventV1 {
     Barrier {
         location: PlironTraceLocationV1,
+        execution_scope: HierarchyAttr,
         address_space: AddressSpaceAttr,
+    },
+    Fence {
+        location: PlironTraceLocationV1,
+        memory_scope: MemoryScopeAttr,
+        address_space: AddressSpaceAttr,
+        order: MemoryOrderAttr,
     },
     Memory {
         location: PlironTraceLocationV1,
@@ -51,19 +61,97 @@ pub(crate) enum PlironTraceEventV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlironInvocationTraceV1 {
     pub(crate) invocation: Vec<u64>,
+    pub(crate) grid: u64,
+    pub(crate) workgroup: u64,
+    pub(crate) subgroup: u64,
+    pub(crate) lane: u64,
     pub(crate) events: Vec<PlironTraceEventV1>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlironTraceFailureV1 {
     Sparse(SparseIndexFailureV1),
-    DynamicLaunch { dimension: usize },
-    LaunchTooLarge { invocations: u64 },
-    UnresolvedBranch { block: usize },
-    ForeignView { block: usize, operation: usize },
-    UnsupportedTerminator { block: usize },
-    CyclicControlFlow { block: usize },
+    DynamicLaunch {
+        dimension: usize,
+    },
+    LaunchTooLarge {
+        invocations: u64,
+    },
+    UnresolvedBranch {
+        block: usize,
+    },
+    ForeignView {
+        block: usize,
+        operation: usize,
+    },
+    UnsupportedTerminator {
+        block: usize,
+    },
+    CyclicControlFlow {
+        block: usize,
+    },
+    MissingExecutionLayout,
+    InvalidExecutionLayout,
+    UnsupportedGridSynchronization {
+        block: usize,
+        operation: usize,
+    },
+    PartialBarrierParticipants {
+        scope: HierarchyAttr,
+        invocations: u64,
+        participant_width: u64,
+    },
     ResourceLimit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlironExecutionLayoutV1 {
+    pub(crate) grid: u64,
+    pub(crate) workgroup_size: u64,
+    pub(crate) subgroup_size: u64,
+}
+
+pub(crate) fn pliron_execution_layout_v1(
+    context: &Context,
+    function: &FuncOp,
+) -> Result<Option<PlironExecutionLayoutV1>, PlironTraceFailureV1> {
+    let mut layout = None;
+    for (block_index, block) in function
+        .get_region(context)
+        .deref(context)
+        .iter(context)
+        .enumerate()
+    {
+        for operation in block.deref(context).iter(context) {
+            let operation = Operation::get_op_dyn(operation, context);
+            let Some(candidate) = operation.downcast_ref::<ExecutionLayoutOp>() else {
+                continue;
+            };
+            if block_index != 0 || layout.is_some() {
+                return Err(PlironTraceFailureV1::InvalidExecutionLayout);
+            }
+            let (Some(grid), Some(workgroup_size), Some(subgroup_size)) = (
+                candidate.grid_identity(context),
+                candidate.workgroup_size(context),
+                candidate.subgroup_size(context),
+            ) else {
+                return Err(PlironTraceFailureV1::InvalidExecutionLayout);
+            };
+            if workgroup_size == 0
+                || subgroup_size == 0
+                || subgroup_size > workgroup_size
+                || !workgroup_size.is_multiple_of(subgroup_size)
+            {
+                return Err(PlironTraceFailureV1::InvalidExecutionLayout);
+            }
+            layout = Some(PlironExecutionLayoutV1 {
+                grid,
+                workgroup_size,
+                subgroup_size,
+            });
+        }
+    }
+    Ok(layout)
 }
 
 pub(crate) fn trace_pliron_invocations_v1(
@@ -72,6 +160,25 @@ pub(crate) fn trace_pliron_invocations_v1(
 ) -> Result<Vec<PlironInvocationTraceV1>, PlironTraceFailureV1> {
     let sparse = analyze_pliron_sparse_indices_v1(context, function)
         .map_err(PlironTraceFailureV1::Sparse)?;
+    let layout = pliron_execution_layout_v1(context, function)?;
+    let needs_scoped_layout = function
+        .get_region(context)
+        .deref(context)
+        .iter(context)
+        .any(|block| {
+            block.deref(context).iter(context).any(|operation| {
+                let operation = Operation::get_op_dyn(operation, context);
+                operation.downcast_ref::<BarrierOp>().is_some()
+                    || operation
+                        .downcast_ref::<RankedViewOp>()
+                        .is_some_and(|view| {
+                            view.memory_space(context) == Some(MemorySpaceAttr::Workgroup)
+                        })
+            })
+        });
+    if needs_scoped_layout && layout.is_none() {
+        return Err(PlironTraceFailureV1::MissingExecutionLayout);
+    }
     if let Some(dimension) = sparse
         .launch_extents()
         .iter()
@@ -89,6 +196,33 @@ pub(crate) fn trace_pliron_invocations_v1(
         return Err(PlironTraceFailureV1::LaunchTooLarge {
             invocations: invocation_count,
         });
+    }
+    if let Some(layout) = layout {
+        for scope in [HierarchyAttr::Workgroup, HierarchyAttr::Subgroup] {
+            let has_scope = function
+                .get_region(context)
+                .deref(context)
+                .iter(context)
+                .any(|block| {
+                    block.deref(context).iter(context).any(|operation| {
+                        Operation::get_op_dyn(operation, context)
+                            .downcast_ref::<BarrierOp>()
+                            .is_some_and(|barrier| barrier.execution_scope(context) == Some(scope))
+                    })
+                });
+            let participant_width = if scope == HierarchyAttr::Workgroup {
+                layout.workgroup_size
+            } else {
+                layout.subgroup_size
+            };
+            if has_scope && !invocation_count.is_multiple_of(participant_width) {
+                return Err(PlironTraceFailureV1::PartialBarrierParticipants {
+                    scope,
+                    invocations: invocation_count,
+                    participant_width,
+                });
+            }
+        }
     }
 
     let blocks = function
@@ -130,6 +264,15 @@ pub(crate) fn trace_pliron_invocations_v1(
                 }
                 let operation = Operation::get_op_dyn(operation, context);
                 if let Some(barrier) = operation.downcast_ref::<BarrierOp>() {
+                    let execution_scope = barrier.execution_scope(context).ok_or(
+                        PlironTraceFailureV1::UnsupportedTerminator { block: block_index },
+                    )?;
+                    if execution_scope == HierarchyAttr::Grid {
+                        return Err(PlironTraceFailureV1::UnsupportedGridSynchronization {
+                            block: block_index,
+                            operation: operation_index,
+                        });
+                    }
                     let address_space = barrier.address_space(context).ok_or(
                         PlironTraceFailureV1::UnsupportedTerminator { block: block_index },
                     )?;
@@ -138,7 +281,27 @@ pub(crate) fn trace_pliron_invocations_v1(
                             block: block_index,
                             operation: operation_index,
                         },
+                        execution_scope,
                         address_space,
+                    });
+                } else if let Some(fence) = operation.downcast_ref::<FenceOp>() {
+                    let (Some(memory_scope), Some(address_space), Some(order)) = (
+                        fence.memory_scope(context),
+                        fence.address_space(context),
+                        fence.order(context),
+                    ) else {
+                        return Err(PlironTraceFailureV1::UnsupportedTerminator {
+                            block: block_index,
+                        });
+                    };
+                    events.push(PlironTraceEventV1::Fence {
+                        location: PlironTraceLocationV1 {
+                            block: block_index,
+                            operation: operation_index,
+                        },
+                        memory_scope,
+                        address_space,
+                        order,
                     });
                 } else if let Some(access) = operation.downcast_ref::<RankedAccessOp>() {
                     let view = access.view(context);
@@ -213,7 +376,23 @@ pub(crate) fn trace_pliron_invocations_v1(
                 .copied()
                 .ok_or(PlironTraceFailureV1::UnsupportedTerminator { block: block_index })?;
         }
-        traces.push(PlironInvocationTraceV1 { invocation, events });
+        let (grid, workgroup, subgroup, lane) = layout.map_or((0, 0, 0, linear), |layout| {
+            let local = linear % layout.workgroup_size;
+            (
+                layout.grid,
+                linear / layout.workgroup_size,
+                local / layout.subgroup_size,
+                local % layout.subgroup_size,
+            )
+        });
+        traces.push(PlironInvocationTraceV1 {
+            invocation,
+            grid,
+            workgroup,
+            subgroup,
+            lane,
+            events,
+        });
     }
     Ok(traces)
 }

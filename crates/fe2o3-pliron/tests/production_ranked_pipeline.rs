@@ -268,6 +268,11 @@ fn divergent_barrier_is_terminal_in_the_closed_production_pipeline() {
         vec![
             ProductionRankedBlockV1::new(
                 vec![
+                    ProductionRankedOperationV1::ExecutionLayout {
+                        grid_identity: 7,
+                        workgroup_size: 4,
+                        subgroup_size: 4,
+                    },
                     ProductionRankedOperationV1::InvocationIndex {
                         result: invocation,
                         dimension: 0,
@@ -319,6 +324,11 @@ fn uninitialized_workgroup_read_is_terminal_before_lowering() {
         0,
         vec![ProductionRankedBlockV1::new(
             vec![
+                ProductionRankedOperationV1::ExecutionLayout {
+                    grid_identity: 7,
+                    workgroup_size: 8,
+                    subgroup_size: 8,
+                },
                 ProductionRankedOperationV1::ViewInSpace {
                     result: view,
                     element_width: 32,
@@ -428,6 +438,117 @@ fn duplicate_output_ownership_is_a_terminal_compile_time_diagnostic() {
         diagnostic
             .contains("distinct concurrent invocations do not imply disjoint memory coordinates")
     );
+}
+
+#[test]
+fn production_fence_does_not_authorize_cross_workgroup_plain_overlap() {
+    let view = ProductionRankedValueIdV1::new(0);
+    let invocation = ProductionRankedValueIdV1::new(1);
+    let zero = ProductionRankedValueIdV1::new(2);
+    let kernel = ProductionRankedKernelV1::new(
+        "fence_is_not_grid_barrier",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::ExecutionLayout {
+                    grid_identity: 19,
+                    workgroup_size: 64,
+                    subgroup_size: 64,
+                },
+                ProductionRankedOperationV1::ViewInSpace {
+                    result: view,
+                    element_width: 32,
+                    writable: true,
+                    shape: vec![1],
+                    dynamic_extents: vec![],
+                    memory_space: MemorySpaceAttr::Global,
+                },
+                ProductionRankedOperationV1::InvocationIndex {
+                    result: invocation,
+                    dimension: 0,
+                    launch_extent: 128,
+                },
+                ProductionRankedOperationV1::IndexConstant {
+                    result: zero,
+                    value: 0,
+                },
+                ProductionRankedOperationV1::Access {
+                    kind: AccessKindAttr::Write,
+                    view: local(view),
+                    indices: vec![local(zero)],
+                },
+                ProductionRankedOperationV1::Fence {
+                    memory_scope: MemoryScopeAttr::Device,
+                    address_space: AddressSpaceAttr::Global,
+                    order: MemoryOrderAttr::AcquireRelease,
+                },
+                ProductionRankedOperationV1::Access {
+                    kind: AccessKindAttr::Write,
+                    view: local(view),
+                    indices: vec![local(zero)],
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .unwrap();
+    let error = compile_ranked_kernel_for_lowering_v1(
+        construction(kernel),
+        ProductionSessionLimitsV1::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedRace(_))
+    ));
+    assert!(error.to_string().contains("error[FE2O3-RACE-002]"));
+    assert!(error.to_string().contains("fence alone"));
+}
+
+#[test]
+fn execution_layout_is_unique_canonical_and_checked() {
+    let invalid = ProductionRankedKernelV1::new(
+        "invalid_layout",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![ProductionRankedOperationV1::ExecutionLayout {
+                grid_identity: 1,
+                workgroup_size: 96,
+                subgroup_size: 64,
+            }],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .unwrap_err();
+    assert!(matches!(
+        invalid,
+        ProductionRankedKernelErrorV1::InvalidExecutionLayout
+    ));
+
+    let noncanonical = ProductionRankedKernelV1::new(
+        "late_layout",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::ExecutionLayout {
+                    grid_identity: 1,
+                    workgroup_size: 64,
+                    subgroup_size: 64,
+                },
+                ProductionRankedOperationV1::ExecutionLayout {
+                    grid_identity: 2,
+                    workgroup_size: 64,
+                    subgroup_size: 64,
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .unwrap_err();
+    assert!(matches!(
+        noncanonical,
+        ProductionRankedKernelErrorV1::InvalidExecutionLayout
+    ));
 }
 
 #[test]

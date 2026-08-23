@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, fmt};
 
-use dialect_gpu::{AddressSpaceAttr, BarrierOp};
+use dialect_gpu::{AddressSpaceAttr, BarrierOp, HierarchyAttr};
 use dialect_kernel::{AnalysisSplitOp, BranchOp, IndexLessThanBranchOp, ReturnOp};
 use pliron::{
     basic_block::BasicBlock,
@@ -152,33 +152,31 @@ pub(crate) fn run_pliron_barrier_convergence_check_after_bounds_v1(
     }
     let trace_failure = match trace_pliron_invocations_v1(context, function) {
         Ok(traces) => {
-            let Some(first) = traces.first() else {
+            if traces.is_empty() {
                 return report(PlironBarrierFindingV1::AnalysisIncomplete {
                     detail: "the launch domain is empty".to_owned(),
                 });
-            };
-            let first_barriers = barrier_trace(first);
-            for trace in traces.iter().skip(1) {
-                let barriers = barrier_trace(trace);
-                if barriers != first_barriers {
-                    return report(PlironBarrierFindingV1::DivergentBarrierTrace {
-                        first_invocation: first.invocation.clone(),
-                        first_trace: first_barriers
-                            .iter()
-                            .map(|(location, _)| (location.block, location.operation))
-                            .collect(),
-                        second_invocation: trace.invocation.clone(),
-                        second_trace: barriers
-                            .iter()
-                            .map(|(location, _)| (location.block, location.operation))
-                            .collect(),
-                    });
-                }
+            }
+            if let Some(finding) = divergent_scope_trace(&traces, HierarchyAttr::Workgroup)
+                .or_else(|| divergent_scope_trace(&traces, HierarchyAttr::Subgroup))
+            {
+                return report(finding);
             }
             return PlironBarrierReportV1 { findings: vec![] };
         }
         Err(failure) => failure,
     };
+    if matches!(
+        trace_failure,
+        PlironTraceFailureV1::MissingExecutionLayout
+            | PlironTraceFailureV1::InvalidExecutionLayout
+            | PlironTraceFailureV1::UnsupportedGridSynchronization { .. }
+            | PlironTraceFailureV1::PartialBarrierParticipants { .. }
+    ) {
+        return report(PlironBarrierFindingV1::AnalysisIncomplete {
+            detail: trace_failure_detail(trace_failure),
+        });
+    }
     match summarize_all_barrier_paths(context, function) {
         BarrierPathSummaryV1::Unique => PlironBarrierReportV1 { findings: vec![] },
         BarrierPathSummaryV1::Divergent {
@@ -376,6 +374,7 @@ pub fn require_pliron_barrier_convergence_before_lowering_v1(
 
 fn barrier_trace(
     trace: &PlironInvocationTraceV1,
+    scope: HierarchyAttr,
 ) -> Vec<(PlironTraceLocationV1, AddressSpaceAttr)> {
     trace
         .events
@@ -383,11 +382,50 @@ fn barrier_trace(
         .filter_map(|event| match event {
             PlironTraceEventV1::Barrier {
                 location,
+                execution_scope,
                 address_space,
-            } => Some((*location, *address_space)),
-            PlironTraceEventV1::Memory { .. } => None,
+            } if *execution_scope == scope => Some((*location, *address_space)),
+            PlironTraceEventV1::Barrier { .. }
+            | PlironTraceEventV1::Fence { .. }
+            | PlironTraceEventV1::Memory { .. } => None,
         })
         .collect()
+}
+
+fn divergent_scope_trace(
+    traces: &[PlironInvocationTraceV1],
+    scope: HierarchyAttr,
+) -> Option<PlironBarrierFindingV1> {
+    let mut first_by_group: HashMap<(u64, u64, Option<u64>), &PlironInvocationTraceV1> =
+        HashMap::new();
+    for trace in traces {
+        let group = (
+            trace.grid,
+            trace.workgroup,
+            (scope == HierarchyAttr::Subgroup).then_some(trace.subgroup),
+        );
+        let Some(first) = first_by_group.get(&group).copied() else {
+            first_by_group.insert(group, trace);
+            continue;
+        };
+        let first_barriers = barrier_trace(first, scope);
+        let barriers = barrier_trace(trace, scope);
+        if barriers != first_barriers {
+            return Some(PlironBarrierFindingV1::DivergentBarrierTrace {
+                first_invocation: first.invocation.clone(),
+                first_trace: first_barriers
+                    .iter()
+                    .map(|(location, _)| (location.block, location.operation))
+                    .collect(),
+                second_invocation: trace.invocation.clone(),
+                second_trace: barriers
+                    .iter()
+                    .map(|(location, _)| (location.block, location.operation))
+                    .collect(),
+            });
+        }
+    }
+    None
 }
 
 fn report(finding: PlironBarrierFindingV1) -> PlironBarrierReportV1 {
@@ -428,8 +466,28 @@ pub(crate) fn trace_failure_detail(failure: PlironTraceFailureV1) -> String {
             format!("block {block} has an unsupported terminator")
         }
         PlironTraceFailureV1::CyclicControlFlow { block } => {
-            format!("block {block} participates in cyclic control flow")
+            format!(
+                "block {block} participates in cyclic control flow; progress-dependent spin synchronization is unsupported"
+            )
         }
+        PlironTraceFailureV1::MissingExecutionLayout => {
+            "scoped synchronization lacks a retained gpu.execution_layout".to_owned()
+        }
+        PlironTraceFailureV1::InvalidExecutionLayout => {
+            "gpu.execution_layout is malformed, duplicated, or outside the entry block".to_owned()
+        }
+        PlironTraceFailureV1::UnsupportedGridSynchronization { block, operation } => {
+            format!(
+                "ordinary grid-wide barriers are unsupported at block {block} op {operation}; use disjoint workgroup ownership or legal device-scope atomics"
+            )
+        }
+        PlironTraceFailureV1::PartialBarrierParticipants {
+            scope,
+            invocations,
+            participant_width,
+        } => format!(
+            "{scope:?} barrier has {invocations} logical invocations, which is not a multiple of participant width {participant_width}; rounded physical lanes and their activity paths are not represented"
+        ),
         PlironTraceFailureV1::ResourceLimit => "trace resource limit exceeded".to_owned(),
     }
 }

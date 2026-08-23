@@ -3,13 +3,14 @@ use fe2o3_pliron_owner_core::{
 };
 
 use crate::{
-    AddressSpaceAttr, BarrierOp, DIALECT_NAME, FenceOp, GeneralGemmEpilogueAttr,
+    AddressSpaceAttr, BarrierOp, DIALECT_NAME, ExecutionLayoutOp, FenceOp, GeneralGemmEpilogueAttr,
     GeneralGemmEpilogueOp, GeneralGemmEpochAttr, GeneralGemmEpochOp, GeneralGemmGlobalTransferAttr,
     GeneralGemmGlobalTransferOp, GeneralGemmGridMappingAttr, GeneralGemmGridMappingOp,
     GeneralGemmLdsTransferAttr, GeneralGemmLdsTransferOp, GeneralGemmMfmaAttr, GeneralGemmMfmaOp,
     GeneralGemmPhaseLoopAttr, GeneralGemmPhaseLoopOp, GeneralGemmRuntimeAbiAttr,
-    GeneralGemmRuntimeAbiOp, HierarchyAttr, HierarchyIdOp, HierarchyIndexType, MemoryOrderAttr,
-    MemoryScopeAttr, MemorySpaceOp, MemorySpaceType,
+    GeneralGemmRuntimeAbiOp, GridIdentityAttr, HierarchyAttr, HierarchyIdOp, HierarchyIndexType,
+    MemoryOrderAttr, MemoryScopeAttr, MemorySpaceOp, MemorySpaceType, SubgroupSizeAttr,
+    WorkgroupSizeAttr,
 };
 
 fn registration_hook(
@@ -20,6 +21,9 @@ fn registration_hook(
     service.register_attribute::<AddressSpaceAttr>()?;
     service.register_attribute::<MemoryScopeAttr>()?;
     service.register_attribute::<MemoryOrderAttr>()?;
+    service.register_attribute::<GridIdentityAttr>()?;
+    service.register_attribute::<WorkgroupSizeAttr>()?;
+    service.register_attribute::<SubgroupSizeAttr>()?;
     service.register_attribute::<GeneralGemmRuntimeAbiAttr>()?;
     service.register_attribute::<GeneralGemmGridMappingAttr>()?;
     service.register_attribute::<GeneralGemmPhaseLoopAttr>()?;
@@ -31,6 +35,7 @@ fn registration_hook(
     service.register_type::<HierarchyIndexType>()?;
     service.register_type::<MemorySpaceType>()?;
     service.register_operation::<HierarchyIdOp>()?;
+    service.register_operation::<ExecutionLayoutOp>()?;
     service.register_operation::<MemorySpaceOp>()?;
     service.register_operation::<BarrierOp>()?;
     service.register_operation::<FenceOp>()?;

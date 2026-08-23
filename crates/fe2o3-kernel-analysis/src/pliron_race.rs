@@ -11,7 +11,11 @@ use std::{
     fmt,
 };
 
-use dialect_kernel::{AccessKindAttr, MemorySpaceAttr, RankedAccessOp, RankedViewOp};
+use dialect_gpu::{AddressSpaceAttr, FenceOp};
+use dialect_kernel::{
+    AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, MemorySpaceAttr, RankedAccessOp,
+    RankedViewOp,
+};
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
     common_traits::Named,
@@ -21,6 +25,7 @@ use pliron::{
     value::Value,
 };
 
+use crate::pliron_invocation_trace::{PlironTraceFailureV1, pliron_execution_layout_v1};
 use crate::pliron_sparse_index::SparseAffineIndexV1;
 use crate::{
     KernelCheckPassKindV1, SparseIndexAnalysisV1, SparseIndexFailureV1,
@@ -52,6 +57,11 @@ pub struct RankedRaceWitnessV1 {
     location: RankedRaceLocationV1,
     access: AccessKindAttr,
     invocation: Vec<u64>,
+    grid: u64,
+    workgroup: Option<u64>,
+    subgroup: Option<u64>,
+    lane: Option<u64>,
+    atomic_scope: Option<AtomicScopeAttr>,
 }
 
 impl RankedRaceWitnessV1 {
@@ -65,6 +75,22 @@ impl RankedRaceWitnessV1 {
 
     pub fn invocation(&self) -> &[u64] {
         &self.invocation
+    }
+
+    pub const fn grid(&self) -> u64 {
+        self.grid
+    }
+
+    pub const fn workgroup(&self) -> Option<u64> {
+        self.workgroup
+    }
+
+    pub const fn subgroup(&self) -> Option<u64> {
+        self.subgroup
+    }
+
+    pub const fn lane(&self) -> Option<u64> {
+        self.lane
     }
 }
 
@@ -100,6 +126,19 @@ pub enum RankedRaceFindingV1 {
         indices: Vec<u64>,
         first: RankedRaceWitnessV1,
         second: RankedRaceWitnessV1,
+    },
+    ExecutionLayoutUnavailable {
+        detail: String,
+    },
+    InsufficientAtomicScope {
+        view: String,
+        indices: Vec<u64>,
+        first: RankedRaceWitnessV1,
+        second: RankedRaceWitnessV1,
+    },
+    HappensBeforeIncomplete {
+        view: String,
+        detail: String,
     },
 }
 
@@ -155,6 +194,24 @@ impl fmt::Display for RankedRaceFindingV1 {
                 second.location.block,
                 second.location.operation,
             ),
+            Self::ExecutionLayoutUnavailable { detail } => write!(
+                formatter,
+                "error[FE2O3-RACE-002]: scoped concurrency analysis is incomplete: {detail}",
+            ),
+            Self::InsufficientAtomicScope {
+                view,
+                indices,
+                first,
+                second,
+            } => write!(
+                formatter,
+                "error[FE2O3-RACE-004]: overlapping atomic effects on {view}{indices:?} use scopes {:?}/{:?} that do not cover invocations {:?}/{:?}; failed proof: cross-workgroup overlap requires compatible device-scope atomics",
+                first.atomic_scope, second.atomic_scope, first.invocation, second.invocation,
+            ),
+            Self::HappensBeforeIncomplete { view, detail } => write!(
+                formatter,
+                "error[FE2O3-RACE-002]: happens-before analysis for conflicting ordinary effects on {view} is incomplete: {detail}",
+            ),
         }
     }
 }
@@ -162,6 +219,7 @@ impl fmt::Display for RankedRaceFindingV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RankedRaceStatusV1 {
     Clean,
+    Incomplete,
     Rejected,
 }
 
@@ -178,6 +236,8 @@ impl RankedRaceReportV1 {
     pub fn status(&self) -> RankedRaceStatusV1 {
         if self.findings.is_empty() {
             RankedRaceStatusV1::Clean
+        } else if self.findings.iter().all(RankedRaceFindingV1::is_incomplete) {
+            RankedRaceStatusV1::Incomplete
         } else {
             RankedRaceStatusV1::Rejected
         }
@@ -232,6 +292,24 @@ struct EffectV1 {
     kind: AccessKindAttr,
     location: RankedRaceLocationV1,
     indices: Vec<Value>,
+    atomic_scope: Option<AtomicScopeAttr>,
+    atomic_ordering: Option<AtomicOrderingAttr>,
+}
+
+impl RankedRaceFindingV1 {
+    const fn is_incomplete(&self) -> bool {
+        matches!(
+            self,
+            Self::SparseIndexAnalysisFailed { .. }
+                | Self::DynamicLaunchExtent { .. }
+                | Self::LaunchDomainTooLarge { .. }
+                | Self::UnresolvedIndex { .. }
+                | Self::EffectInstanceLimitExceeded { .. }
+                | Self::FindingLimitExceeded { .. }
+                | Self::ExecutionLayoutUnavailable { .. }
+                | Self::HappensBeforeIncomplete { .. }
+        )
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -309,6 +387,7 @@ pub(crate) fn run_pliron_ranked_race_check_after_bounds_v1(
         }
     };
     let mut effects = Vec::new();
+    let mut has_global_fence = false;
     for (block_index, block) in function
         .get_region(context)
         .deref(context)
@@ -317,6 +396,12 @@ pub(crate) fn run_pliron_ranked_race_check_after_bounds_v1(
     {
         for (operation_index, operation) in block.deref(context).iter(context).enumerate() {
             let operation = Operation::get_op_dyn(operation, context);
+            if operation
+                .downcast_ref::<FenceOp>()
+                .is_some_and(|fence| fence.address_space(context) == Some(AddressSpaceAttr::Global))
+            {
+                has_global_fence = true;
+            }
             let Some(access) = operation.downcast_ref::<RankedAccessOp>() else {
                 continue;
             };
@@ -370,6 +455,8 @@ pub(crate) fn run_pliron_ranked_race_check_after_bounds_v1(
                     operation: operation_index,
                 },
                 indices: access.indices(context),
+                atomic_scope: access.atomic_scope(context),
+                atomic_ordering: access.atomic_ordering(context),
             });
         }
     }
@@ -377,6 +464,48 @@ pub(crate) fn run_pliron_ranked_race_check_after_bounds_v1(
     if symbolically_proves_disjoint(&effects, &sparse) {
         return clean();
     }
+    let release_signal_views = effects
+        .iter()
+        .filter_map(|effect| {
+            (effect.kind.is_atomic()
+                && effect.kind.writes_memory()
+                && matches!(
+                    effect.atomic_ordering,
+                    Some(
+                        AtomicOrderingAttr::Release
+                            | AtomicOrderingAttr::AcquireRelease
+                            | AtomicOrderingAttr::SequentiallyConsistent
+                    )
+                )
+                && effect
+                    .atomic_scope
+                    .is_some_and(|scope| scope.rank() >= AtomicScopeAttr::Agent.rank()))
+            .then_some(effect.view)
+        })
+        .collect::<HashSet<_>>();
+    let acquire_signal_views = effects
+        .iter()
+        .filter_map(|effect| {
+            (effect.kind.is_atomic()
+                && effect.kind.reads_memory()
+                && matches!(
+                    effect.atomic_ordering,
+                    Some(
+                        AtomicOrderingAttr::Acquire
+                            | AtomicOrderingAttr::AcquireRelease
+                            | AtomicOrderingAttr::SequentiallyConsistent
+                    )
+                )
+                && effect
+                    .atomic_scope
+                    .is_some_and(|scope| scope.rank() >= AtomicScopeAttr::Agent.rank()))
+            .then_some(effect.view)
+        })
+        .collect::<HashSet<_>>();
+    let atomic_signal_views = release_signal_views
+        .intersection(&acquire_signal_views)
+        .copied()
+        .collect::<HashSet<_>>();
     if let Some(dimension) = sparse
         .launch_extents()
         .iter()
@@ -399,6 +528,20 @@ pub(crate) fn run_pliron_ranked_race_check_after_bounds_v1(
     if invocation_count <= 1 {
         return clean();
     }
+
+    let layout = match pliron_execution_layout_v1(context, function) {
+        Ok(layout) => layout,
+        Err(failure) => {
+            return one(RankedRaceFindingV1::ExecutionLayoutUnavailable {
+                detail: match failure {
+                    PlironTraceFailureV1::InvalidExecutionLayout => {
+                        "gpu.execution_layout is malformed or duplicated".to_owned()
+                    }
+                    _ => format!("execution layout extraction failed: {failure:?}"),
+                },
+            });
+        }
+    };
 
     let zero_invocation = vec![0; sparse.launch_extents().len()];
     for effect in &effects {
@@ -442,9 +585,18 @@ pub(crate) fn run_pliron_ranked_race_check_after_bounds_v1(
                 location: effect.location,
                 access: effect.kind,
                 invocation: invocation.clone(),
+                grid: layout.map_or(0, |layout| layout.grid),
+                workgroup: layout.map(|layout| linear_invocation / layout.workgroup_size),
+                subgroup: layout.map(|layout| {
+                    (linear_invocation % layout.workgroup_size) / layout.subgroup_size
+                }),
+                lane: layout.map(|layout| {
+                    (linear_invocation % layout.workgroup_size) % layout.subgroup_size
+                }),
+                atomic_scope: effect.atomic_scope,
             };
             let state = addresses.entry(key.clone()).or_default();
-            let conflict = conflicting_witness(state, effect.kind, &invocation).cloned();
+            let conflict = conflicting_witness(state, effect.kind, &witness).cloned();
             if let Some(first) = conflict {
                 let class = ConflictClassV1 {
                     view: effect.view,
@@ -454,12 +606,42 @@ pub(crate) fn run_pliron_ranked_race_check_after_bounds_v1(
                     second_kind: effect.kind,
                 };
                 if conflict_classes.insert(class) {
-                    findings.push(RankedRaceFindingV1::ConflictingEffects {
-                        view: effect.view_name.clone(),
-                        indices: key.indices,
-                        first,
-                        second: witness.clone(),
-                    });
+                    let finding = if first.access.is_atomic() && witness.access.is_atomic() {
+                        if layout.is_none() {
+                            RankedRaceFindingV1::ExecutionLayoutUnavailable {
+                                detail: format!(
+                                    "overlapping narrow-scope atomics on {} require retained workgroup identity",
+                                    effect.view_name
+                                ),
+                            }
+                        } else {
+                            RankedRaceFindingV1::InsufficientAtomicScope {
+                                view: effect.view_name.clone(),
+                                indices: key.indices,
+                                first,
+                                second: witness.clone(),
+                            }
+                        }
+                    } else if has_global_fence
+                        || atomic_signal_views.iter().any(|view| *view != effect.view)
+                    {
+                        RankedRaceFindingV1::HappensBeforeIncomplete {
+                            view: effect.view_name.clone(),
+                            detail: if atomic_signal_views.iter().any(|view| *view != effect.view) {
+                                "release/acquire atomics require an authenticated read-from relation before they can publish ordinary memory across invocations".to_owned()
+                            } else {
+                                "a non-collective fence alone does not establish a cross-invocation synchronizes-with edge".to_owned()
+                            },
+                        }
+                    } else {
+                        RankedRaceFindingV1::ConflictingEffects {
+                            view: effect.view_name.clone(),
+                            indices: key.indices,
+                            first,
+                            second: witness.clone(),
+                        }
+                    };
+                    findings.push(finding);
                     if findings.len() > MAX_PLIRON_RACE_FINDINGS_V1 {
                         return one(RankedRaceFindingV1::FindingLimitExceeded {
                             actual: findings.len(),
@@ -501,24 +683,68 @@ pub fn require_pliron_ranked_race_freedom_before_lowering_v1(
 fn conflicting_witness<'a>(
     state: &'a AddressStateV1,
     access: AccessKindAttr,
-    invocation: &[u64],
+    witness: &RankedRaceWitnessV1,
 ) -> Option<&'a RankedRaceWitnessV1> {
     match access {
         AccessKindAttr::Read => state
             .writes
-            .different_from(invocation)
-            .or_else(|| state.atomic_writes.different_from(invocation)),
+            .different_from(&witness.invocation)
+            .or_else(|| state.atomic_writes.different_from(&witness.invocation)),
         AccessKindAttr::Write => state
             .writes
-            .different_from(invocation)
-            .or_else(|| state.reads.different_from(invocation))
-            .or_else(|| state.atomic_reads.different_from(invocation))
-            .or_else(|| state.atomic_writes.different_from(invocation)),
-        AccessKindAttr::AtomicRead => state.writes.different_from(invocation),
+            .different_from(&witness.invocation)
+            .or_else(|| state.reads.different_from(&witness.invocation))
+            .or_else(|| state.atomic_reads.different_from(&witness.invocation))
+            .or_else(|| state.atomic_writes.different_from(&witness.invocation)),
+        AccessKindAttr::AtomicRead => state
+            .writes
+            .different_from(&witness.invocation)
+            .or_else(|| incompatible_atomic(&state.atomic_writes, witness)),
         AccessKindAttr::AtomicWrite | AccessKindAttr::AtomicReadModifyWrite => state
             .writes
-            .different_from(invocation)
-            .or_else(|| state.reads.different_from(invocation)),
+            .different_from(&witness.invocation)
+            .or_else(|| state.reads.different_from(&witness.invocation))
+            .or_else(|| incompatible_atomic(&state.atomic_reads, witness))
+            .or_else(|| incompatible_atomic(&state.atomic_writes, witness)),
+    }
+}
+
+fn incompatible_atomic<'a>(
+    state: &'a WitnessPairV1,
+    witness: &RankedRaceWitnessV1,
+) -> Option<&'a RankedRaceWitnessV1> {
+    [state.first.as_ref(), state.second.as_ref()]
+        .into_iter()
+        .flatten()
+        .find(|other| {
+            other.invocation != witness.invocation
+                && (!atomic_scope_covers_pair(other.atomic_scope, other, witness)
+                    || !atomic_scope_covers_pair(witness.atomic_scope, witness, other))
+        })
+}
+
+fn atomic_scope_covers_pair(
+    scope: Option<AtomicScopeAttr>,
+    first: &RankedRaceWitnessV1,
+    second: &RankedRaceWitnessV1,
+) -> bool {
+    if first.invocation == second.invocation {
+        return true;
+    }
+    match (first.workgroup, second.workgroup) {
+        (Some(first), Some(second)) if first == second => matches!(
+            scope,
+            Some(
+                AtomicScopeAttr::Workgroup
+                    | AtomicScopeAttr::Agent
+                    | AtomicScopeAttr::Device
+                    | AtomicScopeAttr::System
+            )
+        ),
+        _ => matches!(
+            scope,
+            Some(AtomicScopeAttr::Agent | AtomicScopeAttr::Device | AtomicScopeAttr::System)
+        ),
     }
 }
 
@@ -551,6 +777,35 @@ fn symbolically_proves_disjoint(effects: &[EffectV1], sparse: &SparseIndexAnalys
                 AccessKindAttr::AtomicWrite | AccessKindAttr::AtomicReadModifyWrite
             )
         });
+        if !has_plain_write && !has_plain_read && has_atomic_write {
+            if effects.iter().all(|effect| {
+                !effect.kind.writes_memory()
+                    || matches!(
+                        effect.atomic_scope,
+                        Some(
+                            AtomicScopeAttr::Agent
+                                | AtomicScopeAttr::Device
+                                | AtomicScopeAttr::System
+                        )
+                    )
+            }) {
+                continue;
+            }
+            let mut representative = None;
+            for effect in effects {
+                let Some(first) = representative else {
+                    if !affine_map_is_injective(&effect.indices, sparse) {
+                        return false;
+                    }
+                    representative = Some(&effect.indices);
+                    continue;
+                };
+                if !same_index_formula(first, &effect.indices, sparse) {
+                    return false;
+                }
+            }
+            continue;
+        }
         if !(has_plain_write || has_plain_read && has_atomic_write) {
             continue;
         }

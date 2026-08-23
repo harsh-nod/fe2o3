@@ -5,6 +5,7 @@
 builtin.func @workgroup_duplicate_write: builtin.function <() -> ()>
 {
   ^entry_block1v1():
+    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 7, gpu_execution_workgroup_size: gpu.workgroup_size 4, gpu_execution_subgroup_size: gpu.subgroup_size 4]: <() -> ()>;
     v0 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Workgroup]: <() -> (kernel.ranked_view <32,true,[1]>)>;
     v1 = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension 0, kernel_launch_extent: kernel.launch_extent 4]: <() -> (kernel.index )>;
     v2 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 0]: <() -> (kernel.index )>;

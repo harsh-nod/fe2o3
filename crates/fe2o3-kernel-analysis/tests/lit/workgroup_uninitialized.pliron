@@ -6,6 +6,7 @@
 builtin.func @workgroup_uninitialized: builtin.function <() -> ()>
 {
   ^entry_block1v1():
+    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 7, gpu_execution_workgroup_size: gpu.workgroup_size 8, gpu_execution_subgroup_size: gpu.subgroup_size 8]: <() -> ()>;
     v0 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Workgroup]: <() -> (kernel.ranked_view <32,true,[64]>)>;
     v1 = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension 0, kernel_launch_extent: kernel.launch_extent 8]: <() -> (kernel.index )>;
     kernel.access (v0, v1) [] [kernel_access_kind: kernel.access_kind Read]: <(kernel.ranked_view <32,true,[64]>, kernel.index ) -> ()>;

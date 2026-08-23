@@ -1,4 +1,6 @@
-use dialect_gpu::{AddressSpaceAttr, BarrierOp, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr};
+use dialect_gpu::{
+    AddressSpaceAttr, BarrierOp, ExecutionLayoutOp, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr,
+};
 use dialect_kernel::{
     BranchOp, DIALECT_NAME, IndexConstantOp, IndexLessThanBranchOp, InvocationIndexOp, ReturnOp,
     register_dialect,
@@ -23,11 +25,23 @@ fn setup() -> Context {
 }
 
 fn function(context: &mut Context, name: &str) -> FuncOp {
-    FuncOp::new(
+    function_with_layout(context, name, 4, 4)
+}
+
+fn function_with_layout(
+    context: &mut Context,
+    name: &str,
+    workgroup_size: u64,
+    subgroup_size: u64,
+) -> FuncOp {
+    let function = FuncOp::new(
         context,
         name.try_into().unwrap(),
         FunctionType::get(context, vec![], vec![]),
-    )
+    );
+    let layout = ExecutionLayoutOp::new(context, 7, workgroup_size, subgroup_size);
+    append(context, function.get_entry_block(context), &layout);
+    function
 }
 
 fn block(context: &mut Context, function: &FuncOp, name: &str) -> Ptr<BasicBlock> {
@@ -224,6 +238,11 @@ fn cyclic_control_flow_fails_closed_but_dynamic_unconditional_flow_is_proved() {
         report.findings(),
         [PlironBarrierFindingV1::AnalysisIncomplete { .. }]
     ));
+    assert!(
+        report.findings()[0]
+            .to_string()
+            .contains("progress-dependent spin synchronization is unsupported")
+    );
 
     let dynamic = function(context, "dynamic");
     let entry = dynamic.get_entry_block(context);
@@ -235,4 +254,105 @@ fn cyclic_control_flow_fails_closed_but_dynamic_unconditional_flow_is_proved() {
     append(context, entry, &ret);
     let report = run_pliron_barrier_convergence_check_v1(context, &dynamic);
     assert!(report.is_clean());
+}
+
+#[test]
+fn subgroup_collective_protocol_is_checked_per_wave() {
+    for (cutoff_value, scope, clean) in [
+        (64, HierarchyAttr::Subgroup, true),
+        (32, HierarchyAttr::Subgroup, false),
+        (64, HierarchyAttr::Workgroup, false),
+    ] {
+        let context = &mut setup();
+        let function = function_with_layout(context, "scoped_collective", 128, 64);
+        let entry = function.get_entry_block(context);
+        let collective = block(context, &function, "collective");
+        let exit = block(context, &function, "exit");
+        let invocation = InvocationIndexOp::new(context, 0, 128);
+        let cutoff = IndexConstantOp::new(context, cutoff_value);
+        let choose = IndexLessThanBranchOp::new(
+            context,
+            invocation.result(context),
+            cutoff.result(context),
+            collective,
+            exit,
+        );
+        let sync = BarrierOp::new(
+            context,
+            scope,
+            if scope == HierarchyAttr::Subgroup {
+                MemoryScopeAttr::Subgroup
+            } else {
+                MemoryScopeAttr::Workgroup
+            },
+            AddressSpaceAttr::Workgroup,
+            MemoryOrderAttr::AcquireRelease,
+        );
+        let leave = BranchOp::new(context, exit);
+        let ret = ReturnOp::new(context);
+        append(context, entry, &invocation);
+        append(context, entry, &cutoff);
+        append(context, entry, &choose);
+        append(context, collective, &sync);
+        append(context, collective, &leave);
+        append(context, exit, &ret);
+        assert_eq!(
+            run_pliron_barrier_convergence_check_v1(context, &function).is_clean(),
+            clean,
+            "unexpected convergence result for cutoff={cutoff_value} scope={scope:?}",
+        );
+    }
+}
+
+#[test]
+fn ordinary_grid_barrier_is_reported_as_unsupported() {
+    let context = &mut setup();
+    let function = function(context, "unsupported_grid_barrier");
+    let entry = function.get_entry_block(context);
+    let invocation = InvocationIndexOp::new(context, 0, 128);
+    let sync = BarrierOp::new(
+        context,
+        HierarchyAttr::Grid,
+        MemoryScopeAttr::Device,
+        AddressSpaceAttr::Global,
+        MemoryOrderAttr::AcquireRelease,
+    );
+    let ret = ReturnOp::new(context);
+    append(context, entry, &invocation);
+    append(context, entry, &sync);
+    append(context, entry, &ret);
+    let report = run_pliron_barrier_convergence_check_v1(context, &function);
+    assert!(matches!(
+        report.findings(),
+        [PlironBarrierFindingV1::AnalysisIncomplete { detail }]
+            if detail.contains("ordinary grid-wide barriers are unsupported")
+    ));
+}
+
+#[test]
+fn workgroup_barrier_requires_a_full_physical_participant_set() {
+    for (extent, clean) in [(65, false), (128, true)] {
+        let context = &mut setup();
+        let function = function_with_layout(context, "full_workgroups", 64, 64);
+        let entry = function.get_entry_block(context);
+        let invocation = InvocationIndexOp::new(context, 0, extent);
+        let sync = barrier(context);
+        let ret = ReturnOp::new(context);
+        append(context, entry, &invocation);
+        append(context, entry, &sync);
+        append(context, entry, &ret);
+        let report = run_pliron_barrier_convergence_check_v1(context, &function);
+        assert_eq!(
+            report.is_clean(),
+            clean,
+            "unexpected result for extent {extent}"
+        );
+        if !clean {
+            assert!(matches!(
+                report.findings(),
+                [PlironBarrierFindingV1::AnalysisIncomplete { detail }]
+                    if detail.contains("not a multiple of participant width 64")
+            ));
+        }
+    }
 }

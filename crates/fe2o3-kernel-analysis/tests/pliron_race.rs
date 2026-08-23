@@ -1,3 +1,4 @@
+use dialect_gpu::{AddressSpaceAttr, ExecutionLayoutOp, FenceOp, MemoryOrderAttr, MemoryScopeAttr};
 use dialect_kernel::{
     AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, BranchOp, DIALECT_NAME,
     IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp, InvocationIndexOp,
@@ -24,6 +25,7 @@ fn setup() -> Context {
         &DialectName::try_new(DIALECT_NAME).expect("valid dialect"),
     )
     .expect("register kernel dialect");
+    dialect_gpu::register_dialect(&mut context).expect("register gpu dialect");
     context
 }
 
@@ -279,6 +281,195 @@ fn atomic_reads_share_with_plain_reads_and_all_atomic_effects() {
 }
 
 #[test]
+fn cross_workgroup_atomic_overlap_requires_agent_or_wider_scope() {
+    for (scope, expected) in [
+        (AtomicScopeAttr::Workgroup, RankedRaceStatusV1::Rejected),
+        (AtomicScopeAttr::Agent, RankedRaceStatusV1::Clean),
+        (AtomicScopeAttr::Device, RankedRaceStatusV1::Clean),
+    ] {
+        let context = &mut setup();
+        let function = function(context, "cross_workgroup_atomic");
+        let entry = function.get_entry_block(context);
+        let layout = ExecutionLayoutOp::new(context, 41, 64, 64);
+        let memory = view(context, vec![1], MemorySpaceAttr::Global);
+        let invocation = InvocationIndexOp::new(context, 0, 128);
+        let zero = IndexConstantOp::new(context, 0);
+        let atomic = RankedAccessOp::new_atomic(
+            context,
+            AccessKindAttr::AtomicReadModifyWrite,
+            AtomicOrderingAttr::AcquireRelease,
+            scope,
+            memory.result(context),
+            vec![zero.result(context)],
+        )
+        .unwrap();
+        let ret = ReturnOp::new(context);
+        append(context, entry, &layout);
+        append(context, entry, &memory);
+        append(context, entry, &invocation);
+        append(context, entry, &zero);
+        append(context, entry, &atomic);
+        append(context, entry, &ret);
+        let report = run_pliron_ranked_race_check_v1(context, &function);
+        assert_eq!(report.status(), expected, "unexpected status for {scope:?}");
+        if scope == AtomicScopeAttr::Workgroup {
+            assert!(matches!(
+                report.findings(),
+                [RankedRaceFindingV1::InsufficientAtomicScope { first, second, .. }]
+                    if first.workgroup() == Some(0) && second.workgroup() == Some(1)
+            ));
+        }
+    }
+}
+
+#[test]
+fn narrow_atomic_overlap_without_layout_is_incomplete() {
+    let context = &mut setup();
+    let function = function(context, "unresolved_atomic_scope");
+    let entry = function.get_entry_block(context);
+    let memory = view(context, vec![1], MemorySpaceAttr::Global);
+    let invocation = InvocationIndexOp::new(context, 0, 2);
+    let zero = IndexConstantOp::new(context, 0);
+    let atomic = RankedAccessOp::new_atomic(
+        context,
+        AccessKindAttr::AtomicReadModifyWrite,
+        AtomicOrderingAttr::AcquireRelease,
+        AtomicScopeAttr::Workgroup,
+        memory.result(context),
+        vec![zero.result(context)],
+    )
+    .unwrap();
+    let ret = ReturnOp::new(context);
+    append(context, entry, &memory);
+    append(context, entry, &invocation);
+    append(context, entry, &zero);
+    append(context, entry, &atomic);
+    append(context, entry, &ret);
+    let report = run_pliron_ranked_race_check_v1(context, &function);
+    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert!(matches!(
+        report.findings(),
+        [RankedRaceFindingV1::ExecutionLayoutUnavailable { .. }]
+    ));
+}
+
+#[test]
+fn fence_only_publication_is_incomplete_without_synchronizes_with() {
+    let context = &mut setup();
+    let function = function(context, "plain_grid_fence");
+    let entry = function.get_entry_block(context);
+    let layout = ExecutionLayoutOp::new(context, 42, 64, 64);
+    let memory = view(context, vec![1], MemorySpaceAttr::Global);
+    let invocation = InvocationIndexOp::new(context, 0, 128);
+    let zero = IndexConstantOp::new(context, 0);
+    let first = RankedAccessOp::new(
+        context,
+        AccessKindAttr::Write,
+        memory.result(context),
+        vec![zero.result(context)],
+    )
+    .unwrap();
+    let fence = FenceOp::new(
+        context,
+        MemoryScopeAttr::Device,
+        AddressSpaceAttr::Global,
+        MemoryOrderAttr::AcquireRelease,
+    );
+    let second = RankedAccessOp::new(
+        context,
+        AccessKindAttr::Write,
+        memory.result(context),
+        vec![zero.result(context)],
+    )
+    .unwrap();
+    let ret = ReturnOp::new(context);
+    append(context, entry, &layout);
+    append(context, entry, &memory);
+    append(context, entry, &invocation);
+    append(context, entry, &zero);
+    append(context, entry, &first);
+    append(context, entry, &fence);
+    append(context, entry, &second);
+    append(context, entry, &ret);
+    assert_eq!(
+        run_pliron_ranked_race_check_v1(context, &function).status(),
+        RankedRaceStatusV1::Incomplete
+    );
+    assert!(
+        run_pliron_ranked_race_check_v1(context, &function)
+            .findings()
+            .iter()
+            .any(|finding| matches!(
+                finding,
+                RankedRaceFindingV1::HappensBeforeIncomplete { detail, .. }
+                    if detail.contains("fence alone")
+            ))
+    );
+}
+
+#[test]
+fn release_store_acquire_load_signaling_needs_a_read_from_proof() {
+    let context = &mut setup();
+    let function = function(context, "atomic_signal_publication");
+    let entry = function.get_entry_block(context);
+    let layout = ExecutionLayoutOp::new(context, 43, 64, 64);
+    let data = view(context, vec![1], MemorySpaceAttr::Global);
+    let signal = view(context, vec![1], MemorySpaceAttr::Global);
+    let invocation = InvocationIndexOp::new(context, 0, 128);
+    let zero = IndexConstantOp::new(context, 0);
+    let data_write = RankedAccessOp::new(
+        context,
+        AccessKindAttr::Write,
+        data.result(context),
+        vec![zero.result(context)],
+    )
+    .unwrap();
+    let signal_release = RankedAccessOp::new_atomic(
+        context,
+        AccessKindAttr::AtomicWrite,
+        AtomicOrderingAttr::Release,
+        AtomicScopeAttr::Agent,
+        signal.result(context),
+        vec![zero.result(context)],
+    )
+    .unwrap();
+    let signal_acquire = RankedAccessOp::new_atomic(
+        context,
+        AccessKindAttr::AtomicRead,
+        AtomicOrderingAttr::Acquire,
+        AtomicScopeAttr::Agent,
+        signal.result(context),
+        vec![zero.result(context)],
+    )
+    .unwrap();
+    let data_read = RankedAccessOp::new(
+        context,
+        AccessKindAttr::Read,
+        data.result(context),
+        vec![zero.result(context)],
+    )
+    .unwrap();
+    let ret = ReturnOp::new(context);
+    append(context, entry, &layout);
+    append(context, entry, &data);
+    append(context, entry, &signal);
+    append(context, entry, &invocation);
+    append(context, entry, &zero);
+    append(context, entry, &data_write);
+    append(context, entry, &signal_release);
+    append(context, entry, &signal_acquire);
+    append(context, entry, &data_read);
+    append(context, entry, &ret);
+    let report = run_pliron_ranked_race_check_v1(context, &function);
+    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        RankedRaceFindingV1::HappensBeforeIncomplete { detail, .. }
+            if detail.contains("authenticated read-from relation")
+    )));
+}
+
+#[test]
 fn affine_stride_and_offset_remain_injective() {
     let context = &mut setup();
     let function = function(context, "strided_output");
@@ -499,7 +690,7 @@ fn dynamic_global_launch_needs_symbolic_disjointness_and_workgroup_effects_defer
         .get_operation()
         .insert_before(context, ret.get_operation());
     let report = run_pliron_ranked_race_check_v1(context, &global_function);
-    assert_eq!(report.status(), RankedRaceStatusV1::Rejected);
+    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
     assert!(
         report.findings()[0]
             .to_string()

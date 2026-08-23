@@ -4,7 +4,10 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
-use dialect_gpu::{AddressSpaceAttr, BarrierOp, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr};
+use dialect_gpu::{
+    AddressSpaceAttr, BarrierOp, ExecutionLayoutOp, FenceOp, HierarchyAttr, MemoryOrderAttr,
+    MemoryScopeAttr,
+};
 use dialect_kernel::{
     AccessKindAttr, AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr, BranchOp,
     CheckedTiledIndex2DOp, DYNAMIC_EXTENT, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp,
@@ -67,6 +70,13 @@ pub enum ProductionRankedValueV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProductionRankedOperationV1 {
+    /// Retained linear invocation-to-scope mapping used by mandatory
+    /// concurrency analysis. It carries no launch authority.
+    ExecutionLayout {
+        grid_identity: u64,
+        workgroup_size: u64,
+        subgroup_size: u64,
+    },
     View {
         result: ProductionRankedValueIdV1,
         element_width: u32,
@@ -128,6 +138,11 @@ pub enum ProductionRankedOperationV1 {
     },
     Barrier {
         execution_scope: HierarchyAttr,
+        memory_scope: MemoryScopeAttr,
+        address_space: AddressSpaceAttr,
+        order: MemoryOrderAttr,
+    },
+    Fence {
         memory_scope: MemoryScopeAttr,
         address_space: AddressSpaceAttr,
         order: MemoryOrderAttr,
@@ -282,8 +297,27 @@ impl ProductionRankedKernelV1 {
         }
 
         let mut locals = Vec::new();
+        let mut saw_execution_layout = false;
         for (block_index, block) in self.blocks.iter().enumerate() {
-            for operation in &block.operations {
+            for (operation_index, operation) in block.operations.iter().enumerate() {
+                if let ProductionRankedOperationV1::ExecutionLayout {
+                    workgroup_size,
+                    subgroup_size,
+                    ..
+                } = operation
+                {
+                    if block_index != 0
+                        || operation_index != 0
+                        || saw_execution_layout
+                        || *workgroup_size == 0
+                        || *subgroup_size == 0
+                        || *subgroup_size > *workgroup_size
+                        || !workgroup_size.is_multiple_of(*subgroup_size)
+                    {
+                        return Err(ProductionRankedKernelErrorV1::InvalidExecutionLayout);
+                    }
+                    saw_execution_layout = true;
+                }
                 let result = validate_operation(operation, self.argument_count, &locals)?;
                 if let Some((identity, kind)) = result {
                     if block_index != 0 {
@@ -335,6 +369,7 @@ pub enum ProductionRankedKernelErrorV1 {
         actual: usize,
     },
     InvalidShape,
+    InvalidExecutionLayout,
     UnsupportedElementWidth(u32),
     DynamicExtentCountMismatch {
         expected: usize,
@@ -387,6 +422,9 @@ impl fmt::Display for ProductionRankedKernelErrorV1 {
             Self::InvalidShape => write!(
                 formatter,
                 "ranked view rank must be within 1..={MAX_RANKED_MEMORY_RANK}"
+            ),
+            Self::InvalidExecutionLayout => formatter.write_str(
+                "ranked execution layout must be the unique first entry operation with nonzero integral subgroup/workgroup sizes",
             ),
             Self::UnsupportedElementWidth(width) => write!(
                 formatter,
@@ -535,6 +573,7 @@ fn validate_operation(
     locals: &[RecipeValueKindV1],
 ) -> Result<Option<(ProductionRankedValueIdV1, RecipeValueKindV1)>, ProductionRankedKernelErrorV1> {
     match operation {
+        ProductionRankedOperationV1::ExecutionLayout { .. } => Ok(None),
         ProductionRankedOperationV1::View {
             result,
             element_width,
@@ -672,7 +711,9 @@ fn validate_operation(
             validate_access(*kind, *view, indices, argument_count, locals)?;
             Ok(None)
         }
-        ProductionRankedOperationV1::Barrier { .. } => Ok(None),
+        ProductionRankedOperationV1::Barrier { .. } | ProductionRankedOperationV1::Fence { .. } => {
+            Ok(None)
+        }
         ProductionRankedOperationV1::SemanticSymbol { result, .. }
         | ProductionRankedOperationV1::SemanticConstant { result, .. } => {
             Ok(Some((*result, RecipeValueKindV1::Semantic)))
@@ -860,10 +901,14 @@ impl ProductionPlironSessionV1 {
             ));
         }
         let has_barrier = kernel.blocks.iter().any(|block| {
-            block
-                .operations
-                .iter()
-                .any(|operation| matches!(operation, ProductionRankedOperationV1::Barrier { .. }))
+            block.operations.iter().any(|operation| {
+                matches!(
+                    operation,
+                    ProductionRankedOperationV1::Barrier { .. }
+                        | ProductionRankedOperationV1::Fence { .. }
+                        | ProductionRankedOperationV1::ExecutionLayout { .. }
+                )
+            })
         });
         if has_barrier
             && !self
@@ -1145,6 +1190,15 @@ fn materialize_operation(
     locals: &mut Vec<Value>,
 ) -> Result<(), ProductionRankedKernelErrorV1> {
     let (operation, result) = match recipe {
+        ProductionRankedOperationV1::ExecutionLayout {
+            grid_identity,
+            workgroup_size,
+            subgroup_size,
+        } => {
+            let op =
+                ExecutionLayoutOp::new(context, *grid_identity, *workgroup_size, *subgroup_size);
+            (op.get_operation(), None)
+        }
         ProductionRankedOperationV1::View {
             result,
             element_width,
@@ -1327,6 +1381,14 @@ fn materialize_operation(
                 *address_space,
                 *order,
             );
+            (op.get_operation(), None)
+        }
+        ProductionRankedOperationV1::Fence {
+            memory_scope,
+            address_space,
+            order,
+        } => {
+            let op = FenceOp::new(context, *memory_scope, *address_space, *order);
             (op.get_operation(), None)
         }
         ProductionRankedOperationV1::SemanticSymbol { result, symbol } => {

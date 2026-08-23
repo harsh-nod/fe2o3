@@ -31,7 +31,7 @@ fn textual_pliron_lit_suite() {
         .collect::<Vec<_>>();
     fixtures.sort();
     assert!(
-        fixtures.len() >= 26,
+        fixtures.len() >= 31,
         "generic kernel-check lit suite unexpectedly shrank"
     );
     for fixture in fixtures {
@@ -151,6 +151,7 @@ fn parse_atomic_capability(source: &str) -> PlironAtomicTargetCapabilityV1 {
     };
     let max_scope = match fields[2] {
         "Workgroup" => AtomicScopeAttr::Workgroup,
+        "Agent" => AtomicScopeAttr::Agent,
         "Device" => AtomicScopeAttr::Device,
         "System" => AtomicScopeAttr::System,
         other => panic!("unsupported atomic capability scope {other}"),

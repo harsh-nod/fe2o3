@@ -2842,6 +2842,14 @@ fn format_ranked_cfg(
 
 fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
     match operation {
+        ProductionRankedOperationV1::ExecutionLayout {
+            grid_identity,
+            workgroup_size,
+            subgroup_size,
+        } => format!(
+            "  gpu.execution_layout <grid={}, workgroup={}, subgroup={}>\n",
+            grid_identity, workgroup_size, subgroup_size,
+        ),
         ProductionRankedOperationV1::View {
             result,
             element_width,
@@ -2967,6 +2975,14 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
         } => format!(
             "  gpu.barrier <{:?}, {:?}, {:?}, {:?}>\n",
             execution_scope, memory_scope, address_space, order,
+        ),
+        ProductionRankedOperationV1::Fence {
+            memory_scope,
+            address_space,
+            order,
+        } => format!(
+            "  gpu.fence <{:?}, {:?}, {:?}>\n",
+            memory_scope, address_space, order,
         ),
         ProductionRankedOperationV1::SemanticSymbol { result, symbol } => {
             format!("  %{} = kernel.semantic_symbol {}\n", result.get(), symbol)
@@ -5298,6 +5314,7 @@ mod tests {
                 ProductionRankedOperationV1::Access { kind, .. }
                 | ProductionRankedOperationV1::AtomicAccess { kind, .. } => Some(*kind),
                 ProductionRankedOperationV1::View { .. }
+                | ProductionRankedOperationV1::ExecutionLayout { .. }
                 | ProductionRankedOperationV1::ViewInSpace { .. }
                 | ProductionRankedOperationV1::IndexConstant { .. }
                 | ProductionRankedOperationV1::InvocationIndex { .. }
@@ -5305,6 +5322,7 @@ mod tests {
                 | ProductionRankedOperationV1::CheckedTiledIndex2D { .. }
                 | ProductionRankedOperationV1::Dimension { .. }
                 | ProductionRankedOperationV1::Barrier { .. }
+                | ProductionRankedOperationV1::Fence { .. }
                 | ProductionRankedOperationV1::SemanticSymbol { .. }
                 | ProductionRankedOperationV1::SemanticConstant { .. }
                 | ProductionRankedOperationV1::SemanticBinary { .. }

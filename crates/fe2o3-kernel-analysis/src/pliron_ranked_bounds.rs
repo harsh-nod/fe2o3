@@ -10,7 +10,7 @@ use std::{
     fmt,
 };
 
-use dialect_gpu::BarrierOp;
+use dialect_gpu::{BarrierOp, ExecutionLayoutOp, FenceOp};
 use dialect_kernel::{
     AccessKindAttr, AnalysisSplitOp, BranchOp, CheckedTiledIndex2DOp, DimensionOp, IndexBinaryOp,
     IndexConstantOp, IndexLessThanBranchOp, InvocationIndexOp, MAX_RANKED_MEMORY_RANK,
@@ -264,6 +264,8 @@ enum RankedOperationKind {
     Branch,
     Return,
     Barrier,
+    ExecutionLayout,
+    Fence,
     SemanticSymbol,
     SemanticConstant,
     SemanticBinary,
@@ -304,6 +306,10 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         Some(RankedOperationKind::Return)
     } else if operation.downcast_ref::<BarrierOp>().is_some() {
         Some(RankedOperationKind::Barrier)
+    } else if operation.downcast_ref::<ExecutionLayoutOp>().is_some() {
+        Some(RankedOperationKind::ExecutionLayout)
+    } else if operation.downcast_ref::<FenceOp>().is_some() {
+        Some(RankedOperationKind::Fence)
     } else if operation.downcast_ref::<SemanticSymbolOp>().is_some() {
         Some(RankedOperationKind::SemanticSymbol)
     } else if operation.downcast_ref::<SemanticConstantOp>().is_some() {
