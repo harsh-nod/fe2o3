@@ -463,6 +463,29 @@ fn matrix_operation_rejects_mutated_tensor_layout_and_frozen_wire_refuses_it() {
 }
 
 #[test]
+fn matrix_operation_and_canonical_owner_reject_incomplete_tensor_contracts() {
+    for mutate in [
+        |contract: &mut TensorLayoutContractV1| {
+            contract.profile = TensorInstructionProfileV1::Opaque(7);
+        },
+        |contract: &mut TensorLayoutContractV1| {
+            contract.a.mapping = TensorSymbolicMapV1::Opaque(7);
+        },
+    ] {
+        let mut module = matrix_module();
+        mutate(
+            operation_mut(&mut module, 2)
+                .tensor_layout
+                .as_mut()
+                .unwrap(),
+        );
+        let diagnostic = verify_module(&module).unwrap_err();
+        assert!(diagnostic.contains(DiagnosticCode::InvalidSemanticOperation));
+        assert!(VerifiedCanonicalKernelIrV7::from_module(module).is_err());
+    }
+}
+
+#[test]
 fn bare_matrix_multiply_never_invents_layout_or_tail_provenance() {
     let mut module = matrix_module();
     operation_mut(&mut module, 2).tensor_layout = None;

@@ -1,13 +1,17 @@
 // RUN: fe2o3-pliron-lit --passes=general %s
 // EXPECT: REJECT
-// CHECK: cyclic control flow
+// CHECK: control-dependent on unresolved branch block
 builtin.func @tensor_layout_loop_incomplete: builtin.function <() -> ()>
 {
   ^entry_block1v1():
-    v0 = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension 0, kernel_launch_extent: kernel.launch_extent 64]: <() -> (kernel.index )>;
-    kernel.br () [^loop_block2v1] []: <() -> ()>
+    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 7, gpu_execution_global_x: gpu.execution_extent 0, gpu_execution_global_y: gpu.execution_extent 1, gpu_execution_global_z: gpu.execution_extent 1, gpu_execution_workgroup_x: gpu.execution_extent 64, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 64]: <() -> ()>;
+    v0 = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension 0, kernel_launch_extent: kernel.launch_extent 0]: <() -> (kernel.index )>;
+    kernel.analysis_split () [^loop_block2v1, ^exit_block3v1] []: <() -> ()>
 
   ^loop_block2v1():
     kernel.tensor_layout () [] [kernel_tensor_a: kernel.tensor_fragment <1,16,16,1,4,1,16,16,0,1,0,0,1,0,0,4,1,1,1,1,1,1>, kernel_tensor_accumulator: kernel.tensor_fragment <3,16,16,2,4,1,16,16,0,0,4,1,1,0,1,0,0,1,1,1,2,1>, kernel_tensor_b: kernel.tensor_fragment <2,16,16,1,4,1,16,16,0,0,4,1,1,0,1,0,0,1,1,1,1,1>, kernel_tensor_convergence: kernel.tensor_convergence UniformSubgroup, kernel_tensor_instruction: kernel.tensor_instruction <1,0,64,64,1>]: <() -> ()>;
-    kernel.br () [^loop_block2v1] []: <() -> ()>
+    kernel.br () [^entry_block1v1] []: <() -> ()>
+
+  ^exit_block3v1():
+    kernel.return () [] []: <() -> ()>
 }

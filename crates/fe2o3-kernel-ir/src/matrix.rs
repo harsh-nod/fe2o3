@@ -1077,10 +1077,7 @@ impl MatrixOperation {
                 }
                 match &self.tensor_layout {
                     Some(contract) => {
-                        for finding in verify_tensor_layout_contract_v1(contract)
-                            .into_iter()
-                            .filter(|finding| !finding.is_incomplete())
-                        {
+                        for finding in verify_tensor_layout_contract_v1(contract) {
                             issues.push(MatrixVerificationIssue::structure(finding.to_string()));
                         }
                     }
