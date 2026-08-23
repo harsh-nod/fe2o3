@@ -278,13 +278,18 @@ leases. One entry point accepts an owned nonempty byte slice and a content
 descriptor, checks their exact length and SHA-256 before allocation, copies the
 complete requested extent, and hashes the mapped bytes again. The private
 repeated-byte entry point instead precommits the exact nonempty extent, byte,
-role, and SHA-256, then fills the complete safe mapping slice without a second
-HBM scan. Both paths map the returned BO offset through the retained render
-file, use the same `PROT_NONE -> MADV_DONTFORK -> read/write` setup as GTT,
-explicitly unmap the CPU VMA, and only then map the allocation to the selected
-GPU. The result binds private allocation/device/VM generations to the checked
-content descriptor and exposes no native address or mutable view. A descriptor
-alone cannot construct it.
+role, and SHA-256, then fills the complete safe mapping without a second HBM
+scan. Large repeated-byte fills are partitioned into at most 16 disjoint safe
+slices and written by bounded scoped CPU workers; smaller fills stay serial.
+A worker spawn failure quarantines the retained session, and no partial fill
+can mint initialized-content authority. Both paths map the returned BO offset
+through the retained render file, use the same
+`PROT_NONE -> MADV_DONTFORK -> read/write` setup as GTT, explicitly unmap the
+CPU VMA, and only then map the allocation to the selected GPU. The result binds
+private allocation/device/VM generations to the checked content descriptor and
+exposes no native address or mutable view. A descriptor alone cannot construct
+it. This is generic KFD/service allocation behavior; it does not encode a
+model, inference engine, or workload-specific initialization policy.
 
 The exact checked gfx942 device profile and successful public-VRAM mmap are the
 only capability admission currently available. A driver or platform that
