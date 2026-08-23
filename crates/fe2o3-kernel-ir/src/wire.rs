@@ -5,15 +5,15 @@ use std::str;
 use crate::{
     AccessMode, AddressSpace, AssemblyConstraint, AssemblyEffect, AssemblyOperand,
     AssemblyOperandKind, AssemblyOption, AssemblySourceIdentity, Atomic, AtomicKind, Axis, Barrier,
-    BarrierSemantics, BasicBlock, BinaryOp, BlockId, CastKind, ComparePredicate, Constant,
-    Convergence, Fence, Function, FunctionBody, FunctionId, FunctionRole, IndexKind,
-    InlineAssembly, InlineAssemblyTarget, IntegerSwitchCase, IntrinsicKind, IntrinsicOperation,
-    Kernel, KernelId, LaunchDomain, LaunchExtent, MatrixElement, MatrixLayout, MatrixLdsProfile,
-    MatrixMultiplyProfile, MatrixOperation, MatrixOperationKind, MemoryAccess, MemoryOrdering,
-    Module, ModuleId, Operation, OperationKind, PointerType, ScalarType, Signature, SliceType,
-    SwitchCase, SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueDef,
-    ValueId, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupMemory,
-    WorkgroupMemoryExtent, WorkgroupSize,
+    BarrierSemantics, BasicBlock, BinaryOp, BlockId, CastKind, CheckedBinaryOperator,
+    ComparePredicate, Constant, Convergence, Fence, Function, FunctionBody, FunctionId,
+    FunctionRole, IndexKind, InlineAssembly, InlineAssemblyTarget, IntegerSwitchCase,
+    IntrinsicKind, IntrinsicOperation, Kernel, KernelId, LaunchDomain, LaunchExtent, MatrixElement,
+    MatrixLayout, MatrixLdsProfile, MatrixMultiplyProfile, MatrixOperation, MatrixOperationKind,
+    MemoryAccess, MemoryOrdering, Module, ModuleId, Operation, OperationKind, PointerType,
+    ScalarType, Signature, SliceType, SwitchCase, SynchronizationScope, TargetCapability,
+    Terminator, Type, UnaryOp, ValueDef, ValueId, WaveOperation, WaveOperationKind, WaveWidth,
+    WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
 };
 
 /// Fixed magic at the start of every canonical kernel IR module.
@@ -28,8 +28,12 @@ pub const KERNEL_IR_VERSION_V3: u16 = 3;
 pub const KERNEL_IR_VERSION_V4: u16 = 4;
 /// Kernel IR V5 adds explicit bounded matrix operations.
 pub const KERNEL_IR_VERSION_V5: u16 = 5;
+/// Kernel IR V6 adds exact two-result checked integer arithmetic.
+pub const KERNEL_IR_VERSION_V6: u16 = 6;
 /// Domain separator for identities derived from canonical Kernel IR V5 bytes.
 pub const KERNEL_IR_DOMAIN_V5: &[u8] = b"FE2O3/KERNEL-IR/V5\0";
+/// Domain separator for identities derived from canonical Kernel IR V6 bytes.
+pub const KERNEL_IR_DOMAIN_V6: &[u8] = b"FE2O3/KERNEL-IR/V6\0";
 /// Maximum size of one encoded kernel IR module.
 pub const MAX_MODULE_BYTES_V1: usize = 16 * 1024 * 1024;
 /// Maximum UTF-8 byte length of any identifier or extension component.
@@ -228,6 +232,11 @@ pub fn encode_module_v5(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError>
     encode_module(module, KERNEL_IR_VERSION_V5)
 }
 
+/// Encodes a module in the bounded canonical kernel IR V6 wire format.
+pub fn encode_module_v6(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
+    encode_module(module, KERNEL_IR_VERSION_V6)
+}
+
 fn encode_module(module: &Module, version: u16) -> Result<Vec<u8>, KernelIrEncodeError> {
     let mut writer = Writer::new(version);
     writer.bytes(&KERNEL_IR_MAGIC_V1)?;
@@ -287,6 +296,11 @@ pub fn decode_module_v4(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
 /// Decodes canonical V1 through V5 bytes using the latest bounded reader.
 pub fn decode_module_v5(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
     decode_module(bytes, KERNEL_IR_VERSION_V5, true)
+}
+
+/// Decodes canonical V1 through V6 bytes using the latest bounded reader.
+pub fn decode_module_v6(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
+    decode_module(bytes, KERNEL_IR_VERSION_V6, true)
 }
 
 fn decode_module(
@@ -638,7 +652,7 @@ fn encode_operation_kind(
         }
         OperationKind::Binary { op, lhs, rhs } => {
             writer.u8(4)?;
-            writer.u8(binary_op_tag(*op))?;
+            encode_binary_op(writer, *op)?;
             writer.u32(lhs.0)?;
             writer.u32(rhs.0)?;
         }
@@ -763,11 +777,14 @@ fn decode_operation_kind(reader: &mut Reader<'_>) -> Result<OperationKind, Kerne
             op: decode_unary_op(reader.u8()?)?,
             operand: ValueId(reader.u32()?),
         },
-        4 => OperationKind::Binary {
-            op: decode_binary_op(reader.u8()?)?,
-            lhs: ValueId(reader.u32()?),
-            rhs: ValueId(reader.u32()?),
-        },
+        4 => {
+            let operator_tag = reader.u8()?;
+            OperationKind::Binary {
+                op: decode_binary_op(reader, operator_tag)?,
+                lhs: ValueId(reader.u32()?),
+                rhs: ValueId(reader.u32()?),
+            }
+        }
         5 => OperationKind::Compare {
             predicate: decode_compare_predicate(reader.u8()?)?,
             lhs: ValueId(reader.u32()?),
@@ -2090,18 +2107,57 @@ enum_codec!(unary_op_tag, decode_unary_op, UnaryOp, "unary operation", {
     UnaryOp::Negate => 1,
     UnaryOp::Not => 2,
 });
-enum_codec!(binary_op_tag, decode_binary_op, BinaryOp, "binary operation", {
-    BinaryOp::Add => 1,
-    BinaryOp::Subtract => 2,
-    BinaryOp::Multiply => 3,
-    BinaryOp::Divide => 4,
-    BinaryOp::Remainder => 5,
-    BinaryOp::BitAnd => 6,
-    BinaryOp::BitOr => 7,
-    BinaryOp::BitXor => 8,
-    BinaryOp::ShiftLeft => 9,
-    BinaryOp::ShiftRight => 10,
-});
+fn encode_binary_op(writer: &mut Writer, operation: BinaryOp) -> Result<(), KernelIrEncodeError> {
+    let tag = match operation {
+        BinaryOp::Add => 1,
+        BinaryOp::Subtract => 2,
+        BinaryOp::Multiply => 3,
+        BinaryOp::Divide => 4,
+        BinaryOp::Remainder => 5,
+        BinaryOp::BitAnd => 6,
+        BinaryOp::BitOr => 7,
+        BinaryOp::BitXor => 8,
+        BinaryOp::ShiftLeft => 9,
+        BinaryOp::ShiftRight => 10,
+        BinaryOp::Checked(operator) => {
+            require_v6(writer, "checked integer binary operation")?;
+            match operator {
+                CheckedBinaryOperator::Add => 11,
+                CheckedBinaryOperator::Subtract => 12,
+                CheckedBinaryOperator::Multiply => 13,
+            }
+        }
+    };
+    writer.u8(tag)
+}
+
+fn decode_binary_op(reader: &Reader<'_>, tag: u8) -> Result<BinaryOp, KernelIrDecodeError> {
+    match tag {
+        1 => Ok(BinaryOp::Add),
+        2 => Ok(BinaryOp::Subtract),
+        3 => Ok(BinaryOp::Multiply),
+        4 => Ok(BinaryOp::Divide),
+        5 => Ok(BinaryOp::Remainder),
+        6 => Ok(BinaryOp::BitAnd),
+        7 => Ok(BinaryOp::BitOr),
+        8 => Ok(BinaryOp::BitXor),
+        9 => Ok(BinaryOp::ShiftLeft),
+        10 => Ok(BinaryOp::ShiftRight),
+        11 if reader.version >= KERNEL_IR_VERSION_V6 => {
+            Ok(BinaryOp::Checked(CheckedBinaryOperator::Add))
+        }
+        12 if reader.version >= KERNEL_IR_VERSION_V6 => {
+            Ok(BinaryOp::Checked(CheckedBinaryOperator::Subtract))
+        }
+        13 if reader.version >= KERNEL_IR_VERSION_V6 => {
+            Ok(BinaryOp::Checked(CheckedBinaryOperator::Multiply))
+        }
+        tag => Err(KernelIrDecodeError::UnknownTag {
+            kind: "binary operation",
+            tag,
+        }),
+    }
+}
 enum_codec!(compare_predicate_tag, decode_compare_predicate, ComparePredicate, "compare predicate", {
     ComparePredicate::Equal => 1,
     ComparePredicate::NotEqual => 2,
@@ -2189,6 +2245,17 @@ fn require_v3(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEnco
 
 fn require_v5(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
     if writer.version >= KERNEL_IR_VERSION_V5 {
+        Ok(())
+    } else {
+        Err(KernelIrEncodeError::UnsupportedInVersion {
+            version: writer.version,
+            feature,
+        })
+    }
+}
+
+fn require_v6(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+    if writer.version >= KERNEL_IR_VERSION_V6 {
         Ok(())
     } else {
         Err(KernelIrEncodeError::UnsupportedInVersion {

@@ -361,6 +361,35 @@ impl Operation {
         Self::new(vec![result], kind)
     }
 
+    /// Constructs checked integer arithmetic with explicit value and overflow
+    /// SSA results. Semantic type validity is established by [`crate::verify_module`].
+    pub fn checked_binary(
+        value: ValueDef,
+        overflow: ValueDef,
+        operator: CheckedBinaryOperator,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> Self {
+        Self::new(
+            vec![value, overflow],
+            OperationKind::Binary {
+                op: BinaryOp::Checked(operator),
+                lhs,
+                rhs,
+            },
+        )
+    }
+
+    /// Returns every SSA operand in stable semantic order.
+    pub fn operands(&self) -> Vec<ValueId> {
+        self.kind.operands()
+    }
+
+    /// Returns every SSA result in stable definition order.
+    pub fn result_ids(&self) -> impl ExactSizeIterator<Item = ValueId> + '_ {
+        self.results.iter().map(|result| result.id)
+    }
+
     pub fn memory_effects(&self) -> Vec<MemoryEffect> {
         if let Some(semantic) = self.kind.semantic_operation() {
             return semantic.contract().memory_effects;
@@ -1465,6 +1494,21 @@ pub enum BinaryOp {
     BitXor,
     ShiftLeft,
     ShiftRight,
+    /// Integer arithmetic with explicit `(value, overflow)` results.
+    Checked(CheckedBinaryOperator),
+}
+
+/// Arithmetic operators with an explicit overflow result.
+///
+/// Signedness is intentionally carried by the operands' scalar type: `I*`
+/// values use signed overflow semantics, while `U*` and `Index` values use
+/// unsigned overflow semantics. This avoids a second signedness field that
+/// could disagree with the SSA types.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum CheckedBinaryOperator {
+    Add,
+    Subtract,
+    Multiply,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

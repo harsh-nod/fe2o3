@@ -493,8 +493,13 @@ fn project_operation_kind(
             project_intrinsic(writer, intrinsic)
         }
         OperationKind::Binary { op, lhs, rhs } => {
+            let Some(operator_tag) = binary_op_tag(*op) else {
+                return Err(ScalarGemmSemanticProjectionErrorV1::UnsupportedField(
+                    "checked binary operation",
+                ));
+            };
             writer.u8(Token::OperationKind, 3)?;
-            writer.u8(Token::BinaryOp, binary_op_tag(*op))?;
+            writer.u8(Token::BinaryOp, operator_tag)?;
             project_value_id(writer, *lhs)?;
             project_value_id(writer, *rhs)
         }
@@ -878,8 +883,8 @@ fn index_kind_tag(kind: IndexKind) -> u8 {
     }
 }
 
-fn binary_op_tag(operation: BinaryOp) -> u8 {
-    match operation {
+fn binary_op_tag(operation: BinaryOp) -> Option<u8> {
+    Some(match operation {
         BinaryOp::Add => 1,
         BinaryOp::Subtract => 2,
         BinaryOp::Multiply => 3,
@@ -890,7 +895,8 @@ fn binary_op_tag(operation: BinaryOp) -> u8 {
         BinaryOp::BitXor => 8,
         BinaryOp::ShiftLeft => 9,
         BinaryOp::ShiftRight => 10,
-    }
+        BinaryOp::Checked(_) => return None,
+    })
 }
 
 fn compare_predicate_tag(predicate: ComparePredicate) -> u8 {

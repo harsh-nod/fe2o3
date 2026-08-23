@@ -11,24 +11,24 @@ use fe2o3_kernel_ir::{
     AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME, AddressSpace as KernelAddressSpace,
     AmdGpuDiagnosticOperation, AssemblyConstraint, AssemblyOperandKind, AssemblyOption, Atomic,
     AtomicKind, Axis, BF16_F32_M16N16K16_CAPABILITY, BasicBlock, BinaryOp, BlockId, CastKind,
-    ComparePredicate, Constant, DiagnosticCode as VerificationDiagnosticCode, F32MathFunction,
-    F32MathImplementation, FloatConversionKind, FloatOperation, Function, FunctionId, FunctionRole,
-    IndexKind, IndexedControlFlow, InlineAssembly, InlineAssemblyTarget, IntrinsicKind, Kernel,
-    KernelId, LDS_TILE_16X16_XOR4_CAPABILITY, LaunchDomain, LaunchExtent,
-    MATRIX_CAPABILITY_NAMESPACE, MATRIX_PROJECTED_KERNARG_POLICY_NAMESPACE_V1,
-    MATRIX_SOURCE_ABI_OBSERVATION_NAMESPACE_V2, MatrixElement, MatrixFrontendBindingV2,
-    MatrixOperation, MatrixOperationKind, MatrixProjectedKernargPolicyV1, MemoryElementType,
-    MemoryIntrinsicOperation, MemoryOrdering, Module, ModuleId, NarrowFloatFormat, Operation,
-    OperationKind, PointerDistanceContract, PointerDistanceKind, PointerDistanceUnit,
-    ScalarGemmTargetRequirementsV1, ScalarGemmV1Error, ScalarType, Signature, SynchronizationScope,
-    TILED_GEMM_LDS_EDGES_V1_LAUNCH_EXTENT_X, TILED_GEMM_LDS_EDGES_V1_LAUNCH_EXTENT_Y,
-    TILED_GEMM_LDS_GRID_V1_LAUNCH_EXTENT_X, TILED_GEMM_LDS_GRID_V1_LAUNCH_EXTENT_Y,
-    TargetCapability, Terminator, TiledGemmLdsEdgesV1Error, TiledGemmLdsEdgesV1Profile,
-    TiledGemmLdsGridV1Error, TiledGemmLdsGridV1Profile, TiledGemmLdsK32V2Error,
-    TiledGemmLdsK32V2Profile, TiledGemmLdsV1Error, TiledGemmLdsV1Profile, TiledGemmV1Error,
-    TiledGemmV1Profile, Type, ValueId, VerificationErrors, WaveOperation, WaveOperationKind,
-    WaveWidth, WidenedFloatBinaryOp, WorkgroupMemoryExtent, WorkgroupSize, analyze_control_flow,
-    encode_module_v4, gfx942_xnack_minus_target_capability, verify_module,
+    CheckedBinaryOperator, ComparePredicate, Constant,
+    DiagnosticCode as VerificationDiagnosticCode, F32MathFunction, F32MathImplementation,
+    FloatConversionKind, FloatOperation, Function, FunctionId, FunctionRole, IndexKind,
+    IndexedControlFlow, InlineAssembly, InlineAssemblyTarget, IntrinsicKind, Kernel, KernelId,
+    LDS_TILE_16X16_XOR4_CAPABILITY, LaunchDomain, LaunchExtent, MATRIX_CAPABILITY_NAMESPACE,
+    MATRIX_PROJECTED_KERNARG_POLICY_NAMESPACE_V1, MATRIX_SOURCE_ABI_OBSERVATION_NAMESPACE_V2,
+    MatrixElement, MatrixFrontendBindingV2, MatrixOperation, MatrixOperationKind,
+    MatrixProjectedKernargPolicyV1, MemoryElementType, MemoryIntrinsicOperation, MemoryOrdering,
+    Module, ModuleId, NarrowFloatFormat, Operation, OperationKind, PointerDistanceContract,
+    PointerDistanceKind, PointerDistanceUnit, ScalarGemmTargetRequirementsV1, ScalarGemmV1Error,
+    ScalarType, Signature, SynchronizationScope, TILED_GEMM_LDS_EDGES_V1_LAUNCH_EXTENT_X,
+    TILED_GEMM_LDS_EDGES_V1_LAUNCH_EXTENT_Y, TILED_GEMM_LDS_GRID_V1_LAUNCH_EXTENT_X,
+    TILED_GEMM_LDS_GRID_V1_LAUNCH_EXTENT_Y, TargetCapability, Terminator, TiledGemmLdsEdgesV1Error,
+    TiledGemmLdsEdgesV1Profile, TiledGemmLdsGridV1Error, TiledGemmLdsGridV1Profile,
+    TiledGemmLdsK32V2Error, TiledGemmLdsK32V2Profile, TiledGemmLdsV1Error, TiledGemmLdsV1Profile,
+    TiledGemmV1Error, TiledGemmV1Profile, Type, ValueId, VerificationErrors, WaveOperation,
+    WaveOperationKind, WaveWidth, WidenedFloatBinaryOp, WorkgroupMemoryExtent, WorkgroupSize,
+    analyze_control_flow, encode_module_v4, gfx942_xnack_minus_target_capability, verify_module,
     verify_scalar_gemm_v1_module, verify_tiled_gemm_lds_edges_v1_module,
     verify_tiled_gemm_lds_grid_v1_module, verify_tiled_gemm_lds_k32_v2_module,
     verify_tiled_gemm_lds_v1_module, verify_tiled_gemm_v1_module,
@@ -3905,7 +3905,7 @@ fn collect_memcpy_declarations<'a>(
 
 fn collect_intrinsic_declarations<'a>(
     lowerers: impl Iterator<Item = &'a FunctionLowerer<'a>>,
-) -> BTreeMap<&'static str, IntrinsicDeclaration> {
+) -> BTreeMap<String, IntrinsicDeclaration> {
     let mut declarations = BTreeMap::new();
     for lowerer in lowerers {
         let body = lowerer.function.body.as_ref().expect("definition required");
@@ -3957,6 +3957,34 @@ fn collect_intrinsic_declarations<'a>(
                         IntrinsicAttribute::ReadNone,
                     );
                 }
+                OperationKind::Binary {
+                    op: BinaryOp::Checked(operator),
+                    lhs,
+                    ..
+                } => {
+                    let scalar = lowerer
+                        .value_type(*lhs)
+                        .as_scalar()
+                        .expect("preflight accepted checked integer operation");
+                    let (result, arguments) = checked_binary_intrinsic_signature(scalar);
+                    let name = checked_binary_intrinsic_name(*operator, scalar);
+                    let previous = declarations.insert(
+                        name,
+                        IntrinsicDeclaration {
+                            result,
+                            arguments,
+                            attribute: IntrinsicAttribute::ReadNone,
+                        },
+                    );
+                    debug_assert!(previous.is_none_or(|previous| {
+                        previous
+                            == IntrinsicDeclaration {
+                                result,
+                                arguments,
+                                attribute: IntrinsicAttribute::ReadNone,
+                            }
+                    }));
+                }
                 OperationKind::WorkgroupBarrier(_)
                     if !lowerer.target.uses_physical_tiled_gemm_barrier() =>
                 {
@@ -3999,7 +4027,7 @@ fn collect_intrinsic_declarations<'a>(
                     ) {
                         let (result, intrinsic) = ballot_intrinsic(wave.width);
                         declarations.insert(
-                            intrinsic,
+                            intrinsic.to_owned(),
                             IntrinsicDeclaration {
                                 result,
                                 arguments: "i1",
@@ -4050,14 +4078,14 @@ fn collect_intrinsic_declarations<'a>(
 }
 
 fn insert_intrinsic(
-    declarations: &mut BTreeMap<&'static str, IntrinsicDeclaration>,
+    declarations: &mut BTreeMap<String, IntrinsicDeclaration>,
     intrinsic: AmdgcnIntrinsic,
     result: &'static str,
     arguments: &'static str,
     attribute: IntrinsicAttribute,
 ) {
     let previous = declarations.insert(
-        intrinsic.llvm_name(),
+        intrinsic.llvm_name().to_owned(),
         IntrinsicDeclaration {
             result,
             arguments,
@@ -5006,6 +5034,16 @@ impl<'a> FunctionLowerer<'a> {
             }
             OperationKind::Binary { op, lhs, .. } => {
                 let ty = self.value_type(*lhs);
+                if matches!(op, BinaryOp::Checked(_)) {
+                    if !ty.as_scalar().is_some_and(ScalarType::is_integer) {
+                        return Err(LoweringErrors::one(
+                            location,
+                            LoweringDiagnosticCode::UnsupportedOperation,
+                            format!("gfx942 does not lower {op:?} for {ty:?}"),
+                        ));
+                    }
+                    return Ok(());
+                }
                 if !supported_binary(*op, ty, self.target) {
                     return Err(LoweringErrors::one(
                         location,
@@ -6193,6 +6231,10 @@ impl<'a> FunctionLowerer<'a> {
                 intrinsic,
             ),
             OperationKind::Binary { op, lhs, rhs } => {
+                if matches!(op, BinaryOp::Checked(_)) {
+                    self.emit_checked_binary(output, block, operation_index, operation);
+                    return Ok(());
+                }
                 let (lhs_name, lhs_ty) = self.value(*lhs);
                 let (rhs_name, _) = self.value(*rhs);
                 writeln!(
@@ -6460,6 +6502,44 @@ impl<'a> FunctionLowerer<'a> {
             _ => unreachable!("preflight rejected unsupported operation"),
         }
         Ok(())
+    }
+
+    fn emit_checked_binary(
+        &self,
+        output: &mut dyn fmt::Write,
+        block: BlockId,
+        operation_index: usize,
+        operation: &Operation,
+    ) {
+        let OperationKind::Binary {
+            op: BinaryOp::Checked(operator),
+            lhs,
+            rhs,
+        } = &operation.kind
+        else {
+            unreachable!("checked binary emitter requires a checked binary operation")
+        };
+        let (lhs_name, lhs_ty) = self.value(*lhs);
+        let (rhs_name, _) = self.value(*rhs);
+        let scalar = lhs_ty
+            .as_scalar()
+            .expect("KIR verification requires checked integer operands");
+        let ty = llvm_scalar(scalar);
+        let intrinsic = checked_binary_intrinsic_name(*operator, scalar);
+        let pair = format!("checked.{}.{}", block.0, operation_index);
+        let value = value_name(operation.results[0].id);
+        let overflow = value_name(operation.results[1].id);
+        writeln!(
+            output,
+            "  %{pair} = call {{ {ty}, i1 }} @{intrinsic}({ty} {lhs_name}, {ty} {rhs_name})"
+        )
+        .unwrap();
+        writeln!(output, "  {value} = extractvalue {{ {ty}, i1 }} %{pair}, 0").unwrap();
+        writeln!(
+            output,
+            "  {overflow} = extractvalue {{ {ty}, i1 }} %{pair}, 1"
+        )
+        .unwrap();
     }
 
     fn emit_matrix(
@@ -7406,7 +7486,7 @@ impl<'a> FunctionLowerer<'a> {
 
 fn supported_scalar(scalar: ScalarType, target: LoweringTarget) -> bool {
     scalar == ScalarType::Bool
-        || supported_integer(scalar)
+        || scalar.is_integer()
         || scalar == ScalarType::F32
         || (target.supports_narrow_float() && matches!(scalar, ScalarType::F16 | ScalarType::Bf16))
 }
@@ -7489,6 +7569,7 @@ fn supported_binary(op: BinaryOp, ty: &Type, target: LoweringTarget) -> bool {
         BinaryOp::Divide | BinaryOp::Remainder => supported_integer(scalar),
         BinaryOp::BitAnd => scalar == ScalarType::Bool || supported_integer(scalar),
         BinaryOp::BitXor => supported_integer(scalar),
+        BinaryOp::Checked(_) => scalar.is_integer(),
         _ => false,
     }
 }
@@ -7822,9 +7903,8 @@ fn llvm_scalar(scalar: ScalarType) -> &'static str {
         ScalarType::I32 | ScalarType::U32 => "i32",
         ScalarType::I64 | ScalarType::U64 | ScalarType::Index => "i64",
         ScalarType::F32 => "float",
-        ScalarType::I128 | ScalarType::U128 | ScalarType::F64 => {
-            unreachable!("preflight rejected unsupported scalar")
-        }
+        ScalarType::I128 | ScalarType::U128 => "i128",
+        ScalarType::F64 => unreachable!("preflight rejected unsupported scalar"),
     }
 }
 
@@ -7875,7 +7955,34 @@ fn binary_opcode(op: BinaryOp, ty: &Type) -> &'static str {
         (BinaryOp::Subtract, true) => "fsub",
         (BinaryOp::Multiply, true) => "fmul",
         (BinaryOp::Divide, true) => "fdiv",
+        (BinaryOp::Checked(_), _) => {
+            unreachable!("checked binary operations use LLVM overflow intrinsics")
+        }
         _ => unreachable!("preflight rejected unsupported binary operation"),
+    }
+}
+
+fn checked_binary_intrinsic_name(operator: CheckedBinaryOperator, scalar: ScalarType) -> String {
+    let signed = scalar.is_signed_integer();
+    let operation = match (operator, signed) {
+        (CheckedBinaryOperator::Add, true) => "sadd",
+        (CheckedBinaryOperator::Add, false) => "uadd",
+        (CheckedBinaryOperator::Subtract, true) => "ssub",
+        (CheckedBinaryOperator::Subtract, false) => "usub",
+        (CheckedBinaryOperator::Multiply, true) => "smul",
+        (CheckedBinaryOperator::Multiply, false) => "umul",
+    };
+    format!("llvm.{operation}.with.overflow.i{}", llvm_width(scalar))
+}
+
+fn checked_binary_intrinsic_signature(scalar: ScalarType) -> (&'static str, &'static str) {
+    match llvm_width(scalar) {
+        8 => ("{ i8, i1 }", "i8, i8"),
+        16 => ("{ i16, i1 }", "i16, i16"),
+        32 => ("{ i32, i1 }", "i32, i32"),
+        64 => ("{ i64, i1 }", "i64, i64"),
+        128 => ("{ i128, i1 }", "i128, i128"),
+        _ => unreachable!("KIR verification accepted a non-integer checked width"),
     }
 }
 

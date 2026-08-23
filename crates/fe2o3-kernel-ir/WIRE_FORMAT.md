@@ -1,13 +1,15 @@
-# Kernel IR Wire Formats V1 through V5
+# Kernel IR Wire Formats V1 through V6
 
 This document freezes the canonical binary representations produced by
-`encode_module_v1` through `encode_module_v5`. `decode_module_v1` accepts only
+`encode_module_v1` through `encode_module_v6`. `decode_module_v1` accepts only
 V1; each later decoder accepts canonical bytes up to its own version for
 migration safety. Every encoder always emits exactly its named version.
 
 `KERNEL_IR_DOMAIN_V5`, the byte string `FE2O3/KERNEL-IR/V5\0`, is the public
 domain separator for identities derived from canonical V5 module bytes. It is
 not an additional wire prefix; the versioned header remains part of the bytes.
+`KERNEL_IR_DOMAIN_V6` provides the corresponding distinct
+`FE2O3/KERNEL-IR/V6\0` namespace for canonical V6 content.
 
 ### Content and Verified-Policy Identities
 
@@ -72,7 +74,7 @@ The 20-byte header is:
 
 ```text
 byte[8] magic = "FE2O3KI\0"
-u16     version = 1, 2, 3, 4, or 5
+u16     version = 1, 2, 3, 4, 5, or 6
 u16     flags = 0
 u32     total_length_including_header
 u32     reserved = 0
@@ -185,6 +187,29 @@ and `Generic=5`. Access-mode tags are `ReadOnly=1` and `ReadWrite=2`.
 
 `MemoryAccess` is `u8 address_space || u32 alignment || u8 volatile_boolean`.
 
+### V6 Checked Integer Arithmetic
+
+V6 extends the binary-operator tag space without changing the operation
+record. Tags `1` through `10` retain their frozen V1 meanings. The new tags
+are:
+
+| Binary tag | Operator |
+|---:|---|
+| 11 | `Checked(Add)` |
+| 12 | `Checked(Subtract)` |
+| 13 | `Checked(Multiply)` |
+
+A checked binary operation must have two same-typed `I8`/`I16`/`I32`/`I64`/
+`I128`, `U8`/`U16`/`U32`/`U64`/`U128`, or `Index` operands. Its operation
+result vector is exactly `[operand_type, Bool]`, representing the wrapped
+value followed by the overflow flag. Signedness comes only from the operand
+type: `I*` uses signed overflow and `U*`/`Index` uses unsigned overflow. The
+wire record does not duplicate signedness.
+
+V1 through V5 encoders reject checked operators, and their bytes and operator
+tags remain frozen. Decoding establishes only canonical wire structure;
+`verify_module` establishes the operand and result invariants above.
+
 ### V5 Matrix Operations
 
 V5 adds the following fixed-width matrix record. All four-value fragments are
@@ -225,8 +250,8 @@ or hardware authority is introduced by this record.
 
 ### Semantic Memory Instance Identities
 
-Memory intrinsics are not representable in the frozen kernel module wire
-versions V1 through V5. Those encoders reject them. They do have an independent
+Memory intrinsics are not representable in the kernel module wire versions V1
+through V6. Those encoders reject them. They do have an independent
 V1 semantic-instance identity used to bind a closed target-neutral obligation
 payload before a future module wire version can admit them.
 
@@ -337,9 +362,10 @@ and the explicit result `Type`. Intrinsic tag `2` is `LaunchExtent` followed by
 `Workgroup=2`, `Local=3`, `WorkgroupSize=4`, and `WorkgroupCount=5`. Axis tags
 are `X=1`, `Y=2`, and `Z=3`.
 
-Unary tags are `Negate=1` and `Not=2`. Binary tags follow declaration order
-from `Add=1` through `ShiftRight=10`. Compare tags follow declaration order
-from `Equal=1` through `GreaterThanOrEqual=6`. Cast tags follow declaration
+Unary tags are `Negate=1` and `Not=2`. Frozen binary tags follow declaration
+order from `Add=1` through `ShiftRight=10`; V6 checked tags are listed above.
+Compare tags follow declaration order from `Equal=1` through
+`GreaterThanOrEqual=6`. Cast tags follow declaration
 order from `Truncate=1` through `Bitcast=8`.
 
 Constant tags follow declaration order from `Bool=1` through `F64Bits=14`.

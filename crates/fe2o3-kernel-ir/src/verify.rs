@@ -5,13 +5,13 @@ use std::fmt;
 use crate::{
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, AssemblyConstraint, AssemblyEffect,
     AssemblyOperandKind, AssemblyOption, Atomic, AtomicKind, Barrier, BasicBlock, BinaryOp,
-    BlockId, ComparePredicate, ControlFlowError, Fence, FloatOperation, Function, FunctionId,
-    FunctionRole, IndexedControlFlow, InlineAssembly, Kernel, KernelId, LaunchExtent,
-    MatrixOperation, MatrixOperationKind, MatrixVerificationIssueKind, MemoryOrdering, Module,
-    ModuleId, Operation, OperationKind, ScalarType, SemanticOperationIssueKind,
-    SemanticOperationVerificationContext, SynchronizationScope, TargetCapability, Terminator, Type,
-    UnaryOp, ValueId, WaveOperation, WaveOperationKind, WorkgroupBarrier, WorkgroupMemory,
-    WorkgroupMemoryExtent, analyze_control_flow, pointer_for,
+    BlockId, CheckedBinaryOperator, ComparePredicate, ControlFlowError, Fence, FloatOperation,
+    Function, FunctionId, FunctionRole, IndexedControlFlow, InlineAssembly, Kernel, KernelId,
+    LaunchExtent, MatrixOperation, MatrixOperationKind, MatrixVerificationIssueKind,
+    MemoryOrdering, Module, ModuleId, Operation, OperationKind, ScalarType,
+    SemanticOperationIssueKind, SemanticOperationVerificationContext, SynchronizationScope,
+    TargetCapability, Terminator, Type, UnaryOp, ValueId, WaveOperation, WaveOperationKind,
+    WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, analyze_control_flow, pointer_for,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -1481,6 +1481,10 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
         rhs: ValueId,
         location: DiagnosticLocation,
     ) {
+        if let BinaryOp::Checked(operator) = op {
+            self.verify_checked_binary(operation, operator, lhs, rhs, location);
+            return;
+        }
         let (Some(lhs_ty), Some(rhs_ty)) = (self.ty(lhs).cloned(), self.ty(rhs).cloned()) else {
             return;
         };
@@ -1506,6 +1510,31 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
             );
         }
         self.expect_results(operation, &[lhs_ty], location);
+    }
+
+    fn verify_checked_binary(
+        &mut self,
+        operation: &Operation,
+        operator: CheckedBinaryOperator,
+        lhs: ValueId,
+        rhs: ValueId,
+        location: DiagnosticLocation,
+    ) {
+        let (Some(lhs_ty), Some(rhs_ty)) = (self.ty(lhs).cloned(), self.ty(rhs).cloned()) else {
+            return;
+        };
+        let valid = lhs_ty == rhs_ty && lhs_ty.as_scalar().is_some_and(ScalarType::is_integer);
+        if !valid {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidOperandType,
+                format!(
+                    "checked {:?} does not accept {lhs_ty:?} and {rhs_ty:?}",
+                    operator
+                ),
+            );
+        }
+        self.expect_results(operation, &[lhs_ty, Type::BOOL], location);
     }
 
     fn verify_compare(
