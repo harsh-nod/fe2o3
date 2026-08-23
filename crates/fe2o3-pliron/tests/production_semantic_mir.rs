@@ -121,7 +121,7 @@ fn admitted() -> AdmittedInertSemanticMirV1 {
         vec![SemanticFunctionIdV1::from_index(0)],
     )
     .unwrap()
-    .admit(SemanticMirLimitsV1::default())
+    .admit_exact_v3(SemanticMirLimitsV1::default())
     .unwrap()
 }
 
@@ -132,6 +132,10 @@ fn exact_owner_retains_nonzero_entry_duplicate_targets_and_edge_roles() {
             .unwrap();
 
     owner.verify_equivalence().unwrap();
+    assert_eq!(
+        owner.semantic().wire_version(),
+        SemanticMirWireVersionV1::V3
+    );
     assert_eq!(owner.locator().functions().len(), 1);
     let function = &owner.locator().functions()[0];
     assert_eq!(function.entry_block_id(), SemanticBlockIdV1::from_index(1));

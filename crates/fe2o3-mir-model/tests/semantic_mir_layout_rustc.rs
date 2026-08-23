@@ -435,6 +435,10 @@ fn backend_facts_are_canonical_and_collision_separated() {
 
     let encoding = initialized_full.canonical_encoding();
     let magic = b"fe2o3.inert-semantic-mir";
+    assert_eq!(
+        initialized_full.wire_version(),
+        SemanticMirWireVersionV1::V2
+    );
     assert_eq!(&encoding[..magic.len()], magic);
     assert_eq!(
         u16::from_le_bytes([encoding[magic.len()], encoding[magic.len() + 1]]),

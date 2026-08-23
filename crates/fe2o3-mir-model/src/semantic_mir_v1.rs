@@ -24,6 +24,34 @@ const MAGIC: &[u8] = b"fe2o3.inert-semantic-mir";
 pub const INERT_SEMANTIC_MIR_VERSION_V2: u16 = 2;
 pub const INERT_SEMANTIC_MIR_VERSION_V3: u16 = 3;
 
+/// Closed wire schema selected for one admitted semantic MIR value.
+///
+/// Canonicality is relative to one of these schemas. V2 and V3 bytes for the
+/// same semantic model are distinct canonical values and therefore have
+/// distinct semantic identities.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum SemanticMirWireVersionV1 {
+    V2,
+    V3,
+}
+
+impl SemanticMirWireVersionV1 {
+    pub const fn as_u16(self) -> u16 {
+        match self {
+            Self::V2 => INERT_SEMANTIC_MIR_VERSION_V2,
+            Self::V3 => INERT_SEMANTIC_MIR_VERSION_V3,
+        }
+    }
+
+    const fn from_u16(value: u16) -> Option<Self> {
+        match value {
+            INERT_SEMANTIC_MIR_VERSION_V2 => Some(Self::V2),
+            INERT_SEMANTIC_MIR_VERSION_V3 => Some(Self::V3),
+            _ => None,
+        }
+    }
+}
+
 pub const HARD_MAX_TYPES_V1: u64 = 16_384;
 pub const HARD_MAX_FUNCTIONS_V1: u64 = 4_096;
 pub const HARD_MAX_CALLABLES_V1: u64 = 8_192;
@@ -5309,16 +5337,53 @@ impl InertSemanticMirRequestV1 {
         })
     }
 
+    /// Admits under the least wire schema that can represent this request.
+    ///
+    /// This is the compatibility admission path: ordinary models select V2,
+    /// while models containing checked arithmetic select V3. Production code
+    /// that requires uniform V3 custody must use [`Self::admit_exact_v3`].
     pub fn admit(
         self,
         limits: SemanticMirLimitsV1,
     ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_minimal_compatible(limits)
+    }
+
+    /// Precisely named form of [`Self::admit`]: selects the least closed wire
+    /// schema capable of representing the request.
+    pub fn admit_minimal_compatible(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        let wire_version = minimum_wire_version(&self);
+        self.admit_for_wire_version(wire_version, limits)
+    }
+
+    /// Admits under the exact closed V3 wire schema, including for requests
+    /// that could also be represented by V2.
+    ///
+    /// The returned bytes are canonical specifically for V3. This API is the
+    /// production custody boundary; it does not alter automatic [`Self::admit`]
+    /// behavior or V2 encodings.
+    pub fn admit_exact_v3(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V3, limits)
+    }
+
+    fn admit_for_wire_version(
+        self,
+        wire_version: SemanticMirWireVersionV1,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
         validate_request(&self, limits)?;
-        let canonical = encode_request(&self, limits)?;
+        let canonical = encode_request(&self, wire_version, limits)?;
         let semantic_sha256 = InertSemanticMirSha256V1(Sha256::digest(&canonical).into());
         Ok(AdmittedInertSemanticMirV1 {
             request: self,
-            canonical: canonical.into_boxed_slice(),
+            wire_version,
+            canonical,
             semantic_sha256,
         })
     }
@@ -5356,18 +5421,26 @@ impl InertSemanticMirSha256V1 {
 /// };
 /// let _ = AdmittedInertSemanticMirV1 {
 ///     request: panic!(),
-///     canonical: Box::new([]),
+///     wire_version: panic!(),
+///     canonical: Vec::new(),
 ///     semantic_sha256: InertSemanticMirSha256V1([0; 32]),
 /// };
 /// ```
 #[derive(Debug)]
 pub struct AdmittedInertSemanticMirV1 {
     request: InertSemanticMirRequestV1,
-    canonical: Box<[u8]>,
+    wire_version: SemanticMirWireVersionV1,
+    canonical: Vec<u8>,
     semantic_sha256: InertSemanticMirSha256V1,
 }
 
 impl AdmittedInertSemanticMirV1 {
+    /// Returns the exact closed wire schema whose canonical bytes are held by
+    /// this owner.
+    pub const fn wire_version(&self) -> SemanticMirWireVersionV1 {
+        self.wire_version
+    }
+
     pub const fn target_layout_identity(&self) -> SemanticLayoutIdentityV1 {
         self.request.target.identity
     }
@@ -5447,12 +5520,14 @@ impl AdmittedInertSemanticMirV1 {
         }
     }
 
-    /// Returns deterministic V1 bytes. The bytes do not authenticate producers.
+    /// Returns deterministic bytes canonical for exactly [`Self::wire_version`].
+    /// The bytes do not authenticate producers.
     pub fn canonical_encoding(&self) -> &[u8] {
         &self.canonical
     }
 
-    /// Identifies only `canonical_encoding()` under this schema version.
+    /// Identifies the exact bytes returned by [`Self::canonical_encoding`],
+    /// including their retained wire-version field.
     pub const fn semantic_sha256(&self) -> InertSemanticMirSha256V1 {
         self.semantic_sha256
     }
@@ -5547,6 +5622,9 @@ pub enum SemanticMirErrorV1 {
     ArithmeticOverflow {
         resource: SemanticMirResourceV1,
     },
+    AllocationFailed {
+        resource: SemanticMirResourceV1,
+    },
     InvalidSourceOrigin,
     InvalidTypeLayout,
     InvalidFunctionAbi,
@@ -5637,6 +5715,9 @@ impl fmt::Display for SemanticMirErrorV1 {
             } => write!(formatter, "{resource:?} uses {actual}, exceeding {max}"),
             Self::ArithmeticOverflow { resource } => {
                 write!(formatter, "checked accounting overflowed for {resource:?}")
+            }
+            Self::AllocationFailed { resource } => {
+                write!(formatter, "allocation failed while encoding {resource:?}")
             }
             Self::InvalidSourceOrigin => formatter.write_str("source origin is invalid"),
             Self::InvalidTypeLayout => formatter.write_str("type layout is invalid"),
@@ -12994,11 +13075,12 @@ fn enqueue_operand_closure_references(
 
 fn encode_request(
     request: &InertSemanticMirRequestV1,
+    wire_version: SemanticMirWireVersionV1,
     limits: SemanticMirLimitsV1,
 ) -> Result<Vec<u8>, SemanticMirErrorV1> {
     let mut writer = CanonicalWriterV1::new(limits.limit(SemanticMirResourceV1::CanonicalBytes));
     writer.raw(MAGIC)?;
-    writer.u16(required_wire_version(request))?;
+    writer.u16(wire_version.as_u16())?;
     writer.identity(request.target.identity.0)?;
     writer.u8(match request.target.architecture {
         SemanticTargetArchitectureV1::AmdGpuGfx942 => 0,
@@ -13035,7 +13117,7 @@ fn encode_request(
     Ok(writer.finish())
 }
 
-fn required_wire_version(request: &InertSemanticMirRequestV1) -> u16 {
+fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireVersionV1 {
     let uses_checked_arithmetic = request.functions.iter().any(|function| {
         function.blocks.iter().any(|block| {
             block.statements.iter().any(|statement| {
@@ -13053,9 +13135,9 @@ fn required_wire_version(request: &InertSemanticMirRequestV1) -> u16 {
         })
     });
     if uses_checked_arithmetic {
-        INERT_SEMANTIC_MIR_VERSION_V3
+        SemanticMirWireVersionV1::V3
     } else {
-        INERT_SEMANTIC_MIR_VERSION_V2
+        SemanticMirWireVersionV1::V2
     }
 }
 
@@ -13076,7 +13158,7 @@ impl CanonicalWriterV1 {
         self.bytes
     }
 
-    fn reserve(&self, additional: usize) -> Result<(), SemanticMirErrorV1> {
+    fn reserve(&mut self, additional: usize) -> Result<(), SemanticMirErrorV1> {
         let next = u64::try_from(self.bytes.len())
             .map_err(|_| SemanticMirErrorV1::ArithmeticOverflow {
                 resource: SemanticMirResourceV1::CanonicalBytes,
@@ -13096,6 +13178,11 @@ impl CanonicalWriterV1 {
                 max: self.max,
             });
         }
+        self.bytes
+            .try_reserve(additional)
+            .map_err(|_| SemanticMirErrorV1::AllocationFailed {
+                resource: SemanticMirResourceV1::CanonicalBytes,
+            })?;
         Ok(())
     }
 

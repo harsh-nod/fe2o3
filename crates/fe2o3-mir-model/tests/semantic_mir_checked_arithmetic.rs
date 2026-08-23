@@ -1,4 +1,5 @@
 use fe2o3_mir_model::semantic_mir_v1::*;
+use sha2::{Digest, Sha256};
 
 const MAGIC: &[u8] = b"fe2o3.inert-semantic-mir";
 const U32: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
@@ -583,13 +584,24 @@ fn checked_add_sub_mul_round_trip_with_exact_value_overflow_contract() {
             wire_version(original.canonical_encoding()),
             INERT_SEMANTIC_MIR_VERSION_V3
         );
+        assert_eq!(original.wire_version(), SemanticMirWireVersionV1::V3);
         let decoded = AdmittedInertSemanticMirV1::decode_canonical(
+            original.canonical_encoding(),
+            SemanticMirLimitsV1::default(),
+        )
+        .unwrap();
+        let exact_decoded = AdmittedInertSemanticMirV1::decode_exact_v3_canonical(
             original.canonical_encoding(),
             SemanticMirLimitsV1::default(),
         )
         .unwrap();
         assert_eq!(decoded.canonical_encoding(), original.canonical_encoding());
         assert_eq!(decoded.semantic_sha256(), original.semantic_sha256());
+        assert_eq!(
+            exact_decoded.canonical_encoding(),
+            original.canonical_encoding()
+        );
+        assert_eq!(exact_decoded.wire_version(), SemanticMirWireVersionV1::V3);
 
         let SemanticRvalueKindV1::CheckedBinary(checked) = checked_kind(&decoded) else {
             panic!("checked arithmetic was erased during decoding")
@@ -712,6 +724,7 @@ fn legacy_models_remain_v2_and_v3_without_v3_content_is_noncanonical() {
         wire_version(legacy.canonical_encoding()),
         INERT_SEMANTIC_MIR_VERSION_V2
     );
+    assert_eq!(legacy.wire_version(), SemanticMirWireVersionV1::V2);
     let decoded = AdmittedInertSemanticMirV1::decode_canonical(
         legacy.canonical_encoding(),
         SemanticMirLimitsV1::default(),
@@ -727,6 +740,144 @@ fn legacy_models_remain_v2_and_v3_without_v3_content_is_noncanonical() {
             .unwrap_err(),
         SemanticMirDecodeErrorV1::NonCanonical
     );
+}
+
+#[test]
+fn explicit_v3_custody_is_schema_exact_identity_bound_and_hostile_input_safe() {
+    let automatic = request(None, U32, U32, U32_BOOL)
+        .admit_minimal_compatible(SemanticMirLimitsV1::default())
+        .unwrap();
+    let exact_v3 = request(None, U32, U32, U32_BOOL)
+        .admit_exact_v3(SemanticMirLimitsV1::default())
+        .unwrap();
+
+    assert_eq!(automatic.wire_version(), SemanticMirWireVersionV1::V2);
+    assert_eq!(exact_v3.wire_version(), SemanticMirWireVersionV1::V3);
+    assert_eq!(
+        automatic.canonical_encoding().len(),
+        exact_v3.canonical_encoding().len()
+    );
+    let differing: Vec<_> = automatic
+        .canonical_encoding()
+        .iter()
+        .zip(exact_v3.canonical_encoding())
+        .enumerate()
+        .filter_map(|(index, (left, right))| (left != right).then_some(index))
+        .collect();
+    assert_eq!(
+        differing,
+        [MAGIC.len()],
+        "the closed V3 schema changes only the little-endian version field for this V2-compatible model"
+    );
+    assert_ne!(automatic.semantic_sha256(), exact_v3.semantic_sha256());
+    assert_eq!(
+        exact_v3.semantic_sha256().as_bytes(),
+        &<[u8; 32]>::from(Sha256::digest(exact_v3.canonical_encoding())),
+        "semantic identity must hash the exact V3 bytes"
+    );
+
+    let decoded = AdmittedInertSemanticMirV1::decode_exact_v3_canonical(
+        exact_v3.canonical_encoding(),
+        SemanticMirLimitsV1::default(),
+    )
+    .unwrap();
+    assert_eq!(decoded.wire_version(), SemanticMirWireVersionV1::V3);
+    assert_eq!(decoded.canonical_encoding(), exact_v3.canonical_encoding());
+    assert_eq!(decoded.semantic_sha256(), exact_v3.semantic_sha256());
+
+    assert_eq!(
+        AdmittedInertSemanticMirV1::decode_minimal_compatible_canonical(
+            exact_v3.canonical_encoding(),
+            SemanticMirLimitsV1::default(),
+        )
+        .unwrap_err(),
+        SemanticMirDecodeErrorV1::NonCanonical,
+        "minimal-compatible decoding must not make ordinary V3 automatic"
+    );
+    assert_eq!(
+        AdmittedInertSemanticMirV1::decode_exact_v3_canonical(
+            automatic.canonical_encoding(),
+            SemanticMirLimitsV1::default(),
+        )
+        .unwrap_err(),
+        SemanticMirDecodeErrorV1::WireVersionMismatch {
+            expected: SemanticMirWireVersionV1::V3,
+            actual: SemanticMirWireVersionV1::V2,
+        },
+        "exact V3 decoding must inspect the wire field instead of relabeling V2 bytes"
+    );
+
+    for end in 0..exact_v3.canonical_encoding().len() {
+        assert!(
+            AdmittedInertSemanticMirV1::decode_exact_v3_canonical(
+                &exact_v3.canonical_encoding()[..end],
+                SemanticMirLimitsV1::default(),
+            )
+            .is_err(),
+            "exact V3 decoder accepted truncation at byte {end}"
+        );
+    }
+
+    let mut trailing = exact_v3.canonical_encoding().to_vec();
+    trailing.push(0);
+    assert!(matches!(
+        AdmittedInertSemanticMirV1::decode_exact_v3_canonical(
+            &trailing,
+            SemanticMirLimitsV1::default(),
+        ),
+        Err(SemanticMirDecodeErrorV1::TrailingBytes { trailing: 1, .. })
+    ));
+
+    for byte in 0..exact_v3.canonical_encoding().len() {
+        for bit in 0..8 {
+            let mut mutation = exact_v3.canonical_encoding().to_vec();
+            mutation[byte] ^= 1 << bit;
+            let result = std::panic::catch_unwind(|| {
+                AdmittedInertSemanticMirV1::decode_exact_v3_canonical(
+                    &mutation,
+                    SemanticMirLimitsV1::default(),
+                )
+            });
+            let result = result
+                .unwrap_or_else(|_| panic!("exact V3 decoder panicked at byte {byte}, bit {bit}"));
+            if let Ok(decoded) = result {
+                assert_eq!(decoded.wire_version(), SemanticMirWireVersionV1::V3);
+                assert_eq!(decoded.canonical_encoding(), mutation);
+            }
+        }
+    }
+
+    let byte_limit = u64::try_from(exact_v3.canonical_encoding().len() - 1).unwrap();
+    let byte_limited = SemanticMirLimitsV1::default()
+        .with_limit(SemanticMirResourceV1::CanonicalBytes, byte_limit)
+        .unwrap();
+    assert_eq!(
+        AdmittedInertSemanticMirV1::decode_exact_v3_canonical(
+            exact_v3.canonical_encoding(),
+            byte_limited,
+        )
+        .unwrap_err(),
+        SemanticMirDecodeErrorV1::InputLimitExceeded {
+            actual: u64::try_from(exact_v3.canonical_encoding().len()).unwrap(),
+            max: byte_limit,
+        }
+    );
+
+    let no_functions = SemanticMirLimitsV1::default()
+        .with_limit(SemanticMirResourceV1::Functions, 0)
+        .unwrap();
+    assert!(matches!(
+        AdmittedInertSemanticMirV1::decode_exact_v3_canonical(
+            exact_v3.canonical_encoding(),
+            no_functions,
+        ),
+        Err(SemanticMirDecodeErrorV1::Validation(
+            SemanticMirErrorV1::LimitExceeded {
+                resource: SemanticMirResourceV1::Functions,
+                ..
+            }
+        ))
+    ));
 }
 
 #[test]

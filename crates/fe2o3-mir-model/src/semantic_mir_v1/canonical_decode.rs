@@ -19,6 +19,10 @@ pub enum SemanticMirDecodeErrorV1 {
     },
     InvalidMagic,
     UnsupportedVersion(u16),
+    WireVersionMismatch {
+        expected: SemanticMirWireVersionV1,
+        actual: SemanticMirWireVersionV1,
+    },
     InvalidBoolean {
         offset: usize,
         value: u8,
@@ -59,6 +63,10 @@ impl fmt::Display for SemanticMirDecodeErrorV1 {
             Self::UnsupportedVersion(version) => {
                 write!(formatter, "unsupported semantic MIR version {version}")
             }
+            Self::WireVersionMismatch { expected, actual } => write!(
+                formatter,
+                "semantic MIR wire version {actual:?} does not match required {expected:?}"
+            ),
             Self::InvalidBoolean { offset, value } => {
                 write!(
                     formatter,
@@ -108,19 +116,49 @@ impl From<SemanticMirErrorV1> for SemanticMirDecodeErrorV1 {
 }
 
 impl AdmittedInertSemanticMirV1 {
-    /// Decodes only the exact bounded canonical representation.
+    /// Decodes the exact bounded minimal-compatible canonical representation.
     ///
     /// Declared resource counts are checked before their records are read, the
-    /// existing semantic admission validator is run, and its canonical output
-    /// must exactly equal `bytes`. The returned value remains inert and grants
-    /// no authority. Parser-owned vector reservations are fallible. Parsing
-    /// and exact reencoding are linear in the independently bounded canonical
-    /// byte stream and structural resources; `ValidationWork` applies only to
-    /// the semantic admission traversal and is not presented as a combined
-    /// parser/validator/encoder instruction budget.
+    /// automatic compatibility admission validator is run, and its canonical
+    /// output must exactly equal `bytes`. Ordinary V3 envelopes without V3-only
+    /// content remain noncanonical through this compatibility API. Use
+    /// [`Self::decode_exact_v3_canonical`] when V3 is the selected custody
+    /// schema. The returned value remains inert and grants no authority.
     pub fn decode_canonical(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_minimal_compatible_canonical(bytes, limits)
+    }
+
+    /// Precisely named form of [`Self::decode_canonical`]: accepts only the
+    /// canonical encoding selected by minimal-compatible admission.
+    pub fn decode_minimal_compatible_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_for_schema(bytes, limits, None)
+    }
+
+    /// Decodes bytes that are canonical specifically under the closed V3 wire
+    /// schema, including ordinary models with no V3-only rvalue.
+    ///
+    /// The declared wire field must itself be V3; V2 bytes cannot be relabeled
+    /// by the caller. Parser-owned vector reservations are fallible. Parsing
+    /// and exact reencoding are linear in independently bounded canonical bytes
+    /// and structural resources; `ValidationWork` retains its existing scope
+    /// over semantic admission traversal only.
+    pub fn decode_exact_v3_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_for_schema(bytes, limits, Some(SemanticMirWireVersionV1::V3))
+    }
+
+    fn decode_for_schema(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+        expected_wire_version: Option<SemanticMirWireVersionV1>,
     ) -> Result<Self, SemanticMirDecodeErrorV1> {
         let actual = u64::try_from(bytes.len())
             .map_err(|_| SemanticMirDecodeErrorV1::LengthOverflow { context: "input" })?;
@@ -129,10 +167,15 @@ impl AdmittedInertSemanticMirV1 {
             return Err(SemanticMirDecodeErrorV1::InputLimitExceeded { actual, max });
         }
 
-        let mut decoder = CanonicalDecoderV1::new(bytes, limits);
+        let mut decoder =
+            CanonicalDecoderV1::with_expected_wire_version(bytes, limits, expected_wire_version);
         let request = decoder.request()?;
         decoder.finish()?;
-        let admitted = request.admit(limits)?;
+        let admitted = match expected_wire_version {
+            Some(SemanticMirWireVersionV1::V3) => request.admit_exact_v3(limits)?,
+            Some(SemanticMirWireVersionV1::V2) => unreachable!("no exact V2 public decoder"),
+            None => request.admit(limits)?,
+        };
         if admitted.canonical_encoding() != bytes {
             return Err(SemanticMirDecodeErrorV1::NonCanonical);
         }
@@ -157,17 +200,28 @@ struct DecodeTotalsV1 {
 struct CanonicalDecoderV1<'a> {
     bytes: &'a [u8],
     offset: usize,
-    wire_version: u16,
+    wire_version: SemanticMirWireVersionV1,
+    expected_wire_version: Option<SemanticMirWireVersionV1>,
     limits: SemanticMirLimitsV1,
     totals: DecodeTotalsV1,
 }
 
 impl<'a> CanonicalDecoderV1<'a> {
+    #[cfg(test)]
     fn new(bytes: &'a [u8], limits: SemanticMirLimitsV1) -> Self {
+        Self::with_expected_wire_version(bytes, limits, None)
+    }
+
+    fn with_expected_wire_version(
+        bytes: &'a [u8],
+        limits: SemanticMirLimitsV1,
+        expected_wire_version: Option<SemanticMirWireVersionV1>,
+    ) -> Self {
         Self {
             bytes,
             offset: 0,
-            wire_version: INERT_SEMANTIC_MIR_VERSION_V3,
+            wire_version: SemanticMirWireVersionV1::V3,
+            expected_wire_version,
             limits,
             totals: DecodeTotalsV1::default(),
         }
@@ -177,12 +231,16 @@ impl<'a> CanonicalDecoderV1<'a> {
         if self.raw(MAGIC.len())? != MAGIC {
             return Err(SemanticMirDecodeErrorV1::InvalidMagic);
         }
-        let version = self.u16()?;
-        if !matches!(
-            version,
-            INERT_SEMANTIC_MIR_VERSION_V2 | INERT_SEMANTIC_MIR_VERSION_V3
-        ) {
-            return Err(SemanticMirDecodeErrorV1::UnsupportedVersion(version));
+        let raw_version = self.u16()?;
+        let version = SemanticMirWireVersionV1::from_u16(raw_version)
+            .ok_or(SemanticMirDecodeErrorV1::UnsupportedVersion(raw_version))?;
+        if let Some(expected) = self.expected_wire_version
+            && version != expected
+        {
+            return Err(SemanticMirDecodeErrorV1::WireVersionMismatch {
+                expected,
+                actual: version,
+            });
         }
         self.wire_version = version;
         let layout_identity = SemanticLayoutIdentityV1(self.identity()?);
@@ -1643,7 +1701,7 @@ impl<'a> CanonicalDecoderV1<'a> {
 
     fn rvalue(&mut self) -> Result<SemanticRvalueV1, SemanticMirDecodeErrorV1> {
         let result_type = SemanticTypeIdV1(self.u32()?);
-        let maximum_tag = if self.wire_version >= INERT_SEMANTIC_MIR_VERSION_V3 {
+        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V3 {
             10
         } else {
             9
