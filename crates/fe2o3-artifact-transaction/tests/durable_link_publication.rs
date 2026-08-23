@@ -1,6 +1,7 @@
 use fe2o3_artifact_transaction::{
     AtomicPublicationIdentityV1, BuildAttempt, CanonicalLinkRequestIdentityV1,
-    DurableArtifactBoundaryV1, DurableFaultTimingV1, DurableJournalBoundaryV1,
+    DurableArtifactBoundaryV1, DurableCurrentLinkPublicationLeaseV1,
+    DurableCurrentLinkPublicationTokenV1, DurableFaultTimingV1, DurableJournalBoundaryV1,
     DurableJournalStageV1, DurableLinkPublicationError, DurableLinkPublicationFaultPointV1,
     DurableLinkPublicationOptionsV1, DurableLinkPublicationOutcomeV1, DurableLinkPublicationPlanV1,
     FinalizationIdentityV1, FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationPhaseV1,
@@ -160,6 +161,21 @@ fn wait_for_path(path: &Path, timeout: Duration) {
     while !path.exists() {
         assert!(Instant::now() < deadline, "timed out waiting for {path:?}");
         thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn acquire_current_token_after_fork_handoff(
+    lease: &DurableCurrentLinkPublicationLeaseV1,
+) -> DurableCurrentLinkPublicationTokenV1 {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match lease.acquire_current_token() {
+            Ok(token) => return token,
+            Err(DurableLinkPublicationError::Busy) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => panic!("uncontended current-token acquisition failed: {error}"),
+        }
     }
 }
 
@@ -1116,7 +1132,7 @@ fn current_lease_retains_exact_descriptor_snapshot_and_revalidates_under_lock() 
     assert!(!lease.grants_load_authority());
     assert!(!lease.grants_launch_authority());
 
-    let token = lease.acquire_current_token().unwrap();
+    let token = acquire_current_token_after_fork_handoff(&lease);
     assert_eq!(token.exact_artifact_bytes(), bytes);
     assert!(!token.grants_load_authority());
     assert!(!token.grants_launch_authority());
@@ -1133,7 +1149,7 @@ fn recursive_current_token_child() {
     let lease = publish(&output, plan(1, 0x7c, 0xdc, bytes), bytes)
         .unwrap()
         .into_current_lease();
-    let _current = lease.acquire_current_token().unwrap();
+    let _current = acquire_current_token_after_fork_handoff(&lease);
     assert!(matches!(
         lease.acquire_current_token(),
         Err(DurableLinkPublicationError::Busy)
@@ -1163,7 +1179,7 @@ fn thread_current_token_contention_returns_busy() {
             .unwrap()
             .into_current_lease(),
     );
-    let current = lease.acquire_current_token().unwrap();
+    let current = acquire_current_token_after_fork_handoff(&lease);
     let contender = Arc::clone(&lease);
     let (result_tx, result_rx) = mpsc::channel();
     let handle = thread::spawn(move || {
@@ -1177,7 +1193,7 @@ fn thread_current_token_contention_returns_busy() {
     assert!(result_rx.recv_timeout(Duration::from_secs(2)).unwrap());
     handle.join().unwrap();
     drop(current);
-    assert!(lease.acquire_current_token().is_ok());
+    drop(acquire_current_token_after_fork_handoff(&lease));
 }
 
 #[test]
@@ -1199,7 +1215,7 @@ fn current_token_is_bound_to_exact_lease() {
     )
     .unwrap()
     .into_current_lease();
-    let current = first_lease.acquire_current_token().unwrap();
+    let current = acquire_current_token_after_fork_handoff(&first_lease);
     assert!(matches!(
         second_lease.validate_current_token(&current),
         Err(DurableLinkPublicationError::CurrentPublication { .. })
@@ -1246,11 +1262,11 @@ fn process_current_token_contention_returns_busy() {
         .spawn()
         .unwrap();
     wait_for_path(&ready, Duration::from_secs(5));
-    let current = lease.acquire_current_token().unwrap();
+    let current = acquire_current_token_after_fork_handoff(&lease);
     fs::write(&go, b"go").unwrap();
     assert!(wait_for_child(child, Duration::from_secs(5)).success());
     drop(current);
-    assert!(lease.acquire_current_token().is_ok());
+    drop(acquire_current_token_after_fork_handoff(&lease));
 }
 
 #[test]
@@ -1307,7 +1323,7 @@ fn current_token_serializes_future_cooperating_publication() {
     let lease = publish(&output, old_plan, old_bytes)
         .unwrap()
         .into_current_lease();
-    let token = lease.acquire_current_token().unwrap();
+    let token = acquire_current_token_after_fork_handoff(&lease);
     let next_bytes = b"blocked next payload";
     let next = plan(2, 0x78, 0xe8, next_bytes);
     let (entered_tx, entered_rx) = mpsc::channel();
