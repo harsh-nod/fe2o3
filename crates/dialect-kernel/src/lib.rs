@@ -35,12 +35,13 @@ mod tensor_layout;
 
 pub use ranked_memory::{
     AccessKindAttr, AllocationOriginAttr, AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr,
-    BranchArgsOp, BranchOp, CheckedTiledIndex2DOp, DYNAMIC_EXTENT, DimensionAttr, DimensionOp,
-    IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexLessThanBranchArgsOp,
-    IndexLessThanBranchOp, IndexType, IndexValueAttr, InvocationDimensionAttr, InvocationIndexOp,
-    LaunchExtentAttr, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, NoAliasClassAttr, RankedAccessOp,
-    RankedMemoryError, RankedViewOp, RankedViewType, ReturnOp, SUPPORTED_ELEMENT_WIDTHS,
-    is_index_type, ranked_view_type,
+    BranchArgsOp, BranchOp, CheckedTiledIndex2DOp, DYNAMIC_EXTENT, DeterministicJoinOp,
+    DimensionAttr, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
+    IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
+    IndexType, IndexValueAttr, InvocationDimensionAttr, InvocationIndexOp, LaunchExtentAttr,
+    MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, NoAliasClassAttr,
+    RankedAccessOp, RankedMemoryError, RankedViewOp, RankedViewType, ReturnOp,
+    SUPPORTED_ELEMENT_WIDTHS, is_index_type, ranked_view_type,
 };
 pub use semantic_contract::{
     RequireEquivalentOp, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr,
@@ -394,12 +395,17 @@ pub fn register_dialect(
     IndexConstantOp::register(context);
     InvocationIndexOp::register(context);
     IndexBinaryOp::register(context);
+    DeterministicJoinOp::register(context);
     CheckedTiledIndex2DOp::register(context);
     DimensionOp::register(context);
     RankedAccessOp::register(context);
     IndexLessThanBranchOp::register(context);
+    IndexLessThanBranchArgsOp::register(context);
+    IndexEqualBranchOp::register(context);
+    IndexEqualBranchArgsOp::register(context);
     AnalysisSplitOp::register(context);
     BranchOp::register(context);
+    BranchArgsOp::register(context);
     ReturnOp::register(context);
     SemanticSymbolOp::register(context);
     SemanticConstantOp::register(context);

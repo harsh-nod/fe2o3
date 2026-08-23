@@ -22,6 +22,9 @@ use pliron::{
 /// Maximum rank admitted by target-neutral ranked memory operations.
 pub const MAX_RANKED_MEMORY_RANK: usize = 8;
 
+/// Maximum explicit dependency count admitted by one deterministic summary.
+pub const MAX_DETERMINISTIC_JOIN_INPUTS_V1: usize = 64;
+
 /// A zero extent in [`RankedViewType`] denotes a runtime dimension.
 pub const DYNAMIC_EXTENT: u64 = 0;
 
@@ -661,6 +664,70 @@ impl Verify for IndexBinaryOp {
     }
 }
 
+/// Abstract result of a total deterministic computation over explicit inputs.
+///
+/// This operation records dependency only. It carries no source identity,
+/// uniformity declaration, compiler refinement, artifact, or launch authority.
+#[pliron_op(
+    name = "kernel.deterministic_join",
+    format,
+    interfaces = [NResultsInterface<1>, NRegionsInterface<0>]
+)]
+pub struct DeterministicJoinOp;
+
+impl DeterministicJoinOp {
+    pub fn new(context: &mut Context, dependencies: Vec<Value>) -> Self {
+        Self::from_operation(Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![IndexType::get(context).into()],
+            dependencies,
+            vec![],
+            0,
+        ))
+    }
+
+    pub fn dependencies(&self, context: &Context) -> Vec<Value> {
+        self.get_operation().deref(context).operands().collect()
+    }
+
+    pub fn result(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_result(0)
+    }
+
+    pub const fn grants_compiler_refinement_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_artifact_or_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+impl Verify for DeterministicJoinOp {
+    fn verify(&self, context: &Context) -> PlironResult<()> {
+        verify_no_regions_results_successors(self, context, 1, 0)?;
+        let operation = self.get_operation();
+        let operation = operation.deref(context);
+        let count = operation.get_num_operands();
+        if !(1..=MAX_DETERMINISTIC_JOIN_INPUTS_V1).contains(&count)
+            || payload_attribute_count(&operation) != 0
+            || !is_index_type(self.result(context), context)
+        {
+            return verify_err!(
+                self.loc(context),
+                RankedMemoryError::MalformedPayload(
+                    "kernel.deterministic_join has malformed or unbounded dependencies",
+                )
+            );
+        }
+        for operand in 0..count {
+            require_index_operand(self, context, operand)?;
+        }
+        Ok(())
+    }
+}
+
 /// Checked row-major index mapping for a dynamically sized grid of static tiles.
 ///
 /// Operands are invocation, component, rows, columns, and row stride. The
@@ -1173,6 +1240,184 @@ impl Verify for IndexLessThanBranchArgsOp {
                     self.loc(context),
                     RankedMemoryError::MalformedPayload(
                         "kernel.index_lt_br_args false-edge types differ",
+                    )
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Conditional branch whose first successor is selected exactly when `lhs == rhs`.
+#[pliron_op(
+    name = "kernel.index_eq_br",
+    format,
+    interfaces = [IsTerminatorInterface, NResultsInterface<0>, NRegionsInterface<0>]
+)]
+pub struct IndexEqualBranchOp;
+
+impl IndexEqualBranchOp {
+    pub fn new(
+        context: &mut Context,
+        lhs: Value,
+        rhs: Value,
+        true_successor: Ptr<pliron::basic_block::BasicBlock>,
+        false_successor: Ptr<pliron::basic_block::BasicBlock>,
+    ) -> Self {
+        Self::from_operation(Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![],
+            vec![lhs, rhs],
+            vec![true_successor, false_successor],
+            0,
+        ))
+    }
+
+    pub fn lhs(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_operand(0)
+    }
+
+    pub fn rhs(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_operand(1)
+    }
+}
+
+impl Verify for IndexEqualBranchOp {
+    fn verify(&self, context: &Context) -> PlironResult<()> {
+        verify_no_regions_results_successors(self, context, 0, 2)?;
+        if self.get_operation().deref(context).get_num_operands() != 2 {
+            return verify_err!(
+                self.loc(context),
+                RankedMemoryError::OperandCountMismatch {
+                    expected: 2,
+                    actual: self.get_operation().deref(context).get_num_operands(),
+                }
+            );
+        }
+        require_index_operand(self, context, 0)?;
+        require_index_operand(self, context, 1)?;
+        require_zero_successor_arguments(self, context)
+    }
+}
+
+/// Equality branch carrying exact SSA values to both successors.
+#[pliron_op(
+    name = "kernel.index_eq_br_args",
+    format,
+    interfaces = [IsTerminatorInterface, NResultsInterface<0>, NRegionsInterface<0>]
+)]
+pub struct IndexEqualBranchArgsOp;
+
+impl IndexEqualBranchArgsOp {
+    pub fn new(
+        context: &mut Context,
+        lhs: Value,
+        rhs: Value,
+        true_arguments: Vec<Value>,
+        false_arguments: Vec<Value>,
+        true_successor: Ptr<pliron::basic_block::BasicBlock>,
+        false_successor: Ptr<pliron::basic_block::BasicBlock>,
+    ) -> Self {
+        let mut operands = Vec::with_capacity(2 + true_arguments.len() + false_arguments.len());
+        operands.push(lhs);
+        operands.push(rhs);
+        operands.extend(true_arguments);
+        operands.extend(false_arguments);
+        Self::from_operation(Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![],
+            operands,
+            vec![true_successor, false_successor],
+            0,
+        ))
+    }
+
+    pub fn lhs(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_operand(0)
+    }
+
+    pub fn rhs(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_operand(1)
+    }
+
+    pub fn true_arguments(&self, context: &Context) -> Vec<Value> {
+        let operation = self.get_operation();
+        let operation = operation.deref(context);
+        let count = operation
+            .get_successor(0)
+            .deref(context)
+            .get_num_arguments();
+        (0..count)
+            .map(|index| operation.get_operand(2 + index))
+            .collect()
+    }
+
+    pub fn false_arguments(&self, context: &Context) -> Vec<Value> {
+        let operation = self.get_operation();
+        let operation = operation.deref(context);
+        let true_count = operation
+            .get_successor(0)
+            .deref(context)
+            .get_num_arguments();
+        let false_count = operation
+            .get_successor(1)
+            .deref(context)
+            .get_num_arguments();
+        (0..false_count)
+            .map(|index| operation.get_operand(2 + true_count + index))
+            .collect()
+    }
+}
+
+impl Verify for IndexEqualBranchArgsOp {
+    fn verify(&self, context: &Context) -> PlironResult<()> {
+        verify_no_regions_results_successors(self, context, 0, 2)?;
+        let operation = self.get_operation();
+        let operation = operation.deref(context);
+        let true_successor = operation.get_successor(0);
+        let false_successor = operation.get_successor(1);
+        let true_count = true_successor.deref(context).get_num_arguments();
+        let false_count = false_successor.deref(context).get_num_arguments();
+        let expected = 2 + true_count + false_count;
+        let actual = operation.get_num_operands();
+        if actual != expected {
+            return verify_err!(
+                self.loc(context),
+                RankedMemoryError::OperandCountMismatch { expected, actual }
+            );
+        }
+        require_index_operand(self, context, 0)?;
+        require_index_operand(self, context, 1)?;
+        for index in 0..true_count {
+            if operation.get_operand(2 + index).get_type(context)
+                != true_successor
+                    .deref(context)
+                    .get_argument(index)
+                    .get_type(context)
+            {
+                return verify_err!(
+                    self.loc(context),
+                    RankedMemoryError::MalformedPayload(
+                        "kernel.index_eq_br_args true-edge types differ",
+                    )
+                );
+            }
+        }
+        for index in 0..false_count {
+            if operation
+                .get_operand(2 + true_count + index)
+                .get_type(context)
+                != false_successor
+                    .deref(context)
+                    .get_argument(index)
+                    .get_type(context)
+            {
+                return verify_err!(
+                    self.loc(context),
+                    RankedMemoryError::MalformedPayload(
+                        "kernel.index_eq_br_args false-edge types differ",
                     )
                 );
             }

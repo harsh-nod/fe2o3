@@ -1,11 +1,12 @@
 use dialect_kernel::{
     AccessKindAttr, AlgorithmOp, AlgorithmType, AtomicOrderingAttr, AtomicScopeAttr, BranchArgsOp,
-    BranchOp, CheckedTiledIndex2DOp, DIALECT_NAME, DYNAMIC_EXTENT, DimensionAttr, DimensionOp,
-    ITERATION_DOMAIN_ATTR_KEY, IndexConstantOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
-    IndexType, IndexValueAttr, IterationDomainAttr, KernelError, MAX_ITERATION_RANK,
-    MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp, RankedMemoryError, RankedViewOp,
-    RankedViewType, RegistrationError, RegistrationOutcome, SemanticOwner, StructuredAlgorithmOp,
-    TensorConvergenceAttr, TensorLayoutOp, register_dialect,
+    BranchOp, CheckedTiledIndex2DOp, DIALECT_NAME, DYNAMIC_EXTENT, DeterministicJoinOp,
+    DimensionAttr, DimensionOp, ITERATION_DOMAIN_ATTR_KEY, IndexConstantOp, IndexEqualBranchArgsOp,
+    IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexType,
+    IndexValueAttr, IterationDomainAttr, KernelError, MAX_DETERMINISTIC_JOIN_INPUTS_V1,
+    MAX_ITERATION_RANK, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp, RankedMemoryError,
+    RankedViewOp, RankedViewType, RegistrationError, RegistrationOutcome, SemanticOwner,
+    StructuredAlgorithmOp, TensorConvergenceAttr, TensorLayoutOp, register_dialect,
 };
 use fe2o3_kernel_ir::{TensorInstructionProfileV1, TensorLayoutContractV1, TensorSymbolicMapV1};
 use pliron::{
@@ -72,6 +73,58 @@ fn branches_require_exact_successor_arguments() {
         )
         .is_err()
     );
+    assert!(
+        verify_op(
+            &IndexEqualBranchOp::new(
+                context,
+                zero.result(context),
+                one.result(context),
+                argument_target,
+                empty_target,
+            ),
+            context,
+        )
+        .is_err()
+    );
+    assert!(
+        verify_op(
+            &IndexEqualBranchArgsOp::new(
+                context,
+                zero.result(context),
+                one.result(context),
+                vec![],
+                vec![],
+                argument_target,
+                empty_target,
+            ),
+            context,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn deterministic_join_is_bounded_and_carries_no_authority() {
+    let context = &mut Context::new();
+    register_dialect(context, &kernel_name()).unwrap();
+    let dependency = IndexConstantOp::new(context, 7);
+    let join = DeterministicJoinOp::new(context, vec![dependency.result(context)]);
+    verify_op(&join, context).expect("one exact index dependency");
+    assert!(!join.grants_compiler_refinement_authority());
+    assert!(!join.grants_artifact_or_launch_authority());
+
+    let empty = DeterministicJoinOp::new(context, vec![]);
+    assert!(verify_op(&empty, context).is_err());
+    let oversized = DeterministicJoinOp::new(
+        context,
+        vec![dependency.result(context); MAX_DETERMINISTIC_JOIN_INPUTS_V1 + 1],
+    );
+    assert!(verify_op(&oversized, context).is_err());
+
+    let foreign = AlgorithmOp::new(context, 1).unwrap();
+    let foreign_result = foreign.get_operation().deref(context).get_result(0);
+    let malformed = DeterministicJoinOp::new(context, vec![foreign_result]);
+    assert!(verify_op(&malformed, context).is_err());
 }
 
 fn kernel_name() -> DialectName {
