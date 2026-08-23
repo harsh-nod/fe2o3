@@ -1227,6 +1227,7 @@ fn expand_general_typed_kernel_with_imports(
     let generated_host_contract =
         GeneratedHostContractIdV3::from_bytes(*model.generated_host_contract_identity.as_bytes());
     let generated_host_arguments = generated_general_typed_arguments_v1(&input, &model.arguments);
+    let generated_worker_v3_adapter = generated_worker_v3_adapter_v1(&input, &model);
     let generated_alpha_zeta_cov6_adapter = generated_alpha_zeta_cov6_adapter_v1(
         &input,
         &model,
@@ -1376,6 +1377,7 @@ fn expand_general_typed_kernel_with_imports(
             pub type Marker = super::#type_marker_ident;
 
             #generated_host_arguments
+            #generated_worker_v3_adapter
             #generated_alpha_zeta_cov6_adapter
             #generated_scalar_gemm_v1_adapter
 
@@ -1947,6 +1949,289 @@ fn generated_general_typed_arguments_v1(
                 }
             }
         }
+    }
+}
+
+fn generated_worker_v3_adapter_v1(
+    input: &ItemFn,
+    model: &GeneralTypedSignatureModelV1,
+) -> proc_macro2::TokenStream {
+    if model.arguments.iter().any(|argument| {
+        matches!(
+            argument,
+            GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)
+                | GeneralTypedArgumentKindV1::GlobalMutPointer(_)
+        )
+    }) {
+        // Descriptor V1 does not preserve mapped index-space identities or global pointers.
+        return quote! {};
+    }
+
+    let fields = input
+        .sig
+        .inputs
+        .iter()
+        .map(|argument| match argument {
+            FnArg::Typed(argument) => match argument.pat.as_ref() {
+                Pat::Ident(pattern) => pattern.ident.clone(),
+                _ => unreachable!("general typed argument validation requires identifier patterns"),
+            },
+            FnArg::Receiver(_) => {
+                unreachable!("general typed argument validation rejects receivers")
+            }
+        })
+        .collect::<Vec<_>>();
+    let scalar_inputs = model
+        .arguments
+        .iter()
+        .zip(&fields)
+        .enumerate()
+        .filter(|(_, (argument, _))| matches!(argument, GeneralTypedArgumentKindV1::Scalar(_)))
+        .map(|(index, (_, field))| quote!(plan.scalar(#index, self.#field)?))
+        .collect::<Vec<_>>();
+    let memory_arguments = model
+        .arguments
+        .iter()
+        .zip(&fields)
+        .enumerate()
+        .filter(|(_, (argument, _))| {
+            matches!(
+                argument,
+                GeneralTypedArgumentKindV1::SharedSlice(_)
+                    | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
+            )
+        })
+        .map(|(index, (_, field))| quote!(self.#field.bind_argument_pair(plan, #index)?))
+        .collect::<Vec<_>>();
+    let layout = generated_worker_v3_layout_v1(model);
+    let retains_borrows = model.arguments.iter().any(|argument| {
+        matches!(
+            argument,
+            GeneralTypedArgumentKindV1::SharedSlice(_)
+                | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
+        )
+    });
+    let arguments_type = if retains_borrows {
+        quote!(Arguments<'allocation>)
+    } else {
+        quote!(Arguments)
+    };
+    let prepare_impl = if retains_borrows {
+        quote! {
+            impl<'allocation> Arguments<'allocation> {
+                /// Prepares this exact verified Worker V3 invocation for one-shot dispatch.
+                #[allow(clippy::type_complexity)]
+                pub fn prepare_worker_v3<'loaded, A>(
+                    self,
+                    executable: &'loaded mut __fe2o3_kernel_host::LoadedWorkerV3HsaExecutableV1<Marker, A>,
+                    observed: &__fe2o3_kernel_host::ObservedContext,
+                    geometry: __fe2o3_kernel_host::HsaLaunchGeometryV1,
+                ) -> Result<
+                    __fe2o3_kernel_host::__generated::GeneratedWorkerV3PreparedInvocationV1<
+                        'loaded,
+                        'allocation,
+                        Marker,
+                        A,
+                        Self,
+                    >,
+                    __fe2o3_kernel_host::__generated::GeneratedWorkerV3PrepareErrorV1,
+                >
+                where
+                    A: __fe2o3_kernel_host::ReviewedHsaImplicitKernargAdapterV1,
+                {
+                    executable.prepare_generated_worker_v3_v1(observed, geometry, self)
+                }
+            }
+        }
+    } else {
+        quote! {
+            impl Arguments {
+                /// Prepares this exact verified Worker V3 invocation for one-shot dispatch.
+                #[allow(clippy::type_complexity)]
+                pub fn prepare_worker_v3<'loaded, A>(
+                    self,
+                    executable: &'loaded mut __fe2o3_kernel_host::LoadedWorkerV3HsaExecutableV1<Marker, A>,
+                    observed: &__fe2o3_kernel_host::ObservedContext,
+                    geometry: __fe2o3_kernel_host::HsaLaunchGeometryV1,
+                ) -> Result<
+                    __fe2o3_kernel_host::__generated::GeneratedWorkerV3PreparedInvocationV1<
+                        'loaded,
+                        'static,
+                        Marker,
+                        A,
+                        Self,
+                    >,
+                    __fe2o3_kernel_host::__generated::GeneratedWorkerV3PrepareErrorV1,
+                >
+                where
+                    A: __fe2o3_kernel_host::ReviewedHsaImplicitKernargAdapterV1,
+                {
+                    executable.prepare_generated_worker_v3_v1(observed, geometry, self)
+                }
+            }
+        }
+    };
+    quote! {
+        // SAFETY: the implementation is generated from the same parsed signature, canonical ABI,
+        // and marker as the compiler-visible V3 registration. Memory inputs and access records are
+        // emitted together by retained, non-forgeable capabilities.
+        unsafe impl<'allocation>
+            __fe2o3_kernel_host::__generated::CompilerGeneratedWorkerV3ArgumentsV1<
+                'allocation,
+                Marker,
+            > for #arguments_type
+        {
+            fn generated_argument_layout_v1() -> Result<
+                __fe2o3_kernel_host::__generated::CompilerGeneratedArgumentLayoutV1,
+                __fe2o3_kernel_host::__generated::GeneratedArgumentLayoutError,
+            > {
+                #layout
+            }
+
+            fn bind_arguments_v1(
+                &self,
+                plan: &__fe2o3_kernel_host::__generated::GeneratedArgumentPackingPlanV1,
+            ) -> Result<
+                __fe2o3_kernel_host::__generated::GeneratedWorkerV3ArgumentBindingV1<'allocation>,
+                __fe2o3_kernel_host::__generated::GeneratedArgumentPackError,
+            > {
+                let scalar_inputs = vec![#(#scalar_inputs),*];
+                let memory_arguments = vec![#(#memory_arguments),*];
+                Ok(
+                    __fe2o3_kernel_host::__generated::GeneratedWorkerV3ArgumentBindingV1::
+                        from_compiler_generated_parts_v1(scalar_inputs, memory_arguments),
+                )
+            }
+        }
+
+        #prepare_impl
+    }
+}
+
+fn generated_worker_v3_layout_v1(model: &GeneralTypedSignatureModelV1) -> proc_macro2::TokenStream {
+    let fields = model
+        .arguments
+        .iter()
+        .zip(model.abi.fields())
+        .map(|(kind, field)| generated_worker_v3_field_v1(*kind, field))
+        .collect::<Vec<_>>();
+    let size = model.abi.size();
+    let alignment = model.abi.alignment();
+
+    quote! {
+        __fe2o3_kernel_host::__generated::CompilerGeneratedArgumentLayoutV1::new(
+            #size,
+            #alignment,
+            __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
+            vec![#(#fields),*],
+        )
+    }
+}
+
+fn generated_worker_v3_field_v1(
+    kind: GeneralTypedArgumentKindV1,
+    field: &AbiField,
+) -> proc_macro2::TokenStream {
+    let name = field.name().as_str();
+    let offset = field.offset();
+    let size = field.size();
+    let alignment = field.alignment();
+    let (scalar, shared, exclusive) = match kind {
+        GeneralTypedArgumentKindV1::Scalar(scalar) => (scalar, false, false),
+        GeneralTypedArgumentKindV1::SharedSlice(scalar) => (scalar, true, false),
+        GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => (scalar, false, true),
+        GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)
+        | GeneralTypedArgumentKindV1::GlobalMutPointer(_) => {
+            unreachable!("unsupported V3 descriptor kinds do not generate an adapter")
+        }
+    };
+    let rust_type = scalar.rust_type_tokens();
+    let scalar_ident = match scalar {
+        GeneralTypedScalarV1::I8 => format_ident!("I8"),
+        GeneralTypedScalarV1::U8 => format_ident!("U8"),
+        GeneralTypedScalarV1::I16 => format_ident!("I16"),
+        GeneralTypedScalarV1::U16 => format_ident!("U16"),
+        GeneralTypedScalarV1::I32 => format_ident!("I32"),
+        GeneralTypedScalarV1::U32 => format_ident!("U32"),
+        GeneralTypedScalarV1::I64 => format_ident!("I64"),
+        GeneralTypedScalarV1::U64 => format_ident!("U64"),
+        GeneralTypedScalarV1::F32 => format_ident!("F32"),
+        GeneralTypedScalarV1::F64 => format_ident!("F64"),
+    };
+    let (abi_kind, mutability, access, address_space, type_identity, ownership, alias) =
+        if shared || exclusive {
+            let (element_size, element_alignment) = scalar.size_alignment();
+            let type_identity = if shared {
+                quote!(<#rust_type as __fe2o3_kernel_host::__generated::GeneratedDeviceScalarV1>::
+                shared_slice_type_identity_v1(
+                    __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
+                ))
+            } else {
+                quote!(<#rust_type as __fe2o3_kernel_host::__generated::GeneratedDeviceScalarV1>::
+                disjoint_slice_type_identity_v1(
+                    __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
+                ))
+            };
+            (
+                quote!(__fe2o3_kernel_host::__generated::AbiKind::Slice {
+                    element_size: #element_size,
+                    element_alignment: #element_alignment,
+                }),
+                if shared {
+                    quote!(__fe2o3_kernel_host::__generated::Mutability::Immutable)
+                } else {
+                    quote!(__fe2o3_kernel_host::__generated::Mutability::Mutable)
+                },
+                if shared {
+                    quote!(__fe2o3_kernel_host::__generated::Access::ReadOnly)
+                } else {
+                    quote!(__fe2o3_kernel_host::__generated::Access::ReadWrite)
+                },
+                quote!(__fe2o3_kernel_host::__generated::AddressSpace::Global),
+                type_identity,
+                if shared {
+                    quote!(__fe2o3_kernel_host::__generated::ArgumentOwnership::SharedBorrow)
+                } else {
+                    quote!(__fe2o3_kernel_host::__generated::ArgumentOwnership::UniqueBorrow)
+                },
+                if shared {
+                    quote!(__fe2o3_kernel_host::__generated::AliasClass::SharedReadOnly)
+                } else {
+                    quote!(__fe2o3_kernel_host::__generated::AliasClass::Exclusive)
+                },
+            )
+        } else {
+            (
+                quote!(__fe2o3_kernel_host::__generated::AbiKind::Scalar(
+                    __fe2o3_kernel_host::__generated::ScalarType::#scalar_ident,
+                )),
+                quote!(__fe2o3_kernel_host::__generated::Mutability::Immutable),
+                quote!(__fe2o3_kernel_host::__generated::Access::ByValue),
+                quote!(__fe2o3_kernel_host::__generated::AddressSpace::Value),
+                quote!(<#rust_type as __fe2o3_kernel_host::__generated::GeneratedDeviceScalarV1>::
+                scalar_type_identity_v1(
+                    __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
+                )),
+                quote!(__fe2o3_kernel_host::__generated::ArgumentOwnership::ByValue),
+                quote!(__fe2o3_kernel_host::__generated::AliasClass::Value),
+            )
+        };
+
+    quote! {
+        __fe2o3_kernel_host::__generated::AbiField::new(
+            __fe2o3_kernel_host::__generated::Name::new(#name)
+                .expect("generated Worker V3 argument name is valid"),
+            #offset,
+            #size,
+            #alignment,
+            #abi_kind,
+            #mutability,
+            #access,
+            #address_space,
+            #type_identity,
+            #ownership,
+            #alias,
+        ).expect("generated Worker V3 ABI field is valid")
     }
 }
 
@@ -4167,11 +4452,11 @@ mod tests {
         expand_device_import_with_import, expand_kernel_with_device_import,
         expand_kernel_with_imports, expand_legacy_kernel_with_imports,
         general_typed_global_mut_pointer_type_identity_v1, generated_general_typed_arguments_v1,
-        host_import_for, model_general_typed_signature_v1, parse_device_ffi_options,
-        parse_kernel_options, validate_generated_device_ffi_contract_grammar,
-        validate_kernel_assembly_boundary, validate_kernel_source_safety,
-        validate_typed_kernel_profile_v1, validate_typed_kernel_signature,
-        validate_typed_kernel_symbol_stem,
+        generated_worker_v3_adapter_v1, host_import_for, model_general_typed_signature_v1,
+        parse_device_ffi_options, parse_kernel_options,
+        validate_generated_device_ffi_contract_grammar, validate_kernel_assembly_boundary,
+        validate_kernel_source_safety, validate_typed_kernel_profile_v1,
+        validate_typed_kernel_signature, validate_typed_kernel_symbol_stem,
     };
     use fe2o3_artifacts::{
         AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Mutability,
@@ -5062,6 +5347,70 @@ mod tests {
     }
 
     #[test]
+    fn canonical_general_arguments_generate_typed_worker_v3_dispatch() {
+        let input: ItemFn = parse_quote! {
+            pub fn mixed(
+                scale: f64,
+                input: &[u16],
+                output: DisjointSlice<i32, Index1D>,
+            ) {}
+        };
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let model = model_general_typed_signature_v1(&input, &options, [0x35; 32]).unwrap();
+        let generated = generated_worker_v3_adapter_v1(&input, &model).to_string();
+
+        for expected in [
+            "CompilerGeneratedWorkerV3ArgumentsV1",
+            "prepare_worker_v3",
+            "plan . scalar (0usize , self . scale)",
+            "self . input . bind_argument_pair (plan , 1usize)",
+            "self . output . bind_argument_pair (plan , 2usize)",
+            "GeneratedWorkerV3ArgumentBindingV1",
+            "ScalarType :: F64",
+            "element_size : 2u64",
+            "element_size : 4u64",
+        ] {
+            assert!(
+                generated.contains(expected),
+                "missing `{expected}` in {generated}"
+            );
+        }
+        assert!(!generated.contains("from_raw"));
+        assert!(!generated.contains("* const"));
+        assert!(!generated.contains("* mut"));
+    }
+
+    #[test]
+    fn worker_v3_dispatch_generation_fails_closed_for_unrepresented_descriptor_kinds() {
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        for input in [
+            parse_quote! {
+                pub fn shifted(output: DisjointSlice<f32, Shifted<Index1D, 7>>) {}
+            },
+            parse_quote! {
+                pub fn global(target: fe2o3_device::DeviceGlobalMutPtr<u32>) {}
+            },
+        ] {
+            let model = model_general_typed_signature_v1(&input, &options, [0x36; 32]).unwrap();
+            assert!(generated_worker_v3_adapter_v1(&input, &model).is_empty());
+        }
+    }
+
+    #[test]
+    fn scalar_only_worker_v3_arguments_use_a_static_allocation_lifetime() {
+        let input: ItemFn = parse_quote! {
+            pub fn scalar(value: u32) {}
+        };
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let model = model_general_typed_signature_v1(&input, &options, [0x37; 32]).unwrap();
+        let generated = generated_worker_v3_adapter_v1(&input, &model).to_string();
+
+        assert!(generated.contains("for Arguments"));
+        assert!(generated.contains("'static , Marker , A , Self"));
+        assert!(!generated.contains("for Arguments < 'allocation >"));
+    }
+
+    #[test]
     fn general_typed_contract_retains_disjoint_mapping_brands() {
         let identity: ItemFn = parse_quote! {
             pub fn identity(output: DisjointSlice<f32, Index1D>) {}
@@ -5375,7 +5724,9 @@ mod tests {
         assert_ne!(alpha_contract, changed_signature_contract);
         let changed_signature_expansion = changed_signature_expansion.to_string();
         assert!(!changed_signature_expansion.contains("CompilerGeneratedAlphaZetaCov6ArgumentsV1"));
-        assert!(!changed_signature_expansion.contains("pub fn prepare"));
+        assert!(changed_signature_expansion.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
+        assert!(changed_signature_expansion.contains("pub fn prepare_worker_v3"));
+        assert!(!changed_signature_expansion.contains("prepare_generated_alpha_zeta_cov6"));
 
         let renamed: ItemFn = parse_quote! {
             pub fn renamed(scale: f32, input: &[f32], output: DisjointSlice<f32>) {}
@@ -5385,7 +5736,9 @@ mod tests {
         assert_ne!(alpha_contract, renamed_contract);
         let renamed_expansion = renamed_expansion.to_string();
         assert!(!renamed_expansion.contains("CompilerGeneratedAlphaZetaCov6ArgumentsV1"));
-        assert!(!renamed_expansion.contains("pub fn prepare"));
+        assert!(renamed_expansion.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
+        assert!(renamed_expansion.contains("pub fn prepare_worker_v3"));
+        assert!(!renamed_expansion.contains("prepare_generated_alpha_zeta_cov6"));
 
         let other_crate_binding = derive_crate_binding_id_v1("fixture", ["other-binding"]);
         let (_, rebound_binding, rebound_contract) = expand(alpha, other_crate_binding);
