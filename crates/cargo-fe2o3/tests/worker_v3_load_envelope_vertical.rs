@@ -290,6 +290,25 @@ where
         &mut self,
         request: &WorkerV3VerificationRequestV1<'_, K>,
     ) -> Result<WorkerV3VerificationDecisionV1, Self::Error> {
+        let capsule = request.semantic_compiler_handoff().capsule();
+        assert_eq!(*capsule.identity().sha256(), request.capsule_sha256());
+        assert_eq!(capsule.canonical_bytes(), request.semantic_capsule_bytes());
+        assert_eq!(
+            *capsule.receipts().formal_memory().identity().sha256(),
+            request.formal_memory_receipt_sha256()
+        );
+        assert_eq!(
+            capsule.receipts().formal_memory().canonical_preimage(),
+            request.formal_memory_receipt_bytes()
+        );
+        assert_eq!(
+            *capsule.receipts().proof_binding().identity().sha256(),
+            request.proof_binding_receipt_sha256()
+        );
+        assert_eq!(
+            capsule.receipts().proof_binding().canonical_preimage(),
+            request.proof_binding_receipt_bytes()
+        );
         let mut finalized = request.finalized_hsaco_sha256();
         if self.substitute_finalized {
             finalized[0] ^= 0xff;

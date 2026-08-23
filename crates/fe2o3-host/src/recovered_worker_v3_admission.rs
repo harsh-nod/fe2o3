@@ -79,6 +79,7 @@ impl WorkerV3HostLineageEvidenceV1 {
 /// and its current publication lease, but exposes no HSACO bytes or load/launch transition.
 pub struct RecoveredWorkerV3PinnedDescriptorV1 {
     envelope: RecoveredWorkerV3LoadEnvelopeV1,
+    outer_handoff: InertSemanticCompilerModuleHandoffV3,
     inspection: FinalizedDescriptorInspection,
     descriptor_index: usize,
     physical_kernel_index: usize,
@@ -142,6 +143,12 @@ impl RecoveredWorkerV3PinnedDescriptorV1 {
         if inspected != self.inspection {
             return Err(RecoveredWorkerV3AdmissionErrorV1::InspectionChanged);
         }
+        let outer_handoff =
+            InertSemanticCompilerModuleHandoffV3::decode(self.envelope.wire().outer_handoff())
+                .map_err(RecoveredWorkerV3AdmissionErrorV1::OuterHandoff)?;
+        if outer_handoff != self.outer_handoff {
+            return Err(RecoveredWorkerV3AdmissionErrorV1::CompilerHandoffChanged);
+        }
         #[cfg(target_os = "linux")]
         if let Some(descriptors) = &self.application_descriptors {
             descriptors
@@ -187,6 +194,10 @@ impl RecoveredWorkerV3PinnedDescriptorV1 {
 
     pub(crate) const fn lineage_evidence(&self) -> WorkerV3HostLineageEvidenceV1 {
         self.lineage
+    }
+
+    pub(crate) const fn outer_handoff(&self) -> &InertSemanticCompilerModuleHandoffV3 {
+        &self.outer_handoff
     }
 
     pub const fn device(&self) -> &DeviceIdentity {
@@ -266,6 +277,7 @@ pub fn admit_recovered_worker_v3_descriptor_v1(
 
     Ok(RecoveredWorkerV3PinnedDescriptorV1 {
         envelope,
+        outer_handoff: outer,
         inspection,
         descriptor_index,
         physical_kernel_index,
@@ -577,6 +589,7 @@ pub enum RecoveredWorkerV3AdmissionErrorV1 {
     DescriptorBindingMismatch,
     SelectedExportMismatch,
     InspectionChanged,
+    CompilerHandoffChanged,
     ApplicationDescriptorsChanged,
 }
 
@@ -655,6 +668,9 @@ impl fmt::Display for RecoveredWorkerV3AdmissionErrorV1 {
                 .write_str("selected Worker V3 kernel is absent from the compiler export roles"),
             Self::InspectionChanged => {
                 formatter.write_str("revalidated Worker V3 HSACO inspection changed")
+            }
+            Self::CompilerHandoffChanged => {
+                formatter.write_str("revalidated Worker V3 compiler handoff changed")
             }
             Self::ApplicationDescriptorsChanged => {
                 formatter.write_str("retained Worker V3 application descriptors changed")

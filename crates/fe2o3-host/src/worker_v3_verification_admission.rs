@@ -82,6 +82,7 @@ impl WorkerV3VerificationChallengeIdentityV1 {
 pub struct WorkerV3VerificationRequestV1<'admission, K> {
     challenge: WorkerV3VerificationChallengeIdentityV1,
     lineage: WorkerV3HostLineageEvidenceV1,
+    handoff: &'admission fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
     descriptor: &'admission KernelDescriptorV1,
     target: fe2o3_amd_target::AmdTargetId,
     code_object_version: CodeObjectVersion,
@@ -101,6 +102,39 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerificationRequestV1<'_, 
 
     pub const fn descriptor(&self) -> &KernelDescriptorV1 {
         self.descriptor
+    }
+
+    /// Returns the exact canonical compiler handoff retained by host admission.
+    ///
+    /// The handoff is inert content, not compiler or proof authority. A reviewed verifier uses it
+    /// to decode every stage receipt instead of trusting request-level digest projections.
+    pub const fn semantic_compiler_handoff(
+        &self,
+    ) -> &fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3 {
+        self.handoff
+    }
+
+    /// Returns the complete canonical semantic-capsule bytes presented to the verifier.
+    pub fn semantic_capsule_bytes(&self) -> &[u8] {
+        self.handoff.capsule().canonical_bytes()
+    }
+
+    /// Returns the exact canonical formal-memory receipt, not only its digest.
+    pub fn formal_memory_receipt_bytes(&self) -> &[u8] {
+        self.handoff
+            .capsule()
+            .receipts()
+            .formal_memory()
+            .canonical_preimage()
+    }
+
+    /// Returns the exact canonical proof-binding receipt, not only its digest.
+    pub fn proof_binding_receipt_bytes(&self) -> &[u8] {
+        self.handoff
+            .capsule()
+            .receipts()
+            .proof_binding()
+            .canonical_preimage()
     }
 
     pub const fn capsule_sha256(&self) -> [u8; 32] {
@@ -310,6 +344,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
         let request = WorkerV3VerificationRequestV1 {
             challenge,
             lineage,
+            handoff: admission.outer_handoff(),
             descriptor: admission.descriptor(),
             target: admission.target(),
             code_object_version: admission.code_object_version(),
