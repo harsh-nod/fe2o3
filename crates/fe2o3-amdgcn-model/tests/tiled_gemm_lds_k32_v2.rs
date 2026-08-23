@@ -271,15 +271,16 @@ fn rejects_deleted_or_moved_barriers_and_lds_resource_drift() {
 }
 
 #[test]
-fn generic_exact_target_lowering_cannot_bypass_k32_admission() {
-    let error = lower_kernel_to_gfx942_xnack_minus_llvm_ir(
+fn generic_exact_target_lowering_uses_workload_neutral_proofs() {
+    let llvm = lower_kernel_to_gfx942_xnack_minus_llvm_ir(
         &tiled_gemm_lds_k32_v2_module(),
         &TILED_GEMM_LDS_K32_V2_KERNEL_ID.into(),
     )
-    .expect_err("generic exact-target lowering must reject K32 index div/rem");
-    assert!(
-        error.contains(fe2o3_amdgcn_model::LoweringDiagnosticCode::UnprovenBarrierConvergence),
-        "{error}"
+    .expect("generic lowering admits verified uniform loops independently of workload identity");
+    assert!(llvm.contains("llvm.amdgcn.mfma.f32.16x16x16bf16.1k"));
+    assert_eq!(
+        llvm.matches("call void @llvm.amdgcn.s.barrier()").count(),
+        2
     );
 }
 

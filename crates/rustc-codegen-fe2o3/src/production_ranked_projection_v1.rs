@@ -121,6 +121,10 @@ enum CapabilityEdgeKindV1 {
         elements_per_lane: u64,
         availability: SemanticOptionAvailabilityV1,
     },
+    CheckedTiled2d {
+        mapping: SemanticDisjointIndexSpaceV1,
+        availability: SemanticOptionAvailabilityV1,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -482,6 +486,15 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         }
         projected_blocks.push(projected);
     }
+    if bounds_checks.checks.iter().any(|check| {
+        projected_blocks
+            .get(check.access_block)
+            .is_none_or(|block| !projected_block_uses_bounds_check(block, *check))
+    }) {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "a Rust bounds assertion does not authorize one matching projected access",
+        ));
+    }
     if !projected_blocks
         .iter()
         .any(ProjectedSemanticBlockV1::has_memory_access)
@@ -762,6 +775,9 @@ fn project_intrinsic_contracts(
         .map_err(|error| ProductionRankedProjectionErrorV1::Unsupported(error.detail()))?;
     let mut edge_count = 0_usize;
     let mut borrowed_locals = Vec::new();
+    let stable_argument_origins = local_stable_argument_origins(function)?;
+    let mut runtime_index_arguments = vec![None; local_count];
+    let mut next_runtime_argument = 1_usize;
     let launch_extent = required_launch_extent_x(function);
 
     for (block_index, block) in function.blocks().iter().enumerate() {
@@ -880,6 +896,43 @@ fn project_intrinsic_contracts(
                 CapabilityEdgeKindV1::CheckedBlock {
                     mapping: expected,
                     elements_per_lane: *elements_per_lane,
+                    availability,
+                }
+            }
+            SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedTiled2d {
+                output_space,
+                lanes_per_tile,
+                tile_rows,
+                tile_columns,
+                elements_per_lane,
+                ..
+            } => {
+                let expected = SemanticDisjointIndexSpaceV1::Tiled2dIndex1d {
+                    lanes_per_tile: *lanes_per_tile,
+                    tile_rows: *tile_rows,
+                    tile_columns: *tile_columns,
+                    elements_per_lane: *elements_per_lane,
+                };
+                if *output_space != expected
+                    || !tiled_2d_geometry_valid_v1(
+                        *lanes_per_tile,
+                        *tile_rows,
+                        *tile_columns,
+                        *elements_per_lane,
+                    )
+                {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "a malformed tiled-2d mapping reached ranked projection",
+                    ));
+                }
+                let destination = simple_call_destination(call)?;
+                let availability = option_dominance.availability(destination).ok_or(
+                    ProductionRankedProjectionErrorV1::Incomplete(
+                        "a checked tiled-2d witness lacks authenticated Option Some availability",
+                    ),
+                )?;
+                CapabilityEdgeKindV1::CheckedTiled2d {
+                    mapping: expected,
                     availability,
                 }
             }
@@ -1146,11 +1199,20 @@ fn project_intrinsic_contracts(
                         ..input
                     }
                 }
+                CapabilityEdgeKindV1::CheckedTiled2d {
+                    mapping,
+                    availability,
+                } => ProjectedDisjointIndexV1 {
+                    mapping,
+                    availability: Some(availability),
+                    ..input
+                },
             };
             if matches!(
                 edge.kind,
                 CapabilityEdgeKindV1::CheckedShift { .. }
                     | CapabilityEdgeKindV1::CheckedBlock { .. }
+                    | CapabilityEdgeKindV1::CheckedTiled2d { .. }
             ) {
                 let predicate = option_predicates.get_mut(edge.destination).ok_or(
                     ProductionRankedProjectionErrorV1::Unsupported(
@@ -1437,6 +1499,97 @@ fn project_intrinsic_contracts(
                     projected.precondition,
                 )
             }
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut {
+                element,
+                index_space,
+                lanes_per_tile,
+                tile_rows,
+                tile_columns,
+                elements_per_lane,
+                ..
+            } => {
+                let projected = projected_disjoint_operand_v1(
+                    call,
+                    1,
+                    &index_values,
+                    &option_dominance,
+                    block_index,
+                )?;
+                let expected = SemanticDisjointIndexSpaceV1::Tiled2dIndex1d {
+                    lanes_per_tile: *lanes_per_tile,
+                    tile_rows: *tile_rows,
+                    tile_columns: *tile_columns,
+                    elements_per_lane: *elements_per_lane,
+                };
+                if projected.mapping != expected
+                    || *index_space != expected
+                    || !tiled_2d_geometry_valid_v1(
+                        *lanes_per_tile,
+                        *tile_rows,
+                        *tile_columns,
+                        *elements_per_lane,
+                    )
+                {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "tiled-2d accessor mapping identity changed",
+                    ));
+                }
+                let component = project_runtime_index_operand_v1(
+                    call.arguments().get(2),
+                    constants,
+                    &stable_argument_origins,
+                    &mut runtime_index_arguments,
+                    &mut next_runtime_argument,
+                    operations,
+                    next_value,
+                )?;
+                let rows = project_runtime_index_operand_v1(
+                    call.arguments().get(3),
+                    constants,
+                    &stable_argument_origins,
+                    &mut runtime_index_arguments,
+                    &mut next_runtime_argument,
+                    operations,
+                    next_value,
+                )?;
+                let columns = project_runtime_index_operand_v1(
+                    call.arguments().get(4),
+                    constants,
+                    &stable_argument_origins,
+                    &mut runtime_index_arguments,
+                    &mut next_runtime_argument,
+                    operations,
+                    next_value,
+                )?;
+                let row_stride = project_runtime_index_operand_v1(
+                    call.arguments().get(5),
+                    constants,
+                    &stable_argument_origins,
+                    &mut runtime_index_arguments,
+                    &mut next_runtime_argument,
+                    operations,
+                    next_value,
+                )?;
+                reserve_operation(operations)?;
+                let index = next_value_id(next_value)?;
+                operations.push(ProductionRankedOperationV1::CheckedTiledIndex2D {
+                    result: index,
+                    invocation: projected.value,
+                    component,
+                    rows,
+                    columns,
+                    row_stride,
+                    lanes_per_tile: *lanes_per_tile,
+                    tile_rows: *tile_rows,
+                    tile_columns: *tile_columns,
+                    elements_per_lane: *elements_per_lane,
+                });
+                (
+                    *element,
+                    ProductionRankedValueV1::Local(index),
+                    projected.precondition,
+                )
+            }
             _ => continue,
         };
 
@@ -1533,10 +1686,82 @@ fn project_intrinsic_contracts(
         checked_reference_origins(function, callables, guarded_accesses.len())?;
     Ok(IntrinsicProjectionV1 {
         checked_reference_origins,
-        extent_argument_count: usize::from(!guarded_accesses.is_empty()),
+        extent_argument_count: if guarded_accesses.is_empty() {
+            0
+        } else {
+            next_runtime_argument
+        },
         guarded_accesses,
         option_predicates,
     })
+}
+
+fn project_runtime_index_operand_v1(
+    operand: Option<&SemanticOperandV1>,
+    constants: &[Option<u64>],
+    stable_argument_origins: &[Option<u32>],
+    arguments: &mut [Option<u32>],
+    next_argument: &mut usize,
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+) -> Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1> {
+    let operand = operand.ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+        "a tiled-2d index operand is missing",
+    ))?;
+    if let Some(value) = constant_operand_value(operand, constants) {
+        reserve_operation(operations)?;
+        let result = next_value_id(next_value)?;
+        operations.push(ProductionRankedOperationV1::IndexConstant { result, value });
+        return Ok(ProductionRankedValueV1::Local(result));
+    }
+    let local =
+        simple_operand_local(operand).ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+            "a tiled-2d runtime index is not a constant or one exact kernel argument",
+        ))?;
+    let local_index = local.index() as usize;
+    let origin = stable_argument_origins
+        .get(local_index)
+        .copied()
+        .flatten()
+        .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+            "a tiled-2d runtime index is not derived from one stable kernel argument",
+        ))? as usize;
+    let slot = arguments
+        .get_mut(origin)
+        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+            "a tiled-2d runtime argument origin is outside the semantic local table",
+        ))?;
+    let argument = match *slot {
+        Some(argument) => argument,
+        None => {
+            let argument = u32::try_from(*next_argument).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported("too many tiled-2d ranked arguments")
+            })?;
+            *next_argument = next_argument.checked_add(1).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "tiled-2d ranked argument count overflow",
+                ),
+            )?;
+            *slot = Some(argument);
+            argument
+        }
+    };
+    Ok(ProductionRankedValueV1::Argument(argument))
+}
+
+fn tiled_2d_geometry_valid_v1(
+    lanes_per_tile: u64,
+    tile_rows: u64,
+    tile_columns: u64,
+    elements_per_lane: u64,
+) -> bool {
+    lanes_per_tile != 0
+        && tile_rows != 0
+        && tile_columns != 0
+        && elements_per_lane != 0
+        && lanes_per_tile.is_multiple_of(tile_columns)
+        && lanes_per_tile.checked_mul(elements_per_lane) == tile_rows.checked_mul(tile_columns)
+        && (lanes_per_tile / tile_columns).checked_mul(elements_per_lane) == Some(tile_rows)
 }
 
 fn push_capability_edge(
@@ -1615,6 +1840,88 @@ fn admit_writable_origin(
         }
     }
     Ok(())
+}
+
+fn local_stable_argument_origins(
+    function: &SemanticFunctionDeclV1,
+) -> Result<Vec<Option<u32>>, ProductionRankedProjectionErrorV1> {
+    let definitions = local_definition_counts(function);
+    let mut origins = vec![None; function.locals().len()];
+    let mut edges = vec![Vec::new(); function.locals().len()];
+    for (local_index, local) in function.locals().iter().enumerate() {
+        if let SemanticLocalRoleV1::Argument(argument) = local.role() {
+            origins[local_index] = Some(argument);
+        }
+    }
+    for block in function.blocks() {
+        for statement in block.statements() {
+            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                continue;
+            };
+            let destination = assignment.destination();
+            if !destination.projections().is_empty()
+                || definitions
+                    .get(destination.local().index() as usize)
+                    .copied()
+                    != Some(1)
+            {
+                continue;
+            }
+            let operand = match assignment.value().kind() {
+                SemanticRvalueKindV1::Use(operand) | SemanticRvalueKindV1::Cast { operand, .. } => {
+                    operand
+                }
+                _ => continue,
+            };
+            let Some(source) = simple_operand_local(operand) else {
+                continue;
+            };
+            let source = source.index() as usize;
+            let destination = destination.local().index() as usize;
+            let Some(source_edges) = edges.get_mut(source) else {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a stable-argument source is outside the semantic local table",
+                ));
+            };
+            if destination >= origins.len() {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a stable-argument destination is outside the semantic local table",
+                ));
+            }
+            source_edges.try_reserve(1).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "stable-argument dataflow storage cannot be reserved",
+                )
+            })?;
+            source_edges.push(destination);
+        }
+    }
+
+    let mut worklist = origins
+        .iter()
+        .enumerate()
+        .filter_map(|(local, origin)| origin.map(|_| local))
+        .collect::<VecDeque<_>>();
+    while let Some(source) = worklist.pop_front() {
+        let Some(origin) = origins[source] else {
+            continue;
+        };
+        for &destination in &edges[source] {
+            match origins[destination] {
+                None => {
+                    origins[destination] = Some(origin);
+                    worklist.push_back(destination);
+                }
+                Some(existing) if existing == origin => {}
+                Some(_) => {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a runtime index may derive from multiple kernel arguments",
+                    ));
+                }
+            }
+        }
+    }
+    Ok(origins)
 }
 
 fn local_allocation_origins(
@@ -1787,6 +2094,7 @@ fn operation_defines_value(operation: &ProductionRankedOperationV1) -> bool {
             | ProductionRankedOperationV1::IndexConstant { .. }
             | ProductionRankedOperationV1::InvocationIndex { .. }
             | ProductionRankedOperationV1::IndexBinary { .. }
+            | ProductionRankedOperationV1::CheckedTiledIndex2D { .. }
             | ProductionRankedOperationV1::Dimension { .. }
             | ProductionRankedOperationV1::SemanticSymbol { .. }
             | ProductionRankedOperationV1::SemanticConstant { .. }
@@ -2395,6 +2703,30 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             ranked_value_text_v1(*lhs),
             ranked_value_text_v1(*rhs),
         ),
+        ProductionRankedOperationV1::CheckedTiledIndex2D {
+            result,
+            invocation,
+            component,
+            rows,
+            columns,
+            row_stride,
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+        } => format!(
+            "  %{} = kernel.checked_tiled_index_2d <{}, {}, {}, {}>({}, {}, {}, {}, {})\n",
+            result.get(),
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+            ranked_value_text_v1(*invocation),
+            ranked_value_text_v1(*component),
+            ranked_value_text_v1(*rows),
+            ranked_value_text_v1(*columns),
+            ranked_value_text_v1(*row_stride),
+        ),
         ProductionRankedOperationV1::Dimension {
             result,
             view,
@@ -2525,7 +2857,8 @@ fn checked_reference_origins(
                 operation: SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { .. }
                     | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut { .. }
                     | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive { .. }
-                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut { .. },
+                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut { .. }
+                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut { .. },
                 ..
             })
         ) {
@@ -2683,6 +3016,25 @@ fn reserve_operation(
         ProductionRankedProjectionErrorV1::Unsupported(
             "semantic intrinsic projection storage cannot be reserved",
         )
+    })
+}
+
+fn projected_block_uses_bounds_check(
+    block: &ProjectedSemanticBlockV1,
+    check: ProjectedBoundsCheckV1,
+) -> bool {
+    block.items.iter().any(|item| match item {
+        ProjectedBlockItemV1::Effect {
+            operation:
+                ProductionRankedOperationV1::Access { indices, .. }
+                | ProductionRankedOperationV1::AtomicAccess { indices, .. },
+            ..
+        } => indices.contains(&check.index),
+        ProjectedBlockItemV1::Guarded(access) => {
+            access.indices.contains(&check.index)
+                && access.comparisons.contains(&(check.index, check.extent))
+        }
+        ProjectedBlockItemV1::Effect { .. } => false,
     })
 }
 
@@ -4626,6 +4978,7 @@ mod tests {
                 | ProductionRankedOperationV1::IndexConstant { .. }
                 | ProductionRankedOperationV1::InvocationIndex { .. }
                 | ProductionRankedOperationV1::IndexBinary { .. }
+                | ProductionRankedOperationV1::CheckedTiledIndex2D { .. }
                 | ProductionRankedOperationV1::Dimension { .. }
                 | ProductionRankedOperationV1::Barrier { .. }
                 | ProductionRankedOperationV1::SemanticSymbol { .. }

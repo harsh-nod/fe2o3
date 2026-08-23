@@ -1718,19 +1718,26 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::WorkgroupIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupDimension(_)
         | ProductionTerminalExpansionV1::GridDimension(_)
+        | ProductionTerminalExpansionV1::MatrixContextCurrent
         | ProductionTerminalExpansionV1::ThreadIndex1d => Some(0),
         ProductionTerminalExpansionV1::ThreadIndexGet
+        | ProductionTerminalExpansionV1::Bf16MatrixFragmentFromBits
+        | ProductionTerminalExpansionV1::F32MatrixAccumulatorFromValues
+        | ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues
         | ProductionTerminalExpansionV1::DisjointSliceLen => Some(1),
+        ProductionTerminalExpansionV1::MatrixMultiplyAccumulate => Some(4),
         ProductionTerminalExpansionV1::DisjointSliceGetMut => Some(2),
         ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint
         | ProductionTerminalExpansionV1::ThreadIndexCheckedShift
         | ProductionTerminalExpansionV1::DisjointIndexGet
         | ProductionTerminalExpansionV1::DisjointIndexCheckedShift => Some(1),
-        ProductionTerminalExpansionV1::ThreadIndexCheckedBlock => Some(1),
+        ProductionTerminalExpansionV1::ThreadIndexCheckedBlock
+        | ProductionTerminalExpansionV1::ThreadIndexCheckedTiled2d => Some(1),
         ProductionTerminalExpansionV1::DisjointSliceGetDisjointMut => Some(2),
         ProductionTerminalExpansionV1::GridLeaderCurrent => Some(0),
         ProductionTerminalExpansionV1::DisjointSliceGetMutExclusive => Some(3),
         ProductionTerminalExpansionV1::DisjointSliceGetBlockMut => Some(3),
+        ProductionTerminalExpansionV1::DisjointSliceGetTiled2dMut => Some(6),
         ProductionTerminalExpansionV1::WorkgroupBarrier => Some(0),
     }
 }

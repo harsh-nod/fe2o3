@@ -93,6 +93,7 @@ version = "0.1.0"
 name = "fe2o3-amdgcn-model"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-kernel-analysis",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
  "sha2",
@@ -193,6 +194,7 @@ dependencies = [
  "fe2o3-amd-target",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
+ "fe2o3-compiler-ffi",
  "fe2o3-core",
  "fe2o3-device",
  "fe2o3-hsaco",
@@ -231,6 +233,13 @@ dependencies = [
  "reserved-fe2o3-symbols",
  "rustix",
  "sha2",
+]
+
+[[package]]
+name = "fe2o3-kernel-analysis"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-kernel-ir",
 ]
 
 [[package]]
@@ -327,6 +336,7 @@ dependencies = [
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
  "fe2o3-build-authority",
+ "fe2o3-compiler-ffi",
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
  "fe2o3-rustc-invocation",

@@ -12,10 +12,10 @@ use std::{
 
 use dialect_gpu::BarrierOp;
 use dialect_kernel::{
-    AccessKindAttr, AnalysisSplitOp, BranchOp, DimensionOp, IndexBinaryOp, IndexConstantOp,
-    IndexLessThanBranchOp, InvocationIndexOp, MAX_RANKED_MEMORY_RANK, RankedAccessOp, RankedViewOp,
-    RankedViewType, RequireEquivalentOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp,
-    SemanticSymbolOp, ranked_view_type,
+    AccessKindAttr, AnalysisSplitOp, BranchOp, CheckedTiledIndex2DOp, DimensionOp, IndexBinaryOp,
+    IndexConstantOp, IndexLessThanBranchOp, InvocationIndexOp, MAX_RANKED_MEMORY_RANK,
+    RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp, SemanticBinaryOp,
+    SemanticConstantOp, SemanticSymbolOp, ranked_view_type,
 };
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
@@ -256,6 +256,7 @@ enum RankedOperationKind {
     IndexConstant,
     InvocationIndex,
     IndexBinary,
+    CheckedTiledIndex2D,
     Dimension,
     RankedAccess,
     IndexLessThanBranch,
@@ -287,6 +288,8 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         Some(RankedOperationKind::InvocationIndex)
     } else if operation.downcast_ref::<IndexBinaryOp>().is_some() {
         Some(RankedOperationKind::IndexBinary)
+    } else if operation.downcast_ref::<CheckedTiledIndex2DOp>().is_some() {
+        Some(RankedOperationKind::CheckedTiledIndex2D)
     } else if operation.downcast_ref::<DimensionOp>().is_some() {
         Some(RankedOperationKind::Dimension)
     } else if operation.downcast_ref::<RankedAccessOp>().is_some() {

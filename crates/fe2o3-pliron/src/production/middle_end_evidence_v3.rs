@@ -1064,6 +1064,30 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             hash_value(digest, *lhs);
             hash_value(digest, *rhs);
         }
+        ProductionRankedOperationV1::CheckedTiledIndex2D {
+            result,
+            invocation,
+            component,
+            rows,
+            columns,
+            row_stride,
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+        } => {
+            digest.update([14]);
+            digest.update(result.get().to_le_bytes());
+            hash_value(digest, *invocation);
+            hash_value(digest, *component);
+            hash_value(digest, *rows);
+            hash_value(digest, *columns);
+            hash_value(digest, *row_stride);
+            digest.update(lanes_per_tile.to_le_bytes());
+            digest.update(tile_rows.to_le_bytes());
+            digest.update(tile_columns.to_le_bytes());
+            digest.update(elements_per_lane.to_le_bytes());
+        }
         ProductionRankedOperationV1::Dimension {
             result,
             view,

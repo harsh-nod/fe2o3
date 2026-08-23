@@ -1,7 +1,7 @@
 use crate::{AnalysisReport, Diagnostic, UnsupportedReason, Variation};
 use fe2o3_kernel_ir::{
-    AddressSpace, BasicBlock, BlockId, Function, FunctionBody, IndexKind, IntrinsicKind, Operation,
-    OperationKind, Terminator, ValueId, WaveOperationKind,
+    AddressSpace, BasicBlock, BlockId, Function, FunctionBody, IndexKind, IntrinsicKind, Module,
+    Operation, OperationKind, Terminator, ValueId, WaveOperationKind,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -13,14 +13,38 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 /// v1 has no uniform-argument metadata. Loads and atomic results are varying
 /// because it has no immutable-region or inter-thread value summaries. Calls
 /// are unsupported because it has no convergence or return-value summaries.
-/// Postdominance is established only for structurally terminating CFG regions;
-/// cycles are fail-closed until a loop proof can establish compatible dynamic
-/// barrier counts and order. Even for accepted acyclic control flow, this pass
-/// checks barrier reachability only. Compatible order among distinct dynamic
-/// barrier instances remains an unsupported obligation.
+/// Postdominance is established only for CFG regions with a path to an exit.
+/// Divergent loop-exiting control remains active beyond the loop, while
+/// branches that reconverge within the same natural-loop nest use their normal
+/// postdominator. This pass checks barrier reachability only; compatible order
+/// among distinct dynamic barrier instances remains an unsupported obligation.
 ///
 /// The returned report is analysis evidence only and grants no assurance.
 pub fn analyze_function(function: &Function) -> AnalysisReport {
+    analyze_function_with_contract(function, &[], &BTreeSet::new())
+}
+
+/// Classifies one kernel entry using uniform ABI parameters and conservative
+/// summaries for reachable pure helpers.
+pub fn analyze_kernel_entry(module: &Module, function: &Function) -> AnalysisReport {
+    let mut summarized_calls = BTreeSet::new();
+    let mut visiting = BTreeSet::new();
+    if let Some(body) = &function.body {
+        for operation in body.blocks.iter().flat_map(|block| &block.operations) {
+            if let OperationKind::Call { callee, .. } = &operation.kind {
+                summarize_pure_helper(module, callee, &mut visiting, &mut summarized_calls);
+            }
+        }
+    }
+    let parameters = vec![Variation::GridUniform; function.signature.parameters.len()];
+    analyze_function_with_contract(function, &parameters, &summarized_calls)
+}
+
+fn analyze_function_with_contract(
+    function: &Function,
+    parameter_variations: &[Variation],
+    summarized_calls: &BTreeSet<fe2o3_kernel_ir::FunctionId>,
+) -> AnalysisReport {
     let mut report = AnalysisReport {
         function: function.id.clone(),
         values: BTreeMap::new(),
@@ -36,7 +60,59 @@ pub fn analyze_function(function: &Function) -> AnalysisReport {
         return report;
     };
 
-    Analyzer::new(body, report).run()
+    Analyzer::new(
+        function,
+        body,
+        report,
+        parameter_variations,
+        summarized_calls,
+    )
+    .run()
+}
+
+fn summarize_pure_helper(
+    module: &Module,
+    function: &fe2o3_kernel_ir::FunctionId,
+    visiting: &mut BTreeSet<fe2o3_kernel_ir::FunctionId>,
+    summarized: &mut BTreeSet<fe2o3_kernel_ir::FunctionId>,
+) -> bool {
+    if summarized.contains(function) {
+        return true;
+    }
+    if !visiting.insert(function.clone()) {
+        return false;
+    }
+    let accepted = module
+        .function(function)
+        .and_then(|function| function.body.as_ref())
+        .is_some_and(|body| {
+            body.blocks.iter().all(|block| {
+                !matches!(block.terminator, Some(Terminator::Unreachable) | None)
+                    && block
+                        .operations
+                        .iter()
+                        .all(|operation| match &operation.kind {
+                            OperationKind::Call { callee, .. } => {
+                                summarize_pure_helper(module, callee, visiting, summarized)
+                            }
+                            OperationKind::Intrinsic(_)
+                            | OperationKind::Atomic(_)
+                            | OperationKind::Barrier(_)
+                            | OperationKind::Fence(_)
+                            | OperationKind::Matrix(_)
+                            | OperationKind::InlineAssembly(_)
+                            | OperationKind::Wave(_)
+                            | OperationKind::WorkgroupBarrier(_)
+                            | OperationKind::WorkgroupMemory(_) => false,
+                            _ => operation.memory_effects().is_empty(),
+                        })
+            })
+        });
+    visiting.remove(function);
+    if accepted {
+        summarized.insert(function.clone());
+    }
+    accepted
 }
 
 struct Analyzer<'a> {
@@ -45,6 +121,9 @@ struct Analyzer<'a> {
     incoming: BTreeMap<BlockId, Vec<Edge>>,
     control_regions: BTreeMap<BlockId, BTreeSet<BlockId>>,
     control_unknown: BTreeSet<BlockId>,
+    trivial_phi_representatives: BTreeMap<ValueId, ValueId>,
+    parameter_variations: &'a [Variation],
+    summarized_calls: &'a BTreeSet<fe2o3_kernel_ir::FunctionId>,
     report: AnalysisReport,
 }
 
@@ -56,7 +135,13 @@ struct Edge {
 }
 
 impl<'a> Analyzer<'a> {
-    fn new(body: &'a FunctionBody, mut report: AnalysisReport) -> Self {
+    fn new(
+        function: &'a Function,
+        body: &'a FunctionBody,
+        mut report: AnalysisReport,
+        parameter_variations: &'a [Variation],
+        summarized_calls: &'a BTreeSet<fe2o3_kernel_ir::FunctionId>,
+    ) -> Self {
         let mut blocks = BTreeMap::new();
         let mut malformed = false;
         for block in &body.blocks {
@@ -82,10 +167,35 @@ impl<'a> Analyzer<'a> {
             });
         }
         let postdominance_available = postdominance_available(&blocks, &reachable);
-        let control_unknown = reachable
+        let mut control_unknown = reachable
             .difference(&postdominance_available)
             .copied()
             .collect::<BTreeSet<_>>();
+        let natural_loop_nests = match crate::analyze_control_flow(function) {
+            Ok(control_flow) => reachable
+                .iter()
+                .map(|block| {
+                    (
+                        *block,
+                        control_flow
+                            .containing_natural_loops(*block)
+                            .unwrap_or_default()
+                            .iter()
+                            .copied()
+                            .collect::<BTreeSet<_>>(),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>(),
+            Err(_) => {
+                control_unknown.extend(reachable.iter().copied());
+                report.diagnostics.push(Diagnostic::Unsupported {
+                    block: None,
+                    operation_index: None,
+                    reason: UnsupportedReason::MalformedControlFlow,
+                });
+                BTreeMap::new()
+            }
+        };
         if !control_unknown.is_empty() {
             report.diagnostics.push(Diagnostic::Unsupported {
                 block: None,
@@ -95,7 +205,14 @@ impl<'a> Analyzer<'a> {
                 },
             });
         }
-        let control_regions = control_regions(body, &blocks, &reachable, &postdominance_available);
+        let control_regions = control_regions(
+            body,
+            &blocks,
+            &reachable,
+            &postdominance_available,
+            &natural_loop_nests,
+        );
+        let trivial_phi_representatives = trivial_phi_representatives(body, &incoming);
 
         Self {
             body,
@@ -103,6 +220,9 @@ impl<'a> Analyzer<'a> {
             incoming,
             control_regions,
             control_unknown,
+            trivial_phi_representatives,
+            parameter_variations,
+            summarized_calls,
             report,
         }
     }
@@ -131,7 +251,9 @@ impl<'a> Analyzer<'a> {
         let mut unknown = BTreeSet::new();
         for block in &self.body.blocks {
             for (operation_index, operation) in block.operations.iter().enumerate() {
-                if let OperationKind::Call { callee, .. } = &operation.kind {
+                if let OperationKind::Call { callee, .. } = &operation.kind
+                    && !self.summarized_calls.contains(callee)
+                {
                     self.report.diagnostics.push(Diagnostic::Unsupported {
                         block: Some(block.id),
                         operation_index: Some(operation_index),
@@ -167,8 +289,14 @@ impl<'a> Analyzer<'a> {
     }
 
     fn initialize_facts(&mut self) {
-        for parameter in &self.body.parameters {
-            self.report.values.insert(*parameter, Variation::Varying);
+        for (index, parameter) in self.body.parameters.iter().enumerate() {
+            self.report.values.insert(
+                *parameter,
+                self.parameter_variations
+                    .get(index)
+                    .copied()
+                    .unwrap_or(Variation::Varying),
+            );
         }
         for block in &self.body.blocks {
             let reachable = self.reachable.contains(&block.id);
@@ -272,6 +400,12 @@ impl<'a> Analyzer<'a> {
 
         let mut changed = false;
         for (index, parameter) in block.parameters.iter().enumerate() {
+            let distinct_origins = edges
+                .iter()
+                .filter_map(|edge| edge.arguments.get(index))
+                .map(|value| self.trivial_phi_representative(*value))
+                .collect::<BTreeSet<_>>();
+            let control_can_select_value = distinct_origins.len() != 1;
             let mut variation = Variation::GridUniform;
             for edge in &edges {
                 let argument = edge
@@ -279,17 +413,20 @@ impl<'a> Analyzer<'a> {
                     .get(index)
                     .map(|value| self.value(*value))
                     .unwrap_or(Variation::Varying);
-                let source_control = self
-                    .report
-                    .block_controls
-                    .get(&edge.source)
-                    .copied()
-                    .unwrap_or(Variation::Varying);
-                let edge_control = edge
-                    .discriminator
-                    .map(|value| self.value(value))
-                    .unwrap_or(Variation::GridUniform);
-                variation = variation.join(argument.join(source_control).join(edge_control));
+                variation = variation.join(argument);
+                if control_can_select_value {
+                    let source_control = self
+                        .report
+                        .block_controls
+                        .get(&edge.source)
+                        .copied()
+                        .unwrap_or(Variation::Varying);
+                    let edge_control = edge
+                        .discriminator
+                        .map(|value| self.value(value))
+                        .unwrap_or(Variation::GridUniform);
+                    variation = variation.join(source_control).join(edge_control);
+                }
             }
             changed |= raise(&mut self.report.values, parameter.id, variation);
         }
@@ -307,6 +444,9 @@ impl<'a> Analyzer<'a> {
                     IndexKind::WorkgroupSize | IndexKind::WorkgroupCount => Variation::GridUniform,
                 },
             },
+            OperationKind::Call { callee, .. } if self.summarized_calls.contains(callee) => {
+                join_values(operation.kind.operands(), &self.report.values)
+            }
             OperationKind::Call { .. } | OperationKind::Load { .. } | OperationKind::Atomic(_) => {
                 Variation::Varying
             }
@@ -409,6 +549,21 @@ impl<'a> Analyzer<'a> {
             .copied()
             .unwrap_or(Variation::Varying)
     }
+
+    fn trivial_phi_representative(&self, mut value: ValueId) -> ValueId {
+        let mut remaining = self.trivial_phi_representatives.len();
+        while remaining != 0 {
+            let Some(next) = self.trivial_phi_representatives.get(&value).copied() else {
+                break;
+            };
+            if next == value {
+                break;
+            }
+            value = next;
+            remaining -= 1;
+        }
+        value
+    }
 }
 
 fn subgroup_collective_variation(input: Variation) -> Variation {
@@ -508,6 +663,57 @@ fn incoming_edges(
     (incoming, malformed)
 }
 
+fn trivial_phi_representatives(
+    body: &FunctionBody,
+    incoming: &BTreeMap<BlockId, Vec<Edge>>,
+) -> BTreeMap<ValueId, ValueId> {
+    let mut representatives = BTreeMap::new();
+    loop {
+        let mut changed = false;
+        for block in &body.blocks {
+            let Some(edges) = incoming.get(&block.id) else {
+                continue;
+            };
+            for (index, parameter) in block.parameters.iter().enumerate() {
+                let origins = edges
+                    .iter()
+                    .filter_map(|edge| edge.arguments.get(index).copied())
+                    .map(|value| resolve_representative(&representatives, value))
+                    .filter(|value| *value != parameter.id)
+                    .collect::<BTreeSet<_>>();
+                if origins.len() == 1 {
+                    let origin = *origins.first().expect("singleton origin");
+                    if representatives.get(&parameter.id) != Some(&origin) {
+                        representatives.insert(parameter.id, origin);
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            return representatives;
+        }
+    }
+}
+
+fn resolve_representative(
+    representatives: &BTreeMap<ValueId, ValueId>,
+    mut value: ValueId,
+) -> ValueId {
+    let mut remaining = representatives.len();
+    while remaining != 0 {
+        let Some(next) = representatives.get(&value).copied() else {
+            break;
+        };
+        if next == value {
+            break;
+        }
+        value = next;
+        remaining -= 1;
+    }
+    value
+}
+
 fn terminator_edges(terminator: &Terminator) -> Vec<(BlockId, Vec<ValueId>)> {
     match terminator {
         Terminator::Branch { target, arguments } => vec![(*target, arguments.clone())],
@@ -550,6 +756,7 @@ fn control_regions(
     blocks: &BTreeMap<BlockId, &BasicBlock>,
     reachable: &BTreeSet<BlockId>,
     postdominance_available: &BTreeSet<BlockId>,
+    natural_loop_nests: &BTreeMap<BlockId, BTreeSet<BlockId>>,
 ) -> BTreeMap<BlockId, BTreeSet<BlockId>> {
     let postdominators = postdominators(blocks, postdominance_available);
     let mut regions = BTreeMap::new();
@@ -563,20 +770,37 @@ fn control_regions(
         if discriminator(terminator).is_none() {
             continue;
         }
-        let stop = immediate_postdominator(block.id, &postdominators);
-        let mut region = BTreeSet::new();
-        let mut pending = VecDeque::from(terminator.successors());
-        while let Some(candidate) = pending.pop_front() {
-            if Some(candidate) == stop
-                || !reachable.contains(&candidate)
-                || !region.insert(candidate)
-            {
-                continue;
+        let mut stop = immediate_postdominator(block.id, &postdominators);
+        let collect_region = |stop: Option<BlockId>| {
+            let mut region = BTreeSet::new();
+            let mut pending = VecDeque::from(terminator.successors());
+            while let Some(candidate) = pending.pop_front() {
+                if Some(candidate) == stop
+                    || !reachable.contains(&candidate)
+                    || !region.insert(candidate)
+                {
+                    continue;
+                }
+                if let Some(candidate_block) = blocks.get(&candidate)
+                    && let Some(candidate_terminator) = &candidate_block.terminator
+                {
+                    pending.extend(candidate_terminator.successors());
+                }
             }
-            if let Some(candidate_block) = blocks.get(&candidate)
-                && let Some(candidate_terminator) = &candidate_block.terminator
-            {
-                pending.extend(candidate_terminator.successors());
+            region
+        };
+        let mut region = collect_region(stop);
+        if let Some(stop_block) = stop {
+            let source_loops = natural_loop_nests.get(&block.id);
+            let stop_loops = natural_loop_nests.get(&stop_block);
+            let exits_containing_loop = source_loops.is_some_and(|source_loops| {
+                source_loops
+                    .iter()
+                    .any(|header| !stop_loops.is_some_and(|stop_loops| stop_loops.contains(header)))
+            });
+            if exits_containing_loop {
+                stop = None;
+                region = collect_region(stop);
             }
         }
         regions.insert(block.id, region);
@@ -603,7 +827,7 @@ fn postdominance_available(
             if successors.is_empty()
                 || successors
                     .iter()
-                    .all(|successor| available.contains(successor))
+                    .any(|successor| available.contains(successor))
             {
                 available.insert(*block_id);
                 changed = true;

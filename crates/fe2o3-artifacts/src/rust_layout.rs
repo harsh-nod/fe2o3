@@ -62,6 +62,13 @@ pub enum RustDisjointIndexSpaceV1 {
         lanes_per_block: NonZeroU64,
         elements_per_lane: NonZeroU64,
     },
+    /// One fixed injective tiled mapping over a runtime row-major 2D view.
+    Tiled2DIndex1D {
+        lanes_per_tile: NonZeroU64,
+        tile_rows: NonZeroU64,
+        tile_columns: NonZeroU64,
+        elements_per_lane: NonZeroU64,
+    },
 }
 
 impl RustDisjointIndexSpaceV1 {
@@ -75,6 +82,50 @@ impl RustDisjointIndexSpaceV1 {
         };
         Some(Self::BlockedIndex1D {
             lanes_per_block,
+            elements_per_lane,
+        })
+    }
+
+    /// Constructs a tiled mapping only when its lane geometry covers the tile exactly.
+    pub const fn tiled_2d_index_1d(
+        lanes_per_tile: u64,
+        tile_rows: u64,
+        tile_columns: u64,
+        elements_per_lane: u64,
+    ) -> Option<Self> {
+        let Some(lanes_per_tile) = NonZeroU64::new(lanes_per_tile) else {
+            return None;
+        };
+        let Some(tile_rows) = NonZeroU64::new(tile_rows) else {
+            return None;
+        };
+        let Some(tile_columns) = NonZeroU64::new(tile_columns) else {
+            return None;
+        };
+        let Some(elements_per_lane) = NonZeroU64::new(elements_per_lane) else {
+            return None;
+        };
+        if !lanes_per_tile.get().is_multiple_of(tile_columns.get()) {
+            return None;
+        }
+        let Some(owned_elements) = lanes_per_tile.get().checked_mul(elements_per_lane.get()) else {
+            return None;
+        };
+        let Some(tile_elements) = tile_rows.get().checked_mul(tile_columns.get()) else {
+            return None;
+        };
+        let Some(owned_rows) =
+            (lanes_per_tile.get() / tile_columns.get()).checked_mul(elements_per_lane.get())
+        else {
+            return None;
+        };
+        if owned_elements != tile_elements || owned_rows != tile_rows.get() {
+            return None;
+        }
+        Some(Self::Tiled2DIndex1D {
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
             elements_per_lane,
         })
     }
@@ -674,6 +725,18 @@ fn encode_index_space(writer: &mut CanonicalWriter, index_space: RustDisjointInd
         } => {
             writer.u8(4);
             writer.u64(lanes_per_block.get());
+            writer.u64(elements_per_lane.get());
+        }
+        RustDisjointIndexSpaceV1::Tiled2DIndex1D {
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+        } => {
+            writer.u8(5);
+            writer.u64(lanes_per_tile.get());
+            writer.u64(tile_rows.get());
+            writer.u64(tile_columns.get());
             writer.u64(elements_per_lane.get());
         }
     }

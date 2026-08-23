@@ -559,6 +559,17 @@ fn validate_production_v1_descriptor_evidence(
                     lanes_per_block: lanes_per_block.get(),
                     elements_per_lane: elements_per_lane.get(),
                 },
+                RustDisjointIndexSpaceV1::Tiled2DIndex1D {
+                    lanes_per_tile,
+                    tile_rows,
+                    tile_columns,
+                    elements_per_lane,
+                } => SemanticDisjointIndexSpaceV1::Tiled2dIndex1d {
+                    lanes_per_tile: lanes_per_tile.get(),
+                    tile_rows: tile_rows.get(),
+                    tile_columns: tile_columns.get(),
+                    elements_per_lane: elements_per_lane.get(),
+                },
                 _ => {
                     return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
                         "supported disjoint mapping identity",

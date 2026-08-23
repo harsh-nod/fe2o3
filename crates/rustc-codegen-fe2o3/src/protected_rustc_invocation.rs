@@ -212,6 +212,20 @@ fn admit_for_codegen_at(
     backend_marker_present: bool,
 ) -> Result<Option<AdmittedProtectedRustcInvocationV1>, ProtectedRustcInvocationErrorV1> {
     if !requires_v3_capability(pipeline, explicit_unprotected_qualification) {
+        let qualification_closure_marker = pipeline == CodegenPipeline::CollectedRowSoftmaxV1
+            && explicit_unprotected_qualification;
+        if qualification_closure_marker {
+            if backend_marker_present {
+                return Err(
+                    ProtectedRustcInvocationErrorV1::UnexpectedProtectedSignals {
+                        descriptor_present: false,
+                        compiler_closure_marker_present: false,
+                        backend_marker_present: true,
+                    },
+                );
+            }
+            return Ok(None);
+        }
         reject_unexpected_protected_signals_at(
             child_fd,
             compiler_closure_marker_present,
@@ -230,12 +244,11 @@ fn reject_unexpected_protected_signals_at(
     compiler_closure_marker_present: bool,
     backend_marker_present: bool,
 ) -> Result<(), ProtectedRustcInvocationErrorV1> {
-    // The fixed inherited slot is reserved by the protected broker. Closing it
-    // before reporting prevents malformed or older descriptors from surviving
-    // into any legacy fallback path.
-    // SAFETY: close accepts any integer descriptor and reports EBADF for an absent slot.
-    let close_result = unsafe { libc::close(child_fd) };
-    let descriptor_present = if close_result == 0 {
+    // Do not close an unexpected descriptor here: an ordinary rustc process
+    // may have reused this number for a Rust-owned file. Returning an error
+    // prevents fallback without violating that owner's descriptor lifetime.
+    // SAFETY: fcntl observes but does not consume the descriptor.
+    let descriptor_present = if unsafe { libc::fcntl(child_fd, libc::F_GETFD) } >= 0 {
         true
     } else {
         let error = std::io::Error::last_os_error();

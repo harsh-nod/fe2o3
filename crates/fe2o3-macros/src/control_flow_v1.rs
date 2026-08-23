@@ -696,11 +696,31 @@ impl<'a> GraphBuilder<'a> {
                 let Some(init) = &local.init else {
                     return self.simple(statement.span());
                 };
-                if init.diverge.is_some() {
-                    return Err(syn::Error::new_spanned(
-                        local,
-                        "let-else control flow is unsupported in the V1 kernel sidecar",
-                    ));
+                if let Some((_, diverge)) = &init.diverge {
+                    reject_nested_control_flow(&init.expr)?;
+                    let branch = self.push_node(
+                        local.span(),
+                        TempNodeKind::Branch {
+                            then_target: None,
+                            else_target: None,
+                        },
+                    )?;
+                    let else_fragment = self.build_expression(diverge)?;
+                    let mut exits = vec![PendingEdge {
+                        node: branch,
+                        slot: PendingSlot::BranchThen,
+                    }];
+                    self.bind_fragment_entry(
+                        branch,
+                        PendingSlot::BranchElse,
+                        else_fragment.entry,
+                        &mut exits,
+                    )?;
+                    exits.extend(else_fragment.exits);
+                    return Ok(Fragment {
+                        entry: Some(branch),
+                        exits,
+                    });
                 }
                 self.build_expression(&init.expr)
             }

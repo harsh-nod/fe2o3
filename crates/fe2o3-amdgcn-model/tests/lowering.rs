@@ -1077,7 +1077,7 @@ fn accepts_only_structurally_convergent_workgroup_barrier_placement() {
     assert!(
         error.diagnostics()[0]
             .message
-            .contains("no uniformity is inferred from branch values")
+            .contains("convergent operation requires Workgroup uniform control")
     );
 
     let mut cyclic = phi_loop_module();
@@ -1094,16 +1094,9 @@ fn accepts_only_structurally_convergent_workgroup_barrier_placement() {
                 [AddressSpace::Global],
             ),
         );
-    let error = lower_kernel_to_llvm_ir(&cyclic, &KernelId::new("phi_loop")).unwrap_err();
-    assert_eq!(
-        error.diagnostics()[0].code,
-        LoweringDiagnosticCode::UnprovenBarrierConvergence
-    );
-    assert!(
-        error.diagnostics()[0]
-            .message
-            .contains("dynamic-order proof")
-    );
+    let llvm = lower_kernel_to_llvm_ir(&cyclic, &KernelId::new("phi_loop"))
+        .expect("a grid-uniform exiting loop has the same barrier count in every work-item");
+    assert!(llvm.contains("call void @llvm.amdgcn.s.barrier()"));
 
     let mut duplicate_successor = barrier_only_module(
         SynchronizationScope::Workgroup,
@@ -1139,9 +1132,9 @@ fn accepts_only_structurally_convergent_workgroup_barrier_placement() {
         lower_kernel_to_llvm_ir(&duplicate_successor, &KernelId::new("fill"))
     });
     assert!(result.is_ok(), "duplicate CFG successors must not panic");
-    assert_eq!(
-        result.unwrap().unwrap_err().diagnostics()[0].code,
-        LoweringDiagnosticCode::UnprovenBarrierConvergence
+    assert!(
+        result.unwrap().is_ok(),
+        "identical successors reconverge independently of the branch value"
     );
 }
 

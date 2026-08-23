@@ -141,7 +141,7 @@ fn absent_and_present_selection_is_exact_and_ordinary_compatible() {
 }
 
 #[test]
-fn unprotected_routes_reject_and_close_every_protected_signal() {
+fn unprotected_routes_reject_protected_signals_without_consuming_unknown_fds() {
     let _guard = FD_TEST_LOCK.lock().unwrap();
     let descriptor_bytes =
         fe2o3_rustc_invocation::encode_descriptor_v3(&baseline_descriptor()).unwrap();
@@ -162,7 +162,8 @@ fn unprotected_routes_reject_and_close_every_protected_signal() {
                 }
             )
         ));
-        assert_eq!(unsafe { libc::fcntl(TEST_CHILD_FD, libc::F_GETFD) }, -1);
+        assert_ne!(unsafe { libc::fcntl(TEST_CHILD_FD, libc::F_GETFD) }, -1);
+        assert_eq!(unsafe { libc::close(TEST_CHILD_FD) }, 0);
     }
 
     for (compiler_closure_marker_present, backend_marker_present) in
@@ -196,6 +197,37 @@ fn unprotected_routes_reject_and_close_every_protected_signal() {
         .unwrap()
         .is_none()
     );
+    let descriptor = sealed_image(&descriptor_bytes);
+    install_inherited(&descriptor, TEST_CHILD_FD);
+    assert!(
+        admit_for_codegen_at(
+            CodegenPipeline::CollectedRowSoftmaxV1,
+            true,
+            TEST_CHILD_FD,
+            true,
+            false,
+        )
+        .unwrap()
+        .is_none()
+    );
+    assert_ne!(unsafe { libc::fcntl(TEST_CHILD_FD, libc::F_GETFD) }, -1);
+    assert_eq!(unsafe { libc::close(TEST_CHILD_FD) }, 0);
+    assert!(matches!(
+        admit_for_codegen_at(
+            CodegenPipeline::CollectedRowSoftmaxV1,
+            true,
+            TEST_CHILD_FD,
+            true,
+            true,
+        ),
+        Err(
+            ProtectedRustcInvocationErrorV1::UnexpectedProtectedSignals {
+                descriptor_present: false,
+                compiler_closure_marker_present: false,
+                backend_marker_present: true,
+            }
+        )
+    ));
 }
 
 #[test]

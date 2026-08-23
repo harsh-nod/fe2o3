@@ -3068,108 +3068,38 @@ fn validate_convergent_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), Lowering
         return Ok(());
     }
 
-    if body.blocks.iter().any(|block| {
-        block
-            .operations
-            .iter()
-            .any(|operation| matches!(operation.kind, OperationKind::Call { .. }))
+    let report = fe2o3_kernel_analysis::analyze_kernel_entry(lowerer.module, lowerer.function);
+    if let Some(diagnostic) = report.diagnostics().iter().find(|diagnostic| {
+        matches!(
+            diagnostic,
+            fe2o3_kernel_analysis::Diagnostic::Unsupported { .. }
+        )
     }) {
         return Err(LoweringErrors::one(
             lowerer.function_location(),
             LoweringDiagnosticCode::UnprovenBarrierConvergence,
-            "matrix and barrier convergence requires an interprocedural summary when the entry calls another function",
+            format!(
+                "target-neutral uniformity analysis could not prove convergence: {diagnostic:?}"
+            ),
         ));
     }
-
-    if matches!(
-        lowerer.target,
-        LoweringTarget::Gfx942TiledGemmLdsK32V2 | LoweringTarget::Gfx942TiledGemmLdsEdgesV1
-    ) {
-        // These private targets are reachable only after exact graph and
-        // profile authentication. Their sealed graphs have one uniform
-        // two-trip loop, with every convergent operation in its unconditional
-        // reconverged body.
-        return Ok(());
-    }
-
-    let entry = body.blocks.first().expect("verified non-empty body").id;
-    let reachable = body
-        .blocks
-        .iter()
-        .map(|block| block.id)
-        .filter(|block| lowerer.control_flow.is_reachable(*block))
-        .collect::<BTreeSet<_>>();
-    let mut indegrees = reachable
-        .iter()
-        .map(|block| {
-            let count = lowerer
-                .control_flow
-                .predecessor_blocks(*block)
-                .expect("indexed block")
-                .filter(|predecessor| reachable.contains(predecessor))
-                .count();
-            (*block, count)
-        })
-        .collect::<BTreeMap<_, _>>();
-    let mut ready = indegrees
-        .iter()
-        .filter_map(|(block, count)| (*count == 0).then_some(*block))
-        .collect::<Vec<_>>();
-    let mut visited = 0usize;
-    while let Some(block_id) = ready.pop() {
-        visited += 1;
-        for successor in lowerer
-            .control_flow
-            .successor_blocks(block_id)
-            .expect("indexed block")
-            .filter(|successor| reachable.contains(successor))
-        {
-            let count = indegrees
-                .get_mut(&successor)
-                .expect("reachable successor has an indegree");
-            *count -= 1;
-            if *count == 0 {
-                ready.push(successor);
-            }
-        }
-    }
-    if visited != reachable.len() {
-        return Err(LoweringErrors::one(
-            lowerer.function_location(),
-            LoweringDiagnosticCode::UnprovenBarrierConvergence,
-            "convergent matrix and barrier operations in cyclic control flow require a compatible dynamic-order proof",
-        ));
-    }
-
-    let mut unconditional_chain = BTreeSet::new();
-    let mut current = entry;
-    loop {
-        if !unconditional_chain.insert(current) {
-            break;
-        }
-        let block = lowerer.block(current);
-        let Some(Terminator::Branch { target, .. }) = &block.terminator else {
-            break;
+    for (block, operation) in convergent_operations {
+        let operation_value = &lowerer.block(block).operations[operation];
+        let scope = match &operation_value.kind {
+            OperationKind::WorkgroupBarrier(barrier) => barrier.convergence.scope(),
+            OperationKind::Matrix(matrix) => matrix.convergence.scope(),
+            _ => unreachable!("convergent operation inventory is exact"),
         };
-        let mut incoming = lowerer
-            .control_flow
-            .predecessor_blocks(*target)
-            .expect("indexed block");
-        if incoming.next() != Some(current) || incoming.next().is_some() {
-            break;
+        let control = report.block_control(block);
+        if !control.is_uniform_for(scope) {
+            return Err(LoweringErrors::one(
+                lowerer.operation_location(block, operation),
+                LoweringDiagnosticCode::UnprovenBarrierConvergence,
+                format!(
+                    "convergent operation requires {scope:?} uniform control, but analysis found {control:?}",
+                ),
+            ));
         }
-        current = *target;
-    }
-
-    if let Some((block, operation)) = convergent_operations
-        .into_iter()
-        .find(|(block, _)| !unconditional_chain.contains(block))
-    {
-        return Err(LoweringErrors::one(
-            lowerer.operation_location(block, operation),
-            LoweringDiagnosticCode::UnprovenBarrierConvergence,
-            "convergent matrix or barrier operation is not on the acyclic unconditional entry chain; no uniformity is inferred from branch values",
-        ));
     }
     Ok(())
 }

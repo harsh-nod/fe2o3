@@ -8,8 +8,8 @@
 use std::collections::{HashMap, VecDeque};
 
 use dialect_kernel::{
-    DimensionOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, InvocationIndexOp,
-    MAX_RANKED_MEMORY_RANK, RankedViewOp, ranked_view_type,
+    CheckedTiledIndex2DOp, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
+    InvocationIndexOp, MAX_RANKED_MEMORY_RANK, RankedViewOp, ranked_view_type,
 };
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
@@ -127,20 +127,49 @@ pub enum SparseIndexFactV1 {
         dividend: SparseAffineIndexV1,
         modulus: u64,
     },
+    CheckedTiled2D(SparseCheckedTiledIndex2DV1),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SparseCheckedTiledIndex2DV1 {
+    invocation: SparseAffineIndexV1,
+    component: u64,
+    rows: Value,
+    columns: Value,
+    row_stride: Value,
+    geometry: [u64; 4],
+}
+
+impl SparseCheckedTiledIndex2DV1 {
+    pub const fn invocation(&self) -> &SparseAffineIndexV1 {
+        &self.invocation
+    }
+
+    pub const fn component(&self) -> u64 {
+        self.component
+    }
+
+    pub const fn runtime_layout(&self) -> [Value; 3] {
+        [self.rows, self.columns, self.row_stride]
+    }
+
+    pub const fn geometry(&self) -> [u64; 4] {
+        self.geometry
+    }
 }
 
 impl SparseIndexFactV1 {
     pub const fn affine(&self) -> Option<&SparseAffineIndexV1> {
         match self {
             Self::Affine(affine) => Some(affine),
-            Self::Unknown | Self::Remainder { .. } => None,
+            Self::Unknown | Self::Remainder { .. } | Self::CheckedTiled2D(_) => None,
         }
     }
 
     pub fn constant_value(&self) -> Option<u64> {
         match self {
             Self::Affine(affine) => affine.is_constant(),
-            Self::Unknown | Self::Remainder { .. } => None,
+            Self::Unknown | Self::Remainder { .. } | Self::CheckedTiled2D(_) => None,
         }
     }
 
@@ -152,6 +181,7 @@ impl SparseIndexFactV1 {
                 dividend.evaluate(invocation).map(|value| value % modulus)
             }
             Self::Remainder { .. } => None,
+            Self::CheckedTiled2D(_) => None,
         }
     }
 
@@ -160,6 +190,14 @@ impl SparseIndexFactV1 {
             Self::Unknown => None,
             Self::Affine(affine) => affine.maximum(launch_extents),
             Self::Remainder { modulus, .. } => modulus.checked_sub(1),
+            Self::CheckedTiled2D(_) => None,
+        }
+    }
+
+    pub const fn checked_tiled_2d(&self) -> Option<&SparseCheckedTiledIndex2DV1> {
+        match self {
+            Self::CheckedTiled2D(fact) => Some(fact),
+            _ => None,
         }
     }
 }
@@ -355,6 +393,34 @@ fn derive_fact(
             .cloned()
             .unwrap_or(SparseIndexFactV1::Unknown);
         return Ok(derive_binary(binary.kind(context), lhs, rhs));
+    }
+    if let Some(tiled) = operation.downcast_ref::<CheckedTiledIndex2DOp>() {
+        let [invocation, component, rows, columns, row_stride] = tiled.operands(context);
+        let Some(invocation) = facts.get(&invocation).and_then(SparseIndexFactV1::affine) else {
+            return Ok(SparseIndexFactV1::Unknown);
+        };
+        let Some(component) = facts
+            .get(&component)
+            .and_then(SparseIndexFactV1::constant_value)
+        else {
+            return Ok(SparseIndexFactV1::Unknown);
+        };
+        let Some(geometry) = tiled.geometry(context) else {
+            return Ok(SparseIndexFactV1::Unknown);
+        };
+        if component >= geometry[3] {
+            return Ok(SparseIndexFactV1::Unknown);
+        }
+        return Ok(SparseIndexFactV1::CheckedTiled2D(
+            SparseCheckedTiledIndex2DV1 {
+                invocation: invocation.clone(),
+                component,
+                rows,
+                columns,
+                row_stride,
+                geometry,
+            },
+        ));
     }
     Ok(SparseIndexFactV1::Unknown)
 }

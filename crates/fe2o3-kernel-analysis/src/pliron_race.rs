@@ -21,6 +21,7 @@ use pliron::{
     value::Value,
 };
 
+use crate::pliron_sparse_index::SparseAffineIndexV1;
 use crate::{
     KernelCheckPassKindV1, SparseIndexAnalysisV1, SparseIndexFailureV1,
     analyze_pliron_sparse_indices_v1, run_pliron_ranked_bounds_check_v1,
@@ -553,15 +554,23 @@ fn symbolically_proves_disjoint(effects: &[EffectV1], sparse: &SparseIndexAnalys
         if !(has_plain_write || has_plain_read && has_atomic_write) {
             continue;
         }
+        let relevant = effects
+            .iter()
+            .copied()
+            .filter(|effect| {
+                has_plain_write
+                    || effect.kind == AccessKindAttr::Read
+                    || matches!(
+                        effect.kind,
+                        AccessKindAttr::AtomicWrite | AccessKindAttr::AtomicReadModifyWrite
+                    )
+            })
+            .collect::<Vec<_>>();
+        if tiled_2d_effect_family_is_injective(&relevant, sparse) {
+            continue;
+        }
         let mut representative = None;
-        for effect in effects.iter().copied().filter(|effect| {
-            has_plain_write
-                || effect.kind == AccessKindAttr::Read
-                || matches!(
-                    effect.kind,
-                    AccessKindAttr::AtomicWrite | AccessKindAttr::AtomicReadModifyWrite
-                )
-        }) {
+        for effect in relevant {
             let Some(first) = representative else {
                 if !affine_map_is_injective(&effect.indices, sparse) {
                     return false;
@@ -577,6 +586,40 @@ fn symbolically_proves_disjoint(effects: &[EffectV1], sparse: &SparseIndexAnalys
     true
 }
 
+fn tiled_2d_effect_family_is_injective(
+    effects: &[&EffectV1],
+    sparse: &SparseIndexAnalysisV1,
+) -> bool {
+    let Some(first_index) = effects.first().and_then(|effect| effect.indices.first()) else {
+        return false;
+    };
+    if effects.iter().any(|effect| effect.indices.len() != 1) {
+        return false;
+    }
+    let first_fact = sparse.fact(*first_index);
+    let Some(first) = first_fact.checked_tiled_2d() else {
+        return false;
+    };
+    let [_, _, _, elements_per_lane] = first.geometry();
+    if first.component() >= elements_per_lane {
+        return false;
+    }
+    for effect in effects.iter().skip(1) {
+        let index_fact = sparse.fact(effect.indices[0]);
+        let Some(index) = index_fact.checked_tiled_2d() else {
+            return false;
+        };
+        if index.invocation() != first.invocation()
+            || index.runtime_layout() != first.runtime_layout()
+            || index.geometry() != first.geometry()
+            || index.component() >= elements_per_lane
+        {
+            return false;
+        }
+    }
+    affine_facts_are_injective(&[first.invocation().clone()], sparse)
+}
+
 fn same_index_formula(first: &[Value], second: &[Value], sparse: &SparseIndexAnalysisV1) -> bool {
     first.len() == second.len()
         && first
@@ -586,6 +629,17 @@ fn same_index_formula(first: &[Value], second: &[Value], sparse: &SparseIndexAna
 }
 
 fn affine_map_is_injective(indices: &[Value], sparse: &SparseIndexAnalysisV1) -> bool {
+    let facts = indices
+        .iter()
+        .map(|index| sparse.fact(*index).affine().cloned())
+        .collect::<Option<Vec<_>>>();
+    facts.is_some_and(|facts| affine_facts_are_injective(&facts, sparse))
+}
+
+fn affine_facts_are_injective(
+    facts: &[SparseAffineIndexV1],
+    sparse: &SparseIndexAnalysisV1,
+) -> bool {
     let active_dimensions = sparse
         .launch_extents()
         .iter()
@@ -595,20 +649,16 @@ fn affine_map_is_injective(indices: &[Value], sparse: &SparseIndexAnalysisV1) ->
     if active_dimensions.is_empty() {
         return true;
     }
-    let matrix = indices
+    let matrix = facts
         .iter()
-        .map(|index| {
-            let fact = sparse.fact(*index);
-            let affine = fact.affine()?;
-            Some(
-                active_dimensions
-                    .iter()
-                    .map(|dimension| affine.coefficients()[*dimension])
-                    .collect::<Vec<_>>(),
-            )
+        .map(|affine| {
+            active_dimensions
+                .iter()
+                .map(|dimension| affine.coefficients()[*dimension])
+                .collect::<Vec<_>>()
         })
-        .collect::<Option<Vec<_>>>();
-    matrix.is_some_and(|matrix| modular_rank(matrix) == active_dimensions.len())
+        .collect::<Vec<_>>();
+    modular_rank(matrix) == active_dimensions.len()
 }
 
 // Full rank modulo a prime implies full rank over the integers. A rank loss

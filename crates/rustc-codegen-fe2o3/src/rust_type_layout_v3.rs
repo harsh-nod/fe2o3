@@ -404,6 +404,42 @@ fn disjoint_index_space_v1<'tcx>(
             Ok(RustDisjointIndexSpaceV1::blocked_index_1d(lanes, elements)
                 .expect("validated nonzero blocked dimensions"))
         }
+        Some(TrustedDeviceItem::Tiled2DIndexSpace) => {
+            let Some(base) = arguments.first().and_then(|argument| argument.as_type()) else {
+                return Err(GeneralTypedExtractError::new(format!(
+                    "{argument} has malformed genuine Tiled2D index-space arguments"
+                )));
+            };
+            let dimensions = (1..5)
+                .map(|index| {
+                    arguments
+                        .get(index)
+                        .and_then(|argument| argument.as_const())
+                        .and_then(|value| value.try_to_target_usize(tcx))
+                })
+                .collect::<Option<Vec<_>>>();
+            let Some(dimensions) = dimensions else {
+                return Err(GeneralTypedExtractError::new(format!(
+                    "{argument} has non-value or out-of-range Tiled2D dimensions"
+                )));
+            };
+            if arguments.len() != 5 || base != trusted_index1d {
+                return Err(GeneralTypedExtractError::new(format!(
+                    "{argument} supports only genuine Tiled2D<Index1D, L, R, C, E>, found `{ty}`"
+                )));
+            }
+            RustDisjointIndexSpaceV1::tiled_2d_index_1d(
+                dimensions[0],
+                dimensions[1],
+                dimensions[2],
+                dimensions[3],
+            )
+            .ok_or_else(|| {
+                GeneralTypedExtractError::new(format!(
+                    "{argument} has invalid or overflowing Tiled2D geometry `{ty}`"
+                ))
+            })
+        }
         _ => Err(GeneralTypedExtractError::new(format!(
             "{argument} uses unsupported or untrusted disjoint index space `{ty}`"
         ))),

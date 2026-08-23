@@ -34,7 +34,7 @@ CARGO_TARGET_DIR="$ROOT_TARGET" rustup run "$TOOLCHAIN" cargo build \
         --target amdgcn-amd-amdhsa --target-dir "$AMD_TARGET" --lib
 )
 
-"$ROCM_DIR/llvm/bin/clang" -nogpulib -x ir \
+"$ROCM_DIR/llvm/bin/clang" -O3 -nogpulib -x ir \
     --target=amdgcn-amd-amdhsa -mcpu=gfx942 -mno-xnack \
     -c "$LLVM_IR" -o "$OBJECT"
 "$ROCM_DIR/llvm/bin/ld.lld" -shared "$OBJECT" -o "$HSACO"

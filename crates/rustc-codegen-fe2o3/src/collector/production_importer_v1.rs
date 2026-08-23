@@ -15,7 +15,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnsafeAssemblyDeclarationV1,
     SemanticUnsafeAssemblyTargetV1, SemanticWorkgroupDimensionsV1,
 };
-use rustc_middle::ty::{Instance, Ty, TyCtxt, TyKind, UintTy};
+use rustc_middle::ty::{FloatTy, Instance, Ty, TyCtxt, TyKind, UintTy};
 use rustc_span::sym;
 
 use super::{
@@ -816,6 +816,99 @@ fn terminal_operation_v1<'tcx>(
         {
             Ok(SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier)
         }
+        ProductionTerminalExpansionV1::MatrixContextCurrent
+            if inputs.is_empty()
+                && rust_inputs.is_empty()
+                && rust_is_trusted_adt_v1(tcx, rust_output, TrustedDeviceItem::DeviceMatrix) =>
+        {
+            Ok(SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { context: output })
+        }
+        ProductionTerminalExpansionV1::Bf16MatrixFragmentFromBits
+            if inputs.len() == 1
+                && rust_inputs.len() == 1
+                && rust_fixed_array_v1(tcx, rust_inputs[0], RustScalarV1::U16, 4)
+                && rust_is_trusted_adt_v1(
+                    tcx,
+                    rust_output,
+                    TrustedDeviceItem::Bf16MfmaFragment,
+                ) =>
+        {
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::Bf16MatrixFragmentFromBits {
+                    fragment: output,
+                    bits: inputs[0],
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::F32MatrixAccumulatorFromValues
+            if inputs.len() == 1
+                && rust_inputs.len() == 1
+                && rust_fixed_array_v1(tcx, rust_inputs[0], RustScalarV1::F32, 4)
+                && rust_is_trusted_adt_v1(
+                    tcx,
+                    rust_output,
+                    TrustedDeviceItem::F32AccumulatorFragment,
+                ) =>
+        {
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorFromValues {
+                    fragment: output,
+                    values: inputs[0],
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues
+            if inputs.len() == 1
+                && rust_inputs.len() == 1
+                && rust_is_trusted_adt_v1(
+                    tcx,
+                    rust_inputs[0],
+                    TrustedDeviceItem::F32AccumulatorFragment,
+                )
+                && rust_fixed_array_v1(tcx, rust_output, RustScalarV1::F32, 4) =>
+        {
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues {
+                    fragment: inputs[0],
+                    values: output,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::MatrixMultiplyAccumulate
+            if inputs.len() == 4
+                && rust_inputs.len() == 4
+                && rust_reference_pointee_v1(rust_inputs[0]).is_some_and(|ty| {
+                    rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::DeviceMatrix)
+                })
+                && rust_is_trusted_adt_v1(
+                    tcx,
+                    rust_inputs[1],
+                    TrustedDeviceItem::Bf16MfmaFragment,
+                )
+                && rust_is_trusted_adt_v1(
+                    tcx,
+                    rust_inputs[2],
+                    TrustedDeviceItem::Bf16MfmaFragment,
+                )
+                && rust_is_trusted_adt_v1(
+                    tcx,
+                    rust_inputs[3],
+                    TrustedDeviceItem::F32AccumulatorFragment,
+                )
+                && rust_is_trusted_adt_v1(
+                    tcx,
+                    rust_output,
+                    TrustedDeviceItem::F32AccumulatorFragment,
+                ) =>
+        {
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
+                    context: pointer_pointee_v1(types, inputs[0])?,
+                    input_fragment: inputs[1],
+                    accumulator_fragment: inputs[3],
+                },
+            )
+        }
         ProductionTerminalExpansionV1::ThreadIndex1d
             if inputs.is_empty()
                 && rust_inputs.is_empty()
@@ -907,6 +1000,39 @@ fn terminal_operation_v1<'tcx>(
                     input_space,
                     output_space,
                     lanes_per_block,
+                    elements_per_lane,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::ThreadIndexCheckedTiled2d
+            if inputs.len() == 1 && rust_inputs.len() == 1 =>
+        {
+            let input_space =
+                rust_index_witness_space_v1(tcx, rust_inputs[0], TrustedDeviceItem::ThreadIndex)
+                    .ok_or_else(|| {
+                        body_owner_table_mismatch_v1("terminal checked-tiled-2d input")
+                    })?;
+            let rust_output_tile = rust_option_payload_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("terminal checked-tiled-2d result"))?;
+            let (output_space, lanes_per_tile, tile_rows, tile_columns, elements_per_lane) =
+                rust_disjoint_tile_2d_v1(tcx, rust_output_tile).ok_or_else(|| {
+                    body_owner_table_mismatch_v1("terminal checked-tiled-2d witness")
+                })?;
+            if input_space != SemanticDisjointIndexSpaceV1::Index1d {
+                return Err(body_owner_table_mismatch_v1(
+                    "terminal checked-tiled-2d input mapping",
+                ));
+            }
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedTiled2d {
+                    input_witness: inputs[0],
+                    output_tile: option_payload_v1(types, output)?,
+                    raw_index: aggregate_field_v1(types, inputs[0], 0)?,
+                    input_space,
+                    output_space,
+                    lanes_per_tile,
+                    tile_rows,
+                    tile_columns,
                     elements_per_lane,
                 },
             )
@@ -1088,6 +1214,43 @@ fn terminal_operation_v1<'tcx>(
                 },
             )
         }
+        ProductionTerminalExpansionV1::DisjointSliceGetTiled2dMut
+            if inputs.len() == 6 && rust_inputs.len() == 6 =>
+        {
+            let rust_slice = rust_reference_pointee_v1(rust_inputs[0])
+                .and_then(|ty| rust_disjoint_slice_v1(tcx, ty));
+            let rust_tile = rust_reference_pointee_v1(rust_inputs[1])
+                .and_then(|ty| rust_disjoint_tile_2d_v1(tcx, ty));
+            let Some((index_space, lanes_per_tile, tile_rows, tile_columns, elements_per_lane)) =
+                rust_tile
+            else {
+                return Err(body_owner_table_mismatch_v1(
+                    "terminal tiled-2d witness identity",
+                ));
+            };
+            if rust_slice.map(|(_, space)| space) != Some(index_space) {
+                return Err(body_owner_table_mismatch_v1(
+                    "terminal tiled-2d mapping identity",
+                ));
+            }
+            let disjoint_slice = pointer_pointee_v1(types, inputs[0])?;
+            let tile_witness = pointer_pointee_v1(types, inputs[1])?;
+            let element_pointer = aggregate_field_v1(types, disjoint_slice, 0)?;
+            let element = pointer_pointee_v1(types, element_pointer)?;
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut {
+                    disjoint_slice,
+                    tile_witness,
+                    element,
+                    raw_index: inputs[2],
+                    index_space,
+                    lanes_per_tile,
+                    tile_rows,
+                    tile_columns,
+                    elements_per_lane,
+                },
+            )
+        }
         ProductionTerminalExpansionV1::ThreadIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupDimension(_)
@@ -1104,7 +1267,14 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::GridLeaderCurrent
         | ProductionTerminalExpansionV1::DisjointSliceGetMutExclusive
         | ProductionTerminalExpansionV1::ThreadIndexCheckedBlock
+        | ProductionTerminalExpansionV1::ThreadIndexCheckedTiled2d
         | ProductionTerminalExpansionV1::DisjointSliceGetBlockMut
+        | ProductionTerminalExpansionV1::DisjointSliceGetTiled2dMut
+        | ProductionTerminalExpansionV1::MatrixContextCurrent
+        | ProductionTerminalExpansionV1::Bf16MatrixFragmentFromBits
+        | ProductionTerminalExpansionV1::F32MatrixAccumulatorFromValues
+        | ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues
+        | ProductionTerminalExpansionV1::MatrixMultiplyAccumulate
         | ProductionTerminalExpansionV1::WorkgroupBarrier => {
             Err(body_owner_table_mismatch_v1("terminal callable ABI"))
         }
@@ -1184,6 +1354,28 @@ fn rust_is_trusted_adt_v1(tcx: TyCtxt<'_>, ty: Ty<'_>, item: TrustedDeviceItem) 
         if arguments.is_empty() && trusted_device_items::classify(tcx, definition.did()) == Some(item))
 }
 
+#[derive(Clone, Copy)]
+enum RustScalarV1 {
+    U16,
+    F32,
+}
+
+fn rust_fixed_array_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+    scalar: RustScalarV1,
+    expected_length: u64,
+) -> bool {
+    let TyKind::Array(element, length) = *ty.kind() else {
+        return false;
+    };
+    let scalar_matches = match scalar {
+        RustScalarV1::U16 => matches!(element.kind(), TyKind::Uint(UintTy::U16)),
+        RustScalarV1::F32 => matches!(element.kind(), TyKind::Float(FloatTy::F32)),
+    };
+    scalar_matches && length.try_to_target_usize(tcx) == Some(expected_length)
+}
+
 fn rust_disjoint_slice_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: Ty<'tcx>,
@@ -1256,8 +1448,44 @@ fn rust_disjoint_index_space_v1<'tcx>(
                 elements_per_lane,
             })
         }
+        Some(TrustedDeviceItem::Tiled2DIndexSpace) if arguments.len() == 5 => {
+            if arguments[0].as_type()? != trusted_index1d_type_v1(tcx)? {
+                return None;
+            }
+            let lanes_per_tile = arguments[1].as_const()?.try_to_target_usize(tcx)?;
+            let tile_rows = arguments[2].as_const()?.try_to_target_usize(tcx)?;
+            let tile_columns = arguments[3].as_const()?.try_to_target_usize(tcx)?;
+            let elements_per_lane = arguments[4].as_const()?.try_to_target_usize(tcx)?;
+            rust_tiled_2d_geometry_valid_v1(
+                lanes_per_tile,
+                tile_rows,
+                tile_columns,
+                elements_per_lane,
+            )
+            .then_some(SemanticDisjointIndexSpaceV1::Tiled2dIndex1d {
+                lanes_per_tile,
+                tile_rows,
+                tile_columns,
+                elements_per_lane,
+            })
+        }
         _ => None,
     }
+}
+
+fn rust_tiled_2d_geometry_valid_v1(
+    lanes_per_tile: u64,
+    tile_rows: u64,
+    tile_columns: u64,
+    elements_per_lane: u64,
+) -> bool {
+    lanes_per_tile != 0
+        && tile_rows != 0
+        && tile_columns != 0
+        && elements_per_lane != 0
+        && lanes_per_tile.is_multiple_of(tile_columns)
+        && lanes_per_tile.checked_mul(elements_per_lane) == tile_rows.checked_mul(tile_columns)
+        && (lanes_per_tile / tile_columns).checked_mul(elements_per_lane) == Some(tile_rows)
 }
 
 fn rust_disjoint_block_v1<'tcx>(
@@ -1291,6 +1519,42 @@ fn rust_disjoint_block_v1<'tcx>(
             elements_per_lane,
         },
         lanes_per_block,
+        elements_per_lane,
+    ))
+}
+
+fn rust_disjoint_tile_2d_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<(SemanticDisjointIndexSpaceV1, u64, u64, u64, u64)> {
+    let TyKind::Adt(definition, arguments) = *ty.kind() else {
+        return None;
+    };
+    if trusted_device_items::classify(tcx, definition.did())
+        != Some(TrustedDeviceItem::DisjointTile2D)
+        || arguments.len() != 5
+        || arguments[0].as_type()? != trusted_index1d_type_v1(tcx)?
+    {
+        return None;
+    }
+    let lanes_per_tile = arguments[1].as_const()?.try_to_target_usize(tcx)?;
+    let tile_rows = arguments[2].as_const()?.try_to_target_usize(tcx)?;
+    let tile_columns = arguments[3].as_const()?.try_to_target_usize(tcx)?;
+    let elements_per_lane = arguments[4].as_const()?.try_to_target_usize(tcx)?;
+    if !rust_tiled_2d_geometry_valid_v1(lanes_per_tile, tile_rows, tile_columns, elements_per_lane)
+    {
+        return None;
+    }
+    Some((
+        SemanticDisjointIndexSpaceV1::Tiled2dIndex1d {
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+        },
+        lanes_per_tile,
+        tile_rows,
+        tile_columns,
         elements_per_lane,
     ))
 }
@@ -1411,6 +1675,13 @@ const fn terminal_operation_tag_v1(
         ProductionTerminalExpansionV1::ThreadIndexCheckedBlock => 10,
         ProductionTerminalExpansionV1::DisjointSliceGetBlockMut => 11,
         ProductionTerminalExpansionV1::WorkgroupBarrier => 12,
+        ProductionTerminalExpansionV1::MatrixContextCurrent => 26,
+        ProductionTerminalExpansionV1::Bf16MatrixFragmentFromBits => 27,
+        ProductionTerminalExpansionV1::F32MatrixAccumulatorFromValues => 28,
+        ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues => 29,
+        ProductionTerminalExpansionV1::MatrixMultiplyAccumulate => 30,
+        ProductionTerminalExpansionV1::ThreadIndexCheckedTiled2d => 31,
+        ProductionTerminalExpansionV1::DisjointSliceGetTiled2dMut => 32,
     }
 }
 

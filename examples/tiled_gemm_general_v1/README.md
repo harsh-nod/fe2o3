@@ -7,15 +7,16 @@ C = alpha * A * B + beta * C
 ```
 
 `M`, `N`, `K`, `lda`, `ldb`, `ldc`, `alpha`, and `beta` are runtime values.
-One global invocation owns one physical slot in `C`; padding columns and the
-rounded-up grid edge return without a memory access. Every active invocation
-runs the full dynamic K loop and applies the epilogue once.
+Each wave64 workgroup owns one 16x16 output tile and executes
+`V_MFMA_F32_16X16X16_BF16` for every 16-element K phase. Checked edge loads
+contribute BF16 zero; checked tiled output witnesses suppress stores outside
+logical M and N. Every active output applies the dynamic alpha/beta epilogue
+once.
 
-The kernel is deliberately the scalar correctness baseline. It exercises the
-general compiler path for dynamic control flow and memory safety without
-special-casing matrix multiplication in the compiler. LDS/MFMA scheduling is a
-separate optimization of the same verified Kernel IR, not a condition for this
-kernel to compile or execute.
+The matrix instruction is exposed through the target-neutral `DeviceMatrix`
+capability. Bounds, uniformity, convergence, ranked indexing, and disjoint
+output ownership are ordinary compiler analyses shared with every other kernel;
+none of those passes recognizes GEMM or grants it a special case.
 
 ## Run on gfx942
 
@@ -42,6 +43,10 @@ It runs packed, fully strided/edge, multi-workgroup dynamic-K, and zero-K epilog
 cases against an independent CPU reference. Temporary AMD Cargo output, LLVM,
 and object files are deleted on exit. The final HSACO is retained under
 `target/fe2o3-gfx942/`.
+
+The generated gfx942 disassembly contains
+`v_mfma_f32_16x16x16_bf16`. Run `./run-benchmark.sh` for an event-timed
+comparison with the directly equivalent HIP kernel.
 
 ## Safety boundary
 

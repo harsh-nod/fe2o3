@@ -75,9 +75,9 @@ pub use tensor::{
     gfx942_lds_bf16_tile_pair_m16x16_v1, gfx942_publish_lds_bf16_tile_pair_m16x16_v1,
 };
 pub use thread::{
-    Blocked, DisjointBlock, DisjointIndex, GlobalGridSize, GlobalWorkitemId, GridExclusive,
-    GridLeader, GridSize, Index1D, Index2D, Invocation3D, Shifted, ThreadIndex, WorkgroupId,
-    WorkgroupSize, WorkitemId,
+    Blocked, DisjointBlock, DisjointIndex, DisjointTile2D, GlobalGridSize, GlobalWorkitemId,
+    GridExclusive, GridLeader, GridSize, Index1D, Index2D, Invocation3D, Shifted, ThreadIndex,
+    Tiled2D, WorkgroupId, WorkgroupSize, WorkitemId,
 };
 pub use views::{
     DisjointStaticTileMut, StaticIndex, StaticTileRegionWitness, StaticView, StaticViewError,
@@ -401,11 +401,52 @@ impl<T, IndexSpace, const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE: usize
     }
 }
 
+impl<
+    T,
+    IndexSpace,
+    const LANES_PER_TILE: usize,
+    const TILE_ROWS: usize,
+    const TILE_COLUMNS: usize,
+    const ELEMENTS_PER_LANE: usize,
+>
+    DisjointSlice<
+        T,
+        Tiled2D<IndexSpace, LANES_PER_TILE, TILE_ROWS, TILE_COLUMNS, ELEMENTS_PER_LANE>,
+    >
+{
+    /// Returns mutable access to one checked row-major tile component.
+    ///
+    /// The tile-grid width is derived from `columns`; edge tiles return `None`
+    /// for inactive components, and `row_stride` may include arbitrary padding.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_disjoint_slice_get_tiled_2d_mut"]
+    pub fn get_tiled_2d_mut(
+        &mut self,
+        tile: &DisjointTile2D<
+            IndexSpace,
+            LANES_PER_TILE,
+            TILE_ROWS,
+            TILE_COLUMNS,
+            ELEMENTS_PER_LANE,
+        >,
+        component: usize,
+        rows: usize,
+        columns: usize,
+        row_stride: usize,
+    ) -> Option<&mut T> {
+        // SAFETY: the move-only witness and matching index-space type establish
+        // an injective tile/lane/component mapping. All runtime arithmetic,
+        // logical edges, stride requirements, and the physical extent are checked.
+        unsafe { self.get_mut_at(tile.component_index(component, rows, columns, row_stride)?) }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        Blocked, DisjointBlock, DisjointIndex, DisjointSlice, GridExclusive, GridLeader, Index1D,
-        Index2D, KERNEL_MARKER_CONTRACT_VERSION_V1, Shifted, StaticIndex, StaticViewError,
+        Blocked, DisjointBlock, DisjointIndex, DisjointSlice, DisjointTile2D, GridExclusive,
+        GridLeader, Index1D, Index2D, KERNEL_MARKER_CONTRACT_VERSION_V1, Shifted, StaticIndex,
+        StaticViewError, Tiled2D,
     };
     use core::mem::{align_of, size_of};
 
@@ -499,6 +540,61 @@ mod tests {
 
         let outside = DisjointBlock::<Index1D, 2, 2>::from_model_index(2).unwrap();
         assert!(slice.get_block_mut(&outside, 0).is_none());
+    }
+
+    #[test]
+    fn tiled_2d_access_handles_grid_edges_and_padded_stride() {
+        type Layout = Tiled2D<Index1D, 4, 2, 4, 2>;
+        type Witness = DisjointTile2D<Index1D, 4, 2, 4, 2>;
+
+        let mut storage = [0_u32; 24];
+        let mut slice = unsafe {
+            DisjointSlice::<u32, Layout>::from_raw_parts(storage.as_mut_ptr(), storage.len())
+        };
+        let rows = 3;
+        let columns = 6;
+        let stride = 8;
+        let mut value = 1_u32;
+        // Four 4-lane tiles cover the ceil-divided 2x2 tile grid.
+        for raw in 0..16 {
+            let witness = Witness::from_model_index(raw).unwrap();
+            for component in 0..2 {
+                if let Some(output) =
+                    slice.get_tiled_2d_mut(&witness, component, rows, columns, stride)
+                {
+                    assert_eq!(*output, 0, "tiled mapping must be injective");
+                    *output = value;
+                    value += 1;
+                }
+            }
+        }
+
+        assert_eq!(value, 19);
+        for row in 0..rows {
+            assert!(
+                storage[row * stride..row * stride + columns]
+                    .iter()
+                    .all(|value| *value != 0)
+            );
+            assert_eq!(
+                &storage[row * stride + columns..(row + 1) * stride],
+                &[0, 0]
+            );
+        }
+    }
+
+    #[test]
+    fn tiled_2d_access_rejects_invalid_geometry_and_stride() {
+        assert!(DisjointTile2D::<Index1D, 3, 2, 4, 2>::from_model_index(0).is_none());
+
+        type Layout = Tiled2D<Index1D, 4, 2, 4, 2>;
+        let mut storage = [0_u32; 8];
+        let mut slice = unsafe {
+            DisjointSlice::<u32, Layout>::from_raw_parts(storage.as_mut_ptr(), storage.len())
+        };
+        let witness = DisjointTile2D::<Index1D, 4, 2, 4, 2>::from_model_index(0).unwrap();
+        assert!(slice.get_tiled_2d_mut(&witness, 2, 2, 4, 4).is_none());
+        assert!(slice.get_tiled_2d_mut(&witness, 0, 2, 4, 3).is_none());
     }
 
     #[test]

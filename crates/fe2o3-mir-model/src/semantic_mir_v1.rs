@@ -4661,6 +4661,12 @@ pub enum SemanticDisjointIndexSpaceV1 {
         lanes_per_block: u64,
         elements_per_lane: u64,
     },
+    Tiled2dIndex1d {
+        lanes_per_tile: u64,
+        tile_rows: u64,
+        tile_columns: u64,
+        elements_per_lane: u64,
+    },
     GridExclusive,
 }
 
@@ -4673,6 +4679,31 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
     WorkgroupBarrier,
     WaveBarrier,
     FabsF32,
+    /// Creates the compiler-issued capability for one supported matrix profile.
+    MatrixContextCurrent {
+        context: SemanticTypeIdV1,
+    },
+    /// Reinterprets four scalar bit patterns as one distributed BF16 fragment.
+    Bf16MatrixFragmentFromBits {
+        fragment: SemanticTypeIdV1,
+        bits: SemanticTypeIdV1,
+    },
+    /// Constructs one distributed FP32 accumulator fragment from four scalars.
+    F32MatrixAccumulatorFromValues {
+        fragment: SemanticTypeIdV1,
+        values: SemanticTypeIdV1,
+    },
+    /// Projects the four scalar lanes from one distributed FP32 accumulator.
+    F32MatrixAccumulatorIntoValues {
+        fragment: SemanticTypeIdV1,
+        values: SemanticTypeIdV1,
+    },
+    /// Performs one target-selected cooperative matrix multiply-accumulate.
+    MatrixMultiplyAccumulate {
+        context: SemanticTypeIdV1,
+        input_fragment: SemanticTypeIdV1,
+        accumulator_fragment: SemanticTypeIdV1,
+    },
     /// Produces the non-duplicable logical-1D index witness backed by `raw_index`.
     ThreadIndex1d {
         index_witness: SemanticTypeIdV1,
@@ -4704,6 +4735,17 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         input_space: SemanticDisjointIndexSpaceV1,
         output_space: SemanticDisjointIndexSpaceV1,
         lanes_per_block: u64,
+        elements_per_lane: u64,
+    },
+    ThreadIndexCheckedTiled2d {
+        input_witness: SemanticTypeIdV1,
+        output_tile: SemanticTypeIdV1,
+        raw_index: SemanticTypeIdV1,
+        input_space: SemanticDisjointIndexSpaceV1,
+        output_space: SemanticDisjointIndexSpaceV1,
+        lanes_per_tile: u64,
+        tile_rows: u64,
+        tile_columns: u64,
         elements_per_lane: u64,
     },
     DisjointIndexGet {
@@ -4756,6 +4798,17 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         raw_index: SemanticTypeIdV1,
         index_space: SemanticDisjointIndexSpaceV1,
         lanes_per_block: u64,
+        elements_per_lane: u64,
+    },
+    DisjointSliceGetTiled2dMut {
+        disjoint_slice: SemanticTypeIdV1,
+        tile_witness: SemanticTypeIdV1,
+        element: SemanticTypeIdV1,
+        raw_index: SemanticTypeIdV1,
+        index_space: SemanticDisjointIndexSpaceV1,
+        lanes_per_tile: u64,
+        tile_rows: u64,
+        tile_columns: u64,
         elements_per_lane: u64,
     },
 }
@@ -6235,6 +6288,34 @@ fn record_intrinsic_capability_claims(
                 && claims.claim_mapping(input_witness, input_space)
                 && claims.claim_mapping(output_block, expected)
         }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedTiled2d {
+            input_witness,
+            output_tile,
+            input_space,
+            output_space,
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+            ..
+        } => {
+            let expected = SemanticDisjointIndexSpaceV1::Tiled2dIndex1d {
+                lanes_per_tile,
+                tile_rows,
+                tile_columns,
+                elements_per_lane,
+            };
+            input_space == SemanticDisjointIndexSpaceV1::Index1d
+                && output_space == expected
+                && tiled_2d_geometry_valid(
+                    lanes_per_tile,
+                    tile_rows,
+                    tile_columns,
+                    elements_per_lane,
+                )
+                && claims.claim_mapping(input_witness, input_space)
+                && claims.claim_mapping(output_tile, expected)
+        }
         SemanticCompilerIntrinsicOperationV1::DisjointIndexGet {
             index_witness,
             index_space,
@@ -6289,6 +6370,32 @@ fn record_intrinsic_capability_claims(
                 && claims.claim_mapping(disjoint_slice, expected)
                 && claims.claim_mapping(block_witness, expected)
         }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut {
+            disjoint_slice,
+            tile_witness,
+            index_space,
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+            ..
+        } => {
+            let expected = SemanticDisjointIndexSpaceV1::Tiled2dIndex1d {
+                lanes_per_tile,
+                tile_rows,
+                tile_columns,
+                elements_per_lane,
+            };
+            index_space == expected
+                && tiled_2d_geometry_valid(
+                    lanes_per_tile,
+                    tile_rows,
+                    tile_columns,
+                    elements_per_lane,
+                )
+                && claims.claim_mapping(disjoint_slice, expected)
+                && claims.claim_mapping(tile_witness, expected)
+        }
         SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { grid_leader } => {
             claims.claim_grid_leader(grid_leader)
         }
@@ -6299,8 +6406,28 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
         | SemanticCompilerIntrinsicOperationV1::WaveBarrier
         | SemanticCompilerIntrinsicOperationV1::FabsF32
+        | SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { .. }
+        | SemanticCompilerIntrinsicOperationV1::Bf16MatrixFragmentFromBits { .. }
+        | SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorFromValues { .. }
+        | SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues { .. }
+        | SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate { .. }
         | SemanticCompilerIntrinsicOperationV1::ThreadIndexGet { .. } => true,
     }
+}
+
+fn tiled_2d_geometry_valid(
+    lanes_per_tile: u64,
+    tile_rows: u64,
+    tile_columns: u64,
+    elements_per_lane: u64,
+) -> bool {
+    lanes_per_tile != 0
+        && tile_rows != 0
+        && tile_columns != 0
+        && elements_per_lane != 0
+        && lanes_per_tile.is_multiple_of(tile_columns)
+        && lanes_per_tile.checked_mul(elements_per_lane) == tile_rows.checked_mul(tile_columns)
+        && (lanes_per_tile / tile_columns).checked_mul(elements_per_lane) == Some(tile_rows)
 }
 
 fn validate_non_body_callable_abi(
@@ -6410,6 +6537,42 @@ fn compiler_intrinsic_signature_matches(
                     Some(SemanticScalarTypeV1::Float { bits: 32 })
                 )
         }
+        SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { context } => {
+            inputs.is_empty() && output == context
+        }
+        SemanticCompilerIntrinsicOperationV1::Bf16MatrixFragmentFromBits { fragment, bits } => {
+            inputs == [bits]
+                && output == fragment
+                && fixed_scalar_array_matches(request, bits, false, 16, 4)
+        }
+        SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorFromValues {
+            fragment,
+            values,
+        } => {
+            inputs == [values]
+                && output == fragment
+                && fixed_scalar_array_matches(request, values, true, 32, 4)
+        }
+        SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues {
+            fragment,
+            values,
+        } => {
+            inputs == [fragment]
+                && output == values
+                && fixed_scalar_array_matches(request, values, true, 32, 4)
+        }
+        SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
+            context,
+            input_fragment,
+            accumulator_fragment,
+        } => {
+            inputs.len() == 4
+                && shared_reference_to(request, inputs[0], context)
+                && inputs[1] == input_fragment
+                && inputs[2] == input_fragment
+                && inputs[3] == accumulator_fragment
+                && output == accumulator_fragment
+        }
         SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
             index_witness,
             raw_index,
@@ -6480,6 +6643,37 @@ fn compiler_intrinsic_signature_matches(
                 && transparent_index_witness_matches(request, input_witness, raw_index)
                 && disjoint_block_witness_matches(request, output_block, raw_index)
                 && option_value_result_matches(request, output, output_block)
+        }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedTiled2d {
+            input_witness,
+            output_tile,
+            raw_index,
+            input_space,
+            output_space,
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+        } => {
+            inputs.len() == 1
+                && inputs[0] == input_witness
+                && input_space == SemanticDisjointIndexSpaceV1::Index1d
+                && output_space
+                    == SemanticDisjointIndexSpaceV1::Tiled2dIndex1d {
+                        lanes_per_tile,
+                        tile_rows,
+                        tile_columns,
+                        elements_per_lane,
+                    }
+                && tiled_2d_geometry_valid(
+                    lanes_per_tile,
+                    tile_rows,
+                    tile_columns,
+                    elements_per_lane,
+                )
+                && transparent_index_witness_matches(request, input_witness, raw_index)
+                && transparent_index_witness_matches(request, output_tile, raw_index)
+                && option_value_result_matches(request, output, output_tile)
         }
         SemanticCompilerIntrinsicOperationV1::DisjointIndexGet {
             index_witness,
@@ -6598,7 +6792,74 @@ fn compiler_intrinsic_signature_matches(
                 )
                 && checked_mutable_access_result_matches(request, output, element)
         }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut {
+            disjoint_slice,
+            tile_witness,
+            element,
+            raw_index,
+            index_space,
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+        } => {
+            inputs.len() == 6
+                && inputs[2..].iter().all(|input| *input == raw_index)
+                && index_space
+                    == SemanticDisjointIndexSpaceV1::Tiled2dIndex1d {
+                        lanes_per_tile,
+                        tile_rows,
+                        tile_columns,
+                        elements_per_lane,
+                    }
+                && tiled_2d_geometry_valid(
+                    lanes_per_tile,
+                    tile_rows,
+                    tile_columns,
+                    elements_per_lane,
+                )
+                && mutable_reference_to(request, inputs[0], disjoint_slice)
+                && shared_reference_to(request, inputs[1], tile_witness)
+                && transparent_index_witness_matches(request, tile_witness, raw_index)
+                && exclusive_disjoint_slice_type_matches(
+                    request,
+                    disjoint_slice,
+                    element,
+                    raw_index,
+                )
+                && checked_mutable_access_result_matches(request, output, element)
+        }
     }
+}
+
+fn fixed_scalar_array_matches(
+    request: &InertSemanticMirRequestV1,
+    ty: SemanticTypeIdV1,
+    float: bool,
+    bits: u16,
+    length: u64,
+) -> bool {
+    let Some(declaration) = request.types.get(ty.0 as usize) else {
+        return false;
+    };
+    let SemanticTypeShapeV1::Array {
+        element,
+        length: actual_length,
+    } = declaration.shape()
+    else {
+        return false;
+    };
+    if *actual_length != length {
+        return false;
+    }
+    matches!(
+        scalar_type(request, *element),
+        Some(SemanticScalarTypeV1::Float { bits: actual }) if float && actual == bits
+    ) || matches!(
+        scalar_type(request, *element),
+        Some(SemanticScalarTypeV1::Integer { signed: false, bits: actual })
+            if !float && actual == bits
+    )
 }
 
 fn disjoint_block_witness_matches(
@@ -11994,6 +12255,30 @@ fn enqueue_compiler_intrinsic_type_references(
         | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
         | SemanticCompilerIntrinsicOperationV1::WaveBarrier
         | SemanticCompilerIntrinsicOperationV1::FabsF32 => {}
+        SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { context } => {
+            pending.push_back(context);
+        }
+        SemanticCompilerIntrinsicOperationV1::Bf16MatrixFragmentFromBits { fragment, bits }
+        | SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorFromValues {
+            fragment,
+            values: bits,
+        }
+        | SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues {
+            fragment,
+            values: bits,
+        } => {
+            pending.push_back(fragment);
+            pending.push_back(bits);
+        }
+        SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
+            context,
+            input_fragment,
+            accumulator_fragment,
+        } => {
+            pending.push_back(context);
+            pending.push_back(input_fragment);
+            pending.push_back(accumulator_fragment);
+        }
         SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
             index_witness,
             raw_index,
@@ -12013,6 +12298,16 @@ fn enqueue_compiler_intrinsic_type_references(
         } => {
             pending.push_back(input_witness);
             pending.push_back(output_block);
+            pending.push_back(raw_index);
+        }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedTiled2d {
+            input_witness,
+            output_tile,
+            raw_index,
+            ..
+        } => {
+            pending.push_back(input_witness);
+            pending.push_back(output_tile);
             pending.push_back(raw_index);
         }
         SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint {
@@ -12101,6 +12396,18 @@ fn enqueue_compiler_intrinsic_type_references(
         } => {
             pending.push_back(disjoint_slice);
             pending.push_back(block_witness);
+            pending.push_back(element);
+            pending.push_back(raw_index);
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut {
+            disjoint_slice,
+            tile_witness,
+            element,
+            raw_index,
+            ..
+        } => {
+            pending.push_back(disjoint_slice);
+            pending.push_back(tile_witness);
             pending.push_back(element);
             pending.push_back(raw_index);
         }
@@ -13371,6 +13678,85 @@ fn encode_compiler_intrinsic_operation(
             writer.u32(raw_index.0)?;
             encode_disjoint_index_space(writer, index_space)
         }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedTiled2d {
+            input_witness,
+            output_tile,
+            raw_index,
+            input_space,
+            output_space,
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+        } => {
+            writer.u8(25)?;
+            writer.u32(input_witness.0)?;
+            writer.u32(output_tile.0)?;
+            writer.u32(raw_index.0)?;
+            encode_disjoint_index_space(writer, input_space)?;
+            encode_disjoint_index_space(writer, output_space)?;
+            writer.u64(lanes_per_tile)?;
+            writer.u64(tile_rows)?;
+            writer.u64(tile_columns)?;
+            writer.u64(elements_per_lane)
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut {
+            disjoint_slice,
+            tile_witness,
+            element,
+            raw_index,
+            index_space,
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+        } => {
+            writer.u8(26)?;
+            writer.u32(disjoint_slice.0)?;
+            writer.u32(tile_witness.0)?;
+            writer.u32(element.0)?;
+            writer.u32(raw_index.0)?;
+            encode_disjoint_index_space(writer, index_space)?;
+            writer.u64(lanes_per_tile)?;
+            writer.u64(tile_rows)?;
+            writer.u64(tile_columns)?;
+            writer.u64(elements_per_lane)
+        }
+        SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { context } => {
+            writer.u8(20)?;
+            writer.u32(context.0)
+        }
+        SemanticCompilerIntrinsicOperationV1::Bf16MatrixFragmentFromBits { fragment, bits } => {
+            writer.u8(21)?;
+            writer.u32(fragment.0)?;
+            writer.u32(bits.0)
+        }
+        SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorFromValues {
+            fragment,
+            values,
+        } => {
+            writer.u8(22)?;
+            writer.u32(fragment.0)?;
+            writer.u32(values.0)
+        }
+        SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues {
+            fragment,
+            values,
+        } => {
+            writer.u8(23)?;
+            writer.u32(fragment.0)?;
+            writer.u32(values.0)
+        }
+        SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
+            context,
+            input_fragment,
+            accumulator_fragment,
+        } => {
+            writer.u8(24)?;
+            writer.u32(context.0)?;
+            writer.u32(input_fragment.0)?;
+            writer.u32(accumulator_fragment.0)
+        }
         SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift {
             input_witness,
             output_witness,
@@ -13511,6 +13897,18 @@ fn encode_disjoint_index_space(
         } => {
             writer.u8(3)?;
             writer.u64(lanes_per_block)?;
+            writer.u64(elements_per_lane)
+        }
+        SemanticDisjointIndexSpaceV1::Tiled2dIndex1d {
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+        } => {
+            writer.u8(4)?;
+            writer.u64(lanes_per_tile)?;
+            writer.u64(tile_rows)?;
+            writer.u64(tile_columns)?;
             writer.u64(elements_per_lane)
         }
     }

@@ -2757,6 +2757,31 @@ fn parse_disjoint_index_space_v1(ty: &Type) -> Option<RustDisjointIndexSpaceV1> 
         let elements_per_lane = parse_u64_const_argument_v1(arguments.next()?)?;
         return RustDisjointIndexSpaceV1::blocked_index_1d(lanes_per_block, elements_per_lane);
     }
+    if segment.ident == "Tiled2D" {
+        let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+            return None;
+        };
+        if arguments.colon2_token.is_some() || arguments.args.len() != 5 {
+            return None;
+        }
+        let mut arguments = arguments.args.iter();
+        let Some(GenericArgument::Type(base)) = arguments.next() else {
+            return None;
+        };
+        if !is_index_1d_v1(base) {
+            return None;
+        }
+        let lanes_per_tile = parse_u64_const_argument_v1(arguments.next()?)?;
+        let tile_rows = parse_u64_const_argument_v1(arguments.next()?)?;
+        let tile_columns = parse_u64_const_argument_v1(arguments.next()?)?;
+        let elements_per_lane = parse_u64_const_argument_v1(arguments.next()?)?;
+        return RustDisjointIndexSpaceV1::tiled_2d_index_1d(
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+        );
+    }
     if segment.ident != "Shifted" {
         return None;
     }
@@ -5053,6 +5078,12 @@ mod tests {
         let blocked_other: ItemFn = parse_quote! {
             pub fn blocked_other(output: DisjointSlice<f32, Blocked<Index1D, 16, 2>>) {}
         };
+        let tiled: ItemFn = parse_quote! {
+            pub fn tiled(output: DisjointSlice<f32, Tiled2D<Index1D, 64, 16, 16, 4>>) {}
+        };
+        let tiled_other: ItemFn = parse_quote! {
+            pub fn tiled_other(output: DisjointSlice<f32, Tiled2D<Index1D, 32, 8, 16, 4>>) {}
+        };
         let options = parse_kernel_options(quote!(typed)).unwrap();
         let identity = model_general_typed_signature_v1(&identity, &options, [0x71; 32])
             .unwrap()
@@ -5080,6 +5111,16 @@ mod tests {
             .abi
             .fields()[0]
             .type_identity();
+        let tiled = model_general_typed_signature_v1(&tiled, &options, [0x77; 32])
+            .unwrap()
+            .abi
+            .fields()[0]
+            .type_identity();
+        let tiled_other = model_general_typed_signature_v1(&tiled_other, &options, [0x78; 32])
+            .unwrap()
+            .abi
+            .fields()[0]
+            .type_identity();
 
         assert_ne!(identity, shifted);
         assert_ne!(identity, grid_exclusive);
@@ -5088,6 +5129,8 @@ mod tests {
         assert_ne!(shifted, blocked);
         assert_ne!(grid_exclusive, blocked);
         assert_ne!(blocked, blocked_other);
+        assert_ne!(blocked, tiled);
+        assert_ne!(tiled, tiled_other);
 
         for invalid in [
             parse_quote! {
@@ -5098,6 +5141,17 @@ mod tests {
             },
             parse_quote! {
                 pub fn wrong_base(output: DisjointSlice<f32, Blocked<GridExclusive, 16, 4>>) {}
+            },
+            parse_quote! {
+                pub fn zero_tile(output: DisjointSlice<f32, Tiled2D<Index1D, 64, 0, 16, 4>>) {}
+            },
+            parse_quote! {
+                pub fn incomplete_tile(output: DisjointSlice<f32, Tiled2D<Index1D, 64, 8, 16, 4>>) {}
+            },
+            parse_quote! {
+                pub fn wrong_tile_base(
+                    output: DisjointSlice<f32, Tiled2D<GridExclusive, 64, 16, 16, 4>>,
+                ) {}
             },
         ] {
             assert!(model_general_typed_signature_v1(&invalid, &options, [0x76; 32]).is_err());

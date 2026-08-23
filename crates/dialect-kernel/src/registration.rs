@@ -4,13 +4,13 @@ use fe2o3_pliron_owner_core::{
 
 use crate::{
     AccessKindAttr, AlgorithmOp, AlgorithmType, AnalysisSplitOp, AtomicOrderingAttr,
-    AtomicScopeAttr, BranchOp, DIALECT_NAME, DimensionAttr, DimensionOp, GeneralGemmAbiSchemaAttr,
-    GeneralGemmEpilogueSchemaAttr, GeneralGemmOp, IndexBinaryKindAttr, IndexBinaryOp,
-    IndexConstantOp, IndexLessThanBranchOp, IndexType, IndexValueAttr, InvocationDimensionAttr,
-    InvocationIndexOp, IterationDomainAttr, LaunchExtentAttr, MemorySpaceAttr, RankedAccessOp,
-    RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp, SemanticBinaryKindAttr,
-    SemanticBinaryOp, SemanticConstantAttr, SemanticConstantOp, SemanticScalarType,
-    SemanticSymbolAttr, SemanticSymbolOp,
+    AtomicScopeAttr, BranchOp, CheckedTiledIndex2DOp, DIALECT_NAME, DimensionAttr, DimensionOp,
+    GeneralGemmAbiSchemaAttr, GeneralGemmEpilogueSchemaAttr, GeneralGemmOp, IndexBinaryKindAttr,
+    IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp, IndexType, IndexValueAttr,
+    InvocationDimensionAttr, InvocationIndexOp, IterationDomainAttr, LaunchExtentAttr,
+    MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp,
+    SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr, SemanticConstantOp,
+    SemanticScalarType, SemanticSymbolAttr, SemanticSymbolOp,
 };
 
 fn registration_hook(
@@ -42,6 +42,7 @@ fn registration_hook(
     service.register_operation::<IndexConstantOp>()?;
     service.register_operation::<InvocationIndexOp>()?;
     service.register_operation::<IndexBinaryOp>()?;
+    service.register_operation::<CheckedTiledIndex2DOp>()?;
     service.register_operation::<DimensionOp>()?;
     service.register_operation::<RankedAccessOp>()?;
     service.register_operation::<IndexLessThanBranchOp>()?;

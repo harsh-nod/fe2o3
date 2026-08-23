@@ -1,4 +1,4 @@
-use fe2o3_device::{DisjointSlice, KernelMarkerV1};
+use fe2o3_device::{DisjointSlice, Index1D, KernelMarkerV1, Tiled2D};
 use fe2o3_tiled_gemm_general_v1::{
     GENERAL_TILED_GEMM_PROTECTED_EXECUTION_BLOCKER_V1,
     GENERAL_TILED_GEMM_PROTECTED_EXECUTION_SUPPORTED_V1,
@@ -16,7 +16,19 @@ const LIB_SOURCE: &str = include_str!("../src/lib.rs");
 const KERNEL_SOURCE: &str = include_str!("../src/kernel.rs");
 
 type GeneralKernelFn =
-    fn(&[f32], &[f32], DisjointSlice<f32>, u32, u32, u32, u32, u32, u32, f32, f32);
+    fn(
+        &[u16],
+        &[u16],
+        DisjointSlice<f32, Tiled2D<Index1D, 64, 16, 16, 4>>,
+        u32,
+        u32,
+        u32,
+        u32,
+        u32,
+        u32,
+        f32,
+        f32,
+    );
 
 #[derive(Default)]
 struct SourceFacts {
@@ -65,7 +77,7 @@ fn attributed_safe_kernel_compiles_with_the_dynamic_abi() {
 }
 
 #[test]
-fn source_forbids_unsafe_and_contains_dynamic_indexing_and_epilogue() {
+fn source_forbids_unsafe_and_contains_matrix_tiling_and_epilogue() {
     let library = syn::parse_file(LIB_SOURCE).expect("library source parses");
     assert!(library.attrs.iter().any(|attribute| {
         attribute.path().is_ident("forbid")
@@ -81,10 +93,27 @@ fn source_forbids_unsafe_and_contains_dynamic_indexing_and_epilogue() {
     assert_eq!(facts.unsafe_blocks, 0);
     assert_eq!(facts.unsafe_functions, 0);
     assert!(facts.function_calls.iter().any(|call| call == "index_1d"));
-    for required in ["a[a_index]", "b[b_index]"] {
-        assert!(KERNEL_SOURCE.contains(required));
+    for required in [
+        "Bf16MfmaFragment::from_bits",
+        "F32AccumulatorFragment::from_values",
+        "while phase < k as usize",
+        "a_row * lda as usize",
+        "depth0 * ldb as usize",
+        "alpha * values[0] + beta * *output",
+    ] {
+        assert!(KERNEL_SOURCE.contains(required), "missing `{required}`");
     }
-    assert!(facts.method_calls.iter().any(|call| call == "get_mut"));
+    for required in [
+        "checked_tiled_2d",
+        "multiply_accumulate",
+        "into_values",
+        "get_tiled_2d_mut",
+    ] {
+        assert!(
+            facts.method_calls.iter().any(|call| call == required),
+            "missing method `{required}`"
+        );
+    }
     for forbidden in ["get_unchecked", "get_unchecked_mut", "get_mut_at"] {
         assert!(!facts.method_calls.iter().any(|call| call == forbidden));
     }
@@ -94,12 +123,17 @@ fn source_forbids_unsafe_and_contains_dynamic_indexing_and_epilogue() {
 fn ordinary_host_execution_panics_before_output_mutation() {
     let function: GeneralKernelFn =
         <__fe2o3_kernel_marker_tiled_gemm_general_v1 as KernelMarkerV1>::FUNCTION;
-    let a = [1.0_f32; 17];
-    let b = [1.0_f32; 19];
+    let a = [0x3f80_u16; 17];
+    let b = [0x3f80_u16; 19];
     let sentinel = f32::from_bits(0x7f7f_ffff);
     let mut output = [sentinel; 19];
     // SAFETY: the test exclusively owns `output` for the caught invocation.
-    let output_view = unsafe { DisjointSlice::from_raw_parts(output.as_mut_ptr(), output.len()) };
+    let output_view = unsafe {
+        DisjointSlice::<f32, Tiled2D<Index1D, 64, 16, 16, 4>>::from_raw_parts(
+            output.as_mut_ptr(),
+            output.len(),
+        )
+    };
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         function(&a, &b, output_view, 1, 1, 17, 17, 1, 19, 2.0, -1.0);
     }));
@@ -113,7 +147,7 @@ fn ordinary_host_execution_panics_before_output_mutation() {
 
 #[test]
 fn status_records_end_to_end_qualification_and_protected_boundary() {
-    assert_eq!(GENERAL_TILED_GEMM_WORKGROUP_V1, [256, 1, 1]);
+    assert_eq!(GENERAL_TILED_GEMM_WORKGROUP_V1, [64, 1, 1]);
     assert_eq!(GENERAL_TILED_GEMM_MAX_PHASES_V1, u32::MAX);
     assert!(std::hint::black_box(
         GENERAL_TILED_GEMM_SAFE_SOURCE_PRESENT_V1

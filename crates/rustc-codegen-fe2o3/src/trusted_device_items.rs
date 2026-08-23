@@ -41,8 +41,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0xa3, 0x37, 0x2b, 0xf8, 0xa2, 0x64, 0x89, 0x68, 0x8c, 0xb5, 0x4d, 0x3f, 0xdd, 0x18, 0x70, 0xc0,
-    0xcd, 0xc9, 0x48, 0x56, 0x11, 0x33, 0x9c, 0xa0, 0x16, 0x26, 0xa4, 0xd5, 0xf5, 0xa8, 0x88, 0x0f,
+    0x68, 0x76, 0x04, 0xfb, 0x50, 0xe3, 0x98, 0x0b, 0x16, 0x9f, 0xab, 0x4a, 0x2f, 0xe0, 0xa4, 0xc0,
+    0xff, 0xa0, 0xca, 0xaa, 0xe3, 0x7f, 0x4b, 0x00, 0xe7, 0x32, 0xd6, 0x8a, 0xfb, 0x82, 0xf2, 0x17,
 ];
 #[allow(
     dead_code,
@@ -79,8 +79,8 @@ const REVIEWED_GENERAL_GEMM_PROOF_DEFINITION_SOURCE_V1: [u8; 32] = [
 // Portable semantic identity of the reviewed `fe2o3_device::DisjointSlice`
 // definition and reference source closure used by the store signatures.
 const REVIEWED_GENERAL_GEMM_DISJOINT_SLICE_DEPENDENCY_V1: [u8; 32] = [
-    0xf3, 0x4f, 0x2d, 0xa5, 0x68, 0x64, 0xfc, 0x05, 0x62, 0x46, 0xdc, 0xf1, 0xe1, 0x22, 0xa3, 0xbf,
-    0x58, 0x64, 0x9a, 0x81, 0x70, 0xf0, 0xcf, 0x69, 0xf7, 0x1d, 0x17, 0x69, 0xb2, 0x3a, 0x6c, 0xa7,
+    0x50, 0x52, 0x58, 0x0f, 0x95, 0xc6, 0x4e, 0x53, 0xa2, 0xdf, 0xbd, 0x9e, 0x35, 0x76, 0x56, 0x8e,
+    0xed, 0xbd, 0xde, 0x59, 0x2f, 0x79, 0x47, 0x27, 0xb0, 0x7f, 0x20, 0xda, 0x1e, 0xdc, 0x73, 0x3b,
 ];
 
 #[cfg(test)]
@@ -456,14 +456,17 @@ pub(crate) enum TrustedDeviceItem {
     DisjointIndex,
     ShiftedIndexSpace,
     BlockedIndexSpace,
+    Tiled2DIndexSpace,
     GridExclusiveIndexSpace,
     DisjointBlock,
+    DisjointTile2D,
     GridLeader,
     ThreadIndex1d,
     ThreadIndexGet,
     ThreadIndexIntoDisjoint,
     ThreadIndexCheckedShift,
     ThreadIndexCheckedBlock,
+    ThreadIndexCheckedTiled2D,
     DisjointIndexGet,
     DisjointIndexCheckedShift,
     DisjointBlockComponentIndex,
@@ -476,6 +479,7 @@ pub(crate) enum TrustedDeviceItem {
     DisjointSliceGetDisjointMut,
     DisjointSliceGetMutExclusive,
     DisjointSliceGetBlockMut,
+    DisjointSliceGetTiled2DMut,
     DisjointSliceGetMutAt,
     DisjointSliceLen,
     DeviceGlobalMutPtrU32AsAtomic,
@@ -639,6 +643,11 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::Blocked",
     ),
     (
+        TrustedDeviceItem::Tiled2DIndexSpace,
+        "fe2o3_device_tiled_2d_index_space",
+        "fe2o3_device::Tiled2D",
+    ),
+    (
         TrustedDeviceItem::GridExclusiveIndexSpace,
         "fe2o3_device_grid_exclusive_index_space",
         "fe2o3_device::GridExclusive",
@@ -652,6 +661,11 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::DisjointBlock,
         "fe2o3_device_disjoint_block",
         "fe2o3_device::DisjointBlock",
+    ),
+    (
+        TrustedDeviceItem::DisjointTile2D,
+        "fe2o3_device_disjoint_tile_2d",
+        "fe2o3_device::DisjointTile2D",
     ),
     (
         TrustedDeviceItem::ThreadIndex1d,
@@ -677,6 +691,11 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::ThreadIndexCheckedBlock,
         "fe2o3_device_thread_index_checked_block",
         "fe2o3_device::ThreadIndex::checked_block",
+    ),
+    (
+        TrustedDeviceItem::ThreadIndexCheckedTiled2D,
+        "fe2o3_device_thread_index_checked_tiled_2d",
+        "fe2o3_device::ThreadIndex::checked_tiled_2d",
     ),
     (
         TrustedDeviceItem::DisjointIndexGet,
@@ -737,6 +756,11 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::DisjointSliceGetBlockMut,
         "fe2o3_device_disjoint_slice_get_block_mut",
         "fe2o3_device::DisjointSlice::<T, Blocked<IndexSpace, LANES_PER_BLOCK, ELEMENTS_PER_LANE>>::get_block_mut",
+    ),
+    (
+        TrustedDeviceItem::DisjointSliceGetTiled2DMut,
+        "fe2o3_device_disjoint_slice_get_tiled_2d_mut",
+        "fe2o3_device::DisjointSlice::<T, Tiled2D<IndexSpace, LANES_PER_TILE, TILE_ROWS, TILE_COLUMNS, ELEMENTS_PER_LANE>>::get_tiled_2d_mut",
     ),
     (
         TrustedDeviceItem::DisjointSliceGetMutAt,
@@ -1395,9 +1419,11 @@ fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option
         TrustedDeviceItem::DisjointIndex => Some("fe2o3_device::thread::DisjointIndex"),
         TrustedDeviceItem::ShiftedIndexSpace => Some("fe2o3_device::thread::Shifted"),
         TrustedDeviceItem::BlockedIndexSpace => Some("fe2o3_device::thread::Blocked"),
+        TrustedDeviceItem::Tiled2DIndexSpace => Some("fe2o3_device::thread::Tiled2D"),
         TrustedDeviceItem::GridExclusiveIndexSpace => Some("fe2o3_device::thread::GridExclusive"),
         TrustedDeviceItem::GridLeader => Some("fe2o3_device::thread::GridLeader"),
         TrustedDeviceItem::DisjointBlock => Some("fe2o3_device::thread::DisjointBlock"),
+        TrustedDeviceItem::DisjointTile2D => Some("fe2o3_device::thread::DisjointTile2D"),
         TrustedDeviceItem::ThreadIndex1d => Some("fe2o3_device::thread::index_1d"),
         TrustedDeviceItem::ThreadIndexGet => Some("fe2o3_device::thread::{impl#7}::get"),
         TrustedDeviceItem::ThreadIndexIntoDisjoint => {
@@ -1408,6 +1434,9 @@ fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option
         }
         TrustedDeviceItem::ThreadIndexCheckedBlock => {
             Some("fe2o3_device::thread::{impl#7}::checked_block")
+        }
+        TrustedDeviceItem::ThreadIndexCheckedTiled2D => {
+            Some("fe2o3_device::thread::{impl#7}::checked_tiled_2d")
         }
         TrustedDeviceItem::DisjointIndexGet => Some("fe2o3_device::thread::{impl#8}::get"),
         TrustedDeviceItem::DisjointIndexCheckedShift => {
@@ -1426,6 +1455,9 @@ fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option
         }
         TrustedDeviceItem::DisjointSliceGetBlockMut => {
             Some("fe2o3_device::{impl#2}::get_block_mut")
+        }
+        TrustedDeviceItem::DisjointSliceGetTiled2DMut => {
+            Some("fe2o3_device::{impl#3}::get_tiled_2d_mut")
         }
         TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic => {
             Some("fe2o3_device::atomic::{impl#0}::as_atomic")
@@ -1582,6 +1614,10 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::F32AccumulatorFragmentFromValues
             | TrustedDeviceItem::F32AccumulatorFragmentIntoValues
             | TrustedDeviceItem::DeviceMatrixMultiplyAccumulate
+            | TrustedDeviceItem::Tiled2DIndexSpace
+            | TrustedDeviceItem::DisjointTile2D
+            | TrustedDeviceItem::ThreadIndexCheckedTiled2D
+            | TrustedDeviceItem::DisjointSliceGetTiled2DMut
     )
 }
 
@@ -2726,14 +2762,17 @@ mod tests {
             TrustedDeviceItem::DisjointIndex,
             TrustedDeviceItem::ShiftedIndexSpace,
             TrustedDeviceItem::BlockedIndexSpace,
+            TrustedDeviceItem::Tiled2DIndexSpace,
             TrustedDeviceItem::GridExclusiveIndexSpace,
             TrustedDeviceItem::GridLeader,
             TrustedDeviceItem::DisjointBlock,
+            TrustedDeviceItem::DisjointTile2D,
             TrustedDeviceItem::ThreadIndex1d,
             TrustedDeviceItem::ThreadIndexGet,
             TrustedDeviceItem::ThreadIndexIntoDisjoint,
             TrustedDeviceItem::ThreadIndexCheckedShift,
             TrustedDeviceItem::ThreadIndexCheckedBlock,
+            TrustedDeviceItem::ThreadIndexCheckedTiled2D,
             TrustedDeviceItem::DisjointIndexGet,
             TrustedDeviceItem::DisjointIndexCheckedShift,
             TrustedDeviceItem::DisjointBlockComponentIndex,
@@ -2742,6 +2781,7 @@ mod tests {
             TrustedDeviceItem::DisjointSliceGetDisjointMut,
             TrustedDeviceItem::DisjointSliceGetMutExclusive,
             TrustedDeviceItem::DisjointSliceGetBlockMut,
+            TrustedDeviceItem::DisjointSliceGetTiled2DMut,
             TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic,
             TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic,
             TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic,
@@ -2762,7 +2802,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("a3372bf8a26489688cb54d3fdd1870c0cdc9485611339ca01626a4d5f5a8880f")
+            digest("687604fb50e3980b169fab4a2fe0a4c0ffa0caaae37f4b00e732d68afb82f217")
         );
 
         let definition = semantic_definition(
@@ -3444,14 +3484,17 @@ mod tests {
             TrustedDeviceItem::DisjointIndex,
             TrustedDeviceItem::ShiftedIndexSpace,
             TrustedDeviceItem::BlockedIndexSpace,
+            TrustedDeviceItem::Tiled2DIndexSpace,
             TrustedDeviceItem::GridExclusiveIndexSpace,
             TrustedDeviceItem::GridLeader,
             TrustedDeviceItem::DisjointBlock,
+            TrustedDeviceItem::DisjointTile2D,
             TrustedDeviceItem::ThreadIndex1d,
             TrustedDeviceItem::ThreadIndexGet,
             TrustedDeviceItem::ThreadIndexIntoDisjoint,
             TrustedDeviceItem::ThreadIndexCheckedShift,
             TrustedDeviceItem::ThreadIndexCheckedBlock,
+            TrustedDeviceItem::ThreadIndexCheckedTiled2D,
             TrustedDeviceItem::DisjointIndexGet,
             TrustedDeviceItem::DisjointIndexCheckedShift,
             TrustedDeviceItem::DisjointBlockComponentIndex,
@@ -3464,6 +3507,7 @@ mod tests {
             TrustedDeviceItem::DisjointSliceGetDisjointMut,
             TrustedDeviceItem::DisjointSliceGetMutExclusive,
             TrustedDeviceItem::DisjointSliceGetBlockMut,
+            TrustedDeviceItem::DisjointSliceGetTiled2DMut,
             TrustedDeviceItem::DisjointSliceGetMutAt,
             TrustedDeviceItem::DisjointSliceLen,
             TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic,

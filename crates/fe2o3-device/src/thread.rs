@@ -376,6 +376,25 @@ pub enum Blocked<IndexSpace, const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LA
     _IndexSpace(core::convert::Infallible, PhantomData<fn() -> IndexSpace>),
 }
 
+/// Type-level mapping for a grid of row-major two-dimensional output tiles.
+///
+/// Lanes are distributed across tile columns and each lane owns a fixed number
+/// of tile rows. The static geometry must satisfy
+/// `LANES_PER_TILE * ELEMENTS_PER_LANE == TILE_ROWS * TILE_COLUMNS` and
+/// `LANES_PER_TILE / TILE_COLUMNS * ELEMENTS_PER_LANE == TILE_ROWS`.
+/// Runtime logical extents and row stride are checked by the matching access.
+#[derive(Debug)]
+#[rustc_diagnostic_item = "fe2o3_device_tiled_2d_index_space"]
+pub enum Tiled2D<
+    IndexSpace,
+    const LANES_PER_TILE: usize,
+    const TILE_ROWS: usize,
+    const TILE_COLUMNS: usize,
+    const ELEMENTS_PER_LANE: usize,
+> {
+    _IndexSpace(core::convert::Infallible, PhantomData<fn() -> IndexSpace>),
+}
+
 /// Type-level mapping reserved for the unique leader of the full grid.
 ///
 /// Unlike `Index1D`, this space has no safe `ThreadIndex` producer. Mutable
@@ -430,6 +449,22 @@ pub struct DisjointIndex<IndexSpace = Index1D> {
 pub struct DisjointBlock<IndexSpace, const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE: usize> {
     block_base: usize,
     lane: usize,
+    _index_space: PhantomData<fn() -> IndexSpace>,
+    _not_send_sync: PhantomData<*mut ()>,
+}
+
+/// Move-only authority for one lane's elements in a two-dimensional tile.
+#[repr(transparent)]
+#[must_use = "tiled output authority is lost when the witness is discarded"]
+#[rustc_diagnostic_item = "fe2o3_device_disjoint_tile_2d"]
+pub struct DisjointTile2D<
+    IndexSpace,
+    const LANES_PER_TILE: usize,
+    const TILE_ROWS: usize,
+    const TILE_COLUMNS: usize,
+    const ELEMENTS_PER_LANE: usize,
+> {
+    raw: usize,
     _index_space: PhantomData<fn() -> IndexSpace>,
     _not_send_sync: PhantomData<*mut ()>,
 }
@@ -512,6 +547,22 @@ impl<IndexSpace> ThreadIndex<IndexSpace> {
         self,
     ) -> Option<DisjointBlock<IndexSpace, LANES_PER_BLOCK, ELEMENTS_PER_LANE>> {
         DisjointBlock::checked_from_raw(self.raw)
+    }
+
+    /// Converts this invocation index into one statically shaped 2D tile witness.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_thread_index_checked_tiled_2d"]
+    pub fn checked_tiled_2d<
+        const LANES_PER_TILE: usize,
+        const TILE_ROWS: usize,
+        const TILE_COLUMNS: usize,
+        const ELEMENTS_PER_LANE: usize,
+    >(
+        self,
+    ) -> Option<
+        DisjointTile2D<IndexSpace, LANES_PER_TILE, TILE_ROWS, TILE_COLUMNS, ELEMENTS_PER_LANE>,
+    > {
+        DisjointTile2D::checked_from_raw(self.raw)
     }
 }
 
@@ -598,6 +649,74 @@ impl<IndexSpace, const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE: usize>
         let component_offset = component.checked_mul(LANES_PER_BLOCK)?;
         self.block_base
             .checked_add(component_offset.checked_add(self.lane)?)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_model_index(raw: usize) -> Option<Self> {
+        Self::checked_from_raw(raw)
+    }
+}
+
+impl<
+    IndexSpace,
+    const LANES_PER_TILE: usize,
+    const TILE_ROWS: usize,
+    const TILE_COLUMNS: usize,
+    const ELEMENTS_PER_LANE: usize,
+> DisjointTile2D<IndexSpace, LANES_PER_TILE, TILE_ROWS, TILE_COLUMNS, ELEMENTS_PER_LANE>
+{
+    fn checked_from_raw(raw: usize) -> Option<Self> {
+        if LANES_PER_TILE == 0
+            || TILE_ROWS == 0
+            || TILE_COLUMNS == 0
+            || ELEMENTS_PER_LANE == 0
+            || !LANES_PER_TILE.is_multiple_of(TILE_COLUMNS)
+            || LANES_PER_TILE.checked_mul(ELEMENTS_PER_LANE)?
+                != TILE_ROWS.checked_mul(TILE_COLUMNS)?
+            || (LANES_PER_TILE / TILE_COLUMNS).checked_mul(ELEMENTS_PER_LANE)? != TILE_ROWS
+        {
+            return None;
+        }
+        Some(Self {
+            raw,
+            _index_space: PhantomData,
+            _not_send_sync: PhantomData,
+        })
+    }
+
+    pub(crate) fn component_index(
+        &self,
+        component: usize,
+        rows: usize,
+        columns: usize,
+        row_stride: usize,
+    ) -> Option<usize> {
+        if component >= ELEMENTS_PER_LANE || row_stride < columns {
+            return None;
+        }
+        let tiles_per_row = columns
+            .checked_add(TILE_COLUMNS.checked_sub(1)?)?
+            .checked_div(TILE_COLUMNS)?;
+        if tiles_per_row == 0 {
+            return None;
+        }
+        let tile = self.raw.checked_div(LANES_PER_TILE)?;
+        let lane = self.raw.checked_rem(LANES_PER_TILE)?;
+        let tile_row = tile.checked_div(tiles_per_row)?;
+        let tile_column = tile.checked_rem(tiles_per_row)?;
+        let local_row = lane
+            .checked_div(TILE_COLUMNS)?
+            .checked_mul(ELEMENTS_PER_LANE)?
+            .checked_add(component)?;
+        let local_column = lane.checked_rem(TILE_COLUMNS)?;
+        let row = tile_row.checked_mul(TILE_ROWS)?.checked_add(local_row)?;
+        let column = tile_column
+            .checked_mul(TILE_COLUMNS)?
+            .checked_add(local_column)?;
+        if row >= rows || column >= columns {
+            return None;
+        }
+        row.checked_mul(row_stride)?.checked_add(column)
     }
 
     #[cfg(test)]

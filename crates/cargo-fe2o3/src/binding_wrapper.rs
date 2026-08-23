@@ -1436,6 +1436,10 @@ fn materialize_row_softmax_v1_child_environment(
             OsString::from(ROW_SOFTMAX_V1_PIPELINE),
         ),
         (OsString::from(TARGET_ENV), OsString::from("gfx942:xnack-")),
+        (
+            OsString::from(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV),
+            required(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV)?.clone(),
+        ),
     ]);
     if cfg!(debug_assertions)
         && inherited
@@ -1478,20 +1482,11 @@ fn materialize_row_softmax_v1_child_environment(
         CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2
     };
     require_canonical_sha256_environment(&final_environment, backend_name, "row-softmax")?;
-    if unprotected_qualification {
-        if final_environment.contains_key(OsStr::new(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV)) {
-            return Err(BindingWrapperError::BuildObservation(
-                "unprotected row-softmax qualification received protected compiler authority"
-                    .to_owned(),
-            ));
-        }
-    } else {
-        require_canonical_sha256_environment(
-            &final_environment,
-            crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV,
-            "row-softmax",
-        )?;
-    }
+    require_canonical_sha256_environment(
+        &final_environment,
+        crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV,
+        "row-softmax compiler closure",
+    )?;
     command.env_clear();
     command.envs(&final_environment);
     Ok(CompleteReviewedChildEnvironmentV2 {
@@ -2557,11 +2552,7 @@ impl CompilerCapabilities {
             crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV,
             hex(&self.compiler_closure_sha256()),
         );
-        if let Some(authority) = &self.invocation_authority {
-            authority
-                .inherit_for_child(command)
-                .map_err(BindingWrapperError::CapabilityBroker)?;
-        }
+        self.inherit_invocation_authority(command)?;
         Ok(())
     }
 
@@ -2572,11 +2563,15 @@ impl CompilerCapabilities {
         self.prepare_artifact_command(command)?;
         command
             .env_remove(CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2)
-            .env_remove(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV)
+            .env(
+                crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV,
+                hex(&self.compiler_closure_sha256()),
+            )
             .env(
                 QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1,
                 hex(&self.backend.sha256()[..]),
             );
+        self.inherit_invocation_authority(command)?;
         Ok(())
     }
 
@@ -2593,6 +2588,18 @@ impl CompilerCapabilities {
         self.backend
             .replace_for_child_at(command, BACKEND_CHILD_FD)
             .map_err(|error| BindingWrapperError::ChildCapability(error.to_string()))
+    }
+
+    fn inherit_invocation_authority(
+        &self,
+        command: &mut Command,
+    ) -> Result<(), BindingWrapperError> {
+        if let Some(authority) = &self.invocation_authority {
+            authority
+                .inherit_for_child(command)
+                .map_err(BindingWrapperError::CapabilityBroker)?;
+        }
+        Ok(())
     }
 
     fn prepare_invocation_authority(
@@ -6721,11 +6728,10 @@ mod tests {
             OsString::from(QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1),
             OsString::from("ab".repeat(32)),
         )));
-        assert!(
-            !complete.entries.iter().any(|(name, _)| {
-                name == OsStr::new(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV)
-            })
-        );
+        assert!(complete.entries.contains(&(
+            OsString::from(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV),
+            OsString::from("01".repeat(32)),
+        )));
         assert!(complete.entries.contains(&(
             OsString::from(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV),
             OsString::from("1"),

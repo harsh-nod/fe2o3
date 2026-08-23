@@ -18,6 +18,7 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     ThreadIndexIntoDisjoint,
     ThreadIndexCheckedShift,
     ThreadIndexCheckedBlock,
+    ThreadIndexCheckedTiled2d,
     DisjointIndexGet,
     DisjointIndexCheckedShift,
     DisjointSliceLen,
@@ -26,7 +27,13 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     GridLeaderCurrent,
     DisjointSliceGetMutExclusive,
     DisjointSliceGetBlockMut,
+    DisjointSliceGetTiled2dMut,
     WorkgroupBarrier,
+    MatrixContextCurrent,
+    Bf16MatrixFragmentFromBits,
+    F32MatrixAccumulatorFromValues,
+    F32MatrixAccumulatorIntoValues,
+    MatrixMultiplyAccumulate,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -89,6 +96,9 @@ impl ProductionSemanticTerminalRuleV1 {
             TrustedDeviceItem::ThreadIndexCheckedBlock => {
                 Self::Expand(ProductionTerminalExpansionV1::ThreadIndexCheckedBlock)
             }
+            TrustedDeviceItem::ThreadIndexCheckedTiled2D => {
+                Self::Expand(ProductionTerminalExpansionV1::ThreadIndexCheckedTiled2d)
+            }
             TrustedDeviceItem::DisjointIndexGet => {
                 Self::Expand(ProductionTerminalExpansionV1::DisjointIndexGet)
             }
@@ -113,8 +123,26 @@ impl ProductionSemanticTerminalRuleV1 {
             TrustedDeviceItem::DisjointSliceGetBlockMut => {
                 Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetBlockMut)
             }
+            TrustedDeviceItem::DisjointSliceGetTiled2DMut => {
+                Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetTiled2dMut)
+            }
             TrustedDeviceItem::WorkgroupSyncthreads => {
                 Self::Expand(ProductionTerminalExpansionV1::WorkgroupBarrier)
+            }
+            TrustedDeviceItem::DeviceMatrixCurrent => {
+                Self::Expand(ProductionTerminalExpansionV1::MatrixContextCurrent)
+            }
+            TrustedDeviceItem::Bf16MfmaFragmentFromBits => {
+                Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixFragmentFromBits)
+            }
+            TrustedDeviceItem::F32AccumulatorFragmentFromValues => {
+                Self::Expand(ProductionTerminalExpansionV1::F32MatrixAccumulatorFromValues)
+            }
+            TrustedDeviceItem::F32AccumulatorFragmentIntoValues => {
+                Self::Expand(ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues)
+            }
+            TrustedDeviceItem::DeviceMatrixMultiplyAccumulate => {
+                Self::Expand(ProductionTerminalExpansionV1::MatrixMultiplyAccumulate)
             }
             unsupported => Self::Reject(unsupported),
         }
@@ -174,6 +202,9 @@ impl ProductionSemanticTerminalRuleV1 {
             Self::Expand(ProductionTerminalExpansionV1::ThreadIndexCheckedBlock) => {
                 TrustedDeviceItem::ThreadIndexCheckedBlock
             }
+            Self::Expand(ProductionTerminalExpansionV1::ThreadIndexCheckedTiled2d) => {
+                TrustedDeviceItem::ThreadIndexCheckedTiled2D
+            }
             Self::Expand(ProductionTerminalExpansionV1::DisjointIndexGet) => {
                 TrustedDeviceItem::DisjointIndexGet
             }
@@ -198,8 +229,26 @@ impl ProductionSemanticTerminalRuleV1 {
             Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetBlockMut) => {
                 TrustedDeviceItem::DisjointSliceGetBlockMut
             }
+            Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetTiled2dMut) => {
+                TrustedDeviceItem::DisjointSliceGetTiled2DMut
+            }
             Self::Expand(ProductionTerminalExpansionV1::WorkgroupBarrier) => {
                 TrustedDeviceItem::WorkgroupSyncthreads
+            }
+            Self::Expand(ProductionTerminalExpansionV1::MatrixContextCurrent) => {
+                TrustedDeviceItem::DeviceMatrixCurrent
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Bf16MatrixFragmentFromBits) => {
+                TrustedDeviceItem::Bf16MfmaFragmentFromBits
+            }
+            Self::Expand(ProductionTerminalExpansionV1::F32MatrixAccumulatorFromValues) => {
+                TrustedDeviceItem::F32AccumulatorFragmentFromValues
+            }
+            Self::Expand(ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues) => {
+                TrustedDeviceItem::F32AccumulatorFragmentIntoValues
+            }
+            Self::Expand(ProductionTerminalExpansionV1::MatrixMultiplyAccumulate) => {
+                TrustedDeviceItem::DeviceMatrixMultiplyAccumulate
             }
             Self::Reject(item) => item,
         }
@@ -314,6 +363,34 @@ mod tests {
                 TrustedDeviceItem::WorkgroupSyncthreads,
                 ProductionTerminalExpansionV1::WorkgroupBarrier,
             ),
+            (
+                TrustedDeviceItem::DeviceMatrixCurrent,
+                ProductionTerminalExpansionV1::MatrixContextCurrent,
+            ),
+            (
+                TrustedDeviceItem::Bf16MfmaFragmentFromBits,
+                ProductionTerminalExpansionV1::Bf16MatrixFragmentFromBits,
+            ),
+            (
+                TrustedDeviceItem::F32AccumulatorFragmentFromValues,
+                ProductionTerminalExpansionV1::F32MatrixAccumulatorFromValues,
+            ),
+            (
+                TrustedDeviceItem::F32AccumulatorFragmentIntoValues,
+                ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues,
+            ),
+            (
+                TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
+                ProductionTerminalExpansionV1::MatrixMultiplyAccumulate,
+            ),
+            (
+                TrustedDeviceItem::ThreadIndexCheckedTiled2D,
+                ProductionTerminalExpansionV1::ThreadIndexCheckedTiled2d,
+            ),
+            (
+                TrustedDeviceItem::DisjointSliceGetTiled2DMut,
+                ProductionTerminalExpansionV1::DisjointSliceGetTiled2dMut,
+            ),
         ];
         for (item, expansion) in cases {
             let rule = ProductionSemanticTerminalRuleV1::from_trusted_device_item(item);
@@ -328,7 +405,6 @@ mod tests {
             TrustedDeviceItem::MemoryVolatileLoad,
             TrustedDeviceItem::MemoryVolatileStore,
             TrustedDeviceItem::MemoryCopyNonOverlapping,
-            TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
             TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic,
             TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic,
             TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic,

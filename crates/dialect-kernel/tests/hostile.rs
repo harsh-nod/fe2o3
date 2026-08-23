@@ -1,9 +1,10 @@
 use dialect_kernel::{
-    AccessKindAttr, AlgorithmOp, AlgorithmType, AtomicOrderingAttr, AtomicScopeAttr, DIALECT_NAME,
-    DYNAMIC_EXTENT, DimensionAttr, DimensionOp, ITERATION_DOMAIN_ATTR_KEY, IndexConstantOp,
-    IndexType, IterationDomainAttr, KernelError, MAX_ITERATION_RANK, MAX_RANKED_MEMORY_RANK,
-    RankedAccessOp, RankedMemoryError, RankedViewOp, RankedViewType, RegistrationError,
-    RegistrationOutcome, SemanticOwner, StructuredAlgorithmOp, register_dialect,
+    AccessKindAttr, AlgorithmOp, AlgorithmType, AtomicOrderingAttr, AtomicScopeAttr,
+    CheckedTiledIndex2DOp, DIALECT_NAME, DYNAMIC_EXTENT, DimensionAttr, DimensionOp,
+    ITERATION_DOMAIN_ATTR_KEY, IndexConstantOp, IndexType, IndexValueAttr, IterationDomainAttr,
+    KernelError, MAX_ITERATION_RANK, MAX_RANKED_MEMORY_RANK, RankedAccessOp, RankedMemoryError,
+    RankedViewOp, RankedViewType, RegistrationError, RegistrationOutcome, SemanticOwner,
+    StructuredAlgorithmOp, register_dialect,
 };
 use pliron::{
     attribute::Attribute,
@@ -285,6 +286,46 @@ fn dimension_verifier_binds_selector_to_the_same_view_rank() {
             .deref(context)
             .is::<IndexType>()
     );
+}
+
+#[test]
+fn checked_tiled_index_verifier_rejects_malformed_geometry_and_payload() {
+    let context = &mut Context::new();
+    register_dialect(context, &kernel_name()).unwrap();
+    let values = (0..5)
+        .map(|value| IndexConstantOp::new(context, value))
+        .collect::<Vec<_>>();
+    let valid = CheckedTiledIndex2DOp::new(
+        context,
+        values[0].result(context),
+        values[1].result(context),
+        values[2].result(context),
+        values[3].result(context),
+        values[4].result(context),
+        [64, 16, 16, 4],
+    );
+    verify_op(&valid, context).unwrap();
+
+    valid.set_attr_kernel_tile_rows(context, IndexValueAttr(15));
+    assert!(verify_op(&valid, context).is_err());
+
+    let raw = Operation::new(
+        context,
+        CheckedTiledIndex2DOp::get_concrete_op_info(),
+        vec![IndexType::get(context).into()],
+        values[..4]
+            .iter()
+            .map(|value| value.result(context))
+            .collect(),
+        vec![],
+        0,
+    );
+    let missing_operand = CheckedTiledIndex2DOp::from_operation(raw);
+    missing_operand.set_attr_kernel_lanes_per_tile(context, IndexValueAttr(64));
+    missing_operand.set_attr_kernel_tile_rows(context, IndexValueAttr(16));
+    missing_operand.set_attr_kernel_tile_columns(context, IndexValueAttr(16));
+    missing_operand.set_attr_kernel_elements_per_lane(context, IndexValueAttr(4));
+    assert!(verify_op(&missing_operand, context).is_err());
 }
 
 #[test]

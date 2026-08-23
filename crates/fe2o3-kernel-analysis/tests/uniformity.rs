@@ -1,6 +1,6 @@
 use fe2o3_kernel_analysis::{Diagnostic, UnsupportedReason, Variation, analyze_function};
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, Axis, Barrier, BarrierSemantics, BasicBlock, BlockId,
+    AccessMode, AddressSpace, Axis, Barrier, BarrierSemantics, BasicBlock, BinaryOp, BlockId,
     ComparePredicate, Constant, Convergence, Function, FunctionId, IndexKind, IntrinsicKind,
     IntrinsicOperation, MemoryAccess, MemoryOrdering, Operation, OperationKind, Signature,
     SynchronizationScope, Terminator, Type, ValueDef, ValueId, WaveOperation, WaveOperationKind,
@@ -35,6 +35,17 @@ fn compare(id: u32, lhs: u32, rhs: u32) -> Operation {
         ValueDef::new(ValueId(id), Type::BOOL),
         OperationKind::Compare {
             predicate: ComparePredicate::NotEqual,
+            lhs: ValueId(lhs),
+            rhs: ValueId(rhs),
+        },
+    )
+}
+
+fn add(id: u32, lhs: u32, rhs: u32) -> Operation {
+    Operation::effect_free(
+        ValueDef::new(ValueId(id), Type::INDEX),
+        OperationKind::Binary {
+            op: BinaryOp::Add,
             lhs: ValueId(lhs),
             rhs: ValueId(rhs),
         },
@@ -481,6 +492,123 @@ fn varying_exitless_loop_fails_closed() {
 }
 
 #[test]
+fn divergent_loop_exit_does_not_manufacture_reconvergence() {
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.extend([
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Local,
+                axis: Axis::X,
+            },
+        ),
+        constant(1, Constant::Index(0)),
+        compare(2, 0, 1),
+    ]);
+    entry.terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![],
+    });
+
+    let mut header = BasicBlock::new(BlockId(1));
+    header.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(2),
+        then_target: BlockId(2),
+        then_arguments: vec![],
+        else_target: BlockId(3),
+        else_arguments: vec![],
+    });
+    let mut body = BasicBlock::new(BlockId(2));
+    body.terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![],
+    });
+    let mut exit = returning(3);
+    exit.operations.push(workgroup_barrier());
+
+    let report = analyze_function(&function(vec![], vec![entry, header, body, exit]));
+
+    assert_eq!(report.block_control(BlockId(3)), Variation::Varying);
+    assert!(matches!(
+        report.diagnostics(),
+        [Diagnostic::DivergentBarrier {
+            block: BlockId(3),
+            ..
+        }]
+    ));
+}
+
+#[test]
+fn divergent_branch_can_reconverge_within_the_same_natural_loop() {
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.extend([
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Local,
+                axis: Axis::X,
+            },
+        ),
+        constant(1, Constant::Index(0)),
+        compare(2, 0, 1),
+        constant(3, Constant::Bool(true)),
+    ]);
+    entry.terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![],
+    });
+
+    let mut header = BasicBlock::new(BlockId(1));
+    header.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(3),
+        then_target: BlockId(2),
+        then_arguments: vec![],
+        else_target: BlockId(6),
+        else_arguments: vec![],
+    });
+    let mut body = BasicBlock::new(BlockId(2));
+    body.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(2),
+        then_target: BlockId(3),
+        then_arguments: vec![],
+        else_target: BlockId(4),
+        else_arguments: vec![],
+    });
+    let mut then_block = BasicBlock::new(BlockId(3));
+    then_block.terminator = Some(Terminator::Branch {
+        target: BlockId(5),
+        arguments: vec![],
+    });
+    let mut else_block = BasicBlock::new(BlockId(4));
+    else_block.terminator = Some(Terminator::Branch {
+        target: BlockId(5),
+        arguments: vec![],
+    });
+    let mut merge = BasicBlock::new(BlockId(5));
+    merge.operations.push(workgroup_barrier());
+    merge.terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![],
+    });
+
+    let report = analyze_function(&function(
+        vec![],
+        vec![
+            entry,
+            header,
+            body,
+            then_block,
+            else_block,
+            merge,
+            returning(6),
+        ],
+    ));
+
+    assert_eq!(report.block_control(BlockId(5)), Variation::GridUniform);
+    assert!(report.diagnostics().is_empty());
+}
+
+#[test]
 fn reconverged_merge_clears_control_but_not_phi_variation() {
     let mut entry = BasicBlock::new(BlockId(0));
     entry.operations.extend([
@@ -526,6 +654,100 @@ fn reconverged_merge_clears_control_but_not_phi_variation() {
 
     assert_eq!(report.block_control(BlockId(3)), Variation::GridUniform);
     assert_eq!(report.value(ValueId(5)), Variation::Varying);
+    assert!(report.diagnostics().is_empty());
+}
+
+#[test]
+fn reconverged_loop_preserves_trivial_phi_uniformity() {
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.extend([
+        constant(0, Constant::Index(0)),
+        constant(1, Constant::Index(3)),
+        constant(2, Constant::Index(1)),
+        intrinsic(
+            3,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Local,
+                axis: Axis::X,
+            },
+        ),
+        compare(4, 3, 0),
+    ]);
+    entry.terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![ValueId(0)],
+    });
+
+    let mut header = BasicBlock::new(BlockId(1));
+    header
+        .parameters
+        .push(ValueDef::new(ValueId(10), Type::INDEX));
+    header.operations.push(compare(11, 10, 1));
+    header.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(11),
+        then_target: BlockId(2),
+        then_arguments: vec![ValueId(10)],
+        else_target: BlockId(6),
+        else_arguments: vec![],
+    });
+
+    let mut body = BasicBlock::new(BlockId(2));
+    body.parameters
+        .push(ValueDef::new(ValueId(12), Type::INDEX));
+    body.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(4),
+        then_target: BlockId(3),
+        then_arguments: vec![ValueId(12)],
+        else_target: BlockId(4),
+        else_arguments: vec![ValueId(12)],
+    });
+
+    let mut then_block = BasicBlock::new(BlockId(3));
+    then_block
+        .parameters
+        .push(ValueDef::new(ValueId(13), Type::INDEX));
+    then_block.terminator = Some(Terminator::Branch {
+        target: BlockId(5),
+        arguments: vec![ValueId(13)],
+    });
+
+    let mut else_block = BasicBlock::new(BlockId(4));
+    else_block
+        .parameters
+        .push(ValueDef::new(ValueId(14), Type::INDEX));
+    else_block.terminator = Some(Terminator::Branch {
+        target: BlockId(5),
+        arguments: vec![ValueId(14)],
+    });
+
+    let mut merge = BasicBlock::new(BlockId(5));
+    merge
+        .parameters
+        .push(ValueDef::new(ValueId(15), Type::INDEX));
+    merge
+        .operations
+        .extend([workgroup_barrier(), add(16, 15, 2)]);
+    merge.terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![ValueId(16)],
+    });
+
+    let report = analyze_function(&function(
+        vec![],
+        vec![
+            entry,
+            header,
+            body,
+            then_block,
+            else_block,
+            merge,
+            returning(6),
+        ],
+    ));
+
+    assert_eq!(report.value(ValueId(10)), Variation::GridUniform);
+    assert_eq!(report.value(ValueId(15)), Variation::GridUniform);
+    assert_eq!(report.block_control(BlockId(5)), Variation::GridUniform);
     assert!(report.diagnostics().is_empty());
 }
 

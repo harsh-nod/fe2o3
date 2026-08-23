@@ -6,11 +6,12 @@ use std::{
 
 use dialect_gpu::{AddressSpaceAttr, BarrierOp, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr};
 use dialect_kernel::{
-    AccessKindAttr, AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr, BranchOp, DYNAMIC_EXTENT,
-    DimensionOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp,
-    IndexType, InvocationIndexOp, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp,
-    RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp, SUPPORTED_ELEMENT_WIDTHS,
-    SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantOp, SemanticSymbolOp,
+    AccessKindAttr, AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr, BranchOp,
+    CheckedTiledIndex2DOp, DYNAMIC_EXTENT, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp,
+    IndexConstantOp, IndexLessThanBranchOp, IndexType, InvocationIndexOp, MAX_RANKED_MEMORY_RANK,
+    MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp,
+    SUPPORTED_ELEMENT_WIDTHS, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantOp,
+    SemanticSymbolOp,
 };
 use fe2o3_kernel_analysis::{
     GeneralPlironKernelCheckErrorV1, GeneralPlironKernelCheckReportV1, MAX_RANKED_BOUNDS_BLOCKS,
@@ -95,6 +96,18 @@ pub enum ProductionRankedOperationV1 {
         kind: IndexBinaryKindAttr,
         lhs: ProductionRankedValueV1,
         rhs: ProductionRankedValueV1,
+    },
+    CheckedTiledIndex2D {
+        result: ProductionRankedValueIdV1,
+        invocation: ProductionRankedValueV1,
+        component: ProductionRankedValueV1,
+        rows: ProductionRankedValueV1,
+        columns: ProductionRankedValueV1,
+        row_stride: ProductionRankedValueV1,
+        lanes_per_tile: u64,
+        tile_rows: u64,
+        tile_columns: u64,
+        elements_per_lane: u64,
     },
     Dimension {
         result: ProductionRankedValueIdV1,
@@ -588,6 +601,35 @@ fn validate_operation(
         } => {
             require_index(*lhs, argument_count, locals)?;
             require_index(*rhs, argument_count, locals)?;
+            Ok(Some((*result, RecipeValueKindV1::Index)))
+        }
+        ProductionRankedOperationV1::CheckedTiledIndex2D {
+            result,
+            invocation,
+            component,
+            rows,
+            columns,
+            row_stride,
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+        } => {
+            for value in [invocation, component, rows, columns, row_stride] {
+                require_index(*value, argument_count, locals)?;
+            }
+            if *lanes_per_tile == 0
+                || *tile_rows == 0
+                || *tile_columns == 0
+                || *elements_per_lane == 0
+                || !lanes_per_tile.is_multiple_of(*tile_columns)
+                || lanes_per_tile.checked_mul(*elements_per_lane)
+                    != tile_rows.checked_mul(*tile_columns)
+                || (lanes_per_tile / tile_columns).checked_mul(*elements_per_lane)
+                    != Some(*tile_rows)
+            {
+                return Err(ProductionRankedKernelErrorV1::InvalidShape);
+            }
             Ok(Some((*result, RecipeValueKindV1::Index)))
         }
         ProductionRankedOperationV1::Dimension {
@@ -1125,6 +1167,34 @@ fn materialize_operation(
                     "validated ranked view operation failed materialization",
                 )
             })?;
+            (op.get_operation(), Some((*result, op.result(context))))
+        }
+        ProductionRankedOperationV1::CheckedTiledIndex2D {
+            result,
+            invocation,
+            component,
+            rows,
+            columns,
+            row_stride,
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+        } => {
+            let op = CheckedTiledIndex2DOp::new(
+                context,
+                resolve_value(*invocation, arguments, locals)?,
+                resolve_value(*component, arguments, locals)?,
+                resolve_value(*rows, arguments, locals)?,
+                resolve_value(*columns, arguments, locals)?,
+                resolve_value(*row_stride, arguments, locals)?,
+                [
+                    *lanes_per_tile,
+                    *tile_rows,
+                    *tile_columns,
+                    *elements_per_lane,
+                ],
+            );
             (op.get_operation(), Some((*result, op.result(context))))
         }
         ProductionRankedOperationV1::ViewInSpace {

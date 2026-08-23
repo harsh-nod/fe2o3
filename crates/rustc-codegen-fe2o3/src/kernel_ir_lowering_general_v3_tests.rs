@@ -9,7 +9,7 @@ use fe2o3_artifacts::{
     AbiLayout, BlockSize, Capability, Dimensions, Endianness, IdentityText, LaunchContract,
     PointerWidth, TargetIdentity,
 };
-use fe2o3_kernel_ir::MatrixOperation;
+use fe2o3_kernel_ir::{Axis, IndexKind, IntrinsicKind, IntrinsicOperation, MatrixOperation};
 use fe2o3_rustc_front::{
     FrontendLaunchBoundsV1, FrontendWorkgroupDimensionsV1, KernelFrontendContractV1,
 };
@@ -460,10 +460,6 @@ fn divergent_matrix_placement_is_rejected_by_the_existing_amdgcn_validator() {
     for capability in &abi {
         function.required_capabilities.remove(capability);
     }
-    function
-        .signature
-        .parameters
-        .push(Type::Scalar(ScalarType::Bool));
     let body = function.body.as_mut().unwrap();
     for operation in body
         .blocks
@@ -474,10 +470,33 @@ fn divergent_matrix_placement_is_rejected_by_the_existing_amdgcn_validator() {
             matrix.frontend_binding = None;
         }
     }
-    body.parameters.push(ValueId(16));
     let matrix_operations = std::mem::take(&mut body.blocks[1].operations);
+    body.blocks[1].operations.extend([
+        Operation::effect_free(
+            ValueDef::new(ValueId(16), Type::INDEX),
+            OperationKind::Intrinsic(IntrinsicOperation::new(
+                IntrinsicKind::InvocationIndex {
+                    kind: IndexKind::Local,
+                    axis: Axis::X,
+                },
+                Type::INDEX,
+            )),
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(17), Type::INDEX),
+            OperationKind::Constant(Constant::Index(0)),
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(18), Type::BOOL),
+            OperationKind::Compare {
+                predicate: ComparePredicate::NotEqual,
+                lhs: ValueId(16),
+                rhs: ValueId(17),
+            },
+        ),
+    ]);
     body.blocks[1].terminator = Some(Terminator::ConditionalBranch {
-        condition: ValueId(16),
+        condition: ValueId(18),
         then_target: BlockId(3),
         then_arguments: Vec::new(),
         else_target: BlockId(2),
@@ -494,7 +513,10 @@ fn divergent_matrix_placement_is_rejected_by_the_existing_amdgcn_validator() {
     let errors =
         dialect_amdgcn::lower_kernel_to_gfx942_xnack_minus_llvm_ir(&module, &module.kernels[0].id)
             .expect_err("divergent matrix placement");
-    assert!(errors.to_string().contains("convergent matrix"), "{errors}");
+    assert!(
+        errors.to_string().contains("convergent operation requires"),
+        "{errors}"
+    );
 }
 
 fn matrix_frontend_function() -> MirFunction {

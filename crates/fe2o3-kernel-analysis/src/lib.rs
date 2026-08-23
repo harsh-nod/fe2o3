@@ -11,14 +11,23 @@ mod kernel_check_pipeline;
 mod machine_effect;
 #[cfg(feature = "authenticated-machine-effect")]
 mod physical_machine_effect;
+#[cfg(feature = "pliron-analysis")]
 mod pliron_atomic_legality;
+#[cfg(feature = "pliron-analysis")]
 mod pliron_barrier;
+#[cfg(feature = "pliron-analysis")]
 mod pliron_invocation_trace;
+#[cfg(feature = "pliron-analysis")]
 mod pliron_pipeline;
+#[cfg(feature = "pliron-analysis")]
 mod pliron_race;
+#[cfg(feature = "pliron-analysis")]
 mod pliron_ranked_bounds;
+#[cfg(feature = "pliron-analysis")]
 mod pliron_semantic_refinement;
+#[cfg(feature = "pliron-analysis")]
 mod pliron_sparse_index;
+#[cfg(feature = "pliron-analysis")]
 mod pliron_workgroup_memory;
 #[cfg(feature = "authenticated-machine-effect")]
 mod scalar_gemm_v1_physical_machine_effect;
@@ -40,13 +49,21 @@ pub use kernel_check_pipeline::*;
 pub use machine_effect::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use physical_machine_effect::*;
+#[cfg(feature = "pliron-analysis")]
 pub use pliron_atomic_legality::*;
+#[cfg(feature = "pliron-analysis")]
 pub use pliron_barrier::*;
+#[cfg(feature = "pliron-analysis")]
 pub use pliron_pipeline::*;
+#[cfg(feature = "pliron-analysis")]
 pub use pliron_race::*;
+#[cfg(feature = "pliron-analysis")]
 pub use pliron_ranked_bounds::*;
+#[cfg(feature = "pliron-analysis")]
 pub use pliron_semantic_refinement::*;
+#[cfg(feature = "pliron-analysis")]
 pub use pliron_sparse_index::*;
+#[cfg(feature = "pliron-analysis")]
 pub use pliron_workgroup_memory::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use scalar_gemm_v1_physical_machine_effect::*;
@@ -54,7 +71,7 @@ pub use ssa::{
     SsaPlacement, SsaPlacementDiagnostic, SsaPlacementErrors, SsaVariable, SsaVariablePlacement,
     place_pruned_ssa_parameters,
 };
-pub use uniformity::analyze_function;
+pub use uniformity::{analyze_function, analyze_kernel_entry};
 
 use fe2o3_kernel_ir::{BlockId, FunctionId, SynchronizationScope, ValueId};
 use std::collections::BTreeMap;

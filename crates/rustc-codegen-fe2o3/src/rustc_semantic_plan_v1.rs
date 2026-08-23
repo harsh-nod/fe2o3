@@ -2099,6 +2099,13 @@ const fn terminal_expansion_tag_v1(expansion: ProductionTerminalExpansionV1) -> 
         ProductionTerminalExpansionV1::ThreadIndexCheckedBlock => 10,
         ProductionTerminalExpansionV1::DisjointSliceGetBlockMut => 11,
         ProductionTerminalExpansionV1::WorkgroupBarrier => 12,
+        ProductionTerminalExpansionV1::MatrixContextCurrent => 26,
+        ProductionTerminalExpansionV1::Bf16MatrixFragmentFromBits => 27,
+        ProductionTerminalExpansionV1::F32MatrixAccumulatorFromValues => 28,
+        ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues => 29,
+        ProductionTerminalExpansionV1::MatrixMultiplyAccumulate => 30,
+        ProductionTerminalExpansionV1::ThreadIndexCheckedTiled2d => 31,
+        ProductionTerminalExpansionV1::DisjointSliceGetTiled2dMut => 32,
     }
 }
 
