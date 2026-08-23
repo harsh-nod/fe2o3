@@ -52,6 +52,7 @@ const MAX_PROJECTED_OPERATIONS_V1: usize = MAX_RANKED_BOUNDS_OPERATIONS - 1;
 const MAX_PROJECTED_RANKED_IR_BYTES_V1: usize = MAX_RANKED_BOUNDS_OPERATIONS * 256;
 const MAX_PROJECTED_TENSOR_STATE_ENTRIES_V1: usize = MAX_RANKED_BOUNDS_OPERATIONS * 4;
 const MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1: usize = MAX_RANKED_BOUNDS_OPERATIONS * 16;
+const MAX_PROJECTED_TENSOR_ENUM_DEPTH_V1: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ProjectedAccessSourceV1 {
@@ -226,7 +227,16 @@ enum ProjectedTensorOriginV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ProjectedTensorValueV1 {
     Known(ProjectedTensorOriginV1),
+    ConstructedEnum(ProjectedTensorEnumEnvelopeV1),
     Invalid,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProjectedTensorEnumEnvelopeV1 {
+    origin: ProjectedTensorOriginV1,
+    // Innermost to outermost. The fixed bound keeps every dataflow state Copy-sized.
+    variants: [u32; MAX_PROJECTED_TENSOR_ENUM_DEPTH_V1],
+    depth: u8,
 }
 
 type ProjectedTensorStateV1 = HashMap<usize, ProjectedTensorValueV1>;
@@ -1031,6 +1041,15 @@ fn transfer_tensor_statements_v1(
                     {
                         state.get(&(place.local().index() as usize)).copied()
                     }
+                    SemanticRvalueKindV1::Aggregate(aggregate) => {
+                        tensor_origin_from_enum_aggregate_v1(
+                            aggregate,
+                            state,
+                            option_dominance,
+                            enum_payload_dominance,
+                            use_block,
+                        )?
+                    }
                     _ => None,
                 };
                 match origin {
@@ -1054,6 +1073,29 @@ fn transfer_tensor_statements_v1(
     Ok(())
 }
 
+fn tensor_origin_from_enum_aggregate_v1(
+    aggregate: &fe2o3_mir_model::semantic_mir_v1::SemanticAggregateRvalueV1,
+    state: &ProjectedTensorStateV1,
+    option_dominance: &SemanticOptionDominanceV1,
+    enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
+    use_block: SemanticBlockIdV1,
+) -> Result<Option<ProjectedTensorValueV1>, ProductionRankedProjectionErrorV1> {
+    let (SemanticAggregateKindV1::EnumVariant(variant), [payload]) =
+        (aggregate.kind(), aggregate.operands())
+    else {
+        return Ok(None);
+    };
+    tensor_origin_from_assignment_operand_v1(
+        payload,
+        state,
+        option_dominance,
+        enum_payload_dominance,
+        use_block,
+    )
+    .map(|payload| wrap_tensor_enum_value_v1(payload, *variant))
+    .transpose()
+}
+
 fn tensor_origin_from_assignment_operand_v1(
     operand: &SemanticOperandV1,
     state: &ProjectedTensorStateV1,
@@ -1067,6 +1109,9 @@ fn tensor_origin_from_assignment_operand_v1(
     }
     let (carrier, variant) = enum_payload_projection(place)?;
     match state.get(&carrier).copied()? {
+        ProjectedTensorValueV1::ConstructedEnum(envelope) => {
+            unwrap_tensor_enum_value_v1(envelope, variant)
+        }
         ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::ViewResult(view))
             if variant == 0
                 && enum_payload_dominance
@@ -1093,6 +1138,53 @@ fn tensor_origin_from_assignment_operand_v1(
         }
         ProjectedTensorValueV1::Invalid => Some(ProjectedTensorValueV1::Invalid),
         _ => None,
+    }
+}
+
+fn wrap_tensor_enum_value_v1(
+    payload: ProjectedTensorValueV1,
+    variant: u32,
+) -> Result<ProjectedTensorValueV1, ProductionRankedProjectionErrorV1> {
+    let mut envelope = match payload {
+        ProjectedTensorValueV1::Known(origin) => ProjectedTensorEnumEnvelopeV1 {
+            origin,
+            variants: [0; MAX_PROJECTED_TENSOR_ENUM_DEPTH_V1],
+            depth: 0,
+        },
+        ProjectedTensorValueV1::ConstructedEnum(envelope) => envelope,
+        ProjectedTensorValueV1::Invalid => return Ok(ProjectedTensorValueV1::Invalid),
+    };
+    let depth = usize::from(envelope.depth);
+    if depth == MAX_PROJECTED_TENSOR_ENUM_DEPTH_V1 {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "tensor enum transport exceeds the charged nesting limit",
+        ));
+    }
+    envelope.variants[depth] = variant;
+    envelope.depth =
+        envelope
+            .depth
+            .checked_add(1)
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "tensor enum transport depth overflow",
+            ))?;
+    Ok(ProjectedTensorValueV1::ConstructedEnum(envelope))
+}
+
+fn unwrap_tensor_enum_value_v1(
+    mut envelope: ProjectedTensorEnumEnvelopeV1,
+    variant: u32,
+) -> Option<ProjectedTensorValueV1> {
+    let outer = usize::from(envelope.depth).checked_sub(1)?;
+    if envelope.variants[outer] != variant {
+        return None;
+    }
+    envelope.variants[outer] = 0;
+    envelope.depth -= 1;
+    if envelope.depth == 0 {
+        Some(ProjectedTensorValueV1::Known(envelope.origin))
+    } else {
+        Some(ProjectedTensorValueV1::ConstructedEnum(envelope))
     }
 }
 
@@ -1381,7 +1473,9 @@ fn tensor_known_origin_v1(
     let local = simple_operand_local(operand)?.index() as usize;
     match state.get(&local) {
         Some(ProjectedTensorValueV1::Known(origin)) => Some(*origin),
-        Some(ProjectedTensorValueV1::Invalid) | None => None,
+        Some(ProjectedTensorValueV1::ConstructedEnum(_))
+        | Some(ProjectedTensorValueV1::Invalid)
+        | None => None,
     }
 }
 
@@ -1405,9 +1499,9 @@ fn merge_tensor_states_v1(
     for (&key, &candidate) in incoming {
         if let std::collections::hash_map::Entry::Vacant(entry) = current.entry(key) {
             entry.insert(match candidate {
-                ProjectedTensorValueV1::Known(_) | ProjectedTensorValueV1::Invalid => {
-                    ProjectedTensorValueV1::Invalid
-                }
+                ProjectedTensorValueV1::Known(_)
+                | ProjectedTensorValueV1::ConstructedEnum(_)
+                | ProjectedTensorValueV1::Invalid => ProjectedTensorValueV1::Invalid,
             });
             changed = true;
         }
@@ -8351,6 +8445,151 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn exact_enum_transport_preserves_tensor_origin_through_nested_wrappers() {
+        let function =
+            projection_function(vec![block(96, vec![], SemanticTerminatorKindV1::Return)]);
+        let option_dominance = SemanticOptionDominanceV1::analyze(&function, &[]).unwrap();
+        let enum_dominance =
+            SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types()).unwrap();
+        let origin = ProjectedTensorOriginV1::Operand(ProjectedMfmaOperandV1 {
+            contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
+            storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+            lane_root: 20,
+        });
+        let mut state = HashMap::from([(0, ProjectedTensorValueV1::Known(origin))]);
+        let first = SemanticAggregateRvalueV1::new(
+            SemanticAggregateKindV1::EnumVariant(0),
+            vec![tensor_operand(0)],
+        )
+        .unwrap();
+        let first = tensor_origin_from_enum_aggregate_v1(
+            &first,
+            &state,
+            &option_dominance,
+            &enum_dominance,
+            SemanticBlockIdV1::from_index(0),
+        )
+        .unwrap()
+        .unwrap();
+        state.insert(1, first);
+        let second = SemanticAggregateRvalueV1::new(
+            SemanticAggregateKindV1::EnumVariant(1),
+            vec![tensor_operand(1)],
+        )
+        .unwrap();
+        let second = tensor_origin_from_enum_aggregate_v1(
+            &second,
+            &state,
+            &option_dominance,
+            &enum_dominance,
+            SemanticBlockIdV1::from_index(0),
+        )
+        .unwrap()
+        .unwrap();
+        state.insert(2, second);
+
+        let first_again = tensor_origin_from_assignment_operand_v1(
+            &tensor_payload(2, 1),
+            &state,
+            &option_dominance,
+            &enum_dominance,
+            SemanticBlockIdV1::from_index(0),
+        )
+        .unwrap();
+        assert_eq!(first_again, first);
+        state.insert(3, first_again);
+        assert_eq!(
+            tensor_origin_from_assignment_operand_v1(
+                &tensor_payload(3, 0),
+                &state,
+                &option_dominance,
+                &enum_dominance,
+                SemanticBlockIdV1::from_index(0),
+            ),
+            Some(ProjectedTensorValueV1::Known(origin))
+        );
+    }
+
+    #[test]
+    fn enum_transport_rejects_wrong_variant_extra_fields_and_bypass_join() {
+        let function =
+            projection_function(vec![block(97, vec![], SemanticTerminatorKindV1::Return)]);
+        let option_dominance = SemanticOptionDominanceV1::analyze(&function, &[]).unwrap();
+        let enum_dominance =
+            SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types()).unwrap();
+        let origin = ProjectedTensorOriginV1::Operand(ProjectedMfmaOperandV1 {
+            contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
+            storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+            lane_root: 20,
+        });
+        let state = HashMap::from([(0, ProjectedTensorValueV1::Known(origin))]);
+        let aggregate = SemanticAggregateRvalueV1::new(
+            SemanticAggregateKindV1::EnumVariant(4),
+            vec![tensor_operand(0)],
+        )
+        .unwrap();
+        let wrapped = tensor_origin_from_enum_aggregate_v1(
+            &aggregate,
+            &state,
+            &option_dominance,
+            &enum_dominance,
+            SemanticBlockIdV1::from_index(0),
+        )
+        .unwrap()
+        .unwrap();
+        let wrapped_state = HashMap::from([(1, wrapped)]);
+        assert!(
+            tensor_origin_from_assignment_operand_v1(
+                &tensor_payload(1, 3),
+                &wrapped_state,
+                &option_dominance,
+                &enum_dominance,
+                SemanticBlockIdV1::from_index(0),
+            )
+            .is_none()
+        );
+
+        let extra_fields = SemanticAggregateRvalueV1::new(
+            SemanticAggregateKindV1::EnumVariant(4),
+            vec![tensor_operand(0), tensor_operand(0)],
+        )
+        .unwrap();
+        assert!(
+            tensor_origin_from_enum_aggregate_v1(
+                &extra_fields,
+                &state,
+                &option_dominance,
+                &enum_dominance,
+                SemanticBlockIdV1::from_index(0),
+            )
+            .unwrap()
+            .is_none()
+        );
+
+        let mut joined = wrapped_state;
+        assert!(merge_tensor_states_v1(&mut joined, &HashMap::new()).unwrap());
+        assert_eq!(joined[&1], ProjectedTensorValueV1::Invalid);
+    }
+
+    #[test]
+    fn enum_transport_nesting_has_an_explicit_resource_bound() {
+        let origin = ProjectedTensorOriginV1::Lane {
+            root: 1,
+            wave_width: 64,
+        };
+        let mut value = ProjectedTensorValueV1::Known(origin);
+        for variant in 0..MAX_PROJECTED_TENSOR_ENUM_DEPTH_V1 {
+            value = wrap_tensor_enum_value_v1(value, variant as u32).unwrap();
+        }
+        assert!(matches!(
+            wrap_tensor_enum_value_v1(value, 99),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "tensor enum transport exceeds the charged nesting limit"
+            ))
+        ));
     }
 
     #[test]
