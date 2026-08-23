@@ -51,7 +51,6 @@ use fe2o3_host::{
 };
 use fe2o3_hsa_runtime::ReviewedHsaRuntimeAdapterV1;
 use fe2o3_kernel_descriptor::KernelId;
-use fe2o3_scalar_gemm_v1::kernel::scalar_gemm_v1_gpu;
 use fe2o3_verifier::{
     build_scalar_gemm_worker_v3_proof_input_v3, validate_compiler_proof_binding_association_v3,
     validate_scalar_gemm_compiler_kir_v3,
@@ -71,6 +70,39 @@ use reserved_fe2o3_symbols::{
     TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
 };
 use sha2::{Digest as _, Sha256};
+
+mod scalar_gemm_marker_fixture {
+    use fe2o3_device::{DisjointSlice, kernel};
+
+    // This test owns only the generated host ABI fixture. The reviewed example
+    // kernel remains a fixture-layer package and is never a cargo-fe2o3 dependency.
+    #[kernel(
+        typed,
+        namespace = "53bf3c83481a081d4ab0e2b32039f9c89be5de3937a84aca0c40800c8d6b0413",
+        control_flow(loop_bounds(4294967295))
+    )]
+    pub fn scalar_gemm_v1(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>, m: u32, n: u32, k: u32) {
+        let p = fe2o3_device::thread::index_1d().get();
+        let output_extent = (m as usize) * (n as usize);
+        if p < output_extent {
+            let row = p / (n as usize);
+            let column = p % (n as usize);
+            let mut accumulator = 0.0_f32;
+            let mut inner = 0_u32;
+            while inner < k {
+                let a_index = row * (k as usize) + (inner as usize);
+                let b_index = (inner as usize) * (n as usize) + column;
+                accumulator += a[a_index] * b[b_index];
+                inner += 1;
+            }
+            if let Some(output) = c.get_mut(fe2o3_device::thread::index_1d()) {
+                *output = accumulator;
+            }
+        }
+    }
+}
+
+use scalar_gemm_marker_fixture::scalar_gemm_v1_gpu;
 
 #[path = "../../fe2o3-hsaco-finalize/tests/worker_v3_hsaco_admission.rs"]
 mod worker_v3_fixture;
