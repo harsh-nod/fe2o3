@@ -51,9 +51,27 @@ const APPLICATION_EXPECTATION_CHECKSUM_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKER-V3/APPLICATION-HANDOFF-EXPECTATION-CHECKSUM/V1\0";
 const APPLICATION_ACK_CHECKSUM_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKER-V3/APPLICATION-HANDOFF-ACK-CHECKSUM/V1\0";
+const APPLICATION_DESCRIPTOR_OCCURRENCE_DOMAIN_V1: &[u8] =
+    b"FE2O3/WORKER-V3/APPLICATION-DESCRIPTOR-OCCURRENCE/V1\0";
 
 /// Wire version used only by the side-by-side application handoff V3 protocol.
 pub const WORKER_V3_APPLICATION_HANDOFF_VERSION_V1: u16 = 1;
+/// Inherited read-only V3 envelope descriptor installed by the Cargo supervisor.
+pub const WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1: &str = "FE2O3_APPLICATION_V3_ENVELOPE_FD_V1";
+/// Inherited read-only artifact-directory descriptor installed by the Cargo supervisor.
+pub const WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1: &str =
+    "FE2O3_APPLICATION_V3_ARTIFACT_DIR_FD_V1";
+/// Inherited write-only acknowledgment descriptor installed by the Cargo supervisor.
+pub const WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1: &str =
+    "FE2O3_APPLICATION_V3_HANDOFF_ACK_FD_V1";
+/// Canonical application-occurrence wire installed by the Cargo supervisor as lowercase hex.
+pub const WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1: &str = "FE2O3_APPLICATION_V3_OCCURRENCE_V1";
+/// Canonical V3 handoff commitment installed by the Cargo supervisor as lowercase hex.
+pub const WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_ENV_V1: &str =
+    "FE2O3_APPLICATION_V3_HANDOFF_COMMITMENT_V1";
+/// Canonical V3 handoff challenge installed by the Cargo supervisor as lowercase hex.
+pub const WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1: &str =
+    "FE2O3_APPLICATION_V3_HANDOFF_CHALLENGE_V1";
 /// Maximum number of inherited input occurrences bound to one application spawn.
 pub const MAX_WORKER_V3_APPLICATION_INPUTS_V1: usize = 64;
 /// Maximum allocation admitted by the default V3 application handoff codec budget.
@@ -311,6 +329,25 @@ impl WorkerV3ApplicationInputOccurrenceV1 {
 
     pub const fn identity(self) -> [u8; IDENTITY_BYTES_V1] {
         self.identity
+    }
+
+    /// Derives the canonical occurrence of one independently inspected Linux descriptor object.
+    ///
+    /// The descriptor number and process-local flags are deliberately excluded. Callers must
+    /// validate access mode, close-on-exec state, object type, ownership, and non-aliasing before
+    /// constructing this descriptive value.
+    pub fn from_linux_descriptor_v1(
+        slot: u16,
+        device: u64,
+        inode: u64,
+        mode: u32,
+    ) -> Result<Self, WorkerV3ApplicationHandoffProtocolErrorV1> {
+        let mut digest = Sha256::new();
+        digest.update(APPLICATION_DESCRIPTOR_OCCURRENCE_DOMAIN_V1);
+        digest.update(device.to_le_bytes());
+        digest.update(inode.to_le_bytes());
+        digest.update(mode.to_le_bytes());
+        Self::new(slot, digest.finalize().into())
     }
 }
 
@@ -2001,6 +2038,30 @@ mod tests {
             WorkerV3ApplicationInputOccurrenceV1::new(1, [0; 32]),
             Err(WorkerV3ApplicationHandoffProtocolErrorV1::ZeroIdentity { .. })
         ));
+    }
+
+    #[test]
+    fn linux_descriptor_occurrence_is_stable_and_binds_each_object_axis() {
+        let exact =
+            WorkerV3ApplicationInputOccurrenceV1::from_linux_descriptor_v1(1, 2, 3, 0o100400)
+                .unwrap();
+        assert_eq!(
+            exact,
+            WorkerV3ApplicationInputOccurrenceV1::from_linux_descriptor_v1(1, 2, 3, 0o100400)
+                .unwrap()
+        );
+        for changed in [
+            WorkerV3ApplicationInputOccurrenceV1::from_linux_descriptor_v1(2, 2, 3, 0o100400)
+                .unwrap(),
+            WorkerV3ApplicationInputOccurrenceV1::from_linux_descriptor_v1(1, 4, 3, 0o100400)
+                .unwrap(),
+            WorkerV3ApplicationInputOccurrenceV1::from_linux_descriptor_v1(1, 2, 5, 0o100400)
+                .unwrap(),
+            WorkerV3ApplicationInputOccurrenceV1::from_linux_descriptor_v1(1, 2, 3, 0o040500)
+                .unwrap(),
+        ] {
+            assert_ne!(changed, exact);
+        }
     }
 
     #[test]
