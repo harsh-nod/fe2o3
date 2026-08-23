@@ -246,14 +246,20 @@ pub struct ValidatedKernelEnvelope<'a> {
     resources: SelectedKernelResourceBindingV1,
     relocation: ClosedRelocationEvidenceV1,
     identity: KernelIdentityInputsV1,
-    reconciled_global_buffer_alignments: Option<Box<[Option<u64>]>>,
+    reconciled_global_buffers: Option<Box<[Option<ReconciledGlobalBufferAbiV1>]>>,
     dispatch_abi_identity: Option<[u8; 32]>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReconciledGlobalBufferAbiV1 {
+    pointee_alignment: u64,
+    access: ArgumentAccess,
 }
 
 /// One source-contract row for an explicit global-buffer kernel argument.
 ///
 /// This value is descriptive. [`ValidatedKernelEnvelope::reconcile_dispatch_abi`]
-/// binds a complete roster to an already authenticated machine-code closure,
+/// binds a complete roster to an already validated machine-code closure,
 /// rejects physical contradictions, and derives the retained identity used by
 /// fixed-dispatch preparation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -318,7 +324,6 @@ pub enum KernelDispatchAbiErrorV1 {
     ArgumentAccessMismatch,
     InvalidPointeeAlignment,
     PhysicalPointeeAlignmentContradiction,
-    MissingGlobalBuffer,
 }
 
 impl<'a> ValidatedKernelEnvelope<'a> {
@@ -377,12 +382,19 @@ impl<'a> ValidatedKernelEnvelope<'a> {
     /// buffer. Reconciliation validates all physical fields that remain
     /// observable, rejects any present alignment contradiction, and binds the
     /// effective roster to the physical closure and source-contract identity.
+    /// # Provenance
+    ///
+    /// The caller must retain custody that establishes `expected` as the exact
+    /// compiler ABI contract that produced this selected kernel.
+    /// `source_contract_identity` identifies that contract but does not prove
+    /// provenance by itself. This loader validates completeness and physical
+    /// consistency; deployment policy remains outside this generic join.
     pub fn reconcile_dispatch_abi(
         mut self,
         source_contract_identity: [u8; 32],
         expected: &[KernelGlobalBufferAbiV1<'_>],
     ) -> Result<Self, KernelDispatchAbiErrorV1> {
-        if self.reconciled_global_buffer_alignments.is_some() {
+        if self.reconciled_global_buffers.is_some() {
             return Err(KernelDispatchAbiErrorV1::AlreadyReconciled);
         }
         if source_contract_identity == [0; 32] {
@@ -398,12 +410,12 @@ impl<'a> ValidatedKernelEnvelope<'a> {
             return Err(KernelDispatchAbiErrorV1::GlobalBufferCardinality);
         }
 
-        let mut alignments = vec![None; arguments.len()].into_boxed_slice();
+        let mut reconciled = vec![None; arguments.len()].into_boxed_slice();
         for row in expected {
             let argument = arguments
                 .get(row.explicit_argument_index)
                 .ok_or(KernelDispatchAbiErrorV1::ExplicitArgumentIndex)?;
-            if alignments[row.explicit_argument_index].is_some() {
+            if reconciled[row.explicit_argument_index].is_some() {
                 return Err(KernelDispatchAbiErrorV1::DuplicateExplicitArgument);
             }
             if argument.value_kind() != ExplicitValueKind::GlobalBuffer
@@ -424,7 +436,9 @@ impl<'a> ValidatedKernelEnvelope<'a> {
             if argument
                 .access()
                 .is_some_and(|declared| declared != row.access)
-                || argument.actual_access() != Some(row.access)
+                || argument
+                    .actual_access()
+                    .is_some_and(|actual| actual != row.access)
             {
                 return Err(KernelDispatchAbiErrorV1::ArgumentAccessMismatch);
             }
@@ -437,39 +451,33 @@ impl<'a> ValidatedKernelEnvelope<'a> {
             {
                 return Err(KernelDispatchAbiErrorV1::PhysicalPointeeAlignmentContradiction);
             }
-            alignments[row.explicit_argument_index] = Some(row.pointee_alignment);
+            reconciled[row.explicit_argument_index] = Some(ReconciledGlobalBufferAbiV1 {
+                pointee_alignment: row.pointee_alignment,
+                access: row.access,
+            });
         }
-        if arguments.iter().enumerate().any(|(index, argument)| {
-            argument.value_kind() == ExplicitValueKind::GlobalBuffer && alignments[index].is_none()
-        }) {
-            return Err(KernelDispatchAbiErrorV1::MissingGlobalBuffer);
-        }
-
         let mut hasher = Sha256::new();
         hasher.update((DISPATCH_ABI_IDENTITY_DOMAIN.len() as u64).to_le_bytes());
         hasher.update(DISPATCH_ABI_IDENTITY_DOMAIN);
         hasher.update(self.identity.closure_sha256());
         hasher.update(source_contract_identity);
         hasher.update((global_count as u64).to_le_bytes());
-        for (index, (argument, alignment)) in arguments.iter().zip(&alignments).enumerate() {
-            let Some(alignment) = alignment else {
+        for (index, (argument, effective)) in arguments.iter().zip(&reconciled).enumerate() {
+            let Some(effective) = effective else {
                 continue;
             };
             let name = argument
                 .name()
                 .expect("reconciled global-buffer arguments have names");
-            let access = argument
-                .actual_access()
-                .expect("reconciled global-buffer arguments have actual access");
             hasher.update((index as u64).to_le_bytes());
             hasher.update((name.len() as u64).to_le_bytes());
             hasher.update(name.as_bytes());
             hasher.update(argument.offset().to_le_bytes());
-            hasher.update(alignment.to_le_bytes());
-            hasher.update([argument_access_tag(access)]);
+            hasher.update(effective.pointee_alignment.to_le_bytes());
+            hasher.update([argument_access_tag(effective.access)]);
         }
         self.dispatch_abi_identity = Some(hasher.finalize().into());
-        self.reconciled_global_buffer_alignments = Some(alignments);
+        self.reconciled_global_buffers = Some(reconciled);
         Ok(self)
     }
 
@@ -479,14 +487,33 @@ impl<'a> ValidatedKernelEnvelope<'a> {
     /// passed [`Self::reconcile_dispatch_abi`]. Otherwise this returns the
     /// physical AMDHSA metadata value unchanged.
     pub fn dispatch_pointee_alignment(&self, explicit_argument_index: usize) -> Option<u64> {
-        self.reconciled_global_buffer_alignments
+        self.reconciled_global_buffers
             .as_deref()
-            .and_then(|alignments| alignments.get(explicit_argument_index).copied().flatten())
+            .and_then(|buffers| buffers.get(explicit_argument_index).copied().flatten())
+            .map(|buffer| buffer.pointee_alignment)
             .or_else(|| {
                 self.selected_kernel()
                     .explicit_arguments()
                     .get(explicit_argument_index)
                     .and_then(|argument| argument.pointee_alignment())
+            })
+    }
+
+    /// Effective access for fixed-dispatch effect and readback validation.
+    ///
+    /// A reconciled source fact fills an omitted `.actual_access` only after the
+    /// complete roster has passed [`Self::reconcile_dispatch_abi`]. Otherwise
+    /// this returns the physical AMDHSA metadata value unchanged.
+    pub fn dispatch_actual_access(&self, explicit_argument_index: usize) -> Option<ArgumentAccess> {
+        self.reconciled_global_buffers
+            .as_deref()
+            .and_then(|buffers| buffers.get(explicit_argument_index).copied().flatten())
+            .map(|buffer| buffer.access)
+            .or_else(|| {
+                self.selected_kernel()
+                    .explicit_arguments()
+                    .get(explicit_argument_index)
+                    .and_then(|argument| argument.actual_access())
             })
     }
 
@@ -628,7 +655,7 @@ impl<'a> ValidatedEnvelope<'a> {
             resources,
             relocation,
             identity,
-            reconciled_global_buffer_alignments: None,
+            reconciled_global_buffers: None,
             dispatch_abi_identity: None,
         })
     }
