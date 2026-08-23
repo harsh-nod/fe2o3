@@ -3589,17 +3589,37 @@ fn projected_cfg_terminator(
                     "a general switch whose only extra successor is not one empty unreachable fallback",
                 ));
             };
+            if targets.values().len() == 1 {
+                let explicit = &targets.values()[0];
+                let explicit_block = target(explicit.edge().target())?;
+                let otherwise_block = target(targets.otherwise().target())?;
+                return match explicit.value() {
+                    0 => Ok(ProjectedCfgTerminatorV1::Predicate {
+                        predicate,
+                        true_block: otherwise_block,
+                        false_block: explicit_block,
+                    }),
+                    1 => Ok(ProjectedCfgTerminatorV1::Predicate {
+                        predicate,
+                        true_block: explicit_block,
+                        false_block: otherwise_block,
+                    }),
+                    _ => Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a comparison predicate switch retained a non-boolean explicit value",
+                    )),
+                };
+            }
             let zero = targets.values().iter().find(|target| target.value() == 0);
             let one = targets.values().iter().find(|target| target.value() == 1);
             if targets.values().len() != 2 || zero.is_none() || one.is_none() {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "a checked Option switch whose exact 0/1 variants were not retained",
+                    "a comparison predicate switch whose exact boolean variants were not retained",
                 ));
             }
             let otherwise = target(targets.otherwise().target())?;
             if !switch_fallback_is_empty_unreachable_v1(function, otherwise) {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "a checked Option switch with a reachable non-variant successor",
+                    "a comparison predicate switch with a reachable non-boolean successor",
                 ));
             }
             Ok(ProjectedCfgTerminatorV1::Predicate {
@@ -8793,6 +8813,71 @@ mod tests {
                 false_block: 2,
             }
         );
+    }
+
+    fn single_explicit_boolean_switch(
+        explicit_value: u128,
+        explicit_target: u32,
+        otherwise_target: u32,
+    ) -> SemanticFunctionDeclV1 {
+        projection_function_with_locals(
+            vec![
+                block(
+                    102,
+                    vec![],
+                    SemanticTerminatorKindV1::SwitchInt {
+                        discriminant: tensor_operand(1),
+                        targets: SemanticSwitchTargetsV1::new(
+                            vec![SemanticSwitchTargetV1::new(
+                                explicit_value,
+                                cfg_edge(SemanticEdgeRoleV1::SwitchValue, explicit_target),
+                            )],
+                            cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, otherwise_target),
+                        )
+                        .unwrap(),
+                    },
+                ),
+                block(103, vec![], SemanticTerminatorKindV1::Return),
+                block(104, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(100, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(101, SCALAR_TYPE, SemanticLocalRoleV1::Argument(0)),
+            ],
+        )
+    }
+
+    #[test]
+    fn comparison_predicate_accepts_canonical_single_explicit_boolean_target() {
+        let predicate = GuardPredicateV1 {
+            comparisons: vec![(
+                ProductionRankedValueV1::Argument(0),
+                ProductionRankedValueV1::Argument(1),
+            )],
+        };
+        for function in [
+            single_explicit_boolean_switch(0, 2, 1),
+            single_explicit_boolean_switch(1, 1, 2),
+        ] {
+            assert_eq!(
+                projected_cfg_terminator(&function, 0, &[None, Some(predicate.clone())]).unwrap(),
+                ProjectedCfgTerminatorV1::Predicate {
+                    predicate: predicate.clone(),
+                    true_block: 1,
+                    false_block: 2,
+                }
+            );
+        }
+        assert!(matches!(
+            projected_cfg_terminator(
+                &single_explicit_boolean_switch(2, 1, 2),
+                0,
+                &[None, Some(predicate)],
+            ),
+            Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a comparison predicate switch retained a non-boolean explicit value"
+            ))
+        ));
     }
 
     fn uniform_induction_function(bound_role: SemanticLocalRoleV1) -> SemanticFunctionDeclV1 {
