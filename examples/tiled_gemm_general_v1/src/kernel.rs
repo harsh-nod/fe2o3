@@ -3,8 +3,8 @@
 #![allow(missing_docs)] // Generated typed-kernel modules lack rustdoc in V1.
 
 use fe2o3_device::{
-    Bf16MfmaFragment, DeviceMatrix, DisjointSlice, F32AccumulatorFragment, Index1D, Tiled2D,
-    kernel, thread,
+    Bf16MfmaFragment, DisjointSlice, F32AccumulatorFragment, Index1D, KernelError, KernelResult,
+    Matrix, Tiled2D, kernel, thread,
 };
 
 /// Exact workgroup dimensions required by the wave64 matrix profile.
@@ -28,7 +28,7 @@ fn accessed_extent(rows: u32, columns: u32, stride: u32) -> usize {
 /// checked tiled output witness suppresses stores outside logical M and N.
 #[kernel(
     typed,
-    namespace = "90386ec5660de5289888dd162da161d0f69838ee2602fa649c1130142e1e8db9",
+    namespace = "3cc6dcf60a079a6257a12a57681920196ce00f130ff594ba56c8d8ec984a564a",
     launch(required = [64, 1, 1], max = [64, 1, 1]),
     control_flow(loop_bounds(4294967295))
 )]
@@ -45,7 +45,7 @@ pub fn tiled_gemm_general_v1(
     ldc: u32,
     alpha: f32,
     beta: f32,
-) {
+) -> KernelResult {
     let invalid_stride = (m != 0 && k != 0 && lda < k)
         || (k != 0 && n != 0 && ldb < n)
         || (m != 0 && n != 0 && ldc < n);
@@ -53,7 +53,7 @@ pub fn tiled_gemm_general_v1(
     let b_extent = accessed_extent(k, n, ldb);
     let c_extent = accessed_extent(m, n, ldc);
     if invalid_stride || a.len() < a_extent || b.len() < b_extent || c.len() < c_extent {
-        return;
+        return Err(KernelError::InvalidArgument);
     }
 
     let thread_index = thread::index_1d();
@@ -61,7 +61,7 @@ pub fn tiled_gemm_general_v1(
     let lane = raw_index % 64;
     let tiles_per_row = (n as usize + 15) / 16;
     if tiles_per_row == 0 {
-        return;
+        return Ok(());
     }
     let tile = raw_index / 64;
     let tile_row = tile / tiles_per_row;
@@ -71,10 +71,10 @@ pub fn tiled_gemm_general_v1(
     let a_row = tile_row * 16 + lane_column;
     let b_column = tile_column * 16 + lane_column;
 
-    let Some(output_tile) = thread_index.checked_tiled_2d::<64, 16, 16, 4>() else {
-        return;
-    };
-    let matrix = DeviceMatrix::current();
+    let output_tile = thread_index
+        .checked_tiled_2d::<64, 16, 16, 4>()
+        .ok_or(KernelError::OutOfBounds)?;
+    let matrix = Matrix::current();
     let mut accumulator = F32AccumulatorFragment::from_values([0.0; 4]);
     let mut phase = 0_usize;
     while phase < k as usize {
@@ -151,6 +151,7 @@ pub fn tiled_gemm_general_v1(
     {
         *output = alpha * values[3] + beta * *output;
     }
+    Ok(())
 }
 
 #[cfg(test)]

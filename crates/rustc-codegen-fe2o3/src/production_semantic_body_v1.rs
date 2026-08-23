@@ -24,14 +24,14 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticProjectionKindV1, SemanticProjectionV1, SemanticRvalueKindV1, SemanticRvalueV1,
     SemanticScalarValueV1, SemanticSourceProvenanceV1, SemanticStatementKindV1,
     SemanticStatementV1, SemanticSwitchTargetV1, SemanticSwitchTargetsV1, SemanticTerminatorKindV1,
-    SemanticTerminatorV1, SemanticTypeIdV1, SemanticUnaryOpV1, SemanticUnwindActionV1,
-    SemanticVolatilityV1,
+    SemanticTerminatorV1, SemanticTypeIdV1, SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1,
+    SemanticUncheckedBinaryRvalueV1, SemanticUnwindActionV1, SemanticVolatilityV1,
 };
 use rustc_middle::mir::interpret::GlobalAlloc;
 use rustc_middle::mir::{
     AggregateKind, AssertKind, BinOp, Body, BorrowKind, CastKind, ConstValue, MutBorrowKind,
-    Operand, Place, PlaceTy, ProjectionElem, RETURN_PLACE, Rvalue, START_BLOCK, StatementKind,
-    TerminatorKind, UnOp, UnwindAction,
+    NonDivergingIntrinsic, Operand, Place, PlaceTy, ProjectionElem, RETURN_PLACE, Rvalue,
+    START_BLOCK, StatementKind, TerminatorKind, UnOp, UnwindAction,
 };
 use rustc_middle::ty::layout::{LayoutCx, LayoutOf};
 use rustc_middle::ty::{EarlyBinder, Instance, Ty, TyCtxt, TyKind, TypingEnv};
@@ -759,7 +759,16 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             }),
             StatementKind::Nop => Ok(SemanticStatementKindV1::Nop),
             StatementKind::FakeRead(..) => Err(unsupported("FakeRead statement", site.0, site.1)),
-            StatementKind::Intrinsic(..) => Err(unsupported("intrinsic statement", site.0, site.1)),
+            StatementKind::Intrinsic(intrinsic) => match intrinsic.as_ref() {
+                NonDivergingIntrinsic::Assume(condition) => Ok(SemanticStatementKindV1::Assume(
+                    self.construct_operand(condition, site.0, site.1)?,
+                )),
+                NonDivergingIntrinsic::CopyNonOverlapping(_) => Err(unsupported(
+                    "copy_nonoverlapping intrinsic statement",
+                    site.0,
+                    site.1,
+                )),
+            },
             StatementKind::Retag(..) => Err(unsupported("Retag statement", site.0, site.1)),
             StatementKind::PlaceMention(..) => {
                 Err(unsupported("PlaceMention statement", site.0, site.1))
@@ -895,9 +904,17 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                     SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
                         operation, left, right,
                     ))
+                } else if let Some(operation) = semantic_unchecked_binary_operation(*operation) {
+                    SemanticRvalueKindV1::UncheckedBinary(SemanticUncheckedBinaryRvalueV1::new(
+                        operation, left, right,
+                    ))
                 } else {
                     let operation = semantic_binary_operation(*operation).ok_or_else(|| {
-                        unsupported("unsupported BinaryOp rvalue", block, statement)
+                        unsupported(
+                            format!("unsupported BinaryOp rvalue {operation:?}"),
+                            block,
+                            statement,
+                        )
                     })?;
                     SemanticRvalueKindV1::Binary {
                         operation,
@@ -1731,7 +1748,8 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::MathContextCurrent
         | ProductionTerminalExpansionV1::CollectiveContextCurrent
         | ProductionTerminalExpansionV1::MatrixContextCurrent
-        | ProductionTerminalExpansionV1::ThreadIndex1d => Some(0),
+        | ProductionTerminalExpansionV1::ThreadIndex1d
+        | ProductionTerminalExpansionV1::ColdPath => Some(0),
         ProductionTerminalExpansionV1::ThreadIndexGet
         | ProductionTerminalExpansionV1::Bf16MatrixFragmentFromBits
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorFromValues
@@ -1788,11 +1806,22 @@ fn semantic_binary_operation(operation: BinOp) -> Option<SemanticBinaryOpV1> {
     }
 }
 
-fn semantic_checked_binary_operation(operation: BinOp) -> Option<SemanticCheckedBinaryOpV1> {
+const fn semantic_checked_binary_operation(operation: BinOp) -> Option<SemanticCheckedBinaryOpV1> {
     match operation {
         BinOp::AddWithOverflow => Some(SemanticCheckedBinaryOpV1::Add),
         BinOp::SubWithOverflow => Some(SemanticCheckedBinaryOpV1::Subtract),
         BinOp::MulWithOverflow => Some(SemanticCheckedBinaryOpV1::Multiply),
+        _ => None,
+    }
+}
+
+const fn semantic_unchecked_binary_operation(
+    operation: BinOp,
+) -> Option<SemanticUncheckedBinaryOpV1> {
+    match operation {
+        BinOp::AddUnchecked => Some(SemanticUncheckedBinaryOpV1::Add),
+        BinOp::SubUnchecked => Some(SemanticUncheckedBinaryOpV1::Subtract),
+        BinOp::MulUnchecked => Some(SemanticUncheckedBinaryOpV1::Multiply),
         _ => None,
     }
 }

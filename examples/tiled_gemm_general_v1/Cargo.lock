@@ -96,6 +96,7 @@ dependencies = [
  "fe2o3-kernel-analysis",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
+ "fe2o3-llvm-handoff",
  "sha2",
 ]
 
@@ -318,6 +319,7 @@ version = "0.1.0"
 dependencies = [
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
+ "fe2o3-compiler-lineage",
  "fe2o3-contracts",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",

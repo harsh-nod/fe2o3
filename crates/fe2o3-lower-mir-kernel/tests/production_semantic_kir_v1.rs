@@ -452,6 +452,98 @@ fn abort_owner() -> ProductionSemanticMirOwnerV1 {
     )
 }
 
+fn direct_enum_constant_owner() -> ProductionSemanticMirOwnerV1 {
+    let u32_ty = SemanticTypeIdV1::from_index(1);
+    let result_ty = SemanticTypeIdV1::from_index(2);
+    let primitive = SemanticBackendPrimitiveV1::integer(false, 32, 4);
+    let scalar = SemanticBackendScalarV1::initialized(
+        primitive,
+        SemanticScalarValidityRangeV1::new(0, u128::from(u32::MAX)),
+    );
+    let variant_layout = |index| {
+        SemanticEnumVariantLayoutV1::from_rustc(
+            index,
+            8,
+            4,
+            SemanticFieldsShapeV1::arbitrary(vec![4], vec![0]).unwrap(),
+            SemanticBackendReprV1::memory(true),
+            None,
+            false,
+            None,
+            4,
+            0,
+            SemanticAggregateLayoutV1::new(vec![4], vec![]).unwrap(),
+        )
+        .unwrap()
+    };
+    let result = SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256(bytes(72)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(72)),
+        SemanticTypeLayoutV1::enum_layout(
+            8,
+            4,
+            SemanticEnumLayoutV1::new(
+                vec![variant_layout(0), variant_layout(1)],
+                SemanticEnumEncodingV1::Direct(SemanticDirectEnumEncodingV1::new(0, 0, scalar)),
+            )
+            .unwrap(),
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Enum {
+            discriminant: u32_ty,
+            variants: vec![
+                SemanticEnumVariantV1::new(0, SemanticAggregateTypeV1::new(vec![u32_ty]).unwrap()),
+                SemanticEnumVariantV1::new(1, SemanticAggregateTypeV1::new(vec![u32_ty]).unwrap()),
+            ]
+            .into_boxed_slice(),
+        },
+    );
+    let assignment = SemanticStatementV1::new(
+        SemanticSourceProvenanceV1::unavailable(),
+        SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            local_place(1, result_ty),
+            SemanticRvalueV1::new(
+                result_ty,
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Constant(SemanticConstantV1::new(
+                    result_ty,
+                    SemanticConstantValueV1::Bytes(
+                        SemanticConstantBytesV1::new(vec![1, 0, 0, 0, 9, 0, 0, 0]).unwrap(),
+                    ),
+                ))),
+            ),
+        )),
+    );
+    owner_from_parts(
+        vec![
+            unit_type(),
+            scalar_type(
+                71,
+                SemanticScalarTypeV1::Integer {
+                    signed: false,
+                    bits: 32,
+                },
+            ),
+            result,
+        ],
+        vec![
+            return_local(),
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(73)),
+                result_ty,
+                SemanticLocalRoleV1::Temporary,
+                SemanticSourceProvenanceV1::unavailable(),
+            ),
+        ],
+        0,
+        vec![block(
+            74,
+            vec![assignment],
+            SemanticTerminatorKindV1::Return,
+        )],
+        b"semantic_direct_enum_constant_test",
+    )
+}
+
 fn admitted(effectful_statement: bool, unsupported_terminator: bool) -> AdmittedInertSemanticMirV1 {
     let type_id = SemanticTypeIdV1::from_index(0);
     let abi = SemanticFunctionAbiV1::from_rustc(
@@ -653,6 +745,27 @@ fn terminator_emission_has_its_own_exact_operation_span() {
     assert_eq!(span.first_operation_ordinal(), 0);
     assert_eq!(span.operation_count(), 1);
     lowered.verify_equivalence().unwrap();
+}
+
+#[test]
+fn exact_rust_enum_bytes_lower_to_payload_and_logical_discriminant() {
+    let lowered = ProductionSemanticKirOwnerV1::try_lower(
+        direct_enum_constant_owner(),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    lowered.verify_equivalence().unwrap();
+    verify_module(lowered.module()).unwrap();
+    let operations = &lowered.module().functions[0].body.as_ref().unwrap().blocks[0].operations;
+    assert_eq!(operations.len(), 2);
+    assert!(matches!(
+        operations[0].kind,
+        fe2o3_kernel_ir::OperationKind::Constant(fe2o3_kernel_ir::Constant::U32(9))
+    ));
+    assert!(matches!(
+        operations[1].kind,
+        fe2o3_kernel_ir::OperationKind::Constant(fe2o3_kernel_ir::Constant::U32(1))
+    ));
 }
 
 #[test]

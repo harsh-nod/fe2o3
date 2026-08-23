@@ -817,6 +817,13 @@ fn terminal_operation_v1<'tcx>(
         {
             Ok(SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier)
         }
+        ProductionTerminalExpansionV1::ColdPath
+            if inputs.is_empty()
+                && rust_inputs.is_empty()
+                && matches!(rust_output.kind(), TyKind::Tuple(fields) if fields.is_empty()) =>
+        {
+            Ok(SemanticCompilerIntrinsicOperationV1::ColdPath)
+        }
         ProductionTerminalExpansionV1::MathContextCurrent
             if inputs.is_empty()
                 && rust_inputs.is_empty()
@@ -1354,6 +1361,7 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorFromValues
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues
         | ProductionTerminalExpansionV1::MatrixMultiplyAccumulate
+        | ProductionTerminalExpansionV1::ColdPath
         | ProductionTerminalExpansionV1::WorkgroupBarrier => {
             Err(body_owner_table_mismatch_v1("terminal callable ABI"))
         }
@@ -1798,6 +1806,7 @@ const fn terminal_operation_tag_v1(
         ProductionTerminalExpansionV1::SubgroupReduceMaxF32 => 35,
         ProductionTerminalExpansionV1::MathContextCurrent => 36,
         ProductionTerminalExpansionV1::MathF32(function) => 37 + f32_math_tag_v1(function),
+        ProductionTerminalExpansionV1::ColdPath => 50,
     }
 }
 

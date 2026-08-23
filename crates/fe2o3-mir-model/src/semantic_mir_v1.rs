@@ -3843,6 +3843,62 @@ pub enum SemanticCheckedBinaryOpV1 {
     Multiply,
 }
 
+/// Integer arithmetic whose rustc MIR contract requires a proven precondition.
+///
+/// Safe Rust emits these operations behind the corresponding checked
+/// arithmetic overflow test. Keeping them distinct prevents an importer or a
+/// forged semantic model from silently treating an unproved operation as
+/// ordinary wrapping arithmetic.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SemanticUncheckedBinaryOpV1 {
+    Add,
+    Subtract,
+    Multiply,
+}
+
+impl SemanticUncheckedBinaryOpV1 {
+    pub const fn checked(self) -> SemanticCheckedBinaryOpV1 {
+        match self {
+            Self::Add => SemanticCheckedBinaryOpV1::Add,
+            Self::Subtract => SemanticCheckedBinaryOpV1::Subtract,
+            Self::Multiply => SemanticCheckedBinaryOpV1::Multiply,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SemanticUncheckedBinaryRvalueV1 {
+    operation: SemanticUncheckedBinaryOpV1,
+    left: SemanticOperandV1,
+    right: SemanticOperandV1,
+}
+
+impl SemanticUncheckedBinaryRvalueV1 {
+    pub const fn new(
+        operation: SemanticUncheckedBinaryOpV1,
+        left: SemanticOperandV1,
+        right: SemanticOperandV1,
+    ) -> Self {
+        Self {
+            operation,
+            left,
+            right,
+        }
+    }
+
+    pub const fn operation(&self) -> SemanticUncheckedBinaryOpV1 {
+        self.operation
+    }
+
+    pub const fn left(&self) -> &SemanticOperandV1 {
+        &self.left
+    }
+
+    pub const fn right(&self) -> &SemanticOperandV1 {
+        &self.right
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticCheckedBinaryRvalueV1 {
     operation: SemanticCheckedBinaryOpV1,
@@ -4018,6 +4074,7 @@ pub enum SemanticRvalueKindV1 {
         right: SemanticOperandV1,
     },
     CheckedBinary(SemanticCheckedBinaryRvalueV1),
+    UncheckedBinary(SemanticUncheckedBinaryRvalueV1),
     Cast {
         kind: SemanticCastKindV1,
         operand: SemanticOperandV1,
@@ -4066,6 +4123,10 @@ impl SemanticRvalueKindV1 {
             Self::CheckedBinary(checked) => {
                 visitor(&checked.left)?;
                 visitor(&checked.right)
+            }
+            Self::UncheckedBinary(unchecked) => {
+                visitor(&unchecked.left)?;
+                visitor(&unchecked.right)
             }
             Self::Aggregate(aggregate) => {
                 for operand in &aggregate.operands {
@@ -4299,6 +4360,8 @@ pub enum SemanticStatementKindV1 {
     Deinitialize(SemanticPlaceV1),
     StorageLive(SemanticLocalIdV1),
     StorageDead(SemanticLocalIdV1),
+    /// A compiler assertion that the boolean operand is true.
+    Assume(SemanticOperandV1),
     Nop,
 }
 
@@ -4990,6 +5053,8 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         tile_columns: u64,
         elements_per_lane: u64,
     },
+    /// Effect-free compiler hint that the current control-flow path is cold.
+    ColdPath,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -5434,6 +5499,31 @@ pub struct AdmittedInertSemanticMirV1 {
     semantic_sha256: InertSemanticMirSha256V1,
 }
 
+/// Selects the semantic function whose body is lowered for one kernel root.
+///
+/// A distinct body is admitted only for the exact unit-ABI wrapper emitted for
+/// a Rust `Result<(), E>` kernel. The wrapper must forward every argument in
+/// order, discard the helper result, and perform no other computation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SemanticKernelBodySelectionV1 {
+    root: SemanticFunctionIdV1,
+    body: SemanticFunctionIdV1,
+}
+
+impl SemanticKernelBodySelectionV1 {
+    pub const fn root(self) -> SemanticFunctionIdV1 {
+        self.root
+    }
+
+    pub const fn body(self) -> SemanticFunctionIdV1 {
+        self.body
+    }
+
+    pub const fn has_transparent_result_wrapper(self) -> bool {
+        self.root.0 != self.body.0
+    }
+}
+
 impl AdmittedInertSemanticMirV1 {
     /// Returns the exact closed wire schema whose canonical bytes are held by
     /// this owner.
@@ -5475,6 +5565,13 @@ impl AdmittedInertSemanticMirV1 {
 
     pub fn roots(&self) -> &[SemanticFunctionIdV1] {
         &self.request.roots
+    }
+
+    /// Resolves either one direct kernel body or the exact transparent wrapper
+    /// used to expose an ordinary Rust `KernelResult` body through a unit GPU
+    /// entry ABI.
+    pub fn select_kernel_body_v1(&self) -> Option<SemanticKernelBodySelectionV1> {
+        select_kernel_body_v1(&self.request)
     }
 
     /// Checks the metadata required before a rustc-owned importer may promote
@@ -5531,6 +5628,139 @@ impl AdmittedInertSemanticMirV1 {
     pub const fn semantic_sha256(&self) -> InertSemanticMirSha256V1 {
         self.semantic_sha256
     }
+}
+
+fn select_kernel_body_v1(
+    request: &InertSemanticMirRequestV1,
+) -> Option<SemanticKernelBodySelectionV1> {
+    let [root] = request.roots.as_ref() else {
+        return None;
+    };
+    let root_function = request.functions.get(root.0 as usize)?;
+    if root_function.role != SemanticFunctionRoleV1::KernelRoot {
+        return None;
+    }
+    if request.functions.len() == 1 {
+        return Some(SemanticKernelBodySelectionV1 {
+            root: *root,
+            body: *root,
+        });
+    }
+    if request.functions.len() != 2
+        || !matches!(
+            request.types[root_function.abi.source_output_type().0 as usize].shape,
+            SemanticTypeShapeV1::Unit
+        )
+    {
+        return None;
+    }
+
+    let entry = root_function.blocks.get(root_function.entry.0 as usize)?;
+    if !entry
+        .statements
+        .iter()
+        .all(|statement| wrapper_administrative_statement(&statement.kind))
+    {
+        return None;
+    }
+    let SemanticTerminatorKindV1::Call(call) = &entry.terminator.kind else {
+        return None;
+    };
+    let SemanticCallableDeclV1::Defined { function: body } =
+        request.callables.get(call.callee.0 as usize)?
+    else {
+        return None;
+    };
+    if body == root {
+        return None;
+    }
+    let body_function = request.functions.get(body.0 as usize)?;
+    let destination = call.destination.as_ref()?;
+    let return_block = root_function
+        .blocks
+        .get(destination.edge.target.0 as usize)?;
+    if body_function.role != SemanticFunctionRoleV1::InternalHelper
+        || body_function.abi.source_input_types() != root_function.abi.source_input_types()
+        || !result_with_unit_ok(request, body_function.abi.source_output_type())
+        || destination.place.ty != body_function.abi.source_output_type()
+        || !destination.place.projections.is_empty()
+        || root_function.locals[destination.place.local.0 as usize].role
+            != SemanticLocalRoleV1::Temporary
+        || call.unwind != SemanticUnwindActionV1::Unreachable
+        || !call.variadic_argument_abis.is_empty()
+        || destination.edge.role != SemanticEdgeRoleV1::CallReturn
+        || call.arguments.len() != root_function.abi.source_input_types().len()
+        || !call
+            .arguments
+            .iter()
+            .enumerate()
+            .all(|(index, operand)| wrapper_argument_is_forwarded(root_function, index, operand))
+        || !return_block
+            .statements
+            .iter()
+            .all(|statement| wrapper_administrative_statement(&statement.kind))
+        || !matches!(
+            return_block.terminator.kind,
+            SemanticTerminatorKindV1::Return
+        )
+        || root_function.blocks.len() != 2
+    {
+        return None;
+    }
+    Some(SemanticKernelBodySelectionV1 {
+        root: *root,
+        body: *body,
+    })
+}
+
+fn wrapper_administrative_statement(statement: &SemanticStatementKindV1) -> bool {
+    matches!(
+        statement,
+        SemanticStatementKindV1::StorageLive(_)
+            | SemanticStatementKindV1::StorageDead(_)
+            | SemanticStatementKindV1::Nop
+    )
+}
+
+fn wrapper_argument_is_forwarded(
+    root: &SemanticFunctionDeclV1,
+    expected: usize,
+    operand: &SemanticOperandV1,
+) -> bool {
+    let (SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)) = operand else {
+        return false;
+    };
+    place.projections.is_empty()
+        && root
+            .locals
+            .get(place.local.0 as usize)
+            .is_some_and(|local| {
+                local.role == SemanticLocalRoleV1::Argument(expected as u32)
+                    && root.abi.source_input_types().get(expected) == Some(&place.ty)
+            })
+}
+
+fn result_with_unit_ok(request: &InertSemanticMirRequestV1, result: SemanticTypeIdV1) -> bool {
+    let Some(result) = request.types.get(result.0 as usize) else {
+        return false;
+    };
+    let SemanticTypeShapeV1::Enum { variants, .. } = &result.shape else {
+        return false;
+    };
+    if variants.len() != 2
+        || variants[0].discriminant != 0
+        || variants[1].discriminant != 1
+        || variants[0].fields.fields.len() != 1
+        || variants[1].fields.fields.len() != 1
+        || variants[0].uninhabited
+        || variants[1].uninhabited
+    {
+        return false;
+    }
+    matches!(
+        request.types[variants[0].fields.fields[0].0 as usize].shape,
+        SemanticTypeShapeV1::Unit
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -5603,6 +5833,7 @@ pub enum SemanticTypeOperationV1 {
     Unary,
     Binary,
     CheckedBinary,
+    UncheckedBinary,
     Cast,
     Borrow,
     Length,
@@ -5610,6 +5841,7 @@ pub enum SemanticTypeOperationV1 {
     Aggregate,
     Atomic,
     SetDiscriminant,
+    Assume,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -5701,6 +5933,10 @@ pub enum SemanticMirErrorV1 {
     },
     InvalidTypeOperation {
         operation: SemanticTypeOperationV1,
+        location: SemanticMirLocationV1,
+    },
+    UnprovenUncheckedArithmetic {
+        operation: SemanticUncheckedBinaryOpV1,
         location: SemanticMirLocationV1,
     },
 }
@@ -5836,6 +6072,13 @@ impl fmt::Display for SemanticMirErrorV1 {
             } => write!(
                 formatter,
                 "types are invalid for {operation:?} at {location:?}"
+            ),
+            Self::UnprovenUncheckedArithmetic {
+                operation,
+                location,
+            } => write!(
+                formatter,
+                "unchecked {operation:?} is not dominated by its exact zero-overflow proof at {location:?}"
             ),
         }
     }
@@ -6636,6 +6879,7 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(_)
         | SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(_)
         | SemanticCompilerIntrinsicOperationV1::GridDimension(_)
+        | SemanticCompilerIntrinsicOperationV1::ColdPath
         | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
         | SemanticCompilerIntrinsicOperationV1::WaveBarrier
         | SemanticCompilerIntrinsicOperationV1::FabsF32
@@ -6758,7 +7002,8 @@ fn compiler_intrinsic_signature_matches(
         | SemanticCompilerIntrinsicOperationV1::GridDimension(_) => {
             inputs.is_empty() && is_unsigned_integer_with_bits(request, output, 32)
         }
-        SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
+        SemanticCompilerIntrinsicOperationV1::ColdPath
+        | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
         | SemanticCompilerIntrinsicOperationV1::WaveBarrier => {
             inputs.is_empty()
                 && matches!(
@@ -7948,6 +8193,13 @@ fn validate_single_backend_layout_facts(
     layout: &SemanticTypeLayoutV1,
 ) -> Result<(), SemanticMirErrorV1> {
     if !matches!(layout.variants, SemanticRustcVariantsV1::Single { .. }) {
+        return Ok(());
+    }
+    if matches!(layout.details, SemanticTypeLayoutDetailsV1::Aggregate(_)) {
+        // An aggregate may forward a scalar or scalar-pair backend ABI even
+        // when its field offsets happen to equal that backend ABI's default
+        // shape. Its rustc randomization seed and niche describe the aggregate,
+        // not a synthesized primitive layout.
         return Ok(());
     }
     let (expected_fields, expected_niche) = backend_default_fields_and_niche(layout.backend_repr)?;
@@ -9938,7 +10190,44 @@ fn validate_function(
         };
         validate_terminator(context, id, function, location, &block.terminator.kind)?;
     }
+    let unchecked_operation = first_unchecked_operation(function);
+    let violation = match unchecked_operation {
+        Some(operation) => {
+            crate::semantic_option_dominance::semantic_unchecked_arithmetic_violation_v1(function)
+                .map_err(|_| SemanticMirErrorV1::UnprovenUncheckedArithmetic {
+                operation,
+                location: function_location,
+            })?
+        }
+        None => None,
+    };
+    if let Some(violation) = violation {
+        return Err(SemanticMirErrorV1::UnprovenUncheckedArithmetic {
+            operation: violation.operation(),
+            location: SemanticMirLocationV1::Statement {
+                function: id,
+                block: violation.block(),
+                statement: violation.statement(),
+            },
+        });
+    }
     Ok(())
+}
+
+fn first_unchecked_operation(
+    function: &SemanticFunctionDeclV1,
+) -> Option<SemanticUncheckedBinaryOpV1> {
+    function.blocks.iter().find_map(|block| {
+        block.statements.iter().find_map(|statement| {
+            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                return None;
+            };
+            let SemanticRvalueKindV1::UncheckedBinary(unchecked) = assignment.value().kind() else {
+                return None;
+            };
+            Some(unchecked.operation())
+        })
+    })
 }
 
 fn validate_hidden_abi_argument(
@@ -10787,6 +11076,15 @@ fn validate_statement(
                 location,
             )?;
         }
+        SemanticStatementKindV1::Assume(condition) => {
+            validate_operand(context, function, location, condition)?;
+            if !matches!(
+                type_shape(context, condition.ty()),
+                SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool)
+            ) {
+                return invalid_type_operation(SemanticTypeOperationV1::Assume, location);
+            }
+        }
         SemanticStatementKindV1::Nop => {}
     }
     Ok(())
@@ -10911,6 +11209,16 @@ fn validate_rvalue(
                         && is_bool_type(context.request, *overflow));
             if !valid {
                 return invalid_type_operation(SemanticTypeOperationV1::CheckedBinary, location);
+            }
+        }
+        SemanticRvalueKindV1::UncheckedBinary(unchecked) => {
+            validate_operand(context, function, location, &unchecked.left)?;
+            validate_operand(context, function, location, &unchecked.right)?;
+            if unchecked.left.ty() != unchecked.right.ty()
+                || unchecked.left.ty() != rvalue.result_type
+                || !is_plain_integer_type(context.request, unchecked.left.ty())
+            {
+                return invalid_type_operation(SemanticTypeOperationV1::UncheckedBinary, location);
             }
         }
         SemanticRvalueKindV1::Cast { kind, operand } => {
@@ -11555,7 +11863,7 @@ fn validate_constant(
         }
         SemanticConstantValueV1::Scalar(value) => {
             if ty.layout.size_bytes != Some(u64::from(value.size_bytes))
-                || !scalar_value_is_valid(&ty.shape, *value)
+                || !scalar_constant_is_valid(context.request, ty, *value)
             {
                 return invalid_type_operation(SemanticTypeOperationV1::Constant, location);
             }
@@ -11745,8 +12053,12 @@ fn pointer_target_range_is_valid(
         .is_some_and(|end| end <= target_size)
 }
 
-fn scalar_value_is_valid(shape: &SemanticTypeShapeV1, value: SemanticScalarValueV1) -> bool {
-    match shape {
+fn scalar_constant_is_valid(
+    request: &InertSemanticMirRequestV1,
+    ty: &SemanticTypeDeclV1,
+    value: SemanticScalarValueV1,
+) -> bool {
+    match &ty.shape {
         SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool) => value.bits <= 1,
         SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Char) => {
             value.bits <= 0x10_ffff && !(0xd800..=0xdfff).contains(&value.bits)
@@ -11757,8 +12069,242 @@ fn scalar_value_is_valid(shape: &SemanticTypeShapeV1, value: SemanticScalarValue
             .valid_ranges
             .iter()
             .any(|range| range.start <= value.bits && value.bits <= range.end),
+        SemanticTypeShapeV1::Enum {
+            discriminant,
+            variants,
+        } => {
+            enum_scalar_constant_variant(&request.types, &ty.layout, *discriminant, variants, value)
+                .is_some()
+        }
         _ => false,
     }
+}
+
+/// Decodes one admitted scalar enum constant to its logical variant index.
+///
+/// This is the single interpretation shared by semantic validation and
+/// target-neutral lowering for both direct and niche rustc enum layouts.
+pub fn semantic_scalar_enum_variant_v1(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    value: SemanticScalarValueV1,
+) -> Option<u32> {
+    let declaration = types.get(ty.0 as usize)?;
+    let SemanticTypeShapeV1::Enum {
+        discriminant,
+        variants,
+    } = &declaration.shape
+    else {
+        return None;
+    };
+    enum_scalar_constant_variant(types, &declaration.layout, *discriminant, variants, value)
+}
+
+/// Decodes an exact direct-layout enum tag to its logical variant index.
+///
+/// Unlike [`semantic_scalar_enum_variant_v1`], this decoder also admits enums
+/// with payload fields. The caller remains responsible for reading the tag at
+/// the offset authenticated by the enum layout.
+pub fn semantic_direct_enum_variant_v1(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    value: SemanticScalarValueV1,
+) -> Option<u32> {
+    let declaration = types.get(ty.0 as usize)?;
+    let SemanticTypeShapeV1::Enum {
+        discriminant,
+        variants,
+    } = &declaration.shape
+    else {
+        return None;
+    };
+    let SemanticRustcVariantsV1::Multiple(enum_layout) = &declaration.layout.variants else {
+        return None;
+    };
+    let SemanticEnumEncodingV1::Direct(direct) = &enum_layout.encoding else {
+        return None;
+    };
+    let logical = types
+        .get(discriminant.0 as usize)
+        .and_then(|ty| scalar_shape(&ty.shape))?;
+    direct_enum_variant_from_tag(logical, variants, enum_layout.variants.len(), direct, value)
+}
+
+fn direct_enum_variant_from_tag(
+    logical: SemanticScalarTypeV1,
+    variants: &[SemanticEnumVariantV1],
+    layout_variant_count: usize,
+    direct: &SemanticDirectEnumEncodingV1,
+    value: SemanticScalarValueV1,
+) -> Option<u32> {
+    let physical = backend_integer_semantic_scalar(direct.tag)?;
+    if direct.tag.primitive().size_bytes()? != u64::from(value.size_bytes)
+        || variants.len() != layout_variant_count
+        || !backend_scalar_contains_bits(direct.tag, value.bits)
+    {
+        return None;
+    }
+    variants.iter().enumerate().find_map(|(index, variant)| {
+        (!variant.uninhabited
+            && encoded_discriminant_bits(variant.discriminant, logical, physical)
+                == Some(value.bits)
+            && backend_scalar_contains_discriminant(direct.tag, variant.discriminant, logical))
+        .then_some(index as u32)
+    })
+}
+
+fn enum_scalar_constant_variant(
+    types: &[SemanticTypeDeclV1],
+    layout: &SemanticTypeLayoutV1,
+    discriminant: SemanticTypeIdV1,
+    variants: &[SemanticEnumVariantV1],
+    value: SemanticScalarValueV1,
+) -> Option<u32> {
+    let SemanticRustcVariantsV1::Multiple(enum_layout) = &layout.variants else {
+        return None;
+    };
+    let SemanticBackendReprV1::Scalar(outer_scalar) = layout.backend_repr else {
+        return None;
+    };
+    let Some(tag_width) = outer_scalar.primitive().size_bytes() else {
+        return None;
+    };
+    if tag_width != u64::from(value.size_bytes)
+        || layout.size_bytes != Some(tag_width)
+        || variants.len() != enum_layout.variants.len()
+        || !backend_scalar_contains_bits(outer_scalar, value.bits)
+    {
+        return None;
+    }
+    let Some(logical) = types
+        .get(discriminant.0 as usize)
+        .and_then(|ty| scalar_shape(&ty.shape))
+    else {
+        return None;
+    };
+    match &enum_layout.encoding {
+        SemanticEnumEncodingV1::Direct(direct) => {
+            (direct.tag_field == 0
+                && direct.tag_offset_bytes == 0
+                && direct.tag.primitive() == outer_scalar.primitive())
+            .then_some(())?;
+            let variant = direct_enum_variant_from_tag(
+                logical,
+                variants,
+                enum_layout.variants.len(),
+                direct,
+                value,
+            )?;
+            variants[variant as usize]
+                .fields
+                .fields
+                .iter()
+                .all(|field| types[field.0 as usize].layout.size_bytes == Some(0))
+                .then_some(variant)
+        }
+        SemanticEnumEncodingV1::Niche(niche) => {
+            niche_scalar_constant_variant(types, variants, niche, outer_scalar, value.bits)
+        }
+    }
+}
+
+fn niche_scalar_constant_variant(
+    types: &[SemanticTypeDeclV1],
+    variants: &[SemanticEnumVariantV1],
+    niche: &SemanticNicheEnumEncodingV1,
+    outer_scalar: SemanticBackendScalarV1,
+    bits: u128,
+) -> Option<u32> {
+    let Some(SemanticScalarTypeV1::Integer {
+        bits: physical_bits,
+        ..
+    }) = backend_integer_semantic_scalar(niche.tag)
+    else {
+        return None;
+    };
+    if niche.tag_field != 0
+        || niche.source.expected_offset_bytes != 0
+        || niche.tag.primitive() != outer_scalar.primitive()
+        || niche.source_niche.primitive != niche.tag.primitive()
+    {
+        return None;
+    }
+    let mask = unsigned_max(physical_bits);
+    let relative = bits.wrapping_sub(niche.niche_start) & mask;
+    let niche_variant_count = u128::from(
+        niche
+            .niche_variants_end
+            .checked_sub(niche.niche_variants_start)
+            .unwrap_or(u32::MAX),
+    );
+    if relative <= niche_variant_count {
+        let Some(index) = u128::from(niche.niche_variants_start)
+            .checked_add(relative)
+            .and_then(|index| usize::try_from(index).ok())
+        else {
+            return None;
+        };
+        return variants.get(index).and_then(|variant| {
+            (!variant.uninhabited
+                && variant
+                    .fields
+                    .fields
+                    .iter()
+                    .all(|field| types[field.0 as usize].layout.size_bytes == Some(0)))
+            .then_some(index as u32)
+        });
+    }
+    variants
+        .get(niche.untagged_variant as usize)
+        .filter(|variant| !variant.uninhabited)?;
+    scalar_validity_range_contains(niche.source_niche.valid_range, bits)
+        .then_some(niche.untagged_variant)
+}
+
+fn backend_scalar_contains_bits(scalar: SemanticBackendScalarV1, bits: u128) -> bool {
+    scalar.valid_range().is_some_and(|range| {
+        scalar
+            .primitive()
+            .bits()
+            .is_some_and(|width| bits <= unsigned_max(width))
+            && scalar_validity_range_contains(range, bits)
+    })
+}
+
+fn scalar_validity_range_contains(range: SemanticScalarValidityRangeV1, bits: u128) -> bool {
+    if range.start <= range.end {
+        (range.start..=range.end).contains(&bits)
+    } else {
+        bits >= range.start || bits <= range.end
+    }
+}
+
+fn encoded_discriminant_bits(
+    raw: u128,
+    logical: SemanticScalarTypeV1,
+    physical: SemanticScalarTypeV1,
+) -> Option<u128> {
+    let SemanticScalarTypeV1::Integer {
+        signed: logical_signed,
+        bits: logical_bits,
+    } = logical
+    else {
+        return None;
+    };
+    let SemanticScalarTypeV1::Integer {
+        bits: physical_bits,
+        ..
+    } = physical
+    else {
+        return None;
+    };
+    discriminant_fits_tag(raw, logical, physical).then(|| {
+        if logical_signed {
+            (sign_extend_discriminant(raw, logical_bits) as u128) & unsigned_max(physical_bits)
+        } else {
+            raw & unsigned_max(physical_bits)
+        }
+    })
 }
 
 fn require_type(
@@ -12544,6 +13090,7 @@ fn enqueue_compiler_intrinsic_type_references(
         | SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(_)
         | SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(_)
         | SemanticCompilerIntrinsicOperationV1::GridDimension(_)
+        | SemanticCompilerIntrinsicOperationV1::ColdPath
         | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
         | SemanticCompilerIntrinsicOperationV1::WaveBarrier
         | SemanticCompilerIntrinsicOperationV1::FabsF32 => {}
@@ -12742,6 +13289,9 @@ fn enqueue_statement_type_references(
         | SemanticStatementKindV1::Deinitialize(place) => {
             enqueue_place_type_references(place, pending);
         }
+        SemanticStatementKindV1::Assume(condition) => {
+            enqueue_operand_type_references(condition, pending);
+        }
         SemanticStatementKindV1::StorageLive(_)
         | SemanticStatementKindV1::StorageDead(_)
         | SemanticStatementKindV1::Nop => {}
@@ -12766,6 +13316,10 @@ fn enqueue_rvalue_type_references(
         SemanticRvalueKindV1::CheckedBinary(checked) => {
             enqueue_operand_type_references(&checked.left, pending);
             enqueue_operand_type_references(&checked.right, pending);
+        }
+        SemanticRvalueKindV1::UncheckedBinary(unchecked) => {
+            enqueue_operand_type_references(&unchecked.left, pending);
+            enqueue_operand_type_references(&unchecked.right, pending);
         }
         SemanticRvalueKindV1::Borrow { place, .. }
         | SemanticRvalueKindV1::AddressOf { place, .. }
@@ -12921,6 +13475,9 @@ fn enqueue_statement_closure_references(
             enqueue_operand_closure_references(context, &operation.expected, pending)?;
             enqueue_operand_closure_references(context, &operation.replacement, pending)?;
         }
+        SemanticStatementKindV1::Assume(condition) => {
+            enqueue_operand_closure_references(context, condition, pending)?;
+        }
         SemanticStatementKindV1::SetDiscriminant { .. }
         | SemanticStatementKindV1::Deinitialize(_)
         | SemanticStatementKindV1::StorageLive(_)
@@ -12948,6 +13505,10 @@ fn enqueue_rvalue_closure_references(
         SemanticRvalueKindV1::CheckedBinary(checked) => {
             enqueue_operand_closure_references(context, &checked.left, pending)?;
             enqueue_operand_closure_references(context, &checked.right, pending)?;
+        }
+        SemanticRvalueKindV1::UncheckedBinary(unchecked) => {
+            enqueue_operand_closure_references(context, &unchecked.left, pending)?;
+            enqueue_operand_closure_references(context, &unchecked.right, pending)?;
         }
         SemanticRvalueKindV1::Aggregate(aggregate) => {
             for operand in &aggregate.operands {
@@ -13125,7 +13686,8 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
                     &statement.kind,
                     SemanticStatementKindV1::Assign(SemanticAssignmentV1 {
                         value: SemanticRvalueV1 {
-                            kind: SemanticRvalueKindV1::CheckedBinary(_),
+                            kind: SemanticRvalueKindV1::CheckedBinary(_)
+                                | SemanticRvalueKindV1::UncheckedBinary(_),
                             ..
                         },
                         ..
@@ -14135,6 +14697,7 @@ fn encode_compiler_intrinsic_operation(
                 SemanticF32MathFunctionV1::Log10 => 12,
             })
         }
+        SemanticCompilerIntrinsicOperationV1::ColdPath => writer.u8(31),
         SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift {
             input_witness,
             output_witness,
@@ -14644,6 +15207,10 @@ fn encode_statement(
             writer.u32(local.0)
         }
         SemanticStatementKindV1::Nop => writer.u8(8),
+        SemanticStatementKindV1::Assume(condition) => {
+            writer.u8(9)?;
+            encode_operand(writer, condition)
+        }
     }
 }
 
@@ -14810,6 +15377,16 @@ fn encode_rvalue(
             })?;
             encode_operand(writer, &checked.left)?;
             encode_operand(writer, &checked.right)
+        }
+        SemanticRvalueKindV1::UncheckedBinary(unchecked) => {
+            writer.u8(11)?;
+            writer.u8(match unchecked.operation {
+                SemanticUncheckedBinaryOpV1::Add => 0,
+                SemanticUncheckedBinaryOpV1::Subtract => 1,
+                SemanticUncheckedBinaryOpV1::Multiply => 2,
+            })?;
+            encode_operand(writer, &unchecked.left)?;
+            encode_operand(writer, &unchecked.right)
         }
         SemanticRvalueKindV1::Cast { kind, operand } => {
             writer.u8(3)?;

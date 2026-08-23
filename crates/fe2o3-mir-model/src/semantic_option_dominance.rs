@@ -8,7 +8,8 @@ use std::{error::Error, fmt};
 use crate::semantic_mir_v1::{
     SemanticBlockIdV1, SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1,
     SemanticDirectCallV1, SemanticFunctionDeclV1, SemanticLocalIdV1, SemanticOperandV1,
-    SemanticPlaceV1, SemanticRvalueKindV1, SemanticStatementKindV1, SemanticTerminatorKindV1,
+    SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticStatementKindV1,
+    SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeShapeV1, SemanticUncheckedBinaryOpV1,
 };
 
 /// Maximum charged CFG, statement, definition, and dominator work.
@@ -343,6 +344,434 @@ impl SemanticOptionDominanceV1 {
     }
 }
 
+/// Opaque identity for one exact enum-payload branch.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct SemanticEnumPayloadAvailabilityV1(usize);
+
+/// Bounded dominance facts for payload extraction from ordinary Rust enums.
+///
+/// Unlike `SemanticOptionDominanceV1`, this analysis grants no producer
+/// authority. It only identifies a branch that is uniquely selected by an
+/// exact discriminant switch for one enum variant.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SemanticEnumPayloadDominanceV1 {
+    availability_by_local: Box<[Vec<(u32, SemanticEnumPayloadAvailabilityV1)>]>,
+    payload_targets: Box<[SemanticBlockIdV1]>,
+    dominator_preorder: Box<[usize]>,
+    dominator_subtree_end: Box<[usize]>,
+    work_units: usize,
+}
+
+impl SemanticEnumPayloadDominanceV1 {
+    /// Finds exact variant branches for every enum local with one exact
+    /// discriminant binding and switch.
+    pub fn analyze(
+        function: &SemanticFunctionDeclV1,
+        types: &[SemanticTypeDeclV1],
+    ) -> Result<Self, SemanticOptionDominanceErrorV1> {
+        let local_count = function.locals().len();
+        let mut budget = WorkBudgetV1::default();
+        let definitions = local_definition_counts(function, &mut budget)?;
+        let dominators = DominatorIntervalsV1::analyze(function, &mut budget)?;
+        let mut discriminants_by_enum = vec![Vec::new(); local_count];
+        for (block_index, block) in function.blocks().iter().enumerate() {
+            budget.charge(block.statements().len().saturating_add(1))?;
+            for statement in block.statements() {
+                let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                    continue;
+                };
+                let SemanticRvalueKindV1::Discriminant(place) = assignment.value().kind() else {
+                    continue;
+                };
+                if !assignment.destination().projections().is_empty()
+                    || !place.projections().is_empty()
+                {
+                    continue;
+                }
+                let Some(bindings) = discriminants_by_enum.get_mut(place.local().index() as usize)
+                else {
+                    return Err(SemanticOptionDominanceErrorV1::InvalidControlFlow(
+                        "an enum discriminator source is outside the local table",
+                    ));
+                };
+                bindings
+                    .try_reserve(1)
+                    .map_err(|_| SemanticOptionDominanceErrorV1::Storage)?;
+                bindings.push((block_index, assignment.destination().local()));
+            }
+        }
+
+        let mut availability_by_local = vec![Vec::new(); local_count];
+        let mut payload_targets = Vec::new();
+        payload_targets
+            .try_reserve(local_count)
+            .map_err(|_| SemanticOptionDominanceErrorV1::Storage)?;
+        for (local_index, bindings) in discriminants_by_enum.iter().enumerate() {
+            let [(switch_block, discriminator)] = bindings.as_slice() else {
+                continue;
+            };
+            if definitions.get(local_index).copied() != Some(1)
+                || definitions.get(discriminator.index() as usize).copied() != Some(1)
+            {
+                continue;
+            }
+            let Some(local) = function.locals().get(local_index) else {
+                return Err(SemanticOptionDominanceErrorV1::InvalidControlFlow(
+                    "an enum payload local is outside the local table",
+                ));
+            };
+            let Some(ty) = types.get(local.ty().index() as usize) else {
+                return Err(SemanticOptionDominanceErrorV1::InvalidControlFlow(
+                    "an enum payload type is outside the type table",
+                ));
+            };
+            let SemanticTypeShapeV1::Enum { variants, .. } = ty.shape() else {
+                continue;
+            };
+            let Some(block) = function.blocks().get(*switch_block) else {
+                return Err(SemanticOptionDominanceErrorV1::InvalidControlFlow(
+                    "an enum payload switch is outside the block table",
+                ));
+            };
+            let SemanticTerminatorKindV1::SwitchInt {
+                discriminant,
+                targets,
+            } = block.terminator().kind()
+            else {
+                continue;
+            };
+            if exact_operand_local(discriminant) != Some(*discriminator) {
+                continue;
+            }
+            budget.charge(
+                variants
+                    .len()
+                    .saturating_mul(targets.values().len().saturating_add(1)),
+            )?;
+            let mut otherwise_variant = None;
+            let mut otherwise_is_ambiguous = false;
+            for (variant_index, variant) in variants.iter().enumerate() {
+                if variant.is_uninhabited()
+                    || targets
+                        .values()
+                        .iter()
+                        .any(|target| target.value() == variant.discriminant())
+                {
+                    continue;
+                }
+                if otherwise_variant.replace(variant_index as u32).is_some() {
+                    otherwise_is_ambiguous = true;
+                    break;
+                }
+            }
+            for (variant_index, variant) in variants.iter().enumerate() {
+                if variant.is_uninhabited() {
+                    continue;
+                }
+                let explicit = targets
+                    .values()
+                    .iter()
+                    .find(|target| target.value() == variant.discriminant())
+                    .map(|target| target.edge().target());
+                let target = explicit.or_else(|| {
+                    (!otherwise_is_ambiguous && otherwise_variant == Some(variant_index as u32))
+                        .then(|| targets.otherwise().target())
+                });
+                let Some(target) = target else {
+                    continue;
+                };
+                if !dominators.is_reachable(target.index() as usize)
+                    || !dominators.has_unique_predecessor(target.index() as usize, *switch_block)
+                {
+                    continue;
+                }
+                let availability = SemanticEnumPayloadAvailabilityV1(payload_targets.len());
+                payload_targets.push(target);
+                availability_by_local[local_index].push((variant_index as u32, availability));
+            }
+        }
+        Ok(Self {
+            availability_by_local: availability_by_local.into_boxed_slice(),
+            payload_targets: payload_targets.into_boxed_slice(),
+            dominator_preorder: dominators.preorder.into_boxed_slice(),
+            dominator_subtree_end: dominators.subtree_end.into_boxed_slice(),
+            work_units: budget.used,
+        })
+    }
+
+    /// Returns the exact branch identity for one enum local and variant.
+    pub fn availability(
+        &self,
+        local: SemanticLocalIdV1,
+        variant: u32,
+    ) -> Option<SemanticEnumPayloadAvailabilityV1> {
+        self.availability_by_local
+            .get(local.index() as usize)?
+            .iter()
+            .find_map(|(candidate, availability)| (*candidate == variant).then_some(*availability))
+    }
+
+    /// Reports in O(1) whether the exact variant edge dominates `block`.
+    pub fn allows(
+        &self,
+        availability: SemanticEnumPayloadAvailabilityV1,
+        block: SemanticBlockIdV1,
+    ) -> bool {
+        self.payload_targets
+            .get(availability.0)
+            .is_some_and(|target| {
+                dominates_with_intervals(
+                    &self.dominator_preorder,
+                    &self.dominator_subtree_end,
+                    target.index() as usize,
+                    block.index() as usize,
+                )
+            })
+    }
+
+    /// Returns deterministic charged analysis work.
+    pub const fn work_units(&self) -> usize {
+        self.work_units
+    }
+
+    /// These inert facts never grant compiler, artifact, or launch authority.
+    pub const fn grants_authority(&self) -> bool {
+        false
+    }
+}
+
+/// One unchecked arithmetic operation lacking the exact checked-operation
+/// false-edge proof required by safe Rust.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SemanticUncheckedArithmeticViolationV1 {
+    operation: SemanticUncheckedBinaryOpV1,
+    block: SemanticBlockIdV1,
+    statement: u32,
+}
+
+impl SemanticUncheckedArithmeticViolationV1 {
+    pub const fn operation(self) -> SemanticUncheckedBinaryOpV1 {
+        self.operation
+    }
+
+    pub const fn block(self) -> SemanticBlockIdV1 {
+        self.block
+    }
+
+    pub const fn statement(self) -> u32 {
+        self.statement
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CheckedArithmeticProducerV1<'a> {
+    local: SemanticLocalIdV1,
+    operation: crate::semantic_mir_v1::SemanticCheckedBinaryOpV1,
+    left: &'a SemanticOperandV1,
+    right: &'a SemanticOperandV1,
+    block: usize,
+}
+
+/// Verifies rustc's general safe-checked-arithmetic refinement pattern.
+///
+/// An unchecked add, subtract, or multiply is admitted only when the same
+/// operands were used by the corresponding checked operation and the exact
+/// zero-overflow switch edge dominates the unchecked operation. The zero edge
+/// must have the switch as its unique predecessor, so a join cannot forge the
+/// precondition.
+pub fn semantic_unchecked_arithmetic_violation_v1(
+    function: &SemanticFunctionDeclV1,
+) -> Result<Option<SemanticUncheckedArithmeticViolationV1>, SemanticOptionDominanceErrorV1> {
+    let mut budget = WorkBudgetV1::default();
+    let definitions = local_definition_counts(function, &mut budget)?;
+    let dominators = DominatorIntervalsV1::analyze(function, &mut budget)?;
+    let mut aliases = vec![None; function.locals().len()];
+    let mut producers = Vec::new();
+    producers
+        .try_reserve(function.locals().len())
+        .map_err(|_| SemanticOptionDominanceErrorV1::Storage)?;
+
+    for (block_index, block) in function.blocks().iter().enumerate() {
+        budget.charge(block.statements().len())?;
+        for statement in block.statements() {
+            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                continue;
+            };
+            let destination = assignment.destination();
+            if destination.projections().is_empty()
+                && definitions
+                    .get(destination.local().index() as usize)
+                    .copied()
+                    == Some(1)
+            {
+                if let SemanticRvalueKindV1::Use(
+                    SemanticOperandV1::Copy(source) | SemanticOperandV1::Move(source),
+                ) = assignment.value().kind()
+                {
+                    aliases[destination.local().index() as usize] = Some(source);
+                }
+                if let SemanticRvalueKindV1::CheckedBinary(checked) = assignment.value().kind() {
+                    producers.push(CheckedArithmeticProducerV1 {
+                        local: destination.local(),
+                        operation: checked.operation(),
+                        left: checked.left(),
+                        right: checked.right(),
+                        block: block_index,
+                    });
+                }
+            }
+        }
+    }
+
+    let mut producer_by_local = Vec::new();
+    producer_by_local
+        .try_reserve_exact(function.locals().len())
+        .map_err(|_| SemanticOptionDominanceErrorV1::Storage)?;
+    producer_by_local.resize(function.locals().len(), None);
+    for (producer_index, producer) in producers.iter().enumerate() {
+        producer_by_local[producer.local.index() as usize] = Some(producer_index);
+    }
+    let mut safe_targets_by_producer = Vec::new();
+    safe_targets_by_producer
+        .try_reserve_exact(producers.len())
+        .map_err(|_| SemanticOptionDominanceErrorV1::Storage)?;
+    safe_targets_by_producer.resize_with(producers.len(), Vec::new);
+    for (switch_block, block) in function.blocks().iter().enumerate() {
+        let SemanticTerminatorKindV1::SwitchInt {
+            discriminant,
+            targets,
+        } = block.terminator().kind()
+        else {
+            continue;
+        };
+        budget.charge(targets.values().len().saturating_add(1))?;
+        let Some(overflow_place) = resolve_alias_place(discriminant, &aliases, &mut budget)? else {
+            continue;
+        };
+        let [overflow_projection] = overflow_place.projections() else {
+            continue;
+        };
+        if overflow_projection.kind() != SemanticProjectionKindV1::Field(1) {
+            continue;
+        }
+        let Some(producer_index) = producer_by_local
+            .get(overflow_place.local().index() as usize)
+            .copied()
+            .flatten()
+        else {
+            continue;
+        };
+        let producer = producers[producer_index];
+        if !dominators.dominates(producer.block, switch_block) {
+            continue;
+        }
+        let only_boolean_values = targets
+            .values()
+            .iter()
+            .all(|target| matches!(target.value(), 0 | 1));
+        if !only_boolean_values {
+            continue;
+        }
+        let zero_target = targets
+            .values()
+            .iter()
+            .find(|target| target.value() == 0)
+            .map(|target| target.edge().target())
+            .or_else(|| {
+                targets
+                    .values()
+                    .iter()
+                    .any(|target| target.value() == 1)
+                    .then(|| targets.otherwise().target())
+            });
+        let Some(zero_target) = zero_target else {
+            continue;
+        };
+        if dominators.is_reachable(zero_target.index() as usize)
+            && dominators.has_unique_predecessor(zero_target.index() as usize, switch_block)
+        {
+            safe_targets_by_producer[producer_index]
+                .try_reserve(1)
+                .map_err(|_| SemanticOptionDominanceErrorV1::Storage)?;
+            safe_targets_by_producer[producer_index].push(zero_target);
+        }
+    }
+
+    for (block_index, block) in function.blocks().iter().enumerate() {
+        for (statement_index, statement) in block.statements().iter().enumerate() {
+            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                continue;
+            };
+            let SemanticRvalueKindV1::UncheckedBinary(unchecked) = assignment.value().kind() else {
+                continue;
+            };
+            let mut proved = false;
+            for (producer_index, producer) in producers.iter().enumerate() {
+                budget.charge(1)?;
+                if producer.operation != unchecked.operation().checked()
+                    || !same_operand_value(producer.left, unchecked.left())
+                    || !same_operand_value(producer.right, unchecked.right())
+                {
+                    continue;
+                }
+                for safe_target in &safe_targets_by_producer[producer_index] {
+                    budget.charge(1)?;
+                    if dominators.dominates(safe_target.index() as usize, block_index) {
+                        proved = true;
+                        break;
+                    }
+                }
+                if proved {
+                    break;
+                }
+            }
+            if !proved {
+                return Ok(Some(SemanticUncheckedArithmeticViolationV1 {
+                    operation: unchecked.operation(),
+                    block: SemanticBlockIdV1::from_index(block_index as u32),
+                    statement: statement_index as u32,
+                }));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn resolve_alias_place<'a>(
+    operand: &'a SemanticOperandV1,
+    aliases: &[Option<&'a SemanticPlaceV1>],
+    budget: &mut WorkBudgetV1,
+) -> Result<Option<&'a SemanticPlaceV1>, SemanticOptionDominanceErrorV1> {
+    let mut place = match operand {
+        SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => place,
+        SemanticOperandV1::Constant(_) => return Ok(None),
+    };
+    for _ in 0..=aliases.len() {
+        budget.charge(1)?;
+        if !place.projections().is_empty() {
+            return Ok(Some(place));
+        }
+        let Some(Some(source)) = aliases.get(place.local().index() as usize) else {
+            return Ok(Some(place));
+        };
+        place = source;
+    }
+    // A cycle cannot establish a proof, but it may be unrelated to the
+    // unchecked operation being verified. Treat it as an inexact candidate.
+    Ok(None)
+}
+
+fn same_operand_value(left: &SemanticOperandV1, right: &SemanticOperandV1) -> bool {
+    match (left, right) {
+        (
+            SemanticOperandV1::Copy(left) | SemanticOperandV1::Move(left),
+            SemanticOperandV1::Copy(right) | SemanticOperandV1::Move(right),
+        ) => left == right,
+        (SemanticOperandV1::Constant(left), SemanticOperandV1::Constant(right)) => left == right,
+        _ => false,
+    }
+}
+
 #[derive(Default)]
 struct WorkBudgetV1 {
     used: usize,
@@ -591,6 +1020,7 @@ fn local_definition_counts(
                 | SemanticStatementKindV1::Deinitialize(place) => record(place)?,
                 SemanticStatementKindV1::StorageLive(_)
                 | SemanticStatementKindV1::StorageDead(_)
+                | SemanticStatementKindV1::Assume(_)
                 | SemanticStatementKindV1::Nop => {}
             }
         }

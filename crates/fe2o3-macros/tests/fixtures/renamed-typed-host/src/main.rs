@@ -1,4 +1,6 @@
-use gpu_device::{DeviceGlobalMutPtr, DisjointSlice, kernel};
+use gpu_device::{
+    DeviceGlobalMutPtr, DisjointSlice, KernelError, KernelResult, kernel,
+};
 
 #[kernel(
     typed,
@@ -23,6 +25,19 @@ pub fn renamed_general(scale: f32, input: &[f32], output: DisjointSlice<f32>) {
 )]
 pub fn renamed_global_mut(target: DeviceGlobalMutPtr<u32>) {
     let _ = target;
+}
+
+#[kernel(
+    typed,
+    namespace = "7c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
+)]
+pub fn renamed_result(
+    input: &[f32],
+    output: DisjointSlice<f32>,
+) -> KernelResult {
+    let _ = input.first().ok_or(KernelError::OutOfBounds)?;
+    let _ = output;
+    Ok(())
 }
 
 fn assert_contract<T: gpu_host::__generated::CompilerGeneratedKernelContractV1>() {}
@@ -62,6 +77,7 @@ fn assert_global_mut_argument<'allocation>(
 fn main() {
     assert_contract::<__fe2o3_kernel_marker_renamed_typed>();
     assert_expectation::<renamed_general_gpu::Marker>();
+    assert_expectation::<renamed_result_gpu::Marker>();
     assert_safe_aliases(None, None);
     let _ = assert_general_arguments;
     let _ = assert_global_mut_argument;

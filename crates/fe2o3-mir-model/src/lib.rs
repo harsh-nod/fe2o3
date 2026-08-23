@@ -59,9 +59,9 @@ pub use semantic_memory::{
     MirProvenanceRegion, MirSemanticMemoryOperation, MirVolatileAccessContract,
 };
 pub use semantic_option_dominance::{
-    MAX_SEMANTIC_OPTION_DOMINANCE_WORK_V1, SemanticOptionAvailabilityV1,
-    SemanticOptionDominanceErrorV1, SemanticOptionDominanceV1, SemanticOptionProducerV1,
-    semantic_option_producers_v1,
+    MAX_SEMANTIC_OPTION_DOMINANCE_WORK_V1, SemanticEnumPayloadAvailabilityV1,
+    SemanticEnumPayloadDominanceV1, SemanticOptionAvailabilityV1, SemanticOptionDominanceErrorV1,
+    SemanticOptionDominanceV1, SemanticOptionProducerV1, semantic_option_producers_v1,
 };
 pub use semantic_type::{
     MirAddressSpace, MirAggregateLayout, MirEnumEncoding, MirEnumType, MirField, MirLayout,

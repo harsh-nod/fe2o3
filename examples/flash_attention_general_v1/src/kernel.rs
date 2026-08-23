@@ -3,8 +3,8 @@
 #![allow(missing_docs)]
 
 use fe2o3_device::{
-    Bf16MfmaFragment, DeviceMath, DeviceMatrix, DisjointSlice, F32AccumulatorFragment,
-    Gfx942Collectives, Index1D, Tiled2D, kernel, thread,
+    Bf16MfmaFragment, DisjointSlice, F32AccumulatorFragment, Index1D, KernelError, KernelResult,
+    Math, Matrix, Subgroup, Tiled2D, kernel, thread,
 };
 
 pub const FLASH_ATTENTION_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
@@ -27,7 +27,7 @@ fn matrix_extent(rows: u32, columns: u32, stride: u32) -> usize {
 /// negative infinity. Logical edge rows are simply ignored by the caller.
 #[kernel(
     typed,
-    namespace = "8b95caf64293c67dcb8e24c2a9b06e255611a3e4745e74ff8d212c8634fd6f1a",
+    namespace = "a3e5de83648eb444171f96f51069694e6d86ae30f8ef64e18b5cf550044ab1db",
     launch(required = [64, 1, 1], max = [64, 1, 1]),
     control_flow(loop_bounds(256, 64, 256, 64, 16))
 )]
@@ -52,23 +52,26 @@ pub fn flash_attention_general_v1(
     output_stride: u32,
     output_rows: u32,
     scale: f32,
-) {
-    let output_rows_overflow = batch_heads != 0 && query_rows_padded > u32::MAX / batch_heads;
-    let expected_output_rows = batch_heads * query_rows_padded;
+) -> KernelResult {
+    let expected_output_rows = batch_heads
+        .checked_mul(query_rows_padded)
+        .ok_or(KernelError::InvalidArgument)?;
     let q_extent = matrix_extent(output_rows, depth, q_stride);
     let k_extent = if batch_heads == 0 || depth == 0 || keys_padded == 0 {
         0
     } else {
-        (batch_heads - 1) as usize * k_head_stride as usize
-            + (depth - 1) as usize * k_depth_stride as usize
-            + keys_padded as usize
+        ((batch_heads - 1) as usize * k_head_stride as usize)
+            .checked_add((depth - 1) as usize * k_depth_stride as usize)
+            .and_then(|extent| extent.checked_add(keys_padded as usize))
+            .ok_or(KernelError::InvalidArgument)?
     };
     let v_extent = if batch_heads == 0 || keys_padded == 0 || value_dimension == 0 {
         0
     } else {
-        (batch_heads - 1) as usize * v_head_stride as usize
-            + (keys_padded - 1) as usize * v_stride as usize
-            + value_dimension as usize
+        ((batch_heads - 1) as usize * v_head_stride as usize)
+            .checked_add((keys_padded - 1) as usize * v_stride as usize)
+            .and_then(|extent| extent.checked_add(value_dimension as usize))
+            .ok_or(KernelError::InvalidArgument)?
     };
     let mask_extent = matrix_extent(output_rows, keys_padded, mask_stride);
     let output_extent = matrix_extent(output_rows, value_dimension, output_stride);
@@ -81,7 +84,6 @@ pub fn flash_attention_general_v1(
         || depth > FLASH_ATTENTION_MAX_DEPTH_V1
         || value_dimension == 0
         || value_dimension > FLASH_ATTENTION_MAX_VALUE_DIMENSION_V1
-        || output_rows_overflow
         || output_rows != expected_output_rows
         || q_stride < depth
         || k_depth_stride < keys_padded
@@ -96,7 +98,7 @@ pub fn flash_attention_general_v1(
         || additive_mask.len() < mask_extent
         || output.len() < output_extent
     {
-        return;
+        return Err(KernelError::InvalidArgument);
     }
 
     let thread_index = thread::index_1d();
@@ -109,12 +111,12 @@ pub fn flash_attention_general_v1(
     let head = query_tile / tiles_per_head;
     let query_row = query_tile * 16 + lane_column;
     let score_row_base = query_tile * 16 + (lane / 16) * 4;
-    let Some(output_tile) = thread_index.checked_tiled_2d::<64, 16, 16, 4>() else {
-        return;
-    };
-    let matrix = DeviceMatrix::current();
-    let collectives = Gfx942Collectives::current();
-    let math = DeviceMath::current();
+    let output_tile = thread_index
+        .checked_tiled_2d::<64, 16, 16, 4>()
+        .ok_or(KernelError::OutOfBounds)?;
+    let matrix = Matrix::current();
+    let subgroup = Subgroup::current();
+    let math = Math::current();
 
     let mut maximum0 = f32::NEG_INFINITY;
     let mut maximum1 = f32::NEG_INFINITY;
@@ -198,10 +200,10 @@ pub fn flash_attention_general_v1(
         }
         key_base += 16;
     }
-    maximum0 = collectives.subgroup_reduce_max_f32::<16>(maximum0);
-    maximum1 = collectives.subgroup_reduce_max_f32::<16>(maximum1);
-    maximum2 = collectives.subgroup_reduce_max_f32::<16>(maximum2);
-    maximum3 = collectives.subgroup_reduce_max_f32::<16>(maximum3);
+    maximum0 = subgroup.subgroup_reduce_max_f32::<16>(maximum0);
+    maximum1 = subgroup.subgroup_reduce_max_f32::<16>(maximum1);
+    maximum2 = subgroup.subgroup_reduce_max_f32::<16>(maximum2);
+    maximum3 = subgroup.subgroup_reduce_max_f32::<16>(maximum3);
 
     let mut sum0 = 0.0_f32;
     let mut sum1 = 0.0_f32;
@@ -290,10 +292,10 @@ pub fn flash_attention_general_v1(
         while dimension < value_dimension as usize {
             let value =
                 v[head * v_head_stride as usize + key_column * v_stride as usize + dimension];
-            let contribution0 = collectives.subgroup_reduce_sum_f32::<16>(probability0 * value);
-            let contribution1 = collectives.subgroup_reduce_sum_f32::<16>(probability1 * value);
-            let contribution2 = collectives.subgroup_reduce_sum_f32::<16>(probability2 * value);
-            let contribution3 = collectives.subgroup_reduce_sum_f32::<16>(probability3 * value);
+            let contribution0 = subgroup.subgroup_reduce_sum_f32::<16>(probability0 * value);
+            let contribution1 = subgroup.subgroup_reduce_sum_f32::<16>(probability1 * value);
+            let contribution2 = subgroup.subgroup_reduce_sum_f32::<16>(probability2 * value);
+            let contribution3 = subgroup.subgroup_reduce_sum_f32::<16>(probability3 * value);
             if lane_column == dimension {
                 numerator0 += contribution0;
                 numerator1 += contribution1;
@@ -304,10 +306,10 @@ pub fn flash_attention_general_v1(
         }
         key_base += 16;
     }
-    let denominator0 = collectives.subgroup_reduce_sum_f32::<16>(sum0);
-    let denominator1 = collectives.subgroup_reduce_sum_f32::<16>(sum1);
-    let denominator2 = collectives.subgroup_reduce_sum_f32::<16>(sum2);
-    let denominator3 = collectives.subgroup_reduce_sum_f32::<16>(sum3);
+    let denominator0 = subgroup.subgroup_reduce_sum_f32::<16>(sum0);
+    let denominator1 = subgroup.subgroup_reduce_sum_f32::<16>(sum1);
+    let denominator2 = subgroup.subgroup_reduce_sum_f32::<16>(sum2);
+    let denominator3 = subgroup.subgroup_reduce_sum_f32::<16>(sum3);
 
     if let Some(element) = output.get_tiled_2d_mut(
         &output_tile,
@@ -345,6 +347,7 @@ pub fn flash_attention_general_v1(
     ) {
         *element = numerator3 / denominator3;
     }
+    Ok(())
 }
 
 #[cfg(test)]

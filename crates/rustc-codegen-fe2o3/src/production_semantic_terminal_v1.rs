@@ -2,6 +2,7 @@
 
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
+use rustc_span::sym;
 
 use dialect_amdgcn::DeviceMathDiagnosticItem;
 use fe2o3_kernel_ir::F32MathFunction;
@@ -41,6 +42,8 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     F32MatrixAccumulatorFromValues,
     F32MatrixAccumulatorIntoValues,
     MatrixMultiplyAccumulate,
+    /// Rust's effect-free hint that the current path is unlikely to execute.
+    ColdPath,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -287,6 +290,9 @@ impl ProductionSemanticTerminalRuleV1 {
             Self::Expand(ProductionTerminalExpansionV1::MatrixMultiplyAccumulate) => {
                 TrustedDeviceItem::DeviceMatrixMultiplyAccumulate
             }
+            Self::Expand(ProductionTerminalExpansionV1::ColdPath) => {
+                panic!("core compiler intrinsics are not trusted device items")
+            }
             Self::Reject(item) => item,
         }
     }
@@ -295,6 +301,12 @@ impl ProductionSemanticTerminalRuleV1 {
 pub(crate) fn classify(tcx: TyCtxt<'_>, def_id: DefId) -> Option<ProductionSemanticTerminalRuleV1> {
     trusted_device_items::classify(tcx, def_id)
         .map(ProductionSemanticTerminalRuleV1::from_trusted_device_item)
+        .or_else(|| {
+            let intrinsic = tcx.intrinsic(def_id)?;
+            (intrinsic.name == sym::cold_path).then_some(ProductionSemanticTerminalRuleV1::Expand(
+                ProductionTerminalExpansionV1::ColdPath,
+            ))
+        })
 }
 
 #[cfg(test)]

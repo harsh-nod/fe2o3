@@ -16,13 +16,14 @@ use fe2o3_mir_model::semantic_mir_v1::{
 };
 use rustc_abi::ExternAbi;
 use rustc_middle::mir::{
-    AggregateKind, AssertKind, BinOp, Body, BorrowKind, Local, MutBorrowKind, Operand, Place,
-    PlaceTy, ProjectionElem, Rvalue, START_BLOCK, StatementKind, TerminatorKind, UnwindAction,
+    AggregateKind, AssertKind, BinOp, Body, BorrowKind, Local, MutBorrowKind,
+    NonDivergingIntrinsic, Operand, Place, PlaceTy, ProjectionElem, Rvalue, START_BLOCK,
+    StatementKind, TerminatorKind, UnwindAction,
 };
 use rustc_middle::ty::layout::{LayoutCx, LayoutOf, TyAndLayout};
 use rustc_middle::ty::util::IntTypeExt;
 use rustc_middle::ty::{
-    self, EarlyBinder, Instance, Ty, TyCtxt, TyKind, TypeVisitableExt, TypingEnv,
+    self, EarlyBinder, Instance, InstanceKind, Ty, TyCtxt, TyKind, TypeVisitableExt, TypingEnv,
 };
 use rustc_span::Span;
 use rustc_target::callconv::FnAbi;
@@ -41,6 +42,8 @@ use crate::rustc_semantic_adapter_v1::{
 };
 
 const PREFLIGHT_PLAN_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v1";
+const COMPILER_INTRINSIC_DEFINITION_DOMAIN_V1: &[u8] =
+    b"fe2o3/semantic-mir/compiler-intrinsic-definition/v1";
 const MAX_DIAGNOSTIC_COMPONENT_CHARS_V1: usize = 512;
 const MAX_MACRO_EXPANSION_DEPTH_V1: usize = 256;
 
@@ -808,7 +811,12 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
             StatementKind::SetDiscriminant { place, .. } => self.inspect_place(**place, site),
             StatementKind::Nop => Ok(()),
             StatementKind::FakeRead(..) => Err(reject("FakeRead statement", site)),
-            StatementKind::Intrinsic(..) => Err(reject("intrinsic statement", site)),
+            StatementKind::Intrinsic(intrinsic) => match intrinsic.as_ref() {
+                NonDivergingIntrinsic::Assume(condition) => self.inspect_operand(condition, site),
+                NonDivergingIntrinsic::CopyNonOverlapping(_) => {
+                    Err(reject("copy_nonoverlapping intrinsic statement", site))
+                }
+            },
             StatementKind::Retag(..) => Err(reject("Retag statement", site)),
             StatementKind::PlaceMention(..) => Err(reject("PlaceMention statement", site)),
             StatementKind::AscribeUserType(..) => Err(reject("AscribeUserType statement", site)),
@@ -910,13 +918,22 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                 | BinOp::Ne
                 | BinOp::Ge
                 | BinOp::Gt
+                | BinOp::AddWithOverflow
+                | BinOp::SubWithOverflow
+                | BinOp::MulWithOverflow
+                | BinOp::AddUnchecked
+                | BinOp::SubUnchecked
+                | BinOp::MulUnchecked
                 | BinOp::Offset,
                 operands,
             ) => {
                 self.inspect_operand(&operands.0, site)?;
                 self.inspect_operand(&operands.1, site)
             }
-            Rvalue::BinaryOp(..) => Err(reject("unsupported BinaryOp rvalue", site)),
+            Rvalue::BinaryOp(operation, ..) => Err(reject(
+                format!("unsupported BinaryOp rvalue {operation:?}"),
+                site,
+            )),
             Rvalue::UnaryOp(_, operand) => self.inspect_operand(operand, site),
             Rvalue::ThreadLocalRef(..) => Err(reject("ThreadLocalRef rvalue", site)),
             Rvalue::WrapUnsafeBinder(..) => Err(reject("WrapUnsafeBinder rvalue", site)),
@@ -1436,17 +1453,18 @@ fn build_terminal_producers_v1<'tcx>(
             .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
         terminal_ids.insert(identity, terminal);
         let source_abi = source_signature_v1(tcx, instance).abi;
-        let captured = canonical_source_provenance_v1(
-            tcx,
-            tcx.instance_mir(instance.def).span,
-            MAX_MACRO_EXPANSION_DEPTH_V1,
-        )
-        .map_err(|error| ProductionSemanticPreflightErrorV1::FunctionAbi {
-            function: SemanticFunctionIdV1::from_index(terminal),
-            detail: bounded_diagnostic_component_v1(&format!(
-                "invalid terminal source provenance: {error}"
-            )),
-        })?;
+        let source_span = match instance.def {
+            InstanceKind::Intrinsic(def_id) => tcx.def_span(def_id),
+            _ => tcx.instance_mir(instance.def).span,
+        };
+        let captured =
+            canonical_source_provenance_v1(tcx, source_span, MAX_MACRO_EXPANSION_DEPTH_V1)
+                .map_err(|error| ProductionSemanticPreflightErrorV1::FunctionAbi {
+                    function: SemanticFunctionIdV1::from_index(terminal),
+                    detail: bounded_diagnostic_component_v1(&format!(
+                        "invalid terminal source provenance: {error}"
+                    )),
+                })?;
         counts.charge(
             SemanticMirResourceV1::ValidationWork,
             captured.expansion_depth().saturating_add(2),
@@ -2014,9 +2032,28 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
         digest.field(recipe.identities.generic_type_arguments().as_bytes());
         digest.field(recipe.identities.const_generic_arguments().as_bytes());
         digest.field(&recipe.terminal.to_le_bytes());
-        digest.field(&rustc_mir_body_sha256_v1(tcx, recipe.instance));
+        digest.field(&terminal_definition_sha256_v1(tcx, recipe));
     }
     digest.finish_with_canonical_transcript()
+}
+
+fn terminal_definition_sha256_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    recipe: &TerminalExpansionRecipeV1<'tcx>,
+) -> [u8; 32] {
+    let InstanceKind::Intrinsic(def_id) = recipe.instance.def else {
+        return rustc_mir_body_sha256_v1(tcx, recipe.instance);
+    };
+    let intrinsic = tcx
+        .intrinsic(def_id)
+        .expect("a resolved intrinsic instance has intrinsic metadata");
+    let mut digest = SemanticIdentityDigestV1::new(COMPILER_INTRINSIC_DEFINITION_DOMAIN_V1);
+    digest.field(recipe.identities.function().as_bytes());
+    digest.field(recipe.identities.item_definition().as_bytes());
+    digest.field(intrinsic.name.as_str().as_bytes());
+    digest.field(&[u8::from(intrinsic.must_be_overridden)]);
+    digest.field(&[u8::from(intrinsic.const_stable)]);
+    digest.finish()
 }
 
 fn source_provenance_producer_count_v1(bodies: &[RetainedSemanticBodyProducerV1]) -> usize {
@@ -2111,6 +2148,7 @@ const fn terminal_expansion_tag_v1(expansion: ProductionTerminalExpansionV1) -> 
         ProductionTerminalExpansionV1::SubgroupReduceMaxF32 => 35,
         ProductionTerminalExpansionV1::MathContextCurrent => 36,
         ProductionTerminalExpansionV1::MathF32(function) => 37 + f32_math_tag_v1(function),
+        ProductionTerminalExpansionV1::ColdPath => 50,
     }
 }
 

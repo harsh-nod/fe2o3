@@ -475,6 +475,49 @@ fn direct_pair_and_vector_seed_mutations_are_rejected() {
     }
 }
 
+#[test]
+fn aggregate_pair_retains_its_exact_rustc_seed_without_primitive_reinterpretation() {
+    let scalar = initialized(
+        SemanticBackendPrimitiveV1::integer(false, 32, 4),
+        full_range(32),
+    );
+    let aggregate = SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256(bytes(2)),
+        layout_identity(2),
+        SemanticTypeLayoutV1::with_exact_rustc_layout(
+            8,
+            4,
+            SemanticFieldsShapeV1::arbitrary(vec![0, 4], vec![0, 1]).unwrap(),
+            SemanticRustcVariantsV1::Single { index: 0 },
+            SemanticBackendReprV1::scalar_pair(scalar, scalar),
+            None,
+            false,
+            None,
+            4,
+            0x5a17_9c03,
+            SemanticTypeLayoutDetailsV1::Aggregate(
+                SemanticAggregateLayoutV1::new(vec![0, 4], vec![]).unwrap(),
+            ),
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Aggregate(
+            SemanticAggregateTypeV1::new(vec![
+                SemanticTypeIdV1::from_index(0),
+                SemanticTypeIdV1::from_index(0),
+            ])
+            .unwrap(),
+        ),
+    );
+    request(
+        vec![u32_type(1), aggregate],
+        SemanticTypeIdV1::from_index(1),
+        pair(),
+        vec![],
+    )
+    .admit(SemanticMirLimitsV1::default())
+    .unwrap();
+}
+
 fn union_forwarded_type(
     backend_repr: SemanticBackendReprV1,
     size_bytes: u64,

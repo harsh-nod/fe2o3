@@ -26,7 +26,7 @@ use reserved_fe2o3_symbols::{
 use syn::{
     Data, DeriveInput, Expr, ExprArray, FnArg, ForeignItem, GenericArgument, ItemFn,
     ItemForeignMod, Lit, LitInt, Meta, Pat, PathArguments, ReturnType, Token, Type, TypePath,
-    Visibility, parse::Parse, parse::ParseStream, parse::Parser, parse_macro_input,
+    Visibility, parse::Parse, parse::ParseStream, parse::Parser, parse_macro_input, parse_quote,
     punctuated::Punctuated, visit::Visit,
 };
 
@@ -795,6 +795,7 @@ fn expand_kernel(input: ItemFn, options: KernelOptions) -> syn::Result<proc_macr
     };
 
     let device_import = fe2o3_device_import()?;
+    let device_path = fe2o3_device_path()?;
     let host_import = if options.mode == KernelMode::Typed {
         Some(fe2o3_host_import()?)
     } else {
@@ -805,6 +806,7 @@ fn expand_kernel(input: ItemFn, options: KernelOptions) -> syn::Result<proc_macr
         input,
         options,
         &device_import,
+        Some(&device_path),
         host_import.as_ref(),
         crate_binding,
     )
@@ -850,6 +852,7 @@ fn expand_kernel_with_device_import(
         device_import,
         None,
         None,
+        None,
     )
 }
 
@@ -857,6 +860,7 @@ fn expand_kernel_with_imports(
     input: ItemFn,
     options: KernelOptions,
     device_import: &proc_macro2::TokenStream,
+    device_path: Option<&proc_macro2::TokenStream>,
     host_import: Option<&proc_macro2::TokenStream>,
     crate_binding: Option<CrateBindingIdV1>,
 ) -> syn::Result<proc_macro2::TokenStream> {
@@ -870,6 +874,7 @@ fn expand_kernel_with_imports(
             input,
             options,
             device_import,
+            device_path,
             host_import,
             crate_binding,
         );
@@ -1184,6 +1189,7 @@ fn expand_general_typed_kernel_with_imports(
     mut input: ItemFn,
     options: KernelOptions,
     device_import: &proc_macro2::TokenStream,
+    device_path: Option<&proc_macro2::TokenStream>,
     host_import: Option<&proc_macro2::TokenStream>,
     crate_binding: Option<CrateBindingIdV1>,
 ) -> syn::Result<proc_macro2::TokenStream> {
@@ -1244,7 +1250,19 @@ fn expand_general_typed_kernel_with_imports(
         analyze_kernel_control_flow_v1(&input, options.control_flow.as_ref())?;
     lower_bounded_for_loops_v1(&mut input, options.control_flow.as_ref())?;
 
+    let returns_kernel_result = is_kernel_result_return(&input.sig.output);
     let internal_ident = format_ident!("__fe2o3_host_kernel_v1_{}", kernel_binding.to_hex());
+    let body_ident = format_ident!("__fe2o3_kernel_body_v1_{}", kernel_binding.to_hex());
+    let result_device_path = if returns_kernel_result {
+        Some(device_path.ok_or_else(|| {
+            syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "KernelResult expansion requires the resolved fe2o3-device crate path",
+            )
+        })?)
+    } else {
+        None
+    };
     let name_marker_ident = format_ident!("__fe2o3_kernel_name_{original_name}");
     let type_marker_ident = format_ident!("__fe2o3_kernel_marker_{original_name}");
     let registration_ident = format_ident!("{KERNEL_REGISTRATION_PREFIX}{original_name}");
@@ -1266,9 +1284,47 @@ fn expand_general_typed_kernel_with_imports(
     let visibility = input.vis.clone();
     let safety = input.sig.unsafety;
     let abi = input.sig.abi.clone();
-    let output = input.sig.output.clone();
+    let output = if returns_kernel_result {
+        ReturnType::Default
+    } else {
+        input.sig.output.clone()
+    };
     let function_pointer = quote!(#safety #abi fn(#(#argument_types),*) #output);
-    input.sig.ident = internal_ident.clone();
+    let argument_names = input
+        .sig
+        .inputs
+        .iter()
+        .map(|argument| match argument {
+            syn::FnArg::Typed(argument) => match argument.pat.as_ref() {
+                Pat::Ident(pattern) => pattern.ident.clone(),
+                _ => unreachable!("general typed validation requires identifier patterns"),
+            },
+            syn::FnArg::Receiver(_) => unreachable!("general typed validation rejects receivers"),
+        })
+        .collect::<Vec<_>>();
+    let helper_input = if returns_kernel_result {
+        let mut helper = input.clone();
+        helper.vis = Visibility::Inherited;
+        helper.sig.ident = body_ident.clone();
+        helper.attrs.push(parse_quote!(#[inline(always)]));
+
+        input.sig.ident = internal_ident.clone();
+        input.sig.output = ReturnType::Default;
+        for argument in &mut input.sig.inputs {
+            if let syn::FnArg::Typed(argument) = argument
+                && let Pat::Ident(pattern) = argument.pat.as_mut()
+            {
+                pattern.mutability = None;
+            }
+        }
+        input.block = Box::new(parse_quote!({
+            let _: #result_device_path::KernelResult = #body_ident(#(#argument_names),*);
+        }));
+        Some(helper)
+    } else {
+        input.sig.ident = internal_ident.clone();
+        None
+    };
 
     let registration_type = quote!((
         u64,
@@ -1421,6 +1477,10 @@ fn expand_general_typed_kernel_with_imports(
     Ok(quote! {
         #[doc(hidden)]
         #[allow(non_snake_case)]
+        #helper_input
+
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
         #export_attribute
         #input
 
@@ -1469,6 +1529,27 @@ fn fe2o3_device_import() -> syn::Result<proc_macro2::TokenStream> {
     })?;
 
     Ok(device_import_for(found))
+}
+
+fn fe2o3_device_path() -> syn::Result<proc_macro2::TokenStream> {
+    let found = crate_name("fe2o3-device").map_err(|error| {
+        syn::Error::new(
+            proc_macro2::Span::call_site(),
+            format!("#[kernel] could not resolve the fe2o3-device crate: {error}"),
+        )
+    })?;
+
+    Ok(device_path_for(found))
+}
+
+fn device_path_for(found: FoundCrate) -> proc_macro2::TokenStream {
+    match found {
+        FoundCrate::Itself => quote!(crate),
+        FoundCrate::Name(name) => {
+            let ident = format_ident!("{name}");
+            quote!(::#ident)
+        }
+    }
 }
 
 fn device_import_for(found: FoundCrate) -> proc_macro2::TokenStream {
@@ -1663,6 +1744,34 @@ fn is_unit_return(output: &ReturnType) -> bool {
         ReturnType::Type(_, output) => {
             matches!(output.as_ref(), Type::Tuple(tuple) if tuple.elems.is_empty())
         }
+    }
+}
+
+fn is_kernel_result_return(output: &ReturnType) -> bool {
+    let ReturnType::Type(_, output) = output else {
+        return false;
+    };
+    let Type::Path(path) = output.as_ref() else {
+        return false;
+    };
+    if path.qself.is_some() {
+        return false;
+    }
+    let Some(segment) = path.path.segments.last() else {
+        return false;
+    };
+    if segment.ident != "KernelResult" {
+        return false;
+    }
+    match &segment.arguments {
+        syn::PathArguments::None => true,
+        syn::PathArguments::AngleBracketed(arguments) if arguments.args.len() == 1 => {
+            matches!(
+                arguments.args.first(),
+                Some(syn::GenericArgument::Type(Type::Tuple(tuple))) if tuple.elems.is_empty()
+            )
+        }
+        _ => false,
     }
 }
 
@@ -2816,10 +2925,10 @@ fn validate_general_typed_function_shape_v1(input: &ItemFn) -> syn::Result<()> {
             "general typed V1 does not support generic kernel functions",
         ));
     }
-    if !is_unit_return(&signature.output) {
+    if !is_unit_return(&signature.output) && !is_kernel_result_return(&signature.output) {
         return Err(syn::Error::new_spanned(
             &signature.output,
-            "general typed V1 requires the unit return type",
+            "general typed V1 requires the unit return type or KernelResult",
         ));
     }
     if signature.inputs.is_empty() {
@@ -4448,12 +4557,12 @@ mod tests {
     use super::{
         DeviceFfiOptions, GeneralTypedArgumentKindV1, GeneralTypedScalarV1, KernelMode,
         KernelOptions, canonical_device_ffi_signature, core_import_for, device_ffi_contract,
-        device_import_for, expand_device_copy_with_core_import, expand_device_export_with_import,
-        expand_device_import_with_import, expand_kernel_with_device_import,
-        expand_kernel_with_imports, expand_legacy_kernel_with_imports,
-        general_typed_global_mut_pointer_type_identity_v1, generated_general_typed_arguments_v1,
-        generated_worker_v3_adapter_v1, host_import_for, model_general_typed_signature_v1,
-        parse_device_ffi_options, parse_kernel_options,
+        device_import_for, device_path_for, expand_device_copy_with_core_import,
+        expand_device_export_with_import, expand_device_import_with_import,
+        expand_kernel_with_device_import, expand_kernel_with_imports,
+        expand_legacy_kernel_with_imports, general_typed_global_mut_pointer_type_identity_v1,
+        generated_general_typed_arguments_v1, generated_worker_v3_adapter_v1, host_import_for,
+        model_general_typed_signature_v1, parse_device_ffi_options, parse_kernel_options,
         validate_generated_device_ffi_contract_grammar, validate_kernel_assembly_boundary,
         validate_kernel_source_safety, validate_typed_kernel_profile_v1,
         validate_typed_kernel_signature, validate_typed_kernel_symbol_stem,
@@ -5052,9 +5161,10 @@ mod tests {
         ))
         .unwrap();
         let device_import = device_import_for(FoundCrate::Name("gpu_device".to_string()));
-        let expansion = expand_kernel_with_imports(input, options, &device_import, None, None)
-            .unwrap()
-            .to_string();
+        let expansion =
+            expand_kernel_with_imports(input, options, &device_import, None, None, None)
+                .unwrap()
+                .to_string();
         assert!(expansion.contains("static __fe2o3_kernel_registration_bounded"));
         assert!(expansion.contains("static __fe2o3_kernel_frontend_contract_v1_bounded"));
         assert!(expansion.contains(&format!(
@@ -5097,6 +5207,7 @@ mod tests {
                 control_flow: None,
             },
             &device_import,
+            None,
             Some(&host_import),
             Some(crate_binding),
         )
@@ -5160,6 +5271,7 @@ mod tests {
             input.clone(),
             options.clone(),
             &device_import,
+            None,
             Some(&host_import),
             Some(crate_binding),
         )
@@ -5546,6 +5658,7 @@ mod tests {
                 input,
                 options.clone(),
                 &device_import,
+                None,
                 Some(&host_import),
                 Some(crate_binding),
             )
@@ -5744,6 +5857,49 @@ mod tests {
         let (_, rebound_binding, rebound_contract) = expand(alpha, other_crate_binding);
         assert_ne!(alpha_binding, rebound_binding);
         assert_ne!(alpha_contract, rebound_contract);
+    }
+
+    #[test]
+    fn general_typed_kernel_result_uses_a_unit_abi_wrapper() {
+        let input: ItemFn = parse_quote! {
+            pub fn checked(
+                input: &[f32],
+                output: DisjointSlice<f32>,
+            ) -> KernelResult {
+                let _ = input.first().ok_or(KernelError::OutOfBounds)?;
+                let _ = output;
+                Ok(())
+            }
+        };
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let device_import = device_import_for(FoundCrate::Name("gpu_device".to_string()));
+        let device_path = device_path_for(FoundCrate::Name("gpu_device".to_string()));
+        let host_import = host_import_for(FoundCrate::Name("gpu_host".to_string()));
+        let crate_binding = derive_crate_binding_id_v1("fixture", ["kernel-result"]);
+        let binding = derive_kernel_binding_id_v1(
+            crate_binding,
+            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+            "checked",
+            "checked",
+        );
+
+        let expansion = expand_kernel_with_imports(
+            input,
+            options,
+            &device_import,
+            Some(&device_path),
+            Some(&host_import),
+            Some(crate_binding),
+        )
+        .unwrap()
+        .to_string();
+
+        assert!(expansion.contains(&format!("fn __fe2o3_kernel_body_v1_{}", binding.to_hex())));
+        assert!(expansion.contains("inline (always)"));
+        assert!(expansion.contains("-> KernelResult"));
+        assert!(expansion.contains(&format!("fn __fe2o3_host_kernel_v1_{}", binding.to_hex())));
+        assert!(expansion.contains("let _ : :: gpu_device :: KernelResult"));
+        assert!(!expansion.contains("fn (& [f32] , DisjointSlice < f32 >) -> KernelResult"));
     }
 
     #[test]
@@ -6186,6 +6342,7 @@ mod tests {
             input,
             options,
             &device_import,
+            None,
             Some(&host_import),
             Some(crate_binding),
         )

@@ -22,16 +22,18 @@ use fe2o3_kernel_ir::{
     WorkgroupSize, verify_module,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticAssertMessageV1, SemanticAxisV1, SemanticBinaryOpV1, SemanticBlockIdV1,
-    SemanticCallableDeclV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
+    SemanticAggregateKindV1, SemanticAssertMessageV1, SemanticAxisV1, SemanticBinaryOpV1,
+    SemanticBlockIdV1, SemanticCallableDeclV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
     SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1, SemanticDirectCallV1,
-    SemanticDisjointIndexSpaceV1, SemanticF32MathFunctionV1, SemanticFunctionDeclV1,
-    SemanticFunctionIdV1, SemanticFunctionRoleV1, SemanticLocalRoleV1, SemanticMutabilityV1,
-    SemanticOperandV1, SemanticPlaceV1, SemanticPointerMetadataV1, SemanticProjectionKindV1,
+    SemanticDisjointIndexSpaceV1, SemanticEnumEncodingV1, SemanticEnumVariantV1,
+    SemanticF32MathFunctionV1, SemanticFieldsShapeV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
+    SemanticLocalRoleV1, SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1,
+    SemanticPointerMetadataV1, SemanticProjectionKindV1, SemanticRustcVariantsV1,
     SemanticRvalueKindV1, SemanticScalarTypeV1, SemanticScalarValueV1, SemanticStatementKindV1,
     SemanticSubgroupReductionKindV1, SemanticTerminatorKindV1, SemanticTypeDeclV1,
-    SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1, SemanticUnwindActionV1,
-    SemanticVolatilityV1,
+    SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
+    SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticVolatilityV1,
+    semantic_direct_enum_variant_v1, semantic_scalar_enum_variant_v1,
 };
 use fe2o3_mir_model::{
     SemanticOptionAvailabilityV1, SemanticOptionDominanceV1, semantic_option_producers_v1,
@@ -278,7 +280,11 @@ impl SemanticKirCorrespondenceV1 {
         &self.semantic_sha256
     }
 
-    /// Returns the number of semantic functions covered.
+    /// Returns the number of functions retained by the admitted semantic MIR.
+    ///
+    /// For a `KernelResult` entry this includes both the exact unit-ABI wrapper
+    /// and its ordinary Rust body, even though only the selected body produces
+    /// Kernel IR operations.
     pub const fn function_count(&self) -> usize {
         self.function_count
     }
@@ -754,11 +760,16 @@ fn validate_semantic_kir_correspondence(
     let semantic = owner.semantic();
     if correspondence.semantic_sha256 != *semantic.semantic_sha256().as_bytes()
         || correspondence.function_count != semantic.functions().len()
-        || semantic.functions().len() != 1
     {
         return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
     }
-    let function = &semantic.functions()[0];
+    let selection = semantic
+        .select_kernel_body_v1()
+        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+    let function = semantic
+        .functions()
+        .get(selection.body().index() as usize)
+        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
     let synthetic_rule =
         semantic_requires_runtime_assert_failure(function, discharge_ranked_bounds)
             .then_some(SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap);
@@ -774,7 +785,7 @@ fn validate_semantic_kir_correspondence(
                 .get(block_index)
                 .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
             Ok(ExpectedSemanticKirBlockCoverageV1 {
-                semantic_function: SemanticFunctionIdV1::from_index(0),
+                semantic_function: selection.body(),
                 semantic_block,
                 kernel_ir_block: BlockId(semantic_block.index()),
                 source_statement_count: u32::try_from(source.statements().len())
@@ -984,14 +995,14 @@ fn lower_module(
         semantic.functions().len(),
         limits.max_functions,
     )?;
-    if semantic.functions().len() != 1 || semantic.roots().len() != 1 {
-        return Err(unsupported(
+    let selection = semantic.select_kernel_body_v1().ok_or_else(|| {
+        unsupported(
             0,
             None,
             None,
-            "only one closed kernel root is admitted",
-        ));
-    }
+            "one direct kernel body or an exact transparent KernelResult wrapper is required",
+        )
+    })?;
     if !semantic.allocations().is_empty()
         || !semantic.statics().is_empty()
         || !semantic.vtables().is_empty()
@@ -1003,18 +1014,15 @@ fn lower_module(
             "allocations, statics, and vtables are not lowered yet",
         ));
     }
-    let function = &semantic.functions()[0];
-    if function.role() != SemanticFunctionRoleV1::KernelRoot
-        || semantic.roots()[0] != SemanticFunctionIdV1::from_index(0)
-    {
-        return Err(unsupported(
-            0,
-            None,
-            None,
-            "the sole function is not the sole kernel root",
-        ));
-    }
-    let entry = function
+    let root = semantic
+        .functions()
+        .get(selection.root().index() as usize)
+        .ok_or_else(|| unsupported(0, None, None, "the selected kernel root is missing"))?;
+    let function = semantic
+        .functions()
+        .get(selection.body().index() as usize)
+        .ok_or_else(|| unsupported(0, None, None, "the selected kernel body is missing"))?;
+    let entry = root
         .kernel_entry()
         .ok_or_else(|| unsupported(0, None, None, "kernel export metadata is missing"))?;
     let symbol = std::str::from_utf8(entry.export_symbol().as_bytes())
@@ -1138,7 +1146,7 @@ fn lower_module(
                 Some(statement),
             )?;
             statement_operation_spans.push(SemanticKirStatementOperationSpanV1 {
-                semantic_function: SemanticFunctionIdV1::from_index(0),
+                semantic_function: selection.body(),
                 semantic_block,
                 statement_ordinal: statement,
                 kernel_ir_block: target.id,
@@ -1155,7 +1163,7 @@ fn lower_module(
         let (first_operation_ordinal, operation_count) =
             measured_operation_span(terminator_first, target.operations.len(), target.id, None)?;
         terminator_operation_spans.push(SemanticKirTerminatorOperationSpanV1 {
-            semantic_function: SemanticFunctionIdV1::from_index(0),
+            semantic_function: selection.body(),
             semantic_block,
             kernel_ir_block: target.id,
             first_operation_ordinal,
@@ -1163,7 +1171,7 @@ fn lower_module(
         });
         blocks.push(target);
         correspondence.push(SemanticKirBlockCorrespondenceV1 {
-            semantic_function: SemanticFunctionIdV1::from_index(0),
+            semantic_function: selection.body(),
             semantic_block,
             kernel_ir_block: BlockId(semantic_block.index()),
             source_statement_count: u32::try_from(source.statements().len()).map_err(|_| {
@@ -1618,6 +1626,10 @@ fn collect_rvalue_uses_v1(
             collect_operand_use_v1(checked.left(), promoted, defs, uses);
             collect_operand_use_v1(checked.right(), promoted, defs, uses);
         }
+        SemanticRvalueKindV1::UncheckedBinary(unchecked) => {
+            collect_operand_use_v1(unchecked.left(), promoted, defs, uses);
+            collect_operand_use_v1(unchecked.right(), promoted, defs, uses);
+        }
         SemanticRvalueKindV1::Borrow { place, .. }
         | SemanticRvalueKindV1::AddressOf { place, .. }
         | SemanticRvalueKindV1::Length(place)
@@ -1719,6 +1731,13 @@ fn collect_place_use_v1(
 enum SemanticValueBindingV1 {
     Unit,
     Aggregate(Vec<SemanticValueBindingV1>),
+    Enum {
+        discriminant: ValueId,
+        discriminant_ty: Type,
+        semantic_type: SemanticTypeIdV1,
+        variant: Option<u32>,
+        fields: Vec<SemanticValueBindingV1>,
+    },
     MathContext,
     CollectiveContext,
     MatrixContext,
@@ -1770,6 +1789,7 @@ impl SemanticValueBindingV1 {
             Self::IndexWitness { id, .. } => Ok((*id, Type::INDEX)),
             Self::Unit
             | Self::Aggregate(_)
+            | Self::Enum { .. }
             | Self::MathContext
             | Self::CollectiveContext
             | Self::MatrixContext
@@ -1799,6 +1819,11 @@ impl SemanticValueBindingV1 {
                     field.append_values(values)?;
                 }
             }
+            Self::Enum {
+                discriminant,
+                discriminant_ty,
+                ..
+            } => values.push((*discriminant, discriminant_ty.clone())),
             Self::Unit => {}
             Self::MathContext
             | Self::CollectiveContext
@@ -2057,6 +2082,10 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 self.require_local(block, statement, local.index())?;
                 Ok(())
             }
+            SemanticStatementKindV1::Assume(condition) => {
+                let _ = self.lower_operand(block, statement, condition, operations)?;
+                Ok(())
+            }
             SemanticStatementKindV1::Nop => Ok(()),
             _ => Err(unsupported(
                 0,
@@ -2086,6 +2115,14 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticRvalueKindV1::Discriminant(place) => {
                 match self.resolve_place(block, statement, place)? {
+                    SemanticValueBindingV1::Enum {
+                        discriminant,
+                        discriminant_ty,
+                        ..
+                    } => Ok(SemanticValueBindingV1::Value {
+                        id: discriminant,
+                        ty: discriminant_ty,
+                    }),
                     SemanticValueBindingV1::OptionPointer { present, .. }
                     | SemanticValueBindingV1::OptionIndexWitness { present, .. }
                     | SemanticValueBindingV1::OptionComponentWitness { present, .. }
@@ -2322,6 +2359,25 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     right,
                 )
             }
+            SemanticRvalueKindV1::UncheckedBinary(unchecked) => {
+                let operation = match unchecked.operation() {
+                    SemanticUncheckedBinaryOpV1::Add => SemanticBinaryOpV1::Add,
+                    SemanticUncheckedBinaryOpV1::Subtract => SemanticBinaryOpV1::Subtract,
+                    SemanticUncheckedBinaryOpV1::Multiply => SemanticBinaryOpV1::Multiply,
+                };
+                let checked_by_admission = SemanticRvalueKindV1::Binary {
+                    operation,
+                    left: unchecked.left().clone(),
+                    right: unchecked.right().clone(),
+                };
+                self.lower_rvalue(
+                    block,
+                    statement,
+                    result_type,
+                    &checked_by_admission,
+                    operations,
+                )
+            }
             SemanticRvalueKindV1::Cast { kind, operand } => {
                 let (input, input_ty) = self
                     .lower_operand(block, statement, operand, operations)?
@@ -2376,6 +2432,46 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     (*pointer_type.pointee).clone(),
                     OperationKind::Load { pointer, access },
                 )
+            }
+            SemanticRvalueKindV1::Aggregate(aggregate)
+                if matches!(aggregate.kind(), SemanticAggregateKindV1::EnumVariant(_)) =>
+            {
+                let SemanticAggregateKindV1::EnumVariant(variant) = aggregate.kind() else {
+                    unreachable!("guard requires an enum aggregate")
+                };
+                let (discriminant_type, variants) = semantic_enum_shape(self.types, result_type)?;
+                let selected = variants.get(*variant as usize).ok_or_else(|| {
+                    unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "semantic enum aggregate variant is out of range",
+                    )
+                })?;
+                let discriminant_ty = lower_scalar_type(self.types, discriminant_type)?;
+                let discriminant = self
+                    .emit(
+                        operations,
+                        discriminant_ty.clone(),
+                        OperationKind::Constant(integer_constant(
+                            &discriminant_ty,
+                            selected.discriminant(),
+                        )?),
+                    )?
+                    .value()
+                    .expect("emitted enum discriminant")
+                    .0;
+                let mut fields = Vec::with_capacity(aggregate.operands().len());
+                for operand in aggregate.operands() {
+                    fields.push(self.lower_operand(block, statement, operand, operations)?);
+                }
+                Ok(SemanticValueBindingV1::Enum {
+                    discriminant,
+                    discriminant_ty,
+                    semantic_type: result_type,
+                    variant: Some(*variant),
+                    fields,
+                })
             }
             SemanticRvalueKindV1::Aggregate(aggregate)
                 if matches!(
@@ -2442,6 +2538,55 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 )
             }
             SemanticOperandV1::Constant(constant) => {
+                if let SemanticConstantValueV1::Scalar(value) = constant.value()
+                    && matches!(
+                        self.types[constant.ty().index() as usize].shape(),
+                        SemanticTypeShapeV1::Enum { .. }
+                    )
+                {
+                    let variant =
+                        semantic_scalar_enum_variant_v1(self.types, constant.ty(), *value)
+                            .ok_or_else(|| {
+                                unsupported(
+                                    0,
+                                    Some(block.index()),
+                                    statement,
+                                    "scalar enum constant has no admitted logical variant",
+                                )
+                            })?;
+                    let (discriminant_type, variants) =
+                        semantic_enum_shape(self.types, constant.ty())?;
+                    let logical = variants[variant as usize].discriminant();
+                    let discriminant_ty = lower_scalar_type(self.types, discriminant_type)?;
+                    let discriminant = self
+                        .emit(
+                            operations,
+                            discriminant_ty.clone(),
+                            OperationKind::Constant(integer_constant(&discriminant_ty, logical)?),
+                        )?
+                        .value()
+                        .expect("emitted enum discriminant")
+                        .0;
+                    return Ok(SemanticValueBindingV1::Enum {
+                        discriminant,
+                        discriminant_ty,
+                        semantic_type: constant.ty(),
+                        variant: Some(variant),
+                        fields: Vec::new(),
+                    });
+                }
+                if let SemanticConstantValueV1::Bytes(bytes) = constant.value() {
+                    let mut structural_nodes = 0;
+                    return self.lower_constant_bytes(
+                        block,
+                        statement,
+                        constant.ty(),
+                        bytes.as_bytes(),
+                        0,
+                        &mut structural_nodes,
+                        operations,
+                    );
+                }
                 let ty = lower_scalar_type(self.types, constant.ty())?;
                 let SemanticConstantValueV1::Scalar(value) = constant.value() else {
                     return Err(unsupported(
@@ -2494,6 +2639,458 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             statement,
             "checked arithmetic operand has no exact plain-integer representation",
         ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn lower_constant_bytes(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        ty: SemanticTypeIdV1,
+        bytes: &[u8],
+        base_offset: u64,
+        structural_nodes: &mut usize,
+        operations: &mut Vec<Operation>,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        *structural_nodes = structural_nodes.checked_add(1).ok_or_else(|| {
+            unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "constant aggregate exceeds the structural limit",
+            )
+        })?;
+        if *structural_nodes > MAX_SSA_VALUE_COMPONENTS_V1 {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "constant aggregate exceeds the structural limit",
+            ));
+        }
+
+        let declaration = self
+            .types
+            .get(ty.index() as usize)
+            .ok_or_else(|| {
+                unsupported(
+                    0,
+                    Some(block.index()),
+                    statement,
+                    "constant type is missing",
+                )
+            })?
+            .clone();
+        let layout = declaration.layout();
+        let size = layout.size_bytes().ok_or_else(|| {
+            unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "constant type has no fixed-size Rust layout",
+            )
+        })?;
+        checked_constant_range_v1(bytes, base_offset, size).ok_or_else(|| {
+            unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "constant bytes are truncated for their Rust layout",
+            )
+        })?;
+
+        match declaration.shape() {
+            SemanticTypeShapeV1::Unit => Ok(SemanticValueBindingV1::Unit),
+            SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_) => {
+                let size = u8::try_from(size).map_err(|_| {
+                    unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "scalar constant exceeds the supported width",
+                    )
+                })?;
+                let bits = read_constant_bits_v1(bytes, base_offset, u64::from(size)).ok_or_else(
+                    || {
+                        unsupported(
+                            0,
+                            Some(block.index()),
+                            statement,
+                            "scalar constant bytes are truncated",
+                        )
+                    },
+                )?;
+                let value = SemanticScalarValueV1::new(bits, size).map_err(|_| {
+                    unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "scalar constant has an invalid Rust representation",
+                    )
+                })?;
+                let lowered_ty = lower_scalar_type(self.types, ty)?;
+                self.emit(
+                    operations,
+                    lowered_ty.clone(),
+                    OperationKind::Constant(lower_constant(lowered_ty, value)?),
+                )
+            }
+            SemanticTypeShapeV1::Array { element, length } => {
+                let SemanticFieldsShapeV1::Array {
+                    stride_bytes,
+                    count,
+                } = layout.fields()
+                else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "array constant has no exact Rust array layout",
+                    ));
+                };
+                if count != length {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "array constant shape disagrees with its Rust layout",
+                    ));
+                }
+                let length = usize::try_from(*length).map_err(|_| {
+                    unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "array constant length exceeds the structural limit",
+                    )
+                })?;
+                let mut fields = Vec::new();
+                fields.try_reserve_exact(length).map_err(|_| {
+                    unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "array constant length exceeds available capacity",
+                    )
+                })?;
+                for index in 0..length {
+                    let field_offset = u64::try_from(index)
+                        .ok()
+                        .and_then(|index| index.checked_mul(*stride_bytes))
+                        .and_then(|offset| base_offset.checked_add(offset))
+                        .ok_or_else(|| {
+                            unsupported(
+                                0,
+                                Some(block.index()),
+                                statement,
+                                "array constant field offset overflows",
+                            )
+                        })?;
+                    fields.push(self.lower_constant_bytes(
+                        block,
+                        statement,
+                        *element,
+                        bytes,
+                        field_offset,
+                        structural_nodes,
+                        operations,
+                    )?);
+                }
+                Ok(SemanticValueBindingV1::Aggregate(fields))
+            }
+            SemanticTypeShapeV1::Tuple(field_types)
+            | SemanticTypeShapeV1::Aggregate(field_types) => {
+                let SemanticTypeLayoutDetailsV1::Aggregate(aggregate) = layout.details() else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "aggregate constant has no exact Rust field layout",
+                    ));
+                };
+                self.lower_constant_fields(
+                    block,
+                    statement,
+                    field_types.fields(),
+                    aggregate.field_offsets(),
+                    bytes,
+                    base_offset,
+                    structural_nodes,
+                    operations,
+                )
+                .map(SemanticValueBindingV1::Aggregate)
+            }
+            SemanticTypeShapeV1::Enum {
+                discriminant,
+                variants,
+            } => {
+                let (variant_index, offsets) = match layout.variants() {
+                    SemanticRustcVariantsV1::Single { index } => {
+                        let SemanticTypeLayoutDetailsV1::Aggregate(aggregate) = layout.details()
+                        else {
+                            return Err(unsupported(
+                                0,
+                                Some(block.index()),
+                                statement,
+                                "single-variant enum constant has no exact Rust field layout",
+                            ));
+                        };
+                        (*index, aggregate.field_offsets().to_vec())
+                    }
+                    SemanticRustcVariantsV1::Multiple(enum_layout) => {
+                        let index = match enum_layout.encoding() {
+                            SemanticEnumEncodingV1::Direct(direct) => {
+                                let tag_size =
+                                    direct.tag().primitive().size_bytes().ok_or_else(|| {
+                                        unsupported(
+                                            0,
+                                            Some(block.index()),
+                                            statement,
+                                            "direct enum tag has an unsupported Rust width",
+                                        )
+                                    })?;
+                                let tag_offset = base_offset
+                                    .checked_add(direct.tag_offset_bytes())
+                                    .ok_or_else(|| {
+                                        unsupported(
+                                            0,
+                                            Some(block.index()),
+                                            statement,
+                                            "direct enum tag offset overflows",
+                                        )
+                                    })?;
+                                let tag = read_constant_bits_v1(bytes, tag_offset, tag_size)
+                                    .ok_or_else(|| {
+                                        unsupported(
+                                            0,
+                                            Some(block.index()),
+                                            statement,
+                                            "direct enum tag bytes are truncated",
+                                        )
+                                    })?;
+                                let tag_size = u8::try_from(tag_size).map_err(|_| {
+                                    unsupported(
+                                        0,
+                                        Some(block.index()),
+                                        statement,
+                                        "direct enum tag exceeds the supported width",
+                                    )
+                                })?;
+                                let tag =
+                                    SemanticScalarValueV1::new(tag, tag_size).map_err(|_| {
+                                        unsupported(
+                                            0,
+                                            Some(block.index()),
+                                            statement,
+                                            "direct enum tag has an invalid Rust representation",
+                                        )
+                                    })?;
+                                semantic_direct_enum_variant_v1(self.types, ty, tag).ok_or_else(
+                                    || {
+                                        unsupported(
+                                            0,
+                                            Some(block.index()),
+                                            statement,
+                                            "direct enum tag has no logical Rust variant",
+                                        )
+                                    },
+                                )?
+                            }
+                            SemanticEnumEncodingV1::Niche(niche) => {
+                                let tag_size =
+                                    niche.tag().primitive().size_bytes().ok_or_else(|| {
+                                        unsupported(
+                                            0,
+                                            Some(block.index()),
+                                            statement,
+                                            "niche enum tag has an unsupported Rust width",
+                                        )
+                                    })?;
+                                let tag_offset = base_offset
+                                    .checked_add(niche.source().expected_offset_bytes())
+                                    .ok_or_else(|| {
+                                        unsupported(
+                                            0,
+                                            Some(block.index()),
+                                            statement,
+                                            "niche enum tag offset overflows",
+                                        )
+                                    })?;
+                                let tag = read_constant_bits_v1(bytes, tag_offset, tag_size)
+                                    .ok_or_else(|| {
+                                        unsupported(
+                                            0,
+                                            Some(block.index()),
+                                            statement,
+                                            "niche enum tag bytes are truncated",
+                                        )
+                                    })?;
+                                let bits = u32::try_from(tag_size)
+                                    .ok()
+                                    .and_then(|size| size.checked_mul(8))
+                                    .ok_or_else(|| {
+                                        unsupported(
+                                            0,
+                                            Some(block.index()),
+                                            statement,
+                                            "niche enum tag width overflows",
+                                        )
+                                    })?;
+                                let mask = if bits == 128 {
+                                    u128::MAX
+                                } else {
+                                    (1_u128 << bits) - 1
+                                };
+                                let relative = tag.wrapping_sub(niche.niche_start()) & mask;
+                                let (start, end) = niche.niche_variant_range();
+                                let niche_variant_count =
+                                    end.checked_sub(start).ok_or_else(|| {
+                                        unsupported(
+                                            0,
+                                            Some(block.index()),
+                                            statement,
+                                            "niche enum variant range is reversed",
+                                        )
+                                    })?;
+                                if relative <= u128::from(niche_variant_count) {
+                                    start.checked_add(relative as u32).ok_or_else(|| {
+                                        unsupported(
+                                            0,
+                                            Some(block.index()),
+                                            statement,
+                                            "niche enum variant index overflows",
+                                        )
+                                    })?
+                                } else {
+                                    niche.untagged_variant()
+                                }
+                            }
+                        };
+                        let variant_layout = enum_layout
+                            .variants()
+                            .iter()
+                            .find(|layout| layout.variant_index() == index)
+                            .ok_or_else(|| {
+                                unsupported(
+                                    0,
+                                    Some(block.index()),
+                                    statement,
+                                    "enum constant has no exact Rust variant layout",
+                                )
+                            })?;
+                        (index, variant_layout.aggregate().field_offsets().to_vec())
+                    }
+                    SemanticRustcVariantsV1::Empty => {
+                        return Err(unsupported(
+                            0,
+                            Some(block.index()),
+                            statement,
+                            "uninhabited enum cannot be a constant",
+                        ));
+                    }
+                };
+                let logical_variant = variants.get(variant_index as usize).ok_or_else(|| {
+                    unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "enum constant variant is absent from its semantic type",
+                    )
+                })?;
+                let fields = self.lower_constant_fields(
+                    block,
+                    statement,
+                    logical_variant.fields().fields(),
+                    &offsets,
+                    bytes,
+                    base_offset,
+                    structural_nodes,
+                    operations,
+                )?;
+                let discriminant_ty = lower_scalar_type(self.types, *discriminant)?;
+                let discriminant_value = self
+                    .emit(
+                        operations,
+                        discriminant_ty.clone(),
+                        OperationKind::Constant(integer_constant(
+                            &discriminant_ty,
+                            logical_variant.discriminant(),
+                        )?),
+                    )?
+                    .value()
+                    .expect("emitted enum discriminant")
+                    .0;
+                Ok(SemanticValueBindingV1::Enum {
+                    discriminant: discriminant_value,
+                    discriminant_ty,
+                    semantic_type: ty,
+                    variant: Some(variant_index),
+                    fields,
+                })
+            }
+            SemanticTypeShapeV1::Never
+            | SemanticTypeShapeV1::Pointer(_)
+            | SemanticTypeShapeV1::Slice { .. }
+            | SemanticTypeShapeV1::Union(_)
+            | SemanticTypeShapeV1::FunctionPointer { .. }
+            | SemanticTypeShapeV1::Opaque => Err(unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "constant Rust layout has no admitted Kernel IR value representation",
+            )),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn lower_constant_fields(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        field_types: &[SemanticTypeIdV1],
+        field_offsets: &[u64],
+        bytes: &[u8],
+        base_offset: u64,
+        structural_nodes: &mut usize,
+        operations: &mut Vec<Operation>,
+    ) -> Result<Vec<SemanticValueBindingV1>, ProductionSemanticKirErrorV1> {
+        if field_types.len() != field_offsets.len() {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "constant field shape disagrees with its exact Rust layout",
+            ));
+        }
+        let mut fields = Vec::new();
+        fields.try_reserve_exact(field_types.len()).map_err(|_| {
+            unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "constant field count exceeds available capacity",
+            )
+        })?;
+        for (field_type, field_offset) in field_types.iter().zip(field_offsets) {
+            let offset = base_offset.checked_add(*field_offset).ok_or_else(|| {
+                unsupported(
+                    0,
+                    Some(block.index()),
+                    statement,
+                    "constant field offset overflows",
+                )
+            })?;
+            fields.push(self.lower_constant_bytes(
+                block,
+                statement,
+                *field_type,
+                bytes,
+                offset,
+                structural_nodes,
+                operations,
+            )?);
+        }
+        Ok(fields)
     }
 
     fn lower_terminator(
@@ -3338,6 +3935,10 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         }),
                     )
                 })?;
+                SemanticValueBindingV1::Unit
+            }
+            SemanticCompilerIntrinsicOperationV1::ColdPath => {
+                self.require_call_argument_count(block, call, 0)?;
                 SemanticValueBindingV1::Unit
             }
             SemanticCompilerIntrinsicOperationV1::WaveBarrier
@@ -4626,6 +5227,51 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     )
                 })?,
                 (
+                    SemanticValueBindingV1::Enum {
+                        discriminant,
+                        discriminant_ty,
+                        semantic_type,
+                        variant,
+                        fields,
+                    },
+                    SemanticProjectionKindV1::Downcast(expected),
+                ) => {
+                    if variant.is_some_and(|variant| variant != expected) {
+                        return Err(unsupported(
+                            0,
+                            Some(block.index()),
+                            statement,
+                            "enum downcast does not match its known variant",
+                        ));
+                    }
+                    SemanticValueBindingV1::Enum {
+                        discriminant,
+                        discriminant_ty,
+                        semantic_type,
+                        variant: Some(expected),
+                        fields,
+                    }
+                }
+                (
+                    SemanticValueBindingV1::Enum {
+                        variant: Some(_),
+                        fields,
+                        ..
+                    },
+                    SemanticProjectionKindV1::Field(field),
+                ) => fields.get(field as usize).cloned().ok_or_else(|| {
+                    unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "enum payload field is unavailable in this block",
+                    )
+                })?,
+                (
+                    binding @ SemanticValueBindingV1::Enum { .. },
+                    SemanticProjectionKindV1::OpaqueCast | SemanticProjectionKindV1::Subtype,
+                ) => binding,
+                (
                     SemanticValueBindingV1::Aggregate(fields),
                     SemanticProjectionKindV1::ConstantIndex {
                         offset, from_end, ..
@@ -4771,6 +5417,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             SemanticValueBindingV1::ComponentWitness { availability, .. } => Some(*availability),
             SemanticValueBindingV1::Unit
             | SemanticValueBindingV1::Aggregate(_)
+            | SemanticValueBindingV1::Enum { .. }
             | SemanticValueBindingV1::MathContext
             | SemanticValueBindingV1::CollectiveContext
             | SemanticValueBindingV1::MatrixContext
@@ -5111,6 +5758,7 @@ fn unsupported_statement_detail(statement: &SemanticStatementKindV1) -> Option<&
         }
         SemanticStatementKindV1::StorageLive(_)
         | SemanticStatementKindV1::StorageDead(_)
+        | SemanticStatementKindV1::Assume(_)
         | SemanticStatementKindV1::Nop => None,
     }
 }
@@ -5128,6 +5776,9 @@ fn unsupported_rvalue_detail(value: &SemanticRvalueKindV1) -> &'static str {
         }
         SemanticRvalueKindV1::CheckedBinary(_) => {
             "internally supported semantic checked arithmetic reached unsupported diagnostics"
+        }
+        SemanticRvalueKindV1::UncheckedBinary(_) => {
+            "semantic unchecked arithmetic lacks an admitted overflow proof"
         }
         SemanticRvalueKindV1::Cast { .. } => {
             "semantic assignment/cast has no exact Kernel IR lowering rule"
@@ -5257,6 +5908,10 @@ fn lower_ssa_value_types(
             .shape();
         match shape {
             SemanticTypeShapeV1::Unit => Ok(()),
+            SemanticTypeShapeV1::Enum { discriminant, .. } => {
+                output.push(lower_scalar_type(types, *discriminant)?);
+                Ok(())
+            }
             SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_) => {
                 output.push(lower_scalar_type(types, ty)?);
                 Ok(())
@@ -5359,6 +6014,28 @@ fn binding_from_value_defs_with_validation(
             .shape();
         match shape {
             SemanticTypeShapeV1::Unit => Ok(SemanticValueBindingV1::Unit),
+            SemanticTypeShapeV1::Enum { discriminant, .. } => {
+                let value = values.get(*cursor).ok_or_else(|| {
+                    unsupported(0, None, None, "enum SSA discriminant is truncated")
+                })?;
+                let expected = lower_scalar_type(types, *discriminant)?;
+                if validate_scalar_types && value.ty != expected {
+                    return Err(unsupported(
+                        0,
+                        None,
+                        None,
+                        "enum SSA discriminant type changed",
+                    ));
+                }
+                *cursor += 1;
+                Ok(SemanticValueBindingV1::Enum {
+                    discriminant: value.id,
+                    discriminant_ty: value.ty.clone(),
+                    semantic_type: ty,
+                    variant: None,
+                    fields: Vec::new(),
+                })
+            }
             SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_) => {
                 let value = values.get(*cursor).ok_or_else(|| {
                     unsupported(0, None, None, "aggregate SSA value is truncated")
@@ -5783,6 +6460,72 @@ fn lower_cast(kind: SemanticCastKindV1, from: &Type, to: &Type) -> Option<CastKi
         | SemanticCastKindV1::PointerWithExposedProvenance
         | SemanticCastKindV1::Transmute => None,
     }
+}
+
+fn semantic_enum_shape(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+) -> Result<(SemanticTypeIdV1, &[SemanticEnumVariantV1]), ProductionSemanticKirErrorV1> {
+    let declaration = types
+        .get(ty.index() as usize)
+        .ok_or_else(|| unsupported(0, None, None, "semantic enum type is missing"))?;
+    let SemanticTypeShapeV1::Enum {
+        discriminant,
+        variants,
+    } = declaration.shape()
+    else {
+        return Err(unsupported(0, None, None, "semantic value is not an enum"));
+    };
+    Ok((*discriminant, variants))
+}
+
+fn integer_constant(ty: &Type, bits: u128) -> Result<Constant, ProductionSemanticKirErrorV1> {
+    match ty.as_scalar() {
+        Some(ScalarType::Bool) if bits <= 1 => Ok(Constant::Bool(bits != 0)),
+        Some(ScalarType::I8) => Ok(Constant::I8(bits as u8 as i8)),
+        Some(ScalarType::I16) => Ok(Constant::I16(bits as u16 as i16)),
+        Some(ScalarType::I32) => Ok(Constant::I32(bits as u32 as i32)),
+        Some(ScalarType::I64) => Ok(Constant::I64(bits as u64 as i64)),
+        Some(ScalarType::U8) => Ok(Constant::U8(bits as u8)),
+        Some(ScalarType::U16) => Ok(Constant::U16(bits as u16)),
+        Some(ScalarType::U32) => Ok(Constant::U32(bits as u32)),
+        Some(ScalarType::U64) => Ok(Constant::U64(bits as u64)),
+        Some(ScalarType::Index) => Ok(Constant::Index(bits as u64)),
+        Some(ScalarType::I128 | ScalarType::U128) => Err(unsupported(
+            0,
+            None,
+            None,
+            "128-bit enum discriminants have no Kernel IR V1 representation",
+        )),
+        Some(_) | None => Err(unsupported(
+            0,
+            None,
+            None,
+            "semantic enum discriminant has no integer Kernel IR representation",
+        )),
+    }
+}
+
+fn checked_constant_range_v1(bytes: &[u8], offset: u64, size: u64) -> Option<&[u8]> {
+    let start = usize::try_from(offset).ok()?;
+    let size = usize::try_from(size).ok()?;
+    let end = start.checked_add(size)?;
+    bytes.get(start..end)
+}
+
+fn read_constant_bits_v1(bytes: &[u8], offset: u64, size: u64) -> Option<u128> {
+    if size == 0 || size > 16 {
+        return None;
+    }
+    let bytes = checked_constant_range_v1(bytes, offset, size)?;
+    Some(
+        bytes
+            .iter()
+            .enumerate()
+            .fold(0_u128, |bits, (index, byte)| {
+                bits | (u128::from(*byte) << (index * 8))
+            }),
+    )
 }
 
 fn lower_constant(

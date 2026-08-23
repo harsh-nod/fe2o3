@@ -3,7 +3,7 @@
 #![allow(missing_docs)]
 
 use fe2o3_device::{
-    DeviceMath, DisjointSlice, Gfx942Collectives, Index1D, Tiled2D, kernel, thread,
+    DisjointSlice, Index1D, KernelError, KernelResult, Math, Subgroup, Tiled2D, kernel, thread,
 };
 
 pub const ROW_SOFTMAX_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
@@ -24,7 +24,7 @@ fn accessed_extent(rows: u32, stride: u32) -> usize {
 /// lets `Tiled2D` prove every store disjoint without unsafe source code.
 #[kernel(
     typed,
-    namespace = "bf0896973a495f4042b006a1fd5f2649c81ac32b5e32228c6a88591c046a35e7",
+    namespace = "bc044acd534ec369d1249dfcbe80b601a2076e52996717aebd48f1b1783d0ddb",
     launch(required = [64, 1, 1], max = [64, 1, 1]),
     control_flow(loop_bounds(64, 64, 64))
 )]
@@ -35,7 +35,7 @@ pub fn row_softmax_general_v1(
     columns: u32,
     input_stride: u32,
     output_rows: u32,
-) {
+) -> KernelResult {
     if columns == 0
         || columns as usize > ROW_SOFTMAX_MAX_COLUMNS_V1
         || (input_stride as usize) < ROW_SOFTMAX_MAX_COLUMNS_V1
@@ -44,19 +44,19 @@ pub fn row_softmax_general_v1(
         || input.len() < accessed_extent(rows, input_stride)
         || output.len() < output_rows as usize * 64
     {
-        return;
+        return Err(KernelError::InvalidArgument);
     }
 
     let thread_index = thread::index_1d();
     let raw = thread_index.get();
     let row = raw / 64;
     let lane = raw % 64;
-    let Some(output_tile) = thread_index.checked_tiled_2d::<64, 64, 64, 64>() else {
-        return;
-    };
+    let output_tile = thread_index
+        .checked_tiled_2d::<64, 64, 64, 64>()
+        .ok_or(KernelError::OutOfBounds)?;
 
-    let collectives = Gfx942Collectives::current();
-    let math = DeviceMath::current();
+    let subgroup = Subgroup::current();
+    let math = Math::current();
     let row_base = row * input_stride as usize;
 
     let mut local_max = f32::NEG_INFINITY;
@@ -69,7 +69,7 @@ pub fn row_softmax_general_v1(
         }
         component += 1;
     }
-    let maximum = collectives.subgroup_reduce_max_f32::<64>(local_max);
+    let maximum = subgroup.subgroup_reduce_max_f32::<64>(local_max);
 
     let mut local_sum = 0.0_f32;
     component = 0;
@@ -78,7 +78,7 @@ pub fn row_softmax_general_v1(
         local_sum += math.exp_f32(input[row_base + column] - maximum);
         component += 1;
     }
-    let denominator = collectives.subgroup_reduce_sum_f32::<64>(local_sum);
+    let denominator = subgroup.subgroup_reduce_sum_f32::<64>(local_sum);
 
     component = 0;
     while component < 64 {
@@ -91,6 +91,7 @@ pub fn row_softmax_general_v1(
         }
         component += 1;
     }
+    Ok(())
 }
 
 #[cfg(test)]

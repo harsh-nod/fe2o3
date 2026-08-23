@@ -2941,6 +2941,340 @@ fn direct_enum_type(tag_offset: u64, second_discriminant: u128) -> SemanticTypeD
     direct_enum_type_with_seed(tag_offset, second_discriminant, 100)
 }
 
+fn scalar_result_like_niche_types() -> Vec<SemanticTypeDeclV1> {
+    let discriminant = i32_type(1);
+    let unit = unit_type(2);
+    let primitive = SemanticBackendPrimitiveV1::integer(false, 32, 4);
+    let error_niche =
+        SemanticLayoutNicheV1::new(0, primitive, SemanticScalarValidityRangeV1::new(1, 3)).unwrap();
+    let error = SemanticTypeDeclV1::new(
+        type_identity(3),
+        layout_identity(3),
+        SemanticTypeLayoutV1::new_with_backend_repr(
+            Some(4),
+            4,
+            SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                primitive,
+                SemanticScalarValidityRangeV1::new(1, 3),
+            )),
+            false,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::ValidityScalar(
+            SemanticValidityScalarTypeV1::new(
+                SemanticScalarTypeV1::Integer {
+                    signed: false,
+                    bits: 32,
+                },
+                vec![SemanticScalarValidityRangeV1::new(1, 3)],
+            )
+            .unwrap(),
+        ),
+    );
+    let variants = vec![
+        SemanticEnumVariantV1::new(
+            0,
+            SemanticAggregateTypeV1::new(vec![SemanticTypeIdV1::from_index(1)]).unwrap(),
+        ),
+        SemanticEnumVariantV1::new(
+            1,
+            SemanticAggregateTypeV1::new(vec![SemanticTypeIdV1::from_index(2)]).unwrap(),
+        ),
+    ];
+    let layouts = vec![
+        enum_variant_layout(
+            0,
+            4,
+            4,
+            SemanticAggregateLayoutV1::new(vec![0], vec![]).unwrap(),
+            false,
+        ),
+        enum_variant_layout_with_niche_and_seed(
+            1,
+            4,
+            4,
+            SemanticAggregateLayoutV1::new(vec![0], vec![]).unwrap(),
+            Some(error_niche),
+            false,
+            101,
+        ),
+    ];
+    let encoding = SemanticNicheEnumEncodingV1::new(
+        0,
+        SemanticNicheSourceV1::new(vec![SemanticNichePathComponentV1::Field(0)], 0).unwrap(),
+        error_niche,
+        SemanticBackendScalarV1::initialized(primitive, SemanticScalarValidityRangeV1::new(1, 0)),
+        1,
+        0,
+        0,
+        0,
+    )
+    .unwrap();
+    let result = SemanticTypeDeclV1::new(
+        type_identity(4),
+        layout_identity(4),
+        SemanticTypeLayoutV1::enum_layout_with_backend_repr(
+            4,
+            4,
+            SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                primitive,
+                SemanticScalarValidityRangeV1::new(0, 3),
+            )),
+            false,
+            SemanticEnumLayoutV1::new(layouts, SemanticEnumEncodingV1::Niche(encoding)).unwrap(),
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::enum_type(SemanticTypeIdV1::from_index(0), variants).unwrap(),
+    );
+    vec![discriminant, unit, error, result]
+}
+
+#[test]
+fn shared_scalar_enum_decoder_handles_result_like_niches() {
+    let types = scalar_result_like_niche_types();
+    let result = SemanticTypeIdV1::from_index(3);
+
+    assert_eq!(
+        semantic_scalar_enum_variant_v1(&types, result, SemanticScalarValueV1::new(0, 4).unwrap(),),
+        Some(0),
+    );
+    for error in 1..=3 {
+        assert_eq!(
+            semantic_scalar_enum_variant_v1(
+                &types,
+                result,
+                SemanticScalarValueV1::new(error, 4).unwrap(),
+            ),
+            Some(1),
+        );
+    }
+    assert_eq!(
+        semantic_scalar_enum_variant_v1(&types, result, SemanticScalarValueV1::new(4, 4).unwrap(),),
+        None,
+    );
+}
+
+fn direct_result_like_types() -> Vec<SemanticTypeDeclV1> {
+    let discriminant = SemanticTypeIdV1::from_index(0);
+    let unit = SemanticTypeIdV1::from_index(1);
+    let tag = SemanticBackendScalarV1::initialized(
+        SemanticBackendPrimitiveV1::integer(false, 32, 4),
+        SemanticScalarValidityRangeV1::new(0, 1),
+    );
+    let variants = vec![
+        SemanticEnumVariantV1::new(0, SemanticAggregateTypeV1::new(vec![unit]).unwrap()),
+        SemanticEnumVariantV1::new(1, SemanticAggregateTypeV1::new(vec![discriminant]).unwrap()),
+    ];
+    let layouts = vec![
+        enum_variant_layout(
+            0,
+            8,
+            4,
+            SemanticAggregateLayoutV1::new(vec![4], vec![]).unwrap(),
+            false,
+        ),
+        enum_variant_layout(
+            1,
+            8,
+            4,
+            SemanticAggregateLayoutV1::new(vec![4], vec![]).unwrap(),
+            false,
+        ),
+    ];
+    let result = SemanticTypeDeclV1::new(
+        type_identity(3),
+        layout_identity(3),
+        SemanticTypeLayoutV1::enum_layout(
+            8,
+            4,
+            SemanticEnumLayoutV1::new(
+                layouts,
+                SemanticEnumEncodingV1::Direct(SemanticDirectEnumEncodingV1::new(0, 0, tag)),
+            )
+            .unwrap(),
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::enum_type(discriminant, variants).unwrap(),
+    );
+    vec![u32_type(1), unit_type(2), result]
+}
+
+#[test]
+fn shared_direct_enum_decoder_retains_payload_variants() {
+    let types = direct_result_like_types();
+    let result = SemanticTypeIdV1::from_index(2);
+
+    assert_eq!(
+        semantic_direct_enum_variant_v1(&types, result, SemanticScalarValueV1::new(0, 4).unwrap(),),
+        Some(0),
+    );
+    assert_eq!(
+        semantic_direct_enum_variant_v1(&types, result, SemanticScalarValueV1::new(1, 4).unwrap(),),
+        Some(1),
+    );
+    assert_eq!(
+        semantic_direct_enum_variant_v1(&types, result, SemanticScalarValueV1::new(2, 4).unwrap(),),
+        None,
+    );
+}
+
+fn transparent_result_wrapper_request(
+    swap_arguments: bool,
+    wrapper_computes: bool,
+) -> InertSemanticMirRequestV1 {
+    let discriminant = SemanticTypeIdV1::from_index(0);
+    let unit = SemanticTypeIdV1::from_index(1);
+    let result = SemanticTypeIdV1::from_index(2);
+    let direct = || SemanticAbiPassModeV1::Direct(noundef_attributes(SemanticAbiExtensionV1::None));
+    let result_mode = || {
+        cast_mode(
+            None,
+            vec![],
+            None,
+            SemanticAbiRegisterV1::new(SemanticAbiRegisterKindV1::Integer, 8).unwrap(),
+            8,
+            false,
+            SemanticAbiValueAttributesV1::plain(),
+        )
+    };
+    let function_abi = |identity: u8, output, output_mode| {
+        SemanticFunctionAbiV1::new(
+            SemanticAbiIdentityV1::from_sha256(bytes(identity)),
+            layout_identity(identity),
+            SemanticCanonAbiV1::Rust,
+            false,
+            false,
+            vec![
+                SemanticAbiValueV1::new(discriminant, direct()),
+                SemanticAbiValueV1::new(discriminant, direct()),
+            ],
+            SemanticAbiValueV1::new(output, output_mode),
+        )
+        .unwrap()
+    };
+    let argument = |local_index| {
+        SemanticOperandV1::Copy(
+            SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(local_index),
+                vec![],
+                discriminant,
+            )
+            .unwrap(),
+        )
+    };
+    let mut wrapper_statements = vec![];
+    if wrapper_computes {
+        wrapper_statements.push(SemanticStatementV1::new(
+            SemanticSourceProvenanceV1::unavailable(),
+            SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                SemanticPlaceV1::new(SemanticLocalIdV1::from_index(4), vec![], discriminant)
+                    .unwrap(),
+                SemanticRvalueV1::new(
+                    discriminant,
+                    SemanticRvalueKindV1::Use(SemanticOperandV1::Constant(
+                        SemanticConstantV1::new(
+                            discriminant,
+                            SemanticConstantValueV1::Scalar(
+                                SemanticScalarValueV1::new(7, 4).unwrap(),
+                            ),
+                        ),
+                    )),
+                ),
+            )),
+        ));
+    }
+    let mut call_arguments = vec![argument(1), argument(2)];
+    if swap_arguments {
+        call_arguments.swap(0, 1);
+    }
+    let wrapper = function(
+        1,
+        function_abi(1, unit, SemanticAbiPassModeV1::Ignore),
+        vec![
+            local(1, unit, SemanticLocalRoleV1::Return),
+            local(2, discriminant, SemanticLocalRoleV1::Argument(0)),
+            local(3, discriminant, SemanticLocalRoleV1::Argument(1)),
+            local(4, result, SemanticLocalRoleV1::Temporary),
+            local(5, discriminant, SemanticLocalRoleV1::Temporary),
+        ],
+        vec![
+            block(
+                1,
+                wrapper_statements,
+                SemanticTerminatorKindV1::Call(
+                    SemanticDirectCallV1::new(
+                        SemanticFunctionIdV1::from_index(1),
+                        call_arguments,
+                        Some(SemanticCallDestinationV1::new(
+                            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(3), vec![], result)
+                                .unwrap(),
+                            SemanticControlFlowEdgeV1::new(
+                                SemanticEdgeRoleV1::CallReturn,
+                                SemanticBlockIdV1::from_index(1),
+                            ),
+                        )),
+                        SemanticUnwindActionV1::Unreachable,
+                    )
+                    .unwrap(),
+                ),
+            ),
+            block(2, vec![], SemanticTerminatorKindV1::Return),
+        ],
+    );
+    let helper = function(
+        2,
+        function_abi(2, result, result_mode()),
+        vec![
+            local(6, result, SemanticLocalRoleV1::Return),
+            local(7, discriminant, SemanticLocalRoleV1::Argument(0)),
+            local(8, discriminant, SemanticLocalRoleV1::Argument(1)),
+        ],
+        vec![block(
+            3,
+            vec![SemanticStatementV1::new(
+                SemanticSourceProvenanceV1::unavailable(),
+                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                    SemanticPlaceV1::new(SemanticLocalIdV1::from_index(0), vec![], result).unwrap(),
+                    SemanticRvalueV1::new(
+                        result,
+                        SemanticRvalueKindV1::aggregate(
+                            SemanticAggregateKindV1::EnumVariant(0),
+                            vec![SemanticOperandV1::Constant(SemanticConstantV1::new(
+                                unit,
+                                SemanticConstantValueV1::ZeroSized,
+                            ))],
+                        )
+                        .unwrap(),
+                    ),
+                )),
+            )],
+            SemanticTerminatorKindV1::Return,
+        )],
+    );
+    request(direct_result_like_types(), vec![], vec![wrapper, helper])
+}
+
+#[test]
+fn transparent_result_wrapper_requires_exact_forwarding_and_no_computation() {
+    let admitted = transparent_result_wrapper_request(false, false)
+        .admit(SemanticMirLimitsV1::default())
+        .unwrap();
+    let selection = admitted.select_kernel_body_v1().unwrap();
+    assert_eq!(selection.root().index(), 0);
+    assert_eq!(selection.body().index(), 1);
+    assert!(selection.has_transparent_result_wrapper());
+
+    let swapped = transparent_result_wrapper_request(true, false)
+        .admit(SemanticMirLimitsV1::default())
+        .unwrap();
+    assert_eq!(swapped.select_kernel_body_v1(), None);
+
+    let computing = transparent_result_wrapper_request(false, true)
+        .admit(SemanticMirLimitsV1::default())
+        .unwrap();
+    assert_eq!(computing.select_kernel_body_v1(), None);
+}
+
 fn direct_enum_type_with_seed(
     tag_offset: u64,
     second_discriminant: u128,
@@ -4070,6 +4404,70 @@ fn request_with_statement(
             )],
         )],
     )
+}
+
+#[test]
+fn assume_is_boolean_typed_and_round_trips_canonically() {
+    let bool_id = SemanticTypeIdV1::from_index(0);
+    let unit_id = SemanticTypeIdV1::from_index(1);
+    let assume = |condition_type, extension, types| {
+        request_with_statement(
+            types,
+            SemanticFunctionAbiV1::new(
+                SemanticAbiIdentityV1::from_sha256(bytes(1)),
+                layout_identity(1),
+                SemanticCanonAbiV1::Rust,
+                false,
+                false,
+                vec![SemanticAbiValueV1::new(
+                    condition_type,
+                    SemanticAbiPassModeV1::Direct(noundef_attributes(extension)),
+                )],
+                SemanticAbiValueV1::new(unit_id, SemanticAbiPassModeV1::Ignore),
+            )
+            .unwrap(),
+            vec![
+                local(1, unit_id, SemanticLocalRoleV1::Return),
+                local(2, condition_type, SemanticLocalRoleV1::Argument(0)),
+            ],
+            SemanticStatementKindV1::Assume(SemanticOperandV1::Copy(
+                SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], condition_type)
+                    .unwrap(),
+            )),
+        )
+    };
+
+    let admitted = assume(
+        bool_id,
+        SemanticAbiExtensionV1::ZeroExtend,
+        vec![bool_type(1), unit_type(2)],
+    )
+    .admit(SemanticMirLimitsV1::default())
+    .unwrap();
+    let decoded = AdmittedInertSemanticMirV1::decode_canonical(
+        admitted.canonical_encoding(),
+        SemanticMirLimitsV1::default(),
+    )
+    .unwrap();
+    assert_eq!(decoded.canonical_encoding(), admitted.canonical_encoding());
+    assert!(matches!(
+        decoded.functions()[0].blocks()[0].statements()[0].kind(),
+        SemanticStatementKindV1::Assume(_)
+    ));
+
+    let u32_id = SemanticTypeIdV1::from_index(0);
+    assert!(matches!(
+        assume(
+            u32_id,
+            SemanticAbiExtensionV1::None,
+            vec![u32_type(1), unit_type(2)],
+        )
+        .admit(SemanticMirLimitsV1::default()),
+        Err(SemanticMirErrorV1::InvalidTypeOperation {
+            operation: SemanticTypeOperationV1::Assume,
+            ..
+        })
+    ));
 }
 
 #[test]

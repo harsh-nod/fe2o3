@@ -16,16 +16,18 @@ use fe2o3_lower_mir_kernel::{
     ProductionRankedSemanticProjectionReceiptV1, ProductionSemanticKirErrorV1,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticAssertMessageV1, SemanticAtomicAccessV1, SemanticAtomicOrderingV1,
-    SemanticAtomicScopeV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticCallableDeclV1,
-    SemanticCallableIdV1, SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1,
-    SemanticDirectCallV1, SemanticDirectTailCallV1, SemanticDisjointIndexSpaceV1,
-    SemanticFunctionDeclV1, SemanticFunctionRoleV1, SemanticLocalIdV1, SemanticLocalRoleV1,
-    SemanticOperandV1, SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1,
-    SemanticSourceProvenanceV1, SemanticStatementKindV1, SemanticTerminatorKindV1,
-    SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1, SemanticUnwindActionV1,
+    SemanticAggregateKindV1, SemanticAssertMessageV1, SemanticAtomicAccessV1,
+    SemanticAtomicOrderingV1, SemanticAtomicScopeV1, SemanticBinaryOpV1, SemanticBlockIdV1,
+    SemanticCallableDeclV1, SemanticCallableIdV1, SemanticCompilerIntrinsicOperationV1,
+    SemanticConstantValueV1, SemanticDirectCallV1, SemanticDirectTailCallV1,
+    SemanticDisjointIndexSpaceV1, SemanticFunctionDeclV1, SemanticFunctionRoleV1,
+    SemanticLocalIdV1, SemanticLocalRoleV1, SemanticOperandV1, SemanticPlaceV1,
+    SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticSourceProvenanceV1,
+    SemanticStatementKindV1, SemanticTerminatorKindV1, SemanticTypeIdV1, SemanticTypeShapeV1,
+    SemanticUnaryOpV1, SemanticUnwindActionV1,
 };
 use fe2o3_mir_model::{
+    SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
     SemanticOptionAvailabilityV1, SemanticOptionDominanceV1, semantic_option_producers_v1,
 };
 
@@ -94,20 +96,30 @@ struct ProjectedDisjointIndexV1 {
     value: ProductionRankedValueV1,
     mapping: SemanticDisjointIndexSpaceV1,
     precondition: Option<(ProductionRankedValueV1, ProductionRankedValueV1)>,
-    availability: Option<SemanticOptionAvailabilityV1>,
+    availability: Option<CapabilityAvailabilityV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CapabilityAvailabilityV1 {
+    Option(SemanticOptionAvailabilityV1),
+    EnumPayload(SemanticEnumPayloadAvailabilityV1),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ProjectedGridLeaderV1 {
     grid_leader: SemanticTypeIdV1,
     precondition: (ProductionRankedValueV1, ProductionRankedValueV1),
-    availability: SemanticOptionAvailabilityV1,
+    availability: CapabilityAvailabilityV1,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CapabilityEdgeKindV1 {
     Alias,
     AuthenticatedOptionPayload,
+    AuthenticatedEnumPayload {
+        construction_block: usize,
+        availability: SemanticEnumPayloadAvailabilityV1,
+    },
     IntoDisjoint {
         mapping: SemanticDisjointIndexSpaceV1,
     },
@@ -125,6 +137,24 @@ enum CapabilityEdgeKindV1 {
         mapping: SemanticDisjointIndexSpaceV1,
         availability: SemanticOptionAvailabilityV1,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PendingEnumPayloadStoreV1 {
+    carrier: usize,
+    variant: u32,
+    source: usize,
+    construction_block: usize,
+    statement: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PendingEnumPayloadLoadV1 {
+    carrier: usize,
+    variant: u32,
+    destination: usize,
+    use_block: usize,
+    statement: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -385,16 +415,24 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         .verify_equivalence()
         .map_err(ProductionRankedProjectionErrorV1::SemanticOwner)?;
     let semantic = semantic_owner.semantic();
-    if semantic.roots().len() != 1 || semantic.functions().len() != 1 {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "a semantic closure that is not one kernel root without helpers",
-        ));
-    }
-    let root = semantic.roots()[0];
-    let function = semantic.functions().get(root.index() as usize).ok_or(
-        ProductionRankedProjectionErrorV1::Unsupported("an out-of-range semantic kernel root"),
+    let selection = semantic.select_kernel_body_v1().ok_or(
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "a semantic closure that is neither one kernel root nor one transparent Result wrapper",
+        ),
     )?;
-    if function.role() != SemanticFunctionRoleV1::KernelRoot {
+    let root_function = semantic
+        .functions()
+        .get(selection.root().index() as usize)
+        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+            "an out-of-range semantic kernel root",
+        ))?;
+    let function = semantic
+        .functions()
+        .get(selection.body().index() as usize)
+        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+            "an out-of-range semantic kernel body",
+        ))?;
+    if root_function.role() != SemanticFunctionRoleV1::KernelRoot {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "a root without the KernelRoot role",
         ));
@@ -526,10 +564,10 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         entry_operations,
         projected_blocks,
     )?;
-    let ranked_ir = format_ranked_cfg(function_name(function)?, &blocks)?;
+    let ranked_ir = format_ranked_cfg(function_name(root_function)?, &blocks)?;
 
     let kernel = ProductionRankedKernelV1::new(
-        function_name(function)?,
+        function_name(root_function)?,
         bounds_checks.argument_count,
         blocks,
     )
@@ -769,9 +807,13 @@ fn project_intrinsic_contracts(
     let mut grid_leaders = vec![None; local_count];
     let mut option_predicates = vec![None; local_count];
     let mut edges_by_source = vec![Vec::new(); local_count];
+    let mut enum_payload_stores = Vec::new();
+    let mut enum_payload_loads = Vec::new();
     let option_producers = semantic_option_producers_v1(function, callables)
         .map_err(|error| ProductionRankedProjectionErrorV1::Unsupported(error.detail()))?;
     let option_dominance = SemanticOptionDominanceV1::analyze(function, &option_producers)
+        .map_err(|error| ProductionRankedProjectionErrorV1::Unsupported(error.detail()))?;
+    let enum_payload_dominance = SemanticEnumPayloadDominanceV1::analyze(function, types)
         .map_err(|error| ProductionRankedProjectionErrorV1::Unsupported(error.detail()))?;
     let mut edge_count = 0_usize;
     let mut borrowed_locals = Vec::new();
@@ -779,14 +821,61 @@ fn project_intrinsic_contracts(
     let mut runtime_index_arguments = vec![None; local_count];
     let mut next_runtime_argument = 1_usize;
     let launch_extent = required_launch_extent_x(function);
+    let local_definitions = local_definition_counts(function);
 
     for (block_index, block) in function.blocks().iter().enumerate() {
-        for statement in block.statements() {
+        for (statement_index, statement) in block.statements().iter().enumerate() {
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
                 continue;
             };
             if !assignment.destination().projections().is_empty() {
                 continue;
+            }
+            if let SemanticRvalueKindV1::Aggregate(aggregate) = assignment.value().kind()
+                && let SemanticAggregateKindV1::EnumVariant(variant) = aggregate.kind()
+                && let [operand] = aggregate.operands()
+                && let Some(source) = transparent_operand_place(operand)
+            {
+                if enum_payload_stores.len() == MAX_PROJECTED_OPERATIONS_V1 {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "single-payload enum stores exceed the charged projection limit",
+                    ));
+                }
+                enum_payload_stores.try_reserve(1).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "single-payload enum store storage cannot be reserved",
+                    )
+                })?;
+                enum_payload_stores.push(PendingEnumPayloadStoreV1 {
+                    carrier: assignment.destination().local().index() as usize,
+                    variant: *variant,
+                    source: source.local().index() as usize,
+                    construction_block: block_index,
+                    statement: statement_index,
+                });
+                continue;
+            }
+            if let SemanticRvalueKindV1::Use(operand) = assignment.value().kind()
+                && let Some(place) = raw_operand_place(operand)
+                && let Some((carrier, variant)) = enum_payload_projection(place)
+            {
+                if enum_payload_loads.len() == MAX_PROJECTED_OPERATIONS_V1 {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "single-payload enum loads exceed the charged projection limit",
+                    ));
+                }
+                enum_payload_loads.try_reserve(1).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "single-payload enum load storage cannot be reserved",
+                    )
+                })?;
+                enum_payload_loads.push(PendingEnumPayloadLoadV1 {
+                    carrier,
+                    variant,
+                    destination: assignment.destination().local().index() as usize,
+                    use_block: block_index,
+                    statement: statement_index,
+                });
             }
             let (source, borrowed) = match assignment.value().kind() {
                 SemanticRvalueKindV1::Use(operand) => (transparent_operand_place(operand), false),
@@ -959,6 +1048,52 @@ fn project_intrinsic_contracts(
         )?;
     }
 
+    enum_payload_stores.sort_unstable_by_key(|store| (store.carrier, store.variant));
+    for load in enum_payload_loads {
+        let key = (load.carrier, load.variant);
+        let first =
+            enum_payload_stores.partition_point(|store| (store.carrier, store.variant) < key);
+        let end =
+            enum_payload_stores.partition_point(|store| (store.carrier, store.variant) <= key);
+        let matches = &enum_payload_stores[first..end];
+        let Some(store) = matches.first() else {
+            continue;
+        };
+        if matches.len() != 1 {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "an enum payload has multiple candidate capability stores",
+            ));
+        }
+        let kind = if store.construction_block == load.use_block && store.statement < load.statement
+        {
+            CapabilityEdgeKindV1::Alias
+        } else {
+            if local_definitions.get(load.carrier).copied() != Some(1) {
+                continue;
+            }
+            let Some(availability) = enum_payload_dominance.availability(
+                SemanticLocalIdV1::from_index(load.carrier as u32),
+                load.variant,
+            ) else {
+                continue;
+            };
+            CapabilityEdgeKindV1::AuthenticatedEnumPayload {
+                construction_block: store.construction_block,
+                availability,
+            }
+        };
+        push_capability_edge(
+            &mut edges_by_source,
+            &mut edge_count,
+            store.source,
+            CapabilityEdgeV1 {
+                destination: load.destination,
+                use_block: load.use_block,
+                kind,
+            },
+        )?;
+    }
+
     let mut index_worklist = VecDeque::new();
     let mut grid_worklist = VecDeque::new();
     for block in function.blocks() {
@@ -1041,7 +1176,7 @@ fn project_intrinsic_contracts(
                         ProductionRankedValueV1::Local(result),
                         ProductionRankedValueV1::Local(one),
                     ),
-                    availability,
+                    availability: CapabilityAvailabilityV1::Option(availability),
                 });
                 grid_worklist.push_back(destination);
             }
@@ -1064,7 +1199,12 @@ fn project_intrinsic_contracts(
                 continue;
             };
             if candidate.grid_leader != borrowed_type
-                || !option_dominance.allows(candidate.availability, use_block_id)
+                || !capability_availability_allows(
+                    &option_dominance,
+                    &enum_payload_dominance,
+                    candidate.availability,
+                    use_block_id,
+                )
             {
                 continue;
             }
@@ -1099,10 +1239,18 @@ fn project_intrinsic_contracts(
                     "capability work accounting overflowed",
                 ),
             )?;
+            let authorization_block = match edge.kind {
+                CapabilityEdgeKindV1::AuthenticatedEnumPayload {
+                    construction_block, ..
+                } => construction_block,
+                _ => edge.use_block,
+            };
             if !input.availability.is_none_or(|availability| {
-                option_dominance.allows(
+                capability_availability_allows(
+                    &option_dominance,
+                    &enum_payload_dominance,
                     availability,
-                    SemanticBlockIdV1::from_index(edge.use_block as u32),
+                    SemanticBlockIdV1::from_index(authorization_block as u32),
                 )
             }) {
                 return Err(ProductionRankedProjectionErrorV1::Unsupported(
@@ -1112,6 +1260,12 @@ fn project_intrinsic_contracts(
             let projected = match edge.kind {
                 CapabilityEdgeKindV1::Alias | CapabilityEdgeKindV1::AuthenticatedOptionPayload => {
                     input
+                }
+                CapabilityEdgeKindV1::AuthenticatedEnumPayload { availability, .. } => {
+                    ProjectedDisjointIndexV1 {
+                        availability: Some(CapabilityAvailabilityV1::EnumPayload(availability)),
+                        ..input
+                    }
                 }
                 CapabilityEdgeKindV1::IntoDisjoint { mapping } => {
                     ProjectedDisjointIndexV1 { mapping, ..input }
@@ -1169,7 +1323,7 @@ fn project_intrinsic_contracts(
                         value: ProductionRankedValueV1::Local(shifted),
                         mapping,
                         precondition,
-                        availability: Some(availability),
+                        availability: Some(CapabilityAvailabilityV1::Option(availability)),
                     }
                 }
                 CapabilityEdgeKindV1::CheckedBlock {
@@ -1195,7 +1349,7 @@ fn project_intrinsic_contracts(
                     ProjectedDisjointIndexV1 {
                         mapping,
                         precondition: Some((input.value, ProductionRankedValueV1::Local(upper))),
-                        availability: Some(availability),
+                        availability: Some(CapabilityAvailabilityV1::Option(availability)),
                         ..input
                     }
                 }
@@ -1204,7 +1358,7 @@ fn project_intrinsic_contracts(
                     availability,
                 } => ProjectedDisjointIndexV1 {
                     mapping,
-                    availability: Some(availability),
+                    availability: Some(CapabilityAvailabilityV1::Option(availability)),
                     ..input
                 },
             };
@@ -1243,13 +1397,23 @@ fn project_intrinsic_contracts(
         for edge in &edges_by_source[source] {
             if !matches!(
                 edge.kind,
-                CapabilityEdgeKindV1::Alias | CapabilityEdgeKindV1::AuthenticatedOptionPayload
+                CapabilityEdgeKindV1::Alias
+                    | CapabilityEdgeKindV1::AuthenticatedOptionPayload
+                    | CapabilityEdgeKindV1::AuthenticatedEnumPayload { .. }
             ) {
                 continue;
             }
-            if !option_dominance.allows(
+            let authorization_block = match edge.kind {
+                CapabilityEdgeKindV1::AuthenticatedEnumPayload {
+                    construction_block, ..
+                } => construction_block,
+                _ => edge.use_block,
+            };
+            if !capability_availability_allows(
+                &option_dominance,
+                &enum_payload_dominance,
                 input.availability,
-                SemanticBlockIdV1::from_index(edge.use_block as u32),
+                SemanticBlockIdV1::from_index(authorization_block as u32),
             ) {
                 return Err(ProductionRankedProjectionErrorV1::Unsupported(
                     "grid-leader authority is aliased outside its authenticated Some edge",
@@ -1266,12 +1430,21 @@ fn project_intrinsic_contracts(
                     "a grid-leader alias escaped the semantic local table or changed capability kind",
                 ));
             }
+            let projected = match edge.kind {
+                CapabilityEdgeKindV1::AuthenticatedEnumPayload { availability, .. } => {
+                    ProjectedGridLeaderV1 {
+                        availability: CapabilityAvailabilityV1::EnumPayload(availability),
+                        ..input
+                    }
+                }
+                _ => input,
+            };
             match grid_leaders[destination] {
                 None => {
-                    grid_leaders[destination] = Some(input);
+                    grid_leaders[destination] = Some(projected);
                     grid_worklist.push_back(destination);
                 }
-                Some(existing) if existing == input => {}
+                Some(existing) if existing == projected => {}
                 Some(_) => {
                     return Err(ProductionRankedProjectionErrorV1::Unsupported(
                         "multiple grid-leader capabilities reach one semantic local",
@@ -1306,6 +1479,7 @@ fn project_intrinsic_contracts(
                     1,
                     &index_values,
                     &option_dominance,
+                    &enum_payload_dominance,
                     block_index,
                 )?;
                 if projected.mapping != SemanticDisjointIndexSpaceV1::Index1d {
@@ -1325,6 +1499,7 @@ fn project_intrinsic_contracts(
                     1,
                     &index_values,
                     &option_dominance,
+                    &enum_payload_dominance,
                     block_index,
                 )?;
                 if projected.mapping != *index_space {
@@ -1357,7 +1532,9 @@ fn project_intrinsic_contracts(
                         "grid-leader capability type identity changed",
                     ));
                 }
-                if !option_dominance.allows(
+                if !capability_availability_allows(
+                    &option_dominance,
+                    &enum_payload_dominance,
                     leader.availability,
                     SemanticBlockIdV1::from_index(block_index as u32),
                 ) {
@@ -1421,6 +1598,7 @@ fn project_intrinsic_contracts(
                     1,
                     &index_values,
                     &option_dominance,
+                    &enum_payload_dominance,
                     block_index,
                 )?;
                 let expected = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
@@ -1513,6 +1691,7 @@ fn project_intrinsic_contracts(
                     1,
                     &index_values,
                     &option_dominance,
+                    &enum_payload_dominance,
                     block_index,
                 )?;
                 let expected = SemanticDisjointIndexSpaceV1::Tiled2dIndex1d {
@@ -2010,6 +2189,7 @@ fn projected_disjoint_operand_v1(
     argument: usize,
     values: &[Option<ProjectedDisjointIndexV1>],
     option_dominance: &SemanticOptionDominanceV1,
+    enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
     use_block: usize,
 ) -> Result<ProjectedDisjointIndexV1, ProductionRankedProjectionErrorV1> {
     let local = call
@@ -2027,7 +2207,9 @@ fn projected_disjoint_operand_v1(
             "a checked disjoint access not bound to authenticated index authority",
         ))?;
     if !projected.availability.is_none_or(|availability| {
-        option_dominance.allows(
+        capability_availability_allows(
+            option_dominance,
+            enum_payload_dominance,
             availability,
             SemanticBlockIdV1::from_index(use_block as u32),
         )
@@ -2037,6 +2219,20 @@ fn projected_disjoint_operand_v1(
         ));
     }
     Ok(projected)
+}
+
+fn capability_availability_allows(
+    option: &SemanticOptionDominanceV1,
+    enum_payload: &SemanticEnumPayloadDominanceV1,
+    availability: CapabilityAvailabilityV1,
+    block: SemanticBlockIdV1,
+) -> bool {
+    match availability {
+        CapabilityAvailabilityV1::Option(availability) => option.allows(availability, block),
+        CapabilityAvailabilityV1::EnumPayload(availability) => {
+            enum_payload.allows(availability, block)
+        }
+    }
 }
 
 fn ranked_value_text_v1(value: ProductionRankedValueV1) -> String {
@@ -2929,6 +3125,7 @@ fn local_definition_counts(function: &SemanticFunctionDeclV1) -> Vec<u8> {
                 | SemanticStatementKindV1::Deinitialize(place) => record(place),
                 SemanticStatementKindV1::StorageLive(_)
                 | SemanticStatementKindV1::StorageDead(_)
+                | SemanticStatementKindV1::Assume(_)
                 | SemanticStatementKindV1::Nop => {}
             }
         }
@@ -2965,11 +3162,25 @@ fn checked_reference_origin(place: &SemanticPlaceV1, origins: &[Option<usize>]) 
 }
 
 fn transparent_operand_place(operand: &SemanticOperandV1) -> Option<&SemanticPlaceV1> {
-    let place = match operand {
-        SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => place,
-        SemanticOperandV1::Constant(_) => return None,
+    transparent_place(raw_operand_place(operand)?)
+}
+
+fn raw_operand_place(operand: &SemanticOperandV1) -> Option<&SemanticPlaceV1> {
+    match operand {
+        SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => Some(place),
+        SemanticOperandV1::Constant(_) => None,
+    }
+}
+
+fn enum_payload_projection(place: &SemanticPlaceV1) -> Option<(usize, u32)> {
+    let [downcast, field] = place.projections() else {
+        return None;
     };
-    transparent_place(place)
+    let SemanticProjectionKindV1::Downcast(variant) = downcast.kind() else {
+        return None;
+    };
+    matches!(field.kind(), SemanticProjectionKindV1::Field(0))
+        .then_some((place.local().index() as usize, variant))
 }
 
 fn transparent_place(place: &SemanticPlaceV1) -> Option<&SemanticPlaceV1> {
@@ -3312,6 +3523,23 @@ fn project_statement_accesses(
             // Storage lifetime markers do not read or write the local's value.
             Ok(())
         }
+        SemanticStatementKindV1::Assume(condition) => project_operand_read(
+            types,
+            function,
+            block_index,
+            bounds_checks,
+            condition,
+            source,
+            constants,
+            checked_reference_origins,
+            guarded_accesses,
+            guarded_sites,
+            projected_views,
+            operations,
+            sources,
+            next_value,
+            ranked_ir,
+        ),
         SemanticStatementKindV1::Nop => Ok(()),
     }
 }
@@ -3691,6 +3919,7 @@ fn constant_locals(function: &SemanticFunctionDeclV1) -> Vec<Option<u64>> {
                 | SemanticStatementKindV1::Deinitialize(_)
                 | SemanticStatementKindV1::StorageLive(_)
                 | SemanticStatementKindV1::StorageDead(_)
+                | SemanticStatementKindV1::Assume(_)
                 | SemanticStatementKindV1::Nop => {}
             }
         }
@@ -3868,13 +4097,20 @@ fn project_rvalue_reads(
                 ranked_ir,
             )
         }
-        SemanticRvalueKindV1::CheckedBinary(checked) => {
+        SemanticRvalueKindV1::CheckedBinary(_) | SemanticRvalueKindV1::UncheckedBinary(_) => {
+            let (left, right) = match value {
+                SemanticRvalueKindV1::CheckedBinary(checked) => (checked.left(), checked.right()),
+                SemanticRvalueKindV1::UncheckedBinary(unchecked) => {
+                    (unchecked.left(), unchecked.right())
+                }
+                _ => unreachable!("outer pattern selects a two-operand arithmetic rvalue"),
+            };
             project_operand_read(
                 types,
                 function,
                 block_index,
                 bounds_checks,
-                checked.left(),
+                left,
                 source,
                 constants,
                 checked_reference_origins,
@@ -3891,7 +4127,7 @@ fn project_rvalue_reads(
                 function,
                 block_index,
                 bounds_checks,
-                checked.right(),
+                right,
                 source,
                 constants,
                 checked_reference_origins,
@@ -4587,6 +4823,7 @@ mod tests {
     const SCALAR_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
     const ARRAY_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);
     const POINTER_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(2);
+    const ENUM_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(3);
 
     fn bytes(tag: u8) -> [u8; 32] {
         [tag; 32]
@@ -4628,6 +4865,55 @@ mod tests {
                 ),
             ),
         ]
+    }
+
+    fn projection_types_with_enum() -> Vec<SemanticTypeDeclV1> {
+        let mut types = projection_types();
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(4)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(4)),
+            SemanticTypeLayoutV1::new(Some(4), 4).unwrap(),
+            SemanticTypeShapeV1::enum_type(
+                SCALAR_TYPE,
+                vec![
+                    SemanticEnumVariantV1::new(0, SemanticAggregateTypeV1::new(vec![]).unwrap()),
+                    SemanticEnumVariantV1::new(1, SemanticAggregateTypeV1::new(vec![]).unwrap()),
+                ],
+            )
+            .unwrap(),
+        ));
+        types
+    }
+
+    fn enum_definition(local: SemanticLocalIdV1, variant: u32) -> SemanticStatementV1 {
+        statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            SemanticPlaceV1::new(local, vec![], ENUM_TYPE).unwrap(),
+            SemanticRvalueV1::new(
+                ENUM_TYPE,
+                SemanticRvalueKindV1::Aggregate(
+                    SemanticAggregateRvalueV1::new(
+                        SemanticAggregateKindV1::EnumVariant(variant),
+                        vec![],
+                    )
+                    .unwrap(),
+                ),
+            ),
+        )))
+    }
+
+    fn enum_discriminant(
+        carrier: SemanticLocalIdV1,
+        destination: SemanticLocalIdV1,
+    ) -> SemanticStatementV1 {
+        statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            SemanticPlaceV1::new(destination, vec![], SCALAR_TYPE).unwrap(),
+            SemanticRvalueV1::new(
+                SCALAR_TYPE,
+                SemanticRvalueKindV1::Discriminant(
+                    SemanticPlaceV1::new(carrier, vec![], ENUM_TYPE).unwrap(),
+                ),
+            ),
+        )))
     }
 
     fn local(tag: u8, ty: SemanticTypeIdV1, role: SemanticLocalRoleV1) -> SemanticLocalDeclV1 {
@@ -5461,6 +5747,149 @@ mod tests {
         for producer in large_producers {
             assert!(large.availability(producer.option_local()).is_some());
         }
+    }
+
+    #[test]
+    fn enum_payload_dominance_tracks_only_the_exact_variant_branch() {
+        let carrier = SemanticLocalIdV1::from_index(1);
+        let discriminator = SemanticLocalIdV1::from_index(2);
+        let discriminator_place = SemanticPlaceV1::new(discriminator, vec![], SCALAR_TYPE).unwrap();
+        let function = projection_function_with_locals(
+            vec![
+                block(
+                    80,
+                    vec![
+                        enum_definition(carrier, 0),
+                        enum_discriminant(carrier, discriminator),
+                    ],
+                    SemanticTerminatorKindV1::SwitchInt {
+                        discriminant: SemanticOperandV1::Copy(discriminator_place),
+                        targets: SemanticSwitchTargetsV1::new(
+                            vec![SemanticSwitchTargetV1::new(
+                                0,
+                                cfg_edge(SemanticEdgeRoleV1::SwitchValue, 1),
+                            )],
+                            cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 2),
+                        )
+                        .unwrap(),
+                    },
+                ),
+                block(
+                    81,
+                    vec![],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3)),
+                ),
+                block(82, vec![], SemanticTerminatorKindV1::Return),
+                block(83, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(20, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(21, ENUM_TYPE, SemanticLocalRoleV1::Temporary),
+                local(22, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        );
+        let dominance =
+            SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types_with_enum())
+                .unwrap();
+        let zero = dominance.availability(carrier, 0).unwrap();
+        let one = dominance.availability(carrier, 1).unwrap();
+
+        assert!(dominance.allows(zero, SemanticBlockIdV1::from_index(1)));
+        assert!(dominance.allows(zero, SemanticBlockIdV1::from_index(3)));
+        assert!(!dominance.allows(zero, SemanticBlockIdV1::from_index(2)));
+        assert!(dominance.allows(one, SemanticBlockIdV1::from_index(2)));
+        assert!(!dominance.grants_authority());
+    }
+
+    #[test]
+    fn enum_payload_branch_with_an_alternate_predecessor_is_not_authenticated() {
+        let carrier = SemanticLocalIdV1::from_index(1);
+        let discriminator = SemanticLocalIdV1::from_index(2);
+        let function = projection_function_with_locals(
+            vec![
+                block(
+                    84,
+                    vec![
+                        enum_definition(carrier, 0),
+                        enum_discriminant(carrier, discriminator),
+                    ],
+                    SemanticTerminatorKindV1::SwitchInt {
+                        discriminant: SemanticOperandV1::Copy(
+                            SemanticPlaceV1::new(discriminator, vec![], SCALAR_TYPE).unwrap(),
+                        ),
+                        targets: SemanticSwitchTargetsV1::new(
+                            vec![SemanticSwitchTargetV1::new(
+                                0,
+                                cfg_edge(SemanticEdgeRoleV1::SwitchValue, 1),
+                            )],
+                            cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 2),
+                        )
+                        .unwrap(),
+                    },
+                ),
+                block(85, vec![], SemanticTerminatorKindV1::Return),
+                block(
+                    86,
+                    vec![],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+            ],
+            vec![
+                local(20, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(21, ENUM_TYPE, SemanticLocalRoleV1::Temporary),
+                local(22, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        );
+        let dominance =
+            SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types_with_enum())
+                .unwrap();
+
+        assert!(dominance.availability(carrier, 0).is_none());
+        assert!(dominance.availability(carrier, 1).is_some());
+    }
+
+    #[test]
+    fn multiply_defined_enum_carrier_cannot_authenticate_a_payload() {
+        let carrier = SemanticLocalIdV1::from_index(1);
+        let discriminator = SemanticLocalIdV1::from_index(2);
+        let function = projection_function_with_locals(
+            vec![
+                block(
+                    87,
+                    vec![
+                        enum_definition(carrier, 0),
+                        enum_definition(carrier, 1),
+                        enum_discriminant(carrier, discriminator),
+                    ],
+                    SemanticTerminatorKindV1::SwitchInt {
+                        discriminant: SemanticOperandV1::Copy(
+                            SemanticPlaceV1::new(discriminator, vec![], SCALAR_TYPE).unwrap(),
+                        ),
+                        targets: SemanticSwitchTargetsV1::new(
+                            vec![SemanticSwitchTargetV1::new(
+                                0,
+                                cfg_edge(SemanticEdgeRoleV1::SwitchValue, 1),
+                            )],
+                            cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 2),
+                        )
+                        .unwrap(),
+                    },
+                ),
+                block(88, vec![], SemanticTerminatorKindV1::Return),
+                block(89, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(20, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(21, ENUM_TYPE, SemanticLocalRoleV1::Temporary),
+                local(22, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        );
+        let dominance =
+            SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types_with_enum())
+                .unwrap();
+
+        assert!(dominance.availability(carrier, 0).is_none());
+        assert!(dominance.availability(carrier, 1).is_none());
     }
 
     #[test]

@@ -3,8 +3,8 @@
 #![allow(missing_docs)]
 
 use fe2o3_device::{
-    Bf16MfmaFragment, DeviceMatrix, DisjointSlice, F32AccumulatorFragment, Index1D, Tiled2D,
-    kernel, thread,
+    Bf16MfmaFragment, DisjointSlice, F32AccumulatorFragment, Index1D, KernelError, KernelResult,
+    Matrix, Tiled2D, kernel, thread,
 };
 
 pub const MOE_EXPERT_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
@@ -25,7 +25,7 @@ fn matrix_extent(rows: u32, columns: u32, stride: u32) -> usize {
 /// selects a strided weight and bias matrix without changing the pipeline.
 #[kernel(
     typed,
-    namespace = "89e87792d88730af30400017f22a90b9e55bf591184188cf9c6d7de807424ae1",
+    namespace = "11b4c081146112bdecd6d063245bc972fc594f802dc2f82f46edc93014094001",
     launch(required = [64, 1, 1], max = [64, 1, 1]),
     control_flow(loop_bounds(4294967295))
 )]
@@ -46,14 +46,15 @@ pub fn moe_grouped_expert_general_v1(
     output_stride: u32,
     expert: u32,
     expert_count: u32,
-) {
+) -> KernelResult {
     let token_extent = matrix_extent(rows_padded, reduction, token_stride);
     let weight_extent = if expert_count == 0 || reduction == 0 || output_columns == 0 {
         0
     } else {
-        (expert_count - 1) as usize * expert_weight_stride as usize
-            + (reduction - 1) as usize * weight_stride as usize
-            + output_columns as usize
+        ((expert_count - 1) as usize * expert_weight_stride as usize)
+            .checked_add((reduction - 1) as usize * weight_stride as usize)
+            .and_then(|extent| extent.checked_add(output_columns as usize))
+            .ok_or(KernelError::InvalidArgument)?
     };
     let bias_extent = matrix_extent(expert_count, output_columns, bias_stride);
     let output_extent = matrix_extent(rows_padded, output_columns, output_stride);
@@ -73,7 +74,7 @@ pub fn moe_grouped_expert_general_v1(
         || expert_bias.len() < bias_extent
         || routed_output.len() < output_extent
     {
-        return;
+        return Err(KernelError::InvalidArgument);
     }
 
     let thread_index = thread::index_1d();
@@ -87,10 +88,10 @@ pub fn moe_grouped_expert_general_v1(
     let tile_column = tile % tiles_per_row;
     let token_row = tile_row * 16 + lane_column;
     let output_column = tile_column * 16 + lane_column;
-    let Some(output_tile) = thread_index.checked_tiled_2d::<64, 16, 16, 4>() else {
-        return;
-    };
-    let matrix = DeviceMatrix::current();
+    let output_tile = thread_index
+        .checked_tiled_2d::<64, 16, 16, 4>()
+        .ok_or(KernelError::OutOfBounds)?;
+    let matrix = Matrix::current();
     let mut accumulator = F32AccumulatorFragment::from_values([0.0; 4]);
     let mut phase = 0_usize;
     while phase < reduction as usize {
@@ -190,6 +191,7 @@ pub fn moe_grouped_expert_general_v1(
     ) {
         *element = route_gates[row_base + 3] * (values[3] + bias);
     }
+    Ok(())
 }
 
 #[cfg(test)]

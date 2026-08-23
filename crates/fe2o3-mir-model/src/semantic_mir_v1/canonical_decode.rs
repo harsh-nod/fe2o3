@@ -1346,7 +1346,7 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        Ok(match self.tagged("compiler intrinsic", 30)? {
+        Ok(match self.tagged("compiler intrinsic", 31)? {
             0 => SemanticCompilerIntrinsicOperationV1::ThreadIndex(self.axis()?),
             1 => SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(self.axis()?),
             2 => SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(self.axis()?),
@@ -1511,6 +1511,7 @@ impl<'a> CanonicalDecoderV1<'a> {
                     _ => unreachable!(),
                 },
             },
+            31 => SemanticCompilerIntrinsicOperationV1::ColdPath,
             _ => unreachable!(),
         })
     }
@@ -1548,7 +1549,7 @@ impl<'a> CanonicalDecoderV1<'a> {
     }
 
     fn statement(&mut self) -> Result<SemanticStatementKindV1, SemanticMirDecodeErrorV1> {
-        Ok(match self.tagged("statement", 8)? {
+        Ok(match self.tagged("statement", 9)? {
             0 => SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
                 self.place()?,
                 self.rvalue()?,
@@ -1604,6 +1605,7 @@ impl<'a> CanonicalDecoderV1<'a> {
             6 => SemanticStatementKindV1::StorageLive(SemanticLocalIdV1(self.u32()?)),
             7 => SemanticStatementKindV1::StorageDead(SemanticLocalIdV1(self.u32()?)),
             8 => SemanticStatementKindV1::Nop,
+            9 => SemanticStatementKindV1::Assume(self.operand()?),
             _ => unreachable!(),
         })
     }
@@ -1702,7 +1704,7 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn rvalue(&mut self) -> Result<SemanticRvalueV1, SemanticMirDecodeErrorV1> {
         let result_type = SemanticTypeIdV1(self.u32()?);
         let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V3 {
-            10
+            11
         } else {
             9
         };
@@ -1777,6 +1779,20 @@ impl<'a> CanonicalDecoderV1<'a> {
                 };
                 self.charge(SemanticMirResourceV1::Operands, 2)?;
                 SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
+                    operation,
+                    self.operand_uncharged()?,
+                    self.operand_uncharged()?,
+                ))
+            }
+            11 => {
+                let operation = match self.tagged("unchecked binary operation", 2)? {
+                    0 => SemanticUncheckedBinaryOpV1::Add,
+                    1 => SemanticUncheckedBinaryOpV1::Subtract,
+                    2 => SemanticUncheckedBinaryOpV1::Multiply,
+                    _ => unreachable!(),
+                };
+                self.charge(SemanticMirResourceV1::Operands, 2)?;
+                SemanticRvalueKindV1::UncheckedBinary(SemanticUncheckedBinaryRvalueV1::new(
                     operation,
                     self.operand_uncharged()?,
                     self.operand_uncharged()?,
@@ -2698,6 +2714,7 @@ mod tests {
             SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier,
             SemanticCompilerIntrinsicOperationV1::WaveBarrier,
             SemanticCompilerIntrinsicOperationV1::FabsF32,
+            SemanticCompilerIntrinsicOperationV1::ColdPath,
             SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
                 index_witness: t(0),
                 raw_index: t(1),

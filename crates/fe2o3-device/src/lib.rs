@@ -25,6 +25,7 @@ pub mod ffi;
 pub mod fp8;
 pub mod group;
 pub mod half;
+pub mod kernel_result;
 pub mod lds;
 pub mod math;
 pub mod memory;
@@ -36,6 +37,8 @@ pub mod thread;
 pub mod views;
 pub mod wave;
 
+/// Target-neutral name for the compiler-issued subgroup capability.
+pub use collective::Gfx942Collectives as Subgroup;
 pub use collective::{
     GFX942_COLLECTIVE_CONTRACT_VERSION_V1, GFX942_STATIC_LDS_U32X256_ALIGNMENT,
     GFX942_STATIC_LDS_U32X256_BYTES, GFX942_STATIC_LDS_U32X256_SLOTS,
@@ -56,10 +59,13 @@ pub use group::{
     ValidWave64TileWidth, Wave64TileWidth, Workgroup, WorkgroupSynchronization,
 };
 pub use half::{Bf16, Bf16x2, F16};
+pub use kernel_result::{KernelError, KernelResult};
 pub use lds::{
     DynamicLds, DynamicLdsError, LdsElement, LdsInitialized, LdsUninitialized,
     MAX_DYNAMIC_LDS_ALIGNMENT, WorkgroupLdsScope,
 };
+/// Target-neutral name for the compiler-issued device math capability.
+pub use math::DeviceMath as Math;
 pub use math::{DEVICE_MATH_CONTRACT_VERSION_V1, DeviceMath};
 pub use mx::{MxScaleConversionError, MxScaleE8M0, MxScaleE8M0x4};
 pub use simd::{GpuSimd, GpuSimdElement, GpuSimdLaneCount, ValidGpuSimdLaneCount};
@@ -68,6 +74,8 @@ pub use sync::{
     BarrierUninitialized, Gfx12, Gfx942, ManagedBarrier, NamedBarrierSlot,
     NativeSplitBarrierTarget, ValidNamedBarrierSlot,
 };
+/// Target-neutral name for the compiler-issued matrix capability.
+pub use tensor::DeviceMatrix as Matrix;
 pub use tensor::{
     BF16_F32_MFMA_M, BF16_F32_MFMA_N, BF16_F32_MFMA_REDUCTION, BF16_F32_MFMA_WAVE_LANES,
     Bf16F32M16N16K16, Bf16MfmaFragment, DeviceMatrix, F32AccumulatorFragment, LdsTile16x16,

@@ -1202,3 +1202,285 @@ fn checked_operands_are_bounded_during_admission_and_decode() {
         })
     );
 }
+
+#[derive(Clone, Copy)]
+enum UncheckedProofShape {
+    Exact,
+    Alias,
+    OverflowEdge,
+    JoinedEdge,
+    MissingProducer,
+}
+
+fn unchecked_proof_request(
+    checked_operation: SemanticCheckedBinaryOpV1,
+    unchecked_operation: SemanticUncheckedBinaryOpV1,
+    checked_right: u128,
+    unchecked_right: u128,
+    shape: UncheckedProofShape,
+) -> InertSemanticMirRequestV1 {
+    let constant = |bits| {
+        SemanticOperandV1::Constant(SemanticConstantV1::new(
+            U32,
+            SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(bits, 4).unwrap()),
+        ))
+    };
+    let place =
+        |local, ty| SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], ty).unwrap();
+    let checked_place = place(1, U32_BOOL);
+    let overflow_place = SemanticPlaceV1::new(
+        SemanticLocalIdV1::from_index(1),
+        vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Field(1), BOOL).unwrap()],
+        BOOL,
+    )
+    .unwrap();
+    let statement =
+        |kind| SemanticStatementV1::new(SemanticSourceProvenanceV1::unavailable(), kind);
+    let checked = statement(match shape {
+        UncheckedProofShape::MissingProducer => SemanticStatementKindV1::Nop,
+        _ => SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            checked_place,
+            SemanticRvalueV1::new(
+                U32_BOOL,
+                SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
+                    checked_operation,
+                    constant(7),
+                    constant(checked_right),
+                )),
+            ),
+        )),
+    });
+    let mut entry_statements = vec![checked];
+    let discriminant = if matches!(shape, UncheckedProofShape::Alias) {
+        entry_statements.push(statement(SemanticStatementKindV1::Assign(
+            SemanticAssignmentV1::new(
+                place(2, BOOL),
+                SemanticRvalueV1::new(
+                    BOOL,
+                    SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(overflow_place)),
+                ),
+            ),
+        )));
+        SemanticOperandV1::Copy(place(2, BOOL))
+    } else {
+        SemanticOperandV1::Copy(overflow_place)
+    };
+    let unchecked = statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+        place(3, U32),
+        SemanticRvalueV1::new(
+            U32,
+            SemanticRvalueKindV1::UncheckedBinary(SemanticUncheckedBinaryRvalueV1::new(
+                unchecked_operation,
+                constant(7),
+                constant(unchecked_right),
+            )),
+        ),
+    )));
+    let edge =
+        |role, target| SemanticControlFlowEdgeV1::new(role, SemanticBlockIdV1::from_index(target));
+    let switch = SemanticTerminatorKindV1::SwitchInt {
+        discriminant,
+        targets: SemanticSwitchTargetsV1::new(
+            vec![SemanticSwitchTargetV1::new(
+                1,
+                edge(SemanticEdgeRoleV1::SwitchValue, 1),
+            )],
+            edge(SemanticEdgeRoleV1::SwitchOtherwise, 2),
+        )
+        .unwrap(),
+    };
+    let terminator =
+        |kind| SemanticTerminatorV1::new(SemanticSourceProvenanceV1::unavailable(), kind);
+    let block = |tag, statements, kind| {
+        SemanticBasicBlockV1::new(
+            SemanticBlockIdentityV1::from_sha256(identity(tag)),
+            SemanticSourceProvenanceV1::unavailable(),
+            statements,
+            terminator(kind),
+        )
+        .unwrap()
+    };
+    let (overflow_statements, overflow_terminator, safe_statements) = match shape {
+        UncheckedProofShape::OverflowEdge => {
+            (vec![unchecked], SemanticTerminatorKindV1::Return, vec![])
+        }
+        UncheckedProofShape::JoinedEdge => (
+            vec![],
+            SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 2)),
+            vec![unchecked],
+        ),
+        UncheckedProofShape::Exact
+        | UncheckedProofShape::Alias
+        | UncheckedProofShape::MissingProducer => {
+            (vec![], SemanticTerminatorKindV1::Return, vec![unchecked])
+        }
+    };
+    let blocks = vec![
+        block(220, entry_statements, switch),
+        block(221, overflow_statements, overflow_terminator),
+        block(222, safe_statements, SemanticTerminatorKindV1::Return),
+    ];
+    let abi = SemanticFunctionAbiV1::new(
+        SemanticAbiIdentityV1::from_sha256(identity(223)),
+        SemanticLayoutIdentityV1::from_sha256(identity(224)),
+        SemanticCanonAbiV1::Rust,
+        false,
+        false,
+        vec![],
+        direct_value(U32),
+    )
+    .unwrap();
+    let mut locals: Vec<_> = [U32, U32_BOOL, BOOL, U32]
+        .into_iter()
+        .enumerate()
+        .map(|(index, ty)| {
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(identity(225 + index as u8)),
+                ty,
+                if index == 0 {
+                    SemanticLocalRoleV1::Return
+                } else {
+                    SemanticLocalRoleV1::Temporary
+                },
+                SemanticSourceProvenanceV1::unavailable(),
+            )
+        })
+        .collect();
+    for type_index in 3..10 {
+        locals.push(SemanticLocalDeclV1::new(
+            SemanticLocalIdentityV1::from_sha256(identity(240 + type_index as u8)),
+            SemanticTypeIdV1::from_index(type_index),
+            SemanticLocalRoleV1::Temporary,
+            SemanticSourceProvenanceV1::unavailable(),
+        ));
+    }
+    let function = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256(identity(230)),
+        SemanticFunctionRoleV1::KernelRoot,
+        SemanticItemDefinitionIdentityV1::from_sha256(identity(231)),
+        SemanticMonomorphizationIdentityV1::from_sha256(identity(232)),
+        SemanticGenericTypeArgumentsIdentityV1::from_sha256(identity(233)),
+        SemanticConstGenericArgumentsIdentityV1::from_sha256(identity(234)),
+        SemanticSourceProvenanceV1::unavailable(),
+        abi,
+        locals,
+        SemanticBlockIdV1::from_index(0),
+        blocks,
+    )
+    .unwrap();
+    InertSemanticMirRequestV1::new(
+        SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(identity(235))),
+        types(),
+        vec![],
+        vec![],
+        vec![],
+        vec![function],
+        vec![SemanticFunctionIdV1::from_index(0)],
+    )
+    .unwrap()
+}
+
+fn unchecked_error(request: InertSemanticMirRequestV1) -> SemanticMirErrorV1 {
+    request.admit(SemanticMirLimitsV1::default()).unwrap_err()
+}
+
+#[test]
+fn unchecked_add_subtract_and_multiply_require_their_exact_safe_edge() {
+    for (checked, unchecked) in [
+        (
+            SemanticCheckedBinaryOpV1::Add,
+            SemanticUncheckedBinaryOpV1::Add,
+        ),
+        (
+            SemanticCheckedBinaryOpV1::Subtract,
+            SemanticUncheckedBinaryOpV1::Subtract,
+        ),
+        (
+            SemanticCheckedBinaryOpV1::Multiply,
+            SemanticUncheckedBinaryOpV1::Multiply,
+        ),
+    ] {
+        let admitted =
+            unchecked_proof_request(checked, unchecked, 11, 11, UncheckedProofShape::Exact)
+                .admit(SemanticMirLimitsV1::default())
+                .unwrap();
+        let decoded = AdmittedInertSemanticMirV1::decode_canonical(
+            admitted.canonical_encoding(),
+            SemanticMirLimitsV1::default(),
+        )
+        .unwrap();
+        assert_eq!(decoded.semantic_sha256(), admitted.semantic_sha256());
+        assert_eq!(
+            wire_version(decoded.canonical_encoding()),
+            INERT_SEMANTIC_MIR_VERSION_V3
+        );
+    }
+}
+
+#[test]
+fn unchecked_arithmetic_accepts_a_unique_local_alias_of_the_overflow_flag() {
+    unchecked_proof_request(
+        SemanticCheckedBinaryOpV1::Multiply,
+        SemanticUncheckedBinaryOpV1::Multiply,
+        11,
+        11,
+        UncheckedProofShape::Alias,
+    )
+    .admit(SemanticMirLimitsV1::default())
+    .unwrap();
+}
+
+#[test]
+fn unchecked_arithmetic_rejects_missing_wrong_or_mismatched_proofs() {
+    let cases = [
+        unchecked_proof_request(
+            SemanticCheckedBinaryOpV1::Add,
+            SemanticUncheckedBinaryOpV1::Add,
+            11,
+            11,
+            UncheckedProofShape::MissingProducer,
+        ),
+        unchecked_proof_request(
+            SemanticCheckedBinaryOpV1::Add,
+            SemanticUncheckedBinaryOpV1::Subtract,
+            11,
+            11,
+            UncheckedProofShape::Exact,
+        ),
+        unchecked_proof_request(
+            SemanticCheckedBinaryOpV1::Add,
+            SemanticUncheckedBinaryOpV1::Add,
+            11,
+            12,
+            UncheckedProofShape::Exact,
+        ),
+    ];
+    for request in cases {
+        assert!(matches!(
+            unchecked_error(request),
+            SemanticMirErrorV1::UnprovenUncheckedArithmetic { .. }
+        ));
+    }
+}
+
+#[test]
+fn unchecked_arithmetic_rejects_the_overflow_edge_and_a_forged_join() {
+    for shape in [
+        UncheckedProofShape::OverflowEdge,
+        UncheckedProofShape::JoinedEdge,
+    ] {
+        assert!(matches!(
+            unchecked_error(unchecked_proof_request(
+                SemanticCheckedBinaryOpV1::Multiply,
+                SemanticUncheckedBinaryOpV1::Multiply,
+                11,
+                11,
+                shape,
+            )),
+            SemanticMirErrorV1::UnprovenUncheckedArithmetic {
+                operation: SemanticUncheckedBinaryOpV1::Multiply,
+                ..
+            }
+        ));
+    }
+}
