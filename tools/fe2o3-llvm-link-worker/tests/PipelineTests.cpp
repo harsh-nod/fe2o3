@@ -3171,6 +3171,9 @@ void testExactWorkgroupSyncProfiles() {
                       ProfileValue == Profile::LdsReduction
                           ? "workgroup_lds_reduction_v1_profile status=ok"
                           : "scoped_atomic_v1_profile status=ok");
+    requireDiagnostic(First, ProfileValue == Profile::LdsReduction
+                                 ? "explicit_kernarg_size=32 kernarg_size=288"
+                                 : "explicit_kernarg_size=40 kernarg_size=296");
 
     Request WrongTarget = Exact;
     WrongTarget.Target = "gfx942:xnack+";
@@ -3216,7 +3219,11 @@ void testExactWorkgroupSyncProfiles() {
     requireInspectionFailure(WrongWorkgroup, Exact,
                              "kernel_contract_reqd_workgroup_size");
     std::vector<uint8_t> WrongKernarg = First.LinkedOutput->Bytes;
-    replaceMetadataByte(WrongKernarg, ".kernarg_segment_size", 0x28, 0x29);
+    const uint8_t ExpectedKernargLowByte =
+        ProfileValue == Profile::LdsReduction ? 0x20 : 0x28;
+    replaceMetadataByte(WrongKernarg, ".kernarg_segment_size",
+                        ExpectedKernargLowByte,
+                        static_cast<uint8_t>(ExpectedKernargLowByte + 1));
     requireInspectionFailure(WrongKernarg, Exact,
                              "kernel_contract_kernarg_segment_size");
     std::vector<uint8_t> WrongWave = First.LinkedOutput->Bytes;
@@ -3263,6 +3270,11 @@ void testExactWorkgroupSyncProfiles() {
   }
 
   std::string LdsBody = BodyFor(Profile::LdsReduction);
+  RequireModuleFailure(
+      replaceExactText(
+          LdsBody, "%values.data, i64 %values.len, ptr addrspace(1)",
+          "%values.data, i64 %values.len, i32 %epoch, ptr addrspace(1)"),
+      Profile::LdsReduction, "function closure");
   RequireModuleFailure(
       replaceExactText(LdsBody, "fence syncscope(\"workgroup\") release",
                        "fence syncscope(\"workgroup\") seq_cst"),
