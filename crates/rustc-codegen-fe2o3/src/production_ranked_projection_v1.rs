@@ -8677,6 +8677,20 @@ mod tests {
         fallback_statements: Vec<SemanticStatementV1>,
         fallback_terminator: SemanticTerminatorKindV1,
     ) -> SemanticFunctionDeclV1 {
+        explicit_binary_switch_with_targets(
+            variants,
+            [1, 2],
+            fallback_statements,
+            fallback_terminator,
+        )
+    }
+
+    fn explicit_binary_switch_with_targets(
+        variants: [u128; 2],
+        variant_targets: [u32; 2],
+        fallback_statements: Vec<SemanticStatementV1>,
+        fallback_terminator: SemanticTerminatorKindV1,
+    ) -> SemanticFunctionDeclV1 {
         projection_function_with_locals(
             vec![
                 block(
@@ -8688,11 +8702,17 @@ mod tests {
                             vec![
                                 SemanticSwitchTargetV1::new(
                                     variants[0],
-                                    cfg_edge(SemanticEdgeRoleV1::SwitchValue, 1),
+                                    cfg_edge(
+                                        SemanticEdgeRoleV1::SwitchValue,
+                                        variant_targets[0],
+                                    ),
                                 ),
                                 SemanticSwitchTargetV1::new(
                                     variants[1],
-                                    cfg_edge(SemanticEdgeRoleV1::SwitchValue, 2),
+                                    cfg_edge(
+                                        SemanticEdgeRoleV1::SwitchValue,
+                                        variant_targets[1],
+                                    ),
                                 ),
                             ],
                             cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 3),
@@ -8753,8 +8773,9 @@ mod tests {
 
     #[test]
     fn checked_option_switch_uses_variant_values_independent_of_target_order() {
-        let function = explicit_binary_switch_with_fallback(
-            [1, 0],
+        let function = explicit_binary_switch_with_targets(
+            [0, 1],
+            [2, 1],
             vec![],
             SemanticTerminatorKindV1::Unreachable,
         );
