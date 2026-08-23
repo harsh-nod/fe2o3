@@ -7,9 +7,10 @@ use std::{
 };
 
 use dialect_kernel::{
-    AnalysisSplitOp, BranchArgsOp, BranchOp, IndexBinaryOp, IndexConstantOp,
-    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, InvocationIndexOp, ReturnOp,
-    TensorConvergenceAttr, TensorLayoutOp,
+    AnalysisSplitOp, BranchArgsOp, BranchOp, DeterministicJoinOp, IndexBinaryOp, IndexConstantOp,
+    IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
+    InvocationIndexOp, MAX_DETERMINISTIC_JOIN_INPUTS_V1, ReturnOp, TensorConvergenceAttr,
+    TensorLayoutOp,
 };
 use fe2o3_kernel_ir::{TensorLayoutFindingV1, verify_tensor_layout_contract_v1};
 use pliron::{
@@ -600,6 +601,54 @@ fn symbolic_subgroup_convergence(
                 ),
                 2,
             )
+        } else if let Some(branch) = terminator.downcast_ref::<IndexEqualBranchOp>() {
+            if raw.get_num_operands() != 2 {
+                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                    detail: format!(
+                        "block {block_index} equality comparison has a malformed operand count"
+                    ),
+                });
+            }
+            (
+                classify_subgroup_equality(
+                    entry,
+                    layout,
+                    &sparse,
+                    &uniformity,
+                    branch.lhs(context),
+                    branch.rhs(context),
+                ),
+                2,
+            )
+        } else if let Some(branch) = terminator.downcast_ref::<IndexEqualBranchArgsOp>() {
+            if raw.get_num_successors() != 2 {
+                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                    detail: format!(
+                        "block {block_index} typed equality comparison has a malformed successor count"
+                    ),
+                });
+            }
+            let expected_operands = 2
+                + raw.get_successor(0).deref(context).get_num_arguments()
+                + raw.get_successor(1).deref(context).get_num_arguments();
+            if raw.get_num_operands() != expected_operands {
+                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                    detail: format!(
+                        "block {block_index} typed equality comparison has a malformed operand count"
+                    ),
+                });
+            }
+            (
+                classify_subgroup_equality(
+                    entry,
+                    layout,
+                    &sparse,
+                    &uniformity,
+                    branch.lhs(context),
+                    branch.rhs(context),
+                ),
+                2,
+            )
         } else if terminator.downcast_ref::<AnalysisSplitOp>().is_some() {
             (SubgroupBranchUniformityV1::Unknown, 2)
         } else {
@@ -766,6 +815,57 @@ fn classify_subgroup_predicate(
     SubgroupBranchUniformityV1::Unknown
 }
 
+fn classify_subgroup_equality(
+    entry: Ptr<BasicBlock>,
+    layout: PlironExecutionLayoutV1,
+    sparse: &SparseIndexAnalysisV1,
+    uniformity: &PlironSubgroupUniformityV1,
+    lhs: Value,
+    rhs: Value,
+) -> SubgroupBranchUniformityV1 {
+    if lhs == rhs {
+        return SubgroupBranchUniformityV1::Uniform;
+    }
+    let lhs_uniformity = uniformity.fact(lhs);
+    let rhs_uniformity = uniformity.fact(rhs);
+    let lhs_fact = sparse.fact(lhs);
+    let rhs_fact = sparse.fact(rhs);
+    let lhs_is_uniform = value_is_entry_argument(lhs, entry)
+        || lhs_uniformity == SubgroupValueUniformityV1::Uniform
+        || sparse_fact_is_subgroup_uniform(&lhs_fact, layout);
+    let rhs_is_uniform = value_is_entry_argument(rhs, entry)
+        || rhs_uniformity == SubgroupValueUniformityV1::Uniform
+        || sparse_fact_is_subgroup_uniform(&rhs_fact, layout);
+    if lhs_is_uniform && rhs_is_uniform {
+        return SubgroupBranchUniformityV1::Uniform;
+    }
+    if let (Some(lhs), Some(rhs)) = (lhs_fact.affine(), rhs_fact.affine())
+        && lhs
+            .coefficients()
+            .iter()
+            .zip(rhs.coefficients())
+            .enumerate()
+            .all(|(dimension, (lhs, rhs))| {
+                lhs == rhs || invocation_axis_is_subgroup_uniform(dimension, layout)
+            })
+    {
+        return SubgroupBranchUniformityV1::Uniform;
+    }
+    if matches!(
+        (lhs_uniformity, rhs_uniformity),
+        (
+            SubgroupValueUniformityV1::Varying,
+            SubgroupValueUniformityV1::Uniform
+        ) | (
+            SubgroupValueUniformityV1::Uniform,
+            SubgroupValueUniformityV1::Varying
+        )
+    ) {
+        return SubgroupBranchUniformityV1::Varying;
+    }
+    SubgroupBranchUniformityV1::Unknown
+}
+
 fn analyze_pliron_subgroup_uniformity(
     context: &Context,
     function: &FuncOp,
@@ -815,6 +915,17 @@ fn analyze_pliron_subgroup_uniformity(
                     && raw.get_num_operands() == 2
                 {
                     SubgroupValueDefinitionV1::Merge(vec![binary.lhs(context), binary.rhs(context)])
+                } else if let Some(join) = dynamic.downcast_ref::<DeterministicJoinOp>() {
+                    let dependencies = join.dependencies(context);
+                    if dependencies.is_empty() {
+                        return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                            detail: "deterministic join has no explicit dependencies".to_owned(),
+                        });
+                    }
+                    if dependencies.len() > MAX_DETERMINISTIC_JOIN_INPUTS_V1 {
+                        return Err(PlironTensorLayoutFindingV1::ResourceLimitExceeded);
+                    }
+                    SubgroupValueDefinitionV1::Merge(dependencies)
                 } else {
                     SubgroupValueDefinitionV1::Fixed(SubgroupValueUniformityV1::Unknown)
                 };
@@ -836,6 +947,7 @@ fn analyze_pliron_subgroup_uniformity(
         if dynamic
             .downcast_ref::<IndexLessThanBranchArgsOp>()
             .is_some()
+            || dynamic.downcast_ref::<IndexEqualBranchArgsOp>().is_some()
         {
             if raw.get_num_successors() != 2 {
                 return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
@@ -863,6 +975,12 @@ fn analyze_pliron_subgroup_uniformity(
             let incoming = if let Some(branch) = dynamic.downcast_ref::<BranchArgsOp>() {
                 branch.arguments(context)
             } else if let Some(branch) = dynamic.downcast_ref::<IndexLessThanBranchArgsOp>() {
+                if successor_index == 0 {
+                    branch.true_arguments(context)
+                } else {
+                    branch.false_arguments(context)
+                }
+            } else if let Some(branch) = dynamic.downcast_ref::<IndexEqualBranchArgsOp>() {
                 if successor_index == 0 {
                     branch.true_arguments(context)
                 } else {

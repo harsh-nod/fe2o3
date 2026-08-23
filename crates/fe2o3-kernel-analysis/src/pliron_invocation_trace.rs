@@ -12,8 +12,9 @@ use dialect_gpu::{
     MemoryScopeAttr,
 };
 use dialect_kernel::{
-    AccessKindAttr, BranchArgsOp, BranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
-    MemorySpaceAttr, RankedAccessOp, RankedViewOp, ReturnOp, TensorLayoutOp,
+    AccessKindAttr, BranchArgsOp, BranchOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
+    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, MemorySpaceAttr, RankedAccessOp,
+    RankedViewOp, ReturnOp, TensorLayoutOp,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -453,6 +454,26 @@ pub(crate) fn trace_pliron_invocations_v1(
                     .evaluate(&invocation)
                     .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
                 raw.successors().nth(usize::from(lhs >= rhs))
+            } else if let Some(branch) = terminator.downcast_ref::<IndexEqualBranchOp>() {
+                let lhs = sparse
+                    .fact(branch.lhs(context))
+                    .evaluate(&invocation)
+                    .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
+                let rhs = sparse
+                    .fact(branch.rhs(context))
+                    .evaluate(&invocation)
+                    .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
+                raw.successors().nth(usize::from(lhs != rhs))
+            } else if let Some(branch) = terminator.downcast_ref::<IndexEqualBranchArgsOp>() {
+                let lhs = sparse
+                    .fact(branch.lhs(context))
+                    .evaluate(&invocation)
+                    .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
+                let rhs = sparse
+                    .fact(branch.rhs(context))
+                    .evaluate(&invocation)
+                    .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
+                raw.successors().nth(usize::from(lhs != rhs))
             } else {
                 return Err(PlironTraceFailureV1::UnsupportedTerminator { block: block_index });
             }

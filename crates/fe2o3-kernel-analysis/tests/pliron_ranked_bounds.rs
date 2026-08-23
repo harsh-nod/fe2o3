@@ -1,7 +1,7 @@
 use dialect_kernel::{
-    AccessKindAttr, AlgorithmOp, BranchOp, DIALECT_NAME, DimensionOp, GeneralGemmOp,
-    IndexConstantOp, IndexLessThanBranchOp, IndexType, RankedAccessOp, RankedViewOp,
-    RankedViewType, ReturnOp, register_dialect,
+    AccessKindAttr, AlgorithmOp, BranchOp, DIALECT_NAME, DeterministicJoinOp, DimensionOp,
+    GeneralGemmOp, IndexConstantOp, IndexEqualBranchOp, IndexLessThanBranchOp, IndexType,
+    RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckPassKindV1, MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_EDGES,
@@ -347,6 +347,50 @@ fn unguarded_dynamic_access_reports_each_unproved_dimension() {
     let diagnostic = report.findings()[0].to_string();
     assert!(diagnostic.contains("unproven bound"));
     assert!(diagnostic.contains("guard every path to the access"));
+}
+
+#[test]
+fn equality_control_does_not_establish_a_dynamic_range_bound() {
+    let context = &mut setup();
+    let (function, arguments) = function(context, "equality_is_not_a_bound", 2);
+    let [index, length]: [Value; 2] = arguments.try_into().unwrap();
+    let entry = function.get_entry_block(context);
+    let access_block = block(context, &function, "access");
+    let exit = block(context, &function, "exit");
+    let view_type = RankedViewType::new(context, 32, false, vec![0]).unwrap();
+    let view = RankedViewOp::new(context, view_type, vec![length]).unwrap();
+    let summary = DeterministicJoinOp::new(context, vec![index, length]);
+    let zero = IndexConstantOp::new(context, 0);
+    let branch = IndexEqualBranchOp::new(
+        context,
+        summary.result(context),
+        zero.result(context),
+        access_block,
+        exit,
+    );
+    let access = RankedAccessOp::new(
+        context,
+        AccessKindAttr::Read,
+        view.result(context),
+        vec![index],
+    )
+    .unwrap();
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &view);
+    append(context, entry, &summary);
+    append(context, entry, &zero);
+    append(context, entry, &branch);
+    append(context, access_block, &access);
+    append(context, access_block, &to_exit);
+    append(context, exit, &ret);
+
+    let report = run_pliron_ranked_bounds_check_v1(context, &function);
+    assert_eq!(report.status(), RankedBoundsStatusV1::Rejected);
+    assert!(matches!(
+        report.findings(),
+        [RankedBoundsFindingV1::UnprovedBound { dimension: 0, .. }]
+    ));
 }
 
 #[test]

@@ -12,11 +12,12 @@ use std::{
 
 use dialect_gpu::{BarrierOp, ExecutionLayoutOp, FenceOp};
 use dialect_kernel::{
-    AccessKindAttr, AnalysisSplitOp, BranchArgsOp, BranchOp, CheckedTiledIndex2DOp, DimensionOp,
-    IndexBinaryOp, IndexConstantOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
-    InvocationIndexOp, MAX_RANKED_MEMORY_RANK, RankedAccessOp, RankedViewOp, RankedViewType,
-    RequireEquivalentOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp, SemanticSymbolOp,
-    TensorLayoutOp, ranked_view_type,
+    AccessKindAttr, AnalysisSplitOp, BranchArgsOp, BranchOp, CheckedTiledIndex2DOp,
+    DeterministicJoinOp, DimensionOp, IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp,
+    IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp, InvocationIndexOp,
+    MAX_RANKED_MEMORY_RANK, RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp,
+    ReturnOp, SemanticBinaryOp, SemanticConstantOp, SemanticSymbolOp, TensorLayoutOp,
+    ranked_view_type,
 };
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
@@ -257,11 +258,14 @@ enum RankedOperationKind {
     IndexConstant,
     InvocationIndex,
     IndexBinary,
+    DeterministicJoin,
     CheckedTiledIndex2D,
     Dimension,
     RankedAccess,
     IndexLessThanBranch,
     IndexLessThanBranchArgs,
+    IndexEqualBranch,
+    IndexEqualBranchArgs,
     AnalysisSplit,
     Branch,
     BranchArgs,
@@ -282,6 +286,8 @@ impl RankedOperationKind {
             self,
             Self::IndexLessThanBranch
                 | Self::IndexLessThanBranchArgs
+                | Self::IndexEqualBranch
+                | Self::IndexEqualBranchArgs
                 | Self::AnalysisSplit
                 | Self::Branch
                 | Self::BranchArgs
@@ -299,6 +305,8 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         Some(RankedOperationKind::InvocationIndex)
     } else if operation.downcast_ref::<IndexBinaryOp>().is_some() {
         Some(RankedOperationKind::IndexBinary)
+    } else if operation.downcast_ref::<DeterministicJoinOp>().is_some() {
+        Some(RankedOperationKind::DeterministicJoin)
     } else if operation.downcast_ref::<CheckedTiledIndex2DOp>().is_some() {
         Some(RankedOperationKind::CheckedTiledIndex2D)
     } else if operation.downcast_ref::<DimensionOp>().is_some() {
@@ -312,6 +320,10 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         .is_some()
     {
         Some(RankedOperationKind::IndexLessThanBranchArgs)
+    } else if operation.downcast_ref::<IndexEqualBranchOp>().is_some() {
+        Some(RankedOperationKind::IndexEqualBranch)
+    } else if operation.downcast_ref::<IndexEqualBranchArgsOp>().is_some() {
+        Some(RankedOperationKind::IndexEqualBranchArgs)
     } else if operation.downcast_ref::<AnalysisSplitOp>().is_some() {
         Some(RankedOperationKind::AnalysisSplit)
     } else if operation.downcast_ref::<BranchOp>().is_some() {

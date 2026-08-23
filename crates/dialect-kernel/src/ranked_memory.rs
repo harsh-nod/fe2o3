@@ -1286,13 +1286,23 @@ impl IndexEqualBranchOp {
 impl Verify for IndexEqualBranchOp {
     fn verify(&self, context: &Context) -> PlironResult<()> {
         verify_no_regions_results_successors(self, context, 0, 2)?;
-        if self.get_operation().deref(context).get_num_operands() != 2 {
+        let operation = self.get_operation();
+        let operation = operation.deref(context);
+        if operation.get_num_operands() != 2 {
             return verify_err!(
                 self.loc(context),
                 RankedMemoryError::OperandCountMismatch {
                     expected: 2,
-                    actual: self.get_operation().deref(context).get_num_operands(),
+                    actual: operation.get_num_operands(),
                 }
+            );
+        }
+        if payload_attribute_count(&operation) != 0 {
+            return verify_err!(
+                self.loc(context),
+                RankedMemoryError::MalformedPayload(
+                    "kernel.index_eq_br carries unexpected attributes",
+                )
             );
         }
         require_index_operand(self, context, 0)?;
@@ -1386,6 +1396,14 @@ impl Verify for IndexEqualBranchArgsOp {
             return verify_err!(
                 self.loc(context),
                 RankedMemoryError::OperandCountMismatch { expected, actual }
+            );
+        }
+        if payload_attribute_count(&operation) != 0 {
+            return verify_err!(
+                self.loc(context),
+                RankedMemoryError::MalformedPayload(
+                    "kernel.index_eq_br_args carries unexpected attributes",
+                )
             );
         }
         require_index_operand(self, context, 0)?;

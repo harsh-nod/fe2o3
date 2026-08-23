@@ -139,6 +139,54 @@ fn tensor_kernel(contract: TensorLayoutContractV1) -> ProductionRankedKernelV1 {
     .expect("valid tensor recipe")
 }
 
+fn deterministic_tensor_kernel() -> ProductionRankedKernelV1 {
+    let zero = ProductionRankedValueIdV1::new(0);
+    let summary = ProductionRankedValueIdV1::new(1);
+    ProductionRankedKernelV1::new(
+        "deterministic_tensor_control",
+        2,
+        vec![
+            ProductionRankedBlockV1::new(
+                vec![
+                    ProductionRankedOperationV1::ExecutionLayout {
+                        grid_identity: 1,
+                        global_extents: [0, 1, 1],
+                        workgroup_extents: [64, 1, 1],
+                        subgroup_size: 64,
+                    },
+                    ProductionRankedOperationV1::IndexConstant {
+                        result: zero,
+                        value: 0,
+                    },
+                    ProductionRankedOperationV1::DeterministicJoin {
+                        result: summary,
+                        dependencies: vec![
+                            ProductionRankedValueV1::Argument(0),
+                            ProductionRankedValueV1::Argument(1),
+                        ],
+                    },
+                ],
+                ProductionRankedTerminatorV1::IndexEqual {
+                    lhs: local(summary),
+                    rhs: local(zero),
+                    true_block: 1,
+                    false_block: 2,
+                },
+            ),
+            ProductionRankedBlockV1::new(
+                vec![ProductionRankedOperationV1::TensorLayout {
+                    contract: TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64(),
+                    convergence: TensorConvergenceAttr::UniformSubgroup,
+                    active_lanes: 64,
+                }],
+                ProductionRankedTerminatorV1::Branch { target: 2 },
+            ),
+            ProductionRankedBlockV1::new(vec![], ProductionRankedTerminatorV1::Return),
+        ],
+    )
+    .expect("valid deterministic control recipe")
+}
+
 fn session(with_kernel_dialect: bool) -> ProductionPlironSessionV1 {
     let registrations = if with_kernel_dialect {
         vec![
@@ -269,6 +317,80 @@ fn direct_and_independently_transformed_tensor_layouts_reach_production_lowering
                 .grants_artifact_or_launch_authority()
         );
     }
+}
+
+#[test]
+fn deterministic_control_summary_reaches_all_mandatory_passes_without_authority() {
+    let input = compile_ranked_kernel_for_lowering_v1(
+        construction(deterministic_tensor_kernel()),
+        ProductionSessionLimitsV1::default(),
+    )
+    .expect("uniform deterministic control is safe for subgroup tensor execution");
+
+    assert!(input.all_mandatory_reports_are_clean());
+    assert!(input.tensor_layout_report().is_clean());
+    assert!(input.bounds_report().is_clean());
+    assert!(!input.grants_artifact_or_launch_authority());
+    assert!(
+        !input
+            .tensor_layout_report()
+            .grants_compiler_refinement_authority()
+    );
+}
+
+#[test]
+fn deterministic_control_recipe_rejects_empty_dependencies_and_wrong_edge_arity() {
+    let empty = ProductionRankedKernelV1::new(
+        "empty_deterministic_join",
+        1,
+        vec![ProductionRankedBlockV1::new(
+            vec![ProductionRankedOperationV1::DeterministicJoin {
+                result: ProductionRankedValueIdV1::new(0),
+                dependencies: vec![],
+            }],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .unwrap_err();
+    assert_eq!(
+        empty,
+        ProductionRankedKernelErrorV1::ResourceLimit {
+            resource: "deterministic dependency",
+            limit: dialect_kernel::MAX_DETERMINISTIC_JOIN_INPUTS_V1,
+            actual: 0,
+        }
+    );
+
+    let wrong_edge = ProductionRankedKernelV1::new(
+        "wrong_equality_edge_arity",
+        2,
+        vec![
+            ProductionRankedBlockV1::new(
+                vec![],
+                ProductionRankedTerminatorV1::IndexEqualArgs {
+                    lhs: ProductionRankedValueV1::Argument(0),
+                    rhs: ProductionRankedValueV1::Argument(1),
+                    true_arguments: vec![],
+                    false_arguments: vec![],
+                    true_block: 1,
+                    false_block: 2,
+                },
+            ),
+            ProductionRankedBlockV1::with_index_arguments(
+                1,
+                vec![],
+                ProductionRankedTerminatorV1::Return,
+            ),
+            ProductionRankedBlockV1::new(vec![], ProductionRankedTerminatorV1::Return),
+        ],
+    )
+    .unwrap_err();
+    assert_eq!(
+        wrong_edge,
+        ProductionRankedKernelErrorV1::Materialization(
+            "ranked conditional branch arguments do not match successors"
+        )
+    );
 }
 
 #[test]

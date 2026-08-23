@@ -1,8 +1,10 @@
 use dialect_gpu::ExecutionLayoutOp;
 use dialect_kernel::{
-    AnalysisSplitOp, BranchArgsOp, BranchOp, DIALECT_NAME, IndexBinaryKindAttr, IndexBinaryOp,
-    IndexConstantOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexType,
-    InvocationIndexOp, ReturnOp, TensorConvergenceAttr, TensorLayoutOp, register_dialect,
+    AnalysisSplitOp, BranchArgsOp, BranchOp, CheckedTiledIndex2DOp, DIALECT_NAME,
+    DeterministicJoinOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
+    IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
+    IndexType, InvocationIndexOp, ReturnOp, TensorConvergenceAttr, TensorLayoutOp,
+    register_dialect,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckStatusV1, MAX_PLIRON_TENSOR_UNIFORMITY_VALUES_V1, PlironTensorLayoutFindingV1,
@@ -387,6 +389,212 @@ fn entry_arguments_are_independently_proven_subgroup_uniform() {
             "{name}"
         );
     }
+}
+
+#[test]
+fn deterministic_join_of_uniform_dependencies_proves_uniform_control_without_authority() {
+    let context = &mut setup();
+    let (function, arguments) = function(context, "uniform_deterministic_control", 2);
+    let entry = function.get_entry_block(context);
+    let matrix_block = block(context, &function, "matrix");
+    let exit = block(context, &function, "exit");
+    let execution = layout(context, 0, 64, 64);
+    let expected = IndexConstantOp::new(context, 0);
+    let summary = DeterministicJoinOp::new(context, arguments);
+    let choose = IndexEqualBranchOp::new(
+        context,
+        summary.result(context),
+        expected.result(context),
+        matrix_block,
+        exit,
+    );
+    let matrix = tensor(context, 64);
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &execution);
+    append(context, entry, &expected);
+    append(context, entry, &summary);
+    append(context, entry, &choose);
+    append(context, matrix_block, &matrix);
+    append(context, matrix_block, &to_exit);
+    append(context, exit, &ret);
+
+    verify_operation(function.get_operation(), context).unwrap();
+    let report = run_pliron_tensor_layout_check_v1(context, &function);
+    assert!(report.is_clean());
+    assert!(!report.grants_compiler_refinement_authority());
+    assert!(!report.grants_artifact_or_launch_authority());
+}
+
+#[test]
+fn deterministic_join_of_lane_varying_dependency_is_rejected() {
+    let context = &mut setup();
+    let (function, _) = function(context, "varying_deterministic_control", 0);
+    let entry = function.get_entry_block(context);
+    let matrix_block = block(context, &function, "matrix");
+    let exit = block(context, &function, "exit");
+    let execution = layout(context, 0, 64, 64);
+    let lane = InvocationIndexOp::new(context, 0, 0);
+    let expected = IndexConstantOp::new(context, 0);
+    let summary = DeterministicJoinOp::new(context, vec![lane.result(context)]);
+    let choose = IndexEqualBranchOp::new(
+        context,
+        summary.result(context),
+        expected.result(context),
+        matrix_block,
+        exit,
+    );
+    let matrix = tensor(context, 64);
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &execution);
+    append(context, entry, &lane);
+    append(context, entry, &expected);
+    append(context, entry, &summary);
+    append(context, entry, &choose);
+    append(context, matrix_block, &matrix);
+    append(context, matrix_block, &to_exit);
+    append(context, exit, &ret);
+
+    verify_operation(function.get_operation(), context).unwrap();
+    assert!(
+        run_pliron_tensor_layout_check_v1(context, &function)
+            .findings()
+            .iter()
+            .any(|finding| matches!(
+                finding,
+                PlironTensorLayoutFindingV1::DivergentSubgroupControl { controller: 0, .. }
+            ))
+    );
+}
+
+#[test]
+fn deterministic_join_of_unknown_dependency_fails_incomplete() {
+    let context = &mut setup();
+    let (function, _) = function(context, "unknown_deterministic_control", 0);
+    let entry = function.get_entry_block(context);
+    let matrix_block = block(context, &function, "matrix");
+    let exit = block(context, &function, "exit");
+    let execution = layout(context, 0, 64, 64);
+    let zero = IndexConstantOp::new(context, 0);
+    let sixteen = IndexConstantOp::new(context, 16);
+    let unknown = CheckedTiledIndex2DOp::new(
+        context,
+        zero.result(context),
+        zero.result(context),
+        sixteen.result(context),
+        sixteen.result(context),
+        sixteen.result(context),
+        [64, 16, 16, 4],
+    );
+    let summary = DeterministicJoinOp::new(context, vec![unknown.result(context)]);
+    let choose = IndexEqualBranchOp::new(
+        context,
+        summary.result(context),
+        zero.result(context),
+        matrix_block,
+        exit,
+    );
+    let matrix = tensor(context, 64);
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &execution);
+    append(context, entry, &zero);
+    append(context, entry, &sixteen);
+    append(context, entry, &unknown);
+    append(context, entry, &summary);
+    append(context, entry, &choose);
+    append(context, matrix_block, &matrix);
+    append(context, matrix_block, &to_exit);
+    append(context, exit, &ret);
+
+    verify_operation(function.get_operation(), context).unwrap();
+    let report = run_pliron_tensor_layout_check_v1(context, &function);
+    assert!(matches!(report.status(), KernelCheckStatusV1::Incomplete));
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete { detail }
+            if detail.contains("control-dependent on unresolved branch")
+    )));
+}
+
+#[test]
+fn empty_deterministic_join_fails_incomplete() {
+    let context = &mut setup();
+    let (function, _) = function(context, "empty_deterministic_join", 0);
+    let entry = function.get_entry_block(context);
+    let matrix_block = block(context, &function, "matrix");
+    let exit = block(context, &function, "exit");
+    let execution = layout(context, 0, 64, 64);
+    let zero = IndexConstantOp::new(context, 0);
+    let summary = DeterministicJoinOp::new(context, vec![]);
+    let choose = IndexEqualBranchOp::new(
+        context,
+        summary.result(context),
+        zero.result(context),
+        matrix_block,
+        exit,
+    );
+    let matrix = tensor(context, 64);
+    let ret_matrix = ReturnOp::new(context);
+    let ret_exit = ReturnOp::new(context);
+    append(context, entry, &execution);
+    append(context, entry, &zero);
+    append(context, entry, &summary);
+    append(context, entry, &choose);
+    append(context, matrix_block, &matrix);
+    append(context, matrix_block, &ret_matrix);
+    append(context, exit, &ret_exit);
+
+    let report = run_pliron_tensor_layout_check_v1(context, &function);
+    assert!(matches!(report.status(), KernelCheckStatusV1::Incomplete));
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete { detail }
+            if detail.contains("deterministic join has no explicit dependencies")
+    )));
+}
+
+#[test]
+fn malformed_equality_edge_operands_fail_incomplete() {
+    let context = &mut setup();
+    let (function, _) = function(context, "malformed_equality_edge", 0);
+    let entry = function.get_entry_block(context);
+    let (matrix_block, carried) = index_block(context, &function, "matrix");
+    let exit = block(context, &function, "exit");
+    let execution = layout(context, 0, 64, 64);
+    let zero = IndexConstantOp::new(context, 0);
+    let summary = DeterministicJoinOp::new(context, vec![zero.result(context)]);
+    let choose = IndexEqualBranchArgsOp::new(
+        context,
+        summary.result(context),
+        zero.result(context),
+        vec![zero.result(context)],
+        vec![],
+        matrix_block,
+        exit,
+    );
+    Operation::pop_operand(choose.get_operation(), context);
+    let matrix = tensor(context, 64);
+    let consume = IndexBinaryOp::new(context, IndexBinaryKindAttr::Add, carried, carried);
+    let ret_matrix = ReturnOp::new(context);
+    let ret_exit = ReturnOp::new(context);
+    append(context, entry, &execution);
+    append(context, entry, &zero);
+    append(context, entry, &summary);
+    append(context, entry, &choose);
+    append(context, matrix_block, &matrix);
+    append(context, matrix_block, &consume);
+    append(context, matrix_block, &ret_matrix);
+    append(context, exit, &ret_exit);
+
+    let report = run_pliron_tensor_layout_check_v1(context, &function);
+    assert!(matches!(report.status(), KernelCheckStatusV1::Incomplete));
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete { detail }
+            if detail.contains("malformed operand count")
+    )));
 }
 
 #[test]

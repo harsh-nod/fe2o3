@@ -101,6 +101,42 @@ fn branches_require_exact_successor_arguments() {
         )
         .is_err()
     );
+
+    let attributed = IndexEqualBranchOp::new(
+        context,
+        zero.result(context),
+        one.result(context),
+        empty_target,
+        empty_target,
+    );
+    attributed
+        .get_operation()
+        .deref_mut(context)
+        .attributes
+        .0
+        .insert(
+            "kernel_index_value".try_into().expect("valid key"),
+            Box::new(IndexValueAttr(0)),
+        );
+    assert!(verify_op(&attributed, context).is_err());
+
+    let foreign = AlgorithmOp::new(context, 1).unwrap();
+    let foreign_result = foreign.get_operation().deref(context).get_result(0);
+    assert!(
+        verify_op(
+            &IndexEqualBranchArgsOp::new(
+                context,
+                zero.result(context),
+                one.result(context),
+                vec![foreign_result],
+                vec![],
+                argument_target,
+                empty_target,
+            ),
+            context,
+        )
+        .is_err()
+    );
 }
 
 #[test]

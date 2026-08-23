@@ -4,8 +4,8 @@ use std::{collections::HashMap, fmt};
 
 use dialect_gpu::{AddressSpaceAttr, BarrierOp, HierarchyAttr};
 use dialect_kernel::{
-    AnalysisSplitOp, BranchArgsOp, BranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
-    ReturnOp,
+    AnalysisSplitOp, BranchArgsOp, BranchOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
+    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, ReturnOp,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -309,6 +309,10 @@ fn summarize_barrier_paths_from(
         || terminator.downcast_ref::<IndexLessThanBranchOp>().is_some()
         || terminator
             .downcast_ref::<IndexLessThanBranchArgsOp>()
+            .is_some()
+        || terminator.downcast_ref::<IndexEqualBranchOp>().is_some()
+        || terminator
+            .downcast_ref::<IndexEqualBranchArgsOp>()
             .is_some()
         || terminator.downcast_ref::<AnalysisSplitOp>().is_some()
     {
