@@ -1,10 +1,12 @@
 use dialect_gpu::ExecutionLayoutOp;
 use dialect_kernel::{
-    AnalysisSplitOp, BranchOp, DIALECT_NAME, IndexConstantOp, IndexLessThanBranchOp, IndexType,
+    AnalysisSplitOp, BranchArgsOp, BranchOp, DIALECT_NAME, IndexBinaryKindAttr, IndexBinaryOp,
+    IndexConstantOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexType,
     InvocationIndexOp, ReturnOp, TensorConvergenceAttr, TensorLayoutOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
-    KernelCheckStatusV1, PlironTensorLayoutFindingV1, run_pliron_tensor_layout_check_v1,
+    KernelCheckStatusV1, MAX_PLIRON_TENSOR_UNIFORMITY_VALUES_V1, PlironTensorLayoutFindingV1,
+    run_pliron_tensor_layout_check_v1,
 };
 use fe2o3_kernel_ir::TensorLayoutContractV1;
 use pliron::{
@@ -13,6 +15,7 @@ use pliron::{
     context::{Context, Ptr},
     dialect::DialectName,
     op::Op,
+    operation::{Operation, verify_operation},
     r#type::TypeHandle,
     value::Value,
 };
@@ -43,6 +46,14 @@ fn block(context: &mut Context, function: &FuncOp, name: &str) -> Ptr<BasicBlock
     let block = BasicBlock::new(context, Some(name.try_into().unwrap()), vec![]);
     block.insert_at_back(function.get_region(context), context);
     block
+}
+
+fn index_block(context: &mut Context, function: &FuncOp, name: &str) -> (Ptr<BasicBlock>, Value) {
+    let index: TypeHandle = IndexType::get(context).into();
+    let block = BasicBlock::new(context, Some(name.try_into().unwrap()), vec![index]);
+    let argument = block.deref(context).get_argument(0);
+    block.insert_at_back(function.get_region(context), context);
+    (block, argument)
 }
 
 fn append<O: Op>(context: &Context, block: Ptr<BasicBlock>, operation: &O) {
@@ -93,6 +104,37 @@ fn exact_traces_are_compared_only_within_authenticated_subgroups() {
     append(context, entry, &choose);
     append(context, first_subgroup, &matrix);
     append(context, first_subgroup, &to_exit);
+    append(context, exit, &ret);
+
+    assert!(run_pliron_tensor_layout_check_v1(context, &function).is_clean());
+}
+
+#[test]
+fn exact_traces_may_differ_across_authenticated_workgroups() {
+    let context = &mut setup();
+    let (function, _) = function(context, "workgroup_scoped", 0);
+    let entry = function.get_entry_block(context);
+    let first_workgroup = block(context, &function, "first_workgroup");
+    let exit = block(context, &function, "exit");
+    let execution = layout(context, 128, 64, 64);
+    let invocation = InvocationIndexOp::new(context, 0, 128);
+    let cutoff = IndexConstantOp::new(context, 64);
+    let choose = IndexLessThanBranchOp::new(
+        context,
+        invocation.result(context),
+        cutoff.result(context),
+        first_workgroup,
+        exit,
+    );
+    let matrix = tensor(context, 64);
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &execution);
+    append(context, entry, &invocation);
+    append(context, entry, &cutoff);
+    append(context, entry, &choose);
+    append(context, first_workgroup, &matrix);
+    append(context, first_workgroup, &to_exit);
     append(context, exit, &ret);
 
     assert!(run_pliron_tensor_layout_check_v1(context, &function).is_clean());
@@ -372,6 +414,200 @@ fn unresolved_cyclic_control_fails_incomplete() {
         PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete { detail }
             if detail.contains("control-dependent on unresolved branch")
     )));
+}
+
+#[test]
+fn parameter_derived_loop_induction_is_proven_subgroup_uniform() {
+    let context = &mut setup();
+    let (function, arguments) = function(context, "uniform_induction", 1);
+    let bound = arguments[0];
+    let entry = function.get_entry_block(context);
+    let (header, induction) = index_block(context, &function, "header");
+    let (body, body_induction) = index_block(context, &function, "body");
+    let exit = block(context, &function, "exit");
+    let execution = layout(context, 0, 64, 64);
+    let start = IndexConstantOp::new(context, 0);
+    let step = IndexConstantOp::new(context, 16);
+    let enter = BranchArgsOp::new(context, vec![start.result(context)], header);
+    let condition = IndexLessThanBranchArgsOp::new(
+        context,
+        induction,
+        bound,
+        vec![induction],
+        vec![],
+        body,
+        exit,
+    );
+    let matrix = tensor(context, 64);
+    let next = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        body_induction,
+        step.result(context),
+    );
+    let repeat = BranchArgsOp::new(context, vec![next.result(context)], header);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &execution);
+    append(context, entry, &start);
+    append(context, entry, &step);
+    append(context, entry, &enter);
+    append(context, header, &condition);
+    append(context, body, &matrix);
+    append(context, body, &next);
+    append(context, body, &repeat);
+    append(context, exit, &ret);
+
+    verify_operation(function.get_operation(), context).unwrap();
+    assert!(run_pliron_tensor_layout_check_v1(context, &function).is_clean());
+}
+
+#[test]
+fn lane_derived_loop_induction_is_rejected() {
+    let context = &mut setup();
+    let (function, arguments) = function(context, "varying_induction", 1);
+    let bound = arguments[0];
+    let entry = function.get_entry_block(context);
+    let (header, induction) = index_block(context, &function, "header");
+    let (body, body_induction) = index_block(context, &function, "body");
+    let exit = block(context, &function, "exit");
+    let execution = layout(context, 0, 64, 64);
+    let invocation = InvocationIndexOp::new(context, 0, 0);
+    let step = IndexConstantOp::new(context, 16);
+    let enter = BranchArgsOp::new(context, vec![invocation.result(context)], header);
+    let condition = IndexLessThanBranchArgsOp::new(
+        context,
+        induction,
+        bound,
+        vec![induction],
+        vec![],
+        body,
+        exit,
+    );
+    let matrix = tensor(context, 64);
+    let next = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        body_induction,
+        step.result(context),
+    );
+    let repeat = BranchArgsOp::new(context, vec![next.result(context)], header);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &execution);
+    append(context, entry, &invocation);
+    append(context, entry, &step);
+    append(context, entry, &enter);
+    append(context, header, &condition);
+    append(context, body, &matrix);
+    append(context, body, &next);
+    append(context, body, &repeat);
+    append(context, exit, &ret);
+
+    verify_operation(function.get_operation(), context).unwrap();
+    assert!(
+        run_pliron_tensor_layout_check_v1(context, &function)
+            .findings()
+            .iter()
+            .any(|finding| matches!(
+                finding,
+                PlironTensorLayoutFindingV1::DivergentSubgroupControl { controller: 1, .. }
+            ))
+    );
+}
+
+#[test]
+fn omitted_edge_operands_for_block_arguments_fail_incomplete() {
+    let context = &mut setup();
+    let (function, _) = function(context, "missing_edge_operand", 0);
+    let entry = function.get_entry_block(context);
+    let (header, _) = index_block(context, &function, "header");
+    let execution = layout(context, 0, 64, 64);
+    let enter = BranchOp::new(context, header);
+    let matrix = tensor(context, 64);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &execution);
+    append(context, entry, &enter);
+    append(context, header, &matrix);
+    append(context, header, &ret);
+
+    let report = run_pliron_tensor_layout_check_v1(context, &function);
+    assert!(matches!(report.status(), KernelCheckStatusV1::Incomplete));
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete { detail }
+            if detail.contains("predecessor without typed edge operands")
+    )));
+}
+
+#[test]
+fn malformed_conditional_edge_segments_fail_incomplete_without_panicking() {
+    let context = &mut setup();
+    let (function, _) = function(context, "malformed_conditional_edge", 0);
+    let entry = function.get_entry_block(context);
+    let (header, induction) = index_block(context, &function, "header");
+    let (body, _) = index_block(context, &function, "body");
+    let exit = block(context, &function, "exit");
+    let execution = layout(context, 0, 64, 64);
+    let start = IndexConstantOp::new(context, 0);
+    let bound = IndexConstantOp::new(context, 16);
+    let enter = BranchArgsOp::new(context, vec![start.result(context)], header);
+    let condition = IndexLessThanBranchArgsOp::new(
+        context,
+        induction,
+        bound.result(context),
+        vec![induction],
+        vec![],
+        body,
+        exit,
+    );
+    Operation::pop_operand(condition.get_operation(), context);
+    let matrix = tensor(context, 64);
+    let body_return = ReturnOp::new(context);
+    let exit_return = ReturnOp::new(context);
+    append(context, entry, &execution);
+    append(context, entry, &start);
+    append(context, entry, &bound);
+    append(context, entry, &enter);
+    append(context, header, &condition);
+    append(context, body, &matrix);
+    append(context, body, &body_return);
+    append(context, exit, &exit_return);
+
+    let report = run_pliron_tensor_layout_check_v1(context, &function);
+    assert!(matches!(report.status(), KernelCheckStatusV1::Incomplete));
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete { detail }
+            if detail.contains("malformed operand count")
+    )));
+}
+
+#[test]
+fn uniformity_value_resource_limit_fails_closed() {
+    let context = &mut setup();
+    let (function, _) = function(context, "uniformity_resource_limit", 0);
+    let entry = function.get_entry_block(context);
+    let execution = layout(context, 0, 64, 64);
+    let matrix = tensor(context, 64);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &execution);
+    append(context, entry, &matrix);
+    append(context, entry, &ret);
+
+    let index: TypeHandle = IndexType::get(context).into();
+    let oversized = BasicBlock::new(
+        context,
+        Some("oversized".try_into().unwrap()),
+        vec![index; MAX_PLIRON_TENSOR_UNIFORMITY_VALUES_V1 + 1],
+    );
+    oversized.insert_at_back(function.get_region(context), context);
+    let dead_return = ReturnOp::new(context);
+    append(context, oversized, &dead_return);
+
+    assert!(
+        run_pliron_tensor_layout_check_v1(context, &function)
+            .findings()
+            .contains(&PlironTensorLayoutFindingV1::ResourceLimitExceeded)
+    );
 }
 
 #[test]

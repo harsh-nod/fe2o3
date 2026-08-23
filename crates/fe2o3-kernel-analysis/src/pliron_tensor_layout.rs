@@ -7,8 +7,9 @@ use std::{
 };
 
 use dialect_kernel::{
-    AnalysisSplitOp, BranchOp, IndexLessThanBranchOp, ReturnOp, TensorConvergenceAttr,
-    TensorLayoutOp,
+    AnalysisSplitOp, BranchArgsOp, BranchOp, IndexBinaryOp, IndexConstantOp,
+    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, InvocationIndexOp, ReturnOp,
+    TensorConvergenceAttr, TensorLayoutOp,
 };
 use fe2o3_kernel_ir::{TensorLayoutFindingV1, verify_tensor_layout_contract_v1};
 use pliron::{
@@ -32,6 +33,8 @@ use crate::{
 
 pub const MAX_PLIRON_TENSOR_LAYOUT_OPERATIONS_V1: usize = 16_384;
 pub const MAX_PLIRON_TENSOR_LAYOUT_FINDINGS_V1: usize = 256;
+pub const MAX_PLIRON_TENSOR_UNIFORMITY_VALUES_V1: usize = 65_536;
+pub const MAX_PLIRON_TENSOR_UNIFORMITY_WORK_UNITS_V1: usize = 1_048_576;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PlironTensorLayoutFindingV1 {
@@ -373,7 +376,8 @@ pub fn run_pliron_tensor_layout_check_v1(
                 PlironTraceFailureV1::DynamicLaunch { .. }
                 | PlironTraceFailureV1::LaunchTooLarge { .. }
                 | PlironTraceFailureV1::UnresolvedBranch { .. }
-                | PlironTraceFailureV1::CyclicControlFlow { .. },
+                | PlironTraceFailureV1::CyclicControlFlow { .. }
+                | PlironTraceFailureV1::UnsupportedTerminator { .. },
             ) => match symbolic_subgroup_convergence(
                 context,
                 function,
@@ -454,6 +458,48 @@ enum SubgroupBranchUniformityV1 {
     Unknown,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SubgroupValueUniformityV1 {
+    Uniform,
+    Unknown,
+    Varying,
+}
+
+impl SubgroupValueUniformityV1 {
+    const fn rank(self) -> u8 {
+        match self {
+            Self::Uniform => 0,
+            Self::Unknown => 1,
+            Self::Varying => 2,
+        }
+    }
+
+    fn merge(inputs: impl IntoIterator<Item = Self>) -> Self {
+        inputs
+            .into_iter()
+            .max_by_key(|uniformity| uniformity.rank())
+            .unwrap_or(Self::Unknown)
+    }
+}
+
+enum SubgroupValueDefinitionV1 {
+    Fixed(SubgroupValueUniformityV1),
+    Merge(Vec<Value>),
+}
+
+struct PlironSubgroupUniformityV1 {
+    facts: HashMap<Value, SubgroupValueUniformityV1>,
+}
+
+impl PlironSubgroupUniformityV1 {
+    fn fact(&self, value: Value) -> SubgroupValueUniformityV1 {
+        self.facts
+            .get(&value)
+            .copied()
+            .unwrap_or(SubgroupValueUniformityV1::Unknown)
+    }
+}
+
 struct SymbolicTensorCfgV1 {
     successors: Vec<Vec<usize>>,
     branch_uniformity: Vec<SubgroupBranchUniformityV1>,
@@ -471,6 +517,7 @@ fn symbolic_subgroup_convergence(
             detail: format!("sparse predicate analysis failed: {failure:?}"),
         }
     })?;
+    let uniformity = analyze_pliron_subgroup_uniformity(context, function, layout)?;
     let blocks = function
         .get_region(context)
         .deref(context)
@@ -501,14 +548,53 @@ fn symbolic_subgroup_convergence(
         let raw = terminator.get_operation().deref(context);
         let (kind, expected_successors) = if terminator.downcast_ref::<ReturnOp>().is_some() {
             (SubgroupBranchUniformityV1::Uniform, 0)
-        } else if terminator.downcast_ref::<BranchOp>().is_some() {
+        } else if terminator.downcast_ref::<BranchOp>().is_some()
+            || terminator.downcast_ref::<BranchArgsOp>().is_some()
+        {
             (SubgroupBranchUniformityV1::Uniform, 1)
         } else if let Some(branch) = terminator.downcast_ref::<IndexLessThanBranchOp>() {
+            if raw.get_num_operands() != 2 {
+                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                    detail: format!(
+                        "block {block_index} index comparison has a malformed operand count"
+                    ),
+                });
+            }
             (
                 classify_subgroup_predicate(
                     entry,
                     layout,
                     &sparse,
+                    &uniformity,
+                    branch.lhs(context),
+                    branch.rhs(context),
+                ),
+                2,
+            )
+        } else if let Some(branch) = terminator.downcast_ref::<IndexLessThanBranchArgsOp>() {
+            if raw.get_num_successors() != 2 {
+                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                    detail: format!(
+                        "block {block_index} typed index comparison has a malformed successor count"
+                    ),
+                });
+            }
+            let expected_operands = 2
+                + raw.get_successor(0).deref(context).get_num_arguments()
+                + raw.get_successor(1).deref(context).get_num_arguments();
+            if raw.get_num_operands() != expected_operands {
+                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                    detail: format!(
+                        "block {block_index} typed index comparison has a malformed operand count"
+                    ),
+                });
+            }
+            (
+                classify_subgroup_predicate(
+                    entry,
+                    layout,
+                    &sparse,
+                    &uniformity,
                     branch.lhs(context),
                     branch.rhs(context),
                 ),
@@ -624,15 +710,25 @@ fn classify_subgroup_predicate(
     entry: Ptr<BasicBlock>,
     layout: PlironExecutionLayoutV1,
     sparse: &SparseIndexAnalysisV1,
+    uniformity: &PlironSubgroupUniformityV1,
     lhs: Value,
     rhs: Value,
 ) -> SubgroupBranchUniformityV1 {
+    if lhs == rhs {
+        return SubgroupBranchUniformityV1::Uniform;
+    }
     let lhs_is_entry_argument = value_is_entry_argument(lhs, entry);
     let rhs_is_entry_argument = value_is_entry_argument(rhs, entry);
+    let lhs_uniformity = uniformity.fact(lhs);
+    let rhs_uniformity = uniformity.fact(rhs);
     let lhs = sparse.fact(lhs);
     let rhs = sparse.fact(rhs);
-    if (lhs_is_entry_argument || sparse_fact_is_subgroup_uniform(&lhs, layout))
-        && (rhs_is_entry_argument || sparse_fact_is_subgroup_uniform(&rhs, layout))
+    if (lhs_is_entry_argument
+        || lhs_uniformity == SubgroupValueUniformityV1::Uniform
+        || sparse_fact_is_subgroup_uniform(&lhs, layout))
+        && (rhs_is_entry_argument
+            || rhs_uniformity == SubgroupValueUniformityV1::Uniform
+            || sparse_fact_is_subgroup_uniform(&rhs, layout))
     {
         return SubgroupBranchUniformityV1::Uniform;
     }
@@ -655,7 +751,187 @@ fn classify_subgroup_predicate(
     if let Some(classification) = classify_coordinate_cutoff(&rhs, &lhs, layout, false) {
         return classification;
     }
+    if matches!(
+        (lhs_uniformity, rhs_uniformity),
+        (
+            SubgroupValueUniformityV1::Varying,
+            SubgroupValueUniformityV1::Uniform
+        ) | (
+            SubgroupValueUniformityV1::Uniform,
+            SubgroupValueUniformityV1::Varying
+        )
+    ) {
+        return SubgroupBranchUniformityV1::Varying;
+    }
     SubgroupBranchUniformityV1::Unknown
+}
+
+fn analyze_pliron_subgroup_uniformity(
+    context: &Context,
+    function: &FuncOp,
+    layout: PlironExecutionLayoutV1,
+) -> Result<PlironSubgroupUniformityV1, PlironTensorLayoutFindingV1> {
+    let entry = function.get_entry_block(context);
+    let mut definitions = HashMap::<Value, SubgroupValueDefinitionV1>::new();
+    let mut definition_order = Vec::new();
+    let mut dependents = HashMap::<Value, Vec<Value>>::new();
+    let mut block_arguments = HashMap::<Ptr<BasicBlock>, Vec<Value>>::new();
+    for block in function.get_region(context).deref(context).iter(context) {
+        let arguments = block.deref(context).arguments().collect::<Vec<_>>();
+        for argument in &arguments {
+            definition_order.push(*argument);
+            definitions.insert(
+                *argument,
+                if block == entry {
+                    SubgroupValueDefinitionV1::Fixed(SubgroupValueUniformityV1::Uniform)
+                } else {
+                    SubgroupValueDefinitionV1::Merge(Vec::new())
+                },
+            );
+        }
+        block_arguments.insert(block, arguments);
+        for operation in block.deref(context).iter(context) {
+            let dynamic = Operation::get_op_dyn(operation, context);
+            let raw = operation.deref(context);
+            for result_index in 0..raw.get_num_results() {
+                let result = raw.get_result(result_index);
+                let definition = if dynamic.downcast_ref::<IndexConstantOp>().is_some() {
+                    SubgroupValueDefinitionV1::Fixed(SubgroupValueUniformityV1::Uniform)
+                } else if let Some(invocation) = dynamic.downcast_ref::<InvocationIndexOp>() {
+                    let uniformity = match invocation
+                        .dimension(context)
+                        .and_then(|dimension| usize::try_from(dimension).ok())
+                    {
+                        Some(dimension)
+                            if invocation_axis_is_subgroup_uniform(dimension, layout) =>
+                        {
+                            SubgroupValueUniformityV1::Uniform
+                        }
+                        Some(_) => SubgroupValueUniformityV1::Varying,
+                        None => SubgroupValueUniformityV1::Unknown,
+                    };
+                    SubgroupValueDefinitionV1::Fixed(uniformity)
+                } else if let Some(binary) = dynamic.downcast_ref::<IndexBinaryOp>()
+                    && raw.get_num_operands() == 2
+                {
+                    SubgroupValueDefinitionV1::Merge(vec![binary.lhs(context), binary.rhs(context)])
+                } else {
+                    SubgroupValueDefinitionV1::Fixed(SubgroupValueUniformityV1::Unknown)
+                };
+                definition_order.push(result);
+                definitions.insert(result, definition);
+            }
+        }
+    }
+    if definitions.len() > MAX_PLIRON_TENSOR_UNIFORMITY_VALUES_V1 {
+        return Err(PlironTensorLayoutFindingV1::ResourceLimitExceeded);
+    }
+
+    for block in function.get_region(context).deref(context).iter(context) {
+        let Some(terminator) = block.deref(context).get_terminator(context) else {
+            continue;
+        };
+        let dynamic = Operation::get_op_dyn(terminator, context);
+        let raw = terminator.deref(context);
+        if dynamic
+            .downcast_ref::<IndexLessThanBranchArgsOp>()
+            .is_some()
+        {
+            if raw.get_num_successors() != 2 {
+                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                    detail: "typed conditional edge has a malformed successor count".to_owned(),
+                });
+            }
+            let expected_operands = 2
+                + raw.get_successor(0).deref(context).get_num_arguments()
+                + raw.get_successor(1).deref(context).get_num_arguments();
+            if raw.get_num_operands() != expected_operands {
+                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                    detail: "typed conditional edge has a malformed operand count".to_owned(),
+                });
+            }
+        }
+        for (successor_index, successor) in raw.successors().enumerate() {
+            let Some(arguments) = block_arguments.get(&successor) else {
+                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                    detail: "a branch targets a block outside the kernel".to_owned(),
+                });
+            };
+            if arguments.is_empty() {
+                continue;
+            }
+            let incoming = if let Some(branch) = dynamic.downcast_ref::<BranchArgsOp>() {
+                branch.arguments(context)
+            } else if let Some(branch) = dynamic.downcast_ref::<IndexLessThanBranchArgsOp>() {
+                if successor_index == 0 {
+                    branch.true_arguments(context)
+                } else {
+                    branch.false_arguments(context)
+                }
+            } else {
+                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                    detail: "a block argument has a predecessor without typed edge operands"
+                        .to_owned(),
+                });
+            };
+            if incoming.len() != arguments.len() {
+                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                    detail: "typed edge operand and block argument counts differ".to_owned(),
+                });
+            }
+            for (argument, incoming) in arguments.iter().zip(incoming) {
+                let Some(SubgroupValueDefinitionV1::Merge(values)) = definitions.get_mut(argument)
+                else {
+                    return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                        detail: "an entry argument cannot receive a CFG edge operand".to_owned(),
+                    });
+                };
+                values.push(incoming);
+            }
+        }
+    }
+
+    for value in &definition_order {
+        let definition = definitions
+            .get(value)
+            .expect("ordered uniformity definition exists");
+        if let SubgroupValueDefinitionV1::Merge(inputs) = definition {
+            for input in inputs {
+                dependents.entry(*input).or_default().push(*value);
+            }
+        }
+    }
+    let mut facts = definition_order
+        .iter()
+        .copied()
+        .map(|value| (value, SubgroupValueUniformityV1::Uniform))
+        .collect::<HashMap<_, _>>();
+    let mut worklist = definition_order.into_iter().collect::<VecDeque<_>>();
+    let mut work_units = 0_usize;
+    while let Some(value) = worklist.pop_front() {
+        work_units = work_units.saturating_add(1);
+        if work_units > MAX_PLIRON_TENSOR_UNIFORMITY_WORK_UNITS_V1 {
+            return Err(PlironTensorLayoutFindingV1::ResourceLimitExceeded);
+        }
+        let next = match definitions.get(&value).expect("queued definition exists") {
+            SubgroupValueDefinitionV1::Fixed(uniformity) => *uniformity,
+            SubgroupValueDefinitionV1::Merge(inputs) => {
+                SubgroupValueUniformityV1::merge(inputs.iter().map(|input| {
+                    facts
+                        .get(input)
+                        .copied()
+                        .unwrap_or(SubgroupValueUniformityV1::Unknown)
+                }))
+            }
+        };
+        let current = facts.get_mut(&value).expect("definition has a fact");
+        if next.rank() <= current.rank() {
+            continue;
+        }
+        *current = next;
+        worklist.extend(dependents.get(&value).into_iter().flatten().copied());
+    }
+    Ok(PlironSubgroupUniformityV1 { facts })
 }
 
 fn value_is_entry_argument(value: Value, entry: Ptr<BasicBlock>) -> bool {

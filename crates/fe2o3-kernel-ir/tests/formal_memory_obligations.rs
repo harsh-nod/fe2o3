@@ -636,7 +636,12 @@ fn address_space_alias_requirements_follow_the_explicit_matrix() {
         for (right_index, right) in spaces.into_iter().enumerate() {
             let analysis = analyze(&address_space_pair_module(left, right), 1);
             let has_write = left != AddressSpace::Constant || right != AddressSpace::Constant;
-            let expected = usize::from(compatible[left_index][right_index] && has_write);
+            let expected = usize::from(
+                left != AddressSpace::Private
+                    && right != AddressSpace::Private
+                    && compatible[left_index][right_index]
+                    && has_write,
+            );
             assert!(analysis.is_complete(), "{left:?} with {right:?}");
             assert_eq!(
                 analysis.obligations().runtime_alias_requirements().len(),
@@ -804,7 +809,7 @@ fn nonlinear_gep_index_fails_closed() {
 }
 
 #[test]
-fn pointer_not_rooted_in_a_kernel_parameter_fails_closed() {
+fn private_pointer_not_rooted_in_a_kernel_parameter_is_invocation_local() {
     let access = MemoryAccess::new(AddressSpace::Private, 4);
     let private_pointer = Type::pointer(Type::F32, AddressSpace::Private, AccessMode::ReadWrite);
     let module = module_with_kernel(
@@ -833,17 +838,15 @@ fn pointer_not_rooted_in_a_kernel_parameter_fails_closed() {
     );
     let analysis = analyze(&module, 8);
 
-    assert!(analysis.incomplete_reasons().iter().any(|reason| matches!(
-        reason,
-        FormalMemoryIncompleteReason::UnsupportedMemoryEffect { .. }
-    )));
-    assert!(analysis.incomplete_reasons().iter().any(|reason| matches!(
-        reason,
-        FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
-            pointer: ValueId(1),
-            ..
-        }
-    )));
+    assert!(analysis.is_complete());
+    assert!(analysis.incomplete_reasons().is_empty());
+    assert!(analysis.obligations().accesses().is_empty());
+    assert!(
+        analysis
+            .obligations()
+            .runtime_alias_requirements()
+            .is_empty()
+    );
 }
 
 #[test]
