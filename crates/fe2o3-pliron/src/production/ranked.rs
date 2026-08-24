@@ -176,12 +176,60 @@ const FUNCTIONAL_REFINEMENT_FORMULA_DOMAIN_V2: &[u8] =
 const EFFECT_REFINEMENT_CONTRACT_DOMAIN_V2: &[u8] = b"FE2O3/PLIRON/EFFECT-REFINEMENT-CONTRACT/V2\0";
 pub const MAX_PRODUCTION_RANKED_EFFECT_INDICES_V2: usize = MAX_RANKED_MEMORY_RANK;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductionGpuWriteSiteV2 {
+    block: u32,
+    operation: u32,
+}
+
+impl ProductionGpuWriteSiteV2 {
+    pub const fn new(block: u32, operation: u32) -> Self {
+        Self { block, operation }
+    }
+    pub const fn block(self) -> u32 {
+        self.block
+    }
+    pub const fn operation(self) -> u32 {
+        self.operation
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductionReferenceOutputSiteV2 {
+    argument: u32,
+    block: u32,
+    statement: u32,
+}
+
+impl ProductionReferenceOutputSiteV2 {
+    pub const fn new(argument: u32, block: u32, statement: u32) -> Self {
+        Self {
+            argument,
+            block,
+            statement,
+        }
+    }
+    pub const fn argument(self) -> u32 {
+        self.argument
+    }
+    pub const fn block(self) -> u32 {
+        self.block
+    }
+    pub const fn statement(self) -> u32 {
+        self.statement
+    }
+}
+
 /// Workload-neutral normalized effect statement joined to one logical GPU write.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProductionEffectRefinementContractV2 {
     contract_identity: u64,
+    gpu_write_site: ProductionGpuWriteSiteV2,
+    reference_output_site: ProductionReferenceOutputSiteV2,
     view: ProductionRankedValueV1,
     indices: Vec<ProductionRankedValueV1>,
+    gpu_coordinates: Vec<ProductionRankedValueV1>,
+    reference_coordinates: Vec<ProductionRankedValueV1>,
     gpu_domain: ProductionRankedValueV1,
     reference_domain: ProductionRankedValueV1,
     gpu_precondition: ProductionRankedValueV1,
@@ -194,8 +242,12 @@ impl ProductionEffectRefinementContractV2 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         contract_identity: u64,
+        gpu_write_site: ProductionGpuWriteSiteV2,
+        reference_output_site: ProductionReferenceOutputSiteV2,
         view: ProductionRankedValueV1,
         indices: Vec<ProductionRankedValueV1>,
+        gpu_coordinates: Vec<ProductionRankedValueV1>,
+        reference_coordinates: Vec<ProductionRankedValueV1>,
         gpu_domain: ProductionRankedValueV1,
         reference_domain: ProductionRankedValueV1,
         gpu_precondition: ProductionRankedValueV1,
@@ -206,13 +258,19 @@ impl ProductionEffectRefinementContractV2 {
         if contract_identity == 0
             || indices.is_empty()
             || indices.len() > MAX_PRODUCTION_RANKED_EFFECT_INDICES_V2
+            || gpu_coordinates.len() != indices.len()
+            || reference_coordinates.len() != indices.len()
         {
             return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
         }
         Ok(Self {
             contract_identity,
+            gpu_write_site,
+            reference_output_site,
             view,
             indices,
+            gpu_coordinates,
+            reference_coordinates,
             gpu_domain,
             reference_domain,
             gpu_precondition,
@@ -225,11 +283,23 @@ impl ProductionEffectRefinementContractV2 {
     pub const fn contract_identity(&self) -> u64 {
         self.contract_identity
     }
+    pub const fn gpu_write_site(&self) -> ProductionGpuWriteSiteV2 {
+        self.gpu_write_site
+    }
+    pub const fn reference_output_site(&self) -> ProductionReferenceOutputSiteV2 {
+        self.reference_output_site
+    }
     pub const fn view(&self) -> ProductionRankedValueV1 {
         self.view
     }
     pub fn indices(&self) -> &[ProductionRankedValueV1] {
         &self.indices
+    }
+    pub fn gpu_coordinates(&self) -> &[ProductionRankedValueV1] {
+        &self.gpu_coordinates
+    }
+    pub fn reference_coordinates(&self) -> &[ProductionRankedValueV1] {
+        &self.reference_coordinates
     }
     pub const fn gpu_domain(&self) -> ProductionRankedValueV1 {
         self.gpu_domain
@@ -255,15 +325,22 @@ impl ProductionEffectRefinementContractV2 {
     pub fn request_shape_hash(&self) -> DigestV1 {
         let mut writer = CanonicalRefinementDigestV2::new(EFFECT_REFINEMENT_CONTRACT_DOMAIN_V2);
         writer.field(1, &self.contract_identity.to_le_bytes());
-        writer.value(2, self.view);
-        writer.values(3, &self.indices);
+        writer.field(2, &self.gpu_write_site.block.to_le_bytes());
+        writer.field(3, &self.gpu_write_site.operation.to_le_bytes());
+        writer.field(4, &self.reference_output_site.argument.to_le_bytes());
+        writer.field(5, &self.reference_output_site.block.to_le_bytes());
+        writer.field(6, &self.reference_output_site.statement.to_le_bytes());
+        writer.value(7, self.view);
+        writer.values(8, &self.indices);
+        writer.values(9, &self.gpu_coordinates);
+        writer.values(10, &self.reference_coordinates);
         for (tag, value) in [
-            (4, self.gpu_domain),
-            (5, self.reference_domain),
-            (6, self.gpu_precondition),
-            (7, self.reference_precondition),
-            (8, self.gpu_value),
-            (9, self.reference_value),
+            (11, self.gpu_domain),
+            (12, self.reference_domain),
+            (13, self.gpu_precondition),
+            (14, self.reference_precondition),
+            (15, self.gpu_value),
+            (16, self.reference_value),
         ] {
             writer.value(tag, value);
         }
@@ -282,8 +359,12 @@ pub fn normalized_functional_refinement_formula_hash_for_kernel_v2(
 ) -> Result<DigestV1, ProductionRankedKernelErrorV1> {
     let mut writer = CanonicalRefinementDigestV2::new(FUNCTIONAL_REFINEMENT_FORMULA_DOMAIN_V2);
     writer.kernel_header(kernel, block_index, operation_index, subjects);
-    writer.definition(kernel, 20, actual)?;
-    writer.definition(kernel, 21, expected)?;
+    writer.field(
+        12,
+        &super::middle_end_evidence_v4::derive_functional_refinement_graph_identity_v2(kernel),
+    );
+    writer.value(20, actual);
+    writer.value(21, expected);
     Ok(writer.finish())
 }
 
@@ -298,24 +379,40 @@ pub fn normalized_effect_refinement_hash_for_kernel_v2(
 ) -> Result<DigestV1, ProductionRankedKernelErrorV1> {
     let mut writer = CanonicalRefinementDigestV2::new(EFFECT_REFINEMENT_CONTRACT_DOMAIN_V2);
     writer.kernel_header(kernel, block_index, operation_index, subjects);
+    writer.field(
+        12,
+        &super::middle_end_evidence_v4::derive_functional_refinement_graph_identity_v2(kernel),
+    );
     writer.field(20, &contract.contract_identity.to_le_bytes());
-    writer.definition(kernel, 21, contract.view)?;
+    writer.field(21, &contract.gpu_write_site.block.to_le_bytes());
+    writer.field(22, &contract.gpu_write_site.operation.to_le_bytes());
+    writer.field(23, &contract.reference_output_site.argument.to_le_bytes());
+    writer.field(24, &contract.reference_output_site.block.to_le_bytes());
+    writer.field(25, &contract.reference_output_site.statement.to_le_bytes());
+    writer.value(26, contract.view);
     for (index, value) in contract.indices.iter().copied().enumerate() {
-        writer.definition(kernel, 30 + index as u16, value)?;
+        writer.value(30 + index as u16, value);
+    }
+    for (index, value) in contract.gpu_coordinates.iter().copied().enumerate() {
+        writer.value(50 + index as u16, value);
+    }
+    for (index, value) in contract.reference_coordinates.iter().copied().enumerate() {
+        writer.value(70 + index as u16, value);
     }
     for (tag, value) in [
-        (60, contract.gpu_domain),
-        (61, contract.reference_domain),
-        (62, contract.gpu_precondition),
-        (63, contract.reference_precondition),
-        (64, contract.gpu_value),
-        (65, contract.reference_value),
+        (90, contract.gpu_domain),
+        (91, contract.reference_domain),
+        (92, contract.gpu_precondition),
+        (93, contract.reference_precondition),
+        (94, contract.gpu_value),
+        (95, contract.reference_value),
     ] {
-        writer.definition(kernel, tag, value)?;
+        writer.value(tag, value);
     }
 
     let mut writes = Vec::new();
     let mut ownership = Vec::new();
+    let mut unmodeled_matching_write = false;
     for (candidate_block, block) in kernel.blocks.iter().enumerate() {
         for (candidate_operation, operation) in block.operations.iter().enumerate() {
             match operation {
@@ -326,6 +423,18 @@ pub fn normalized_effect_refinement_hash_for_kernel_v2(
                 } if kind.writes_memory()
                     && *view == contract.view
                     && indices == &contract.indices =>
+                {
+                    unmodeled_matching_write = true;
+                }
+                ProductionRankedOperationV1::ValueAccess {
+                    kind,
+                    view,
+                    indices,
+                    value,
+                } if kind.writes_memory()
+                    && *view == contract.view
+                    && indices == &contract.indices
+                    && *value == contract.gpu_value =>
                 {
                     writes.push((
                         candidate_block,
@@ -344,6 +453,20 @@ pub fn normalized_effect_refinement_hash_for_kernel_v2(
                 } if kind.writes_memory()
                     && *view == contract.view
                     && indices == &contract.indices =>
+                {
+                    unmodeled_matching_write = true;
+                }
+                ProductionRankedOperationV1::AtomicValueAccess {
+                    kind,
+                    ordering,
+                    scope,
+                    view,
+                    indices,
+                    value,
+                } if kind.writes_memory()
+                    && *view == contract.view
+                    && indices == &contract.indices
+                    && *value == contract.gpu_value =>
                 {
                     writes.push((
                         candidate_block,
@@ -369,10 +492,15 @@ pub fn normalized_effect_refinement_hash_for_kernel_v2(
             }
         }
     }
-    if writes.len() != 1 || ownership.len() != 1 {
+    if unmodeled_matching_write || writes.len() != 1 || ownership.len() != 1 {
         return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
     }
     let write = writes[0];
+    if write.0 != contract.gpu_write_site.block as usize
+        || write.1 != contract.gpu_write_site.operation as usize
+    {
+        return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+    }
     for (tag, value) in [
         (80, write.0 as u64),
         (81, write.1 as u64),
@@ -434,172 +562,6 @@ impl CanonicalRefinementDigestV2 {
         }
     }
 
-    fn definition(
-        &mut self,
-        kernel: &ProductionRankedKernelV1,
-        tag: u16,
-        value: ProductionRankedValueV1,
-    ) -> Result<(), ProductionRankedKernelErrorV1> {
-        let mut nested = CanonicalRefinementDigestV2::new(b"FE2O3/PLIRON/VALUE-DAG/V2\0");
-        let mut active = BTreeSet::new();
-        nested.definition_inner(kernel, value, &mut active, 0)?;
-        self.field(tag, nested.finish().as_bytes());
-        Ok(())
-    }
-
-    fn definition_inner(
-        &mut self,
-        kernel: &ProductionRankedKernelV1,
-        value: ProductionRankedValueV1,
-        active: &mut BTreeSet<ProductionRankedValueIdV1>,
-        depth: usize,
-    ) -> Result<(), ProductionRankedKernelErrorV1> {
-        if depth > MAX_RANKED_BOUNDS_OPERATIONS {
-            return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
-        }
-        self.value(1, value);
-        let ProductionRankedValueV1::Local(identity) = value else {
-            return Ok(());
-        };
-        if !active.insert(identity) {
-            return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
-        }
-        let definition = kernel
-            .blocks
-            .iter()
-            .flat_map(|block| &block.operations)
-            .find(|operation| operation_result_identity(operation) == Some(identity))
-            .ok_or(ProductionRankedKernelErrorV1::InvalidReferenceContract)?;
-        match definition {
-            ProductionRankedOperationV1::View {
-                element_width,
-                writable,
-                shape,
-                dynamic_extents,
-                allocation_origin,
-                noalias_class,
-                ..
-            }
-            | ProductionRankedOperationV1::ViewInSpace {
-                element_width,
-                writable,
-                shape,
-                dynamic_extents,
-                allocation_origin,
-                noalias_class,
-                ..
-            } => {
-                self.field(10, &element_width.to_le_bytes());
-                self.field(11, &[u8::from(*writable)]);
-                self.u64s(12, shape);
-                self.field(13, &allocation_origin.to_le_bytes());
-                self.field(14, &noalias_class.to_le_bytes());
-                let space = match definition {
-                    ProductionRankedOperationV1::View { .. } => MemorySpaceAttr::Global,
-                    ProductionRankedOperationV1::ViewInSpace { memory_space, .. } => *memory_space,
-                    _ => unreachable!(),
-                };
-                self.field(15, &[memory_space_tag(space)]);
-                for (index, extent) in dynamic_extents.iter().copied().enumerate() {
-                    self.definition_inner(kernel, extent, active, depth + 1)?;
-                    self.field(16, &(index as u64).to_le_bytes());
-                }
-            }
-            ProductionRankedOperationV1::IndexConstant { value, .. } => {
-                self.field(20, &value.to_le_bytes())
-            }
-            ProductionRankedOperationV1::IndexUnknown { .. } => self.field(21, &[]),
-            ProductionRankedOperationV1::InvocationIndex {
-                dimension,
-                launch_extent,
-                ..
-            } => {
-                self.field(22, &dimension.to_le_bytes());
-                self.field(23, &launch_extent.to_le_bytes());
-            }
-            ProductionRankedOperationV1::IndexBinary { kind, lhs, rhs, .. } => {
-                self.field(24, &[index_binary_tag(*kind)]);
-                self.definition_inner(kernel, *lhs, active, depth + 1)?;
-                self.definition_inner(kernel, *rhs, active, depth + 1)?;
-            }
-            ProductionRankedOperationV1::DeterministicJoin { dependencies, .. } => {
-                self.field(25, &(dependencies.len() as u64).to_le_bytes());
-                for dependency in dependencies {
-                    self.definition_inner(kernel, *dependency, active, depth + 1)?;
-                }
-            }
-            ProductionRankedOperationV1::CheckedTiledIndex2D {
-                invocation,
-                component,
-                rows,
-                columns,
-                row_stride,
-                lanes_per_tile,
-                tile_rows,
-                tile_columns,
-                elements_per_lane,
-                ..
-            } => {
-                self.u64s(
-                    26,
-                    &[
-                        *lanes_per_tile,
-                        *tile_rows,
-                        *tile_columns,
-                        *elements_per_lane,
-                    ],
-                );
-                for operand in [invocation, component, rows, columns, row_stride] {
-                    self.definition_inner(kernel, *operand, active, depth + 1)?;
-                }
-            }
-            ProductionRankedOperationV1::CheckedRowStripedIndex2D {
-                invocation,
-                component,
-                rows,
-                columns,
-                row_stride,
-                lanes_per_row,
-                elements_per_lane,
-                ..
-            } => {
-                self.u64s(27, &[*lanes_per_row, *elements_per_lane]);
-                for operand in [invocation, component, rows, columns, row_stride] {
-                    self.definition_inner(kernel, *operand, active, depth + 1)?;
-                }
-            }
-            ProductionRankedOperationV1::Dimension {
-                view, dimension, ..
-            } => {
-                self.field(28, &dimension.to_le_bytes());
-                self.definition_inner(kernel, *view, active, depth + 1)?;
-            }
-            ProductionRankedOperationV1::SemanticSymbol { symbol, .. } => {
-                self.field(30, &symbol.to_le_bytes())
-            }
-            ProductionRankedOperationV1::SemanticConstant { value, .. } => {
-                self.field(31, &value.to_le_bytes())
-            }
-            ProductionRankedOperationV1::SemanticBinary { kind, lhs, rhs, .. } => {
-                self.field(32, &[semantic_binary_tag_v2(*kind)]);
-                self.definition_inner(kernel, *lhs, active, depth + 1)?;
-                self.definition_inner(kernel, *rhs, active, depth + 1)?;
-            }
-            _ => return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract),
-        }
-        active.remove(&identity);
-        Ok(())
-    }
-
-    fn u64s(&mut self, tag: u16, values: &[u64]) {
-        let mut bytes = Vec::with_capacity(8 + values.len() * 8);
-        bytes.extend_from_slice(&(values.len() as u64).to_le_bytes());
-        for value in values {
-            bytes.extend_from_slice(&value.to_le_bytes());
-        }
-        self.field(tag, &bytes);
-    }
-
     fn value(&mut self, tag: u16, value: ProductionRankedValueV1) {
         let mut bytes = Vec::with_capacity(9);
         match value {
@@ -650,27 +612,6 @@ impl CanonicalRefinementDigestV2 {
     }
 }
 
-fn operation_result_identity(
-    operation: &ProductionRankedOperationV1,
-) -> Option<ProductionRankedValueIdV1> {
-    match operation {
-        ProductionRankedOperationV1::View { result, .. }
-        | ProductionRankedOperationV1::ViewInSpace { result, .. }
-        | ProductionRankedOperationV1::IndexConstant { result, .. }
-        | ProductionRankedOperationV1::IndexUnknown { result }
-        | ProductionRankedOperationV1::InvocationIndex { result, .. }
-        | ProductionRankedOperationV1::IndexBinary { result, .. }
-        | ProductionRankedOperationV1::DeterministicJoin { result, .. }
-        | ProductionRankedOperationV1::CheckedTiledIndex2D { result, .. }
-        | ProductionRankedOperationV1::CheckedRowStripedIndex2D { result, .. }
-        | ProductionRankedOperationV1::Dimension { result, .. }
-        | ProductionRankedOperationV1::SemanticSymbol { result, .. }
-        | ProductionRankedOperationV1::SemanticConstant { result, .. }
-        | ProductionRankedOperationV1::SemanticBinary { result, .. } => Some(*result),
-        _ => None,
-    }
-}
-
 fn access_kind_tag(kind: AccessKindAttr) -> u8 {
     match kind {
         AccessKindAttr::Read => 1,
@@ -678,27 +619,6 @@ fn access_kind_tag(kind: AccessKindAttr) -> u8 {
         AccessKindAttr::AtomicRead => 3,
         AccessKindAttr::AtomicWrite => 4,
         AccessKindAttr::AtomicReadModifyWrite => 5,
-    }
-}
-fn memory_space_tag(space: MemorySpaceAttr) -> u8 {
-    match space {
-        MemorySpaceAttr::Private => 1,
-        MemorySpaceAttr::Workgroup => 2,
-        MemorySpaceAttr::Global => 3,
-    }
-}
-fn index_binary_tag(kind: IndexBinaryKindAttr) -> u8 {
-    match kind {
-        IndexBinaryKindAttr::Add => 1,
-        IndexBinaryKindAttr::Multiply => 2,
-        IndexBinaryKindAttr::Remainder => 3,
-        IndexBinaryKindAttr::Divide => 4,
-    }
-}
-fn semantic_binary_tag_v2(kind: SemanticBinaryKindAttr) -> u8 {
-    match kind {
-        SemanticBinaryKindAttr::Add => 1,
-        SemanticBinaryKindAttr::Multiply => 2,
     }
 }
 fn ownership_coverage_tag(coverage: OwnershipCoverageAttr) -> u8 {
@@ -914,12 +834,31 @@ pub enum ProductionRankedOperationV1 {
         view: ProductionRankedValueV1,
         indices: Vec<ProductionRankedValueV1>,
     },
+    /// A non-atomic access whose exact semantic write RHS is retained.
+    ///
+    /// Functional-effect refinement accepts only this value-carrying form for
+    /// writes, so a detached proof formula cannot stand in for the actual RHS.
+    ValueAccess {
+        kind: AccessKindAttr,
+        view: ProductionRankedValueV1,
+        indices: Vec<ProductionRankedValueV1>,
+        value: ProductionRankedValueV1,
+    },
     AtomicAccess {
         kind: AccessKindAttr,
         ordering: AtomicOrderingAttr,
         scope: AtomicScopeAttr,
         view: ProductionRankedValueV1,
         indices: Vec<ProductionRankedValueV1>,
+    },
+    /// An atomic access whose exact semantic write RHS is retained.
+    AtomicValueAccess {
+        kind: AccessKindAttr,
+        ordering: AtomicOrderingAttr,
+        scope: AtomicScopeAttr,
+        view: ProductionRankedValueV1,
+        indices: Vec<ProductionRankedValueV1>,
+        value: ProductionRankedValueV1,
     },
     /// Requests a workload-neutral proof of write ownership across invocation,
     /// subgroup, workgroup, and grid scopes for one global output view.
@@ -1786,6 +1725,19 @@ fn validate_operation(
             validate_access(*kind, *view, indices, argument_count, locals)?;
             Ok(None)
         }
+        ProductionRankedOperationV1::ValueAccess {
+            kind,
+            view,
+            indices,
+            value,
+        } => {
+            if kind.is_atomic() || !kind.writes_memory() {
+                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+            }
+            validate_access(*kind, *view, indices, argument_count, locals)?;
+            require_semantic(*value, argument_count, locals)?;
+            Ok(None)
+        }
         ProductionRankedOperationV1::AtomicAccess {
             kind,
             view,
@@ -1796,6 +1748,20 @@ fn validate_operation(
                 return Err(ProductionRankedKernelErrorV1::NonAtomicKindForAtomicAccess);
             }
             validate_access(*kind, *view, indices, argument_count, locals)?;
+            Ok(None)
+        }
+        ProductionRankedOperationV1::AtomicValueAccess {
+            kind,
+            view,
+            indices,
+            value,
+            ..
+        } => {
+            if !kind.is_atomic() || !kind.writes_memory() {
+                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+            }
+            validate_access(*kind, *view, indices, argument_count, locals)?;
+            require_semantic(*value, argument_count, locals)?;
             Ok(None)
         }
         ProductionRankedOperationV1::OwnershipContract { view, .. } => {
@@ -1851,14 +1817,20 @@ fn validate_operation(
             for index in contract.indices() {
                 require_index(*index, argument_count, locals)?;
             }
-            for value in [
-                contract.gpu_domain(),
-                contract.reference_domain(),
-                contract.gpu_precondition(),
-                contract.reference_precondition(),
-                contract.gpu_value(),
-                contract.reference_value(),
-            ] {
+            for value in contract
+                .gpu_coordinates()
+                .iter()
+                .chain(contract.reference_coordinates())
+                .copied()
+                .chain([
+                    contract.gpu_domain(),
+                    contract.reference_domain(),
+                    contract.gpu_precondition(),
+                    contract.reference_precondition(),
+                    contract.gpu_value(),
+                    contract.reference_value(),
+                ])
+            {
                 require_semantic(value, argument_count, locals)?;
             }
             Ok(None)
@@ -1967,6 +1939,24 @@ fn validate_block_argument_values_v1(
                 validate(*value)?;
             }
         }
+        ProductionRankedOperationV1::ValueAccess {
+            view,
+            indices,
+            value,
+            ..
+        }
+        | ProductionRankedOperationV1::AtomicValueAccess {
+            view,
+            indices,
+            value,
+            ..
+        } => {
+            validate(*view)?;
+            for index in indices {
+                validate(*index)?;
+            }
+            validate(*value)?;
+        }
         ProductionRankedOperationV1::RequireEquivalent { actual, expected }
         | ProductionRankedOperationV1::RequireReferenceEquivalent {
             actual, expected, ..
@@ -1987,14 +1977,21 @@ fn validate_block_argument_values_v1(
         ProductionRankedOperationV1::RequireEffectRefinement { contract, .. }
         | ProductionRankedOperationV1::RequestEffectRefinement { contract, .. } => {
             validate(contract.view())?;
-            for value in contract.indices().iter().copied().chain([
-                contract.gpu_domain(),
-                contract.reference_domain(),
-                contract.gpu_precondition(),
-                contract.reference_precondition(),
-                contract.gpu_value(),
-                contract.reference_value(),
-            ]) {
+            for value in contract
+                .indices()
+                .iter()
+                .chain(contract.gpu_coordinates())
+                .chain(contract.reference_coordinates())
+                .copied()
+                .chain([
+                    contract.gpu_domain(),
+                    contract.reference_domain(),
+                    contract.gpu_precondition(),
+                    contract.reference_precondition(),
+                    contract.gpu_value(),
+                    contract.reference_value(),
+                ])
+            {
                 validate(value)?;
             }
         }
@@ -2916,6 +2913,12 @@ fn materialize_operation(
             kind,
             view,
             indices,
+        }
+        | ProductionRankedOperationV1::ValueAccess {
+            kind,
+            view,
+            indices,
+            ..
         } => {
             let indices = indices
                 .iter()
@@ -2940,6 +2943,14 @@ fn materialize_operation(
             scope,
             view,
             indices,
+        }
+        | ProductionRankedOperationV1::AtomicValueAccess {
+            kind,
+            ordering,
+            scope,
+            view,
+            indices,
+            ..
         } => {
             let indices = indices
                 .iter()
@@ -3164,6 +3175,16 @@ fn materialize_operation(
                 resolve_value(contract.view(), arguments, locals, block_arguments)?,
                 contract
                     .indices()
+                    .iter()
+                    .map(|value| resolve_value(*value, arguments, locals, block_arguments))
+                    .collect::<Result<Vec<_>, _>>()?,
+                contract
+                    .gpu_coordinates()
+                    .iter()
+                    .map(|value| resolve_value(*value, arguments, locals, block_arguments))
+                    .collect::<Result<Vec<_>, _>>()?,
+                contract
+                    .reference_coordinates()
                     .iter()
                     .map(|value| resolve_value(*value, arguments, locals, block_arguments))
                     .collect::<Result<Vec<_>, _>>()?,

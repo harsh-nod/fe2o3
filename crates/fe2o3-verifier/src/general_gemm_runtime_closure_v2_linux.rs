@@ -21,9 +21,10 @@ use crate::authenticated_verus_execution_v2::{
     FILE_LIMIT_V2, supervise_bounded_process_group_v2, validate_controller_security_v2,
 };
 
+#[cfg(test)]
+use super::GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME;
 use super::{
-    EntryKindV2, FileSpecV2, GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME,
-    GeneralGemmProofSourceV2, GeneralGemmRuntimeClosureErrorKindV2,
+    EntryKindV2, FileSpecV2, GeneralGemmProofSourceV2, GeneralGemmRuntimeClosureErrorKindV2,
     GeneralGemmRuntimeClosureErrorV2, GeneralGemmRuntimeProcessOutputV2, InterpreterSpecV2,
     MAX_TARGET_FILE_BYTES, ManifestV2,
 };
@@ -277,12 +278,10 @@ impl RetainedRuntimeClosureV2 {
         let root_directory = directories
             .get(Path::new(""))
             .expect("retained runtime root exists");
-        let installed_manifest = open_regular_beneath(
-            &root_directory.file,
-            OsStr::new(GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME),
-        )?;
+        let installed_manifest =
+            open_regular_beneath(&root_directory.file, OsStr::new(manifest.manifest_name))?;
         let manifest_spec = FileSpecV2 {
-            path: PathBuf::from(GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME),
+            path: PathBuf::from(manifest.manifest_name),
             mode: manifest.manifest_mode,
             size: Some(manifest.manifest_bytes.len() as u64),
             sha256: Sha256::digest(manifest.manifest_bytes).into(),
@@ -536,7 +535,7 @@ fn execute_rust_verify_common(
     if Instant::now() >= deadline {
         return Err(error(
             GeneralGemmRuntimeClosureErrorKindV2::TimedOut,
-            "general GEMM proof deadline elapsed before spawn",
+            "retained proof deadline elapsed before spawn",
         ));
     }
 
@@ -546,11 +545,10 @@ fn execute_rust_verify_common(
     let toolchain = runtime.required_directory(Path::new("toolchain"))?;
     let toolchain_lib = runtime.required_directory(Path::new("toolchain/lib"))?;
     let system_lib = runtime.required_directory(Path::new("system-lib"))?;
-    let proof = runtime.required_directory(Path::new("proof"))?;
     let empty = runtime.required_directory(Path::new("empty"))?;
 
-    // Normalize all source descriptors above the fixed child map. This prevents an ambient
-    // descriptor allocation pattern from making one dup2 destination overwrite a later source.
+    // Generated proofs do not inherit the reviewed workload-source directory. This keeps their
+    // execution authority limited to the pinned tool assets and their sealed source.
     let mut source_files = vec![
         rust_verify,
         z3,
@@ -558,12 +556,20 @@ fn execute_rust_verify_common(
         toolchain,
         toolchain_lib,
         system_lib,
-        proof,
         empty,
     ];
-    if let Some(generated_source) = generated_source {
+    let proof_index = if generated_source.is_none() {
+        let index = source_files.len();
+        source_files.push(runtime.required_directory(Path::new("proof"))?);
+        Some(index)
+    } else {
+        None
+    };
+    let generated_index = generated_source.map(|generated_source| {
+        let index = source_files.len();
         source_files.push(generated_source);
-    }
+        index
+    });
     let sources = duplicate_child_sources(&source_files)?;
     let mut inherited = vec![
         (sources[0].as_raw_fd(), RUST_VERIFY_FD, true),
@@ -572,12 +578,14 @@ fn execute_rust_verify_common(
         (sources[3].as_raw_fd(), TOOLCHAIN_DIRECTORY_FD, false),
         (sources[4].as_raw_fd(), TOOLCHAIN_LIB_DIRECTORY_FD, false),
         (sources[5].as_raw_fd(), SYSTEM_LIB_DIRECTORY_FD, false),
-        (sources[6].as_raw_fd(), PROOF_DIRECTORY_FD, false),
     ];
-    if generated_source.is_some() {
-        inherited.push((sources[8].as_raw_fd(), GENERATED_PROOF_SOURCE_FD, false));
+    if let Some(index) = proof_index {
+        inherited.push((sources[index].as_raw_fd(), PROOF_DIRECTORY_FD, false));
     }
-    let empty_descriptor = sources[7].as_raw_fd();
+    if let Some(index) = generated_index {
+        inherited.push((sources[index].as_raw_fd(), GENERATED_PROOF_SOURCE_FD, false));
+    }
+    let empty_descriptor = sources[6].as_raw_fd();
 
     let mut command = Command::new(format!("/proc/self/fd/{RUST_VERIFY_FD}"));
     command

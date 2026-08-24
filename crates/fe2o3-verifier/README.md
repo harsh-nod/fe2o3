@@ -428,6 +428,19 @@ caller-provided and its two direct stages do not prove a real Verus-to-solver
 invocation relationship. Both sealed paths currently require Linux
 `memfd_create`, `fcntl` seals, ptrace/pidfd support, and `/proc`.
 
+Compiler-generated functional-refinement proofs use the separate
+FunctionalRefinementVerusRuntimeLeaseV1. Its retained manifest contains only
+the exact verifier, solver, Rust toolchain/target files, system libraries, and
+empty directory. It contains no workload proof sources, and the generated
+proof child receives only a sealed source descriptor. The canonical obligation
+binds the complete ranked graph, including CFG/control dependencies, execution
+layout, GPU/reference write sites, semantic RHS and coordinate/value formulas,
+and the ownership contract. The mandatory V2 pipeline recomputes effect and
+hierarchy witnesses from that graph; those reports are not receipt-attested
+shortcuts. A proved effect is partial correctness unless the freshly computed
+ownership result also proves exact total output coverage. This is MIR/effect
+evidence only, not source-to-MIR, source-to-ISA, artifact, or launch authority.
+
 The general-GEMM V2 runner is narrower than the public authenticated V2
 protocol. It accepts only a same-process `GeneralGemmVerusRuntimeClosureLeaseV2`
 over the exact protected `/opt/fe2o3/verus-runtime-v2/<version>` closure. It

@@ -448,6 +448,7 @@ struct EffectContractV1 {
     view: Value,
     view_name: String,
     indices: Vec<Value>,
+    coordinates: Vec<(Value, Value)>,
     expressions: [Value; 6],
 }
 
@@ -700,7 +701,12 @@ pub(crate) fn run_pliron_effect_refinement_with_analyses_v1(
         }
         let write = write_by_contract[index].expect("correlated contract has write");
         let witness = witness_by_write.get(&write).cloned();
-        let pairs = [
+        let mut pairs = contract
+            .coordinates
+            .iter()
+            .map(|(actual, expected)| ("coordinate", *actual, *expected))
+            .collect::<Vec<_>>();
+        pairs.extend([
             ("domain", contract.expressions[0], contract.expressions[1]),
             (
                 "precondition",
@@ -708,7 +714,7 @@ pub(crate) fn run_pliron_effect_refinement_with_analyses_v1(
                 contract.expressions[3],
             ),
             ("value", contract.expressions[4], contract.expressions[5]),
-        ];
+        ]);
         let mut valid = true;
         for (component, actual, expected) in pairs {
             let Some(actual_description) = expressions.describe_value(actual) else {
@@ -811,6 +817,11 @@ fn collect(context: &Context, function: &FuncOp) -> CollectedV1 {
                     view,
                     view_name: view.unique_name(context).to_string(),
                     indices: contract.indices(context),
+                    coordinates: contract
+                        .gpu_coordinates(context)
+                        .into_iter()
+                        .zip(contract.reference_coordinates(context))
+                        .collect(),
                     expressions: [
                         contract.gpu_domain(context),
                         contract.reference_domain(context),

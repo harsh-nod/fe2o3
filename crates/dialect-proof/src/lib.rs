@@ -529,6 +529,8 @@ impl RequireEffectRefinementOp {
         obligation_id: ProofIdAttr,
         view: Value,
         indices: Vec<Value>,
+        gpu_coordinates: Vec<Value>,
+        reference_coordinates: Vec<Value>,
         gpu_domain: Value,
         reference_domain: Value,
         gpu_precondition: Value,
@@ -536,9 +538,11 @@ impl RequireEffectRefinementOp {
         gpu_value: Value,
         reference_value: Value,
     ) -> Self {
-        let mut operands = Vec::with_capacity(indices.len() + 7);
+        let mut operands = Vec::with_capacity(indices.len() * 3 + 7);
         operands.push(view);
         operands.extend(indices);
+        operands.extend(gpu_coordinates);
+        operands.extend(reference_coordinates);
         operands.extend([
             gpu_domain,
             reference_domain,
@@ -580,13 +584,35 @@ impl RequireEffectRefinementOp {
             .collect()
     }
 
+    pub fn gpu_coordinates(&self, context: &Context) -> Vec<Value> {
+        let rank = ranked_view_type(self.view(context), context)
+            .map(|view| view.deref(context).rank())
+            .unwrap_or(0);
+        let operation = self.get_operation();
+        let operation = operation.deref(context);
+        (1 + rank..1 + rank * 2)
+            .map(|operand| operation.get_operand(operand))
+            .collect()
+    }
+
+    pub fn reference_coordinates(&self, context: &Context) -> Vec<Value> {
+        let rank = ranked_view_type(self.view(context), context)
+            .map(|view| view.deref(context).rank())
+            .unwrap_or(0);
+        let operation = self.get_operation();
+        let operation = operation.deref(context);
+        (1 + rank * 2..1 + rank * 3)
+            .map(|operand| operation.get_operand(operand))
+            .collect()
+    }
+
     fn semantic_operand(&self, context: &Context, offset: usize) -> Value {
         let rank = ranked_view_type(self.view(context), context)
             .map(|view| view.deref(context).rank())
             .unwrap_or(0);
         self.get_operation()
             .deref(context)
-            .get_operand(1 + rank + offset)
+            .get_operand(1 + rank * 3 + offset)
     }
 
     pub fn gpu_domain(&self, context: &Context) -> Value {
@@ -632,7 +658,7 @@ impl Verify for RequireEffectRefinementOp {
             );
         };
         let rank = view_type.deref(context).rank();
-        verify_closed_shape_with_operands(self, context, rank + 7, 1)?;
+        verify_closed_shape_with_operands(self, context, rank * 3 + 7, 1)?;
         required_attr(
             self,
             context,
@@ -648,7 +674,7 @@ impl Verify for RequireEffectRefinementOp {
                 );
             }
         }
-        for operand in rank + 1..rank + 7 {
+        for operand in rank + 1..rank * 3 + 7 {
             if !operation
                 .get_operand(operand)
                 .get_type(context)

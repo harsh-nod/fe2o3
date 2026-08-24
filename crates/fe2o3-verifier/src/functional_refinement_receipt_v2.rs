@@ -7,9 +7,10 @@
 //! the compiler frontend.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     error::Error,
     fmt,
+    fmt::Write as _,
     time::{Duration, Instant},
 };
 
@@ -32,13 +33,17 @@ use fe2o3_proof_contracts::DigestV1;
 use rand_core::OsRng;
 use sha2::{Digest, Sha256};
 
-use crate::{
-    CanonicalGeneratedVerusProofInputV3, GeneralGemmRuntimeClosureErrorV2,
-    GeneralGemmRuntimeProcessOutputV2, GeneralGemmVerusRuntimeClosureLeaseV2,
+use crate::functional_refinement_runtime_v1::{
+    FunctionalRefinementRuntimeProcessOutputV1, FunctionalRefinementVerusRuntimeLeaseV1,
 };
+use crate::{CanonicalGeneratedVerusProofInputV3, FunctionalRefinementRuntimeErrorV1};
 
 pub const MAX_FUNCTIONAL_REFINEMENT_VERUS_TIMEOUT_SECONDS_V2: u32 = 600;
 pub const MAX_FUNCTIONAL_REFINEMENT_VERUS_OUTPUT_BYTES_V2: usize = 16 * 1024;
+pub const MAX_FUNCTIONAL_REFINEMENT_FORMULA_NODES_V2: usize = 8_192;
+pub const MAX_FUNCTIONAL_REFINEMENT_FORMULA_EDGES_V2: usize = 16_384;
+pub const MAX_FUNCTIONAL_REFINEMENT_FORMULA_WORK_V2: usize = 32_768;
+pub const MAX_FUNCTIONAL_REFINEMENT_FORMULA_DEPTH_V2: usize = 512;
 
 const VERUS_EXECUTABLE_SHA256: [u8; 32] = [
     0xd1, 0xb6, 0x1f, 0xde, 0xd9, 0x13, 0x28, 0xc7, 0xdd, 0x7b, 0xf4, 0x9d, 0x26, 0x4a, 0xdc, 0x6e,
@@ -55,7 +60,7 @@ const EXECUTION_IDENTITY_DOMAIN: &[u8] = b"FE2O3/FUNCTIONAL-REFINEMENT/VERUS-EXE
 
 /// Returns the exact toolchain identity enforced by the retained runtime lease.
 pub fn functional_refinement_verus_toolchain_identity_v2(
-    runtime: &GeneralGemmVerusRuntimeClosureLeaseV2,
+    runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
 ) -> Result<VerusToolchainIdentityV2, FunctionalRefinementVerusExecutionErrorV2> {
     runtime
         .revalidate()
@@ -82,7 +87,7 @@ pub fn functional_refinement_verus_toolchain_identity_v2(
 /// producer deliberately supports only the reference-MIR to kernel-MIR boundary; a source hash is
 /// not evidence of source-to-MIR refinement.
 fn execute_functional_refinement_verus_and_prepare_receipt_v2(
-    runtime: &GeneralGemmVerusRuntimeClosureLeaseV2,
+    runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
     source: CanonicalGeneratedVerusProofInputV3,
     binding: FunctionalRefinementBindingV2,
     signer_identity: DigestV1,
@@ -148,7 +153,7 @@ impl PreparedFunctionalRefinementReceiptV2 {
 /// Generates Verus source from the ranked semantic DAG and executes it through
 /// the retained runtime. There is no caller-provided source parameter.
 pub fn prepare_ranked_functional_refinement_receipt_v2(
-    runtime: &GeneralGemmVerusRuntimeClosureLeaseV2,
+    runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
     kernel: &ProductionRankedKernelV1,
     block_index: usize,
     operation_index: usize,
@@ -174,7 +179,7 @@ pub fn prepare_ranked_functional_refinement_receipt_v2(
 
 /// Local compilation path with an ephemeral compiler-owned trust root.
 pub fn execute_and_import_ranked_functional_refinement_locally_v2(
-    runtime: &GeneralGemmVerusRuntimeClosureLeaseV2,
+    runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
     kernel: &ProductionRankedKernelV1,
     block_index: usize,
     operation_index: usize,
@@ -257,50 +262,37 @@ fn generate_ranked_functional_refinement_proof_v2(
         ProductionRankedOperationV1::RequestEffectRefinement {
             contract,
             subjects: request_subjects,
-        } if *request_subjects == subjects => (
-            normalized_effect_refinement_hash_for_kernel_v2(
+        } if *request_subjects == subjects => {
+            let obligation = normalized_effect_refinement_hash_for_kernel_v2(
                 kernel,
                 block_index,
                 operation_index,
                 contract,
                 subjects,
             )
-            .map_err(|_| invalid_ranked_recipe())?,
-            vec![
+            .map_err(|_| invalid_ranked_recipe())?;
+            let mut pairs = contract
+                .gpu_coordinates()
+                .iter()
+                .copied()
+                .zip(contract.reference_coordinates().iter().copied())
+                .collect::<Vec<_>>();
+            pairs.extend([
                 (contract.gpu_domain(), contract.reference_domain()),
                 (
                     contract.gpu_precondition(),
                     contract.reference_precondition(),
                 ),
                 (contract.gpu_value(), contract.reference_value()),
-            ],
-        ),
+            ]);
+            (obligation, pairs)
+        }
         _ => return Err(invalid_ranked_recipe()),
     };
     let binding = FunctionalRefinementBindingV2::from_subjects(subjects, obligation)
         .map_err(FunctionalRefinementVerusExecutionErrorV2::receipt)?;
-    let mut symbols = BTreeSet::new();
-    let mut rendered = Vec::new();
-    for (actual, expected) in pairs {
-        let actual =
-            render_ranked_semantic_formula(kernel, actual, &mut symbols, &mut BTreeSet::new())?;
-        let expected =
-            render_ranked_semantic_formula(kernel, expected, &mut symbols, &mut BTreeSet::new())?;
-        rendered.push((actual, expected));
-    }
-    let parameters = symbols
-        .iter()
-        .map(|symbol| format!("s{symbol}: int"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let ensures = rendered
-        .iter()
-        .map(|(actual, expected)| format!("        ({actual}) == ({expected})"))
-        .collect::<Vec<_>>()
-        .join(",\n");
-    let source = format!(
-        "use vstd::prelude::*;\n\nverus! {{\n    proof fn fe2o3_functional_refinement_v2({parameters})\n        ensures\n{ensures}\n    {{\n    }}\n}}\n\nfn main() {{}}\n"
-    );
+    let program = SemanticFormulaProgramV2::build(kernel, &pairs)?;
+    let source = program.render(&pairs)?;
     let source =
         CanonicalGeneratedVerusProofInputV3::new(source.into_bytes()).map_err(|error| {
             FunctionalRefinementVerusExecutionErrorV2 {
@@ -311,48 +303,264 @@ fn generate_ranked_functional_refinement_proof_v2(
     Ok((binding, source))
 }
 
-fn render_ranked_semantic_formula(
-    kernel: &ProductionRankedKernelV1,
-    value: ProductionRankedValueV1,
-    symbols: &mut BTreeSet<u32>,
-    active: &mut BTreeSet<ProductionRankedValueIdV1>,
-) -> Result<String, FunctionalRefinementVerusExecutionErrorV2> {
-    let ProductionRankedValueV1::Local(identity) = value else {
-        return Err(invalid_ranked_recipe());
-    };
-    if !active.insert(identity) {
-        return Err(invalid_ranked_recipe());
+#[derive(Clone, Copy)]
+enum SemanticDefinitionV2 {
+    Symbol(u32),
+    Constant(i128),
+    Binary(
+        dialect_kernel::SemanticBinaryKindAttr,
+        ProductionRankedValueV1,
+        ProductionRankedValueV1,
+    ),
+}
+
+impl SemanticDefinitionV2 {
+    fn dependencies(self) -> [Option<ProductionRankedValueV1>; 2] {
+        match self {
+            Self::Symbol(_) | Self::Constant(_) => [None, None],
+            Self::Binary(_, lhs, rhs) => [Some(lhs), Some(rhs)],
+        }
     }
-    let definition = kernel
-        .blocks()
-        .iter()
-        .flat_map(|block| block.operations())
-        .find(|operation| match operation {
-            ProductionRankedOperationV1::SemanticSymbol { result, .. }
-            | ProductionRankedOperationV1::SemanticConstant { result, .. }
-            | ProductionRankedOperationV1::SemanticBinary { result, .. } => *result == identity,
-            _ => false,
-        })
-        .ok_or_else(invalid_ranked_recipe)?;
-    let rendered = match definition {
-        ProductionRankedOperationV1::SemanticSymbol { symbol, .. } => {
-            symbols.insert(*symbol);
-            format!("s{symbol}")
-        }
-        ProductionRankedOperationV1::SemanticConstant { value, .. } => value.to_string(),
-        ProductionRankedOperationV1::SemanticBinary { kind, lhs, rhs, .. } => {
-            let lhs = render_ranked_semantic_formula(kernel, *lhs, symbols, active)?;
-            let rhs = render_ranked_semantic_formula(kernel, *rhs, symbols, active)?;
-            let operator = match kind {
-                dialect_kernel::SemanticBinaryKindAttr::Add => "+",
-                dialect_kernel::SemanticBinaryKindAttr::Multiply => "*",
+}
+
+struct SemanticFormulaProgramV2 {
+    definitions: BTreeMap<ProductionRankedValueIdV1, SemanticDefinitionV2>,
+    order: Vec<ProductionRankedValueIdV1>,
+    symbols: BTreeSet<u32>,
+}
+
+impl SemanticFormulaProgramV2 {
+    fn build(
+        kernel: &ProductionRankedKernelV1,
+        pairs: &[(ProductionRankedValueV1, ProductionRankedValueV1)],
+    ) -> Result<Self, FunctionalRefinementVerusExecutionErrorV2> {
+        let mut definitions = BTreeMap::new();
+        for operation in kernel.blocks().iter().flat_map(|block| block.operations()) {
+            let definition = match operation {
+                ProductionRankedOperationV1::SemanticSymbol { result, symbol } => {
+                    Some((*result, SemanticDefinitionV2::Symbol(*symbol)))
+                }
+                ProductionRankedOperationV1::SemanticConstant { result, value } => {
+                    Some((*result, SemanticDefinitionV2::Constant(i128::from(*value))))
+                }
+                ProductionRankedOperationV1::SemanticBinary {
+                    result,
+                    kind,
+                    lhs,
+                    rhs,
+                } => Some((*result, SemanticDefinitionV2::Binary(*kind, *lhs, *rhs))),
+                _ => None,
             };
-            format!("({lhs} {operator} {rhs})")
+            if let Some((identity, definition)) = definition {
+                if definitions.len() >= MAX_FUNCTIONAL_REFINEMENT_FORMULA_NODES_V2 {
+                    return Err(formula_resource_limit());
+                }
+                if definitions.insert(identity, definition).is_some() {
+                    return Err(invalid_ranked_recipe());
+                }
+            }
         }
-        _ => unreachable!(),
-    };
-    active.remove(&identity);
-    Ok(rendered)
+
+        let mut state = BTreeMap::<ProductionRankedValueIdV1, u8>::new();
+        let mut depths = BTreeMap::<ProductionRankedValueIdV1, usize>::new();
+        let mut order = Vec::new();
+        let mut symbols = BTreeSet::new();
+        let mut edge_count = 0_usize;
+        let mut work = 0_usize;
+        for root in pairs
+            .iter()
+            .flat_map(|(actual, expected)| [actual, expected])
+        {
+            let ProductionRankedValueV1::Local(root) = *root else {
+                return Err(invalid_ranked_recipe());
+            };
+            let mut stack = vec![(root, false)];
+            while let Some((identity, expanded)) = stack.pop() {
+                work = work.checked_add(1).ok_or_else(formula_resource_limit)?;
+                if work > MAX_FUNCTIONAL_REFINEMENT_FORMULA_WORK_V2 {
+                    return Err(formula_resource_limit());
+                }
+                if expanded {
+                    let definition = *definitions
+                        .get(&identity)
+                        .ok_or_else(invalid_ranked_recipe)?;
+                    let mut depth = 1_usize;
+                    for dependency in definition.dependencies().into_iter().flatten() {
+                        let ProductionRankedValueV1::Local(dependency) = dependency else {
+                            return Err(invalid_ranked_recipe());
+                        };
+                        depth = depth.max(
+                            depths
+                                .get(&dependency)
+                                .copied()
+                                .ok_or_else(invalid_ranked_recipe)?
+                                .checked_add(1)
+                                .ok_or_else(formula_resource_limit)?,
+                        );
+                    }
+                    if depth > MAX_FUNCTIONAL_REFINEMENT_FORMULA_DEPTH_V2 {
+                        return Err(formula_resource_limit());
+                    }
+                    if let SemanticDefinitionV2::Symbol(symbol) = definition {
+                        symbols.insert(symbol);
+                    }
+                    depths.insert(identity, depth);
+                    state.insert(identity, 2);
+                    order.push(identity);
+                    continue;
+                }
+                match state.get(&identity).copied() {
+                    Some(1) => return Err(invalid_ranked_recipe()),
+                    Some(2) => continue,
+                    _ => {}
+                }
+                if state.len() >= MAX_FUNCTIONAL_REFINEMENT_FORMULA_NODES_V2 {
+                    return Err(formula_resource_limit());
+                }
+                let definition = *definitions
+                    .get(&identity)
+                    .ok_or_else(invalid_ranked_recipe)?;
+                state.insert(identity, 1);
+                stack.push((identity, true));
+                let dependencies = definition.dependencies();
+                let added_edges = dependencies.iter().flatten().count();
+                edge_count = edge_count
+                    .checked_add(added_edges)
+                    .ok_or_else(formula_resource_limit)?;
+                if edge_count > MAX_FUNCTIONAL_REFINEMENT_FORMULA_EDGES_V2 {
+                    return Err(formula_resource_limit());
+                }
+                for dependency in dependencies.into_iter().flatten().rev() {
+                    let ProductionRankedValueV1::Local(dependency) = dependency else {
+                        return Err(invalid_ranked_recipe());
+                    };
+                    stack.push((dependency, false));
+                }
+            }
+        }
+        Ok(Self {
+            definitions,
+            order,
+            symbols,
+        })
+    }
+
+    fn render(
+        &self,
+        pairs: &[(ProductionRankedValueV1, ProductionRankedValueV1)],
+    ) -> Result<String, FunctionalRefinementVerusExecutionErrorV2> {
+        let mut source = BoundedVerusSourceV2::default();
+        write!(
+            source,
+            "use vstd::prelude::*;\n\nverus! {{\n    proof fn fe2o3_functional_refinement_v2("
+        )
+        .map_err(|_| generated_source_limit())?;
+        for (index, symbol) in self.symbols.iter().enumerate() {
+            if index != 0 {
+                source
+                    .write_str(", ")
+                    .map_err(|_| generated_source_limit())?;
+            }
+            write!(source, "s{symbol}: int").map_err(|_| generated_source_limit())?;
+        }
+        source
+            .write_str(") {\n")
+            .map_err(|_| generated_source_limit())?;
+        for identity in &self.order {
+            let definition = self
+                .definitions
+                .get(identity)
+                .copied()
+                .ok_or_else(invalid_ranked_recipe)?;
+            match definition {
+                SemanticDefinitionV2::Symbol(symbol) => {
+                    writeln!(source, "        let v{}: int = s{symbol};", identity.get())
+                }
+                SemanticDefinitionV2::Constant(value) => {
+                    writeln!(source, "        let v{}: int = {value};", identity.get())
+                }
+                SemanticDefinitionV2::Binary(kind, lhs, rhs) => {
+                    let (ProductionRankedValueV1::Local(lhs), ProductionRankedValueV1::Local(rhs)) =
+                        (lhs, rhs)
+                    else {
+                        return Err(invalid_ranked_recipe());
+                    };
+                    let operator = match kind {
+                        dialect_kernel::SemanticBinaryKindAttr::Add => "+",
+                        dialect_kernel::SemanticBinaryKindAttr::Multiply => "*",
+                    };
+                    writeln!(
+                        source,
+                        "        let v{}: int = v{} {operator} v{};",
+                        identity.get(),
+                        lhs.get(),
+                        rhs.get()
+                    )
+                }
+            }
+            .map_err(|_| generated_source_limit())?;
+        }
+        for (actual, expected) in pairs {
+            let (ProductionRankedValueV1::Local(actual), ProductionRankedValueV1::Local(expected)) =
+                (*actual, *expected)
+            else {
+                return Err(invalid_ranked_recipe());
+            };
+            writeln!(
+                source,
+                "        assert(v{} == v{});",
+                actual.get(),
+                expected.get()
+            )
+            .map_err(|_| generated_source_limit())?;
+        }
+        source
+            .write_str("    }\n}\n\nfn main() {}\n")
+            .map_err(|_| generated_source_limit())?;
+        Ok(source.into_string())
+    }
+}
+
+#[derive(Default)]
+struct BoundedVerusSourceV2 {
+    source: String,
+}
+
+impl BoundedVerusSourceV2 {
+    fn into_string(self) -> String {
+        self.source
+    }
+}
+
+impl fmt::Write for BoundedVerusSourceV2 {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        let length = self
+            .source
+            .len()
+            .checked_add(text.len())
+            .ok_or(fmt::Error)?;
+        if length > crate::MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3 {
+            return Err(fmt::Error);
+        }
+        self.source.push_str(text);
+        Ok(())
+    }
+}
+
+fn formula_resource_limit() -> FunctionalRefinementVerusExecutionErrorV2 {
+    FunctionalRefinementVerusExecutionErrorV2 {
+        kind: FunctionalRefinementVerusExecutionErrorKindV2::InvalidRankedProofRecipe,
+        detail: Some(
+            "semantic formula DAG exceeds its node, edge, work, or depth bound".to_owned(),
+        ),
+    }
+}
+
+fn generated_source_limit() -> FunctionalRefinementVerusExecutionErrorV2 {
+    FunctionalRefinementVerusExecutionErrorV2 {
+        kind: FunctionalRefinementVerusExecutionErrorKindV2::GeneratedSource,
+        detail: Some("generated Verus source exceeds its byte bound".to_owned()),
+    }
 }
 
 fn invalid_ranked_recipe() -> FunctionalRefinementVerusExecutionErrorV2 {
@@ -362,7 +570,7 @@ fn invalid_ranked_recipe() -> FunctionalRefinementVerusExecutionErrorV2 {
 }
 
 fn validate_proved_output(
-    observed: &GeneralGemmRuntimeProcessOutputV2,
+    observed: &FunctionalRefinementRuntimeProcessOutputV1,
 ) -> Result<(), FunctionalRefinementVerusExecutionErrorV2> {
     let prefix = b"verification results:: ";
     let suffix = b" verified, 0 errors\n";
@@ -392,10 +600,10 @@ fn validate_proved_output(
 }
 
 fn execution_identity(
-    runtime: &GeneralGemmVerusRuntimeClosureLeaseV2,
+    runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
     source: &CanonicalGeneratedVerusProofInputV3,
     binding: FunctionalRefinementBindingV2,
-    observed: &GeneralGemmRuntimeProcessOutputV2,
+    observed: &FunctionalRefinementRuntimeProcessOutputV1,
 ) -> DigestV1 {
     let mut digest = Sha256::new();
     digest.update(EXECUTION_IDENTITY_DOMAIN);
@@ -457,7 +665,7 @@ impl FunctionalRefinementVerusExecutionErrorV2 {
         Self { kind, detail: None }
     }
 
-    fn runtime(error: GeneralGemmRuntimeClosureErrorV2) -> Self {
+    fn runtime(error: FunctionalRefinementRuntimeErrorV1) -> Self {
         Self {
             kind: FunctionalRefinementVerusExecutionErrorKindV2::Runtime,
             detail: Some(error.to_string()),
@@ -497,8 +705,12 @@ mod tests {
         ProductionRankedBlockV1, ProductionRankedOperationV1, ProductionRankedTerminatorV1,
     };
 
-    fn output(exit_code: i32, stdout: &[u8], stderr: &[u8]) -> GeneralGemmRuntimeProcessOutputV2 {
-        GeneralGemmRuntimeProcessOutputV2 {
+    fn output(
+        exit_code: i32,
+        stdout: &[u8],
+        stderr: &[u8],
+    ) -> FunctionalRefinementRuntimeProcessOutputV1 {
+        FunctionalRefinementRuntimeProcessOutputV1 {
             exit_code: Some(exit_code),
             signal: None,
             stdout: stdout.to_vec(),
@@ -565,6 +777,44 @@ mod tests {
         .unwrap()
     }
 
+    fn shared_formula_kernel(depth: usize) -> (ProductionRankedKernelV1, usize) {
+        let local = ProductionRankedValueV1::Local;
+        let mut operations = vec![ProductionRankedOperationV1::SemanticSymbol {
+            result: ProductionRankedValueIdV1::new(0),
+            symbol: 0,
+        }];
+        for identity in 1..=depth {
+            let previous = ProductionRankedValueIdV1::new((identity - 1) as u32);
+            operations.push(ProductionRankedOperationV1::SemanticBinary {
+                result: ProductionRankedValueIdV1::new(identity as u32),
+                kind: SemanticBinaryKindAttr::Add,
+                lhs: local(previous),
+                rhs: local(previous),
+            });
+        }
+        let result = local(ProductionRankedValueIdV1::new(depth as u32));
+        let request = operations.len();
+        operations.push(
+            ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
+                actual: result,
+                expected: result,
+                subjects: subjects(),
+            },
+        );
+        (
+            ProductionRankedKernelV1::new(
+                "shared_formula",
+                0,
+                vec![ProductionRankedBlockV1::new(
+                    operations,
+                    ProductionRankedTerminatorV1::Return,
+                )],
+            )
+            .unwrap(),
+            request,
+        )
+    }
+
     #[test]
     fn only_exact_nonzero_verified_success_is_proved() {
         validate_proved_output(&output(
@@ -597,7 +847,9 @@ mod tests {
         let (positive_binding, positive_source) =
             generate_ranked_functional_refinement_proof_v2(&positive, 0, 4, subjects()).unwrap();
         let source = std::str::from_utf8(positive_source.source()).unwrap();
-        assert!(source.contains("((s0 + s1)) == ((s1 + s0))"));
+        assert!(source.contains("let v2: int = v0 + v1;"));
+        assert!(source.contains("let v3: int = v1 + v0;"));
+        assert!(source.contains("assert(v2 == v3);"));
         assert_ne!(
             positive_binding.normalized_obligation_effect_ir_hash(),
             digest(20)
@@ -609,12 +861,70 @@ mod tests {
         assert!(
             std::str::from_utf8(mutated_source.source())
                 .unwrap()
-                .contains("((s1 * s0))")
+                .contains("let v3: int = v1 * v0;")
         );
         assert_ne!(positive_source.source(), mutated_source.source());
         assert_ne!(
             positive_binding.normalized_obligation_effect_ir_hash(),
             mutated_binding.normalized_obligation_effect_ir_hash(),
         );
+    }
+
+    #[test]
+    fn shared_formula_dag_renders_once_per_node() {
+        let (kernel, request) = shared_formula_kernel(128);
+        let (_, source) =
+            generate_ranked_functional_refinement_proof_v2(&kernel, 0, request, subjects())
+                .unwrap();
+        let source = std::str::from_utf8(source.source()).unwrap();
+        assert_eq!(source.matches("        let v").count(), 129);
+        assert!(source.len() < 16 * 1024);
+    }
+
+    #[test]
+    fn overdeep_formula_dag_fails_before_source_construction() {
+        let (kernel, request) = shared_formula_kernel(MAX_FUNCTIONAL_REFINEMENT_FORMULA_DEPTH_V2);
+        let error = generate_ranked_functional_refinement_proof_v2(&kernel, 0, request, subjects())
+            .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            FunctionalRefinementVerusExecutionErrorKindV2::InvalidRankedProofRecipe
+        );
+        assert!(error.to_string().contains("depth bound"));
+    }
+
+    #[test]
+    fn oversized_semantic_inventory_fails_before_source_construction() {
+        let local = ProductionRankedValueV1::Local;
+        let mut operations = (0..=MAX_FUNCTIONAL_REFINEMENT_FORMULA_NODES_V2)
+            .map(|identity| ProductionRankedOperationV1::SemanticConstant {
+                result: ProductionRankedValueIdV1::new(identity as u32),
+                value: identity as u64,
+            })
+            .collect::<Vec<_>>();
+        let request = operations.len();
+        operations.push(
+            ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
+                actual: local(ProductionRankedValueIdV1::new(0)),
+                expected: local(ProductionRankedValueIdV1::new(0)),
+                subjects: subjects(),
+            },
+        );
+        let kernel = ProductionRankedKernelV1::new(
+            "oversized_semantic_inventory",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                operations,
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap();
+        let error = generate_ranked_functional_refinement_proof_v2(&kernel, 0, request, subjects())
+            .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            FunctionalRefinementVerusExecutionErrorKindV2::InvalidRankedProofRecipe
+        );
+        assert!(error.to_string().contains("node"));
     }
 }

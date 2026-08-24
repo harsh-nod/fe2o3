@@ -248,6 +248,8 @@ fn effect_function(
         ProofIdAttr::new(OBLIGATION),
         view.result(context),
         vec![contract_index],
+        vec![expressions[0]],
+        vec![expressions[0]],
         expressions[0],
         expressions[1],
         expressions[2],

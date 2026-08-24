@@ -18,13 +18,14 @@ use fe2o3_kernel_ir::{TensorInstructionProfileV1, TensorLayoutContractV1, Tensor
 use fe2o3_pliron::{
     DialectRegistration, HARD_MAX_SESSION_OPERATION_TREE_ITEMS, ProductionConstructionV1,
     ProductionEffectRefinementContractV2, ProductionFunctionalRefinementAdmissionErrorV2,
-    ProductionFunctionalRefinementTrustPolicyV2, ProductionPlironSessionV1,
-    ProductionRankedBlockV1, ProductionRankedCompileErrorV1, ProductionRankedCompileErrorV2,
-    ProductionRankedKernelErrorV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
-    ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
-    ProductionReferenceProofV1, ProductionReferenceProofV2, ProductionSessionErrorV1,
-    ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
-    compile_ranked_kernel_for_lowering_v2, normalized_effect_refinement_hash_for_kernel_v2,
+    ProductionFunctionalRefinementTrustPolicyV2, ProductionGpuWriteSiteV2,
+    ProductionPlironSessionV1, ProductionRankedBlockV1, ProductionRankedCompileErrorV1,
+    ProductionRankedCompileErrorV2, ProductionRankedKernelErrorV1, ProductionRankedKernelV1,
+    ProductionRankedOperationV1, ProductionRankedTerminatorV1, ProductionRankedValueIdV1,
+    ProductionRankedValueV1, ProductionReferenceOutputSiteV2, ProductionReferenceProofV1,
+    ProductionReferenceProofV2, ProductionSessionErrorV1, ProductionSessionLimitsV1,
+    compile_ranked_kernel_for_lowering_v1, compile_ranked_kernel_for_lowering_v2,
+    normalized_effect_refinement_hash_for_kernel_v2,
     normalized_functional_refinement_formula_hash_for_kernel_v2,
 };
 use fe2o3_proof_contracts::DigestV1;
@@ -814,7 +815,7 @@ fn authenticated_mir_reference_reaches_the_production_pipeline() {
     let rhs = ProductionRankedValueIdV1::new(1);
     let actual = ProductionRankedValueIdV1::new(2);
     let expected = ProductionRankedValueIdV1::new(3);
-    let kernel = || {
+    let kernel = |terminator| {
         ProductionRankedKernelV1::new(
             "authenticated_reference",
             0,
@@ -846,12 +847,12 @@ fn authenticated_mir_reference_reaches_the_production_pipeline() {
                         subjects: functional_subjects(4),
                     },
                 ],
-                ProductionRankedTerminatorV1::Return,
+                terminator,
             )],
         )
         .unwrap()
     };
-    let placeholder_kernel = kernel();
+    let placeholder_kernel = kernel(ProductionRankedTerminatorV1::Return);
     let obligation = normalized_functional_refinement_formula_hash_for_kernel_v2(
         &placeholder_kernel,
         0,
@@ -861,12 +862,25 @@ fn authenticated_mir_reference_reaches_the_production_pipeline() {
         functional_subjects(4),
     )
     .unwrap();
+    let changed_terminator = kernel(ProductionRankedTerminatorV1::Trap);
+    assert_ne!(
+        obligation,
+        normalized_functional_refinement_formula_hash_for_kernel_v2(
+            &changed_terminator,
+            0,
+            4,
+            local(actual),
+            local(expected),
+            functional_subjects(4),
+        )
+        .unwrap()
+    );
     let (_, unbound_imported, unbound_policy) = imported_reference(
         functional_binding(4, obligation),
         FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
     );
     let unbound_error = compile_ranked_kernel_for_lowering_v2(
-        construction(kernel()),
+        construction(kernel(ProductionRankedTerminatorV1::Return)),
         ProductionSessionLimitsV1::default(),
         vec![unbound_imported],
         unbound_policy,
@@ -906,6 +920,59 @@ fn authenticated_mir_reference_reaches_the_production_pipeline() {
     assert!(!input.grants_compiler_refinement_authority());
     assert!(!input.authenticated_functional_refinement()[0].grants_source_to_isa_authority());
     assert!(!input.authenticated_functional_refinement()[0].grants_artifact_or_launch_authority());
+}
+
+#[test]
+fn functional_refinement_transcript_binds_control_dependencies() {
+    let actual = ProductionRankedValueIdV1::new(0);
+    let expected = ProductionRankedValueIdV1::new(1);
+    let kernel = |dependency| {
+        ProductionRankedKernelV1::new(
+            "control_dependency_binding",
+            2,
+            vec![
+                ProductionRankedBlockV1::new(
+                    vec![
+                        ProductionRankedOperationV1::SemanticSymbol {
+                            result: actual,
+                            symbol: 0,
+                        },
+                        ProductionRankedOperationV1::SemanticSymbol {
+                            result: expected,
+                            symbol: 0,
+                        },
+                        ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
+                            actual: local(actual),
+                            expected: local(expected),
+                            subjects: functional_subjects(4),
+                        },
+                    ],
+                    ProductionRankedTerminatorV1::AnalysisSplit {
+                        control_dependencies: vec![ProductionRankedValueV1::Argument(dependency)],
+                        first_block: 1,
+                        second_block: 2,
+                    },
+                ),
+                ProductionRankedBlockV1::new(vec![], ProductionRankedTerminatorV1::Return),
+                ProductionRankedBlockV1::new(vec![], ProductionRankedTerminatorV1::Return),
+            ],
+        )
+        .unwrap()
+    };
+    let first = kernel(0);
+    let second = kernel(1);
+    let digest = |kernel: &ProductionRankedKernelV1| {
+        normalized_functional_refinement_formula_hash_for_kernel_v2(
+            kernel,
+            0,
+            2,
+            local(actual),
+            local(expected),
+            functional_subjects(4),
+        )
+        .unwrap()
+    };
+    assert_ne!(digest(&first), digest(&second));
 }
 
 #[test]
@@ -1000,16 +1067,33 @@ fn authenticated_effect_refinement_reaches_the_same_production_pipeline() {
     let view = ProductionRankedValueIdV1::new(0);
     let index = ProductionRankedValueIdV1::new(1);
     let formula = ProductionRankedValueIdV1::new(2);
-    let kernel = |allocation_origin| {
+    let alternate_formula = ProductionRankedValueIdV1::new(3);
+    let kernel = |allocation_origin,
+                  grid_identity,
+                  reference_statement,
+                  alternate_coordinate,
+                  alternate_rhs| {
         let contract = ProductionEffectRefinementContractV2::new(
             91,
+            ProductionGpuWriteSiteV2::new(0, 5),
+            ProductionReferenceOutputSiteV2::new(2, 3, reference_statement),
             local(view),
             vec![local(index)],
+            vec![local(if alternate_coordinate {
+                alternate_formula
+            } else {
+                formula
+            })],
+            vec![local(formula)],
             local(formula),
             local(formula),
             local(formula),
             local(formula),
-            local(formula),
+            local(if alternate_rhs {
+                alternate_formula
+            } else {
+                formula
+            }),
             local(formula),
         )
         .unwrap();
@@ -1019,7 +1103,7 @@ fn authenticated_effect_refinement_reaches_the_same_production_pipeline() {
             vec![ProductionRankedBlockV1::new(
                 vec![
                     ProductionRankedOperationV1::ExecutionLayout {
-                        grid_identity: 1,
+                        grid_identity,
                         global_extents: [1, 1, 1],
                         workgroup_extents: [1, 1, 1],
                         subgroup_size: 1,
@@ -1038,19 +1122,28 @@ fn authenticated_effect_refinement_reaches_the_same_production_pipeline() {
                         result: index,
                         value: 0,
                     },
-                    ProductionRankedOperationV1::Access {
+                    ProductionRankedOperationV1::SemanticConstant {
+                        result: formula,
+                        value: 1,
+                    },
+                    ProductionRankedOperationV1::SemanticConstant {
+                        result: alternate_formula,
+                        value: 2,
+                    },
+                    ProductionRankedOperationV1::ValueAccess {
                         kind: AccessKindAttr::Write,
                         view: local(view),
                         indices: vec![local(index)],
+                        value: local(if alternate_rhs {
+                            alternate_formula
+                        } else {
+                            formula
+                        }),
                     },
                     ProductionRankedOperationV1::OwnershipContract {
                         view: local(view),
                         coverage: OwnershipCoverageAttr::ExactView,
                         partition: OwnershipPartitionAttr::ExactSets,
-                    },
-                    ProductionRankedOperationV1::SemanticConstant {
-                        result: formula,
-                        value: 1,
                     },
                     ProductionRankedOperationV1::RequestEffectRefinement {
                         contract,
@@ -1062,25 +1155,25 @@ fn authenticated_effect_refinement_reaches_the_same_production_pipeline() {
         )
         .unwrap()
     };
-    let skeleton = kernel(1);
+    let skeleton = kernel(1, 1, 4, false, false);
     let ProductionRankedOperationV1::RequestEffectRefinement { contract, .. } =
-        &skeleton.blocks()[0].operations()[6]
+        &skeleton.blocks()[0].operations()[7]
     else {
         unreachable!()
     };
     let obligation = normalized_effect_refinement_hash_for_kernel_v2(
         &skeleton,
         0,
-        6,
+        7,
         contract,
         functional_subjects(4),
     )
     .unwrap();
-    let mutated = kernel(2);
+    let mutated = kernel(2, 1, 4, false, false);
     let ProductionRankedOperationV1::RequestEffectRefinement {
         contract: mutated_contract,
         ..
-    } = &mutated.blocks()[0].operations()[6]
+    } = &mutated.blocks()[0].operations()[7]
     else {
         unreachable!()
     };
@@ -1089,18 +1182,43 @@ fn authenticated_effect_refinement_reaches_the_same_production_pipeline() {
         normalized_effect_refinement_hash_for_kernel_v2(
             &mutated,
             0,
-            6,
+            7,
             mutated_contract,
             functional_subjects(4),
         )
         .unwrap()
     );
+    for changed in [
+        kernel(1, 2, 4, false, false),
+        kernel(1, 1, 5, false, false),
+        kernel(1, 1, 4, true, false),
+        kernel(1, 1, 4, false, true),
+    ] {
+        let ProductionRankedOperationV1::RequestEffectRefinement {
+            contract: changed_contract,
+            ..
+        } = &changed.blocks()[0].operations()[7]
+        else {
+            unreachable!()
+        };
+        assert_ne!(
+            obligation,
+            normalized_effect_refinement_hash_for_kernel_v2(
+                &changed,
+                0,
+                7,
+                changed_contract,
+                functional_subjects(4),
+            )
+            .unwrap()
+        );
+    }
     let (proof, imported, policy) = imported_reference(
         functional_binding(4, obligation),
         FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
     );
     let bound = skeleton
-        .bind_functional_refinement_request_v2(0, 6, proof)
+        .bind_functional_refinement_request_v2(0, 7, proof)
         .unwrap();
     let input = compile_ranked_kernel_for_lowering_v2(
         construction(bound),
