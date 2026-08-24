@@ -8,7 +8,6 @@ use fe2o3_device::{
 };
 
 pub const MOE_EXPERT_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
-pub const MOE_MAX_REDUCTION_PHASES_V1: u32 = u32::MAX;
 
 fn matrix_extent(rows: u32, columns: u32, stride: u32) -> usize {
     if rows == 0 || columns == 0 {
@@ -75,13 +74,7 @@ pub fn moe_grouped_expert_general_v1(
     {
         return Err(KernelError::InvalidArgument);
     }
-    let gates = StridedReadView2D::from_shared_slice(
-        route_gates,
-        0,
-        rows_padded as usize,
-        1,
-        1,
-    )?;
+    let gates = StridedReadView2D::from_shared_slice(route_gates, 0, rows_padded as usize, 1, 1)?;
     let biases = StridedReadView2D::from_shared_slice(
         expert_bias,
         expert as usize * bias_stride as usize,
@@ -94,7 +87,7 @@ pub fn moe_grouped_expert_general_v1(
     let raw = thread_index.get();
     let lane = raw % 64;
     let lane_column = lane % 16;
-    let tiles_per_row = (output_columns as usize + 15) / 16;
+    let tiles_per_row = (output_columns as usize).div_ceil(16);
     let tile = raw / 64;
     let tile_row = tile / tiles_per_row;
     let tile_column = tile % tiles_per_row;

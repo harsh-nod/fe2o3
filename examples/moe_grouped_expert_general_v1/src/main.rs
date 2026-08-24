@@ -1,17 +1,18 @@
 use fe2o3_core::{DeviceBuffer, GpuContext, GpuModule, LaunchConfig, Stream};
 use fe2o3_device::Bf16;
 use fe2o3_host::launch;
+use fe2o3_moe_grouped_expert_general_v1::kernel::MOE_EXPERT_WORKGROUP_V1;
 use std::path::PathBuf;
 
-const TOKENS: u32 = 17;
-const EXPERTS: u32 = 3;
-const REDUCTION: u32 = 18;
-const OUTPUT_COLUMNS: u32 = 19;
-const TOKEN_STRIDE: u32 = 23;
-const WEIGHT_STRIDE: u32 = 29;
+const TOKENS: u32 = 41;
+const EXPERTS: u32 = 4;
+const REDUCTION: u32 = 35;
+const OUTPUT_COLUMNS: u32 = 33;
+const TOKEN_STRIDE: u32 = 41;
+const WEIGHT_STRIDE: u32 = 39;
 const EXPERT_WEIGHT_STRIDE: u32 = REDUCTION * WEIGHT_STRIDE + 7;
-const BIAS_STRIDE: u32 = 23;
-const OUTPUT_STRIDE: u32 = 27;
+const BIAS_STRIDE: u32 = 37;
+const OUTPUT_STRIDE: u32 = 41;
 
 fn sample(seed: u32, modulus: u32, center: i32, scale: f32) -> f32 {
     ((seed % modulus) as i32 - center) as f32 * scale
@@ -29,8 +30,9 @@ fn launch_expert(
     expert: u32,
 ) -> fe2o3_core::Result<()> {
     let workgroups = (rows_padded / 16) * OUTPUT_COLUMNS.div_ceil(16);
-    // SAFETY: the five buffers and ten scalar arguments exactly match the
-    // generated kernel ABI and remain alive through readback.
+    // SAFETY: the five non-aliasing buffers and ten scalars exactly match the
+    // generated ABI, remain alive through readback, and the grid covers every
+    // logical 16x16 output tile exactly once.
     unsafe {
         launch! {
             kernel: moe_grouped_expert_general_v1,
@@ -38,7 +40,11 @@ fn launch_expert(
             module: module,
             config: LaunchConfig {
                 grid_dim: (workgroups, 1, 1),
-                block_dim: (64, 1, 1),
+                block_dim: (
+                    MOE_EXPERT_WORKGROUP_V1[0],
+                    MOE_EXPERT_WORKGROUP_V1[1],
+                    MOE_EXPERT_WORKGROUP_V1[2],
+                ),
                 shared_mem_bytes: 0,
             },
             args: [
@@ -151,6 +157,15 @@ fn main() -> fe2o3_core::Result<()> {
                     .iter()
                     .all(|value| *value == sentinel),
                 "expert {expert} wrote output padding"
+            );
+        }
+        for row in entries.len()..rows_padded as usize {
+            assert!(
+                actual[row * OUTPUT_STRIDE as usize
+                    ..row * OUTPUT_STRIDE as usize + OUTPUT_COLUMNS as usize]
+                    .iter()
+                    .all(|value| *value == 0.0),
+                "expert {expert} produced a nonzero padded route row"
             );
         }
     }
