@@ -169,6 +169,55 @@ fn a_retained_partial_subgroup_is_rejected() {
 }
 
 #[test]
+fn cyclic_symbolic_fallback_never_accepts_a_partial_subgroup() {
+    let context = &mut setup();
+    let (function, _) = function(context, "partial_subgroup_cycle", 0);
+    let entry = function.get_entry_block(context);
+    let body = block(context, &function, "body");
+    let execution = layout(context, 65, 64, 64);
+    let enter = BranchOp::new(context, body);
+    let matrix = tensor(context, 64);
+    let repeat = BranchOp::new(context, body);
+    append(context, entry, &execution);
+    append(context, entry, &enter);
+    append(context, body, &matrix);
+    append(context, body, &repeat);
+
+    let report = run_pliron_tensor_layout_check_v1(context, &function);
+    assert!(matches!(report.status(), KernelCheckStatusV1::Incomplete));
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete { detail }
+            if detail.contains("partial workgroup")
+    )));
+}
+
+#[test]
+fn dense_exact_traces_charge_every_scanned_operation() {
+    let context = &mut setup();
+    let (function, _) = function(context, "dense_trace_budget", 0);
+    let entry = function.get_entry_block(context);
+    let execution = layout(context, 2048, 64, 64);
+    append(context, entry, &execution);
+    for value in 0..512 {
+        let constant = IndexConstantOp::new(context, value);
+        append(context, entry, &constant);
+    }
+    let matrix = tensor(context, 64);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &matrix);
+    append(context, entry, &ret);
+
+    let report = run_pliron_tensor_layout_check_v1(context, &function);
+    assert!(matches!(report.status(), KernelCheckStatusV1::Incomplete));
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete { detail }
+            if detail.contains("resource limit")
+    )));
+}
+
+#[test]
 fn dynamic_lane_varying_control_may_reconverge_before_tensor_use() {
     let context = &mut setup();
     let (function, _) = function(context, "dynamic_reconverged", 0);

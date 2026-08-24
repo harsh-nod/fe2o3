@@ -513,6 +513,19 @@ fn symbolic_subgroup_convergence(
     layout: PlironExecutionLayoutV1,
     tensor_sites: &[(usize, usize)],
 ) -> Result<(), PlironTensorLayoutFindingV1> {
+    if layout
+        .global_extents
+        .iter()
+        .zip(layout.workgroup_extents)
+        .any(|(global, workgroup)| !global.is_multiple_of(workgroup))
+    {
+        return Err(
+            PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                detail: "symbolic tensor convergence cannot establish full subgroup participation for a partial workgroup"
+                    .to_owned(),
+            },
+        );
+    }
     let sparse = analyze_pliron_sparse_indices_v1(context, function).map_err(|failure| {
         PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
             detail: format!("sparse predicate analysis failed: {failure:?}"),

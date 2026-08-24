@@ -349,7 +349,10 @@ fn duplicate_plain_writes_race_but_atomic_writes_do_not() {
     }
 }
 
-fn cross_view_lds_alias_is_clean(first_class: u64, second_class: u64) -> bool {
+fn cross_view_lds_alias_report(
+    first_class: u64,
+    second_class: u64,
+) -> fe2o3_kernel_analysis::PlironWorkgroupMemoryReportV1 {
     let context = &mut setup();
     let function = function_with_layout(context, "cross_view_lds_alias", 2, 2);
     let entry = function.get_entry_block(context);
@@ -384,13 +387,30 @@ fn cross_view_lds_alias_is_clean(first_class: u64, second_class: u64) -> bool {
     append(context, entry, &first_write);
     append(context, entry, &second_write);
     append(context, entry, &ret);
-    run_pliron_workgroup_memory_check_v1(context, &function).is_clean()
+    run_pliron_workgroup_memory_check_v1(context, &function)
 }
 
 #[test]
 fn lds_alias_contract_applies_across_distinct_ssa_views() {
-    assert!(!cross_view_lds_alias_is_clean(31, 31));
-    assert!(cross_view_lds_alias_is_clean(32, 33));
+    let report = cross_view_lds_alias_report(31, 31);
+    assert!(!report.is_clean());
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        PlironWorkgroupMemoryFindingV1::AnalysisIncomplete { detail }
+            if detail.contains("relative base offset")
+    )));
+    assert!(cross_view_lds_alias_report(32, 33).is_clean());
+}
+
+#[test]
+fn unknown_lds_alias_views_without_relative_offsets_fail_closed() {
+    let report = cross_view_lds_alias_report(0, 0);
+    assert!(!report.is_clean());
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        PlironWorkgroupMemoryFindingV1::AnalysisIncomplete { detail }
+            if detail.contains("relative base offset")
+    )));
 }
 
 #[test]

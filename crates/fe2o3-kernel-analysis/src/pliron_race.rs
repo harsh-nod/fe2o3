@@ -504,6 +504,43 @@ pub(crate) fn run_pliron_ranked_race_check_after_bounds_v1(
             });
         }
     }
+    let all_origins = effects
+        .iter()
+        .map(|effect| effect.allocation_origin)
+        .collect::<HashSet<_>>();
+    if effects.iter().any(|effect| effect.noalias_class == 0)
+        && effects.iter().any(|effect| effect.kind.writes_memory())
+        && all_origins.len() > 1
+    {
+        return one(RankedRaceFindingV1::AllocationContractUnavailable {
+            detail: "an unknown-alias view may overlap a distinct allocation origin, but ranked IR does not retain their relative base offset"
+                .to_owned(),
+        });
+    }
+    let mut origins_by_class = HashMap::<u64, HashSet<u64>>::new();
+    let mut writable_classes = HashSet::new();
+    for effect in &effects {
+        if effect.noalias_class == 0 {
+            continue;
+        }
+        origins_by_class
+            .entry(effect.noalias_class)
+            .or_default()
+            .insert(effect.allocation_origin);
+        if effect.kind.writes_memory() {
+            writable_classes.insert(effect.noalias_class);
+        }
+    }
+    if let Some((&class, _)) = origins_by_class
+        .iter()
+        .find(|(class, origins)| origins.len() > 1 && writable_classes.contains(class))
+    {
+        return one(RankedRaceFindingV1::AllocationContractUnavailable {
+            detail: format!(
+                "potentially aliasing class {class} contains writable views from distinct allocation origins, but ranked IR does not retain their relative base offset"
+            ),
+        });
+    }
     let has_unknown_alias = effects.iter().any(|effect| effect.noalias_class == 0);
     for effect in &mut effects {
         if has_unknown_alias {

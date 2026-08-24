@@ -31,6 +31,16 @@ use crate::{
 
 pub const MAX_PLIRON_TRACE_TOTAL_STEPS_V1: usize = 1_048_576;
 
+fn charge_trace_work_v1(total: &mut usize, amount: usize) -> Result<(), PlironTraceFailureV1> {
+    *total = total
+        .checked_add(amount)
+        .ok_or(PlironTraceFailureV1::ResourceLimit)?;
+    if *total > MAX_PLIRON_TRACE_TOTAL_STEPS_V1 {
+        return Err(PlironTraceFailureV1::ResourceLimit);
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct PlironTraceLocationV1 {
     pub(crate) block: usize,
@@ -302,10 +312,7 @@ pub(crate) fn trace_pliron_invocations_v1(
         let mut block_index = 0_usize;
         let mut visited = HashSet::new();
         loop {
-            total_steps = total_steps.saturating_add(1);
-            if total_steps > MAX_PLIRON_TRACE_TOTAL_STEPS_V1 {
-                return Err(PlironTraceFailureV1::ResourceLimit);
-            }
+            charge_trace_work_v1(&mut total_steps, 1)?;
             if !visited.insert(block_index) {
                 return Err(PlironTraceFailureV1::CyclicControlFlow { block: block_index });
             }
@@ -318,6 +325,10 @@ pub(crate) fn trace_pliron_invocations_v1(
                 .get_terminator(context)
                 .ok_or(PlironTraceFailureV1::UnsupportedTerminator { block: block_index })?;
             for (operation_index, operation) in block.deref(context).iter(context).enumerate() {
+                // Charge the scan itself, including pure definitions and the
+                // terminator. Event count is therefore bounded by this same
+                // budget instead of only by the number of visited blocks.
+                charge_trace_work_v1(&mut total_steps, 1)?;
                 if operation == terminator {
                     continue;
                 }

@@ -841,7 +841,10 @@ fn overlapping_atomics_require_both_scopes_to_cover_the_pair() {
     )));
 }
 
-fn cross_view_alias_report(first_class: u64, second_class: u64) -> RankedRaceStatusV1 {
+fn cross_view_alias_report(
+    first_class: u64,
+    second_class: u64,
+) -> fe2o3_kernel_analysis::RankedRaceReportV1 {
     let context = &mut setup();
     let function = function(context, "cross_view_alias");
     let entry = function.get_entry_block(context);
@@ -878,20 +881,37 @@ fn cross_view_alias_report(first_class: u64, second_class: u64) -> RankedRaceSta
     append(context, entry, &first_write);
     append(context, entry, &second_write);
     append(context, entry, &ret);
-    run_pliron_ranked_race_check_v1(context, &function).status()
+    run_pliron_ranked_race_check_v1(context, &function)
 }
 
 #[test]
-fn same_noalias_class_collides_across_distinct_ssa_views() {
-    assert_eq!(
-        cross_view_alias_report(53, 53),
-        RankedRaceStatusV1::Rejected
-    );
+fn same_noalias_class_without_relative_offsets_fails_closed() {
+    let report = cross_view_alias_report(53, 53);
+    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        RankedRaceFindingV1::AllocationContractUnavailable { detail }
+            if detail.contains("relative base offset")
+    )));
+}
+
+#[test]
+fn unknown_alias_views_without_relative_offsets_fail_closed() {
+    let report = cross_view_alias_report(0, 0);
+    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        RankedRaceFindingV1::AllocationContractUnavailable { detail }
+            if detail.contains("relative base offset")
+    )));
 }
 
 #[test]
 fn distinct_authenticated_noalias_classes_are_disjoint() {
-    assert_eq!(cross_view_alias_report(54, 55), RankedRaceStatusV1::Clean);
+    assert_eq!(
+        cross_view_alias_report(54, 55).status(),
+        RankedRaceStatusV1::Clean
+    );
 }
 
 #[test]

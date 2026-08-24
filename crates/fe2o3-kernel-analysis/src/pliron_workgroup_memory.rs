@@ -398,6 +398,44 @@ fn validate_workgroup_allocation_contract(
         }
     }
 
+    let all_origins = contracts
+        .values()
+        .map(|contract| contract.allocation_origin)
+        .collect::<HashSet<_>>();
+    if contracts
+        .values()
+        .any(|contract| contract.noalias_class == 0)
+        && contracts.values().any(|contract| contract.writes_memory)
+        && all_origins.len() > 1
+    {
+        return Err(
+            "an unknown-alias workgroup view may overlap a distinct allocation origin, but ranked IR does not retain their relative base offset"
+                .to_owned(),
+        );
+    }
+    let mut origins_by_class = HashMap::<u64, HashSet<u64>>::new();
+    let mut writable_classes = HashSet::new();
+    for contract in contracts.values() {
+        if contract.noalias_class == 0 {
+            continue;
+        }
+        origins_by_class
+            .entry(contract.noalias_class)
+            .or_default()
+            .insert(contract.allocation_origin);
+        if contract.writes_memory {
+            writable_classes.insert(contract.noalias_class);
+        }
+    }
+    if let Some((&class, _)) = origins_by_class
+        .iter()
+        .find(|(class, origins)| origins.len() > 1 && writable_classes.contains(class))
+    {
+        return Err(format!(
+            "potentially aliasing workgroup class {class} contains writable views from distinct allocation origins, but ranked IR does not retain their relative base offset"
+        ));
+    }
+
     let has_unknown_alias = contracts
         .values()
         .any(|contract| contract.noalias_class == 0);
