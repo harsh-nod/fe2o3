@@ -207,6 +207,10 @@ use std::process;
 use std::sync::Weak;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
+#[cfg(feature = "test-hooks")]
+use std::thread;
+#[cfg(feature = "test-hooks")]
+use std::time::Duration;
 pub use worker_v2_publication_intent::{
     MAX_WORKER_V2_PUBLICATION_INTENT_CLEANUP_ESCROW_CAPSULE_BYTES_V1,
     MAX_WORKER_V2_PUBLICATION_INTENT_OUTPUT_BYTES,
@@ -3621,6 +3625,16 @@ impl PinnedOutput {
     }
 
     fn try_lock(&self) -> Result<Option<OutputLock>, EmitError> {
+        #[cfg(feature = "test-hooks")]
+        {
+            for _ in 0..50 {
+                if let Some(lock) = self.lock_with(true, None)? {
+                    return Ok(Some(lock));
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+
         self.lock_with(true, None)
     }
 
