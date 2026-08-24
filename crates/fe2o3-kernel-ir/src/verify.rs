@@ -760,17 +760,15 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 if matches!(
                     &operation.kind,
                     OperationKind::Call { callee, arguments }
-                        if matches!(
-                            AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments),
-                            Some(AmdGpuDiagnosticOperation::Trap)
-                        )
+                        if AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments)
+                            .is_some_and(|diagnostic| diagnostic.is_terminating())
                 ) && (operation_index + 1 != block.operations.len()
                     || !matches!(block.terminator, Some(Terminator::Unreachable)))
                 {
                     self.emit(
                         location.clone(),
                         DiagnosticCode::InvalidAmdGpuDiagnosticOperation,
-                        "AMDGPU trap must be the final operation of a block terminated by unreachable",
+                        "terminating AMDGPU diagnostic must be the final operation of a block terminated by unreachable",
                     );
                 }
                 for operand in operation.kind.operands() {

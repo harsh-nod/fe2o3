@@ -1117,6 +1117,29 @@ fn gfx942_diagnostic_items_lower_to_closed_ir_contracts() {
             AmdGpuDiagnosticOperation::Trap,
         ]
     ));
+    let assert_fail_block = kernel
+        .body
+        .as_ref()
+        .unwrap()
+        .blocks
+        .iter()
+        .find(|block| {
+            block.operations.last().is_some_and(|operation| {
+                matches!(
+                    &operation.kind,
+                    OperationKind::Call { callee, arguments }
+                        if matches!(
+                            AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments),
+                            Some(AmdGpuDiagnosticOperation::AssertFail { .. })
+                        )
+                )
+            })
+        })
+        .unwrap();
+    assert!(matches!(
+        assert_fail_block.terminator,
+        Some(fe2o3_kernel_ir::Terminator::Unreachable)
+    ));
     let trap_block = kernel
         .body
         .as_ref()

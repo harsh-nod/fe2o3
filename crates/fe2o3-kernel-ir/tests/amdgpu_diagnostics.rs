@@ -14,9 +14,9 @@ fn module_with_operation(parameters: Vec<Type>, diagnostic: AmdGpuDiagnosticOper
         .result_type()
         .map(|_| ValueId(parameters.len() as u32));
     let mut block = BasicBlock::new(BlockId(0));
-    let is_trap = matches!(diagnostic, AmdGpuDiagnosticOperation::Trap);
+    let terminates = diagnostic.is_terminating();
     block.operations.push(diagnostic.operation(result));
-    block.terminator = Some(if is_trap {
+    block.terminator = Some(if terminates {
         Terminator::Unreachable
     } else {
         Terminator::Return {
@@ -146,28 +146,55 @@ fn reserved_diagnostic_calls_reject_arity_type_and_declaration_mutation() {
 }
 
 #[test]
-fn trap_rejects_fallthrough_and_nonterminal_placement() {
-    let mut fallthrough = module_with_operation(Vec::new(), AmdGpuDiagnosticOperation::Trap);
-    fallthrough.functions[0].body.as_mut().unwrap().blocks[0].terminator =
-        Some(Terminator::Return { values: vec![] });
-    assert!(
-        verify_module(&fallthrough)
-            .unwrap_err()
-            .contains(DiagnosticCode::InvalidAmdGpuDiagnosticOperation)
-    );
+fn terminating_diagnostics_reject_fallthrough_and_nonterminal_placement() {
+    for (parameters, diagnostic) in [
+        (Vec::new(), AmdGpuDiagnosticOperation::Trap),
+        (
+            vec![u32_type(); 2],
+            AmdGpuDiagnosticOperation::AssertFail {
+                site_id: ValueId(0),
+                line: ValueId(1),
+            },
+        ),
+    ] {
+        assert!(diagnostic.is_terminating());
+        let mut fallthrough = module_with_operation(parameters.clone(), diagnostic.clone());
+        fallthrough.functions[0].body.as_mut().unwrap().blocks[0].terminator =
+            Some(Terminator::Return { values: vec![] });
+        assert!(
+            verify_module(&fallthrough)
+                .unwrap_err()
+                .contains(DiagnosticCode::InvalidAmdGpuDiagnosticOperation)
+        );
+        assert!(VerifiedCanonicalKernelIrV7::from_module(fallthrough).is_err());
 
-    let mut nonterminal = module_with_operation(Vec::new(), AmdGpuDiagnosticOperation::Trap);
-    nonterminal.functions[0].body.as_mut().unwrap().blocks[0]
-        .operations
-        .push(Operation::effect_free(
-            ValueDef::new(ValueId(0), Type::BOOL),
-            OperationKind::Constant(Constant::Bool(false)),
-        ));
-    assert!(
-        verify_module(&nonterminal)
-            .unwrap_err()
-            .contains(DiagnosticCode::InvalidAmdGpuDiagnosticOperation)
-    );
+        let mut branch = module_with_operation(parameters.clone(), diagnostic.clone());
+        branch.functions[0].body.as_mut().unwrap().blocks[0].terminator =
+            Some(Terminator::Branch {
+                target: BlockId(0),
+                arguments: vec![],
+            });
+        assert!(
+            verify_module(&branch)
+                .unwrap_err()
+                .contains(DiagnosticCode::InvalidAmdGpuDiagnosticOperation)
+        );
+        assert!(VerifiedCanonicalKernelIrV7::from_module(branch).is_err());
+
+        let mut nonterminal = module_with_operation(parameters, diagnostic);
+        nonterminal.functions[0].body.as_mut().unwrap().blocks[0]
+            .operations
+            .push(Operation::effect_free(
+                ValueDef::new(ValueId(8), Type::BOOL),
+                OperationKind::Constant(Constant::Bool(false)),
+            ));
+        assert!(
+            verify_module(&nonterminal)
+                .unwrap_err()
+                .contains(DiagnosticCode::InvalidAmdGpuDiagnosticOperation)
+        );
+        assert!(VerifiedCanonicalKernelIrV7::from_module(nonterminal).is_err());
+    }
 }
 
 #[test]
@@ -189,4 +216,27 @@ fn frozen_wire_round_trips_canonical_diagnostic_calls() {
     for length in 0..bytes.len() {
         assert!(decode_module_v2(&bytes[..length]).is_err());
     }
+}
+
+#[test]
+fn frozen_wire_preserves_assert_fail_terminal_contract() {
+    let module = module_with_operation(
+        vec![u32_type(); 2],
+        AmdGpuDiagnosticOperation::AssertFail {
+            site_id: ValueId(0),
+            line: ValueId(1),
+        },
+    );
+    let bytes = encode_module_v2(&module).unwrap();
+    let decoded = decode_module_v2(&bytes).unwrap();
+    assert_eq!(decoded, module);
+    let block = &decoded.functions[0].body.as_ref().unwrap().blocks[0];
+    assert!(matches!(block.terminator, Some(Terminator::Unreachable)));
+    let OperationKind::Call { callee, arguments } = &block.operations[0].kind else {
+        panic!("assert-fail round trip changed operation kind");
+    };
+    assert!(
+        AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments)
+            .is_some_and(|diagnostic| diagnostic.is_terminating())
+    );
 }

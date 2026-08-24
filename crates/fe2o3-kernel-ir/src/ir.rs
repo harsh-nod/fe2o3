@@ -888,6 +888,12 @@ pub enum AmdGpuDiagnosticOperation {
 }
 
 impl AmdGpuDiagnosticOperation {
+    /// Reports whether this operation ends the current invocation without
+    /// returning to its Kernel IR continuation.
+    pub const fn is_terminating(&self) -> bool {
+        matches!(self, Self::Trap | Self::AssertFail { .. })
+    }
+
     pub fn operands(&self) -> Vec<ValueId> {
         match self {
             Self::Clock32 | Self::Trap | Self::DebugTrap => Vec::new(),

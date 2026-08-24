@@ -28,13 +28,13 @@ fn constant(block: &mut BasicBlock, id: u32, value: u32) {
 }
 
 fn diagnostic_module() -> Module {
-    let mut block = BasicBlock::new(BlockId(0));
-    constant(&mut block, 0, 0x1234_5678);
-    constant(&mut block, 1, 11);
-    constant(&mut block, 2, 22);
-    constant(&mut block, 3, 73);
-    constant(&mut block, 4, 0x7654_3210);
-    constant(&mut block, 5, 41);
+    let mut diagnostic_block = BasicBlock::new(BlockId(0));
+    constant(&mut diagnostic_block, 0, 0x1234_5678);
+    constant(&mut diagnostic_block, 1, 11);
+    constant(&mut diagnostic_block, 2, 22);
+    constant(&mut diagnostic_block, 3, 73);
+    constant(&mut diagnostic_block, 4, 0x7654_3210);
+    constant(&mut diagnostic_block, 5, 41);
 
     let operations = [
         AmdGpuDiagnosticOperation::Clock32,
@@ -50,19 +50,23 @@ fn diagnostic_module() -> Module {
         },
         AmdGpuDiagnosticOperation::Trap,
     ];
-    block
+    diagnostic_block
         .operations
         .push(operations[0].operation(Some(ValueId(6))));
-    for operation in &operations[1..] {
-        block.operations.push(operation.operation(None));
+    for operation in &operations[1..5] {
+        diagnostic_block.operations.push(operation.operation(None));
     }
-    block.terminator = Some(Terminator::Unreachable);
+    diagnostic_block.terminator = Some(Terminator::Unreachable);
+
+    let mut trap_block = BasicBlock::new(BlockId(1));
+    trap_block.operations.push(operations[5].operation(None));
+    trap_block.terminator = Some(Terminator::Unreachable);
 
     let function = Function::kernel_entry(
         "diagnostic_impl",
         Signature::new(Vec::new(), Vec::new()),
         Vec::new(),
-        vec![block],
+        vec![diagnostic_block, trap_block],
     );
     let mut kernel = Kernel::new(
         "diagnostic_kernel",
@@ -91,9 +95,13 @@ fn diagnostic_call_mut(
     module: &mut Module,
     predicate: impl Fn(&AmdGpuDiagnosticOperation) -> bool,
 ) -> &mut OperationKind {
-    let operations = &mut module.functions[0].body.as_mut().unwrap().blocks[0].operations;
-    &mut operations
+    &mut module.functions[0]
+        .body
+        .as_mut()
+        .unwrap()
+        .blocks
         .iter_mut()
+        .flat_map(|block| block.operations.iter_mut())
         .find(|operation| {
             let OperationKind::Call { callee, arguments } = &operation.kind else {
                 return false;
@@ -137,9 +145,27 @@ fn single_kernel_lowering_declares_trap_and_terminates_without_fallthrough() {
     let llvm = lower_kernel_to_gfx942_llvm_ir(&module, &module.kernels[0].id).unwrap();
     assert_eq!(llvm.matches("declare void @llvm.trap()").count(), 1);
     assert_eq!(llvm.matches("call void @llvm.trap()").count(), 2);
-    assert!(llvm.contains("call void @llvm.trap()\n  unreachable"));
+    assert_eq!(
+        llvm.matches("call void @llvm.trap()\n  unreachable")
+            .count(),
+        2
+    );
     assert!(!llvm.contains("call void @llvm.trap()\n  ret"));
     assert!(!llvm.contains("call void @llvm.trap()\n  br"));
+}
+
+#[test]
+fn assert_fail_fallthrough_is_rejected_before_llvm_emission() {
+    let mut module = diagnostic_module();
+    module.functions[0].body.as_mut().unwrap().blocks[0].terminator =
+        Some(Terminator::Return { values: vec![] });
+    assert!(
+        lower_kernel_to_gfx942_llvm_ir(&module, &module.kernels[0].id)
+            .unwrap_err()
+            .contains(LoweringDiagnosticCode::InputVerification(
+                DiagnosticCode::InvalidAmdGpuDiagnosticOperation,
+            ))
+    );
 }
 
 #[test]

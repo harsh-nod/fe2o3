@@ -53,6 +53,60 @@ fn analyze(module: &Module, extent: u64) -> FormalMemoryObligationAnalysis {
     .unwrap()
 }
 
+#[test]
+fn terminating_assert_fail_is_formally_closed_and_has_no_memory_obligations() {
+    let diagnostic = AmdGpuDiagnosticOperation::AssertFail {
+        site_id: ValueId(0),
+        line: ValueId(1),
+    };
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations.push(diagnostic.operation(None));
+    block.terminator = Some(Terminator::Unreachable);
+    let function = Function::kernel_entry(
+        "kernel_impl",
+        Signature::new(vec![Type::Scalar(ScalarType::U32); 2], vec![]),
+        vec![ValueId(0), ValueId(1)],
+        vec![block],
+    );
+    let mut module = Module::new("formal-assert-fail-test");
+    module.functions.push(function);
+    module.functions.push(diagnostic.declaration());
+    module
+        .kernels
+        .push(Kernel::new("kernel", "kernel_impl", dynamic_1d()));
+
+    let analysis = analyze(&module, 2);
+    assert!(analysis.is_complete());
+    assert!(analysis.obligations().accesses().is_empty());
+    assert!(analysis.obligations().bounds_requirements().is_empty());
+    assert!(
+        analysis
+            .obligations()
+            .runtime_alias_requirements()
+            .is_empty()
+    );
+    assert!(
+        analysis
+            .obligations()
+            .inter_invocation_conflicts()
+            .is_empty()
+    );
+
+    let mut fallthrough = module;
+    fallthrough.functions[0].body.as_mut().unwrap().blocks[0].terminator =
+        Some(Terminator::Return { values: vec![] });
+    assert!(matches!(
+        derive_kernel_memory_obligations(
+            &fallthrough,
+            &KernelId::new("kernel"),
+            ExplicitLaunchExtent1d::Exact(2),
+            FormalIndexWidth::Bits64,
+        ),
+        Err(FormalMemoryObligationError::InvalidModule(ref errors))
+            if errors.contains(DiagnosticCode::InvalidAmdGpuDiagnosticOperation)
+    ));
+}
+
 fn fill_module(index: OperationKind) -> Module {
     let pointer = global_pointer(AccessMode::ReadWrite);
     let access = MemoryAccess::new(AddressSpace::Global, 4);

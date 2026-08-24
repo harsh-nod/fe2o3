@@ -34,6 +34,49 @@ fn analyze(function: &Function, bindings: &FunctionEffectBindings) -> FunctionRe
     extract_function_region_effects(&module, &function.id, bindings).unwrap()
 }
 
+#[test]
+fn terminating_assert_fail_has_closed_empty_memory_effects() {
+    let diagnostic = AmdGpuDiagnosticOperation::AssertFail {
+        site_id: ValueId(0),
+        line: ValueId(1),
+    };
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations.push(diagnostic.operation(None));
+    block.terminator = Some(Terminator::Unreachable);
+    let function = Function::definition(
+        "assert_fail_impl",
+        Signature::new(vec![Type::Scalar(ScalarType::U32); 2], vec![]),
+        vec![ValueId(0), ValueId(1)],
+        vec![block],
+    );
+    let module = module_with_functions(vec![function.clone(), diagnostic.declaration()]);
+
+    let report =
+        extract_function_region_effects(&module, &function.id, &FunctionEffectBindings::new())
+            .unwrap();
+    assert!(report.effects().is_empty());
+    assert!(report.bounds_obligations().is_empty());
+    assert!(report.race_obligations().is_empty());
+    assert!(report.extraction_issues().is_empty());
+    assert_eq!(
+        report.completeness(),
+        EffectExtractionCompleteness::CompleteUnderSuppliedBindings
+    );
+
+    let mut fallthrough = module;
+    fallthrough.functions[0].body.as_mut().unwrap().blocks[0].terminator =
+        Some(Terminator::Return { values: vec![] });
+    assert!(matches!(
+        extract_function_region_effects(
+            &fallthrough,
+            &function.id,
+            &FunctionEffectBindings::new(),
+        ),
+        Err(FunctionRegionEffectExtractionError::InvalidModule(ref errors))
+            if errors.contains(DiagnosticCode::InvalidAmdGpuDiagnosticOperation)
+    ));
+}
+
 fn store(pointer: u32, value: u32, access: MemoryAccess) -> Operation {
     Operation::new(
         vec![],
