@@ -371,6 +371,15 @@ pub(super) trait MemoryBackend {
             "AQL mapped publication backend",
         ))
     }
+    fn observe_aql_packet_header_acquire(
+        _mapping: &mut Self::Mapping,
+        _requested_bytes: usize,
+        _packet_id: u64,
+    ) -> Result<(u32, u16, u16), MemorySessionError> {
+        Err(MemorySessionError::KernelResultMalformed(
+            "AQL packet observation backend",
+        ))
+    }
     fn observe_completion_signal_acquire(
         _mapping: &mut Self::Mapping,
         _requested_bytes: usize,
@@ -378,6 +387,15 @@ pub(super) trait MemoryBackend {
     ) -> Result<fe2o3_aql::AqlCompletionObservationV1, MemorySessionError> {
         Err(MemorySessionError::KernelResultMalformed(
             "AQL completion observation backend",
+        ))
+    }
+    fn observe_completion_signal_state_acquire(
+        _mapping: &mut Self::Mapping,
+        _requested_bytes: usize,
+        _slot_index: u32,
+    ) -> Result<(i64, i64), MemorySessionError> {
+        Err(MemorySessionError::KernelResultMalformed(
+            "AQL completion state observation backend",
         ))
     }
     fn reset_completion_signal_release(

@@ -26,16 +26,16 @@ pub(super) const MAX_COMPLETION_POLL_ATTEMPTS_V1: u32 = 1_000_000;
 
 /// Canonical claim boundary for the private completion-signal slice.
 pub const GFX942_AQL_COMPLETION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-aql-completion-r5-v1\n",
+    "profile=fe2o3-mi300x-gfx942-aql-completion-r6-v1\n",
     "aql_dispatch_schema_sha256=82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0\n",
     "aql_fixed_batch_schema_sha256=a3c74fe4aa26a62772253de267812f2fb1626247685d8c4e8ed8bbb2a5a9e34a\n",
     "arena=one-host-visible-coherent-gtt-allocation,524288-bytes,8192-distinct-64-byte-aligned-user-signals\n",
     "batch=1-through-8192,heap-owned-fixed-cardinality-state,one-unique-signal-per-packet,no-aggregate-alias\n",
     "initialization=typed-amd-busy-signal-construction,kind-user-1,value-pending-1,event-fields-zero,before-gpu-map\n",
     "binding=crate-private-packet-construction,per-packet-independent-or-wait-for-prior-ordering-retained,no-public-signal-address,exact-queue-vm-signal-code-kernarg-and-nonzero-dispatch-generations-retained,actual-resource-lifetimes-owned-by-private-c5-queue-owner\n",
-    "observation=bounded-busy-poll,one-pre-post-currentness-envelope-around-one-exact-batch-of-atomic-i64-acquire-loads,same-scan-redacted-packet-completed-pending-and-first-pending-index-progress,all-signals-zero-before-ready,unexpected-value-is-fault\n",
+    "observation=bounded-busy-poll,one-pre-post-currentness-envelope-around-one-exact-batch-of-atomic-i64-acquire-loads,same-scan-redacted-packet-completed-pending-and-first-pending-index-progress,all-signals-zero-before-ready,unexpected-value-is-fault,timeout-retains-batch-privately-until-addressless-counter-packet-zero-signal-zero-exception-currentness-snapshot\n",
     "recycle=only-after-exact-all-signal-completion,atomic-i64-release-reset-to-pending,checked-slot-generation-increment\n",
-    "failure=currentness-native-observation-unexpected-value-timeout-invalid-poll-bound-generation-exhaustion-or-reset-ambiguity-poisons-owner-and-queue;teardown-required\n",
+    "failure=currentness-native-observation-unexpected-value-timeout-invalid-poll-bound-generation-exhaustion-or-reset-ambiguity-poisons-owner-and-queue;timeout-snapshot-precedes-poison-and-grants-no-native-authority;teardown-required\n",
     "release=queue-destroy-first,only-when-every-batch-was-completed-and-recycled,explicit-unmap-and-free,no-drop-native-effects\n",
     "proof=host-state-machine-and-mock-fault-tests-only,cpu-gpu-atomic-coherence-device-write-visibility-firmware-signal-and-quiescence-refinement-contracted\n",
     "excluded=public-safe-launch,resource-lifetime-mint,copy,alias-proof,hardware-execution,ioctl-validation\n",
@@ -43,7 +43,7 @@ pub const GFX942_AQL_COMPLETION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_AQL_COMPLETION_MANIFEST_V1`].
 pub const GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1: &str =
-    "9e4c70e71001d7de3270bce4f1b1f0afbaafa9b81ad5b3e18e39f507c2375306";
+    "2cbc02677fc02a906090875f63ff01db82d2eba0888934ee74a7e0f3b82d7fb3";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CompletionOwnerPhaseV1 {
@@ -214,6 +214,31 @@ impl<const N: usize> fmt::Debug for Gfx942CompletionBatchV1<N> {
     }
 }
 
+impl<const N: usize> Gfx942CompletionBatchV1<N> {
+    pub(super) fn first_packet_and_signal_slot(
+        &self,
+    ) -> Result<(u64, u32), Gfx942CompletionErrorV1> {
+        let packet_count =
+            u64::try_from(N).map_err(|_| Gfx942CompletionErrorV1::PacketCountExceedsMaximum {
+                requested: N,
+                maximum: AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize,
+            })?;
+        let first_packet_id = self
+            .retention
+            .last_packet_id
+            .and_then(|last| last.checked_add(1))
+            .and_then(|next| next.checked_sub(packet_count))
+            .ok_or(Gfx942CompletionErrorV1::StaleBatchGeneration)?;
+        let first_signal_slot = self
+            .retention
+            .slots
+            .first()
+            .ok_or(Gfx942CompletionErrorV1::ZeroPacketCount)?
+            .index;
+        Ok((first_packet_id, first_signal_slot))
+    }
+}
+
 /// Linear evidence that every signal in one exact batch was acquired as zero.
 ///
 /// ```compile_fail
@@ -290,6 +315,127 @@ pub enum Gfx942CompletionPollWithProgressV1<const N: usize> {
     },
 }
 
+/// Addressless completion-signal state retained in a terminal timeout snapshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Gfx942TimeoutSignalObservationV1 {
+    /// The acquired value was the canonical pending value.
+    Pending,
+    /// The acquired value was the canonical completed value.
+    Completed,
+    /// The acquired value was neither pending nor completed.
+    Fault(i64),
+}
+
+impl Gfx942TimeoutSignalObservationV1 {
+    /// Returns the exact acquired signal value represented by this observation.
+    pub const fn value(self) -> i64 {
+        match self {
+            Self::Pending => fe2o3_aql::AMD_SIGNAL_VALUE_PENDING_V1,
+            Self::Completed => fe2o3_aql::AMD_SIGNAL_VALUE_COMPLETE_V1,
+            Self::Fault(value) => value,
+        }
+    }
+}
+
+/// Currentness-enveloped, addressless execution state captured before timeout poison.
+///
+/// The fields are sequential observations, not one atomic device snapshot. The
+/// packet and signal selected for inspection remain private queue-relative ordinals.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942TimeoutExecutionObservationV1 {
+    packet_count: u16,
+    write_counter: u64,
+    read_counter: u64,
+    first_packet_header: u16,
+    first_packet_setup: u16,
+    first_signal_kind: i64,
+    first_signal: Gfx942TimeoutSignalObservationV1,
+    queue_exception_reason_mask: u64,
+}
+
+impl Gfx942TimeoutExecutionObservationV1 {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) const fn new(
+        packet_count: u16,
+        write_counter: u64,
+        read_counter: u64,
+        first_packet_header: u16,
+        first_packet_setup: u16,
+        first_signal_kind: i64,
+        first_signal: Gfx942TimeoutSignalObservationV1,
+        queue_exception_reason_mask: u64,
+    ) -> Self {
+        Self {
+            packet_count,
+            write_counter,
+            read_counter,
+            first_packet_header,
+            first_packet_setup,
+            first_signal_kind,
+            first_signal,
+            queue_exception_reason_mask,
+        }
+    }
+
+    /// Returns the exact fixed-batch packet count.
+    pub const fn packet_count(self) -> u16 {
+        self.packet_count
+    }
+
+    /// Returns the acquiring write-counter observation.
+    pub const fn write_counter(self) -> u64 {
+        self.write_counter
+    }
+
+    /// Returns the acquiring read-counter observation.
+    pub const fn read_counter(self) -> u64 {
+        self.read_counter
+    }
+
+    /// Returns packet zero's acquiring low 16-bit header observation.
+    pub const fn first_packet_header(self) -> u16 {
+        self.first_packet_header
+    }
+
+    /// Returns packet zero's acquiring high 16-bit setup observation.
+    pub const fn first_packet_setup(self) -> u16 {
+        self.first_packet_setup
+    }
+
+    /// Returns signal zero's immutable kind-word observation.
+    pub const fn first_signal_kind(self) -> i64 {
+        self.first_signal_kind
+    }
+
+    /// Returns signal zero's acquiring value classification.
+    pub const fn first_signal(self) -> Gfx942TimeoutSignalObservationV1 {
+        self.first_signal
+    }
+
+    /// Returns the admitted volatile CWSR queue-exception reason mask.
+    ///
+    /// Zero is a racy observation at capture time, not proof that no exception
+    /// occurred before or after the snapshot.
+    pub const fn queue_exception_reason_mask(self) -> u64 {
+        self.queue_exception_reason_mask
+    }
+
+    /// Confirms that device, runtime, event, and CWSR bindings were checked
+    /// before and after the sequential observations.
+    pub const fn currentness_confirmed(self) -> bool {
+        true
+    }
+}
+
+#[derive(Debug)]
+pub(super) enum Gfx942CompletionWaitFailureV1<const N: usize> {
+    Terminal(Gfx942CompletionErrorV1),
+    Timeout {
+        batch: Box<Gfx942CompletionBatchV1<N>>,
+        polls: u32,
+    },
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Gfx942CompletionRecycleObservationV1 {
     packet_count: u16,
@@ -305,7 +451,10 @@ impl Gfx942CompletionRecycleObservationV1 {
 pub enum Gfx942CompletionErrorV1 {
     InvalidArena(&'static str),
     ZeroPacketCount,
-    PacketCountExceedsMaximum { requested: usize, maximum: usize },
+    PacketCountExceedsMaximum {
+        requested: usize,
+        maximum: usize,
+    },
     InsufficientSignals,
     BatchIdentityExhausted,
     SignalGenerationExhausted,
@@ -318,9 +467,20 @@ pub enum Gfx942CompletionErrorV1 {
     BatchConstruction(AqlPreparedKernelDispatchBatchErrorV1),
     Currentness,
     Observation,
-    Fault { slot: u32, value: i64 },
-    InvalidPollBound { requested: u32, maximum: u32 },
-    Timeout { polls: u32 },
+    Fault {
+        slot: u32,
+        value: i64,
+    },
+    InvalidPollBound {
+        requested: u32,
+        maximum: u32,
+    },
+    Timeout {
+        /// Requested bounded poll count.
+        polls: u32,
+        /// Addressless state captured before terminal poison.
+        observation: Box<Gfx942TimeoutExecutionObservationV1>,
+    },
     Recycle,
     BatchStillRetained,
 }
@@ -622,23 +782,37 @@ impl CompletionSignalArenaOwnerV1 {
         mut batch: Gfx942CompletionBatchV1<N>,
         polls: u32,
         backend: &mut B,
-    ) -> Result<Gfx942CompletedBatchV1<N>, Gfx942CompletionErrorV1> {
+    ) -> Result<Gfx942CompletedBatchV1<N>, Gfx942CompletionWaitFailureV1<N>> {
         if polls > MAX_COMPLETION_POLL_ATTEMPTS_V1 {
-            return self.poison(Gfx942CompletionErrorV1::InvalidPollBound {
-                requested: polls,
-                maximum: MAX_COMPLETION_POLL_ATTEMPTS_V1,
+            return self
+                .poison(Gfx942CompletionErrorV1::InvalidPollBound {
+                    requested: polls,
+                    maximum: MAX_COMPLETION_POLL_ATTEMPTS_V1,
+                })
+                .map_err(Gfx942CompletionWaitFailureV1::Terminal);
+        }
+        self.require_ready()
+            .and_then(|()| self.validate_published(&batch.retention))
+            .map_err(Gfx942CompletionWaitFailureV1::Terminal)?;
+        if polls == 0 {
+            return Err(Gfx942CompletionWaitFailureV1::Timeout {
+                batch: Box::new(batch),
+                polls,
             });
         }
-        if polls == 0 {
-            return self.poison(Gfx942CompletionErrorV1::Timeout { polls });
-        }
         for _ in 0..polls {
-            match self.observe_once(batch, backend)? {
+            match self
+                .observe_once(batch, backend)
+                .map_err(Gfx942CompletionWaitFailureV1::Terminal)?
+            {
                 Gfx942CompletionPollV1::Pending(pending) => batch = pending,
                 Gfx942CompletionPollV1::Ready(ready) => return Ok(ready),
             }
         }
-        self.poison(Gfx942CompletionErrorV1::Timeout { polls })
+        Err(Gfx942CompletionWaitFailureV1::Timeout {
+            batch: Box::new(batch),
+            polls,
+        })
     }
 
     pub(super) fn recycle<const N: usize, B: NativeCompletionSignalBackendV1>(
@@ -1208,10 +1382,17 @@ mod tests {
 
         let mut timeout_owner = owner();
         let timeout_batch = publish(&mut timeout_owner, [template(0)]);
-        assert!(matches!(
-            timeout_owner.wait_bounded(timeout_batch, 3, &mut MockBackend::pending()),
-            Err(Gfx942CompletionErrorV1::Timeout { polls: 3 })
-        ));
+        let mut timeout_backend = MockBackend::pending();
+        let timeout = timeout_owner
+            .wait_bounded(timeout_batch, 3, &mut timeout_backend)
+            .unwrap_err();
+        let Gfx942CompletionWaitFailureV1::Timeout { batch, polls } = timeout else {
+            panic!("pending exhaustion did not preserve timeout custody")
+        };
+        assert_eq!(polls, 3);
+        assert_eq!(batch.first_packet_and_signal_slot().unwrap(), (99, 0));
+        assert_eq!(timeout_backend.observe_calls, 3);
+        timeout_owner.poison_owner();
 
         let mut observe_owner = owner();
         let observe_batch = publish(&mut observe_owner, [template(0)]);
@@ -1221,6 +1402,61 @@ mod tests {
             observe_owner.observe_once(observe_batch, &mut observe_backend),
             Err(Gfx942CompletionErrorV1::Observation)
         ));
+    }
+
+    #[test]
+    fn zero_poll_timeout_preserves_locator_without_scanning_signals() {
+        let mut owner = owner();
+        let first = publish(&mut owner, [template(0), template(1)]);
+        let mut backend = MockBackend::pending();
+        backend.values[..2].fill(AMD_SIGNAL_VALUE_COMPLETE_V1);
+        let completed = owner.wait_bounded(first, 1, &mut backend).unwrap();
+        owner.recycle(completed, &mut backend).unwrap();
+
+        let second = publish(&mut owner, [template(2), template(3), template(4)]);
+        let scans_before = backend.observe_calls;
+        let timeout = owner.wait_bounded(second, 0, &mut backend).unwrap_err();
+        let Gfx942CompletionWaitFailureV1::Timeout { batch, polls } = timeout else {
+            panic!("zero poll did not retain timeout custody")
+        };
+        assert_eq!(polls, 0);
+        assert_eq!(batch.first_packet_and_signal_slot().unwrap(), (97, 0));
+        assert_eq!(backend.observe_calls, scans_before);
+        owner.poison_owner();
+    }
+
+    #[test]
+    fn timeout_observation_is_addressless_and_preserves_exact_values() {
+        let observation = Gfx942TimeoutExecutionObservationV1::new(
+            545,
+            545,
+            0,
+            0x1502,
+            3,
+            fe2o3_aql::AMD_SIGNAL_KIND_USER_V1,
+            Gfx942TimeoutSignalObservationV1::Pending,
+            0,
+        );
+        assert_eq!(observation.packet_count(), 545);
+        assert_eq!(observation.write_counter(), 545);
+        assert_eq!(observation.read_counter(), 0);
+        assert_eq!(observation.first_packet_header(), 0x1502);
+        assert_eq!(observation.first_packet_setup(), 3);
+        assert_eq!(
+            observation.first_signal_kind(),
+            fe2o3_aql::AMD_SIGNAL_KIND_USER_V1
+        );
+        assert_eq!(
+            observation.first_signal(),
+            Gfx942TimeoutSignalObservationV1::Pending
+        );
+        assert_eq!(observation.first_signal().value(), 1);
+        assert_eq!(observation.queue_exception_reason_mask(), 0);
+        assert!(observation.currentness_confirmed());
+        let rendered = format!("{observation:?}");
+        for forbidden in ["address", "handle", "queue_id", "packet_id", "slot_index"] {
+            assert!(!rendered.contains(forbidden));
+        }
     }
 
     #[test]
@@ -1361,10 +1597,12 @@ mod tests {
         let mut backend = MockBackend::pending();
         assert!(matches!(
             owner.wait_bounded(batch, MAX_COMPLETION_POLL_ATTEMPTS_V1 + 1, &mut backend),
-            Err(Gfx942CompletionErrorV1::InvalidPollBound {
-                requested,
-                maximum: MAX_COMPLETION_POLL_ATTEMPTS_V1,
-            }) if requested == MAX_COMPLETION_POLL_ATTEMPTS_V1 + 1
+            Err(Gfx942CompletionWaitFailureV1::Terminal(
+                Gfx942CompletionErrorV1::InvalidPollBound {
+                    requested,
+                    maximum: MAX_COMPLETION_POLL_ATTEMPTS_V1,
+                }
+            )) if requested == MAX_COMPLETION_POLL_ATTEMPTS_V1 + 1
         ));
         assert_eq!(backend.observe_calls, 0);
         assert_eq!(

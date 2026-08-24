@@ -87,7 +87,7 @@ pub const GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_SHA256_V1: &str =
 
 /// Canonical contract for the bounded multi-allocation R2 adapter.
 pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-shared-gtt-memory-r5-v1\n",
+    "profile=fe2o3-mi300x-shared-gtt-memory-r6-v1\n",
     "base_memory_profile_sha256=7bdca672c4921ee56a850d41040045f4a8fbe5a20176628a4ea982dd80fbe8ec\n",
     "kfd_memory_schema_sha256=e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a\n",
     "profiles=host-visible-coherent:0x84000002,kernarg:0x86000002,aql-queue:0x8e000002,executable:0xc4000002\n",
@@ -98,8 +98,8 @@ pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
     "queue-bridge=crate-private-role-marked-linear-mapped-capabilities,ring-control-eop-cwsr-completion-signal-dispatch-code-dispatch-kernarg-and-dispatch-host-data-roles,private-va-mapping-publication-facts,no-public-mint\n",
     "device-dispatch-bridge=exact-complete-distinct-set-of-every-live-mapped-c3-lease-required-before-model-transfer,actual-linear-lease-retained,private-address-facts\n",
     "queue-gtt-policy=ring:aql-special,control-and-completion-signals:host-visible-coherent,eop-and-cwsr:executable,not-rocr-equivalence\n",
-    "cpu_views=closure-scoped-before-map;mapped-completion-access-only-through-slot-bounded-acquire-observe-and-release-reset;mapped-dispatch-data-copy-is-crate-private-bounded-owned-and-generation-gated-by-the-retaining-queue,no-safe-mapped-borrow-escape\n",
-    "completion-bridge=exact-retained-host-coherent-mapping,private-64-byte-slot-index,backend-atomic-i64-acquire-observe-and-release-reset,currentness-sandwiched\n",
+    "cpu_views=closure-scoped-before-map;mapped-queue-diagnostic-access-only-through-private-packet-id-and-signal-slot-bounded-acquire-or-volatile-observation;mapped-completion-access-only-through-slot-bounded-acquire-observe-and-release-reset;mapped-dispatch-data-copy-is-crate-private-bounded-owned-and-generation-gated-by-the-retaining-queue,no-safe-mapped-borrow-escape\n",
+    "completion-bridge=exact-retained-ring-and-host-coherent-mappings,private-packet-id-and-64-byte-signal-slot-index,backend-atomic-u32-header-and-atomic-i64-value-acquire-observe,immutable-kind-volatile-observe,and-release-reset,currentness-sandwiched\n",
     "executable=cpu-construction-rw-to-vma-read-only-before-gpu-map,gpu-writable-flag-remains-contracted\n",
     "failure=global-quarantine-after-started-or-ambiguous-native-transaction,no-drop-cleanup-or-retry\n",
     "fork=current-base-contract,prot-none-dontfork-before-rw,no-raw-fork-clone-during-setup\n",
@@ -109,11 +109,11 @@ pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
 );
 
 pub const SHARED_GTT_MEMORY_PROFILE_SHA256_V1: &str =
-    "286ad8af398b666217d5ec8c0a19390a4736cfcf6624e363214c7488b8e2e535";
+    "1b046d5ea66bc56580930a59d8d0a4dabb1b129fd9e228aee5e8f72b4a7a6378";
 
 pub const SHARED_GTT_MEMORY_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
-    0x28, 0x6a, 0xd8, 0xaf, 0x39, 0x8b, 0x66, 0x62, 0x17, 0xd5, 0xec, 0x8c, 0x0a, 0x19, 0x39, 0x0a,
-    0x47, 0x36, 0xcf, 0xcf, 0x66, 0x24, 0xe3, 0x63, 0x21, 0x4c, 0x74, 0x88, 0xb8, 0xe2, 0xe5, 0x35,
+    0x1b, 0x04, 0x6d, 0x5e, 0xa6, 0x6b, 0xc5, 0x65, 0x80, 0x93, 0x0a, 0x59, 0xd8, 0xd0, 0xa4, 0xda,
+    0xbb, 0x1b, 0x12, 0x9f, 0xd9, 0xe2, 0x28, 0xae, 0xe5, 0xe8, 0xf7, 0x2b, 0x4a, 0x7a, 0x63, 0x78,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1617,6 +1617,23 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         self.check_currentness()
     }
 
+    fn observe_aql_packet_header<P: MutableGpuGttProfileV1>(
+        &mut self,
+        token: &mut SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>,
+        packet_id: u64,
+    ) -> Result<(u32, u16, u16), MemorySessionError> {
+        self.check_currentness()?;
+        let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
+        let requested = self.allocations[index].layout.requested_bytes;
+        let mapping = self.allocations[index]
+            .mapping
+            .as_mut()
+            .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+        let observation = B::observe_aql_packet_header_acquire(mapping, requested, packet_id)?;
+        self.check_currentness()?;
+        Ok(observation)
+    }
+
     fn observe_completion_signal(
         &mut self,
         token: &mut SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
@@ -1630,6 +1647,24 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             .as_mut()
             .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
         let observation = B::observe_completion_signal_acquire(mapping, requested, slot_index)?;
+        self.check_currentness()?;
+        Ok(observation)
+    }
+
+    fn observe_completion_signal_state(
+        &mut self,
+        token: &mut SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+        slot_index: u32,
+    ) -> Result<(i64, i64), MemorySessionError> {
+        self.check_currentness()?;
+        let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
+        let requested = self.allocations[index].layout.requested_bytes;
+        let mapping = self.allocations[index]
+            .mapping
+            .as_mut()
+            .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+        let observation =
+            B::observe_completion_signal_state_acquire(mapping, requested, slot_index)?;
         self.check_currentness()?;
         Ok(observation)
     }
@@ -2859,6 +2894,19 @@ impl SharedGttMemorySessionV1 {
             .publish_aql_header(&mut authority.token, slot_index, header)
     }
 
+    pub(crate) fn observe_aql_ring_packet_header(
+        &mut self,
+        authority: &mut SharedGttQueueResourceAuthorityV1<
+            AqlRingResourceRoleV1,
+            AqlQueueGttV1,
+            GttGpuAccessibleMutableV1,
+        >,
+        packet_id: u64,
+    ) -> Result<(u32, u16, u16), MemorySessionError> {
+        self.engine
+            .observe_aql_packet_header(&mut authority.token, packet_id)
+    }
+
     #[allow(dead_code)]
     pub(crate) fn observe_aql_completion_signal(
         &mut self,
@@ -2871,6 +2919,19 @@ impl SharedGttMemorySessionV1 {
     ) -> Result<fe2o3_aql::AqlCompletionObservationV1, MemorySessionError> {
         self.engine
             .observe_completion_signal(&mut authority.token, slot_index)
+    }
+
+    pub(crate) fn observe_aql_completion_signal_state(
+        &mut self,
+        authority: &mut SharedGttQueueResourceAuthorityV1<
+            AqlCompletionSignalResourceRoleV1,
+            HostVisibleCoherentGttV1,
+            GttGpuAccessibleMutableV1,
+        >,
+        slot_index: u32,
+    ) -> Result<(i64, i64), MemorySessionError> {
+        self.engine
+            .observe_completion_signal_state(&mut authority.token, slot_index)
     }
 
     pub(crate) fn observe_aql_completion_signals_in_current_scope(

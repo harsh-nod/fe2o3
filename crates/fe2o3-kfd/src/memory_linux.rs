@@ -8,7 +8,7 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use fe2o3_aql::{
     AMD_SIGNAL_BYTES_V1, AMD_SIGNAL_VALUE_PENDING_V1, AQL_INVALID_PACKET_HEADER_V1,
     AQL_KERNEL_DISPATCH_PACKET_BYTES_V1, AqlCompletionObservationV1, AqlDispatchOrderingV1,
-    classify_acquired_completion_value_v1,
+    AqlRingCapacityV1, classify_acquired_completion_value_v1,
 };
 use fe2o3_kfd_uapi::{
     AMDKFD_IOC_ACQUIRE_VM, AMDKFD_IOC_ALLOC_MEMORY_OF_GPU, AMDKFD_IOC_FREE_MEMORY_OF_GPU,
@@ -589,6 +589,34 @@ impl MemoryBackend for LinuxMemoryBackend {
         Ok(())
     }
 
+    fn observe_aql_packet_header_acquire(
+        mapping: &mut Self::Mapping,
+        requested_bytes: usize,
+        packet_id: u64,
+    ) -> Result<(u32, u16, u16), MemorySessionError> {
+        let ring_bytes = u32::try_from(requested_bytes)
+            .map_err(|_| malformed_aql_mapping("packet observation ring length"))?;
+        let capacity = AqlRingCapacityV1::from_ring_bytes(ring_bytes)
+            .map_err(|_| malformed_aql_mapping("packet observation ring capacity"))?;
+        let slot_index = u32::try_from(packet_id & capacity.mask())
+            .map_err(|_| malformed_aql_mapping("packet observation slot index"))?;
+        let offset = usize::try_from(slot_index)
+            .ok()
+            .and_then(|index| index.checked_mul(AQL_KERNEL_DISPATCH_PACKET_BYTES_V1))
+            .ok_or_else(|| malformed_aql_mapping("packet observation slot offset"))?;
+        let pointer = checked_mapping_pointer(
+            mapping,
+            requested_bytes,
+            offset,
+            core::mem::size_of::<AtomicU32>(),
+            core::mem::align_of::<AtomicU32>(),
+        )?;
+        // SAFETY: every admitted ring slot header is an initialized AtomicU32.
+        let full_header =
+            u32::from_le(unsafe { &*pointer.cast::<AtomicU32>() }.load(Ordering::Acquire));
+        Ok((slot_index, full_header as u16, (full_header >> 16) as u16))
+    }
+
     fn observe_completion_signal_acquire(
         mapping: &mut Self::Mapping,
         requested_bytes: usize,
@@ -597,6 +625,30 @@ impl MemoryBackend for LinuxMemoryBackend {
         let value =
             checked_completion_value(mapping, requested_bytes, slot_index)?.load(Ordering::Acquire);
         Ok(classify_acquired_completion_value_v1(value))
+    }
+
+    fn observe_completion_signal_state_acquire(
+        mapping: &mut Self::Mapping,
+        requested_bytes: usize,
+        slot_index: u32,
+    ) -> Result<(i64, i64), MemorySessionError> {
+        let offset = usize::try_from(slot_index)
+            .ok()
+            .and_then(|index| index.checked_mul(AMD_SIGNAL_BYTES_V1))
+            .ok_or_else(|| malformed_aql_mapping("completion state slot offset"))?;
+        let kind_pointer = checked_mapping_pointer(
+            mapping,
+            requested_bytes,
+            offset,
+            core::mem::size_of::<i64>(),
+            core::mem::align_of::<i64>(),
+        )?;
+        // SAFETY: the exact admitted signal kind word remains inside the live
+        // mapping and immutable after initialization.
+        let kind = i64::from_le(unsafe { core::ptr::read_volatile(kind_pointer.cast::<i64>()) });
+        let value =
+            checked_completion_value(mapping, requested_bytes, slot_index)?.load(Ordering::Acquire);
+        Ok((kind, value))
     }
 
     fn reset_completion_signal_release(
@@ -753,6 +805,9 @@ mod tests {
     #[repr(C, align(64))]
     struct OnePacket([u8; AQL_KERNEL_DISPATCH_PACKET_BYTES_V1]);
 
+    #[repr(C, align(64))]
+    struct MinimumRing([u8; 4096]);
+
     #[test]
     fn mapped_packet_accepts_exact_wait_for_prior_release_header() {
         let mut packet = OnePacket([0; AQL_KERNEL_DISPATCH_PACKET_BYTES_V1]);
@@ -793,6 +848,33 @@ mod tests {
     }
 
     #[test]
+    fn mapped_packet_observation_is_acquiring_and_wraps_private_slot() {
+        let mut ring = MinimumRing([0; 4096]);
+        let wrapped_slot = 3_usize;
+        let offset = wrapped_slot * AQL_KERNEL_DISPATCH_PACKET_BYTES_V1;
+        ring.0[offset..offset + 4].copy_from_slice(&0x0003_1502_u32.to_le_bytes());
+        let mut mapping = LinuxCpuMapping {
+            address: NonNull::from(&mut ring).cast(),
+            bytes: ring.0.len(),
+            active: true,
+            accessible: true,
+        };
+
+        assert_eq!(
+            LinuxMemoryBackend::observe_aql_packet_header_acquire(
+                &mut mapping,
+                4096,
+                64 + wrapped_slot as u64,
+            )
+            .unwrap(),
+            (wrapped_slot as u32, 0x1502, 3)
+        );
+        assert!(
+            LinuxMemoryBackend::observe_aql_packet_header_acquire(&mut mapping, 63, 0).is_err()
+        );
+    }
+
+    #[test]
     fn mapped_completion_slots_use_exact_acquire_and_release_atomics() {
         let mut signals = TwoSignals([
             AmdBusyCompletionSignalV1::new_pending(),
@@ -813,6 +895,18 @@ mod tests {
             .unwrap(),
             AqlCompletionObservationV1::Pending
         );
+        assert_eq!(
+            LinuxMemoryBackend::observe_completion_signal_state_acquire(
+                &mut mapping,
+                2 * AMD_SIGNAL_BYTES_V1,
+                1,
+            )
+            .unwrap(),
+            (
+                fe2o3_aql::AMD_SIGNAL_KIND_USER_V1,
+                AMD_SIGNAL_VALUE_PENDING_V1
+            )
+        );
         checked_completion_value(&mut mapping, 2 * AMD_SIGNAL_BYTES_V1, 1)
             .unwrap()
             .store(0, Ordering::Release);
@@ -824,6 +918,15 @@ mod tests {
             )
             .unwrap(),
             AqlCompletionObservationV1::Completed
+        );
+        assert_eq!(
+            LinuxMemoryBackend::observe_completion_signal_state_acquire(
+                &mut mapping,
+                2 * AMD_SIGNAL_BYTES_V1,
+                1,
+            )
+            .unwrap(),
+            (fe2o3_aql::AMD_SIGNAL_KIND_USER_V1, 0)
         );
         LinuxMemoryBackend::reset_completion_signal_release(
             &mut mapping,
@@ -842,6 +945,14 @@ mod tests {
         );
         assert!(
             LinuxMemoryBackend::observe_completion_signal_acquire(
+                &mut mapping,
+                2 * AMD_SIGNAL_BYTES_V1,
+                2,
+            )
+            .is_err()
+        );
+        assert!(
+            LinuxMemoryBackend::observe_completion_signal_state_acquire(
                 &mut mapping,
                 2 * AMD_SIGNAL_BYTES_V1,
                 2,
