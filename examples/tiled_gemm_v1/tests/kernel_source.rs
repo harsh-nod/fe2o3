@@ -144,7 +144,7 @@ fn executable_function_body_contains_the_slice1_algorithm() {
     let calls = calls(kernel);
     for required in [
         "index_1d",
-        "from_bits",
+        "row_major",
         "current",
         "gfx942_lds_bf16_tile_pair_m16x16_v1",
         "gfx942_publish_lds_bf16_tile_pair_m16x16_v1",
@@ -157,6 +157,8 @@ fn executable_function_body_contains_the_slice1_algorithm() {
     for required in [
         "write_mfma_fragment",
         "read_mfma_fragment",
+        "load_m16k16",
+        "load_k16n16",
         "multiply_accumulate",
         "into_values",
         "checked_block",
