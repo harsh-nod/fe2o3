@@ -19,8 +19,9 @@ use super::completion::{
     COMPLETION_SIGNAL_ARENA_BYTES_V1, CompletionPacketTemplateV1, CompletionSignalArenaOwnerV1,
     Gfx942CompletedBatchV1, Gfx942CompletionBatchV1, Gfx942CompletionErrorV1,
     Gfx942CompletionPollV1, Gfx942CompletionPollWithProgressV1,
-    Gfx942CompletionRecycleObservationV1, NativeCompletionSignalBackendV1,
-    initialize_pending_completion_signal_arena,
+    Gfx942CompletionRecycleObservationV1, Gfx942CompletionWaitFailureV1,
+    Gfx942TimeoutExecutionObservationV1, Gfx942TimeoutSignalObservationV1,
+    NativeCompletionSignalBackendV1, initialize_pending_completion_signal_arena,
 };
 use super::dispatch_binding::{
     DeviceDataAllocationInputV1, DispatchGeometryV1, DispatchResourceOwnerV1,
@@ -55,7 +56,8 @@ use crate::{
     SHARED_GTT_MEMORY_PROFILE_SHA256_V1, plan_gfx942_aql_queue_resources,
 };
 use fe2o3_aql::{
-    AqlKernelDispatchPacketV1, AqlPreparedKernelDispatchBatchV2, AqlPreparedKernelDispatchV1,
+    AqlCompletionObservationV1, AqlKernelDispatchPacketV1, AqlPreparedKernelDispatchBatchV2,
+    AqlPreparedKernelDispatchV1, classify_acquired_completion_value_v1,
 };
 
 const CONTROL_BYTES: usize = 4_096;
@@ -63,13 +65,13 @@ static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and fixed-batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r20-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r21-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
-    "memory_profile_sha256=286ad8af398b666217d5ec8c0a19390a4736cfcf6624e363214c7488b8e2e535\n",
+    "memory_profile_sha256=1b046d5ea66bc56580930a59d8d0a4dabb1b129fd9e228aee5e8f72b4a7a6378\n",
     "queue_resource_profile_sha256=b8317e4288e14c6d7546b53887ec2a10e1938ffba9595271d174a2a652320f4f\n",
     "aql_dispatch_schema_sha256=82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0\n",
     "aql_fixed_batch_schema_sha256=a3c74fe4aa26a62772253de267812f2fb1626247685d8c4e8ed8bbb2a5a9e34a\n",
-    "aql_completion_schema_sha256=9e4c70e71001d7de3270bce4f1b1f0afbaafa9b81ad5b3e18e39f507c2375306\n",
+    "aql_completion_schema_sha256=2cbc02677fc02a906090875f63ff01db82d2eba0888934ee74a7e0f3b82d7fb3\n",
     "dispatch_binding_schema_sha256=4307f4e7aedd1a1b8582fd150966fb5d8b9a4c95955759abcf5d755faa113da4\n",
     "event_schema_sha256=8d754af12ed2fcd0c238e1f9e38fbbdab053f44fc5d613b227fdcdd616fcc849\n",
     "runtime_enable_schema_sha256=4c762d1e35a5940f0972290151de51e6e19722f81874a6446c66ddc70a062ac1\n",
@@ -84,24 +86,24 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "runtime=one-process-global-fe2o3-owner;exact-enable-r_debug0-mode1-capabilities0-before-event-and-any-queue;ttmp-save-excluded;foreign-kfd-clients-excluded\n",
     "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-explicit-two-atomic-u64-zero;completion-arena-exact-8192-typed-64-byte-user-signals-pending-1-before-gpu-map;one-first-internal-auto-reset-signal-event-id-1-through-255-before-create;8-cwsr-bo-and-shadow-headers-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,one-first-shadow-aligned-error-reason-zero,exact-event-id\n",
     "submission=crate-private-non-clone-single-producer,aql-fixed-batch-v2-count-1-through-8192-and-ring-capacity-bounded,heap-owned-fixed-cardinality-state,no-mapped-slice-or-raw-pointer-escape,rptr-wptr-acquire,one-actual-wptr-acq-rel-fetch-add-by-count,all-invalid-bodies-before-per-packet-independent-0x1402-or-wait-for-prior-0x1502-ordered-u32-release-headers,conservative-service-default-wait-for-prior,release-fence-x86-sfence,one-final-volatile-u64-doorbell-store-of-last-packet-id\n",
-    "completion=crate-private-non-clone-generation-bound-batches,unique-signal-per-packet,signal-code-kernarg-dispatch-and-queue-generations-retained,bounded-atomic-acquire-poll-with-one-pre-post-currentness-envelope-and-same-scan-redacted-progress,pending-ready-fault-timeout-distinct,release-reset-only-after-all-signals-zero\n",
+    "completion=crate-private-non-clone-generation-bound-batches,unique-signal-per-packet,signal-code-kernarg-dispatch-and-queue-generations-retained,bounded-atomic-acquire-poll-with-one-pre-post-currentness-envelope-and-same-scan-redacted-progress,pending-ready-fault-timeout-distinct,timeout-retains-private-batch-through-sequential-pre-post-currentness-enveloped-addressless-write-read-counter-packet-zero-header-setup-signal-zero-kind-value-and-CWSR-reason-observation-before-poison,release-reset-only-after-all-signals-zero\n",
     "dispatch=public-addressless-linear-fixed-batch,1-through-32-inspected-programs,1-through-8192-packets,validated-code-materialization,zero-pointer-kernarg-internal-injection,metadata-derived-COV6-geometry-and-dynamic-lds-implicit-subset-with-caller-zero-suffix,queue-pointer-and-runtime-address-fields-rejected,exact-mapped-data-set-retained-even-when-unreferenced-by-current-batch,referenced-subset-only-inspected-access-and-sealed-initialization-gates,ordinary-release-or-exact-recycle-gated-attached-or-detached-return-after-destroy\n",
     "readback=coherent-host-data-only,owned-bounded-copy-after-exact-acquire-observed-completion-and-signal-recycle,exact-dispatch-generation,ordinary-range-within-one-inspected-write-or-readwrite-binding-or-exact-admitted-initialized-enclosing-snapshot,no-native-address-or-mapped-borrow,no-whole-allocation-initialization-promotion\n",
     "rebinding=exact-completion-and-signal-recycle-before-detach,code-and-kernarg-released,queue-ring-signal-event-doorbell-and-runtime-remain-live,exact-complete-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,all-mapped-data-retained-with-inspected-effects-only-for-currently-referenced-subset,new-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest\n",
     "doorbell=complete-8192-byte-kfd-slice,exact-returned-offset,madv-dontfork,no-public-address-pointer-or-mmio-accessor\n",
     "lifecycle=runtime-enable,event-create,queue-create;all-completion-batches-observed-and-recycled;queue-destroy,event-destroy,runtime-disable,doorbell-release,cwsr-queue-resource-and-completion-arena-release;no-drop-ioctl-store-munmap-or-free\n",
-    "currentness=pid-and-device-before-publication,after-bounded-preparation,and-before-mmio\n",
+    "currentness=pid-and-device-before-publication,after-bounded-preparation,and-before-mmio;timeout-observation-confirms-device-runtime-event-and-CWSR-structure-before-and-after-its-sequential-racy-loads\n",
     "proof=queue-and-aql-model-obligations-only,cpu-gpu-atomic-coherence-mmio-driver-firmware-refinement-contracted\n",
     "event-lifecycle=linear-private-kfd-event,no-event-page-mmap,queue-destroy-before-event-destroy-before-runtime-disable-before-cwsr-free-and-full-reservation-munmap,no-drop-ioctl-or-unmap\n",
     "cwsr-address-semantics=bo-cpu-vma-is-not-create-address;exact-8-owned-fixed-private-anonymous-pages,prot-none-then-dontfork-then-rw;headers-mirrored-and-read-back-in-bo-and-shadows;cpu-visible-debug-suspend-checkpoint-wave-state-copy-unsupported;ordinary-hardware-preemption-restore-contracted\n",
-    "exception-observation=crate-private-one-shot-timeout-0-through-1000ms,wait-and-volatile-payload-must-agree,unknown-reason-rejected,timeout-is-terminal-racy-snapshot-not-absence-proof,no-atomic-or-lossless-delivery-claim\n",
-    "failure=counter-divergence-regression-currentness-and-any-possible-side-effect-runtime-event-shadow-wait-publication-completion-observation-timeout-reset-or-teardown-error-terminally-poisons;no-in-process-recovery-rollback-or-cleanup-after-terminal-observation;only-pre-side-effect-full-or-insufficient-space-retryable\n",
-    "excluded=live-batch-execution-evidence,actual-hardware-completion-fault-or-exception-delivery-refinement,effect-correctness-beyond-inspected-metadata,full-write-coverage,numerical-correctness,update,multi-producer,foreign-kfd-process-coordination,cpu-visible-debug-suspend-checkpoint-wave-state-copy\n",
+    "exception-observation=crate-private-one-shot-timeout-0-through-1000ms-wait-and-terminal-timeout-direct-volatile-CWSR-reason,wait-and-payload-must-agree,unknown-reason-rejected,zero-reason-is-racy-snapshot-not-absence-proof,no-atomic-or-lossless-delivery-claim\n",
+    "failure=counter-divergence-regression-currentness-and-any-possible-side-effect-runtime-event-shadow-wait-publication-completion-observation-timeout-reset-or-teardown-error-terminally-poisons;timeout-snapshot-capture-failure-reports-currentness-or-observation-instead-of-unbound-evidence;no-in-process-recovery-rollback-or-cleanup-after-terminal-observation;only-pre-side-effect-full-or-insufficient-space-retryable\n",
+    "excluded=live-batch-success-evidence,actual-hardware-completion-fault-or-exception-delivery-refinement,effect-correctness-beyond-inspected-metadata,full-write-coverage,numerical-correctness,update,multi-producer,foreign-kfd-process-coordination,cpu-visible-debug-suspend-checkpoint-wave-state-copy\n",
 );
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "7d6b4cd393d4a7abdf7022c640c3a6d046cae9aa8d59ccbdd3293f21a90981fc";
+    "2dd03306031fb2a2fc577bb76c21660677ba624b7b8ddfcc4a76c0d02bbf0508";
 
 type RingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -1660,6 +1662,117 @@ impl ComputeAqlQueueSessionV1 {
         result.map_err(Into::into)
     }
 
+    fn check_timeout_observation_currentness(&mut self) -> Result<(), Gfx942CompletionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942CompletionErrorV1::Currentness);
+        }
+        let engine = self
+            .engine
+            .as_mut()
+            .ok_or(Gfx942CompletionErrorV1::Currentness)?;
+        if engine.authority_poisoned
+            || engine.phase(self.key) != Some(ComputeAqlQueuePhaseV1::Active)
+        {
+            return Err(Gfx942CompletionErrorV1::Currentness);
+        }
+        engine
+            .backend
+            .session
+            .check_queue_currentness()
+            .map_err(|_| Gfx942CompletionErrorV1::Currentness)?;
+        let exception = self
+            .exception
+            .as_ref()
+            .ok_or(Gfx942CompletionErrorV1::Currentness)?;
+        exception
+            .runtime
+            .validate_queue_live(
+                engine.backend.session.kfd_fd(),
+                engine.backend.session.opener_pid(),
+            )
+            .map_err(|_| Gfx942CompletionErrorV1::Currentness)?;
+        exception
+            .event
+            .validate_live_with_shadows_for_diagnostic(
+                engine.backend.session.kfd_fd(),
+                engine.backend.session.opener_pid(),
+                &exception.shadows,
+            )
+            .map_err(|_| Gfx942CompletionErrorV1::Currentness)
+    }
+
+    fn observe_completion_timeout<const N: usize>(
+        &mut self,
+        batch: &Gfx942CompletionBatchV1<N>,
+    ) -> Result<Gfx942TimeoutExecutionObservationV1, Gfx942CompletionErrorV1> {
+        self.check_timeout_observation_currentness()?;
+        let (first_packet_id, first_signal_slot) = batch.first_packet_and_signal_slot()?;
+        let (
+            (write_counter, read_counter),
+            (_, first_packet_header, first_packet_setup),
+            (kind, value),
+            reason,
+        ) = {
+            let engine = self
+                .engine
+                .as_mut()
+                .ok_or(Gfx942CompletionErrorV1::Observation)?;
+            if engine.phase(self.key) != Some(ComputeAqlQueuePhaseV1::Active) {
+                return Err(Gfx942CompletionErrorV1::Observation);
+            }
+            let resource = engine
+                .resources
+                .iter_mut()
+                .find(|resource| resource.key == self.key)
+                .ok_or(Gfx942CompletionErrorV1::Observation)?;
+            let authority = resource
+                .authority
+                .as_mut()
+                .ok_or(Gfx942CompletionErrorV1::Observation)?;
+            let memory = &mut engine.backend.session;
+            let counters = memory
+                .observe_aql_control_counters(&mut authority.control)
+                .map_err(map_timeout_memory_observation_error)?;
+            let packet = memory
+                .observe_aql_ring_packet_header(&mut authority.ring, first_packet_id)
+                .map_err(map_timeout_memory_observation_error)?;
+            let signals = self
+                .completion_signals
+                .as_mut()
+                .ok_or(Gfx942CompletionErrorV1::Observation)?;
+            let signal = memory
+                .observe_aql_completion_signal_state(signals, first_signal_slot)
+                .map_err(map_timeout_memory_observation_error)?;
+            let reason = self
+                .exception
+                .as_ref()
+                .ok_or(Gfx942CompletionErrorV1::Observation)?
+                .shadows
+                .observe_reason()
+                .map_err(|_| Gfx942CompletionErrorV1::Observation)?;
+            (counters, packet, signal, reason)
+        };
+        self.check_timeout_observation_currentness()?;
+        let first_signal = match classify_acquired_completion_value_v1(value) {
+            AqlCompletionObservationV1::Pending => Gfx942TimeoutSignalObservationV1::Pending,
+            AqlCompletionObservationV1::Completed => Gfx942TimeoutSignalObservationV1::Completed,
+            AqlCompletionObservationV1::Unexpected(value) => {
+                Gfx942TimeoutSignalObservationV1::Fault(value)
+            }
+        };
+        let packet_count = u16::try_from(N).map_err(|_| Gfx942CompletionErrorV1::Observation)?;
+        Ok(Gfx942TimeoutExecutionObservationV1::new(
+            packet_count,
+            write_counter,
+            read_counter,
+            first_packet_header,
+            first_packet_setup,
+            kind,
+            first_signal,
+            reason.get(),
+        ))
+    }
+
     #[allow(dead_code)]
     pub(crate) fn wait_completion_batch<const N: usize>(
         &mut self,
@@ -1699,10 +1812,28 @@ impl ComputeAqlQueueSessionV1 {
                 };
                 owner.wait_bounded(batch, polls, &mut backend)
             };
-        if result.is_err() {
-            self.poison_terminal();
+        match result {
+            Ok(completed) => Ok(completed),
+            Err(Gfx942CompletionWaitFailureV1::Terminal(error)) => {
+                self.poison_terminal();
+                Err(error.into())
+            }
+            Err(Gfx942CompletionWaitFailureV1::Timeout { batch, polls }) => {
+                let observation = observe_then_poison(
+                    self,
+                    |session| session.observe_completion_timeout(&batch),
+                    Self::poison_terminal,
+                );
+                match observation {
+                    Ok(observation) => Err(Gfx942CompletionErrorV1::Timeout {
+                        polls,
+                        observation: Box::new(observation),
+                    }
+                    .into()),
+                    Err(error) => Err(error.into()),
+                }
+            }
         }
-        result.map_err(Into::into)
     }
 
     #[allow(dead_code)]
@@ -2277,6 +2408,26 @@ fn digest_id(
     IdentityDigestV1::from_untrusted_bytes(hasher.finalize().into())
 }
 
+fn map_timeout_memory_observation_error(error: MemorySessionError) -> Gfx942CompletionErrorV1 {
+    match error {
+        MemorySessionError::Device(_)
+        | MemorySessionError::ProcessChanged
+        | MemorySessionError::ProcessVmStatePoisoned
+        | MemorySessionError::SharedSessionQuarantined => Gfx942CompletionErrorV1::Currentness,
+        _ => Gfx942CompletionErrorV1::Observation,
+    }
+}
+
+fn observe_then_poison<S, T, E>(
+    state: &mut S,
+    observe: impl FnOnce(&mut S) -> Result<T, E>,
+    poison: impl FnOnce(&mut S),
+) -> Result<T, E> {
+    let observation = observe(state);
+    poison(state);
+    observation
+}
+
 fn map_native(error: NativeQueueAdapterErrorV1) -> ComputeAqlQueueSessionErrorV1 {
     let detail = match error {
         NativeQueueAdapterErrorV1::ProcessChanged => "queue process changed",
@@ -2316,6 +2467,48 @@ fn map_submission(error: NativeAqlSubmissionErrorV1) -> ComputeAqlQueueSessionEr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timeout_capture_always_precedes_terminal_poison() {
+        #[derive(Default)]
+        struct State {
+            poisoned: bool,
+            observed_before_poison: bool,
+        }
+
+        for observation in [Ok(7_u8), Err(11_u8)] {
+            let mut state = State::default();
+            let result = observe_then_poison(
+                &mut state,
+                |state| {
+                    state.observed_before_poison = !state.poisoned;
+                    observation
+                },
+                |state| state.poisoned = true,
+            );
+            assert_eq!(result, observation);
+            assert!(state.observed_before_poison);
+            assert!(state.poisoned);
+        }
+    }
+
+    #[test]
+    fn timeout_memory_errors_preserve_currentness_classification() {
+        for error in [
+            MemorySessionError::ProcessChanged,
+            MemorySessionError::ProcessVmStatePoisoned,
+            MemorySessionError::SharedSessionQuarantined,
+        ] {
+            assert_eq!(
+                map_timeout_memory_observation_error(error),
+                Gfx942CompletionErrorV1::Currentness
+            );
+        }
+        assert_eq!(
+            map_timeout_memory_observation_error(MemorySessionError::InvalidAllocationAuthority),
+            Gfx942CompletionErrorV1::Observation
+        );
+    }
 
     fn detached_preflight(
         dispatch_attached: bool,
@@ -2463,7 +2656,7 @@ mod tests {
         );
         assert_eq!(
             super::super::completion::GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1,
-            "9e4c70e71001d7de3270bce4f1b1f0afbaafa9b81ad5b3e18e39f507c2375306"
+            "2cbc02677fc02a906090875f63ff01db82d2eba0888934ee74a7e0f3b82d7fb3"
         );
         assert_eq!(
             super::super::dispatch_binding::GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1,
@@ -2471,7 +2664,7 @@ mod tests {
         );
         assert_eq!(
             SHARED_GTT_MEMORY_PROFILE_SHA256_V1,
-            "286ad8af398b666217d5ec8c0a19390a4736cfcf6624e363214c7488b8e2e535"
+            "1b046d5ea66bc56580930a59d8d0a4dabb1b129fd9e228aee5e8f72b4a7a6378"
         );
         assert_eq!(
             fe2o3_kfd_uapi::KFD_RUNTIME_ENABLE_SCHEMA_SHA256,

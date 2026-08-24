@@ -529,6 +529,19 @@ impl LinuxQueueExceptionEventV1 {
         shadows.validate_readback()
     }
 
+    pub(crate) fn validate_live_with_shadows_for_diagnostic(
+        &self,
+        kfd: BorrowedFd<'_>,
+        opener_pid: u32,
+        shadows: &LinuxCwsrShadowPagesV1,
+    ) -> Result<(), LinuxDoorbellErrorV1> {
+        self.check_binding(kfd, opener_pid)?;
+        if !shadows.matches(self.binding) {
+            return Err(LinuxDoorbellErrorV1::Event("event/shadow substitution"));
+        }
+        shadows.validate_structural_readback()
+    }
+
     #[allow(dead_code)]
     pub(crate) fn wait_and_observe(
         &mut self,
@@ -795,7 +808,7 @@ impl LinuxCwsrShadowPagesV1 {
         self.active && self.binding == binding && self.binding.opener_pid == std::process::id()
     }
 
-    fn validate_readback(&self) -> Result<(), LinuxDoorbellErrorV1> {
+    fn validate_structural_readback(&self) -> Result<(), LinuxDoorbellErrorV1> {
         let payload = KfdQueueExceptionPayloadAddressV1::new(self.payload.as_ptr() as usize as u64)
             .ok_or(LinuxDoorbellErrorV1::Shadow("payload readback"))?;
         for (xcc, page) in self.pages.iter().enumerate() {
@@ -811,13 +824,18 @@ impl LinuxCwsrShadowPagesV1 {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn validate_readback(&self) -> Result<(), LinuxDoorbellErrorV1> {
+        self.validate_structural_readback()?;
         if self.observe_reason()?.get() != 0 {
             return Err(LinuxDoorbellErrorV1::Shadow("initial payload"));
         }
         Ok(())
     }
 
-    fn observe_reason(&self) -> Result<KfdQueueExceptionReasonV1, LinuxDoorbellErrorV1> {
+    pub(crate) fn observe_reason(&self) -> Result<KfdQueueExceptionReasonV1, LinuxDoorbellErrorV1> {
         if !self.active || self.binding.opener_pid != std::process::id() {
             return Err(LinuxDoorbellErrorV1::ProcessChanged);
         }
@@ -1235,6 +1253,61 @@ mod tests {
     use crate::queue::submit::{
         GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1, GFX942_CWSR_TOTAL_BYTES_V1, GFX942_CWSR_XCC_COUNT_V1,
     };
+    use std::os::fd::AsFd;
+
+    fn diagnostic_shadow_fixture() -> (
+        LinuxCwsrShadowPagesV1,
+        Vec<Box<[u8; 4096]>>,
+        LinuxQueueExceptionEventV1,
+        std::fs::File,
+    ) {
+        let file = std::fs::File::open("/dev/null").unwrap();
+        let binding = QueueExceptionBindingV1 {
+            event_id: KfdSignalEventIdV1::new(7).unwrap(),
+            opener_pid: std::process::id(),
+            raw_fd: file.as_fd().as_raw_fd(),
+        };
+        let mut storage: Vec<Box<[u8; 4096]>> = (0..GFX942_CWSR_XCC_COUNT_V1)
+            .map(|_| Box::new([0_u8; 4096]))
+            .collect();
+        let payload = NonNull::new(
+            // SAFETY: offset 64 is aligned and wholly inside the retained first page.
+            unsafe { storage[0].as_mut_ptr().add(QUEUE_EXCEPTION_PAYLOAD_OFFSET) }.cast::<u64>(),
+        )
+        .unwrap();
+        let payload_address =
+            KfdQueueExceptionPayloadAddressV1::new(payload.as_ptr() as usize as u64).unwrap();
+        for (xcc, page) in storage.iter_mut().enumerate() {
+            let header = crate::queue::submit::gfx942_cwsr_header_bytes(
+                xcc,
+                payload_address,
+                binding.event_id,
+            )
+            .unwrap();
+            page[..header.len()].copy_from_slice(&header);
+        }
+        let pages: [NonNull<c_void>; GFX942_CWSR_XCC_COUNT_V1] = storage
+            .iter_mut()
+            .map(|page| NonNull::new(page.as_mut_ptr().cast::<c_void>()).unwrap())
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let shadows = LinuxCwsrShadowPagesV1 {
+            pages,
+            payload,
+            binding,
+            #[cfg(feature = "live-validation")]
+            page_bytes: 4096,
+            active: true,
+        };
+        let event = LinuxQueueExceptionEventV1 {
+            binding,
+            active: true,
+            poisoned: false,
+            observation_used: false,
+        };
+        (shadows, storage, event, file)
+    }
 
     #[test]
     fn shadow_plan_is_exact_and_hostile_geometry_fails_closed() {
@@ -1290,6 +1363,43 @@ mod tests {
         assert!(admit_queue_exception_wait(KfdWaitResultV1::Complete, empty).is_err());
         assert!(admit_queue_exception_wait(KfdWaitResultV1::Timeout, fault).is_err());
         assert!(KfdQueueExceptionReasonV1::from_untrusted_wire(1 << 63).is_none());
+    }
+
+    #[test]
+    fn timeout_diagnostic_admits_reason_but_rejects_malformed_shadow_state() {
+        let (shadows, mut storage, event, file) = diagnostic_shadow_fixture();
+        // SAFETY: the fixture retains the aligned writable payload word.
+        unsafe { core::ptr::write_volatile(shadows.payload.as_ptr(), 1_u64.to_le()) };
+        assert!(
+            event
+                .validate_live_with_shadows_for_diagnostic(
+                    file.as_fd(),
+                    std::process::id(),
+                    &shadows,
+                )
+                .is_ok()
+        );
+        assert!(
+            event
+                .validate_live_with_shadows(file.as_fd(), std::process::id(), &shadows)
+                .is_err()
+        );
+        assert_eq!(shadows.observe_reason().unwrap().get(), 1);
+
+        // SAFETY: the fixture retains the aligned writable payload word.
+        unsafe { core::ptr::write_volatile(shadows.payload.as_ptr(), (1_u64 << 63).to_le()) };
+        assert!(shadows.observe_reason().is_err());
+
+        storage[1][0] ^= 1;
+        assert!(
+            event
+                .validate_live_with_shadows_for_diagnostic(
+                    file.as_fd(),
+                    std::process::id(),
+                    &shadows,
+                )
+                .is_err()
+        );
     }
 
     #[test]

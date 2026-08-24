@@ -9,9 +9,10 @@ use fe2o3_kfd::{
     ComputeAqlQueueDestroyedV1, ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1,
     ComputeAqlQueueSessionV1, Gfx942CompletedDispatchBatchV1, Gfx942CompletedDispatchReadRequestV1,
     Gfx942CompletedDispatchReadbackV1, Gfx942CompletedDispatchSnapshotRequestV1,
-    Gfx942CompletionRecycleObservationV1, Gfx942DeviceContentDescriptorV1, Gfx942DispatchBatchV1,
-    Gfx942DispatchPollWithProgressV1, Gfx942DispatchProgressV1, Gfx942FixedDispatchDataV1,
-    Gfx942RecycledDispatchResourcesV1,
+    Gfx942CompletionErrorV1, Gfx942CompletionRecycleObservationV1, Gfx942DeviceContentDescriptorV1,
+    Gfx942DispatchBatchV1, Gfx942DispatchPollWithProgressV1, Gfx942DispatchProgressV1,
+    Gfx942FixedDispatchDataV1, Gfx942RecycledDispatchResourcesV1,
+    Gfx942TimeoutExecutionObservationV1,
 };
 
 use crate::allocation::{
@@ -26,25 +27,25 @@ use crate::batch::ServiceFixedBatchV1;
 
 /// Frozen claim boundary for the reusable service queue composition layer.
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-service-addressless-fixed-queue-r9-v1\n",
+    "profile=fe2o3-service-addressless-fixed-queue-r10-v1\n",
     "queue=one-long-lived-kfd-compute-aql-owner,ring-event-doorbell-and-signal-resources-retained-across-rebind\n",
     "batch=1-through-8192-fixed-packets,conservative-wait-for-prior-ordering-default-with-explicit-independent-opt-in,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges,optional-initialized-enclosing-host-snapshot-associated-with-one-strict-interior\n",
     "implicit-kernarg=exact-trailing-256-byte-COV6-caller-zero-suffix,lower-owner-privately-populates-metadata-derived-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds,queue-pointer-and-runtime-service-or-address-fields-rejected\n",
     "publication=one-reservation-one-write-counter-fetch-add,one-retained-final-ordering-header-per-packet,one-final-doorbell-per-fixed-batch\n",
-    "custody=prepared-published-completed-recycled-unbound-linear-service-types,consuming-poll-with-progress-returns-pending-or-completed-custody-plus-same-scan-redacted-counts-and-first-pending-index,exact-completion-and-signal-recycle-before-detach-rebind-or-attached-or-unbound-returning-destroy\n",
+    "custody=prepared-published-completed-recycled-unbound-linear-service-types,consuming-poll-with-progress-returns-pending-or-completed-custody-plus-same-scan-redacted-counts-and-first-pending-index,terminal-timeout-failure-borrows-addressless-currentness-enveloped-execution-observation,exact-completion-and-signal-recycle-before-detach-rebind-or-attached-or-unbound-returning-destroy\n",
     "data=read-and-readwrite-require-sealed-full-initialization,write-only-may-consume-uninitialized-exclusive-storage,initialized-state-retained-after-generic-completion-without-stale-content-digest\n",
     "subleases=whole-native-allocation-owner-retained,partition-registry-transfers-with-ledger,partitioned-bindings-require-member-index-and-contained-offset-extent,detached-initialized-replacement-preflights-and-atomically-installs-an-exact-new-partition,replacement-denies-old-allocation-generation\n",
     "readback=caller-can-mint-only-from-current-recycled-owner,request-binds-exact-dispatch-generation-and-owner-checked-host-allocation-generation,lower-owner-allows-an-ordinary-range-within-one-inspected-write-or-readwrite-binding-or-one-exact-declared-initialized-enclosing-snapshot-with-an-isolated-writable-interior-and-returns-owned-bytes,no-address-or-initialization-promotion\n",
     "rebind=same-native-queue-may-consume-a-different-fixed-cardinality-program-geometry-kernarg-and-addressless-data-binding-after-exact-recycle\n",
     "release=return-attached-or-exact-ordered-detached-data-custody-after-exact-recycle,destroy-native-queue,restore-service-ledger,reverse-order-unmap-and-free\n",
-    "failure=pure-rejection-recovers-input-owners,ambiguous-native-side-effect-is-terminal-and-denies-retry,opaque-quarantine-retains-available-owner-state\n",
+    "failure=pure-rejection-recovers-input-owners,ambiguous-native-side-effect-is-terminal-and-denies-retry,opaque-quarantine-retains-available-owner-state,timeout-observation-grants-no-live-introspection-or-authority\n",
     "authority=no-native-address-handle-pointer-fd-mmio-signal-or-packet-template-export,no-caller-initialization-or-effect-assertion\n",
     "excluded=executable-correctness,effect-correctness-beyond-inspected-metadata,full-write-coverage,content-interpretation,numerical-correctness,hardware-execution,performance\n",
 );
 
 /// SHA-256 of [`SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "cc5e0b136a86e2e51ba732a2951bc137017b93d24e99b464be54f9054c760cda";
+    "a11e0245fab4f1959a0ab54e9b64f3aadb68831e391f7c9bce64f77bbce10036";
 
 /// Queue composition, transition, or teardown error.
 #[derive(Debug)]
@@ -113,9 +114,25 @@ impl ServiceQueueOperationFailureV1 {
         &self.error
     }
 
+    /// Returns addressless execution state only for a terminal completion timeout.
+    pub fn timeout_observation(&self) -> Option<&Gfx942TimeoutExecutionObservationV1> {
+        timeout_observation(&self.error)
+    }
+
     /// Consumes the failure and returns the opaque quarantined owner.
     pub fn into_quarantined(self) -> QuarantinedServiceQueueV1 {
         *self.retained
+    }
+}
+
+fn timeout_observation(
+    error: &ServiceQueueErrorV1,
+) -> Option<&Gfx942TimeoutExecutionObservationV1> {
+    match error {
+        ServiceQueueErrorV1::Kfd(ComputeAqlQueueSessionErrorV1::Completion(
+            Gfx942CompletionErrorV1::Timeout { observation, .. },
+        )) => Some(observation.as_ref()),
+        _ => None,
     }
 }
 
@@ -1372,6 +1389,14 @@ mod tests {
             write!(&mut actual, "{byte:02x}").unwrap();
         }
         assert_eq!(actual, SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1);
+    }
+
+    #[test]
+    fn timeout_observation_is_absent_from_non_timeout_errors() {
+        assert_eq!(
+            timeout_observation(&ServiceQueueErrorV1::BatchContract("not timeout")),
+            None
+        );
     }
 
     #[test]
