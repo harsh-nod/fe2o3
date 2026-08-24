@@ -34,6 +34,9 @@ mod queue_resources;
 mod queue;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod semantic_observation;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[allow(unsafe_code)]
 mod queue_linux;
 
@@ -57,6 +60,9 @@ pub use queue::{
     GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1, NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1,
     NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1,
 };
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use semantic_observation::*;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use currentness::ObservableDeviceCurrentnessV1;
