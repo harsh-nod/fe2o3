@@ -19,7 +19,8 @@ use fe2o3_kernel_analysis::{
     MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_EDGES, MAX_RANKED_BOUNDS_OPERATIONS,
 };
 use fe2o3_lower_mir_kernel::{
-    ProductionRankedSemanticProjectionReceiptV1, ProductionSemanticKirErrorV1,
+    ProductionRankedAccessSourceV1, ProductionRankedSemanticProjectionReceiptV1,
+    ProductionSemanticKirErrorV1,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAbiPassModeV1, SemanticAbiPointeeKindV1, SemanticAggregateKindV1,
@@ -69,6 +70,13 @@ pub(crate) struct ProjectedAccessSourceV1 {
     access: AccessKindAttr,
     memory_space: MemorySpaceAttr,
     source: SemanticSourceProvenanceV1,
+    semantic_site: Option<ProjectedSemanticAccessSiteV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProjectedSemanticAccessSiteV1 {
+    block: usize,
+    statement: Option<usize>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -79,6 +87,7 @@ struct GuardedRankedAccessV1 {
     access: AccessKindAttr,
     memory_space: MemorySpaceAttr,
     source: SemanticSourceProvenanceV1,
+    semantic_site: Option<ProjectedSemanticAccessSiteV1>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -380,6 +389,7 @@ struct ProjectedEffectSourceV1 {
     access: AccessKindAttr,
     memory_space: MemorySpaceAttr,
     source: SemanticSourceProvenanceV1,
+    semantic_site: Option<ProjectedSemanticAccessSiteV1>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -657,7 +667,9 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         let mut operations = Vec::new();
         let mut guarded_sites = Vec::new();
         let mut local_sources = Vec::new();
-        for statement in block.statements() {
+        for (statement_index, statement) in block.statements().iter().enumerate() {
+            let source_start = local_sources.len();
+            let guarded_start = guarded_sites.len();
             retain_incomplete(
                 project_statement_accesses(
                     semantic.types(),
@@ -677,7 +689,17 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
                 ),
                 &mut incomplete,
             )?;
+            bind_projected_access_site(
+                &mut local_sources[source_start..],
+                &mut guarded_sites[guarded_start..],
+                ProjectedSemanticAccessSiteV1 {
+                    block: block_index,
+                    statement: Some(statement_index),
+                },
+            )?;
         }
+        let source_start = local_sources.len();
+        let guarded_start = guarded_sites.len();
         retain_incomplete(
             project_terminator_accesses(
                 semantic.callables(),
@@ -726,6 +748,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
                 access: AccessKindAttr::Read,
                 memory_space: MemorySpaceAttr::Global,
                 source: effect.source,
+                semantic_site: None,
             });
         }
         if let Some(access) = intrinsic
@@ -744,6 +767,14 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
                 access,
             });
         }
+        bind_projected_access_site(
+            &mut local_sources[source_start..],
+            &mut guarded_sites[guarded_start..],
+            ProjectedSemanticAccessSiteV1 {
+                block: block_index,
+                statement: None,
+            },
+        )?;
         let projected = order_projected_block_effects(
             operations,
             guarded_sites,
@@ -807,6 +838,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         entry_operations,
         projected_blocks,
     )?;
+    let access_sources = production_access_sources(&blocks, &sources)?;
     let ranked_ir = format_ranked_cfg(function_name(root_function)?, &blocks)?;
     let kernel = ProductionRankedKernelV1::new(
         function_name(root_function)?,
@@ -830,9 +862,73 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         semantic_owner,
         lowering,
         ranked_ir,
+        access_sources,
     )
     .map_err(ProductionRankedProjectionErrorV1::Custody)?;
     Ok(ProductionRankedSemanticProgramV1 { receipt })
+}
+
+fn production_access_sources(
+    blocks: &[ProductionRankedBlockV1],
+    sources: &[ProjectedAccessSourceV1],
+) -> Result<Vec<ProductionRankedAccessSourceV1>, ProductionRankedProjectionErrorV1> {
+    let mut ordinals = HashMap::<(usize, Option<usize>), u32>::new();
+    let mut retained = Vec::new();
+    retained.try_reserve(sources.len()).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "ranked access correspondence storage cannot be reserved",
+        )
+    })?;
+    for source in sources {
+        let operation = blocks
+            .get(source.block)
+            .and_then(|block| block.operations().get(source.operation))
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "ranked access correspondence is outside the projected graph",
+            ))?;
+        if !matches!(
+            operation,
+            ProductionRankedOperationV1::Access { .. }
+                | ProductionRankedOperationV1::AtomicAccess { .. }
+        ) {
+            continue;
+        }
+        let site = source
+            .semantic_site
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "ranked access correspondence has no exact semantic site",
+            ))?;
+        let ordinal = ordinals.entry((site.block, site.statement)).or_default();
+        retained.push(ProductionRankedAccessSourceV1::new(
+            u32::try_from(site.block).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "semantic access block does not fit u32",
+                )
+            })?,
+            site.statement.map(u32::try_from).transpose().map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "semantic access statement does not fit u32",
+                )
+            })?,
+            *ordinal,
+            u32::try_from(source.block).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "ranked access block does not fit u32",
+                )
+            })?,
+            u32::try_from(source.operation).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "ranked access operation does not fit u32",
+                )
+            })?,
+        ));
+        *ordinal = ordinal
+            .checked_add(1)
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "semantic access ordinal overflow",
+            ))?;
+    }
+    Ok(retained)
 }
 
 fn project_rust_bounds_checks(
@@ -1366,6 +1462,7 @@ fn project_strided_read_effects_v1(
             access: AccessKindAttr::Read,
             memory_space: MemorySpaceAttr::Global,
             source: block.terminator().source(),
+            semantic_site: None,
         }));
     }
     Ok(projected)
@@ -3316,6 +3413,7 @@ fn project_intrinsic_contracts(
             access: AccessKindAttr::Write,
             memory_space: MemorySpaceAttr::Global,
             source: block.terminator().source(),
+            semantic_site: None,
         };
         let destination = simple_call_destination(call)?.index() as usize;
         let predicate = option_predicates.get_mut(destination).ok_or(
@@ -5635,6 +5733,28 @@ fn operation_defines_value(operation: &ProductionRankedOperationV1) -> bool {
     )
 }
 
+fn bind_projected_access_site(
+    sources: &mut [ProjectedAccessSourceV1],
+    guarded_sites: &mut [GuardedAccessSiteV1],
+    site: ProjectedSemanticAccessSiteV1,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    for source in sources {
+        if source.semantic_site.replace(site).is_some() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a projected access was attributed to multiple semantic sites",
+            ));
+        }
+    }
+    for guarded in guarded_sites {
+        if guarded.access.semantic_site.replace(site).is_some() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a guarded access was attributed to multiple semantic sites",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn order_projected_block_effects(
     operations: Vec<ProductionRankedOperationV1>,
     guarded_sites: Vec<GuardedAccessSiteV1>,
@@ -5657,6 +5777,7 @@ fn order_projected_block_effects(
             access: source.access,
             memory_space: source.memory_space,
             source: source.source,
+            semantic_site: source.semantic_site,
         });
     }
     let mut sites = guarded_sites.into_iter().peekable();
@@ -6050,6 +6171,7 @@ fn build_ranked_cfg(
                             access: source.access,
                             memory_space: source.memory_space,
                             source: source.source,
+                            semantic_site: source.semantic_site,
                         });
                     }
                     operations.push(operation);
@@ -6116,6 +6238,7 @@ fn build_ranked_cfg(
                         access: access.access,
                         memory_space: access.memory_space,
                         source: access.source,
+                        semantic_site: access.semantic_site,
                     });
                     push_block_at(
                         &mut blocks,
@@ -8666,6 +8789,7 @@ fn project_place_access_with_atomic(
                 access,
                 memory_space,
                 source,
+                semantic_site: None,
             },
         });
         return Ok(());
@@ -8716,6 +8840,7 @@ fn project_place_access_with_atomic(
         access,
         memory_space,
         source,
+        semantic_site: None,
     });
     Ok(())
 }
@@ -9580,6 +9705,7 @@ mod tests {
             access: AccessKindAttr::Write,
             memory_space: MemorySpaceAttr::Global,
             source: SemanticSourceProvenanceV1::unavailable(),
+            semantic_site: None,
         };
         let (blocks, sources, ranked_ir) = single_guarded_cfg(entry, guarded);
         assert_eq!(blocks.len(), 5);
@@ -9741,6 +9867,7 @@ mod tests {
                 access: AccessKindAttr::Write,
                 memory_space: MemorySpaceAttr::Global,
                 source: SemanticSourceProvenanceV1::unavailable(),
+                semantic_site: None,
             })
         };
         let barrier = || ProjectedBlockItemV1::Effect {
@@ -9860,6 +9987,7 @@ mod tests {
             access: AccessKindAttr::Write,
             memory_space: MemorySpaceAttr::Global,
             source: SemanticSourceProvenanceV1::unavailable(),
+            semantic_site: None,
         };
         let (blocks, sources, ranked_ir) = single_guarded_cfg(entry, guarded);
         assert_eq!(blocks.len(), 6);
@@ -14072,6 +14200,7 @@ mod tests {
                 access: AccessKindAttr::Read,
                 memory_space: MemorySpaceAttr::Global,
                 source: SemanticSourceProvenanceV1::unavailable(),
+                semantic_site: None,
             }));
         let (blocks, _) = build_ranked_cfg(
             &function,

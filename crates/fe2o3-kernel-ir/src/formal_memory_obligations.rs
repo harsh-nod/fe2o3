@@ -351,6 +351,7 @@ pub enum FormalMemoryIncompleteReason {
     UnsupportedIndexExpression {
         location: FunctionOperationLocation,
         index: ValueId,
+        allocation: FormalAllocationIdentity,
     },
     ElementWidthUnavailable {
         location: FunctionOperationLocation,
@@ -1061,6 +1062,7 @@ fn derive_pointer_expression(
                     FormalMemoryIncompleteReason::UnsupportedIndexExpression {
                         location: *definition_location,
                         index: *offset,
+                        allocation: base_expression.allocation,
                     }
                 }
                 IndexExpressionError::Overflow => {

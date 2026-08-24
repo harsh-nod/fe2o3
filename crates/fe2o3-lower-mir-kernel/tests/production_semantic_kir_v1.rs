@@ -882,6 +882,7 @@ fn ranked_checks_remain_in_custody_through_kir_and_formal_memory() {
                 semantic_owner(false, false),
                 ranked,
                 "func @semantic_kir_test { kernel.return }".to_owned(),
+                vec![],
             )
             .unwrap();
         let lowered = ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
@@ -936,6 +937,7 @@ fn ranked_trap_reaches_gfx942_llvm_as_trap_then_unreachable() {
         bounds_assert_owner(),
         ranked,
         "func @semantic_bounds_trap_test { kernel.trap }".to_owned(),
+        vec![],
     )
     .unwrap();
     let lowered = ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(

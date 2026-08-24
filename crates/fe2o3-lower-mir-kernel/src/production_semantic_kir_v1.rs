@@ -12,14 +12,14 @@ use std::{error::Error, fmt};
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, Axis, BarrierSemantics, BasicBlock,
     BinaryOp, BlockId, CastKind, CheckedBinaryOperator, ComparePredicate, Constant, Convergence,
-    F32MathFunction, FloatOperation, Function, FunctionId, FunctionOperationLocation, IndexKind,
-    IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
-    MAX_OPERATIONS_V1 as MAX_BLOCK_OPERATIONS_V1, MatrixOperation, MemoryAccess, MemoryOrdering,
-    Module, Operation, OperationKind, ScalarType, Signature, SwitchCase, SynchronizationScope,
-    TensorLayoutContractV1, Terminator, Type, UnaryOp, ValueDef, ValueId, VerificationErrors,
-    VerifiedCanonicalKernelIrErrorV7, VerifiedCanonicalKernelIrIdentityV7,
-    VerifiedCanonicalKernelIrV7, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
-    WorkgroupSize, verify_module,
+    F32MathFunction, FloatOperation, FormalMemoryIncompleteReason, Function, FunctionBody,
+    FunctionId, FunctionOperationLocation, IndexKind, IntrinsicKind, IntrinsicOperation, Kernel,
+    LaunchDomain, LaunchExtent, MAX_OPERATIONS_V1 as MAX_BLOCK_OPERATIONS_V1, MatrixOperation,
+    MemoryAccess, MemoryOrdering, Module, Operation, OperationKind, ScalarType, Signature,
+    SwitchCase, SynchronizationScope, TensorLayoutContractV1, Terminator, Type, UnaryOp, ValueDef,
+    ValueId, VerificationErrors, VerifiedCanonicalKernelIrErrorV7,
+    VerifiedCanonicalKernelIrIdentityV7, VerifiedCanonicalKernelIrV7, WaveOperation,
+    WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupSize, verify_module,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAggregateKindV1, SemanticAssertMessageV1, SemanticAxisV1, SemanticBinaryOpV1,
@@ -41,8 +41,8 @@ use fe2o3_mir_model::{
     semantic_option_producers_v1,
 };
 use fe2o3_pliron::{
-    ProductionRankedKernelLoweringInputV1, ProductionSemanticMirErrorV1,
-    ProductionSemanticMirOwnerV1,
+    ProductionRankedKernelLoweringInputV1, ProductionRankedOperationV1, ProductionRankedValueV1,
+    ProductionSemanticMirErrorV1, ProductionSemanticMirOwnerV1,
 };
 
 const DEFAULT_MAX_FUNCTIONS_V1: usize = 1_024;
@@ -435,6 +435,39 @@ impl Error for ProductionSemanticKirErrorV1 {
     }
 }
 
+/// Exact source and ranked-graph location of one projected memory access.
+///
+/// This is compiler-internal correspondence, not proof authority. It is
+/// revalidated against all three retained IR owners before formal admission.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ProductionRankedAccessSourceV1 {
+    semantic_block: u32,
+    semantic_statement: Option<u32>,
+    semantic_access_ordinal: u32,
+    ranked_block: u32,
+    ranked_operation: u32,
+}
+
+impl ProductionRankedAccessSourceV1 {
+    /// Constructs one compiler-projected access correspondence record.
+    #[doc(hidden)]
+    pub const fn new(
+        semantic_block: u32,
+        semantic_statement: Option<u32>,
+        semantic_access_ordinal: u32,
+        ranked_block: u32,
+        ranked_operation: u32,
+    ) -> Self {
+        Self {
+            semantic_block,
+            semantic_statement,
+            semantic_access_ordinal,
+            ranked_block,
+            ranked_operation,
+        }
+    }
+}
+
 /// Move-only custody for one compiler-asserted semantic-to-ranked projection.
 ///
 /// The public minting API is intentionally named as an internal compiler
@@ -448,6 +481,7 @@ pub struct ProductionRankedSemanticProjectionReceiptV1 {
     ranked_ir: String,
     semantic_sha256: [u8; 32],
     function_name: String,
+    access_sources: Box<[ProductionRankedAccessSourceV1]>,
 }
 
 impl fmt::Debug for ProductionRankedSemanticProjectionReceiptV1 {
@@ -456,6 +490,7 @@ impl fmt::Debug for ProductionRankedSemanticProjectionReceiptV1 {
             .debug_struct("ProductionRankedSemanticProjectionReceiptV1")
             .field("function_name", &self.function_name)
             .field("ranked_ir_bytes", &self.ranked_ir.len())
+            .field("access_sources", &self.access_sources.len())
             .finish_non_exhaustive()
     }
 }
@@ -472,6 +507,7 @@ impl ProductionRankedSemanticProjectionReceiptV1 {
         semantic: ProductionSemanticMirOwnerV1,
         lowering: ProductionRankedKernelLoweringInputV1,
         ranked_ir: String,
+        access_sources: Vec<ProductionRankedAccessSourceV1>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         semantic
             .verify_equivalence()
@@ -490,6 +526,14 @@ impl ProductionRankedSemanticProjectionReceiptV1 {
                 None,
                 None,
                 "ranked projection receipt has empty diagnostic IR",
+            ));
+        }
+        if !ranked_access_sources_are_well_formed(&lowering, &access_sources) {
+            return Err(unsupported(
+                0,
+                None,
+                None,
+                "ranked projection receipt has invalid access correspondence",
             ));
         }
         let document = semantic.semantic();
@@ -528,6 +572,7 @@ impl ProductionRankedSemanticProjectionReceiptV1 {
             semantic,
             lowering,
             ranked_ir,
+            access_sources: access_sources.into_boxed_slice(),
         })
     }
 
@@ -568,6 +613,7 @@ struct RetainedGenericKernelChecksV1 {
     function_name: String,
     ranked_ir: Box<str>,
     lowering: ProductionRankedKernelLoweringInputV1,
+    access_sources: Box<[ProductionRankedAccessSourceV1]>,
 }
 
 impl fmt::Debug for ProductionSemanticKirOwnerV1 {
@@ -625,6 +671,7 @@ impl ProductionSemanticKirOwnerV1 {
             ranked_ir,
             semantic_sha256,
             function_name,
+            access_sources,
         } = receipt;
         semantic
             .verify_equivalence()
@@ -652,6 +699,7 @@ impl ProductionSemanticKirOwnerV1 {
                 function_name,
                 ranked_ir: ranked_ir.into_boxed_str(),
                 lowering,
+                access_sources,
             }),
         };
         owner.verify_equivalence()?;
@@ -688,6 +736,10 @@ impl ProductionSemanticKirOwnerV1 {
                 || generic_checks.function_name != function.id.as_str()
                 || generic_checks.ranked_ir.is_empty()
                 || !mandatory_generic_checks_are_clean(&generic_checks.lowering)
+                || !ranked_access_sources_are_well_formed(
+                    &generic_checks.lowering,
+                    &generic_checks.access_sources,
+                )
             {
                 return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
             }
@@ -725,10 +777,21 @@ impl ProductionSemanticKirOwnerV1 {
         self.generic_checks.is_some()
     }
 
-    pub(crate) fn retained_generic_checks_discharge_dynamic_indices(&self) -> bool {
-        self.generic_checks
-            .as_ref()
-            .is_some_and(|checks| mandatory_generic_checks_are_clean(&checks.lowering))
+    pub(crate) fn retained_generic_checks_discharge_unsupported_indices(
+        &self,
+        reasons: &[FormalMemoryIncompleteReason],
+    ) -> bool {
+        self.generic_checks.as_ref().is_some_and(|checks| {
+            mandatory_generic_checks_are_clean(&checks.lowering)
+                && unsupported_indices_match_ranked_sources(
+                    &self.module,
+                    &self.correspondence,
+                    &checks.lowering,
+                    &checks.access_sources,
+                    reasons,
+                    self.limits.max_operations,
+                )
+        })
     }
 
     pub(crate) fn retained_generic_checks_discharge_guarded_accesses(
@@ -748,6 +811,404 @@ impl ProductionSemanticKirOwnerV1 {
     pub const fn grants_artifact_or_launch_authority(&self) -> bool {
         false
     }
+}
+
+fn ranked_access_sources_are_well_formed(
+    lowering: &ProductionRankedKernelLoweringInputV1,
+    sources: &[ProductionRankedAccessSourceV1],
+) -> bool {
+    if sources.len() > DEFAULT_MAX_OPERATIONS_V1 {
+        return false;
+    }
+    let mut ranked_locations = BTreeSet::new();
+    let mut source_ordinals = BTreeMap::<(u32, Option<u32>), BTreeSet<u32>>::new();
+    for source in sources {
+        let Some(operation) = lowering
+            .kernel()
+            .blocks()
+            .get(source.ranked_block as usize)
+            .and_then(|block| block.operations().get(source.ranked_operation as usize))
+        else {
+            return false;
+        };
+        if !matches!(
+            operation,
+            ProductionRankedOperationV1::Access { .. }
+                | ProductionRankedOperationV1::AtomicAccess { .. }
+        ) || !ranked_locations.insert((source.ranked_block, source.ranked_operation))
+        {
+            return false;
+        }
+        if !source_ordinals
+            .entry((source.semantic_block, source.semantic_statement))
+            .or_default()
+            .insert(source.semantic_access_ordinal)
+        {
+            return false;
+        }
+    }
+    source_ordinals.values().all(|ordinals| {
+        ordinals
+            .iter()
+            .copied()
+            .eq(0..u32::try_from(ordinals.len()).unwrap_or(u32::MAX))
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct SemanticAccessSiteV1 {
+    block: u32,
+    statement: Option<u32>,
+    ordinal: u32,
+}
+
+fn unsupported_indices_match_ranked_sources(
+    module: &Module,
+    correspondence: &SemanticKirCorrespondenceV1,
+    lowering: &ProductionRankedKernelLoweringInputV1,
+    sources: &[ProductionRankedAccessSourceV1],
+    reasons: &[FormalMemoryIncompleteReason],
+    max_operations: usize,
+) -> bool {
+    if reasons.len() > max_operations || !ranked_access_sources_are_well_formed(lowering, sources) {
+        return false;
+    }
+    let [kernel] = module.kernels.as_slice() else {
+        return false;
+    };
+    let Some(function) = module
+        .functions
+        .iter()
+        .find(|function| function.id == kernel.entry)
+    else {
+        return false;
+    };
+    let Some(body) = function.body.as_ref() else {
+        return false;
+    };
+    let operation_count = body.blocks.iter().try_fold(0_usize, |count, block| {
+        count.checked_add(block.operations.len())
+    });
+    if operation_count.is_none_or(|count| count > max_operations) {
+        return false;
+    }
+    let definitions = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.operations.iter())
+        .flat_map(|operation| {
+            operation
+                .result_ids()
+                .map(move |result| (result, operation))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut used_ranked_locations = BTreeSet::new();
+    for reason in reasons {
+        let FormalMemoryIncompleteReason::UnsupportedIndexExpression {
+            location,
+            index,
+            allocation,
+        } = reason
+        else {
+            return false;
+        };
+        let Some(defining_operation) = operation_at(body, *location) else {
+            return false;
+        };
+        let OperationKind::GetElementPointer { offset, .. } = defining_operation.kind else {
+            return false;
+        };
+        let [pointer] = defining_operation.results.as_slice() else {
+            return false;
+        };
+        if offset != *index {
+            return false;
+        }
+        let mut consumers = Vec::new();
+        for block in &body.blocks {
+            for (operation_index, operation) in block.operations.iter().enumerate() {
+                let Some((candidate_pointer, expected_access, expected_memory_space)) =
+                    kir_memory_access(operation)
+                else {
+                    continue;
+                };
+                let Some(mut budget) = max_operations.checked_mul(8) else {
+                    return false;
+                };
+                let depends = pointer_depends_on(
+                    candidate_pointer,
+                    pointer.id,
+                    &definitions,
+                    &mut budget,
+                    &mut BTreeSet::new(),
+                );
+                let Ok(depends) = depends else {
+                    return false;
+                };
+                if depends {
+                    consumers.push((
+                        FunctionOperationLocation::new(block.id, operation_index),
+                        expected_access,
+                        expected_memory_space,
+                    ));
+                }
+            }
+        }
+        let [(consumer, expected_access, expected_memory_space)] = consumers.as_slice() else {
+            return false;
+        };
+        let Some(site) = semantic_access_site(body, correspondence, *consumer) else {
+            return false;
+        };
+        let mut matching_sources = sources.iter().filter(|source| {
+            source.semantic_block == site.block
+                && source.semantic_statement == site.statement
+                && source.semantic_access_ordinal == site.ordinal
+        });
+        let Some(source) = matching_sources.next() else {
+            return false;
+        };
+        if matching_sources.next().is_some()
+            || !used_ranked_locations.insert((source.ranked_block, source.ranked_operation))
+            || !ranked_source_matches_allocation(
+                lowering,
+                source,
+                *expected_access,
+                *expected_memory_space,
+                allocation.parameter_index(),
+            )
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn operation_at(body: &FunctionBody, location: FunctionOperationLocation) -> Option<&Operation> {
+    body.blocks
+        .iter()
+        .find(|block| block.id == location.block)
+        .and_then(|block| block.operations.get(location.operation_index))
+}
+
+fn kir_memory_access(
+    operation: &Operation,
+) -> Option<(
+    ValueId,
+    dialect_kernel::AccessKindAttr,
+    dialect_kernel::MemorySpaceAttr,
+)> {
+    match operation.kind {
+        OperationKind::Load { pointer, access }
+        | OperationKind::GuardedLoad {
+            pointer, access, ..
+        } => {
+            let memory_space = ranked_memory_space(access.address_space)?;
+            Some((pointer, dialect_kernel::AccessKindAttr::Read, memory_space))
+        }
+        OperationKind::Store {
+            pointer, access, ..
+        } => {
+            let memory_space = ranked_memory_space(access.address_space)?;
+            Some((pointer, dialect_kernel::AccessKindAttr::Write, memory_space))
+        }
+        _ => None,
+    }
+}
+
+const fn ranked_memory_space(
+    address_space: AddressSpace,
+) -> Option<dialect_kernel::MemorySpaceAttr> {
+    match address_space {
+        AddressSpace::Private => Some(dialect_kernel::MemorySpaceAttr::Private),
+        AddressSpace::Workgroup => Some(dialect_kernel::MemorySpaceAttr::Workgroup),
+        AddressSpace::Global | AddressSpace::Constant => {
+            Some(dialect_kernel::MemorySpaceAttr::Global)
+        }
+        AddressSpace::Generic => None,
+    }
+}
+
+fn is_kir_ranked_access(operation: &Operation) -> bool {
+    kir_memory_access(operation).is_some() || matches!(operation.kind, OperationKind::Atomic(_))
+}
+
+fn pointer_depends_on(
+    value: ValueId,
+    target: ValueId,
+    definitions: &BTreeMap<ValueId, &Operation>,
+    budget: &mut usize,
+    visited: &mut BTreeSet<ValueId>,
+) -> Result<bool, ()> {
+    if value == target {
+        return Ok(true);
+    }
+    if !visited.insert(value) {
+        return Ok(false);
+    }
+    *budget = budget.checked_sub(1).ok_or(())?;
+    let Some(operation) = definitions.get(&value) else {
+        return Ok(false);
+    };
+    match operation.kind {
+        OperationKind::GetElementPointer { base, .. } => {
+            pointer_depends_on(base, target, definitions, budget, visited)
+        }
+        OperationKind::Cast { value, .. } => {
+            pointer_depends_on(value, target, definitions, budget, visited)
+        }
+        OperationKind::Select {
+            true_value,
+            false_value,
+            ..
+        } => {
+            if pointer_depends_on(true_value, target, definitions, budget, visited)? {
+                Ok(true)
+            } else {
+                pointer_depends_on(false_value, target, definitions, budget, visited)
+            }
+        }
+        _ => Ok(false),
+    }
+}
+
+fn semantic_access_site(
+    body: &FunctionBody,
+    correspondence: &SemanticKirCorrespondenceV1,
+    location: FunctionOperationLocation,
+) -> Option<SemanticAccessSiteV1> {
+    let statement = correspondence
+        .statement_operation_spans()
+        .iter()
+        .find_map(|span| {
+            operation_is_in_span(
+                location,
+                span.kernel_ir_block(),
+                span.first_operation_ordinal(),
+                span.operation_count(),
+            )
+            .then_some((
+                span.semantic_block().index(),
+                Some(span.statement_ordinal()),
+                span,
+            ))
+        });
+    let terminator = correspondence
+        .terminator_operation_spans()
+        .iter()
+        .find_map(|span| {
+            operation_is_in_span(
+                location,
+                span.kernel_ir_block(),
+                span.first_operation_ordinal(),
+                span.operation_count(),
+            )
+            .then_some((
+                span.semantic_block().index(),
+                None,
+                span.first_operation_ordinal(),
+                span.operation_count(),
+            ))
+        });
+    if statement.is_some() == terminator.is_some() {
+        return None;
+    }
+    let (block, statement, first, count) = if let Some((block, statement, span)) = statement {
+        (
+            block,
+            statement,
+            span.first_operation_ordinal(),
+            span.operation_count(),
+        )
+    } else {
+        terminator?
+    };
+    let kir_block = body
+        .blocks
+        .iter()
+        .find(|candidate| candidate.id == location.block)?;
+    let first = first as usize;
+    let end = first.checked_add(count as usize)?;
+    let ordinal = kir_block
+        .operations
+        .get(first..location.operation_index)?
+        .iter()
+        .filter(|operation| is_kir_ranked_access(operation))
+        .count();
+    if location.operation_index >= end {
+        return None;
+    }
+    Some(SemanticAccessSiteV1 {
+        block,
+        statement,
+        ordinal: u32::try_from(ordinal).ok()?,
+    })
+}
+
+fn operation_is_in_span(
+    location: FunctionOperationLocation,
+    block: BlockId,
+    first: u32,
+    count: u32,
+) -> bool {
+    location.block == block
+        && (first as usize..(first as usize).saturating_add(count as usize))
+            .contains(&location.operation_index)
+}
+
+fn ranked_source_matches_allocation(
+    lowering: &ProductionRankedKernelLoweringInputV1,
+    source: &ProductionRankedAccessSourceV1,
+    expected_access: dialect_kernel::AccessKindAttr,
+    expected_memory_space: dialect_kernel::MemorySpaceAttr,
+    parameter_index: u32,
+) -> bool {
+    let Some(operation) = lowering
+        .kernel()
+        .blocks()
+        .get(source.ranked_block as usize)
+        .and_then(|block| block.operations().get(source.ranked_operation as usize))
+    else {
+        return false;
+    };
+    let (access, view) = match operation {
+        ProductionRankedOperationV1::Access { kind, view, .. }
+        | ProductionRankedOperationV1::AtomicAccess { kind, view, .. } => (*kind, *view),
+        _ => return false,
+    };
+    let ProductionRankedValueV1::Local(view) = view else {
+        return false;
+    };
+    let mut definitions = lowering
+        .kernel()
+        .blocks()
+        .iter()
+        .flat_map(|block| block.operations())
+        .filter_map(|operation| match operation {
+            ProductionRankedOperationV1::View {
+                result,
+                allocation_origin,
+                ..
+            } if *result == view => {
+                Some((*allocation_origin, dialect_kernel::MemorySpaceAttr::Global))
+            }
+            ProductionRankedOperationV1::ViewInSpace {
+                result,
+                memory_space,
+                allocation_origin,
+                ..
+            } if *result == view => Some((*allocation_origin, *memory_space)),
+            _ => None,
+        });
+    let Some((origin, memory_space)) = definitions.next() else {
+        return false;
+    };
+    access == expected_access
+        && memory_space == expected_memory_space
+        && definitions.next().is_none()
+        && u64::from(parameter_index)
+            .checked_add(1)
+            .is_some_and(|expected| origin == expected)
 }
 
 // Keep hostile shared predicate graphs bounded independently of the lowering budget.
@@ -8055,11 +8516,17 @@ fn hex_identity(bytes: &[u8; 32]) -> String {
 #[cfg(test)]
 mod resource_tests {
     use super::*;
+    use dialect_kernel::AccessKindAttr;
     use fe2o3_mir_model::semantic_mir_v1::{
         SemanticBackendReprV1, SemanticFieldsShapeV1, SemanticLayoutIdentityV1,
         SemanticMfmaAccumulatorDistributionV1, SemanticMfmaOperandRoleV1,
         SemanticMfmaRegisterDistributionV1, SemanticRustcVariantsV1, SemanticTypeIdentityV1,
         SemanticTypeLayoutDetailsV1, SemanticTypeLayoutV1,
+    };
+    use fe2o3_pliron::{
+        ProductionConstructionV1, ProductionRankedBlockV1, ProductionRankedKernelV1,
+        ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionSessionLimitsV1,
+        compile_ranked_kernel_for_lowering_v1,
     };
 
     #[test]
@@ -9008,6 +9475,313 @@ mod resource_tests {
             &cyclic.module,
             &cyclic.locations,
             12,
+        ));
+    }
+
+    struct UnsupportedIndexCorrelationFixtureV1 {
+        module: Module,
+        correspondence: SemanticKirCorrespondenceV1,
+        reasons: Vec<FormalMemoryIncompleteReason>,
+        source: ProductionRankedAccessSourceV1,
+    }
+
+    fn unsupported_index_correlation_fixture() -> UnsupportedIndexCorrelationFixtureV1 {
+        let slice = Type::slice(
+            Type::Scalar(ScalarType::F32),
+            AddressSpace::Global,
+            AccessMode::ReadOnly,
+        );
+        let pointer = Type::pointer(
+            Type::Scalar(ScalarType::F32),
+            AddressSpace::Global,
+            AccessMode::ReadOnly,
+        );
+        let mut block = BasicBlock::new(BlockId(0));
+        block.operations = vec![
+            Operation::effect_free(
+                ValueDef::new(ValueId(1), Type::INDEX),
+                OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(2), Type::INDEX),
+                OperationKind::Binary {
+                    op: BinaryOp::Multiply,
+                    lhs: ValueId(1),
+                    rhs: ValueId(1),
+                },
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(3), pointer.clone()),
+                OperationKind::SliceData { slice: ValueId(0) },
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(4), pointer),
+                OperationKind::GetElementPointer {
+                    base: ValueId(3),
+                    offset: ValueId(2),
+                },
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(5), Type::Scalar(ScalarType::F32)),
+                OperationKind::Load {
+                    pointer: ValueId(4),
+                    access: MemoryAccess::new(AddressSpace::Global, 4),
+                },
+            ),
+        ];
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let mut module = Module::new("unsupported-index-correlation");
+        module.functions.push(Function::kernel_entry(
+            "unsupported_index_correlation",
+            Signature::new(vec![slice], vec![]),
+            vec![ValueId(0)],
+            vec![block],
+        ));
+        module.kernels.push(Kernel::new(
+            "unsupported-index-correlation",
+            "unsupported_index_correlation",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Static(64),
+            },
+        ));
+        verify_module(&module).expect("unsupported-index fixture must be valid Kernel IR");
+        let analysis = fe2o3_kernel_ir::derive_kernel_memory_obligations_for_launch(
+            &module,
+            &module.kernels[0].id,
+            fe2o3_kernel_ir::ExplicitLaunchExtent::Exact {
+                rank: 1,
+                extents: [64, 1, 1],
+            },
+            fe2o3_kernel_ir::FormalIndexWidth::Bits64,
+        )
+        .expect("formal analysis must run");
+        let fe2o3_kernel_ir::FormalMemoryObligationAnalysis::Incomplete { reasons, .. } = analysis
+        else {
+            panic!("nonlinear fixture must remain formally incomplete");
+        };
+        assert!(matches!(
+            reasons.as_slice(),
+            [FormalMemoryIncompleteReason::UnsupportedIndexExpression {
+                location: FunctionOperationLocation {
+                    block: BlockId(0),
+                    operation_index: 3,
+                },
+                index: ValueId(2),
+                allocation,
+            }] if allocation.parameter_index() == 0
+        ));
+        let correspondence = SemanticKirCorrespondenceV1 {
+            semantic_sha256: [7; 32],
+            function_count: 1,
+            blocks: vec![SemanticKirBlockCorrespondenceV1 {
+                semantic_function: SemanticFunctionIdV1::from_index(0),
+                semantic_block: SemanticBlockIdV1::from_index(0),
+                kernel_ir_block: BlockId(0),
+                source_statement_count: 1,
+            }]
+            .into_boxed_slice(),
+            statement_operation_spans: vec![SemanticKirStatementOperationSpanV1 {
+                semantic_function: SemanticFunctionIdV1::from_index(0),
+                semantic_block: SemanticBlockIdV1::from_index(0),
+                statement_ordinal: 0,
+                kernel_ir_block: BlockId(0),
+                first_operation_ordinal: 0,
+                operation_count: 5,
+            }]
+            .into_boxed_slice(),
+            terminator_operation_spans: vec![SemanticKirTerminatorOperationSpanV1 {
+                semantic_function: SemanticFunctionIdV1::from_index(0),
+                semantic_block: SemanticBlockIdV1::from_index(0),
+                kernel_ir_block: BlockId(0),
+                first_operation_ordinal: 5,
+                operation_count: 0,
+            }]
+            .into_boxed_slice(),
+            synthetic_operation_spans: Box::new([]),
+        };
+        UnsupportedIndexCorrelationFixtureV1 {
+            module,
+            correspondence,
+            reasons,
+            source: ProductionRankedAccessSourceV1::new(0, Some(0), 0, 0, 3),
+        }
+    }
+
+    fn ranked_correlation_input(
+        access: AccessKindAttr,
+        allocation_origin: u64,
+    ) -> ProductionRankedKernelLoweringInputV1 {
+        let view = ProductionRankedValueIdV1::new(0);
+        let index = ProductionRankedValueIdV1::new(1);
+        let kernel = ProductionRankedKernelV1::new(
+            "unsupported_index_correlation",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                vec![
+                    ProductionRankedOperationV1::ExecutionLayout {
+                        grid_identity: 1,
+                        global_extents: [64, 1, 1],
+                        workgroup_extents: [64, 1, 1],
+                        subgroup_size: 64,
+                        full_physical_workgroups: true,
+                    },
+                    ProductionRankedOperationV1::ViewInSpace {
+                        result: view,
+                        element_width: 32,
+                        writable: access != AccessKindAttr::Read,
+                        shape: vec![64],
+                        dynamic_extents: vec![],
+                        memory_space: dialect_kernel::MemorySpaceAttr::Global,
+                        allocation_origin,
+                        noalias_class: allocation_origin,
+                    },
+                    ProductionRankedOperationV1::InvocationIndex {
+                        result: index,
+                        dimension: 0,
+                        launch_extent: 64,
+                    },
+                    ProductionRankedOperationV1::Access {
+                        kind: access,
+                        view: ProductionRankedValueV1::Local(view),
+                        indices: vec![ProductionRankedValueV1::Local(index)],
+                    },
+                ],
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .expect("ranked correlation fixture must be valid");
+        compile_ranked_kernel_for_lowering_v1(
+            ProductionConstructionV1::ranked_kernel("unsupported_index_module", kernel).unwrap(),
+            ProductionSessionLimitsV1::default(),
+        )
+        .expect("ranked correlation fixture must pass mandatory checks")
+    }
+
+    #[test]
+    fn unsupported_index_discharge_requires_exact_location_index_and_unique_consumer() {
+        let fixture = unsupported_index_correlation_fixture();
+        let lowering = ranked_correlation_input(AccessKindAttr::Read, 1);
+        assert!(unsupported_indices_match_ranked_sources(
+            &fixture.module,
+            &fixture.correspondence,
+            &lowering,
+            &[fixture.source],
+            &fixture.reasons,
+            16,
+        ));
+
+        let mut wrong_location = fixture.reasons.clone();
+        let FormalMemoryIncompleteReason::UnsupportedIndexExpression { location, .. } =
+            &mut wrong_location[0]
+        else {
+            unreachable!();
+        };
+        *location = FunctionOperationLocation::new(BlockId(0), 2);
+        assert!(!unsupported_indices_match_ranked_sources(
+            &fixture.module,
+            &fixture.correspondence,
+            &lowering,
+            &[fixture.source],
+            &wrong_location,
+            16,
+        ));
+
+        let mut wrong_index = fixture.reasons.clone();
+        let FormalMemoryIncompleteReason::UnsupportedIndexExpression { index, .. } =
+            &mut wrong_index[0]
+        else {
+            unreachable!();
+        };
+        *index = ValueId(1);
+        assert!(!unsupported_indices_match_ranked_sources(
+            &fixture.module,
+            &fixture.correspondence,
+            &lowering,
+            &[fixture.source],
+            &wrong_index,
+            16,
+        ));
+
+        let mut mistranslated = fixture.module.clone();
+        let OperationKind::GetElementPointer { offset, .. } =
+            &mut mistranslated.functions[0].body.as_mut().unwrap().blocks[0].operations[3].kind
+        else {
+            unreachable!();
+        };
+        *offset = ValueId(1);
+        assert!(!unsupported_indices_match_ranked_sources(
+            &mistranslated,
+            &fixture.correspondence,
+            &lowering,
+            &[fixture.source],
+            &fixture.reasons,
+            16,
+        ));
+
+        let mut ambiguous = fixture.module.clone();
+        ambiguous.functions[0].body.as_mut().unwrap().blocks[0]
+            .operations
+            .push(Operation::effect_free(
+                ValueDef::new(ValueId(6), Type::Scalar(ScalarType::F32)),
+                OperationKind::Load {
+                    pointer: ValueId(4),
+                    access: MemoryAccess::new(AddressSpace::Global, 4),
+                },
+            ));
+        assert!(!unsupported_indices_match_ranked_sources(
+            &ambiguous,
+            &fixture.correspondence,
+            &lowering,
+            &[fixture.source],
+            &fixture.reasons,
+            16,
+        ));
+    }
+
+    #[test]
+    fn unsupported_index_discharge_rejects_ranked_source_and_allocation_drift() {
+        let fixture = unsupported_index_correlation_fixture();
+        let lowering = ranked_correlation_input(AccessKindAttr::Read, 1);
+        for sources in [
+            vec![],
+            vec![fixture.source, fixture.source],
+            vec![ProductionRankedAccessSourceV1::new(0, None, 0, 0, 3)],
+            vec![ProductionRankedAccessSourceV1::new(0, Some(0), 1, 0, 3)],
+        ] {
+            assert!(!unsupported_indices_match_ranked_sources(
+                &fixture.module,
+                &fixture.correspondence,
+                &lowering,
+                &sources,
+                &fixture.reasons,
+                16,
+            ));
+        }
+        let wrong_kind = ranked_correlation_input(AccessKindAttr::Write, 1);
+        assert!(!unsupported_indices_match_ranked_sources(
+            &fixture.module,
+            &fixture.correspondence,
+            &wrong_kind,
+            &[fixture.source],
+            &fixture.reasons,
+            16,
+        ));
+        let wrong_allocation = ranked_correlation_input(AccessKindAttr::Read, 2);
+        assert!(!unsupported_indices_match_ranked_sources(
+            &fixture.module,
+            &fixture.correspondence,
+            &wrong_allocation,
+            &[fixture.source],
+            &fixture.reasons,
+            16,
+        ));
+        assert!(!unsupported_indices_match_ranked_sources(
+            &fixture.module,
+            &fixture.correspondence,
+            &lowering,
+            &[fixture.source],
+            &fixture.reasons,
+            4,
         ));
     }
 }

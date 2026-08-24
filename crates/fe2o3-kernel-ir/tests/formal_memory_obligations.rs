@@ -857,8 +857,9 @@ fn nonlinear_gep_index_fails_closed() {
         analysis.incomplete_reasons(),
         [FormalMemoryIncompleteReason::UnsupportedIndexExpression {
             index: ValueId(3),
+            allocation,
             ..
-        }]
+        }] if allocation.parameter_index() == 0
     ));
 }
 

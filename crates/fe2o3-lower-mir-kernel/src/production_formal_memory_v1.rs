@@ -232,6 +232,16 @@ fn derive_admitted_obligations(
                     _ => None,
                 })
                 .collect::<Vec<_>>();
+            let unsupported_indices = reasons
+                .iter()
+                .filter(|reason| {
+                    matches!(
+                        reason,
+                        FormalMemoryIncompleteReason::UnsupportedIndexExpression { .. }
+                    )
+                })
+                .cloned()
+                .collect::<Vec<_>>();
             let reasons_are_ranked_dischargeable = reasons.iter().all(|reason| {
                 matches!(
                     reason,
@@ -239,8 +249,11 @@ fn derive_admitted_obligations(
                         | FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof { .. }
                 )
             });
-            if !semantic_kir.retained_generic_checks_discharge_dynamic_indices()
-                || !reasons_are_ranked_dischargeable
+            if !reasons_are_ranked_dischargeable
+                || (!unsupported_indices.is_empty()
+                    && !semantic_kir.retained_generic_checks_discharge_unsupported_indices(
+                        &unsupported_indices,
+                    ))
                 || (!guarded_locations.is_empty()
                     && !semantic_kir
                         .retained_generic_checks_discharge_guarded_accesses(&guarded_locations))

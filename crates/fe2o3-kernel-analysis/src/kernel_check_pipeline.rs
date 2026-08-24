@@ -596,10 +596,15 @@ fn write_memory_incomplete_reason(
             "pointer {pointer} at {} has an unsupported derivation",
             display_operation_location(*location),
         ),
-        FormalMemoryIncompleteReason::UnsupportedIndexExpression { location, index } => write!(
+        FormalMemoryIncompleteReason::UnsupportedIndexExpression {
+            location,
+            index,
+            allocation,
+        } => write!(
             formatter,
-            "index {index} at {} has an unsupported expression",
+            "index {index} at {} has an unsupported expression for allocation parameter {}",
             display_operation_location(*location),
+            allocation.parameter_index(),
         ),
         FormalMemoryIncompleteReason::ElementWidthUnavailable { location, pointer } => write!(
             formatter,
