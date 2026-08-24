@@ -107,6 +107,7 @@ fe2o3-pliron = { path = "crates/fe2o3-pliron" }
 fe2o3-pliron-owner-core = { path = "crates/fe2o3-pliron-owner-core" }
 fe2o3-pliron-worker-v2 = { path = "crates/fe2o3-pliron-worker-v2" }
 fe2o3-process-identity = { path = "crates/fe2o3-process-identity" }
+fe2o3-semantic-query = { path = "crates/fe2o3-semantic-query" }
 fe2o3-semantic-trace = { path = "crates/fe2o3-semantic-trace" }
 fe2o3-proof-contracts = { path = "crates/fe2o3-proof-contracts" }
 fe2o3-rustc-invocation = { path = "crates/fe2o3-rustc-invocation" }
