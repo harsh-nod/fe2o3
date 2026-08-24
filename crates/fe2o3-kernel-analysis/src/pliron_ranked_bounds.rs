@@ -1011,6 +1011,7 @@ fn sparse_index_failure(failure: SparseIndexFailureV1) -> RankedBoundsFindingV1 
         } => format!(
             "invocation dimension {dimension} has inconsistent launch extents {first} and {second}"
         ),
+        SparseIndexFailureV1::MalformedControlFlow { detail } => detail.to_owned(),
     };
     RankedBoundsFindingV1::SparseIndexAnalysisFailed { detail }
 }

@@ -28,7 +28,10 @@ use crate::pliron_invocation_trace::{
     PlironExecutionLayoutV1, PlironInvocationTraceV1, PlironTraceEventV1, PlironTraceFailureV1,
     PlironTraceLocationV1,
 };
-use crate::{KernelCheckPassKindV1, KernelCheckStatusV1, SparseIndexAnalysisV1, SparseIndexFactV1};
+use crate::{
+    KernelCheckPassKindV1, KernelCheckStatusV1, SparseIndexAnalysisV1, SparseIndexFactV1,
+    SparseIndexFailureV1,
+};
 
 pub const MAX_PLIRON_TENSOR_LAYOUT_OPERATIONS_V1: usize = 16_384;
 pub const MAX_PLIRON_TENSOR_LAYOUT_FINDINGS_V1: usize = 256;
@@ -382,6 +385,9 @@ pub(crate) fn run_pliron_tensor_layout_check_with_analyses_v1(
                     findings.push(finding);
                 }
             }
+            Err(PlironTraceFailureV1::Sparse(SparseIndexFailureV1::ResourceLimit { .. })) => {
+                findings.push(PlironTensorLayoutFindingV1::ResourceLimitExceeded)
+            }
             Err(
                 PlironTraceFailureV1::DynamicLaunch { .. }
                 | PlironTraceFailureV1::LaunchTooLarge { .. }
@@ -540,10 +546,13 @@ fn symbolic_subgroup_convergence(
         );
     }
     analyses.prepare_sparse_indices(context, function);
-    let sparse = analyses.sparse_indices().map_err(|failure| {
-        PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
-            detail: format!("sparse predicate analysis failed: {failure:?}"),
+    let sparse = analyses.sparse_indices().map_err(|failure| match failure {
+        SparseIndexFailureV1::ResourceLimit { .. } => {
+            PlironTensorLayoutFindingV1::ResourceLimitExceeded
         }
+        failure => PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+            detail: format!("sparse predicate analysis failed: {failure:?}"),
+        },
     })?;
     let uniformity = analyze_pliron_subgroup_uniformity(context, function, layout)?;
     let blocks = function

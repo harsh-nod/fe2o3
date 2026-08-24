@@ -1218,6 +1218,7 @@ fn sparse_failure(failure: SparseIndexFailureV1) -> String {
         } => format!(
             "invocation dimension {dimension} has inconsistent launch extents {first} and {second}"
         ),
+        SparseIndexFailureV1::MalformedControlFlow { detail } => detail.to_owned(),
     }
 }
 

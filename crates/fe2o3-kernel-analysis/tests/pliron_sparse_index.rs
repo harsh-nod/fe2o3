@@ -1,16 +1,22 @@
 use dialect_kernel::{
-    CheckedTiledIndex2DOp, DIALECT_NAME, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp,
-    IndexConstantOp, InvocationIndexOp, RankedViewOp, RankedViewType, ReturnOp, register_dialect,
+    BranchArgsOp, BranchOp, CheckedTiledIndex2DOp, DIALECT_NAME, DimensionOp, IndexBinaryKindAttr,
+    IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp, IndexLessThanBranchArgsOp, IndexType,
+    InvocationIndexOp, MAX_RANKED_MEMORY_RANK, RankedViewOp, RankedViewType, ReturnOp,
+    register_dialect,
 };
 use fe2o3_kernel_analysis::{
-    SparseIndexFactV1, SparseIndexFailureV1, analyze_pliron_sparse_indices_v1,
+    MAX_SPARSE_INDEX_VALUES_V1, SparseIndexFactV1, SparseIndexFailureV1,
+    analyze_pliron_sparse_indices_v1,
 };
 use pliron::{
     basic_block::BasicBlock,
-    builtin::{ops::FuncOp, types::FunctionType},
+    builtin::{op_interfaces::OneRegionInterface, ops::FuncOp, types::FunctionType},
     context::{Context, Ptr},
     dialect::DialectName,
     op::Op,
+    operation::Operation,
+    r#type::TypeHandle,
+    value::Value,
 };
 
 fn setup() -> Context {
@@ -29,6 +35,20 @@ fn function(context: &mut Context, name: &str) -> FuncOp {
 
 fn append<O: Op>(context: &Context, block: Ptr<BasicBlock>, operation: &O) {
     operation.get_operation().insert_at_back(block, context);
+}
+
+fn block(context: &mut Context, function: &FuncOp, name: &str) -> Ptr<BasicBlock> {
+    let block = BasicBlock::new(context, Some(name.try_into().unwrap()), vec![]);
+    block.insert_at_back(function.get_region(context), context);
+    block
+}
+
+fn index_block(context: &mut Context, function: &FuncOp, name: &str) -> (Ptr<BasicBlock>, Value) {
+    let index: TypeHandle = IndexType::get(context).into();
+    let block = BasicBlock::new(context, Some(name.try_into().unwrap()), vec![index]);
+    let argument = block.deref(context).get_argument(0);
+    block.insert_at_back(function.get_region(context), context);
+    (block, argument)
 }
 
 #[test]
@@ -265,4 +285,258 @@ fn dynamic_and_static_launch_contracts_cannot_share_one_dimension() {
             Err(SparseIndexFailureV1::InconsistentLaunchExtent { dimension: 0, .. })
         ));
     }
+}
+
+#[test]
+fn branch_arguments_propagate_sparse_facts() {
+    let context = &mut setup();
+    let function = function(context, "branch_argument");
+    let entry = function.get_entry_block(context);
+    let (join, argument) = index_block(context, &function, "join");
+    let seven = IndexConstantOp::new(context, 7);
+    let branch = BranchArgsOp::new(context, vec![seven.result(context)], join);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &seven);
+    append(context, entry, &branch);
+    append(context, join, &ret);
+
+    let analysis = analyze_pliron_sparse_indices_v1(context, &function).unwrap();
+    assert_eq!(analysis.fact(argument).constant_value(), Some(7));
+}
+
+#[test]
+fn equal_typed_conditional_edges_retain_the_shared_fact() {
+    let context = &mut setup();
+    let function = function(context, "equal_conditional_edges");
+    let entry = function.get_entry_block(context);
+    let (join, argument) = index_block(context, &function, "join");
+    let seven = IndexConstantOp::new(context, 7);
+    let branch = IndexLessThanBranchArgsOp::new(
+        context,
+        seven.result(context),
+        seven.result(context),
+        vec![seven.result(context)],
+        vec![seven.result(context)],
+        join,
+        join,
+    );
+    let ret = ReturnOp::new(context);
+    append(context, entry, &seven);
+    append(context, entry, &branch);
+    append(context, join, &ret);
+
+    let analysis = analyze_pliron_sparse_indices_v1(context, &function).unwrap();
+    assert_eq!(analysis.fact(argument).constant_value(), Some(7));
+}
+
+#[test]
+fn conflicting_typed_conditional_edges_become_unknown() {
+    let context = &mut setup();
+    let function = function(context, "conflicting_conditional_edges");
+    let entry = function.get_entry_block(context);
+    let (join, argument) = index_block(context, &function, "join");
+    let seven = IndexConstantOp::new(context, 7);
+    let nine = IndexConstantOp::new(context, 9);
+    let branch = IndexEqualBranchArgsOp::new(
+        context,
+        seven.result(context),
+        nine.result(context),
+        vec![seven.result(context)],
+        vec![nine.result(context)],
+        join,
+        join,
+    );
+    let ret = ReturnOp::new(context);
+    append(context, entry, &seven);
+    append(context, entry, &nine);
+    append(context, entry, &branch);
+    append(context, join, &ret);
+
+    let analysis = analyze_pliron_sparse_indices_v1(context, &function).unwrap();
+    assert_eq!(analysis.fact(argument), SparseIndexFactV1::Unknown);
+}
+
+#[test]
+fn an_unknown_merge_input_is_absorbing() {
+    let context = &mut setup();
+    let function = function(context, "unknown_merge_input");
+    let entry = function.get_entry_block(context);
+    let (join, argument) = index_block(context, &function, "join");
+    let seven = IndexConstantOp::new(context, 7);
+    let unknown = InvocationIndexOp::new(context, MAX_RANKED_MEMORY_RANK as u32, 16);
+    let branch = IndexEqualBranchArgsOp::new(
+        context,
+        seven.result(context),
+        seven.result(context),
+        vec![seven.result(context)],
+        vec![unknown.result(context)],
+        join,
+        join,
+    );
+    let ret = ReturnOp::new(context);
+    append(context, entry, &seven);
+    append(context, entry, &unknown);
+    append(context, entry, &branch);
+    append(context, join, &ret);
+
+    let analysis = analyze_pliron_sparse_indices_v1(context, &function).unwrap();
+    assert_eq!(analysis.fact(argument), SparseIndexFactV1::Unknown);
+}
+
+#[test]
+fn unreachable_predecessors_do_not_poison_reachable_merges() {
+    let context = &mut setup();
+    let function = function(context, "unreachable_predecessor");
+    let entry = function.get_entry_block(context);
+    let dead = block(context, &function, "dead");
+    let (join, argument) = index_block(context, &function, "join");
+    let seven = IndexConstantOp::new(context, 7);
+    let enter = BranchArgsOp::new(context, vec![seven.result(context)], join);
+    let nine = IndexConstantOp::new(context, 9);
+    let dead_edge = BranchArgsOp::new(context, vec![nine.result(context)], join);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &seven);
+    append(context, entry, &enter);
+    append(context, dead, &nine);
+    append(context, dead, &dead_edge);
+    append(context, join, &ret);
+
+    let analysis = analyze_pliron_sparse_indices_v1(context, &function).unwrap();
+    assert_eq!(analysis.fact(argument).constant_value(), Some(7));
+}
+
+#[test]
+fn untyped_edges_to_block_arguments_fail_closed() {
+    let context = &mut setup();
+    let function = function(context, "untyped_edge");
+    let entry = function.get_entry_block(context);
+    let (join, _) = index_block(context, &function, "join");
+    let branch = BranchOp::new(context, join);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &branch);
+    append(context, join, &ret);
+
+    assert_eq!(
+        analyze_pliron_sparse_indices_v1(context, &function).unwrap_err(),
+        SparseIndexFailureV1::MalformedControlFlow {
+            detail: "a block argument has a predecessor without typed edge operands",
+        }
+    );
+}
+
+#[test]
+fn malformed_typed_edge_segments_fail_without_panicking() {
+    let context = &mut setup();
+    let function = function(context, "malformed_typed_edge");
+    let entry = function.get_entry_block(context);
+    let (join, _) = index_block(context, &function, "join");
+    let zero = IndexConstantOp::new(context, 0);
+    let branch = IndexEqualBranchArgsOp::new(
+        context,
+        zero.result(context),
+        zero.result(context),
+        vec![zero.result(context)],
+        vec![zero.result(context)],
+        join,
+        join,
+    );
+    Operation::pop_operand(branch.get_operation(), context);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &zero);
+    append(context, entry, &branch);
+    append(context, join, &ret);
+
+    assert_eq!(
+        analyze_pliron_sparse_indices_v1(context, &function).unwrap_err(),
+        SparseIndexFailureV1::MalformedControlFlow {
+            detail: "typed conditional edge has a malformed operand count",
+        }
+    );
+}
+
+#[test]
+fn unreachable_unseeded_cycles_remain_unknown() {
+    let context = &mut setup();
+    let function = function(context, "unseeded_cycle");
+    let entry = function.get_entry_block(context);
+    let (cycle, argument) = index_block(context, &function, "cycle");
+    let ret = ReturnOp::new(context);
+    let repeat = BranchArgsOp::new(context, vec![argument], cycle);
+    append(context, entry, &ret);
+    append(context, cycle, &repeat);
+
+    let analysis = analyze_pliron_sparse_indices_v1(context, &function).unwrap();
+    assert_eq!(analysis.fact(argument), SparseIndexFactV1::Unknown);
+}
+
+#[test]
+fn a_constant_seeded_self_cycle_reaches_a_fixed_point() {
+    let context = &mut setup();
+    let function = function(context, "constant_cycle");
+    let entry = function.get_entry_block(context);
+    let (header, argument) = index_block(context, &function, "header");
+    let five = IndexConstantOp::new(context, 5);
+    let enter = BranchArgsOp::new(context, vec![five.result(context)], header);
+    let repeat = BranchArgsOp::new(context, vec![argument], header);
+    append(context, entry, &five);
+    append(context, entry, &enter);
+    append(context, header, &repeat);
+
+    let analysis = analyze_pliron_sparse_indices_v1(context, &function).unwrap();
+    assert_eq!(analysis.fact(argument).constant_value(), Some(5));
+}
+
+#[test]
+fn loop_recurrences_converge_conservatively_to_unknown() {
+    let context = &mut setup();
+    let function = function(context, "loop_recurrence");
+    let entry = function.get_entry_block(context);
+    let (header, argument) = index_block(context, &function, "header");
+    let zero = IndexConstantOp::new(context, 0);
+    let one = IndexConstantOp::new(context, 1);
+    let enter = BranchArgsOp::new(context, vec![zero.result(context)], header);
+    let next = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        argument,
+        one.result(context),
+    );
+    let repeat = BranchArgsOp::new(context, vec![next.result(context)], header);
+    append(context, entry, &zero);
+    append(context, entry, &one);
+    append(context, entry, &enter);
+    append(context, header, &next);
+    append(context, header, &repeat);
+
+    let analysis = analyze_pliron_sparse_indices_v1(context, &function).unwrap();
+    assert_eq!(analysis.fact(argument), SparseIndexFactV1::Unknown);
+    assert_eq!(
+        analysis.fact(next.result(context)),
+        SparseIndexFactV1::Unknown
+    );
+}
+
+#[test]
+fn block_arguments_count_toward_the_sparse_value_budget() {
+    let context = &mut setup();
+    let function = function(context, "oversized_block");
+    let entry = function.get_entry_block(context);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &ret);
+    let index: TypeHandle = IndexType::get(context).into();
+    let oversized = BasicBlock::new(
+        context,
+        Some("oversized".try_into().unwrap()),
+        vec![index; MAX_SPARSE_INDEX_VALUES_V1 + 1],
+    );
+    oversized.insert_at_back(function.get_region(context), context);
+
+    assert_eq!(
+        analyze_pliron_sparse_indices_v1(context, &function).unwrap_err(),
+        SparseIndexFailureV1::ResourceLimit {
+            resource: "SSA value",
+            limit: MAX_SPARSE_INDEX_VALUES_V1,
+            actual: MAX_SPARSE_INDEX_VALUES_V1 + 1,
+        }
+    );
 }
