@@ -68,10 +68,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-amd-target"
+version = "0.1.0"
+
+[[package]]
 name = "fe2o3-artifact-transaction"
 version = "0.1.0"
 dependencies = [
  "fe2o3-build-authority",
+ "fe2o3-compiler-ffi",
  "libc",
  "rustix",
  "sha2",
@@ -89,6 +94,26 @@ dependencies = [
 name = "fe2o3-build-authority"
 version = "0.1.0"
 dependencies = [
+ "sha2",
+]
+
+[[package]]
+name = "fe2o3-compiler-ffi"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-compiler-lineage",
+ "fe2o3-kernel-descriptor",
+ "reserved-fe2o3-symbols",
+ "sha2",
+]
+
+[[package]]
+name = "fe2o3-compiler-lineage"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-build-authority",
+ "fe2o3-kernel-descriptor",
+ "fe2o3-rustc-invocation",
  "sha2",
 ]
 
@@ -111,6 +136,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-kernel-descriptor"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-amd-target",
+ "sha2",
+]
+
+[[package]]
 name = "fe2o3-macros"
 version = "0.1.0"
 dependencies = [
@@ -120,6 +153,15 @@ dependencies = [
  "quote",
  "reserved-fe2o3-symbols",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "fe2o3-rustc-invocation"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-amd-target",
+ "fe2o3-build-authority",
+ "sha2",
 ]
 
 [[package]]
