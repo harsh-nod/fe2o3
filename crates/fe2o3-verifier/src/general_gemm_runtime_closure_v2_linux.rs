@@ -29,6 +29,9 @@ use super::{
     MAX_TARGET_FILE_BYTES, ManifestV2,
 };
 
+#[path = "functional_refinement_process_tree_v1_linux.rs"]
+mod functional_refinement_process_tree_v1;
+
 const MAX_DIRECTORY_ENTRIES: usize = 256;
 const MAX_TOTAL_RUNTIME_BYTES: u64 = 1024 * 1024 * 1024;
 
@@ -451,6 +454,41 @@ impl RetainedRuntimeClosureV2 {
             })
     }
 
+    fn allowed_runtime_object_identities(
+        &self,
+    ) -> Result<
+        Vec<functional_refinement_process_tree_v1::AllowedRuntimeExecutableV1>,
+        GeneralGemmRuntimeClosureErrorV2,
+    > {
+        let mut executables = Vec::new();
+        for file in &self.files {
+            if let Some(executable) =
+                functional_refinement_process_tree_v1::allowed_runtime_executable(
+                    &file.file,
+                    file.snapshot.object_identity(),
+                    &file.path,
+                )?
+            {
+                executables.push(executable);
+            }
+        }
+        if let Some(interpreter) = &self.interpreter {
+            let executable = functional_refinement_process_tree_v1::allowed_runtime_executable(
+                &interpreter.file.file,
+                interpreter.file.snapshot.object_identity(),
+                &interpreter.file.path,
+            )?
+            .ok_or_else(|| {
+                error(
+                    GeneralGemmRuntimeClosureErrorKindV2::ContentMismatch,
+                    "retained interpreter is not one x86-64 ELF executable image",
+                )
+            })?;
+            executables.push(executable);
+        }
+        Ok(executables)
+    }
+
     #[cfg(test)]
     fn open_for_test(
         root: &Path,
@@ -511,6 +549,15 @@ pub(super) fn execute_generated_rust_verify(
     );
     sealed.revalidate(source)?;
     result
+}
+
+pub(super) fn execute_functional_refinement_generated_rust_verify(
+    runtime: &RetainedRuntimeClosureV2,
+    source: &CanonicalGeneratedVerusProofInputV3,
+    deadline: Instant,
+    output_limit: usize,
+) -> Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2> {
+    functional_refinement_process_tree_v1::execute(runtime, source, deadline, output_limit)
 }
 
 fn execute_rust_verify_common(

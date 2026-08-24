@@ -441,6 +441,19 @@ shortcuts. A proved effect is partial correctness unless the freshly computed
 ownership result also proves exact total output coverage. This is MIR/effect
 evidence only, not source-to-MIR, source-to-ISA, artifact, or launch authority.
 
+Generated functional-refinement execution on Linux/x86-64 additionally uses a
+descendant-aware ptrace/seccomp controller. It admits the pinned Rust thread
+clone ABI, one retained auxiliary `rust_verify`, and one retained Z3 process in
+that order; authenticates every process executable and inherited descriptor
+set; and rejects extra, nested, or sequential descendants. Executable mmap and
+mprotect requests are limited to retained ELF executable load ranges, while
+session, process-group, namespace, credential, signaling, cross-process-memory,
+socket, io_uring, and untraced-clone escape paths fail closed. CPU, process,
+descriptor, address-space, data, file, core, output, and wall-clock bounds apply
+to the complete traced tree, and cleanup kills and waits every observed tracee.
+This confinement authenticates proof-tool execution; it does not turn the
+result into compiler, artifact, module-load, or kernel-launch authority.
+
 The general-GEMM V2 runner is narrower than the public authenticated V2
 protocol. It accepts only a same-process `GeneralGemmVerusRuntimeClosureLeaseV2`
 over the exact protected `/opt/fe2o3/verus-runtime-v2/<version>` closure. It

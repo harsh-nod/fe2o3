@@ -489,8 +489,12 @@ impl RetainedGeneratedVerusRuntimeBackendV1 {
     ) -> Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2> {
         self.revalidate()?;
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        let result =
-            linux::execute_generated_rust_verify(&self.retained, source, deadline, output_limit);
+        let result = linux::execute_functional_refinement_generated_rust_verify(
+            &self.retained,
+            source,
+            deadline,
+            output_limit,
+        );
         #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
         let result = Err(GeneralGemmRuntimeClosureErrorV2::new(
             GeneralGemmRuntimeClosureErrorKindV2::UnsupportedPlatform,
