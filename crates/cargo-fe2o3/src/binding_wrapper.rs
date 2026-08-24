@@ -6413,6 +6413,7 @@ mod tests {
 
     #[test]
     fn general_gemm_pre_spawn_materialization_failure_revokes_attempt() {
+        fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
         let directory = std::env::temp_dir().join(format!(
             "cargo-fe2o3-general-gemm-pre-spawn-{}-{:?}",
             std::process::id(),
@@ -6457,6 +6458,7 @@ mod tests {
 
     #[test]
     fn general_gemm_pre_spawn_cleanup_failure_is_reported() {
+        fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
         let directory = std::env::temp_dir().join(format!(
             "cargo-fe2o3-general-gemm-cleanup-error-{}-{:?}",
             std::process::id(),
@@ -6991,6 +6993,7 @@ mod tests {
 
     #[test]
     fn required_finalized_completion_cannot_bypass_the_envelope_transition() {
+        fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
         let directory = std::env::temp_dir().join(format!(
             "cargo-fe2o3-completed-envelope-{}",
             std::process::id()
@@ -7297,6 +7300,7 @@ mod tests {
     }
 
     fn test_artifact_directory(label: &str) -> std::path::PathBuf {
+        fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
         let directory = std::env::temp_dir().join(format!(
             "cargo-fe2o3-binding-{label}-{}-{:?}",
             std::process::id(),
