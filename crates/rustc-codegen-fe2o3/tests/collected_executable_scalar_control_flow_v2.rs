@@ -3741,7 +3741,7 @@ fn target_pipeline_identity_abi_and_collection_substitutions_reject_without_fall
             "gfx942:xnack-",
             "collected-executable-scalar-control-flow-v2-custom",
         ),
-        "FE2O3_CODEGEN_PIPELINE must be unset or exactly",
+        "FE2O3_CODEGEN_PIPELINE must be unset (selecting `production-v1`) or exactly",
     );
 
     let custom_llvm = TestOutputDir::new(&workspace);

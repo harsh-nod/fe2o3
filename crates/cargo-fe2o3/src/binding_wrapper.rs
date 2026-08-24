@@ -80,12 +80,14 @@ use crate::project::PinnedDirectory;
 use crate::protected_compiler_handoff_v3::{
     ParentRustcInvocationCustody, ProtectedCompilerModuleHandoffIntake,
 };
+#[cfg(test)]
+use crate::worker_v2::PRODUCTION_V1_PIPELINE;
 use crate::worker_v2::{
     GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV, GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV,
     PreparedWorkerV2Config, WORKER_V2_CONFIG_ENV, WORKER_V2_EXPECTED_ID_ENV,
     WORKER_V2_SOURCE_DEBUG_PROFILE_ENV, WorkerV2BuildObservation,
     WorkerV2CompileEnvironmentProfileV1, WorkerV2ConfigError, WorkerV2ConfigIdentity,
-    WorkerV2SourceDebugProfileV1,
+    WorkerV2SourceDebugProfileV1, production_pipeline_selected,
 };
 use crate::worker_v2_artifact_container::{
     assemble_recovered_worker_v2_load_envelope_v1, assemble_recovered_worker_v2_load_envelope_v2,
@@ -110,7 +112,6 @@ const TARGET_ENV: &str = "FE2O3_TARGET";
 const VERIFY_KERNEL_IR_ENV: &str = "FE2O3_VERIFY_KERNEL_IR";
 const SCALAR_GEMM_V1_PIPELINE: &str = "collected-scalar-gemm-v1";
 const ROW_SOFTMAX_V1_PIPELINE: &str = "collected-row-softmax-v1";
-const PRODUCTION_V1_PIPELINE: &str = "production-v1";
 const NON_PRODUCTION_REPRODUCTION_RECORD_ENV: &str =
     "FE2O3_NON_PRODUCTION_COMPILER_REPRODUCTION_RECORD_V1";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
@@ -482,8 +483,9 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         pinned_execution_directory.configure_child_fchdir(command.as_command_mut());
         if let Some(capabilities) = &compiler_capabilities {
             if managed_attempt.is_none()
-                && std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref()
-                    == Some(OsStr::new(PRODUCTION_V1_PIPELINE))
+                && production_pipeline_selected(
+                    std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref(),
+                )
             {
                 capabilities.prepare_unmanaged_production_command(command.as_command_mut())?;
             } else if protected_invocation {
@@ -774,7 +776,7 @@ fn pipeline_requires_protected_invocation(
     pipeline: Option<&OsStr>,
     explicit_unprotected_qualification: bool,
 ) -> bool {
-    pipeline == Some(OsStr::new(PRODUCTION_V1_PIPELINE))
+    production_pipeline_selected(pipeline)
         || (pipeline == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
             && !explicit_unprotected_qualification)
 }
@@ -5961,6 +5963,7 @@ mod tests {
             Some(OsStr::new(PRODUCTION_V1_PIPELINE)),
             false,
         ));
+        assert!(pipeline_requires_protected_invocation(None, false));
         assert!(pipeline_requires_protected_invocation(
             Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE)),
             false,
@@ -5970,7 +5973,6 @@ mod tests {
             true,
         ));
         for pipeline in [
-            None,
             Some(OsStr::new("kernel-ir-v1")),
             Some(OsStr::new("kernel-ir-worker-v2")),
             Some(OsStr::new("collected-general-gemm-v1")),

@@ -56,7 +56,7 @@ pub(crate) const GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV: &str =
 pub(crate) const WORKER_V2_SOURCE_DEBUG_PROFILE_ENV: &str =
     "FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1";
 const WORKER_V2_PIPELINE: &str = "kernel-ir-worker-v2";
-const PRODUCTION_V1_PIPELINE: &str = "production-v1";
+pub(crate) const PRODUCTION_V1_PIPELINE: &str = "production-v1";
 const SCALAR_GEMM_V1_PIPELINE: &str = "collected-scalar-gemm-v1";
 const ROW_SOFTMAX_V1_PIPELINE: &str = "collected-row-softmax-v1";
 pub(crate) const GENERAL_GEMM_V1_PIPELINE: &str = "collected-general-gemm-v1";
@@ -286,6 +286,11 @@ impl WorkerV2PipelineV1 {
     }
 }
 
+/// Matches the backend's closed selector rule: unset means production V1.
+pub(crate) fn production_pipeline_selected(pipeline: Option<&OsStr>) -> bool {
+    pipeline.is_none() || pipeline == Some(OsStr::new(PRODUCTION_V1_PIPELINE))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorkerV2CompileEnvironmentProfileV1 {
     S09AlphaGfx942O0,
@@ -329,7 +334,11 @@ impl PreparedWorkerV2Config {
         pipeline: Option<&OsStr>,
         config_path: Option<&OsStr>,
     ) -> Result<Option<Self>, WorkerV2ConfigError> {
-        let selected = pipeline.and_then(WorkerV2PipelineV1::from_environment_value);
+        let selected = if production_pipeline_selected(pipeline) {
+            Some(WorkerV2PipelineV1::ProductionV1)
+        } else {
+            pipeline.and_then(WorkerV2PipelineV1::from_environment_value)
+        };
         match (selected, config_path) {
             (None, None) => Ok(None),
             (Some(WorkerV2PipelineV1::RowSoftmaxV1), None) => Ok(None),
@@ -1045,7 +1054,7 @@ impl fmt::Display for WorkerV2ConfigError {
             ),
             Self::UnexpectedConfiguration => write!(
                 formatter,
-                "{WORKER_V2_CONFIG_ENV} is valid only with {CODEGEN_PIPELINE_ENV}={PRODUCTION_V1_PIPELINE}, {WORKER_V2_PIPELINE}, {SCALAR_GEMM_V1_PIPELINE}, {ROW_SOFTMAX_V1_PIPELINE}, or {GENERAL_GEMM_V1_PIPELINE}"
+                "{WORKER_V2_CONFIG_ENV} is valid only when {CODEGEN_PIPELINE_ENV} is unset (selecting {PRODUCTION_V1_PIPELINE}) or exactly {PRODUCTION_V1_PIPELINE}, {WORKER_V2_PIPELINE}, {SCALAR_GEMM_V1_PIPELINE}, {ROW_SOFTMAX_V1_PIPELINE}, or {GENERAL_GEMM_V1_PIPELINE}"
             ),
             Self::Io { kind, path, error } => {
                 write!(
@@ -1780,11 +1789,10 @@ mod tests {
 
     #[test]
     fn requires_configuration_exactly_for_the_worker_v2_pipeline() {
-        assert!(
-            PreparedWorkerV2Config::from_selection(None, None)
-                .unwrap()
-                .is_none()
-        );
+        assert!(matches!(
+            PreparedWorkerV2Config::from_selection(None, None),
+            Err(WorkerV2ConfigError::MissingConfiguration)
+        ));
         assert!(matches!(
             PreparedWorkerV2Config::from_selection(Some(OsStr::new(WORKER_V2_PIPELINE)), None),
             Err(WorkerV2ConfigError::MissingConfiguration)
@@ -1810,7 +1818,10 @@ mod tests {
                 .is_none()
         );
         assert!(matches!(
-            PreparedWorkerV2Config::from_selection(None, Some(OsStr::new("/config"))),
+            PreparedWorkerV2Config::from_selection(
+                Some(OsStr::new("legacy-v1")),
+                Some(OsStr::new("/config"))
+            ),
             Err(WorkerV2ConfigError::UnexpectedConfiguration)
         ));
     }
@@ -2083,6 +2094,10 @@ mod tests {
         )
         .unwrap()
         .unwrap();
+        let default_production =
+            PreparedWorkerV2Config::from_selection(None, Some(path.as_os_str()))
+                .unwrap()
+                .unwrap();
         let scalar = PreparedWorkerV2Config::from_selection(
             Some(OsStr::new(SCALAR_GEMM_V1_PIPELINE)),
             Some(path.as_os_str()),
@@ -2093,6 +2108,11 @@ mod tests {
         assert_ne!(general.identity(), scalar.identity());
         assert_ne!(general.identity(), production.identity());
         assert_ne!(production.identity(), scalar.identity());
+        assert_eq!(default_production.identity(), production.identity());
+        assert_eq!(
+            default_production.pipeline,
+            WorkerV2PipelineV1::ProductionV1
+        );
         assert!(!general.requires_expected_identity());
         assert!(!production.requires_expected_identity());
         assert!(scalar.requires_expected_identity());

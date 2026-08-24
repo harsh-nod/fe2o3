@@ -109,9 +109,76 @@ impl CodegenPipeline {
     }
 }
 
+/// One explicitly selected qualification-only backend route.
+///
+/// This token cannot be produced by the unset/default selection path. Passing
+/// it into qualification collection keeps those compatibility routes out of
+/// the ordinary production transaction by construction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct QualificationPipelineV1 {
+    pipeline: CodegenPipeline,
+}
+
+impl QualificationPipelineV1 {
+    pub(crate) const fn pipeline(self) -> CodegenPipeline {
+        self.pipeline
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DevicePipelineRouteV1 {
+    ProductionComplete,
+    QualificationOracle(QualificationPipelineV1),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ResolvedPipelineV1 {
+    pipeline: CodegenPipeline,
+    explicitly_selected: bool,
+}
+
+impl ResolvedPipelineV1 {
+    pub(crate) const fn pipeline(self) -> CodegenPipeline {
+        self.pipeline
+    }
+
+    pub(crate) fn device_route(
+        self,
+        production_transaction_complete: bool,
+    ) -> Result<DevicePipelineRouteV1, String> {
+        match (
+            self.pipeline.purpose(),
+            self.explicitly_selected,
+            production_transaction_complete,
+        ) {
+            (PipelinePurposeV1::Production, _, true) => {
+                Ok(DevicePipelineRouteV1::ProductionComplete)
+            }
+            (PipelinePurposeV1::Production, _, false) => Err(format!(
+                "production pipeline `{}` did not complete its device transaction; qualification fallback is forbidden",
+                self.pipeline.selector_name(),
+            )),
+            (PipelinePurposeV1::QualificationOracle, true, false) => Ok(
+                DevicePipelineRouteV1::QualificationOracle(QualificationPipelineV1 {
+                    pipeline: self.pipeline,
+                }),
+            ),
+            (PipelinePurposeV1::QualificationOracle, false, false) => Err(format!(
+                "qualification pipeline `{}` was not explicitly selected",
+                self.pipeline.selector_name(),
+            )),
+            (PipelinePurposeV1::QualificationOracle, _, true) => Err(format!(
+                "qualification pipeline `{}` cannot complete or publish as the production device transaction",
+                self.pipeline.selector_name(),
+            )),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PipelineSelection {
-    Valid(CodegenPipeline),
+    DefaultProduction,
+    Explicit(CodegenPipeline),
     Invalid(String),
 }
 
@@ -122,13 +189,13 @@ impl PipelineSelection {
 
     pub(crate) fn from_value(value: Option<&OsStr>) -> Self {
         let Some(value) = value else {
-            return Self::Valid(CodegenPipeline::LegacyV1);
+            return Self::DefaultProduction;
         };
         if let Some(pipeline) = CodegenPipeline::ALL
             .into_iter()
             .find(|pipeline| value == OsStr::new(pipeline.selector_name()))
         {
-            return Self::Valid(pipeline);
+            return Self::Explicit(pipeline);
         }
         let supported = CodegenPipeline::ALL
             .into_iter()
@@ -136,14 +203,21 @@ impl PipelineSelection {
             .collect::<Vec<_>>()
             .join(", ");
         Self::Invalid(format!(
-            "{} must be unset or exactly one of {supported}; found {value:?}",
+            "{} must be unset (selecting `production-v1`) or exactly one of {supported}; found {value:?}",
             crate::CODEGEN_PIPELINE_ENV,
         ))
     }
 
-    pub(crate) fn resolve(&self) -> Result<CodegenPipeline, amdgpu_llvm::EmitError> {
+    pub(crate) fn resolve(&self) -> Result<ResolvedPipelineV1, amdgpu_llvm::EmitError> {
         match self {
-            Self::Valid(pipeline) => Ok(*pipeline),
+            Self::DefaultProduction => Ok(ResolvedPipelineV1 {
+                pipeline: CodegenPipeline::ProductionV1,
+                explicitly_selected: false,
+            }),
+            Self::Explicit(pipeline) => Ok(ResolvedPipelineV1 {
+                pipeline: *pipeline,
+                explicitly_selected: true,
+            }),
             Self::Invalid(reason) => Err(amdgpu_llvm::EmitError::Preflight {
                 reason: reason.clone(),
             }),
@@ -153,7 +227,7 @@ impl PipelineSelection {
 
 impl Default for PipelineSelection {
     fn default() -> Self {
-        Self::Valid(CodegenPipeline::LegacyV1)
+        Self::DefaultProduction
     }
 }
 
@@ -162,7 +236,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::ffi::OsStr;
 
-    use super::{CodegenPipeline, PipelinePurposeV1, PipelineSelection};
+    use super::{CodegenPipeline, DevicePipelineRouteV1, PipelinePurposeV1, PipelineSelection};
 
     #[test]
     fn exactly_one_selectable_route_is_a_production_pipeline() {
@@ -183,7 +257,68 @@ mod tests {
         for pipeline in CodegenPipeline::ALL {
             assert_eq!(
                 PipelineSelection::from_value(Some(OsStr::new(pipeline.selector_name()))),
-                PipelineSelection::Valid(pipeline),
+                PipelineSelection::Explicit(pipeline),
+            );
+        }
+    }
+
+    #[test]
+    fn unset_and_default_selection_resolve_only_to_production() {
+        for selection in [
+            PipelineSelection::from_value(None),
+            PipelineSelection::default(),
+        ] {
+            assert_eq!(selection, PipelineSelection::DefaultProduction);
+            let resolved = selection.resolve().expect("default must resolve");
+            assert_eq!(resolved.pipeline(), CodegenPipeline::ProductionV1);
+            assert_eq!(
+                resolved
+                    .device_route(true)
+                    .expect("completed production transaction"),
+                DevicePipelineRouteV1::ProductionComplete,
+            );
+            assert!(
+                resolved
+                    .device_route(false)
+                    .expect_err("production must never fall back")
+                    .contains("qualification fallback is forbidden")
+            );
+        }
+    }
+
+    #[test]
+    fn every_qualification_route_requires_explicit_selection_and_cannot_publish_as_production() {
+        for pipeline in CodegenPipeline::ALL {
+            if pipeline.purpose() != PipelinePurposeV1::QualificationOracle {
+                continue;
+            }
+            let explicit =
+                PipelineSelection::from_value(Some(OsStr::new(pipeline.selector_name())))
+                    .resolve()
+                    .expect("explicit qualification selector must resolve");
+            let DevicePipelineRouteV1::QualificationOracle(qualification) = explicit
+                .device_route(false)
+                .expect("explicit qualification route")
+            else {
+                panic!("qualification selector became production")
+            };
+            assert_eq!(qualification.pipeline(), pipeline);
+            assert!(
+                explicit
+                    .device_route(true)
+                    .expect_err("qualification cannot publish as production")
+                    .contains("cannot complete or publish as the production")
+            );
+
+            let implicit = super::ResolvedPipelineV1 {
+                pipeline,
+                explicitly_selected: false,
+            };
+            assert!(
+                implicit
+                    .device_route(false)
+                    .expect_err("implicit qualification route must be impossible")
+                    .contains("was not explicitly selected")
             );
         }
     }

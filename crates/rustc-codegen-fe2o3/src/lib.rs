@@ -100,7 +100,9 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use pipeline_selection::{CodegenPipeline, PipelinePurposeV1, PipelineSelection};
+use pipeline_selection::{
+    CodegenPipeline, DevicePipelineRouteV1, PipelineSelection, QualificationPipelineV1,
+};
 
 const MAX_FINALIZED_LLVM_IR_BYTES: usize = 16 * 1024 * 1024;
 const MAX_FINALIZED_HSACO_BYTES: usize = 4 * 1024 * 1024;
@@ -337,9 +339,9 @@ fn collect_qualification_oracle_input<'tcx>(
     tcx: TyCtxt<'tcx>,
     cgus: &[rustc_middle::mir::mono::CodegenUnit<'tcx>],
     verbose: bool,
-    pipeline: CodegenPipeline,
+    pipeline: QualificationPipelineV1,
 ) -> Result<collector::CollectionResult<'tcx>, String> {
-    debug_assert_eq!(pipeline.purpose(), PipelinePurposeV1::QualificationOracle);
+    let pipeline = pipeline.pipeline();
     let collection = collector::collect_device_functions(tcx, cgus, verbose)
         .map_err(|error| error.to_string())?;
     let frontend_record = frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
@@ -398,11 +400,12 @@ impl CodegenBackend for Fe2o3CodegenBackend {
 
     fn codegen_crate(&self, tcx: TyCtxt<'_>, crate_info: &CrateInfo) -> Box<dyn Any> {
         with_no_trimmed_paths!({
-            let codegen_pipeline = self
+            let resolved_codegen_pipeline = self
                 .config
                 .codegen_pipeline
                 .resolve()
                 .unwrap_or_else(|error| tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}")));
+            let codegen_pipeline = resolved_codegen_pipeline.pipeline();
             let mut protected_rustc_invocation =
                 protected_rustc_invocation::admit_for_codegen(codegen_pipeline)
                     .unwrap_or_else(|error| {
@@ -535,7 +538,20 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     general_gemm_pipeline_v1::GENERAL_GEMM_PIPELINE_V1,
                 ));
             }
-            if kernel_count > 0 && !production_device_transaction_complete {
+            let device_pipeline_route = if kernel_count > 0 {
+                Some(
+                    resolved_codegen_pipeline
+                        .device_route(production_device_transaction_complete)
+                        .unwrap_or_else(|error| {
+                            tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"))
+                        }),
+                )
+            } else {
+                None
+            };
+            if let Some(DevicePipelineRouteV1::QualificationOracle(qualification_pipeline)) =
+                device_pipeline_route
+            {
                 let output_dir = output_dir.expect("kernel output was required above");
                 if codegen_pipeline == CodegenPipeline::CollectedGeneralGemmV1 {
                     let qualification = (|| -> Result<_, String> {
@@ -561,7 +577,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
-                            codegen_pipeline,
+                            qualification_pipeline,
                         )?;
                         let imported = collected_general_gemm_v1::try_import_general_gemm_v1(
                             tcx,
@@ -615,7 +631,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
-                            codegen_pipeline,
+                            qualification_pipeline,
                         )?;
                         let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
                         collected_executable_scalar_control_flow_v2::authenticate_collected_executable_scalar_control_flow_v2(
@@ -657,7 +673,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
-                            codegen_pipeline,
+                            qualification_pipeline,
                         )?;
                         let typed_roots =
                             compiler_descriptor::typed_descriptor_roots_from_collection(
@@ -748,7 +764,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
-                            codegen_pipeline,
+                            qualification_pipeline,
                         )?;
                         let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
                         let mut receipt =
@@ -844,7 +860,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
-                            codegen_pipeline,
+                            qualification_pipeline,
                         )?;
                         let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
                         let mut receipt =
@@ -885,7 +901,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
-                            codegen_pipeline,
+                            qualification_pipeline,
                         )?;
                         let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
                         let mut receipt = collected_wave64_collectives_v1::authenticate_collected_wave64_collectives_v1(
@@ -940,7 +956,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
-                            codegen_pipeline,
+                            qualification_pipeline,
                         )?;
                         let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
                         let mut receipt =
@@ -1057,7 +1073,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
-                            codegen_pipeline,
+                            qualification_pipeline,
                         )?;
                         let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
                         if collected_tiled_gemm_lds_slice1_v1::is_lds_slice1_collection(&collection)
@@ -1216,7 +1232,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
-                            codegen_pipeline,
+                            qualification_pipeline,
                         )?;
                         let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
                         let mut receipt =
@@ -1306,7 +1322,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
-                            codegen_pipeline,
+                            qualification_pipeline,
                         )?;
                         let descriptor_roots =
                             compiler_descriptor::typed_descriptor_roots_from_collection(
@@ -1415,7 +1431,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 tcx,
                                 mono_partitions.codegen_units,
                                 self.config.verbose,
-                                codegen_pipeline,
+                                qualification_pipeline,
                             )
                             .map_err(|reason| amdgpu_llvm::EmitError::Preflight { reason })?;
                             if codegen_pipeline == CodegenPipeline::KernelIrV1 {
@@ -2455,11 +2471,10 @@ fn optional_tool(llvm_bin: &Path, name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AmdGpuTarget, BackendConfig, BuildAttemptSelection, CodegenPipeline, PipelineSelection,
-        RocmToolchain, TemporaryHostObjects, TypedKernelRootV1, TypedVerticalError,
-        finalized_artifact_bytes, generate_typed_host_objects, llvm_compile_command,
-        managed_artifact_output, match_typed_artifacts, run_optional_kernel_ir_analysis,
-        validate_hsaco_metadata_text,
+        AmdGpuTarget, BackendConfig, BuildAttemptSelection, PipelineSelection, RocmToolchain,
+        TemporaryHostObjects, TypedKernelRootV1, TypedVerticalError, finalized_artifact_bytes,
+        generate_typed_host_objects, llvm_compile_command, managed_artifact_output,
+        match_typed_artifacts, run_optional_kernel_ir_analysis, validate_hsaco_metadata_text,
     };
     use crate::amdgpu_llvm::DeviceArtifact;
     use crate::collector::TypedKernelProfile;
@@ -2730,44 +2745,7 @@ mod tests {
     }
 
     #[test]
-    fn production_pipeline_selection_is_versioned_and_strict() {
-        assert_eq!(
-            PipelineSelection::from_value(None),
-            PipelineSelection::Valid(CodegenPipeline::LegacyV1)
-        );
-        assert_eq!(
-            PipelineSelection::from_value(Some(OsStr::new("production-v1"))),
-            PipelineSelection::Valid(CodegenPipeline::ProductionV1)
-        );
-        assert_eq!(
-            PipelineSelection::from_value(Some(OsStr::new("legacy-v1"))),
-            PipelineSelection::Valid(CodegenPipeline::LegacyV1)
-        );
-        assert_eq!(
-            PipelineSelection::from_value(Some(OsStr::new("kernel-ir-v1"))),
-            PipelineSelection::Valid(CodegenPipeline::KernelIrV1)
-        );
-        assert_eq!(
-            PipelineSelection::from_value(Some(OsStr::new("kernel-ir-worker-v2"))),
-            PipelineSelection::Valid(CodegenPipeline::KernelIrWorkerV2)
-        );
-        assert_eq!(
-            PipelineSelection::from_value(Some(OsStr::new("collected-general-gemm-v1"))),
-            PipelineSelection::Valid(CodegenPipeline::CollectedGeneralGemmV1)
-        );
-        assert_eq!(
-            PipelineSelection::from_value(Some(OsStr::new("collected-scalar-gemm-v1"))),
-            PipelineSelection::Valid(CodegenPipeline::CollectedScalarGemmV1)
-        );
-        assert_eq!(
-            PipelineSelection::from_value(Some(OsStr::new("collected-tiled-gemm-v1"))),
-            PipelineSelection::Valid(CodegenPipeline::CollectedTiledGemmV1)
-        );
-        assert_eq!(
-            PipelineSelection::from_value(Some(OsStr::new("collected-row-softmax-v1"))),
-            PipelineSelection::Valid(CodegenPipeline::CollectedRowSoftmaxV1)
-        );
-
+    fn invalid_pipeline_selection_is_versioned_and_strict() {
         for invalid in [
             "",
             "legacy",

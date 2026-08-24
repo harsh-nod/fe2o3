@@ -273,9 +273,10 @@ Migration follows these rules:
    selection from production device compilation. Shadow/oracle execution may
    remain in test-only tooling without candidate authority.
 
-The default does not switch until the first scalar slice has complete compile,
-host-interface, artifact, and hardware gates. After the switch, an incomplete
-general route fails closed instead of silently entering legacy codegen.
+The default switched to `production-v1` after the first scalar slice completed
+its compile, host-interface, artifact, and hardware gates. An incomplete
+general route now fails closed instead of silently entering legacy codegen;
+every retained oracle route requires an explicit selector.
 
 The 2026-08-20 compiler review made this distinction structural. Selector names
 now come from one table, every route has an explicit production-or-oracle

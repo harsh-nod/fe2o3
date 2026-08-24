@@ -415,6 +415,9 @@ fn cargo_with_backend_result(
         );
     }
     let requires_authorized_closure = protected_release.is_some()
+        || worker_v2::production_pipeline_selected(
+            env::var_os(worker_v2::CODEGEN_PIPELINE_ENV).as_deref(),
+        )
         || env::var("FE2O3_CODEGEN_PIPELINE").as_deref() == Ok(AUTHORITY_BEARING_ROW_PIPELINE)
         || worker_v2
             .as_ref()
@@ -537,6 +540,9 @@ fn cargo_with_backend_result(
 
 fn authority_sensitive_request_selected(protected_release: bool) -> bool {
     protected_release
+        || worker_v2::production_pipeline_selected(
+            env::var_os(worker_v2::CODEGEN_PIPELINE_ENV).as_deref(),
+        )
         || env::var_os(worker_v2::CODEGEN_PIPELINE_ENV).as_deref()
         == Some(OsStr::new(AUTHORITY_BEARING_ROW_PIPELINE))
         // A Worker V2 manifest can select the source-debug authority profile. Treat the

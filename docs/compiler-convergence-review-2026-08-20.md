@@ -135,7 +135,7 @@ must preserve the tests' path-substitution and build-custody properties.
 
 | Surface | Why retained | Retirement condition |
 |---|---|---|
-| `legacy-v1` | Current compatibility default | First production scalar slice has compile, artifact, ABI, and hardware gates |
+| `legacy-v1` | Explicit compatibility oracle; never a default or fallback | Equivalent evidence is retained by production-neutral tests or tools |
 | `kernel-ir-v1`, `kernel-ir-worker-v2` | Generic compatibility and Worker evidence | Production transaction reaches equivalent inspected artifact |
 | `collected_*` selectors | Differential workload and hardware oracles | Matching slice passes general-route differential gates |
 | `mir_import`, `same_session_rustc_v1`, `mir_import_v2` | Existing semantic/custody observations | Sole AMD-target importer subsumes each required fact and hostile test |

@@ -964,8 +964,9 @@ fn selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_arti
     let invalid_stderr = String::from_utf8_lossy(&invalid.stderr);
     assert!(!invalid.status.success(), "invalid selector was accepted");
     assert!(
-        invalid_stderr.contains("FE2O3_CODEGEN_PIPELINE must be unset or exactly")
-            && invalid_stderr.contains("found \"kernel-ir\""),
+        invalid_stderr.contains(
+            "FE2O3_CODEGEN_PIPELINE must be unset (selecting `production-v1`) or exactly"
+        ) && invalid_stderr.contains("found \"kernel-ir\""),
         "missing strict selector diagnostic:\n{invalid_stderr}"
     );
     assert!(!invalid_stderr.contains("emitted vecadd"));
@@ -996,8 +997,12 @@ fn selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_arti
         "missing exact admission diagnostic:\n{unsupported_stderr}"
     );
     assert!(
-        unsupported_stderr.contains("default legacy-v1 pipeline"),
-        "diagnostic did not identify the available legacy path:\n{unsupported_stderr}"
+        unsupported_stderr.contains("explicit qualification legacy route"),
+        "diagnostic did not identify the qualification-only legacy path:\n{unsupported_stderr}"
+    );
+    assert!(
+        unsupported_stderr.contains("production-v1 never falls back"),
+        "diagnostic did not prohibit production fallback:\n{unsupported_stderr}"
     );
     assert!(!unsupported_stderr.contains("emitted copy"));
     for artifact in copy_artifacts {

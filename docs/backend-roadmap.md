@@ -105,7 +105,9 @@ driver route or persistent-service model.
   through the `dialect-amdgcn` compatibility facade, and published through the
   existing transactional LLVM/object/HSACO path. Invalid selectors and
   unsupported selected inputs fail without legacy fallback and remove stale
-  artifacts. The default remains `legacy-v1` while coverage is extended.
+  artifacts. Unset selection enters `production-v1`; `kernel-ir-v1`,
+  `legacy-v1`, and workload-specific routes require explicit qualification
+  selection and cannot complete a production device transaction.
 - `fe2o3-amdgcn-model`, reached through the `dialect-amdgcn` compatibility
   facade, lowers that verified fill subset to deterministic AMDGPU LLVM. Its
   code-object regression checks target/features, ELF and metadata versions,

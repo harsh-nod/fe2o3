@@ -26,6 +26,7 @@ use std::path::Path;
 
 const FILL_KERNEL: &str = "fill";
 const VECADD_KERNEL: &str = "vecadd";
+const EXPLICIT_LEGACY_QUALIFICATION_HINT: &str = "select FE2O3_CODEGEN_PIPELINE=legacy-v1 only for the explicit qualification legacy route; production-v1 never falls back";
 const WORKGROUP_X: u32 = 256;
 pub(crate) const TILED_GEMM_FRONTEND_TEST_LLVM_FILE: &str =
     "tiled_gemm_frontend_v1.imported.gfx942-xnack-.ll";
@@ -1486,12 +1487,12 @@ pub(crate) fn prepare_fill_collection(
     expected.sort();
     let [kernel_name] = expected.as_slice() else {
         return Err(reject(format!(
-            "supports exactly one kernel export from {FILL_KERNEL:?} or {VECADD_KERNEL:?}; collected {expected:?}; unset {CODEGEN_PIPELINE_ENV} to use the default legacy-v1 pipeline"
+            "supports exactly one kernel export from {FILL_KERNEL:?} or {VECADD_KERNEL:?}; collected {expected:?}; {EXPLICIT_LEGACY_QUALIFICATION_HINT}"
         )));
     };
     if !matches!(kernel_name.as_str(), FILL_KERNEL | VECADD_KERNEL) {
         return Err(reject(format!(
-            "does not support kernel export {kernel_name:?}; expected {FILL_KERNEL:?} or {VECADD_KERNEL:?}; unset {CODEGEN_PIPELINE_ENV} to use the default legacy-v1 pipeline"
+            "does not support kernel export {kernel_name:?}; expected {FILL_KERNEL:?} or {VECADD_KERNEL:?}; {EXPLICIT_LEGACY_QUALIFICATION_HINT}"
         )));
     }
 
@@ -3007,7 +3008,8 @@ mod tests {
 
         let text = error.to_string();
         assert!(text.contains("does not support kernel export \"saxpy\""));
-        assert!(text.contains("default legacy-v1 pipeline"));
+        assert!(text.contains("explicit qualification legacy route"));
+        assert!(text.contains("production-v1 never falls back"));
     }
 
     #[test]

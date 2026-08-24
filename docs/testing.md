@@ -619,7 +619,8 @@ The smoke suite builds and runs all supported examples. Each example copies its
 result back to the host and checks it against a CPU-computed expected value. It
 also runs both `fe2o3-fill` and `fe2o3-vecadd` through
 `FE2O3_CODEGEN_PIPELINE=kernel-ir-v1`, so the integrated verified-IR paths are
-exercised independently of the default legacy emitter. Generated HSACO
+exercised as explicit qualification routes independently of the default
+`production-v1` transaction. Generated HSACO
 inspection uses a strict pipeline-specific metadata profile.
 
 ## Guard tests

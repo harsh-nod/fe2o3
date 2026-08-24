@@ -83,8 +83,9 @@ opaque context-bound exact-byte KIR envelope, bounded detached MIR-to-kernel
 and kernel-to-GPU lowering services, compiler routing
 contracts, and inert host/service contracts. It does not yet connect the
 general device path in the diagram.
-The working compiler remains the existing `rustc-codegen-fe2o3` composition,
-including the default legacy recognizer and bounded opt-in Kernel IR routes.
+The working compiler remains the existing `rustc-codegen-fe2o3` composition.
+Unset selection enters the general `production-v1` transaction; the legacy
+recognizer and bounded Kernel IR routes are explicit qualification tools only.
 The closed scalar slice now uses dialect-only `pliron-llvm` with
 `default-features = false`. Live graph-derived extraction (`62e66209e`),
 deterministic bounded LLVM assembly (`3a3b43e90`), the inert attempt-scoped
