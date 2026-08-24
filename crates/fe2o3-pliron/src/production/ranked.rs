@@ -732,7 +732,16 @@ fn atomic_scope_tag(scope: AtomicScopeAttr) -> u8 {
 }
 
 /// Compiler-retained summary constructible only from strict V2 import output.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+///
+/// ```compile_fail
+/// use fe2o3_pliron::ProductionFunctionalRefinementEvidenceV2;
+///
+/// fn duplicate(evidence: ProductionFunctionalRefinementEvidenceV2) {
+///     let _first = evidence;
+///     let _second = evidence;
+/// }
+/// ```
+#[derive(Debug, Eq, PartialEq)]
 pub struct ProductionFunctionalRefinementEvidenceV2 {
     receipt_identity: FunctionalRefinementReceiptIdentityV2,
     binding: FunctionalRefinementBindingV2,
