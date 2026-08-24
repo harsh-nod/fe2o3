@@ -3,6 +3,8 @@
 
 use fe2o3_contracts::{IdentityWriteIndex, LaunchDomain1d, ThreadInDomain1d};
 
+pub mod reference;
+
 include!("vecadd_body.rs");
 include!("elementwise_bodies.rs");
 include!("two_kernel_bodies.rs");
@@ -371,6 +373,33 @@ mod tests {
         ] {
             assert!(fixture.contains("two_kernel.rs"));
         }
+    }
+
+    #[test]
+    fn reference_refinement_proof_is_workload_neutral_and_has_mutations() {
+        let proof = include_str!("../verus/reference_refinement_v1.rs");
+        for marker in [
+            "pub struct HierarchyWriteV1",
+            "exact_reference_contract_v1",
+            "exact_hierarchy_writes_refine_safe_cpu_reference_v1",
+            "writes[coordinate].workgroup",
+        ] {
+            assert!(proof.contains(marker), "missing reference marker {marker}");
+        }
+        for shortcut in ["admit(", "assume(", "#[verifier::external_body]"] {
+            assert!(
+                !proof.contains(shortcut),
+                "proof contains shortcut {shortcut}"
+            );
+        }
+        assert!(
+            include_str!("../verus/negative/reference_refinement_wrong_value.rs")
+                .contains("mutated_reference_value_is_accepted")
+        );
+        assert!(
+            include_str!("../verus/negative/reference_refinement_duplicate_owner.rs")
+                .contains("mutated_duplicate_owner_is_injective")
+        );
     }
 
     #[test]

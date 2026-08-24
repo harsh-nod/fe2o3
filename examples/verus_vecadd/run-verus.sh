@@ -309,6 +309,16 @@ run_pass elementwise "$script_dir/verus/elementwise.rs"
 run_pass wave_lds "$script_dir/verus/wave_lds.rs"
 run_pass gfx942_wave_lds_v1 "$script_dir/verus/gfx942_wave_lds_v1.rs"
 run_pass two_kernel "$script_dir/verus/two_kernel.rs"
+run_pass reference_refinement_v1 \
+    "$script_dir/verus/reference_refinement_v1.rs"
+run_rejected reference_refinement_wrong_value \
+    "$script_dir/verus/negative/reference_refinement_wrong_value.rs" \
+    'mutated_reference_value_is_accepted' \
+    'postcondition.*not satisfied|postcondition failure'
+run_rejected reference_refinement_duplicate_owner \
+    "$script_dir/verus/negative/reference_refinement_duplicate_owner.rs" \
+    'mutated_duplicate_owner_is_injective' \
+    'postcondition.*not satisfied|postcondition failure'
 run_rejected fill_missing_bounds \
     "$script_dir/verus/negative/fill_missing_bounds.rs" \
     'mutated_fill_index_is_in_bounds' \

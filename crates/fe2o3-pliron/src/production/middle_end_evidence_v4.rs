@@ -2,7 +2,9 @@
 //!
 //! The live-produced value binds an exact semantic-MIR owner, the checked
 //! ranked kernel, deterministic ranked IR, and the seven fixed clean analysis
-//! reports. The decoded form is deliberately named `Inert`: byte integrity is
+//! reports represented by this historical schema. Live construction also
+//! requires the hierarchy-ownership pass in the V2 pipeline, but V4 bytes do
+//! not encode that eighth report. The decoded form is deliberately named `Inert`: byte integrity is
 //! not producer authentication, a refinement proof, or execution authority.
 
 use std::{error::Error, fmt, ops::Range};
@@ -12,7 +14,10 @@ use dialect_kernel::{
     AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, IndexBinaryKindAttr, MemorySpaceAttr,
     SemanticBinaryKindAttr,
 };
-use fe2o3_kernel_analysis::{KernelCheckPassKindV1, PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V1};
+use fe2o3_kernel_analysis::{
+    KernelCheckPassKindV1, PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V1,
+    PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2,
+};
 use fe2o3_kernel_ir::{
     MatrixElement, TensorElementPackingV1, TensorFragmentLayoutV1, TensorInstructionProfileV1,
     TensorLayoutContractV1, TensorLdsSwizzleV1, TensorMultiplicityV1, TensorOperandRoleV1,
@@ -25,6 +30,7 @@ use sha2::{Digest, Sha256};
 // prefix within the V4 domain.
 const RANKED_EXECUTION_LAYOUT_TAG_V4: u8 = 15;
 const RANKED_TENSOR_LAYOUT_TAG_V4: u8 = 19;
+const RANKED_OWNERSHIP_CONTRACT_TAG_V4: u8 = 24;
 
 use super::{
     ProductionRankedKernelErrorV1, ProductionRankedKernelLoweringInputV1,
@@ -792,7 +798,7 @@ fn validate_live_reports(
     ranked: &ProductionRankedKernelLoweringInputV1,
 ) -> Result<(), ProductionMiddleEndEvidenceCodecErrorV4> {
     if ranked.production_pipeline_report().pass_order()
-        != &PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V1
+        != &PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2
     {
         return Err(
             ProductionMiddleEndEvidenceCodecErrorV4::ReportPassOrderMismatch {
@@ -1219,6 +1225,21 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             digest.update([atomic_scope_tag(*scope)]);
             hash_value(digest, *view);
             hash_values(digest, indices);
+        }
+        ProductionRankedOperationV1::OwnershipContract {
+            view,
+            coverage,
+            partition,
+        } => {
+            digest.update([RANKED_OWNERSHIP_CONTRACT_TAG_V4]);
+            hash_value(digest, *view);
+            digest.update([match coverage {
+                dialect_kernel::OwnershipCoverageAttr::ExactView => 1,
+            }]);
+            digest.update([match partition {
+                dialect_kernel::OwnershipPartitionAttr::ExactSets => 1,
+                dialect_kernel::OwnershipPartitionAttr::DenseRectangles => 2,
+            }]);
         }
         ProductionRankedOperationV1::AllocationEffect {
             kind,
@@ -1888,7 +1909,16 @@ mod tests {
 
         assert_eq!(RANKED_EXECUTION_LAYOUT_TAG_V4, 15);
         assert_eq!(RANKED_TENSOR_LAYOUT_TAG_V4, 19);
+        assert_eq!(RANKED_OWNERSHIP_CONTRACT_TAG_V4, 24);
         assert_ne!(RANKED_EXECUTION_LAYOUT_TAG_V4, RANKED_TENSOR_LAYOUT_TAG_V4);
+        assert_ne!(
+            RANKED_EXECUTION_LAYOUT_TAG_V4,
+            RANKED_OWNERSHIP_CONTRACT_TAG_V4
+        );
+        assert_ne!(
+            RANKED_TENSOR_LAYOUT_TAG_V4,
+            RANKED_OWNERSHIP_CONTRACT_TAG_V4
+        );
 
         let execution = ProductionRankedOperationV1::ExecutionLayout {
             grid_identity: 1,

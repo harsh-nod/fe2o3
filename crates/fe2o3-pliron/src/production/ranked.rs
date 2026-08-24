@@ -15,21 +15,21 @@ use dialect_kernel::{
     DeterministicJoinOp, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
     IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
     IndexType, IndexUnknownOp, InvocationIndexOp, MAX_DETERMINISTIC_JOIN_INPUTS_V1,
-    MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType,
-    RequireEquivalentOp, ReturnOp, SUPPORTED_ELEMENT_WIDTHS, SemanticBinaryKindAttr,
-    SemanticBinaryOp, SemanticConstantOp, SemanticSymbolOp, TensorConvergenceAttr, TensorLayoutOp,
-    TrapOp,
+    MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, OwnershipContractOp, OwnershipCoverageAttr,
+    OwnershipPartitionAttr, RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp,
+    ReturnOp, SUPPORTED_ELEMENT_WIDTHS, SemanticBinaryKindAttr, SemanticBinaryOp,
+    SemanticConstantOp, SemanticSymbolOp, TensorConvergenceAttr, TensorLayoutOp, TrapOp,
 };
 use dialect_proof::{
     CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, ProofIdAttr,
     PropertyAttr, RequireRefinementOp,
 };
 use fe2o3_kernel_analysis::{
-    MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_OPERATIONS, PlironAtomicLegalityReportV1,
-    PlironBarrierReportV1, PlironSemanticRefinementReportV1, PlironTensorLayoutReportV1,
-    PlironWorkgroupMemoryReportV1, ProductionPlironPreloweringErrorV1,
-    ProductionPlironPreloweringReportV1, RankedBoundsReportV1, RankedRaceReportV1,
-    require_production_pliron_checks_before_lowering_v1,
+    HierarchicalOwnershipReportV1, MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_OPERATIONS,
+    PlironAtomicLegalityReportV1, PlironBarrierReportV1, PlironSemanticRefinementReportV1,
+    PlironTensorLayoutReportV1, PlironWorkgroupMemoryReportV1, ProductionPlironPreloweringErrorV2,
+    ProductionPlironPreloweringReportV2, RankedBoundsReportV1, RankedRaceReportV1,
+    require_production_pliron_checks_before_lowering_v2,
 };
 use fe2o3_kernel_ir::TensorLayoutContractV1;
 use pliron::{
@@ -227,6 +227,13 @@ pub enum ProductionRankedOperationV1 {
         scope: AtomicScopeAttr,
         view: ProductionRankedValueV1,
         indices: Vec<ProductionRankedValueV1>,
+    },
+    /// Requests a workload-neutral proof of write ownership across invocation,
+    /// subgroup, workgroup, and grid scopes for one global output view.
+    OwnershipContract {
+        view: ProductionRankedValueV1,
+        coverage: OwnershipCoverageAttr,
+        partition: OwnershipPartitionAttr,
     },
     /// Conservative allocation-level memory effect with no claimed coordinate.
     AllocationEffect {
@@ -1029,6 +1036,13 @@ fn validate_operation(
             validate_access(*kind, *view, indices, argument_count, locals)?;
             Ok(None)
         }
+        ProductionRankedOperationV1::OwnershipContract { view, .. } => {
+            let (_, writable) = require_view(*view, argument_count, locals)?;
+            if !writable {
+                return Err(ProductionRankedKernelErrorV1::WriteThroughReadOnlyView);
+            }
+            Ok(None)
+        }
         ProductionRankedOperationV1::AllocationEffect {
             kind, memory_space, ..
         } => {
@@ -1154,7 +1168,8 @@ fn validate_block_argument_values_v1(
                 validate(*value)?;
             }
         }
-        ProductionRankedOperationV1::Dimension { view, .. } => validate(*view)?,
+        ProductionRankedOperationV1::Dimension { view, .. }
+        | ProductionRankedOperationV1::OwnershipContract { view, .. } => validate(*view)?,
         ProductionRankedOperationV1::Access { view, indices, .. }
         | ProductionRankedOperationV1::AtomicAccess { view, indices, .. } => {
             validate(*view)?;
@@ -1440,7 +1455,7 @@ pub(super) struct ConstructedRootV1 {
     pub(super) identity: RootIdentityV1,
     pub(super) ranked_function: Option<Ptr<Operation>>,
     pub(super) ranked_kernel: Option<ProductionRankedKernelV1>,
-    pub(super) production_pipeline_report: Option<ProductionPlironPreloweringReportV1>,
+    pub(super) production_pipeline_report: Option<ProductionPlironPreloweringReportV2>,
 }
 
 pub(super) struct MaterializedConstructionV1 {
@@ -1468,10 +1483,10 @@ impl ProductionPlironSessionV1 {
     fn run_production_pipeline_guarded(
         &mut self,
         function: Ptr<Operation>,
-    ) -> Result<ProductionPlironPreloweringReportV1, ProductionSessionErrorV1> {
+    ) -> Result<ProductionPlironPreloweringReportV2, ProductionSessionErrorV1> {
         let result = catch_unwind(AssertUnwindSafe(|| {
             let function = FuncOp::from_operation(function);
-            require_production_pliron_checks_before_lowering_v1(&self.inner.context, &function)
+            require_production_pliron_checks_before_lowering_v2(&self.inner.context, &function)
         }));
         match result {
             Ok(Ok(report)) => Ok(report),
@@ -1807,28 +1822,31 @@ impl ProductionPlironSessionV1 {
 }
 
 fn production_pipeline_check_error(
-    error: ProductionPlironPreloweringErrorV1,
+    error: ProductionPlironPreloweringErrorV2,
 ) -> ProductionSessionErrorV1 {
     match error {
-        ProductionPlironPreloweringErrorV1::TensorLayout(error) => {
+        ProductionPlironPreloweringErrorV2::TensorLayout(error) => {
             ProductionSessionErrorV1::RankedTensorLayout(error)
         }
-        ProductionPlironPreloweringErrorV1::Bounds(error) => {
+        ProductionPlironPreloweringErrorV2::Bounds(error) => {
             ProductionSessionErrorV1::RankedBounds(error)
         }
-        ProductionPlironPreloweringErrorV1::Atomic(error) => {
+        ProductionPlironPreloweringErrorV2::Atomic(error) => {
             ProductionSessionErrorV1::RankedAtomic(error)
         }
-        ProductionPlironPreloweringErrorV1::Race(error) => {
+        ProductionPlironPreloweringErrorV2::Race(error) => {
             ProductionSessionErrorV1::RankedRace(error)
         }
-        ProductionPlironPreloweringErrorV1::Barrier(error) => {
+        ProductionPlironPreloweringErrorV2::Ownership(error) => {
+            ProductionSessionErrorV1::RankedOwnership(error)
+        }
+        ProductionPlironPreloweringErrorV2::Barrier(error) => {
             ProductionSessionErrorV1::RankedBarrier(error)
         }
-        ProductionPlironPreloweringErrorV1::Workgroup(error) => {
+        ProductionPlironPreloweringErrorV2::Workgroup(error) => {
             ProductionSessionErrorV1::RankedWorkgroup(error)
         }
-        ProductionPlironPreloweringErrorV1::Semantic(error) => {
+        ProductionPlironPreloweringErrorV2::Semantic(error) => {
             ProductionSessionErrorV1::RankedSemantic(error)
         }
     }
@@ -2107,6 +2125,24 @@ fn materialize_operation(
             .map_err(|_| {
                 ProductionRankedKernelErrorV1::Materialization(
                     "validated ranked atomic access failed materialization",
+                )
+            })?;
+            (op.get_operation(), None)
+        }
+        ProductionRankedOperationV1::OwnershipContract {
+            view,
+            coverage,
+            partition,
+        } => {
+            let op = OwnershipContractOp::new(
+                context,
+                resolve_value(*view, arguments, locals, block_arguments)?,
+                *coverage,
+                *partition,
+            )
+            .map_err(|_| {
+                ProductionRankedKernelErrorV1::Materialization(
+                    "validated ownership contract failed materialization",
                 )
             })?;
             (op.get_operation(), None)
@@ -2442,7 +2478,7 @@ fn materialize_terminator(
 #[must_use = "safety-verified ranked input must be consumed by a checked lowering stage"]
 pub struct ProductionRankedKernelLoweringInputV1 {
     kernel: ProductionRankedKernelV1,
-    production_pipeline_report: ProductionPlironPreloweringReportV1,
+    production_pipeline_report: ProductionPlironPreloweringReportV2,
     _session: ProductionPlironSessionV1,
     _stage: ProductionStageHandleV1<KernelChecksVerifiedGraphStageV1>,
     _root: ProductionRootHandleV1<KernelChecksVerifiedGraphStageV1>,
@@ -2474,8 +2510,8 @@ impl ProductionRankedKernelLoweringInputV1 {
         &self.kernel
     }
 
-    /// Indivisible lineage from the mandatory seven-pass production pipeline.
-    pub const fn production_pipeline_report(&self) -> &ProductionPlironPreloweringReportV1 {
+    /// Indivisible lineage from the mandatory eight-pass production pipeline.
+    pub const fn production_pipeline_report(&self) -> &ProductionPlironPreloweringReportV2 {
         &self.production_pipeline_report
     }
 
@@ -2493,6 +2529,10 @@ impl ProductionRankedKernelLoweringInputV1 {
 
     pub const fn race_report(&self) -> &RankedRaceReportV1 {
         self.production_pipeline_report.race()
+    }
+
+    pub const fn ownership_report(&self) -> &HierarchicalOwnershipReportV1 {
+        self.production_pipeline_report.ownership()
     }
 
     pub const fn barrier_report(&self) -> &PlironBarrierReportV1 {

@@ -8207,6 +8207,16 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             ranked_value_text_v1(*view),
             format_ranked_values(indices),
         ),
+        ProductionRankedOperationV1::OwnershipContract {
+            view,
+            coverage,
+            partition,
+        } => format!(
+            "  kernel.ownership_contract {:?} <{:?}, {:?}>\n",
+            ranked_value_text_v1(*view),
+            coverage,
+            partition,
+        ),
         ProductionRankedOperationV1::AllocationEffect {
             kind,
             memory_space,
@@ -10880,6 +10890,7 @@ mod tests {
                 | ProductionRankedOperationV1::CheckedTiledIndex2D { .. }
                 | ProductionRankedOperationV1::CheckedRowStripedIndex2D { .. }
                 | ProductionRankedOperationV1::Dimension { .. }
+                | ProductionRankedOperationV1::OwnershipContract { .. }
                 | ProductionRankedOperationV1::Barrier { .. }
                 | ProductionRankedOperationV1::Fence { .. }
                 | ProductionRankedOperationV1::TensorLayout { .. }

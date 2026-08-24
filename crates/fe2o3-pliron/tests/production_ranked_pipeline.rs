@@ -1,10 +1,10 @@
 use dialect_gpu::{AddressSpaceAttr, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr};
 use dialect_kernel::{
-    AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, MemorySpaceAttr, SemanticBinaryKindAttr,
-    TensorConvergenceAttr,
+    AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, IndexBinaryKindAttr, MemorySpaceAttr,
+    OwnershipCoverageAttr, OwnershipPartitionAttr, SemanticBinaryKindAttr, TensorConvergenceAttr,
 };
 use fe2o3_kernel_analysis::{
-    KernelCheckPassKindV1, KernelCheckStatusV1, PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V1,
+    KernelCheckPassKindV1, KernelCheckStatusV1, PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2,
 };
 use fe2o3_kernel_ir::{TensorInstructionProfileV1, TensorLayoutContractV1, TensorSymbolicMapV1};
 use fe2o3_pliron::{
@@ -220,7 +220,7 @@ fn static_non_gemm_kernel_reaches_safety_verified_lowering_input() {
     assert_eq!(input.kernel().function_name(), "static_copy");
     assert_eq!(
         input.production_pipeline_report().pass_order(),
-        &PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V1
+        &PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2
     );
     assert_eq!(
         input.production_pipeline_report().pass_order()[0],
@@ -239,6 +239,7 @@ fn static_non_gemm_kernel_reaches_safety_verified_lowering_input() {
     assert!(input.tensor_layout_report().is_clean());
     assert!(input.atomic_report().is_clean());
     assert!(input.race_report().is_clean());
+    assert!(input.ownership_report().is_clean());
     assert!(!input.race_report().grants_compiler_refinement_authority());
     assert!(input.barrier_report().is_clean());
     assert!(input.workgroup_report().is_clean());
@@ -959,6 +960,99 @@ fn invocation_owned_output_reaches_lowering_after_race_verification() {
     .expect("invocation-owned output is disjoint");
     assert!(input.bounds_report().is_clean());
     assert!(input.race_report().is_clean());
+}
+
+fn hierarchy_owned_output_kernel(has_holes: bool) -> ProductionRankedKernelV1 {
+    let two = ProductionRankedValueIdV1::new(2);
+    let address = ProductionRankedValueIdV1::new(3);
+    let mut operations = vec![
+        ProductionRankedOperationV1::ExecutionLayout {
+            grid_identity: 9,
+            global_extents: [64, 1, 1],
+            workgroup_extents: [32, 1, 1],
+            subgroup_size: 16,
+            full_physical_workgroups: true,
+        },
+        ProductionRankedOperationV1::ViewInSpace {
+            result: VIEW,
+            element_width: 32,
+            writable: true,
+            shape: vec![if has_holes { 128 } else { 64 }],
+            dynamic_extents: vec![],
+            allocation_origin: 1,
+            noalias_class: 1,
+            memory_space: MemorySpaceAttr::Global,
+        },
+        ProductionRankedOperationV1::OwnershipContract {
+            view: local(VIEW),
+            coverage: OwnershipCoverageAttr::ExactView,
+            partition: if has_holes {
+                OwnershipPartitionAttr::ExactSets
+            } else {
+                OwnershipPartitionAttr::DenseRectangles
+            },
+        },
+        ProductionRankedOperationV1::InvocationIndex {
+            result: INDEX,
+            dimension: 0,
+            launch_extent: 64,
+        },
+    ];
+    let access_index = if has_holes {
+        operations.push(ProductionRankedOperationV1::IndexConstant {
+            result: two,
+            value: 2,
+        });
+        operations.push(ProductionRankedOperationV1::IndexBinary {
+            result: address,
+            kind: IndexBinaryKindAttr::Multiply,
+            lhs: local(INDEX),
+            rhs: local(two),
+        });
+        address
+    } else {
+        INDEX
+    };
+    operations.push(ProductionRankedOperationV1::Access {
+        kind: AccessKindAttr::Write,
+        view: local(VIEW),
+        indices: vec![local(access_index)],
+    });
+    ProductionRankedKernelV1::new(
+        "hierarchy_owned_output",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            operations,
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .expect("valid hierarchy ownership recipe")
+}
+
+#[test]
+fn production_pipeline_enforces_complete_gpu_hierarchy_ownership() {
+    let input = compile_ranked_kernel_for_lowering_v1(
+        construction(hierarchy_owned_output_kernel(false)),
+        ProductionSessionLimitsV1::default(),
+    )
+    .expect("complete disjoint hierarchy ownership");
+    assert!(input.ownership_report().is_clean());
+    assert!(!input.ownership_report().regions().is_empty());
+}
+
+#[test]
+fn hierarchy_coverage_hole_is_a_terminal_compile_time_diagnostic() {
+    let error = compile_ranked_kernel_for_lowering_v1(
+        construction(hierarchy_owned_output_kernel(true)),
+        ProductionSessionLimitsV1::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedOwnership(_))
+    ));
+    assert!(error.to_string().contains("error[FE2O3-OWN-006]"));
+    assert!(error.to_string().contains("logical coordinate [1]"));
 }
 
 #[test]
