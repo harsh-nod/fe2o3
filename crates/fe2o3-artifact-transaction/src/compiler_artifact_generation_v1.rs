@@ -488,6 +488,8 @@ pub enum CompilerArtifactGenerationObjectBoundaryV1 {
     SyncFinalMode,
     RenameStagedToFinal,
     SyncFinalName,
+    RenameFinalToStaged,
+    SyncRecoveredStagedName,
 }
 
 /// Scope-record boundary exposed to deterministic fault tests.
@@ -2089,10 +2091,19 @@ impl CompilerArtifactGenerationStoreV1 {
         object: CompilerArtifactGenerationObjectV1,
         hooks: &mut StoreHooks,
     ) -> Result<(), CompilerArtifactGenerationErrorV1> {
+        let staged_name = format!("{final_name}{STAGED_SUFFIX}");
         if let Some(matches) =
             self.candidate_matches_exact(final_name, bytes, CandidateMode::Published)?
         {
             if matches {
+                hooks.object = object;
+                self.durable.establish_recovered_artifact_durability(
+                    &staged_name,
+                    final_name,
+                    bytes,
+                    CONTENT_MODE,
+                    hooks,
+                )?;
                 return Ok(());
             }
             return Err(unsafe_entry(
@@ -2101,7 +2112,6 @@ impl CompilerArtifactGenerationStoreV1 {
             ));
         }
 
-        let staged_name = format!("{final_name}{STAGED_SUFFIX}");
         match self.candidate_matches_exact(&staged_name, bytes, CandidateMode::Staged)? {
             Some(true) => {}
             Some(false) => {
@@ -2751,6 +2761,12 @@ fn map_object_boundary(
         }
         RetainedDurableArtifactBoundaryV1::SyncFinalName => {
             CompilerArtifactGenerationObjectBoundaryV1::SyncFinalName
+        }
+        RetainedDurableArtifactBoundaryV1::RenameFinalToStaged => {
+            CompilerArtifactGenerationObjectBoundaryV1::RenameFinalToStaged
+        }
+        RetainedDurableArtifactBoundaryV1::SyncRecoveredStagedName => {
+            CompilerArtifactGenerationObjectBoundaryV1::SyncRecoveredStagedName
         }
     }
 }

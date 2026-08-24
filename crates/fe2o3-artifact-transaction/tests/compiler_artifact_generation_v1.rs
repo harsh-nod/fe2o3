@@ -847,6 +847,39 @@ fn every_object_publication_fault_leaves_no_mixed_generation_and_retries() {
 }
 
 #[test]
+fn reused_visible_object_crosses_a_fresh_rename_boundary() {
+    let directory = TestDirectory::new();
+    let store = directory.store();
+    let object = CompilerArtifactGenerationObjectV1::Artifact(CompilerArtifactRoleV1::SemanticMir);
+    assert_generation(
+        &committed(store.publish_generation_v1(&request(1, false))),
+        1,
+        false,
+    );
+
+    let recommit = store.publish_generation_v1_with_options(
+        &request(1, true),
+        CompilerArtifactGenerationOptionsV1::inject_fault(
+            CompilerArtifactGenerationFaultPointV1::Object {
+                object,
+                boundary: CompilerArtifactGenerationObjectBoundaryV1::RenameFinalToStaged,
+                timing: CompilerArtifactGenerationFaultTimingV1::Before,
+            },
+        ),
+    );
+    assert!(matches!(
+        recommit,
+        CompilerArtifactGenerationPublishOutcomeV1::NotCommitted(_)
+    ));
+    assert_generation(&store.open_generation_v1().unwrap().unwrap(), 1, false);
+    assert_generation(
+        &committed(store.publish_generation_v1(&request(1, true))),
+        1,
+        true,
+    );
+}
+
+#[test]
 fn identical_redo_recovers_but_stale_predecessor_fails_closed() {
     let identical_directory = TestDirectory::new();
     let identical_store = identical_directory.store();

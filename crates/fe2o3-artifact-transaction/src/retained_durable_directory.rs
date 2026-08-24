@@ -72,6 +72,8 @@ pub enum RetainedDurableArtifactBoundaryV1 {
     SyncFinalMode,
     RenameStagedToFinal,
     SyncFinalName,
+    RenameFinalToStaged,
+    SyncRecoveredStagedName,
 }
 
 /// Test-only boundary callbacks. Production callers use [`NoRetainedDurableDirectoryHooksV1`].
@@ -642,6 +644,96 @@ impl RetainedDurableDirectoryV1 {
         self.verify_exact(staged, bytes)
     }
 
+    /// Recommits an exact visible artifact through a fresh staged-to-final transaction.
+    ///
+    /// A final name may be visible even though the directory sync that followed its rename failed.
+    /// A later sync alone cannot establish that the original rename was durable after a writeback
+    /// error. This operation therefore moves the validated final object back to its distinct staged
+    /// name, syncs that namespace mutation, and publishes it again through a fresh final rename and
+    /// directory sync. The cycle preserves the managed-entry count at exact quotas.
+    pub fn establish_recovered_artifact_durability(
+        &self,
+        staged: &str,
+        final_entry: &str,
+        expected_bytes: &[u8],
+        final_mode: u32,
+        hooks: &mut impl RetainedDurableDirectoryHooksV1,
+    ) -> Result<(), RetainedDurableDirectoryErrorV1> {
+        self.verify()?;
+        validate_name(staged)?;
+        validate_name(final_entry)?;
+        validate_final_mode(final_mode)?;
+        if staged == final_entry {
+            return Err(RetainedDurableDirectoryErrorV1::InvalidName {
+                entry: staged.to_owned(),
+            });
+        }
+        let staged_exists = self.read_managed(
+            staged,
+            expected_bytes.len(),
+            ManagedMode::PrivateOrExact(final_mode),
+        )?;
+        let final_exists = self.read_published(final_entry, expected_bytes.len(), final_mode)?;
+        match (staged_exists, final_exists) {
+            (None, Some(final_bytes)) if final_bytes == expected_bytes => {}
+            (None, None) => {
+                return Err(RetainedDurableDirectoryErrorV1::MissingEntry {
+                    entry: final_entry.to_owned(),
+                });
+            }
+            _ => {
+                return Err(RetainedDurableDirectoryErrorV1::ContentMismatch {
+                    entry: final_entry.to_owned(),
+                });
+            }
+        }
+        hit_artifact(
+            hooks,
+            RetainedDurableArtifactBoundaryV1::RenameFinalToStaged,
+            RetainedDurableFaultTimingV1::Before,
+        )?;
+        renameat_with(
+            &self.output.fd,
+            final_entry,
+            &self.output.fd,
+            staged,
+            RenameFlags::NOREPLACE,
+        )
+        .map_err(io::Error::from)?;
+        hit_artifact(
+            hooks,
+            RetainedDurableArtifactBoundaryV1::RenameFinalToStaged,
+            RetainedDurableFaultTimingV1::After,
+        )?;
+        hit_artifact(
+            hooks,
+            RetainedDurableArtifactBoundaryV1::SyncRecoveredStagedName,
+            RetainedDurableFaultTimingV1::Before,
+        )?;
+        hooks.sync_directory(&self.output.fd)?;
+        hit_artifact(
+            hooks,
+            RetainedDurableArtifactBoundaryV1::SyncRecoveredStagedName,
+            RetainedDurableFaultTimingV1::After,
+        )?;
+        self.verify()?;
+        let staged_after = self.read_managed(
+            staged,
+            expected_bytes.len(),
+            ManagedMode::PrivateOrExact(final_mode),
+        )?;
+        if self
+            .read_published(final_entry, expected_bytes.len(), final_mode)?
+            .is_some()
+            || staged_after.as_deref() != Some(expected_bytes)
+        {
+            return Err(RetainedDurableDirectoryErrorV1::ContentMismatch {
+                entry: staged.to_owned(),
+            });
+        }
+        self.publish_staged(staged, final_entry, expected_bytes, final_mode, hooks)
+    }
+
     /// Atomically makes one exact staged artifact visible at its bound final component.
     pub fn publish_staged(
         &self,
@@ -669,18 +761,13 @@ impl RetainedDurableDirectoryV1 {
         match (staged_exists, final_exists) {
             (Some(staged_bytes), None) if staged_bytes == expected_bytes => {}
             (None, Some(final_bytes)) if final_bytes == expected_bytes => {
-                hit_artifact(
+                return self.establish_recovered_artifact_durability(
+                    staged,
+                    final_entry,
+                    &final_bytes,
+                    final_mode,
                     hooks,
-                    RetainedDurableArtifactBoundaryV1::SyncFinalName,
-                    RetainedDurableFaultTimingV1::Before,
-                )?;
-                hooks.sync_directory(&self.output.fd)?;
-                hit_artifact(
-                    hooks,
-                    RetainedDurableArtifactBoundaryV1::SyncFinalName,
-                    RetainedDurableFaultTimingV1::After,
-                )?;
-                return Ok(());
+                );
             }
             (None, None) => {
                 return Err(RetainedDurableDirectoryErrorV1::MissingEntry {
@@ -1170,6 +1257,35 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct ArtifactRecoveryHook {
+        fail_sync_call: Option<usize>,
+        sync_calls: usize,
+        events: Vec<(
+            RetainedDurableArtifactBoundaryV1,
+            RetainedDurableFaultTimingV1,
+        )>,
+    }
+
+    impl RetainedDurableDirectoryHooksV1 for ArtifactRecoveryHook {
+        fn sync_directory(&mut self, directory: &OwnedFd) -> io::Result<()> {
+            self.sync_calls += 1;
+            if self.fail_sync_call == Some(self.sync_calls) {
+                return Err(io::Error::from_raw_os_error(libc::EIO));
+            }
+            fsync(directory).map_err(io::Error::from)
+        }
+
+        fn artifact(
+            &mut self,
+            boundary: RetainedDurableArtifactBoundaryV1,
+            timing: RetainedDurableFaultTimingV1,
+        ) -> io::Result<()> {
+            self.events.push((boundary, timing));
+            Ok(())
+        }
+    }
+
     type RecoveryEvent = (
         RetainedDurableRecordBoundaryV1,
         RetainedDurableFaultTimingV1,
@@ -1285,6 +1401,113 @@ mod tests {
     fn write_private(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
         fs::write(path, bytes)?;
         fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+    }
+
+    #[test]
+    fn visible_artifact_after_directory_fsync_eio_requires_a_fresh_rename_commit() {
+        const FINAL_MODE: u32 = 0o444;
+        let directory = TestDirectory::new();
+        let store = directory.store();
+        let expected = b"content-addressed compiler object";
+        let mut no_faults = NoRetainedDurableDirectoryHooksV1;
+        store
+            .stage_artifact("object.staged", expected, 1024, &mut no_faults)
+            .unwrap();
+
+        let mut failing = ArtifactRecoveryHook {
+            fail_sync_call: Some(1),
+            ..ArtifactRecoveryHook::default()
+        };
+        let error = store
+            .publish_staged(
+                "object.staged",
+                "object.final",
+                expected,
+                FINAL_MODE,
+                &mut failing,
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .source()
+                .unwrap()
+                .to_string()
+                .contains("Input/output error")
+        );
+        store
+            .verify_published_exact("object.final", expected, FINAL_MODE)
+            .unwrap();
+        assert!(store.read_private("object.staged", 1024).unwrap().is_none());
+
+        let mut recovery = ArtifactRecoveryHook::default();
+        store
+            .publish_staged(
+                "object.staged",
+                "object.final",
+                expected,
+                FINAL_MODE,
+                &mut recovery,
+            )
+            .unwrap();
+
+        assert_eq!(
+            recovery.events,
+            [
+                (
+                    RetainedDurableArtifactBoundaryV1::RenameFinalToStaged,
+                    RetainedDurableFaultTimingV1::Before,
+                ),
+                (
+                    RetainedDurableArtifactBoundaryV1::RenameFinalToStaged,
+                    RetainedDurableFaultTimingV1::After,
+                ),
+                (
+                    RetainedDurableArtifactBoundaryV1::SyncRecoveredStagedName,
+                    RetainedDurableFaultTimingV1::Before,
+                ),
+                (
+                    RetainedDurableArtifactBoundaryV1::SyncRecoveredStagedName,
+                    RetainedDurableFaultTimingV1::After,
+                ),
+                (
+                    RetainedDurableArtifactBoundaryV1::SetFinalMode,
+                    RetainedDurableFaultTimingV1::Before,
+                ),
+                (
+                    RetainedDurableArtifactBoundaryV1::SetFinalMode,
+                    RetainedDurableFaultTimingV1::After,
+                ),
+                (
+                    RetainedDurableArtifactBoundaryV1::SyncFinalMode,
+                    RetainedDurableFaultTimingV1::Before,
+                ),
+                (
+                    RetainedDurableArtifactBoundaryV1::SyncFinalMode,
+                    RetainedDurableFaultTimingV1::After,
+                ),
+                (
+                    RetainedDurableArtifactBoundaryV1::RenameStagedToFinal,
+                    RetainedDurableFaultTimingV1::Before,
+                ),
+                (
+                    RetainedDurableArtifactBoundaryV1::RenameStagedToFinal,
+                    RetainedDurableFaultTimingV1::After,
+                ),
+                (
+                    RetainedDurableArtifactBoundaryV1::SyncFinalName,
+                    RetainedDurableFaultTimingV1::Before,
+                ),
+                (
+                    RetainedDurableArtifactBoundaryV1::SyncFinalName,
+                    RetainedDurableFaultTimingV1::After,
+                ),
+            ]
+        );
+        assert_eq!(recovery.sync_calls, 2);
+        store
+            .verify_published_exact("object.final", expected, FINAL_MODE)
+            .unwrap();
+        assert!(store.read_private("object.staged", 1024).unwrap().is_none());
     }
 
     #[test]
