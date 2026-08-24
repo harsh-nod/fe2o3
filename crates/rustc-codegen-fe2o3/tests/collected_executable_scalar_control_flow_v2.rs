@@ -579,6 +579,7 @@ fn receive_backend_from_child(
 }
 
 fn build_backend(workspace: &Path) -> &'static PinnedBackend {
+    fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
     BACKEND.get_or_init(|| {
         let build_root = PrivateBuildRoot::new(workspace);
         let (parent_socket, child_socket) = UnixDatagram::pair().expect("create backend FD socket");
