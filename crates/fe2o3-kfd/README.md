@@ -403,6 +403,31 @@ release reset to pending, after which their slot generations advance. Queue
 destroy refuses any bound, published, or completed-but-unrecycled batch and
 releases the completion arena only after confirmed queue destruction.
 
+### One-shot queue liveness probe
+
+`Gfx942BarrierProbePollBoundV1::new` validates a nonzero bounded poll count
+without consuming device authority. The public consuming
+`CheckedGfx942XnackMinusDevice::run_compute_aql_barrier_probe` operation then
+creates an exact fresh queue with no dispatch resources, leases one completion
+signal, publishes one zero-dependency system-scoped BARRIER_AND packet, and
+returns redacted success evidence only after exact completion validation,
+release-reset of that signal, and confirmed queue destruction.
+
+The probe binds only queue and signal generations; it does not invent code,
+kernarg, or dispatch generations. Submission cancellation is permitted only
+for a stage-classified full or insufficient-space result before any native
+side effect. Execution failures return opaque quarantined queue custody that
+must remain until process teardown. A `TerminalTeardown` failure recovers no
+authority: native resource disposition is indeterminate, process termination
+is required, and retry, reopen, or confirmed-cleanup claims are prohibited.
+The operation arms a process-global KFD runtime-gate poison before beginning
+destroy and clears it only after end-to-end confirmed success. An error or
+panic retains the poison, including failures after the native mutex owner
+would otherwise have been released, so another thread cannot reopen a queue in
+the teardown window.
+No safe result exposes a GPU address, signal address, descriptor, doorbell, or
+MMIO authority.
+
 ### Addressless fixed dispatch binding
 
 `SharedGttMemorySessionV1::create_compute_aql_queue_with_fixed_dispatch`

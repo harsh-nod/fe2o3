@@ -2,20 +2,22 @@ use core::mem::{align_of, size_of};
 use fe2o3_aql::{
     AMD_SIGNAL_ALIGNMENT_V1, AMD_SIGNAL_BYTES_V1, AMD_SIGNAL_KIND_USER_V1,
     AMD_SIGNAL_VALUE_COMPLETE_V1, AMD_SIGNAL_VALUE_PENDING_V1,
-    AQL_BATCH_RESERVATION_MODEL_MANIFEST_SHA256_V1, AQL_BATCH_RESERVATION_MODEL_MANIFEST_V1,
-    AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_BYTES_V1, AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_V1,
-    AQL_DISPATCH_ABI_SCHEMA_MANIFEST_V1, AQL_FIXED_BATCH_MODEL_MANIFEST_SHA256_V2,
-    AQL_FIXED_BATCH_MODEL_MANIFEST_V2, AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
-    AQL_MAX_BATCH_PACKETS_V1, AQL_MAX_FIXED_BATCH_PACKETS_V2,
-    AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1, AmdBusyCompletionSignalV1,
-    AqlAddressObservationError, AqlCompletionObservationV1, AqlDispatchGeometryV1,
-    AqlDispatchOrderingV1, AqlDispatchPacketError, AqlGeometryError, AqlKernelDispatchPacketV1,
-    AqlPacketBatchPublicationTargetV1, AqlPacketPublicationTargetV1,
+    AQL_BARRIER_AND_ABI_SCHEMA_MANIFEST_SHA256_V1, AQL_BARRIER_AND_ABI_SCHEMA_MANIFEST_V1,
+    AQL_BARRIER_AND_PACKET_BYTES_V1, AQL_BATCH_RESERVATION_MODEL_MANIFEST_SHA256_V1,
+    AQL_BATCH_RESERVATION_MODEL_MANIFEST_V1, AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_BYTES_V1,
+    AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_V1, AQL_DISPATCH_ABI_SCHEMA_MANIFEST_V1,
+    AQL_FIXED_BATCH_MODEL_MANIFEST_SHA256_V2, AQL_FIXED_BATCH_MODEL_MANIFEST_V2,
+    AQL_KERNEL_DISPATCH_PACKET_BYTES_V1, AQL_MAX_BATCH_PACKETS_V1, AQL_MAX_FIXED_BATCH_PACKETS_V2,
+    AQL_SYSTEM_SCOPED_BARRIER_AND_HEADER_V1, AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1,
+    AmdBusyCompletionSignalV1, AqlAddressObservationError, AqlBarrierAndPacketErrorV1,
+    AqlBarrierAndPacketV1, AqlBarrierAndPublicationTargetV1, AqlCompletionObservationV1,
+    AqlDispatchGeometryV1, AqlDispatchOrderingV1, AqlDispatchPacketError, AqlGeometryError,
+    AqlKernelDispatchPacketV1, AqlPacketBatchPublicationTargetV1, AqlPacketPublicationTargetV1,
     AqlPreparedKernelDispatchBatchErrorV1, AqlPreparedKernelDispatchBatchV1,
     AqlPreparedKernelDispatchBatchV2, AqlPreparedKernelDispatchV1, AqlRingCapacityError,
     AqlRingCapacityV1, AqlRingReservationError, AqlSingleProducerRingModelV1, ObservedGpuAddressV1,
     classify_acquired_completion_value_v1, encode_pending_completion_signal_bytes_v1,
-    initialize_pending_completion_signal_bytes_v1,
+    initialize_pending_completion_signal_bytes_v1, is_reviewed_aql_publication_v1,
 };
 use sha2::{Digest, Sha256};
 
@@ -27,6 +29,52 @@ fn schema_digest_is_frozen() {
         digest.as_slice(),
         AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_BYTES_V1
     );
+}
+
+#[test]
+fn barrier_and_schema_digest_is_frozen() {
+    let digest = Sha256::digest(AQL_BARRIER_AND_ABI_SCHEMA_MANIFEST_V1);
+    assert_eq!(hex(&digest), AQL_BARRIER_AND_ABI_SCHEMA_MANIFEST_SHA256_V1);
+}
+
+#[test]
+fn barrier_and_packet_layout_and_encoding_are_exact() {
+    assert_eq!(
+        size_of::<AqlBarrierAndPacketV1>(),
+        AQL_BARRIER_AND_PACKET_BYTES_V1
+    );
+    assert_eq!(align_of::<AqlBarrierAndPacketV1>(), 8);
+
+    let prepared =
+        AqlBarrierAndPacketV1::new_unpublished(ObservedGpuAddressV1::new(0x3040).unwrap()).unwrap();
+    let mut target = BarrierCaptureTarget::default();
+    prepared.publish_with(&mut target).unwrap();
+    let packet = target.unpublished.unwrap();
+    assert_eq!(&packet[0..4], &1_u32.to_le_bytes());
+    assert!(packet[4..56].iter().all(|byte| *byte == 0));
+    assert_eq!(&packet[56..64], &0x3040_u64.to_le_bytes());
+    assert_eq!(target.publication_header, Some(0x1403));
+    assert_eq!(AQL_SYSTEM_SCOPED_BARRIER_AND_HEADER_V1, 0x1403);
+}
+
+#[test]
+fn barrier_and_rejects_misaligned_completion_signal() {
+    assert_eq!(
+        AqlBarrierAndPacketV1::new_unpublished(ObservedGpuAddressV1::new(0x3008).unwrap()),
+        Err(AqlBarrierAndPacketErrorV1::CompletionSignal(
+            AqlAddressObservationError::Misaligned
+        ))
+    );
+}
+
+#[test]
+fn reviewed_publication_pairs_dispatch_and_barrier_setup_exactly() {
+    assert!(is_reviewed_aql_publication_v1(0x1402, 1));
+    assert!(is_reviewed_aql_publication_v1(0x1502, 3));
+    assert!(is_reviewed_aql_publication_v1(0x1403, 0));
+    assert!(!is_reviewed_aql_publication_v1(0x1403, 1));
+    assert!(!is_reviewed_aql_publication_v1(0x1402, 0));
+    assert!(!is_reviewed_aql_publication_v1(0x1503, 0));
 }
 
 #[test]
@@ -661,6 +709,30 @@ fn fixed_batch_v2_reservation_is_bounded_by_512k_ring_and_checked_arithmetic() {
 struct CaptureTarget {
     unpublished: Option<[u8; AQL_KERNEL_DISPATCH_PACKET_BYTES_V1]>,
     publication_header: Option<u16>,
+}
+
+#[derive(Default)]
+struct BarrierCaptureTarget {
+    unpublished: Option<[u8; AQL_BARRIER_AND_PACKET_BYTES_V1]>,
+    publication_header: Option<u16>,
+}
+
+impl AqlBarrierAndPublicationTargetV1 for BarrierCaptureTarget {
+    type Error = ();
+
+    fn write_unpublished_barrier(
+        &mut self,
+        packet: &AqlBarrierAndPacketV1,
+    ) -> Result<(), Self::Error> {
+        assert!(packet.is_unpublished());
+        self.unpublished = Some(packet.encode_unpublished_le());
+        Ok(())
+    }
+
+    fn publish_barrier_release_header(&mut self, header: u16) -> Result<(), Self::Error> {
+        self.publication_header = Some(header);
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

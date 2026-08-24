@@ -7,8 +7,8 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 
 use fe2o3_aql::{
     AMD_SIGNAL_BYTES_V1, AMD_SIGNAL_VALUE_PENDING_V1, AQL_INVALID_PACKET_HEADER_V1,
-    AQL_KERNEL_DISPATCH_PACKET_BYTES_V1, AqlCompletionObservationV1, AqlDispatchOrderingV1,
-    AqlRingCapacityV1, classify_acquired_completion_value_v1,
+    AQL_KERNEL_DISPATCH_PACKET_BYTES_V1, AqlCompletionObservationV1, AqlRingCapacityV1,
+    classify_acquired_completion_value_v1, is_reviewed_aql_publication_v1,
 };
 use fe2o3_kfd_uapi::{
     AMDKFD_IOC_ACQUIRE_VM, AMDKFD_IOC_ALLOC_MEMORY_OF_GPU, AMDKFD_IOC_FREE_MEMORY_OF_GPU,
@@ -522,9 +522,7 @@ impl MemoryBackend for LinuxMemoryBackend {
                 .map_err(|_| malformed_aql_mapping("packet header"))?,
         );
         let setup = unpublished >> 16;
-        if unpublished & 0xffff != u32::from(AQL_INVALID_PACKET_HEADER_V1)
-            || !(1..=3).contains(&setup)
-        {
+        if unpublished & 0xffff != u32::from(AQL_INVALID_PACKET_HEADER_V1) || setup > 3 {
             return Err(malformed_aql_mapping("unpublished packet header"));
         }
         let offset = usize::try_from(slot_index)
@@ -559,9 +557,6 @@ impl MemoryBackend for LinuxMemoryBackend {
         slot_index: u32,
         header: u16,
     ) -> Result<(), MemorySessionError> {
-        if AqlDispatchOrderingV1::from_header(header).is_none() {
-            return Err(malformed_aql_mapping("release header"));
-        }
         let offset = usize::try_from(slot_index)
             .ok()
             .and_then(|index| index.checked_mul(AQL_KERNEL_DISPATCH_PACKET_BYTES_V1))
@@ -578,7 +573,7 @@ impl MemoryBackend for LinuxMemoryBackend {
         let unpublished = u32::from_le(atomic.load(Ordering::Relaxed));
         let setup = unpublished >> 16;
         if unpublished & 0xffff != u32::from(AQL_INVALID_PACKET_HEADER_V1)
-            || !(1..=3).contains(&setup)
+            || !is_reviewed_aql_publication_v1(header, setup as u16)
         {
             return Err(malformed_aql_mapping("packet no longer unpublished"));
         }
@@ -795,6 +790,7 @@ impl Drop for LinuxCpuMapping {
 mod tests {
     use super::*;
     use fe2o3_aql::{
+        AQL_SYSTEM_SCOPED_BARRIER_AND_HEADER_V1,
         AQL_SYSTEM_SCOPED_WAIT_FOR_PRIOR_KERNEL_DISPATCH_HEADER_V1, AmdBusyCompletionSignalV1,
         AqlCompletionObservationV1,
     };
@@ -844,6 +840,41 @@ mod tests {
         assert_eq!(
             u32::from_le_bytes(packet.0[..4].try_into().unwrap()),
             0x0002_0001
+        );
+    }
+
+    #[test]
+    fn mapped_packet_accepts_only_zero_setup_for_barrier_and_header() {
+        let mut packet = OnePacket([0; AQL_KERNEL_DISPATCH_PACKET_BYTES_V1]);
+        packet.0[..4].copy_from_slice(&1_u32.to_le_bytes());
+        let mut mapping = LinuxCpuMapping {
+            address: NonNull::from(&mut packet).cast(),
+            bytes: AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
+            active: true,
+            accessible: true,
+        };
+
+        LinuxMemoryBackend::publish_aql_header(
+            &mut mapping,
+            AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
+            0,
+            AQL_SYSTEM_SCOPED_BARRIER_AND_HEADER_V1,
+        )
+        .unwrap();
+        assert_eq!(
+            u32::from_le_bytes(packet.0[..4].try_into().unwrap()),
+            0x0000_1403
+        );
+
+        packet.0[..4].copy_from_slice(&0x0001_0001_u32.to_le_bytes());
+        assert!(
+            LinuxMemoryBackend::publish_aql_header(
+                &mut mapping,
+                AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
+                0,
+                AQL_SYSTEM_SCOPED_BARRIER_AND_HEADER_V1,
+            )
+            .is_err()
         );
     }
 

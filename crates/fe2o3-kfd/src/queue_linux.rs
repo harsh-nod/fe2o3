@@ -37,6 +37,56 @@ static KFD_RUNTIME_GATE_POISONED: AtomicBool = AtomicBool::new(false);
 #[allow(dead_code)]
 const UPDATE_QUEUE_OPCODE: Opcode = AMDKFD_IOC_UPDATE_QUEUE as Opcode;
 
+struct RuntimeGateTerminalTeardownArmV1<'a> {
+    flag: &'a AtomicBool,
+    previously_poisoned: bool,
+    confirmed: bool,
+}
+
+impl RuntimeGateTerminalTeardownArmV1<'_> {
+    fn confirm_destroyed(mut self) {
+        if !self.previously_poisoned {
+            self.flag.store(false, Ordering::Release);
+        }
+        self.confirmed = true;
+    }
+}
+
+impl Drop for RuntimeGateTerminalTeardownArmV1<'_> {
+    fn drop(&mut self) {
+        if !self.confirmed {
+            self.flag.store(true, Ordering::Release);
+        }
+    }
+}
+
+fn arm_runtime_gate_for_terminal_teardown(
+    flag: &AtomicBool,
+) -> RuntimeGateTerminalTeardownArmV1<'_> {
+    let previously_poisoned = flag.swap(true, Ordering::AcqRel);
+    RuntimeGateTerminalTeardownArmV1 {
+        flag,
+        previously_poisoned,
+        confirmed: false,
+    }
+}
+
+/// Excludes a new queue session until teardown is confirmed end to end.
+pub(crate) struct ProcessGlobalKfdRuntimeTeardownArmV1(RuntimeGateTerminalTeardownArmV1<'static>);
+
+impl ProcessGlobalKfdRuntimeTeardownArmV1 {
+    pub(crate) fn confirm_destroyed(self) {
+        self.0.confirm_destroyed();
+    }
+}
+
+pub(crate) fn arm_process_global_kfd_runtime_gate_for_teardown_v1()
+-> ProcessGlobalKfdRuntimeTeardownArmV1 {
+    ProcessGlobalKfdRuntimeTeardownArmV1(arm_runtime_gate_for_terminal_teardown(
+        &KFD_RUNTIME_GATE_POISONED,
+    ))
+}
+
 #[derive(Debug)]
 pub(super) enum LinuxDoorbellErrorV1 {
     ProcessChanged,
@@ -1431,6 +1481,33 @@ mod tests {
         assert!(begin_one_shot_observation(&mut used).is_ok());
         assert!(used);
         assert!(begin_one_shot_observation(&mut used).is_err());
+    }
+
+    #[test]
+    fn terminal_teardown_arm_clears_only_after_confirmed_success() {
+        let flag = AtomicBool::new(false);
+        let arm = arm_runtime_gate_for_terminal_teardown(&flag);
+        assert!(flag.load(Ordering::Acquire));
+        arm.confirm_destroyed();
+        assert!(!flag.load(Ordering::Acquire));
+
+        let arm = arm_runtime_gate_for_terminal_teardown(&flag);
+        assert!(flag.load(Ordering::Acquire));
+        drop(arm);
+        assert!(flag.load(Ordering::Acquire));
+
+        let already_poisoned = AtomicBool::new(true);
+        let arm = arm_runtime_gate_for_terminal_teardown(&already_poisoned);
+        arm.confirm_destroyed();
+        assert!(already_poisoned.load(Ordering::Acquire));
+
+        let panic_flag = AtomicBool::new(false);
+        let result = std::panic::catch_unwind(|| {
+            let _arm = arm_runtime_gate_for_terminal_teardown(&panic_flag);
+            panic!("simulated teardown panic");
+        });
+        assert!(result.is_err());
+        assert!(panic_flag.load(Ordering::Acquire));
     }
 
     #[test]
