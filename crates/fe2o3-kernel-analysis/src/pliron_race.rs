@@ -707,12 +707,26 @@ pub(crate) fn run_pliron_ranked_race_check_after_bounds_v1(
                     limit: MAX_PLIRON_RACE_EFFECT_INSTANCES_V1,
                 });
             }
-            let indices = effect
+            let Some(indices) = effect
                 .indices
                 .iter()
                 .map(|index| sparse.fact(*index).evaluate(&invocation))
                 .collect::<Option<Vec<_>>>()
-                .expect("prechecked sparse index remains evaluable");
+            else {
+                let (dimension, value) = effect
+                    .indices
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .find(|(_, index)| sparse.fact(*index).evaluate(&invocation).is_none())
+                    .expect("failed index evaluation identifies an unresolved index");
+                return one(RankedRaceFindingV1::UnresolvedIndex {
+                    block: effect.location.block,
+                    operation: effect.location.operation,
+                    dimension,
+                    value: value.unique_name(context).to_string(),
+                });
+            };
             let key = AddressKeyV1 {
                 allocation_class: effect.noalias_class,
                 indices,
@@ -1034,6 +1048,12 @@ fn affine_map_is_injective(
 }
 
 fn affine_facts_are_injective(facts: &[SparseAffineIndexV1], launch_extents: &[u64]) -> bool {
+    if !facts
+        .iter()
+        .all(|affine| affine_is_total_over_launch(affine, launch_extents))
+    {
+        return false;
+    }
     let active_dimensions = launch_extents
         .iter()
         .enumerate()
@@ -1052,6 +1072,30 @@ fn affine_facts_are_injective(facts: &[SparseAffineIndexV1], launch_extents: &[u
         })
         .collect::<Vec<_>>();
     modular_rank(matrix) == active_dimensions.len()
+}
+
+fn affine_is_total_over_launch(affine: &SparseAffineIndexV1, launch_extents: &[u64]) -> bool {
+    let mut maximum = affine.constant_term();
+    for (dimension, coefficient) in affine.coefficients().iter().copied().enumerate() {
+        if coefficient == 0 {
+            continue;
+        }
+        let Some(maximum_coordinate) = launch_extents
+            .get(dimension)
+            .copied()
+            .and_then(|extent| extent.checked_sub(1))
+        else {
+            return false;
+        };
+        let Some(contribution) = coefficient.checked_mul(maximum_coordinate) else {
+            return false;
+        };
+        let Some(next) = maximum.checked_add(contribution) else {
+            return false;
+        };
+        maximum = next;
+    }
+    true
 }
 
 // Full rank modulo a prime implies full rank over the integers. A rank loss

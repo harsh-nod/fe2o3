@@ -1,8 +1,9 @@
 use dialect_gpu::{AddressSpaceAttr, ExecutionLayoutOp, FenceOp, MemoryOrderAttr, MemoryScopeAttr};
 use dialect_kernel::{
-    AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, BranchOp, DIALECT_NAME,
-    IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp, InvocationIndexOp,
-    MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp, register_dialect,
+    AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, BranchOp, CheckedTiledIndex2DOp,
+    DIALECT_NAME, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp,
+    InvocationIndexOp, MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp,
+    register_dialect,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckPassKindV1, RankedRaceFindingV1, RankedRaceStatusV1,
@@ -529,7 +530,181 @@ fn affine_stride_and_offset_remain_injective() {
 }
 
 #[test]
-fn dynamic_launch_identity_is_proved_symbolically_after_a_bounds_guard() {
+fn guarded_overflowing_affine_multiply_is_not_proved_injective() {
+    let context = &mut setup();
+    let function = function(context, "guarded_overflowing_multiply");
+    let entry = function.get_entry_block(context);
+    let access_block = block(context, &function, "access");
+    let exit = block(context, &function, "exit");
+    let output = view(context, vec![1], MemorySpaceAttr::Global);
+    let invocation = InvocationIndexOp::new(context, 0, 3);
+    let factor = IndexConstantOp::new(context, 1_u64 << 63);
+    let index = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Multiply,
+        invocation.result(context),
+        factor.result(context),
+    );
+    let extent = IndexConstantOp::new(context, 1);
+    let guard = IndexLessThanBranchOp::new(
+        context,
+        index.result(context),
+        extent.result(context),
+        access_block,
+        exit,
+    );
+    let write = access(
+        context,
+        AccessKindAttr::Write,
+        output.result(context),
+        index.result(context),
+    );
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &output);
+    append(context, entry, &invocation);
+    append(context, entry, &factor);
+    append(context, entry, &index);
+    append(context, entry, &extent);
+    append(context, entry, &guard);
+    append(context, access_block, &write);
+    append(context, access_block, &to_exit);
+    append(context, exit, &ret);
+
+    let report = run_pliron_ranked_race_check_v1(context, &function);
+    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert!(
+        report
+            .findings()
+            .iter()
+            .any(|finding| matches!(finding, RankedRaceFindingV1::UnresolvedIndex { .. }))
+    );
+}
+
+#[test]
+fn guarded_overflowing_affine_add_is_not_proved_injective() {
+    let context = &mut setup();
+    let function = function(context, "guarded_overflowing_add");
+    let entry = function.get_entry_block(context);
+    let access_block = block(context, &function, "access");
+    let exit = block(context, &function, "exit");
+    let output = view(context, vec![1], MemorySpaceAttr::Global);
+    let invocation = InvocationIndexOp::new(context, 0, 2);
+    let maximum = IndexConstantOp::new(context, u64::MAX);
+    let index = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        invocation.result(context),
+        maximum.result(context),
+    );
+    let extent = IndexConstantOp::new(context, 1);
+    let guard = IndexLessThanBranchOp::new(
+        context,
+        index.result(context),
+        extent.result(context),
+        access_block,
+        exit,
+    );
+    let write = access(
+        context,
+        AccessKindAttr::Write,
+        output.result(context),
+        index.result(context),
+    );
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &output);
+    append(context, entry, &invocation);
+    append(context, entry, &maximum);
+    append(context, entry, &index);
+    append(context, entry, &extent);
+    append(context, entry, &guard);
+    append(context, access_block, &write);
+    append(context, access_block, &to_exit);
+    append(context, exit, &ret);
+
+    let report = run_pliron_ranked_race_check_v1(context, &function);
+    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert!(
+        report
+            .findings()
+            .iter()
+            .any(|finding| matches!(finding, RankedRaceFindingV1::UnresolvedIndex { .. }))
+    );
+}
+
+#[test]
+fn checked_tiled_overflowing_invocation_is_not_proved_injective() {
+    let context = &mut setup();
+    let function = function(context, "checked_tiled_overflowing_invocation");
+    let entry = function.get_entry_block(context);
+    let access_block = block(context, &function, "access");
+    let exit = block(context, &function, "exit");
+    let output = view(context, vec![1], MemorySpaceAttr::Global);
+    let invocation = InvocationIndexOp::new(context, 0, 3);
+    let factor = IndexConstantOp::new(context, 1_u64 << 63);
+    let tile_invocation = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Multiply,
+        invocation.result(context),
+        factor.result(context),
+    );
+    let zero = IndexConstantOp::new(context, 0);
+    let sixteen = IndexConstantOp::new(context, 16);
+    let tiled = CheckedTiledIndex2DOp::new(
+        context,
+        tile_invocation.result(context),
+        zero.result(context),
+        sixteen.result(context),
+        sixteen.result(context),
+        sixteen.result(context),
+        [64, 16, 16, 4],
+    );
+    let extent = IndexConstantOp::new(context, 1);
+    let guard = IndexLessThanBranchOp::new(
+        context,
+        tiled.result(context),
+        extent.result(context),
+        access_block,
+        exit,
+    );
+    let write = access(
+        context,
+        AccessKindAttr::Write,
+        output.result(context),
+        tiled.result(context),
+    );
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    for operation in [
+        output.get_operation(),
+        invocation.get_operation(),
+        factor.get_operation(),
+        tile_invocation.get_operation(),
+        zero.get_operation(),
+        sixteen.get_operation(),
+        tiled.get_operation(),
+        extent.get_operation(),
+        guard.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    append(context, access_block, &write);
+    append(context, access_block, &to_exit);
+    append(context, exit, &ret);
+
+    let report = run_pliron_ranked_race_check_v1(context, &function);
+    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert!(
+        report
+            .findings()
+            .iter()
+            .any(|finding| matches!(finding, RankedRaceFindingV1::UnresolvedIndex { .. }))
+    );
+}
+
+#[test]
+fn dynamic_launch_identity_remains_unresolved_after_a_bounds_guard() {
     let context = &mut setup();
     let function = function(context, "dynamic_identity");
     let entry = function.get_entry_block(context);
@@ -562,7 +737,12 @@ fn dynamic_launch_identity_is_proved_symbolically_after_a_bounds_guard() {
     append(context, access_block, &to_exit);
     append(context, exit, &ret);
 
-    assert!(run_pliron_ranked_race_check_v1(context, &function).is_clean());
+    let report = run_pliron_ranked_race_check_v1(context, &function);
+    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        RankedRaceFindingV1::DynamicLaunchExtent { dimension: 0 }
+    )));
 }
 
 #[test]
