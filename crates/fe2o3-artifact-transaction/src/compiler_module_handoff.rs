@@ -6648,7 +6648,14 @@ mod tests {
             duplicate,
             CompilerModuleHandoffErrorV1::AttemptNotClaimable
         ));
-        crate::finish_build_attempt(&temp.0, &producer, attempt).unwrap();
+        let generic_completion =
+            crate::finish_build_attempt(&temp.0, &producer, attempt).unwrap_err();
+        assert!(
+            generic_completion
+                .to_string()
+                .contains("observation-only attempt"),
+            "{generic_completion}"
+        );
         assert!(crate::read_backend_publication_receipt_v1(&temp.0, &producer, attempt).is_err());
         assert!(matches!(
             crate::read_backend_publication_receipt_v2(&temp.0, &producer, attempt),

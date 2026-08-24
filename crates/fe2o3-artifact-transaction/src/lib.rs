@@ -732,12 +732,21 @@ pub fn finish_build_attempt(
         ));
     }
     if record.phase == AttemptPhase::Completed {
-        return Ok(());
+        return if record
+            .backend_receipt
+            .is_some_and(attempt::BackendReceiptV1::is_artifact_completion)
+        {
+            Ok(())
+        } else {
+            Err(build_attempt_error(
+                "completed observation-only attempt has no authorized backend publication",
+            ))
+        };
     }
     if (record.phase == AttemptPhase::Building || record.phase == AttemptPhase::BackendClaimed)
         && !record
             .backend_receipt
-            .is_some_and(attempt::BackendReceiptV1::is_completed)
+            .is_some_and(attempt::BackendReceiptV1::is_artifact_completion)
     {
         let primary = build_attempt_error("build completed without an authorized device backend");
         claim_attempt_for_termination_locked(&output, producer, attempt)?;

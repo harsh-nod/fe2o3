@@ -144,6 +144,18 @@ rejected deterministically; a module may contain multiple kernels, and the
 typed request selects exactly one of them. Use normal Cargo package/target
 selection after `--` to select the intended producer.
 
+Each invocation supplies a fresh, nonzero tracked simulation-attempt identity
+to every supported `#[kernel]` expansion. The identity changes Cargo's
+dependency observation without changing generated kernel tokens, so a reused
+Cargo target must rerun each kernel-bearing source crate and publish a new
+one-shot KIR handoff. The `<target>/fe2o3` simulation generation is never
+committed or cached: it is explicitly deleted after success, Cargo failure,
+request rejection, simulator rejection, or output-publication failure.
+Unrelated Cargo host outputs remain reusable. Manually forging reserved kernel
+registration symbols is not a supported source root; if a root does not pass
+through `#[kernel]` and therefore does not observe the fresh attempt, reuse
+produces no handoff and fails closed.
+
 Simulation sets the existing `FE2O3_HIP_SYS_DISABLE` build boundary and the
 default `cargo-fe2o3` dependency and ELF closures exclude `fe2o3-core`,
 `fe2o3-host`, `fe2o3-hsa-runtime`, HIP, HSA, KFD, DRM, and ROCm libraries.

@@ -162,6 +162,7 @@ fn ordinary_source_simulation_is_exact_deterministic_and_never_probes_a_gpu() {
         std::iter::once(trap).chain(env::split_paths(&env::var_os("PATH").unwrap_or_default())),
     )
     .unwrap();
+    let target = directory.0.join("target-shared");
 
     let first_result = directory.0.join("first.json");
     let first = run_simulation(
@@ -169,7 +170,7 @@ fn ordinary_source_simulation_is_exact_deterministic_and_never_probes_a_gpu() {
         &backend,
         &request,
         &first_result,
-        &directory.0.join("target-first"),
+        &target,
         &path,
     );
     assert!(
@@ -181,6 +182,10 @@ fn ordinary_source_simulation_is_exact_deterministic_and_never_probes_a_gpu() {
     assert!(first.stdout.is_empty());
     let first_bytes = fs::read(&first_result).unwrap();
     assert_exact_fill_result(&first_bytes);
+    assert!(
+        !target.join("fe2o3").exists(),
+        "successful simulation retained an fe2o3 generation"
+    );
 
     let second_result = directory.0.join("second.json");
     let second = run_simulation(
@@ -188,7 +193,7 @@ fn ordinary_source_simulation_is_exact_deterministic_and_never_probes_a_gpu() {
         &backend,
         &request,
         &second_result,
-        &directory.0.join("target-second"),
+        &target,
         &path,
     );
     assert!(
@@ -201,5 +206,99 @@ fn ordinary_source_simulation_is_exact_deterministic_and_never_probes_a_gpu() {
     let second_bytes = fs::read(&second_result).unwrap();
     assert_exact_fill_result(&second_bytes);
     assert_eq!(second_bytes, first_bytes);
+    assert!(
+        !target.join("fe2o3").exists(),
+        "same-target simulation retained an fe2o3 generation"
+    );
+
+    let mut missing_document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
+    missing_document["kernel"] = serde_json::Value::String("missing".to_owned());
+    let missing_request = directory.0.join("missing-request.json");
+    fs::write(
+        &missing_request,
+        serde_json::to_vec(&missing_document).unwrap(),
+    )
+    .unwrap();
+    let missing_result = directory.0.join("missing-result.json");
+    let missing = run_simulation(
+        &workspace,
+        &backend,
+        &missing_request,
+        &missing_result,
+        &target,
+        &path,
+    );
+    assert!(!missing.status.success(), "missing kernel unexpectedly ran");
+    let missing_stderr = String::from_utf8_lossy(&missing.stderr);
+    assert!(
+        missing_stderr.contains(
+            r#""schema":"fe2o3-simulation-error-v1","status":"error","stage":"preflight","kind":"preflight_unknown_kernel""#
+        ),
+        "missing kernel did not emit the stable structured error:\n{missing_stderr}"
+    );
+    assert!(!missing_result.exists());
+    assert!(
+        !target.join("fe2o3").exists(),
+        "failed request retained an fe2o3 generation"
+    );
+
+    let after_missing_result = directory.0.join("after-missing.json");
+    let after_missing = run_simulation(
+        &workspace,
+        &backend,
+        &request,
+        &after_missing_result,
+        &target,
+        &path,
+    );
+    assert!(
+        after_missing.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&after_missing.stdout),
+        String::from_utf8_lossy(&after_missing.stderr)
+    );
+    let after_missing_bytes = fs::read(&after_missing_result).unwrap();
+    assert_exact_fill_result(&after_missing_bytes);
+    assert_eq!(after_missing_bytes, first_bytes);
+    assert!(!target.join("fe2o3").exists());
+
+    let occupied = run_simulation(
+        &workspace,
+        &backend,
+        &request,
+        &first_result,
+        &target,
+        &path,
+    );
+    assert!(
+        !occupied.status.success(),
+        "preexisting output was unexpectedly replaced"
+    );
+    assert_eq!(fs::read(&first_result).unwrap(), first_bytes);
+    assert!(
+        !target.join("fe2o3").exists(),
+        "failed output publication retained an fe2o3 generation"
+    );
+
+    let after_occupied_result = directory.0.join("after-occupied.json");
+    let after_occupied = run_simulation(
+        &workspace,
+        &backend,
+        &request,
+        &after_occupied_result,
+        &target,
+        &path,
+    );
+    assert!(
+        after_occupied.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&after_occupied.stdout),
+        String::from_utf8_lossy(&after_occupied.stderr)
+    );
+    let after_occupied_bytes = fs::read(&after_occupied_result).unwrap();
+    assert_exact_fill_result(&after_occupied_bytes);
+    assert_eq!(after_occupied_bytes, first_bytes);
+    assert!(!target.join("fe2o3").exists());
     assert!(!marker.exists(), "cargo fe2o3 simulate invoked rocminfo");
 }

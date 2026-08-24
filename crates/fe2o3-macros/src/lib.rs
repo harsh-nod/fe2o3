@@ -38,6 +38,7 @@ use crate::control_flow_v1::{
 };
 
 const SIMULATION_MODE_ENV_V1: &str = "FE2O3_SIMULATION_MODE_V1";
+const SIMULATION_ATTEMPT_ENV_V1: &str = "FE2O3_SIMULATION_ATTEMPT_V1";
 
 #[proc_macro_derive(DeviceCopy)]
 pub fn derive_device_copy(item: TokenStream) -> TokenStream {
@@ -798,7 +799,10 @@ fn expand_kernel(input: ItemFn, options: KernelOptions) -> syn::Result<proc_macr
 
     let device_import = fe2o3_device_import()?;
     let device_path = fe2o3_device_path()?;
-    let omit_host_adapter = options.mode == KernelMode::Typed && simulation_mode_selected_v1()?;
+    // Every supported source kernel observes the attempt even when its emitted
+    // tokens have no simulation-specific host adapter to omit.
+    let simulation_mode = simulation_mode_selected_v1()?;
+    let omit_host_adapter = options.mode == KernelMode::Typed && simulation_mode;
     let host_import = if options.mode == KernelMode::Typed && !omit_host_adapter {
         Some(fe2o3_host_import()?)
     } else {
@@ -816,18 +820,53 @@ fn expand_kernel(input: ItemFn, options: KernelOptions) -> syn::Result<proc_macr
 }
 
 fn simulation_mode_selected_v1() -> syn::Result<bool> {
-    match proc_macro::tracked::env_var(SIMULATION_MODE_ENV_V1) {
-        Ok(value) => Ok(simulation_mode_value_v1(&value)),
-        Err(std::env::VarError::NotPresent) => Ok(false),
+    let mode = tracked_environment_value_v1(SIMULATION_MODE_ENV_V1)?;
+    let attempt = tracked_environment_value_v1(SIMULATION_ATTEMPT_ENV_V1)?;
+    if mode.as_deref().is_some_and(simulation_mode_value_v1) {
+        match attempt {
+            Some(attempt) if simulation_attempt_value_v1(&attempt) => Ok(true),
+            Some(_) => Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                format!(
+                    "{SIMULATION_ATTEMPT_ENV_V1} must be exactly 32 lowercase hexadecimal digits and nonzero"
+                ),
+            )),
+            None => Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                format!("{SIMULATION_MODE_ENV_V1}=1 requires {SIMULATION_ATTEMPT_ENV_V1}"),
+            )),
+        }
+    } else if attempt.is_some() {
+        Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            format!("{SIMULATION_ATTEMPT_ENV_V1} is only valid with {SIMULATION_MODE_ENV_V1}=1"),
+        ))
+    } else {
+        Ok(false)
+    }
+}
+
+fn tracked_environment_value_v1(name: &str) -> syn::Result<Option<String>> {
+    match proc_macro::tracked::env_var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
         Err(std::env::VarError::NotUnicode(_)) => Err(syn::Error::new(
             proc_macro2::Span::call_site(),
-            format!("{SIMULATION_MODE_ENV_V1} is not valid UTF-8"),
+            format!("{name} is not valid UTF-8"),
         )),
     }
 }
 
 fn simulation_mode_value_v1(value: &str) -> bool {
     value == "1"
+}
+
+fn simulation_attempt_value_v1(value: &str) -> bool {
+    value.len() == 32
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && value.as_bytes().iter().any(|byte| *byte != b'0')
 }
 
 fn resolve_crate_binding(
@@ -4607,10 +4646,10 @@ mod tests {
         expand_legacy_kernel_with_imports, general_typed_global_mut_pointer_type_identity_v1,
         generated_general_typed_arguments_v1, generated_worker_v3_adapter_v1, host_import_for,
         model_general_typed_signature_v1, parse_device_ffi_options, parse_kernel_options,
-        simulation_mode_value_v1, validate_generated_device_ffi_contract_grammar,
-        validate_kernel_assembly_boundary, validate_kernel_source_safety,
-        validate_typed_kernel_profile_v1, validate_typed_kernel_signature,
-        validate_typed_kernel_symbol_stem,
+        simulation_attempt_value_v1, simulation_mode_value_v1,
+        validate_generated_device_ffi_contract_grammar, validate_kernel_assembly_boundary,
+        validate_kernel_source_safety, validate_typed_kernel_profile_v1,
+        validate_typed_kernel_signature, validate_typed_kernel_symbol_stem,
     };
     use fe2o3_artifacts::{
         AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Mutability,
@@ -5305,6 +5344,22 @@ mod tests {
         assert!(simulation_mode_value_v1("1"));
         for hostile in ["", "0", "true", "TRUE", "01", "attacker", "1 "] {
             assert!(!simulation_mode_value_v1(hostile), "accepted {hostile:?}");
+        }
+        assert!(simulation_attempt_value_v1(
+            "0123456789abcdef0123456789abcdef"
+        ));
+        for hostile in [
+            "",
+            "0",
+            "00000000000000000000000000000000",
+            "0123456789ABCDEF0123456789abcdef",
+            "0123456789abcdef0123456789abcdeg",
+            "0123456789abcdef0123456789abcdef00",
+        ] {
+            assert!(
+                !simulation_attempt_value_v1(hostile),
+                "accepted {hostile:?}"
+            );
         }
     }
 

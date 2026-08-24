@@ -65,6 +65,7 @@ const BINDING_WRAPPER_MODE_ENV: &str = "FE2O3_BINDING_WRAPPER_MODE_V1";
 const MANAGED_RUSTC_ARGS_ENV: &str = "FE2O3_MANAGED_RUSTC_ARGS_V1";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
 pub(crate) const SIMULATION_MODE_ENV: &str = "FE2O3_SIMULATION_MODE_V1";
+pub(crate) const SIMULATION_ATTEMPT_ENV: &str = "FE2O3_SIMULATION_ATTEMPT_V1";
 const SIMULATION_PIPELINE: &str = "simulation-v1";
 const SIMULATION_FAILURE_ALREADY_REPORTED: &str =
     "cargo fe2o3 simulate emitted a structured simulation error";
@@ -834,6 +835,7 @@ impl BackendRunContext {
             fe2o3_build_authority::CompilerClosureV2::identity_sha256,
         );
         let worker_v2_identity = worker_v2.as_ref().map(|config| config.identity());
+        let build_session = random_build_session()?;
         let mut cargo_configuration = project.semantic_configuration(
             args,
             &pinned_cargo,
@@ -847,21 +849,36 @@ impl BackendRunContext {
         }
         if simulation {
             cargo_configuration.extend_from_slice(b"fe2o3-cargo-simulation-v1\0");
+            cargo_configuration.extend_from_slice(b"fe2o3-simulation-attempt-v1\0");
+            cargo_configuration.extend_from_slice(build_session.as_bytes());
         }
+        let backend_reference = pinned_backend
+            .fixed_child_descriptor_path(BACKEND_CHILD_FD)
+            .map_err(|error| format!("failed to retain pinned codegen backend: {error}"))?;
         let semantic = generation::semantic_identity(
             &target,
             &compiler_closure_sha256,
             worker_v2_identity,
             &cargo_configuration,
         )?;
-        let generation = generation::PreparedGeneration::prepare(&target_dir, semantic)?;
-        let backend_reference = pinned_backend
-            .fixed_child_descriptor_path(BACKEND_CHILD_FD)
-            .map_err(|error| format!("failed to retain pinned codegen backend: {error}"))?;
+        let mut generation = generation::PreparedGeneration::prepare(&target_dir, semantic)?;
         let managed_rustc_args =
-            generation::managed_rustc_args(&backend_reference, generation.token())?;
-        let build_session = random_build_session()?;
-
+            match generation::managed_rustc_args(&backend_reference, generation.token()) {
+                Ok(arguments) => arguments,
+                Err(error) if simulation => {
+                    return match aggregate_post_spawn_results(
+                        Err(error),
+                        [(
+                            "ephemeral simulation generation cleanup after preparation failure",
+                            generation.discard_simulation_generation(),
+                        )],
+                    ) {
+                        Err(error) => Err(error),
+                        Ok(()) => unreachable!("primary simulation preparation failure was lost"),
+                    };
+                }
+                Err(error) => return Err(error),
+            };
         Ok(Self {
             target,
             project,
@@ -888,6 +905,27 @@ impl BackendRunContext {
 }
 
 fn run_cargo_with_backend(
+    context: &mut BackendRunContext,
+    command: &str,
+    args: &[OsString],
+    protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
+    simulation: Option<&SimulationCommand>,
+) -> Result<(), String> {
+    let result =
+        run_cargo_with_backend_inner(context, command, args, protected_release, simulation);
+    if simulation.is_none() {
+        return result;
+    }
+    aggregate_post_spawn_results(
+        result,
+        [(
+            "ephemeral simulation generation cleanup",
+            context.generation.discard_simulation_generation(),
+        )],
+    )
+}
+
+fn run_cargo_with_backend_inner(
     context: &mut BackendRunContext,
     command: &str,
     args: &[OsString],
@@ -1041,7 +1079,10 @@ fn run_cargo_with_backend(
             hex_encode(&context.compiler_closure_sha256),
         )
         .env(BUILD_SESSION_ENV, context.build_session.to_hex());
-    configure_simulation_build_environment(cargo.as_command_mut(), simulation.is_some());
+    configure_simulation_build_environment(
+        cargo.as_command_mut(),
+        simulation.map(|_| context.build_session),
+    );
     if let Some(action) = context.protected_release_action {
         cargo
             .as_command_mut()
@@ -1143,7 +1184,9 @@ fn run_cargo_with_backend(
     let canonical_kir = simulation
         .map(|_| simulation_capture::consume_exactly_one(context.generation.artifact_dir()))
         .transpose()?;
-    context.generation.commit()?;
+    if simulation.is_none() {
+        context.generation.commit()?;
+    }
     if let (Some(simulation), Some(canonical_kir)) = (simulation, canonical_kir) {
         let status = fe2o3_kir_sim_cli::run_captured_kir_v6_with_bound_request(
             &canonical_kir,
@@ -1158,15 +1201,20 @@ fn run_cargo_with_backend(
     Ok(())
 }
 
-fn configure_simulation_build_environment(command: &mut Command, selected: bool) {
-    if selected {
+fn configure_simulation_build_environment(
+    command: &mut Command,
+    attempt: Option<fe2o3_artifact_transaction::BuildSession>,
+) {
+    if let Some(attempt) = attempt {
         command
             .env(worker_v2::CODEGEN_PIPELINE_ENV, SIMULATION_PIPELINE)
             .env(SIMULATION_MODE_ENV, "1")
+            .env(SIMULATION_ATTEMPT_ENV, attempt.to_hex())
             .env("FE2O3_HIP_SYS_DISABLE", "1");
     } else {
         command
             .env_remove(SIMULATION_MODE_ENV)
+            .env_remove(SIMULATION_ATTEMPT_ENV)
             .env_remove("FE2O3_HIP_SYS_DISABLE");
     }
 }
@@ -2679,9 +2727,9 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
     use super::{
-        SIMULATION_MODE_ENV, aggregate_post_spawn_results, configure_simulation_build_environment,
-        inject_application_runner_config, normalize_invocation, parse_rocminfo_target,
-        resolve_amd_gpu_target, selected_run_target,
+        SIMULATION_ATTEMPT_ENV, SIMULATION_MODE_ENV, aggregate_post_spawn_results,
+        configure_simulation_build_environment, inject_application_runner_config,
+        normalize_invocation, parse_rocminfo_target, resolve_amd_gpu_target, selected_run_target,
     };
     use crate::project::PinnedDirectory;
     use std::ffi::{OsStr, OsString};
@@ -2729,15 +2777,22 @@ mod tests {
         let mut command = Command::new("cargo");
         command
             .env(SIMULATION_MODE_ENV, "attacker")
+            .env(SIMULATION_ATTEMPT_ENV, "attacker")
             .env("FE2O3_HIP_SYS_DISABLE", "attacker");
-        configure_simulation_build_environment(&mut command, false);
+        configure_simulation_build_environment(&mut command, None);
         assert_eq!(command_environment(&command, SIMULATION_MODE_ENV), None);
+        assert_eq!(command_environment(&command, SIMULATION_ATTEMPT_ENV), None);
         assert_eq!(command_environment(&command, "FE2O3_HIP_SYS_DISABLE"), None);
 
-        configure_simulation_build_environment(&mut command, true);
+        let attempt = fe2o3_artifact_transaction::BuildSession::from_bytes([0x5a; 16]);
+        configure_simulation_build_environment(&mut command, Some(attempt));
         assert_eq!(
             command_environment(&command, SIMULATION_MODE_ENV),
             Some(OsStr::new("1"))
+        );
+        assert_eq!(
+            command_environment(&command, SIMULATION_ATTEMPT_ENV),
+            Some(OsStr::new("5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"))
         );
         assert_eq!(
             command_environment(&command, "FE2O3_CODEGEN_PIPELINE"),

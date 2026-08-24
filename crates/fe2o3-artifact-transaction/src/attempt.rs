@@ -628,9 +628,7 @@ pub(crate) enum BackendReceiptV1 {
 }
 
 impl BackendReceiptV1 {
-    pub(crate) const fn is_completed(self) -> bool {
-        // Simulation observations complete registry retirement only. Every
-        // artifact/publication schema rejects that distinct receipt variant.
+    pub(crate) const fn is_terminal(self) -> bool {
         matches!(
             self,
             Self::LegacyCoordination
@@ -639,6 +637,17 @@ impl BackendReceiptV1 {
                 | Self::ProvenanceV3(_)
                 | Self::EnvelopeCustodyV3(_, _)
                 | Self::SimulationObservation(_)
+        )
+    }
+
+    pub(crate) const fn is_artifact_completion(self) -> bool {
+        matches!(
+            self,
+            Self::LegacyCoordination
+                | Self::Provenance(_)
+                | Self::ProvenanceV2(_)
+                | Self::ProvenanceV3(_)
+                | Self::EnvelopeCustodyV3(_, _)
         )
     }
 }
@@ -1297,7 +1306,7 @@ impl AttemptRegistry {
         if record.phase == AttemptPhase::Completed {
             return if record
                 .backend_receipt
-                .is_some_and(BackendReceiptV1::is_completed)
+                .is_some_and(BackendReceiptV1::is_terminal)
             {
                 Ok(())
             } else {
@@ -1307,7 +1316,7 @@ impl AttemptRegistry {
         if record.phase != AttemptPhase::BackendClaimed
             || !record
                 .backend_receipt
-                .is_some_and(BackendReceiptV1::is_completed)
+                .is_some_and(BackendReceiptV1::is_terminal)
         {
             return Err(AttemptCodecError::InvalidTransition);
         }
@@ -1475,7 +1484,7 @@ impl AttemptRegistry {
                 || (record.phase == AttemptPhase::Completed
                     && !record
                         .backend_receipt
-                        .is_some_and(BackendReceiptV1::is_completed))
+                        .is_some_and(BackendReceiptV1::is_terminal))
             {
                 return Err(AttemptCodecError::InvalidTransition);
             }

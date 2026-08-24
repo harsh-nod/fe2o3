@@ -3409,6 +3409,10 @@ fn simulation_mode_selected() -> bool {
     std::env::var_os(crate::SIMULATION_MODE_ENV).as_deref() == Some(OsStr::new("1"))
         && std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref()
             == Some(OsStr::new("simulation-v1"))
+        && std::env::var(crate::SIMULATION_ATTEMPT_ENV)
+            .ok()
+            .and_then(|attempt| BuildSession::from_hex(&attempt).ok())
+            .is_some_and(|attempt| attempt != BuildSession::DIRECT)
 }
 
 fn complete_simulation_attempt(managed: &ManagedAttempt) -> Result<(), CompletionFailure> {
