@@ -57,19 +57,28 @@ fn sample(seed: u32, modulus: u32, center: i32, scale: f32) -> f32 {
     ((seed % modulus) as i32 - center) as f32 * scale
 }
 
-fn launch_case(
-    stream: &Stream,
-    module: &std::sync::Arc<GpuModule>,
-    q: &DeviceBuffer<u16>,
-    k: &DeviceBuffer<u16>,
-    v: &DeviceBuffer<f32>,
-    mask: &DeviceBuffer<f32>,
-    output: &DeviceBuffer<f32>,
-    case: Case,
+struct DeviceBuffers<'a> {
+    q: &'a DeviceBuffer<u16>,
+    k: &'a DeviceBuffer<u16>,
+    v: &'a DeviceBuffer<f32>,
+    mask: &'a DeviceBuffer<f32>,
+    output: &'a DeviceBuffer<f32>,
+}
+
+#[derive(Clone, Copy)]
+struct LaunchLayout {
     k_head_stride: u32,
     v_head_stride: u32,
     output_rows: u32,
     scale: f32,
+}
+
+fn launch_case(
+    stream: &Stream,
+    module: &std::sync::Arc<GpuModule>,
+    buffers: DeviceBuffers<'_>,
+    case: Case,
+    layout: LaunchLayout,
 ) -> fe2o3_core::Result<()> {
     let workgroups = case.batch_heads * (case.query_rows_padded / 16);
     // SAFETY: buffers match five slice ABI pairs and the scalar list below
@@ -85,25 +94,27 @@ fn launch_case(
                 shared_mem_bytes: 0,
             },
             args: [
-                slice(q),
-                slice(k),
-                slice(v),
-                slice(mask),
-                slice_mut(output),
+                slice(buffers.q),
+                slice(buffers.k),
+                slice(buffers.v),
+                slice(buffers.mask),
+                slice_mut(buffers.output),
                 scalar(case.batch_heads),
+                scalar(case.queries),
                 scalar(case.query_rows_padded),
+                scalar(case.keys),
                 scalar(case.keys_padded),
                 scalar(case.depth),
                 scalar(case.value_dimension),
                 scalar(case.q_stride),
                 scalar(case.k_depth_stride),
-                scalar(k_head_stride),
+                scalar(layout.k_head_stride),
                 scalar(case.v_stride),
-                scalar(v_head_stride),
+                scalar(layout.v_head_stride),
                 scalar(case.mask_stride),
                 scalar(case.output_stride),
-                scalar(output_rows),
-                scalar(scale),
+                scalar(layout.output_rows),
+                scalar(layout.scale),
             ]
         }
     }
@@ -138,8 +149,10 @@ fn run_case(
                     Bf16::from_f32(sample(head * 101 + row * 17 + d * 7, 31, 15, 0.03125))
                         .to_bits();
             }
-            for key in 0..case.keys {
-                let visible = row >= case.queries || key <= row;
+            for key in 0..case.keys_padded {
+                let visible = row >= case.queries
+                    || key >= case.keys
+                    || (row != case.queries / 2 && key <= row);
                 if visible {
                     mask[global_row as usize * case.mask_stride as usize + key as usize] = 0.0;
                 }
@@ -149,23 +162,15 @@ fn run_case(
             for key in 0..case.keys_padded {
                 k[head as usize * k_head_stride as usize
                     + d as usize * case.k_depth_stride as usize
-                    + key as usize] = Bf16::from_f32(if key < case.keys {
-                    sample(head * 79 + d * 11 + key * 5, 29, 14, 0.03125)
-                } else {
-                    0.0
-                })
-                .to_bits();
+                    + key as usize] =
+                    Bf16::from_f32(sample(head * 79 + d * 11 + key * 5, 29, 14, 0.03125)).to_bits();
             }
         }
         for key in 0..case.keys_padded {
             for d in 0..case.value_dimension {
                 v[head as usize * v_head_stride as usize
                     + key as usize * case.v_stride as usize
-                    + d as usize] = if key < case.keys {
-                    sample(head * 67 + key * 13 + d * 3, 23, 11, 0.0625)
-                } else {
-                    0.0
-                };
+                    + d as usize] = sample(head * 67 + key * 13 + d * 3, 23, 11, 0.0625);
             }
         }
     }
@@ -179,27 +184,35 @@ fn run_case(
     launch_case(
         &stream,
         module,
-        &q_device,
-        &k_device,
-        &v_device,
-        &mask_device,
-        &output_device,
+        DeviceBuffers {
+            q: &q_device,
+            k: &k_device,
+            v: &v_device,
+            mask: &mask_device,
+            output: &output_device,
+        },
         case,
-        k_head_stride,
-        v_head_stride,
-        output_rows,
-        scale,
+        LaunchLayout {
+            k_head_stride,
+            v_head_stride,
+            output_rows,
+            scale,
+        },
     )?;
     let actual = output_device.to_host_vec(&stream)?;
 
     let mut max_error = 0.0_f32;
     for head in 0..case.batch_heads {
-        for row in 0..case.queries {
+        for row in 0..case.query_rows_padded {
             let global_row = head * case.query_rows_padded + row;
             let mut scores = vec![f32::NEG_INFINITY; case.keys as usize];
-            for key in 0..case.keys {
-                if mask[global_row as usize * case.mask_stride as usize + key as usize].is_finite()
-                {
+            if row < case.queries {
+                for key in 0..case.keys {
+                    if !mask[global_row as usize * case.mask_stride as usize + key as usize]
+                        .is_finite()
+                    {
+                        continue;
+                    }
                     let mut score = 0.0_f32;
                     for d in 0..case.depth {
                         score += Bf16::from_bits(
@@ -217,20 +230,38 @@ fn run_case(
                 }
             }
             let maximum = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-            let denominator = scores
-                .iter()
-                .map(|score| (*score - maximum).exp())
-                .sum::<f32>();
+            let denominator = if maximum == f32::NEG_INFINITY {
+                0.0
+            } else {
+                scores
+                    .iter()
+                    .map(|score| (*score - maximum).exp())
+                    .sum::<f32>()
+            };
             for d in 0..case.value_dimension {
                 let mut expected = 0.0_f32;
-                for key in 0..case.keys {
-                    expected += ((scores[key as usize] - maximum).exp() / denominator)
-                        * v[head as usize * v_head_stride as usize
-                            + key as usize * case.v_stride as usize
-                            + d as usize];
+                if denominator > 0.0 {
+                    for key in 0..case.keys {
+                        expected += ((scores[key as usize] - maximum).exp() / denominator)
+                            * v[head as usize * v_head_stride as usize
+                                + key as usize * case.v_stride as usize
+                                + d as usize];
+                    }
                 }
                 let observed =
                     actual[global_row as usize * case.output_stride as usize + d as usize];
+                assert!(
+                    observed.is_finite(),
+                    "{} head {head} row {row} dim {d}: non-finite output {observed}",
+                    case.name
+                );
+                if row >= case.queries || row == case.queries / 2 {
+                    assert_eq!(
+                        observed, 0.0,
+                        "{} head {head} row {row} dim {d}: zero-output policy violated",
+                        case.name
+                    );
+                }
                 let error = (observed - expected).abs();
                 max_error = max_error.max(error);
                 assert!(
@@ -252,7 +283,7 @@ fn run_case(
         );
     }
     println!(
-        "PASS {:<24} heads={} queries={}/{} keys={}/{} depth={} value_dim={} max_error={max_error}",
+        "PASS {:<24} heads={} queries={}/{} keys={}/{} depth={} value_dim={} all_masked_row={} max_error={max_error}",
         case.name,
         case.batch_heads,
         case.queries,
@@ -261,6 +292,7 @@ fn run_case(
         case.keys_padded,
         case.depth,
         case.value_dimension,
+        case.queries / 2,
     );
     Ok(())
 }
@@ -276,4 +308,47 @@ fn main() -> fe2o3_core::Result<()> {
         run_case(&context, &module, case)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qualification_cases_cover_independent_logical_tails() {
+        assert!(
+            CASES
+                .iter()
+                .all(|case| case.queries <= case.query_rows_padded)
+        );
+        assert!(CASES.iter().all(|case| case.keys <= case.keys_padded));
+        assert!(
+            CASES
+                .iter()
+                .any(|case| case.queries < case.query_rows_padded)
+        );
+        assert!(CASES.iter().any(|case| case.keys < case.keys_padded));
+        assert!(CASES.iter().any(|case| case.batch_heads > 1));
+    }
+
+    #[test]
+    fn fully_masked_reference_policy_is_finite_zero() {
+        let scores = [f32::NEG_INFINITY; 7];
+        let maximum = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let denominator = if maximum == f32::NEG_INFINITY {
+            0.0
+        } else {
+            scores
+                .iter()
+                .map(|score| (*score - maximum).exp())
+                .sum::<f32>()
+        };
+        let output = if denominator > 0.0 {
+            1.0 / denominator
+        } else {
+            0.0
+        };
+        assert_eq!(output, 0.0);
+        assert!(output.is_finite());
+    }
 }
