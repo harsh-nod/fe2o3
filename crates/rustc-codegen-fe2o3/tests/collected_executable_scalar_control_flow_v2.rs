@@ -3480,8 +3480,7 @@ fn assert_rejected_without_fallback(output: &Output, expected: &str) {
         "missing `{expected}` diagnostic\n{stderr}"
     );
     assert!(
-        !stderr.contains("unsupported kernel shape for AMDGPU LLVM IR MVP")
-            && !stderr.contains("emitted scalar_control_flow_v1"),
+        !stderr.contains("emitted scalar_control_flow_v1"),
         "rejection entered an artifact fallback\n{stderr}"
     );
 }

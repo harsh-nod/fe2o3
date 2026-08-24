@@ -43,3 +43,42 @@ pub(crate) struct PreparedDeviceKernel {
     pub(crate) name: String,
     pub(crate) llvm_ir: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn empty_preflight_reconciles_without_invoking_the_rocm_compiler() {
+        let output = std::env::temp_dir().join(format!(
+            "fe2o3-zero-kernel-reconciliation-{}-{}",
+            std::process::id(),
+            NEXT_OUTPUT.fetch_add(1, Ordering::Relaxed),
+        ));
+        let producer = ProducerIdentity::from_codegen(
+            "zero_kernel_reconciliation",
+            Some(Path::new("/tests/zero-kernel.rs")),
+        )
+        .unwrap();
+
+        let artifacts = emit_collection_after_preflight(
+            &producer,
+            &output,
+            &AmdGpuTarget::default(),
+            None,
+            || Ok(Vec::new()),
+        )
+        .unwrap();
+
+        assert!(artifacts.is_empty());
+        assert!(fs::read_dir(&output).unwrap().all(|entry| !matches!(
+                    entry.unwrap().path().extension().and_then(|value| value.to_str()),
+                    Some("ll" | "o" | "hsaco")
+                )));
+        fs::remove_dir_all(output).unwrap();
+    }
+}

@@ -1123,7 +1123,7 @@ pub struct MirStatement {
     pub rvalue: Option<MirRvalueKind>,
     /// Concrete target/result type for rustc cast and ADT aggregate rvalues.
     pub(crate) semantic_rvalue_type: Option<MirSemanticTypeEvidence>,
-    /// Compatibility spelling consumed by the legacy record recognizer.
+    /// Diagnostic spelling retained alongside the structured rvalue.
     pub operation: Option<String>,
     pub source: Option<MirSourceLocation>,
 }
@@ -1182,7 +1182,7 @@ pub enum MirOperandRef {
     Constant {
         ty: MirImportedType,
         literal: MirConstant,
-        /// Compatibility spelling consumed by the legacy record recognizer.
+        /// Diagnostic spelling retained alongside the structured constant.
         value: String,
     },
 }

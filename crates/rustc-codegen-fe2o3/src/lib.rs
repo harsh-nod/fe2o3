@@ -1497,62 +1497,62 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             }
                             CodegenPipeline::KernelIrWorkerV2 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
-                                    reason: "internal error: Worker V2 entered the legacy artifact transaction"
+                                    reason: "internal error: Worker V2 entered the generic qualification artifact transaction"
                                         .to_owned(),
                                 })
                             }
                             CodegenPipeline::CollectedExecutableScalarControlFlowV2 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
-                                    reason: "internal error: collected executable scalar-control-flow V2 entered the legacy artifact transaction"
+                                    reason: "internal error: collected executable scalar-control-flow V2 entered the generic qualification artifact transaction"
                                         .to_owned(),
                                 })
                             }
                             CodegenPipeline::CollectedFlashAttentionV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
-                                    reason: "internal error: collected FlashAttention V1 entered the legacy artifact transaction"
+                                    reason: "internal error: collected FlashAttention V1 entered the generic qualification artifact transaction"
                                         .to_owned(),
                                 })
                             }
                             CodegenPipeline::CollectedGeneralGemmV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
-                                    reason: "internal error: collected general GEMM V1 entered the legacy artifact transaction"
+                                    reason: "internal error: collected general GEMM V1 entered the generic qualification artifact transaction"
                                         .to_owned(),
                                 })
                             }
                             CodegenPipeline::CollectedMoeTop2V1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
-                                    reason: "internal error: collected MoE top-2 V1 entered the legacy artifact transaction"
+                                    reason: "internal error: collected MoE top-2 V1 entered the generic qualification artifact transaction"
                                         .to_owned(),
                                 })
                             }
                             CodegenPipeline::CollectedScalarGemmV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
-                                    reason: "internal error: collected scalar GEMM V1 entered the legacy artifact transaction"
+                                    reason: "internal error: collected scalar GEMM V1 entered the generic qualification artifact transaction"
                                         .to_owned(),
                                 })
                             }
                             CodegenPipeline::CollectedRowSoftmaxV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
-                                    reason: "internal error: collected row softmax V1 entered the legacy artifact transaction"
+                                    reason: "internal error: collected row softmax V1 entered the generic qualification artifact transaction"
                                         .to_owned(),
                                 })
                             }
                             CodegenPipeline::CollectedTiledGemmV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
-                                    reason: "internal error: collected tiled GEMM V1 entered the legacy artifact transaction"
+                                    reason: "internal error: collected tiled GEMM V1 entered the generic qualification artifact transaction"
                                         .to_owned(),
                                 })
                             }
                             CodegenPipeline::CollectedWave64CollectivesV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
-                                    reason: "internal error: collected Wave64 collectives V1 entered the legacy artifact transaction"
+                                    reason: "internal error: collected Wave64 collectives V1 entered the generic qualification artifact transaction"
                                         .to_owned(),
                                 })
                             }
                             CodegenPipeline::CollectedLdsReductionV1
                             | CodegenPipeline::CollectedScopedAtomicV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
-                                    reason: "internal error: collected workgroup synchronization V1 entered the legacy artifact transaction"
+                                    reason: "internal error: collected workgroup synchronization V1 entered the generic qualification artifact transaction"
                                         .to_owned(),
                                 })
                             }
@@ -1810,7 +1810,7 @@ fn generate_typed_host_objects(
             collector::TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 { .. } => {
                 return Err(TypedVerticalError::InvalidCollectedRoot {
                     export_name: root.export_name.clone(),
-                    reason: "general typed V3 cannot enter legacy artifact generation",
+                    reason: "general typed V3 cannot enter qualification artifact generation",
                 });
             }
         };

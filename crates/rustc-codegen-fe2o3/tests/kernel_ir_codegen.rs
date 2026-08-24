@@ -981,7 +981,7 @@ fn selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_arti
     assert_vecadd_publication(&workspace, "build", false);
     // The pipeline selector is consumed by the rustc backend and is not part
     // of Cargo's package fingerprint. The preceding ROCm gate stages may have
-    // compiled `copy` through the legacy pipeline, so force this negative case
+    // compiled `copy` through another qualification pipeline, so force this negative case
     // back through rustc before asserting selected-pipeline rejection.
     clean_package(&workspace, "fe2o3-copy");
     let copy_artifacts = artifact_paths(&workspace, "copy");
@@ -997,11 +997,8 @@ fn selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_arti
         "missing exact admission diagnostic:\n{unsupported_stderr}"
     );
     assert!(
-        unsupported_stderr.contains("explicit qualification legacy route"),
-        "diagnostic did not identify the qualification-only legacy path:\n{unsupported_stderr}"
-    );
-    assert!(
-        unsupported_stderr.contains("production-v1 never falls back"),
+        unsupported_stderr
+            .contains("production-v1 does not fall back to a qualification-only lowering route"),
         "diagnostic did not prohibit production fallback:\n{unsupported_stderr}"
     );
     assert!(!unsupported_stderr.contains("emitted copy"));
