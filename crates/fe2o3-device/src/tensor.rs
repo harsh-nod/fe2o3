@@ -12,6 +12,7 @@ use core::marker::PhantomData;
 
 use crate::{
     Bf16, DynamicLds, LdsElement, LdsInitialized, LdsUninitialized, Wave64, WaveLane, WaveWidth,
+    views::{CheckedStridedExtentError, check_strided_2d_extent},
 };
 
 pub const MATRIX_CONTRACT_VERSION_V1: u16 = 1;
@@ -191,27 +192,15 @@ impl<'data, Role: sealed::OperandRole> Bf16MfmaMatrix<'data, Role> {
         columns: usize,
         stride: usize,
     ) -> Result<Self, Bf16MatrixViewError> {
-        if rows != 0 && columns != 0 && stride < columns {
-            return Err(Bf16MatrixViewError::InvalidStride);
-        }
-        let required = if rows == 0 || columns == 0 {
-            offset
-        } else {
-            offset
-                .checked_add(
-                    (rows - 1)
-                        .checked_mul(stride)
-                        .and_then(|value| value.checked_add(columns))
-                        .ok_or(Bf16MatrixViewError::ExtentOverflow)?,
-                )
-                .ok_or(Bf16MatrixViewError::ExtentOverflow)?
-        };
-        if required > bits.len() {
-            return Err(Bf16MatrixViewError::OutOfBounds {
-                required,
-                actual: bits.len(),
-            });
-        }
+        check_strided_2d_extent(offset, rows, columns, stride, bits.len()).map_err(|error| {
+            match error {
+                CheckedStridedExtentError::InvalidStride => Bf16MatrixViewError::InvalidStride,
+                CheckedStridedExtentError::ExtentOverflow => Bf16MatrixViewError::ExtentOverflow,
+                CheckedStridedExtentError::OutOfBounds { required, actual } => {
+                    Bf16MatrixViewError::OutOfBounds { required, actual }
+                }
+            }
+        })?;
         Ok(Self {
             bits,
             offset,

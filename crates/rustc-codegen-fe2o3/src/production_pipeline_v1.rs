@@ -387,10 +387,11 @@ impl FormalMemoryAdmittedProductionCompilationV1 {
         let wave = fe2o3_kernel_ir::TargetCapability::WaveWidth(fe2o3_kernel_ir::WaveWidth::Wave64);
         target_module.required_capabilities.insert(target.clone());
         target_module.required_capabilities.insert(wave.clone());
-        let kernel = target_module
-            .kernels
-            .first_mut()
-            .expect("formal admission requires exactly one kernel");
+        let [kernel] = target_module.kernels.as_mut_slice() else {
+            return Err(ProductionPipelineErrorV1::Geometry(
+                crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
+            ));
+        };
         kernel.required_capabilities.insert(target.clone());
         kernel.required_capabilities.insert(wave.clone());
         let kernel_id = kernel.id.clone();
@@ -399,15 +400,17 @@ impl FormalMemoryAdmittedProductionCompilationV1 {
             .functions
             .iter_mut()
             .find(|function| function.id == entry_id)
-            .expect("verified formal admission retains the kernel entry");
+            .ok_or(ProductionPipelineErrorV1::Geometry(
+                crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
+            ))?;
         entry.required_capabilities.insert(target);
         entry.required_capabilities.insert(wave);
         fe2o3_kernel_ir::verify_module(&target_module)
             .map_err(ProductionPipelineErrorV1::TargetBinding)?;
-        let legacy_llvm_ir =
+        let dialect_llvm_ir =
             dialect_amdgcn::lower_kernel_to_gfx942_xnack_minus_llvm_ir(&target_module, &kernel_id)
                 .map_err(ProductionPipelineErrorV1::Gfx942Lowering)?;
-        let llvm_ir = bind_production_upstream_llvm_layout_v1(legacy_llvm_ir)
+        let llvm_ir = bind_production_upstream_llvm_layout_v1(dialect_llvm_ir)
             .map_err(ProductionPipelineErrorV1::UpstreamLlvmLayoutBinding)?;
         Ok(Gfx942LoweredProductionCompilationV1 {
             admitted,
@@ -419,16 +422,16 @@ impl FormalMemoryAdmittedProductionCompilationV1 {
     }
 }
 
-fn bind_production_upstream_llvm_layout_v1(legacy_llvm_ir: String) -> Result<String, String> {
+fn bind_production_upstream_llvm_layout_v1(dialect_llvm_ir: String) -> Result<String, String> {
     const TRIPLE_HEADER: &str = "target triple = \"amdgcn-amd-amdhsa\"\n";
-    let legacy_layout = format!(
+    let dialect_layout = format!(
         "target datalayout = \"{}\"\n",
         dialect_amdgcn::GFX942_XNACK_MINUS_DATA_LAYOUT
     );
-    let expected_prefix = format!("{TRIPLE_HEADER}{legacy_layout}\n");
-    if !legacy_llvm_ir.starts_with(&expected_prefix)
-        || legacy_llvm_ir.matches("target triple =").count() != 1
-        || legacy_llvm_ir.matches("target datalayout =").count() != 1
+    let expected_prefix = format!("{TRIPLE_HEADER}{dialect_layout}\n");
+    if !dialect_llvm_ir.starts_with(&expected_prefix)
+        || dialect_llvm_ir.matches("target triple =").count() != 1
+        || dialect_llvm_ir.matches("target datalayout =").count() != 1
     {
         return Err(
             "verified gfx942 lowering did not retain one canonical target header".to_owned(),
@@ -437,13 +440,13 @@ fn bind_production_upstream_llvm_layout_v1(legacy_llvm_ir: String) -> Result<Str
 
     let upstream_layout = crate::production_target_v1::PRODUCTION_RUSTC_DATA_LAYOUT_V1;
     let mut bound = String::with_capacity(
-        legacy_llvm_ir.len() + upstream_layout.len().saturating_sub(legacy_layout.len()),
+        dialect_llvm_ir.len() + upstream_layout.len().saturating_sub(dialect_layout.len()),
     );
     bound.push_str(TRIPLE_HEADER);
     bound.push_str("target datalayout = \"");
     bound.push_str(upstream_layout);
     bound.push_str("\"\n\n");
-    bound.push_str(&legacy_llvm_ir[expected_prefix.len()..]);
+    bound.push_str(&dialect_llvm_ir[expected_prefix.len()..]);
     Ok(bound)
 }
 
@@ -456,10 +459,11 @@ impl Gfx942LoweredProductionCompilationV1 {
         &self.llvm_ir
     }
 
-    pub(crate) fn workgroup_size(&self) -> fe2o3_kernel_ir::WorkgroupSize {
-        self.target_module.kernels[0]
-            .workgroup_size
-            .expect("gfx942 lowering requires an exact workgroup size")
+    pub(crate) fn workgroup_size(&self) -> Option<fe2o3_kernel_ir::WorkgroupSize> {
+        self.target_module
+            .kernels
+            .first()
+            .and_then(|kernel| kernel.workgroup_size)
     }
 
     pub(crate) fn semantic_function_count(&self) -> usize {

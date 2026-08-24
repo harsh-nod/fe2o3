@@ -1039,6 +1039,21 @@ fn lowers_each_workgroup_barrier_order_and_memory_scope_exactly() {
 }
 
 #[test]
+fn gfx942_barriers_use_one_workload_neutral_physical_policy() {
+    let module = exact_gfx942_xnack_minus(barrier_only_module(
+        SynchronizationScope::Workgroup,
+        MemoryOrdering::AcquireRelease,
+    ));
+    let llvm = lower_kernel_to_gfx942_xnack_minus_llvm_ir(&module, &KernelId::new("fill")).unwrap();
+    assert_eq!(
+        llvm.matches("call void asm sideeffect \"s_barrier\", \"\"()")
+            .count(),
+        1
+    );
+    assert!(!llvm.contains("call void @llvm.amdgcn.s.barrier()"));
+}
+
+#[test]
 fn accepts_only_structurally_convergent_workgroup_barrier_placement() {
     let mut unconditional = barrier_only_module(
         SynchronizationScope::Workgroup,

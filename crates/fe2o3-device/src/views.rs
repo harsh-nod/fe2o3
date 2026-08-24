@@ -17,6 +17,41 @@ use core::fmt;
 use core::marker::PhantomData;
 use core::mem::size_of;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CheckedStridedExtentError {
+    InvalidStride,
+    ExtentOverflow,
+    OutOfBounds { required: usize, actual: usize },
+}
+
+pub(crate) fn check_strided_2d_extent(
+    offset: usize,
+    rows: usize,
+    columns: usize,
+    row_stride: usize,
+    actual: usize,
+) -> Result<(), CheckedStridedExtentError> {
+    if rows != 0 && columns != 0 && row_stride < columns {
+        return Err(CheckedStridedExtentError::InvalidStride);
+    }
+    let required = if rows == 0 || columns == 0 {
+        offset
+    } else {
+        offset
+            .checked_add(
+                (rows - 1)
+                    .checked_mul(row_stride)
+                    .and_then(|value| value.checked_add(columns))
+                    .ok_or(CheckedStridedExtentError::ExtentOverflow)?,
+            )
+            .ok_or(CheckedStridedExtentError::ExtentOverflow)?
+    };
+    if required > actual {
+        return Err(CheckedStridedExtentError::OutOfBounds { required, actual });
+    }
+    Ok(())
+}
+
 /// Zero-sized witness that constant `I` lies within fixed extent `N`.
 ///
 /// Safe code can construct this witness only through [`Self::CHECKED`], whose
@@ -114,27 +149,15 @@ impl<'parent, T> StridedReadView2D<'parent, T> {
         if size_of::<T>() == 0 {
             return Err(StridedReadView2DError::ZeroSizedElement);
         }
-        if rows != 0 && columns != 0 && row_stride < columns {
-            return Err(StridedReadView2DError::InvalidStride);
-        }
-        let required = if rows == 0 || columns == 0 {
-            offset
-        } else {
-            offset
-                .checked_add(
-                    (rows - 1)
-                        .checked_mul(row_stride)
-                        .and_then(|value| value.checked_add(columns))
-                        .ok_or(StridedReadView2DError::ExtentOverflow)?,
-                )
-                .ok_or(StridedReadView2DError::ExtentOverflow)?
-        };
-        if required > data.len() {
-            return Err(StridedReadView2DError::OutOfBounds {
-                required,
-                actual: data.len(),
-            });
-        }
+        check_strided_2d_extent(offset, rows, columns, row_stride, data.len()).map_err(
+            |error| match error {
+                CheckedStridedExtentError::InvalidStride => StridedReadView2DError::InvalidStride,
+                CheckedStridedExtentError::ExtentOverflow => StridedReadView2DError::ExtentOverflow,
+                CheckedStridedExtentError::OutOfBounds { required, actual } => {
+                    StridedReadView2DError::OutOfBounds { required, actual }
+                }
+            },
+        )?;
         Ok(Self {
             data,
             offset,

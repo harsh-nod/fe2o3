@@ -966,8 +966,11 @@ fn terminal_operation_v1<'tcx>(
                     .iter()
                     .all(|ty| matches!(ty.kind(), TyKind::Uint(UintTy::Usize))) =>
         {
-            let rust_element =
-                rust_shared_slice_element_v1(rust_inputs[0]).expect("guarded shared slice element");
+            let Some(rust_element) = rust_shared_slice_element_v1(rust_inputs[0]) else {
+                return Err(body_owner_table_mismatch_v1(
+                    "strided read view slice element",
+                ));
+            };
             let (rust_view, rust_error) = rust_result_payloads_v1(tcx, rust_output)
                 .ok_or_else(|| body_owner_table_mismatch_v1("strided read view result"))?;
             let view_arguments = rust_trusted_adt_type_arguments_v1(
@@ -1113,9 +1116,13 @@ fn terminal_operation_v1<'tcx>(
                 && rust_mfma_accumulator_contract_v1(tcx, rust_inputs[3]).is_some()
                 && rust_mfma_accumulator_contract_v1(tcx, rust_output).is_some() =>
         {
-            let lhs = rust_mfma_fragment_contract_v1(tcx, rust_inputs[1]).unwrap();
-            let rhs = rust_mfma_fragment_contract_v1(tcx, rust_inputs[2]).unwrap();
-            let accumulator = rust_mfma_accumulator_contract_v1(tcx, rust_inputs[3]).unwrap();
+            let (Some(lhs), Some(rhs), Some(accumulator)) = (
+                rust_mfma_fragment_contract_v1(tcx, rust_inputs[1]),
+                rust_mfma_fragment_contract_v1(tcx, rust_inputs[2]),
+                rust_mfma_accumulator_contract_v1(tcx, rust_inputs[3]),
+            ) else {
+                return Err(body_owner_table_mismatch_v1("typed MFMA argument contract"));
+            };
             if lhs.role != SemanticMfmaOperandRoleV1::A
                 || rhs.role != SemanticMfmaOperandRoleV1::B
                 || Some(accumulator) != rust_mfma_accumulator_contract_v1(tcx, rust_output)
@@ -1167,11 +1174,13 @@ fn terminal_operation_v1<'tcx>(
         ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint
             if inputs.len() == 1 && rust_inputs.len() == 1 =>
         {
-            let input_space =
-                rust_index_witness_space_v1(tcx, rust_inputs[0], TrustedDeviceItem::ThreadIndex);
-            let output_space =
-                rust_index_witness_space_v1(tcx, rust_output, TrustedDeviceItem::DisjointIndex);
-            if input_space.is_none() || input_space != output_space {
+            let (Some(input_space), Some(output_space)) = (
+                rust_index_witness_space_v1(tcx, rust_inputs[0], TrustedDeviceItem::ThreadIndex),
+                rust_index_witness_space_v1(tcx, rust_output, TrustedDeviceItem::DisjointIndex),
+            ) else {
+                return Err(body_owner_table_mismatch_v1("terminal disjoint mapping"));
+            };
+            if input_space != output_space {
                 return Err(body_owner_table_mismatch_v1("terminal disjoint mapping"));
             }
             let raw_index = aggregate_field_v1(types, inputs[0], 0)?;
@@ -1180,7 +1189,7 @@ fn terminal_operation_v1<'tcx>(
                     input_witness: inputs[0],
                     output_witness: output,
                     raw_index,
-                    index_space: input_space.expect("checked mapping"),
+                    index_space: input_space,
                 },
             )
         }

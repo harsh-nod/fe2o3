@@ -82,9 +82,11 @@ fn active_wave64_and_static_lds_reduction_reach_exact_gfx942_ir() {
     assert_eq!(llvm.matches("call i64 @llvm.amdgcn.ballot.i64").count(), 1);
     assert_eq!(llvm.matches("call i32 @llvm.amdgcn.ds.bpermute").count(), 6);
     assert_eq!(
-        llvm.matches("call void @llvm.amdgcn.s.barrier()").count(),
+        llvm.matches("call void asm sideeffect \"s_barrier\", \"\"()")
+            .count(),
         18
     );
+    assert!(!llvm.contains("call void @llvm.amdgcn.s.barrier()"));
     assert!(llvm.contains("addrspace(3) global [256 x i32] undef, align 4"));
     assert!(llvm.contains("\"target-cpu\"=\"gfx942\""));
     assert!(llvm.contains("\"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\""));
@@ -179,7 +181,8 @@ fn workgroup_sum_profiles_reach_real_lds_and_barrier_llvm() {
         let llvm = dialect_amdgcn::lower_device_module_to_gfx942_xnack_minus_llvm_ir(&module)
             .expect("workgroup collective LLVM");
         assert!(llvm.contains("addrspace(3) global [256 x i32]"));
-        assert!(llvm.contains("call void @llvm.amdgcn.s.barrier()"));
+        assert!(llvm.contains("call void asm sideeffect \"s_barrier\", \"\"()"));
+        assert!(!llvm.contains("call void @llvm.amdgcn.s.barrier()"));
         assert!(llvm.contains("load i32, ptr addrspace(3)"));
         assert!(llvm.contains("store i32"));
     }
@@ -209,7 +212,8 @@ fn gfx942_deferred_barrier_is_release_then_physical_wait() {
     let llvm = dialect_amdgcn::lower_device_module_to_gfx942_xnack_minus_llvm_ir(&module)
         .expect("deferred barrier LLVM");
     assert!(llvm.contains("fence syncscope(\"workgroup\") release"));
-    assert!(llvm.contains("call void @llvm.amdgcn.s.barrier()"));
+    assert!(llvm.contains("call void asm sideeffect \"s_barrier\", \"\"()"));
+    assert!(!llvm.contains("call void @llvm.amdgcn.s.barrier()"));
     assert!(llvm.contains("fence syncscope(\"workgroup\") acquire"));
     assert!(!llvm.contains("s.barrier.signal"));
     assert!(!llvm.contains("s.barrier.wait"));

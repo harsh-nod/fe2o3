@@ -941,6 +941,7 @@ fn ranked_trap_reaches_gfx942_llvm_as_trap_then_unreachable() {
     let lowered = ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
         receipt,
         ProductionSemanticKirLimitsV1::default(),
+        1,
     )
     .unwrap();
     lowered.verify_equivalence().unwrap();

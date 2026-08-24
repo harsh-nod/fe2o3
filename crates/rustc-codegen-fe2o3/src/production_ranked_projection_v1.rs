@@ -1332,10 +1332,17 @@ fn project_strided_read_effects_v1(
             views.insert(effect.view.root, (effect.view, view));
             result
         };
-        let (rows, columns) = views
-            .get(&effect.view.root)
-            .map(|(_, view)| (view.dynamic_extents[0], view.dynamic_extents[1]))
-            .expect("inserted or existing checked read view");
+        let Some((_, checked_view)) = views.get(&effect.view.root) else {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "checked read-view projection lost its authenticated capability",
+            ));
+        };
+        let [rows, columns] = checked_view.dynamic_extents.as_slice() else {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "checked read-view projection does not retain exactly two extents",
+            ));
+        };
+        let (rows, columns) = (*rows, *columns);
         let row = project_read_value_to_ranked_v1(
             effect.row,
             stable_argument_origins,
