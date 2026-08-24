@@ -398,15 +398,11 @@ fn validate_workgroup_allocation_contract(
         }
     }
 
-    let all_origins = contracts
-        .values()
-        .map(|contract| contract.allocation_origin)
-        .collect::<HashSet<_>>();
     if contracts
         .values()
         .any(|contract| contract.noalias_class == 0)
         && contracts.values().any(|contract| contract.writes_memory)
-        && all_origins.len() > 1
+        && contracts.len() > 1
     {
         return Err(
             "an unknown-alias workgroup view may overlap a distinct allocation origin, but ranked IR does not retain their relative base offset"

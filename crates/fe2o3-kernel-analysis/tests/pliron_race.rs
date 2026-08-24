@@ -842,15 +842,29 @@ fn overlapping_atomics_require_both_scopes_to_cover_the_pair() {
 }
 
 fn cross_view_alias_report(
+    first_origin: u64,
     first_class: u64,
+    second_origin: u64,
     second_class: u64,
 ) -> fe2o3_kernel_analysis::RankedRaceReportV1 {
     let context = &mut setup();
     let function = function(context, "cross_view_alias");
     let entry = function.get_entry_block(context);
     let layout = ExecutionLayoutOp::new(context, 52, [2, 1, 1], [2, 1, 1], 2);
-    let first = view_with_contract(context, vec![3], MemorySpaceAttr::Global, 521, first_class);
-    let second = view_with_contract(context, vec![3], MemorySpaceAttr::Global, 522, second_class);
+    let first = view_with_contract(
+        context,
+        vec![3],
+        MemorySpaceAttr::Global,
+        first_origin,
+        first_class,
+    );
+    let second = view_with_contract(
+        context,
+        vec![3],
+        MemorySpaceAttr::Global,
+        second_origin,
+        second_class,
+    );
     let invocation = InvocationIndexOp::new(context, 0, 2);
     let one = IndexConstantOp::new(context, 1);
     let shifted = IndexBinaryOp::new(
@@ -886,7 +900,7 @@ fn cross_view_alias_report(
 
 #[test]
 fn same_noalias_class_without_relative_offsets_fails_closed() {
-    let report = cross_view_alias_report(53, 53);
+    let report = cross_view_alias_report(521, 53, 522, 53);
     assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
     assert!(report.findings().iter().any(|finding| matches!(
         finding,
@@ -897,7 +911,7 @@ fn same_noalias_class_without_relative_offsets_fails_closed() {
 
 #[test]
 fn unknown_alias_views_without_relative_offsets_fail_closed() {
-    let report = cross_view_alias_report(0, 0);
+    let report = cross_view_alias_report(0, 0, 0, 0);
     assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
     assert!(report.findings().iter().any(|finding| matches!(
         finding,
@@ -909,7 +923,7 @@ fn unknown_alias_views_without_relative_offsets_fail_closed() {
 #[test]
 fn distinct_authenticated_noalias_classes_are_disjoint() {
     assert_eq!(
-        cross_view_alias_report(54, 55).status(),
+        cross_view_alias_report(521, 54, 522, 55).status(),
         RankedRaceStatusV1::Clean
     );
 }

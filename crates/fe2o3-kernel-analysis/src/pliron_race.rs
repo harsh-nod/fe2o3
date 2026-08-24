@@ -504,13 +504,13 @@ pub(crate) fn run_pliron_ranked_race_check_after_bounds_v1(
             });
         }
     }
-    let all_origins = effects
+    let distinct_views = effects
         .iter()
-        .map(|effect| effect.allocation_origin)
+        .map(|effect| effect.view)
         .collect::<HashSet<_>>();
     if effects.iter().any(|effect| effect.noalias_class == 0)
         && effects.iter().any(|effect| effect.kind.writes_memory())
-        && all_origins.len() > 1
+        && distinct_views.len() > 1
     {
         return one(RankedRaceFindingV1::AllocationContractUnavailable {
             detail: "an unknown-alias view may overlap a distinct allocation origin, but ranked IR does not retain their relative base offset"
