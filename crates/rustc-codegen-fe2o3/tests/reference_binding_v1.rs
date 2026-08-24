@@ -135,6 +135,10 @@ fn unsafe_abi_and_unsupported_reference_semantics_fail_closed() {
             "reference anchor must name exactly one resolvable function item; found 0",
         ),
         (
+            "reference-no-output",
+            "reference-effect V1 found no observable output write",
+        ),
+        (
             "reference-duplicate",
             "duplicate safe Rust reference binding for one kernel",
         ),

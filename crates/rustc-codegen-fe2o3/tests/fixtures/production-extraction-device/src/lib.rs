@@ -12,6 +12,7 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
     feature = "reference-non-function",
     feature = "reference-generic-mismatch",
     feature = "reference-missing",
+    feature = "reference-no-output",
     feature = "reference-duplicate",
     feature = "reference-orphan",
 )))]
@@ -24,19 +25,22 @@ pub fn fill(mut output: DisjointSlice<u32>) {
 }
 
 #[cfg(any(feature = "reference-positive", feature = "reference-duplicate"))]
-fn cpu_reference(output: &mut u32) {
+fn cpu_reference(_point: usize, output: &mut u32) {
     *output = 17;
 }
 
 #[cfg(feature = "reference-mutated")]
-fn cpu_reference(output: &mut u32) {
+fn cpu_reference(_point: usize, output: &mut u32) {
     *output = 18;
 }
 
 #[cfg(feature = "reference-unsafe")]
-unsafe fn cpu_reference(output: &mut u32) {
+unsafe fn cpu_reference(_point: usize, output: &mut u32) {
     *output = 17;
 }
+
+#[cfg(feature = "reference-no-output")]
+fn cpu_reference(_point: usize, _output: &mut u32) {}
 
 #[cfg(feature = "reference-abi-mismatch")]
 fn cpu_reference(output: &mut f32) {
@@ -76,6 +80,7 @@ fn cpu_reference<T>(output: &mut T) {
     feature = "reference-loop",
     feature = "reference-call",
     feature = "reference-generic-mismatch",
+    feature = "reference-no-output",
     feature = "reference-duplicate",
 ))]
 #[kernel(

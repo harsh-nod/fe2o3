@@ -54,6 +54,7 @@ mod production_semantic_types_v1;
 mod production_target_lineage_v3;
 mod production_target_v1;
 mod protected_rustc_invocation;
+mod reference_effect_bijection_v1;
 mod reference_effect_v1;
 mod rust_type_layout;
 mod rust_type_layout_general;

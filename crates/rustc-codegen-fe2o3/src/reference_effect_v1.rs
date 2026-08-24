@@ -2,8 +2,13 @@
 //!
 //! This IR is deliberately bounded and fail-closed. It retains exact rustc
 //! identities and represents only semantics translated without workload names.
+//! A point reference may add up to three leading `usize` coordinate arguments;
+//! the remaining arguments map to the kernel ABI. Its extracted write events
+//! describe coordinates, path predicates, and RHS expressions independently
+//! of the GPU projection. Matching those events proves only per-effect partial
+//! correctness, not total coverage of a dynamic output domain.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 use rustc_abi::ExternAbi;
@@ -23,8 +28,12 @@ use crate::trusted_device_items::{self, TrustedDeviceItem};
 
 pub(crate) const MAX_REFERENCE_BLOCKS_V1: usize = 4_096;
 pub(crate) const MAX_REFERENCE_STATEMENTS_V1: usize = 65_536;
+pub(crate) const MAX_REFERENCE_POINT_AXES_V1: usize = 3;
+pub(crate) const MAX_REFERENCE_GUARD_CLAUSES_V1: usize = 65_536;
+pub(crate) const MAX_REFERENCE_GUARD_ATOMS_V1: usize = 262_144;
+pub(crate) const MAX_REFERENCE_EXPRESSION_NODES_V1: usize = 8_192;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ReferenceScalarTypeV1 {
     Bool,
     U8,
@@ -43,6 +52,10 @@ pub(crate) enum ReferenceScalarTypeV1 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ReferenceArgumentRelationV1 {
+    PointCoordinate {
+        reference_argument: u32,
+        axis: u32,
+    },
     ScalarInput {
         argument: u32,
         scalar: ReferenceScalarTypeV1,
@@ -90,7 +103,7 @@ pub(crate) struct ReferencePlaceV1 {
     pub(crate) projection: Box<[ReferencePlaceProjectionV1]>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ReferenceConstantV1 {
     ZeroSized,
     Scalar {
@@ -106,7 +119,7 @@ pub(crate) enum ReferenceOperandV1 {
     Constant(ReferenceConstantV1),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ReferenceBinaryOpV1 {
     Add,
     Subtract,
@@ -126,7 +139,7 @@ pub(crate) enum ReferenceBinaryOpV1 {
     GreaterThan,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ReferenceUnaryOpV1 {
     Not,
     Negate,
@@ -185,12 +198,84 @@ pub(crate) struct ReferenceEffectIrV1 {
     pub(crate) local_count: u32,
     pub(crate) relations: Box<[ReferenceArgumentRelationV1]>,
     pub(crate) blocks: Box<[ReferenceBlockV1]>,
+    /// Compiler-derived point effects. This is per-effect partial correctness
+    /// evidence; it does not assert that a dynamic output view is totally
+    /// covered by the kernel.
+    pub(crate) observable_output_effects: Box<[ReferenceOutputWriteV1]>,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum ReferenceEffectExpressionV1 {
+    PointCoordinate {
+        axis: u32,
+    },
+    KernelScalarArgument {
+        argument: u32,
+    },
+    Constant(ReferenceConstantV1),
+    Binary {
+        operation: ReferenceBinaryOpV1,
+        lhs: Box<Self>,
+        rhs: Box<Self>,
+        checked: bool,
+    },
+    Unary {
+        operation: ReferenceUnaryOpV1,
+        operand: Box<Self>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum ReferenceGuardAtomV1 {
+    SwitchValueSet {
+        discriminant: ReferenceEffectExpressionV1,
+        values: Box<[u128]>,
+        inside_set: bool,
+    },
+    Assert {
+        condition: ReferenceEffectExpressionV1,
+        expected: bool,
+    },
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct ReferenceGuardClauseV1 {
+    pub(crate) atoms: Box<[ReferenceGuardAtomV1]>,
+}
+
+/// A canonical disjunction of conjunctions. No clauses means false; one empty
+/// clause means true.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct ReferencePathPredicateV1 {
+    pub(crate) clauses: Box<[ReferenceGuardClauseV1]>,
+}
+
+impl ReferencePathPredicateV1 {
+    pub(crate) fn unconditional_v1() -> Self {
+        Self {
+            clauses: vec![ReferenceGuardClauseV1 {
+                atoms: Box::default(),
+            }]
+            .into_boxed_slice(),
+        }
+    }
+
+    fn unreachable_v1() -> Self {
+        Self {
+            clauses: Box::default(),
+        }
+    }
+
+    fn is_unreachable_v1(&self) -> bool {
+        self.clauses.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ReferenceOutputCoordinateV1 {
+    LogicalPoint(Box<[ReferenceEffectExpressionV1]>),
     SingleCoordinate,
-    DynamicLocal(u32),
+    Dynamic(ReferenceEffectExpressionV1),
     Constant {
         offset: u64,
         minimum_length: u64,
@@ -204,11 +289,28 @@ pub(crate) struct ReferenceOutputWriteV1 {
     pub(crate) block: u32,
     pub(crate) statement: u32,
     pub(crate) coordinate: ReferenceOutputCoordinateV1,
+    pub(crate) guard: ReferencePathPredicateV1,
+    pub(crate) rhs: ReferenceEffectExpressionV1,
     pub(crate) value: ReferenceValueV1,
 }
 
 impl ReferenceEffectIrV1 {
-    pub(crate) fn observable_output_writes_v1(&self) -> Vec<ReferenceOutputWriteV1> {
+    fn observable_output_writes_v1(
+        &self,
+    ) -> Result<Vec<ReferenceOutputWriteV1>, ReferenceBindingErrorV1> {
+        let guards = reference_block_path_predicates_v1(self)?;
+        let resolver = ReferenceExpressionResolverV1::new(self)?;
+        let point_coordinates = self
+            .relations
+            .iter()
+            .filter_map(|relation| match relation {
+                ReferenceArgumentRelationV1::PointCoordinate { axis, .. } => {
+                    Some(ReferenceEffectExpressionV1::PointCoordinate { axis: *axis })
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         let mut writes = Vec::new();
         for relation in &self.relations {
             let (argument, coordinate_output) = match relation {
@@ -219,10 +321,23 @@ impl ReferenceEffectIrV1 {
                     (*argument, true)
                 }
                 ReferenceArgumentRelationV1::ScalarInput { .. }
-                | ReferenceArgumentRelationV1::SharedSliceInput { .. } => continue,
+                | ReferenceArgumentRelationV1::SharedSliceInput { .. }
+                | ReferenceArgumentRelationV1::PointCoordinate { .. } => continue,
             };
-            let local = argument + 1;
+            let local = self
+                .reference_argument_for_kernel_argument_v1(argument)?
+                .checked_add(1)
+                .ok_or_else(|| ReferenceBindingErrorV1::new("reference local index overflowed"))?;
             for block in &self.blocks {
+                let guard = guards
+                    .get(block.block as usize)
+                    .ok_or_else(|| {
+                        ReferenceBindingErrorV1::new("reference block identity is out of bounds")
+                    })?
+                    .clone();
+                if guard.is_unreachable_v1() {
+                    continue;
+                }
                 for assignment in &block.assignments {
                     if assignment.destination.local != local {
                         continue;
@@ -230,13 +345,17 @@ impl ReferenceEffectIrV1 {
                     let projection = assignment.destination.projection.as_ref();
                     let coordinate = match projection {
                         [ReferencePlaceProjectionV1::Dereference] if coordinate_output => {
-                            ReferenceOutputCoordinateV1::SingleCoordinate
+                            if point_coordinates.is_empty() {
+                                ReferenceOutputCoordinateV1::SingleCoordinate
+                            } else {
+                                ReferenceOutputCoordinateV1::LogicalPoint(point_coordinates.clone())
+                            }
                         }
                         [
                             ReferencePlaceProjectionV1::Dereference,
                             ReferencePlaceProjectionV1::Index(index),
                         ] if !coordinate_output => {
-                            ReferenceOutputCoordinateV1::DynamicLocal(*index)
+                            ReferenceOutputCoordinateV1::Dynamic(resolver.resolve_local_v1(*index)?)
                         }
                         [
                             ReferencePlaceProjectionV1::Dereference,
@@ -250,19 +369,51 @@ impl ReferenceEffectIrV1 {
                             minimum_length: *minimum_length,
                             from_end: *from_end,
                         },
-                        _ => continue,
+                        _ => {
+                            return Err(ReferenceBindingErrorV1::new(format!(
+                                "observable output argument {} uses unsupported write projection {:?}; reference-effect V1 cannot omit a global output write",
+                                argument + 1,
+                                assignment.destination.projection,
+                            )));
+                        }
                     };
                     writes.push(ReferenceOutputWriteV1 {
                         argument,
                         block: block.block,
                         statement: assignment.statement,
                         coordinate,
+                        guard: guard.clone(),
+                        rhs: resolver.resolve_value_v1(&assignment.value)?,
                         value: assignment.value.clone(),
                     });
                 }
             }
         }
-        writes
+        Ok(writes)
+    }
+
+    fn point_coordinate_count_v1(&self) -> Result<u32, ReferenceBindingErrorV1> {
+        u32::try_from(
+            self.relations
+                .iter()
+                .filter(|relation| {
+                    matches!(
+                        relation,
+                        ReferenceArgumentRelationV1::PointCoordinate { .. }
+                    )
+                })
+                .count(),
+        )
+        .map_err(|_| ReferenceBindingErrorV1::new("point coordinate count exceeds u32"))
+    }
+
+    fn reference_argument_for_kernel_argument_v1(
+        &self,
+        kernel_argument: u32,
+    ) -> Result<u32, ReferenceBindingErrorV1> {
+        self.point_coordinate_count_v1()?
+            .checked_add(kernel_argument)
+            .ok_or_else(|| ReferenceBindingErrorV1::new("reference argument index overflowed"))
     }
 
     pub(crate) fn canonical_sha256_v1(&self) -> [u8; 32] {
@@ -273,6 +424,14 @@ impl ReferenceEffectIrV1 {
         put_len(&mut digest, self.relations.len());
         for relation in &self.relations {
             match relation {
+                ReferenceArgumentRelationV1::PointCoordinate {
+                    reference_argument,
+                    axis,
+                } => {
+                    digest.update([4]);
+                    digest.update(reference_argument.to_le_bytes());
+                    digest.update(axis.to_le_bytes());
+                }
                 ReferenceArgumentRelationV1::ScalarInput { argument, scalar } => {
                     digest.update([0, scalar_tag(*scalar)]);
                     digest.update(argument.to_le_bytes());
@@ -301,6 +460,10 @@ impl ReferenceEffectIrV1 {
                 digest_value(&mut digest, &assignment.value);
             }
             digest_terminator(&mut digest, &block.terminator);
+        }
+        put_len(&mut digest, self.observable_output_effects.len());
+        for effect in &self.observable_output_effects {
+            digest_output_effect_v1(&mut digest, effect);
         }
         digest.finalize().into()
     }
@@ -386,7 +549,7 @@ pub(crate) fn authenticate_reference_binding_v1<'tcx>(
     let relations = logical_abi_relation_v1(tcx, kernel, reference)?;
     let effect_ir = lower_reference_effect_ir_v1(tcx, reference, relations)?;
     let effect_ir_sha256 = effect_ir.canonical_sha256_v1();
-    let observable_output_writes = effect_ir.observable_output_writes_v1();
+    let observable_output_writes = effect_ir.observable_output_effects.clone();
     if effect_ir.relations.iter().any(|relation| {
         matches!(
             relation,
@@ -406,7 +569,7 @@ pub(crate) fn authenticate_reference_binding_v1<'tcx>(
         reference: function_identity_v1(tcx, reference),
         effect_ir_sha256,
         effect_ir,
-        observable_output_writes: observable_output_writes.into_boxed_slice(),
+        observable_output_writes,
     })
 }
 
@@ -511,19 +674,56 @@ fn logical_abi_relation_v1<'tcx>(
             "safe Rust reference must return unit in V1; use explicit mutable outputs",
         ));
     }
-    if kernel_signature.inputs().len() != reference_signature.inputs().len() {
+    if reference_signature.inputs().len() < kernel_signature.inputs().len() {
         return Err(ReferenceBindingErrorV1::new(format!(
-            "safe Rust reference logical ABI has {} arguments but kernel has {}",
+            "safe Rust reference logical ABI has {} arguments but kernel has {}; a point reference may only add leading usize coordinate arguments",
             reference_signature.inputs().len(),
             kernel_signature.inputs().len(),
         )));
     }
-    let mut relations = Vec::with_capacity(kernel_signature.inputs().len());
+    let point_axis_count = reference_signature.inputs().len() - kernel_signature.inputs().len();
+    if point_axis_count > MAX_REFERENCE_POINT_AXES_V1 {
+        return Err(ReferenceBindingErrorV1::new(format!(
+            "safe Rust point reference has {point_axis_count} coordinate axes; maximum is {MAX_REFERENCE_POINT_AXES_V1}",
+        )));
+    }
+    let mut relations = Vec::with_capacity(reference_signature.inputs().len());
+    for (axis, reference_ty) in reference_signature
+        .inputs()
+        .iter()
+        .copied()
+        .take(point_axis_count)
+        .enumerate()
+    {
+        if !matches!(
+            reference_ty.kind(),
+            TyKind::Uint(rustc_middle::ty::UintTy::Usize)
+        ) {
+            return Err(ReferenceBindingErrorV1::new(format!(
+                "safe Rust point-reference coordinate argument {} must be usize, found '{reference_ty}'",
+                axis + 1,
+            )));
+        }
+        relations.push(ReferenceArgumentRelationV1::PointCoordinate {
+            reference_argument: u32::try_from(axis).map_err(|_| {
+                ReferenceBindingErrorV1::new("reference coordinate argument exceeds u32")
+            })?,
+            axis: u32::try_from(axis).map_err(|_| {
+                ReferenceBindingErrorV1::new("reference coordinate axis exceeds u32")
+            })?,
+        });
+    }
     for (index, (kernel_ty, reference_ty)) in kernel_signature
         .inputs()
         .iter()
         .copied()
-        .zip(reference_signature.inputs().iter().copied())
+        .zip(
+            reference_signature
+                .inputs()
+                .iter()
+                .copied()
+                .skip(point_axis_count),
+        )
         .enumerate()
     {
         let argument = u32::try_from(index)
@@ -739,13 +939,412 @@ fn lower_reference_effect_ir_v1<'tcx>(
             terminator,
         });
     }
-    Ok(ReferenceEffectIrV1 {
+    let mut effect_ir = ReferenceEffectIrV1 {
         argument_count: u32::try_from(body.arg_count)
             .map_err(|_| ReferenceBindingErrorV1::new("reference argument count exceeds u32"))?,
         local_count: u32::try_from(body.local_decls.len())
             .map_err(|_| ReferenceBindingErrorV1::new("reference local count exceeds u32"))?,
         relations: relations.into_boxed_slice(),
         blocks: blocks.into_boxed_slice(),
+        observable_output_effects: Box::default(),
+    };
+    effect_ir.observable_output_effects =
+        effect_ir.observable_output_writes_v1()?.into_boxed_slice();
+    Ok(effect_ir)
+}
+
+struct ReferenceExpressionResolverV1<'a> {
+    effect_ir: &'a ReferenceEffectIrV1,
+    definitions: BTreeMap<u32, &'a ReferenceValueV1>,
+    ambiguous_definitions: BTreeSet<u32>,
+}
+
+impl<'a> ReferenceExpressionResolverV1<'a> {
+    fn new(effect_ir: &'a ReferenceEffectIrV1) -> Result<Self, ReferenceBindingErrorV1> {
+        let mut definitions = BTreeMap::new();
+        let mut ambiguous_definitions = BTreeSet::new();
+        for block in &effect_ir.blocks {
+            for assignment in &block.assignments {
+                if !assignment.destination.projection.is_empty() {
+                    continue;
+                }
+                if assignment.destination.local > 0
+                    && assignment.destination.local <= effect_ir.argument_count
+                {
+                    return Err(ReferenceBindingErrorV1::new(format!(
+                        "reference effect reassigns logical argument {}; mutable argument-local normalization is outside reference-effect V1",
+                        assignment.destination.local,
+                    )));
+                }
+                if definitions
+                    .insert(assignment.destination.local, &assignment.value)
+                    .is_some()
+                {
+                    ambiguous_definitions.insert(assignment.destination.local);
+                }
+            }
+        }
+        Ok(Self {
+            effect_ir,
+            definitions,
+            ambiguous_definitions,
+        })
+    }
+
+    fn resolve_local_v1(
+        &self,
+        local: u32,
+    ) -> Result<ReferenceEffectExpressionV1, ReferenceBindingErrorV1> {
+        self.resolve_local_inner_v1(local, &mut BTreeSet::new(), &mut 0)
+    }
+
+    fn resolve_value_v1(
+        &self,
+        value: &ReferenceValueV1,
+    ) -> Result<ReferenceEffectExpressionV1, ReferenceBindingErrorV1> {
+        self.resolve_value_inner_v1(value, &mut BTreeSet::new(), &mut 0)
+    }
+
+    fn charge_node_v1(work: &mut usize) -> Result<(), ReferenceBindingErrorV1> {
+        *work = work
+            .checked_add(1)
+            .ok_or_else(|| ReferenceBindingErrorV1::new("reference expression work overflowed"))?;
+        if *work > MAX_REFERENCE_EXPRESSION_NODES_V1 {
+            return Err(ReferenceBindingErrorV1::new(format!(
+                "reference effect expression exceeds {MAX_REFERENCE_EXPRESSION_NODES_V1} nodes",
+            )));
+        }
+        Ok(())
+    }
+
+    fn resolve_local_inner_v1(
+        &self,
+        local: u32,
+        visiting: &mut BTreeSet<u32>,
+        work: &mut usize,
+    ) -> Result<ReferenceEffectExpressionV1, ReferenceBindingErrorV1> {
+        Self::charge_node_v1(work)?;
+        if local > 0 && local <= self.effect_ir.argument_count {
+            let reference_argument = local - 1;
+            if let Some((axis, _)) =
+                self.effect_ir
+                    .relations
+                    .iter()
+                    .find_map(|relation| match relation {
+                        ReferenceArgumentRelationV1::PointCoordinate {
+                            reference_argument: actual,
+                            axis,
+                        } if *actual == reference_argument => Some((*axis, *actual)),
+                        _ => None,
+                    })
+            {
+                return Ok(ReferenceEffectExpressionV1::PointCoordinate { axis });
+            }
+            let point_count = self.effect_ir.point_coordinate_count_v1()?;
+            let kernel_argument = reference_argument.checked_sub(point_count).ok_or_else(|| {
+                ReferenceBindingErrorV1::new("reference argument has no logical ABI relation")
+            })?;
+            return match self
+                .effect_ir
+                .relations
+                .iter()
+                .find(|relation| match relation {
+                    ReferenceArgumentRelationV1::ScalarInput { argument, .. }
+                    | ReferenceArgumentRelationV1::SharedSliceInput { argument, .. }
+                    | ReferenceArgumentRelationV1::DisjointOutputSlice { argument, .. }
+                    | ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, .. } => {
+                        *argument == kernel_argument
+                    }
+                    ReferenceArgumentRelationV1::PointCoordinate { .. } => false,
+                }) {
+                Some(ReferenceArgumentRelationV1::ScalarInput { .. }) => {
+                    Ok(ReferenceEffectExpressionV1::KernelScalarArgument {
+                        argument: kernel_argument,
+                    })
+                }
+                Some(_) => Err(ReferenceBindingErrorV1::new(format!(
+                    "reference effect expression reads non-scalar logical argument {}",
+                    kernel_argument + 1,
+                ))),
+                None => Err(ReferenceBindingErrorV1::new(format!(
+                    "reference argument {} has no logical ABI relation",
+                    reference_argument + 1,
+                ))),
+            };
+        }
+        if self.ambiguous_definitions.contains(&local) {
+            return Err(ReferenceBindingErrorV1::new(format!(
+                "reference effect local _{local} has multiple definitions; path-sensitive scalar phi normalization is outside reference-effect V1",
+            )));
+        }
+        let value = self.definitions.get(&local).ok_or_else(|| {
+            ReferenceBindingErrorV1::new(format!(
+                "reference effect local _{local} has no unique scalar definition",
+            ))
+        })?;
+        if !visiting.insert(local) {
+            return Err(ReferenceBindingErrorV1::new(format!(
+                "reference effect local _{local} has a cyclic scalar definition",
+            )));
+        }
+        let resolved = self.resolve_value_inner_v1(value, visiting, work);
+        visiting.remove(&local);
+        resolved
+    }
+
+    fn resolve_operand_inner_v1(
+        &self,
+        operand: &ReferenceOperandV1,
+        visiting: &mut BTreeSet<u32>,
+        work: &mut usize,
+    ) -> Result<ReferenceEffectExpressionV1, ReferenceBindingErrorV1> {
+        match operand {
+            ReferenceOperandV1::Constant(constant) => {
+                Self::charge_node_v1(work)?;
+                Ok(ReferenceEffectExpressionV1::Constant(constant.clone()))
+            }
+            ReferenceOperandV1::Copy(place) | ReferenceOperandV1::Move(place)
+                if place.projection.is_empty() =>
+            {
+                self.resolve_local_inner_v1(place.local, visiting, work)
+            }
+            ReferenceOperandV1::Copy(place) | ReferenceOperandV1::Move(place) => {
+                Err(ReferenceBindingErrorV1::new(format!(
+                    "reference effect scalar operand uses unsupported place projection {:?}",
+                    place.projection,
+                )))
+            }
+        }
+    }
+
+    fn resolve_value_inner_v1(
+        &self,
+        value: &ReferenceValueV1,
+        visiting: &mut BTreeSet<u32>,
+        work: &mut usize,
+    ) -> Result<ReferenceEffectExpressionV1, ReferenceBindingErrorV1> {
+        Self::charge_node_v1(work)?;
+        match value {
+            ReferenceValueV1::Use(operand) => {
+                self.resolve_operand_inner_v1(operand, visiting, work)
+            }
+            ReferenceValueV1::Binary {
+                operation,
+                lhs,
+                rhs,
+                checked,
+            } => Ok(ReferenceEffectExpressionV1::Binary {
+                operation: *operation,
+                lhs: Box::new(self.resolve_operand_inner_v1(lhs, visiting, work)?),
+                rhs: Box::new(self.resolve_operand_inner_v1(rhs, visiting, work)?),
+                checked: *checked,
+            }),
+            ReferenceValueV1::Unary { operation, operand } => {
+                Ok(ReferenceEffectExpressionV1::Unary {
+                    operation: *operation,
+                    operand: Box::new(self.resolve_operand_inner_v1(operand, visiting, work)?),
+                })
+            }
+        }
+    }
+}
+
+fn reference_block_path_predicates_v1(
+    effect_ir: &ReferenceEffectIrV1,
+) -> Result<Vec<ReferencePathPredicateV1>, ReferenceBindingErrorV1> {
+    let block_count = effect_ir.blocks.len();
+    if block_count == 0 {
+        return Err(ReferenceBindingErrorV1::new(
+            "reference effect IR has no entry block",
+        ));
+    }
+    for (index, block) in effect_ir.blocks.iter().enumerate() {
+        if block.block as usize != index {
+            return Err(ReferenceBindingErrorV1::new(
+                "reference effect block identities are not contiguous",
+            ));
+        }
+    }
+    let resolver = ReferenceExpressionResolverV1::new(effect_ir)?;
+    let mut successors = vec![BTreeSet::new(); block_count];
+    let mut indegree = vec![0_usize; block_count];
+    for block in &effect_ir.blocks {
+        for target in reference_successors_v1(&block.terminator) {
+            let target_index = target as usize;
+            if target_index >= block_count {
+                return Err(ReferenceBindingErrorV1::new(
+                    "reference effect terminator target is out of bounds",
+                ));
+            }
+            if successors[block.block as usize].insert(target_index) {
+                indegree[target_index] =
+                    indegree[target_index].checked_add(1).ok_or_else(|| {
+                        ReferenceBindingErrorV1::new("reference effect CFG indegree overflowed")
+                    })?;
+            }
+        }
+    }
+    let mut pending = indegree
+        .iter()
+        .enumerate()
+        .filter_map(|(block, degree)| (*degree == 0).then_some(block))
+        .collect::<VecDeque<_>>();
+    let mut predicates = vec![ReferencePathPredicateV1::unreachable_v1(); block_count];
+    predicates[0] = ReferencePathPredicateV1::unconditional_v1();
+    let mut visited = 0_usize;
+    while let Some(block_index) = pending.pop_front() {
+        visited += 1;
+        let source = predicates[block_index].clone();
+        for (target, atom) in
+            reference_guarded_edges_v1(&effect_ir.blocks[block_index].terminator, &resolver)?
+        {
+            let contribution = match atom {
+                Some(atom) => reference_predicate_and_atom_v1(&source, atom)?,
+                None => source.clone(),
+            };
+            reference_predicate_or_assign_v1(&mut predicates[target as usize], contribution)?;
+        }
+        for target in &successors[block_index] {
+            indegree[*target] -= 1;
+            if indegree[*target] == 0 {
+                pending.push_back(*target);
+            }
+        }
+    }
+    if visited != block_count {
+        return Err(ReferenceBindingErrorV1::new(
+            "reference effect CFG contains a cycle after MIR authentication",
+        ));
+    }
+    Ok(predicates)
+}
+
+fn reference_successors_v1(terminator: &ReferenceTerminatorV1) -> Vec<u32> {
+    match terminator {
+        ReferenceTerminatorV1::Return => Vec::new(),
+        ReferenceTerminatorV1::Goto { target } => vec![*target],
+        ReferenceTerminatorV1::Switch {
+            values, otherwise, ..
+        } => values
+            .iter()
+            .map(|(_, target)| *target)
+            .chain(std::iter::once(*otherwise))
+            .collect(),
+        ReferenceTerminatorV1::Assert { success, .. } => vec![*success],
+    }
+}
+
+fn reference_guarded_edges_v1(
+    terminator: &ReferenceTerminatorV1,
+    resolver: &ReferenceExpressionResolverV1<'_>,
+) -> Result<Vec<(u32, Option<ReferenceGuardAtomV1>)>, ReferenceBindingErrorV1> {
+    match terminator {
+        ReferenceTerminatorV1::Return => Ok(Vec::new()),
+        ReferenceTerminatorV1::Goto { target } => Ok(vec![(*target, None)]),
+        ReferenceTerminatorV1::Assert {
+            condition,
+            expected,
+            success,
+        } => Ok(vec![(
+            *success,
+            Some(ReferenceGuardAtomV1::Assert {
+                condition: resolver.resolve_operand_inner_v1(
+                    condition,
+                    &mut BTreeSet::new(),
+                    &mut 0,
+                )?,
+                expected: *expected,
+            }),
+        )]),
+        ReferenceTerminatorV1::Switch {
+            discriminant,
+            values,
+            otherwise,
+        } => {
+            let expression =
+                resolver.resolve_operand_inner_v1(discriminant, &mut BTreeSet::new(), &mut 0)?;
+            let mut by_target = BTreeMap::<u32, Vec<u128>>::new();
+            let mut all_values = Vec::with_capacity(values.len());
+            for (value, target) in values {
+                by_target.entry(*target).or_default().push(*value);
+                all_values.push(*value);
+            }
+            all_values.sort_unstable();
+            all_values.dedup();
+            let mut edges = Vec::with_capacity(by_target.len() + 1);
+            for (target, mut accepted) in by_target {
+                accepted.sort_unstable();
+                accepted.dedup();
+                edges.push((
+                    target,
+                    Some(ReferenceGuardAtomV1::SwitchValueSet {
+                        discriminant: expression.clone(),
+                        values: accepted.into_boxed_slice(),
+                        inside_set: true,
+                    }),
+                ));
+            }
+            edges.push((
+                *otherwise,
+                Some(ReferenceGuardAtomV1::SwitchValueSet {
+                    discriminant: expression,
+                    values: all_values.into_boxed_slice(),
+                    inside_set: false,
+                }),
+            ));
+            Ok(edges)
+        }
+    }
+}
+
+fn reference_predicate_and_atom_v1(
+    predicate: &ReferencePathPredicateV1,
+    atom: ReferenceGuardAtomV1,
+) -> Result<ReferencePathPredicateV1, ReferenceBindingErrorV1> {
+    let mut clauses = Vec::with_capacity(predicate.clauses.len());
+    for clause in &predicate.clauses {
+        let mut atoms = clause.atoms.to_vec();
+        atoms.push(atom.clone());
+        atoms.sort();
+        atoms.dedup();
+        clauses.push(ReferenceGuardClauseV1 {
+            atoms: atoms.into_boxed_slice(),
+        });
+    }
+    reference_normalize_predicate_v1(clauses)
+}
+
+fn reference_predicate_or_assign_v1(
+    target: &mut ReferencePathPredicateV1,
+    source: ReferencePathPredicateV1,
+) -> Result<(), ReferenceBindingErrorV1> {
+    let mut clauses = target.clauses.to_vec();
+    clauses.extend(source.clauses);
+    *target = reference_normalize_predicate_v1(clauses)?;
+    Ok(())
+}
+
+fn reference_normalize_predicate_v1(
+    mut clauses: Vec<ReferenceGuardClauseV1>,
+) -> Result<ReferencePathPredicateV1, ReferenceBindingErrorV1> {
+    clauses.sort();
+    clauses.dedup();
+    if clauses.len() > MAX_REFERENCE_GUARD_CLAUSES_V1 {
+        return Err(ReferenceBindingErrorV1::new(format!(
+            "reference path predicate has {} clauses; maximum is {MAX_REFERENCE_GUARD_CLAUSES_V1}",
+            clauses.len(),
+        )));
+    }
+    let atoms = clauses.iter().try_fold(0_usize, |total, clause| {
+        total.checked_add(clause.atoms.len())
+    });
+    if atoms.is_none_or(|atoms| atoms > MAX_REFERENCE_GUARD_ATOMS_V1) {
+        return Err(ReferenceBindingErrorV1::new(format!(
+            "reference path predicate exceeds {MAX_REFERENCE_GUARD_ATOMS_V1} total atoms",
+        )));
+    }
+    Ok(ReferencePathPredicateV1 {
+        clauses: clauses.into_boxed_slice(),
     })
 }
 
@@ -1070,6 +1669,104 @@ fn digest_value(digest: &mut Sha256, value: &ReferenceValueV1) {
     }
 }
 
+fn digest_effect_expression_v1(digest: &mut Sha256, expression: &ReferenceEffectExpressionV1) {
+    match expression {
+        ReferenceEffectExpressionV1::PointCoordinate { axis } => {
+            digest.update([0]);
+            digest.update(axis.to_le_bytes());
+        }
+        ReferenceEffectExpressionV1::KernelScalarArgument { argument } => {
+            digest.update([1]);
+            digest.update(argument.to_le_bytes());
+        }
+        ReferenceEffectExpressionV1::Constant(constant) => {
+            digest.update([2]);
+            digest_operand(digest, &ReferenceOperandV1::Constant(constant.clone()));
+        }
+        ReferenceEffectExpressionV1::Binary {
+            operation,
+            lhs,
+            rhs,
+            checked,
+        } => {
+            digest.update([3, binary_tag(*operation), u8::from(*checked)]);
+            digest_effect_expression_v1(digest, lhs);
+            digest_effect_expression_v1(digest, rhs);
+        }
+        ReferenceEffectExpressionV1::Unary { operation, operand } => {
+            digest.update([
+                4,
+                match operation {
+                    ReferenceUnaryOpV1::Not => 0,
+                    ReferenceUnaryOpV1::Negate => 1,
+                },
+            ]);
+            digest_effect_expression_v1(digest, operand);
+        }
+    }
+}
+
+fn digest_path_predicate_v1(digest: &mut Sha256, predicate: &ReferencePathPredicateV1) {
+    put_len(digest, predicate.clauses.len());
+    for clause in &predicate.clauses {
+        put_len(digest, clause.atoms.len());
+        for atom in &clause.atoms {
+            match atom {
+                ReferenceGuardAtomV1::SwitchValueSet {
+                    discriminant,
+                    values,
+                    inside_set,
+                } => {
+                    digest.update([0, u8::from(*inside_set)]);
+                    digest_effect_expression_v1(digest, discriminant);
+                    put_len(digest, values.len());
+                    for value in values {
+                        digest.update(value.to_le_bytes());
+                    }
+                }
+                ReferenceGuardAtomV1::Assert {
+                    condition,
+                    expected,
+                } => {
+                    digest.update([1, u8::from(*expected)]);
+                    digest_effect_expression_v1(digest, condition);
+                }
+            }
+        }
+    }
+}
+
+fn digest_output_effect_v1(digest: &mut Sha256, effect: &ReferenceOutputWriteV1) {
+    digest.update(effect.argument.to_le_bytes());
+    digest.update(effect.block.to_le_bytes());
+    digest.update(effect.statement.to_le_bytes());
+    match &effect.coordinate {
+        ReferenceOutputCoordinateV1::LogicalPoint(axes) => {
+            digest.update([0]);
+            put_len(digest, axes.len());
+            for axis in axes {
+                digest_effect_expression_v1(digest, axis);
+            }
+        }
+        ReferenceOutputCoordinateV1::SingleCoordinate => digest.update([1]),
+        ReferenceOutputCoordinateV1::Dynamic(expression) => {
+            digest.update([2]);
+            digest_effect_expression_v1(digest, expression);
+        }
+        ReferenceOutputCoordinateV1::Constant {
+            offset,
+            minimum_length,
+            from_end,
+        } => {
+            digest.update([3, u8::from(*from_end)]);
+            digest.update(offset.to_le_bytes());
+            digest.update(minimum_length.to_le_bytes());
+        }
+    }
+    digest_path_predicate_v1(digest, &effect.guard);
+    digest_effect_expression_v1(digest, &effect.rhs);
+}
+
 fn binary_tag(operation: ReferenceBinaryOpV1) -> u8 {
     match operation {
         ReferenceBinaryOpV1::Add => 0,
@@ -1121,5 +1818,129 @@ fn digest_terminator(digest: &mut Sha256, terminator: &ReferenceTerminatorV1) {
             digest_operand(digest, condition);
             digest.update(success.to_le_bytes());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scalar_constant(bits: u128) -> ReferenceConstantV1 {
+        ReferenceConstantV1::Scalar {
+            scalar: ReferenceScalarTypeV1::U32,
+            bits,
+        }
+    }
+
+    fn scalar_operand(bits: u128) -> ReferenceOperandV1 {
+        ReferenceOperandV1::Constant(scalar_constant(bits))
+    }
+
+    fn output_assignment(projection: Vec<ReferencePlaceProjectionV1>) -> ReferenceAssignmentV1 {
+        ReferenceAssignmentV1 {
+            statement: 0,
+            destination: ReferencePlaceV1 {
+                local: 3,
+                projection: projection.into_boxed_slice(),
+            },
+            value: ReferenceValueV1::Use(scalar_operand(17)),
+        }
+    }
+
+    fn guarded_point_reference_ir(
+        output_projection: Vec<ReferencePlaceProjectionV1>,
+    ) -> ReferenceEffectIrV1 {
+        ReferenceEffectIrV1 {
+            argument_count: 3,
+            local_count: 4,
+            relations: vec![
+                ReferenceArgumentRelationV1::PointCoordinate {
+                    reference_argument: 0,
+                    axis: 0,
+                },
+                ReferenceArgumentRelationV1::ScalarInput {
+                    argument: 0,
+                    scalar: ReferenceScalarTypeV1::Bool,
+                },
+                ReferenceArgumentRelationV1::DisjointOutputCoordinate {
+                    argument: 1,
+                    element: ReferenceScalarTypeV1::U32,
+                },
+            ]
+            .into_boxed_slice(),
+            blocks: vec![
+                ReferenceBlockV1 {
+                    block: 0,
+                    assignments: Box::default(),
+                    terminator: ReferenceTerminatorV1::Switch {
+                        discriminant: ReferenceOperandV1::Copy(ReferencePlaceV1 {
+                            local: 2,
+                            projection: Box::default(),
+                        }),
+                        values: vec![(0, 2)].into_boxed_slice(),
+                        otherwise: 1,
+                    },
+                },
+                ReferenceBlockV1 {
+                    block: 1,
+                    assignments: vec![output_assignment(output_projection)].into_boxed_slice(),
+                    terminator: ReferenceTerminatorV1::Return,
+                },
+                ReferenceBlockV1 {
+                    block: 2,
+                    assignments: Box::default(),
+                    terminator: ReferenceTerminatorV1::Return,
+                },
+            ]
+            .into_boxed_slice(),
+            observable_output_effects: Box::default(),
+        }
+    }
+
+    #[test]
+    fn derives_point_coordinate_guard_and_rhs_from_reference_ir() {
+        let effect_ir = guarded_point_reference_ir(vec![ReferencePlaceProjectionV1::Dereference]);
+        let writes = effect_ir.observable_output_writes_v1().unwrap();
+        assert_eq!(writes.len(), 1);
+        assert_eq!(
+            writes[0].coordinate,
+            ReferenceOutputCoordinateV1::LogicalPoint(
+                vec![ReferenceEffectExpressionV1::PointCoordinate { axis: 0 }].into_boxed_slice(),
+            )
+        );
+        assert_eq!(
+            writes[0].rhs,
+            ReferenceEffectExpressionV1::Constant(scalar_constant(17))
+        );
+        assert_eq!(
+            writes[0].guard,
+            ReferencePathPredicateV1 {
+                clauses: vec![ReferenceGuardClauseV1 {
+                    atoms: vec![ReferenceGuardAtomV1::SwitchValueSet {
+                        discriminant: ReferenceEffectExpressionV1::KernelScalarArgument {
+                            argument: 0,
+                        },
+                        values: vec![0].into_boxed_slice(),
+                        inside_set: false,
+                    }]
+                    .into_boxed_slice(),
+                }]
+                .into_boxed_slice(),
+            }
+        );
+    }
+
+    #[test]
+    fn refuses_to_omit_an_unsupported_observable_output_projection() {
+        let effect_ir = guarded_point_reference_ir(vec![
+            ReferencePlaceProjectionV1::Dereference,
+            ReferencePlaceProjectionV1::Field(0),
+        ]);
+        let error = effect_ir.observable_output_writes_v1().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("cannot omit a global output write")
+        );
     }
 }

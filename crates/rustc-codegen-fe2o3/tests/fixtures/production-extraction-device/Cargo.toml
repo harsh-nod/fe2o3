@@ -17,6 +17,7 @@ reference-call = []
 reference-non-function = []
 reference-generic-mismatch = []
 reference-missing = []
+reference-no-output = []
 reference-duplicate = []
 reference-orphan = []
 
