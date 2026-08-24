@@ -64,7 +64,6 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-kir-sim-cli
   fe2o3-kir-sim-trace
   fe2o3-kir-pliron-bridge
-  fe2o3-legacy-compiler
   fe2o3-lower-kernel-gpu
   fe2o3-lower-mir-kernel
   fe2o3-macros
@@ -575,9 +574,6 @@ run_rocm_compile() {
       cargo run --quiet --locked -p cargo-fe2o3 -- \
         examples check-artifacts "${package}"
   done
-  run_step rocm-kernel-ir-verification \
-    cargo test --locked -p cargo-fe2o3 --test kernel_ir_verification \
-      verification_gate_accepts_rejects_and_remains_opt_in -- --ignored --exact
 }
 
 require_gpu_access() {

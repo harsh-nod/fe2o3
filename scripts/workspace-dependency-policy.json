@@ -105,7 +105,6 @@
         "fe2o3-compiler-driver",
         "fe2o3-differential",
         "fe2o3-general-gemm-compiler",
-        "fe2o3-legacy-compiler",
         "fe2o3-kir-sim-cli",
         "fe2o3-llvm-route-conformance",
         "fe2o3-pliron-conformance",
