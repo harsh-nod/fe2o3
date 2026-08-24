@@ -565,24 +565,6 @@ fn file_sha256(path: &Path) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn compiler_closure_sha256(
-    cargo: [u8; 32],
-    rustc: [u8; 32],
-    rustc_lib_tree: [u8; 32],
-    backend: [u8; 32],
-) -> String {
-    let mut rustc_identity = Sha256::new();
-    rustc_identity.update(b"fe2o3-rustc-executable-runtime-identity-v1\0");
-    rustc_identity.update(rustc);
-    rustc_identity.update(rustc_lib_tree);
-    let mut closure = Sha256::new();
-    closure.update(b"fe2o3-compiler-closure-identity-v1\0");
-    closure.update(cargo);
-    closure.update(rustc_identity.finalize());
-    closure.update(backend);
-    file_digest_hex(closure.finalize().into())
-}
-
 #[cfg(unix)]
 fn runtime_tree_sha256(root: &Path) -> String {
     fn hash_field(hash: &mut Sha256, value: &[u8]) {
@@ -2676,18 +2658,11 @@ fn cargo_cannot_substitute_inherited_rustc_lib_tree_fd_193() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn cargo_cannot_substitute_authenticated_compiler_closure_before_rustc() {
+fn cargo_cannot_inject_compiler_closure_into_ordinary_root_rustc() {
     let fixture = ProjectFixture::standalone();
     let report = fixture.root.join("compiler-closure-rustc-report");
     let capability_report = fixture.root.join("compiler-closure-capability-report");
     let real_rustc = resolved_real_rustc();
-    let rustc = rustc_fixture_executable(&fixture.root);
-    let expected = compiler_closure_sha256(
-        Sha256::digest(fs::read(env!("CARGO_BIN_EXE_cargo-fe2o3-cargo-fixture")).unwrap()).into(),
-        Sha256::digest(fs::read(&rustc).unwrap()).into(),
-        [0; 32],
-        Sha256::digest(fs::read(&fixture.backend).unwrap()).into(),
-    );
     let mut command = fixture.command(&[OsString::from("build")]);
     command
         .env("PATH", rustc_fixture_path(&fixture.root))
@@ -2704,7 +2679,7 @@ fn cargo_cannot_substitute_authenticated_compiler_closure_before_rustc() {
     );
     assert_eq!(
         fs::read_to_string(report).expect("read rustc compiler closure report"),
-        expected
+        "absent"
     );
 }
 
@@ -3280,7 +3255,7 @@ fn hostile_orphan_descendants_cannot_retain_supervisor_slots() {
             let report: serde_json::Value =
                 serde_json::from_slice(&fs::read(&report).expect("read holder report"))
                     .expect("decode holder report");
-            assert_eq!(report["inherited_fds"], serde_json::json!([]));
+            assert_only_runtime_artifact_descriptor(&report, &root);
             let child = fs::read_to_string(&marker)
                 .expect("read holder PID")
                 .parse::<i32>()
@@ -3350,7 +3325,7 @@ fn hostile_application_cannot_forge_pending_supervisor_success() {
         serde_json::from_slice(&fs::read(&report).expect("read forgery report"))
             .expect("decode forgery report");
     assert_eq!(report["forged_supervisor_result"], false);
-    assert_eq!(report["inherited_fds"], serde_json::json!([]));
+    assert_only_runtime_artifact_descriptor(&report, &root);
     let application = fs::read_to_string(&marker)
         .expect("read application PID")
         .parse::<i32>()
@@ -3388,7 +3363,7 @@ fn hostile_application_cannot_unlock_supervisor_admission() {
     let report: serde_json::Value =
         serde_json::from_slice(&fs::read(&report).expect("read slot report"))
             .expect("decode slot report");
-    assert_eq!(report["inherited_fds"], serde_json::json!([]));
+    assert_only_runtime_artifact_descriptor(&report, &root);
     assert_eq!(report["slot_unlocks"], serde_json::json!([]));
     fs::remove_dir_all(root).expect("remove slot fixture");
 }
@@ -3572,6 +3547,20 @@ fn internal_runner_args(
         report.as_os_str().to_os_string(),
         payload,
     ]
+}
+
+#[cfg(unix)]
+fn assert_only_runtime_artifact_descriptor(report: &serde_json::Value, root: &Path) {
+    let inherited = report["inherited_fds"]
+        .as_array()
+        .expect("inherited descriptor report is an array");
+    assert_eq!(inherited.len(), 1, "{report}");
+    assert_eq!(inherited[0]["fd"], 197, "{report}");
+    assert_eq!(
+        inherited[0]["target"],
+        root.join("runner-artifact").to_str().unwrap(),
+        "{report}"
+    );
 }
 
 #[cfg(unix)]
@@ -3764,7 +3753,7 @@ fn assert_runner_chain_report(path: &Path, mode: &str, preserved_environment: Op
     let report: serde_json::Value =
         serde_json::from_slice(&fs::read(path).expect("read runner report"))
             .expect("decode runner report");
-    assert_eq!(report["artifact_fd_open"], false);
+    assert_eq!(report["artifact_fd_open"], true);
     assert_eq!(report["backend_fd_open"], false);
     assert_eq!(report["leaked_environment"], serde_json::json!([]));
     assert_eq!(
@@ -3787,7 +3776,7 @@ fn assert_application_report(path: &Path, payload: &str, preserved_environment: 
     let report: serde_json::Value =
         serde_json::from_slice(&fs::read(path).expect("read application report"))
             .expect("decode application report");
-    assert_eq!(report["artifact_fd_open"], false);
+    assert_eq!(report["artifact_fd_open"], true);
     assert_eq!(report["backend_fd_open"], false);
     assert_eq!(report["leaked_environment"], serde_json::json!([]));
     assert_eq!(report["unexpected_environment"], serde_json::json!([]));

@@ -604,6 +604,7 @@ fn invoke_compile_wrapper(crate_name: &str, metadata: &str) -> ExitCode {
         .args(["--crate-name", crate_name])
         .arg(format!("-Cmetadata={metadata}"))
         .arg(source)
+        .env("CARGO_PRIMARY_PACKAGE", "1")
         .status()
     {
         Ok(status) if status.success() => ExitCode::SUCCESS,
@@ -634,6 +635,7 @@ fn invoke_compile_wrapper_with_environment(
         .args(["--crate-name", crate_name])
         .arg(format!("-Cmetadata={metadata}"))
         .arg(source)
+        .env("CARGO_PRIMARY_PACKAGE", "1")
         .env(name, value)
         .status()
     {

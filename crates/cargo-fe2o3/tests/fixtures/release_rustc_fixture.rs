@@ -55,10 +55,11 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     match classify_rustc_invocation_v2(&filtered) {
-        Ok(RustcInvocationV2::Compile(compile)) => {
+        Ok(RustcInvocationV2::Compile(compile)) if env::var_os(BUILD_ATTEMPT_ENV).is_some() => {
             observe_rustc_invocation_descriptor()?;
             publish_fixture(compile.crate_name(), compile.source_path())
         }
+        Ok(RustcInvocationV2::Compile(_)) => Ok(()),
         Ok(_) => Ok(()),
         Err(error) => Err(format!("classify rustc invocation: {error}")),
     }

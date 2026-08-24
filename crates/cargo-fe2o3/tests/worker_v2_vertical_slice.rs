@@ -986,7 +986,7 @@ fn stderr(output: &Output) -> String {
 const CHILD_COMMITMENT_MISMATCH_DIAGNOSTIC: &[u8] =
     b"host consumer fixture: application handoff commitment does not bind the envelope and current executable";
 const CHILD_AMD_WAVE_DIAGNOSTIC: &[u8] = b"host consumer fixture: failed to recover inherited Worker V2 envelope: Worker V2 host admission failed: HIP observations are too coarse to establish required capability AmdWave";
-const PARENT_TRUNCATED_ACK_DIAGNOSTIC: &[u8] = b"cargo-fe2o3 application runner: invalid application handoff acknowledgment: application handoff acknowledgment is truncated (0 bytes)";
+const PARENT_TRUNCATED_ACK_DIAGNOSTIC: &[u8] = b"cargo-fe2o3 application runner: invalid Worker V2 application acknowledgment: application handoff acknowledgment is truncated (0 bytes)";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ApplicationRejectionDiagnostic {
@@ -1101,8 +1101,8 @@ fn application_rejection_diagnostic_classifier_is_exact() {
             [other_diagnostic, PARENT_TRUNCATED_ACK_DIAGNOSTIC].concat(),
             b"cargo-fe2o3 application runner: application handoff acknowledgment timed out".to_vec(),
             b"cargo-fe2o3 application runner: application containment failed".to_vec(),
-            b"cargo-fe2o3 application runner: invalid application handoff acknowledgment: application handoff acknowledgment is truncated (1 bytes)".to_vec(),
-            b"host consumer fixture: arbitrary child errorcargo-fe2o3 application runner: invalid application handoff acknowledgment: application handoff acknowledgment is truncated (0 bytes)".to_vec(),
+            b"cargo-fe2o3 application runner: invalid Worker V2 application acknowledgment: application handoff acknowledgment is truncated (1 bytes)".to_vec(),
+            b"host consumer fixture: arbitrary child errorcargo-fe2o3 application runner: invalid Worker V2 application acknowledgment: application handoff acknowledgment is truncated (0 bytes)".to_vec(),
         ] {
             assert_eq!(
                 classify_application_rejection_diagnostic(&invalid, child_diagnostic),

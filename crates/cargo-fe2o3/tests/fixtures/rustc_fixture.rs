@@ -50,17 +50,16 @@ fn run() -> Result<std::process::ExitStatus, String> {
     let real_rustc = env::var_os("FE2O3_TEST_REAL_RUSTC")
         .ok_or_else(|| "missing FE2O3_TEST_REAL_RUSTC".to_string())?;
     match classify_rustc_invocation_v2(&filtered) {
-        Ok(RustcInvocationV2::Compile(compile)) => {
+        Ok(RustcInvocationV2::Compile(compile)) if env::var_os(BUILD_ATTEMPT_ENV).is_some() => {
             publish_probe(compile.crate_name(), compile.source_path())?;
             if let Some(report) = env::var_os("FE2O3_TEST_COMPILER_CLOSURE_RUSTC_REPORT") {
-                let closure =
-                    env::var("FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1").map_err(|_| {
-                        "rustc fixture has no authenticated compiler closure".to_owned()
-                    })?;
+                let closure = env::var("FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1")
+                    .unwrap_or_else(|_| "absent".to_owned());
                 fs::write(report, closure)
                     .map_err(|error| format!("write compiler closure report: {error}"))?;
             }
         }
+        Ok(RustcInvocationV2::Compile(_)) => {}
         Ok(_) => {}
         Err(_) if env::var_os(BUILD_ATTEMPT_ENV).is_none() => {}
         Err(error) => return Err(format!("classify filtered rustc invocation: {error}")),
