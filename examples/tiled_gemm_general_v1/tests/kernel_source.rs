@@ -36,6 +36,8 @@ struct SourceFacts {
     unsafe_functions: usize,
     function_calls: Vec<String>,
     method_calls: Vec<String>,
+    checked_slice_get_receivers: Vec<String>,
+    indexed_paths: Vec<String>,
 }
 
 impl<'ast> Visit<'ast> for SourceFacts {
@@ -62,7 +64,23 @@ impl<'ast> Visit<'ast> for SourceFacts {
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         self.method_calls.push(call.method.to_string());
+        if call.method == "get"
+            && let syn::Expr::Path(path) = call.receiver.as_ref()
+            && let Some(identifier) = path.path.get_ident()
+        {
+            self.checked_slice_get_receivers
+                .push(identifier.to_string());
+        }
         syn::visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_index(&mut self, expression: &'ast syn::ExprIndex) {
+        if let syn::Expr::Path(path) = expression.expr.as_ref()
+            && let Some(identifier) = path.path.get_ident()
+        {
+            self.indexed_paths.push(identifier.to_string());
+        }
+        syn::visit::visit_expr_index(self, expression);
     }
 }
 
@@ -116,6 +134,21 @@ fn source_forbids_unsafe_and_contains_matrix_tiling_and_epilogue() {
     }
     for forbidden in ["get_unchecked", "get_unchecked_mut", "get_mut_at"] {
         assert!(!facts.method_calls.iter().any(|call| call == forbidden));
+    }
+    for input in ["a", "b"] {
+        assert_eq!(
+            facts
+                .checked_slice_get_receivers
+                .iter()
+                .filter(|receiver| *receiver == input)
+                .count(),
+            4,
+            "input `{input}` must use four checked slice loads"
+        );
+        assert!(
+            !facts.indexed_paths.iter().any(|path| path == input),
+            "input `{input}` must not use MIR-asserting slice indexing"
+        );
     }
 }
 

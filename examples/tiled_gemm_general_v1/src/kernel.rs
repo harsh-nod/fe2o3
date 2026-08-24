@@ -84,44 +84,52 @@ pub fn tiled_gemm_general_v1(
         let depth3 = depth0 + 3;
         let lhs = Bf16MfmaFragment::from_bits([
             if a_row < m as usize && depth0 < k as usize {
-                a[a_row * lda as usize + depth0]
+                *a.get(a_row * lda as usize + depth0)
+                    .ok_or(KernelError::OutOfBounds)?
             } else {
                 0
             },
             if a_row < m as usize && depth1 < k as usize {
-                a[a_row * lda as usize + depth1]
+                *a.get(a_row * lda as usize + depth1)
+                    .ok_or(KernelError::OutOfBounds)?
             } else {
                 0
             },
             if a_row < m as usize && depth2 < k as usize {
-                a[a_row * lda as usize + depth2]
+                *a.get(a_row * lda as usize + depth2)
+                    .ok_or(KernelError::OutOfBounds)?
             } else {
                 0
             },
             if a_row < m as usize && depth3 < k as usize {
-                a[a_row * lda as usize + depth3]
+                *a.get(a_row * lda as usize + depth3)
+                    .ok_or(KernelError::OutOfBounds)?
             } else {
                 0
             },
         ]);
         let rhs = Bf16MfmaFragment::from_bits([
             if depth0 < k as usize && b_column < n as usize {
-                b[depth0 * ldb as usize + b_column]
+                *b.get(depth0 * ldb as usize + b_column)
+                    .ok_or(KernelError::OutOfBounds)?
             } else {
                 0
             },
             if depth1 < k as usize && b_column < n as usize {
-                b[depth1 * ldb as usize + b_column]
+                *b.get(depth1 * ldb as usize + b_column)
+                    .ok_or(KernelError::OutOfBounds)?
             } else {
                 0
             },
             if depth2 < k as usize && b_column < n as usize {
-                b[depth2 * ldb as usize + b_column]
+                *b.get(depth2 * ldb as usize + b_column)
+                    .ok_or(KernelError::OutOfBounds)?
             } else {
                 0
             },
             if depth3 < k as usize && b_column < n as usize {
-                b[depth3 * ldb as usize + b_column]
+                *b.get(depth3 * ldb as usize + b_column)
+                    .ok_or(KernelError::OutOfBounds)?
             } else {
                 0
             },

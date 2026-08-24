@@ -210,12 +210,15 @@ fn safe_general_gemm_mir_reaches_kir_and_exact_semantic_mutations_are_diagnostic
     );
     let positive_stderr = assert_failed_without_artifact(&positive, &brokered_artifacts);
     assert!(
+        !positive_stderr.contains("unsupported Assert terminator"),
+        "positive safe source retained a MIR Assert terminator:\n{positive_stderr}"
+    );
+    assert!(
         positive_stderr.contains(
-            "authenticated general GEMM positive structural analysis completed, but frontend correspondence is disabled until the optimized-MIR authority proof is closed"
-        ) && positive_stderr.contains(
-            "this source is non-executable and cannot issue frontend correspondence or artifact authority"
-        ) && !positive_stderr.contains("reached verified symbolic semantic template"),
-        "positive safe source crossed the fail-closed analysis boundary:\n{positive_stderr}"
+            "general typed V3 requires kernel-ir-worker-v2 shared publication"
+        ) && positive_stderr.contains("publication state: NotStarted")
+            && !positive_stderr.contains("reached verified symbolic semantic template"),
+        "positive safe source missed the checked-MIR fail-closed boundary:\n{positive_stderr}"
     );
 
     prepare_committed_generation(
