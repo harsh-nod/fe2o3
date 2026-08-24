@@ -140,6 +140,9 @@ pub struct CollectedFunction<'tcx> {
         Option<crate::rust_type_layout_v3::GeneralTypedKernelContractV3>,
     /// Compiler-authenticated source contract for this exact kernel root.
     pub(crate) frontend_contract: Option<AuthenticatedKernelFrontendContractV1>,
+    /// Exact safe-Rust reference/effect binding for this kernel root.
+    pub(crate) reference_effect_binding:
+        Option<crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1>,
     /// Compiler-private observation derived from this exact monomorphized MIR.
     pub(crate) dead_branches: Option<crate::monomorphization_dead::CompilerDeadBranchObservationV1>,
 }
@@ -651,6 +654,8 @@ struct KernelRoot<T> {
     typed_layout_identities: Option<TypedArgumentListV1<TypeIdentity>>,
     general_typed_contract: Option<crate::rust_type_layout_v3::GeneralTypedKernelContractV3>,
     frontend_contract: Option<AuthenticatedKernelFrontendContractV1>,
+    reference_effect_binding:
+        Option<crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1>,
 }
 
 #[derive(Clone, Debug)]
@@ -666,6 +671,15 @@ struct FrontendContractRegistrationRecord<T> {
     target_symbol: String,
     target_identity: String,
     target: T,
+}
+
+#[derive(Clone, Debug)]
+struct ReferenceBindingRegistrationRecord<T> {
+    registration_path: String,
+    item_name: String,
+    logical_name: String,
+    kernel: T,
+    reference: T,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -778,6 +792,8 @@ fn kernel_roots<'tcx>(
     )?;
     let frontend_records = decode_frontend_contract_registrations(tcx, &functions_by_symbol)?;
     bind_frontend_contract_registrations(tcx, &mut roots, frontend_records)?;
+    let reference_records = decode_reference_binding_registrations(tcx)?;
+    bind_reference_binding_registrations(tcx, &mut roots, reference_records)?;
     if !retain_qualification_layout_evidence {
         for root in &mut roots {
             root.typed_layout_identities = None;
@@ -1231,6 +1247,250 @@ fn frontend_contract_candidates<'tcx>(
                 .then_some((path, item_name, def_id, item))
         })
         .collect()
+}
+
+fn reference_binding_candidates<'tcx>(
+    tcx: TyCtxt<'tcx>,
+) -> Vec<(
+    String,
+    String,
+    rustc_hir::def_id::LocalDefId,
+    &'tcx rustc_hir::Item<'tcx>,
+)> {
+    tcx.hir_free_items()
+        .filter_map(|item_id| {
+            let item = tcx.hir_item(item_id);
+            let def_id = item.owner_id.def_id;
+            let path = tcx.def_path_str(def_id.to_def_id());
+            let item_name = final_path_segment(&path).to_string();
+            item_name
+                .starts_with(reserved_fe2o3_symbols::REFERENCE_BINDING_REGISTRATION_PREFIX_V1)
+                .then_some((path, item_name, def_id, item))
+        })
+        .collect()
+}
+
+fn decode_reference_binding_registrations<'tcx>(
+    tcx: TyCtxt<'tcx>,
+) -> Result<Vec<ReferenceBindingRegistrationRecord<Instance<'tcx>>>, RegistrationError> {
+    let mut candidates = reference_binding_candidates(tcx);
+    candidates.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
+    candidates
+        .into_iter()
+        .map(|(path, item_name, def_id, item)| {
+            decode_reference_binding_registration(tcx, def_id, path, item_name, item)
+        })
+        .collect()
+}
+
+fn decode_reference_binding_registration<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: rustc_hir::def_id::LocalDefId,
+    registration_path: String,
+    item_name: String,
+    item: &rustc_hir::Item<'tcx>,
+) -> Result<ReferenceBindingRegistrationRecord<Instance<'tcx>>, RegistrationError> {
+    if !matches!(item.kind, ItemKind::Static(..)) {
+        return Err(RegistrationError::new(
+            registration_path,
+            "reserved reference-binding name must identify a static item",
+        ));
+    }
+    if tcx.is_mutable_static(def_id.to_def_id()) {
+        return Err(RegistrationError::new(
+            registration_path,
+            "reference-binding static must be immutable",
+        ));
+    }
+    let flags = tcx.codegen_fn_attrs(def_id).flags;
+    if !flags.intersects(CodegenFnAttrFlags::USED_COMPILER | CodegenFnAttrFlags::USED_LINKER) {
+        return Err(RegistrationError::new(
+            registration_path,
+            "reference-binding static must carry #[used]",
+        ));
+    }
+    let registration_ty = tcx
+        .try_normalize_erasing_regions(
+            TypingEnv::fully_monomorphized(),
+            tcx.type_of(def_id).instantiate_identity(),
+        )
+        .map_err(|_| {
+            RegistrationError::new(
+                &registration_path,
+                "reference-binding type did not normalize",
+            )
+        })?;
+    let TyKind::Tuple(types) = registration_ty.kind() else {
+        return Err(RegistrationError::new(
+            registration_path,
+            "reference binding must use the exact V1 tuple type",
+        ));
+    };
+    let exact_type = types.len()
+        == reserved_fe2o3_symbols::REFERENCE_BINDING_REGISTRATION_FIELD_COUNT_V1
+        && types[0] == tcx.types.u64
+        && types[1] == tcx.types.u16
+        && types[2] == tcx.types.u16
+        && is_shared_str(types[3])
+        && matches!(types[4].kind(), TyKind::FnPtr(..))
+        && matches!(types[5].kind(), TyKind::FnPtr(..));
+    if !exact_type {
+        return Err(RegistrationError::new(
+            registration_path,
+            "reference binding must be (u64, u16, u16, &str, kernel fn pointer, fn())",
+        ));
+    }
+    let body = tcx.mir_for_ctfe(def_id);
+    let fields = registration_tuple_fields(
+        body,
+        reserved_fe2o3_symbols::REFERENCE_BINDING_REGISTRATION_FIELD_COUNT_V1,
+        &registration_path,
+    )?;
+    let magic = registration_integer(tcx, fields[0], tcx.types.u64, "magic", &registration_path)?;
+    let version =
+        registration_integer(tcx, fields[1], tcx.types.u16, "version", &registration_path)?;
+    let kind = registration_integer(tcx, fields[2], tcx.types.u16, "kind", &registration_path)?;
+    if magic != u128::from(reserved_fe2o3_symbols::REFERENCE_BINDING_REGISTRATION_MAGIC_V1)
+        || version != u128::from(reserved_fe2o3_symbols::REFERENCE_BINDING_REGISTRATION_VERSION_V1)
+        || kind != u128::from(reserved_fe2o3_symbols::REFERENCE_BINDING_REGISTRATION_KIND_V1)
+    {
+        return Err(RegistrationError::new(
+            registration_path,
+            "reference-binding magic, version, or kind is not canonical V1",
+        ));
+    }
+    let logical_name = registration_string(tcx, fields[3], "logical name", &registration_path)?;
+    let kernel = registration_target(tcx, body, fields[4], &registration_path)?;
+    let anchor = registration_target(tcx, body, fields[5], &registration_path)?;
+    let reference = reference_target_from_anchor_v1(tcx, anchor, &registration_path)?;
+    Ok(ReferenceBindingRegistrationRecord {
+        registration_path,
+        item_name,
+        logical_name,
+        kernel,
+        reference,
+    })
+}
+
+fn reference_target_from_anchor_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    anchor: Instance<'tcx>,
+    registration_path: &str,
+) -> Result<Instance<'tcx>, RegistrationError> {
+    if anchor.def_id().as_local().is_none() {
+        return Err(RegistrationError::new(
+            registration_path,
+            "reference anchor must be a local generated function",
+        ));
+    };
+    let expected_prefix = "__fe2o3_kernel_reference_anchor_v1_";
+    let anchor_path = tcx.def_path_str(anchor.def_id());
+    if !final_path_segment(&anchor_path).starts_with(expected_prefix) {
+        return Err(RegistrationError::new(
+            registration_path,
+            "reference anchor does not use the compiler-reserved generated name",
+        ));
+    }
+    let body = tcx.instance_mir(anchor.def);
+    let mut candidates = body
+        .local_decls
+        .iter()
+        .filter_map(|declaration| {
+            let TyKind::FnDef(def_id, arguments) = declaration.ty.kind() else {
+                return None;
+            };
+            Instance::try_resolve(tcx, TypingEnv::fully_monomorphized(), *def_id, arguments)
+                .ok()
+                .flatten()
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|instance| {
+        (
+            tcx.def_path_hash(instance.def_id()).0,
+            tcx.symbol_name(*instance).name.to_string(),
+        )
+    });
+    candidates.dedup();
+    let [reference] = candidates.as_slice() else {
+        return Err(RegistrationError::new(
+            registration_path,
+            format!(
+                "reference anchor must name exactly one resolvable function item; found {}",
+                candidates.len(),
+            ),
+        ));
+    };
+    if !is_fully_monomorphized(tcx, *reference) {
+        return Err(RegistrationError::new(
+            registration_path,
+            "reference function is not fully monomorphized",
+        ));
+    }
+    Ok(*reference)
+}
+
+fn bind_reference_binding_registrations<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    roots: &mut [KernelRoot<Instance<'tcx>>],
+    records: Vec<ReferenceBindingRegistrationRecord<Instance<'tcx>>>,
+) -> Result<(), RegistrationError> {
+    let roots_by_name = roots
+        .iter()
+        .enumerate()
+        .map(|(index, root)| (root.logical_name.clone(), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut binding_counts = BTreeMap::new();
+    for record in &records {
+        *binding_counts
+            .entry(record.logical_name.as_str())
+            .or_insert(0usize) += 1;
+    }
+    if let Some((logical_name, _)) = binding_counts.iter().find(|(_, count)| **count > 1) {
+        let duplicate = records
+            .iter()
+            .find(|record| record.logical_name == *logical_name)
+            .expect("duplicate count came from one binding record");
+        return Err(RegistrationError::new(
+            &duplicate.registration_path,
+            "duplicate safe Rust reference binding for one kernel",
+        ));
+    }
+    for record in records {
+        let expected_name = format!(
+            "{}{}",
+            reserved_fe2o3_symbols::REFERENCE_BINDING_REGISTRATION_PREFIX_V1,
+            record.logical_name,
+        );
+        if record.item_name != expected_name {
+            return Err(RegistrationError::new(
+                record.registration_path,
+                "reference-binding item name disagrees with its logical kernel name",
+            ));
+        }
+        let Some(&index) = roots_by_name.get(&record.logical_name) else {
+            return Err(RegistrationError::new(
+                record.registration_path,
+                "orphan safe Rust reference binding has no registered kernel",
+            ));
+        };
+        let root = &mut roots[index];
+        if root.target != record.kernel {
+            return Err(RegistrationError::new(
+                record.registration_path,
+                "safe Rust reference binding does not point at the exact registered kernel instance",
+            ));
+        }
+        let binding = crate::reference_effect_v1::authenticate_reference_binding_v1(
+            tcx,
+            record.registration_path.clone(),
+            record.logical_name,
+            record.kernel,
+            record.reference,
+        )
+        .map_err(|error| RegistrationError::new(&record.registration_path, error.to_string()))?;
+        root.reference_effect_binding = Some(binding);
+    }
+    Ok(())
 }
 
 fn decode_frontend_contract_registrations<'tcx>(
@@ -2252,6 +2512,7 @@ fn validate_registration_records<T: Copy>(
             typed_layout_identities: None,
             general_typed_contract: None,
             frontend_contract: None,
+            reference_effect_binding: None,
         });
     }
 
@@ -2536,6 +2797,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                 typed_layout_identities: None,
                 general_typed_contract: None,
                 frontend_contract: None,
+                reference_effect_binding: None,
                 dead_branches: None,
             });
         }
@@ -2553,6 +2815,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             typed_layout_identities,
             general_typed_contract,
             frontend_contract,
+            reference_effect_binding,
         } = root;
         if !self.used_export_names.insert(export_name.clone()) {
             return Err(CollectError {
@@ -2584,6 +2847,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                 typed_layout_identities,
                 general_typed_contract,
                 frontend_contract,
+                reference_effect_binding,
                 dead_branches: None,
             });
         }
@@ -3439,6 +3703,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             typed_layout_identities: None,
             general_typed_contract: None,
             frontend_contract: None,
+            reference_effect_binding: None,
             dead_branches: None,
         });
         Ok(())

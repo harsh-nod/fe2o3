@@ -317,6 +317,7 @@ fn collected<'tcx>(tcx: TyCtxt<'tcx>, name: &str, kernel: bool) -> CollectedFunc
         general_typed_contract: None,
         frontend_contract: kernel
             .then(|| AuthenticatedKernelFrontendContractV1::for_test(scalar_contract())),
+        reference_effect_binding: None,
         dead_branches: None,
     }
 }

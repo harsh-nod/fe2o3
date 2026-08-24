@@ -838,6 +838,7 @@ fn kernel(value: u32) -> u32 {
             general_typed_contract: None,
             frontend_contract: is_kernel
                 .then(|| AuthenticatedKernelFrontendContractV1::for_test(scalar_contract())),
+            reference_effect_binding: None,
             dead_branches: None,
         }
     }

@@ -7,6 +7,19 @@ repository.workspace = true
 rust-version.workspace = true
 publish = false
 
+[features]
+reference-positive = []
+reference-mutated = []
+reference-unsafe = []
+reference-abi-mismatch = []
+reference-loop = []
+reference-call = []
+reference-non-function = []
+reference-generic-mismatch = []
+reference-missing = []
+reference-duplicate = []
+reference-orphan = []
+
 [dependencies]
 fe2o3-device.workspace = true
 
