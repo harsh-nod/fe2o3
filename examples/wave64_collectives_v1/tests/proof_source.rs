@@ -56,9 +56,9 @@ fn proof_names_every_phase_a_obligation() {
 fn refinement_proof_binds_identity_profile_mask_values_and_ownership() {
     for marker in [
         "pub open spec fn attributed_source_identity_v1",
-        "word0: 0xc649e38712232ed4",
+        "word0: 0x7c6ead1e7c01a61a",
         "pub open spec fn kernel_ir_schema_identity_v1",
-        "word0: 0xd733ad4e530cc75a",
+        "word0: 0xda2722bd3ce34922",
         "pub open spec fn exact_source_model_to_kernel_ir_profile_v1",
         "target_gfx942_xnack_minus",
         "pub proof fn source_and_kernel_ir_contributors_are_equal_v1",
@@ -222,11 +222,11 @@ fn documentation_keeps_refinement_and_execution_boundaries_explicit() {
     for marker in [
         "Source-model-to-Kernel-IR refinement",
         "Reviewed attributed-source-to-CPU correspondence",
-        "c649e38712232ed45c1d2f6f8a2a49405f12a5e308907b3265c2415f227803a2",
+        "7c6ead1e7c01a61a8f31a010c9e8cb9bd1c21a905ba61e9d90c6c077c748ffd4",
         "837aae894e5c04da4b598e45f344f2e5df0aa8bc6155acf0bf05809ecd86d407",
-        "7ac5f3d6b90891c4a3e0b6e932a71c46ff26a65102cc24186a5c543f94abe177",
+        "d1c8630a5e534fe559db0b669ca55a6f9dda5454a50d57feb67eb3b969941e87",
         "b8daeb2bc953924a424542820bed566e52d57290",
-        "d733ad4e530cc75add27f051620394bfd7a05e75b1d577543b693f42d91b4b42",
+        "da2722bd3ce349228644300b13bb45d4683d1ebd60f8b7749e7764ec6569e894",
         "proves_source_to_model_refinement=false",
         "does not prove semantic source-to-model",
         "does not prove Git-tree membership",

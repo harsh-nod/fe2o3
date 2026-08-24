@@ -131,8 +131,8 @@ fn hostile_semantic_mutations_retain_names_but_fail_exact_ast_admission() {
         ),
         replace_once(
             SOURCE,
-            "2863304ebf7f501a7f177c5b8f5a456261ee34760472727ba3f0205ccf5ce9cc",
-            "3863304ebf7f501a7f177c5b8f5a456261ee34760472727ba3f0205ccf5ce9cc",
+            "    typed,\n    launch(",
+            "    typed,\n    namespace = \"2863304ebf7f501a7f177c5b8f5a456261ee34760472727ba3f0205ccf5ce9cc\",\n    launch(",
         ),
     ];
 
@@ -278,7 +278,7 @@ fn exact_identities_and_transcript_fail_closed_under_mutation() {
     let exact = exact_source_cpu_content_identities_v2();
     assert_eq!(
         encode_hex(&exact.attributed_source_sha256),
-        "c649e38712232ed45c1d2f6f8a2a49405f12a5e308907b3265c2415f227803a2"
+        "7c6ead1e7c01a61a8f31a010c9e8cb9bd1c21a905ba61e9d90c6c077c748ffd4"
     );
     assert_eq!(
         encode_hex(&exact.cpu_oracle_sha256),
@@ -286,7 +286,7 @@ fn exact_identities_and_transcript_fail_closed_under_mutation() {
     );
     assert_eq!(
         encode_hex(&exact.correspondence_sha256),
-        "7ac5f3d6b90891c4a3e0b6e932a71c46ff26a65102cc24186a5c543f94abe177"
+        "d1c8630a5e534fe559db0b669ca55a6f9dda5454a50d57feb67eb3b969941e87"
     );
     assert_eq!(
         verus_digest("attributed_source_identity_v2"),

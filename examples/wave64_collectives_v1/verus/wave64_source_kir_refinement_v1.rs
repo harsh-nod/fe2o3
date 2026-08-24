@@ -13,20 +13,20 @@ pub struct Digest256V1 {
 /// SHA-256 of the exact checked-in attributed `src/kernel.rs`.
 pub open spec fn attributed_source_identity_v1() -> Digest256V1 {
     Digest256V1 {
-        word0: 0xc649e38712232ed4,
-        word1: 0x5c1d2f6f8a2a4940,
-        word2: 0x5f12a5e308907b32,
-        word3: 0x65c2415f227803a2,
+        word0: 0x7c6ead1e7c01a61a,
+        word1: 0x8f31a010c9e8cb9b,
+        word2: 0xd1c21a905ba61e9d,
+        word3: 0x90c6c077c748ffd4,
     }
 }
 
 /// SHA-256 of the exact checked-in Wave64 semantic Kernel-IR schema source.
 pub open spec fn kernel_ir_schema_identity_v1() -> Digest256V1 {
     Digest256V1 {
-        word0: 0xd733ad4e530cc75a,
-        word1: 0xdd27f051620394bf,
-        word2: 0xd7a05e75b1d57754,
-        word3: 0x3b693f42d91b4b42,
+        word0: 0xda2722bd3ce34922,
+        word1: 0x8644300b13bb45d4,
+        word2: 0x683d1ebd60f8b774,
+        word3: 0x9e7764ec6569e894,
     }
 }
 

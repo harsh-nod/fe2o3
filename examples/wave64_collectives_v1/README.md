@@ -63,9 +63,9 @@ bit exact.
 
 The content binding carries exact SHA-256 identities:
 
-- attributed source: `c649e38712232ed45c1d2f6f8a2a49405f12a5e308907b3265c2415f227803a2`;
+- attributed source: `7c6ead1e7c01a61a8f31a010c9e8cb9bd1c21a905ba61e9d90c6c077c748ffd4`;
 - CPU oracle: `837aae894e5c04da4b598e45f344f2e5df0aa8bc6155acf0bf05809ecd86d407`;
-- reviewed correspondence: `7ac5f3d6b90891c4a3e0b6e932a71c46ff26a65102cc24186a5c543f94abe177`.
+- reviewed correspondence: `d1c8630a5e534fe559db0b669ca55a6f9dda5454a50d57feb67eb3b969941e87`.
 
 Those identities are domain-separated with an outer 20-byte Git commit. The
 formal profile pins public base
@@ -92,8 +92,8 @@ Rust syntax an operational semantics and connects that semantics to the model.
 CPU source model and an independent interpreter of the exact canonical
 semantic Kernel IR. It binds both checked-in files by SHA-256:
 
-- attributed source: `c649e38712232ed45c1d2f6f8a2a49405f12a5e308907b3265c2415f227803a2`;
-- Kernel-IR schema: `d733ad4e530cc75add27f051620394bfd7a05e75b1d577543b693f42d91b4b42`.
+- attributed source: `7c6ead1e7c01a61a8f31a010c9e8cb9bd1c21a905ba61e9d90c6c077c748ffd4`;
+- Kernel-IR schema: `da2722bd3ce349228644300b13bb45d4683d1ebd60f8b7749e7764ec6569e894`.
 
 The checker first requires the exact gfx942:xnack-, COV6, Wave64, WG64,
 one-workgroup profile and canonical KIR structure. It then compares all 192
