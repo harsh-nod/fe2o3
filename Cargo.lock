@@ -314,6 +314,7 @@ dependencies = [
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
+ "fe2o3-kir-sim-cli",
  "fe2o3-process-identity",
  "fe2o3-rustc-invocation",
  "fe2o3-scalar-gemm-v1",
@@ -1113,6 +1114,7 @@ dependencies = [
  "rustix",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
 ]
 
 [[package]]

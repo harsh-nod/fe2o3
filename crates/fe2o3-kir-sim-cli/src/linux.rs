@@ -29,6 +29,7 @@ use rustix::fs::{
 use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use sha2::{Digest, Sha256};
 
 use crate::schema::{ErrorKind, Stage};
 
@@ -828,22 +829,89 @@ pub(crate) fn main() -> ExitCode {
     }
 }
 
+pub(crate) fn run_captured_kir_v6(
+    canonical_kir_v6: &[u8],
+    request: OsString,
+    expected_request: Option<crate::SimulationRequestIdentityV1>,
+    output: Option<OsString>,
+) -> ExitCode {
+    let result = run_with_captured_kir(
+        canonical_kir_v6,
+        Options {
+            kir_v6: OsString::new(),
+            request,
+            output,
+        },
+        expected_request,
+    );
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            write_error(&error);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+pub(crate) fn bind_request_v1(
+    request: OsString,
+) -> Result<crate::SimulationRequestIdentityV1, String> {
+    let bytes = secure_read(
+        Path::new(&request),
+        MAX_REQUEST_BYTES,
+        InputCode::Request,
+        "simulation request",
+    )
+    .map_err(|failure| failure.0.message.clone())?;
+    let document: RequestDocument = serde_json::from_slice(&bytes).map_err(|error| {
+        format!(
+            "request JSON is invalid at line {} column {}",
+            error.line(),
+            error.column()
+        )
+    })?;
+    prepare_request(document).map_err(|failure| failure.0.message.clone())?;
+    Ok(crate::SimulationRequestIdentityV1 {
+        sha256: Sha256::digest(&bytes).into(),
+        length: bytes.len(),
+    })
+}
+
 fn run(arguments: impl Iterator<Item = OsString>) -> Result<(), Failure> {
     let options = parse_options(arguments)?;
-    let limits = cli_simulation_limits();
     let kir = secure_read(
         Path::new(&options.kir_v6),
         MAX_KIR_BYTES,
         InputCode::KirV6,
         "canonical KIR V6",
     )?;
-    let canonical = VerifiedCanonicalKernelIrV6::from_canonical_bytes(kir).map_err(|error| {
-        Failure::new(
-            Stage::KirAdmission,
-            kir_error_kind(&error),
-            bounded_display(&error),
-        )
-    })?;
+    run_with_captured_kir(&kir, options, None)
+}
+
+fn run_with_captured_kir(
+    kir: &[u8],
+    options: Options,
+    expected_request: Option<crate::SimulationRequestIdentityV1>,
+) -> Result<(), Failure> {
+    if kir.len() > MAX_KIR_BYTES {
+        return Err(Failure::input(
+            InputCode::KirV6,
+            ErrorKind::InputTooLarge,
+            format!(
+                "canonical KIR V6 input is {} bytes; maximum is {MAX_KIR_BYTES}",
+                kir.len()
+            ),
+        ));
+    }
+    let limits = cli_simulation_limits();
+    let canonical =
+        VerifiedCanonicalKernelIrV6::from_canonical_bytes(kir.to_vec()).map_err(|error| {
+            Failure::new(
+                Stage::KirAdmission,
+                kir_error_kind(&error),
+                bounded_display(&error),
+            )
+        })?;
     let admitted = AdmittedSimulationModuleV1::admit(canonical, limits).map_err(|error| {
         Failure::new(
             Stage::SimulatorAdmission,
@@ -857,6 +925,16 @@ fn run(arguments: impl Iterator<Item = OsString>) -> Result<(), Failure> {
         InputCode::Request,
         "simulation request",
     )?;
+    if expected_request.is_some_and(|expected| {
+        expected.length != request_bytes.len()
+            || expected.sha256 != <[u8; 32]>::from(Sha256::digest(&request_bytes))
+    }) {
+        return Err(Failure::input(
+            InputCode::Request,
+            ErrorKind::InputChanged,
+            "simulation request changed after its pre-build admission",
+        ));
+    }
     let document: RequestDocument = serde_json::from_slice(&request_bytes).map_err(|error| {
         Failure::new(
             Stage::Request,

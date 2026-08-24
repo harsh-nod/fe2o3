@@ -154,6 +154,13 @@
       "kinds": [
         "normal"
       ]
+    },
+    {
+      "from": "cargo-fe2o3",
+      "to": "fe2o3-scalar-gemm-v1",
+      "kinds": [
+        "normal"
+      ]
     }
   ],
   "forbidden_dependency_directions": [

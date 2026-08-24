@@ -91,6 +91,7 @@ fe2o3-kernel-descriptor = { path = "crates/fe2o3-kernel-descriptor" }
 fe2o3-kernel-analysis = { path = "crates/fe2o3-kernel-analysis", default-features = false }
 fe2o3-kernel-ir = { path = "crates/fe2o3-kernel-ir" }
 fe2o3-kir-sim = { path = "crates/fe2o3-kir-sim" }
+fe2o3-kir-sim-cli = { path = "crates/fe2o3-kir-sim-cli" }
 fe2o3-kir-sim-trace = { path = "crates/fe2o3-kir-sim-trace" }
 fe2o3-kir-pliron-bridge = { path = "crates/fe2o3-kir-pliron-bridge" }
 fe2o3-legacy-compiler = { path = "crates/fe2o3-legacy-compiler" }

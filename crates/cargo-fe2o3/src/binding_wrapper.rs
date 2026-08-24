@@ -3326,6 +3326,9 @@ fn complete_managed_attempt_inner(
     managed: &mut ManagedAttempt,
     parent_custody: Option<&ParentRustcInvocationCustody>,
 ) -> Result<(), CompletionFailure> {
+    if simulation_mode_selected() {
+        return complete_simulation_attempt(managed);
+    }
     if managed.row_softmax_provision {
         return complete_row_softmax_v1_provision(managed);
     }
@@ -3398,6 +3401,46 @@ fn complete_managed_attempt_inner(
     }
     finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(|error| {
         CompletionFailure::Uncommitted(format!("build-attempt completion failed: {error}"))
+    })
+}
+
+fn simulation_mode_selected() -> bool {
+    std::env::var_os(crate::SIMULATION_MODE_ENV).as_deref() == Some(OsStr::new("1"))
+        && std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref()
+            == Some(OsStr::new("simulation-v1"))
+}
+
+fn complete_simulation_attempt(managed: &ManagedAttempt) -> Result<(), CompletionFailure> {
+    if managed.worker_v2.is_some()
+        || managed.row_softmax_provision
+        || managed.row_softmax_release.is_some()
+    {
+        return Err(CompletionFailure::Uncommitted(
+            "simulation-v1 cannot enter a Worker V2 or protected release completion path"
+                .to_owned(),
+        ));
+    }
+    let captured = match consume_compiler_module_handoff_v1(
+        &managed.output_dir,
+        &managed.producer,
+        managed.attempt,
+    ) {
+        Ok(captured) => Some(captured),
+        Err(fe2o3_artifact_transaction::CompilerModuleHandoffErrorV1::NotPublished) => None,
+        Err(error) => {
+            return Err(CompletionFailure::Uncommitted(format!(
+                "simulation-v1 could not consume its exact canonical KIR V6 handoff: {error}"
+            )));
+        }
+    };
+    if let Some(captured) = captured {
+        crate::simulation_capture::publish(&managed.output_dir, managed.attempt, captured.bytes())
+            .map_err(CompletionFailure::Uncommitted)?;
+    }
+    finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(|error| {
+        CompletionFailure::Uncommitted(format!(
+            "simulation-v1 build-attempt completion failed: {error}"
+        ))
     })
 }
 

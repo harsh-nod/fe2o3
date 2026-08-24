@@ -29,6 +29,7 @@ pub(crate) enum RustcInvocationPolicyV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CodegenPipeline {
     ProductionV1,
+    SimulationV1,
     LegacyV1,
     KernelIrV1,
     KernelIrWorkerV2,
@@ -45,8 +46,9 @@ pub(crate) enum CodegenPipeline {
 }
 
 impl CodegenPipeline {
-    pub(crate) const ALL: [Self; 14] = [
+    pub(crate) const ALL: [Self; 15] = [
         Self::ProductionV1,
+        Self::SimulationV1,
         Self::LegacyV1,
         Self::KernelIrV1,
         Self::KernelIrWorkerV2,
@@ -65,7 +67,8 @@ impl CodegenPipeline {
     pub(crate) const fn purpose(self) -> PipelinePurposeV1 {
         match self {
             Self::ProductionV1 => PipelinePurposeV1::Production,
-            Self::LegacyV1
+            Self::SimulationV1
+            | Self::LegacyV1
             | Self::KernelIrV1
             | Self::KernelIrWorkerV2
             | Self::CollectedExecutableScalarControlFlowV2
@@ -118,6 +121,7 @@ impl CodegenPipeline {
     pub(crate) const fn selector_name(self) -> &'static str {
         match self {
             Self::ProductionV1 => crate::production_pipeline_v1::PRODUCTION_PIPELINE_V1,
+            Self::SimulationV1 => crate::production_pipeline_v1::SIMULATION_PIPELINE_V1,
             Self::LegacyV1 => "legacy-v1",
             Self::KernelIrV1 => "kernel-ir-v1",
             Self::KernelIrWorkerV2 => "kernel-ir-worker-v2",

@@ -112,6 +112,51 @@ fingerprint and remove only the opened
 closed without deletion. Successful incremental builds republish their exact
 snapshot. Unrelated host outputs remain available for normal Cargo reuse.
 
+### CPU simulation from source
+
+`cargo fe2o3 simulate` runs the ordinary Cargo/source frontend through the
+generic verified MIR-to-KIR lowering and then executes the exact canonical KIR
+V6 bytes with the bounded CPU simulator:
+
+```console
+cargo fe2o3 simulate \
+  --request request.json \
+  --output result.json \
+  -- --package my-kernel
+```
+
+The request uses `fe2o3-simulation-request-v1` and names one kernel, launch
+grid, workgroup, and typed scalar or buffer arguments. The result uses
+`fe2o3-simulation-result-v1`; omitting `--output` writes exactly one JSON
+document to stdout. Output-file publication is private, durable, atomic, and
+no-replace.
+
+The command securely reads and strictly admits the complete request before
+starting Cargo. It binds the byte length and SHA-256 and verifies both again
+immediately before execution, so request replacement during a long build fails
+without producing output when it changes any admitted byte. Byte-identical
+pathname or inode replacement is content-equivalent. Compiler completions
+publish inert, attempt-scoped canonical KIR. After Cargo exits, the parent
+requires exactly one kernel-bearing module. Zero or multiple modules are
+rejected deterministically; a module may contain multiple kernels, and the
+typed request selects exactly one of them. Use normal Cargo package/target
+selection after `--` to select the intended producer.
+
+Simulation sets the existing `FE2O3_HIP_SYS_DISABLE` build boundary and the
+default `cargo-fe2o3` dependency and ELF closures exclude `fe2o3-core`,
+`fe2o3-host`, `fe2o3-hsa-runtime`, HIP, HSA, KFD, DRM, and ROCm libraries.
+It does not enumerate a GPU or initialize a GPU runtime. Hardware commands
+remain explicit and never fall back to simulation. The existing direct
+row-softmax runtime is compiled only with the explicit `hardware-runtime`
+feature; a default command image fails closed before that runtime boundary.
+
+This is a qualification route, not the production compiler transaction. It
+provides exact KIR V6 custody from the current generic frontend and runs every
+kernel/type/operation admitted by both that lowering and the simulator. An
+unsupported source construct or simulator operation fails closed. It grants no
+compiler, refinement-proof, artifact, runtime, performance-prediction, or GPU
+authority.
+
 Deletion guards are structural accident and substitution defenses, not
 authentication. Their random tokens correlate an interrupted creation with
 the directory completed by that operation, but every record is stored inside

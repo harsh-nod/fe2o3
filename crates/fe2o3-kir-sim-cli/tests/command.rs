@@ -230,3 +230,26 @@ fn closed_stdout_reports_real_epipe_without_gpu_runtime() {
     assert_eq!(value["stage"], "output");
     assert_eq!(value["kind"], "output_write_failed");
 }
+
+#[test]
+fn bound_request_rejects_post_admission_substitution_without_output() {
+    let directory = TestDirectory::new();
+    let (_, request) = write_success_fixture(&directory);
+    let identity = fe2o3_kir_sim_cli::bind_request_v1(&request).unwrap();
+    fs::write(
+        &request,
+        br#"{"schema":"fe2o3-simulation-request-v1","kernel":"kernel","grid":[3,1,1],"workgroup":[1,1,1],"arguments":[{"kind":"buffer","element":"u8","access":"read_only","alignment":1,"bytes":"0x2a"}]}"#,
+    )
+    .unwrap();
+    let output = directory.path().join("result.json");
+
+    let status = fe2o3_kir_sim_cli::run_captured_kir_v6_with_bound_request(
+        &canonical_noop_with_buffer(),
+        &request,
+        identity,
+        Some(&output),
+    );
+
+    assert_ne!(status, std::process::ExitCode::SUCCESS);
+    assert!(!output.exists());
+}

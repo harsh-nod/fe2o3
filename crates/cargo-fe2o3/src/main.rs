@@ -27,12 +27,18 @@ mod pinned_codegen_backend;
 mod pinned_executable;
 #[cfg(test)]
 mod pinned_executable_test_directory;
+#[cfg(feature = "hardware-runtime")]
 #[path = "../../../examples/row_softmax_v1/src/production_release.rs"]
 mod production_release;
+#[cfg(not(feature = "hardware-runtime"))]
+mod production_release_no_hardware;
+#[cfg(not(feature = "hardware-runtime"))]
+use production_release_no_hardware as production_release;
 mod project;
 mod protected_compiler_handoff_v3;
 #[path = "rustc_runtime.rs"]
 mod rustc_lib_tree;
+mod simulation_capture;
 mod tool_commands;
 #[allow(dead_code)]
 #[path = "../../../examples/row_softmax_v1/src/verification_certificate.rs"]
@@ -58,6 +64,10 @@ const DEFAULT_TARGET: &str = "gfx1100";
 const BINDING_WRAPPER_MODE_ENV: &str = "FE2O3_BINDING_WRAPPER_MODE_V1";
 const MANAGED_RUSTC_ARGS_ENV: &str = "FE2O3_MANAGED_RUSTC_ARGS_V1";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
+pub(crate) const SIMULATION_MODE_ENV: &str = "FE2O3_SIMULATION_MODE_V1";
+const SIMULATION_PIPELINE: &str = "simulation-v1";
+const SIMULATION_FAILURE_ALREADY_REPORTED: &str =
+    "cargo fe2o3 simulate emitted a structured simulation error";
 const EXPECTED_RUSTC_SHA256_ENV: &str = "FE2O3_EXPECTED_RUSTC_SHA256_V1";
 const EXPECTED_COMPILER_CLOSURE_SHA256_ENV: &str = "FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1";
 const AUTHORITY_CARGO_SHA256_ENV: &str = "FE2O3_AUTHORITY_CARGO_SHA256_V1";
@@ -157,6 +167,7 @@ fn main() -> ExitCode {
         Some("doctor") => doctor(),
         Some("build") => cargo_with_backend("build", &rest),
         Some("run") => cargo_with_backend("run", &rest),
+        Some("simulate") => simulate_command(&rest),
         Some("smoke") => with_utf8_args(&rest, smoke),
         Some("examples") => with_utf8_args(&rest, example_manifest::command),
         Some("clean") => clean_command(&rest),
@@ -273,7 +284,7 @@ fn clean_command(args: &[OsString]) -> ExitCode {
 }
 
 fn doctor() -> ExitCode {
-    let target = amd_gpu_target();
+    let target = amd_gpu_target(false);
     println!("fe2o3 diagnostics");
     println!("target: {target}");
 
@@ -299,13 +310,110 @@ fn doctor() -> ExitCode {
 }
 
 fn cargo_with_backend(command: &str, args: &[OsString]) -> ExitCode {
-    match cargo_with_backend_result(command, args, None, None) {
+    match cargo_with_backend_result(command, args, None, None, None) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");
             ExitCode::FAILURE
         }
     }
+}
+
+struct SimulationCommand {
+    request: PathBuf,
+    request_identity: fe2o3_kir_sim_cli::SimulationRequestIdentityV1,
+    output: Option<PathBuf>,
+}
+
+fn simulate_command(args: &[OsString]) -> ExitCode {
+    if matches!(args, [argument] if argument == "--help" || argument == "-h") {
+        println!("{}", simulation_usage());
+        return ExitCode::SUCCESS;
+    }
+    let (simulation, cargo_args) = match parse_simulation_command(args) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match cargo_with_backend_result("build", &cargo_args, None, None, Some(&simulation)) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            if error != SIMULATION_FAILURE_ALREADY_REPORTED {
+                eprintln!("{error}");
+            }
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn parse_simulation_command(
+    args: &[OsString],
+) -> Result<(SimulationCommand, Vec<OsString>), String> {
+    let mut request: Option<PathBuf> = None;
+    let mut output: Option<PathBuf> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let argument = &args[index];
+        if argument == "--" {
+            let cargo_args = args[index + 1..].to_vec();
+            let request = request.ok_or_else(simulation_usage)?;
+            let request_identity = fe2o3_kir_sim_cli::bind_request_v1(&request)?;
+            return Ok((
+                SimulationCommand {
+                    request,
+                    request_identity,
+                    output,
+                },
+                cargo_args,
+            ));
+        }
+        let slot = if argument == "--request" {
+            &mut request
+        } else if argument == "--output" {
+            &mut output
+        } else {
+            return Err(format!(
+                "unknown cargo fe2o3 simulate option {argument:?}; {}",
+                simulation_usage()
+            ));
+        };
+        index += 1;
+        let value = args
+            .get(index)
+            .ok_or_else(|| format!("{argument:?} requires a path; {}", simulation_usage()))?;
+        if value.is_empty() || slot.is_some() {
+            return Err(format!(
+                "{argument:?} requires one non-empty path; {}",
+                simulation_usage()
+            ));
+        }
+        let path = PathBuf::from(value);
+        let path = if path.is_absolute() {
+            path
+        } else {
+            env::current_dir()
+                .map_err(|error| format!("cannot resolve simulation path: {error}"))?
+                .join(path)
+        };
+        *slot = Some(path);
+        index += 1;
+    }
+    let request = request.ok_or_else(simulation_usage)?;
+    let request_identity = fe2o3_kir_sim_cli::bind_request_v1(&request)?;
+    Ok((
+        SimulationCommand {
+            request,
+            request_identity,
+            output,
+        },
+        Vec::new(),
+    ))
+}
+
+fn simulation_usage() -> String {
+    "usage: cargo fe2o3 simulate --request PATH [--output PATH] [-- CARGO_BUILD_ARGS...]".to_owned()
 }
 
 fn cargo_with_protected_release(
@@ -338,7 +446,7 @@ fn cargo_with_protected_release(
     } else {
         command
     };
-    match cargo_with_backend_result(cargo_command, &args[1..], Some(&admission), action) {
+    match cargo_with_backend_result(cargo_command, &args[1..], Some(&admission), action, None) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");
@@ -370,7 +478,7 @@ fn smoke(args: &[String]) -> ExitCode {
     for package in packages {
         eprintln!("cargo fe2o3 smoke: running {package}");
         let args = [OsString::from("-p"), OsString::from(package)];
-        if let Err(error) = cargo_with_backend_result("run", &args, None, None) {
+        if let Err(error) = cargo_with_backend_result("run", &args, None, None, None) {
             eprintln!("{error}");
             return ExitCode::FAILURE;
         }
@@ -384,6 +492,7 @@ fn cargo_with_backend_result(
     args: &[OsString],
     protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
     protected_release_action: Option<ProtectedReleaseAction>,
+    simulation: Option<&SimulationCommand>,
 ) -> Result<(), String> {
     if authority_sensitive_request_selected(protected_release.is_some()) {
         reject_dynamic_loader_environment()?;
@@ -531,8 +640,9 @@ fn cargo_with_backend_result(
             protected_release_action,
         },
         args,
+        simulation.is_some(),
     )?;
-    run_cargo_with_backend(&mut context, command, args, protected_release)
+    run_cargo_with_backend(&mut context, command, args, protected_release, simulation)
 }
 
 fn authority_sensitive_request_selected(protected_release: bool) -> bool {
@@ -635,7 +745,11 @@ struct BackendRunPreparation {
 }
 
 impl BackendRunContext {
-    fn prepare(preparation: BackendRunPreparation, args: &[OsString]) -> Result<Self, String> {
+    fn prepare(
+        preparation: BackendRunPreparation,
+        args: &[OsString],
+        simulation: bool,
+    ) -> Result<Self, String> {
         let BackendRunPreparation {
             project,
             worker_v2,
@@ -648,7 +762,7 @@ impl BackendRunContext {
             authorized_closure,
             protected_release_action,
         } = preparation;
-        let target = amd_gpu_target();
+        let target = amd_gpu_target(simulation);
         let target_dir = project.open_or_create_target()?;
         pinned_rustc.assert_lib_tree_unmutated()?;
         let (backend, pinned_backend) = match authority_backend {
@@ -731,6 +845,9 @@ impl BackendRunContext {
                 .extend_from_slice(&(authorized_closure.snapshot().len() as u64).to_le_bytes());
             cargo_configuration.extend_from_slice(authorized_closure.snapshot());
         }
+        if simulation {
+            cargo_configuration.extend_from_slice(b"fe2o3-cargo-simulation-v1\0");
+        }
         let semantic = generation::semantic_identity(
             &target,
             &compiler_closure_sha256,
@@ -775,6 +892,7 @@ fn run_cargo_with_backend(
     command: &str,
     args: &[OsString],
     protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
+    simulation: Option<&SimulationCommand>,
 ) -> Result<(), String> {
     context.project.validate_paths()?;
     context.target_dir.validate_path("Cargo target directory")?;
@@ -923,6 +1041,7 @@ fn run_cargo_with_backend(
             hex_encode(&context.compiler_closure_sha256),
         )
         .env(BUILD_SESSION_ENV, context.build_session.to_hex());
+    configure_simulation_build_environment(cargo.as_command_mut(), simulation.is_some());
     if let Some(action) = context.protected_release_action {
         cargo
             .as_command_mut()
@@ -1021,7 +1140,35 @@ fn run_cargo_with_backend(
     context.project.validate_paths()?;
     context.target_dir.validate_path("Cargo target directory")?;
     context.generation.reject_if_substituted()?;
-    context.generation.commit()
+    let canonical_kir = simulation
+        .map(|_| simulation_capture::consume_exactly_one(context.generation.artifact_dir()))
+        .transpose()?;
+    context.generation.commit()?;
+    if let (Some(simulation), Some(canonical_kir)) = (simulation, canonical_kir) {
+        let status = fe2o3_kir_sim_cli::run_captured_kir_v6_with_bound_request(
+            &canonical_kir,
+            &simulation.request,
+            simulation.request_identity,
+            simulation.output.as_deref(),
+        );
+        if status != ExitCode::SUCCESS {
+            return Err(SIMULATION_FAILURE_ALREADY_REPORTED.to_owned());
+        }
+    }
+    Ok(())
+}
+
+fn configure_simulation_build_environment(command: &mut Command, selected: bool) {
+    if selected {
+        command
+            .env(worker_v2::CODEGEN_PIPELINE_ENV, SIMULATION_PIPELINE)
+            .env(SIMULATION_MODE_ENV, "1")
+            .env("FE2O3_HIP_SYS_DISABLE", "1");
+    } else {
+        command
+            .env_remove(SIMULATION_MODE_ENV)
+            .env_remove("FE2O3_HIP_SYS_DISABLE");
+    }
 }
 
 fn aggregate_post_spawn_results<const N: usize>(
@@ -2455,11 +2602,23 @@ fn optional_tool(llvm_bin: &Path, name: &str) -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
-fn amd_gpu_target() -> String {
-    env::var(TARGET_ENV)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(detect_amd_gpu_target)
+fn amd_gpu_target(simulation: bool) -> String {
+    resolve_amd_gpu_target(
+        simulation,
+        env::var(TARGET_ENV)
+            .ok()
+            .filter(|value| !value.trim().is_empty()),
+        detect_amd_gpu_target,
+    )
+}
+
+fn resolve_amd_gpu_target(
+    simulation: bool,
+    declared: Option<String>,
+    detect: impl FnOnce() -> Option<String>,
+) -> String {
+    declared
+        .or_else(|| (!simulation).then(detect).flatten())
         .unwrap_or_else(|| DEFAULT_TARGET.to_string())
 }
 
@@ -2513,18 +2672,30 @@ fn is_gfx_target(candidate: &str) -> bool {
 
 fn print_help() {
     eprintln!(
-        "usage: cargo fe2o3 <command>\n\ncommands:\n  authority release   run an authority build through the protected self-launch boundary\n  doctor              check ROCm/HIP toolchain discovery\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n  smoke               run manifest-selected GPU examples\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact or HSACO metadata without execution\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions"
+        "usage: cargo fe2o3 <command>\n\ncommands:\n  authority release   run an authority build through the protected self-launch boundary\n  doctor              check ROCm/HIP toolchain discovery\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n  simulate            compile source to exact KIR V6 and execute it deterministically on CPU\n  smoke               run manifest-selected GPU examples\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact or HSACO metadata without execution\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions"
     );
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        aggregate_post_spawn_results, inject_application_runner_config, normalize_invocation,
-        parse_rocminfo_target, selected_run_target,
+        SIMULATION_MODE_ENV, aggregate_post_spawn_results, configure_simulation_build_environment,
+        inject_application_runner_config, normalize_invocation, parse_rocminfo_target,
+        resolve_amd_gpu_target, selected_run_target,
     };
     use crate::project::PinnedDirectory;
-    use std::ffi::OsString;
+    use std::ffi::{OsStr, OsString};
+    use std::process::Command;
+
+    fn command_environment<'command>(
+        command: &'command Command,
+        name: &str,
+    ) -> Option<&'command OsStr> {
+        command
+            .get_envs()
+            .find(|(candidate, _)| *candidate == OsStr::new(name))
+            .and_then(|(_, value)| value)
+    }
 
     #[test]
     fn normalizes_direct_and_cargo_subcommand_invocations() {
@@ -2533,6 +2704,7 @@ mod tests {
             "doctor",
             "build",
             "run",
+            "simulate",
             "smoke",
             "examples",
             "clean",
@@ -2550,6 +2722,45 @@ mod tests {
             assert_eq!(normalize_invocation(direct.clone()), direct);
             assert_eq!(normalize_invocation(cargo), direct);
         }
+    }
+
+    #[test]
+    fn simulation_environment_is_explicit_and_normal_commands_clear_activation() {
+        let mut command = Command::new("cargo");
+        command
+            .env(SIMULATION_MODE_ENV, "attacker")
+            .env("FE2O3_HIP_SYS_DISABLE", "attacker");
+        configure_simulation_build_environment(&mut command, false);
+        assert_eq!(command_environment(&command, SIMULATION_MODE_ENV), None);
+        assert_eq!(command_environment(&command, "FE2O3_HIP_SYS_DISABLE"), None);
+
+        configure_simulation_build_environment(&mut command, true);
+        assert_eq!(
+            command_environment(&command, SIMULATION_MODE_ENV),
+            Some(OsStr::new("1"))
+        );
+        assert_eq!(
+            command_environment(&command, "FE2O3_CODEGEN_PIPELINE"),
+            Some(OsStr::new("simulation-v1"))
+        );
+        assert_eq!(
+            command_environment(&command, "FE2O3_HIP_SYS_DISABLE"),
+            Some(OsStr::new("1"))
+        );
+    }
+
+    #[test]
+    fn simulation_target_selection_never_calls_hardware_detection() {
+        assert_eq!(
+            resolve_amd_gpu_target(true, None, || panic!("GPU detector was called")),
+            super::DEFAULT_TARGET
+        );
+        assert_eq!(
+            resolve_amd_gpu_target(true, Some("gfx942".to_owned()), || panic!(
+                "GPU detector was called"
+            ),),
+            "gfx942"
+        );
     }
 
     #[test]

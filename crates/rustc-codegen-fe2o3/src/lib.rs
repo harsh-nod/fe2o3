@@ -529,6 +529,52 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     }
                 }
             }
+            if codegen_pipeline == CodegenPipeline::SimulationV1 && kernel_count > 0 {
+                let output_dir = output_dir.expect("device output was required above");
+                let attempt = build_attempt.unwrap_or_else(|| {
+                    tcx.dcx().fatal(
+                        "[rustc-codegen-fe2o3] simulation-v1 requires a managed build attempt",
+                    )
+                });
+                let captured = (|| -> Result<_, String> {
+                    let collection = collect_qualification_oracle_input(
+                        tcx,
+                        mono_partitions.codegen_units,
+                        self.config.verbose,
+                        codegen_pipeline,
+                    )?;
+                    let mir_module = mir_import::import_collection(tcx, &collection)
+                        .map_err(|error| format!("compiler FFI MIR import failed: {error}"))?;
+                    let module = kernel_ir_lowering::translate_and_verify_for_session(
+                        &mir_module,
+                        &self.config.target,
+                        tcx.sess,
+                    )
+                    .map_err(|errors| format!("MIR translation failed: {errors}"))?;
+                    let canonical =
+                        fe2o3_kernel_ir::VerifiedCanonicalKernelIrV6::from_module(module)
+                            .map_err(|error| format!("canonical KIR V6 custody failed: {error}"))?;
+                    fe2o3_artifact_transaction::publish_compiler_module_handoff_v1(
+                        output_dir,
+                        &producer,
+                        attempt,
+                        canonical.canonical_bytes(),
+                    )
+                    .map_err(|error| format!("attempt-scoped KIR capture failed: {error}"))
+                })();
+                match captured {
+                    Ok(receipt) => {
+                        production_device_transaction_complete = true;
+                        eprintln!(
+                            "[rustc-codegen-fe2o3] simulation-v1 captured {} exact canonical KIR V6 byte(s) from the generic verified MIR lowering into an inert attempt-scoped handoff; target lowering, artifact, runtime, and GPU authority remain false",
+                            receipt.length(),
+                        );
+                    }
+                    Err(error) => tcx.dcx().fatal(format!(
+                        "[rustc-codegen-fe2o3] simulation-v1 failed without fallback: {error}"
+                    )),
+                }
+            }
             if kernel_count == 0 && codegen_pipeline == CodegenPipeline::CollectedGeneralGemmV1 {
                 tcx.dcx().fatal(format!(
                     "[rustc-codegen-fe2o3] {} found no authenticated general GEMM kernel root; no fallback or artifact reconciliation was entered",
@@ -1470,9 +1516,9 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                     Some(&lowering_plan),
                                 )
                             }
-                            CodegenPipeline::ProductionV1 => {
+                            CodegenPipeline::ProductionV1 | CodegenPipeline::SimulationV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
-                                    reason: "internal error: production-v1 escaped its fail-closed transaction branch"
+                                    reason: "internal error: production/simulation semantic custody escaped its fail-closed transaction branch"
                                         .to_owned(),
                                 })
                             }

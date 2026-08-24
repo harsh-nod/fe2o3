@@ -18,6 +18,7 @@ use crate::protected_rustc_invocation::{
 };
 
 pub(crate) const PRODUCTION_PIPELINE_V1: &str = "production-v1";
+pub(crate) const SIMULATION_PIPELINE_V1: &str = "simulation-v1";
 const PRODUCTION_GFX942_DEFAULT_WORKGROUP_X_V1: u32 = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
