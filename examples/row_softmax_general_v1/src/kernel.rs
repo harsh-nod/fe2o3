@@ -87,18 +87,16 @@ pub fn row_softmax_general_v1(
 
     component = 0;
     while component < 64 {
-        let column = lane + component * 64;
-        if column < columns as usize
-            && let Some(element) = output.get_row_striped_2d_mut(
-                    &output_stripe,
-                    component,
-                    rows as usize,
-                    columns as usize,
-                    output_stride as usize,
-                )
-        {
-            *element = math.exp_f32(input.load_or(row, column, f32::NEG_INFINITY) - maximum)
-                / denominator;
+        if let Some(element) = output.get_row_striped_2d_mut(
+            &output_stripe,
+            component,
+            rows as usize,
+            columns as usize,
+            output_stride as usize,
+        ) {
+            *element = math.exp_f32(
+                input.load_or(row, lane + component * 64, f32::NEG_INFINITY) - maximum,
+            ) / denominator;
         }
         component += 1;
     }
