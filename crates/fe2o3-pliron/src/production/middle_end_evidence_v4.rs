@@ -20,6 +20,12 @@ use fe2o3_kernel_ir::{
 };
 use sha2::{Digest, Sha256};
 
+// V4 keeps every pre-existing operation tag stable. New operation variants must
+// consume an unused tag so two distinct recipes can never share an identity
+// prefix within the V4 domain.
+const RANKED_EXECUTION_LAYOUT_TAG_V4: u8 = 15;
+const RANKED_TENSOR_LAYOUT_TAG_V4: u8 = 19;
+
 use super::{
     ProductionRankedKernelErrorV1, ProductionRankedKernelLoweringInputV1,
     ProductionRankedOperationV1, ProductionRankedTerminatorV1, ProductionRankedValueV1,
@@ -1046,7 +1052,7 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             subgroup_size,
             full_physical_workgroups,
         } => {
-            digest.update([15]);
+            digest.update([RANKED_EXECUTION_LAYOUT_TAG_V4]);
             digest.update(grid_identity.to_le_bytes());
             for extent in global_extents {
                 digest.update(extent.to_le_bytes());
@@ -1099,6 +1105,10 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             digest.update([3]);
             digest.update(result.get().to_le_bytes());
             digest.update(value.to_le_bytes());
+        }
+        ProductionRankedOperationV1::IndexUnknown { result } => {
+            digest.update([22]);
+            digest.update(result.get().to_le_bytes());
         }
         ProductionRankedOperationV1::InvocationIndex {
             result,
@@ -1227,7 +1237,7 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             convergence,
             active_lanes,
         } => {
-            digest.update([15]);
+            digest.update([RANKED_TENSOR_LAYOUT_TAG_V4]);
             hash_tensor_layout_contract(digest, contract);
             digest.update([match convergence {
                 dialect_kernel::TensorConvergenceAttr::UniformSubgroup => 1,
@@ -1400,10 +1410,26 @@ fn hash_ranked_terminator(digest: &mut Sha256, terminator: &ProductionRankedTerm
             digest.update(false_block.to_le_bytes());
         }
         ProductionRankedTerminatorV1::AnalysisSplit {
+            control_dependencies,
             first_block,
             second_block,
         } => {
             digest.update([4]);
+            hash_values(digest, control_dependencies);
+            digest.update(first_block.to_le_bytes());
+            digest.update(second_block.to_le_bytes());
+        }
+        ProductionRankedTerminatorV1::AnalysisSplitArgs {
+            control_dependencies,
+            first_arguments,
+            second_arguments,
+            first_block,
+            second_block,
+        } => {
+            digest.update([10]);
+            hash_values(digest, control_dependencies);
+            hash_values(digest, first_arguments);
+            hash_values(digest, second_arguments);
             digest.update(first_block.to_le_bytes());
             digest.update(second_block.to_le_bytes());
         }
@@ -1426,7 +1452,20 @@ fn hash_ranked_terminator(digest: &mut Sha256, terminator: &ProductionRankedTerm
             hash_value(digest, *step);
             digest.update(target.to_le_bytes());
         }
+        ProductionRankedTerminatorV1::BranchArgsAddAt {
+            arguments,
+            add_argument,
+            step,
+            target,
+        } => {
+            digest.update([11]);
+            hash_values(digest, arguments);
+            digest.update(add_argument.to_le_bytes());
+            hash_value(digest, *step);
+            digest.update(target.to_le_bytes());
+        }
         ProductionRankedTerminatorV1::Return => digest.update([3]),
+        ProductionRankedTerminatorV1::Trap => digest.update([12]),
     }
 }
 
@@ -1514,6 +1553,7 @@ const fn index_binary_tag(value: IndexBinaryKindAttr) -> u8 {
         IndexBinaryKindAttr::Add => 1,
         IndexBinaryKindAttr::Multiply => 2,
         IndexBinaryKindAttr::Remainder => 3,
+        IndexBinaryKindAttr::Divide => 4,
     }
 }
 
@@ -1619,6 +1659,7 @@ impl<'a> ReaderV4<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ProductionRankedValueIdV1;
 
     fn clean_facts() -> [ObservedPassFactV4; PASS_COUNT_V4] {
         PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V1.map(|pass| ObservedPassFactV4 {
@@ -1780,5 +1821,135 @@ mod tests {
         ] {
             assert_ne!(identity(&changed), base_identity);
         }
+    }
+
+    #[test]
+    fn ranked_trap_identity_is_distinct_from_successful_return() {
+        fn identity(terminator: &ProductionRankedTerminatorV1) -> [u8; SHA256_BYTES] {
+            let mut digest = Sha256::new();
+            hash_ranked_terminator(&mut digest, terminator);
+            digest.finalize().into()
+        }
+
+        assert_ne!(
+            identity(&ProductionRankedTerminatorV1::Return),
+            identity(&ProductionRankedTerminatorV1::Trap)
+        );
+    }
+
+    #[test]
+    fn ranked_execution_and_tensor_layouts_have_distinct_v4_variant_tags_and_identities() {
+        fn identity(operation: &ProductionRankedOperationV1) -> [u8; SHA256_BYTES] {
+            let mut digest = Sha256::new();
+            hash_ranked_operation(&mut digest, operation);
+            digest.finalize().into()
+        }
+
+        assert_eq!(RANKED_EXECUTION_LAYOUT_TAG_V4, 15);
+        assert_eq!(RANKED_TENSOR_LAYOUT_TAG_V4, 19);
+        assert_ne!(RANKED_EXECUTION_LAYOUT_TAG_V4, RANKED_TENSOR_LAYOUT_TAG_V4);
+
+        let execution = ProductionRankedOperationV1::ExecutionLayout {
+            grid_identity: 1,
+            global_extents: [64, 1, 1],
+            workgroup_extents: [64, 1, 1],
+            subgroup_size: 64,
+            full_physical_workgroups: true,
+        };
+        let tensor = ProductionRankedOperationV1::TensorLayout {
+            contract: TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64(),
+            convergence: dialect_kernel::TensorConvergenceAttr::UniformSubgroup,
+            active_lanes: 64,
+        };
+        assert_ne!(identity(&execution), identity(&tensor));
+    }
+
+    #[test]
+    fn ranked_control_and_divide_identity_bind_every_new_recipe_field() {
+        fn terminator_identity(terminator: &ProductionRankedTerminatorV1) -> [u8; SHA256_BYTES] {
+            let mut digest = Sha256::new();
+            hash_ranked_terminator(&mut digest, terminator);
+            digest.finalize().into()
+        }
+        fn operation_identity(operation: &ProductionRankedOperationV1) -> [u8; SHA256_BYTES] {
+            let mut digest = Sha256::new();
+            hash_ranked_operation(&mut digest, operation);
+            digest.finalize().into()
+        }
+
+        let split = ProductionRankedTerminatorV1::AnalysisSplitArgs {
+            control_dependencies: vec![ProductionRankedValueV1::Argument(2)],
+            first_arguments: vec![ProductionRankedValueV1::Argument(0)],
+            second_arguments: vec![ProductionRankedValueV1::Argument(1)],
+            first_block: 1,
+            second_block: 2,
+        };
+        for changed in [
+            ProductionRankedTerminatorV1::AnalysisSplitArgs {
+                control_dependencies: vec![ProductionRankedValueV1::Argument(2)],
+                first_arguments: vec![],
+                second_arguments: vec![
+                    ProductionRankedValueV1::Argument(0),
+                    ProductionRankedValueV1::Argument(1),
+                ],
+                first_block: 1,
+                second_block: 2,
+            },
+            ProductionRankedTerminatorV1::AnalysisSplitArgs {
+                control_dependencies: vec![ProductionRankedValueV1::Argument(3)],
+                first_arguments: vec![ProductionRankedValueV1::Argument(1)],
+                second_arguments: vec![ProductionRankedValueV1::Argument(0)],
+                first_block: 1,
+                second_block: 2,
+            },
+        ] {
+            assert_ne!(terminator_identity(&split), terminator_identity(&changed));
+        }
+
+        let add_at = ProductionRankedTerminatorV1::BranchArgsAddAt {
+            arguments: vec![
+                ProductionRankedValueV1::Argument(0),
+                ProductionRankedValueV1::Argument(1),
+            ],
+            add_argument: 0,
+            step: ProductionRankedValueV1::Argument(2),
+            target: 3,
+        };
+        for changed in [
+            ProductionRankedTerminatorV1::BranchArgsAddAt {
+                arguments: vec![
+                    ProductionRankedValueV1::Argument(0),
+                    ProductionRankedValueV1::Argument(1),
+                ],
+                add_argument: 1,
+                step: ProductionRankedValueV1::Argument(2),
+                target: 3,
+            },
+            ProductionRankedTerminatorV1::BranchArgsAddAt {
+                arguments: vec![
+                    ProductionRankedValueV1::Argument(0),
+                    ProductionRankedValueV1::Argument(1),
+                ],
+                add_argument: 0,
+                step: ProductionRankedValueV1::Argument(3),
+                target: 3,
+            },
+        ] {
+            assert_ne!(terminator_identity(&add_at), terminator_identity(&changed));
+        }
+
+        let divide = ProductionRankedOperationV1::IndexBinary {
+            result: ProductionRankedValueIdV1::new(0),
+            kind: IndexBinaryKindAttr::Divide,
+            lhs: ProductionRankedValueV1::Argument(0),
+            rhs: ProductionRankedValueV1::Argument(1),
+        };
+        let add = ProductionRankedOperationV1::IndexBinary {
+            result: ProductionRankedValueIdV1::new(0),
+            kind: IndexBinaryKindAttr::Add,
+            lhs: ProductionRankedValueV1::Argument(0),
+            rhs: ProductionRankedValueV1::Argument(1),
+        };
+        assert_ne!(operation_identity(&divide), operation_identity(&add));
     }
 }

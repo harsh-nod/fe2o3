@@ -503,7 +503,8 @@ fn analyze_workgroup_traces(
                     }
                     PlironTraceEventV1::Barrier { .. }
                     | PlironTraceEventV1::Fence { .. }
-                    | PlironTraceEventV1::TensorInstruction { .. } => {}
+                    | PlironTraceEventV1::TensorInstruction { .. }
+                    | PlironTraceEventV1::Trap { .. } => {}
                     PlironTraceEventV1::Memory { memory_space, .. }
                         if *memory_space != MemorySpaceAttr::Workgroup => {}
                     PlironTraceEventV1::Memory {

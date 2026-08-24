@@ -1,9 +1,10 @@
 use dialect_kernel::{
-    AccessKindAttr, AlgorithmOp, AlgorithmType, AllocationEffectOp, AtomicOrderingAttr,
-    AtomicScopeAttr, BranchArgsOp, BranchOp, CheckedTiledIndex2DOp, DIALECT_NAME, DYNAMIC_EXTENT,
-    DeterministicJoinOp, DimensionAttr, DimensionOp, ITERATION_DOMAIN_ATTR_KEY, IndexConstantOp,
-    IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
-    IndexType, IndexValueAttr, IterationDomainAttr, KernelError, MAX_DETERMINISTIC_JOIN_INPUTS_V1,
+    AccessKindAttr, AlgorithmOp, AlgorithmType, AllocationEffectOp, AnalysisSplitControlCountAttr,
+    AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr, BranchArgsOp, BranchOp,
+    CheckedTiledIndex2DOp, DIALECT_NAME, DYNAMIC_EXTENT, DeterministicJoinOp, DimensionAttr,
+    DimensionOp, ITERATION_DOMAIN_ATTR_KEY, IndexConstantOp, IndexEqualBranchArgsOp,
+    IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexType,
+    IndexValueAttr, IterationDomainAttr, KernelError, MAX_DETERMINISTIC_JOIN_INPUTS_V1,
     MAX_ITERATION_RANK, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp, RankedMemoryError,
     RankedViewOp, RankedViewType, RegistrationError, RegistrationOutcome, SemanticOwner,
     StructuredAlgorithmOp, TensorConvergenceAttr, TensorLayoutOp, register_dialect,
@@ -137,6 +138,50 @@ fn branches_require_exact_successor_arguments() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn analysis_split_binds_control_and_successor_operand_segments_exactly() {
+    let context = &mut Context::new();
+    register_dialect(context, &kernel_name()).unwrap();
+    let index: TypeHandle = IndexType::get(context).into();
+    let first = BasicBlock::new(context, None, vec![index.clone()]);
+    let second = BasicBlock::new(context, None, vec![index]);
+    let zero = IndexConstantOp::new(context, 0);
+    let one = IndexConstantOp::new(context, 1);
+    let valid = AnalysisSplitOp::new_with_control_and_arguments(
+        context,
+        vec![zero.result(context)],
+        vec![zero.result(context)],
+        vec![one.result(context)],
+        first,
+        second,
+    );
+    verify_op(&valid, context).unwrap();
+    assert_eq!(
+        valid.control_dependencies(context),
+        vec![zero.result(context)]
+    );
+    assert_eq!(valid.first_arguments(context), vec![zero.result(context)]);
+    assert_eq!(valid.second_arguments(context), vec![one.result(context)]);
+
+    valid.set_attr_kernel_analysis_split_control_count(context, AnalysisSplitControlCountAttr(2));
+    assert!(verify_op(&valid, context).is_err());
+    valid.set_attr_kernel_analysis_split_control_count(context, AnalysisSplitControlCountAttr(1));
+    Operation::pop_operand(valid.get_operation(), context);
+    assert!(verify_op(&valid, context).is_err());
+
+    let foreign = AlgorithmOp::new(context, 1).unwrap();
+    let foreign_result = foreign.get_operation().deref(context).get_result(0);
+    let wrong_control = AnalysisSplitOp::new_with_control_and_arguments(
+        context,
+        vec![foreign_result],
+        vec![zero.result(context)],
+        vec![one.result(context)],
+        first,
+        second,
+    );
+    assert!(verify_op(&wrong_control, context).is_err());
 }
 
 #[test]

@@ -4,16 +4,17 @@ use fe2o3_pliron_owner_core::{
 
 use crate::{
     AccessKindAttr, AlgorithmOp, AlgorithmType, AllocationEffectOp, AllocationOriginAttr,
-    AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr, BranchArgsOp, BranchOp,
-    CheckedTiledIndex2DOp, DIALECT_NAME, DeterministicJoinOp, DimensionAttr, DimensionOp,
-    GeneralGemmAbiSchemaAttr, GeneralGemmEpilogueSchemaAttr, GeneralGemmOp, IndexBinaryKindAttr,
-    IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
-    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexType, IndexValueAttr,
-    InvocationDimensionAttr, InvocationIndexOp, IterationDomainAttr, LaunchExtentAttr,
-    MemorySpaceAttr, NoAliasClassAttr, RankedAccessOp, RankedViewOp, RankedViewType,
-    RequireEquivalentOp, ReturnOp, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr,
-    SemanticConstantOp, SemanticScalarType, SemanticSymbolAttr, SemanticSymbolOp,
-    TensorConvergenceAttr, TensorFragmentAttr, TensorInstructionAttr, TensorLayoutOp,
+    AnalysisSplitControlCountAttr, AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr,
+    BranchArgsOp, BranchOp, CheckedTiledIndex2DOp, DIALECT_NAME, DeterministicJoinOp,
+    DimensionAttr, DimensionOp, GeneralGemmAbiSchemaAttr, GeneralGemmEpilogueSchemaAttr,
+    GeneralGemmOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp,
+    IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexType,
+    IndexUnknownOp, IndexValueAttr, InvocationDimensionAttr, InvocationIndexOp,
+    IterationDomainAttr, LaunchExtentAttr, MemorySpaceAttr, NoAliasClassAttr, RankedAccessOp,
+    RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp, SemanticBinaryKindAttr,
+    SemanticBinaryOp, SemanticConstantAttr, SemanticConstantOp, SemanticScalarType,
+    SemanticSymbolAttr, SemanticSymbolOp, TensorConvergenceAttr, TensorFragmentAttr,
+    TensorInstructionAttr, TensorLayoutOp, TrapOp,
 };
 
 fn registration_hook(
@@ -37,6 +38,7 @@ fn registration_hook(
     service.register_attribute::<NoAliasClassAttr>()?;
     service.register_attribute::<InvocationDimensionAttr>()?;
     service.register_attribute::<LaunchExtentAttr>()?;
+    service.register_attribute::<AnalysisSplitControlCountAttr>()?;
     service.register_attribute::<IndexBinaryKindAttr>()?;
     service.register_attribute::<SemanticSymbolAttr>()?;
     service.register_attribute::<SemanticConstantAttr>()?;
@@ -48,6 +50,7 @@ fn registration_hook(
     service.register_operation::<GeneralGemmOp>()?;
     service.register_operation::<RankedViewOp>()?;
     service.register_operation::<IndexConstantOp>()?;
+    service.register_operation::<IndexUnknownOp>()?;
     service.register_operation::<InvocationIndexOp>()?;
     service.register_operation::<IndexBinaryOp>()?;
     service.register_operation::<DeterministicJoinOp>()?;
@@ -63,6 +66,7 @@ fn registration_hook(
     service.register_operation::<BranchOp>()?;
     service.register_operation::<BranchArgsOp>()?;
     service.register_operation::<ReturnOp>()?;
+    service.register_operation::<TrapOp>()?;
     service.register_operation::<SemanticSymbolOp>()?;
     service.register_operation::<SemanticConstantOp>()?;
     service.register_operation::<SemanticBinaryOp>()?;

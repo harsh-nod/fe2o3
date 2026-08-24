@@ -7,10 +7,10 @@ use std::{
 };
 
 use dialect_kernel::{
-    AnalysisSplitOp, BranchArgsOp, BranchOp, DeterministicJoinOp, IndexBinaryOp, IndexConstantOp,
-    IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
-    InvocationIndexOp, MAX_DETERMINISTIC_JOIN_INPUTS_V1, ReturnOp, TensorConvergenceAttr,
-    TensorLayoutOp,
+    AnalysisSplitOp, BranchArgsOp, BranchOp, DeterministicJoinOp, IndexBinaryKindAttr,
+    IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
+    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, InvocationIndexOp,
+    MAX_DETERMINISTIC_JOIN_INPUTS_V1, ReturnOp, TensorConvergenceAttr, TensorLayoutOp, TrapOp,
 };
 use fe2o3_kernel_ir::{TensorLayoutFindingV1, verify_tensor_layout_contract_v1};
 use pliron::{
@@ -523,6 +523,19 @@ struct SymbolicTensorCfgV1 {
     reachable: Vec<bool>,
 }
 
+struct TensorControlRegionV1 {
+    blocks: Vec<u64>,
+    has_cycle: bool,
+}
+
+impl TensorControlRegionV1 {
+    fn contains(&self, block: usize) -> bool {
+        self.blocks
+            .get(block / u64::BITS as usize)
+            .is_some_and(|word| word & (1_u64 << (block % u64::BITS as usize)) != 0)
+    }
+}
+
 fn symbolic_subgroup_convergence(
     context: &Context,
     function: &FuncOp,
@@ -583,7 +596,9 @@ fn symbolic_subgroup_convergence(
             )?;
         let terminator = Operation::get_op_dyn(terminator, context);
         let raw = terminator.get_operation().deref(context);
-        let (kind, expected_successors) = if terminator.downcast_ref::<ReturnOp>().is_some() {
+        let (kind, expected_successors) = if terminator.downcast_ref::<ReturnOp>().is_some()
+            || terminator.downcast_ref::<TrapOp>().is_some()
+        {
             (SubgroupBranchUniformityV1::Uniform, 0)
         } else if terminator.downcast_ref::<BranchOp>().is_some()
             || terminator.downcast_ref::<BranchArgsOp>().is_some()
@@ -685,8 +700,22 @@ fn symbolic_subgroup_convergence(
                 ),
                 2,
             )
-        } else if terminator.downcast_ref::<AnalysisSplitOp>().is_some() {
-            (SubgroupBranchUniformityV1::Unknown, 2)
+        } else if let Some(split) = terminator.downcast_ref::<AnalysisSplitOp>() {
+            let dependencies = split.control_dependencies(context);
+            let kind = if dependencies.is_empty() {
+                SubgroupBranchUniformityV1::Unknown
+            } else {
+                match SubgroupValueUniformityV1::merge(
+                    dependencies
+                        .into_iter()
+                        .map(|dependency| uniformity.fact(dependency)),
+                ) {
+                    SubgroupValueUniformityV1::Uniform => SubgroupBranchUniformityV1::Uniform,
+                    SubgroupValueUniformityV1::Varying => SubgroupBranchUniformityV1::Varying,
+                    SubgroupValueUniformityV1::Unknown => SubgroupBranchUniformityV1::Unknown,
+                }
+            };
+            (kind, 2)
         } else {
             return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
                 detail: format!("block {block_index} has an unsupported terminator"),
@@ -744,12 +773,27 @@ fn symbolic_subgroup_convergence(
     if tensor_blocks.len() > MAX_PLIRON_TENSOR_LAYOUT_FINDINGS_V1 {
         return Err(PlironTensorLayoutFindingV1::ResourceLimitExceeded);
     }
+    let mut convergence_work = 0_usize;
+    let predecessors = bounded_predecessors(&cfg.successors, &mut convergence_work)?;
+    let postdominators = bounded_postdominators(
+        &cfg.successors,
+        &cfg.reachable,
+        &predecessors,
+        &mut convergence_work,
+    )?;
+    let control_regions = bounded_control_regions(
+        &cfg.successors,
+        &cfg.reachable,
+        &cfg.branch_uniformity,
+        &postdominators,
+        &mut convergence_work,
+    )?;
     for (tensor_block, tensor_operation) in tensor_blocks {
         if tensor_block >= cfg.successors.len() || !cfg.reachable[tensor_block] {
             continue;
         }
-        let can_reach_tensor = reverse_reachable(&cfg.successors, tensor_block);
-        let can_avoid_tensor = can_avoid_tensor(&cfg.successors, tensor_block);
+        let can_reach_tensor =
+            reverse_reachable(&predecessors, tensor_block, &mut convergence_work)?;
         for controller in 0..cfg.successors.len() {
             let kind = cfg.branch_uniformity[controller];
             let controls_future_tensor = cfg.successors[controller]
@@ -762,11 +806,10 @@ fn symbolic_subgroup_convergence(
             {
                 continue;
             }
-            let control_can_avoid_tensor = cfg.successors[controller]
-                .iter()
-                .copied()
-                .any(|successor| can_avoid_tensor[successor]);
-            if !control_can_avoid_tensor {
+            let Some(region) = &control_regions[controller] else {
+                continue;
+            };
+            if !region.contains(tensor_block) && !region.has_cycle {
                 continue;
             }
             return Err(match kind {
@@ -943,7 +986,11 @@ fn analyze_pliron_subgroup_uniformity(
     let mut definition_order = Vec::new();
     let mut dependents = HashMap::<Value, Vec<Value>>::new();
     let mut block_arguments = HashMap::<Ptr<BasicBlock>, Vec<Value>>::new();
+    let mut collection_work = 0_usize;
     for block in function.get_region(context).deref(context).iter(context) {
+        let argument_count = block.deref(context).get_num_arguments();
+        charge_uniformity_collection(&mut collection_work, argument_count)?;
+        ensure_uniformity_value_capacity(definitions.len(), argument_count)?;
         let arguments = block.deref(context).arguments().collect::<Vec<_>>();
         for argument in &arguments {
             definition_order.push(*argument);
@@ -960,7 +1007,13 @@ fn analyze_pliron_subgroup_uniformity(
         for operation in block.deref(context).iter(context) {
             let dynamic = Operation::get_op_dyn(operation, context);
             let raw = operation.deref(context);
-            for result_index in 0..raw.get_num_results() {
+            let result_count = raw.get_num_results();
+            charge_uniformity_collection(
+                &mut collection_work,
+                raw.get_num_operands().saturating_add(result_count),
+            )?;
+            ensure_uniformity_value_capacity(definitions.len(), result_count)?;
+            for result_index in 0..result_count {
                 let result = raw.get_result(result_index);
                 let definition = if dynamic.downcast_ref::<IndexConstantOp>().is_some() {
                     SubgroupValueDefinitionV1::Fixed(SubgroupValueUniformityV1::Uniform)
@@ -981,7 +1034,14 @@ fn analyze_pliron_subgroup_uniformity(
                 } else if let Some(binary) = dynamic.downcast_ref::<IndexBinaryOp>()
                     && raw.get_num_operands() == 2
                 {
-                    SubgroupValueDefinitionV1::Merge(vec![binary.lhs(context), binary.rhs(context)])
+                    if invocation_quotient_is_subgroup_uniform(context, binary, layout) {
+                        SubgroupValueDefinitionV1::Fixed(SubgroupValueUniformityV1::Uniform)
+                    } else {
+                        SubgroupValueDefinitionV1::Merge(vec![
+                            binary.lhs(context),
+                            binary.rhs(context),
+                        ])
+                    }
                 } else if let Some(join) = dynamic.downcast_ref::<DeterministicJoinOp>() {
                     let dependencies = join.dependencies(context);
                     if dependencies.is_empty() {
@@ -1001,10 +1061,6 @@ fn analyze_pliron_subgroup_uniformity(
             }
         }
     }
-    if definitions.len() > MAX_PLIRON_TENSOR_UNIFORMITY_VALUES_V1 {
-        return Err(PlironTensorLayoutFindingV1::ResourceLimitExceeded);
-    }
-
     for block in function.get_region(context).deref(context).iter(context) {
         let Some(terminator) = block.deref(context).get_terminator(context) else {
             continue;
@@ -1030,6 +1086,24 @@ fn analyze_pliron_subgroup_uniformity(
                 });
             }
         }
+        if dynamic.downcast_ref::<AnalysisSplitOp>().is_some() {
+            if raw.get_num_successors() != 2 {
+                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                    detail: "analysis split has a malformed successor count".to_owned(),
+                });
+            }
+            let split = dynamic
+                .downcast_ref::<AnalysisSplitOp>()
+                .expect("analysis split was just recognized");
+            let expected_operands = split.control_dependencies(context).len()
+                + raw.get_successor(0).deref(context).get_num_arguments()
+                + raw.get_successor(1).deref(context).get_num_arguments();
+            if raw.get_num_operands() != expected_operands {
+                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                    detail: "analysis split has a malformed operand count".to_owned(),
+                });
+            }
+        }
         for (successor_index, successor) in raw.successors().enumerate() {
             let Some(arguments) = block_arguments.get(&successor) else {
                 return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
@@ -1039,6 +1113,7 @@ fn analyze_pliron_subgroup_uniformity(
             if arguments.is_empty() {
                 continue;
             }
+            charge_uniformity_collection(&mut collection_work, arguments.len())?;
             let incoming = if let Some(branch) = dynamic.downcast_ref::<BranchArgsOp>() {
                 branch.arguments(context)
             } else if let Some(branch) = dynamic.downcast_ref::<IndexLessThanBranchArgsOp>() {
@@ -1052,6 +1127,12 @@ fn analyze_pliron_subgroup_uniformity(
                     branch.true_arguments(context)
                 } else {
                     branch.false_arguments(context)
+                }
+            } else if let Some(split) = dynamic.downcast_ref::<AnalysisSplitOp>() {
+                if successor_index == 0 {
+                    split.first_arguments(context)
+                } else {
+                    split.second_arguments(context)
                 }
             } else {
                 return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
@@ -1081,6 +1162,7 @@ fn analyze_pliron_subgroup_uniformity(
             .get(value)
             .expect("ordered uniformity definition exists");
         if let SubgroupValueDefinitionV1::Merge(inputs) = definition {
+            charge_uniformity_collection(&mut collection_work, inputs.len())?;
             for input in inputs {
                 dependents.entry(*input).or_default().push(*value);
             }
@@ -1117,6 +1199,65 @@ fn analyze_pliron_subgroup_uniformity(
         worklist.extend(dependents.get(&value).into_iter().flatten().copied());
     }
     Ok(PlironSubgroupUniformityV1 { facts })
+}
+
+fn charge_uniformity_collection(
+    work: &mut usize,
+    amount: usize,
+) -> Result<(), PlironTensorLayoutFindingV1> {
+    *work = work
+        .checked_add(amount)
+        .ok_or(PlironTensorLayoutFindingV1::ResourceLimitExceeded)?;
+    if *work > MAX_PLIRON_TENSOR_UNIFORMITY_WORK_UNITS_V1 {
+        return Err(PlironTensorLayoutFindingV1::ResourceLimitExceeded);
+    }
+    Ok(())
+}
+
+fn ensure_uniformity_value_capacity(
+    current: usize,
+    additional: usize,
+) -> Result<(), PlironTensorLayoutFindingV1> {
+    if current
+        .checked_add(additional)
+        .is_none_or(|count| count > MAX_PLIRON_TENSOR_UNIFORMITY_VALUES_V1)
+    {
+        return Err(PlironTensorLayoutFindingV1::ResourceLimitExceeded);
+    }
+    Ok(())
+}
+
+fn invocation_quotient_is_subgroup_uniform(
+    context: &Context,
+    binary: &IndexBinaryOp,
+    layout: PlironExecutionLayoutV1,
+) -> bool {
+    if binary.kind(context) != Some(IndexBinaryKindAttr::Divide) || layout.subgroup_size == 0 {
+        return false;
+    }
+    let Some(divisor) = binary.rhs(context).defining_op().and_then(|operation| {
+        Operation::get_op_dyn(operation, context)
+            .downcast_ref::<IndexConstantOp>()
+            .and_then(|constant| constant.value(context))
+    }) else {
+        return false;
+    };
+    if divisor == 0 || !divisor.is_multiple_of(layout.subgroup_size) {
+        return false;
+    }
+    let Some(invocation) = binary.lhs(context).defining_op().and_then(|operation| {
+        Operation::get_op_dyn(operation, context)
+            .downcast_ref::<InvocationIndexOp>()
+            .cloned()
+    }) else {
+        return false;
+    };
+    if invocation.dimension(context) != Some(0) {
+        return false;
+    }
+    let workgroup_extent = layout.workgroup_extents[0];
+    workgroup_extent >= layout.subgroup_size
+        && workgroup_extent.is_multiple_of(layout.subgroup_size)
 }
 
 fn value_is_entry_argument(value: Value, entry: Ptr<BasicBlock>) -> bool {
@@ -1219,114 +1360,337 @@ fn classify_coordinate_cutoff(
     None
 }
 
-fn reverse_reachable(successors: &[Vec<usize>], target: usize) -> Vec<bool> {
+fn charge_convergence_work(
+    work: &mut usize,
+    amount: usize,
+) -> Result<(), PlironTensorLayoutFindingV1> {
+    *work = work
+        .checked_add(amount)
+        .ok_or(PlironTensorLayoutFindingV1::ResourceLimitExceeded)?;
+    if *work > MAX_PLIRON_TENSOR_UNIFORMITY_WORK_UNITS_V1 {
+        return Err(PlironTensorLayoutFindingV1::ResourceLimitExceeded);
+    }
+    Ok(())
+}
+
+fn bounded_predecessors(
+    successors: &[Vec<usize>],
+    work: &mut usize,
+) -> Result<Vec<Vec<usize>>, PlironTensorLayoutFindingV1> {
+    let edge_count = successors
+        .iter()
+        .try_fold(0_usize, |count, targets| count.checked_add(targets.len()))
+        .ok_or(PlironTensorLayoutFindingV1::ResourceLimitExceeded)?;
+    charge_convergence_work(work, successors.len())?;
+    charge_convergence_work(work, edge_count)?;
     let mut predecessors = vec![Vec::new(); successors.len()];
     for (block, targets) in successors.iter().enumerate() {
         for target in targets {
+            if *target >= successors.len() {
+                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                    detail: "convergence edge is outside the kernel CFG".to_owned(),
+                });
+            }
             predecessors[*target].push(block);
         }
     }
-    let mut reachable = vec![false; successors.len()];
+    Ok(predecessors)
+}
+
+fn reverse_reachable(
+    predecessors: &[Vec<usize>],
+    target: usize,
+    work: &mut usize,
+) -> Result<Vec<bool>, PlironTensorLayoutFindingV1> {
+    if target >= predecessors.len() {
+        return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+            detail: "tensor block is outside the kernel CFG".to_owned(),
+        });
+    }
+    charge_convergence_work(work, predecessors.len())?;
+    let mut reachable = vec![false; predecessors.len()];
     let mut worklist = VecDeque::from([target]);
     while let Some(block) = worklist.pop_front() {
+        charge_convergence_work(work, 1)?;
         if reachable[block] {
             continue;
         }
         reachable[block] = true;
+        charge_convergence_work(work, predecessors[block].len())?;
         worklist.extend(predecessors[block].iter().copied());
     }
-    reachable
+    Ok(reachable)
 }
 
-fn can_avoid_tensor(successors: &[Vec<usize>], tensor_block: usize) -> Vec<bool> {
-    let mut predecessors = vec![Vec::new(); successors.len()];
+fn bounded_postdominators(
+    successors: &[Vec<usize>],
+    reachable: &[bool],
+    predecessors: &[Vec<usize>],
+    work: &mut usize,
+) -> Result<Vec<Option<Vec<u64>>>, PlironTensorLayoutFindingV1> {
+    let block_count = successors.len();
+    let word_count = block_count.div_ceil(u64::BITS as usize);
+    if predecessors.len() != block_count || reachable.len() != block_count {
+        return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+            detail: "postdominator inputs do not match the kernel CFG".to_owned(),
+        });
+    }
+    charge_convergence_work(work, block_count)?;
+    charge_convergence_work(work, word_count)?;
     for (block, targets) in successors.iter().enumerate() {
-        if block == tensor_block {
+        if !reachable.get(block).copied().unwrap_or(false) {
             continue;
         }
-        for target in targets
-            .iter()
-            .copied()
-            .filter(|target| *target != tensor_block)
-        {
-            predecessors[target].push(block);
+        for target in targets.iter().copied() {
+            if target >= block_count {
+                return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                    detail: "postdominator edge is outside the kernel CFG".to_owned(),
+                });
+            }
+            let _ = reachable[target];
         }
     }
 
-    // Iterative Kosaraju avoids verifier stack growth on a legal large CFG.
-    let mut visited = vec![false; successors.len()];
-    visited[tensor_block] = true;
-    let mut finish_order = Vec::with_capacity(successors.len());
-    for start in 0..successors.len() {
-        if visited[start] {
-            continue;
-        }
-        visited[start] = true;
-        let mut stack = vec![(start, 0_usize)];
-        while let Some((block, successor_index)) = stack.last_mut() {
-            while *successor_index < successors[*block].len()
-                && successors[*block][*successor_index] == tensor_block
-            {
-                *successor_index += 1;
-            }
-            if *successor_index == successors[*block].len() {
-                finish_order.push(*block);
-                stack.pop();
-                continue;
-            }
-            let successor = successors[*block][*successor_index];
-            *successor_index += 1;
-            if !visited[successor] {
-                visited[successor] = true;
-                stack.push((successor, 0));
-            }
-        }
-    }
-
-    let mut component = vec![usize::MAX; successors.len()];
-    let mut cyclic = Vec::new();
-    for start in finish_order.into_iter().rev() {
-        if component[start] != usize::MAX {
-            continue;
-        }
-        let component_index = cyclic.len();
-        component[start] = component_index;
-        let mut nodes = Vec::new();
-        let mut worklist = vec![start];
-        while let Some(block) = worklist.pop() {
-            nodes.push(block);
-            for predecessor in predecessors[block].iter().copied() {
-                if component[predecessor] == usize::MAX {
-                    component[predecessor] = component_index;
-                    worklist.push(predecessor);
-                }
-            }
-        }
-        cyclic.push(
-            nodes.len() > 1
-                || nodes
-                    .first()
-                    .is_some_and(|node| successors[*node].contains(node)),
-        );
-    }
-
-    let mut can_avoid = vec![false; successors.len()];
+    charge_convergence_work(work, block_count)?;
+    let mut can_reach_exit = vec![false; block_count];
     let mut worklist = VecDeque::new();
-    for block in 0..successors.len() {
-        let is_return = successors[block].is_empty();
-        let is_cycle = component[block] != usize::MAX && cyclic[component[block]];
-        if block != tensor_block && (is_return || is_cycle) {
+    for block in 0..block_count {
+        if reachable[block] && successors[block].is_empty() {
+            can_reach_exit[block] = true;
             worklist.push_back(block);
         }
     }
     while let Some(block) = worklist.pop_front() {
-        if can_avoid[block] {
+        for predecessor in predecessors[block].iter().copied() {
+            charge_convergence_work(work, 1)?;
+            if !can_reach_exit[predecessor] {
+                can_reach_exit[predecessor] = true;
+                worklist.push_back(predecessor);
+            }
+        }
+    }
+
+    charge_convergence_work(work, word_count)?;
+    let mut universe = vec![0_u64; word_count];
+    for block in 0..block_count {
+        if can_reach_exit[block] {
+            universe[block / u64::BITS as usize] |= 1_u64 << (block % u64::BITS as usize);
+        }
+    }
+    let initial_words = can_reach_exit
+        .iter()
+        .filter(|available| **available)
+        .count()
+        .saturating_mul(word_count);
+    charge_convergence_work(work, initial_words)?;
+    let mut facts = can_reach_exit
+        .iter()
+        .map(|available| available.then(|| universe.clone()))
+        .collect::<Vec<_>>();
+    loop {
+        let mut changed = false;
+        for block in (0..block_count).rev() {
+            if !can_reach_exit[block] {
+                continue;
+            }
+            let mut next = if successors[block].is_empty()
+                || successors[block]
+                    .iter()
+                    .any(|successor| !can_reach_exit[*successor])
+            {
+                charge_convergence_work(work, word_count)?;
+                vec![0_u64; word_count]
+            } else {
+                let mut targets = successors[block].iter();
+                let first = *targets.next().expect("non-terminal block has a successor");
+                charge_convergence_work(work, word_count)?;
+                let mut intersection = facts[first]
+                    .as_ref()
+                    .expect("exit-reachable successor has a postdominator fact")
+                    .clone();
+                for successor in targets {
+                    let successor = facts[*successor]
+                        .as_ref()
+                        .expect("exit-reachable successor has a postdominator fact");
+                    for (word, successor_word) in intersection.iter_mut().zip(successor) {
+                        charge_convergence_work(work, 1)?;
+                        *word &= successor_word;
+                    }
+                }
+                intersection
+            };
+            next[block / u64::BITS as usize] |= 1_u64 << (block % u64::BITS as usize);
+            let slot = facts[block]
+                .as_mut()
+                .expect("exit-reachable block has a postdominator fact");
+            charge_convergence_work(work, word_count)?;
+            if *slot != next {
+                *slot = next;
+                changed = true;
+            }
+        }
+        if !changed {
+            return Ok(facts);
+        }
+        charge_convergence_work(work, block_count)?;
+    }
+}
+
+fn immediate_postdominator(
+    controller: usize,
+    facts: &[Option<Vec<u64>>],
+    depths: &[u32],
+    work: &mut usize,
+) -> Result<Option<usize>, PlironTensorLayoutFindingV1> {
+    if depths.len() != facts.len() {
+        return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+            detail: "postdominator depths do not match the kernel CFG".to_owned(),
+        });
+    }
+    let Some(fact) = facts.get(controller).and_then(Option::as_ref) else {
+        return Ok(None);
+    };
+    let mut best = None;
+    let mut best_depth = 0_u32;
+    let mut tied = false;
+    for (word_index, word) in fact.iter().copied().enumerate() {
+        let mut candidates = word;
+        while candidates != 0 {
+            charge_convergence_work(work, 1)?;
+            let bit = candidates.trailing_zeros() as usize;
+            candidates &= candidates - 1;
+            let candidate = word_index * u64::BITS as usize + bit;
+            if candidate == controller || candidate >= facts.len() {
+                continue;
+            }
+            let depth = depths[candidate];
+            if depth > best_depth {
+                best = Some(candidate);
+                best_depth = depth;
+                tied = false;
+            } else if depth == best_depth {
+                tied = true;
+            }
+        }
+    }
+    Ok((!tied).then_some(best).flatten())
+}
+
+fn bounded_control_regions(
+    successors: &[Vec<usize>],
+    reachable: &[bool],
+    branch_uniformity: &[SubgroupBranchUniformityV1],
+    postdominators: &[Option<Vec<u64>>],
+    work: &mut usize,
+) -> Result<Vec<Option<TensorControlRegionV1>>, PlironTensorLayoutFindingV1> {
+    let block_count = successors.len();
+    let word_count = block_count.div_ceil(u64::BITS as usize);
+    let controller_count = branch_uniformity
+        .iter()
+        .enumerate()
+        .filter(|(block, uniformity)| {
+            reachable[*block]
+                && **uniformity != SubgroupBranchUniformityV1::Uniform
+                && successors[*block].len() > 1
+        })
+        .count();
+    let allocation_work = controller_count
+        .checked_mul(word_count)
+        .and_then(|work| work.checked_add(block_count))
+        .ok_or(PlironTensorLayoutFindingV1::ResourceLimitExceeded)?;
+    charge_convergence_work(work, allocation_work)?;
+    let depth_work = block_count
+        .checked_mul(word_count)
+        .ok_or(PlironTensorLayoutFindingV1::ResourceLimitExceeded)?;
+    charge_convergence_work(work, depth_work)?;
+    let postdominator_depths = postdominators
+        .iter()
+        .map(|fact| {
+            fact.as_ref()
+                .map(|words| words.iter().map(|word| word.count_ones()).sum())
+                .unwrap_or(0)
+        })
+        .collect::<Vec<_>>();
+    let mut regions = (0..block_count).map(|_| None).collect::<Vec<_>>();
+    for controller in 0..block_count {
+        if !reachable[controller]
+            || branch_uniformity[controller] == SubgroupBranchUniformityV1::Uniform
+            || successors[controller].len() < 2
+        {
             continue;
         }
-        can_avoid[block] = true;
-        worklist.extend(predecessors[block].iter().copied());
+        let reconvergence =
+            immediate_postdominator(controller, postdominators, &postdominator_depths, work)?;
+        let mut blocks = vec![0_u64; word_count];
+        let mut region_blocks = Vec::new();
+        let mut worklist = successors[controller]
+            .iter()
+            .copied()
+            .collect::<VecDeque<_>>();
+        while let Some(block) = worklist.pop_front() {
+            charge_convergence_work(work, 1)?;
+            let word = &mut blocks[block / u64::BITS as usize];
+            let mask = 1_u64 << (block % u64::BITS as usize);
+            if Some(block) == reconvergence || !reachable[block] || *word & mask != 0 {
+                continue;
+            }
+            *word |= mask;
+            charge_convergence_work(work, 1)?;
+            region_blocks.push(block);
+            worklist.extend(successors[block].iter().copied());
+        }
+        let contains = |block: usize| {
+            blocks[block / u64::BITS as usize] & (1_u64 << (block % u64::BITS as usize)) != 0
+        };
+        charge_convergence_work(work, region_blocks.len())?;
+        let mut indegree = region_blocks
+            .iter()
+            .copied()
+            .map(|block| (block, 0_usize))
+            .collect::<HashMap<_, _>>();
+        for block in region_blocks.iter().copied() {
+            for successor in successors[block].iter().copied() {
+                if contains(successor) {
+                    charge_convergence_work(work, 1)?;
+                    let degree = indegree.get_mut(&successor).ok_or_else(|| {
+                        PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                            detail: "control region membership is internally inconsistent"
+                                .to_owned(),
+                        }
+                    })?;
+                    *degree = degree.saturating_add(1);
+                }
+            }
+        }
+        let mut acyclic = indegree
+            .iter()
+            .filter_map(|(block, indegree)| (*indegree == 0).then_some(*block))
+            .collect::<VecDeque<_>>();
+        let mut consumed = 0_usize;
+        while let Some(block) = acyclic.pop_front() {
+            consumed += 1;
+            for successor in successors[block].iter().copied() {
+                if !contains(successor) {
+                    continue;
+                }
+                charge_convergence_work(work, 1)?;
+                let degree = indegree.get_mut(&successor).ok_or_else(|| {
+                    PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                        detail: "control region membership is internally inconsistent".to_owned(),
+                    }
+                })?;
+                *degree -= 1;
+                if *degree == 0 {
+                    acyclic.push_back(successor);
+                }
+            }
+        }
+        regions[controller] = Some(TensorControlRegionV1 {
+            blocks,
+            has_cycle: consumed != region_blocks.len(),
+        });
     }
-    can_avoid
+    Ok(regions)
 }
 
 fn tensor_trace(trace: &PlironInvocationTraceV1) -> Vec<PlironTraceLocationV1> {
@@ -1337,6 +1701,7 @@ fn tensor_trace(trace: &PlironInvocationTraceV1) -> Vec<PlironTraceLocationV1> {
             PlironTraceEventV1::TensorInstruction { location } => Some(*location),
             PlironTraceEventV1::Barrier { .. }
             | PlironTraceEventV1::Fence { .. }
+            | PlironTraceEventV1::Trap { .. }
             | PlironTraceEventV1::Memory { .. } => None,
         })
         .collect()

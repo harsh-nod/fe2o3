@@ -603,7 +603,12 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         &mut next_value,
         &mut discarded_ir,
     )?;
-    let bounds_checks = project_rust_bounds_checks(function, intrinsic.extent_argument_count)?;
+    let bounds_checks = project_rust_bounds_checks(
+        function,
+        intrinsic.extent_argument_count,
+        &mut entry_operations,
+        &mut next_value,
+    )?;
     let switch_predicates = switch_predicates(
         function,
         &intrinsic.option_predicates,
@@ -749,6 +754,14 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         entry_operations,
         projected_blocks,
     )?;
+    if blocks
+        .iter()
+        .any(|block| matches!(block.terminator(), ProductionRankedTerminatorV1::Trap))
+    {
+        incomplete.get_or_insert(
+            "target lowering for the ranked kernel.trap terminator is not authenticated",
+        );
+    }
     let ranked_ir = format_ranked_cfg(function_name(root_function)?, &blocks)?;
 
     let kernel = ProductionRankedKernelV1::new(
@@ -781,6 +794,8 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
 fn project_rust_bounds_checks(
     function: &SemanticFunctionDeclV1,
     first_argument: usize,
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
 ) -> Result<ProjectedBoundsChecksV1, ProductionRankedProjectionErrorV1> {
     #[derive(Clone, Copy, Default)]
     struct LocalDefinitionV1 {
@@ -840,8 +855,7 @@ fn project_rust_bounds_checks(
             })?;
     }
 
-    let mut local_arguments = vec![None; function.locals().len()];
-    let mut next_argument = first_argument;
+    let mut local_values = vec![None; function.locals().len()];
     let mut checks = Vec::new();
     for (block_index, block) in function.blocks().iter().enumerate() {
         let SemanticTerminatorKindV1::Assert {
@@ -937,27 +951,27 @@ fn project_rust_bounds_checks(
                 "a Rust bounds-check success block not uniquely controlled by that check",
             ));
         }
-        let mut argument_for = |local: SemanticLocalIdV1| {
-            let slot = local_arguments.get_mut(local.index() as usize).ok_or(
+        let mut unknown_for = |local: SemanticLocalIdV1| {
+            let slot = local_values.get_mut(local.index() as usize).ok_or(
                 ProductionRankedProjectionErrorV1::Unsupported(
                     "a Rust bounds-check operand outside the semantic local table",
                 ),
             )?;
-            if let Some(argument) = *slot {
-                return Ok(ProductionRankedValueV1::Argument(argument));
+            if let Some(value) = *slot {
+                return Ok(value);
             }
-            let argument = u32::try_from(next_argument).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "too many dynamic ranked-analysis arguments",
-                )
-            })?;
-            next_argument = next_argument.checked_add(1).ok_or(
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "dynamic ranked-analysis argument count overflow",
-                ),
-            )?;
-            *slot = Some(argument);
-            Ok(ProductionRankedValueV1::Argument(argument))
+            let result = ProductionRankedValueIdV1::new(*next_value);
+            *next_value =
+                next_value
+                    .checked_add(1)
+                    .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                        "dynamic ranked-analysis value count overflow",
+                    ))?;
+            reserve_operation(operations)?;
+            operations.push(ProductionRankedOperationV1::IndexUnknown { result });
+            let value = ProductionRankedValueV1::Local(result);
+            *slot = Some(value);
+            Ok(value)
         };
         checks.try_reserve(1).map_err(|_| {
             ProductionRankedProjectionErrorV1::Unsupported(
@@ -968,13 +982,13 @@ fn project_rust_bounds_checks(
             access_block,
             slice_local,
             index_local,
-            index: argument_for(index_local)?,
-            extent: argument_for(length_local)?,
+            index: unknown_for(index_local)?,
+            extent: unknown_for(length_local)?,
         });
     }
     Ok(ProjectedBoundsChecksV1 {
         checks,
-        argument_count: next_argument,
+        argument_count: first_argument,
     })
 }
 
@@ -3089,6 +3103,7 @@ struct DeterministicScalarProjectorV1<'a> {
     local_definitions: &'a [u8],
     index_values: &'a [Option<ProjectedDisjointIndexV1>],
     local_allocations: &'a [Option<AllocationContractV1>],
+    switch_predicates: &'a [Option<GuardPredicateV1>],
     argument_slots: &'a mut [Option<u32>],
     next_argument: &'a mut usize,
     operations: &'a mut Vec<ProductionRankedOperationV1>,
@@ -3112,6 +3127,7 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
         local_definitions: &'a [u8],
         index_values: &'a [Option<ProjectedDisjointIndexV1>],
         local_allocations: &'a [Option<AllocationContractV1>],
+        switch_predicates: &'a [Option<GuardPredicateV1>],
         argument_slots: &'a mut [Option<u32>],
         next_argument: &'a mut usize,
         operations: &'a mut Vec<ProductionRankedOperationV1>,
@@ -3122,6 +3138,7 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
             || local_definitions.len() != local_count
             || index_values.len() != local_count
             || local_allocations.len() != local_count
+            || switch_predicates.len() != local_count
             || argument_slots.len() != local_count
         {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
@@ -3178,6 +3195,7 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
             local_definitions,
             index_values,
             local_allocations,
+            switch_predicates,
             argument_slots,
             next_argument,
             operations,
@@ -3275,7 +3293,7 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
             if candidates.is_empty() {
                 None
             } else if candidates.windows(2).all(|pair| pair[0] == pair[1])
-                && self.definitions[local]
+                || self.definitions[local]
                     .windows(2)
                     .all(|pair| self.definition_semantics_equal(pair[0], pair[1]))
             {
@@ -3415,37 +3433,7 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
                 .terminator()
                 .kind()
                 .clone();
-            if terminator.edge_count() < 2 {
-                continue;
-            }
-            let mut successors = Vec::new();
-            successors
-                .try_reserve(terminator.edge_count())
-                .map_err(|_| {
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "deterministic scalar successor storage cannot be reserved",
-                    )
-                })?;
-            let mut successor_set = HashSet::new();
-            successor_set
-                .try_reserve(terminator.edge_count())
-                .map_err(|_| {
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "deterministic scalar successor set cannot be reserved",
-                    )
-                })?;
-            terminator.try_for_each_edge::<ProductionRankedProjectionErrorV1>(|edge| {
-                let successor = edge.target().index() as usize;
-                if successor >= self.function.blocks().len() {
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "a deterministic scalar control edge is outside the semantic CFG",
-                    ));
-                }
-                if successor_set.insert(successor) {
-                    successors.push(successor);
-                }
-                Ok(())
-            })?;
+            let successors = self.control_successors(&terminator)?;
             if successors.len() < 2 {
                 continue;
             }
@@ -3470,6 +3458,83 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
             controls.push(control);
         }
         Ok(Some(controls))
+    }
+
+    fn control_successors(
+        &self,
+        terminator: &SemanticTerminatorKindV1,
+    ) -> Result<Vec<usize>, ProductionRankedProjectionErrorV1> {
+        let proven_true = match terminator {
+            SemanticTerminatorKindV1::SwitchInt {
+                discriminant,
+                targets,
+            } => simple_operand_local(discriminant)
+                .and_then(|local| self.switch_predicates.get(local.index() as usize))
+                .and_then(Option::as_ref)
+                .filter(|predicate| predicate.comparisons.is_empty())
+                .map(|_| {
+                    let target = if targets.values().len() == 1 {
+                        match targets.values()[0].value() {
+                            0 => targets.otherwise().target(),
+                            1 => targets.values()[0].edge().target(),
+                            _ => {
+                                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                                    "an authenticated empty predicate did not select a boolean switch",
+                                ));
+                            }
+                        }
+                    } else {
+                        let Some(target) = targets.values().iter().find(|target| target.value() == 1)
+                        else {
+                            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                                "an authenticated empty predicate had no true switch variant",
+                            ));
+                        };
+                        target.edge().target()
+                    };
+                    Ok(target.index() as usize)
+                })
+                .transpose()?,
+            _ => None,
+        };
+        if let Some(successor) = proven_true {
+            if successor >= self.function.blocks().len() {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a deterministic scalar proven control edge is outside the semantic CFG",
+                ));
+            }
+            return Ok(vec![successor]);
+        }
+
+        let mut successors = Vec::new();
+        successors
+            .try_reserve(terminator.edge_count())
+            .map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "deterministic scalar successor storage cannot be reserved",
+                )
+            })?;
+        let mut successor_set = HashSet::new();
+        successor_set
+            .try_reserve(terminator.edge_count())
+            .map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "deterministic scalar successor set cannot be reserved",
+                )
+            })?;
+        terminator.try_for_each_edge::<ProductionRankedProjectionErrorV1>(|edge| {
+            let successor = edge.target().index() as usize;
+            if successor >= self.function.blocks().len() {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a deterministic scalar control edge is outside the semantic CFG",
+                ));
+            }
+            if successor_set.insert(successor) {
+                successors.push(successor);
+            }
+            Ok(())
+        })?;
+        Ok(successors)
     }
 
     fn block_can_reach(
@@ -3506,7 +3571,7 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
                 break;
             }
             let terminator = self.function.blocks()[block].terminator().kind().clone();
-            terminator.try_for_each_edge::<ProductionRankedProjectionErrorV1>(|edge| {
+            for successor in self.control_successors(&terminator)? {
                 self.reachability_work = self.reachability_work.checked_add(1).ok_or(
                     ProductionRankedProjectionErrorV1::Unsupported(
                         "deterministic scalar reachability work accounting overflowed",
@@ -3517,7 +3582,6 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
                         "deterministic scalar reachability exceeded its explicit work limit",
                     ));
                 }
-                let successor = edge.target().index() as usize;
                 let Some(mark) = self.reachability_marks.get_mut(successor) else {
                     return Err(ProductionRankedProjectionErrorV1::Unsupported(
                         "a deterministic scalar reachability edge is outside the semantic CFG",
@@ -3532,8 +3596,7 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
                     })?;
                     worklist.push(successor);
                 }
-                Ok(())
-            })?;
+            }
         }
         self.reachability.try_reserve(1).map_err(|_| {
             ProductionRankedProjectionErrorV1::Unsupported(
@@ -3555,11 +3618,11 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
                 let summary = self.resolve_operand(&operand)?;
                 self.derive([summary])
             }
-            SemanticRvalueKindV1::Binary { left, right, .. } => {
-                let left = self.resolve_operand(&left)?;
-                let right = self.resolve_operand(&right)?;
-                self.derive([left, right])
-            }
+            SemanticRvalueKindV1::Binary {
+                operation,
+                left,
+                right,
+            } => self.resolve_binary(operation, &left, &right),
             SemanticRvalueKindV1::CheckedBinary(checked) => {
                 let left = self.resolve_operand(checked.left())?;
                 let right = self.resolve_operand(checked.right())?;
@@ -3633,6 +3696,25 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
         else {
             return Ok(None);
         };
+        if matches!(
+            operation,
+            SemanticCompilerIntrinsicOperationV1::ThreadIndexGet { .. }
+                | SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { .. }
+        ) {
+            let [argument] = call.arguments() else {
+                return Ok(None);
+            };
+            return Ok(match self.resolve_operand(argument)? {
+                Some(DeterministicScalarSummaryV1::Derived(values)) if values.len() == 1 => {
+                    Some(DeterministicScalarSummaryV1::Exact(values[0]))
+                }
+                summary @ Some(
+                    DeterministicScalarSummaryV1::Constant(_)
+                    | DeterministicScalarSummaryV1::Exact(_),
+                ) => summary,
+                Some(DeterministicScalarSummaryV1::Derived(_)) | None => None,
+            });
+        }
         if !compiler_intrinsic_is_pure_total_scalar_dependency_v1(operation) {
             return Ok(None);
         }
@@ -3646,6 +3728,45 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
             inputs.push(self.resolve_operand(argument)?);
         }
         self.derive(inputs)
+    }
+
+    fn resolve_binary(
+        &mut self,
+        operation: SemanticBinaryOpV1,
+        left: &SemanticOperandV1,
+        right: &SemanticOperandV1,
+    ) -> Result<Option<DeterministicScalarSummaryV1>, ProductionRankedProjectionErrorV1> {
+        let left = self.resolve_operand(left)?;
+        let right = self.resolve_operand(right)?;
+        let Some(kind) = deterministic_index_binary_kind_v1(operation) else {
+            return self.derive([left, right]);
+        };
+        if matches!(
+            kind,
+            IndexBinaryKindAttr::Divide | IndexBinaryKindAttr::Remainder
+        ) && !matches!(right, Some(DeterministicScalarSummaryV1::Constant(value)) if value != 0)
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a division or remainder used for deterministic control lacks a statically nonzero divisor",
+            ));
+        }
+        let (Some(left), Some(right)) = (left, right) else {
+            return Ok(None);
+        };
+        let lhs = self.materialize(left)?;
+        let rhs = self.materialize(right)?;
+        reserve_operation(self.operations)?;
+        let result = next_value_id(self.next_value)?;
+        self.operations
+            .push(ProductionRankedOperationV1::IndexBinary {
+                result,
+                kind,
+                lhs,
+                rhs,
+            });
+        Ok(Some(DeterministicScalarSummaryV1::Exact(
+            ProductionRankedValueV1::Local(result),
+        )))
     }
 
     fn derive(
@@ -3792,6 +3913,30 @@ fn compiler_intrinsic_is_pure_total_scalar_dependency_v1(
     )
 }
 
+const fn deterministic_index_binary_kind_v1(
+    operation: SemanticBinaryOpV1,
+) -> Option<IndexBinaryKindAttr> {
+    match operation {
+        SemanticBinaryOpV1::Add => Some(IndexBinaryKindAttr::Add),
+        SemanticBinaryOpV1::Multiply => Some(IndexBinaryKindAttr::Multiply),
+        SemanticBinaryOpV1::Divide => Some(IndexBinaryKindAttr::Divide),
+        SemanticBinaryOpV1::Remainder => Some(IndexBinaryKindAttr::Remainder),
+        SemanticBinaryOpV1::Subtract
+        | SemanticBinaryOpV1::Offset
+        | SemanticBinaryOpV1::BitXor
+        | SemanticBinaryOpV1::BitAnd
+        | SemanticBinaryOpV1::BitOr
+        | SemanticBinaryOpV1::ShiftLeft
+        | SemanticBinaryOpV1::ShiftRight
+        | SemanticBinaryOpV1::Equal
+        | SemanticBinaryOpV1::LessThan
+        | SemanticBinaryOpV1::LessOrEqual
+        | SemanticBinaryOpV1::NotEqual
+        | SemanticBinaryOpV1::GreaterOrEqual
+        | SemanticBinaryOpV1::GreaterThan => None,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn project_deterministic_scalar_switches_v1(
     callables: &[SemanticCallableDeclV1],
@@ -3818,6 +3963,7 @@ fn project_deterministic_scalar_switches_v1(
         local_definitions,
         index_values,
         local_allocations,
+        predicates,
         argument_slots,
         next_argument,
         operations,
@@ -3943,9 +4089,6 @@ fn project_uniform_inductions_v1(
         else {
             continue;
         };
-        if local_definitions.get(induction.index() as usize).copied() != Some(2) {
-            continue;
-        }
         let body_entry = targets.otherwise().target().index() as usize;
         let exit = targets.values()[0].edge().target().index() as usize;
         if body_entry >= function.blocks().len() || exit >= function.blocks().len() {
@@ -3953,10 +4096,67 @@ fn project_uniform_inductions_v1(
                 "a uniform induction successor outside the semantic CFG",
             ));
         }
+        let Some(topology) =
+            project_natural_loop_topology_v1(&graph, header, body_entry, exit, &mut graph_work)?
+        else {
+            continue;
+        };
         let mut initial = None;
+        for statement in function.blocks()[topology.preheader].statements() {
+            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                continue;
+            };
+            if assignment.destination().projections().is_empty()
+                && assignment.destination().local() == induction
+            {
+                let SemanticRvalueKindV1::Use(operand) = assignment.value().kind() else {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a uniform induction has a non-canonical preheader definition",
+                    ));
+                };
+                if initial.replace(operand).is_some() {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a uniform induction has multiple preheader definitions",
+                    ));
+                }
+            }
+        }
         let mut step = None;
-        for (candidate, candidate_block) in function.blocks().iter().enumerate() {
-            for statement in candidate_block.statements() {
+        for statement in function.blocks()[topology.latch].statements() {
+            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                continue;
+            };
+            if assignment.destination().projections().is_empty()
+                && assignment.destination().local() == induction
+            {
+                let candidate = match assignment.value().kind() {
+                    SemanticRvalueKindV1::Binary {
+                        operation: SemanticBinaryOpV1::Add,
+                        left,
+                        right,
+                    } if simple_operand_local(left) == Some(induction) => Some(right),
+                    SemanticRvalueKindV1::Binary {
+                        operation: SemanticBinaryOpV1::Add,
+                        left,
+                        right,
+                    } if simple_operand_local(right) == Some(induction) => Some(left),
+                    _ => None,
+                }
+                .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a uniform induction has a non-canonical latch definition",
+                ))?;
+                if step.replace(candidate).is_some() {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a uniform induction has multiple latch definitions",
+                    ));
+                }
+            }
+        }
+        for candidate in topology.loop_blocks.iter().copied() {
+            if candidate == topology.latch {
+                continue;
+            }
+            for statement in function.blocks()[candidate].statements() {
                 let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
                     continue;
                 };
@@ -3965,45 +4165,12 @@ fn project_uniform_inductions_v1(
                 {
                     continue;
                 }
-                match assignment.value().kind() {
-                    SemanticRvalueKindV1::Use(operand) => {
-                        if initial.replace((candidate, operand)).is_some() {
-                            return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                                "a uniform induction with multiple initial definitions",
-                            ));
-                        }
-                    }
-                    SemanticRvalueKindV1::Binary {
-                        operation: SemanticBinaryOpV1::Add,
-                        left,
-                        right,
-                    } if simple_operand_local(left) == Some(induction) => {
-                        if step.replace((candidate, right)).is_some() {
-                            return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                                "a uniform induction with multiple latch definitions",
-                            ));
-                        }
-                    }
-                    SemanticRvalueKindV1::Binary {
-                        operation: SemanticBinaryOpV1::Add,
-                        left,
-                        right,
-                    } if simple_operand_local(right) == Some(induction) => {
-                        if step.replace((candidate, left)).is_some() {
-                            return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                                "a uniform induction with multiple latch definitions",
-                            ));
-                        }
-                    }
-                    _ => {
-                        return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                            "a uniform induction with a non-canonical definition",
-                        ));
-                    }
-                }
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a uniform induction is modified outside its unique latch",
+                ));
             }
         }
-        let (Some((initial_block, initial)), Some((step_block, step))) = (initial, step) else {
+        let (Some(initial), Some(step)) = (initial, step) else {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a uniform induction without exact initial and latch definitions",
             ));
@@ -4013,15 +4180,6 @@ fn project_uniform_inductions_v1(
                 "a uniform induction whose positive step is not statically established",
             ));
         }
-        let topology = project_natural_loop_topology_v1(
-            &graph,
-            header,
-            body_entry,
-            exit,
-            initial_block,
-            step_block,
-            &mut graph_work,
-        )?;
         let Some(initial) = project_uniform_switch_operand_v1(
             initial,
             constants,
@@ -4070,19 +4228,6 @@ fn project_uniform_inductions_v1(
                 "a uniform induction with a lane-varying step",
             ));
         };
-        if inductions
-            .iter()
-            .any(|existing: &ProjectedUniformInductionV1| {
-                existing
-                    .loop_blocks
-                    .iter()
-                    .any(|block| topology.loop_blocks.binary_search(block).is_ok())
-            })
-        {
-            return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "overlapping uniform induction regions",
-            ));
-        }
         inductions.push(ProjectedUniformInductionV1 {
             preheader: topology.preheader,
             header,
@@ -4094,6 +4239,30 @@ fn project_uniform_inductions_v1(
             bound,
             step,
         });
+    }
+    inductions.sort_by(|left, right| {
+        right
+            .loop_blocks
+            .len()
+            .cmp(&left.loop_blocks.len())
+            .then_with(|| left.header.cmp(&right.header))
+    });
+    for (index, left) in inductions.iter().enumerate() {
+        for right in &inductions[index + 1..] {
+            let overlaps = left
+                .loop_blocks
+                .iter()
+                .any(|block| right.contains_block(*block));
+            let right_is_nested = right
+                .loop_blocks
+                .iter()
+                .all(|block| left.contains_block(*block));
+            if overlaps && !right_is_nested {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "partially overlapping uniform induction regions",
+                ));
+            }
+        }
     }
     Ok(inductions)
 }
@@ -4283,10 +4452,8 @@ fn project_natural_loop_topology_v1(
     header: usize,
     body_entry: usize,
     exit: usize,
-    initial_block: usize,
-    step_block: usize,
     work: &mut usize,
-) -> Result<ProjectedNaturalLoopTopologyV1, ProductionRankedProjectionErrorV1> {
+) -> Result<Option<ProjectedNaturalLoopTopologyV1>, ProductionRankedProjectionErrorV1> {
     if !graph.reachable.get(header).copied().unwrap_or(false) {
         return Err(ProductionRankedProjectionErrorV1::Incomplete(
             "a uniform induction header is unreachable",
@@ -4321,6 +4488,9 @@ fn project_natural_loop_topology_v1(
         .copied()
         .filter(|predecessor| reachable_without_header[*predecessor])
         .collect::<Vec<_>>();
+    if backedges.is_empty() {
+        return Ok(None);
+    }
     if backedges.len() != 1 {
         return Err(ProductionRankedProjectionErrorV1::Incomplete(
             "a uniform induction without one unique dominated backedge",
@@ -4333,11 +4503,6 @@ fn project_natural_loop_topology_v1(
     }
     let latch = backedges[0];
     let preheader = preheaders[0];
-    if latch != step_block || preheader != initial_block {
-        return Err(ProductionRankedProjectionErrorV1::Incomplete(
-            "uniform induction definitions do not belong to the unique preheader and latch",
-        ));
-    }
     if graph.successors[preheader].as_slice() != [header]
         || graph.successors[latch].as_slice() != [header]
     {
@@ -4412,11 +4577,11 @@ fn project_natural_loop_topology_v1(
         .enumerate()
         .filter_map(|(block, inside)| inside.then_some(block))
         .collect();
-    Ok(ProjectedNaturalLoopTopologyV1 {
+    Ok(Some(ProjectedNaturalLoopTopologyV1 {
         preheader,
         latch,
         loop_blocks,
-    })
+    }))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5061,6 +5226,7 @@ fn operation_defines_value(operation: &ProductionRankedOperationV1) -> bool {
         ProductionRankedOperationV1::View { .. }
             | ProductionRankedOperationV1::ViewInSpace { .. }
             | ProductionRankedOperationV1::IndexConstant { .. }
+            | ProductionRankedOperationV1::IndexUnknown { .. }
             | ProductionRankedOperationV1::InvocationIndex { .. }
             | ProductionRankedOperationV1::IndexBinary { .. }
             | ProductionRankedOperationV1::CheckedTiledIndex2D { .. }
@@ -5157,6 +5323,7 @@ enum ProjectedCfgTerminatorV1 {
 fn projected_cfg_terminator(
     function: &SemanticFunctionDeclV1,
     block_index: usize,
+    constants: &[Option<u64>],
     switch_predicates: &[Option<GuardPredicateV1>],
     deterministic_switches: &[Option<ProjectedDeterministicSwitchV1>],
 ) -> Result<ProjectedCfgTerminatorV1, ProductionRankedProjectionErrorV1> {
@@ -5266,8 +5433,23 @@ fn projected_cfg_terminator(
                 None => Ok(ProjectedCfgTerminatorV1::Return),
             }
         }
-        SemanticTerminatorKindV1::Assert { target: edge, .. }
-        | SemanticTerminatorKindV1::Drop { target: edge, .. } => {
+        SemanticTerminatorKindV1::Assert {
+            condition,
+            expected,
+            message,
+            target: edge,
+            ..
+        } => {
+            if !matches!(message, SemanticAssertMessageV1::BoundsCheck { .. })
+                && constant_operand_value(condition, constants) != Some(u64::from(*expected))
+            {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a non-bounds Rust assertion is not statically proven to succeed",
+                ));
+            }
+            Ok(ProjectedCfgTerminatorV1::Branch(target(edge.target())?))
+        }
+        SemanticTerminatorKindV1::Drop { target: edge, .. } => {
             Ok(ProjectedCfgTerminatorV1::Branch(target(edge.target())?))
         }
         SemanticTerminatorKindV1::FalseEdge { .. } => {
@@ -5305,7 +5487,7 @@ fn projected_block_expansion(
     for item in &block.items {
         if let ProjectedBlockItemV1::Guarded(access) = item {
             count = count
-                .checked_add(GuardPredicateV1::for_access(access).comparisons.len() + 1)
+                .checked_add(GuardPredicateV1::for_access(access).comparisons.len() + 2)
                 .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                     "checked-access CFG block count overflow",
                 ))?;
@@ -5328,6 +5510,51 @@ fn projected_block_expansion(
     Ok(count)
 }
 
+fn live_induction_block_arguments(
+    block: u32,
+    live: &[usize],
+) -> Result<Vec<ProductionRankedValueV1>, ProductionRankedProjectionErrorV1> {
+    live.iter()
+        .enumerate()
+        .map(|(argument, _)| {
+            Ok(ProductionRankedValueV1::BlockArgument {
+                block,
+                argument: u32::try_from(argument).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "live induction argument count does not fit u32",
+                    )
+                })?,
+            })
+        })
+        .collect()
+}
+
+fn forward_live_inductions(
+    source_block: u32,
+    source_live: &[usize],
+    target_live: &[usize],
+) -> Result<Vec<ProductionRankedValueV1>, ProductionRankedProjectionErrorV1> {
+    target_live
+        .iter()
+        .map(|target| {
+            let argument = source_live
+                .iter()
+                .position(|source| source == target)
+                .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a ranked edge introduces an induction outside its preheader",
+                ))?;
+            Ok(ProductionRankedValueV1::BlockArgument {
+                block: source_block,
+                argument: u32::try_from(argument).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "live induction argument count does not fit u32",
+                    )
+                })?,
+            })
+        })
+        .collect()
+}
+
 fn build_ranked_cfg(
     function: &SemanticFunctionDeclV1,
     switch_predicates: &[Option<GuardPredicateV1>],
@@ -5344,37 +5571,29 @@ fn build_ranked_cfg(
             "semantic CFG projection lost a basic block",
         ));
     }
+    let constants = constant_locals(function);
     let terminators = (0..function.blocks().len())
         .map(|index| {
-            projected_cfg_terminator(function, index, switch_predicates, deterministic_switches)
+            projected_cfg_terminator(
+                function,
+                index,
+                &constants,
+                switch_predicates,
+                deterministic_switches,
+            )
         })
         .collect::<Result<Vec<_>, _>>()?;
     let entry = function.entry().index() as usize;
     let reachable = reachable_projected_blocks(entry, &terminators)?;
-    for induction in uniform_inductions {
-        for &semantic_block in &induction.loop_blocks {
-            let block = projected_blocks.get(semantic_block).ok_or(
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "a uniform induction block outside the semantic CFG",
-                ),
-            )?;
-            if projected_block_expansion(block, &terminators[semantic_block])? != 1 {
-                return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "a uniform induction region containing expanded guarded control",
-                ));
-            }
-            if semantic_block != induction.header
-                && matches!(
-                    terminators[semantic_block],
-                    ProjectedCfgTerminatorV1::AnalysisSplit { .. }
-                )
-            {
-                return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "a uniform induction region containing control without typed edge arguments",
-                ));
-            }
-        }
-    }
+    let live_inductions = (0..function.blocks().len())
+        .map(|block| {
+            uniform_inductions
+                .iter()
+                .enumerate()
+                .filter_map(|(index, induction)| induction.contains_block(block).then_some(index))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
     let mut base_blocks = vec![None; projected_blocks.len()];
     let mut block_count = 1_usize;
     for (index, (block, terminator)) in projected_blocks.iter().zip(&terminators).enumerate() {
@@ -5421,6 +5640,7 @@ fn build_ranked_cfg(
         let Some(mut current) = base_blocks[semantic_index] else {
             continue;
         };
+        let live = &live_inductions[semantic_index];
         let mut operations = Vec::new();
         for item in projected.items {
             match item {
@@ -5438,28 +5658,60 @@ fn build_ranked_cfg(
                 }
                 ProjectedBlockItemV1::Guarded(access) => {
                     let predicate = GuardPredicateV1::for_access(&access);
-                    let continuation = current + predicate.comparisons.len() + 1;
-                    append_predicate_blocks(
-                        &mut blocks,
-                        current,
-                        operations,
-                        &predicate,
-                        current + predicate.comparisons.len(),
-                        continuation,
-                    )?;
                     let access_block = current + predicate.comparisons.len();
-                    push_block_at(
-                        &mut blocks,
-                        access_block,
-                        vec![ProductionRankedOperationV1::Access {
-                            kind: access.access,
-                            view: ProductionRankedValueV1::Local(access.view),
-                            indices: access.indices,
-                        }],
-                        ProductionRankedTerminatorV1::Branch {
-                            target: ranked_block_id(continuation)?,
-                        },
-                    )?;
+                    let failure_block = access_block + 1;
+                    let continuation = failure_block + 1;
+                    if !live.is_empty() {
+                        append_predicate_blocks_with_index_arguments(
+                            &mut blocks,
+                            current,
+                            operations,
+                            &predicate,
+                            access_block,
+                            failure_block,
+                            live.len(),
+                        )?;
+                    } else {
+                        append_predicate_blocks(
+                            &mut blocks,
+                            current,
+                            operations,
+                            &predicate,
+                            access_block,
+                            failure_block,
+                        )?;
+                    }
+                    let access_operations = vec![ProductionRankedOperationV1::Access {
+                        kind: access.access,
+                        view: ProductionRankedValueV1::Local(access.view),
+                        indices: access.indices,
+                    }];
+                    if !live.is_empty() {
+                        let block = ranked_block_id(access_block)?;
+                        push_block_at_with_index_arguments(
+                            &mut blocks,
+                            access_block,
+                            u32::try_from(live.len()).map_err(|_| {
+                                ProductionRankedProjectionErrorV1::Unsupported(
+                                    "live induction argument count does not fit u32",
+                                )
+                            })?,
+                            access_operations,
+                            ProductionRankedTerminatorV1::BranchArgs {
+                                arguments: live_induction_block_arguments(block, live)?,
+                                target: ranked_block_id(continuation)?,
+                            },
+                        )?;
+                    } else {
+                        push_block_at(
+                            &mut blocks,
+                            access_block,
+                            access_operations,
+                            ProductionRankedTerminatorV1::Branch {
+                                target: ranked_block_id(continuation)?,
+                            },
+                        )?;
+                    }
                     sources.push(ProjectedAccessSourceV1 {
                         block: access_block,
                         operation: 0,
@@ -5467,96 +5719,154 @@ fn build_ranked_cfg(
                         memory_space: access.memory_space,
                         source: access.source,
                     });
+                    push_block_at(
+                        &mut blocks,
+                        failure_block,
+                        Vec::new(),
+                        ProductionRankedTerminatorV1::Trap,
+                    )?;
                     current = continuation;
                     operations = Vec::new();
                 }
             }
         }
-        if let Some(induction) = uniform_inductions
+        if let Some((induction_index, induction)) = uniform_inductions
             .iter()
-            .find(|induction| induction.preheader == semantic_index)
+            .enumerate()
+            .find(|(_, induction)| induction.preheader == semantic_index)
         {
-            push_block_at(
+            let block = ranked_block_id(current)?;
+            let target_live = &live_inductions[induction.header];
+            let mut arguments = Vec::with_capacity(target_live.len());
+            for target_induction in target_live {
+                if *target_induction == induction_index {
+                    arguments.push(induction.initial);
+                } else {
+                    let source_argument = live
+                        .iter()
+                        .position(|source| source == target_induction)
+                        .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                            "a uniform induction preheader introduces an unrelated live induction",
+                        ))?;
+                    arguments.push(ProductionRankedValueV1::BlockArgument {
+                        block,
+                        argument: u32::try_from(source_argument).map_err(|_| {
+                            ProductionRankedProjectionErrorV1::Unsupported(
+                                "live induction argument count does not fit u32",
+                            )
+                        })?,
+                    });
+                }
+            }
+            push_block_at_with_index_arguments(
                 &mut blocks,
                 current,
+                u32::try_from(live.len()).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "live induction argument count does not fit u32",
+                    )
+                })?,
                 operations,
                 ProductionRankedTerminatorV1::BranchArgs {
-                    arguments: vec![induction.initial],
+                    arguments,
                     target: ranked_block_id(projected_target(&base_blocks, induction.header)?)?,
                 },
             )?;
             continue;
         }
-        if let Some(induction) = uniform_inductions
+        if let Some((induction_index, induction)) = uniform_inductions
             .iter()
-            .find(|induction| induction.header == semantic_index)
+            .enumerate()
+            .find(|(_, induction)| induction.header == semantic_index)
         {
             let header = ranked_block_id(current)?;
             let body = projected_target(&base_blocks, induction.body_entry)?;
+            let induction_argument = live
+                .iter()
+                .position(|candidate| *candidate == induction_index)
+                .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a uniform induction header does not carry its induction value",
+                ))?;
             push_block_at_with_index_arguments(
                 &mut blocks,
                 current,
-                1,
+                u32::try_from(live.len()).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "live induction argument count does not fit u32",
+                    )
+                })?,
                 operations,
                 ProductionRankedTerminatorV1::IndexLessThanArgs {
                     lhs: ProductionRankedValueV1::BlockArgument {
                         block: header,
-                        argument: 0,
+                        argument: u32::try_from(induction_argument).map_err(|_| {
+                            ProductionRankedProjectionErrorV1::Unsupported(
+                                "live induction argument count does not fit u32",
+                            )
+                        })?,
                     },
                     rhs: induction.bound,
-                    true_arguments: vec![ProductionRankedValueV1::BlockArgument {
-                        block: header,
-                        argument: 0,
-                    }],
-                    false_arguments: vec![],
+                    true_arguments: forward_live_inductions(
+                        header,
+                        live,
+                        &live_inductions[induction.body_entry],
+                    )?,
+                    false_arguments: forward_live_inductions(
+                        header,
+                        live,
+                        &live_inductions[induction.exit],
+                    )?,
                     true_block: ranked_block_id(body)?,
                     false_block: ranked_block_id(projected_target(&base_blocks, induction.exit)?)?,
                 },
             )?;
             continue;
         }
-        if let Some(induction) = uniform_inductions
+        if let Some((induction_index, induction)) = uniform_inductions
             .iter()
-            .find(|induction| induction.latch == semantic_index)
+            .enumerate()
+            .find(|(_, induction)| induction.latch == semantic_index)
         {
             let latch = ranked_block_id(current)?;
+            let target_live = &live_inductions[induction.header];
+            let arguments = forward_live_inductions(latch, live, target_live)?;
+            let add_argument = target_live
+                .iter()
+                .position(|candidate| *candidate == induction_index)
+                .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a uniform induction latch does not carry its induction value",
+                ))?;
             push_block_at_with_index_arguments(
                 &mut blocks,
                 current,
-                1,
+                u32::try_from(live.len()).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "live induction argument count does not fit u32",
+                    )
+                })?,
                 operations,
-                ProductionRankedTerminatorV1::BranchArgsAdd {
-                    value: ProductionRankedValueV1::BlockArgument {
-                        block: latch,
-                        argument: 0,
-                    },
+                ProductionRankedTerminatorV1::BranchArgsAddAt {
+                    arguments,
+                    add_argument: u32::try_from(add_argument).map_err(|_| {
+                        ProductionRankedProjectionErrorV1::Unsupported(
+                            "live induction argument count does not fit u32",
+                        )
+                    })?,
                     step: induction.step,
                     target: ranked_block_id(projected_target(&base_blocks, induction.header)?)?,
                 },
             )?;
             continue;
         }
-        if let Some(induction) = uniform_inductions
-            .iter()
-            .find(|induction| induction.contains_block(semantic_index))
-        {
+        if !live.is_empty() {
             let block = ranked_block_id(current)?;
-            let argument = ProductionRankedValueV1::BlockArgument { block, argument: 0 };
-            let require_loop_target = |target: usize| {
-                induction.contains_block(target).then_some(target).ok_or(
-                    ProductionRankedProjectionErrorV1::Incomplete(
-                        "a uniform induction body edge escapes its unique exit",
-                    ),
-                )
-            };
+            let arguments_for =
+                |target: usize| forward_live_inductions(block, live, &live_inductions[target]);
             let terminator = match terminator {
                 ProjectedCfgTerminatorV1::Branch(target) => {
                     ProductionRankedTerminatorV1::BranchArgs {
-                        arguments: vec![argument],
-                        target: ranked_block_id(projected_target(
-                            &base_blocks,
-                            require_loop_target(target)?,
-                        )?)?,
+                        arguments: arguments_for(target)?,
+                        target: ranked_block_id(projected_target(&base_blocks, target)?)?,
                     }
                 }
                 ProjectedCfgTerminatorV1::Predicate {
@@ -5564,11 +5874,8 @@ fn build_ranked_cfg(
                     true_block,
                     false_block: _,
                 } if predicate.comparisons.is_empty() => ProductionRankedTerminatorV1::BranchArgs {
-                    arguments: vec![argument],
-                    target: ranked_block_id(projected_target(
-                        &base_blocks,
-                        require_loop_target(true_block)?,
-                    )?)?,
+                    arguments: arguments_for(true_block)?,
+                    target: ranked_block_id(projected_target(&base_blocks, true_block)?)?,
                 },
                 ProjectedCfgTerminatorV1::Predicate {
                     predicate,
@@ -5579,16 +5886,10 @@ fn build_ranked_cfg(
                     ProductionRankedTerminatorV1::IndexLessThanArgs {
                         lhs,
                         rhs,
-                        true_arguments: vec![argument],
-                        false_arguments: vec![argument],
-                        true_block: ranked_block_id(projected_target(
-                            &base_blocks,
-                            require_loop_target(true_block)?,
-                        )?)?,
-                        false_block: ranked_block_id(projected_target(
-                            &base_blocks,
-                            require_loop_target(false_block)?,
-                        )?)?,
+                        true_arguments: arguments_for(true_block)?,
+                        false_arguments: arguments_for(false_block)?,
+                        true_block: ranked_block_id(projected_target(&base_blocks, true_block)?)?,
+                        false_block: ranked_block_id(projected_target(&base_blocks, false_block)?)?,
                     }
                 }
                 ProjectedCfgTerminatorV1::Predicate { .. } => {
@@ -5596,18 +5897,20 @@ fn build_ranked_cfg(
                         "a uniform induction predicate requires unrepresentable control expansion",
                     ));
                 }
-                ProjectedCfgTerminatorV1::AnalysisSplit { .. } => {
-                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                        "a uniform induction region containing control without typed edge arguments",
-                    ));
-                }
+                ProjectedCfgTerminatorV1::AnalysisSplit {
+                    first_block,
+                    second_block,
+                } => ProductionRankedTerminatorV1::AnalysisSplitArgs {
+                    control_dependencies: Vec::new(),
+                    first_arguments: arguments_for(first_block)?,
+                    second_arguments: arguments_for(second_block)?,
+                    first_block: ranked_block_id(projected_target(&base_blocks, first_block)?)?,
+                    second_block: ranked_block_id(projected_target(&base_blocks, second_block)?)?,
+                },
                 ProjectedCfgTerminatorV1::ExactSwitch(switch) if switch.targets.is_empty() => {
                     ProductionRankedTerminatorV1::BranchArgs {
-                        arguments: vec![argument],
-                        target: ranked_block_id(projected_target(
-                            &base_blocks,
-                            require_loop_target(switch.otherwise)?,
-                        )?)?,
+                        arguments: arguments_for(switch.otherwise)?,
+                        target: ranked_block_id(projected_target(&base_blocks, switch.otherwise)?)?,
                     }
                 }
                 ProjectedCfgTerminatorV1::ExactSwitch(switch) if switch.targets.len() == 1 => {
@@ -5615,15 +5918,12 @@ fn build_ranked_cfg(
                     ProductionRankedTerminatorV1::IndexEqualArgs {
                         lhs: switch.discriminant,
                         rhs: variant,
-                        true_arguments: vec![argument],
-                        false_arguments: vec![argument],
-                        true_block: ranked_block_id(projected_target(
-                            &base_blocks,
-                            require_loop_target(target)?,
-                        )?)?,
+                        true_arguments: arguments_for(target)?,
+                        false_arguments: arguments_for(switch.otherwise)?,
+                        true_block: ranked_block_id(projected_target(&base_blocks, target)?)?,
                         false_block: ranked_block_id(projected_target(
                             &base_blocks,
-                            require_loop_target(switch.otherwise)?,
+                            switch.otherwise,
                         )?)?,
                     }
                 }
@@ -5638,7 +5938,17 @@ fn build_ranked_cfg(
                     ));
                 }
             };
-            push_block_at_with_index_arguments(&mut blocks, current, 1, operations, terminator)?;
+            push_block_at_with_index_arguments(
+                &mut blocks,
+                current,
+                u32::try_from(live.len()).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "live induction argument count does not fit u32",
+                    )
+                })?,
+                operations,
+                terminator,
+            )?;
             continue;
         }
         match terminator {
@@ -5682,6 +5992,7 @@ fn build_ranked_cfg(
                 current,
                 operations,
                 ProductionRankedTerminatorV1::AnalysisSplit {
+                    control_dependencies: Vec::new(),
                     first_block: ranked_block_id(projected_target(&base_blocks, first_block)?)?,
                     second_block: ranked_block_id(projected_target(&base_blocks, second_block)?)?,
                 },
@@ -5805,6 +6116,57 @@ fn append_predicate_blocks(
             ProductionRankedTerminatorV1::IndexLessThan {
                 lhs,
                 rhs,
+                true_block: ranked_block_id(next)?,
+                false_block: ranked_block_id(false_block)?,
+            },
+        )?;
+    }
+    Ok(())
+}
+
+fn append_predicate_blocks_with_index_arguments(
+    blocks: &mut Vec<ProductionRankedBlockV1>,
+    first_block: usize,
+    first_operations: Vec<ProductionRankedOperationV1>,
+    predicate: &GuardPredicateV1,
+    true_block: usize,
+    false_block: usize,
+    argument_count: usize,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    if predicate.comparisons.is_empty() {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "an empty predicate was materialized as conditional control flow",
+        ));
+    }
+    for (index, &(lhs, rhs)) in predicate.comparisons.iter().enumerate() {
+        let block = first_block + index;
+        let operations = if index == 0 {
+            first_operations.clone()
+        } else {
+            Vec::new()
+        };
+        let next = if index + 1 == predicate.comparisons.len() {
+            true_block
+        } else {
+            block + 1
+        };
+        let block_id = ranked_block_id(block)?;
+        let live = (0..argument_count).collect::<Vec<_>>();
+        let arguments = live_induction_block_arguments(block_id, &live)?;
+        push_block_at_with_index_arguments(
+            blocks,
+            block,
+            u32::try_from(argument_count).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "live induction argument count does not fit u32",
+                )
+            })?,
+            operations,
+            ProductionRankedTerminatorV1::IndexLessThanArgs {
+                lhs,
+                rhs,
+                true_arguments: arguments.clone(),
+                false_arguments: Vec::new(),
                 true_block: ranked_block_id(next)?,
                 false_block: ranked_block_id(false_block)?,
             },
@@ -5981,9 +6343,29 @@ fn format_ranked_cfg(
                 false_block,
             ),
             ProductionRankedTerminatorV1::AnalysisSplit {
+                control_dependencies,
                 first_block,
                 second_block,
-            } => format!("  kernel.analysis_split ^bb{first_block}, ^bb{second_block}\n"),
+            } => format!(
+                "  kernel.analysis_split controls=({}) ^bb{}, ^bb{}\n",
+                format_ranked_values(control_dependencies),
+                first_block,
+                second_block,
+            ),
+            ProductionRankedTerminatorV1::AnalysisSplitArgs {
+                control_dependencies,
+                first_arguments,
+                second_arguments,
+                first_block,
+                second_block,
+            } => format!(
+                "  kernel.analysis_split controls=({}) ({}) ^bb{}, ({}) ^bb{}\n",
+                format_ranked_values(control_dependencies),
+                format_ranked_values(first_arguments),
+                first_block,
+                format_ranked_values(second_arguments),
+                second_block,
+            ),
             ProductionRankedTerminatorV1::Branch { target } => {
                 format!("  kernel.br ^bb{target}\n")
             }
@@ -6002,7 +6384,20 @@ fn format_ranked_cfg(
                 ranked_value_text_v1(*step),
                 target,
             ),
+            ProductionRankedTerminatorV1::BranchArgsAddAt {
+                arguments,
+                add_argument,
+                step,
+                target,
+            } => format!(
+                "  kernel.br_args_add_at ({}) [{}] += {} ^bb{}\n",
+                format_ranked_values(arguments),
+                add_argument,
+                ranked_value_text_v1(*step),
+                target,
+            ),
             ProductionRankedTerminatorV1::Return => "  kernel.return\n".to_owned(),
+            ProductionRankedTerminatorV1::Trap => "  kernel.trap\n".to_owned(),
         };
         push_ranked_ir(&mut output, &terminator)?;
     }
@@ -6066,6 +6461,9 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
         ),
         ProductionRankedOperationV1::IndexConstant { result, value } => {
             format!("  %{} = kernel.index_constant {}\n", result.get(), value)
+        }
+        ProductionRankedOperationV1::IndexUnknown { result } => {
+            format!("  %{} = kernel.index_unknown\n", result.get())
         }
         ProductionRankedOperationV1::InvocationIndex {
             result,
@@ -8412,6 +8810,15 @@ mod tests {
         )
     }
 
+    fn project_test_bounds_checks(
+        function: &SemanticFunctionDeclV1,
+        first_argument: usize,
+    ) -> Result<ProjectedBoundsChecksV1, ProductionRankedProjectionErrorV1> {
+        let mut operations = Vec::new();
+        let mut next_value = 0;
+        project_rust_bounds_checks(function, first_argument, &mut operations, &mut next_value)
+    }
+
     fn option_dominance_chain(
         producer_count: usize,
     ) -> (SemanticFunctionDeclV1, Vec<SemanticOptionProducerV1>) {
@@ -8606,6 +9013,7 @@ mod tests {
                 | ProductionRankedOperationV1::ExecutionLayout { .. }
                 | ProductionRankedOperationV1::ViewInSpace { .. }
                 | ProductionRankedOperationV1::IndexConstant { .. }
+                | ProductionRankedOperationV1::IndexUnknown { .. }
                 | ProductionRankedOperationV1::InvocationIndex { .. }
                 | ProductionRankedOperationV1::DeterministicJoin { .. }
                 | ProductionRankedOperationV1::IndexBinary { .. }
@@ -8783,9 +9191,13 @@ mod tests {
             source: SemanticSourceProvenanceV1::unavailable(),
         };
         let (blocks, sources, ranked_ir) = single_guarded_cfg(entry, guarded);
-        assert_eq!(blocks.len(), 4);
+        assert_eq!(blocks.len(), 5);
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0].block, 2);
+        assert!(matches!(
+            blocks[3].terminator(),
+            ProductionRankedTerminatorV1::Trap
+        ));
         let kernel = ProductionRankedKernelV1::new("generic_checked_access", 1, blocks).unwrap();
         let construction =
             ProductionConstructionV1::ranked_kernel("checked_access_module", kernel).unwrap();
@@ -8797,33 +9209,44 @@ mod tests {
         assert!(lowering.bounds_report().is_clean());
         assert!(lowering.race_report().is_clean());
         assert!(ranked_ir.contains("kernel.cond_br") && ranked_ir.contains("kernel.access"));
-        assert!(ranked_ir.contains("kernel.br ^bb1"));
+        assert!(ranked_ir.contains("kernel.br ^bb4"));
     }
 
     #[test]
     fn rust_bounds_check_projects_only_the_exact_index_less_than_length_guard() {
         let function = bounds_check_function(SemanticBinaryOpV1::LessThan, true, false, false);
-        let projected = project_rust_bounds_checks(&function, 3).unwrap();
+        let mut operations = Vec::new();
+        let mut next_value = 0;
+        let projected =
+            project_rust_bounds_checks(&function, 3, &mut operations, &mut next_value).unwrap();
 
-        assert_eq!(projected.argument_count, 5);
+        assert_eq!(projected.argument_count, 3);
+        assert_eq!(next_value, 2);
+        assert!(matches!(
+            operations.as_slice(),
+            [
+                ProductionRankedOperationV1::IndexUnknown { result: first },
+                ProductionRankedOperationV1::IndexUnknown { result: second },
+            ] if first.get() == 0 && second.get() == 1
+        ));
         assert_eq!(projected.checks.len(), 1);
         assert_eq!(projected.checks[0].access_block, 1);
         assert_eq!(projected.checks[0].slice_local.index(), 1);
         assert_eq!(projected.checks[0].index_local.index(), 4);
         assert_eq!(
             projected.checks[0].index,
-            ProductionRankedValueV1::Argument(3)
+            ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(0))
         );
         assert_eq!(
             projected.checks[0].extent,
-            ProductionRankedValueV1::Argument(4)
+            ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(1))
         );
     }
 
     #[test]
     fn forged_rust_bounds_messages_and_conditions_fail_closed() {
         assert!(matches!(
-            project_rust_bounds_checks(
+            project_test_bounds_checks(
                 &bounds_check_function(SemanticBinaryOpV1::GreaterThan, true, false, false),
                 0,
             ),
@@ -8832,7 +9255,7 @@ mod tests {
             ))
         ));
         assert!(matches!(
-            project_rust_bounds_checks(
+            project_test_bounds_checks(
                 &bounds_check_function(SemanticBinaryOpV1::LessThan, true, true, false),
                 0,
             ),
@@ -8841,7 +9264,7 @@ mod tests {
             ))
         ));
         assert!(matches!(
-            project_rust_bounds_checks(
+            project_test_bounds_checks(
                 &bounds_check_function(SemanticBinaryOpV1::LessThan, false, false, false),
                 0,
             ),
@@ -8854,7 +9277,7 @@ mod tests {
     #[test]
     fn rust_bounds_check_cannot_authorize_another_slice_or_a_bypass_edge() {
         let function = bounds_check_function(SemanticBinaryOpV1::LessThan, true, false, false);
-        let projected = project_rust_bounds_checks(&function, 0).unwrap();
+        let projected = project_test_bounds_checks(&function, 0).unwrap();
         assert!(matches!(
             projected_bounds_check(
                 &projected.checks,
@@ -8868,7 +9291,7 @@ mod tests {
         ));
 
         assert!(matches!(
-            project_rust_bounds_checks(
+            project_test_bounds_checks(
                 &bounds_check_function(SemanticBinaryOpV1::LessThan, true, false, true),
                 0,
             ),
@@ -8962,7 +9385,7 @@ mod tests {
             [ProductionRankedOperationV1::Access { .. }]
         ));
         assert!(matches!(
-            after_blocks[3].operations(),
+            after_blocks[4].operations(),
             [ProductionRankedOperationV1::Barrier { .. }]
         ));
 
@@ -9048,9 +9471,13 @@ mod tests {
             source: SemanticSourceProvenanceV1::unavailable(),
         };
         let (blocks, sources, ranked_ir) = single_guarded_cfg(entry, guarded);
-        assert_eq!(blocks.len(), 5);
+        assert_eq!(blocks.len(), 6);
         assert_eq!(sources[0].block, 3);
-        assert!(ranked_ir.contains("kernel.br ^bb1"));
+        assert!(matches!(
+            blocks[4].terminator(),
+            ProductionRankedTerminatorV1::Trap
+        ));
+        assert!(ranked_ir.contains("kernel.br ^bb5"));
         assert!(ranked_ir.contains("^bb3:"));
 
         let kernel = ProductionRankedKernelV1::new("shifted_checked_access", 1, blocks).unwrap();
@@ -11221,11 +11648,52 @@ mod tests {
             SemanticTerminatorKindV1::Unreachable,
         );
         assert_eq!(
-            projected_cfg_terminator(&function, 0, &[const { None }; 2], &[]).unwrap(),
+            projected_cfg_terminator(&function, 0, &[], &[const { None }; 2], &[]).unwrap(),
             ProjectedCfgTerminatorV1::AnalysisSplit {
                 first_block: 1,
                 second_block: 2,
             }
+        );
+    }
+
+    fn non_bounds_assert_function(condition: SemanticOperandV1) -> SemanticFunctionDeclV1 {
+        projection_function_with_locals(
+            vec![
+                block(
+                    138,
+                    vec![],
+                    SemanticTerminatorKindV1::Assert {
+                        condition,
+                        expected: true,
+                        message: SemanticAssertMessageV1::DivisionByZero(tensor_operand(2)),
+                        target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 1),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
+                block(139, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(138, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(139, SCALAR_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(140, SCALAR_TYPE, SemanticLocalRoleV1::Argument(1)),
+            ],
+        )
+    }
+
+    #[test]
+    fn non_bounds_asserts_are_elided_only_after_exact_constant_success() {
+        let unresolved = non_bounds_assert_function(tensor_operand(1));
+        assert!(matches!(
+            projected_cfg_terminator(&unresolved, 0, &[], &[const { None }; 3], &[]),
+            Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a non-bounds Rust assertion is not statically proven to succeed"
+            ))
+        ));
+
+        let proven = non_bounds_assert_function(constant(1));
+        assert_eq!(
+            projected_cfg_terminator(&proven, 0, &[], &[const { None }; 3], &[]).unwrap(),
+            ProjectedCfgTerminatorV1::Branch(1)
         );
     }
 
@@ -11245,7 +11713,7 @@ mod tests {
             ),
         ] {
             assert!(matches!(
-                projected_cfg_terminator(&function, 0, &[const { None }; 2], &[]),
+                projected_cfg_terminator(&function, 0, &[], &[const { None }; 2], &[]),
                 Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "a general switch whose only extra successor is not one empty unreachable fallback"
                 ))
@@ -11268,7 +11736,8 @@ mod tests {
             )],
         };
         assert_eq!(
-            projected_cfg_terminator(&function, 0, &[None, Some(predicate.clone())], &[]).unwrap(),
+            projected_cfg_terminator(&function, 0, &[], &[None, Some(predicate.clone())], &[],)
+                .unwrap(),
             ProjectedCfgTerminatorV1::Predicate {
                 predicate,
                 true_block: 1,
@@ -11472,17 +11941,27 @@ mod tests {
         assert_eq!(projected.targets[0].1, 1);
         assert_eq!(projected.targets[1].1, 2);
         assert_eq!(projected.otherwise, 3);
-        let dependencies = operations
+        let binaries = operations
             .iter()
-            .find_map(|operation| match operation {
-                ProductionRankedOperationV1::DeterministicJoin { dependencies, .. } => {
-                    Some(dependencies)
-                }
+            .filter_map(|operation| match operation {
+                ProductionRankedOperationV1::IndexBinary {
+                    result,
+                    kind,
+                    lhs,
+                    rhs,
+                } => Some((*result, *kind, *lhs, *rhs)),
                 _ => None,
             })
-            .expect("derived expression must have one explicit join");
-        assert_eq!(dependencies.len(), 3);
-        assert!(dependencies.contains(&ProductionRankedValueV1::Argument(1)));
+            .collect::<Vec<_>>();
+        assert_eq!(binaries.len(), 2);
+        assert_eq!(binaries[0].1, IndexBinaryKindAttr::Divide);
+        assert_eq!(binaries[0].2, ProductionRankedValueV1::Argument(1));
+        assert_eq!(binaries[1].1, IndexBinaryKindAttr::Add);
+        assert_eq!(binaries[1].2, ProductionRankedValueV1::Local(binaries[0].0));
+        assert!(!operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::DeterministicJoin { .. }
+        )));
         let constant_values = operations
             .iter()
             .filter_map(|operation| match operation {
@@ -11517,6 +11996,32 @@ mod tests {
             2,
             "every explicit source variant must remain one exact equality edge"
         );
+    }
+
+    #[test]
+    fn deterministic_scalar_projection_rejects_partial_dynamic_or_zero_division() {
+        for divisor in [tensor_operand(2), constant(0)] {
+            let function = deterministic_expression_switch(
+                vec![scalar_assignment(
+                    3,
+                    scalar_binary(SemanticBinaryOpV1::Divide, tensor_operand(1), divisor),
+                )],
+                deterministic_expression_locals(true),
+                3,
+            );
+            assert!(matches!(
+                deterministic_scalar_switch_projection(
+                    &[],
+                    &function,
+                    &vec![None; function.locals().len()],
+                    vec![],
+                    0,
+                ),
+                Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a division or remainder used for deterministic control lacks a statically nonzero divisor"
+                ))
+            ));
+        }
     }
 
     #[test]
@@ -11560,7 +12065,7 @@ mod tests {
                 ),
             )
         };
-        for (second_argument, expected_exact) in [(1, true), (2, false)] {
+        for second_argument in [1, 2] {
             let function = deterministic_expression_switch(
                 vec![
                     definition(1),
@@ -11573,7 +12078,7 @@ mod tests {
                 deterministic_expression_locals(true),
                 4,
             );
-            let (switches, _, _) = deterministic_scalar_switch_projection(
+            let (switches, operations, _) = deterministic_scalar_switch_projection(
                 &[],
                 &function,
                 &vec![None; function.locals().len()],
@@ -11581,7 +12086,11 @@ mod tests {
                 0,
             )
             .unwrap();
-            assert_eq!(switches[0].is_some(), expected_exact);
+            assert_eq!(switches[0].is_some(), second_argument == 1);
+            assert!(!operations.iter().any(|operation| matches!(
+                operation,
+                ProductionRankedOperationV1::DeterministicJoin { .. }
+            )));
         }
     }
 
@@ -11740,8 +12249,15 @@ mod tests {
         assert!(switches[0].is_some());
         assert!(operations.iter().any(|operation| matches!(
             operation,
-            ProductionRankedOperationV1::DeterministicJoin { dependencies, .. }
-                if dependencies.contains(&ProductionRankedValueV1::Local(invocation))
+            ProductionRankedOperationV1::IndexBinary {
+                kind: IndexBinaryKindAttr::Add,
+                lhs: ProductionRankedValueV1::Local(value),
+                ..
+            } if *value == invocation
+        )));
+        assert!(!operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::DeterministicJoin { .. }
         )));
     }
 
@@ -11972,7 +12488,7 @@ mod tests {
             single_explicit_boolean_switch(1, 1, 2),
         ] {
             assert_eq!(
-                projected_cfg_terminator(&function, 0, &[None, Some(predicate.clone())], &[])
+                projected_cfg_terminator(&function, 0, &[], &[None, Some(predicate.clone())], &[],)
                     .unwrap(),
                 ProjectedCfgTerminatorV1::Predicate {
                     predicate: predicate.clone(),
@@ -11985,6 +12501,7 @@ mod tests {
             projected_cfg_terminator(
                 &single_explicit_boolean_switch(2, 1, 2),
                 0,
+                &[],
                 &[None, Some(predicate)],
                 &[],
             ),
@@ -12058,7 +12575,7 @@ mod tests {
         )
     }
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug)]
     enum InductionCfgShape {
         Chain,
         HeaderCopyAlias,
@@ -12488,7 +13005,7 @@ mod tests {
         ));
         assert!(matches!(
             blocks[3].terminator(),
-            ProductionRankedTerminatorV1::BranchArgsAdd { .. }
+            ProductionRankedTerminatorV1::BranchArgsAddAt { .. }
         ));
         ProductionRankedKernelV1::new("uniform_dynamic_loop", next_argument, blocks).unwrap();
     }
@@ -12541,7 +13058,7 @@ mod tests {
         ));
         assert!(matches!(
             blocks[5].terminator(),
-            ProductionRankedTerminatorV1::BranchArgsAdd { .. }
+            ProductionRankedTerminatorV1::BranchArgsAddAt { .. }
         ));
         ProductionRankedKernelV1::new("multi_block_uniform_loop", next_argument, blocks).unwrap();
     }
@@ -12679,7 +13196,16 @@ mod tests {
         ] {
             let function =
                 multi_block_induction_function(shape, SemanticLocalRoleV1::Argument(0), 16);
-            assert_incomplete(project_test_inductions(&function), message);
+            match project_test_inductions(&function) {
+                Ok((inductions, _, _)) => assert!(
+                    inductions.is_empty(),
+                    "a malformed loop must not mint an induction: {shape:?}"
+                ),
+                Err(ProductionRankedProjectionErrorV1::Incomplete(actual)) => {
+                    assert_eq!(actual, message)
+                }
+                Err(other) => panic!("expected incomplete projection, got {other}"),
+            }
         }
     }
 
@@ -12793,30 +13319,36 @@ mod tests {
     }
 
     #[test]
-    fn body_control_without_typed_edges_fails_closed() {
+    fn body_control_threads_typed_induction_edges() {
         let function = multi_block_induction_function(
             InductionCfgShape::AnalysisSplit,
             SemanticLocalRoleV1::Argument(0),
             16,
         );
         let (inductions, entry_operations, _) = project_test_inductions(&function).unwrap();
-        assert_incomplete(
-            build_ranked_cfg(
-                &function,
-                &vec![None; function.locals().len()],
-                &vec![None; function.blocks().len()],
-                &inductions,
-                entry_operations,
-                (0..function.blocks().len())
-                    .map(|_| ProjectedSemanticBlockV1 { items: vec![] })
-                    .collect(),
-            ),
-            "a uniform induction region containing control without typed edge arguments",
-        );
+        let (blocks, _) = build_ranked_cfg(
+            &function,
+            &vec![None; function.locals().len()],
+            &vec![None; function.blocks().len()],
+            &inductions,
+            entry_operations,
+            (0..function.blocks().len())
+                .map(|_| ProjectedSemanticBlockV1 { items: vec![] })
+                .collect(),
+        )
+        .unwrap();
+        assert!(blocks.iter().any(|block| matches!(
+            block.terminator(),
+            ProductionRankedTerminatorV1::AnalysisSplitArgs {
+                first_arguments,
+                second_arguments,
+                ..
+            } if first_arguments.len() == 1 && second_arguments.len() == 1
+        )));
     }
 
     #[test]
-    fn guarded_body_expansion_fails_closed_before_ssa_construction() {
+    fn guarded_body_expansion_threads_ssa_and_terminates_failure() {
         let function = multi_block_induction_function(
             InductionCfgShape::Chain,
             SemanticLocalRoleV1::Argument(0),
@@ -12839,16 +13371,27 @@ mod tests {
                 memory_space: MemorySpaceAttr::Global,
                 source: SemanticSourceProvenanceV1::unavailable(),
             }));
-        assert_incomplete(
-            build_ranked_cfg(
-                &function,
-                &vec![None; function.locals().len()],
-                &vec![None; function.blocks().len()],
-                &inductions,
-                entry_operations,
-                projected,
-            ),
-            "a uniform induction region containing expanded guarded control",
+        let (blocks, _) = build_ranked_cfg(
+            &function,
+            &vec![None; function.locals().len()],
+            &vec![None; function.blocks().len()],
+            &inductions,
+            entry_operations,
+            projected,
+        )
+        .unwrap();
+        assert!(blocks.iter().any(|block| matches!(
+            block.terminator(),
+            ProductionRankedTerminatorV1::IndexLessThanArgs {
+                true_arguments,
+                false_arguments,
+                ..
+            } if true_arguments.len() == 1 && false_arguments.is_empty()
+        )));
+        assert!(
+            blocks
+                .iter()
+                .any(|block| matches!(block.terminator(), ProductionRankedTerminatorV1::Trap))
         );
     }
 

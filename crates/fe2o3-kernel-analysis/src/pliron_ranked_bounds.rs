@@ -15,9 +15,9 @@ use dialect_kernel::{
     AccessKindAttr, AllocationEffectOp, AnalysisSplitOp, BranchArgsOp, BranchOp,
     CheckedTiledIndex2DOp, DeterministicJoinOp, DimensionOp, IndexBinaryOp, IndexConstantOp,
     IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
-    InvocationIndexOp, MAX_RANKED_MEMORY_RANK, RankedAccessOp, RankedViewOp, RankedViewType,
-    RequireEquivalentOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp, SemanticSymbolOp,
-    TensorLayoutOp, ranked_view_type,
+    IndexUnknownOp, InvocationIndexOp, MAX_RANKED_MEMORY_RANK, RankedAccessOp, RankedViewOp,
+    RankedViewType, RequireEquivalentOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp,
+    SemanticSymbolOp, TensorLayoutOp, TrapOp, ranked_view_type,
 };
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
@@ -254,6 +254,7 @@ struct PredecessorEdge {
 enum RankedOperationKind {
     RankedView,
     IndexConstant,
+    IndexUnknown,
     InvocationIndex,
     IndexBinary,
     DeterministicJoin,
@@ -269,6 +270,7 @@ enum RankedOperationKind {
     Branch,
     BranchArgs,
     Return,
+    Trap,
     Barrier,
     ExecutionLayout,
     Fence,
@@ -291,6 +293,7 @@ impl RankedOperationKind {
                 | Self::Branch
                 | Self::BranchArgs
                 | Self::Return
+                | Self::Trap
         )
     }
 }
@@ -300,6 +303,8 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         Some(RankedOperationKind::RankedView)
     } else if operation.downcast_ref::<IndexConstantOp>().is_some() {
         Some(RankedOperationKind::IndexConstant)
+    } else if operation.downcast_ref::<IndexUnknownOp>().is_some() {
+        Some(RankedOperationKind::IndexUnknown)
     } else if operation.downcast_ref::<InvocationIndexOp>().is_some() {
         Some(RankedOperationKind::InvocationIndex)
     } else if operation.downcast_ref::<IndexBinaryOp>().is_some() {
@@ -333,6 +338,8 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         Some(RankedOperationKind::BranchArgs)
     } else if operation.downcast_ref::<ReturnOp>().is_some() {
         Some(RankedOperationKind::Return)
+    } else if operation.downcast_ref::<TrapOp>().is_some() {
+        Some(RankedOperationKind::Trap)
     } else if operation.downcast_ref::<BarrierOp>().is_some() {
         Some(RankedOperationKind::Barrier)
     } else if operation.downcast_ref::<ExecutionLayoutOp>().is_some() {

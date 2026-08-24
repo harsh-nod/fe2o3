@@ -8,9 +8,9 @@
 use std::collections::{HashMap, VecDeque};
 
 use dialect_kernel::{
-    BranchArgsOp, CheckedTiledIndex2DOp, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp,
-    IndexConstantOp, IndexEqualBranchArgsOp, IndexLessThanBranchArgsOp, InvocationIndexOp,
-    MAX_RANKED_MEMORY_RANK, RankedViewOp, ranked_view_type,
+    AnalysisSplitOp, BranchArgsOp, CheckedTiledIndex2DOp, DimensionOp, IndexBinaryKindAttr,
+    IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp, IndexLessThanBranchArgsOp,
+    InvocationIndexOp, MAX_RANKED_MEMORY_RANK, RankedViewOp, ranked_view_type,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -565,6 +565,36 @@ fn typed_edge_arguments(
             .collect();
         return Ok(Some(vec![true_values, false_values]));
     }
+    if let Some(split) = operation.downcast_ref::<AnalysisSplitOp>() {
+        if raw.get_num_successors() != 2 {
+            return Err(malformed(
+                "kernel.analysis_split has a malformed successor count",
+            ));
+        }
+        let Some(first_arguments) = block_arguments.get(&raw.get_successor(0)) else {
+            return Err(malformed("a branch targets a block outside the kernel"));
+        };
+        let Some(second_arguments) = block_arguments.get(&raw.get_successor(1)) else {
+            return Err(malformed("a branch targets a block outside the kernel"));
+        };
+        let control_count = split.control_dependencies(context).len();
+        let expected = control_count
+            .checked_add(first_arguments.len())
+            .and_then(|count| count.checked_add(second_arguments.len()))
+            .ok_or_else(|| malformed("analysis split operand count overflows"))?;
+        if raw.get_num_operands() != expected {
+            return Err(malformed(
+                "kernel.analysis_split has a malformed operand count",
+            ));
+        }
+        let first_values = (0..first_arguments.len())
+            .map(|index| raw.get_operand(control_count + index))
+            .collect();
+        let second_values = (0..second_arguments.len())
+            .map(|index| raw.get_operand(control_count + first_arguments.len() + index))
+            .collect();
+        return Ok(Some(vec![first_values, second_values]));
+    }
     Ok(None)
 }
 
@@ -834,6 +864,7 @@ fn derive_binary(
                 modulus,
             })
             .unwrap_or(SparseIndexFactV1::Unknown),
+        Some(IndexBinaryKindAttr::Divide) => SparseIndexFactV1::Unknown,
         None => SparseIndexFactV1::Unknown,
     }
 }

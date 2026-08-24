@@ -14,10 +14,10 @@ use dialect_kernel::{
     BranchArgsOp, BranchOp, CheckedTiledIndex2DOp, DYNAMIC_EXTENT, DeterministicJoinOp,
     DimensionOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp,
     IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexType,
-    InvocationIndexOp, MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr,
-    RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp,
+    IndexUnknownOp, InvocationIndexOp, MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK,
+    MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp,
     SUPPORTED_ELEMENT_WIDTHS, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantOp,
-    SemanticSymbolOp, TensorConvergenceAttr, TensorLayoutOp,
+    SemanticSymbolOp, TensorConvergenceAttr, TensorLayoutOp, TrapOp,
 };
 use fe2o3_kernel_analysis::{
     MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_OPERATIONS, PlironAtomicLegalityReportV1,
@@ -107,6 +107,9 @@ pub enum ProductionRankedOperationV1 {
     IndexConstant {
         result: ProductionRankedValueIdV1,
         value: u64,
+    },
+    IndexUnknown {
+        result: ProductionRankedValueIdV1,
     },
     InvocationIndex {
         result: ProductionRankedValueIdV1,
@@ -235,6 +238,14 @@ pub enum ProductionRankedTerminatorV1 {
         false_block: u32,
     },
     AnalysisSplit {
+        control_dependencies: Vec<ProductionRankedValueV1>,
+        first_block: u32,
+        second_block: u32,
+    },
+    AnalysisSplitArgs {
+        control_dependencies: Vec<ProductionRankedValueV1>,
+        first_arguments: Vec<ProductionRankedValueV1>,
+        second_arguments: Vec<ProductionRankedValueV1>,
         first_block: u32,
         second_block: u32,
     },
@@ -250,7 +261,14 @@ pub enum ProductionRankedTerminatorV1 {
         step: ProductionRankedValueV1,
         target: u32,
     },
+    BranchArgsAddAt {
+        arguments: Vec<ProductionRankedValueV1>,
+        add_argument: u32,
+        step: ProductionRankedValueV1,
+        target: u32,
+    },
     Return,
+    Trap,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -356,6 +374,7 @@ impl ProductionRankedKernelV1 {
                 .checked_add(usize::from(matches!(
                     block.terminator,
                     ProductionRankedTerminatorV1::BranchArgsAdd { .. }
+                        | ProductionRankedTerminatorV1::BranchArgsAddAt { .. }
                 )))
         });
         let Some(operation_count) = operation_count else {
@@ -782,6 +801,9 @@ fn validate_operation(
         ProductionRankedOperationV1::IndexConstant { result, .. } => {
             Ok(Some((*result, RecipeValueKindV1::Index)))
         }
+        ProductionRankedOperationV1::IndexUnknown { result } => {
+            Ok(Some((*result, RecipeValueKindV1::Index)))
+        }
         ProductionRankedOperationV1::InvocationIndex {
             result, dimension, ..
         } => {
@@ -1012,6 +1034,7 @@ fn validate_block_argument_values_v1(
         }
         ProductionRankedOperationV1::ExecutionLayout { .. }
         | ProductionRankedOperationV1::IndexConstant { .. }
+        | ProductionRankedOperationV1::IndexUnknown { .. }
         | ProductionRankedOperationV1::InvocationIndex { .. }
         | ProductionRankedOperationV1::Barrier { .. }
         | ProductionRankedOperationV1::Fence { .. }
@@ -1067,9 +1090,41 @@ fn validate_terminator_block_argument_values_v1(
             }
             Ok(())
         }
-        ProductionRankedTerminatorV1::AnalysisSplit { .. }
-        | ProductionRankedTerminatorV1::Branch { .. }
-        | ProductionRankedTerminatorV1::Return => Ok(()),
+        ProductionRankedTerminatorV1::BranchArgsAddAt {
+            arguments, step, ..
+        } => {
+            for value in arguments {
+                validate(*value)?;
+            }
+            validate(*step)
+        }
+        ProductionRankedTerminatorV1::AnalysisSplitArgs {
+            control_dependencies,
+            first_arguments,
+            second_arguments,
+            ..
+        } => {
+            for value in control_dependencies
+                .iter()
+                .chain(first_arguments)
+                .chain(second_arguments)
+            {
+                validate(*value)?;
+            }
+            Ok(())
+        }
+        ProductionRankedTerminatorV1::AnalysisSplit {
+            control_dependencies,
+            ..
+        } => {
+            for value in control_dependencies {
+                validate(*value)?;
+            }
+            Ok(())
+        }
+        ProductionRankedTerminatorV1::Branch { .. }
+        | ProductionRankedTerminatorV1::Return
+        | ProductionRankedTerminatorV1::Trap => Ok(()),
     }
 }
 
@@ -1149,11 +1204,41 @@ fn validate_terminator(
             Ok(())
         }
         ProductionRankedTerminatorV1::AnalysisSplit {
+            control_dependencies,
             first_block,
             second_block,
         } => {
+            for value in control_dependencies {
+                require_index(*value, argument_count, locals)?;
+            }
             target_without_arguments(*first_block)?;
             target_without_arguments(*second_block)
+        }
+        ProductionRankedTerminatorV1::AnalysisSplitArgs {
+            control_dependencies,
+            first_arguments,
+            second_arguments,
+            first_block,
+            second_block,
+        } => {
+            target(*first_block)?;
+            target(*second_block)?;
+            if first_arguments.len() != blocks[*first_block as usize].index_argument_count as usize
+                || second_arguments.len()
+                    != blocks[*second_block as usize].index_argument_count as usize
+            {
+                return Err(ProductionRankedKernelErrorV1::Materialization(
+                    "ranked analysis split arguments do not match successors",
+                ));
+            }
+            for value in control_dependencies
+                .iter()
+                .chain(first_arguments)
+                .chain(second_arguments)
+            {
+                require_index(*value, argument_count, locals)?;
+            }
+            Ok(())
         }
         ProductionRankedTerminatorV1::Branch {
             target: destination,
@@ -1188,7 +1273,29 @@ fn validate_terminator(
             require_index(*value, argument_count, locals)?;
             require_index(*step, argument_count, locals)
         }
-        ProductionRankedTerminatorV1::Return => Ok(()),
+        ProductionRankedTerminatorV1::BranchArgsAddAt {
+            arguments,
+            add_argument,
+            step,
+            target: destination,
+        } => {
+            target(*destination)?;
+            let expected = blocks[*destination as usize].index_argument_count as usize;
+            if arguments.len() != expected
+                || usize::try_from(*add_argument)
+                    .ok()
+                    .is_none_or(|argument| argument >= arguments.len())
+            {
+                return Err(ProductionRankedKernelErrorV1::Materialization(
+                    "ranked induction backedge update does not match its successor arguments",
+                ));
+            }
+            for argument in arguments {
+                require_index(*argument, argument_count, locals)?;
+            }
+            require_index(*step, argument_count, locals)
+        }
+        ProductionRankedTerminatorV1::Return | ProductionRankedTerminatorV1::Trap => Ok(()),
     }
 }
 
@@ -1722,6 +1829,10 @@ fn materialize_operation(
             let op = IndexConstantOp::new(context, *value);
             (op.get_operation(), Some((*result, op.result(context))))
         }
+        ProductionRankedOperationV1::IndexUnknown { result } => {
+            let op = IndexUnknownOp::new(context);
+            (op.get_operation(), Some((*result, op.result(context))))
+        }
         ProductionRankedOperationV1::InvocationIndex {
             result,
             dimension,
@@ -1997,10 +2108,41 @@ fn materialize_terminator(
         )
         .get_operation(),
         ProductionRankedTerminatorV1::AnalysisSplit {
+            control_dependencies,
             first_block,
             second_block,
-        } => AnalysisSplitOp::new(
+        } => AnalysisSplitOp::new_with_control_and_arguments(
             context,
+            control_dependencies
+                .iter()
+                .map(|value| resolve_value(*value, arguments, locals, block_arguments))
+                .collect::<Result<Vec<_>, _>>()?,
+            vec![],
+            vec![],
+            blocks[*first_block as usize],
+            blocks[*second_block as usize],
+        )
+        .get_operation(),
+        ProductionRankedTerminatorV1::AnalysisSplitArgs {
+            control_dependencies,
+            first_arguments,
+            second_arguments,
+            first_block,
+            second_block,
+        } => AnalysisSplitOp::new_with_control_and_arguments(
+            context,
+            control_dependencies
+                .iter()
+                .map(|value| resolve_value(*value, arguments, locals, block_arguments))
+                .collect::<Result<Vec<_>, _>>()?,
+            first_arguments
+                .iter()
+                .map(|value| resolve_value(*value, arguments, locals, block_arguments))
+                .collect::<Result<Vec<_>, _>>()?,
+            second_arguments
+                .iter()
+                .map(|value| resolve_value(*value, arguments, locals, block_arguments))
+                .collect::<Result<Vec<_>, _>>()?,
             blocks[*first_block as usize],
             blocks[*second_block as usize],
         )
@@ -2039,7 +2181,33 @@ fn materialize_terminator(
             )
             .get_operation()
         }
+        ProductionRankedTerminatorV1::BranchArgsAddAt {
+            arguments: edge_arguments,
+            add_argument,
+            step,
+            target,
+        } => {
+            let mut edge_arguments = edge_arguments
+                .iter()
+                .map(|value| resolve_value(*value, arguments, locals, block_arguments))
+                .collect::<Result<Vec<_>, _>>()?;
+            let add_argument = usize::try_from(*add_argument).map_err(|_| {
+                ProductionRankedKernelErrorV1::Materialization(
+                    "ranked induction update argument does not fit usize",
+                )
+            })?;
+            let next = IndexBinaryOp::new(
+                context,
+                IndexBinaryKindAttr::Add,
+                edge_arguments[add_argument],
+                resolve_value(*step, arguments, locals, block_arguments)?,
+            );
+            next.get_operation().insert_at_back(block, context);
+            edge_arguments[add_argument] = next.result(context);
+            BranchArgsOp::new(context, edge_arguments, blocks[*target as usize]).get_operation()
+        }
         ProductionRankedTerminatorV1::Return => ReturnOp::new(context).get_operation(),
+        ProductionRankedTerminatorV1::Trap => TrapOp::new(context).get_operation(),
     };
     operation.insert_at_back(block, context);
     Ok(())

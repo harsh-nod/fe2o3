@@ -1044,6 +1044,7 @@ fn arbitrary_control_flow_split_never_manufactures_a_bounds_fact() {
             ProductionRankedBlockV1::new(
                 vec![view],
                 ProductionRankedTerminatorV1::AnalysisSplit {
+                    control_dependencies: vec![],
                     first_block: 1,
                     second_block: 2,
                 },
@@ -1064,6 +1065,50 @@ fn arbitrary_control_flow_split_never_manufactures_a_bounds_fact() {
         ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedBounds(_))
     ));
     assert!(error.to_string().contains("error[FE2O3-BOUNDS-002]"));
+}
+
+#[test]
+fn typed_analysis_split_materializes_and_recursively_verifies_exact_segments() {
+    let kernel = ProductionRankedKernelV1::new(
+        "typed_analysis_split",
+        1,
+        vec![
+            ProductionRankedBlockV1::new(
+                vec![ProductionRankedOperationV1::ExecutionLayout {
+                    grid_identity: 1,
+                    global_extents: [64, 1, 1],
+                    workgroup_extents: [64, 1, 1],
+                    subgroup_size: 64,
+                    full_physical_workgroups: true,
+                }],
+                ProductionRankedTerminatorV1::AnalysisSplitArgs {
+                    control_dependencies: vec![ProductionRankedValueV1::Argument(0)],
+                    first_arguments: vec![ProductionRankedValueV1::Argument(0)],
+                    second_arguments: vec![ProductionRankedValueV1::Argument(0)],
+                    first_block: 1,
+                    second_block: 2,
+                },
+            ),
+            ProductionRankedBlockV1::with_index_arguments(
+                1,
+                vec![],
+                ProductionRankedTerminatorV1::Return,
+            ),
+            ProductionRankedBlockV1::with_index_arguments(
+                1,
+                vec![],
+                ProductionRankedTerminatorV1::Return,
+            ),
+        ],
+    )
+    .unwrap();
+
+    let lowered = compile_ranked_kernel_for_lowering_v1(
+        construction(kernel),
+        ProductionSessionLimitsV1::default(),
+    )
+    .expect("typed split survives construction and recursive verification");
+    assert!(lowered.all_mandatory_reports_are_clean());
 }
 
 #[test]

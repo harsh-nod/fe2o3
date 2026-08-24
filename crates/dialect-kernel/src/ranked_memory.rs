@@ -330,6 +330,22 @@ impl LaunchExtentAttr {
     }
 }
 
+/// Number of leading analysis-split operands that completely describe its
+/// controlling predicate dependencies. Remaining operands are successor data.
+#[pliron_attr(
+    name = "kernel.analysis_split_control_count",
+    format = "$0",
+    verifier = "succ"
+)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct AnalysisSplitControlCountAttr(pub u32);
+
+impl AnalysisSplitControlCountAttr {
+    pub const fn count(self) -> u32 {
+        self.0
+    }
+}
+
 /// Closed arithmetic supported by sparse index analysis.
 #[pliron_attr(name = "kernel.index_binary_kind", format, verifier = "succ")]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -337,6 +353,7 @@ pub enum IndexBinaryKindAttr {
     Add,
     Multiply,
     Remainder,
+    Divide,
 }
 
 /// Materializes a ranked view. Its operands are the runtime extents in shape order.
@@ -529,6 +546,47 @@ impl Verify for IndexConstantOp {
             return verify_err!(
                 self.loc(context),
                 RankedMemoryError::MalformedPayload("kernel.index_constant has malformed payload")
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Produces an index whose source provenance is unavailable to analysis.
+#[pliron_op(
+    name = "kernel.index_unknown",
+    format,
+    interfaces = [NResultsInterface<1>, NRegionsInterface<0>]
+)]
+pub struct IndexUnknownOp;
+
+impl IndexUnknownOp {
+    pub fn new(context: &mut Context) -> Self {
+        Self::from_operation(Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![IndexType::get(context).into()],
+            vec![],
+            vec![],
+            0,
+        ))
+    }
+
+    pub fn result(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_result(0)
+    }
+}
+
+impl Verify for IndexUnknownOp {
+    fn verify(&self, context: &Context) -> PlironResult<()> {
+        verify_no_regions_results_successors(self, context, 1, 0)?;
+        if self.get_operation().deref(context).get_num_operands() != 0
+            || payload_attribute_count(&self.get_operation().deref(context)) != 0
+            || !is_index_type(self.result(context), context)
+        {
+            return verify_err!(
+                self.loc(context),
+                RankedMemoryError::MalformedPayload("kernel.index_unknown has malformed payload")
             );
         }
         Ok(())
@@ -1546,12 +1604,13 @@ impl Verify for IndexEqualBranchArgsOp {
     }
 }
 
-/// Target-neutral two-way split used when safety analysis retains control-flow
-/// topology but intentionally does not claim a predicate fact.
+/// Target-neutral two-way split that retains the complete control-dependency
+/// set without interpreting the source predicate.
 #[pliron_op(
     name = "kernel.analysis_split",
     format,
-    interfaces = [IsTerminatorInterface, NResultsInterface<0>, NRegionsInterface<0>]
+    interfaces = [IsTerminatorInterface, NResultsInterface<0>, NRegionsInterface<0>],
+    attributes = (kernel_analysis_split_control_count: AnalysisSplitControlCountAttr)
 )]
 pub struct AnalysisSplitOp;
 
@@ -1561,27 +1620,193 @@ impl AnalysisSplitOp {
         first_successor: Ptr<pliron::basic_block::BasicBlock>,
         second_successor: Ptr<pliron::basic_block::BasicBlock>,
     ) -> Self {
-        Self::from_operation(Operation::new(
+        Self::new_with_control_and_arguments(
+            context,
+            vec![],
+            vec![],
+            vec![],
+            first_successor,
+            second_successor,
+        )
+    }
+
+    pub fn new_with_arguments(
+        context: &mut Context,
+        first_arguments: Vec<Value>,
+        second_arguments: Vec<Value>,
+        first_successor: Ptr<pliron::basic_block::BasicBlock>,
+        second_successor: Ptr<pliron::basic_block::BasicBlock>,
+    ) -> Self {
+        Self::new_with_control_and_arguments(
+            context,
+            vec![],
+            first_arguments,
+            second_arguments,
+            first_successor,
+            second_successor,
+        )
+    }
+
+    pub fn new_with_control_and_arguments(
+        context: &mut Context,
+        control_dependencies: Vec<Value>,
+        first_arguments: Vec<Value>,
+        second_arguments: Vec<Value>,
+        first_successor: Ptr<pliron::basic_block::BasicBlock>,
+        second_successor: Ptr<pliron::basic_block::BasicBlock>,
+    ) -> Self {
+        let control_count = u32::try_from(control_dependencies.len()).unwrap_or(u32::MAX);
+        let mut operands = Vec::with_capacity(
+            control_dependencies.len() + first_arguments.len() + second_arguments.len(),
+        );
+        operands.extend(control_dependencies);
+        operands.extend(first_arguments);
+        operands.extend(second_arguments);
+        let op = Self::from_operation(Operation::new(
             context,
             Self::get_concrete_op_info(),
             vec![],
-            vec![],
+            operands,
             vec![first_successor, second_successor],
             0,
-        ))
+        ));
+        op.set_attr_kernel_analysis_split_control_count(
+            context,
+            AnalysisSplitControlCountAttr(control_count),
+        );
+        op
+    }
+
+    pub fn control_dependencies(&self, context: &Context) -> Vec<Value> {
+        let operation = self.get_operation();
+        let operation = operation.deref(context);
+        let count = self
+            .get_attr_kernel_analysis_split_control_count(context)
+            .map_or(0, |count| count.count() as usize);
+        (0..count.min(operation.get_num_operands()))
+            .map(|index| operation.get_operand(index))
+            .collect()
+    }
+
+    pub fn first_arguments(&self, context: &Context) -> Vec<Value> {
+        let operation = self.get_operation();
+        let operation = operation.deref(context);
+        let count = operation
+            .get_successor(0)
+            .deref(context)
+            .get_num_arguments();
+        let control_count = self
+            .get_attr_kernel_analysis_split_control_count(context)
+            .map_or(0, |count| count.count() as usize);
+        (0..count)
+            .map(|index| operation.get_operand(control_count + index))
+            .collect()
+    }
+
+    pub fn second_arguments(&self, context: &Context) -> Vec<Value> {
+        let operation = self.get_operation();
+        let operation = operation.deref(context);
+        let first_count = operation
+            .get_successor(0)
+            .deref(context)
+            .get_num_arguments();
+        let second_count = operation
+            .get_successor(1)
+            .deref(context)
+            .get_num_arguments();
+        let control_count = self
+            .get_attr_kernel_analysis_split_control_count(context)
+            .map_or(0, |count| count.count() as usize);
+        (0..second_count)
+            .map(|index| operation.get_operand(control_count + first_count + index))
+            .collect()
     }
 }
 
 impl Verify for AnalysisSplitOp {
     fn verify(&self, context: &Context) -> PlironResult<()> {
         verify_no_regions_results_successors(self, context, 0, 2)?;
-        if self.get_operation().deref(context).get_num_operands() != 0 {
+        let operation = self.get_operation();
+        let operation = operation.deref(context);
+        let first_successor = operation.get_successor(0);
+        let second_successor = operation.get_successor(1);
+        let first_count = first_successor.deref(context).get_num_arguments();
+        let second_count = second_successor.deref(context).get_num_arguments();
+        let Some(control_count) = self
+            .get_attr_kernel_analysis_split_control_count(context)
+            .and_then(|count| usize::try_from(count.count()).ok())
+        else {
             return verify_err!(
                 self.loc(context),
-                RankedMemoryError::MalformedPayload("kernel.analysis_split cannot carry operands")
+                RankedMemoryError::MalformedPayload(
+                    "kernel.analysis_split requires one valid control-count segment",
+                )
+            );
+        };
+        let expected = control_count
+            .checked_add(first_count)
+            .and_then(|count| count.checked_add(second_count))
+            .unwrap_or(usize::MAX);
+        let actual = operation.get_num_operands();
+        if actual != expected {
+            return verify_err!(
+                self.loc(context),
+                RankedMemoryError::OperandCountMismatch { expected, actual }
             );
         }
-        require_zero_successor_arguments(self, context)
+        if payload_attribute_count(&operation) != 1 {
+            return verify_err!(
+                self.loc(context),
+                RankedMemoryError::MalformedPayload(
+                    "kernel.analysis_split carries unexpected attributes",
+                )
+            );
+        }
+        for index in 0..control_count {
+            if operation.get_operand(index).get_type(context) != IndexType::get(context).into() {
+                return verify_err!(
+                    self.loc(context),
+                    RankedMemoryError::MalformedPayload(
+                        "kernel.analysis_split control dependency is not a kernel index",
+                    )
+                );
+            }
+        }
+        for index in 0..first_count {
+            if operation
+                .get_operand(control_count + index)
+                .get_type(context)
+                != first_successor
+                    .deref(context)
+                    .get_argument(index)
+                    .get_type(context)
+            {
+                return verify_err!(
+                    self.loc(context),
+                    RankedMemoryError::MalformedPayload(
+                        "kernel.analysis_split first-edge types differ",
+                    )
+                );
+            }
+        }
+        for index in 0..second_count {
+            if operation
+                .get_operand(control_count + first_count + index)
+                .get_type(context)
+                != second_successor
+                    .deref(context)
+                    .get_argument(index)
+                    .get_type(context)
+            {
+                return verify_err!(
+                    self.loc(context),
+                    RankedMemoryError::MalformedPayload(
+                        "kernel.analysis_split second-edge types differ",
+                    )
+                );
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1681,7 +1906,49 @@ impl Verify for BranchArgsOp {
     }
 }
 
-/// Terminates a void target-neutral kernel function.
+/// Verifies the shared parent and signature contract for kernel terminators.
+fn verify_void_function_terminator<O: Op>(
+    terminator: &O,
+    context: &Context,
+    parent_message: &'static str,
+    foreign_type_message: &'static str,
+    signature_message: &'static str,
+) -> PlironResult<()> {
+    let Some(parent) = terminator
+        .get_operation()
+        .deref(context)
+        .get_parent_op(context)
+    else {
+        return verify_err!(
+            terminator.loc(context),
+            RankedMemoryError::MalformedPayload(parent_message)
+        );
+    };
+    if !Operation::is_op::<FuncOp>(parent, context) {
+        return verify_err!(
+            terminator.loc(context),
+            RankedMemoryError::MalformedPayload(parent_message)
+        );
+    }
+    let function = FuncOp::from_operation(parent);
+    let Ok(function_type) =
+        TypedHandle::<FunctionType>::from_handle(function.get_type(context), context)
+    else {
+        return verify_err!(
+            terminator.loc(context),
+            RankedMemoryError::MalformedPayload(foreign_type_message)
+        );
+    };
+    if !function_type.deref(context).res_types().is_empty() {
+        return verify_err!(
+            terminator.loc(context),
+            RankedMemoryError::MalformedPayload(signature_message)
+        );
+    }
+    Ok(())
+}
+
+/// Terminates a void target-neutral kernel function successfully.
 #[pliron_op(
     name = "kernel.return",
     format,
@@ -1711,40 +1978,53 @@ impl Verify for ReturnOp {
                 RankedMemoryError::MalformedPayload("kernel.return cannot carry operands")
             );
         }
-        let Some(parent) = self.get_operation().deref(context).get_parent_op(context) else {
+        verify_void_function_terminator(
+            self,
+            context,
+            "kernel.return must directly terminate a builtin.func block",
+            "kernel.return parent has a foreign type",
+            "kernel.return requires a void builtin.func signature",
+        )
+    }
+}
+
+/// Terminates a target-neutral kernel function by trapping the current invocation.
+#[pliron_op(
+    name = "kernel.trap",
+    format,
+    interfaces = [IsTerminatorInterface, NResultsInterface<0>, NRegionsInterface<0>]
+)]
+pub struct TrapOp;
+
+impl TrapOp {
+    pub fn new(context: &mut Context) -> Self {
+        Self::from_operation(Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![],
+            vec![],
+            vec![],
+            0,
+        ))
+    }
+}
+
+impl Verify for TrapOp {
+    fn verify(&self, context: &Context) -> PlironResult<()> {
+        verify_no_regions_results_successors(self, context, 0, 0)?;
+        if self.get_operation().deref(context).get_num_operands() != 0 {
             return verify_err!(
                 self.loc(context),
-                RankedMemoryError::MalformedPayload(
-                    "kernel.return must directly terminate a builtin.func block",
-                )
-            );
-        };
-        if !Operation::is_op::<FuncOp>(parent, context) {
-            return verify_err!(
-                self.loc(context),
-                RankedMemoryError::MalformedPayload(
-                    "kernel.return must directly terminate a builtin.func block",
-                )
+                RankedMemoryError::MalformedPayload("kernel.trap cannot carry operands")
             );
         }
-        let function = FuncOp::from_operation(parent);
-        let Ok(function_type) =
-            TypedHandle::<FunctionType>::from_handle(function.get_type(context), context)
-        else {
-            return verify_err!(
-                self.loc(context),
-                RankedMemoryError::MalformedPayload("kernel.return parent has a foreign type")
-            );
-        };
-        if !function_type.deref(context).res_types().is_empty() {
-            return verify_err!(
-                self.loc(context),
-                RankedMemoryError::MalformedPayload(
-                    "kernel.return requires a void builtin.func signature",
-                )
-            );
-        }
-        Ok(())
+        verify_void_function_terminator(
+            self,
+            context,
+            "kernel.trap must directly terminate a builtin.func block",
+            "kernel.trap parent has a foreign type",
+            "kernel.trap requires a void builtin.func signature",
+        )
     }
 }
 
@@ -1815,6 +2095,7 @@ fn verify_no_regions_results_successors(
                     | "kernel_allocation_effect_noalias_class"
                     | "kernel_invocation_dimension"
                     | "kernel_launch_extent"
+                    | "kernel_analysis_split_control_count"
                     | "kernel_index_binary_kind"
                     | "kernel_lanes_per_tile"
                     | "kernel_tile_rows"

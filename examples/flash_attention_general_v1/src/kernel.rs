@@ -106,7 +106,9 @@ pub fn flash_attention_general_v1(
     let lane_column = lane % 16;
     let query_tile = raw / 64;
     let tiles_per_head = query_rows_padded as usize / 16;
-    let head = query_tile / tiles_per_head;
+    let head = query_tile
+        .checked_div(tiles_per_head)
+        .ok_or(KernelError::InvalidArgument)?;
     let query_row_base = query_tile * 16;
     let score_row_base = query_tile * 16 + (lane / 16) * 4;
     let output_tile = thread_index

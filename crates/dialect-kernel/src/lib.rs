@@ -34,14 +34,15 @@ mod semantic_contract;
 mod tensor_layout;
 
 pub use ranked_memory::{
-    AccessKindAttr, AllocationEffectOp, AllocationOriginAttr, AnalysisSplitOp, AtomicOrderingAttr,
-    AtomicScopeAttr, BranchArgsOp, BranchOp, CheckedTiledIndex2DOp, DYNAMIC_EXTENT,
-    DeterministicJoinOp, DimensionAttr, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp,
-    IndexConstantOp, IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp,
-    IndexLessThanBranchOp, IndexType, IndexValueAttr, InvocationDimensionAttr, InvocationIndexOp,
-    LaunchExtentAttr, MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr,
-    NoAliasClassAttr, RankedAccessOp, RankedMemoryError, RankedViewOp, RankedViewType, ReturnOp,
-    SUPPORTED_ELEMENT_WIDTHS, is_index_type, ranked_view_type,
+    AccessKindAttr, AllocationEffectOp, AllocationOriginAttr, AnalysisSplitControlCountAttr,
+    AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr, BranchArgsOp, BranchOp,
+    CheckedTiledIndex2DOp, DYNAMIC_EXTENT, DeterministicJoinOp, DimensionAttr, DimensionOp,
+    IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp,
+    IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexType,
+    IndexUnknownOp, IndexValueAttr, InvocationDimensionAttr, InvocationIndexOp, LaunchExtentAttr,
+    MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, NoAliasClassAttr,
+    RankedAccessOp, RankedMemoryError, RankedViewOp, RankedViewType, ReturnOp,
+    SUPPORTED_ELEMENT_WIDTHS, TrapOp, is_index_type, ranked_view_type,
 };
 pub use semantic_contract::{
     RequireEquivalentOp, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr,
@@ -385,6 +386,9 @@ pub fn register_dialect(
     <NoAliasClassAttr as Attribute>::register::<NoAliasClassAttr>(context);
     <InvocationDimensionAttr as Attribute>::register::<InvocationDimensionAttr>(context);
     <LaunchExtentAttr as Attribute>::register::<LaunchExtentAttr>(context);
+    <AnalysisSplitControlCountAttr as Attribute>::register::<AnalysisSplitControlCountAttr>(
+        context,
+    );
     <IndexBinaryKindAttr as Attribute>::register::<IndexBinaryKindAttr>(context);
     <SemanticSymbolAttr as Attribute>::register::<SemanticSymbolAttr>(context);
     <SemanticConstantAttr as Attribute>::register::<SemanticConstantAttr>(context);
@@ -393,6 +397,7 @@ pub fn register_dialect(
     GeneralGemmOp::register(context);
     RankedViewOp::register(context);
     IndexConstantOp::register(context);
+    IndexUnknownOp::register(context);
     InvocationIndexOp::register(context);
     IndexBinaryOp::register(context);
     DeterministicJoinOp::register(context);
@@ -407,6 +412,7 @@ pub fn register_dialect(
     BranchOp::register(context);
     BranchArgsOp::register(context);
     ReturnOp::register(context);
+    TrapOp::register(context);
     SemanticSymbolOp::register(context);
     SemanticConstantOp::register(context);
     SemanticBinaryOp::register(context);

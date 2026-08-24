@@ -14,7 +14,7 @@ use dialect_gpu::{
 use dialect_kernel::{
     AccessKindAttr, BranchArgsOp, BranchOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
     IndexLessThanBranchArgsOp, IndexLessThanBranchOp, MemorySpaceAttr, RankedAccessOp,
-    RankedViewOp, ReturnOp, TensorLayoutOp,
+    RankedViewOp, ReturnOp, TensorLayoutOp, TrapOp,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -59,6 +59,9 @@ pub(crate) enum PlironTraceEventV1 {
         order: MemoryOrderAttr,
     },
     TensorInstruction {
+        location: PlironTraceLocationV1,
+    },
+    Trap {
         location: PlironTraceLocationV1,
     },
     Memory {
@@ -338,12 +341,14 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
                 .deref(context)
                 .get_terminator(context)
                 .ok_or(PlironTraceFailureV1::UnsupportedTerminator { block: block_index })?;
+            let mut terminator_index = None;
             for (operation_index, operation) in block.deref(context).iter(context).enumerate() {
                 // Charge the scan itself, including pure definitions and the
                 // terminator. Event count is therefore bounded by this same
                 // budget instead of only by the number of visited blocks.
                 charge_trace_work_v1(&mut total_steps, 1)?;
                 if operation == terminator {
+                    terminator_index = Some(operation_index);
                     continue;
                 }
                 let operation = Operation::get_op_dyn(operation, context);
@@ -452,6 +457,17 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
 
             let terminator = Operation::get_op_dyn(terminator, context);
             if terminator.downcast_ref::<ReturnOp>().is_some() {
+                break;
+            }
+            if terminator.downcast_ref::<TrapOp>().is_some() {
+                let operation = terminator_index
+                    .ok_or(PlironTraceFailureV1::UnsupportedTerminator { block: block_index })?;
+                events.push(PlironTraceEventV1::Trap {
+                    location: PlironTraceLocationV1 {
+                        block: block_index,
+                        operation,
+                    },
+                });
                 break;
             }
             let raw = terminator.get_operation().deref(context);

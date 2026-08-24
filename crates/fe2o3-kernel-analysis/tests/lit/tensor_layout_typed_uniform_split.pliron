@@ -1,0 +1,19 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK: PASS
+builtin.func @tensor_layout_typed_uniform_split: builtin.function <(kernel.index ) -> ()>
+{
+  ^entry_block1v1(k_v0: kernel.index ):
+    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 7, gpu_execution_global_x: gpu.execution_extent 0, gpu_execution_global_y: gpu.execution_extent 1, gpu_execution_global_z: gpu.execution_extent 1, gpu_execution_workgroup_x: gpu.execution_extent 64, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 64, gpu_execution_domain: gpu.execution_domain FullPhysicalWorkgroups]: <() -> ()>;
+    kernel.analysis_split (k_v0, k_v0, k_v0) [^left_block2v1, ^right_block3v1] [kernel_analysis_split_control_count: kernel.analysis_split_control_count 1]: <(kernel.index , kernel.index , kernel.index ) -> ()>
+
+  ^left_block2v1(left_v1: kernel.index ):
+    kernel.br () [^join_block4v1] []: <() -> ()>
+
+  ^right_block3v1(right_v2: kernel.index ):
+    kernel.br () [^join_block4v1] []: <() -> ()>
+
+  ^join_block4v1():
+    kernel.tensor_layout () [] [kernel_tensor_a: kernel.tensor_fragment <1,16,16,1,4,1,16,16,0,1,0,0,1,0,0,4,1,1,1,1,1,1>, kernel_tensor_accumulator: kernel.tensor_fragment <3,16,16,2,4,1,16,16,0,0,4,1,1,0,1,0,0,1,1,1,2,1>, kernel_tensor_b: kernel.tensor_fragment <2,16,16,1,4,1,16,16,0,0,4,1,1,0,1,0,0,1,1,1,1,1>, kernel_tensor_convergence: kernel.tensor_convergence UniformSubgroup, kernel_tensor_instruction: kernel.tensor_instruction <1,0,64,64,1>]: <() -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

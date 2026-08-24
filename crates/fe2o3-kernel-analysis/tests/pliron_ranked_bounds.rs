@@ -1,7 +1,7 @@
 use dialect_kernel::{
     AccessKindAttr, AlgorithmOp, BranchOp, DIALECT_NAME, DeterministicJoinOp, DimensionOp,
     GeneralGemmOp, IndexConstantOp, IndexEqualBranchOp, IndexLessThanBranchOp, IndexType,
-    RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp, register_dialect,
+    RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp, TrapOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckPassKindV1, MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_EDGES,
@@ -73,6 +73,26 @@ fn kernel_return_rejects_a_nonvoid_function_signature() {
 
     assert_eq!(
         run_pliron_ranked_bounds_check_v1(context, &function).findings(),
+        &[RankedBoundsFindingV1::StructuralVerificationFailed]
+    );
+}
+
+#[test]
+fn kernel_trap_is_a_distinct_valid_void_terminator() {
+    let context = &mut setup();
+    let (function, _) = function(context, "trapping", 0);
+    let trap = TrapOp::new(context);
+    append(context, function.get_entry_block(context), &trap);
+
+    assert!(run_pliron_ranked_bounds_check_v1(context, &function).is_clean());
+
+    let unit: TypeHandle = UnitType::get(context).into();
+    let function_type = FunctionType::get(context, vec![], vec![unit]);
+    let nonvoid = FuncOp::new(context, "nonvoid_trap".try_into().unwrap(), function_type);
+    let trap = TrapOp::new(context);
+    append(context, nonvoid.get_entry_block(context), &trap);
+    assert_eq!(
+        run_pliron_ranked_bounds_check_v1(context, &nonvoid).findings(),
         &[RankedBoundsFindingV1::StructuralVerificationFailed]
     );
 }

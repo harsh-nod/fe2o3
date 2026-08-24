@@ -5,7 +5,7 @@ use std::{collections::HashMap, fmt};
 use dialect_gpu::{AddressSpaceAttr, BarrierOp, ExecutionDomainAttr, HierarchyAttr};
 use dialect_kernel::{
     AnalysisSplitOp, BranchArgsOp, BranchOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
-    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, ReturnOp,
+    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, ReturnOp, TrapOp,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -319,7 +319,9 @@ fn summarize_barrier_paths_from(
     }
     let terminator = Operation::get_op_dyn(terminator, context);
     let raw = terminator.get_operation().deref(context);
-    let successors = if terminator.downcast_ref::<ReturnOp>().is_some() {
+    let successors = if terminator.downcast_ref::<ReturnOp>().is_some()
+        || terminator.downcast_ref::<TrapOp>().is_some()
+    {
         Vec::new()
     } else if terminator.downcast_ref::<BranchOp>().is_some()
         || terminator.downcast_ref::<BranchArgsOp>().is_some()
@@ -417,6 +419,7 @@ fn barrier_trace(
             PlironTraceEventV1::Barrier { .. }
             | PlironTraceEventV1::Fence { .. }
             | PlironTraceEventV1::TensorInstruction { .. }
+            | PlironTraceEventV1::Trap { .. }
             | PlironTraceEventV1::Memory { .. } => None,
         })
         .collect()
