@@ -12,7 +12,8 @@ use std::{
 use dialect_gpu::{AddressSpaceAttr, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr};
 use dialect_kernel::{
     AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, DYNAMIC_EXTENT, IndexBinaryKindAttr,
-    MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, SUPPORTED_ELEMENT_WIDTHS, TensorConvergenceAttr,
+    MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr,
+    SUPPORTED_ELEMENT_WIDTHS, TensorConvergenceAttr,
 };
 use fe2o3_kernel_analysis::{
     MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_EDGES, MAX_RANKED_BOUNDS_OPERATIONS,
@@ -183,9 +184,30 @@ struct IntrinsicProjectionV1 {
     guarded_accesses: Vec<GuardedRankedAccessV1>,
     option_predicates: Vec<Option<GuardPredicateV1>>,
     direct_switch_predicates: Vec<Option<GuardPredicateV1>>,
+    deterministic_switches: Vec<Option<ProjectedDeterministicSwitchV1>>,
     uniform_inductions: Vec<ProjectedUniformInductionV1>,
     tensor_layouts: Vec<Option<ProductionRankedOperationV1>>,
     extent_argument_count: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProjectedDeterministicSwitchV1 {
+    discriminant: ProductionRankedValueV1,
+    targets: Vec<(ProductionRankedValueV1, usize)>,
+    otherwise: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum DeterministicScalarSummaryV1 {
+    Constant(u64),
+    Exact(ProductionRankedValueV1),
+    Derived(Vec<ProductionRankedValueV1>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeterministicScalarDefinitionV1 {
+    Assignment { block: usize, statement: usize },
+    Call { block: usize },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -679,6 +701,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     let (blocks, sources) = build_ranked_cfg(
         function,
         &switch_predicates,
+        &intrinsic.deterministic_switches,
         &intrinsic.uniform_inductions,
         entry_operations,
         projected_blocks,
@@ -2863,6 +2886,21 @@ fn project_intrinsic_contracts(
         operations,
         next_value,
     )?;
+    let projected_switch_predicates =
+        switch_predicates(function, &option_predicates, &direct_switch_predicates)?;
+    let deterministic_switches = project_deterministic_scalar_switches_v1(
+        callables,
+        function,
+        constants,
+        &local_definitions,
+        &index_values,
+        &local_allocations,
+        &projected_switch_predicates,
+        &mut runtime_index_arguments,
+        &mut next_runtime_argument,
+        operations,
+        next_value,
+    )?;
 
     let local_contracts = ProjectionLocalContractsV1 {
         checked_reference_origins: checked_reference_origins(
@@ -2882,6 +2920,7 @@ fn project_intrinsic_contracts(
         guarded_accesses,
         option_predicates,
         direct_switch_predicates,
+        deterministic_switches,
         uniform_inductions,
         tensor_layouts,
     })
@@ -2901,6 +2940,804 @@ fn retain_identical_direct_switch_predicate_v1(
         }
     }
     Ok(())
+}
+
+struct DeterministicScalarProjectorV1<'a> {
+    callables: &'a [SemanticCallableDeclV1],
+    function: &'a SemanticFunctionDeclV1,
+    constants: &'a [Option<u64>],
+    local_definitions: &'a [u8],
+    index_values: &'a [Option<ProjectedDisjointIndexV1>],
+    local_allocations: &'a [Option<AllocationContractV1>],
+    argument_slots: &'a mut [Option<u32>],
+    next_argument: &'a mut usize,
+    operations: &'a mut Vec<ProductionRankedOperationV1>,
+    next_value: &'a mut u32,
+    definitions: Vec<Vec<DeterministicScalarDefinitionV1>>,
+    states: Vec<u8>,
+    summaries: Vec<Option<DeterministicScalarSummaryV1>>,
+    ranked_constants: HashMap<u64, ProductionRankedValueV1>,
+    reachability: HashMap<(usize, usize), bool>,
+    reachability_marks: Vec<u32>,
+    reachability_epoch: u32,
+    reachability_work: usize,
+}
+
+impl<'a> DeterministicScalarProjectorV1<'a> {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        callables: &'a [SemanticCallableDeclV1],
+        function: &'a SemanticFunctionDeclV1,
+        constants: &'a [Option<u64>],
+        local_definitions: &'a [u8],
+        index_values: &'a [Option<ProjectedDisjointIndexV1>],
+        local_allocations: &'a [Option<AllocationContractV1>],
+        argument_slots: &'a mut [Option<u32>],
+        next_argument: &'a mut usize,
+        operations: &'a mut Vec<ProductionRankedOperationV1>,
+        next_value: &'a mut u32,
+    ) -> Result<Self, ProductionRankedProjectionErrorV1> {
+        let local_count = function.locals().len();
+        if constants.len() != local_count
+            || local_definitions.len() != local_count
+            || index_values.len() != local_count
+            || local_allocations.len() != local_count
+            || argument_slots.len() != local_count
+        {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic scalar projection tables do not match the semantic local table",
+            ));
+        }
+        let mut definitions = vec![Vec::new(); local_count];
+        for (block_index, block) in function.blocks().iter().enumerate() {
+            for (statement_index, statement) in block.statements().iter().enumerate() {
+                let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                    continue;
+                };
+                if !assignment.destination().projections().is_empty() {
+                    continue;
+                }
+                let local = assignment.destination().local().index() as usize;
+                let Some(slot) = definitions.get_mut(local) else {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "a deterministic scalar assignment is outside the semantic local table",
+                    ));
+                };
+                slot.try_reserve(1).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "deterministic scalar definition storage cannot be reserved",
+                    )
+                })?;
+                slot.push(DeterministicScalarDefinitionV1::Assignment {
+                    block: block_index,
+                    statement: statement_index,
+                });
+            }
+            if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
+                && let Some(destination) = call.destination()
+                && destination.place().projections().is_empty()
+            {
+                let local = destination.place().local().index() as usize;
+                let Some(slot) = definitions.get_mut(local) else {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "a deterministic scalar call destination is outside the semantic local table",
+                    ));
+                };
+                slot.try_reserve(1).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "deterministic scalar definition storage cannot be reserved",
+                    )
+                })?;
+                slot.push(DeterministicScalarDefinitionV1::Call { block: block_index });
+            }
+        }
+        Ok(Self {
+            callables,
+            function,
+            constants,
+            local_definitions,
+            index_values,
+            local_allocations,
+            argument_slots,
+            next_argument,
+            operations,
+            next_value,
+            definitions,
+            states: vec![0; local_count],
+            summaries: vec![None; local_count],
+            ranked_constants: HashMap::new(),
+            reachability: HashMap::new(),
+            reachability_marks: vec![0; function.blocks().len()],
+            reachability_epoch: 0,
+            reachability_work: 0,
+        })
+    }
+
+    fn resolve_operand(
+        &mut self,
+        operand: &SemanticOperandV1,
+    ) -> Result<Option<DeterministicScalarSummaryV1>, ProductionRankedProjectionErrorV1> {
+        match operand {
+            SemanticOperandV1::Constant(constant) => match constant.value() {
+                SemanticConstantValueV1::Scalar(value) => Ok(u64::try_from(value.bits())
+                    .ok()
+                    .map(DeterministicScalarSummaryV1::Constant)),
+                _ => Ok(None),
+            },
+            SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
+                self.resolve_place(place, place.projections().is_empty())
+            }
+        }
+    }
+
+    fn resolve_place(
+        &mut self,
+        place: &SemanticPlaceV1,
+        preserve_exact: bool,
+    ) -> Result<Option<DeterministicScalarSummaryV1>, ProductionRankedProjectionErrorV1> {
+        if transparent_place(place).is_none() {
+            return Ok(None);
+        }
+        let summary = self.resolve_local(place.local().index() as usize)?;
+        if preserve_exact {
+            Ok(summary)
+        } else {
+            self.derive([summary])
+        }
+    }
+
+    fn resolve_local(
+        &mut self,
+        local: usize,
+    ) -> Result<Option<DeterministicScalarSummaryV1>, ProductionRankedProjectionErrorV1> {
+        let Some(state) = self.states.get(local).copied() else {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a deterministic scalar dependency is outside the semantic local table",
+            ));
+        };
+        if state == 2 {
+            return Ok(self.summaries[local].clone());
+        }
+        if state == 1 {
+            return Ok(None);
+        }
+        self.states[local] = 1;
+        let summary = if let Some(index) = self.index_values[local] {
+            Some(DeterministicScalarSummaryV1::Exact(index.value))
+        } else if let Some(value) = self.constants[local] {
+            Some(DeterministicScalarSummaryV1::Constant(value))
+        } else if self.local_definitions[local] == 0 {
+            match self.function.locals()[local].role() {
+                SemanticLocalRoleV1::Argument(argument) => Some(
+                    DeterministicScalarSummaryV1::Exact(self.ranked_argument(argument as usize)?),
+                ),
+                SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => None,
+            }
+        } else if self.definitions[local].len() != usize::from(self.local_definitions[local]) {
+            None
+        } else {
+            let mut candidates = Vec::new();
+            candidates
+                .try_reserve(self.definitions[local].len())
+                .map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "deterministic scalar definition meet storage cannot be reserved",
+                    )
+                })?;
+            for definition_index in 0..self.definitions[local].len() {
+                let definition = self.definitions[local][definition_index];
+                let Some(candidate) = self.resolve_definition(definition)? else {
+                    candidates.clear();
+                    break;
+                };
+                candidates.push(candidate);
+            }
+            if candidates.is_empty() {
+                None
+            } else if candidates.windows(2).all(|pair| pair[0] == pair[1])
+                && self.definitions[local]
+                    .windows(2)
+                    .all(|pair| self.definition_semantics_equal(pair[0], pair[1]))
+            {
+                candidates.into_iter().next()
+            } else {
+                self.merge_control_selected_definitions(local, candidates)?
+            }
+        };
+        self.states[local] = 2;
+        self.summaries[local] = summary.clone();
+        Ok(summary)
+    }
+
+    fn resolve_definition(
+        &mut self,
+        definition: DeterministicScalarDefinitionV1,
+    ) -> Result<Option<DeterministicScalarSummaryV1>, ProductionRankedProjectionErrorV1> {
+        match definition {
+            DeterministicScalarDefinitionV1::Assignment { block, statement } => {
+                let value = self.function.blocks()[block].statements()[statement]
+                    .kind()
+                    .clone();
+                let SemanticStatementKindV1::Assign(assignment) = value else {
+                    unreachable!("indexed deterministic assignment changed kind")
+                };
+                self.resolve_rvalue(assignment.value().kind().clone())
+            }
+            DeterministicScalarDefinitionV1::Call { block } => {
+                let terminator = self.function.blocks()[block].terminator().kind().clone();
+                let SemanticTerminatorKindV1::Call(call) = terminator else {
+                    unreachable!("indexed deterministic call changed kind")
+                };
+                self.resolve_call(&call)
+            }
+        }
+    }
+
+    fn merge_control_selected_definitions(
+        &mut self,
+        local: usize,
+        candidates: Vec<DeterministicScalarSummaryV1>,
+    ) -> Result<Option<DeterministicScalarSummaryV1>, ProductionRankedProjectionErrorV1> {
+        if self.definitions[local]
+            .windows(2)
+            .any(|pair| Self::definition_block(pair[0]) == Self::definition_block(pair[1]))
+        {
+            return Ok(None);
+        }
+        let mut inputs = Vec::new();
+        inputs.try_reserve(candidates.len()).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic scalar control meet storage cannot be reserved",
+            )
+        })?;
+        inputs.extend(candidates.into_iter().map(Some));
+        let mut observed_selector = false;
+        for definition_index in 0..self.definitions[local].len() {
+            let definition_block =
+                Self::definition_block(self.definitions[local][definition_index]);
+            let Some(controls) = self.definition_control_summaries(definition_block)? else {
+                return Ok(None);
+            };
+            observed_selector |= !controls.is_empty();
+            inputs.try_reserve(controls.len()).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "deterministic scalar control meet storage cannot be reserved",
+                )
+            })?;
+            inputs.extend(controls.into_iter().map(Some));
+        }
+        if !observed_selector {
+            return Ok(None);
+        }
+        self.derive(inputs)
+    }
+
+    const fn definition_block(definition: DeterministicScalarDefinitionV1) -> usize {
+        match definition {
+            DeterministicScalarDefinitionV1::Assignment { block, .. }
+            | DeterministicScalarDefinitionV1::Call { block } => block,
+        }
+    }
+
+    fn definition_semantics_equal(
+        &self,
+        left: DeterministicScalarDefinitionV1,
+        right: DeterministicScalarDefinitionV1,
+    ) -> bool {
+        match (left, right) {
+            (
+                DeterministicScalarDefinitionV1::Assignment {
+                    block: left_block,
+                    statement: left_statement,
+                },
+                DeterministicScalarDefinitionV1::Assignment {
+                    block: right_block,
+                    statement: right_statement,
+                },
+            ) => {
+                let left = self.function.blocks()[left_block].statements()[left_statement].kind();
+                let right =
+                    self.function.blocks()[right_block].statements()[right_statement].kind();
+                let (SemanticStatementKindV1::Assign(left), SemanticStatementKindV1::Assign(right)) =
+                    (left, right)
+                else {
+                    unreachable!("indexed deterministic assignments changed kind")
+                };
+                left.value() == right.value()
+            }
+            (
+                DeterministicScalarDefinitionV1::Call { block: left },
+                DeterministicScalarDefinitionV1::Call { block: right },
+            ) => {
+                let left = self.function.blocks()[left].terminator().kind();
+                let right = self.function.blocks()[right].terminator().kind();
+                let (SemanticTerminatorKindV1::Call(left), SemanticTerminatorKindV1::Call(right)) =
+                    (left, right)
+                else {
+                    unreachable!("indexed deterministic calls changed kind")
+                };
+                left.callee() == right.callee()
+                    && left.arguments() == right.arguments()
+                    && left.variadic_argument_abis() == right.variadic_argument_abis()
+                    && left.unwind() == right.unwind()
+            }
+            _ => false,
+        }
+    }
+
+    fn definition_control_summaries(
+        &mut self,
+        definition_block: usize,
+    ) -> Result<Option<Vec<DeterministicScalarSummaryV1>>, ProductionRankedProjectionErrorV1> {
+        let mut controls = Vec::new();
+        for block_index in 0..self.function.blocks().len() {
+            let terminator = self.function.blocks()[block_index]
+                .terminator()
+                .kind()
+                .clone();
+            if terminator.edge_count() < 2 {
+                continue;
+            }
+            let mut successors = Vec::new();
+            successors
+                .try_reserve(terminator.edge_count())
+                .map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "deterministic scalar successor storage cannot be reserved",
+                    )
+                })?;
+            let mut successor_set = HashSet::new();
+            successor_set
+                .try_reserve(terminator.edge_count())
+                .map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "deterministic scalar successor set cannot be reserved",
+                    )
+                })?;
+            terminator.try_for_each_edge::<ProductionRankedProjectionErrorV1>(|edge| {
+                let successor = edge.target().index() as usize;
+                if successor >= self.function.blocks().len() {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "a deterministic scalar control edge is outside the semantic CFG",
+                    ));
+                }
+                if successor_set.insert(successor) {
+                    successors.push(successor);
+                }
+                Ok(())
+            })?;
+            if successors.len() < 2 {
+                continue;
+            }
+            let mut reaches = 0_usize;
+            for successor in successors.iter().copied() {
+                reaches += usize::from(self.block_can_reach(successor, definition_block)?);
+            }
+            if reaches == 0 || reaches == successors.len() {
+                continue;
+            }
+            let SemanticTerminatorKindV1::SwitchInt { discriminant, .. } = &terminator else {
+                return Ok(None);
+            };
+            let Some(control) = self.resolve_operand(discriminant)? else {
+                return Ok(None);
+            };
+            controls.try_reserve(1).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "deterministic scalar selector storage cannot be reserved",
+                )
+            })?;
+            controls.push(control);
+        }
+        Ok(Some(controls))
+    }
+
+    fn block_can_reach(
+        &mut self,
+        start: usize,
+        target: usize,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        if start >= self.function.blocks().len() || target >= self.function.blocks().len() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a deterministic scalar reachability query is outside the semantic CFG",
+            ));
+        }
+        if let Some(reaches) = self.reachability.get(&(start, target)).copied() {
+            return Ok(reaches);
+        }
+        self.reachability_epoch = self.reachability_epoch.wrapping_add(1);
+        if self.reachability_epoch == 0 {
+            self.reachability_marks.fill(0);
+            self.reachability_epoch = 1;
+        }
+        let epoch = self.reachability_epoch;
+        let mut worklist = Vec::new();
+        worklist.try_reserve(1).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic scalar reachability worklist cannot be reserved",
+            )
+        })?;
+        worklist.push(start);
+        self.reachability_marks[start] = epoch;
+        let mut reaches = false;
+        while let Some(block) = worklist.pop() {
+            if block == target {
+                reaches = true;
+                break;
+            }
+            let terminator = self.function.blocks()[block].terminator().kind().clone();
+            terminator.try_for_each_edge::<ProductionRankedProjectionErrorV1>(|edge| {
+                self.reachability_work = self.reachability_work.checked_add(1).ok_or(
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "deterministic scalar reachability work accounting overflowed",
+                    ),
+                )?;
+                if self.reachability_work > MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1 {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "deterministic scalar reachability exceeded its explicit work limit",
+                    ));
+                }
+                let successor = edge.target().index() as usize;
+                let Some(mark) = self.reachability_marks.get_mut(successor) else {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "a deterministic scalar reachability edge is outside the semantic CFG",
+                    ));
+                };
+                if *mark != epoch {
+                    *mark = epoch;
+                    worklist.try_reserve(1).map_err(|_| {
+                        ProductionRankedProjectionErrorV1::Unsupported(
+                            "deterministic scalar reachability worklist cannot be reserved",
+                        )
+                    })?;
+                    worklist.push(successor);
+                }
+                Ok(())
+            })?;
+        }
+        self.reachability.try_reserve(1).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic scalar reachability cache cannot be reserved",
+            )
+        })?;
+        self.reachability.insert((start, target), reaches);
+        Ok(reaches)
+    }
+
+    fn resolve_rvalue(
+        &mut self,
+        rvalue: SemanticRvalueKindV1,
+    ) -> Result<Option<DeterministicScalarSummaryV1>, ProductionRankedProjectionErrorV1> {
+        match rvalue {
+            SemanticRvalueKindV1::Use(operand) => self.resolve_operand(&operand),
+            SemanticRvalueKindV1::Unary { operand, .. }
+            | SemanticRvalueKindV1::Cast { operand, .. } => {
+                let summary = self.resolve_operand(&operand)?;
+                self.derive([summary])
+            }
+            SemanticRvalueKindV1::Binary { left, right, .. } => {
+                let left = self.resolve_operand(&left)?;
+                let right = self.resolve_operand(&right)?;
+                self.derive([left, right])
+            }
+            SemanticRvalueKindV1::CheckedBinary(checked) => {
+                let left = self.resolve_operand(checked.left())?;
+                let right = self.resolve_operand(checked.right())?;
+                self.derive([left, right])
+            }
+            // Unlike ordinary MIR arithmetic guarded by explicit control, this
+            // operation carries a precondition not represented in the rvalue.
+            SemanticRvalueKindV1::UncheckedBinary(_) => Ok(None),
+            SemanticRvalueKindV1::Aggregate(aggregate) => {
+                if let SemanticAggregateKindV1::EnumVariant(variant) = aggregate.kind() {
+                    return Ok(Some(DeterministicScalarSummaryV1::Constant(u64::from(
+                        *variant,
+                    ))));
+                }
+                let mut inputs = Vec::new();
+                inputs
+                    .try_reserve(aggregate.operands().len())
+                    .map_err(|_| {
+                        ProductionRankedProjectionErrorV1::Unsupported(
+                            "deterministic scalar aggregate dependency storage cannot be reserved",
+                        )
+                    })?;
+                for operand in aggregate.operands() {
+                    inputs.push(self.resolve_operand(operand)?);
+                }
+                self.derive(inputs)
+            }
+            SemanticRvalueKindV1::Length(place) => self.resolve_place(&place, false),
+            // Private addresses may differ per invocation even when the
+            // referenced value is uniform. Address-space provenance must be
+            // established before either rvalue can become a control summary.
+            SemanticRvalueKindV1::Borrow { place, .. }
+            | SemanticRvalueKindV1::AddressOf { place, .. } => {
+                let local = place.local().index() as usize;
+                if self
+                    .local_allocations
+                    .get(local)
+                    .copied()
+                    .flatten()
+                    .is_none()
+                {
+                    return Ok(None);
+                }
+                let summary = self.resolve_place(&place, true)?;
+                self.derive([summary])
+            }
+            SemanticRvalueKindV1::Discriminant(place) => {
+                let summary = self.resolve_place(&place, true)?;
+                match summary {
+                    Some(DeterministicScalarSummaryV1::Constant(value)) => {
+                        Ok(Some(DeterministicScalarSummaryV1::Constant(value)))
+                    }
+                    summary => self.derive([summary]),
+                }
+            }
+            // A load may depend on mutable memory that is not represented by
+            // its address. It can never be summarized as deterministic control.
+            SemanticRvalueKindV1::Load(_) => Ok(None),
+        }
+    }
+
+    fn resolve_call(
+        &mut self,
+        call: &SemanticDirectCallV1,
+    ) -> Result<Option<DeterministicScalarSummaryV1>, ProductionRankedProjectionErrorV1> {
+        if matches!(call.unwind(), SemanticUnwindActionV1::Cleanup(_)) {
+            return Ok(None);
+        }
+        let Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) =
+            self.callables.get(call.callee().index() as usize)
+        else {
+            return Ok(None);
+        };
+        if !compiler_intrinsic_is_pure_total_scalar_dependency_v1(operation) {
+            return Ok(None);
+        }
+        let mut inputs = Vec::new();
+        inputs.try_reserve(call.arguments().len()).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic scalar call dependency storage cannot be reserved",
+            )
+        })?;
+        for argument in call.arguments() {
+            inputs.push(self.resolve_operand(argument)?);
+        }
+        self.derive(inputs)
+    }
+
+    fn derive(
+        &mut self,
+        inputs: impl IntoIterator<Item = Option<DeterministicScalarSummaryV1>>,
+    ) -> Result<Option<DeterministicScalarSummaryV1>, ProductionRankedProjectionErrorV1> {
+        let mut dependencies = Vec::new();
+        for input in inputs {
+            let Some(input) = input else {
+                return Ok(None);
+            };
+            let values = match input {
+                DeterministicScalarSummaryV1::Constant(value) => {
+                    let value = self.ranked_constant(value)?;
+                    Self::retain_dependency(&mut dependencies, value)?;
+                    continue;
+                }
+                DeterministicScalarSummaryV1::Exact(value) => {
+                    Self::retain_dependency(&mut dependencies, value)?;
+                    continue;
+                }
+                DeterministicScalarSummaryV1::Derived(values) => values,
+            };
+            for value in values {
+                Self::retain_dependency(&mut dependencies, value)?;
+            }
+        }
+        Ok((!dependencies.is_empty())
+            .then_some(DeterministicScalarSummaryV1::Derived(dependencies)))
+    }
+
+    fn retain_dependency(
+        dependencies: &mut Vec<ProductionRankedValueV1>,
+        value: ProductionRankedValueV1,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        if let Err(index) = dependencies.binary_search(&value) {
+            dependencies.try_reserve(1).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "deterministic scalar dependency storage cannot be reserved",
+                )
+            })?;
+            dependencies.insert(index, value);
+            if dependencies.len() > MAX_DETERMINISTIC_JOIN_INPUTS_V1 {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a deterministic scalar expression exceeds the explicit dependency limit",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn materialize(
+        &mut self,
+        summary: DeterministicScalarSummaryV1,
+    ) -> Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1> {
+        match summary {
+            DeterministicScalarSummaryV1::Constant(value) => self.ranked_constant(value),
+            DeterministicScalarSummaryV1::Exact(value) => Ok(value),
+            DeterministicScalarSummaryV1::Derived(dependencies) => {
+                if !(1..=MAX_DETERMINISTIC_JOIN_INPUTS_V1).contains(&dependencies.len()) {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "a deterministic scalar summary has missing or excessive dependencies",
+                    ));
+                }
+                reserve_operation(self.operations)?;
+                let result = next_value_id(self.next_value)?;
+                self.operations
+                    .push(ProductionRankedOperationV1::DeterministicJoin {
+                        result,
+                        dependencies,
+                    });
+                Ok(ProductionRankedValueV1::Local(result))
+            }
+        }
+    }
+
+    fn ranked_constant(
+        &mut self,
+        value: u64,
+    ) -> Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1> {
+        if let Some(value) = self.ranked_constants.get(&value).copied() {
+            return Ok(value);
+        }
+        self.ranked_constants.try_reserve(1).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic scalar constant cache cannot be reserved",
+            )
+        })?;
+        reserve_operation(self.operations)?;
+        let result = next_value_id(self.next_value)?;
+        let ranked = ProductionRankedValueV1::Local(result);
+        self.operations
+            .push(ProductionRankedOperationV1::IndexConstant { result, value });
+        self.ranked_constants.insert(value, ranked);
+        Ok(ranked)
+    }
+
+    fn ranked_argument(
+        &mut self,
+        origin: usize,
+    ) -> Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1> {
+        let slot = self.argument_slots.get_mut(origin).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "a deterministic scalar argument origin is outside the semantic local table",
+            ),
+        )?;
+        let argument = match *slot {
+            Some(argument) => argument,
+            None => {
+                let argument = u32::try_from(*self.next_argument).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "too many deterministic scalar ranked arguments",
+                    )
+                })?;
+                *self.next_argument = self.next_argument.checked_add(1).ok_or(
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "deterministic scalar ranked argument count overflow",
+                    ),
+                )?;
+                *slot = Some(argument);
+                argument
+            }
+        };
+        Ok(ProductionRankedValueV1::Argument(argument))
+    }
+}
+
+fn compiler_intrinsic_is_pure_total_scalar_dependency_v1(
+    operation: &SemanticCompilerIntrinsicOperationV1,
+) -> bool {
+    matches!(
+        operation,
+        SemanticCompilerIntrinsicOperationV1::FabsF32
+            | SemanticCompilerIntrinsicOperationV1::MathF32 { .. }
+            | SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor { .. }
+            | SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint { .. }
+            | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift { .. }
+            | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedBlock { .. }
+            | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedTiled2d { .. }
+            | SemanticCompilerIntrinsicOperationV1::ThreadIndexGet { .. }
+            | SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { .. }
+            | SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift { .. }
+            | SemanticCompilerIntrinsicOperationV1::DisjointSliceLen { .. }
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_deterministic_scalar_switches_v1(
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
+    constants: &[Option<u64>],
+    local_definitions: &[u8],
+    index_values: &[Option<ProjectedDisjointIndexV1>],
+    local_allocations: &[Option<AllocationContractV1>],
+    predicates: &[Option<GuardPredicateV1>],
+    argument_slots: &mut [Option<u32>],
+    next_argument: &mut usize,
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+) -> Result<Vec<Option<ProjectedDeterministicSwitchV1>>, ProductionRankedProjectionErrorV1> {
+    if predicates.len() != function.locals().len() {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "deterministic scalar predicates do not match the semantic local table",
+        ));
+    }
+    let mut projector = DeterministicScalarProjectorV1::new(
+        callables,
+        function,
+        constants,
+        local_definitions,
+        index_values,
+        local_allocations,
+        argument_slots,
+        next_argument,
+        operations,
+        next_value,
+    )?;
+    let mut switches = vec![None; function.blocks().len()];
+    for (block_index, block) in function.blocks().iter().enumerate() {
+        let SemanticTerminatorKindV1::SwitchInt {
+            discriminant,
+            targets,
+        } = block.terminator().kind()
+        else {
+            continue;
+        };
+        if simple_operand_local(discriminant).is_some_and(|local| {
+            predicates
+                .get(local.index() as usize)
+                .is_some_and(Option::is_some)
+        }) {
+            continue;
+        }
+        let Some(summary) = projector.resolve_operand(discriminant)? else {
+            continue;
+        };
+        let discriminant = projector.materialize(summary)?;
+        let mut projected_targets = Vec::new();
+        projected_targets
+            .try_reserve(targets.values().len())
+            .map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "deterministic scalar switch target storage cannot be reserved",
+                )
+            })?;
+        for target in targets.values() {
+            let value = u64::try_from(target.value()).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Incomplete(
+                    "a deterministic scalar switch variant does not fit ranked index width",
+                )
+            })?;
+            let target_block = target.edge().target().index() as usize;
+            if target_block >= function.blocks().len() {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a deterministic scalar switch target is outside the semantic CFG",
+                ));
+            }
+            projected_targets.push((projector.ranked_constant(value)?, target_block));
+        }
+        let otherwise = targets.otherwise().target().index() as usize;
+        if otherwise >= function.blocks().len() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a deterministic scalar switch fallback is outside the semantic CFG",
+            ));
+        }
+        switches[block_index] = Some(ProjectedDeterministicSwitchV1 {
+            discriminant,
+            targets: projected_targets,
+            otherwise,
+        });
+    }
+    Ok(switches)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4060,6 +4897,7 @@ enum ProjectedCfgTerminatorV1 {
         first_block: usize,
         second_block: usize,
     },
+    ExactSwitch(ProjectedDeterministicSwitchV1),
     Return,
 }
 
@@ -4067,6 +4905,7 @@ fn projected_cfg_terminator(
     function: &SemanticFunctionDeclV1,
     block_index: usize,
     switch_predicates: &[Option<GuardPredicateV1>],
+    deterministic_switches: &[Option<ProjectedDeterministicSwitchV1>],
 ) -> Result<ProjectedCfgTerminatorV1, ProductionRankedProjectionErrorV1> {
     let block = function.blocks().get(block_index).ok_or(
         ProductionRankedProjectionErrorV1::Unsupported("a semantic CFG block outside the function"),
@@ -4093,6 +4932,12 @@ fn projected_cfg_terminator(
                     .and_then(Clone::clone)
             });
             let Some(predicate) = predicate else {
+                if let Some(projected) = deterministic_switches
+                    .get(block_index)
+                    .and_then(Clone::clone)
+                {
+                    return Ok(ProjectedCfgTerminatorV1::ExactSwitch(projected));
+                }
                 if targets.values().len() == 1 {
                     return Ok(ProjectedCfgTerminatorV1::AnalysisSplit {
                         first_block: target(targets.values()[0].edge().target())?,
@@ -4220,12 +5065,20 @@ fn projected_block_expansion(
                 "semantic CFG predicate block count overflow",
             ))?;
     }
+    if let ProjectedCfgTerminatorV1::ExactSwitch(switch) = terminator {
+        count = count
+            .checked_add(switch.targets.len().saturating_sub(1))
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic switch CFG block count overflow",
+            ))?;
+    }
     Ok(count)
 }
 
 fn build_ranked_cfg(
     function: &SemanticFunctionDeclV1,
     switch_predicates: &[Option<GuardPredicateV1>],
+    deterministic_switches: &[Option<ProjectedDeterministicSwitchV1>],
     uniform_inductions: &[ProjectedUniformInductionV1],
     entry_operations: Vec<ProductionRankedOperationV1>,
     projected_blocks: Vec<ProjectedSemanticBlockV1>,
@@ -4239,7 +5092,9 @@ fn build_ranked_cfg(
         ));
     }
     let terminators = (0..function.blocks().len())
-        .map(|index| projected_cfg_terminator(function, index, switch_predicates))
+        .map(|index| {
+            projected_cfg_terminator(function, index, switch_predicates, deterministic_switches)
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let entry = function.entry().index() as usize;
     let reachable = reachable_projected_blocks(entry, &terminators)?;
@@ -4547,6 +5402,15 @@ fn build_ranked_cfg(
                     second_block: ranked_block_id(projected_target(&base_blocks, second_block)?)?,
                 },
             )?,
+            ProjectedCfgTerminatorV1::ExactSwitch(switch) => {
+                append_exact_switch_blocks(
+                    &mut blocks,
+                    current,
+                    operations,
+                    &switch,
+                    &base_blocks,
+                )?;
+            }
             ProjectedCfgTerminatorV1::Return => push_block_at(
                 &mut blocks,
                 current,
@@ -4604,6 +5468,10 @@ fn reachable_projected_blocks(
                 pending.push(*first_block);
                 pending.push(*second_block);
             }
+            ProjectedCfgTerminatorV1::ExactSwitch(switch) => {
+                pending.extend(switch.targets.iter().map(|(_, target)| *target));
+                pending.push(switch.otherwise);
+            }
             ProjectedCfgTerminatorV1::Return => {}
         }
     }
@@ -4654,6 +5522,50 @@ fn append_predicate_blocks(
                 lhs,
                 rhs,
                 true_block: ranked_block_id(next)?,
+                false_block: ranked_block_id(false_block)?,
+            },
+        )?;
+    }
+    Ok(())
+}
+
+fn append_exact_switch_blocks(
+    blocks: &mut Vec<ProductionRankedBlockV1>,
+    first_block: usize,
+    first_operations: Vec<ProductionRankedOperationV1>,
+    switch: &ProjectedDeterministicSwitchV1,
+    base_blocks: &[Option<usize>],
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    if switch.targets.is_empty() {
+        return push_block_at(
+            blocks,
+            first_block,
+            first_operations,
+            ProductionRankedTerminatorV1::Branch {
+                target: ranked_block_id(projected_target(base_blocks, switch.otherwise)?)?,
+            },
+        );
+    }
+    for (index, &(variant, target)) in switch.targets.iter().enumerate() {
+        let block = first_block + index;
+        let operations = if index == 0 {
+            first_operations.clone()
+        } else {
+            Vec::new()
+        };
+        let false_block = if index + 1 == switch.targets.len() {
+            projected_target(base_blocks, switch.otherwise)?
+        } else {
+            block + 1
+        };
+        push_block_at(
+            blocks,
+            block,
+            operations,
+            ProductionRankedTerminatorV1::IndexEqual {
+                lhs: switch.discriminant,
+                rhs: variant,
+                true_block: ranked_block_id(projected_target(base_blocks, target)?)?,
                 false_block: ranked_block_id(false_block)?,
             },
         )?;
@@ -7401,6 +8313,7 @@ mod tests {
                 | ProductionRankedOperationV1::ViewInSpace { .. }
                 | ProductionRankedOperationV1::IndexConstant { .. }
                 | ProductionRankedOperationV1::InvocationIndex { .. }
+                | ProductionRankedOperationV1::DeterministicJoin { .. }
                 | ProductionRankedOperationV1::IndexBinary { .. }
                 | ProductionRankedOperationV1::CheckedTiledIndex2D { .. }
                 | ProductionRankedOperationV1::Dimension { .. }
@@ -7429,6 +8342,7 @@ mod tests {
         let (blocks, sources) = build_ranked_cfg(
             &function,
             &vec![None; function.locals().len()],
+            &vec![None; function.blocks().len()],
             &[],
             entry,
             vec![ProjectedSemanticBlockV1 {
@@ -7739,6 +8653,7 @@ mod tests {
         let (after_blocks, _) = build_ranked_cfg(
             &function,
             &vec![None; function.locals().len()],
+            &vec![None; function.blocks().len()],
             &[],
             vec![],
             vec![
@@ -7761,6 +8676,7 @@ mod tests {
         let (before_blocks, _) = build_ranked_cfg(
             &function,
             &vec![None; function.locals().len()],
+            &vec![None; function.blocks().len()],
             &[],
             vec![],
             vec![
@@ -9702,7 +10618,7 @@ mod tests {
             SemanticTerminatorKindV1::Unreachable,
         );
         assert_eq!(
-            projected_cfg_terminator(&function, 0, &[const { None }; 2]).unwrap(),
+            projected_cfg_terminator(&function, 0, &[const { None }; 2], &[]).unwrap(),
             ProjectedCfgTerminatorV1::AnalysisSplit {
                 first_block: 1,
                 second_block: 2,
@@ -9726,7 +10642,7 @@ mod tests {
             ),
         ] {
             assert!(matches!(
-                projected_cfg_terminator(&function, 0, &[const { None }; 2]),
+                projected_cfg_terminator(&function, 0, &[const { None }; 2], &[]),
                 Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "a general switch whose only extra successor is not one empty unreachable fallback"
                 ))
@@ -9749,7 +10665,7 @@ mod tests {
             )],
         };
         assert_eq!(
-            projected_cfg_terminator(&function, 0, &[None, Some(predicate.clone())]).unwrap(),
+            projected_cfg_terminator(&function, 0, &[None, Some(predicate.clone())], &[]).unwrap(),
             ProjectedCfgTerminatorV1::Predicate {
                 predicate,
                 true_block: 1,
@@ -9790,6 +10706,656 @@ mod tests {
         )
     }
 
+    fn deterministic_scalar_switch_projection(
+        callables: &[SemanticCallableDeclV1],
+        function: &SemanticFunctionDeclV1,
+        index_values: &[Option<ProjectedDisjointIndexV1>],
+        operations: Vec<ProductionRankedOperationV1>,
+        next_value: u32,
+    ) -> Result<
+        (
+            Vec<Option<ProjectedDeterministicSwitchV1>>,
+            Vec<ProductionRankedOperationV1>,
+            usize,
+        ),
+        ProductionRankedProjectionErrorV1,
+    > {
+        deterministic_scalar_switch_projection_with_allocations(
+            callables,
+            function,
+            index_values,
+            &vec![None; function.locals().len()],
+            operations,
+            next_value,
+        )
+    }
+
+    fn deterministic_scalar_switch_projection_with_allocations(
+        callables: &[SemanticCallableDeclV1],
+        function: &SemanticFunctionDeclV1,
+        index_values: &[Option<ProjectedDisjointIndexV1>],
+        local_allocations: &[Option<AllocationContractV1>],
+        mut operations: Vec<ProductionRankedOperationV1>,
+        mut next_value: u32,
+    ) -> Result<
+        (
+            Vec<Option<ProjectedDeterministicSwitchV1>>,
+            Vec<ProductionRankedOperationV1>,
+            usize,
+        ),
+        ProductionRankedProjectionErrorV1,
+    > {
+        let constants = constant_locals(function);
+        let definitions = local_definition_counts(function);
+        let mut arguments = vec![None; function.locals().len()];
+        let mut next_argument = 1;
+        let switches = project_deterministic_scalar_switches_v1(
+            callables,
+            function,
+            &constants,
+            &definitions,
+            index_values,
+            local_allocations,
+            &vec![None; function.locals().len()],
+            &mut arguments,
+            &mut next_argument,
+            &mut operations,
+            &mut next_value,
+        )?;
+        Ok((switches, operations, next_argument))
+    }
+
+    fn deterministic_expression_switch(
+        definitions: Vec<SemanticStatementV1>,
+        locals: Vec<SemanticLocalDeclV1>,
+        discriminant: u32,
+    ) -> SemanticFunctionDeclV1 {
+        projection_function_with_locals(
+            vec![
+                block(
+                    110,
+                    definitions,
+                    SemanticTerminatorKindV1::SwitchInt {
+                        discriminant: tensor_operand(discriminant),
+                        targets: SemanticSwitchTargetsV1::new(
+                            vec![
+                                SemanticSwitchTargetV1::new(
+                                    3,
+                                    cfg_edge(SemanticEdgeRoleV1::SwitchValue, 1),
+                                ),
+                                SemanticSwitchTargetV1::new(
+                                    7,
+                                    cfg_edge(SemanticEdgeRoleV1::SwitchValue, 2),
+                                ),
+                            ],
+                            cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 3),
+                        )
+                        .unwrap(),
+                    },
+                ),
+                block(111, vec![], SemanticTerminatorKindV1::Return),
+                block(112, vec![], SemanticTerminatorKindV1::Return),
+                block(113, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            locals,
+        )
+    }
+
+    fn scalar_assignment(local: u32, value: SemanticRvalueKindV1) -> SemanticStatementV1 {
+        statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], SCALAR_TYPE)
+                .unwrap(),
+            SemanticRvalueV1::new(SCALAR_TYPE, value),
+        )))
+    }
+
+    fn scalar_binary(
+        operation: SemanticBinaryOpV1,
+        left: SemanticOperandV1,
+        right: SemanticOperandV1,
+    ) -> SemanticRvalueKindV1 {
+        SemanticRvalueKindV1::Binary {
+            operation,
+            left,
+            right,
+        }
+    }
+
+    fn deterministic_expression_locals(two_arguments: bool) -> Vec<SemanticLocalDeclV1> {
+        let mut locals = vec![
+            local(110, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+            local(111, SCALAR_TYPE, SemanticLocalRoleV1::Argument(0)),
+        ];
+        if two_arguments {
+            locals.push(local(112, SCALAR_TYPE, SemanticLocalRoleV1::Argument(1)));
+        } else {
+            locals.push(local(112, SCALAR_TYPE, SemanticLocalRoleV1::Temporary));
+        }
+        locals.extend([
+            local(113, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+            local(114, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+            local(115, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+        ]);
+        locals
+    }
+
+    #[test]
+    fn deterministic_scalar_projection_preserves_divide_add_dependencies_and_switch_values() {
+        let function = deterministic_expression_switch(
+            vec![
+                scalar_assignment(
+                    3,
+                    scalar_binary(SemanticBinaryOpV1::Divide, tensor_operand(1), constant(16)),
+                ),
+                scalar_assignment(
+                    4,
+                    scalar_binary(SemanticBinaryOpV1::Add, tensor_operand(3), constant(1)),
+                ),
+            ],
+            deterministic_expression_locals(false),
+            4,
+        );
+        let (switches, operations, _) = deterministic_scalar_switch_projection(
+            &[],
+            &function,
+            &vec![None; function.locals().len()],
+            vec![],
+            0,
+        )
+        .unwrap();
+
+        let projected = switches[0].as_ref().expect("switch must be exact");
+        assert_eq!(projected.targets.len(), 2);
+        assert_eq!(projected.targets[0].1, 1);
+        assert_eq!(projected.targets[1].1, 2);
+        assert_eq!(projected.otherwise, 3);
+        let dependencies = operations
+            .iter()
+            .find_map(|operation| match operation {
+                ProductionRankedOperationV1::DeterministicJoin { dependencies, .. } => {
+                    Some(dependencies)
+                }
+                _ => None,
+            })
+            .expect("derived expression must have one explicit join");
+        assert_eq!(dependencies.len(), 3);
+        assert!(dependencies.contains(&ProductionRankedValueV1::Argument(1)));
+        let constant_values = operations
+            .iter()
+            .filter_map(|operation| match operation {
+                ProductionRankedOperationV1::IndexConstant { value, .. } => Some(*value),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(constant_values.contains(&1));
+        assert!(constant_values.contains(&3));
+        assert!(constant_values.contains(&7));
+        assert!(constant_values.contains(&16));
+
+        let (blocks, _) = build_ranked_cfg(
+            &function,
+            &vec![None; function.locals().len()],
+            &switches,
+            &[],
+            operations,
+            (0..function.blocks().len())
+                .map(|_| ProjectedSemanticBlockV1 { items: vec![] })
+                .collect(),
+        )
+        .unwrap();
+        assert_eq!(
+            blocks
+                .iter()
+                .filter(|block| matches!(
+                    block.terminator(),
+                    ProductionRankedTerminatorV1::IndexEqual { .. }
+                ))
+                .count(),
+            2,
+            "every explicit source variant must remain one exact equality edge"
+        );
+    }
+
+    #[test]
+    fn deterministic_scalar_projection_rejects_one_missing_dependency() {
+        let function = deterministic_expression_switch(
+            vec![scalar_assignment(
+                4,
+                scalar_binary(
+                    SemanticBinaryOpV1::Add,
+                    tensor_operand(1),
+                    tensor_operand(2),
+                ),
+            )],
+            deterministic_expression_locals(false),
+            4,
+        );
+        let (switches, operations, _) = deterministic_scalar_switch_projection(
+            &[],
+            &function,
+            &vec![None; function.locals().len()],
+            vec![],
+            0,
+        )
+        .unwrap();
+        assert!(switches[0].is_none());
+        assert!(!operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::DeterministicJoin { .. }
+        )));
+    }
+
+    #[test]
+    fn repeated_deterministic_definitions_meet_only_when_dependencies_match() {
+        let definition = |argument| {
+            scalar_assignment(
+                3,
+                scalar_binary(
+                    SemanticBinaryOpV1::Divide,
+                    tensor_operand(argument),
+                    constant(16),
+                ),
+            )
+        };
+        for (second_argument, expected_exact) in [(1, true), (2, false)] {
+            let function = deterministic_expression_switch(
+                vec![
+                    definition(1),
+                    definition(second_argument),
+                    scalar_assignment(
+                        4,
+                        scalar_binary(SemanticBinaryOpV1::Add, tensor_operand(3), constant(1)),
+                    ),
+                ],
+                deterministic_expression_locals(true),
+                4,
+            );
+            let (switches, _, _) = deterministic_scalar_switch_projection(
+                &[],
+                &function,
+                &vec![None; function.locals().len()],
+                vec![],
+                0,
+            )
+            .unwrap();
+            assert_eq!(switches[0].is_some(), expected_exact);
+        }
+    }
+
+    fn control_selected_definition_switch(selector: SemanticLocalRoleV1) -> SemanticFunctionDeclV1 {
+        let destination = SemanticLocalIdV1::from_index(2);
+        let place = SemanticPlaceV1::new(destination, vec![], SCALAR_TYPE).unwrap();
+        projection_function_with_locals(
+            vec![
+                block(
+                    132,
+                    vec![],
+                    SemanticTerminatorKindV1::SwitchInt {
+                        discriminant: tensor_operand(1),
+                        targets: SemanticSwitchTargetsV1::new(
+                            vec![SemanticSwitchTargetV1::new(
+                                0,
+                                cfg_edge(SemanticEdgeRoleV1::SwitchValue, 1),
+                            )],
+                            cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 2),
+                        )
+                        .unwrap(),
+                    },
+                ),
+                block(
+                    133,
+                    vec![scalar_assignment(
+                        2,
+                        scalar_binary(SemanticBinaryOpV1::Add, tensor_operand(3), constant(1)),
+                    )],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3)),
+                ),
+                block(
+                    134,
+                    vec![scalar_assignment(
+                        2,
+                        scalar_binary(SemanticBinaryOpV1::Subtract, tensor_operand(3), constant(1)),
+                    )],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3)),
+                ),
+                block(
+                    135,
+                    vec![],
+                    SemanticTerminatorKindV1::SwitchInt {
+                        discriminant: SemanticOperandV1::Move(place),
+                        targets: SemanticSwitchTargetsV1::new(
+                            vec![SemanticSwitchTargetV1::new(
+                                0,
+                                cfg_edge(SemanticEdgeRoleV1::SwitchValue, 4),
+                            )],
+                            cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 5),
+                        )
+                        .unwrap(),
+                    },
+                ),
+                block(136, vec![], SemanticTerminatorKindV1::Return),
+                block(137, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(132, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(133, SCALAR_TYPE, selector),
+                local(134, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(135, SCALAR_TYPE, SemanticLocalRoleV1::Argument(1)),
+            ],
+        )
+    }
+
+    #[test]
+    fn control_selected_definitions_include_the_exact_selector_dependency() {
+        let uniform = control_selected_definition_switch(SemanticLocalRoleV1::Argument(0));
+        let (switches, operations, _) = deterministic_scalar_switch_projection(
+            &[],
+            &uniform,
+            &vec![None; uniform.locals().len()],
+            vec![],
+            0,
+        )
+        .unwrap();
+        assert!(switches[3].is_some());
+        assert!(operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::DeterministicJoin { dependencies, .. }
+                if dependencies.contains(&ProductionRankedValueV1::Argument(1))
+                    && dependencies.contains(&ProductionRankedValueV1::Argument(2))
+        )));
+
+        let varying = control_selected_definition_switch(SemanticLocalRoleV1::Temporary);
+        let invocation = ProductionRankedValueIdV1::new(0);
+        let mut index_values = vec![None; varying.locals().len()];
+        index_values[1] = Some(ProjectedDisjointIndexV1 {
+            value: ProductionRankedValueV1::Local(invocation),
+            mapping: SemanticDisjointIndexSpaceV1::Index1d,
+            precondition: None,
+            availability: None,
+        });
+        let (switches, operations, _) = deterministic_scalar_switch_projection(
+            &[],
+            &varying,
+            &index_values,
+            vec![ProductionRankedOperationV1::InvocationIndex {
+                result: invocation,
+                dimension: 0,
+                launch_extent: 0,
+            }],
+            1,
+        )
+        .unwrap();
+        assert!(switches[3].is_some());
+        assert!(operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::DeterministicJoin { dependencies, .. }
+                if dependencies.contains(&ProductionRankedValueV1::Local(invocation))
+        )));
+
+        let unknown = control_selected_definition_switch(SemanticLocalRoleV1::Temporary);
+        let (switches, _, _) = deterministic_scalar_switch_projection(
+            &[],
+            &unknown,
+            &vec![None; unknown.locals().len()],
+            vec![],
+            0,
+        )
+        .unwrap();
+        assert!(switches[3].is_none());
+    }
+
+    #[test]
+    fn lane_derived_scalar_control_retains_the_invocation_dependency() {
+        let function = deterministic_expression_switch(
+            vec![scalar_assignment(
+                4,
+                scalar_binary(SemanticBinaryOpV1::Add, tensor_operand(1), constant(1)),
+            )],
+            deterministic_expression_locals(false),
+            4,
+        );
+        let invocation = ProductionRankedValueIdV1::new(0);
+        let mut index_values = vec![None; function.locals().len()];
+        index_values[1] = Some(ProjectedDisjointIndexV1 {
+            value: ProductionRankedValueV1::Local(invocation),
+            mapping: SemanticDisjointIndexSpaceV1::Index1d,
+            precondition: None,
+            availability: None,
+        });
+        let (switches, operations, _) = deterministic_scalar_switch_projection(
+            &[],
+            &function,
+            &index_values,
+            vec![ProductionRankedOperationV1::InvocationIndex {
+                result: invocation,
+                dimension: 0,
+                launch_extent: 0,
+            }],
+            1,
+        )
+        .unwrap();
+        assert!(switches[0].is_some());
+        assert!(operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::DeterministicJoin { dependencies, .. }
+                if dependencies.contains(&ProductionRankedValueV1::Local(invocation))
+        )));
+    }
+
+    fn compiler_intrinsic_callable(
+        operation: SemanticCompilerIntrinsicOperationV1,
+    ) -> SemanticCallableDeclV1 {
+        let abi = projection_function(vec![block(116, vec![], SemanticTerminatorKindV1::Return)])
+            .abi()
+            .clone();
+        SemanticCallableDeclV1::CompilerIntrinsic {
+            binding: SemanticNonBodyCallableBindingV1::new(
+                SemanticFunctionIdentityV1::from_sha256(bytes(116)),
+                SemanticItemDefinitionIdentityV1::from_sha256(bytes(117)),
+                SemanticMonomorphizationIdentityV1::from_sha256(bytes(118)),
+                SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(119)),
+                SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(120)),
+                SemanticSourceProvenanceV1::unavailable(),
+                abi,
+            ),
+            operation,
+            operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256(bytes(121)),
+        }
+    }
+
+    fn call_discriminant_switch(
+        callee: u32,
+        arguments: Vec<SemanticOperandV1>,
+    ) -> SemanticFunctionDeclV1 {
+        let carrier = SemanticLocalIdV1::from_index(3);
+        let discriminant = SemanticLocalIdV1::from_index(4);
+        let call = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(callee),
+            arguments,
+            Some(SemanticCallDestinationV1::new(
+                SemanticPlaceV1::new(carrier, vec![], ENUM_TYPE).unwrap(),
+                cfg_edge(SemanticEdgeRoleV1::CallReturn, 1),
+            )),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        projection_function_with_locals(
+            vec![
+                block(122, vec![], SemanticTerminatorKindV1::Call(call)),
+                block(
+                    123,
+                    vec![enum_discriminant(carrier, discriminant)],
+                    SemanticTerminatorKindV1::SwitchInt {
+                        discriminant: tensor_operand(4),
+                        targets: SemanticSwitchTargetsV1::new(
+                            vec![SemanticSwitchTargetV1::new(
+                                0,
+                                cfg_edge(SemanticEdgeRoleV1::SwitchValue, 2),
+                            )],
+                            cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 3),
+                        )
+                        .unwrap(),
+                    },
+                ),
+                block(124, vec![], SemanticTerminatorKindV1::Return),
+                block(125, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(120, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(121, SCALAR_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(122, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(123, ENUM_TYPE, SemanticLocalRoleV1::Temporary),
+                local(124, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
+    #[test]
+    fn authenticated_pure_checked_constructor_projects_all_scalar_dependencies() {
+        let callable = compiler_intrinsic_callable(
+            SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor {
+                result: ENUM_TYPE,
+                view: POINTER_TYPE,
+                error: SCALAR_TYPE,
+                role: SemanticMfmaOperandRoleV1::A,
+                storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+            },
+        );
+        let function = call_discriminant_switch(0, vec![tensor_operand(1), constant(16)]);
+        let (switches, operations, _) = deterministic_scalar_switch_projection(
+            &[callable.clone()],
+            &function,
+            &vec![None; function.locals().len()],
+            vec![],
+            0,
+        )
+        .unwrap();
+        assert!(switches[1].is_some());
+        assert!(operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::DeterministicJoin { dependencies, .. }
+                if dependencies.contains(&ProductionRankedValueV1::Argument(1))
+                    && dependencies.len() == 2
+        )));
+
+        let missing = call_discriminant_switch(0, vec![tensor_operand(1), tensor_operand(2)]);
+        let (switches, operations, _) = deterministic_scalar_switch_projection(
+            &[callable],
+            &missing,
+            &vec![None; missing.locals().len()],
+            vec![],
+            0,
+        )
+        .unwrap();
+        assert!(switches[1].is_none());
+        assert!(!operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::DeterministicJoin { .. }
+        )));
+    }
+
+    #[test]
+    fn unknown_calls_memory_reads_and_private_addresses_remain_unresolved() {
+        let unknown = call_discriminant_switch(0, vec![tensor_operand(1)]);
+        let (switches, _, _) = deterministic_scalar_switch_projection(
+            &[],
+            &unknown,
+            &vec![None; unknown.locals().len()],
+            vec![],
+            0,
+        )
+        .unwrap();
+        assert!(switches[1].is_none());
+
+        let loaded = deterministic_expression_switch(
+            vec![scalar_assignment(
+                4,
+                SemanticRvalueKindV1::Load(SemanticMemoryLoadV1::new(
+                    SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], SCALAR_TYPE)
+                        .unwrap(),
+                    SemanticVolatilityV1::NonVolatile,
+                    None,
+                )),
+            )],
+            deterministic_expression_locals(false),
+            4,
+        );
+        let (switches, _, _) = deterministic_scalar_switch_projection(
+            &[],
+            &loaded,
+            &vec![None; loaded.locals().len()],
+            vec![],
+            0,
+        )
+        .unwrap();
+        assert!(switches[0].is_none());
+
+        let pointer = SemanticLocalIdV1::from_index(3);
+        let borrowed = deterministic_expression_switch(
+            vec![
+                statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                    SemanticPlaceV1::new(pointer, vec![], POINTER_TYPE).unwrap(),
+                    SemanticRvalueV1::new(
+                        POINTER_TYPE,
+                        SemanticRvalueKindV1::Borrow {
+                            kind: SemanticBorrowKindV1::Shared,
+                            place: SemanticPlaceV1::new(
+                                SemanticLocalIdV1::from_index(1),
+                                vec![],
+                                SCALAR_TYPE,
+                            )
+                            .unwrap(),
+                        },
+                    ),
+                ))),
+                scalar_assignment(
+                    4,
+                    SemanticRvalueKindV1::Cast {
+                        kind: SemanticCastKindV1::PointerExposeProvenance,
+                        operand: SemanticOperandV1::Copy(
+                            SemanticPlaceV1::new(pointer, vec![], POINTER_TYPE).unwrap(),
+                        ),
+                    },
+                ),
+            ],
+            vec![
+                local(126, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(127, SCALAR_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(128, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(129, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+                local(130, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(131, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+            4,
+        );
+        let (switches, _, _) = deterministic_scalar_switch_projection(
+            &[],
+            &borrowed,
+            &vec![None; borrowed.locals().len()],
+            vec![],
+            0,
+        )
+        .unwrap();
+        assert!(switches[0].is_none());
+
+        let mut allocations = vec![None; borrowed.locals().len()];
+        allocations[1] = Some(AllocationContractV1 {
+            allocation_origin: 1,
+            noalias_class: 1,
+            writable: false,
+        });
+        let (switches, _, _) = deterministic_scalar_switch_projection_with_allocations(
+            &[],
+            &borrowed,
+            &vec![None; borrowed.locals().len()],
+            &allocations,
+            vec![],
+            0,
+        )
+        .unwrap();
+        assert!(switches[0].is_some());
+    }
+
     #[test]
     fn comparison_predicate_accepts_canonical_single_explicit_boolean_target() {
         let predicate = GuardPredicateV1 {
@@ -9803,7 +11369,8 @@ mod tests {
             single_explicit_boolean_switch(1, 1, 2),
         ] {
             assert_eq!(
-                projected_cfg_terminator(&function, 0, &[None, Some(predicate.clone())]).unwrap(),
+                projected_cfg_terminator(&function, 0, &[None, Some(predicate.clone())], &[])
+                    .unwrap(),
                 ProjectedCfgTerminatorV1::Predicate {
                     predicate: predicate.clone(),
                     true_block: 1,
@@ -9816,6 +11383,7 @@ mod tests {
                 &single_explicit_boolean_switch(2, 1, 2),
                 0,
                 &[None, Some(predicate)],
+                &[],
             ),
             Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a comparison predicate switch retained a non-boolean explicit value"
@@ -10259,6 +11827,7 @@ mod tests {
         let (blocks, _) = build_ranked_cfg(
             &function,
             &vec![None; function.locals().len()],
+            &vec![None; function.blocks().len()],
             &inductions,
             entry_operations,
             (0..function.blocks().len())
