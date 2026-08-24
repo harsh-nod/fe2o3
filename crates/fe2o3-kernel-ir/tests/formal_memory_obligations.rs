@@ -1077,5 +1077,126 @@ fn guarded_load_requires_a_distinct_ranked_proof_reason() {
             }
         ]
     );
-    assert!(analysis.obligations().accesses().is_empty());
+    assert_eq!(analysis.obligations().accesses().len(), 1);
+    let guarded_read = &analysis.obligations().accesses()[0];
+    assert_eq!(guarded_read.allocation().parameter_index(), 0);
+    assert_eq!(guarded_read.kind(), FormalMemoryAccessKind::Read);
+    assert_eq!(
+        guarded_read.byte_offset(),
+        ByteExpression::Affine {
+            constant: 0,
+            invocation_coefficient: 0,
+        }
+    );
+}
+
+#[test]
+fn guarded_ranked_read_retains_a_conservative_alias_effect() {
+    let read_pointer = global_pointer(AccessMode::ReadOnly);
+    let write_pointer = global_pointer(AccessMode::ReadWrite);
+    let access = MemoryAccess::new(AddressSpace::Global, 4);
+    let module = module_with_kernel(
+        vec![
+            global_slice(AccessMode::ReadOnly),
+            global_slice(AccessMode::ReadWrite),
+            Type::F32,
+        ],
+        vec![
+            op(
+                3,
+                Type::INDEX,
+                OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
+            ),
+            op(
+                4,
+                Type::INDEX,
+                OperationKind::SliceLength { slice: ValueId(0) },
+            ),
+            op(
+                5,
+                Type::BOOL,
+                OperationKind::Compare {
+                    predicate: ComparePredicate::LessThan,
+                    lhs: ValueId(3),
+                    rhs: ValueId(4),
+                },
+            ),
+            op(6, Type::INDEX, OperationKind::Constant(Constant::Index(0))),
+            op(
+                7,
+                Type::INDEX,
+                OperationKind::Select {
+                    condition: ValueId(5),
+                    true_value: ValueId(3),
+                    false_value: ValueId(6),
+                },
+            ),
+            op(
+                8,
+                read_pointer.clone(),
+                OperationKind::SliceData { slice: ValueId(0) },
+            ),
+            op(
+                9,
+                read_pointer,
+                OperationKind::GetElementPointer {
+                    base: ValueId(8),
+                    offset: ValueId(7),
+                },
+            ),
+            Operation::new(
+                vec![ValueDef::new(ValueId(10), Type::F32)],
+                OperationKind::GuardedLoad {
+                    pointer: ValueId(9),
+                    predicate: ValueId(5),
+                    fallback: ValueId(2),
+                    access,
+                },
+            ),
+            op(
+                11,
+                write_pointer.clone(),
+                OperationKind::SliceData { slice: ValueId(1) },
+            ),
+            op(
+                12,
+                write_pointer,
+                OperationKind::GetElementPointer {
+                    base: ValueId(11),
+                    offset: ValueId(3),
+                },
+            ),
+            Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer: ValueId(12),
+                    value: ValueId(10),
+                    access,
+                },
+            ),
+        ],
+        dynamic_1d(),
+    );
+
+    let analysis = analyze(&module, 8);
+    assert_eq!(
+        analysis.incomplete_reasons(),
+        &[
+            FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof {
+                location: FunctionOperationLocation::new(BlockId(0), 7),
+            }
+        ]
+    );
+    let obligations = analysis.obligations();
+    assert_eq!(obligations.accesses().len(), 2);
+    let guarded_read = &obligations.accesses()[0];
+    assert_eq!(guarded_read.allocation().parameter_index(), 0);
+    assert_eq!(guarded_read.kind(), FormalMemoryAccessKind::Read);
+    assert_eq!(guarded_read.byte_offset(), ByteExpression::Unbounded);
+    assert_eq!(obligations.runtime_alias_requirements().len(), 1);
+    let alias = obligations.runtime_alias_requirements()[0];
+    assert_eq!(alias.left().parameter_index(), 0);
+    assert_eq!(alias.right().parameter_index(), 1);
+    assert_eq!(alias.left_accessed_bytes().start(), 0);
+    assert_eq!(alias.left_accessed_bytes().end_exclusive(), u64::MAX);
 }

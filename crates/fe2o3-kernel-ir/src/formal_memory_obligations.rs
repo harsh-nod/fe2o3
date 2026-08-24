@@ -546,7 +546,33 @@ pub fn derive_kernel_memory_obligations_from_verified(
                 OperationKind::Matrix(matrix) if matrix.memory_effects().is_empty() => {}
                 OperationKind::GuardedLoad { access, .. }
                     if access.address_space == AddressSpace::Private => {}
-                OperationKind::GuardedLoad { .. } => {
+                OperationKind::GuardedLoad {
+                    pointer, access, ..
+                } => {
+                    if let Some(invocations) = access_invocations {
+                        match derive_access(
+                            location,
+                            *pointer,
+                            FormalMemoryAccessKind::Read,
+                            *access,
+                            invocations,
+                            &context,
+                        ) {
+                            Ok(access) => accesses.push(access),
+                            Err(exact_reason) => match derive_conservative_guarded_access(
+                                location,
+                                *pointer,
+                                *access,
+                                invocations,
+                                &context,
+                            ) {
+                                Ok(access) => accesses.push(access),
+                                Err(_) => {
+                                    reasons.insert(exact_reason);
+                                }
+                            },
+                        }
+                    }
                     reasons.insert(
                         FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof { location },
                     );
@@ -759,6 +785,80 @@ fn derive_access(
     })
 }
 
+/// Retains the allocation-level read effect when a guarded address cannot be
+/// represented by the affine extractor. The owner-held ranked proof remains
+/// responsible for the predicate and bounds; this conservative effect prevents
+/// that separate proof from erasing alias and race obligations.
+fn derive_conservative_guarded_access(
+    location: FunctionOperationLocation,
+    pointer: ValueId,
+    access: MemoryAccess,
+    invocations: InvocationRange1d,
+    context: &AccessDerivationContext<'_, '_>,
+) -> Result<FormalMemoryAccess, FormalMemoryIncompleteReason> {
+    let byte_width = context
+        .value_types
+        .get(&pointer)
+        .and_then(pointer_byte_width)
+        .ok_or(FormalMemoryIncompleteReason::ElementWidthUnavailable { location, pointer })?;
+    let allocation = derive_pointer_allocation(
+        pointer,
+        context.definitions,
+        context.value_types,
+        context.allocation_by_value,
+        location,
+    )?;
+    Ok(FormalMemoryAccess {
+        location,
+        allocation,
+        kind: FormalMemoryAccessKind::Read,
+        address_space: access.address_space,
+        byte_offset: ByteExpression::Unbounded,
+        byte_width,
+        alignment: u64::from(access.alignment),
+        invocations,
+    })
+}
+
+fn derive_pointer_allocation(
+    pointer: ValueId,
+    definitions: &Definitions<'_>,
+    value_types: &BTreeMap<ValueId, Type>,
+    allocation_by_value: &BTreeMap<ValueId, FormalAllocationIdentity>,
+    access_location: FunctionOperationLocation,
+) -> Result<FormalAllocationIdentity, FormalMemoryIncompleteReason> {
+    if let Some(allocation) = allocation_by_value.get(&pointer).copied()
+        && matches!(value_types.get(&pointer), Some(Type::Pointer(_)))
+    {
+        return Ok(allocation);
+    }
+    let Some((operation, definition_location)) = definitions.operations.get(&pointer) else {
+        return Err(FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
+            location: access_location,
+            pointer,
+        });
+    };
+    match &operation.kind {
+        OperationKind::SliceData { slice } => allocation_by_value.get(slice).copied().ok_or(
+            FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
+                location: *definition_location,
+                pointer,
+            },
+        ),
+        OperationKind::GetElementPointer { base, .. } => derive_pointer_allocation(
+            *base,
+            definitions,
+            value_types,
+            allocation_by_value,
+            access_location,
+        ),
+        _ => Err(FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
+            location: *definition_location,
+            pointer,
+        }),
+    }
+}
+
 #[derive(Clone, Copy)]
 struct PointerExpression {
     allocation: FormalAllocationIdentity,
@@ -964,12 +1064,18 @@ fn derive_bounds_requirements(
     accesses
         .iter()
         .filter_map(|access| {
-            let range = access_envelope(access).or_else(|| {
-                reasons.insert(FormalMemoryIncompleteReason::AddressArithmeticOverflow {
-                    location: access.location,
-                });
-                None
-            })?;
+            let range = match access.byte_offset {
+                // Only guarded reads are admitted with an unbounded affine
+                // expression, and their bounds stay behind the distinct ranked
+                // proof reason emitted at extraction time.
+                ByteExpression::Unbounded => return None,
+                ByteExpression::Affine { .. } => access_envelope(access).or_else(|| {
+                    reasons.insert(FormalMemoryIncompleteReason::AddressArithmeticOverflow {
+                        location: access.location,
+                    });
+                    None
+                })?,
+            };
             Some(FormalBoundsRequirement {
                 location: access.location,
                 allocation: access.allocation,
@@ -1010,8 +1116,17 @@ struct AllocationEnvelope {
 fn derive_alias_requirements(accesses: &[FormalMemoryAccess]) -> Vec<RuntimeAliasRequirement> {
     let mut envelopes = BTreeMap::<FormalAllocationIdentity, AllocationEnvelope>::new();
     for access in accesses {
-        let Some(range) = access_envelope(access) else {
-            continue;
+        let range = match access.byte_offset {
+            ByteExpression::Unbounded => FormalByteRange {
+                start: 0,
+                end_exclusive: u64::MAX,
+            },
+            ByteExpression::Affine { .. } => {
+                let Some(range) = access_envelope(access) else {
+                    continue;
+                };
+                range
+            }
         };
         envelopes
             .entry(access.allocation)

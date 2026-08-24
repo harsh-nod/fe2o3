@@ -632,11 +632,10 @@ fn validate_production_v1_descriptor_evidence(
         .filter(|(_, argument)| !matches!(argument.kind, DescriptorArgumentKindV1::Scalar(_)))
         .collect::<Vec<_>>();
     if formal.obligations().allocations().len() != expected_allocations.len()
-        || !formal.obligations().runtime_alias_requirements().is_empty()
         || !formal.obligations().inter_invocation_conflicts().is_empty()
     {
         return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
-            "closed formal allocation/alias obligations",
+            "closed formal allocation/race obligations",
         ));
     }
     for (index, argument) in expected_allocations {
@@ -663,6 +662,22 @@ fn validate_production_v1_descriptor_evidence(
             ));
         }
     }
+    if !formal
+        .obligations()
+        .runtime_alias_requirements()
+        .iter()
+        .all(|requirement| {
+            rust_ownership_discharges_runtime_alias_v1(
+                requirement.left().parameter_index() as usize,
+                requirement.right().parameter_index() as usize,
+                root.arguments.as_slice(),
+            )
+        })
+    {
+        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "formal alias obligation not discharged by Rust ownership",
+        ));
+    }
     for access in formal.obligations().accesses() {
         let index = access.allocation().parameter_index() as usize;
         let Some(argument) = root.arguments.as_slice().get(index) else {
@@ -680,6 +695,24 @@ fn validate_production_v1_descriptor_evidence(
         }
     }
     Ok(())
+}
+
+fn rust_ownership_discharges_runtime_alias_v1(
+    left: usize,
+    right: usize,
+    arguments: &[TypedDescriptorArgumentV1],
+) -> bool {
+    if left == right {
+        return false;
+    }
+    let Some(left) = arguments.get(left).map(|argument| argument.kind) else {
+        return false;
+    };
+    let Some(right) = arguments.get(right).map(|argument| argument.kind) else {
+        return false;
+    };
+    matches!(left, DescriptorArgumentKindV1::DisjointSlice(_))
+        || matches!(right, DescriptorArgumentKindV1::DisjointSlice(_))
 }
 
 fn descriptor_scalar_to_kernel_ir(scalar: ScalarTypeV1) -> Option<fe2o3_kernel_ir::ScalarType> {
@@ -2654,6 +2687,43 @@ mod tests {
                 ),
             ],
         )
+    }
+
+    #[test]
+    fn rust_ownership_only_discharges_aliases_involving_disjoint_slices() {
+        let arguments = vec![
+            descriptor_argument(
+                0,
+                DescriptorArgumentKindV1::SharedSlice(ScalarTypeV1::F32),
+                0,
+            ),
+            descriptor_argument(
+                1,
+                DescriptorArgumentKindV1::SharedSlice(ScalarTypeV1::F32),
+                16,
+            ),
+            descriptor_argument(
+                2,
+                DescriptorArgumentKindV1::DisjointSlice(ScalarTypeV1::F32),
+                32,
+            ),
+            descriptor_argument(3, DescriptorArgumentKindV1::Scalar(ScalarTypeV1::F32), 48),
+        ];
+
+        assert!(!rust_ownership_discharges_runtime_alias_v1(
+            0, 1, &arguments
+        ));
+        assert!(rust_ownership_discharges_runtime_alias_v1(0, 2, &arguments));
+        assert!(rust_ownership_discharges_runtime_alias_v1(2, 1, &arguments));
+        assert!(!rust_ownership_discharges_runtime_alias_v1(
+            0, 3, &arguments
+        ));
+        assert!(!rust_ownership_discharges_runtime_alias_v1(
+            2, 2, &arguments
+        ));
+        assert!(!rust_ownership_discharges_runtime_alias_v1(
+            2, 8, &arguments
+        ));
     }
 
     fn module() -> Module {
