@@ -2467,14 +2467,9 @@ fn compiler_issued_ssa_bindings_v1(
         let SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } = callable else {
             continue;
         };
+        require_current_production_intrinsic_v1(operation)?;
         match operation {
-            SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad {
-                fragment,
-                contract,
-                storage_layout,
-                ..
-            }
-            | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
+            SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
                 fragment,
                 contract,
                 storage_layout,
@@ -2558,6 +2553,24 @@ fn compiler_issued_ssa_bindings_v1(
         }
     }
     Ok(bindings)
+}
+
+fn require_current_production_intrinsic_v1(
+    operation: &SemanticCompilerIntrinsicOperationV1,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    if matches!(
+        operation,
+        SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { .. }
+    ) {
+        Err(unsupported(
+            0,
+            None,
+            None,
+            "the retired Option-returning BF16 matrix load is not admitted; use Bf16MatrixLoadZeroFilledV2",
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -4583,6 +4596,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "defined and device-FFI calls require interprocedural lowering",
             ));
         };
+        require_current_production_intrinsic_v1(operation)?;
         let destination = call.destination().ok_or_else(|| {
             unsupported(
                 0,
@@ -4719,32 +4733,21 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 operations,
                 lower_scalar_type(self.types, *element)?,
             )?,
-            SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad {
-                option_fragment,
-                fragment,
-                contract,
-                storage_layout,
-                ..
-            } => self.lower_bf16_matrix_load(
-                block,
-                call,
-                operations,
-                Some((*option_fragment, *fragment)),
-                *contract,
-                *storage_layout,
-            )?,
+            SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { .. } => {
+                return Err(unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "the retired Option-returning BF16 matrix load is not admitted; use Bf16MatrixLoadZeroFilledV2",
+                ));
+            }
             SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
                 contract,
                 storage_layout,
                 ..
-            } => self.lower_bf16_matrix_load(
-                block,
-                call,
-                operations,
-                None,
-                *contract,
-                *storage_layout,
-            )?,
+            } => {
+                self.lower_bf16_matrix_load(block, call, operations, *contract, *storage_layout)?
+            }
             SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
                 fragment,
                 contract,
@@ -5885,7 +5888,6 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         block: SemanticBlockIdV1,
         call: &SemanticDirectCallV1,
         operations: &mut Vec<Operation>,
-        legacy_option: Option<(SemanticTypeIdV1, SemanticTypeIdV1)>,
         contract: SemanticMfmaOperandContractV1,
         storage_layout: SemanticMfmaStorageLayoutV1,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
@@ -5998,7 +6000,6 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         )?;
         let component_count = contract.profile.operand_components_per_lane();
         let mut values = Vec::with_capacity(component_count);
-        let mut availability = legacy_option.map(|_| present);
         for component in 0..u64::try_from(component_count).expect("MFMA component count fits u64") {
             let component_value = self.emit_index_constant(operations, component)?;
             let (reduction, component_safe) = self.emit_checked_index(
@@ -6037,9 +6038,6 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             guard = self.emit_bool_and(operations, guard, offset_safe)?;
             guard = self.emit_bool_and(operations, guard, column_safe)?;
             guard = self.emit_bool_and(operations, guard, index_in_bounds)?;
-            if let Some(previous) = availability {
-                availability = Some(self.emit_bool_and(operations, previous, guard)?);
-            }
             let safe_index = self.emit_select_index(operations, guard, index, zero_index)?;
             let pointer = self.emit_id(
                 operations,
@@ -6074,66 +6072,11 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             )?;
             values.push((value, Type::Scalar(ScalarType::Bf16)));
         }
-        let fragment = SemanticValueBindingV1::MatrixFragment {
+        Ok(SemanticValueBindingV1::MatrixFragment {
             values,
             contract,
             storage_layout,
             wave,
-        };
-        let Some((option_type, fragment_type)) = legacy_option else {
-            return Ok(fragment);
-        };
-        let (discriminant_type, variants) = semantic_enum_shape(self.types, option_type)?;
-        let some_variant =
-            unique_enum_variant_with_field(variants, fragment_type).ok_or_else(|| {
-                unsupported(
-                    0,
-                    Some(block.index()),
-                    None,
-                    "typed matrix load Option has no unique fragment payload",
-                )
-            })?;
-        let none_variant = unique_fieldless_enum_variant(variants).ok_or_else(|| {
-            unsupported(
-                0,
-                Some(block.index()),
-                None,
-                "typed matrix load Option has no unique fieldless variant",
-            )
-        })?;
-        let discriminant_ty = lower_scalar_type(self.types, discriminant_type)?;
-        let some_discriminant = self.emit_id(
-            operations,
-            discriminant_ty.clone(),
-            OperationKind::Constant(integer_constant(
-                &discriminant_ty,
-                variants[some_variant as usize].discriminant(),
-            )?),
-        )?;
-        let none_discriminant = self.emit_id(
-            operations,
-            discriminant_ty.clone(),
-            OperationKind::Constant(integer_constant(
-                &discriminant_ty,
-                variants[none_variant as usize].discriminant(),
-            )?),
-        )?;
-        let discriminant = self.emit_id(
-            operations,
-            discriminant_ty.clone(),
-            OperationKind::Select {
-                condition: availability.expect("legacy matrix load records availability"),
-                true_value: some_discriminant,
-                false_value: none_discriminant,
-            },
-        )?;
-        Ok(SemanticValueBindingV1::Enum {
-            discriminant,
-            discriminant_ty,
-            semantic_type: option_type,
-            variant: None,
-            payload_variant: Some(some_variant),
-            fields: vec![fragment],
         })
     }
 
@@ -8627,14 +8570,6 @@ fn unique_enum_variant_with_field(
     matches.next().is_none().then_some(found)
 }
 
-fn unique_fieldless_enum_variant(variants: &[SemanticEnumVariantV1]) -> Option<u32> {
-    let mut matches = variants.iter().enumerate().filter_map(|(index, variant)| {
-        variant.fields().fields().is_empty().then_some(index as u32)
-    });
-    let found = matches.next()?;
-    matches.next().is_none().then_some(found)
-}
-
 fn integer_constant(ty: &Type, bits: u128) -> Result<Constant, ProductionSemanticKirErrorV1> {
     match ty.as_scalar() {
         Some(ScalarType::Bool) if bits <= 1 => Ok(Constant::Bool(bits != 0)),
@@ -8956,6 +8891,36 @@ mod resource_tests {
             distribution: SemanticMfmaAccumulatorDistributionV1::RowMajor,
             wave_width: 64,
         }
+    }
+
+    #[test]
+    fn production_semantic_kir_rejects_the_retired_option_load_and_accepts_v2() {
+        let legacy = SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad {
+            option_fragment: SemanticTypeIdV1::from_index(0),
+            view: SemanticTypeIdV1::from_index(1),
+            lane: SemanticTypeIdV1::from_index(2),
+            fragment: SemanticTypeIdV1::from_index(3),
+            contract: operand_contract(SemanticMfmaOperandRoleV1::A),
+            storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+        };
+        assert!(matches!(
+            require_current_production_intrinsic_v1(&legacy),
+            Err(ProductionSemanticKirErrorV1::Unsupported {
+                function: 0,
+                block: None,
+                statement: None,
+                detail: "the retired Option-returning BF16 matrix load is not admitted; use Bf16MatrixLoadZeroFilledV2",
+            })
+        ));
+
+        let zero_filled = SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
+            fragment: SemanticTypeIdV1::from_index(3),
+            view: SemanticTypeIdV1::from_index(1),
+            lane: SemanticTypeIdV1::from_index(2),
+            contract: operand_contract(SemanticMfmaOperandRoleV1::A),
+            storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+        };
+        assert!(require_current_production_intrinsic_v1(&zero_filled).is_ok());
     }
 
     #[test]

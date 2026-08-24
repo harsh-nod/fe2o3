@@ -305,18 +305,11 @@ struct ProjectedMfmaAccumulatorV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ProjectedTensorLoadResultV1 {
-    LegacyOption,
-    DirectFragment,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ProjectedTensorOriginV1 {
     MatrixContext { root: u64 },
     Lane { root: u64, wave_width: u32 },
     ViewResult(ProjectedMfmaViewV1),
     View(ProjectedMfmaViewV1),
-    LoadOption(ProjectedMfmaOperandV1),
     Operand(ProjectedMfmaOperandV1),
     Accumulator(ProjectedMfmaAccumulatorV1),
     ReadViewResult(ProjectedReadViewV1),
@@ -1161,7 +1154,6 @@ fn project_rust_bounds_checks(
 fn project_authenticated_tensor_layouts_v1(
     callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
-    option_dominance: &SemanticOptionDominanceV1,
     enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
     local_allocations: &[Option<AllocationContractV1>],
     constants: &[Option<u64>],
@@ -1193,13 +1185,7 @@ fn project_authenticated_tensor_layouts_v1(
             )?,
         )?;
         let mut state = entry_state.clone();
-        transfer_tensor_statements_v1(
-            function,
-            block_index,
-            &mut state,
-            option_dominance,
-            enum_payload_dominance,
-        )?;
+        transfer_tensor_statements_v1(function, block_index, &mut state, enum_payload_dominance)?;
         transfer_tensor_terminator_v1(
             callables,
             function,
@@ -1293,13 +1279,7 @@ fn project_authenticated_tensor_layouts_v1(
                     "tensor producer replay work overflow",
                 ))?,
         )?;
-        transfer_tensor_statements_v1(
-            function,
-            block_index,
-            &mut state,
-            option_dominance,
-            enum_payload_dominance,
-        )?;
+        transfer_tensor_statements_v1(function, block_index, &mut state, enum_payload_dominance)?;
         let effects = transfer_tensor_terminator_v1(
             callables,
             function,
@@ -1564,7 +1544,6 @@ fn transfer_tensor_statements_v1(
     function: &SemanticFunctionDeclV1,
     block_index: usize,
     state: &mut ProjectedTensorStateV1,
-    option_dominance: &SemanticOptionDominanceV1,
     enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     let block = &function.blocks()[block_index];
@@ -1579,7 +1558,6 @@ fn transfer_tensor_statements_v1(
                             tensor_origin_from_assignment_operand_v1(
                                 operand,
                                 state,
-                                option_dominance,
                                 enum_payload_dominance,
                                 use_block,
                             )
@@ -1594,7 +1572,6 @@ fn transfer_tensor_statements_v1(
                             tensor_origin_from_enum_aggregate_v1(
                                 aggregate,
                                 state,
-                                option_dominance,
                                 enum_payload_dominance,
                                 use_block,
                             )?
@@ -1705,7 +1682,6 @@ fn invalidate_tensor_local_v1(state: &mut ProjectedTensorStateV1, local: usize) 
 fn tensor_origin_from_enum_aggregate_v1(
     aggregate: &fe2o3_mir_model::semantic_mir_v1::SemanticAggregateRvalueV1,
     state: &ProjectedTensorStateV1,
-    option_dominance: &SemanticOptionDominanceV1,
     enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
     use_block: SemanticBlockIdV1,
 ) -> Result<Option<ProjectedTensorValueV1>, ProductionRankedProjectionErrorV1> {
@@ -1714,21 +1690,14 @@ fn tensor_origin_from_enum_aggregate_v1(
     else {
         return Ok(None);
     };
-    tensor_origin_from_assignment_operand_v1(
-        payload,
-        state,
-        option_dominance,
-        enum_payload_dominance,
-        use_block,
-    )
-    .map(|payload| wrap_tensor_enum_value_v1(payload, *variant))
-    .transpose()
+    tensor_origin_from_assignment_operand_v1(payload, state, enum_payload_dominance, use_block)
+        .map(|payload| wrap_tensor_enum_value_v1(payload, *variant))
+        .transpose()
 }
 
 fn tensor_origin_from_assignment_operand_v1(
     operand: &SemanticOperandV1,
     state: &ProjectedTensorStateV1,
-    option_dominance: &SemanticOptionDominanceV1,
     enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
     use_block: SemanticBlockIdV1,
 ) -> Option<ProjectedTensorValueV1> {
@@ -1763,18 +1732,6 @@ fn tensor_origin_from_assignment_operand_v1(
         {
             Some(ProjectedTensorValueV1::Known(
                 ProjectedTensorOriginV1::ReadView(view),
-            ))
-        }
-        ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::LoadOption(fragment))
-            if variant == 1
-                && option_dominance
-                    .availability(SemanticLocalIdV1::from_index(carrier as u32))
-                    .is_some_and(|availability| {
-                        option_dominance.allows(availability, use_block)
-                    }) =>
-        {
-            Some(ProjectedTensorValueV1::Known(
-                ProjectedTensorOriginV1::Operand(fragment),
             ))
         }
         ProjectedTensorValueV1::Invalid => Some(ProjectedTensorValueV1::Invalid),
@@ -1901,12 +1858,17 @@ fn transfer_tensor_terminator_v1(
         Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) => Some(operation),
         _ => None,
     };
+    if matches!(
+        intrinsic_operation,
+        Some(SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { .. })
+    ) {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "the retired Option-returning BF16 matrix load; use Bf16MatrixLoadZeroFilledV2",
+        ));
+    }
     let is_global_fragment_load = matches!(
         intrinsic_operation,
-        Some(
-            SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { .. }
-                | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 { .. }
-        )
+        Some(SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 { .. })
     );
     if let Some(SemanticCompilerIntrinsicOperationV1::StridedReadView2DLoadOr { element, .. }) =
         intrinsic_operation
@@ -2053,23 +2015,6 @@ fn transfer_tensor_terminator_v1(
             };
             (origin, None)
         }
-        SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad {
-            option_fragment,
-            contract,
-            storage_layout,
-            ..
-        } => (
-            project_tensor_load_origin_v1(
-                call,
-                state,
-                destination.place().ty(),
-                *option_fragment,
-                *contract,
-                *storage_layout,
-                ProjectedTensorLoadResultV1::LegacyOption,
-            ),
-            None,
-        ),
         SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
             fragment,
             contract,
@@ -2083,7 +2028,6 @@ fn transfer_tensor_terminator_v1(
                 *fragment,
                 *contract,
                 *storage_layout,
-                ProjectedTensorLoadResultV1::DirectFragment,
             ),
             None,
         ),
@@ -2162,11 +2106,9 @@ fn transfer_tensor_terminator_v1(
         ));
     }
     let global_read = match (is_global_fragment_load, origin) {
-        (
-            true,
-            ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::LoadOption(fragment))
-            | ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Operand(fragment)),
-        ) => Some(fragment.allocation),
+        (true, ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Operand(fragment))) => {
+            Some(fragment.allocation)
+        }
         (true, _) => {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a typed global fragment load without exact authenticated view, lane, allocation, and result provenance",
@@ -2221,7 +2163,6 @@ fn project_tensor_load_origin_v1(
     expected_output_type: SemanticTypeIdV1,
     contract: SemanticMfmaOperandContractV1,
     storage_layout: SemanticMfmaStorageLayoutV1,
-    result: ProjectedTensorLoadResultV1,
 ) -> ProjectedTensorValueV1 {
     if destination_type != expected_output_type {
         return ProjectedTensorValueV1::Invalid;
@@ -2229,10 +2170,7 @@ fn project_tensor_load_origin_v1(
     let Some(fragment) = authenticate_tensor_load_v1(call, state, contract, storage_layout) else {
         return ProjectedTensorValueV1::Invalid;
     };
-    ProjectedTensorValueV1::Known(match result {
-        ProjectedTensorLoadResultV1::LegacyOption => ProjectedTensorOriginV1::LoadOption(fragment),
-        ProjectedTensorLoadResultV1::DirectFragment => ProjectedTensorOriginV1::Operand(fragment),
-    })
+    ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Operand(fragment))
 }
 
 fn authenticate_tensor_instruction_v1(
@@ -2365,6 +2303,7 @@ fn project_intrinsic_contracts(
     next_value: &mut u32,
     ranked_ir: &mut String,
 ) -> Result<IntrinsicProjectionV1, ProductionRankedProjectionErrorV1> {
+    reject_retired_production_intrinsics_v1(callables)?;
     let local_count = function.locals().len();
     let mut index_values = vec![None; local_count];
     let mut grid_leaders = vec![None; local_count];
@@ -2386,7 +2325,6 @@ fn project_intrinsic_contracts(
     let tensor_effects = project_authenticated_tensor_layouts_v1(
         callables,
         function,
-        &option_dominance,
         &enum_payload_dominance,
         &local_allocations,
         constants,
@@ -3579,6 +3517,26 @@ fn project_intrinsic_contracts(
         tensor_read_effects,
         read_view_effects,
     })
+}
+
+fn reject_retired_production_intrinsics_v1(
+    callables: &[SemanticCallableDeclV1],
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    if callables.iter().any(|callable| {
+        matches!(
+            callable,
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { .. },
+                ..
+            }
+        )
+    }) {
+        Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "the retired Option-returning BF16 matrix load; use Bf16MatrixLoadZeroFilledV2",
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 fn retain_identical_direct_switch_predicate_v1(
@@ -11850,6 +11808,17 @@ mod tests {
         )
     }
 
+    fn legacy_tensor_load_callable() -> SemanticCallableDeclV1 {
+        compiler_intrinsic_callable(SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad {
+            option_fragment: ENUM_TYPE,
+            fragment: SCALAR_TYPE,
+            view: SCALAR_TYPE,
+            lane: SCALAR_TYPE,
+            contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
+            storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+        })
+    }
+
     fn tensor_load_function(destination: Option<SemanticPlaceV1>) -> SemanticFunctionDeclV1 {
         let destination = destination.map(|place| {
             SemanticCallDestinationV1::new(place, cfg_edge(SemanticEdgeRoleV1::CallReturn, 0))
@@ -12214,21 +12183,8 @@ mod tests {
                 SCALAR_TYPE,
                 contract,
                 SemanticMfmaStorageLayoutV1::RowMajor,
-                ProjectedTensorLoadResultV1::DirectFragment,
             ),
             ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Operand(_))
-        ));
-        assert!(matches!(
-            project_tensor_load_origin_v1(
-                &call,
-                &state,
-                SCALAR_TYPE,
-                SCALAR_TYPE,
-                contract,
-                SemanticMfmaStorageLayoutV1::RowMajor,
-                ProjectedTensorLoadResultV1::LegacyOption,
-            ),
-            ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::LoadOption(_))
         ));
         assert_eq!(
             project_tensor_load_origin_v1(
@@ -12238,7 +12194,6 @@ mod tests {
                 SCALAR_TYPE,
                 contract,
                 SemanticMfmaStorageLayoutV1::RowMajor,
-                ProjectedTensorLoadResultV1::DirectFragment,
             ),
             ProjectedTensorValueV1::Invalid
         );
@@ -12250,10 +12205,38 @@ mod tests {
                 SCALAR_TYPE,
                 mfma_operand_contract(SemanticMfmaOperandRoleV1::B),
                 SemanticMfmaStorageLayoutV1::RowMajor,
-                ProjectedTensorLoadResultV1::DirectFragment,
             ),
             ProjectedTensorValueV1::Invalid
         );
+    }
+
+    #[test]
+    fn production_ranked_projection_rejects_the_retired_option_load_before_analysis() {
+        assert!(matches!(
+            reject_retired_production_intrinsics_v1(&[legacy_tensor_load_callable()]),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "the retired Option-returning BF16 matrix load; use Bf16MatrixLoadZeroFilledV2"
+            ))
+        ));
+        assert!(
+            reject_retired_production_intrinsics_v1(&[zero_filled_tensor_load_callable()]).is_ok()
+        );
+
+        let function = tensor_load_function(None);
+        assert!(matches!(
+            transfer_tensor_terminator_v1(
+                &[legacy_tensor_load_callable()],
+                &function,
+                0,
+                &mut authenticated_tensor_load_state(),
+                &[None; 5],
+                &[],
+                false,
+            ),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "the retired Option-returning BF16 matrix load; use Bf16MatrixLoadZeroFilledV2"
+            ))
+        ));
     }
 
     fn authenticated_tensor_state(
@@ -12391,7 +12374,7 @@ mod tests {
     }
 
     #[test]
-    fn result_ok_and_option_some_payloads_require_their_exact_dominating_edges() {
+    fn result_ok_payloads_require_their_exact_dominating_edges() {
         let carrier = SemanticLocalIdV1::from_index(1);
         let discriminator = SemanticLocalIdV1::from_index(2);
         let discriminator_place = SemanticPlaceV1::new(discriminator, vec![], SCALAR_TYPE).unwrap();
@@ -12429,7 +12412,6 @@ mod tests {
             &projection_types_with_enum(),
         )
         .unwrap();
-        let empty_option = SemanticOptionDominanceV1::analyze(&result_function, &[]).unwrap();
         let result_state = HashMap::from([(
             1,
             ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::ViewResult(
@@ -12444,7 +12426,6 @@ mod tests {
             tensor_origin_from_assignment_operand_v1(
                 &tensor_payload(1, 0),
                 &result_state,
-                &empty_option,
                 &result_dominance,
                 SemanticBlockIdV1::from_index(1),
             ),
@@ -12456,48 +12437,8 @@ mod tests {
             tensor_origin_from_assignment_operand_v1(
                 &tensor_payload(1, 0),
                 &result_state,
-                &empty_option,
                 &result_dominance,
                 SemanticBlockIdV1::from_index(2),
-            )
-            .is_none()
-        );
-
-        let (option_function, producers) = option_dominance_chain(1);
-        let option_dominance =
-            SemanticOptionDominanceV1::analyze(&option_function, &producers).unwrap();
-        let enum_dominance =
-            SemanticEnumPayloadDominanceV1::analyze(&option_function, &projection_types()).unwrap();
-        let option_state = HashMap::from([(
-            1,
-            ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::LoadOption(
-                ProjectedMfmaOperandV1 {
-                    contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
-                    storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
-                    lane_root: 20,
-                    allocation: tensor_test_allocation(),
-                },
-            )),
-        )]);
-        assert!(matches!(
-            tensor_origin_from_assignment_operand_v1(
-                &tensor_payload(1, 1),
-                &option_state,
-                &option_dominance,
-                &enum_dominance,
-                SemanticBlockIdV1::from_index(2),
-            ),
-            Some(ProjectedTensorValueV1::Known(
-                ProjectedTensorOriginV1::Operand(_)
-            ))
-        ));
-        assert!(
-            tensor_origin_from_assignment_operand_v1(
-                &tensor_payload(1, 1),
-                &option_state,
-                &option_dominance,
-                &enum_dominance,
-                SemanticBlockIdV1::from_index(1),
             )
             .is_none()
         );
@@ -12507,7 +12448,6 @@ mod tests {
     fn exact_enum_transport_preserves_tensor_origin_through_nested_wrappers() {
         let function =
             projection_function(vec![block(96, vec![], SemanticTerminatorKindV1::Return)]);
-        let option_dominance = SemanticOptionDominanceV1::analyze(&function, &[]).unwrap();
         let enum_dominance =
             SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types()).unwrap();
         let origin = ProjectedTensorOriginV1::Operand(ProjectedMfmaOperandV1 {
@@ -12525,7 +12465,6 @@ mod tests {
         let first = tensor_origin_from_enum_aggregate_v1(
             &first,
             &state,
-            &option_dominance,
             &enum_dominance,
             SemanticBlockIdV1::from_index(0),
         )
@@ -12540,7 +12479,6 @@ mod tests {
         let second = tensor_origin_from_enum_aggregate_v1(
             &second,
             &state,
-            &option_dominance,
             &enum_dominance,
             SemanticBlockIdV1::from_index(0),
         )
@@ -12551,7 +12489,6 @@ mod tests {
         let first_again = tensor_origin_from_assignment_operand_v1(
             &tensor_payload(2, 1),
             &state,
-            &option_dominance,
             &enum_dominance,
             SemanticBlockIdV1::from_index(0),
         )
@@ -12562,7 +12499,6 @@ mod tests {
             tensor_origin_from_assignment_operand_v1(
                 &tensor_payload(3, 0),
                 &state,
-                &option_dominance,
                 &enum_dominance,
                 SemanticBlockIdV1::from_index(0),
             ),
@@ -12574,7 +12510,6 @@ mod tests {
     fn enum_transport_rejects_wrong_variant_extra_fields_and_bypass_join() {
         let function =
             projection_function(vec![block(97, vec![], SemanticTerminatorKindV1::Return)]);
-        let option_dominance = SemanticOptionDominanceV1::analyze(&function, &[]).unwrap();
         let enum_dominance =
             SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types()).unwrap();
         let origin = ProjectedTensorOriginV1::Operand(ProjectedMfmaOperandV1 {
@@ -12592,7 +12527,6 @@ mod tests {
         let wrapped = tensor_origin_from_enum_aggregate_v1(
             &aggregate,
             &state,
-            &option_dominance,
             &enum_dominance,
             SemanticBlockIdV1::from_index(0),
         )
@@ -12603,7 +12537,6 @@ mod tests {
             tensor_origin_from_assignment_operand_v1(
                 &tensor_payload(1, 3),
                 &wrapped_state,
-                &option_dominance,
                 &enum_dominance,
                 SemanticBlockIdV1::from_index(0),
             )
@@ -12619,7 +12552,6 @@ mod tests {
             tensor_origin_from_enum_aggregate_v1(
                 &extra_fields,
                 &state,
-                &option_dominance,
                 &enum_dominance,
                 SemanticBlockIdV1::from_index(0),
             )
@@ -12690,11 +12622,10 @@ mod tests {
                     local(105, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
                 ],
             );
-            let option = SemanticOptionDominanceV1::analyze(&function, &[]).unwrap();
             let payload =
                 SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types()).unwrap();
             let mut state = HashMap::from([(1, tensor_state_origin())]);
-            transfer_tensor_statements_v1(&function, 0, &mut state, &option, &payload).unwrap();
+            transfer_tensor_statements_v1(&function, 0, &mut state, &payload).unwrap();
             assert_eq!(state[&1], ProjectedTensorValueV1::Invalid);
             assert_eq!(state[&2], tensor_state_origin());
             assert_eq!(state[&3], ProjectedTensorValueV1::Invalid);
@@ -12731,19 +12662,17 @@ mod tests {
                     local(107, ENUM_TYPE, SemanticLocalRoleV1::Temporary),
                 ],
             );
-            let option = SemanticOptionDominanceV1::analyze(&function, &[]).unwrap();
             let payload =
                 SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types_with_enum())
                     .unwrap();
             let wrapped = wrap_tensor_enum_value_v1(tensor_state_origin(), 4).unwrap();
             let mut state = HashMap::from([(1, wrapped)]);
-            transfer_tensor_statements_v1(&function, 0, &mut state, &option, &payload).unwrap();
+            transfer_tensor_statements_v1(&function, 0, &mut state, &payload).unwrap();
             assert_eq!(state[&1], ProjectedTensorValueV1::Invalid);
             assert_eq!(
                 tensor_origin_from_assignment_operand_v1(
                     &tensor_payload(1, 4),
                     &state,
-                    &option,
                     &payload,
                     SemanticBlockIdV1::from_index(0),
                 ),
