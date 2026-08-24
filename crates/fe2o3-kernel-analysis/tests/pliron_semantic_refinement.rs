@@ -263,7 +263,7 @@ fn structurally_different_association_is_not_silently_reassociated() {
 }
 
 #[test]
-fn exact_proved_source_reference_is_joined_to_semantic_equality() {
+fn exact_proved_mir_reference_is_joined_to_semantic_equality() {
     let context = &mut setup();
     let function = function(context, "reference_ok", 0);
     let entry = function.get_entry_block(context);
@@ -296,7 +296,7 @@ fn exact_proved_source_reference_is_joined_to_semantic_equality() {
         expected.result(context),
         PropertyAttr::FunctionalRefinement,
         EvidenceStatusAttr::Proved,
-        CoveredBoundaryAttr::Source,
+        CoveredBoundaryAttr::Mir,
     );
     let ret = ReturnOp::new(context);
     append(context, entry, &ret);
@@ -325,7 +325,7 @@ fn proved_reference_rejects_a_semantic_mismatch() {
         expected.result(context),
         PropertyAttr::FunctionalRefinement,
         EvidenceStatusAttr::Proved,
-        CoveredBoundaryAttr::Source,
+        CoveredBoundaryAttr::Mir,
     );
     let ret = ReturnOp::new(context);
     append(context, entry, &ret);
@@ -374,14 +374,14 @@ fn non_proved_or_wrong_boundary_evidence_is_incomplete() {
         (
             "checked_only",
             EvidenceStatusAttr::Checked,
-            CoveredBoundaryAttr::Source,
+            CoveredBoundaryAttr::Mir,
             "requires exact Proved evidence",
         ),
         (
             "wrong_boundary",
             EvidenceStatusAttr::Proved,
-            CoveredBoundaryAttr::Mir,
-            "must cover the exact source boundary",
+            CoveredBoundaryAttr::Source,
+            "must cover the exact MIR boundary",
         ),
     ] {
         let context = &mut setup();
@@ -420,7 +420,7 @@ fn wrong_property_and_duplicate_evidence_are_rejected() {
         value.result(context),
         PropertyAttr::Bounds,
         EvidenceStatusAttr::Proved,
-        CoveredBoundaryAttr::Source,
+        CoveredBoundaryAttr::Mir,
     );
     let ret = ReturnOp::new(context);
     append(context, entry, &ret);
@@ -441,7 +441,7 @@ fn wrong_property_and_duplicate_evidence_are_rejected() {
         value.result(context),
         PropertyAttr::FunctionalRefinement,
         EvidenceStatusAttr::Proved,
-        CoveredBoundaryAttr::Source,
+        CoveredBoundaryAttr::Mir,
     );
     let duplicate = EvidenceRefOp::new(
         context,
@@ -449,7 +449,7 @@ fn wrong_property_and_duplicate_evidence_are_rejected() {
         proof_id(1),
         PropertyAttr::FunctionalRefinement,
         EvidenceStatusAttr::Proved,
-        CoveredBoundaryAttr::Source,
+        CoveredBoundaryAttr::Mir,
     );
     append(context, entry, &duplicate);
     let ret = ReturnOp::new(context);

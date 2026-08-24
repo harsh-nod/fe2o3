@@ -181,3 +181,19 @@ The root workspace owns the exact Pliron revision so every dialect and lowering
 crate resolves one audited upstream implementation. The selective
 `pliron-llvm` dependency resolves that same revision and cannot broaden this
 crate's authority boundary.
+
+## Authenticated functional refinement
+
+V2 functional-refinement requests use an acyclic compiler-owned transition.
+The validated ranked recipe first contains an unbound scalar or effect request
+with exact MIR subjects. `fe2o3-verifier` derives the proof program from that
+DAG and returns imported evidence. The consuming
+`bind_functional_refinement_request_v2` method replaces only the addressed
+unbound request. Production V2 compilation rejects unbound requests, V1
+declarations, untrusted signers/toolchains, stale transcript hashes, duplicate
+claims, missing proofs, and unused proofs.
+
+The transcript includes formula definitions, view/allocation facts, the unique
+correlated write, and ownership. Only an imported V2 proof at the exact MIR
+boundary materializes `Proved` evidence. The output retains that evidence but
+continues to grant no source-to-ISA, artifact, or launch authority.

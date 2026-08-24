@@ -1,5 +1,12 @@
+use fe2o3_functional_proof::{
+    FunctionalRefinementBindingV2, FunctionalRefinementBoundaryV2,
+    FunctionalRefinementReceiptIdentityV2, FunctionalRefinementSubjectsV2,
+    ImportedFunctionalRefinementProofV2, VerusToolchainIdentityV2,
+};
+use fe2o3_proof_contracts::DigestV1;
+use sha2::{Digest as _, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, BTreeSet, HashMap},
     error::Error,
     fmt,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -22,7 +29,7 @@ use dialect_kernel::{
 };
 use dialect_proof::{
     CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, ProofIdAttr,
-    PropertyAttr, RequireRefinementOp,
+    PropertyAttr, RequireEffectRefinementOp, RequireRefinementOp,
 };
 use fe2o3_kernel_analysis::{
     HierarchicalOwnershipReportV1, MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_OPERATIONS,
@@ -48,9 +55,9 @@ use pliron::{
 };
 
 use super::{
-    ConstructedGraphStageV1, KernelChecksVerifiedGraphStageV1, ProductionConstructionKindV1,
-    ProductionConstructionV1, ProductionPlironSessionV1, ProductionRootHandleV1,
-    ProductionSessionErrorV1, ProductionStageHandleV1, RootIdentityV1,
+    ConstructedGraphStageV1, HARD_MAX_PRODUCTION_CONSTRUCTIONS, KernelChecksVerifiedGraphStageV1,
+    ProductionConstructionKindV1, ProductionConstructionV1, ProductionPlironSessionV1,
+    ProductionRootHandleV1, ProductionSessionErrorV1, ProductionStageHandleV1, RootIdentityV1,
 };
 use crate::{
     ContextBuildError, HARD_MAX_SESSION_OPERATION_TREE_ITEMS, NameError, NameKind, OperationHandle,
@@ -79,11 +86,11 @@ pub enum ProductionRankedValueV1 {
     Local(ProductionRankedValueIdV1),
 }
 
-/// Exact identities for one externally proved safe-Rust reference obligation.
+/// Legacy declarative identities retained for compatibility.
 ///
-/// Construction validates only the closed identity shape. The proof overlay
-/// remains non-authoritative; an evidence importer must authenticate these
-/// identities before a caller treats the resulting clean report as proof.
+/// V1 declarations are never admitted as authenticated functional-refinement
+/// evidence by a production compile. Use [`ProductionReferenceProofV2`] plus an
+/// imported V2 receipt instead.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProductionReferenceProofV1 {
     obligation_id: [u64; 4],
@@ -130,6 +137,683 @@ impl ProductionReferenceProofV1 {
 
     pub const fn evidence_id(&self) -> [u64; 4] {
         self.evidence_id
+    }
+}
+
+/// Exact receipt and semantic binding requested by one ranked recipe operation.
+///
+/// This cloneable request is not evidence. Only
+/// [`compile_ranked_kernel_for_lowering_v2`] can reconcile it with a consumed,
+/// authenticated [`ImportedFunctionalRefinementProofV2`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductionReferenceProofV2 {
+    receipt_identity: FunctionalRefinementReceiptIdentityV2,
+    binding: FunctionalRefinementBindingV2,
+}
+
+impl ProductionReferenceProofV2 {
+    pub const fn request_exact(
+        receipt_identity: FunctionalRefinementReceiptIdentityV2,
+        binding: FunctionalRefinementBindingV2,
+    ) -> Self {
+        Self {
+            receipt_identity,
+            binding,
+        }
+    }
+
+    pub const fn receipt_identity(&self) -> FunctionalRefinementReceiptIdentityV2 {
+        self.receipt_identity
+    }
+
+    pub const fn binding(&self) -> FunctionalRefinementBindingV2 {
+        self.binding
+    }
+}
+
+const FUNCTIONAL_REFINEMENT_FORMULA_DOMAIN_V2: &[u8] =
+    b"FE2O3/PLIRON/FUNCTIONAL-REFINEMENT-FORMULA/V2\0";
+const EFFECT_REFINEMENT_CONTRACT_DOMAIN_V2: &[u8] = b"FE2O3/PLIRON/EFFECT-REFINEMENT-CONTRACT/V2\0";
+pub const MAX_PRODUCTION_RANKED_EFFECT_INDICES_V2: usize = MAX_RANKED_MEMORY_RANK;
+
+/// Workload-neutral normalized effect statement joined to one logical GPU write.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductionEffectRefinementContractV2 {
+    contract_identity: u64,
+    view: ProductionRankedValueV1,
+    indices: Vec<ProductionRankedValueV1>,
+    gpu_domain: ProductionRankedValueV1,
+    reference_domain: ProductionRankedValueV1,
+    gpu_precondition: ProductionRankedValueV1,
+    reference_precondition: ProductionRankedValueV1,
+    gpu_value: ProductionRankedValueV1,
+    reference_value: ProductionRankedValueV1,
+}
+
+impl ProductionEffectRefinementContractV2 {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        contract_identity: u64,
+        view: ProductionRankedValueV1,
+        indices: Vec<ProductionRankedValueV1>,
+        gpu_domain: ProductionRankedValueV1,
+        reference_domain: ProductionRankedValueV1,
+        gpu_precondition: ProductionRankedValueV1,
+        reference_precondition: ProductionRankedValueV1,
+        gpu_value: ProductionRankedValueV1,
+        reference_value: ProductionRankedValueV1,
+    ) -> Result<Self, ProductionRankedKernelErrorV1> {
+        if contract_identity == 0
+            || indices.is_empty()
+            || indices.len() > MAX_PRODUCTION_RANKED_EFFECT_INDICES_V2
+        {
+            return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+        }
+        Ok(Self {
+            contract_identity,
+            view,
+            indices,
+            gpu_domain,
+            reference_domain,
+            gpu_precondition,
+            reference_precondition,
+            gpu_value,
+            reference_value,
+        })
+    }
+
+    pub const fn contract_identity(&self) -> u64 {
+        self.contract_identity
+    }
+    pub const fn view(&self) -> ProductionRankedValueV1 {
+        self.view
+    }
+    pub fn indices(&self) -> &[ProductionRankedValueV1] {
+        &self.indices
+    }
+    pub const fn gpu_domain(&self) -> ProductionRankedValueV1 {
+        self.gpu_domain
+    }
+    pub const fn reference_domain(&self) -> ProductionRankedValueV1 {
+        self.reference_domain
+    }
+    pub const fn gpu_precondition(&self) -> ProductionRankedValueV1 {
+        self.gpu_precondition
+    }
+    pub const fn reference_precondition(&self) -> ProductionRankedValueV1 {
+        self.reference_precondition
+    }
+    pub const fn gpu_value(&self) -> ProductionRankedValueV1 {
+        self.gpu_value
+    }
+    pub const fn reference_value(&self) -> ProductionRankedValueV1 {
+        self.reference_value
+    }
+
+    /// Non-authoritative shape identity. Production admission uses the full
+    /// validated-kernel transcript rather than this request-local digest.
+    pub fn request_shape_hash(&self) -> DigestV1 {
+        let mut writer = CanonicalRefinementDigestV2::new(EFFECT_REFINEMENT_CONTRACT_DOMAIN_V2);
+        writer.field(1, &self.contract_identity.to_le_bytes());
+        writer.value(2, self.view);
+        writer.values(3, &self.indices);
+        for (tag, value) in [
+            (4, self.gpu_domain),
+            (5, self.reference_domain),
+            (6, self.gpu_precondition),
+            (7, self.reference_precondition),
+            (8, self.gpu_value),
+            (9, self.reference_value),
+        ] {
+            writer.value(tag, value);
+        }
+        writer.finish()
+    }
+}
+
+/// Derives the exact scalar-refinement transcript digest from validated recipe DAGs.
+pub fn normalized_functional_refinement_formula_hash_for_kernel_v2(
+    kernel: &ProductionRankedKernelV1,
+    block_index: usize,
+    operation_index: usize,
+    actual: ProductionRankedValueV1,
+    expected: ProductionRankedValueV1,
+    subjects: FunctionalRefinementSubjectsV2,
+) -> Result<DigestV1, ProductionRankedKernelErrorV1> {
+    let mut writer = CanonicalRefinementDigestV2::new(FUNCTIONAL_REFINEMENT_FORMULA_DOMAIN_V2);
+    writer.kernel_header(kernel, block_index, operation_index, subjects);
+    writer.definition(kernel, 20, actual)?;
+    writer.definition(kernel, 21, expected)?;
+    Ok(writer.finish())
+}
+
+/// Derives the exact effect-refinement transcript digest from the validated
+/// recipe DAG, correlated write, view/allocation, and ownership contract.
+pub fn normalized_effect_refinement_hash_for_kernel_v2(
+    kernel: &ProductionRankedKernelV1,
+    block_index: usize,
+    operation_index: usize,
+    contract: &ProductionEffectRefinementContractV2,
+    subjects: FunctionalRefinementSubjectsV2,
+) -> Result<DigestV1, ProductionRankedKernelErrorV1> {
+    let mut writer = CanonicalRefinementDigestV2::new(EFFECT_REFINEMENT_CONTRACT_DOMAIN_V2);
+    writer.kernel_header(kernel, block_index, operation_index, subjects);
+    writer.field(20, &contract.contract_identity.to_le_bytes());
+    writer.definition(kernel, 21, contract.view)?;
+    for (index, value) in contract.indices.iter().copied().enumerate() {
+        writer.definition(kernel, 30 + index as u16, value)?;
+    }
+    for (tag, value) in [
+        (60, contract.gpu_domain),
+        (61, contract.reference_domain),
+        (62, contract.gpu_precondition),
+        (63, contract.reference_precondition),
+        (64, contract.gpu_value),
+        (65, contract.reference_value),
+    ] {
+        writer.definition(kernel, tag, value)?;
+    }
+
+    let mut writes = Vec::new();
+    let mut ownership = Vec::new();
+    for (candidate_block, block) in kernel.blocks.iter().enumerate() {
+        for (candidate_operation, operation) in block.operations.iter().enumerate() {
+            match operation {
+                ProductionRankedOperationV1::Access {
+                    kind,
+                    view,
+                    indices,
+                } if kind.writes_memory()
+                    && *view == contract.view
+                    && indices == &contract.indices =>
+                {
+                    writes.push((
+                        candidate_block,
+                        candidate_operation,
+                        access_kind_tag(*kind),
+                        0,
+                        0,
+                    ));
+                }
+                ProductionRankedOperationV1::AtomicAccess {
+                    kind,
+                    ordering,
+                    scope,
+                    view,
+                    indices,
+                } if kind.writes_memory()
+                    && *view == contract.view
+                    && indices == &contract.indices =>
+                {
+                    writes.push((
+                        candidate_block,
+                        candidate_operation,
+                        access_kind_tag(*kind),
+                        atomic_ordering_tag(*ordering),
+                        atomic_scope_tag(*scope),
+                    ));
+                }
+                ProductionRankedOperationV1::OwnershipContract {
+                    view,
+                    coverage,
+                    partition,
+                } if *view == contract.view => {
+                    ownership.push((
+                        candidate_block,
+                        candidate_operation,
+                        ownership_coverage_tag(*coverage),
+                        ownership_partition_tag(*partition),
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
+    if writes.len() != 1 || ownership.len() != 1 {
+        return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+    }
+    let write = writes[0];
+    for (tag, value) in [
+        (80, write.0 as u64),
+        (81, write.1 as u64),
+        (82, u64::from(write.2)),
+        (83, u64::from(write.3)),
+        (84, u64::from(write.4)),
+    ] {
+        writer.field(tag, &value.to_le_bytes());
+    }
+    let owner = ownership[0];
+    for (tag, value) in [
+        (90, owner.0 as u64),
+        (91, owner.1 as u64),
+        (92, u64::from(owner.2)),
+        (93, u64::from(owner.3)),
+    ] {
+        writer.field(tag, &value.to_le_bytes());
+    }
+    Ok(writer.finish())
+}
+
+struct CanonicalRefinementDigestV2(Sha256);
+
+impl CanonicalRefinementDigestV2 {
+    fn new(domain: &[u8]) -> Self {
+        let mut digest = Sha256::new();
+        digest.update((domain.len() as u64).to_le_bytes());
+        digest.update(domain);
+        Self(digest)
+    }
+
+    fn field(&mut self, tag: u16, bytes: &[u8]) {
+        self.0.update(tag.to_le_bytes());
+        self.0.update((bytes.len() as u64).to_le_bytes());
+        self.0.update(bytes);
+    }
+
+    fn kernel_header(
+        &mut self,
+        kernel: &ProductionRankedKernelV1,
+        block_index: usize,
+        operation_index: usize,
+        subjects: FunctionalRefinementSubjectsV2,
+    ) {
+        self.field(1, b"2");
+        self.field(2, kernel.function_name.as_bytes());
+        self.field(3, &(kernel.argument_count as u64).to_le_bytes());
+        self.field(4, &(block_index as u64).to_le_bytes());
+        self.field(5, &(operation_index as u64).to_le_bytes());
+        self.field(6, &[subjects.safe_reference_kind() as u8]);
+        for (tag, digest) in [
+            (7, subjects.safe_reference_identity()),
+            (8, subjects.safe_reference_source_hash()),
+            (9, subjects.safe_reference_mir_hash()),
+            (10, subjects.kernel_subject_identity()),
+            (11, subjects.kernel_mir_hash()),
+        ] {
+            self.field(tag, digest.as_bytes());
+        }
+    }
+
+    fn definition(
+        &mut self,
+        kernel: &ProductionRankedKernelV1,
+        tag: u16,
+        value: ProductionRankedValueV1,
+    ) -> Result<(), ProductionRankedKernelErrorV1> {
+        let mut nested = CanonicalRefinementDigestV2::new(b"FE2O3/PLIRON/VALUE-DAG/V2\0");
+        let mut active = BTreeSet::new();
+        nested.definition_inner(kernel, value, &mut active, 0)?;
+        self.field(tag, nested.finish().as_bytes());
+        Ok(())
+    }
+
+    fn definition_inner(
+        &mut self,
+        kernel: &ProductionRankedKernelV1,
+        value: ProductionRankedValueV1,
+        active: &mut BTreeSet<ProductionRankedValueIdV1>,
+        depth: usize,
+    ) -> Result<(), ProductionRankedKernelErrorV1> {
+        if depth > MAX_RANKED_BOUNDS_OPERATIONS {
+            return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+        }
+        self.value(1, value);
+        let ProductionRankedValueV1::Local(identity) = value else {
+            return Ok(());
+        };
+        if !active.insert(identity) {
+            return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+        }
+        let definition = kernel
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .find(|operation| operation_result_identity(operation) == Some(identity))
+            .ok_or(ProductionRankedKernelErrorV1::InvalidReferenceContract)?;
+        match definition {
+            ProductionRankedOperationV1::View {
+                element_width,
+                writable,
+                shape,
+                dynamic_extents,
+                allocation_origin,
+                noalias_class,
+                ..
+            }
+            | ProductionRankedOperationV1::ViewInSpace {
+                element_width,
+                writable,
+                shape,
+                dynamic_extents,
+                allocation_origin,
+                noalias_class,
+                ..
+            } => {
+                self.field(10, &element_width.to_le_bytes());
+                self.field(11, &[u8::from(*writable)]);
+                self.u64s(12, shape);
+                self.field(13, &allocation_origin.to_le_bytes());
+                self.field(14, &noalias_class.to_le_bytes());
+                let space = match definition {
+                    ProductionRankedOperationV1::View { .. } => MemorySpaceAttr::Global,
+                    ProductionRankedOperationV1::ViewInSpace { memory_space, .. } => *memory_space,
+                    _ => unreachable!(),
+                };
+                self.field(15, &[memory_space_tag(space)]);
+                for (index, extent) in dynamic_extents.iter().copied().enumerate() {
+                    self.definition_inner(kernel, extent, active, depth + 1)?;
+                    self.field(16, &(index as u64).to_le_bytes());
+                }
+            }
+            ProductionRankedOperationV1::IndexConstant { value, .. } => {
+                self.field(20, &value.to_le_bytes())
+            }
+            ProductionRankedOperationV1::IndexUnknown { .. } => self.field(21, &[]),
+            ProductionRankedOperationV1::InvocationIndex {
+                dimension,
+                launch_extent,
+                ..
+            } => {
+                self.field(22, &dimension.to_le_bytes());
+                self.field(23, &launch_extent.to_le_bytes());
+            }
+            ProductionRankedOperationV1::IndexBinary { kind, lhs, rhs, .. } => {
+                self.field(24, &[index_binary_tag(*kind)]);
+                self.definition_inner(kernel, *lhs, active, depth + 1)?;
+                self.definition_inner(kernel, *rhs, active, depth + 1)?;
+            }
+            ProductionRankedOperationV1::DeterministicJoin { dependencies, .. } => {
+                self.field(25, &(dependencies.len() as u64).to_le_bytes());
+                for dependency in dependencies {
+                    self.definition_inner(kernel, *dependency, active, depth + 1)?;
+                }
+            }
+            ProductionRankedOperationV1::CheckedTiledIndex2D {
+                invocation,
+                component,
+                rows,
+                columns,
+                row_stride,
+                lanes_per_tile,
+                tile_rows,
+                tile_columns,
+                elements_per_lane,
+                ..
+            } => {
+                self.u64s(
+                    26,
+                    &[
+                        *lanes_per_tile,
+                        *tile_rows,
+                        *tile_columns,
+                        *elements_per_lane,
+                    ],
+                );
+                for operand in [invocation, component, rows, columns, row_stride] {
+                    self.definition_inner(kernel, *operand, active, depth + 1)?;
+                }
+            }
+            ProductionRankedOperationV1::CheckedRowStripedIndex2D {
+                invocation,
+                component,
+                rows,
+                columns,
+                row_stride,
+                lanes_per_row,
+                elements_per_lane,
+                ..
+            } => {
+                self.u64s(27, &[*lanes_per_row, *elements_per_lane]);
+                for operand in [invocation, component, rows, columns, row_stride] {
+                    self.definition_inner(kernel, *operand, active, depth + 1)?;
+                }
+            }
+            ProductionRankedOperationV1::Dimension {
+                view, dimension, ..
+            } => {
+                self.field(28, &dimension.to_le_bytes());
+                self.definition_inner(kernel, *view, active, depth + 1)?;
+            }
+            ProductionRankedOperationV1::SemanticSymbol { symbol, .. } => {
+                self.field(30, &symbol.to_le_bytes())
+            }
+            ProductionRankedOperationV1::SemanticConstant { value, .. } => {
+                self.field(31, &value.to_le_bytes())
+            }
+            ProductionRankedOperationV1::SemanticBinary { kind, lhs, rhs, .. } => {
+                self.field(32, &[semantic_binary_tag_v2(*kind)]);
+                self.definition_inner(kernel, *lhs, active, depth + 1)?;
+                self.definition_inner(kernel, *rhs, active, depth + 1)?;
+            }
+            _ => return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract),
+        }
+        active.remove(&identity);
+        Ok(())
+    }
+
+    fn u64s(&mut self, tag: u16, values: &[u64]) {
+        let mut bytes = Vec::with_capacity(8 + values.len() * 8);
+        bytes.extend_from_slice(&(values.len() as u64).to_le_bytes());
+        for value in values {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        self.field(tag, &bytes);
+    }
+
+    fn value(&mut self, tag: u16, value: ProductionRankedValueV1) {
+        let mut bytes = Vec::with_capacity(9);
+        match value {
+            ProductionRankedValueV1::Argument(index) => {
+                bytes.push(1);
+                bytes.extend_from_slice(&index.to_le_bytes());
+            }
+            ProductionRankedValueV1::BlockArgument { block, argument } => {
+                bytes.push(2);
+                bytes.extend_from_slice(&block.to_le_bytes());
+                bytes.extend_from_slice(&argument.to_le_bytes());
+            }
+            ProductionRankedValueV1::Local(identity) => {
+                bytes.push(3);
+                bytes.extend_from_slice(&identity.get().to_le_bytes());
+            }
+        }
+        self.field(tag, &bytes);
+    }
+
+    fn values(&mut self, tag: u16, values: &[ProductionRankedValueV1]) {
+        let mut bytes = Vec::with_capacity(8 + values.len() * 9);
+        bytes.extend_from_slice(&(values.len() as u64).to_le_bytes());
+        for value in values {
+            let mut item = [0_u8; 9];
+            match value {
+                ProductionRankedValueV1::Argument(index) => {
+                    item[0] = 1;
+                    item[1..5].copy_from_slice(&index.to_le_bytes());
+                }
+                ProductionRankedValueV1::BlockArgument { block, argument } => {
+                    item[0] = 2;
+                    item[1..5].copy_from_slice(&block.to_le_bytes());
+                    item[5..9].copy_from_slice(&argument.to_le_bytes());
+                }
+                ProductionRankedValueV1::Local(identity) => {
+                    item[0] = 3;
+                    item[1..5].copy_from_slice(&identity.get().to_le_bytes());
+                }
+            }
+            bytes.extend_from_slice(&item);
+        }
+        self.field(tag, &bytes);
+    }
+
+    fn finish(self) -> DigestV1 {
+        DigestV1::from_untrusted_bytes(self.0.finalize().into())
+    }
+}
+
+fn operation_result_identity(
+    operation: &ProductionRankedOperationV1,
+) -> Option<ProductionRankedValueIdV1> {
+    match operation {
+        ProductionRankedOperationV1::View { result, .. }
+        | ProductionRankedOperationV1::ViewInSpace { result, .. }
+        | ProductionRankedOperationV1::IndexConstant { result, .. }
+        | ProductionRankedOperationV1::IndexUnknown { result }
+        | ProductionRankedOperationV1::InvocationIndex { result, .. }
+        | ProductionRankedOperationV1::IndexBinary { result, .. }
+        | ProductionRankedOperationV1::DeterministicJoin { result, .. }
+        | ProductionRankedOperationV1::CheckedTiledIndex2D { result, .. }
+        | ProductionRankedOperationV1::CheckedRowStripedIndex2D { result, .. }
+        | ProductionRankedOperationV1::Dimension { result, .. }
+        | ProductionRankedOperationV1::SemanticSymbol { result, .. }
+        | ProductionRankedOperationV1::SemanticConstant { result, .. }
+        | ProductionRankedOperationV1::SemanticBinary { result, .. } => Some(*result),
+        _ => None,
+    }
+}
+
+fn access_kind_tag(kind: AccessKindAttr) -> u8 {
+    match kind {
+        AccessKindAttr::Read => 1,
+        AccessKindAttr::Write => 2,
+        AccessKindAttr::AtomicRead => 3,
+        AccessKindAttr::AtomicWrite => 4,
+        AccessKindAttr::AtomicReadModifyWrite => 5,
+    }
+}
+fn memory_space_tag(space: MemorySpaceAttr) -> u8 {
+    match space {
+        MemorySpaceAttr::Private => 1,
+        MemorySpaceAttr::Workgroup => 2,
+        MemorySpaceAttr::Global => 3,
+    }
+}
+fn index_binary_tag(kind: IndexBinaryKindAttr) -> u8 {
+    match kind {
+        IndexBinaryKindAttr::Add => 1,
+        IndexBinaryKindAttr::Multiply => 2,
+        IndexBinaryKindAttr::Remainder => 3,
+        IndexBinaryKindAttr::Divide => 4,
+    }
+}
+fn semantic_binary_tag_v2(kind: SemanticBinaryKindAttr) -> u8 {
+    match kind {
+        SemanticBinaryKindAttr::Add => 1,
+        SemanticBinaryKindAttr::Multiply => 2,
+    }
+}
+fn ownership_coverage_tag(coverage: OwnershipCoverageAttr) -> u8 {
+    match coverage {
+        OwnershipCoverageAttr::ExactView => 1,
+    }
+}
+fn ownership_partition_tag(partition: OwnershipPartitionAttr) -> u8 {
+    match partition {
+        OwnershipPartitionAttr::ExactSets => 1,
+        OwnershipPartitionAttr::DenseRectangles => 2,
+    }
+}
+fn atomic_ordering_tag(ordering: AtomicOrderingAttr) -> u8 {
+    match ordering {
+        AtomicOrderingAttr::Relaxed => 1,
+        AtomicOrderingAttr::Acquire => 2,
+        AtomicOrderingAttr::Release => 3,
+        AtomicOrderingAttr::AcquireRelease => 4,
+        AtomicOrderingAttr::SequentiallyConsistent => 5,
+    }
+}
+fn atomic_scope_tag(scope: AtomicScopeAttr) -> u8 {
+    match scope {
+        AtomicScopeAttr::SingleThread => 1,
+        AtomicScopeAttr::Workgroup => 2,
+        AtomicScopeAttr::Agent => 3,
+        AtomicScopeAttr::Device => 4,
+        AtomicScopeAttr::System => 5,
+    }
+}
+
+/// Compiler-retained summary constructible only from strict V2 import output.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductionFunctionalRefinementEvidenceV2 {
+    receipt_identity: FunctionalRefinementReceiptIdentityV2,
+    binding: FunctionalRefinementBindingV2,
+    signer_identity: DigestV1,
+    toolchain: VerusToolchainIdentityV2,
+    execution_identity: DigestV1,
+    boundary: FunctionalRefinementBoundaryV2,
+}
+
+/// Compiler-configuration trust root for production V2 admission.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductionFunctionalRefinementTrustPolicyV2 {
+    signer_identities: BTreeSet<DigestV1>,
+    toolchain: VerusToolchainIdentityV2,
+}
+
+impl ProductionFunctionalRefinementTrustPolicyV2 {
+    pub fn new(
+        signer_identities: impl IntoIterator<Item = DigestV1>,
+        toolchain: VerusToolchainIdentityV2,
+    ) -> Result<Self, ProductionRankedKernelErrorV1> {
+        let signer_identities = signer_identities.into_iter().collect::<BTreeSet<_>>();
+        if signer_identities.is_empty()
+            || signer_identities.len() > HARD_MAX_PRODUCTION_CONSTRUCTIONS
+            || signer_identities.iter().any(|identity| identity.is_zero())
+        {
+            return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+        }
+        Ok(Self {
+            signer_identities,
+            toolchain,
+        })
+    }
+
+    pub fn accepts_signer(&self, signer: DigestV1) -> bool {
+        self.signer_identities.contains(&signer)
+    }
+
+    pub const fn toolchain(&self) -> VerusToolchainIdentityV2 {
+        self.toolchain
+    }
+}
+
+impl ProductionFunctionalRefinementEvidenceV2 {
+    fn from_imported(proof: ImportedFunctionalRefinementProofV2) -> Self {
+        Self {
+            receipt_identity: proof.receipt_identity(),
+            binding: proof.binding(),
+            signer_identity: proof.signer_identity(),
+            toolchain: proof.toolchain(),
+            execution_identity: proof.execution_identity(),
+            boundary: proof.boundary(),
+        }
+    }
+
+    pub const fn receipt_identity(&self) -> FunctionalRefinementReceiptIdentityV2 {
+        self.receipt_identity
+    }
+    pub const fn binding(&self) -> FunctionalRefinementBindingV2 {
+        self.binding
+    }
+    pub const fn signer_identity(&self) -> DigestV1 {
+        self.signer_identity
+    }
+    pub const fn toolchain(&self) -> VerusToolchainIdentityV2 {
+        self.toolchain
+    }
+    pub const fn execution_identity(&self) -> DigestV1 {
+        self.execution_identity
+    }
+    pub const fn boundary(&self) -> FunctionalRefinementBoundaryV2 {
+        self.boundary
+    }
+    pub const fn grants_functional_refinement_evidence(&self) -> bool {
+        true
+    }
+    pub const fn grants_source_to_isa_authority(&self) -> bool {
+        false
+    }
+    pub const fn grants_artifact_or_launch_authority(&self) -> bool {
+        false
     }
 }
 
@@ -288,6 +972,31 @@ pub enum ProductionRankedOperationV1 {
         expected: ProductionRankedValueV1,
         proof: ProductionReferenceProofV1,
     },
+    /// Requires semantic equality backed by an exact authenticated V2 receipt.
+    /// The request itself is inert until the V2 production entrypoint consumes
+    /// and reconciles the corresponding imported proof.
+    RequireAuthenticatedReferenceEquivalent {
+        actual: ProductionRankedValueV1,
+        expected: ProductionRankedValueV1,
+        proof: ProductionReferenceProofV2,
+    },
+    /// Generator input before exact proof execution/import. Production compile
+    /// rejects this variant until the consuming bind transition replaces it.
+    RequestAuthenticatedReferenceEquivalent {
+        actual: ProductionRankedValueV1,
+        expected: ProductionRankedValueV1,
+        subjects: FunctionalRefinementSubjectsV2,
+    },
+    /// Joins authenticated MIR evidence to one normalized write effect.
+    RequireEffectRefinement {
+        contract: ProductionEffectRefinementContractV2,
+        proof: ProductionReferenceProofV2,
+    },
+    /// Generator input for an effect contract before exact proof import.
+    RequestEffectRefinement {
+        contract: ProductionEffectRefinementContractV2,
+        subjects: FunctionalRefinementSubjectsV2,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -436,6 +1145,46 @@ impl ProductionRankedKernelV1 {
         &self.blocks
     }
 
+    /// Consumes one validated generator request and replaces only the exact
+    /// addressed unbound operation with its imported receipt request.
+    pub fn bind_functional_refinement_request_v2(
+        mut self,
+        block_index: usize,
+        operation_index: usize,
+        proof: ProductionReferenceProofV2,
+    ) -> Result<Self, ProductionRankedKernelErrorV1> {
+        let operation = self
+            .blocks
+            .get_mut(block_index)
+            .and_then(|block| block.operations.get_mut(operation_index))
+            .ok_or(ProductionRankedKernelErrorV1::InvalidReferenceContract)?;
+        let replacement = match operation {
+            ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
+                actual,
+                expected,
+                subjects,
+            } if *subjects == proof.binding().subjects() => {
+                ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent {
+                    actual: *actual,
+                    expected: *expected,
+                    proof,
+                }
+            }
+            ProductionRankedOperationV1::RequestEffectRefinement { contract, subjects }
+                if *subjects == proof.binding().subjects() =>
+            {
+                ProductionRankedOperationV1::RequireEffectRefinement {
+                    contract: contract.clone(),
+                    proof,
+                }
+            }
+            _ => return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract),
+        };
+        *operation = replacement;
+        self.tree_work = self.validate()?;
+        Ok(self)
+    }
+
     fn validate(&self) -> Result<usize, ProductionRankedKernelErrorV1> {
         if self.argument_count > HARD_MAX_PRODUCTION_RANKED_ARGUMENTS {
             return Err(ProductionRankedKernelErrorV1::ResourceLimit {
@@ -460,6 +1209,10 @@ impl ProductionRankedKernelV1 {
                         if matches!(
                             operation,
                             ProductionRankedOperationV1::RequireReferenceEquivalent { .. }
+                                | ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
+                                | ProductionRankedOperationV1::RequireEffectRefinement { .. }
+                                | ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
+                                | ProductionRankedOperationV1::RequestEffectRefinement { .. }
                         ) {
                             3
                         } else {
@@ -1068,9 +1821,37 @@ fn validate_operation(
         ProductionRankedOperationV1::RequireEquivalent { actual, expected }
         | ProductionRankedOperationV1::RequireReferenceEquivalent {
             actual, expected, ..
+        }
+        | ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent {
+            actual,
+            expected,
+            ..
+        }
+        | ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
+            actual,
+            expected,
+            ..
         } => {
             require_semantic(*actual, argument_count, locals)?;
             require_semantic(*expected, argument_count, locals)?;
+            Ok(None)
+        }
+        ProductionRankedOperationV1::RequireEffectRefinement { contract, .. }
+        | ProductionRankedOperationV1::RequestEffectRefinement { contract, .. } => {
+            require_view(contract.view(), argument_count, locals)?;
+            for index in contract.indices() {
+                require_index(*index, argument_count, locals)?;
+            }
+            for value in [
+                contract.gpu_domain(),
+                contract.reference_domain(),
+                contract.gpu_precondition(),
+                contract.reference_precondition(),
+                contract.gpu_value(),
+                contract.reference_value(),
+            ] {
+                require_semantic(value, argument_count, locals)?;
+            }
             Ok(None)
         }
     }
@@ -1180,9 +1961,33 @@ fn validate_block_argument_values_v1(
         ProductionRankedOperationV1::RequireEquivalent { actual, expected }
         | ProductionRankedOperationV1::RequireReferenceEquivalent {
             actual, expected, ..
+        }
+        | ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent {
+            actual,
+            expected,
+            ..
+        }
+        | ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
+            actual,
+            expected,
+            ..
         } => {
             validate(*actual)?;
             validate(*expected)?;
+        }
+        ProductionRankedOperationV1::RequireEffectRefinement { contract, .. }
+        | ProductionRankedOperationV1::RequestEffectRefinement { contract, .. } => {
+            validate(contract.view())?;
+            for value in contract.indices().iter().copied().chain([
+                contract.gpu_domain(),
+                contract.reference_domain(),
+                contract.gpu_precondition(),
+                contract.reference_precondition(),
+                contract.gpu_value(),
+                contract.reference_value(),
+            ]) {
+                validate(value)?;
+            }
         }
         ProductionRankedOperationV1::ExecutionLayout { .. }
         | ProductionRankedOperationV1::IndexConstant { .. }
@@ -1455,6 +2260,7 @@ pub(super) struct ConstructedRootV1 {
     pub(super) identity: RootIdentityV1,
     pub(super) ranked_function: Option<Ptr<Operation>>,
     pub(super) ranked_kernel: Option<ProductionRankedKernelV1>,
+    pub(super) authenticated_functional_refinement: Vec<ProductionFunctionalRefinementEvidenceV2>,
     pub(super) production_pipeline_report: Option<ProductionPlironPreloweringReportV2>,
 }
 
@@ -1462,6 +2268,7 @@ pub(super) struct MaterializedConstructionV1 {
     pub(super) operation: OperationHandle,
     pub(super) ranked_function: Option<Ptr<Operation>>,
     pub(super) ranked_kernel: Option<ProductionRankedKernelV1>,
+    pub(super) authenticated_functional_refinement: Vec<ProductionFunctionalRefinementEvidenceV2>,
 }
 
 impl ProductionConstructionV1 {
@@ -1474,6 +2281,7 @@ impl ProductionConstructionV1 {
             kind: ProductionConstructionKindV1::RankedKernel {
                 root_name: root_name.to_owned(),
                 kernel,
+                authenticated_functional_refinement: Vec::new(),
             },
         })
     }
@@ -1526,11 +2334,18 @@ impl ProductionPlironSessionV1 {
                     operation,
                     ranked_function: None,
                     ranked_kernel: None,
+                    authenticated_functional_refinement: Vec::new(),
                 })
                 .map_err(ProductionSessionErrorV1::Operation),
-            ProductionConstructionKindV1::RankedKernel { kernel, .. } => {
-                self.materialize_ranked_kernel(root_name, kernel)
-            }
+            ProductionConstructionKindV1::RankedKernel {
+                kernel,
+                authenticated_functional_refinement,
+                ..
+            } => self.materialize_ranked_kernel(
+                root_name,
+                kernel,
+                authenticated_functional_refinement,
+            ),
         }));
         match result {
             Ok(result) => result,
@@ -1544,6 +2359,7 @@ impl ProductionPlironSessionV1 {
         &mut self,
         root_name: &str,
         kernel: ProductionRankedKernelV1,
+        authenticated_functional_refinement: Vec<ProductionFunctionalRefinementEvidenceV2>,
     ) -> Result<MaterializedConstructionV1, ProductionSessionErrorV1> {
         if !self
             .inner
@@ -1583,6 +2399,8 @@ impl ProductionPlironSessionV1 {
                 matches!(
                     operation,
                     ProductionRankedOperationV1::RequireReferenceEquivalent { .. }
+                        | ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
+                        | ProductionRankedOperationV1::RequireEffectRefinement { .. }
                 )
             })
         });
@@ -1675,6 +2493,7 @@ impl ProductionPlironSessionV1 {
                     &arguments,
                     &mut locals,
                     &block_arguments,
+                    &authenticated_functional_refinement,
                 )
                 .map_err(ProductionSessionErrorV1::RankedRecipe)?;
             }
@@ -1696,6 +2515,7 @@ impl ProductionPlironSessionV1 {
             operation,
             ranked_function: Some(function.get_operation()),
             ranked_kernel: Some(kernel),
+            authenticated_functional_refinement,
         })
     }
 
@@ -1814,6 +2634,7 @@ impl ProductionPlironSessionV1 {
         Ok(ProductionRankedKernelLoweringInputV1 {
             kernel,
             production_pipeline_report: report,
+            authenticated_functional_refinement: record.authenticated_functional_refinement,
             _session: self,
             _stage: stage,
             _root: root,
@@ -1881,6 +2702,7 @@ fn materialize_operation(
     arguments: &[Value],
     locals: &mut Vec<Value>,
     block_arguments: &HashMap<(u32, u32), Value>,
+    authenticated_functional_refinement: &[ProductionFunctionalRefinementEvidenceV2],
 ) -> Result<(), ProductionRankedKernelErrorV1> {
     let (operation, result) = match recipe {
         ProductionRankedOperationV1::ExecutionLayout {
@@ -2247,8 +3069,8 @@ fn materialize_operation(
                 ProofIdAttr::new(proof.evidence_id()),
                 obligation_id.clone(),
                 PropertyAttr::FunctionalRefinement,
-                EvidenceStatusAttr::Proved,
-                CoveredBoundaryAttr::Source,
+                EvidenceStatusAttr::Unsupported,
+                CoveredBoundaryAttr::Mir,
             );
             evidence.get_operation().insert_at_back(block, context);
             let op = RequireRefinementOp::new(
@@ -2258,6 +3080,118 @@ fn materialize_operation(
                 resolve_value(*expected, arguments, locals, block_arguments)?,
             );
             (op.get_operation(), None)
+        }
+        ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent {
+            actual,
+            expected,
+            proof,
+        } => {
+            let imported = authenticated_functional_refinement
+                .iter()
+                .find(|candidate| candidate.receipt_identity() == proof.receipt_identity())
+                .filter(|candidate| candidate.binding() == proof.binding())
+                .ok_or(ProductionRankedKernelErrorV1::Materialization(
+                    "authenticated functional-refinement evidence was not retained",
+                ))?;
+            let [obligation_words, subject_words, model_words, evidence_words] =
+                authenticated_proof_ids(imported)?;
+            let obligation_id = ProofIdAttr::new(obligation_words);
+            let obligation = ObligationOp::new(
+                context,
+                obligation_id.clone(),
+                ProofIdAttr::new(subject_words),
+                ProofIdAttr::new(model_words),
+                PropertyAttr::FunctionalRefinement,
+            );
+            obligation.get_operation().insert_at_back(block, context);
+            let evidence = EvidenceRefOp::new(
+                context,
+                ProofIdAttr::new(evidence_words),
+                obligation_id.clone(),
+                PropertyAttr::FunctionalRefinement,
+                EvidenceStatusAttr::Proved,
+                CoveredBoundaryAttr::Mir,
+            );
+            evidence.get_operation().insert_at_back(block, context);
+            let op = RequireRefinementOp::new(
+                context,
+                obligation_id,
+                resolve_value(*actual, arguments, locals, block_arguments)?,
+                resolve_value(*expected, arguments, locals, block_arguments)?,
+            );
+            (op.get_operation(), None)
+        }
+        ProductionRankedOperationV1::RequireEffectRefinement { contract, proof } => {
+            let imported = authenticated_functional_refinement
+                .iter()
+                .find(|candidate| candidate.receipt_identity() == proof.receipt_identity())
+                .filter(|candidate| candidate.binding() == proof.binding())
+                .ok_or(ProductionRankedKernelErrorV1::Materialization(
+                    "authenticated effect-refinement evidence was not retained",
+                ))?;
+            let [obligation_words, subject_words, model_words, evidence_words] =
+                authenticated_proof_ids(imported)?;
+            let obligation_id = ProofIdAttr::new(obligation_words);
+            let obligation = ObligationOp::new(
+                context,
+                obligation_id.clone(),
+                ProofIdAttr::new(subject_words),
+                ProofIdAttr::new(model_words),
+                PropertyAttr::FunctionalRefinement,
+            );
+            obligation.get_operation().insert_at_back(block, context);
+            let evidence = EvidenceRefOp::new(
+                context,
+                ProofIdAttr::new(evidence_words),
+                obligation_id.clone(),
+                PropertyAttr::FunctionalRefinement,
+                EvidenceStatusAttr::Proved,
+                CoveredBoundaryAttr::Mir,
+            );
+            evidence.get_operation().insert_at_back(block, context);
+            let op = RequireEffectRefinementOp::new(
+                context,
+                obligation_id,
+                resolve_value(contract.view(), arguments, locals, block_arguments)?,
+                contract
+                    .indices()
+                    .iter()
+                    .map(|value| resolve_value(*value, arguments, locals, block_arguments))
+                    .collect::<Result<Vec<_>, _>>()?,
+                resolve_value(contract.gpu_domain(), arguments, locals, block_arguments)?,
+                resolve_value(
+                    contract.reference_domain(),
+                    arguments,
+                    locals,
+                    block_arguments,
+                )?,
+                resolve_value(
+                    contract.gpu_precondition(),
+                    arguments,
+                    locals,
+                    block_arguments,
+                )?,
+                resolve_value(
+                    contract.reference_precondition(),
+                    arguments,
+                    locals,
+                    block_arguments,
+                )?,
+                resolve_value(contract.gpu_value(), arguments, locals, block_arguments)?,
+                resolve_value(
+                    contract.reference_value(),
+                    arguments,
+                    locals,
+                    block_arguments,
+                )?,
+            );
+            (op.get_operation(), None)
+        }
+        ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
+        | ProductionRankedOperationV1::RequestEffectRefinement { .. } => {
+            return Err(ProductionRankedKernelErrorV1::Materialization(
+                "unbound functional-refinement request cannot be materialized",
+            ));
         }
     };
     operation.insert_at_back(block, context);
@@ -2270,6 +3204,56 @@ fn materialize_operation(
         locals.push(value);
     }
     Ok(())
+}
+
+fn digest_as_proof_id(digest: DigestV1) -> [u64; 4] {
+    let bytes = digest.as_bytes();
+    std::array::from_fn(|index| {
+        u64::from_le_bytes(
+            bytes[index * 8..(index + 1) * 8]
+                .try_into()
+                .expect("digest quarters have fixed width"),
+        )
+    })
+}
+
+fn authenticated_proof_ids(
+    evidence: &ProductionFunctionalRefinementEvidenceV2,
+) -> Result<[[u64; 4]; 4], ProductionRankedKernelErrorV1> {
+    let inputs = [
+        (
+            b"FE2O3/PLIRON/PROOF-ID/OBLIGATION/V2\0".as_slice(),
+            evidence.binding().normalized_obligation_effect_ir_hash(),
+        ),
+        (
+            b"FE2O3/PLIRON/PROOF-ID/SUBJECT/V2\0".as_slice(),
+            evidence.binding().kernel_mir_hash(),
+        ),
+        (
+            b"FE2O3/PLIRON/PROOF-ID/MODEL/V2\0".as_slice(),
+            evidence.binding().safe_reference_mir_hash(),
+        ),
+        (
+            b"FE2O3/PLIRON/PROOF-ID/EVIDENCE/V2\0".as_slice(),
+            evidence.receipt_identity().digest(),
+        ),
+    ];
+    let identities = inputs.map(|(domain, input)| {
+        let mut digest = Sha256::new();
+        digest.update((domain.len() as u64).to_le_bytes());
+        digest.update(domain);
+        digest.update(input.as_bytes());
+        digest_as_proof_id(DigestV1::from_untrusted_bytes(digest.finalize().into()))
+    });
+    if identities.iter().any(|identity| *identity == [0; 4])
+        || identities
+            .iter()
+            .enumerate()
+            .any(|(index, identity)| identities[..index].contains(identity))
+    {
+        return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+    }
+    Ok(identities)
 }
 
 fn materialize_terminator(
@@ -2479,6 +3463,7 @@ fn materialize_terminator(
 pub struct ProductionRankedKernelLoweringInputV1 {
     kernel: ProductionRankedKernelV1,
     production_pipeline_report: ProductionPlironPreloweringReportV2,
+    authenticated_functional_refinement: Vec<ProductionFunctionalRefinementEvidenceV2>,
     _session: ProductionPlironSessionV1,
     _stage: ProductionStageHandleV1<KernelChecksVerifiedGraphStageV1>,
     _root: ProductionRootHandleV1<KernelChecksVerifiedGraphStageV1>,
@@ -2513,6 +3498,13 @@ impl ProductionRankedKernelLoweringInputV1 {
     /// Indivisible lineage from the mandatory eight-pass production pipeline.
     pub const fn production_pipeline_report(&self) -> &ProductionPlironPreloweringReportV2 {
         &self.production_pipeline_report
+    }
+
+    /// Exact authenticated functional-refinement receipts consumed for this graph.
+    pub fn authenticated_functional_refinement(
+        &self,
+    ) -> &[ProductionFunctionalRefinementEvidenceV2] {
+        &self.authenticated_functional_refinement
     }
 
     pub const fn bounds_report(&self) -> &RankedBoundsReportV1 {
@@ -2558,6 +3550,10 @@ impl ProductionRankedKernelLoweringInputV1 {
     pub const fn grants_compiler_refinement_authority(&self) -> bool {
         false
     }
+
+    pub const fn grants_authenticated_functional_refinement_evidence(&self) -> bool {
+        !self.authenticated_functional_refinement.is_empty()
+    }
 }
 
 #[derive(Debug)]
@@ -2591,6 +3587,224 @@ impl Error for ProductionRankedCompileErrorV1 {
     }
 }
 
+/// Failure to join imported proof capabilities to exact ranked-IR requests.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProductionFunctionalRefinementAdmissionErrorV2 {
+    WrongConstructionKind,
+    LegacyV1Declaration,
+    UnboundRequest,
+    DuplicateImportedReceipt(FunctionalRefinementReceiptIdentityV2),
+    DuplicateReceiptClaim(FunctionalRefinementReceiptIdentityV2),
+    MissingImportedReceipt(FunctionalRefinementReceiptIdentityV2),
+    UnusedImportedReceipt(FunctionalRefinementReceiptIdentityV2),
+    BindingMismatch(FunctionalRefinementReceiptIdentityV2),
+    ObligationEffectDigestMismatch(FunctionalRefinementReceiptIdentityV2),
+    WrongBoundary(FunctionalRefinementReceiptIdentityV2),
+    WrongSigner(FunctionalRefinementReceiptIdentityV2),
+    WrongToolchain(FunctionalRefinementReceiptIdentityV2),
+    InertImportedEvidence(FunctionalRefinementReceiptIdentityV2),
+}
+
+impl fmt::Display for ProductionFunctionalRefinementAdmissionErrorV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WrongConstructionKind => formatter.write_str(
+                "functional-refinement receipts can be admitted only for a ranked kernel",
+            ),
+            Self::LegacyV1Declaration => formatter.write_str(
+                "legacy declarative reference proof is non-authoritative; an imported V2 receipt is required",
+            ),
+            Self::UnboundRequest => formatter.write_str(
+                "functional-refinement generator request must be bound to an imported receipt before production compilation",
+            ),
+            Self::DuplicateImportedReceipt(_) => {
+                formatter.write_str("duplicate imported functional-refinement receipt")
+            }
+            Self::DuplicateReceiptClaim(_) => {
+                formatter.write_str("functional-refinement receipt is claimed more than once")
+            }
+            Self::MissingImportedReceipt(_) => {
+                formatter.write_str("ranked operation has no matching imported functional-refinement receipt")
+            }
+            Self::UnusedImportedReceipt(_) => {
+                formatter.write_str("imported functional-refinement receipt is not claimed by the ranked kernel")
+            }
+            Self::BindingMismatch(_) => formatter.write_str(
+                "ranked operation functional-refinement binding does not match the imported receipt",
+            ),
+            Self::ObligationEffectDigestMismatch(_) => formatter.write_str(
+                "authenticated normalized obligation/effect digest does not match the ranked recipe",
+            ),
+            Self::WrongBoundary(_) => formatter.write_str(
+                "production admission requires the safe-reference-MIR to kernel-MIR boundary",
+            ),
+            Self::WrongSigner(_) => formatter.write_str(
+                "functional-refinement signer is not trusted by compiler configuration",
+            ),
+            Self::WrongToolchain(_) => formatter.write_str(
+                "functional-refinement toolchain is not pinned by compiler configuration",
+            ),
+            Self::InertImportedEvidence(_) => formatter.write_str(
+                "imported receipt did not grant exact functional-refinement evidence",
+            ),
+        }
+    }
+}
+
+impl Error for ProductionFunctionalRefinementAdmissionErrorV2 {}
+
+#[derive(Debug)]
+pub enum ProductionRankedCompileErrorV2 {
+    Proof(ProductionFunctionalRefinementAdmissionErrorV2),
+    Pipeline(ProductionRankedCompileErrorV1),
+}
+
+impl fmt::Display for ProductionRankedCompileErrorV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Proof(error) => error.fmt(formatter),
+            Self::Pipeline(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl Error for ProductionRankedCompileErrorV2 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Proof(error) => Some(error),
+            Self::Pipeline(error) => Some(error),
+        }
+    }
+}
+
+fn admit_functional_refinement_v2(
+    construction: &mut ProductionConstructionV1,
+    imported: Vec<ImportedFunctionalRefinementProofV2>,
+    policy: &ProductionFunctionalRefinementTrustPolicyV2,
+) -> Result<(), ProductionFunctionalRefinementAdmissionErrorV2> {
+    let ProductionConstructionKindV1::RankedKernel {
+        kernel,
+        authenticated_functional_refinement,
+        ..
+    } = &mut construction.kind
+    else {
+        return Err(ProductionFunctionalRefinementAdmissionErrorV2::WrongConstructionKind);
+    };
+
+    let mut available = BTreeMap::new();
+    for proof in imported {
+        let identity = proof.receipt_identity();
+        if available.insert(identity, proof).is_some() {
+            return Err(
+                ProductionFunctionalRefinementAdmissionErrorV2::DuplicateImportedReceipt(identity),
+            );
+        }
+    }
+    let mut claimed = BTreeSet::new();
+    let mut retained = Vec::new();
+    let mut admit = |request: &ProductionReferenceProofV2,
+                     expected_obligation_effect: DigestV1|
+     -> Result<(), ProductionFunctionalRefinementAdmissionErrorV2> {
+        let identity = request.receipt_identity();
+        if !claimed.insert(identity) {
+            return Err(
+                ProductionFunctionalRefinementAdmissionErrorV2::DuplicateReceiptClaim(identity),
+            );
+        }
+        let proof = available.remove(&identity).ok_or(
+            ProductionFunctionalRefinementAdmissionErrorV2::MissingImportedReceipt(identity),
+        )?;
+        if proof.binding() != request.binding() {
+            return Err(ProductionFunctionalRefinementAdmissionErrorV2::BindingMismatch(identity));
+        }
+        if proof.boundary() != FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir {
+            return Err(ProductionFunctionalRefinementAdmissionErrorV2::WrongBoundary(identity));
+        }
+        if !policy.accepts_signer(proof.signer_identity()) {
+            return Err(ProductionFunctionalRefinementAdmissionErrorV2::WrongSigner(
+                identity,
+            ));
+        }
+        if proof.toolchain() != policy.toolchain() {
+            return Err(ProductionFunctionalRefinementAdmissionErrorV2::WrongToolchain(identity));
+        }
+        if !proof.grants_functional_refinement_evidence() {
+            return Err(
+                ProductionFunctionalRefinementAdmissionErrorV2::InertImportedEvidence(identity),
+            );
+        }
+        if proof.binding().normalized_obligation_effect_ir_hash() != expected_obligation_effect {
+            return Err(
+                ProductionFunctionalRefinementAdmissionErrorV2::ObligationEffectDigestMismatch(
+                    identity,
+                ),
+            );
+        }
+        retained.push(ProductionFunctionalRefinementEvidenceV2::from_imported(
+            proof,
+        ));
+        Ok(())
+    };
+    for (block_index, block) in kernel.blocks.iter().enumerate() {
+        for (operation_index, operation) in block.operations.iter().enumerate() {
+            match operation {
+                ProductionRankedOperationV1::RequireReferenceEquivalent { .. } => {
+                    return Err(
+                        ProductionFunctionalRefinementAdmissionErrorV2::LegacyV1Declaration,
+                    );
+                }
+                ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
+                | ProductionRankedOperationV1::RequestEffectRefinement { .. } => {
+                    return Err(ProductionFunctionalRefinementAdmissionErrorV2::UnboundRequest);
+                }
+                ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent {
+                    actual,
+                    expected,
+                    proof: request,
+                } => {
+                    let expected_digest = normalized_functional_refinement_formula_hash_for_kernel_v2(
+                    kernel,
+                    block_index,
+                    operation_index,
+                    *actual,
+                    *expected,
+                    request.binding().subjects(),
+                )
+                .map_err(|_| {
+                    ProductionFunctionalRefinementAdmissionErrorV2::ObligationEffectDigestMismatch(
+                        request.receipt_identity(),
+                    )
+                })?;
+                    admit(request, expected_digest)?;
+                }
+                ProductionRankedOperationV1::RequireEffectRefinement { contract, proof } => {
+                    let expected_digest = normalized_effect_refinement_hash_for_kernel_v2(
+                    kernel,
+                    block_index,
+                    operation_index,
+                    contract,
+                    proof.binding().subjects(),
+                )
+                .map_err(|_| {
+                    ProductionFunctionalRefinementAdmissionErrorV2::ObligationEffectDigestMismatch(
+                        proof.receipt_identity(),
+                    )
+                })?;
+                    admit(proof, expected_digest)?;
+                }
+                _ => {}
+            }
+        }
+    }
+    if let Some(identity) = available.keys().next().copied() {
+        return Err(
+            ProductionFunctionalRefinementAdmissionErrorV2::UnusedImportedReceipt(identity),
+        );
+    }
+    *authenticated_functional_refinement = retained;
+    Ok(())
+}
+
 /// Executes the sole closed ranked-kernel production path through construction,
 /// recursive structural verification, the fixed generic verifier pipeline, and
 /// one checked lowering transition.
@@ -2621,4 +3835,22 @@ pub fn compile_ranked_kernel_for_lowering_v1(
     session
         .prepare_ranked_lowering(verified, root)
         .map_err(ProductionRankedCompileErrorV1::Session)
+}
+
+/// Executes the ranked production path after consuming and exactly reconciling
+/// authenticated V2 functional-refinement proofs.
+///
+/// Only MIR-to-MIR functional-refinement authority is admitted. Source-to-MIR,
+/// lowering, ISA, artifact, load, launch, and hardware authority remain outside
+/// this transition.
+pub fn compile_ranked_kernel_for_lowering_v2(
+    mut construction: ProductionConstructionV1,
+    limits: ProductionSessionLimitsV1,
+    imported: Vec<ImportedFunctionalRefinementProofV2>,
+    policy: ProductionFunctionalRefinementTrustPolicyV2,
+) -> Result<ProductionRankedKernelLoweringInputV1, ProductionRankedCompileErrorV2> {
+    admit_functional_refinement_v2(&mut construction, imported, &policy)
+        .map_err(ProductionRankedCompileErrorV2::Proof)?;
+    compile_ranked_kernel_for_lowering_v1(construction, limits)
+        .map_err(ProductionRankedCompileErrorV2::Pipeline)
 }

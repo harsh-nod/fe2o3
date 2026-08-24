@@ -575,3 +575,13 @@ The existing legacy `build_invocation_plan` and `execute_recorder` APIs still
 accept caller-supplied tool identities and intentionally cannot construct
 `AuthenticatedRecorderOutputV1` (or its deprecated
 `AuthenticatedVerusExecutionEvidenceV1` alias).
+
+## Ranked functional-refinement V2
+
+The V2 ranked producer accepts no caller-authored Verus source. It consumes a
+validated unbound scalar/effect request, walks its semantic DAG, computes the
+versioned Pliron transcript, and generates `CanonicalGeneratedVerusProofInputV3`
+internally. A distributed path returns a signable receipt; a local path uses an
+ephemeral compiler-owned signer and returns the move-only imported proof plus
+the matching production trust policy. Both require the retained no-follow
+`rust_verify`/Z3 closure and cover only safe-reference MIR to kernel MIR.

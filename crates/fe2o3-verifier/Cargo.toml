@@ -12,18 +12,24 @@ publish = false
 name = "fe2o3_verifier"
 
 [dependencies]
+dialect-kernel.workspace = true
 fe2o3-artifact-transaction.workspace = true
 fe2o3-artifacts.workspace = true
 fe2o3-contracts.workspace = true
 fe2o3-compiler-lineage.workspace = true
+fe2o3-functional-proof.workspace = true
 fe2o3-kernel-descriptor.workspace = true
 fe2o3-kernel-ir.workspace = true
+fe2o3-pliron.workspace = true
+fe2o3-proof-contracts.workspace = true
 fe2o3-rustc-front.workspace = true
 proc-macro2.workspace = true
 rustix.workspace = true
 sha2.workspace = true
 syn = { workspace = true, features = ["visit"] }
 toml = "1.1.4"
+ed25519-dalek = { version = "2.2.0", features = ["fast", "rand_core", "zeroize"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
 
 [[bin]]
 name = "fe2o3-verifier-test-recorder"

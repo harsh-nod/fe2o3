@@ -22,6 +22,7 @@ mod compiler_proof_binding_v3;
 mod control_flow_binding;
 mod executor;
 mod flash_attention_memory_v1;
+mod functional_refinement_receipt_v2;
 mod general_gemm_kir_model_correspondence_v1;
 mod general_gemm_numerical_correspondence_v1;
 mod general_gemm_numerical_late_machine_v1;
@@ -133,6 +134,13 @@ pub use executor::{
     ExecutionSuccess, MAX_CAPTURE_BYTES, OutputStream, ProcessOutput, execute_recorder,
 };
 pub use flash_attention_memory_v1::*;
+pub use functional_refinement_receipt_v2::{
+    FunctionalRefinementVerusExecutionErrorKindV2, FunctionalRefinementVerusExecutionErrorV2,
+    PreparedFunctionalRefinementReceiptV2,
+    execute_and_import_ranked_functional_refinement_locally_v2,
+    functional_refinement_verus_toolchain_identity_v2,
+    prepare_ranked_functional_refinement_receipt_v2,
+};
 pub use general_gemm_kir_model_correspondence_v1::*;
 pub use general_gemm_numerical_correspondence_v1::*;
 pub use general_gemm_numerical_late_machine_v1::*;

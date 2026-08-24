@@ -642,6 +642,7 @@ checksum = "70e796c081cee67dc755e1a36a0a172b897fab85fc3f6bc48307991f64e4eca9"
 dependencies = [
  "curve25519-dalek",
  "ed25519",
+ "rand_core 0.6.4",
  "serde",
  "sha2 0.10.9",
  "subtle",
@@ -895,6 +896,15 @@ dependencies = [
  "fe2o3-core",
  "fe2o3-device",
  "fe2o3-host",
+]
+
+[[package]]
+name = "fe2o3-functional-proof"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "fe2o3-proof-contracts",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -1271,10 +1281,13 @@ dependencies = [
  "dialect-kernel",
  "dialect-mir",
  "dialect-proof",
+ "ed25519-dalek",
+ "fe2o3-functional-proof",
  "fe2o3-kernel-analysis",
  "fe2o3-kernel-ir",
  "fe2o3-mir-model",
  "fe2o3-pliron-owner-core",
+ "fe2o3-proof-contracts",
  "pliron",
  "sha2 0.11.0",
  "trybuild",
@@ -1662,14 +1675,20 @@ dependencies = [
 name = "fe2o3-verifier"
 version = "0.1.0"
 dependencies = [
+ "dialect-kernel",
+ "ed25519-dalek",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
  "fe2o3-compiler-lineage",
  "fe2o3-contracts",
+ "fe2o3-functional-proof",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
+ "fe2o3-pliron",
+ "fe2o3-proof-contracts",
  "fe2o3-rustc-front",
  "proc-macro2",
+ "rand_core 0.6.4",
  "rustix",
  "sha2 0.11.0",
  "syn 2.0.117",

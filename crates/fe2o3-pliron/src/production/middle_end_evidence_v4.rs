@@ -1336,6 +1336,85 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
                 }
             }
         }
+        ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent {
+            actual,
+            expected,
+            proof,
+        } => {
+            digest.update([24]);
+            hash_value(digest, *actual);
+            hash_value(digest, *expected);
+            digest.update(proof.receipt_identity().digest().as_bytes());
+            let binding = proof.binding();
+            digest.update([binding.safe_reference_kind() as u8]);
+            for identity in [
+                binding.safe_reference_identity(),
+                binding.safe_reference_source_hash(),
+                binding.safe_reference_mir_hash(),
+                binding.kernel_subject_identity(),
+                binding.kernel_mir_hash(),
+                binding.normalized_obligation_effect_ir_hash(),
+            ] {
+                digest.update(identity.as_bytes());
+            }
+        }
+        ProductionRankedOperationV1::RequireEffectRefinement { contract, proof } => {
+            digest.update([25]);
+            digest.update(contract.contract_identity().to_le_bytes());
+            hash_value(digest, contract.view());
+            digest.update((contract.indices().len() as u64).to_le_bytes());
+            for value in contract.indices() {
+                hash_value(digest, *value);
+            }
+            for value in [
+                contract.gpu_domain(),
+                contract.reference_domain(),
+                contract.gpu_precondition(),
+                contract.reference_precondition(),
+                contract.gpu_value(),
+                contract.reference_value(),
+            ] {
+                hash_value(digest, value);
+            }
+            digest.update(proof.receipt_identity().digest().as_bytes());
+            digest.update(
+                proof
+                    .binding()
+                    .normalized_obligation_effect_ir_hash()
+                    .as_bytes(),
+            );
+        }
+        ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
+            actual,
+            expected,
+            subjects,
+        } => {
+            digest.update([26]);
+            hash_value(digest, *actual);
+            hash_value(digest, *expected);
+            hash_functional_refinement_subjects(digest, *subjects);
+        }
+        ProductionRankedOperationV1::RequestEffectRefinement { contract, subjects } => {
+            digest.update([27]);
+            digest.update(contract.request_shape_hash().as_bytes());
+            hash_functional_refinement_subjects(digest, *subjects);
+        }
+    }
+}
+
+fn hash_functional_refinement_subjects(
+    digest: &mut Sha256,
+    subjects: fe2o3_functional_proof::FunctionalRefinementSubjectsV2,
+) {
+    digest.update([subjects.safe_reference_kind() as u8]);
+    for identity in [
+        subjects.safe_reference_identity(),
+        subjects.safe_reference_source_hash(),
+        subjects.safe_reference_mir_hash(),
+        subjects.kernel_subject_identity(),
+        subjects.kernel_mir_hash(),
+    ] {
+        digest.update(identity.as_bytes());
     }
 }
 

@@ -3,18 +3,31 @@ use dialect_kernel::{
     AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, IndexBinaryKindAttr, MemorySpaceAttr,
     OwnershipCoverageAttr, OwnershipPartitionAttr, SemanticBinaryKindAttr, TensorConvergenceAttr,
 };
+use ed25519_dalek::{Signer, SigningKey};
+use fe2o3_functional_proof::{
+    FunctionalRefinementBindingV2, FunctionalRefinementBoundaryV2,
+    FunctionalRefinementImportExpectationV2, FunctionalRefinementImportPolicyV2,
+    FunctionalRefinementReceiptImporterV2, FunctionalRefinementResultV2,
+    FunctionalRefinementSubjectsV2, ImportedFunctionalRefinementProofV2, SafeReferenceKindV2,
+    UnsignedFunctionalRefinementReceiptV2, VerusToolchainIdentityV2,
+};
 use fe2o3_kernel_analysis::{
     KernelCheckPassKindV1, KernelCheckStatusV1, PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2,
 };
 use fe2o3_kernel_ir::{TensorInstructionProfileV1, TensorLayoutContractV1, TensorSymbolicMapV1};
 use fe2o3_pliron::{
     DialectRegistration, HARD_MAX_SESSION_OPERATION_TREE_ITEMS, ProductionConstructionV1,
-    ProductionPlironSessionV1, ProductionRankedBlockV1, ProductionRankedCompileErrorV1,
+    ProductionEffectRefinementContractV2, ProductionFunctionalRefinementAdmissionErrorV2,
+    ProductionFunctionalRefinementTrustPolicyV2, ProductionPlironSessionV1,
+    ProductionRankedBlockV1, ProductionRankedCompileErrorV1, ProductionRankedCompileErrorV2,
     ProductionRankedKernelErrorV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
     ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
-    ProductionReferenceProofV1, ProductionSessionErrorV1, ProductionSessionLimitsV1,
-    compile_ranked_kernel_for_lowering_v1,
+    ProductionReferenceProofV1, ProductionReferenceProofV2, ProductionSessionErrorV1,
+    ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
+    compile_ranked_kernel_for_lowering_v2, normalized_effect_refinement_hash_for_kernel_v2,
+    normalized_functional_refinement_formula_hash_for_kernel_v2,
 };
+use fe2o3_proof_contracts::DigestV1;
 
 const VIEW: ProductionRankedValueIdV1 = ProductionRankedValueIdV1::new(0);
 const INDEX: ProductionRankedValueIdV1 = ProductionRankedValueIdV1::new(1);
@@ -671,8 +684,78 @@ fn reference_proof() -> ProductionReferenceProofV1 {
     .expect("exact nonzero proof identities")
 }
 
+fn proof_digest(value: u8) -> DigestV1 {
+    DigestV1::from_untrusted_bytes([value; 32])
+}
+
+fn functional_subjects(kernel_mir: u8) -> FunctionalRefinementSubjectsV2 {
+    FunctionalRefinementSubjectsV2::new(
+        SafeReferenceKindV2::Mir,
+        proof_digest(1),
+        DigestV1::ZERO,
+        proof_digest(2),
+        proof_digest(3),
+        proof_digest(kernel_mir),
+    )
+    .unwrap()
+}
+
+fn functional_binding(kernel_mir: u8, obligation: DigestV1) -> FunctionalRefinementBindingV2 {
+    FunctionalRefinementBindingV2::from_subjects(functional_subjects(kernel_mir), obligation)
+        .unwrap()
+}
+
+fn imported_reference(
+    binding: FunctionalRefinementBindingV2,
+    boundary: FunctionalRefinementBoundaryV2,
+) -> (
+    ProductionReferenceProofV2,
+    ImportedFunctionalRefinementProofV2,
+    ProductionFunctionalRefinementTrustPolicyV2,
+) {
+    let signing = SigningKey::from_bytes(&[91; 32]);
+    let toolchain = VerusToolchainIdentityV2::new(
+        proof_digest(10),
+        proof_digest(11),
+        proof_digest(12),
+        proof_digest(13),
+        proof_digest(14),
+    )
+    .unwrap();
+    let policy = FunctionalRefinementImportPolicyV2::new(
+        signing.verifying_key().to_bytes(),
+        toolchain,
+        boundary,
+    )
+    .unwrap();
+    let signer_identity = policy.signer_identity();
+    let unsigned = UnsignedFunctionalRefinementReceiptV2::from_verified_execution_join(
+        policy.signer_identity(),
+        binding,
+        toolchain,
+        proof_digest(20),
+        FunctionalRefinementResultV2::Proved,
+        boundary,
+    )
+    .unwrap();
+    let wire = unsigned
+        .clone()
+        .attach_signature(signing.sign(unsigned.signing_bytes()).to_bytes());
+    let mut importer = FunctionalRefinementReceiptImporterV2::new(policy, 1).unwrap();
+    let imported = importer
+        .import(FunctionalRefinementImportExpectationV2::new(binding), &wire)
+        .unwrap();
+    let production_policy =
+        ProductionFunctionalRefinementTrustPolicyV2::new([signer_identity], toolchain).unwrap();
+    (
+        ProductionReferenceProofV2::request_exact(imported.receipt_identity(), binding),
+        imported,
+        production_policy,
+    )
+}
+
 #[test]
-fn proved_safe_rust_reference_is_mandatory_in_the_production_pipeline() {
+fn legacy_declared_proved_reference_is_not_authoritative() {
     let lhs = ProductionRankedValueIdV1::new(0);
     let rhs = ProductionRankedValueIdV1::new(1);
     let actual = ProductionRankedValueIdV1::new(2);
@@ -713,11 +796,102 @@ fn proved_safe_rust_reference_is_mandatory_in_the_production_pipeline() {
     )
     .expect("valid workload-neutral reference recipe");
 
-    let input = compile_ranked_kernel_for_lowering_v1(
+    let error = compile_ranked_kernel_for_lowering_v1(
         construction(kernel),
         ProductionSessionLimitsV1::default(),
     )
-    .expect("proved reference reaches checked lowering input");
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedSemantic(_))
+    ));
+    assert!(error.to_string().contains("requires exact Proved evidence"));
+}
+
+#[test]
+fn authenticated_mir_reference_reaches_the_production_pipeline() {
+    let lhs = ProductionRankedValueIdV1::new(0);
+    let rhs = ProductionRankedValueIdV1::new(1);
+    let actual = ProductionRankedValueIdV1::new(2);
+    let expected = ProductionRankedValueIdV1::new(3);
+    let kernel = || {
+        ProductionRankedKernelV1::new(
+            "authenticated_reference",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                vec![
+                    ProductionRankedOperationV1::SemanticSymbol {
+                        result: lhs,
+                        symbol: 0,
+                    },
+                    ProductionRankedOperationV1::SemanticSymbol {
+                        result: rhs,
+                        symbol: 1,
+                    },
+                    ProductionRankedOperationV1::SemanticBinary {
+                        result: actual,
+                        kind: SemanticBinaryKindAttr::Add,
+                        lhs: local(lhs),
+                        rhs: local(rhs),
+                    },
+                    ProductionRankedOperationV1::SemanticBinary {
+                        result: expected,
+                        kind: SemanticBinaryKindAttr::Add,
+                        lhs: local(rhs),
+                        rhs: local(lhs),
+                    },
+                    ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
+                        actual: local(actual),
+                        expected: local(expected),
+                        subjects: functional_subjects(4),
+                    },
+                ],
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap()
+    };
+    let placeholder_kernel = kernel();
+    let obligation = normalized_functional_refinement_formula_hash_for_kernel_v2(
+        &placeholder_kernel,
+        0,
+        4,
+        local(actual),
+        local(expected),
+        functional_subjects(4),
+    )
+    .unwrap();
+    let (_, unbound_imported, unbound_policy) = imported_reference(
+        functional_binding(4, obligation),
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+    );
+    let unbound_error = compile_ranked_kernel_for_lowering_v2(
+        construction(kernel()),
+        ProductionSessionLimitsV1::default(),
+        vec![unbound_imported],
+        unbound_policy,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        unbound_error,
+        ProductionRankedCompileErrorV2::Proof(
+            ProductionFunctionalRefinementAdmissionErrorV2::UnboundRequest
+        )
+    ));
+    let (proof, imported, policy) = imported_reference(
+        functional_binding(4, obligation),
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+    );
+    let bound = placeholder_kernel
+        .bind_functional_refinement_request_v2(0, 4, proof)
+        .unwrap();
+    let input = compile_ranked_kernel_for_lowering_v2(
+        construction(bound),
+        ProductionSessionLimitsV1::default(),
+        vec![imported],
+        policy,
+    )
+    .unwrap();
     assert_eq!(input.semantic_report().reference_obligation_count(), 1);
     assert_eq!(
         input.semantic_report().proved_reference_obligation_count(),
@@ -728,7 +902,225 @@ fn proved_safe_rust_reference_is_mandatory_in_the_production_pipeline() {
             .semantic_report()
             .all_reference_obligations_are_proved()
     );
+    assert!(input.grants_authenticated_functional_refinement_evidence());
     assert!(!input.grants_compiler_refinement_authority());
+    assert!(!input.authenticated_functional_refinement()[0].grants_source_to_isa_authority());
+    assert!(!input.authenticated_functional_refinement()[0].grants_artifact_or_launch_authority());
+}
+
+#[test]
+fn authenticated_reference_admission_rejects_missing_wrong_boundary_and_stale_binding() {
+    fn kernel(proof: ProductionReferenceProofV2) -> ProductionRankedKernelV1 {
+        let value = ProductionRankedValueIdV1::new(0);
+        ProductionRankedKernelV1::new(
+            "reference_admission_negative",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                vec![
+                    ProductionRankedOperationV1::SemanticSymbol {
+                        result: value,
+                        symbol: 0,
+                    },
+                    ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent {
+                        actual: local(value),
+                        expected: local(value),
+                        proof,
+                    },
+                ],
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap()
+    }
+
+    let (request, _, policy) = imported_reference(
+        functional_binding(4, proof_digest(5)),
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+    );
+    let error = compile_ranked_kernel_for_lowering_v2(
+        construction(kernel(request)),
+        ProductionSessionLimitsV1::default(),
+        vec![],
+        policy,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ProductionRankedCompileErrorV2::Proof(
+            ProductionFunctionalRefinementAdmissionErrorV2::MissingImportedReceipt(_)
+        )
+    ));
+
+    let (request, imported, policy) = imported_reference(
+        functional_binding(4, proof_digest(5)),
+        FunctionalRefinementBoundaryV2::SafeReferenceSourceToKernelMir,
+    );
+    let error = compile_ranked_kernel_for_lowering_v2(
+        construction(kernel(request)),
+        ProductionSessionLimitsV1::default(),
+        vec![imported],
+        policy,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ProductionRankedCompileErrorV2::Proof(
+            ProductionFunctionalRefinementAdmissionErrorV2::WrongBoundary(_)
+        )
+    ));
+
+    let (request, _, _) = imported_reference(
+        functional_binding(4, proof_digest(5)),
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+    );
+    let (_, stale, policy) = imported_reference(
+        functional_binding(6, proof_digest(5)),
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+    );
+    let error = compile_ranked_kernel_for_lowering_v2(
+        construction(kernel(ProductionReferenceProofV2::request_exact(
+            stale.receipt_identity(),
+            request.binding(),
+        ))),
+        ProductionSessionLimitsV1::default(),
+        vec![stale],
+        policy,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ProductionRankedCompileErrorV2::Proof(
+            ProductionFunctionalRefinementAdmissionErrorV2::BindingMismatch(_)
+        )
+    ));
+}
+
+#[test]
+fn authenticated_effect_refinement_reaches_the_same_production_pipeline() {
+    let view = ProductionRankedValueIdV1::new(0);
+    let index = ProductionRankedValueIdV1::new(1);
+    let formula = ProductionRankedValueIdV1::new(2);
+    let kernel = |allocation_origin| {
+        let contract = ProductionEffectRefinementContractV2::new(
+            91,
+            local(view),
+            vec![local(index)],
+            local(formula),
+            local(formula),
+            local(formula),
+            local(formula),
+            local(formula),
+            local(formula),
+        )
+        .unwrap();
+        ProductionRankedKernelV1::new(
+            "authenticated_effect",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                vec![
+                    ProductionRankedOperationV1::ExecutionLayout {
+                        grid_identity: 1,
+                        global_extents: [1, 1, 1],
+                        workgroup_extents: [1, 1, 1],
+                        subgroup_size: 1,
+                        full_physical_workgroups: true,
+                    },
+                    ProductionRankedOperationV1::View {
+                        result: view,
+                        element_width: 32,
+                        writable: true,
+                        shape: vec![1],
+                        dynamic_extents: vec![],
+                        allocation_origin,
+                        noalias_class: 1,
+                    },
+                    ProductionRankedOperationV1::IndexConstant {
+                        result: index,
+                        value: 0,
+                    },
+                    ProductionRankedOperationV1::Access {
+                        kind: AccessKindAttr::Write,
+                        view: local(view),
+                        indices: vec![local(index)],
+                    },
+                    ProductionRankedOperationV1::OwnershipContract {
+                        view: local(view),
+                        coverage: OwnershipCoverageAttr::ExactView,
+                        partition: OwnershipPartitionAttr::ExactSets,
+                    },
+                    ProductionRankedOperationV1::SemanticConstant {
+                        result: formula,
+                        value: 1,
+                    },
+                    ProductionRankedOperationV1::RequestEffectRefinement {
+                        contract,
+                        subjects: functional_subjects(4),
+                    },
+                ],
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap()
+    };
+    let skeleton = kernel(1);
+    let ProductionRankedOperationV1::RequestEffectRefinement { contract, .. } =
+        &skeleton.blocks()[0].operations()[6]
+    else {
+        unreachable!()
+    };
+    let obligation = normalized_effect_refinement_hash_for_kernel_v2(
+        &skeleton,
+        0,
+        6,
+        contract,
+        functional_subjects(4),
+    )
+    .unwrap();
+    let mutated = kernel(2);
+    let ProductionRankedOperationV1::RequestEffectRefinement {
+        contract: mutated_contract,
+        ..
+    } = &mutated.blocks()[0].operations()[6]
+    else {
+        unreachable!()
+    };
+    assert_ne!(
+        obligation,
+        normalized_effect_refinement_hash_for_kernel_v2(
+            &mutated,
+            0,
+            6,
+            mutated_contract,
+            functional_subjects(4),
+        )
+        .unwrap()
+    );
+    let (proof, imported, policy) = imported_reference(
+        functional_binding(4, obligation),
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+    );
+    let bound = skeleton
+        .bind_functional_refinement_request_v2(0, 6, proof)
+        .unwrap();
+    let input = compile_ranked_kernel_for_lowering_v2(
+        construction(bound),
+        ProductionSessionLimitsV1::default(),
+        vec![imported],
+        policy,
+    )
+    .unwrap();
+    assert!(input.semantic_report().effect_refinement().is_clean());
+    assert_eq!(
+        input.semantic_report().effect_refinement().contract_count(),
+        1
+    );
+    assert_eq!(
+        input
+            .semantic_report()
+            .effect_refinement()
+            .proved_contract_count(),
+        1
+    );
 }
 
 #[test]

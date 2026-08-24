@@ -529,14 +529,14 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
             );
             continue;
         }
-        if record.6 != Some(CoveredBoundaryAttr::Source) {
+        if record.6 != Some(CoveredBoundaryAttr::Mir) {
             push(
                 &mut findings,
                 PlironSemanticRefinementFindingV1::ReferenceContractIncomplete {
                     block: *block,
                     operation: *operation,
                     obligation: identity,
-                    reason: "the Verus reference evidence must cover the exact source boundary",
+                    reason: "the Verus reference evidence must cover the exact MIR boundary",
                 },
             );
             continue;
