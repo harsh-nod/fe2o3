@@ -19,7 +19,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticUnsafeAssemblyDeclarationV1, SemanticUnsafeAssemblyTargetV1,
     SemanticWorkgroupDimensionsV1,
 };
-use rustc_middle::ty::{FloatTy, Instance, Ty, TyCtxt, TyKind, UintTy};
+use rustc_middle::ty::{FloatTy, Instance, IntTy, Ty, TyCtxt, TyKind, UintTy};
 use rustc_span::sym;
 
 use super::{
@@ -563,7 +563,7 @@ fn construct_complete_request_v1<'tcx>(
         callables,
         plan.roots().to_vec(),
     )
-    .and_then(|request| request.admit_exact_v4(SemanticMirLimitsV1::default()))
+    .and_then(|request| request.admit_exact_v5(SemanticMirLimitsV1::default()))
     .map_err(ProductionSemanticImportErrorV1::SemanticSchema)
 }
 
@@ -954,6 +954,82 @@ fn terminal_operation_v1<'tcx>(
                     error,
                     role,
                     storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::StridedReadView2DFromSharedSlice
+            if inputs.len() == 5
+                && rust_inputs.len() == 5
+                && rust_shared_slice_element_v1(rust_inputs[0])
+                    .is_some_and(rust_supported_read_view_scalar_v1)
+                && rust_inputs[1..]
+                    .iter()
+                    .all(|ty| matches!(ty.kind(), TyKind::Uint(UintTy::Usize))) =>
+        {
+            let rust_element =
+                rust_shared_slice_element_v1(rust_inputs[0]).expect("guarded shared slice element");
+            let (rust_view, rust_error) = rust_result_payloads_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("strided read view result"))?;
+            let view_arguments = rust_trusted_adt_type_arguments_v1(
+                tcx,
+                rust_view,
+                TrustedDeviceItem::StridedReadView2D,
+            )
+            .ok_or_else(|| body_owner_table_mismatch_v1("strided read view type"))?;
+            if view_arguments.as_slice() != [rust_element]
+                || !rust_is_exact_trusted_marker_v1(
+                    tcx,
+                    rust_error,
+                    TrustedDeviceItem::StridedReadView2DError,
+                )
+            {
+                return Err(body_owner_table_mismatch_v1(
+                    "strided read view element or error",
+                ));
+            }
+            let (view, error) = semantic_result_payloads_v1(types, output)?;
+            let slice = pointer_pointee_v1(types, inputs[0])?;
+            let SemanticTypeShapeV1::Slice { element } = types
+                .get(slice.index() as usize)
+                .ok_or_else(|| body_owner_table_mismatch_v1("strided read view slice"))?
+                .shape()
+            else {
+                return Err(body_owner_table_mismatch_v1("strided read view slice"));
+            };
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice {
+                    result: output,
+                    view,
+                    error,
+                    element: *element,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::StridedReadView2DLoadOr
+            if inputs.len() == 4
+                && rust_inputs.len() == 4
+                && matches!(rust_inputs[1].kind(), TyKind::Uint(UintTy::Usize))
+                && matches!(rust_inputs[2].kind(), TyKind::Uint(UintTy::Usize))
+                && rust_inputs[3] == rust_output
+                && rust_supported_read_view_scalar_v1(rust_output) =>
+        {
+            let rust_view = rust_reference_pointee_v1(rust_inputs[0])
+                .ok_or_else(|| body_owner_table_mismatch_v1("strided read view borrow"))?;
+            let view_arguments = rust_trusted_adt_type_arguments_v1(
+                tcx,
+                rust_view,
+                TrustedDeviceItem::StridedReadView2D,
+            )
+            .ok_or_else(|| body_owner_table_mismatch_v1("strided read view type"))?;
+            if view_arguments.as_slice() != [rust_output] || inputs[3] != output {
+                return Err(body_owner_table_mismatch_v1(
+                    "strided read view load element",
+                ));
+            }
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::StridedReadView2DLoadOr {
+                    view: pointer_pointee_v1(types, inputs[0])?,
+                    element: output,
                 },
             )
         }
@@ -1430,6 +1506,8 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::Bf16MatrixBRowMajor
         | ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2
         | ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2
+        | ProductionTerminalExpansionV1::StridedReadView2DFromSharedSlice
+        | ProductionTerminalExpansionV1::StridedReadView2DLoadOr
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorZero
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues
         | ProductionTerminalExpansionV1::MatrixMultiplyAccumulate
@@ -1537,6 +1615,25 @@ fn rust_shared_u16_slice_v1(ty: Ty<'_>) -> bool {
     };
     matches!(*pointee.kind(), TyKind::Slice(element)
         if matches!(element.kind(), TyKind::Uint(UintTy::U16)))
+}
+
+fn rust_shared_slice_element_v1(ty: Ty<'_>) -> Option<Ty<'_>> {
+    let pointee = rust_reference_pointee_v1(ty)?;
+    match *pointee.kind() {
+        TyKind::Slice(element) => Some(element),
+        _ => None,
+    }
+}
+
+fn rust_supported_read_view_scalar_v1(ty: Ty<'_>) -> bool {
+    matches!(
+        ty.kind(),
+        TyKind::Bool
+            | TyKind::Char
+            | TyKind::Int(IntTy::I8 | IntTy::I16 | IntTy::I32 | IntTy::I64)
+            | TyKind::Uint(UintTy::U8 | UintTy::U16 | UintTy::U32 | UintTy::U64)
+            | TyKind::Float(FloatTy::F32 | FloatTy::F64)
+    )
 }
 
 fn rust_option_payload_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
@@ -2011,6 +2108,8 @@ const fn terminal_operation_tag_v1(
         ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2 => 54,
         ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2 => 55,
         ProductionTerminalExpansionV1::F32MatrixAccumulatorZero => 56,
+        ProductionTerminalExpansionV1::StridedReadView2DFromSharedSlice => 57,
+        ProductionTerminalExpansionV1::StridedReadView2DLoadOr => 58,
     }
 }
 

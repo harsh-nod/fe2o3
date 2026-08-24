@@ -60,6 +60,7 @@ const MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1: usize = MAX_RANKED_BOUNDS_OPERATION
 const MAX_PROJECTED_TENSOR_ENUM_DEPTH_V1: usize = 8;
 const MAX_PROJECTED_LOOP_GRAPH_WORK_V1: usize =
     MAX_RANKED_BOUNDS_BLOCKS * (MAX_RANKED_BOUNDS_BLOCKS + MAX_RANKED_BOUNDS_EDGES);
+const PRIVATE_ALLOCATION_ORIGIN_TAG_V1: u64 = 1_u64 << 63;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ProjectedAccessSourceV1 {
@@ -189,6 +190,7 @@ struct IntrinsicProjectionV1 {
     uniform_inductions: Vec<ProjectedUniformInductionV1>,
     tensor_layouts: Vec<Option<ProductionRankedOperationV1>>,
     tensor_read_effects: Vec<Option<ProjectedTensorReadEffectV1>>,
+    read_view_effects: Vec<Option<GuardedRankedAccessV1>>,
     extent_argument_count: usize,
 }
 
@@ -256,11 +258,35 @@ struct ProjectedTensorReadEffectV1 {
 struct ProjectedTensorTerminatorEffectsV1 {
     layout: Option<ProductionRankedOperationV1>,
     global_read: Option<AllocationContractV1>,
+    read_view: Option<ProjectedReadViewAccessV1>,
 }
 
 struct ProjectedTensorEffectsV1 {
     layouts: Vec<Option<ProductionRankedOperationV1>>,
     global_reads: Vec<Option<AllocationContractV1>>,
+    read_views: Vec<Option<ProjectedReadViewAccessV1>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProjectedReadValueV1 {
+    Constant(u64),
+    Local(SemanticLocalIdV1),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProjectedReadViewV1 {
+    root: u64,
+    element: SemanticTypeIdV1,
+    allocation: AllocationContractV1,
+    rows: ProjectedReadValueV1,
+    columns: ProjectedReadValueV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProjectedReadViewAccessV1 {
+    view: ProjectedReadViewV1,
+    row: ProjectedReadValueV1,
+    column: ProjectedReadValueV1,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -284,6 +310,8 @@ enum ProjectedTensorOriginV1 {
     LoadOption(ProjectedMfmaOperandV1),
     Operand(ProjectedMfmaOperandV1),
     Accumulator(ProjectedMfmaAccumulatorV1),
+    ReadViewResult(ProjectedReadViewV1),
+    ReadView(ProjectedReadViewV1),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -698,6 +726,22 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
                 source: effect.source,
             });
         }
+        if let Some(access) = intrinsic
+            .read_view_effects
+            .get(block_index)
+            .cloned()
+            .flatten()
+        {
+            guarded_sites.try_reserve(1).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "strided read access-site storage cannot be reserved",
+                )
+            })?;
+            guarded_sites.push(GuardedAccessSiteV1 {
+                insertion_operation: operations.len(),
+                access,
+            });
+        }
         let projected = order_projected_block_effects(
             operations,
             guarded_sites,
@@ -762,7 +806,6 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         projected_blocks,
     )?;
     let ranked_ir = format_ranked_cfg(function_name(root_function)?, &blocks)?;
-
     let kernel = ProductionRankedKernelV1::new(
         function_name(root_function)?,
         bounds_checks.argument_count,
@@ -997,6 +1040,7 @@ fn project_authenticated_tensor_layouts_v1(
     option_dominance: &SemanticOptionDominanceV1,
     enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
     local_allocations: &[Option<AllocationContractV1>],
+    constants: &[Option<u64>],
 ) -> Result<ProjectedTensorEffectsV1, ProductionRankedProjectionErrorV1> {
     let block_count = function.blocks().len();
     let entry = function.entry().index() as usize;
@@ -1034,6 +1078,7 @@ fn project_authenticated_tensor_layouts_v1(
             block_index,
             &mut state,
             local_allocations,
+            constants,
             false,
         )?;
         charge_tensor_dataflow_work_v1(
@@ -1097,6 +1142,7 @@ fn project_authenticated_tensor_layouts_v1(
 
     let mut layouts = vec![None; block_count];
     let mut global_reads = vec![None; block_count];
+    let mut read_views = vec![None; block_count];
     for (block_index, entry_state) in entries.into_iter().enumerate() {
         let Some(mut state) = entry_state else {
             continue;
@@ -1114,14 +1160,17 @@ fn project_authenticated_tensor_layouts_v1(
             block_index,
             &mut state,
             local_allocations,
+            constants,
             true,
         )?;
         layouts[block_index] = effects.layout;
         global_reads[block_index] = effects.global_read;
+        read_views[block_index] = effects.read_view;
     }
     Ok(ProjectedTensorEffectsV1 {
         layouts,
         global_reads,
+        read_views,
     })
 }
 
@@ -1147,6 +1196,170 @@ fn bind_tensor_read_effects_to_call_blocks_v1(
         }));
     }
     Ok(effects)
+}
+
+fn project_read_value_to_ranked_v1(
+    value: ProjectedReadValueV1,
+    stable_argument_origins: &[Option<u32>],
+    arguments: &mut [Option<u32>],
+    next_argument: &mut usize,
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+) -> Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1> {
+    match value {
+        ProjectedReadValueV1::Constant(value) => {
+            reserve_operation(operations)?;
+            let result = next_value_id(next_value)?;
+            operations.push(ProductionRankedOperationV1::IndexConstant { result, value });
+            Ok(ProductionRankedValueV1::Local(result))
+        }
+        ProjectedReadValueV1::Local(local) => {
+            let local_index = local.index() as usize;
+            let origin = stable_argument_origins
+                .get(local_index)
+                .copied()
+                .flatten()
+                .unwrap_or(local.index()) as usize;
+            let slot =
+                arguments
+                    .get_mut(origin)
+                    .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                        "a strided read index origin outside the semantic local table",
+                    ))?;
+            let argument = match *slot {
+                Some(argument) => argument,
+                None => {
+                    let argument = u32::try_from(*next_argument).map_err(|_| {
+                        ProductionRankedProjectionErrorV1::Unsupported(
+                            "too many strided read ranked arguments",
+                        )
+                    })?;
+                    *next_argument = next_argument.checked_add(1).ok_or(
+                        ProductionRankedProjectionErrorV1::Unsupported(
+                            "strided read ranked argument count overflow",
+                        ),
+                    )?;
+                    *slot = Some(argument);
+                    argument
+                }
+            };
+            Ok(ProductionRankedValueV1::Argument(argument))
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_strided_read_effects_v1(
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    effects: &[Option<ProjectedReadViewAccessV1>],
+    stable_argument_origins: &[Option<u32>],
+    arguments: &mut [Option<u32>],
+    next_argument: &mut usize,
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+) -> Result<Vec<Option<GuardedRankedAccessV1>>, ProductionRankedProjectionErrorV1> {
+    if effects.len() != function.blocks().len() {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "strided read effects do not correspond one-to-one with semantic MIR blocks",
+        ));
+    }
+    let mut views: HashMap<u64, (ProjectedReadViewV1, ProjectedViewV1)> = HashMap::new();
+    let mut projected = Vec::new();
+    projected.try_reserve_exact(effects.len()).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "strided read effect storage cannot be reserved",
+        )
+    })?;
+    for (block, effect) in function.blocks().iter().zip(effects.iter().copied()) {
+        let Some(effect) = effect else {
+            projected.push(None);
+            continue;
+        };
+        if effect.view.allocation.writable {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a checked shared read view rooted in writable allocation authority",
+            ));
+        }
+        let view = if let Some((source, view)) = views.get(&effect.view.root) {
+            if *source != effect.view {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "one checked read-view origin changed its element, extent, or allocation contract",
+                ));
+            }
+            view.result
+        } else {
+            let rows = project_read_value_to_ranked_v1(
+                effect.view.rows,
+                stable_argument_origins,
+                arguments,
+                next_argument,
+                operations,
+                next_value,
+            )?;
+            let columns = project_read_value_to_ranked_v1(
+                effect.view.columns,
+                stable_argument_origins,
+                arguments,
+                next_argument,
+                operations,
+                next_value,
+            )?;
+            reserve_operation(operations)?;
+            let result = next_value_id(next_value)?;
+            let view = ProjectedViewV1 {
+                result,
+                element_width: type_width(types, effect.view.element)?,
+                writable: false,
+                shape: vec![DYNAMIC_EXTENT, DYNAMIC_EXTENT],
+                dynamic_extents: vec![rows, columns],
+                memory_space: MemorySpaceAttr::Global,
+                allocation_origin: effect.view.allocation.allocation_origin,
+                noalias_class: effect.view.allocation.noalias_class,
+            };
+            operations.push(ProductionRankedOperationV1::ViewInSpace {
+                result,
+                element_width: view.element_width,
+                writable: view.writable,
+                shape: view.shape.clone(),
+                dynamic_extents: view.dynamic_extents.clone(),
+                memory_space: view.memory_space,
+                allocation_origin: view.allocation_origin,
+                noalias_class: view.noalias_class,
+            });
+            views.insert(effect.view.root, (effect.view, view));
+            result
+        };
+        let (rows, columns) = views
+            .get(&effect.view.root)
+            .map(|(_, view)| (view.dynamic_extents[0], view.dynamic_extents[1]))
+            .expect("inserted or existing checked read view");
+        let row = project_read_value_to_ranked_v1(
+            effect.row,
+            stable_argument_origins,
+            arguments,
+            next_argument,
+            operations,
+            next_value,
+        )?;
+        let column = project_read_value_to_ranked_v1(
+            effect.column,
+            stable_argument_origins,
+            arguments,
+            next_argument,
+            operations,
+            next_value,
+        )?;
+        projected.push(Some(GuardedRankedAccessV1 {
+            view,
+            indices: vec![row, column],
+            comparisons: vec![(row, rows), (column, columns)],
+            access: AccessKindAttr::Read,
+            memory_space: MemorySpaceAttr::Global,
+            source: block.terminator().source(),
+        }));
+    }
+    Ok(projected)
 }
 
 fn charge_tensor_dataflow_work_v1(
@@ -1298,10 +1511,31 @@ fn consume_tensor_rvalue_operands_v1(
 
 fn consume_tensor_operand_v1(state: &mut ProjectedTensorStateV1, operand: &SemanticOperandV1) {
     let place = match operand {
+        SemanticOperandV1::Copy(place)
+            if place.projections().is_empty()
+                && state
+                    .get(&(place.local().index() as usize))
+                    .is_some_and(projected_value_is_shared_read_v1) =>
+        {
+            return;
+        }
         SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => place,
         SemanticOperandV1::Constant(_) => return,
     };
     invalidate_tensor_place_v1(state, place);
+}
+
+fn projected_value_is_shared_read_v1(value: &ProjectedTensorValueV1) -> bool {
+    matches!(
+        value,
+        ProjectedTensorValueV1::Known(
+            ProjectedTensorOriginV1::ReadViewResult(_) | ProjectedTensorOriginV1::ReadView(_)
+        ) | ProjectedTensorValueV1::ConstructedEnum(ProjectedTensorEnumEnvelopeV1 {
+            origin: ProjectedTensorOriginV1::ReadViewResult(_)
+                | ProjectedTensorOriginV1::ReadView(_),
+            ..
+        })
+    )
 }
 
 fn consume_tensor_operands_v1(state: &mut ProjectedTensorStateV1, operands: &[SemanticOperandV1]) {
@@ -1371,6 +1605,18 @@ fn tensor_origin_from_assignment_operand_v1(
                 ProjectedTensorOriginV1::View(view),
             ))
         }
+        ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::ReadViewResult(view))
+            if variant == 0
+                && enum_payload_dominance
+                    .availability(SemanticLocalIdV1::from_index(carrier as u32), variant)
+                    .is_some_and(|availability| {
+                        enum_payload_dominance.allows(availability, use_block)
+                    }) =>
+        {
+            Some(ProjectedTensorValueV1::Known(
+                ProjectedTensorOriginV1::ReadView(view),
+            ))
+        }
         ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::LoadOption(fragment))
             if variant == 1
                 && option_dominance
@@ -1435,12 +1681,46 @@ fn unwrap_tensor_enum_value_v1(
     }
 }
 
+fn projected_read_value_v1(
+    operand: &SemanticOperandV1,
+    constants: &[Option<u64>],
+) -> Option<ProjectedReadValueV1> {
+    constant_operand_value(operand, constants)
+        .map(ProjectedReadValueV1::Constant)
+        .or_else(|| simple_operand_local(operand).map(ProjectedReadValueV1::Local))
+}
+
+fn authenticate_strided_read_v1(
+    call: &SemanticDirectCallV1,
+    state: &ProjectedTensorStateV1,
+    element: SemanticTypeIdV1,
+    constants: &[Option<u64>],
+) -> Option<ProjectedReadViewAccessV1> {
+    if call.arguments().len() != 4 {
+        return None;
+    }
+    let ProjectedTensorOriginV1::ReadView(view) =
+        tensor_known_origin_v1(state, &call.arguments()[0])?
+    else {
+        return None;
+    };
+    if view.element != element {
+        return None;
+    }
+    Some(ProjectedReadViewAccessV1 {
+        view,
+        row: projected_read_value_v1(&call.arguments()[1], constants)?,
+        column: projected_read_value_v1(&call.arguments()[2], constants)?,
+    })
+}
+
 fn transfer_tensor_terminator_v1(
     callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
     block_index: usize,
     state: &mut ProjectedTensorStateV1,
     local_allocations: &[Option<AllocationContractV1>],
+    constants: &[Option<u64>],
     require_authenticated_site: bool,
 ) -> Result<ProjectedTensorTerminatorEffectsV1, ProductionRankedProjectionErrorV1> {
     let terminator = function.blocks()[block_index].terminator().kind();
@@ -1480,6 +1760,27 @@ fn transfer_tensor_terminator_v1(
                 | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 { .. }
         )
     );
+    if let Some(SemanticCompilerIntrinsicOperationV1::StridedReadView2DLoadOr { element, .. }) =
+        intrinsic_operation
+    {
+        let read_view = authenticate_strided_read_v1(call, state, *element, constants);
+        consume_tensor_operands_v1(state, call.arguments());
+        if let Some(destination) = call.destination() {
+            invalidate_tensor_place_v1(state, destination.place());
+            if destination.place().projections().is_empty() {
+                state.remove(&(destination.place().local().index() as usize));
+            }
+        }
+        if read_view.is_none() && require_authenticated_site {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a strided read without one dominating checked view payload and exact scalar operands",
+            ));
+        }
+        return Ok(ProjectedTensorTerminatorEffectsV1 {
+            read_view,
+            ..ProjectedTensorTerminatorEffectsV1::default()
+        });
+    }
     let Some(destination) = call.destination() else {
         consume_tensor_operands_v1(state, call.arguments());
         if is_global_fragment_load {
@@ -1512,6 +1813,46 @@ fn transfer_tensor_terminator_v1(
     }
     let root = ((block_index as u64) << 32) | destination_local as u64;
     let (origin, layout) = match operation {
+        SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice {
+            result,
+            element,
+            ..
+        } => {
+            let allocation = call
+                .arguments()
+                .first()
+                .and_then(transparent_operand_place)
+                .and_then(|place| local_allocations.get(place.local().index() as usize))
+                .copied()
+                .flatten();
+            let rows = call
+                .arguments()
+                .get(2)
+                .and_then(|operand| projected_read_value_v1(operand, constants));
+            let columns = call
+                .arguments()
+                .get(3)
+                .and_then(|operand| projected_read_value_v1(operand, constants));
+            let origin = match (allocation, rows, columns) {
+                (Some(allocation), Some(rows), Some(columns))
+                    if call.arguments().len() == 5
+                        && destination.place().ty() == *result
+                        && !allocation.writable =>
+                {
+                    ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::ReadViewResult(
+                        ProjectedReadViewV1 {
+                            root,
+                            element: *element,
+                            allocation,
+                            rows,
+                            columns,
+                        },
+                    ))
+                }
+                _ => ProjectedTensorValueV1::Invalid,
+            };
+            (origin, None)
+        }
         SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { context } => {
             if !call.arguments().is_empty() || destination.place().ty() != *context {
                 (ProjectedTensorValueV1::Invalid, None)
@@ -1548,23 +1889,21 @@ fn transfer_tensor_terminator_v1(
                 .and_then(|place| local_allocations.get(place.local().index() as usize))
                 .copied()
                 .flatten();
-            if call.arguments().len() != 5
-                || destination.place().ty() != *result
-                || allocation.is_none()
-            {
-                (ProjectedTensorValueV1::Invalid, None)
-            } else {
-                (
+            let origin = match allocation {
+                Some(allocation)
+                    if call.arguments().len() == 5 && destination.place().ty() == *result =>
+                {
                     ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::ViewResult(
                         ProjectedMfmaViewV1 {
                             role: *role,
                             storage_layout: *storage_layout,
-                            allocation: allocation.expect("checked matrix storage allocation"),
+                            allocation,
                         },
-                    )),
-                    None,
-                )
-            }
+                    ))
+                }
+                _ => ProjectedTensorValueV1::Invalid,
+            };
+            (origin, None)
         }
         SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad {
             option_fragment,
@@ -1690,6 +2029,7 @@ fn transfer_tensor_terminator_v1(
     Ok(ProjectedTensorTerminatorEffectsV1 {
         layout,
         global_read,
+        read_view: None,
     })
 }
 
@@ -1903,14 +2243,26 @@ fn project_intrinsic_contracts(
         &option_dominance,
         &enum_payload_dominance,
         &local_allocations,
+        constants,
     )?;
     let tensor_read_effects =
         bind_tensor_read_effects_to_call_blocks_v1(function, &tensor_effects.global_reads)?;
     let tensor_layouts = tensor_effects.layouts;
+    let read_view_sources = tensor_effects.read_views;
     let mut edge_count = 0_usize;
     let mut borrowed_locals = Vec::new();
     let mut runtime_index_arguments = vec![None; local_count];
     let mut next_runtime_argument = 1_usize;
+    let read_view_effects = project_strided_read_effects_v1(
+        types,
+        function,
+        &read_view_sources,
+        &stable_argument_origins,
+        &mut runtime_index_arguments,
+        &mut next_runtime_argument,
+        operations,
+        next_value,
+    )?;
     // Workgroup geometry and the runtime grid domain are independent. The
     // source launch contract authenticates the former; the latter remains
     // dynamic until host launch evidence is joined.
@@ -3078,6 +3430,7 @@ fn project_intrinsic_contracts(
         uniform_inductions,
         tensor_layouts,
         tensor_read_effects,
+        read_view_effects,
     })
 }
 
@@ -8181,6 +8534,11 @@ fn project_place_access_with_atomic(
                     "a private allocation identity overflowed",
                 ),
             )?;
+            let identity = PRIVATE_ALLOCATION_ORIGIN_TAG_V1
+                .checked_add(identity)
+                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a private allocation identity overflowed",
+                ))?;
             AllocationContractV1 {
                 allocation_origin: identity,
                 noalias_class: identity,
@@ -10727,6 +11085,150 @@ mod tests {
         ])
     }
 
+    fn strided_read_view() -> ProjectedReadViewV1 {
+        ProjectedReadViewV1 {
+            root: 41,
+            element: SCALAR_TYPE,
+            allocation: AllocationContractV1 {
+                allocation_origin: 3,
+                noalias_class: 1,
+                writable: false,
+            },
+            rows: ProjectedReadValueV1::Constant(7),
+            columns: ProjectedReadValueV1::Local(SemanticLocalIdV1::from_index(2)),
+        }
+    }
+
+    fn strided_read_call_function(destination: Option<SemanticPlaceV1>) -> SemanticFunctionDeclV1 {
+        let call = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(0),
+            vec![
+                tensor_operand(0),
+                tensor_operand(1),
+                tensor_operand(2),
+                tensor_operand(3),
+            ],
+            destination.map(|place| {
+                SemanticCallDestinationV1::new(place, cfg_edge(SemanticEdgeRoleV1::CallReturn, 0))
+            }),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        projection_function_with_locals(
+            vec![block(132, vec![], SemanticTerminatorKindV1::Call(call))],
+            vec![
+                local(132, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(133, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(134, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(135, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(136, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
+    fn strided_read_callable() -> SemanticCallableDeclV1 {
+        compiler_intrinsic_callable(
+            SemanticCompilerIntrinsicOperationV1::StridedReadView2DLoadOr {
+                view: SCALAR_TYPE,
+                element: SCALAR_TYPE,
+            },
+        )
+    }
+
+    #[test]
+    fn strided_read_requires_exact_dominating_view_and_records_discarded_loads() {
+        let function = strided_read_call_function(None);
+        let view = strided_read_view();
+        let mut state = HashMap::from([(
+            0,
+            ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::ReadView(view)),
+        )]);
+        let effects = transfer_tensor_terminator_v1(
+            &[strided_read_callable()],
+            &function,
+            0,
+            &mut state,
+            &[None; 5],
+            &[None; 5],
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            effects.read_view,
+            Some(ProjectedReadViewAccessV1 {
+                view,
+                row: ProjectedReadValueV1::Local(SemanticLocalIdV1::from_index(1)),
+                column: ProjectedReadValueV1::Local(SemanticLocalIdV1::from_index(2)),
+            })
+        );
+        assert_eq!(
+            state.get(&0),
+            Some(&ProjectedTensorValueV1::Known(
+                ProjectedTensorOriginV1::ReadView(view)
+            ))
+        );
+
+        let mut invalid = HashMap::from([(0, ProjectedTensorValueV1::Invalid)]);
+        assert!(matches!(
+            transfer_tensor_terminator_v1(
+                &[strided_read_callable()],
+                &function,
+                0,
+                &mut invalid,
+                &[None; 5],
+                &[None; 5],
+                true,
+            ),
+            Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a strided read without one dominating checked view payload and exact scalar operands"
+            ))
+        ));
+    }
+
+    #[test]
+    fn strided_read_projects_rank_two_guarded_access_without_fabricated_indices() {
+        let function =
+            projection_function(vec![block(131, vec![], SemanticTerminatorKindV1::Return)]);
+        let effect = ProjectedReadViewAccessV1 {
+            view: strided_read_view(),
+            row: ProjectedReadValueV1::Local(SemanticLocalIdV1::from_index(1)),
+            column: ProjectedReadValueV1::Constant(4),
+        };
+        let mut arguments = vec![None; function.locals().len()];
+        let mut next_argument = 1;
+        let mut operations = Vec::new();
+        let mut next_value = 0;
+        let projected = project_strided_read_effects_v1(
+            &projection_types(),
+            &function,
+            &[Some(effect)],
+            &vec![None; function.locals().len()],
+            &mut arguments,
+            &mut next_argument,
+            &mut operations,
+            &mut next_value,
+        )
+        .unwrap();
+        assert!(matches!(
+            operations.as_slice(),
+            [
+                ProductionRankedOperationV1::IndexConstant { value: 7, .. },
+                ProductionRankedOperationV1::ViewInSpace {
+                    writable: false,
+                    shape,
+                    memory_space: MemorySpaceAttr::Global,
+                    allocation_origin: 3,
+                    ..
+                },
+                ProductionRankedOperationV1::IndexConstant { value: 4, .. }
+            ] if shape == &[DYNAMIC_EXTENT, DYNAMIC_EXTENT]
+        ));
+        let access = projected[0].as_ref().unwrap();
+        assert_eq!(access.access, AccessKindAttr::Read);
+        assert_eq!(access.indices.len(), 2);
+        assert_eq!(access.comparisons.len(), 2);
+    }
+
     #[test]
     fn every_authenticated_global_fragment_load_emits_a_read_even_when_unused() {
         let function = tensor_load_function(Some(
@@ -10739,6 +11241,7 @@ mod tests {
             0,
             &mut state,
             &[None; 5],
+            &[],
             true,
         )
         .unwrap();
@@ -10796,6 +11299,7 @@ mod tests {
             0,
             &mut merged_state,
             &[None; 5],
+            &[],
             true,
         )
         .unwrap_err();
@@ -10815,6 +11319,7 @@ mod tests {
                 0,
                 &mut invalid_lane,
                 &[None; 5],
+                &[],
                 false,
             ),
             Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -10833,6 +11338,7 @@ mod tests {
                 0,
                 &mut authenticated_tensor_load_state(),
                 &[None; 5],
+                &[],
                 true,
             ),
             Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -10856,6 +11362,7 @@ mod tests {
                 0,
                 &mut authenticated_tensor_load_state(),
                 &[None; 5],
+                &[],
                 true,
             ),
             Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -11450,7 +11957,7 @@ mod tests {
         );
         let mut state = HashMap::from([(1, tensor_state_origin())]);
         assert_eq!(
-            transfer_tensor_terminator_v1(&[], &function, 0, &mut state, &[None; 4], false)
+            transfer_tensor_terminator_v1(&[], &function, 0, &mut state, &[None; 4], &[], false)
                 .unwrap(),
             ProjectedTensorTerminatorEffectsV1::default()
         );

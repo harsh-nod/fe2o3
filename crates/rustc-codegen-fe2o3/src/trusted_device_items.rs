@@ -40,8 +40,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x4b, 0x6a, 0x6b, 0xe3, 0xfa, 0x51, 0x22, 0xe6, 0x07, 0x92, 0x2a, 0x7d, 0x2f, 0xe9, 0x37, 0xd8,
-    0x9e, 0x41, 0x8a, 0x78, 0xc5, 0x19, 0xda, 0xe3, 0x05, 0x67, 0xf5, 0xef, 0xb0, 0x3e, 0x87, 0xb5,
+    0xba, 0x52, 0x89, 0xee, 0xec, 0x91, 0x8a, 0x19, 0x04, 0x1b, 0x36, 0x4d, 0x38, 0x31, 0x84, 0x21,
+    0x55, 0xd8, 0xa3, 0x4e, 0xe5, 0xbd, 0x57, 0x79, 0xcc, 0x40, 0x82, 0xb1, 0x8e, 0x1b, 0x0e, 0xe9,
 ];
 #[allow(
     dead_code,
@@ -78,8 +78,8 @@ const REVIEWED_GENERAL_GEMM_PROOF_DEFINITION_SOURCE_V1: [u8; 32] = [
 // Portable semantic identity of the reviewed `fe2o3_device::DisjointSlice`
 // definition and reference source closure used by the store signatures.
 const REVIEWED_GENERAL_GEMM_DISJOINT_SLICE_DEPENDENCY_V1: [u8; 32] = [
-    0x7c, 0xb1, 0xe1, 0x2b, 0x3e, 0xf2, 0xc8, 0x46, 0xd8, 0xe9, 0xc3, 0x2b, 0x96, 0xff, 0x3e, 0xae,
-    0xdc, 0xbe, 0x0e, 0x7f, 0xcd, 0xab, 0xd9, 0x75, 0xaf, 0x93, 0x77, 0x9f, 0x4f, 0xb4, 0x55, 0xcc,
+    0xff, 0xac, 0x64, 0xb9, 0xc5, 0xdf, 0x17, 0xbd, 0x7a, 0x58, 0x26, 0x55, 0x4b, 0x64, 0x8c, 0xd8,
+    0xa5, 0xcc, 0x16, 0xba, 0x86, 0x99, 0xb2, 0xd0, 0xd2, 0x76, 0xe9, 0xfc, 0x68, 0xb2, 0xbf, 0x37,
 ];
 
 #[cfg(test)]
@@ -481,6 +481,10 @@ pub(crate) enum TrustedDeviceItem {
     DisjointSliceGetTiled2DMut,
     DisjointSliceGetMutAt,
     DisjointSliceLen,
+    StridedReadView2D,
+    StridedReadView2DError,
+    StridedReadView2DFromSharedSlice,
+    StridedReadView2DLoadOr,
     DeviceGlobalMutPtrU32AsAtomic,
     DeviceGlobalMutPtrI32AsAtomic,
     DeviceGlobalMutPtrU64AsAtomic,
@@ -545,6 +549,26 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::DisjointSlice,
         "fe2o3_device_disjoint_slice",
         "fe2o3_device::DisjointSlice",
+    ),
+    (
+        TrustedDeviceItem::StridedReadView2D,
+        "fe2o3_device_strided_read_view_2d_v1",
+        "fe2o3_device::StridedReadView2D",
+    ),
+    (
+        TrustedDeviceItem::StridedReadView2DError,
+        "fe2o3_device_strided_read_view_2d_error_v1",
+        "fe2o3_device::StridedReadView2DError",
+    ),
+    (
+        TrustedDeviceItem::StridedReadView2DFromSharedSlice,
+        "fe2o3_device_strided_read_view_2d_from_shared_slice_v1",
+        "fe2o3_device::StridedReadView2D::from_shared_slice",
+    ),
+    (
+        TrustedDeviceItem::StridedReadView2DLoadOr,
+        "fe2o3_device_strided_read_view_2d_load_or_v1",
+        "fe2o3_device::StridedReadView2D::load_or",
     ),
     (
         TrustedDeviceItem::DeviceGlobalMutPtr,
@@ -1504,6 +1528,16 @@ fn validate_reviewed_fe2o3_device_provider_definition_v1(
 fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option<&'static str> {
     match item {
         TrustedDeviceItem::DisjointSlice => Some("fe2o3_device::DisjointSlice"),
+        TrustedDeviceItem::StridedReadView2D => Some("fe2o3_device::views::StridedReadView2D"),
+        TrustedDeviceItem::StridedReadView2DError => {
+            Some("fe2o3_device::views::StridedReadView2DError")
+        }
+        TrustedDeviceItem::StridedReadView2DFromSharedSlice => {
+            Some("fe2o3_device::views::{impl#4}::from_shared_slice")
+        }
+        TrustedDeviceItem::StridedReadView2DLoadOr => {
+            Some("fe2o3_device::views::{impl#4}::load_or")
+        }
         TrustedDeviceItem::ThreadIndex => Some("fe2o3_device::thread::ThreadIndex"),
         TrustedDeviceItem::DisjointIndex => Some("fe2o3_device::thread::DisjointIndex"),
         TrustedDeviceItem::ShiftedIndexSpace => Some("fe2o3_device::thread::Shifted"),
@@ -1745,6 +1779,10 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::DisjointTile2D
             | TrustedDeviceItem::ThreadIndexCheckedTiled2D
             | TrustedDeviceItem::DisjointSliceGetTiled2DMut
+            | TrustedDeviceItem::StridedReadView2D
+            | TrustedDeviceItem::StridedReadView2DError
+            | TrustedDeviceItem::StridedReadView2DFromSharedSlice
+            | TrustedDeviceItem::StridedReadView2DLoadOr
     )
 }
 
@@ -2882,9 +2920,52 @@ mod tests {
     }
 
     #[test]
+    fn strided_read_capabilities_reject_type_constructor_and_load_lookalikes() {
+        for item in [
+            TrustedDeviceItem::StridedReadView2D,
+            TrustedDeviceItem::StridedReadView2DError,
+            TrustedDeviceItem::StridedReadView2DFromSharedSlice,
+            TrustedDeviceItem::StridedReadView2DLoadOr,
+        ] {
+            let structural = exact_provider_compiler_definition_path_v1(item).unwrap();
+            let local = structural.strip_prefix("fe2o3_device::").unwrap();
+            let exact = semantic_definition(
+                ReviewedProviderSemanticProfileV1::WorkgroupFlashMoeV4,
+                local,
+                super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
+                [6; 32],
+            );
+            validate_reviewed_fe2o3_device_provider_definition_v1(item, &exact)
+                .expect("exact checked read-view capability");
+
+            let lookalike = semantic_definition(
+                ReviewedProviderSemanticProfileV1::WorkgroupFlashMoeV4,
+                &format!("lookalike::{local}"),
+                super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
+                [6; 32],
+            );
+            assert!(
+                validate_reviewed_fe2o3_device_provider_definition_v1(item, &lookalike).is_err(),
+                "same-signature lookalike authenticated as {item:?}"
+            );
+
+            let mut wrong_crate = exact.clone();
+            wrong_crate.provider.crate_name = "fe2o3_device_lookalike".into();
+            assert!(
+                validate_reviewed_fe2o3_device_provider_definition_v1(item, &wrong_crate).is_err(),
+                "wrong-crate lookalike authenticated as {item:?}"
+            );
+        }
+    }
+
+    #[test]
     fn every_production_safety_terminal_has_an_exact_structural_path() {
         for item in [
             TrustedDeviceItem::DisjointSlice,
+            TrustedDeviceItem::StridedReadView2D,
+            TrustedDeviceItem::StridedReadView2DError,
+            TrustedDeviceItem::StridedReadView2DFromSharedSlice,
+            TrustedDeviceItem::StridedReadView2DLoadOr,
             TrustedDeviceItem::ThreadIndex,
             TrustedDeviceItem::DisjointIndex,
             TrustedDeviceItem::ShiftedIndexSpace,
@@ -3586,6 +3667,10 @@ mod tests {
     fn semantic_registry_is_complete_and_unique() {
         let items = [
             TrustedDeviceItem::DisjointSlice,
+            TrustedDeviceItem::StridedReadView2D,
+            TrustedDeviceItem::StridedReadView2DError,
+            TrustedDeviceItem::StridedReadView2DFromSharedSlice,
+            TrustedDeviceItem::StridedReadView2DLoadOr,
             TrustedDeviceItem::DeviceGlobalMutPtr,
             TrustedDeviceItem::WorkgroupLdsScope,
             TrustedDeviceItem::WorkgroupLdsScopeCurrent,

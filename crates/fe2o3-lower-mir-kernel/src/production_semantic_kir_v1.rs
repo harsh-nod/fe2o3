@@ -3992,7 +3992,36 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 view,
                 error,
                 ..
-            } => self.lower_bf16_matrix_view(block, call, operations, *result, *view, *error)?,
+            } => self.lower_checked_strided_read_view(
+                block,
+                call,
+                operations,
+                *result,
+                *view,
+                *error,
+                Type::Scalar(ScalarType::U16),
+            )?,
+            SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice {
+                result,
+                view,
+                error,
+                element,
+            } => self.lower_checked_strided_read_view(
+                block,
+                call,
+                operations,
+                *result,
+                *view,
+                *error,
+                lower_scalar_type(self.types, *element)?,
+            )?,
+            SemanticCompilerIntrinsicOperationV1::StridedReadView2DLoadOr { element, .. } => self
+                .lower_strided_read_view_load_or(
+                block,
+                call,
+                operations,
+                lower_scalar_type(self.types, *element)?,
+            )?,
             SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad {
                 option_fragment,
                 fragment,
@@ -4854,7 +4883,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         })
     }
 
-    fn lower_bf16_matrix_view(
+    fn lower_checked_strided_read_view(
         &mut self,
         block: SemanticBlockIdV1,
         call: &SemanticDirectCallV1,
@@ -4862,6 +4891,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         result_type: SemanticTypeIdV1,
         view_type: SemanticTypeIdV1,
         error_type: SemanticTypeIdV1,
+        element_type: Type,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
         self.require_call_argument_count(block, call, 5)?;
         let bits = self.lower_operand(block, None, &call.arguments()[0], operations)?;
@@ -4873,18 +4903,18 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 0,
                 Some(block.index()),
                 None,
-                "BF16 matrix view storage is not a slice",
+                "checked strided view storage is not a slice",
             ));
         };
         if slice.address_space != AddressSpace::Global
             || slice.access != AccessMode::ReadOnly
-            || *slice.element != Type::Scalar(ScalarType::U16)
+            || *slice.element != element_type
         {
             return Err(unsupported(
                 0,
                 Some(block.index()),
                 None,
-                "BF16 matrix view storage must be a read-only global u16 slice",
+                "checked strided view storage must be a read-only global scalar slice",
             ));
         }
         let mut indices = Vec::with_capacity(4);
@@ -4954,7 +4984,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 0,
                 Some(block.index()),
                 None,
-                "matrix view Result has no unique Ok payload",
+                "checked strided view Result has no unique Ok payload",
             )
         })?;
         let error_variant =
@@ -4963,7 +4993,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     0,
                     Some(block.index()),
                     None,
-                    "matrix view Result has no unique error payload",
+                    "checked strided view Result has no unique error payload",
                 )
             })?;
         let discriminant_ty = lower_scalar_type(self.types, discriminant_type)?;
@@ -5021,6 +5051,134 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             variant: None,
             payload_variant: Some(ok_variant),
             fields: vec![view],
+        })
+    }
+
+    fn lower_strided_read_view_load_or(
+        &mut self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        operations: &mut Vec<Operation>,
+        element_type: Type,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        self.require_call_argument_count(block, call, 4)?;
+        let view = self.lower_operand(block, None, &call.arguments()[0], operations)?;
+        let view = view
+            .values()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+        if view.len() != 5 {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "strided read load view has no exact checked representation",
+            ));
+        }
+        let (data, data_ty) = view[0].clone();
+        let Type::Slice(slice) = &data_ty else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "strided read load storage is not a slice",
+            ));
+        };
+        if slice.address_space != AddressSpace::Global
+            || slice.access != AccessMode::ReadOnly
+            || *slice.element != element_type
+        {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "strided read load storage contract changed",
+            ));
+        }
+        let [(_, _), (offset, _), (rows, _), (columns, _), (stride, _)] = view.as_slice() else {
+            unreachable!("checked five-component strided view");
+        };
+        let row = self.lower_operand(block, None, &call.arguments()[1], operations)?;
+        let row = self
+            .coerce_index(block, operations, row)?
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
+            .0;
+        let column = self.lower_operand(block, None, &call.arguments()[2], operations)?;
+        let column = self
+            .coerce_index(block, operations, column)?
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
+            .0;
+        let fallback = self.lower_operand(block, None, &call.arguments()[3], operations)?;
+        let (fallback, fallback_ty) = fallback
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+        if fallback_ty != element_type {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "strided read fallback element type changed",
+            ));
+        }
+
+        let row_valid = self.emit_compare(operations, ComparePredicate::LessThan, row, *rows)?;
+        let column_valid =
+            self.emit_compare(operations, ComparePredicate::LessThan, column, *columns)?;
+        let (row_offset, row_safe) =
+            self.emit_checked_index(operations, CheckedBinaryOperator::Multiply, row, *stride)?;
+        let (index, offset_safe) =
+            self.emit_checked_index(operations, CheckedBinaryOperator::Add, *offset, row_offset)?;
+        let (index, column_safe) =
+            self.emit_checked_index(operations, CheckedBinaryOperator::Add, index, column)?;
+        let length = self.emit_id(
+            operations,
+            Type::INDEX,
+            OperationKind::SliceLength { slice: data },
+        )?;
+        let index_valid =
+            self.emit_compare(operations, ComparePredicate::LessThan, index, length)?;
+        let mut predicate = self.emit_bool_and(operations, row_valid, column_valid)?;
+        predicate = self.emit_bool_and(operations, predicate, row_safe)?;
+        predicate = self.emit_bool_and(operations, predicate, offset_safe)?;
+        predicate = self.emit_bool_and(operations, predicate, column_safe)?;
+        predicate = self.emit_bool_and(operations, predicate, index_valid)?;
+        let zero = self.emit_index_constant(operations, 0)?;
+        let safe_index = self.emit_select_index(operations, predicate, index, zero)?;
+        let base = self.emit_id(
+            operations,
+            Type::pointer(element_type.clone(), slice.address_space, slice.access),
+            OperationKind::SliceData { slice: data },
+        )?;
+        let pointer = self.emit_id(
+            operations,
+            Type::pointer(element_type.clone(), slice.address_space, slice.access),
+            OperationKind::GetElementPointer {
+                base,
+                offset: safe_index,
+            },
+        )?;
+        let alignment = strided_read_scalar_alignment_v1(&element_type).ok_or_else(|| {
+            unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "strided read element has no supported scalar alignment",
+            )
+        })?;
+        let value = self.emit_id(
+            operations,
+            element_type.clone(),
+            OperationKind::GuardedLoad {
+                pointer,
+                predicate,
+                fallback,
+                access: MemoryAccess::new(slice.address_space, alignment),
+            },
+        )?;
+        Ok(SemanticValueBindingV1::Value {
+            id: value,
+            ty: element_type,
         })
     }
 
@@ -6919,6 +7077,16 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
     }
 }
 
+fn strided_read_scalar_alignment_v1(element: &Type) -> Option<u32> {
+    match element.as_scalar()? {
+        ScalarType::Bool => Some(1),
+        scalar => scalar
+            .bit_width()
+            .filter(|bits| bits % 8 == 0)
+            .map(|bits| u32::from(bits / 8)),
+    }
+}
+
 fn unsupported_terminator_detail(terminator: &SemanticTerminatorKindV1) -> &'static str {
     match terminator {
         SemanticTerminatorKindV1::SwitchInt { .. } => {
@@ -7873,6 +8041,24 @@ mod resource_tests {
         SemanticMfmaRegisterDistributionV1, SemanticRustcVariantsV1, SemanticTypeIdentityV1,
         SemanticTypeLayoutDetailsV1, SemanticTypeLayoutV1,
     };
+
+    #[test]
+    fn admitted_strided_read_scalars_have_exact_byte_alignments() {
+        for (scalar, alignment) in [
+            (ScalarType::Bool, 1),
+            (ScalarType::I8, 1),
+            (ScalarType::U16, 2),
+            (ScalarType::F32, 4),
+            (ScalarType::I64, 8),
+            (ScalarType::F64, 8),
+        ] {
+            assert_eq!(
+                strided_read_scalar_alignment_v1(&Type::Scalar(scalar)),
+                Some(alignment)
+            );
+        }
+        assert_eq!(strided_read_scalar_alignment_v1(&Type::INDEX), None);
+    }
 
     fn unit_type() -> SemanticTypeDeclV1 {
         SemanticTypeDeclV1::new(

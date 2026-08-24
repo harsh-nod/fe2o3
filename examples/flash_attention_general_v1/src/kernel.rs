@@ -4,7 +4,8 @@
 
 use fe2o3_device::{
     Bf16MfmaAMatrix, Bf16MfmaBMatrix, DisjointSlice, F32AccumulatorFragment, Index1D, KernelError,
-    KernelResult, Math, Matrix, Subgroup, Tiled2D, Wave64, WaveLane, kernel, thread,
+    KernelResult, Math, Matrix, StridedReadView2D, Subgroup, Tiled2D, Wave64, WaveLane, kernel,
+    thread,
 };
 
 pub const FLASH_ATTENTION_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
@@ -114,6 +115,24 @@ pub fn flash_attention_general_v1(
     let output_tile = thread_index
         .checked_tiled_2d::<64, 16, 16, 4>()
         .ok_or(KernelError::OutOfBounds)?;
+    let Ok(mask) = StridedReadView2D::from_shared_slice(
+        additive_mask,
+        0,
+        output_rows as usize,
+        keys_padded as usize,
+        mask_stride as usize,
+    ) else {
+        return Err(KernelError::InvalidArgument);
+    };
+    let Ok(v_view) = StridedReadView2D::from_shared_slice(
+        v,
+        head * v_head_stride as usize,
+        keys_padded as usize,
+        value_dimension as usize,
+        v_stride as usize,
+    ) else {
+        return Err(KernelError::InvalidArgument);
+    };
     let Ok(q_matrix) = Bf16MfmaAMatrix::row_major(
         q,
         0,
@@ -153,11 +172,14 @@ pub fn flash_attention_general_v1(
             phase += 16;
         }
         let values = scores.into_values();
-        let mask_base = score_row_base * mask_stride as usize + key_column;
-        let score0 = values[0] * scale + additive_mask[mask_base];
-        let score1 = values[1] * scale + additive_mask[mask_base + mask_stride as usize];
-        let score2 = values[2] * scale + additive_mask[mask_base + 2 * mask_stride as usize];
-        let score3 = values[3] * scale + additive_mask[mask_base + 3 * mask_stride as usize];
+        let score0 = values[0] * scale
+            + mask.load_or(score_row_base, key_column, f32::NEG_INFINITY);
+        let score1 = values[1] * scale
+            + mask.load_or(score_row_base + 1, key_column, f32::NEG_INFINITY);
+        let score2 = values[2] * scale
+            + mask.load_or(score_row_base + 2, key_column, f32::NEG_INFINITY);
+        let score3 = values[3] * scale
+            + mask.load_or(score_row_base + 3, key_column, f32::NEG_INFINITY);
         if score0 > maximum0 {
             maximum0 = score0;
         }
@@ -197,16 +219,25 @@ pub fn flash_attention_general_v1(
             phase += 16;
         }
         let values = scores.into_values();
-        let mask_base = score_row_base * mask_stride as usize + key_column;
-        let probability0 = math.exp_f32(values[0] * scale + additive_mask[mask_base] - maximum0);
+        let probability0 = math.exp_f32(
+            values[0] * scale
+                + mask.load_or(score_row_base, key_column, f32::NEG_INFINITY)
+                - maximum0,
+        );
         let probability1 = math.exp_f32(
-            values[1] * scale + additive_mask[mask_base + mask_stride as usize] - maximum1,
+            values[1] * scale
+                + mask.load_or(score_row_base + 1, key_column, f32::NEG_INFINITY)
+                - maximum1,
         );
         let probability2 = math.exp_f32(
-            values[2] * scale + additive_mask[mask_base + 2 * mask_stride as usize] - maximum2,
+            values[2] * scale
+                + mask.load_or(score_row_base + 2, key_column, f32::NEG_INFINITY)
+                - maximum2,
         );
         let probability3 = math.exp_f32(
-            values[3] * scale + additive_mask[mask_base + 3 * mask_stride as usize] - maximum3,
+            values[3] * scale
+                + mask.load_or(score_row_base + 3, key_column, f32::NEG_INFINITY)
+                - maximum3,
         );
         sum0 += probability0;
         sum1 += probability1;
@@ -215,8 +246,7 @@ pub fn flash_attention_general_v1(
 
         let mut dimension = 0_usize;
         while dimension < value_dimension as usize {
-            let value =
-                v[head * v_head_stride as usize + key_column * v_stride as usize + dimension];
+            let value = v_view.load_or(key_column, dimension, 0.0);
             let contribution0 = subgroup.subgroup_reduce_sum_f32::<16>(probability0 * value);
             let contribution1 = subgroup.subgroup_reduce_sum_f32::<16>(probability1 * value);
             let contribution2 = subgroup.subgroup_reduce_sum_f32::<16>(probability2 * value);

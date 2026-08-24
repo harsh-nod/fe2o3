@@ -52,6 +52,144 @@ pub enum StaticViewError {
     },
 }
 
+/// Failure to derive a checked row-major strided read view from a shared slice.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+#[rustc_diagnostic_item = "fe2o3_device_strided_read_view_2d_error_v1"]
+pub enum StridedReadView2DError {
+    /// The element type has no addressable storage.
+    ZeroSizedElement,
+    /// A nonempty view has a row stride smaller than its logical column count.
+    InvalidStride,
+    /// Offset or extent arithmetic overflowed `usize`.
+    ExtentOverflow,
+    /// The complete logical view is not contained in the supplied slice.
+    OutOfBounds { required: usize, actual: usize },
+}
+
+impl fmt::Display for StridedReadView2DError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "invalid strided 2-D read view: {self:?}")
+    }
+}
+
+type InvariantSharedBorrow<'parent, T> = fn(&'parent [T]) -> &'parent [T];
+
+/// Checked read-only row-major 2-D view with a runtime row stride.
+///
+/// Safe construction is available only from an ordinary shared Rust slice.
+/// The private slice and invariant lifetime brand keep the resulting view tied
+/// to that exact borrow; callers cannot forge a view from a raw pointer or
+/// extend its lifetime. Logical out-of-bounds reads are explicit and total:
+/// [`Self::load_or`] returns the supplied fallback without accessing storage.
+#[rustc_diagnostic_item = "fe2o3_device_strided_read_view_2d_v1"]
+pub struct StridedReadView2D<'parent, T> {
+    data: &'parent [T],
+    offset: usize,
+    rows: usize,
+    columns: usize,
+    row_stride: usize,
+    _borrow: PhantomData<InvariantSharedBorrow<'parent, T>>,
+}
+
+impl<T> Copy for StridedReadView2D<'_, T> {}
+
+impl<T> Clone for StridedReadView2D<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'parent, T> StridedReadView2D<'parent, T> {
+    /// Checks one row-major strided view rooted at `offset` in `data`.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_strided_read_view_2d_from_shared_slice_v1"]
+    pub fn from_shared_slice(
+        data: &'parent [T],
+        offset: usize,
+        rows: usize,
+        columns: usize,
+        row_stride: usize,
+    ) -> Result<Self, StridedReadView2DError> {
+        if size_of::<T>() == 0 {
+            return Err(StridedReadView2DError::ZeroSizedElement);
+        }
+        if rows != 0 && columns != 0 && row_stride < columns {
+            return Err(StridedReadView2DError::InvalidStride);
+        }
+        let required = if rows == 0 || columns == 0 {
+            offset
+        } else {
+            offset
+                .checked_add(
+                    (rows - 1)
+                        .checked_mul(row_stride)
+                        .and_then(|value| value.checked_add(columns))
+                        .ok_or(StridedReadView2DError::ExtentOverflow)?,
+                )
+                .ok_or(StridedReadView2DError::ExtentOverflow)?
+        };
+        if required > data.len() {
+            return Err(StridedReadView2DError::OutOfBounds {
+                required,
+                actual: data.len(),
+            });
+        }
+        Ok(Self {
+            data,
+            offset,
+            rows,
+            columns,
+            row_stride,
+            _borrow: PhantomData,
+        })
+    }
+
+    pub const fn rows(&self) -> usize {
+        self.rows
+    }
+
+    pub const fn columns(&self) -> usize {
+        self.columns
+    }
+
+    pub const fn row_stride(&self) -> usize {
+        self.row_stride
+    }
+
+    /// Reads one logical element or returns `fallback` without accessing
+    /// storage when either coordinate lies outside the logical view.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_strided_read_view_2d_load_or_v1"]
+    pub fn load_or(&self, row: usize, column: usize, fallback: T) -> T
+    where
+        T: Copy,
+    {
+        if row >= self.rows || column >= self.columns {
+            return fallback;
+        }
+        let Some(index) = row
+            .checked_mul(self.row_stride)
+            .and_then(|value| self.offset.checked_add(value))
+            .and_then(|value| value.checked_add(column))
+        else {
+            return fallback;
+        };
+        self.data.get(index).copied().unwrap_or(fallback)
+    }
+}
+
+impl<T> fmt::Debug for StridedReadView2D<'_, T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StridedReadView2D")
+            .field("rows", &self.rows)
+            .field("columns", &self.columns)
+            .field("row_stride", &self.row_stride)
+            .finish_non_exhaustive()
+    }
+}
+
 impl fmt::Display for StaticViewError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "invalid static view: {self:?}")
@@ -407,7 +545,10 @@ fn checked_start<T, const N: usize>(
 
 #[cfg(test)]
 mod tests {
-    use super::{StaticIndex, StaticView, StaticViewError, StaticViewMut};
+    use super::{
+        StaticIndex, StaticView, StaticViewError, StaticViewMut, StridedReadView2D,
+        StridedReadView2DError,
+    };
     use core::mem::{align_of, size_of};
 
     #[test]
@@ -482,5 +623,65 @@ mod tests {
             size_of::<*mut u32>()
         );
         assert_eq!(size_of::<StaticIndex<4, 2>>(), 0);
+    }
+
+    #[test]
+    fn strided_read_view_uses_explicit_non_speculative_fallbacks() {
+        let storage = [10_u32, 11, 99, 20, 21, 98, 30, 31];
+        let view = StridedReadView2D::from_shared_slice(&storage, 0, 3, 2, 3).unwrap();
+        assert_eq!(view.rows(), 3);
+        assert_eq!(view.columns(), 2);
+        assert_eq!(view.row_stride(), 3);
+        assert_eq!(view.load_or(0, 1, 777), 11);
+        assert_eq!(view.load_or(2, 1, 777), 31);
+        assert_eq!(view.load_or(3, 0, 777), 777);
+        assert_eq!(view.load_or(1, 2, 888), 888);
+    }
+
+    #[test]
+    fn strided_read_view_checks_layout_extent_and_overflow() {
+        let storage = [0_u32; 8];
+        assert_eq!(
+            StridedReadView2D::from_shared_slice(&storage, 0, 2, 3, 2).unwrap_err(),
+            StridedReadView2DError::InvalidStride
+        );
+        assert_eq!(
+            StridedReadView2D::from_shared_slice(&storage, 1, 3, 2, 3).unwrap_err(),
+            StridedReadView2DError::OutOfBounds {
+                required: 9,
+                actual: 8,
+            }
+        );
+        assert_eq!(
+            StridedReadView2D::from_shared_slice(&storage, usize::MAX, 0, 0, 0).unwrap_err(),
+            StridedReadView2DError::OutOfBounds {
+                required: usize::MAX,
+                actual: 8,
+            }
+        );
+        assert_eq!(
+            StridedReadView2D::from_shared_slice(&storage, 0, usize::MAX, 2, usize::MAX)
+                .unwrap_err(),
+            StridedReadView2DError::ExtentOverflow
+        );
+        assert_eq!(
+            StridedReadView2D::from_shared_slice(&[()], 0, 1, 1, 1).unwrap_err(),
+            StridedReadView2DError::ZeroSizedElement
+        );
+    }
+
+    #[test]
+    fn empty_strided_read_view_is_valid_and_never_reads() {
+        let storage = [5_u32, 6];
+        let view = StridedReadView2D::from_shared_slice(&storage, 2, 0, 7, 0).unwrap();
+        assert_eq!(view.load_or(0, 0, 42), 42);
+    }
+
+    #[test]
+    fn strided_read_view_preserves_shared_reference_auto_traits() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        fn assert_copy_clone<T: Copy + Clone>() {}
+        assert_send_sync::<StridedReadView2D<'static, u32>>();
+        assert_copy_clone::<StridedReadView2D<'static, u32>>();
     }
 }

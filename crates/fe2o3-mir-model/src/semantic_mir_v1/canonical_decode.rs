@@ -164,6 +164,14 @@ impl AdmittedInertSemanticMirV1 {
         Self::decode_for_schema(bytes, limits, Some(SemanticMirWireVersionV1::V4))
     }
 
+    /// Decodes bytes canonical specifically under the closed V5 schema.
+    pub fn decode_exact_v5_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_for_schema(bytes, limits, Some(SemanticMirWireVersionV1::V5))
+    }
+
     fn decode_for_schema(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -181,6 +189,7 @@ impl AdmittedInertSemanticMirV1 {
         let request = decoder.request()?;
         decoder.finish()?;
         let admitted = match expected_wire_version {
+            Some(SemanticMirWireVersionV1::V5) => request.admit_exact_v5(limits)?,
             Some(SemanticMirWireVersionV1::V4) => request.admit_exact_v4(limits)?,
             Some(SemanticMirWireVersionV1::V3) => request.admit_exact_v3(limits)?,
             Some(SemanticMirWireVersionV1::V2) => unreachable!("no exact V2 public decoder"),
@@ -230,7 +239,7 @@ impl<'a> CanonicalDecoderV1<'a> {
         Self {
             bytes,
             offset: 0,
-            wire_version: SemanticMirWireVersionV1::V4,
+            wire_version: SemanticMirWireVersionV1::V5,
             expected_wire_version,
             limits,
             totals: DecodeTotalsV1::default(),
@@ -1164,7 +1173,7 @@ impl<'a> CanonicalDecoderV1<'a> {
             Some(SemanticMirResourceV1::CallArguments),
             |decoder| Ok(SemanticTypeIdV1(decoder.u32()?)),
         )?;
-        let source_argument_ownership = if self.wire_version == SemanticMirWireVersionV1::V4 {
+        let source_argument_ownership = if self.wire_version >= SemanticMirWireVersionV1::V4 {
             self.records(
                 "source ABI argument ownership",
                 // Ownership is one-to-one metadata for the source inputs charged
@@ -1388,7 +1397,12 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        Ok(match self.tagged("compiler intrinsic", 36)? {
+        let maximum_tag = if self.wire_version >= SemanticMirWireVersionV1::V5 {
+            38
+        } else {
+            36
+        };
+        Ok(match self.tagged("compiler intrinsic", maximum_tag)? {
             0 => SemanticCompilerIntrinsicOperationV1::ThreadIndex(self.axis()?),
             1 => SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(self.axis()?),
             2 => SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(self.axis()?),
@@ -1587,6 +1601,16 @@ impl<'a> CanonicalDecoderV1<'a> {
                 lane: SemanticTypeIdV1(self.u32()?),
                 contract: self.mfma_operand_contract()?,
                 storage_layout: self.mfma_storage_layout()?,
+            },
+            37 => SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice {
+                result: SemanticTypeIdV1(self.u32()?),
+                view: SemanticTypeIdV1(self.u32()?),
+                error: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+            },
+            38 => SemanticCompilerIntrinsicOperationV1::StridedReadView2DLoadOr {
+                view: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
             },
             _ => unreachable!(),
         })

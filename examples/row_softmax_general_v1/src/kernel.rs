@@ -4,16 +4,17 @@
 
 use fe2o3_device::{
     DisjointSlice, Index1D, KernelError, KernelResult, Math, Subgroup, Tiled2D, kernel, thread,
+    StridedReadView2D,
 };
 
 pub const ROW_SOFTMAX_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
 pub const ROW_SOFTMAX_MAX_COLUMNS_V1: usize = 4096;
 
-fn accessed_extent(rows: u32, stride: u32) -> usize {
-    if rows == 0 {
+fn accessed_extent(rows: u32, columns: u32, stride: u32) -> usize {
+    if rows == 0 || columns == 0 {
         return 0;
     }
-    (rows - 1) as usize * stride as usize + ROW_SOFTMAX_MAX_COLUMNS_V1
+    (rows - 1) as usize * stride as usize + columns as usize
 }
 
 /// Computes independent softmax rows with dynamic dimensions and input stride.
@@ -37,14 +38,23 @@ pub fn row_softmax_general_v1(
 ) -> KernelResult {
     if columns == 0
         || columns as usize > ROW_SOFTMAX_MAX_COLUMNS_V1
-        || (input_stride as usize) < ROW_SOFTMAX_MAX_COLUMNS_V1
+        || input_stride < columns
         || rows > u32::MAX / 64
         || output_rows != rows * 64
-        || input.len() < accessed_extent(rows, input_stride)
+        || input.len() < accessed_extent(rows, columns, input_stride)
         || output.len() < output_rows as usize * 64
     {
         return Err(KernelError::InvalidArgument);
     }
+    let Ok(input) = StridedReadView2D::from_shared_slice(
+        input,
+        0,
+        rows as usize,
+        columns as usize,
+        input_stride as usize,
+    ) else {
+        return Err(KernelError::InvalidArgument);
+    };
 
     let thread_index = thread::index_1d();
     let raw = thread_index.get();
@@ -56,13 +66,12 @@ pub fn row_softmax_general_v1(
 
     let subgroup = Subgroup::current();
     let math = Math::current();
-    let row_base = row * input_stride as usize;
 
     let mut local_max = f32::NEG_INFINITY;
     let mut component = 0;
     while component < 64 {
         let column = lane + component * 64;
-        let value = input[row_base + column];
+        let value = input.load_or(row, column, f32::NEG_INFINITY);
         if value > local_max {
             local_max = value;
         }
@@ -74,7 +83,7 @@ pub fn row_softmax_general_v1(
     component = 0;
     while component < 64 {
         let column = lane + component * 64;
-        local_sum += math.exp_f32(input[row_base + column] - maximum);
+        local_sum += math.exp_f32(input.load_or(row, column, f32::NEG_INFINITY) - maximum);
         component += 1;
     }
     let denominator = subgroup.subgroup_reduce_sum_f32::<64>(local_sum);
@@ -86,7 +95,8 @@ pub fn row_softmax_general_v1(
             && let Some(element) =
                 output.get_tiled_2d_mut(&output_tile, component, output_rows as usize, 64, 64)
         {
-            *element = math.exp_f32(input[row_base + column] - maximum) / denominator;
+            *element = math.exp_f32(input.load_or(row, column, f32::NEG_INFINITY) - maximum)
+                / denominator;
         }
         component += 1;
     }
@@ -99,7 +109,7 @@ mod tests {
 
     #[test]
     fn accessed_extent_excludes_trailing_padding() {
-        assert_eq!(accessed_extent(3, 4100), 12_296);
-        assert_eq!(accessed_extent(0, 4100), 0);
+        assert_eq!(accessed_extent(3, 5, 8), 21);
+        assert_eq!(accessed_extent(0, 5, 8), 0);
     }
 }

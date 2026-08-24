@@ -1938,9 +1938,13 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | TrustedDeviceItem::Gfx942BarrierArrive
                     | TrustedDeviceItem::Gfx942BarrierWait
                     | TrustedDeviceItem::DeviceMatrixCurrent
-                    | TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
+                    | TrustedDeviceItem::DeviceMatrixMultiplyAccumulate
+                    | TrustedDeviceItem::StridedReadView2D
+                    | TrustedDeviceItem::StridedReadView2DError
+                    | TrustedDeviceItem::StridedReadView2DFromSharedSlice
+                    | TrustedDeviceItem::StridedReadView2DLoadOr,
                 ) => {
-                    unreachable!("collective operations are handled by semantic lowering")
+                    unreachable!("typed device operations are handled by semantic lowering")
                 }
                 Some(
                     TrustedDeviceItem::AmdGpuInline(_) | TrustedDeviceItem::AmdGpuDiagnostic(_),

@@ -4,7 +4,7 @@
 
 use fe2o3_device::{
     Bf16MfmaAMatrix, Bf16MfmaBMatrix, DisjointSlice, F32AccumulatorFragment, Index1D, KernelError,
-    KernelResult, Matrix, Tiled2D, Wave64, WaveLane, kernel, thread,
+    KernelResult, Matrix, StridedReadView2D, Tiled2D, Wave64, WaveLane, kernel, thread,
 };
 
 pub const MOE_EXPERT_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
@@ -75,6 +75,24 @@ pub fn moe_grouped_expert_general_v1(
     {
         return Err(KernelError::InvalidArgument);
     }
+    let Ok(gates) = StridedReadView2D::from_shared_slice(
+        route_gates,
+        0,
+        rows_padded as usize,
+        1,
+        1,
+    ) else {
+        return Err(KernelError::InvalidArgument);
+    };
+    let Ok(biases) = StridedReadView2D::from_shared_slice(
+        expert_bias,
+        expert as usize * bias_stride as usize,
+        1,
+        output_columns as usize,
+        bias_stride as usize,
+    ) else {
+        return Err(KernelError::InvalidArgument);
+    };
 
     let thread_index = thread::index_1d();
     let raw = thread_index.get();
@@ -120,11 +138,7 @@ pub fn moe_grouped_expert_general_v1(
 
     let values = accumulator.into_values();
     let row_base = tile_row * 16 + (lane / 16) * 4;
-    let bias = if output_column < output_columns as usize {
-        expert_bias[expert as usize * bias_stride as usize + output_column]
-    } else {
-        0.0
-    };
+    let bias = biases.load_or(0, output_column, 0.0);
     if let Some(element) = routed_output.get_tiled_2d_mut(
         &output_tile,
         0,
@@ -132,7 +146,7 @@ pub fn moe_grouped_expert_general_v1(
         output_columns as usize,
         output_stride as usize,
     ) {
-        *element = route_gates[row_base] * (values[0] + bias);
+        *element = gates.load_or(row_base, 0, 0.0) * (values[0] + bias);
     }
     if let Some(element) = routed_output.get_tiled_2d_mut(
         &output_tile,
@@ -141,7 +155,7 @@ pub fn moe_grouped_expert_general_v1(
         output_columns as usize,
         output_stride as usize,
     ) {
-        *element = route_gates[row_base + 1] * (values[1] + bias);
+        *element = gates.load_or(row_base + 1, 0, 0.0) * (values[1] + bias);
     }
     if let Some(element) = routed_output.get_tiled_2d_mut(
         &output_tile,
@@ -150,7 +164,7 @@ pub fn moe_grouped_expert_general_v1(
         output_columns as usize,
         output_stride as usize,
     ) {
-        *element = route_gates[row_base + 2] * (values[2] + bias);
+        *element = gates.load_or(row_base + 2, 0, 0.0) * (values[2] + bias);
     }
     if let Some(element) = routed_output.get_tiled_2d_mut(
         &output_tile,
@@ -159,7 +173,7 @@ pub fn moe_grouped_expert_general_v1(
         output_columns as usize,
         output_stride as usize,
     ) {
-        *element = route_gates[row_base + 3] * (values[3] + bias);
+        *element = gates.load_or(row_base + 3, 0, 0.0) * (values[3] + bias);
     }
     Ok(())
 }

@@ -91,7 +91,7 @@ pub use thread::{
 };
 pub use views::{
     DisjointStaticTileMut, StaticIndex, StaticTileRegionWitness, StaticView, StaticViewError,
-    StaticViewMut,
+    StaticViewMut, StridedReadView2D, StridedReadView2DError,
 };
 pub use wave::{Wave32, Wave64, WaveLane, WaveWidth};
 

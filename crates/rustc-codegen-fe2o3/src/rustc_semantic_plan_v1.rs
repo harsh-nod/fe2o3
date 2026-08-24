@@ -2153,6 +2153,8 @@ const fn terminal_expansion_tag_v1(expansion: ProductionTerminalExpansionV1) -> 
         ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2 => 54,
         ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2 => 55,
         ProductionTerminalExpansionV1::F32MatrixAccumulatorZero => 56,
+        ProductionTerminalExpansionV1::StridedReadView2DFromSharedSlice => 57,
+        ProductionTerminalExpansionV1::StridedReadView2DLoadOr => 58,
     }
 }
 

@@ -24,10 +24,11 @@ const MAGIC: &[u8] = b"fe2o3.inert-semantic-mir";
 pub const INERT_SEMANTIC_MIR_VERSION_V2: u16 = 2;
 pub const INERT_SEMANTIC_MIR_VERSION_V3: u16 = 3;
 pub const INERT_SEMANTIC_MIR_VERSION_V4: u16 = 4;
+pub const INERT_SEMANTIC_MIR_VERSION_V5: u16 = 5;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
-/// Canonicality is relative to one of these schemas. V2, V3, and V4 bytes for the
+/// Canonicality is relative to one of these schemas. V2 through V5 bytes for the
 /// same semantic model are distinct canonical values and therefore have
 /// distinct semantic identities.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -35,6 +36,7 @@ pub enum SemanticMirWireVersionV1 {
     V2,
     V3,
     V4,
+    V5,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -43,6 +45,7 @@ impl SemanticMirWireVersionV1 {
             Self::V2 => INERT_SEMANTIC_MIR_VERSION_V2,
             Self::V3 => INERT_SEMANTIC_MIR_VERSION_V3,
             Self::V4 => INERT_SEMANTIC_MIR_VERSION_V4,
+            Self::V5 => INERT_SEMANTIC_MIR_VERSION_V5,
         }
     }
 
@@ -51,6 +54,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V2 => Some(Self::V2),
             INERT_SEMANTIC_MIR_VERSION_V3 => Some(Self::V3),
             INERT_SEMANTIC_MIR_VERSION_V4 => Some(Self::V4),
+            INERT_SEMANTIC_MIR_VERSION_V5 => Some(Self::V5),
             _ => None,
         }
     }
@@ -5058,6 +5062,21 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         contract: SemanticMfmaOperandContractV1,
         storage_layout: SemanticMfmaStorageLayoutV1,
     },
+    /// Checks and creates a generic read-only row-major strided 2-D view.
+    StridedReadView2DFromSharedSlice {
+        result: SemanticTypeIdV1,
+        view: SemanticTypeIdV1,
+        error: SemanticTypeIdV1,
+        element: SemanticTypeIdV1,
+    },
+    /// Performs one explicitly predicated scalar read from a checked 2-D view.
+    ///
+    /// A false logical bounds predicate returns the caller-provided fallback
+    /// and has no memory effect.
+    StridedReadView2DLoadOr {
+        view: SemanticTypeIdV1,
+        element: SemanticTypeIdV1,
+    },
     /// Creates a typed zero accumulator associated with an authenticated lane.
     F32MatrixAccumulatorZero {
         lane: SemanticTypeIdV1,
@@ -5538,9 +5557,10 @@ impl InertSemanticMirRequestV1 {
     /// Admits under the least wire schema that can represent this request.
     ///
     /// This is the compatibility admission path: ordinary models select V2,
-    /// models containing checked arithmetic select V3, and models retaining
-    /// authenticated source ownership select V4. Production import uses
-    /// [`Self::admit_exact_v4`] so ownership is always identity-bound.
+    /// models containing checked arithmetic select V3, models retaining
+    /// authenticated source ownership select V4, and models using generic
+    /// checked read views select V5. Production import uses
+    /// [`Self::admit_exact_v5`] so both ownership and read effects are bound.
     pub fn admit(
         self,
         limits: SemanticMirLimitsV1,
@@ -5578,6 +5598,15 @@ impl InertSemanticMirRequestV1 {
         limits: SemanticMirLimitsV1,
     ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V4, limits)
+    }
+
+    /// Admits under the exact closed V5 wire schema that adds authenticated
+    /// generic checked read-view construction and predicated scalar loads.
+    pub fn admit_exact_v5(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V5, limits)
     }
 
     fn admit_for_wire_version(
@@ -7055,6 +7084,8 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor { .. }
         | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { .. }
         | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 { .. }
+        | SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice { .. }
+        | SemanticCompilerIntrinsicOperationV1::StridedReadView2DLoadOr { .. }
         | SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero { .. }
         | SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues { .. }
         | SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate { .. }
@@ -7272,6 +7303,33 @@ fn compiler_intrinsic_signature_matches(
                     .all(|input| is_integer_type(request, *input))
                 && mfma_operand_contract_valid(contract)
                 && storage_layout == SemanticMfmaStorageLayoutV1::RowMajor
+        }
+        SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice {
+            result,
+            view,
+            error,
+            element,
+        } => {
+            inputs.len() == 5
+                && output == result
+                && shared_slice_reference_with_element(request, inputs[0], element)
+                && inputs[1..]
+                    .iter()
+                    .all(|input| is_unsigned_integer_with_bits(request, *input, 64))
+                && result_value_error_matches(request, result, view, error)
+                && strided_read_view_type_matches(request, view, element)
+                && supported_read_view_scalar_type(request, element)
+        }
+        SemanticCompilerIntrinsicOperationV1::StridedReadView2DLoadOr { view, element } => {
+            inputs.len() == 4
+                && shared_reference_to(request, inputs[0], view)
+                && inputs[1..3]
+                    .iter()
+                    .all(|input| is_unsigned_integer_with_bits(request, *input, 64))
+                && inputs[3] == element
+                && output == element
+                && strided_read_view_type_matches(request, view, element)
+                && supported_read_view_scalar_type(request, element)
         }
         SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
             lane,
@@ -7580,6 +7638,72 @@ fn mfma_operand_contract_valid(contract: SemanticMfmaOperandContractV1) -> bool 
     contract.profile == SemanticMfmaProfileV1::Bf16F32M16N16K16
         && contract.register_distribution == SemanticMfmaRegisterDistributionV1::Tile16x16
         && contract.wave_width == 64
+}
+
+fn shared_slice_reference_with_element(
+    request: &InertSemanticMirRequestV1,
+    reference: SemanticTypeIdV1,
+    element: SemanticTypeIdV1,
+) -> bool {
+    let Some(SemanticTypeShapeV1::Pointer(pointer)) = request
+        .types
+        .get(reference.0 as usize)
+        .map(|declaration| &declaration.shape)
+    else {
+        return false;
+    };
+    if pointer.kind != SemanticPointerKindV1::Reference
+        || pointer.mutability != SemanticMutabilityV1::Immutable
+        || pointer.address_space != 0
+        || pointer.pointer_width_bits != 64
+        || pointer.metadata != SemanticPointerMetadataV1::SliceLength
+    {
+        return false;
+    }
+    matches!(
+        request.types.get(pointer.pointee.0 as usize).map(|declaration| &declaration.shape),
+        Some(SemanticTypeShapeV1::Slice { element: actual }) if *actual == element
+    )
+}
+
+fn supported_read_view_scalar_type(
+    request: &InertSemanticMirRequestV1,
+    element: SemanticTypeIdV1,
+) -> bool {
+    matches!(
+        scalar_type(request, element),
+        Some(SemanticScalarTypeV1::Bool | SemanticScalarTypeV1::Char)
+            | Some(SemanticScalarTypeV1::Integer {
+                bits: 8 | 16 | 32 | 64,
+                ..
+            })
+            | Some(SemanticScalarTypeV1::Float { bits: 32 | 64 })
+    )
+}
+
+fn strided_read_view_type_matches(
+    request: &InertSemanticMirRequestV1,
+    view: SemanticTypeIdV1,
+    element: SemanticTypeIdV1,
+) -> bool {
+    let Some(declaration) = request.types.get(view.0 as usize) else {
+        return false;
+    };
+    let SemanticTypeShapeV1::Aggregate(fields) = &declaration.shape else {
+        return false;
+    };
+    if fields.fields.len() != 6
+        || !shared_slice_reference_with_element(request, fields.fields[0], element)
+        || !fields.fields[1..5]
+            .iter()
+            .all(|field| is_unsigned_integer_with_bits(request, *field, 64))
+    {
+        return false;
+    }
+    request
+        .types
+        .get(fields.fields[5].0 as usize)
+        .is_some_and(|declaration| declaration.layout.size_bytes == Some(0))
 }
 
 fn mfma_accumulator_contract_valid(contract: SemanticMfmaAccumulatorContractV1) -> bool {
@@ -13420,6 +13544,21 @@ fn enqueue_compiler_intrinsic_type_references(
             pending.push_back(view);
             pending.push_back(lane);
         }
+        SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice {
+            result,
+            view,
+            error,
+            element,
+        } => {
+            pending.push_back(result);
+            pending.push_back(view);
+            pending.push_back(error);
+            pending.push_back(element);
+        }
+        SemanticCompilerIntrinsicOperationV1::StridedReadView2DLoadOr { view, element } => {
+            pending.push_back(view);
+            pending.push_back(element);
+        }
         SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
             lane, fragment, ..
         } => {
@@ -13998,6 +14137,20 @@ fn encode_request(
 }
 
 fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireVersionV1 {
+    let uses_checked_read_view = request.callables.iter().any(|callable| {
+        matches!(
+            callable,
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation:
+                    SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice { .. }
+                    | SemanticCompilerIntrinsicOperationV1::StridedReadView2DLoadOr { .. },
+                ..
+            }
+        )
+    });
+    if uses_checked_read_view {
+        return SemanticMirWireVersionV1::V5;
+    }
     let uses_source_ownership = request.functions.iter().any(|function| {
         function
             .abi
@@ -15095,6 +15248,23 @@ fn encode_compiler_intrinsic_operation(
             encode_mfma_operand_contract(writer, contract)?;
             encode_mfma_storage_layout(writer, storage_layout)
         }
+        SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice {
+            result,
+            view,
+            error,
+            element,
+        } => {
+            writer.u8(37)?;
+            writer.u32(result.0)?;
+            writer.u32(view.0)?;
+            writer.u32(error.0)?;
+            writer.u32(element.0)
+        }
+        SemanticCompilerIntrinsicOperationV1::StridedReadView2DLoadOr { view, element } => {
+            writer.u8(38)?;
+            writer.u32(view.0)?;
+            writer.u32(element.0)
+        }
         SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift {
             input_witness,
             output_witness,
@@ -15386,7 +15556,7 @@ fn encode_abi(
     for source_type in abi.source_input_types() {
         writer.u32(source_type.0)?;
     }
-    if wire_version == SemanticMirWireVersionV1::V4 {
+    if wire_version >= SemanticMirWireVersionV1::V4 {
         writer.count(abi.source_argument_ownership.len())?;
         for ownership in &abi.source_argument_ownership {
             writer.u8(match ownership {

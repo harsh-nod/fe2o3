@@ -31,6 +31,8 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     DisjointSliceGetMutExclusive,
     DisjointSliceGetBlockMut,
     DisjointSliceGetTiled2dMut,
+    StridedReadView2DFromSharedSlice,
+    StridedReadView2DLoadOr,
     WorkgroupBarrier,
     MathContextCurrent,
     MathF32(F32MathFunction),
@@ -139,6 +141,12 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             TrustedDeviceItem::DisjointSliceGetTiled2DMut => {
                 Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetTiled2dMut)
+            }
+            TrustedDeviceItem::StridedReadView2DFromSharedSlice => {
+                Self::Expand(ProductionTerminalExpansionV1::StridedReadView2DFromSharedSlice)
+            }
+            TrustedDeviceItem::StridedReadView2DLoadOr => {
+                Self::Expand(ProductionTerminalExpansionV1::StridedReadView2DLoadOr)
             }
             TrustedDeviceItem::WorkgroupSyncthreads => {
                 Self::Expand(ProductionTerminalExpansionV1::WorkgroupBarrier)
@@ -272,6 +280,12 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetTiled2dMut) => {
                 TrustedDeviceItem::DisjointSliceGetTiled2DMut
+            }
+            Self::Expand(ProductionTerminalExpansionV1::StridedReadView2DFromSharedSlice) => {
+                TrustedDeviceItem::StridedReadView2DFromSharedSlice
+            }
+            Self::Expand(ProductionTerminalExpansionV1::StridedReadView2DLoadOr) => {
+                TrustedDeviceItem::StridedReadView2DLoadOr
             }
             Self::Expand(ProductionTerminalExpansionV1::WorkgroupBarrier) => {
                 TrustedDeviceItem::WorkgroupSyncthreads
