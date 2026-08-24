@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/ui/fail/row_striped_mapping_must_match.rs:8:47
+  |
+8 |         let _ = output.get_row_striped_2d_mut(&stripe, 0, 3, 257, 269);
+  |                        ---------------------- ^^^^^^^ expected `64`, found `32`
+  |                        |
+  |                        arguments to this method are incorrect
+  |
+  = note: expected reference `&DisjointRowStripe2D<Index1D, 64, 4>`
+             found reference `&DisjointRowStripe2D<Index1D, 32, 8>`
+note: method defined here
+ --> src/lib.rs
+  |
+  |     pub fn get_row_striped_2d_mut(
+  |            ^^^^^^^^^^^^^^^^^^^^^^

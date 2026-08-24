@@ -1096,7 +1096,7 @@ fn row_striped_2d_effect_family_is_injective(
             return false;
         }
     }
-    checked_tiled_invocations_are_injective(&[first.invocation().clone()], launch_extents)
+    checked_structured_invocations_are_injective(&[first.invocation().clone()], launch_extents)
 }
 
 fn tiled_2d_effect_family_is_injective(
@@ -1126,10 +1126,10 @@ fn tiled_2d_effect_family_is_injective(
             return false;
         }
     }
-    checked_tiled_invocations_are_injective(&[first.invocation().clone()], launch_extents)
+    checked_structured_invocations_are_injective(&[first.invocation().clone()], launch_extents)
 }
 
-fn checked_tiled_invocations_are_injective(
+fn checked_structured_invocations_are_injective(
     facts: &[SparseAffineIndexV1],
     launch_extents: &[u64],
 ) -> bool {
