@@ -1478,6 +1478,70 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                             .edge_arguments(zero.expect("checked above").target, &location)?,
                     });
                 }
+                if self.value_type(selector, &location)? == &Type::BOOL {
+                    let mut false_target = None;
+                    let mut true_target = None;
+                    for target in targets {
+                        let selected = match target.value {
+                            0 => &mut false_target,
+                            1 => &mut true_target,
+                            value => {
+                                return Err(diagnostic(
+                                    TranslationDiagnosticCode::UnsupportedStatement,
+                                    location,
+                                    format!(
+                                        "boolean switch contains non-boolean case value {value}"
+                                    ),
+                                ));
+                            }
+                        };
+                        if selected.replace(target.target).is_some() {
+                            return Err(diagnostic(
+                                TranslationDiagnosticCode::MalformedMir,
+                                location,
+                                format!(
+                                    "boolean switch contains duplicate case value {}",
+                                    target.value
+                                ),
+                            ));
+                        }
+                    }
+                    let default_is_unreachable = self.function.blocks.iter().any(|block| {
+                        block.index == *otherwise
+                            && matches!(
+                                block.terminator.as_ref().map(|terminator| &terminator.kind),
+                                Some(MirTerminatorKind::Unreachable)
+                            )
+                    });
+                    let (false_target, true_target) = match (false_target, true_target) {
+                        (Some(false_target), None) => (false_target, *otherwise),
+                        (None, Some(true_target)) => (*otherwise, true_target),
+                        (Some(false_target), Some(true_target)) if default_is_unreachable => {
+                            (false_target, true_target)
+                        }
+                        _ => {
+                            return Err(diagnostic(
+                                TranslationDiagnosticCode::UnsupportedStatement,
+                                location,
+                                "boolean switch must contain one explicit 0/1 case, or exact 0/1 cases with an unreachable default",
+                            ));
+                        }
+                    };
+                    if false_target == true_target {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::MalformedMir,
+                            location,
+                            "boolean switch true and false edges must be distinct",
+                        ));
+                    }
+                    return Ok(Terminator::ConditionalBranch {
+                        condition: selector,
+                        then_target: self.block_id(true_target, location.clone())?,
+                        then_arguments: self.edge_arguments(true_target, &location)?,
+                        else_target: self.block_id(false_target, location.clone())?,
+                        else_arguments: self.edge_arguments(false_target, &location)?,
+                    });
+                }
                 let mut cases = targets
                     .iter()
                     .map(|target| {

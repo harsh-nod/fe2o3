@@ -49,6 +49,9 @@ pub(super) fn lower_call(
         SessionRecognizedSemanticItem::TrustedDevice(
             TrustedDeviceItem::MemoryCopyNonOverlapping,
         ) => lower_copy_nonoverlapping(lowerer, call, block),
+        SessionRecognizedSemanticItem::TrustedDevice(TrustedDeviceItem::DisjointSliceLen) => {
+            lower_slice_len(lowerer, call, block)
+        }
         _ => unreachable!("only claimed memory calls may be lowered"),
     }
 }
@@ -61,8 +64,40 @@ fn is_memory_item(item: SessionRecognizedSemanticItem) -> bool {
                 | TrustedDeviceItem::MemoryVolatileLoad
                 | TrustedDeviceItem::MemoryVolatileStore
                 | TrustedDeviceItem::MemoryCopyNonOverlapping
+                | TrustedDeviceItem::DisjointSliceLen
         )
     )
+}
+
+fn lower_slice_len(
+    lowerer: &mut FunctionLowerer<'_, '_>,
+    call: SessionRecognizedSemanticCall<'_>,
+    block: &mut BasicBlock,
+) -> Result<Terminator, TranslationDiagnostic> {
+    let [allocation] = call.operands else {
+        return Err(lowerer.call_arity(call.callee, 1, call.operands.len(), call.location.clone()));
+    };
+    let slice = lowerer.lower_operand(allocation, block, call.location)?;
+    if !matches!(lowerer.value_type(slice, call.location)?, Type::Slice(_)) {
+        return Err(diagnostic(
+            TranslationDiagnosticCode::UnsupportedType,
+            call.location.clone(),
+            "memory-v1 length receiver must be a translated DisjointSlice",
+        ));
+    }
+    lowerer.require_destination_type(call.destination, &Type::INDEX, call.location)?;
+    let result = lowerer.emit_result(
+        block,
+        Type::INDEX,
+        OperationKind::SliceLength { slice },
+        call.location,
+    )?;
+    lowerer.bind_local(
+        call.destination.local,
+        LocalBinding::Value(result),
+        call.location.clone(),
+    )?;
+    branch_to_target(lowerer, call)
 }
 
 fn lower_offset_from(

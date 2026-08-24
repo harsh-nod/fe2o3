@@ -1,71 +1,105 @@
-//! Bounded device memory operations with explicit Rust unsafe obligations.
+//! Bounded device memory operations with checked Rust-side obligations.
 //!
 //! These functions are semantic identities consumed by the fe2o3 backend. The
-//! ordinary Rust implementations remain useful for host tests and define the
-//! source behavior that target lowering must preserve.
+//! ordinary Rust implementations validate bounds for host tests and define the
+//! source behavior that verified target lowering must preserve.
 
 use crate::DisjointSlice;
 
 /// Computes the signed element distance between two positions in one slice.
 ///
-/// # Safety
+/// # Panics
 ///
-/// Both indices must be in bounds or one past the end of `allocation`. The
-/// resulting byte distance must fit in `isize`. Zero-sized `T` is unsupported.
+/// Panics when either index is beyond one past the end of `allocation` or `T`
+/// is zero-sized.
 #[inline(never)]
 #[rustc_diagnostic_item = "fe2o3_device_memory_offset_from_v1"]
-pub unsafe fn offset_from<T>(allocation: &[T], pointer_index: usize, origin_index: usize) -> isize {
-    let base = allocation.as_ptr();
-    // SAFETY: The caller establishes the complete `offset_from` contract.
-    unsafe { base.add(pointer_index).offset_from(base.add(origin_index)) }
+pub fn offset_from<T>(allocation: &[T], pointer_index: usize, origin_index: usize) -> isize {
+    assert!(
+        core::mem::size_of::<T>() != 0,
+        "zero-sized values have no device-memory distance"
+    );
+    assert!(
+        pointer_index <= allocation.len(),
+        "pointer index is outside the allocation"
+    );
+    assert!(
+        origin_index <= allocation.len(),
+        "origin index is outside the allocation"
+    );
+    let pointer_index =
+        isize::try_from(pointer_index).expect("a valid nonzero-sized Rust slice extent fits isize");
+    let origin_index =
+        isize::try_from(origin_index).expect("a valid nonzero-sized Rust slice extent fits isize");
+    pointer_index - origin_index
 }
 
 /// Performs one volatile load from a Rust allocation.
 ///
-/// # Safety
+/// # Panics
 ///
-/// `index` must select an initialized, aligned, readable element of
-/// `allocation`, and the volatile access must not trap.
+/// Panics when `index` is outside `allocation`.
 #[inline(never)]
 #[rustc_diagnostic_item = "fe2o3_device_memory_volatile_load_v1"]
-pub unsafe fn volatile_load<T: Copy>(allocation: &[T], index: usize) -> T {
-    // SAFETY: The caller establishes pointer validity, alignment, and access.
+pub fn volatile_load<T: Copy>(allocation: &[T], index: usize) -> T {
+    assert!(
+        index < allocation.len(),
+        "volatile load index is outside the allocation"
+    );
+    // SAFETY: a checked element of a shared slice is initialized, aligned, and readable.
     unsafe { core::ptr::read_volatile(allocation.as_ptr().add(index)) }
 }
 
 /// Performs one volatile store into an exclusive device slice.
 ///
-/// # Safety
+/// # Panics
 ///
-/// `index` must select an aligned, writable element of `allocation`, the
-/// volatile access must not trap, and the `DisjointSlice` construction
-/// contract must remain valid across all GPU invocations and aliases.
+/// Panics when `index` is outside `allocation`.
 #[inline(never)]
 #[rustc_diagnostic_item = "fe2o3_device_memory_volatile_store_v1"]
-pub unsafe fn volatile_store<T: Copy>(allocation: &mut DisjointSlice<T>, index: usize, value: T) {
-    // SAFETY: The caller establishes pointer validity, alignment, and access.
+pub fn volatile_store<T: Copy>(allocation: &mut DisjointSlice<T>, index: usize, value: T) {
+    assert!(
+        index < allocation.len,
+        "volatile store index is outside the allocation"
+    );
+    // SAFETY: the checked element is valid and writable by the DisjointSlice contract.
     unsafe { core::ptr::write_volatile(allocation.ptr.add(index), value) }
 }
 
 /// Copies `count` elements between non-overlapping device regions.
 ///
-/// # Safety
+/// # Panics
 ///
-/// `source_index..source_index + count` must be readable and contained in
-/// `source`; `destination_index..destination_index + count` must be writable
-/// and contained in `destination`; both starting pointers must be aligned even
-/// when `count == 0`; the byte count must fit in `usize`; and the positive-byte
-/// source and destination regions must not overlap.
+/// Panics when either selected range is outside its allocation.
+///
+/// A valid `DisjointSlice` excludes a live source alias to its elements, so
+/// the selected source and destination regions cannot overlap.
 #[inline(never)]
 #[rustc_diagnostic_item = "fe2o3_device_memory_copy_nonoverlapping_v1"]
-pub unsafe fn copy_nonoverlapping<T: Copy>(
+pub fn copy_nonoverlapping<T: Copy>(
     source: &[T],
     source_index: usize,
     destination: &mut DisjointSlice<T>,
     destination_index: usize,
     count: usize,
 ) {
-    // SAFETY: The caller establishes both ranges, alignment, and non-overlap.
+    let source_end = source_index
+        .checked_add(count)
+        .expect("source range extent overflows usize");
+    assert!(
+        source_end <= source.len(),
+        "source range is outside the allocation"
+    );
+    let destination_end = destination_index
+        .checked_add(count)
+        .expect("destination range extent overflows usize");
+    assert!(
+        destination_end <= destination.len,
+        "destination range is outside the allocation"
+    );
+    // SAFETY: checked slice ranges are valid and aligned. A valid DisjointSlice
+    // excludes a simultaneously live source alias, so positive-byte overlap is
+    // impossible.
     unsafe {
         core::ptr::copy_nonoverlapping(
             source.as_ptr().add(source_index),
@@ -83,17 +117,14 @@ mod tests {
     #[test]
     fn host_semantics_preserve_signed_distance_and_volatile_access() {
         let source = [10_u32, 20, 30, 40];
-        // SAFETY: Both indices select positions in the same allocation.
-        assert_eq!(unsafe { offset_from(&source, 1, 3) }, -2);
-        // SAFETY: Index two is initialized, aligned, readable, and nontrapping.
-        assert_eq!(unsafe { volatile_load(&source, 2) }, 30);
+        assert_eq!(offset_from(&source, 1, 3), -2);
+        assert_eq!(volatile_load(&source, 2), 30);
 
         let mut destination = [0_u32; 4];
         // SAFETY: This host test has exclusive ownership of `destination`.
         let mut device =
             unsafe { DisjointSlice::from_raw_parts(destination.as_mut_ptr(), destination.len()) };
-        // SAFETY: Index one is aligned, writable, and exclusively owned.
-        unsafe { volatile_store(&mut device, 1, 77) };
+        volatile_store(&mut device, 1, 77);
         assert_eq!(destination, [0, 77, 0, 0]);
     }
 
@@ -104,8 +135,31 @@ mod tests {
         // SAFETY: This host test has exclusive ownership of `destination`.
         let mut device =
             unsafe { DisjointSlice::from_raw_parts(destination.as_mut_ptr(), destination.len()) };
-        // SAFETY: The selected ranges are valid, aligned, and non-overlapping.
-        unsafe { copy_nonoverlapping(&source, 1, &mut device, 2, 3) };
+        copy_nonoverlapping(&source, 1, &mut device, 2, 3);
         assert_eq!(destination, [9, 9, 2, 3, 4, 9]);
+    }
+
+    #[test]
+    fn host_memory_operations_reject_out_of_bounds_ranges() {
+        let source = [1_u32, 2];
+        let mut destination = [0_u32; 2];
+        // SAFETY: This host test has exclusive ownership of `destination`.
+        let mut device =
+            unsafe { DisjointSlice::from_raw_parts(destination.as_mut_ptr(), destination.len()) };
+
+        assert!(std::panic::catch_unwind(|| volatile_load(&source, 2)).is_err());
+        assert!(std::panic::catch_unwind(|| offset_from(&source, 3, 0)).is_err());
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                volatile_store(&mut device, 2, 3)
+            }))
+            .is_err()
+        );
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                copy_nonoverlapping(&source, 1, &mut device, 0, 2)
+            }))
+            .is_err()
+        );
     }
 }
