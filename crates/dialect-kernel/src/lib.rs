@@ -34,13 +34,13 @@ mod semantic_contract;
 mod tensor_layout;
 
 pub use ranked_memory::{
-    AccessKindAttr, AllocationOriginAttr, AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr,
-    BranchArgsOp, BranchOp, CheckedTiledIndex2DOp, DYNAMIC_EXTENT, DeterministicJoinOp,
-    DimensionAttr, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
-    IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
-    IndexType, IndexValueAttr, InvocationDimensionAttr, InvocationIndexOp, LaunchExtentAttr,
-    MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, NoAliasClassAttr,
-    RankedAccessOp, RankedMemoryError, RankedViewOp, RankedViewType, ReturnOp,
+    AccessKindAttr, AllocationEffectOp, AllocationOriginAttr, AnalysisSplitOp, AtomicOrderingAttr,
+    AtomicScopeAttr, BranchArgsOp, BranchOp, CheckedTiledIndex2DOp, DYNAMIC_EXTENT,
+    DeterministicJoinOp, DimensionAttr, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp,
+    IndexConstantOp, IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp,
+    IndexLessThanBranchOp, IndexType, IndexValueAttr, InvocationDimensionAttr, InvocationIndexOp,
+    LaunchExtentAttr, MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr,
+    NoAliasClassAttr, RankedAccessOp, RankedMemoryError, RankedViewOp, RankedViewType, ReturnOp,
     SUPPORTED_ELEMENT_WIDTHS, is_index_type, ranked_view_type,
 };
 pub use semantic_contract::{

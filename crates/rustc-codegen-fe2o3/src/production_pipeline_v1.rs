@@ -895,6 +895,11 @@ impl<'tcx> ProductionCompilationV1<'tcx, EquivalentSemanticMirStageV1> {
             semantic_mir,
             bindings,
         } = self.stage;
+        crate::compiler_descriptor::validate_production_v1_semantic_ownership_evidence(
+            &bindings.typed_descriptor_roots,
+            semantic_mir.semantic(),
+        )
+        .map_err(ProductionPipelineErrorV1::DescriptorEvidence)?;
         let ranked =
             crate::production_ranked_projection_v1::project_and_verify_ranked_semantic_mir_v1(
                 semantic_mir,

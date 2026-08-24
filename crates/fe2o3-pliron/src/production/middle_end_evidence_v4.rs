@@ -1188,6 +1188,18 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             hash_value(digest, *view);
             hash_values(digest, indices);
         }
+        ProductionRankedOperationV1::AllocationEffect {
+            kind,
+            memory_space,
+            allocation_origin,
+            noalias_class,
+        } => {
+            digest.update([18]);
+            digest.update([access_kind_tag(*kind)]);
+            digest.update([memory_space_tag(*memory_space)]);
+            digest.update(allocation_origin.to_le_bytes());
+            digest.update(noalias_class.to_le_bytes());
+        }
         ProductionRankedOperationV1::Barrier {
             execution_scope,
             memory_scope,

@@ -1,9 +1,9 @@
 use dialect_kernel::{
-    AccessKindAttr, AlgorithmOp, AlgorithmType, AtomicOrderingAttr, AtomicScopeAttr, BranchArgsOp,
-    BranchOp, CheckedTiledIndex2DOp, DIALECT_NAME, DYNAMIC_EXTENT, DeterministicJoinOp,
-    DimensionAttr, DimensionOp, ITERATION_DOMAIN_ATTR_KEY, IndexConstantOp, IndexEqualBranchArgsOp,
-    IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexType,
-    IndexValueAttr, IterationDomainAttr, KernelError, MAX_DETERMINISTIC_JOIN_INPUTS_V1,
+    AccessKindAttr, AlgorithmOp, AlgorithmType, AllocationEffectOp, AtomicOrderingAttr,
+    AtomicScopeAttr, BranchArgsOp, BranchOp, CheckedTiledIndex2DOp, DIALECT_NAME, DYNAMIC_EXTENT,
+    DeterministicJoinOp, DimensionAttr, DimensionOp, ITERATION_DOMAIN_ATTR_KEY, IndexConstantOp,
+    IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
+    IndexType, IndexValueAttr, IterationDomainAttr, KernelError, MAX_DETERMINISTIC_JOIN_INPUTS_V1,
     MAX_ITERATION_RANK, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp, RankedMemoryError,
     RankedViewOp, RankedViewType, RegistrationError, RegistrationOutcome, SemanticOwner,
     StructuredAlgorithmOp, TensorConvergenceAttr, TensorLayoutOp, register_dialect,
@@ -363,6 +363,117 @@ fn ranked_view_allocation_contract_is_explicit_and_fail_closed() {
     )
     .unwrap();
     assert!(verify_op(&forged, context).is_err());
+}
+
+#[test]
+fn allocation_effect_is_global_non_atomic_and_authenticated() {
+    let context = &mut Context::new();
+    register_dialect(context, &kernel_name()).unwrap();
+    let effect = AllocationEffectOp::new(
+        context,
+        AccessKindAttr::Read,
+        MemorySpaceAttr::Global,
+        17,
+        23,
+    )
+    .unwrap();
+    verify_op(&effect, context).unwrap();
+    assert_eq!(effect.kind(context), Some(AccessKindAttr::Read));
+    assert_eq!(effect.memory_space(context), Some(MemorySpaceAttr::Global));
+    assert_eq!(effect.allocation_origin(context), Some(17));
+    assert_eq!(effect.noalias_class(context), Some(23));
+
+    assert!(
+        AllocationEffectOp::new(
+            context,
+            AccessKindAttr::Read,
+            MemorySpaceAttr::Workgroup,
+            17,
+            23,
+        )
+        .is_err()
+    );
+    assert!(
+        AllocationEffectOp::new(
+            context,
+            AccessKindAttr::AtomicRead,
+            MemorySpaceAttr::Global,
+            17,
+            23,
+        )
+        .is_err()
+    );
+    assert!(
+        AllocationEffectOp::new(
+            context,
+            AccessKindAttr::Read,
+            MemorySpaceAttr::Global,
+            0,
+            23,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn parsed_allocation_effect_payloads_fail_closed_before_analysis() {
+    let in_function = |name: &str, operation: &str| {
+        format!(
+            "builtin.func @{name}: builtin.function <() -> ()>\n{{\n  ^entry_block1v1():\n    {operation};\n    kernel.return () [] []: <() -> ()>\n}}"
+        )
+    };
+    let cases = [
+        "kernel_allocation_effect_access_kind: kernel.access_kind Write, kernel_allocation_effect_memory_space: kernel.memory_space Global, kernel_allocation_effect_origin: kernel.allocation_origin 17, kernel_allocation_effect_noalias_class: kernel.noalias_class 23",
+        "kernel_allocation_effect_access_kind: kernel.access_kind Read, kernel_allocation_effect_memory_space: kernel.memory_space Workgroup, kernel_allocation_effect_origin: kernel.allocation_origin 17, kernel_allocation_effect_noalias_class: kernel.noalias_class 23",
+        "kernel_allocation_effect_access_kind: kernel.access_kind Read, kernel_allocation_effect_memory_space: kernel.memory_space Global, kernel_allocation_effect_origin: kernel.allocation_origin 0, kernel_allocation_effect_noalias_class: kernel.noalias_class 23",
+        "kernel_allocation_effect_access_kind: kernel.access_kind Read, kernel_allocation_effect_memory_space: kernel.memory_space Global, kernel_allocation_effect_noalias_class: kernel.noalias_class 23",
+        "kernel_allocation_effect_access_kind: kernel.access_kind Read, kernel_allocation_effect_memory_space: kernel.memory_space Global, kernel_allocation_effect_origin: kernel.noalias_class 17, kernel_allocation_effect_noalias_class: kernel.noalias_class 23",
+        "kernel_allocation_effect_access_kind: kernel.access_kind Read, kernel_allocation_effect_memory_space: kernel.memory_space Global, kernel_allocation_effect_origin: kernel.allocation_origin 17, kernel_allocation_effect_noalias_class: kernel.noalias_class 23, kernel_index_value: kernel.index_value 0",
+    ];
+    for attributes in cases {
+        let context = &mut Context::new();
+        register_dialect(context, &kernel_name()).unwrap();
+        let source = in_function(
+            "payload",
+            &format!("kernel.allocation_effect () [] [{attributes}]: <() -> ()>"),
+        );
+        let operation = parse_from_str(Operation::top_level_parser(), context, &source)
+            .expect("malformed payload remains syntactically parseable");
+        assert!(
+            verify_operation(operation, context).is_err(),
+            "malformed parsed effect verified: {source}"
+        );
+    }
+
+    let attributes = "kernel_allocation_effect_access_kind: kernel.access_kind Read, kernel_allocation_effect_memory_space: kernel.memory_space Global, kernel_allocation_effect_origin: kernel.allocation_origin 17, kernel_allocation_effect_noalias_class: kernel.noalias_class 23";
+    let structured_cases = [
+        in_function(
+            "result",
+            &format!("v0 = kernel.allocation_effect () [] [{attributes}]: <() -> (kernel.index )>"),
+        ),
+        format!(
+            "builtin.func @operand: builtin.function <() -> ()>\n{{\n  ^entry_block1v1():\n    v0 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 0]: <() -> (kernel.index )>;\n    kernel.allocation_effect (v0) [] [{attributes}]: <(kernel.index ) -> ()>;\n    kernel.return () [] []: <() -> ()>\n}}"
+        ),
+        format!(
+            "builtin.func @successor: builtin.function <() -> ()>\n{{\n  ^entry_block1v1():\n    kernel.allocation_effect () [^exit_block1v1] [{attributes}]: <() -> ()>;\n    kernel.return () [] []: <() -> ()>\n  ^exit_block1v1():\n    kernel.return () [] []: <() -> ()>\n}}"
+        ),
+        in_function(
+            "region",
+            &format!(
+                "kernel.allocation_effect () [] [{attributes}]: <() -> ()>\n    {{\n      ^nested_block1v1():\n        kernel.return () [] []: <() -> ()>\n    }}"
+            ),
+        ),
+    ];
+    for source in structured_cases {
+        let context = &mut Context::new();
+        register_dialect(context, &kernel_name()).unwrap();
+        let operation = parse_from_str(Operation::top_level_parser(), context, &source)
+            .expect("invalid structural payload remains syntactically parseable");
+        assert!(
+            verify_operation(operation, context).is_err(),
+            "structurally malformed parsed effect verified: {source}"
+        );
+    }
 }
 
 #[test]

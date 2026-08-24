@@ -563,7 +563,7 @@ fn construct_complete_request_v1<'tcx>(
         callables,
         plan.roots().to_vec(),
     )
-    .and_then(|request| request.admit_exact_v3(SemanticMirLimitsV1::default()))
+    .and_then(|request| request.admit_exact_v4(SemanticMirLimitsV1::default()))
     .map_err(ProductionSemanticImportErrorV1::SemanticSchema)
 }
 

@@ -14,9 +14,10 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAbiRegularAttributesV1, SemanticAbiUniformV1, SemanticAbiValueAttributesV1,
     SemanticAbiValueV1, SemanticArmCallV1, SemanticCanonAbiV1, SemanticExternAbiV1,
     SemanticFunctionAbiV1, SemanticInterruptKindV1, SemanticLayoutIdentityV1, SemanticMirErrorV1,
-    SemanticTypeIdV1, SemanticX86CallV1,
+    SemanticSourceArgumentOwnershipV1, SemanticTypeIdV1, SemanticX86CallV1,
 };
 use rustc_abi::{ArmCall, CanonAbi, ExternAbi, InterruptKind, Reg, RegKind, X86Call};
+use rustc_hir::Mutability;
 use rustc_middle::ty::layout::TyAndLayout;
 use rustc_middle::ty::{Ty, TyKind};
 use rustc_target::callconv::{
@@ -27,6 +28,7 @@ use crate::rustc_semantic_adapter_v1::rustc_type_identity_v1;
 use crate::rustc_semantic_plan_v1::{
     RetainedSemanticFunctionAbiProducerV1, RetainedSemanticTypeProducerV1,
 };
+use crate::trusted_device_items::{self, TrustedDeviceItem};
 
 #[derive(Debug)]
 pub(crate) enum ProductionSemanticFnAbiErrorV1 {
@@ -249,7 +251,26 @@ fn type_binding_v1<'a, 'tcx>(
     Ok(ProductionSemanticFnAbiTypeProducerV1::new(
         producer.layout,
         semantic_type,
+        source_argument_ownership_v1(tcx, ty),
     ))
+}
+
+fn source_argument_ownership_v1(
+    tcx: rustc_middle::ty::TyCtxt<'_>,
+    ty: Ty<'_>,
+) -> SemanticSourceArgumentOwnershipV1 {
+    match ty.kind() {
+        TyKind::Ref(_, _, Mutability::Not) => SemanticSourceArgumentOwnershipV1::SharedBorrow,
+        TyKind::Ref(_, _, Mutability::Mut) => SemanticSourceArgumentOwnershipV1::UniqueBorrow,
+        TyKind::RawPtr(..) => SemanticSourceArgumentOwnershipV1::RawPointer,
+        TyKind::Adt(definition, _)
+            if trusted_device_items::classify(tcx, definition.did())
+                == Some(TrustedDeviceItem::DisjointSlice) =>
+        {
+            SemanticSourceArgumentOwnershipV1::ExclusiveOwner
+        }
+        _ => SemanticSourceArgumentOwnershipV1::ByValue,
+    }
 }
 
 fn exact_value_binding_v1<'tcx>(
@@ -274,16 +295,19 @@ impl From<SemanticMirErrorV1> for ProductionSemanticFnAbiErrorV1 {
 pub(crate) struct ProductionSemanticFnAbiTypeProducerV1<'tcx> {
     rustc_layout: TyAndLayout<'tcx>,
     semantic_type: SemanticTypeIdV1,
+    ownership: SemanticSourceArgumentOwnershipV1,
 }
 
 impl<'tcx> ProductionSemanticFnAbiTypeProducerV1<'tcx> {
     pub(crate) const fn new(
         rustc_layout: TyAndLayout<'tcx>,
         semantic_type: SemanticTypeIdV1,
+        ownership: SemanticSourceArgumentOwnershipV1,
     ) -> Self {
         Self {
             rustc_layout,
             semantic_type,
+            ownership,
         }
     }
 }
@@ -400,6 +424,11 @@ pub(crate) fn construct_production_semantic_fn_abi_v1(
         .iter()
         .map(|input| input.semantic_type)
         .collect();
+    let source_argument_ownership = producer
+        .source_inputs
+        .iter()
+        .map(|input| input.ownership)
+        .collect();
     let mut arguments = Vec::with_capacity(producer.arguments.len());
     for (rustc_argument, argument) in producer.fn_abi.args.iter().zip(producer.arguments) {
         let value = convert_value_v1(rustc_argument, argument.value)?;
@@ -431,6 +460,7 @@ pub(crate) fn construct_production_semantic_fn_abi_v1(
         arguments,
         return_value,
     )
+    .and_then(|abi| abi.with_source_argument_ownership(source_argument_ownership))
     .map_err(Into::into)
 }
 

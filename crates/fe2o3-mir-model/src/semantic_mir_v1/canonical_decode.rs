@@ -155,6 +155,15 @@ impl AdmittedInertSemanticMirV1 {
         Self::decode_for_schema(bytes, limits, Some(SemanticMirWireVersionV1::V3))
     }
 
+    /// Decodes bytes canonical specifically under the closed ownership-bearing
+    /// V4 wire schema.
+    pub fn decode_exact_v4_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_for_schema(bytes, limits, Some(SemanticMirWireVersionV1::V4))
+    }
+
     fn decode_for_schema(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -172,6 +181,7 @@ impl AdmittedInertSemanticMirV1 {
         let request = decoder.request()?;
         decoder.finish()?;
         let admitted = match expected_wire_version {
+            Some(SemanticMirWireVersionV1::V4) => request.admit_exact_v4(limits)?,
             Some(SemanticMirWireVersionV1::V3) => request.admit_exact_v3(limits)?,
             Some(SemanticMirWireVersionV1::V2) => unreachable!("no exact V2 public decoder"),
             None => request.admit(limits)?,
@@ -220,7 +230,7 @@ impl<'a> CanonicalDecoderV1<'a> {
         Self {
             bytes,
             offset: 0,
-            wire_version: SemanticMirWireVersionV1::V3,
+            wire_version: SemanticMirWireVersionV1::V4,
             expected_wire_version,
             limits,
             totals: DecodeTotalsV1::default(),
@@ -1154,6 +1164,37 @@ impl<'a> CanonicalDecoderV1<'a> {
             Some(SemanticMirResourceV1::CallArguments),
             |decoder| Ok(SemanticTypeIdV1(decoder.u32()?)),
         )?;
+        let source_argument_ownership = if self.wire_version == SemanticMirWireVersionV1::V4 {
+            self.records(
+                "source ABI argument ownership",
+                // Ownership is one-to-one metadata for the source inputs charged
+                // immediately above, not another set of call arguments.
+                None,
+                |decoder| {
+                    Ok(match decoder.tagged("source ABI argument ownership", 5)? {
+                        0 => SemanticSourceArgumentOwnershipV1::Unspecified,
+                        1 => SemanticSourceArgumentOwnershipV1::ByValue,
+                        2 => SemanticSourceArgumentOwnershipV1::SharedBorrow,
+                        3 => SemanticSourceArgumentOwnershipV1::UniqueBorrow,
+                        4 => SemanticSourceArgumentOwnershipV1::ExclusiveOwner,
+                        5 => SemanticSourceArgumentOwnershipV1::RawPointer,
+                        _ => unreachable!(),
+                    })
+                },
+            )?
+        } else {
+            let mut ownership = Vec::new();
+            ownership
+                .try_reserve_exact(source_input_types.len())
+                .map_err(|_| SemanticMirDecodeErrorV1::AllocationFailed {
+                    context: "legacy source ABI argument ownership",
+                })?;
+            ownership.resize(
+                source_input_types.len(),
+                SemanticSourceArgumentOwnershipV1::Unspecified,
+            );
+            ownership
+        };
         let source_output_type = SemanticTypeIdV1(self.u32()?);
         let arguments = self.records(
             "ABI arguments",
@@ -1193,6 +1234,7 @@ impl<'a> CanonicalDecoderV1<'a> {
             arguments,
             return_value,
         )
+        .and_then(|abi| abi.with_source_argument_ownership(source_argument_ownership))
         .map_err(Into::into)
     }
 
@@ -1795,7 +1837,7 @@ impl<'a> CanonicalDecoderV1<'a> {
 
     fn rvalue(&mut self) -> Result<SemanticRvalueV1, SemanticMirDecodeErrorV1> {
         let result_type = SemanticTypeIdV1(self.u32()?);
-        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V3 {
+        let maximum_tag = if self.wire_version != SemanticMirWireVersionV1::V2 {
             11
         } else {
             9
@@ -3288,7 +3330,11 @@ mod tests {
         )
         .unwrap();
         for abi in [rust_call, hidden] {
-            component_round_trip(abi, encode_abi, |decoder| decoder.abi());
+            component_round_trip(
+                abi,
+                |writer, abi| encode_abi(writer, abi, SemanticMirWireVersionV1::V4),
+                |decoder| decoder.abi(),
+            );
         }
     }
 
@@ -3420,7 +3466,11 @@ mod tests {
             },
         ];
         for callable in callables {
-            component_round_trip(callable, encode_callable, |decoder| decoder.callable());
+            component_round_trip(
+                callable,
+                |writer, callable| encode_callable(writer, callable, SemanticMirWireVersionV1::V4),
+                |decoder| decoder.callable(),
+            );
         }
 
         let launch = SemanticKernelLaunchBoundsV1::new(
@@ -3519,7 +3569,11 @@ mod tests {
             )),
         ];
         for function in functions {
-            component_round_trip(function, encode_function, |decoder| decoder.function());
+            component_round_trip(
+                function,
+                |writer, function| encode_function(writer, function, SemanticMirWireVersionV1::V4),
+                |decoder| decoder.function(),
+            );
         }
     }
 

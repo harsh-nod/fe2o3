@@ -13,8 +13,8 @@ use std::{
 
 use dialect_gpu::{AddressSpaceAttr, FenceOp};
 use dialect_kernel::{
-    AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, MemorySpaceAttr, RankedAccessOp,
-    RankedViewOp,
+    AccessKindAttr, AllocationEffectOp, AtomicOrderingAttr, AtomicScopeAttr, MemorySpaceAttr,
+    RankedAccessOp, RankedViewOp,
 };
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
@@ -293,7 +293,7 @@ impl std::error::Error for RankedRaceCheckErrorV1 {}
 
 #[derive(Clone)]
 struct EffectV1 {
-    view: Value,
+    identity: EffectIdentityV1,
     view_name: String,
     kind: AccessKindAttr,
     location: RankedRaceLocationV1,
@@ -302,7 +302,15 @@ struct EffectV1 {
     atomic_ordering: Option<AtomicOrderingAttr>,
     allocation_origin: u64,
     noalias_class: u64,
-    view_signature: (u32, Vec<u64>),
+    view_signature: Option<(u32, Vec<u64>)>,
+    conservative: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum EffectIdentityV1 {
+    View(Value),
+    Allocation(u64),
+    AllocationSite(RankedRaceLocationV1),
 }
 
 impl RankedRaceFindingV1 {
@@ -370,7 +378,7 @@ struct AddressStateV1 {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct ConflictClassV1 {
-    view: Value,
+    identity: EffectIdentityV1,
     first: RankedRaceLocationV1,
     second: RankedRaceLocationV1,
     first_kind: AccessKindAttr,
@@ -422,6 +430,45 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
             {
                 has_global_fence = true;
             }
+            if let Some(effect) = operation.downcast_ref::<AllocationEffectOp>() {
+                match effect.memory_space(context) {
+                    Some(MemorySpaceAttr::Private | MemorySpaceAttr::Workgroup) => continue,
+                    Some(MemorySpaceAttr::Global) => {}
+                    None => {
+                        return one(RankedRaceFindingV1::AllocationContractUnavailable {
+                            detail: "a whole-allocation effect has no memory space".to_owned(),
+                        });
+                    }
+                }
+                let Some(kind) = effect.kind(context) else {
+                    return one(RankedRaceFindingV1::AllocationContractUnavailable {
+                        detail: "a whole-allocation effect has no access kind".to_owned(),
+                    });
+                };
+                let location = RankedRaceLocationV1 {
+                    block: block_index,
+                    operation: operation_index,
+                };
+                let allocation_origin = effect.allocation_origin(context).unwrap_or(0);
+                effects.push(EffectV1 {
+                    identity: if allocation_origin == 0 {
+                        EffectIdentityV1::AllocationSite(location)
+                    } else {
+                        EffectIdentityV1::Allocation(allocation_origin)
+                    },
+                    view_name: format!("allocation origin {allocation_origin}"),
+                    kind,
+                    location,
+                    indices: vec![],
+                    atomic_scope: None,
+                    atomic_ordering: None,
+                    allocation_origin,
+                    noalias_class: effect.noalias_class(context).unwrap_or(0),
+                    view_signature: None,
+                    conservative: true,
+                });
+                continue;
+            }
             let Some(access) = operation.downcast_ref::<RankedAccessOp>() else {
                 continue;
             };
@@ -467,7 +514,7 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
                 });
             };
             effects.push(EffectV1 {
-                view,
+                identity: EffectIdentityV1::View(view),
                 view_name: view.unique_name(context).to_string(),
                 kind,
                 location: RankedRaceLocationV1 {
@@ -479,13 +526,11 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
                 atomic_ordering: access.atomic_ordering(context),
                 allocation_origin: view_op.allocation_origin(context).unwrap_or(0),
                 noalias_class: view_op.noalias_class(context).unwrap_or(0),
-                view_signature: view_op
-                    .view_type(context)
-                    .map(|ty| {
-                        let ty = ty.deref(context);
-                        (ty.element_width(), ty.shape().to_vec())
-                    })
-                    .unwrap_or_default(),
+                view_signature: view_op.view_type(context).map(|ty| {
+                    let ty = ty.deref(context);
+                    (ty.element_width(), ty.shape().to_vec())
+                }),
+                conservative: false,
             });
         }
     }
@@ -515,7 +560,7 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
     }
     let distinct_views = effects
         .iter()
-        .map(|effect| effect.view)
+        .map(|effect| effect.identity)
         .collect::<HashSet<_>>();
     if effects.iter().any(|effect| effect.noalias_class == 0)
         && effects.iter().any(|effect| effect.kind.writes_memory())
@@ -565,9 +610,12 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
         if !classes_with_writes.contains(&effect.noalias_class) {
             continue;
         }
+        let Some(signature) = effect.view_signature.clone() else {
+            continue;
+        };
         if signatures_by_class
-            .insert(effect.noalias_class, effect.view_signature.clone())
-            .is_some_and(|previous| previous != effect.view_signature)
+            .insert(effect.noalias_class, signature.clone())
+            .is_some_and(|previous| previous != signature)
         {
             return one(RankedRaceFindingV1::AllocationContractUnavailable {
                 detail: format!(
@@ -687,6 +735,17 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
     if invocation_count <= 1 {
         return clean();
     }
+    if let Some(effect) = effects
+        .iter()
+        .find(|effect| effect.conservative && classes_with_writes.contains(&effect.noalias_class))
+    {
+        return one(RankedRaceFindingV1::AllocationContractUnavailable {
+            detail: format!(
+                "whole-allocation read on {} may overlap a writable effect in alias class {} across concurrent invocations",
+                effect.view_name, effect.noalias_class
+            ),
+        });
+    }
 
     let zero_invocation = vec![0; launch_extents.len()];
     for effect in &effects {
@@ -755,7 +814,7 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
             let conflict = conflicting_witness(state, effect.kind, &witness).cloned();
             if let Some(first) = conflict {
                 let class = ConflictClassV1 {
-                    view: effect.view,
+                    identity: effect.identity,
                     first: first.location,
                     second: effect.location,
                     first_kind: first.access,

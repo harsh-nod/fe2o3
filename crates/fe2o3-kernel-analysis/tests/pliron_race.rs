@@ -1,9 +1,9 @@
 use dialect_gpu::{AddressSpaceAttr, ExecutionLayoutOp, FenceOp, MemoryOrderAttr, MemoryScopeAttr};
 use dialect_kernel::{
-    AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, BranchOp, CheckedTiledIndex2DOp,
-    DIALECT_NAME, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp,
-    InvocationIndexOp, MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp,
-    register_dialect,
+    AccessKindAttr, AllocationEffectOp, AtomicOrderingAttr, AtomicScopeAttr, BranchOp,
+    CheckedTiledIndex2DOp, DIALECT_NAME, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
+    IndexLessThanBranchOp, InvocationIndexOp, MemorySpaceAttr, RankedAccessOp, RankedViewOp,
+    RankedViewType, ReturnOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckPassKindV1, RankedRaceFindingV1, RankedRaceStatusV1,
@@ -1160,6 +1160,96 @@ fn distinct_authenticated_noalias_classes_are_disjoint() {
         cross_view_alias_report(521, 54, 522, 55).status(),
         RankedRaceStatusV1::Clean
     );
+}
+
+fn allocation_read_and_write_report(
+    invocation_count: u64,
+    read_origin: u64,
+    read_class: u64,
+    write_origin: u64,
+    write_class: u64,
+) -> fe2o3_kernel_analysis::RankedRaceReportV1 {
+    let context = &mut setup();
+    let function = function(context, "allocation_read_and_write");
+    let entry = function.get_entry_block(context);
+    let layout = ExecutionLayoutOp::new(
+        context,
+        58,
+        [invocation_count, 1, 1],
+        [invocation_count, 1, 1],
+        invocation_count,
+    );
+    let read = AllocationEffectOp::new(
+        context,
+        AccessKindAttr::Read,
+        MemorySpaceAttr::Global,
+        read_origin,
+        read_class,
+    )
+    .unwrap();
+    let output = view_with_contract(
+        context,
+        vec![invocation_count],
+        MemorySpaceAttr::Global,
+        write_origin,
+        write_class,
+    );
+    let invocation = InvocationIndexOp::new(context, 0, invocation_count);
+    let write = access(
+        context,
+        AccessKindAttr::Write,
+        output.result(context),
+        invocation.result(context),
+    );
+    let ret = ReturnOp::new(context);
+    append(context, entry, &layout);
+    append(context, entry, &read);
+    append(context, entry, &output);
+    append(context, entry, &invocation);
+    append(context, entry, &write);
+    append(context, entry, &ret);
+    run_pliron_ranked_race_check_v1(context, &function)
+}
+
+#[test]
+fn whole_allocation_read_is_safe_with_a_distinct_exclusive_output() {
+    assert_eq!(
+        allocation_read_and_write_report(64, 581, 58, 582, 59).status(),
+        RankedRaceStatusV1::Clean
+    );
+}
+
+#[test]
+fn whole_allocation_read_and_same_class_write_are_safe_for_one_invocation() {
+    assert_eq!(
+        allocation_read_and_write_report(1, 581, 58, 581, 58).status(),
+        RankedRaceStatusV1::Clean
+    );
+}
+
+#[test]
+fn whole_allocation_read_and_same_class_write_fail_closed_when_concurrent() {
+    let report = allocation_read_and_write_report(64, 581, 58, 581, 58);
+    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert!(matches!(
+        report.findings(),
+        [RankedRaceFindingV1::AllocationContractUnavailable { detail }]
+            if detail.contains("whole-allocation read")
+                && detail.contains("concurrent invocations")
+                && !detail.contains("[0]")
+                && !detail.contains("coordinate")
+    ));
+}
+
+#[test]
+fn whole_allocation_unknown_alias_read_fails_closed_against_an_output() {
+    let report = allocation_read_and_write_report(64, 0, 0, 582, 59);
+    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert!(matches!(
+        report.findings(),
+        [RankedRaceFindingV1::AllocationContractUnavailable { detail }]
+            if detail.contains("unknown-alias")
+    ));
 }
 
 #[test]

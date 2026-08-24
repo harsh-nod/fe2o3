@@ -3,17 +3,17 @@ use fe2o3_pliron_owner_core::{
 };
 
 use crate::{
-    AccessKindAttr, AlgorithmOp, AlgorithmType, AllocationOriginAttr, AnalysisSplitOp,
-    AtomicOrderingAttr, AtomicScopeAttr, BranchArgsOp, BranchOp, CheckedTiledIndex2DOp,
-    DIALECT_NAME, DeterministicJoinOp, DimensionAttr, DimensionOp, GeneralGemmAbiSchemaAttr,
-    GeneralGemmEpilogueSchemaAttr, GeneralGemmOp, IndexBinaryKindAttr, IndexBinaryOp,
-    IndexConstantOp, IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp,
-    IndexLessThanBranchOp, IndexType, IndexValueAttr, InvocationDimensionAttr, InvocationIndexOp,
-    IterationDomainAttr, LaunchExtentAttr, MemorySpaceAttr, NoAliasClassAttr, RankedAccessOp,
-    RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp, SemanticBinaryKindAttr,
-    SemanticBinaryOp, SemanticConstantAttr, SemanticConstantOp, SemanticScalarType,
-    SemanticSymbolAttr, SemanticSymbolOp, TensorConvergenceAttr, TensorFragmentAttr,
-    TensorInstructionAttr, TensorLayoutOp,
+    AccessKindAttr, AlgorithmOp, AlgorithmType, AllocationEffectOp, AllocationOriginAttr,
+    AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr, BranchArgsOp, BranchOp,
+    CheckedTiledIndex2DOp, DIALECT_NAME, DeterministicJoinOp, DimensionAttr, DimensionOp,
+    GeneralGemmAbiSchemaAttr, GeneralGemmEpilogueSchemaAttr, GeneralGemmOp, IndexBinaryKindAttr,
+    IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
+    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexType, IndexValueAttr,
+    InvocationDimensionAttr, InvocationIndexOp, IterationDomainAttr, LaunchExtentAttr,
+    MemorySpaceAttr, NoAliasClassAttr, RankedAccessOp, RankedViewOp, RankedViewType,
+    RequireEquivalentOp, ReturnOp, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr,
+    SemanticConstantOp, SemanticScalarType, SemanticSymbolAttr, SemanticSymbolOp,
+    TensorConvergenceAttr, TensorFragmentAttr, TensorInstructionAttr, TensorLayoutOp,
 };
 
 fn registration_hook(
@@ -54,6 +54,7 @@ fn registration_hook(
     service.register_operation::<CheckedTiledIndex2DOp>()?;
     service.register_operation::<DimensionOp>()?;
     service.register_operation::<RankedAccessOp>()?;
+    service.register_operation::<AllocationEffectOp>()?;
     service.register_operation::<IndexLessThanBranchOp>()?;
     service.register_operation::<IndexLessThanBranchArgsOp>()?;
     service.register_operation::<IndexEqualBranchOp>()?;

@@ -1074,6 +1074,104 @@ impl Verify for RankedAccessOp {
     }
 }
 
+/// Conservative whole-allocation memory effect with no fabricated coordinate.
+#[pliron_op(
+    name = "kernel.allocation_effect",
+    format,
+    interfaces = [NResultsInterface<0>, NRegionsInterface<0>],
+    attributes = (
+        kernel_allocation_effect_access_kind: AccessKindAttr,
+        kernel_allocation_effect_memory_space: MemorySpaceAttr,
+        kernel_allocation_effect_origin: AllocationOriginAttr,
+        kernel_allocation_effect_noalias_class: NoAliasClassAttr
+    )
+)]
+pub struct AllocationEffectOp;
+
+impl AllocationEffectOp {
+    pub fn new(
+        context: &mut Context,
+        kind: AccessKindAttr,
+        memory_space: MemorySpaceAttr,
+        allocation_origin: u64,
+        noalias_class: u64,
+    ) -> Result<Self, RankedMemoryError> {
+        if kind != AccessKindAttr::Read
+            || memory_space != MemorySpaceAttr::Global
+            || (noalias_class != 0 && allocation_origin == 0)
+        {
+            return Err(RankedMemoryError::MalformedPayload(
+                "kernel.allocation_effect requires a global read and a valid allocation contract",
+            ));
+        }
+        let operation = Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![],
+            vec![],
+            vec![],
+            0,
+        );
+        let op = Self::from_operation(operation);
+        op.set_attr_kernel_allocation_effect_access_kind(context, kind);
+        op.set_attr_kernel_allocation_effect_memory_space(context, memory_space);
+        op.set_attr_kernel_allocation_effect_origin(
+            context,
+            AllocationOriginAttr(allocation_origin),
+        );
+        op.set_attr_kernel_allocation_effect_noalias_class(
+            context,
+            NoAliasClassAttr(noalias_class),
+        );
+        Ok(op)
+    }
+
+    pub fn kind(&self, context: &Context) -> Option<AccessKindAttr> {
+        self.get_attr_kernel_allocation_effect_access_kind(context)
+            .map(|kind| *kind)
+    }
+
+    pub fn memory_space(&self, context: &Context) -> Option<MemorySpaceAttr> {
+        self.get_attr_kernel_allocation_effect_memory_space(context)
+            .map(|space| *space)
+    }
+
+    pub fn allocation_origin(&self, context: &Context) -> Option<u64> {
+        self.get_attr_kernel_allocation_effect_origin(context)
+            .map(|origin| origin.identity())
+    }
+
+    pub fn noalias_class(&self, context: &Context) -> Option<u64> {
+        self.get_attr_kernel_allocation_effect_noalias_class(context)
+            .map(|class| class.identity())
+    }
+}
+
+impl Verify for AllocationEffectOp {
+    fn verify(&self, context: &Context) -> PlironResult<()> {
+        verify_no_regions_results_successors(self, context, 0, 0)?;
+        let operation = self.get_operation();
+        let operation = operation.deref(context);
+        if operation.get_num_operands() != 0
+            || payload_attribute_count(&operation) != 4
+            || self.kind(context) != Some(AccessKindAttr::Read)
+            || self.memory_space(context) != Some(MemorySpaceAttr::Global)
+            || self.allocation_origin(context).is_none()
+            || self.noalias_class(context).is_none()
+            || (self.noalias_class(context) != Some(0)
+                && self.allocation_origin(context) == Some(0))
+        {
+            return verify_err!(
+                self.loc(context),
+                RankedMemoryError::MalformedPayload(
+                    "kernel.allocation_effect has malformed payload"
+                )
+            );
+        }
+        Ok(())
+    }
+}
+
 /// Conditional branch whose first successor is selected exactly when `lhs < rhs`.
 #[pliron_op(
     name = "kernel.index_lt_br",
@@ -1711,6 +1809,10 @@ fn verify_no_regions_results_successors(
                     | "kernel_memory_space"
                     | "kernel_allocation_origin"
                     | "kernel_noalias_class"
+                    | "kernel_allocation_effect_access_kind"
+                    | "kernel_allocation_effect_memory_space"
+                    | "kernel_allocation_effect_origin"
+                    | "kernel_allocation_effect_noalias_class"
                     | "kernel_invocation_dimension"
                     | "kernel_launch_extent"
                     | "kernel_index_binary_kind"

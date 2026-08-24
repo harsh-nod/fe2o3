@@ -233,6 +233,128 @@ fn nonempty_rust_call_tuple_expansion_admits() {
 }
 
 #[test]
+fn source_argument_ownership_is_canonical_and_length_checked() {
+    let u32_id = SemanticTypeIdV1::from_index(0);
+    let u64_id = SemanticTypeIdV1::from_index(1);
+    let base = rust_call_abi(vec![
+        SemanticAbiArgumentV1::rust_call_tuple_field(0, direct(u32_id)),
+        SemanticAbiArgumentV1::rust_call_tuple_field(1, direct(u64_id)),
+    ])
+    .unwrap();
+    assert!(
+        base.clone()
+            .with_source_argument_ownership(
+                vec![SemanticSourceArgumentOwnershipV1::ExclusiveOwner,]
+            )
+            .is_err()
+    );
+
+    let legacy_v3 = request(base.clone())
+        .admit_exact_v3(SemanticMirLimitsV1::default())
+        .unwrap();
+    let owned = base
+        .clone()
+        .with_source_argument_ownership(vec![
+            SemanticSourceArgumentOwnershipV1::SharedBorrow,
+            SemanticSourceArgumentOwnershipV1::ExclusiveOwner,
+        ])
+        .unwrap();
+    let admitted_base = admit(base.clone()).unwrap();
+    let admitted_owned = admit(owned).unwrap();
+    assert_eq!(admitted_owned.wire_version(), SemanticMirWireVersionV1::V4);
+    assert_ne!(
+        admitted_base.canonical_encoding(),
+        admitted_owned.canonical_encoding()
+    );
+
+    let decoded = AdmittedInertSemanticMirV1::decode_exact_v4_canonical(
+        admitted_owned.canonical_encoding(),
+        SemanticMirLimitsV1::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        decoded.functions()[0].abi().source_argument_ownership(),
+        [
+            SemanticSourceArgumentOwnershipV1::SharedBorrow,
+            SemanticSourceArgumentOwnershipV1::ExclusiveOwner,
+        ]
+    );
+    AdmittedInertSemanticMirV1::decode_exact_v4_canonical(
+        admitted_owned.canonical_encoding(),
+        SemanticMirLimitsV1::default()
+            .with_limit(SemanticMirResourceV1::CallArguments, 5)
+            .unwrap(),
+    )
+    .expect("V4 ownership metadata must not be double-charged as call arguments");
+
+    let mut normalized_v4 = admitted_owned.canonical_encoding().to_vec();
+    normalized_v4[b"fe2o3.inert-semantic-mir".len()..b"fe2o3.inert-semantic-mir".len() + 2]
+        .copy_from_slice(&INERT_SEMANTIC_MIR_VERSION_V3.to_le_bytes());
+    let insertion = normalized_v4
+        .iter()
+        .zip(legacy_v3.canonical_encoding())
+        .position(|(left, right)| left != right)
+        .expect("V4 ownership record insertion");
+    assert_eq!(
+        &normalized_v4[insertion..insertion + 6],
+        &[2, 0, 0, 0, 2, 4]
+    );
+    assert_eq!(
+        &normalized_v4[insertion + 6..],
+        &legacy_v3.canonical_encoding()[insertion..]
+    );
+
+    let mut invalid_tag = admitted_owned.canonical_encoding().to_vec();
+    invalid_tag[insertion + 4] = 6;
+    assert!(matches!(
+        AdmittedInertSemanticMirV1::decode_exact_v4_canonical(
+            &invalid_tag,
+            SemanticMirLimitsV1::default(),
+        ),
+        Err(SemanticMirDecodeErrorV1::InvalidTag {
+            context: "source ABI argument ownership",
+            ..
+        })
+    ));
+    let mut invalid_length = admitted_owned.canonical_encoding().to_vec();
+    invalid_length[insertion..insertion + 4].copy_from_slice(&3_u32.to_le_bytes());
+    assert!(
+        AdmittedInertSemanticMirV1::decode_exact_v4_canonical(
+            &invalid_length,
+            SemanticMirLimitsV1::default(),
+        )
+        .is_err()
+    );
+    for end in 0..admitted_owned.canonical_encoding().len() {
+        assert!(
+            AdmittedInertSemanticMirV1::decode_exact_v4_canonical(
+                &admitted_owned.canonical_encoding()[..end],
+                SemanticMirLimitsV1::default(),
+            )
+            .is_err(),
+            "V4 decoder accepted truncation at byte {end}"
+        );
+    }
+
+    let owned_v3_error = request(
+        base.with_source_argument_ownership(vec![
+            SemanticSourceArgumentOwnershipV1::SharedBorrow,
+            SemanticSourceArgumentOwnershipV1::ExclusiveOwner,
+        ])
+        .unwrap(),
+    )
+    .admit_exact_v3(SemanticMirLimitsV1::default())
+    .unwrap_err();
+    assert_eq!(
+        owned_v3_error,
+        SemanticMirErrorV1::WireVersionCannotRepresent {
+            requested: SemanticMirWireVersionV1::V3,
+            required: SemanticMirWireVersionV1::V4,
+        }
+    );
+}
+
+#[test]
 fn malformed_rust_call_tuple_index_type_and_count_are_rejected() {
     let u32_id = SemanticTypeIdV1::from_index(0);
     let u64_id = SemanticTypeIdV1::from_index(1);

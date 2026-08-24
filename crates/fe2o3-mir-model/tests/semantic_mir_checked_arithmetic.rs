@@ -725,6 +725,15 @@ fn legacy_models_remain_v2_and_v3_without_v3_content_is_noncanonical() {
         INERT_SEMANTIC_MIR_VERSION_V2
     );
     assert_eq!(legacy.wire_version(), SemanticMirWireVersionV1::V2);
+    assert_eq!(legacy.canonical_encoding().len(), 2_836);
+    assert_eq!(
+        legacy.semantic_sha256().as_bytes(),
+        &[
+            128, 238, 224, 140, 36, 180, 168, 56, 5, 105, 146, 17, 0, 230, 52, 3, 75, 133, 72, 61,
+            1, 170, 101, 63, 240, 228, 208, 221, 252, 192, 254, 93,
+        ],
+        "update only when the frozen V2 grammar intentionally changes"
+    );
     let decoded = AdmittedInertSemanticMirV1::decode_canonical(
         legacy.canonical_encoding(),
         SemanticMirLimitsV1::default(),

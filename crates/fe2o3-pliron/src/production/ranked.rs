@@ -10,14 +10,14 @@ use dialect_gpu::{
     MemoryOrderAttr, MemoryScopeAttr,
 };
 use dialect_kernel::{
-    AccessKindAttr, AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr, BranchArgsOp, BranchOp,
-    CheckedTiledIndex2DOp, DYNAMIC_EXTENT, DeterministicJoinOp, DimensionOp, IndexBinaryKindAttr,
-    IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
-    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexType, InvocationIndexOp,
-    MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp,
-    RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp, SUPPORTED_ELEMENT_WIDTHS,
-    SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantOp, SemanticSymbolOp,
-    TensorConvergenceAttr, TensorLayoutOp,
+    AccessKindAttr, AllocationEffectOp, AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr,
+    BranchArgsOp, BranchOp, CheckedTiledIndex2DOp, DYNAMIC_EXTENT, DeterministicJoinOp,
+    DimensionOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp,
+    IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexType,
+    InvocationIndexOp, MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr,
+    RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp,
+    SUPPORTED_ELEMENT_WIDTHS, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantOp,
+    SemanticSymbolOp, TensorConvergenceAttr, TensorLayoutOp,
 };
 use fe2o3_kernel_analysis::{
     MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_OPERATIONS, PlironAtomicLegalityReportV1,
@@ -155,6 +155,13 @@ pub enum ProductionRankedOperationV1 {
         scope: AtomicScopeAttr,
         view: ProductionRankedValueV1,
         indices: Vec<ProductionRankedValueV1>,
+    },
+    /// Conservative allocation-level memory effect with no claimed coordinate.
+    AllocationEffect {
+        kind: AccessKindAttr,
+        memory_space: MemorySpaceAttr,
+        allocation_origin: u64,
+        noalias_class: u64,
     },
     Barrier {
         execution_scope: HierarchyAttr,
@@ -449,6 +456,11 @@ impl ProductionRankedKernelV1 {
                     allocation_origin,
                     noalias_class,
                     ..
+                }
+                | ProductionRankedOperationV1::AllocationEffect {
+                    allocation_origin,
+                    noalias_class,
+                    ..
                 } = operation
                 {
                     if *noalias_class != 0 && *allocation_origin == 0
@@ -571,7 +583,7 @@ impl fmt::Display for ProductionRankedKernelErrorV1 {
                 "ranked execution layout must be the unique first entry operation with nonzero workgroup axes and an integral subgroup width",
             ),
             Self::InvalidAllocationContract => formatter.write_str(
-                "ranked views require consistent allocation origins and no-alias classes",
+                "ranked views/effects require supported memory semantics and consistent allocation origins/no-alias classes",
             ),
             Self::UnsupportedElementWidth(width) => write!(
                 formatter,
@@ -876,6 +888,14 @@ fn validate_operation(
             validate_access(*kind, *view, indices, argument_count, locals)?;
             Ok(None)
         }
+        ProductionRankedOperationV1::AllocationEffect {
+            kind, memory_space, ..
+        } => {
+            if *kind != AccessKindAttr::Read || *memory_space != MemorySpaceAttr::Global {
+                return Err(ProductionRankedKernelErrorV1::InvalidAllocationContract);
+            }
+            Ok(None)
+        }
         ProductionRankedOperationV1::Barrier { .. }
         | ProductionRankedOperationV1::Fence { .. }
         | ProductionRankedOperationV1::TensorLayout { .. } => Ok(None),
@@ -996,6 +1016,7 @@ fn validate_block_argument_values_v1(
         | ProductionRankedOperationV1::Barrier { .. }
         | ProductionRankedOperationV1::Fence { .. }
         | ProductionRankedOperationV1::TensorLayout { .. }
+        | ProductionRankedOperationV1::AllocationEffect { .. }
         | ProductionRankedOperationV1::SemanticSymbol { .. }
         | ProductionRankedOperationV1::SemanticConstant { .. } => {}
     }
@@ -1795,6 +1816,26 @@ fn materialize_operation(
             .map_err(|_| {
                 ProductionRankedKernelErrorV1::Materialization(
                     "validated ranked atomic access failed materialization",
+                )
+            })?;
+            (op.get_operation(), None)
+        }
+        ProductionRankedOperationV1::AllocationEffect {
+            kind,
+            memory_space,
+            allocation_origin,
+            noalias_class,
+        } => {
+            let op = AllocationEffectOp::new(
+                context,
+                *kind,
+                *memory_space,
+                *allocation_origin,
+                *noalias_class,
+            )
+            .map_err(|_| {
+                ProductionRankedKernelErrorV1::Materialization(
+                    "validated allocation effect failed materialization",
                 )
             })?;
             (op.get_operation(), None)

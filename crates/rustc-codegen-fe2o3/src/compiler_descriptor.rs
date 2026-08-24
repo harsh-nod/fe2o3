@@ -410,22 +410,21 @@ fn validate_production_v1_descriptor_evidence(
     typed_roots: &[TypedDescriptorRootV1],
     formal: &fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
 ) -> Result<(), CompilerDescriptorError> {
-    use fe2o3_artifacts::{RustDisjointIndexSpaceV1, RustSourceTypeShapeV1, RustcAbiClassV1};
+    use fe2o3_artifacts::{RustDisjointIndexSpaceV1, RustSourceTypeShapeV1};
     use fe2o3_kernel_ir::{
         AccessMode as KirAccessMode, AddressSpace, FormalMemoryAccessKind, FormalParameterKind,
         Type as KirType,
     };
     use fe2o3_mir_model::semantic_mir_v1::{
-        SemanticAbiPassModeV1, SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1,
-        SemanticDisjointIndexSpaceV1,
+        SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1, SemanticDisjointIndexSpaceV1,
     };
 
+    let semantic = formal.semantic_kir().semantic().semantic();
     let [root] = typed_roots else {
         return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
             "one complete typed root",
         ));
     };
-    let semantic = formal.semantic_kir().semantic().semantic();
     let [semantic_root] = semantic.roots() else {
         return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
             "one semantic root",
@@ -437,21 +436,6 @@ fn validate_production_v1_descriptor_evidence(
         .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
             "semantic root function",
         ))?;
-    let semantic_entry = semantic_function.kernel_entry().ok_or(
-        CompilerDescriptorError::ProductionDescriptorMismatch("semantic kernel entry"),
-    )?;
-    let semantic_export = std::str::from_utf8(semantic_entry.export_symbol().as_bytes())
-        .map_err(|_| CompilerDescriptorError::ProductionDescriptorMismatch("UTF-8 export"))?;
-    if semantic_export != root.export_name
-        || semantic_entry.kernel_binding_identity().as_bytes() != &root.kernel_binding.as_bytes()
-        || semantic_function.abi().source_input_types().len() != root.arguments.len()
-        || semantic_function.abi().adjusted_arguments().len() != root.arguments.len()
-    {
-        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
-            "semantic source identity/ABI closure",
-        ));
-    }
-
     let [kernel] = module.kernels.as_slice() else {
         return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
             "one target-bound kernel",
@@ -482,36 +466,13 @@ fn validate_production_v1_descriptor_evidence(
         ));
     }
 
-    for (index, (((root_argument, semantic_type), semantic_abi), kernel_type)) in root
+    for (index, (root_argument, kernel_type)) in root
         .arguments
         .as_slice()
         .iter()
-        .zip(semantic_function.abi().source_input_types())
-        .zip(semantic_function.abi().adjusted_arguments())
         .zip(&entry.signature.parameters)
         .enumerate()
     {
-        let semantic_type_id = *semantic_type;
-        let semantic_type = semantic.types().get(semantic_type.index() as usize).ok_or(
-            CompilerDescriptorError::ProductionDescriptorMismatch("semantic argument type"),
-        )?;
-        if semantic_type.layout().size_bytes() != Some(root_argument.layout.size())
-            || semantic_type.layout().alignment_bytes()
-                != u64::from(root_argument.layout.abi_alignment())
-            || semantic_abi.ty() != semantic_function.abi().source_input_types()[index]
-        {
-            return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
-                "rustc semantic argument layout",
-            ));
-        }
-        let exact_abi_mode = matches!(
-            (root_argument.layout.abi_class(), semantic_abi.mode()),
-            (RustcAbiClassV1::Scalar, SemanticAbiPassModeV1::Direct(_))
-                | (
-                    RustcAbiClassV1::ScalarPair,
-                    SemanticAbiPassModeV1::Pair { .. }
-                )
-        );
         let exact_kernel_type = match (root_argument.kind, kernel_type) {
             (DescriptorArgumentKindV1::Scalar(scalar), KirType::Scalar(actual)) => {
                 descriptor_scalar_to_kernel_ir(scalar) == Some(*actual)
@@ -528,15 +489,22 @@ fn validate_production_v1_descriptor_evidence(
             }
             _ => false,
         };
-        if !exact_abi_mode || !exact_kernel_type {
+        if !exact_kernel_type {
             return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
-                "semantic ABI/Kernel IR argument correspondence",
+                "typed descriptor/Kernel IR argument correspondence",
             ));
         }
         if matches!(
             root_argument.kind,
             DescriptorArgumentKindV1::DisjointSlice(_)
         ) {
+            let semantic_type_id = *semantic_function
+                .abi()
+                .source_input_types()
+                .get(index)
+                .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
+                    "pre-ranked semantic argument identity",
+                ))?;
             let RustSourceTypeShapeV1::DisjointSlice { index_space, .. } =
                 root_argument.layout.rust_type().source_type()
             else {
@@ -691,6 +659,93 @@ fn validate_production_v1_descriptor_evidence(
         {
             return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
                 "formal access mode",
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_production_v1_semantic_ownership_evidence(
+    typed_roots: &[TypedDescriptorRootV1],
+    semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+) -> Result<(), CompilerDescriptorError> {
+    use fe2o3_artifacts::RustcAbiClassV1;
+    use fe2o3_mir_model::semantic_mir_v1::{
+        SemanticAbiPassModeV1, SemanticSourceArgumentOwnershipV1,
+    };
+
+    let [root] = typed_roots else {
+        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "one complete typed root",
+        ));
+    };
+    let [semantic_root] = semantic.roots() else {
+        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "one semantic root",
+        ));
+    };
+    let function = semantic
+        .functions()
+        .get(semantic_root.index() as usize)
+        .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "semantic root function",
+        ))?;
+    let entry =
+        function
+            .kernel_entry()
+            .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "semantic kernel entry",
+            ))?;
+    let export = std::str::from_utf8(entry.export_symbol().as_bytes())
+        .map_err(|_| CompilerDescriptorError::ProductionDescriptorMismatch("UTF-8 export"))?;
+    if export != root.export_name
+        || entry.kernel_binding_identity().as_bytes() != &root.kernel_binding.as_bytes()
+        || function.abi().source_input_types().len() != root.arguments.len()
+        || function.abi().adjusted_arguments().len() != root.arguments.len()
+        || function.abi().source_argument_ownership().len() != root.arguments.len()
+    {
+        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "semantic source identity/ABI/ownership closure",
+        ));
+    }
+
+    for (index, ((argument, semantic_type), semantic_abi)) in root
+        .arguments
+        .as_slice()
+        .iter()
+        .zip(function.abi().source_input_types())
+        .zip(function.abi().adjusted_arguments())
+        .enumerate()
+    {
+        let semantic_type = semantic.types().get(semantic_type.index() as usize).ok_or(
+            CompilerDescriptorError::ProductionDescriptorMismatch("semantic argument type"),
+        )?;
+        let expected_ownership = match argument.kind {
+            DescriptorArgumentKindV1::Scalar(_) => SemanticSourceArgumentOwnershipV1::ByValue,
+            DescriptorArgumentKindV1::SharedSlice(_) => {
+                SemanticSourceArgumentOwnershipV1::SharedBorrow
+            }
+            DescriptorArgumentKindV1::DisjointSlice(_) => {
+                SemanticSourceArgumentOwnershipV1::ExclusiveOwner
+            }
+        };
+        let exact_abi_mode = matches!(
+            (argument.layout.abi_class(), semantic_abi.mode()),
+            (RustcAbiClassV1::Scalar, SemanticAbiPassModeV1::Direct(_))
+                | (
+                    RustcAbiClassV1::ScalarPair,
+                    SemanticAbiPassModeV1::Pair { .. }
+                )
+        );
+        if semantic_type.layout().size_bytes() != Some(argument.layout.size())
+            || semantic_type.layout().alignment_bytes()
+                != u64::from(argument.layout.abi_alignment())
+            || semantic_abi.ty() != function.abi().source_input_types()[index]
+            || function.abi().source_argument_ownership()[index] != expected_ownership
+            || !exact_abi_mode
+        {
+            return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "rustc semantic argument layout/ownership",
             ));
         }
     }

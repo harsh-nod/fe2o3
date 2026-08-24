@@ -32,9 +32,9 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1,
     SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1, SemanticOperandV1,
     SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticScalarTypeV1,
-    SemanticSourceProvenanceV1, SemanticStatementKindV1, SemanticTargetArchitectureV1,
-    SemanticTerminatorKindV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
-    SemanticUnwindActionV1,
+    SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1, SemanticStatementKindV1,
+    SemanticTargetArchitectureV1, SemanticTerminatorKindV1, SemanticTypeIdV1, SemanticTypeShapeV1,
+    SemanticUnaryOpV1, SemanticUnwindActionV1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
@@ -187,6 +187,7 @@ struct IntrinsicProjectionV1 {
     deterministic_switches: Vec<Option<ProjectedDeterministicSwitchV1>>,
     uniform_inductions: Vec<ProjectedUniformInductionV1>,
     tensor_layouts: Vec<Option<ProductionRankedOperationV1>>,
+    tensor_read_effects: Vec<Option<ProjectedTensorReadEffectV1>>,
     extent_argument_count: usize,
 }
 
@@ -233,6 +234,7 @@ impl ProjectedUniformInductionV1 {
 struct ProjectedMfmaViewV1 {
     role: SemanticMfmaOperandRoleV1,
     storage_layout: SemanticMfmaStorageLayoutV1,
+    allocation: AllocationContractV1,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -240,6 +242,24 @@ struct ProjectedMfmaOperandV1 {
     contract: SemanticMfmaOperandContractV1,
     storage_layout: SemanticMfmaStorageLayoutV1,
     lane_root: u64,
+    allocation: AllocationContractV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProjectedTensorReadEffectV1 {
+    allocation: AllocationContractV1,
+    source: SemanticSourceProvenanceV1,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct ProjectedTensorTerminatorEffectsV1 {
+    layout: Option<ProductionRankedOperationV1>,
+    global_read: Option<AllocationContractV1>,
+}
+
+struct ProjectedTensorEffectsV1 {
+    layouts: Vec<Option<ProductionRankedOperationV1>>,
+    global_reads: Vec<Option<AllocationContractV1>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -347,7 +367,8 @@ impl ProjectedSemanticBlockV1 {
             ProjectedBlockItemV1::Effect {
                 operation:
                     ProductionRankedOperationV1::Access { .. }
-                    | ProductionRankedOperationV1::AtomicAccess { .. },
+                    | ProductionRankedOperationV1::AtomicAccess { .. }
+                    | ProductionRankedOperationV1::AllocationEffect { .. },
                 ..
             }
             | ProjectedBlockItemV1::Guarded(_) => true,
@@ -642,6 +663,28 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
             // carries no load-refinement or artifact authority by itself; that
             // authority is joined later with the exact semantic owner and KIR.
             operations.push(tensor_layout);
+        }
+        if let Some(effect) = intrinsic
+            .tensor_read_effects
+            .get(block_index)
+            .copied()
+            .flatten()
+        {
+            let operation = operations.len();
+            reserve_operation(&mut operations)?;
+            operations.push(ProductionRankedOperationV1::AllocationEffect {
+                kind: AccessKindAttr::Read,
+                memory_space: MemorySpaceAttr::Global,
+                allocation_origin: effect.allocation.allocation_origin,
+                noalias_class: effect.allocation.noalias_class,
+            });
+            local_sources.push(ProjectedAccessSourceV1 {
+                block: block_index,
+                operation,
+                access: AccessKindAttr::Read,
+                memory_space: MemorySpaceAttr::Global,
+                source: effect.source,
+            });
         }
         let projected = order_projected_block_effects(
             operations,
@@ -940,7 +983,8 @@ fn project_authenticated_tensor_layouts_v1(
     function: &SemanticFunctionDeclV1,
     option_dominance: &SemanticOptionDominanceV1,
     enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
-) -> Result<Vec<Option<ProductionRankedOperationV1>>, ProductionRankedProjectionErrorV1> {
+    local_allocations: &[Option<AllocationContractV1>],
+) -> Result<ProjectedTensorEffectsV1, ProductionRankedProjectionErrorV1> {
     let block_count = function.blocks().len();
     let entry = function.entry().index() as usize;
     if entry >= block_count {
@@ -971,7 +1015,14 @@ fn project_authenticated_tensor_layouts_v1(
             option_dominance,
             enum_payload_dominance,
         )?;
-        transfer_tensor_terminator_v1(callables, function, block_index, &mut state, false)?;
+        transfer_tensor_terminator_v1(
+            callables,
+            function,
+            block_index,
+            &mut state,
+            local_allocations,
+            false,
+        )?;
         charge_tensor_dataflow_work_v1(
             &mut work,
             function.blocks()[block_index]
@@ -1032,6 +1083,7 @@ fn project_authenticated_tensor_layouts_v1(
     }
 
     let mut layouts = vec![None; block_count];
+    let mut global_reads = vec![None; block_count];
     for (block_index, entry_state) in entries.into_iter().enumerate() {
         let Some(mut state) = entry_state else {
             continue;
@@ -1043,10 +1095,45 @@ fn project_authenticated_tensor_layouts_v1(
             option_dominance,
             enum_payload_dominance,
         )?;
-        layouts[block_index] =
-            transfer_tensor_terminator_v1(callables, function, block_index, &mut state, true)?;
+        let effects = transfer_tensor_terminator_v1(
+            callables,
+            function,
+            block_index,
+            &mut state,
+            local_allocations,
+            true,
+        )?;
+        layouts[block_index] = effects.layout;
+        global_reads[block_index] = effects.global_read;
     }
-    Ok(layouts)
+    Ok(ProjectedTensorEffectsV1 {
+        layouts,
+        global_reads,
+    })
+}
+
+fn bind_tensor_read_effects_to_call_blocks_v1(
+    function: &SemanticFunctionDeclV1,
+    global_reads: &[Option<AllocationContractV1>],
+) -> Result<Vec<Option<ProjectedTensorReadEffectV1>>, ProductionRankedProjectionErrorV1> {
+    if global_reads.len() != function.blocks().len() {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "tensor read effects do not correspond one-to-one with semantic MIR blocks",
+        ));
+    }
+    let mut effects = Vec::new();
+    effects.try_reserve_exact(global_reads.len()).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "tensor read effect storage cannot be reserved",
+        )
+    })?;
+    for (block, allocation) in function.blocks().iter().zip(global_reads.iter().copied()) {
+        effects.push(allocation.map(|allocation| ProjectedTensorReadEffectV1 {
+            allocation,
+            source: block.terminator().source(),
+        }));
+    }
+    Ok(effects)
 }
 
 fn charge_tensor_dataflow_work_v1(
@@ -1340,8 +1427,9 @@ fn transfer_tensor_terminator_v1(
     function: &SemanticFunctionDeclV1,
     block_index: usize,
     state: &mut ProjectedTensorStateV1,
+    local_allocations: &[Option<AllocationContractV1>],
     require_authenticated_site: bool,
-) -> Result<Option<ProductionRankedOperationV1>, ProductionRankedProjectionErrorV1> {
+) -> Result<ProjectedTensorTerminatorEffectsV1, ProductionRankedProjectionErrorV1> {
     let terminator = function.blocks()[block_index].terminator().kind();
     let SemanticTerminatorKindV1::Call(call) = terminator else {
         match terminator {
@@ -1366,24 +1454,43 @@ fn transfer_tensor_terminator_v1(
             | SemanticTerminatorKindV1::Unreachable => {}
             SemanticTerminatorKindV1::Call(_) => unreachable!("matched call terminator"),
         }
-        return Ok(None);
+        return Ok(ProjectedTensorTerminatorEffectsV1::default());
     };
+    let intrinsic_operation = match callables.get(call.callee().index() as usize) {
+        Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) => Some(operation),
+        _ => None,
+    };
+    let is_global_fragment_load = matches!(
+        intrinsic_operation,
+        Some(
+            SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { .. }
+                | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 { .. }
+        )
+    );
     let Some(destination) = call.destination() else {
         consume_tensor_operands_v1(state, call.arguments());
-        return Ok(None);
+        if is_global_fragment_load {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a typed global fragment load without one direct local result",
+            ));
+        }
+        return Ok(ProjectedTensorTerminatorEffectsV1::default());
     };
     if !destination.place().projections().is_empty() {
         consume_tensor_operands_v1(state, call.arguments());
         invalidate_tensor_place_v1(state, destination.place());
-        return Ok(None);
+        if is_global_fragment_load {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a typed global fragment load into a projected destination",
+            ));
+        }
+        return Ok(ProjectedTensorTerminatorEffectsV1::default());
     }
     let destination_local = destination.place().local().index() as usize;
-    let Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) =
-        callables.get(call.callee().index() as usize)
-    else {
+    let Some(operation) = intrinsic_operation else {
         consume_tensor_operands_v1(state, call.arguments());
         state.remove(&destination_local);
-        return Ok(None);
+        return Ok(ProjectedTensorTerminatorEffectsV1::default());
     };
     if matches!(call.unwind(), SemanticUnwindActionV1::Cleanup(_)) {
         return Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -1421,7 +1528,17 @@ fn transfer_tensor_terminator_v1(
             storage_layout,
             ..
         } => {
-            if call.arguments().len() != 5 || destination.place().ty() != *result {
+            let allocation = call
+                .arguments()
+                .first()
+                .and_then(transparent_operand_place)
+                .and_then(|place| local_allocations.get(place.local().index() as usize))
+                .copied()
+                .flatten();
+            if call.arguments().len() != 5
+                || destination.place().ty() != *result
+                || allocation.is_none()
+            {
                 (ProjectedTensorValueV1::Invalid, None)
             } else {
                 (
@@ -1429,6 +1546,7 @@ fn transfer_tensor_terminator_v1(
                         ProjectedMfmaViewV1 {
                             role: *role,
                             storage_layout: *storage_layout,
+                            allocation: allocation.expect("checked matrix storage allocation"),
                         },
                     )),
                     None,
@@ -1527,7 +1645,7 @@ fn transfer_tensor_terminator_v1(
         _ => {
             consume_tensor_operands_v1(state, call.arguments());
             state.remove(&destination_local);
-            return Ok(None);
+            return Ok(ProjectedTensorTerminatorEffectsV1::default());
         }
     };
     consume_tensor_operands_v1(state, call.arguments());
@@ -1543,7 +1661,23 @@ fn transfer_tensor_terminator_v1(
             "an MFMA call whose result type does not match its authenticated accumulator contract",
         ));
     }
-    Ok(layout)
+    let global_read = match (is_global_fragment_load, origin) {
+        (
+            true,
+            ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::LoadOption(fragment))
+            | ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Operand(fragment)),
+        ) => Some(fragment.allocation),
+        (true, _) => {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a typed global fragment load without exact authenticated view, lane, allocation, and result provenance",
+            ));
+        }
+        (false, _) => None,
+    };
+    Ok(ProjectedTensorTerminatorEffectsV1 {
+        layout,
+        global_read,
+    })
 }
 
 fn authenticate_tensor_load_v1(
@@ -1574,6 +1708,7 @@ fn authenticate_tensor_load_v1(
             contract,
             storage_layout,
             lane_root,
+            allocation: view.allocation,
         })
 }
 
@@ -1744,12 +1879,18 @@ fn project_intrinsic_contracts(
         .map_err(|error| ProductionRankedProjectionErrorV1::Unsupported(error.detail()))?;
     let enum_payload_dominance = SemanticEnumPayloadDominanceV1::analyze(function, types)
         .map_err(|error| ProductionRankedProjectionErrorV1::Unsupported(error.detail()))?;
-    let tensor_layouts = project_authenticated_tensor_layouts_v1(
+    let allocation_origins = local_allocation_origins(function)?;
+    let local_allocations = local_allocation_contracts(types, function, &allocation_origins)?;
+    let tensor_effects = project_authenticated_tensor_layouts_v1(
         callables,
         function,
         &option_dominance,
         &enum_payload_dominance,
+        &local_allocations,
     )?;
+    let tensor_read_effects =
+        bind_tensor_read_effects_to_call_blocks_v1(function, &tensor_effects.global_reads)?;
+    let tensor_layouts = tensor_effects.layouts;
     let mut edge_count = 0_usize;
     let mut borrowed_locals = Vec::new();
     let stable_argument_origins = local_stable_argument_origins(function)?;
@@ -2397,8 +2538,6 @@ fn project_intrinsic_contracts(
         ));
     }
 
-    let allocation_origins = local_allocation_origins(function)?;
-    let local_allocations = local_allocation_contracts(types, function, &allocation_origins)?;
     let mut views_by_origin: Vec<Option<ProjectedViewV1>> = vec![None; function.locals().len()];
     let mut guarded_accesses = Vec::new();
     for (block_index, block) in function.blocks().iter().enumerate() {
@@ -2923,6 +3062,7 @@ fn project_intrinsic_contracts(
         deterministic_switches,
         uniform_inductions,
         tensor_layouts,
+        tensor_read_effects,
     })
 }
 
@@ -4675,7 +4815,13 @@ fn local_allocation_contracts(
         ));
     }
     let source_types = function.abi().source_input_types();
+    let source_ownership = function.abi().source_argument_ownership();
     let abi_arguments = function.abi().adjusted_arguments();
+    if source_ownership.len() != source_types.len() {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "source ownership and semantic argument tables have different lengths",
+        ));
+    }
     let mut arguments = vec![None; source_types.len()];
     for (argument_index, &ty) in source_types.iter().enumerate() {
         let type_decl = types.get(ty.index() as usize).ok_or(
@@ -4708,16 +4854,72 @@ fn local_allocation_contracts(
         let Some(pointee) = pointee else {
             continue;
         };
-        arguments[argument_index] = Some(allocation_contract_from_pointee(
+        let abi_contract = allocation_contract_from_pointee(
             pointee.kind(),
             first_pointer_noalias,
             allocation_origin,
-        ));
+        );
+        arguments[argument_index] = Some(authenticated_source_allocation_contract_v1(
+            source_ownership[argument_index],
+            pointee.kind(),
+            abi_contract,
+        )?);
     }
     Ok(origins
         .iter()
         .map(|origin| origin.and_then(|origin| arguments.get(origin as usize).copied().flatten()))
         .collect())
+}
+
+fn authenticated_source_allocation_contract_v1(
+    ownership: SemanticSourceArgumentOwnershipV1,
+    pointee: SemanticAbiPointeeKindV1,
+    abi_contract: AllocationContractV1,
+) -> Result<AllocationContractV1, ProductionRankedProjectionErrorV1> {
+    Ok(match ownership {
+        SemanticSourceArgumentOwnershipV1::UniqueBorrow
+            if abi_contract.noalias_class != 0
+                && matches!(
+                    pointee,
+                    SemanticAbiPointeeKindV1::MutableReference { .. }
+                        | SemanticAbiPointeeKindV1::Box { .. }
+                ) =>
+        {
+            abi_contract
+        }
+        SemanticSourceArgumentOwnershipV1::ExclusiveOwner
+            if matches!(pointee, SemanticAbiPointeeKindV1::Raw) =>
+        {
+            AllocationContractV1 {
+                allocation_origin: abi_contract.allocation_origin,
+                noalias_class: abi_contract.allocation_origin + 1,
+                writable: true,
+            }
+        }
+        SemanticSourceArgumentOwnershipV1::SharedBorrow
+            if matches!(pointee, SemanticAbiPointeeKindV1::SharedReference { .. }) =>
+        {
+            abi_contract
+        }
+        SemanticSourceArgumentOwnershipV1::RawPointer
+            if matches!(pointee, SemanticAbiPointeeKindV1::Raw) =>
+        {
+            abi_contract
+        }
+        SemanticSourceArgumentOwnershipV1::ByValue if abi_contract.noalias_class == 0 => {
+            abi_contract
+        }
+        SemanticSourceArgumentOwnershipV1::UniqueBorrow
+        | SemanticSourceArgumentOwnershipV1::ExclusiveOwner
+        | SemanticSourceArgumentOwnershipV1::SharedBorrow
+        | SemanticSourceArgumentOwnershipV1::RawPointer
+        | SemanticSourceArgumentOwnershipV1::ByValue
+        | SemanticSourceArgumentOwnershipV1::Unspecified => {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "source ownership disagrees with rustc ABI pointer provenance",
+            ));
+        }
+    })
 }
 
 fn allocation_contract_from_pointee(
@@ -5956,6 +6158,15 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             scope,
             ranked_value_text_v1(*view),
             format_ranked_values(indices),
+        ),
+        ProductionRankedOperationV1::AllocationEffect {
+            kind,
+            memory_space,
+            allocation_origin,
+            noalias_class,
+        } => format!(
+            "  kernel.allocation_effect {:?} <{:?}, origin={}, noalias={}>\n",
+            kind, memory_space, allocation_origin, noalias_class,
         ),
         ProductionRankedOperationV1::Barrier {
             execution_scope,
@@ -8389,7 +8600,8 @@ mod tests {
             .iter()
             .filter_map(|operation| match operation {
                 ProductionRankedOperationV1::Access { kind, .. }
-                | ProductionRankedOperationV1::AtomicAccess { kind, .. } => Some(*kind),
+                | ProductionRankedOperationV1::AtomicAccess { kind, .. }
+                | ProductionRankedOperationV1::AllocationEffect { kind, .. } => Some(*kind),
                 ProductionRankedOperationV1::View { .. }
                 | ProductionRankedOperationV1::ExecutionLayout { .. }
                 | ProductionRankedOperationV1::ViewInSpace { .. }
@@ -9411,6 +9623,104 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_source_ownership_distinguishes_borrows_owners_and_raw_pointers() {
+        let raw = allocation_contract_from_pointee(SemanticAbiPointeeKindV1::Raw, false, 3);
+        let exclusive = authenticated_source_allocation_contract_v1(
+            SemanticSourceArgumentOwnershipV1::ExclusiveOwner,
+            SemanticAbiPointeeKindV1::Raw,
+            raw,
+        )
+        .unwrap();
+        assert_eq!(exclusive.allocation_origin, 3);
+        assert_eq!(exclusive.noalias_class, 4);
+        assert!(exclusive.writable);
+
+        for ownership in [
+            SemanticSourceArgumentOwnershipV1::RawPointer,
+            SemanticSourceArgumentOwnershipV1::ByValue,
+        ] {
+            assert_eq!(
+                authenticated_source_allocation_contract_v1(
+                    ownership,
+                    SemanticAbiPointeeKindV1::Raw,
+                    raw,
+                )
+                .unwrap()
+                .noalias_class,
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn authenticated_source_ownership_mismatches_fail_closed() {
+        let shared = allocation_contract_from_pointee(
+            SemanticAbiPointeeKindV1::SharedReference { frozen: true },
+            true,
+            2,
+        );
+        let raw = allocation_contract_from_pointee(SemanticAbiPointeeKindV1::Raw, false, 3);
+        for (ownership, pointee, contract) in [
+            (
+                SemanticSourceArgumentOwnershipV1::ExclusiveOwner,
+                SemanticAbiPointeeKindV1::SharedReference { frozen: true },
+                shared,
+            ),
+            (
+                SemanticSourceArgumentOwnershipV1::SharedBorrow,
+                SemanticAbiPointeeKindV1::Raw,
+                raw,
+            ),
+            (
+                SemanticSourceArgumentOwnershipV1::UniqueBorrow,
+                SemanticAbiPointeeKindV1::Raw,
+                raw,
+            ),
+            (
+                SemanticSourceArgumentOwnershipV1::Unspecified,
+                SemanticAbiPointeeKindV1::Raw,
+                raw,
+            ),
+            (
+                SemanticSourceArgumentOwnershipV1::ByValue,
+                SemanticAbiPointeeKindV1::SharedReference { frozen: true },
+                shared,
+            ),
+            (
+                SemanticSourceArgumentOwnershipV1::ByValue,
+                SemanticAbiPointeeKindV1::MutableReference { unpin: true },
+                allocation_contract_from_pointee(
+                    SemanticAbiPointeeKindV1::MutableReference { unpin: true },
+                    true,
+                    4,
+                ),
+            ),
+            (
+                SemanticSourceArgumentOwnershipV1::ByValue,
+                SemanticAbiPointeeKindV1::Box {
+                    unpin: true,
+                    global: true,
+                },
+                allocation_contract_from_pointee(
+                    SemanticAbiPointeeKindV1::Box {
+                        unpin: true,
+                        global: true,
+                    },
+                    true,
+                    5,
+                ),
+            ),
+        ] {
+            assert!(matches!(
+                authenticated_source_allocation_contract_v1(ownership, pointee, contract),
+                Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "source ownership disagrees with rustc ABI pointer provenance"
+                ))
+            ));
+        }
+    }
+
+    #[test]
     fn source_execution_layout_keeps_only_the_d1_grid_extent_dynamic() {
         let dimensions = SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap();
         let launch =
@@ -9909,6 +10219,211 @@ mod tests {
         }
     }
 
+    fn tensor_test_allocation() -> AllocationContractV1 {
+        AllocationContractV1 {
+            allocation_origin: 1,
+            noalias_class: 1,
+            writable: false,
+        }
+    }
+
+    fn zero_filled_tensor_load_callable() -> SemanticCallableDeclV1 {
+        compiler_intrinsic_callable(
+            SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
+                fragment: SCALAR_TYPE,
+                view: SCALAR_TYPE,
+                lane: SCALAR_TYPE,
+                contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
+                storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+            },
+        )
+    }
+
+    fn tensor_load_function(destination: Option<SemanticPlaceV1>) -> SemanticFunctionDeclV1 {
+        let destination = destination.map(|place| {
+            SemanticCallDestinationV1::new(place, cfg_edge(SemanticEdgeRoleV1::CallReturn, 0))
+        });
+        let call = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(0),
+            vec![
+                tensor_operand(0),
+                tensor_operand(1),
+                tensor_operand(2),
+                tensor_operand(3),
+            ],
+            destination,
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        projection_function_with_locals(
+            vec![block(133, vec![], SemanticTerminatorKindV1::Call(call))],
+            vec![
+                local(133, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(134, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(135, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(136, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(137, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
+    fn authenticated_tensor_load_state() -> ProjectedTensorStateV1 {
+        HashMap::from([
+            (
+                0,
+                ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::View(ProjectedMfmaViewV1 {
+                    role: SemanticMfmaOperandRoleV1::A,
+                    storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                    allocation: tensor_test_allocation(),
+                })),
+            ),
+            (
+                1,
+                ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Lane {
+                    root: 20,
+                    wave_width: 64,
+                }),
+            ),
+        ])
+    }
+
+    #[test]
+    fn every_authenticated_global_fragment_load_emits_a_read_even_when_unused() {
+        let function = tensor_load_function(Some(
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(4), vec![], SCALAR_TYPE).unwrap(),
+        ));
+        let mut state = authenticated_tensor_load_state();
+        let effects = transfer_tensor_terminator_v1(
+            &[zero_filled_tensor_load_callable()],
+            &function,
+            0,
+            &mut state,
+            &[None; 5],
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(effects.global_read, Some(tensor_test_allocation()));
+        assert!(effects.layout.is_none());
+        assert!(matches!(
+            state.get(&4),
+            Some(ProjectedTensorValueV1::Known(
+                ProjectedTensorOriginV1::Operand(_)
+            ))
+        ));
+    }
+
+    #[test]
+    fn operand_a_and_b_reads_remain_distinct_effects_in_their_mir_call_blocks() {
+        let function = projection_function(vec![
+            block(138, vec![], SemanticTerminatorKindV1::Return),
+            block(139, vec![], SemanticTerminatorKindV1::Return),
+            block(140, vec![], SemanticTerminatorKindV1::Return),
+        ]);
+        let operand_a = tensor_test_allocation();
+        let operand_b = AllocationContractV1 {
+            allocation_origin: 2,
+            noalias_class: 1,
+            writable: false,
+        };
+        let effects = bind_tensor_read_effects_to_call_blocks_v1(
+            &function,
+            &[Some(operand_a), None, Some(operand_b)],
+        )
+        .unwrap();
+
+        assert_eq!(effects.len(), 3);
+        assert_eq!(effects[0].map(|effect| effect.allocation), Some(operand_a));
+        assert_eq!(effects[1], None);
+        assert_eq!(effects[2].map(|effect| effect.allocation), Some(operand_b));
+        assert_ne!(
+            effects[0].unwrap().allocation.allocation_origin,
+            effects[2].unwrap().allocation.allocation_origin
+        );
+        assert!(bind_tensor_read_effects_to_call_blocks_v1(&function, &[Some(operand_a)]).is_err());
+    }
+
+    #[test]
+    fn global_fragment_loads_fail_closed_before_later_mfma_consumption() {
+        let direct_destination =
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(4), vec![], SCALAR_TYPE).unwrap();
+        let function = tensor_load_function(Some(direct_destination));
+        let mut merged_state = authenticated_tensor_load_state();
+        assert!(merge_tensor_states_v1(&mut merged_state, &HashMap::new()).unwrap());
+        let error = transfer_tensor_terminator_v1(
+            &[zero_filled_tensor_load_callable()],
+            &function,
+            0,
+            &mut merged_state,
+            &[None; 5],
+            true,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ProductionRankedProjectionErrorV1::Incomplete(
+                "a typed global fragment load without exact authenticated view, lane, allocation, and result provenance"
+            )
+        ));
+
+        let mut invalid_lane = authenticated_tensor_load_state();
+        invalid_lane.insert(1, ProjectedTensorValueV1::Invalid);
+        assert!(matches!(
+            transfer_tensor_terminator_v1(
+                &[zero_filled_tensor_load_callable()],
+                &function,
+                0,
+                &mut invalid_lane,
+                &[None; 5],
+                false,
+            ),
+            Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a typed global fragment load without exact authenticated view, lane, allocation, and result provenance"
+            ))
+        ));
+    }
+
+    #[test]
+    fn global_fragment_loads_cannot_discard_or_project_their_result() {
+        let function = tensor_load_function(None);
+        assert!(matches!(
+            transfer_tensor_terminator_v1(
+                &[zero_filled_tensor_load_callable()],
+                &function,
+                0,
+                &mut authenticated_tensor_load_state(),
+                &[None; 5],
+                true,
+            ),
+            Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a typed global fragment load without one direct local result"
+            ))
+        ));
+
+        let projected = SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(4),
+            vec![
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), SCALAR_TYPE).unwrap(),
+            ],
+            SCALAR_TYPE,
+        )
+        .unwrap();
+        let function = tensor_load_function(Some(projected));
+        assert!(matches!(
+            transfer_tensor_terminator_v1(
+                &[zero_filled_tensor_load_callable()],
+                &function,
+                0,
+                &mut authenticated_tensor_load_state(),
+                &[None; 5],
+                true,
+            ),
+            Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a typed global fragment load into a projected destination"
+            ))
+        ));
+    }
+
     #[test]
     fn zero_filled_v2_load_is_a_direct_authenticated_operand() {
         let call = tensor_test_call();
@@ -9919,6 +10434,7 @@ mod tests {
                 ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::View(ProjectedMfmaViewV1 {
                     role: SemanticMfmaOperandRoleV1::A,
                     storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                    allocation: tensor_test_allocation(),
                 })),
             ),
             (
@@ -9996,6 +10512,7 @@ mod tests {
                         contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
                         storage_layout: lhs_storage,
                         lane_root: 20,
+                        allocation: tensor_test_allocation(),
                     },
                 )),
             ),
@@ -10006,6 +10523,7 @@ mod tests {
                         contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::B),
                         storage_layout: rhs_storage,
                         lane_root: 20,
+                        allocation: tensor_test_allocation(),
                     },
                 )),
             ),
@@ -10158,6 +10676,7 @@ mod tests {
                 ProjectedMfmaViewV1 {
                     role: SemanticMfmaOperandRoleV1::A,
                     storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                    allocation: tensor_test_allocation(),
                 },
             )),
         )]);
@@ -10196,6 +10715,7 @@ mod tests {
                     contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
                     storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
                     lane_root: 20,
+                    allocation: tensor_test_allocation(),
                 },
             )),
         )]);
@@ -10234,6 +10754,7 @@ mod tests {
             contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
             storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
             lane_root: 20,
+            allocation: tensor_test_allocation(),
         });
         let mut state = HashMap::from([(0, ProjectedTensorValueV1::Known(origin))]);
         let first = SemanticAggregateRvalueV1::new(
@@ -10300,6 +10821,7 @@ mod tests {
             contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
             storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
             lane_root: 20,
+            allocation: tensor_test_allocation(),
         });
         let state = HashMap::from([(0, ProjectedTensorValueV1::Known(origin))]);
         let aggregate = SemanticAggregateRvalueV1::new(
@@ -10487,10 +11009,10 @@ mod tests {
             ],
         );
         let mut state = HashMap::from([(1, tensor_state_origin())]);
-        assert!(
-            transfer_tensor_terminator_v1(&[], &function, 0, &mut state, false)
-                .unwrap()
-                .is_none()
+        assert_eq!(
+            transfer_tensor_terminator_v1(&[], &function, 0, &mut state, &[None; 4], false)
+                .unwrap(),
+            ProjectedTensorTerminatorEffectsV1::default()
         );
         assert_eq!(state[&1], ProjectedTensorValueV1::Invalid);
     }

@@ -23,16 +23,18 @@ pub use canonical_decode::SemanticMirDecodeErrorV1;
 const MAGIC: &[u8] = b"fe2o3.inert-semantic-mir";
 pub const INERT_SEMANTIC_MIR_VERSION_V2: u16 = 2;
 pub const INERT_SEMANTIC_MIR_VERSION_V3: u16 = 3;
+pub const INERT_SEMANTIC_MIR_VERSION_V4: u16 = 4;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
-/// Canonicality is relative to one of these schemas. V2 and V3 bytes for the
+/// Canonicality is relative to one of these schemas. V2, V3, and V4 bytes for the
 /// same semantic model are distinct canonical values and therefore have
 /// distinct semantic identities.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum SemanticMirWireVersionV1 {
     V2,
     V3,
+    V4,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -40,6 +42,7 @@ impl SemanticMirWireVersionV1 {
         match self {
             Self::V2 => INERT_SEMANTIC_MIR_VERSION_V2,
             Self::V3 => INERT_SEMANTIC_MIR_VERSION_V3,
+            Self::V4 => INERT_SEMANTIC_MIR_VERSION_V4,
         }
     }
 
@@ -47,6 +50,7 @@ impl SemanticMirWireVersionV1 {
         match value {
             INERT_SEMANTIC_MIR_VERSION_V2 => Some(Self::V2),
             INERT_SEMANTIC_MIR_VERSION_V3 => Some(Self::V3),
+            INERT_SEMANTIC_MIR_VERSION_V4 => Some(Self::V4),
             _ => None,
         }
     }
@@ -2351,6 +2355,21 @@ pub enum SemanticAbiArgumentRoleV1 {
     Hidden(SemanticAbiHiddenArgumentRoleV1),
 }
 
+/// Source-language ownership retained independently of rustc's physical ABI.
+///
+/// `Unspecified` keeps the general schema constructible for non-production
+/// clients. The production rustc importer must replace it with an exact fact
+/// before kernel verification can use ownership to discharge aliasing.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SemanticSourceArgumentOwnershipV1 {
+    Unspecified,
+    ByValue,
+    SharedBorrow,
+    UniqueBorrow,
+    ExclusiveOwner,
+    RawPointer,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticAbiArgumentV1 {
     role: SemanticAbiArgumentRoleV1,
@@ -2435,6 +2454,7 @@ pub struct SemanticFunctionAbiV1 {
     layout_identity: SemanticLayoutIdentityV1,
     canon_abi: SemanticCanonAbiV1,
     source_signature: SemanticSourceFnSignatureV1,
+    source_argument_ownership: Box<[SemanticSourceArgumentOwnershipV1]>,
     can_unwind: bool,
     fixed_count: u32,
     arguments: Box<[SemanticAbiArgumentV1]>,
@@ -2545,6 +2565,7 @@ impl SemanticFunctionAbiV1 {
         if canonicalize_extern_abi(extern_abi) != Some(canon_abi) {
             return Err(SemanticMirErrorV1::InvalidFunctionAbi);
         }
+        let source_argument_count = source_input_types.len();
         Ok(Self {
             identity,
             layout_identity,
@@ -2555,6 +2576,11 @@ impl SemanticFunctionAbiV1 {
                 inputs: source_input_types.into_boxed_slice(),
                 output: source_output_type,
             },
+            source_argument_ownership: vec![
+                SemanticSourceArgumentOwnershipV1::Unspecified;
+                source_argument_count
+            ]
+            .into_boxed_slice(),
             can_unwind,
             fixed_count,
             arguments: arguments.into_boxed_slice(),
@@ -2608,6 +2634,22 @@ impl SemanticFunctionAbiV1 {
 
     pub fn source_input_types(&self) -> &[SemanticTypeIdV1] {
         &self.source_signature.inputs
+    }
+
+    pub fn source_argument_ownership(&self) -> &[SemanticSourceArgumentOwnershipV1] {
+        &self.source_argument_ownership
+    }
+
+    pub fn with_source_argument_ownership(
+        mut self,
+        ownership: Vec<SemanticSourceArgumentOwnershipV1>,
+    ) -> Result<Self, SemanticMirErrorV1> {
+        enforce_hard(SemanticMirResourceV1::CallArguments, ownership.len())?;
+        if ownership.len() != self.source_signature.inputs.len() {
+            return Err(SemanticMirErrorV1::InvalidFunctionAbi);
+        }
+        self.source_argument_ownership = ownership.into_boxed_slice();
+        Ok(self)
     }
 
     pub const fn source_output_type(&self) -> SemanticTypeIdV1 {
@@ -5496,8 +5538,9 @@ impl InertSemanticMirRequestV1 {
     /// Admits under the least wire schema that can represent this request.
     ///
     /// This is the compatibility admission path: ordinary models select V2,
-    /// while models containing checked arithmetic select V3. Production code
-    /// that requires uniform V3 custody must use [`Self::admit_exact_v3`].
+    /// models containing checked arithmetic select V3, and models retaining
+    /// authenticated source ownership select V4. Production import uses
+    /// [`Self::admit_exact_v4`] so ownership is always identity-bound.
     pub fn admit(
         self,
         limits: SemanticMirLimitsV1,
@@ -5518,14 +5561,23 @@ impl InertSemanticMirRequestV1 {
     /// Admits under the exact closed V3 wire schema, including for requests
     /// that could also be represented by V2.
     ///
-    /// The returned bytes are canonical specifically for V3. This API is the
-    /// production custody boundary; it does not alter automatic [`Self::admit`]
-    /// behavior or V2 encodings.
+    /// The returned bytes are canonical specifically for V3. This API remains
+    /// the compatibility custody boundary for ownership-free V3 models; it
+    /// does not alter automatic [`Self::admit`] behavior or V2 encodings.
     pub fn admit_exact_v3(
         self,
         limits: SemanticMirLimitsV1,
     ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V3, limits)
+    }
+
+    /// Admits under the exact closed V4 wire schema that binds authenticated
+    /// source-argument ownership into canonical identity.
+    pub fn admit_exact_v4(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V4, limits)
     }
 
     fn admit_for_wire_version(
@@ -5534,6 +5586,13 @@ impl InertSemanticMirRequestV1 {
         limits: SemanticMirLimitsV1,
     ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
         validate_request(&self, limits)?;
+        let required = minimum_wire_version(&self);
+        if wire_version < required {
+            return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                requested: wire_version,
+                required,
+            });
+        }
         let canonical = encode_request(&self, wire_version, limits)?;
         let semantic_sha256 = InertSemanticMirSha256V1(Sha256::digest(&canonical).into());
         Ok(AdmittedInertSemanticMirV1 {
@@ -5772,6 +5831,8 @@ fn select_kernel_body_v1(
         .get(destination.edge.target.0 as usize)?;
     if body_function.role != SemanticFunctionRoleV1::InternalHelper
         || body_function.abi.source_input_types() != root_function.abi.source_input_types()
+        || body_function.abi.source_argument_ownership()
+            != root_function.abi.source_argument_ownership()
         || !result_with_unit_ok(request, body_function.abi.source_output_type())
         || destination.place.ty != body_function.abi.source_output_type()
         || !destination.place.projections.is_empty()
@@ -5948,6 +6009,10 @@ pub enum SemanticMirErrorV1 {
     AllocationFailed {
         resource: SemanticMirResourceV1,
     },
+    WireVersionCannotRepresent {
+        requested: SemanticMirWireVersionV1,
+        required: SemanticMirWireVersionV1,
+    },
     InvalidSourceOrigin,
     InvalidTypeLayout,
     InvalidFunctionAbi,
@@ -6046,6 +6111,13 @@ impl fmt::Display for SemanticMirErrorV1 {
             Self::AllocationFailed { resource } => {
                 write!(formatter, "allocation failed while encoding {resource:?}")
             }
+            Self::WireVersionCannotRepresent {
+                requested,
+                required,
+            } => write!(
+                formatter,
+                "semantic MIR wire version {requested:?} cannot represent content requiring {required:?}"
+            ),
             Self::InvalidSourceOrigin => formatter.write_str("source origin is invalid"),
             Self::InvalidTypeLayout => formatter.write_str("type layout is invalid"),
             Self::InvalidFunctionAbi => formatter.write_str("function ABI is invalid"),
@@ -10544,6 +10616,7 @@ fn validate_function_abi_contract(
         ),
     };
     if !target_abi_valid
+        || abi.source_argument_ownership.len() != abi.source_input_types().len()
         || abi.can_unwind
         || (abi.canon_abi == SemanticCanonAbiV1::GpuKernel
             && !matches!(abi.return_value.mode, SemanticAbiPassModeV1::Ignore))
@@ -13911,11 +13984,11 @@ fn encode_request(
     }
     writer.count(request.functions.len())?;
     for function in &request.functions {
-        encode_function(&mut writer, function)?;
+        encode_function(&mut writer, function, wire_version)?;
     }
     writer.count(request.callables.len())?;
     for callable in &request.callables {
-        encode_callable(&mut writer, callable)?;
+        encode_callable(&mut writer, callable, wire_version)?;
     }
     writer.count(request.roots.len())?;
     for root in &request.roots {
@@ -13925,6 +13998,27 @@ fn encode_request(
 }
 
 fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireVersionV1 {
+    let uses_source_ownership = request.functions.iter().any(|function| {
+        function
+            .abi
+            .source_argument_ownership()
+            .iter()
+            .any(|ownership| *ownership != SemanticSourceArgumentOwnershipV1::Unspecified)
+    }) || request.callables.iter().any(|callable| {
+        let binding = match callable {
+            SemanticCallableDeclV1::Defined { .. } => return false,
+            SemanticCallableDeclV1::DeviceFfiImport { binding, .. }
+            | SemanticCallableDeclV1::CompilerIntrinsic { binding, .. } => binding,
+        };
+        binding
+            .abi()
+            .source_argument_ownership()
+            .iter()
+            .any(|ownership| *ownership != SemanticSourceArgumentOwnershipV1::Unspecified)
+    });
+    if uses_source_ownership {
+        return SemanticMirWireVersionV1::V4;
+    }
     let uses_checked_arithmetic = request.functions.iter().any(|function| {
         function.blocks.iter().any(|block| {
             block.statements.iter().any(|statement| {
@@ -14652,6 +14746,7 @@ fn encode_vtable(
 fn encode_function(
     writer: &mut CanonicalWriterV1,
     function: &SemanticFunctionDeclV1,
+    wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
     writer.identity(function.identity.0)?;
     match function.role {
@@ -14679,7 +14774,7 @@ fn encode_function(
     writer.identity(function.generic_type_arguments_identity.0)?;
     writer.identity(function.const_generic_arguments_identity.0)?;
     encode_source(writer, function.source)?;
-    encode_abi(writer, &function.abi)?;
+    encode_abi(writer, &function.abi, wire_version)?;
     writer.count(function.locals.len())?;
     for local in &function.locals {
         writer.identity(local.identity.0)?;
@@ -14713,6 +14808,7 @@ fn encode_function(
 fn encode_callable(
     writer: &mut CanonicalWriterV1,
     callable: &SemanticCallableDeclV1,
+    wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
     match callable {
         SemanticCallableDeclV1::Defined { function } => {
@@ -14721,7 +14817,7 @@ fn encode_callable(
         }
         SemanticCallableDeclV1::DeviceFfiImport { binding, contract } => {
             writer.u8(1)?;
-            encode_non_body_callable_binding(writer, binding)?;
+            encode_non_body_callable_binding(writer, binding, wire_version)?;
             writer.identity(contract.contract_identity.0)?;
             writer.blob(&contract.symbol.0)?;
             match contract.target {
@@ -14740,7 +14836,7 @@ fn encode_callable(
             operation_identity,
         } => {
             writer.u8(2)?;
-            encode_non_body_callable_binding(writer, binding)?;
+            encode_non_body_callable_binding(writer, binding, wire_version)?;
             encode_compiler_intrinsic_operation(writer, *operation)?;
             writer.identity(operation_identity.0)
         }
@@ -14750,6 +14846,7 @@ fn encode_callable(
 fn encode_non_body_callable_binding(
     writer: &mut CanonicalWriterV1,
     binding: &SemanticNonBodyCallableBindingV1,
+    wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
     writer.identity(binding.identity.0)?;
     writer.identity(binding.item_definition_identity.0)?;
@@ -14757,7 +14854,7 @@ fn encode_non_body_callable_binding(
     writer.identity(binding.generic_type_arguments_identity.0)?;
     writer.identity(binding.const_generic_arguments_identity.0)?;
     encode_source(writer, binding.source)?;
-    encode_abi(writer, &binding.abi)
+    encode_abi(writer, &binding.abi, wire_version)
 }
 
 fn encode_compiler_intrinsic_operation(
@@ -15276,6 +15373,7 @@ fn encode_optional_workgroup_dimensions(
 fn encode_abi(
     writer: &mut CanonicalWriterV1,
     abi: &SemanticFunctionAbiV1,
+    wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
     writer.identity(abi.identity.0)?;
     writer.identity(abi.layout_identity.0)?;
@@ -15287,6 +15385,19 @@ fn encode_abi(
     writer.count(abi.source_input_types().len())?;
     for source_type in abi.source_input_types() {
         writer.u32(source_type.0)?;
+    }
+    if wire_version == SemanticMirWireVersionV1::V4 {
+        writer.count(abi.source_argument_ownership.len())?;
+        for ownership in &abi.source_argument_ownership {
+            writer.u8(match ownership {
+                SemanticSourceArgumentOwnershipV1::Unspecified => 0,
+                SemanticSourceArgumentOwnershipV1::ByValue => 1,
+                SemanticSourceArgumentOwnershipV1::SharedBorrow => 2,
+                SemanticSourceArgumentOwnershipV1::UniqueBorrow => 3,
+                SemanticSourceArgumentOwnershipV1::ExclusiveOwner => 4,
+                SemanticSourceArgumentOwnershipV1::RawPointer => 5,
+            })?;
+        }
     }
     writer.u32(abi.source_output_type().0)?;
     writer.count(abi.arguments.len())?;

@@ -1124,6 +1124,25 @@ fn known_legacy_versions_cannot_be_spliced_into_production_wire() {
 }
 
 #[test]
+fn semantic_mir_v4_cannot_be_claimed_by_the_legacy_kernel_ir_v6_lineage() {
+    let mut canonical = sample_canonical();
+    let offsets = wire_offsets(&canonical);
+    canonical[offsets.semantic_version] = 4;
+
+    assert!(matches!(
+        InertCanonicalMirToKirLineageV4::decode_canonical(
+            &canonical,
+            LineageDecodeLimitsV4::default(),
+        ),
+        Err(LineageDecodeErrorV4::InvalidTag {
+            context: "semantic MIR canonical wire version",
+            value: 4,
+            ..
+        })
+    ));
+}
+
+#[test]
 fn model_rejects_trailing_operations_and_invalid_synthetic_rules() {
     let trailing = BlockRecordV4::semantic(0, 2, 0, vec![1], 0);
     assert!(matches!(

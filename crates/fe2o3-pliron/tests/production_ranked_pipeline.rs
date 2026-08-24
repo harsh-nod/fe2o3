@@ -317,6 +317,66 @@ fn recipe_rejects_noalias_class_without_authenticated_origin() {
 }
 
 #[test]
+fn production_allocation_read_effect_reaches_the_full_pipeline() {
+    let kernel = ProductionRankedKernelV1::new(
+        "allocation_read",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::ExecutionLayout {
+                    grid_identity: 91,
+                    global_extents: [64, 1, 1],
+                    workgroup_extents: [64, 1, 1],
+                    subgroup_size: 64,
+                    full_physical_workgroups: true,
+                },
+                ProductionRankedOperationV1::AllocationEffect {
+                    kind: AccessKindAttr::Read,
+                    memory_space: MemorySpaceAttr::Global,
+                    allocation_origin: 91,
+                    noalias_class: 92,
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .expect("supported allocation read effect");
+    let _ = compile_ranked_kernel_for_lowering_v1(
+        construction(kernel),
+        ProductionSessionLimitsV1::default(),
+    )
+    .expect("allocation read effect reaches production lowering");
+}
+
+#[test]
+fn production_allocation_effect_rejects_unchecked_memory_semantics() {
+    for (kind, memory_space) in [
+        (AccessKindAttr::Write, MemorySpaceAttr::Global),
+        (AccessKindAttr::Read, MemorySpaceAttr::Workgroup),
+        (AccessKindAttr::Read, MemorySpaceAttr::Private),
+    ] {
+        let error = ProductionRankedKernelV1::new(
+            "unsupported_allocation_effect",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                vec![ProductionRankedOperationV1::AllocationEffect {
+                    kind,
+                    memory_space,
+                    allocation_origin: 91,
+                    noalias_class: 92,
+                }],
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            ProductionRankedKernelErrorV1::InvalidAllocationContract
+        );
+    }
+}
+
+#[test]
 fn direct_and_independently_transformed_tensor_layouts_reach_production_lowering() {
     for contract in [
         TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64(),
