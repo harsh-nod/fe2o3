@@ -39,12 +39,12 @@ pub(super) fn claim_call(
             ),
         ));
     }
-    if !lowerer.is_exact_general_v3_alpha_zeta_context() {
+    if !lowerer.is_authenticated_general_v3_scalar_context() {
         return HandlerClaim::Reject(diagnostic(
             TranslationDiagnosticCode::UnsupportedCall,
             call.location.clone(),
             format!(
-                "session-recognized AMDGPU operation `{}` requires an exact General V3 alpha/zeta kernel context",
+                "session-recognized AMDGPU operation `{}` requires an authenticated General V3 scalar kernel context",
                 call.callee.identity()
             ),
         ));
@@ -232,13 +232,16 @@ fn assembly_source_identity(
     call: SessionRecognizedSemanticCall<'_>,
     mnemonic: &str,
 ) -> Result<AssemblySourceIdentity, TranslationDiagnostic> {
-    let authenticated = lowerer.function.frontend_contract.as_ref().ok_or_else(|| {
-        diagnostic(
-            TranslationDiagnosticCode::UnsupportedCall,
-            call.location.clone(),
-            "typed AMDGPU inline operation requires an authenticated frontend contract",
-        )
-    })?;
+    let authenticated = lowerer
+        .kernel_context
+        .and_then(|context| context.frontend_contract.as_ref())
+        .ok_or_else(|| {
+            diagnostic(
+                TranslationDiagnosticCode::UnsupportedCall,
+                call.location.clone(),
+                "typed AMDGPU inline operation requires an authenticated frontend contract",
+            )
+        })?;
     let source = call.location.source.as_deref().ok_or_else(|| {
         diagnostic(
             TranslationDiagnosticCode::UnsupportedCall,

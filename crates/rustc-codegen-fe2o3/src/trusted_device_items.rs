@@ -41,8 +41,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0xaf, 0xf6, 0xf0, 0xc1, 0xa5, 0x26, 0x5b, 0x96, 0xea, 0x47, 0x93, 0x5d, 0xbc, 0x2b, 0xff, 0xca,
-    0x2a, 0x76, 0xbd, 0x23, 0x56, 0x6e, 0x90, 0x0b, 0xde, 0x42, 0x2f, 0x68, 0xfd, 0x35, 0x4a, 0x0b,
+    0x1e, 0x99, 0xc1, 0x81, 0x14, 0xb0, 0xad, 0x38, 0x37, 0x68, 0x91, 0x51, 0x4d, 0xf8, 0x71, 0xc7,
+    0x08, 0x97, 0x2b, 0xbe, 0x4f, 0x80, 0xc6, 0xbf, 0xcb, 0xe3, 0xfa, 0xef, 0x92, 0x8f, 0x77, 0xbf,
 ];
 #[allow(
     dead_code,
@@ -79,8 +79,8 @@ const REVIEWED_GENERAL_GEMM_PROOF_DEFINITION_SOURCE_V1: [u8; 32] = [
 // Portable semantic identity of the reviewed `fe2o3_device::DisjointSlice`
 // definition and reference source closure used by the store signatures.
 const REVIEWED_GENERAL_GEMM_DISJOINT_SLICE_DEPENDENCY_V1: [u8; 32] = [
-    0xd7, 0x0a, 0x11, 0x12, 0x6f, 0x62, 0x19, 0xbf, 0x7b, 0xd1, 0x97, 0x96, 0x65, 0xfd, 0xc6, 0xc2,
-    0x11, 0x91, 0x6f, 0xed, 0x64, 0xc3, 0xcb, 0x67, 0xf5, 0xb7, 0x89, 0x78, 0xbb, 0x19, 0xea, 0x33,
+    0x82, 0x7f, 0xf2, 0x0c, 0xd8, 0xbf, 0x81, 0xa6, 0x8d, 0x6d, 0x42, 0x69, 0x04, 0x79, 0xc3, 0x41,
+    0xed, 0x4f, 0x4c, 0x0b, 0x0c, 0x79, 0x64, 0x25, 0x3e, 0x6d, 0x38, 0x7e, 0xaf, 0x37, 0xd7, 0x98,
 ];
 
 #[cfg(test)]
@@ -433,6 +433,7 @@ pub(crate) enum TrustedGeneralGemmOperationV1 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TrustedDeviceItem {
+    KernelError,
     DisjointSlice,
     DeviceGlobalMutPtr,
     WorkgroupLdsScope,
@@ -530,6 +531,11 @@ pub(crate) enum TrustedDeviceItem {
 }
 
 const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
+    (
+        TrustedDeviceItem::KernelError,
+        "fe2o3_device_kernel_error_v1",
+        "fe2o3_device::KernelError",
+    ),
     (
         TrustedDeviceItem::DisjointSlice,
         "fe2o3_device_disjoint_slice",
@@ -1432,6 +1438,7 @@ fn validate_reviewed_fe2o3_device_provider_definition_v1(
 }
 fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option<&'static str> {
     match item {
+        TrustedDeviceItem::KernelError => Some("fe2o3_device::kernel_result::KernelError"),
         TrustedDeviceItem::DisjointSlice => Some("fe2o3_device::DisjointSlice"),
         TrustedDeviceItem::ThreadIndex => Some("fe2o3_device::thread::ThreadIndex"),
         TrustedDeviceItem::DisjointIndex => Some("fe2o3_device::thread::DisjointIndex"),
@@ -3484,6 +3491,7 @@ mod tests {
     #[test]
     fn semantic_registry_is_complete_and_unique() {
         let items = [
+            TrustedDeviceItem::KernelError,
             TrustedDeviceItem::DisjointSlice,
             TrustedDeviceItem::DeviceGlobalMutPtr,
             TrustedDeviceItem::WorkgroupLdsScope,

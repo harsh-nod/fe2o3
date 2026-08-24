@@ -1459,7 +1459,7 @@ fn rust_reference_pointee_v1(ty: Ty<'_>) -> Option<Ty<'_>> {
     }
 }
 
-fn rust_option_payload_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
+pub(crate) fn rust_option_payload_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
     let TyKind::Adt(definition, arguments) = *ty.kind() else {
         return None;
     };
@@ -1514,7 +1514,7 @@ fn rust_disjoint_slice_v1<'tcx>(
     ))
 }
 
-fn rust_index_witness_space_v1<'tcx>(
+pub(crate) fn rust_index_witness_space_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: Ty<'tcx>,
     item: TrustedDeviceItem,
@@ -1642,7 +1642,7 @@ fn rust_disjoint_block_v1<'tcx>(
     ))
 }
 
-fn rust_disjoint_tile_2d_v1<'tcx>(
+pub(crate) fn rust_disjoint_tile_2d_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: Ty<'tcx>,
 ) -> Option<(SemanticDisjointIndexSpaceV1, u64, u64, u64, u64)> {

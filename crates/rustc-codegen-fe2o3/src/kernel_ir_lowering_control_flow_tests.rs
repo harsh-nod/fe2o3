@@ -102,7 +102,8 @@ fn mutable_local_read_before_entry_definition_fails_closed() {
 #[test]
 fn control_flow_block_budget_fails_closed() {
     let mut fixture = loop_fixture();
-    fixture.functions[0].blocks = (0..129)
+    let maximum = fe2o3_rustc_front::MAX_BLOCKS_PER_FUNCTION_V1;
+    fixture.functions[0].blocks = (0..=maximum)
         .map(|index| MirBlock {
             index,
             statements: Vec::new(),
@@ -113,7 +114,9 @@ fn control_flow_block_budget_fails_closed() {
     let error = translate_and_verify_for_target(&fixture, &AmdGpuTarget::new("gfx942"))
         .expect_err("oversized CFG must fail");
     assert!(
-        error.to_string().contains("at most 128 MIR blocks"),
+        error
+            .to_string()
+            .contains(&format!("at most {maximum} MIR blocks")),
         "{error}"
     );
 }
@@ -162,6 +165,33 @@ fn unauthenticated_enum_aggregate_remains_rejected() {
             .contains("unsupported structured MIR rvalue"),
         "{error}"
     );
+}
+
+#[test]
+fn exact_f32_accumulator_fragment_is_promoted_as_four_ordered_values() {
+    let function = fragment_plan_fixture();
+    let plan = control_flow_ssa::ControlFlowSsaPlan::analyze(&function, true)
+        .expect("exact accumulator loop promotion");
+    assert_eq!(
+        plan.kind(1),
+        Some(control_flow_ssa::PromotedLocalKind::F32AccumulatorFragment)
+    );
+    assert_eq!(plan.types(1), Some([Type::F32; 4].as_slice()));
+    assert_eq!(plan.live_in(1), [1]);
+
+    let mut wrong_identity = function.clone();
+    wrong_identity.locals[1].ty.shape = MirTypeShape::Adt {
+        identity: "tests::LookalikeAccumulator".to_owned(),
+    };
+    let plan = control_flow_ssa::ControlFlowSsaPlan::analyze(&wrong_identity, true)
+        .expect("lookalike remains outside aggregate promotion");
+    assert_eq!(plan.kind(1), None);
+
+    let mut wrong_rvalue = function;
+    wrong_rvalue.blocks[2].statements[0].rvalue = Some(MirRvalueKind::Aggregate);
+    let plan = control_flow_ssa::ControlFlowSsaPlan::analyze(&wrong_rvalue, true)
+        .expect("unsupported reassignment remains outside aggregate promotion");
+    assert_eq!(plan.kind(1), None);
 }
 
 fn loop_fixture() -> MirModule {
@@ -303,6 +333,53 @@ fn enum_fixture() -> MirModule {
                 },
             ],
         }],
+    }
+}
+
+fn fragment_plan_fixture() -> MirFunction {
+    let fragment = MirTypeShape::Adt {
+        identity: TrustedDeviceItem::F32AccumulatorFragment
+            .canonical_path()
+            .to_owned(),
+    };
+    MirFunction {
+        semantic_instance: None,
+        export_name: "fragment_loop".to_owned(),
+        rust_path: "tests::fragment_loop".to_owned(),
+        kind: MirFunctionKind::KernelEntry,
+        typed_profile: None,
+        frontend_contract: None,
+        matrix_frontend_abi: None,
+        arg_count: 1,
+        local_count: 4,
+        locals: vec![
+            local(0, MirLocalRole::Return, MirTypeShape::Unit),
+            local(1, MirLocalRole::Temp, fragment.clone()),
+            local(2, MirLocalRole::Arg, fragment.clone()),
+            local(3, MirLocalRole::Temp, fragment),
+        ],
+        blocks: vec![
+            MirBlock {
+                index: 0,
+                statements: Vec::new(),
+                terminator: Some(terminator(MirTerminatorKind::Call {
+                    callee: None,
+                    target: Some(1),
+                    destination: Some(place(1)),
+                    operands: vec![operand(2)],
+                })),
+            },
+            MirBlock {
+                index: 1,
+                statements: vec![assign(0, 3, vec![operand(1)], MirRvalueKind::Use)],
+                terminator: Some(terminator(MirTerminatorKind::Goto { target: 2 })),
+            },
+            MirBlock {
+                index: 2,
+                statements: vec![assign(0, 1, vec![operand(2)], MirRvalueKind::Use)],
+                terminator: Some(terminator(MirTerminatorKind::Goto { target: 1 })),
+            },
+        ],
     }
 }
 

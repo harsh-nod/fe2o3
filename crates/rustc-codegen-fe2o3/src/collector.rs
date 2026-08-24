@@ -39,6 +39,7 @@ mod production_importer_v1;
 pub(crate) use production_importer_v1::{
     AuthenticatedRustcIdentityInventoryV3, AuthenticatedRustcPreflightPlanV3,
     ProductionSemanticImportErrorV1, construct_production_semantic_mir_v1,
+    rust_disjoint_tile_2d_v1, rust_index_witness_space_v1, rust_option_payload_v1,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

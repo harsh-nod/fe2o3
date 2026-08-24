@@ -115,6 +115,7 @@ struct WorkerV2MissingEnvelope(PathBuf);
 impl WorkerV2MissingEnvelope {
     fn new(workspace: &Path) -> Self {
         let worker = std::env::current_exe().expect("current test executable");
+        let working_directory = workspace.join("examples/tiled_gemm_general_v1");
         let bytes = std::fs::read(&worker).expect("read current test executable");
         let digest = DigestAlgorithm::Sha256
             .calculate(&bytes)
@@ -144,8 +145,8 @@ impl WorkerV2MissingEnvelope {
             "providers": [],
             "units": [{
                 "crate_name": "fe2o3_tiled_gemm_general_v1",
-                "source": "examples/tiled_gemm_general_v1/src/lib.rs",
-                "working_directory": workspace
+                "source": "src/lib.rs",
+                "working_directory": working_directory
             }],
             "worker": {
                 "byte_len": bytes.len(),
@@ -369,7 +370,7 @@ fn safe_general_gemm_mir_reaches_kir_and_exact_semantic_mutations_are_diagnostic
         positive_stderr.contains("mir.load")
             && positive_stderr.contains("local1.deref")
             && positive_stderr.contains("local2.deref")
-            && imported_mir < verified_kir
+            && imported_mir < missing_envelope
             && verified_kir < missing_envelope,
         "checked A/B slice loads did not cross semantic MIR import and verified KIR construction:\n{positive_stderr}"
     );

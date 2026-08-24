@@ -649,7 +649,7 @@ fn summarize_portable_mir(
                 if statement.kind == MirStatementKind::Assign {
                     add_count(&mut summary.assignment_count, 1, "assignment")?;
                 }
-                if statement.rvalue == Some(MirRvalueKind::Repeat) {
+                if matches!(statement.rvalue, Some(MirRvalueKind::Repeat { .. })) {
                     add_count(&mut summary.repeat_count, 1, "repeat")?;
                 }
                 if let Some(MirRvalueKind::Binary(operation)) = statement.rvalue {
