@@ -81,10 +81,11 @@ fn rejects_malformed_loop_noninjective_output_and_index_truncation() {
             value: ValueId(19),
             to: Type::INDEX,
         };
-    assert_eq!(
+    assert!(matches!(
         verify_scalar_gemm_v1_module(&truncated, requirements()),
-        Err(ScalarGemmV1Error::NonCanonicalKernelIr)
-    );
+        Err(ScalarGemmV1Error::InvalidKernelIr(errors))
+            if errors.contains(DiagnosticCode::InvalidCast)
+    ));
 }
 
 #[test]

@@ -5,9 +5,9 @@ use std::fmt;
 use crate::{
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, AssemblyConstraint, AssemblyEffect,
     AssemblyOperandKind, AssemblyOption, Atomic, AtomicKind, Barrier, BasicBlock, BinaryOp,
-    BlockId, CheckedBinaryOperator, ComparePredicate, ControlFlowError, Fence, FloatOperation,
-    Function, FunctionId, FunctionRole, IndexedControlFlow, InlineAssembly, Kernel, KernelId,
-    LaunchExtent, MatrixOperation, MatrixOperationKind, MatrixVerificationIssueKind,
+    BlockId, CastKind, CheckedBinaryOperator, ComparePredicate, ControlFlowError, Fence,
+    FloatOperation, Function, FunctionId, FunctionRole, IndexedControlFlow, InlineAssembly, Kernel,
+    KernelId, LaunchExtent, MatrixOperation, MatrixOperationKind, MatrixVerificationIssueKind,
     MemoryOrdering, Module, ModuleId, Operation, OperationKind, ScalarType,
     SemanticOperationIssueKind, SemanticOperationVerificationContext, SynchronizationScope,
     TargetCapability, Terminator, Type, UnaryOp, ValueId, WaveOperation, WaveOperationKind,
@@ -44,6 +44,7 @@ pub enum DiagnosticCode {
     ResultArity,
     TypeMismatch,
     InvalidOperandType,
+    InvalidCast,
     InvalidSemanticOperation,
     InvalidMemoryAccess,
     InvalidAlignment,
@@ -917,16 +918,27 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 lhs,
                 rhs,
             } => self.verify_compare(operation, *predicate, *lhs, *rhs, location),
-            OperationKind::Cast { value, to, .. } => {
+            OperationKind::Cast { kind, value, to } => {
                 let Some(from) = self.ty(*value).cloned() else {
                     return;
                 };
-                if from.as_scalar().is_none() || to.as_scalar().is_none() {
-                    self.emit(
-                        location.clone(),
-                        DiagnosticCode::InvalidOperandType,
-                        format!("casts require scalar types, found {from:?} to {to:?}"),
-                    );
+                match (from.as_scalar(), to.as_scalar()) {
+                    (Some(from_scalar), Some(to_scalar)) => {
+                        if !valid_scalar_cast(*kind, from_scalar, to_scalar) {
+                            self.emit(
+                                location.clone(),
+                                DiagnosticCode::InvalidCast,
+                                format!("invalid {kind:?} cast from {from:?} to {to:?}"),
+                            );
+                        }
+                    }
+                    _ => {
+                        self.emit(
+                            location.clone(),
+                            DiagnosticCode::InvalidOperandType,
+                            format!("casts require scalar types, found {from:?} to {to:?}"),
+                        );
+                    }
                 }
                 self.expect_results(operation, std::slice::from_ref(to), location);
             }
@@ -2155,6 +2167,45 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
             code,
             message: message.into(),
         });
+    }
+}
+
+fn valid_scalar_cast(kind: CastKind, from: ScalarType, to: ScalarType) -> bool {
+    match (kind, from, to) {
+        // Hardware identifiers are u32, while pointer arithmetic uses Index.
+        (CastKind::ZeroExtend, ScalarType::U32, ScalarType::Index) => return true,
+        // Production AMDGPU kernels represent Rust usize as u64. Keeping this
+        // bridge explicit prevents target-sized Index from acquiring a guessed width.
+        (CastKind::Bitcast, ScalarType::U64, ScalarType::Index)
+        | (CastKind::Bitcast, ScalarType::Index, ScalarType::U64) => return true,
+        _ if from == ScalarType::Index || to == ScalarType::Index => return false,
+        _ => {}
+    }
+
+    let Some(from_width) = from.bit_width() else {
+        return false;
+    };
+    let Some(to_width) = to.bit_width() else {
+        return false;
+    };
+
+    match kind {
+        CastKind::Truncate => from.is_integer() && to.is_integer() && from_width > to_width,
+        CastKind::ZeroExtend => {
+            (from == ScalarType::Bool || (from.is_integer() && !from.is_signed_integer()))
+                && to.is_integer()
+                && from_width < to_width
+        }
+        CastKind::SignExtend => {
+            from.is_signed_integer() && to.is_integer() && from_width < to_width
+        }
+        CastKind::FloatExtend => from.is_float() && to.is_float() && from_width < to_width,
+        CastKind::FloatTruncate => from.is_float() && to.is_float() && from_width > to_width,
+        CastKind::IntegerToFloat => from.is_integer() && to.is_float(),
+        CastKind::FloatToInteger => from.is_float() && to.is_integer(),
+        CastKind::Bitcast => {
+            from.is_numeric() && to.is_numeric() && from != to && from_width == to_width
+        }
     }
 }
 

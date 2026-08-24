@@ -1554,13 +1554,28 @@ pub enum ComparePredicate {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum CastKind {
+    /// Discard high bits from an integer value into a strictly narrower integer type.
     Truncate,
+    /// Widen `Bool` or an unsigned integer by filling high bits with zero.
+    ///
+    /// The only target-sized conversion in this class is `U32 -> Index`, used to
+    /// promote hardware lane identifiers into the indexing domain.
     ZeroExtend,
+    /// Widen a signed integer by replicating its sign bit.
     SignExtend,
+    /// Convert a floating-point value to a strictly wider floating-point format.
     FloatExtend,
+    /// Convert a floating-point value to a strictly narrower floating-point format.
     FloatTruncate,
+    /// Numerically convert an integer value to a floating-point value.
     IntegerToFloat,
+    /// Numerically convert a floating-point value to an integer value.
     FloatToInteger,
+    /// Reinterpret a numeric value as a distinct numeric type of the same width.
+    ///
+    /// `Index` has target-sized width and therefore has no general bitcast rule.
+    /// Kernel IR explicitly admits only `U64 <-> Index`, which is the production
+    /// compiler's 64-bit Rust `usize` representation bridge.
     Bitcast,
 }
 
