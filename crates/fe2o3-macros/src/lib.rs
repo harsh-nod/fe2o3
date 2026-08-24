@@ -1423,6 +1423,10 @@ fn expand_general_typed_kernel_with_imports(
     let typed_module = quote! {
         #[cfg(not(target_arch = "amdgpu"))]
         pub mod #module_ident {
+            extern crate alloc as __fe2o3_kernel_alloc;
+
+            use __fe2o3_kernel_alloc::vec;
+
             unsafe extern "C" {
                 fn #semantic_witness_pointer_ident() -> *const u8;
                 fn #semantic_witness_length_ident() -> usize;
@@ -5756,6 +5760,8 @@ mod tests {
 
             let expansion = expansion.to_string();
             assert!(expansion.contains(&format!("pub mod {name}_gpu")));
+            assert!(expansion.contains("extern crate alloc as __fe2o3_kernel_alloc"));
+            assert!(expansion.contains("use __fe2o3_kernel_alloc :: vec"));
             assert!(expansion.contains(&format!(
                 "pub type Marker = super :: __fe2o3_kernel_marker_{name}"
             )));
