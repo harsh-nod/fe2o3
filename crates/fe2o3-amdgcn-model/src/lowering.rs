@@ -5802,6 +5802,7 @@ impl<'a> FunctionLowerer<'a> {
         }
         writeln!(output).unwrap();
         let float_requirements = FloatRequirements::collect(std::iter::once(self));
+        let diagnostic_requirements = DiagnosticRequirements::collect(std::iter::once(self));
         let has_workgroup_barrier = self.has_workgroup_barrier();
         let has_matrix_lds = self.has_matrix_kind(|kind| {
             matches!(
@@ -5893,6 +5894,7 @@ impl<'a> FunctionLowerer<'a> {
             )
             .unwrap();
         }
+        emit_diagnostic_declarations(&mut output, &diagnostic_requirements);
         emit_float_support_declarations(&mut output, &float_requirements);
         writeln!(output).unwrap();
 

@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use fe2o3_amdgcn_model::{
     LoweringDiagnosticCode, lower_compiler_module_to_gfx942_llvm_ir,
-    lower_compiler_module_to_llvm_ir,
+    lower_compiler_module_to_llvm_ir, lower_kernel_to_gfx942_llvm_ir,
 };
 use fe2o3_kernel_ir::*;
 
@@ -56,7 +56,7 @@ fn diagnostic_module() -> Module {
     for operation in &operations[1..] {
         block.operations.push(operation.operation(None));
     }
-    block.terminator = Some(Terminator::Return { values: Vec::new() });
+    block.terminator = Some(Terminator::Unreachable);
 
     let function = Function::kernel_entry(
         "diagnostic_impl",
@@ -129,6 +129,17 @@ fn gfx942_emits_bounded_nonconvergent_diagnostic_ir() {
     assert!(llvm.contains("call void @llvm.debugtrap()"));
     assert!(!llvm.contains("convergent"));
     assert!(!llvm.contains("__fe2o3_ir_amdgpu_diagnostics"));
+}
+
+#[test]
+fn single_kernel_lowering_declares_trap_and_terminates_without_fallthrough() {
+    let module = diagnostic_module();
+    let llvm = lower_kernel_to_gfx942_llvm_ir(&module, &module.kernels[0].id).unwrap();
+    assert_eq!(llvm.matches("declare void @llvm.trap()").count(), 1);
+    assert_eq!(llvm.matches("call void @llvm.trap()").count(), 2);
+    assert!(llvm.contains("call void @llvm.trap()\n  unreachable"));
+    assert!(!llvm.contains("call void @llvm.trap()\n  ret"));
+    assert!(!llvm.contains("call void @llvm.trap()\n  br"));
 }
 
 #[test]

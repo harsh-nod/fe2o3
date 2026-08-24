@@ -757,6 +757,22 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                     .clone()
                     .at_block(block.id)
                     .at_operation(operation_index);
+                if matches!(
+                    &operation.kind,
+                    OperationKind::Call { callee, arguments }
+                        if matches!(
+                            AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments),
+                            Some(AmdGpuDiagnosticOperation::Trap)
+                        )
+                ) && (operation_index + 1 != block.operations.len()
+                    || !matches!(block.terminator, Some(Terminator::Unreachable)))
+                {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidAmdGpuDiagnosticOperation,
+                        "AMDGPU trap must be the final operation of a block terminated by unreachable",
+                    );
+                }
                 for operand in operation.kind.operands() {
                     self.verify_use(operand, block.id, Some(operation_index), location.clone());
                 }

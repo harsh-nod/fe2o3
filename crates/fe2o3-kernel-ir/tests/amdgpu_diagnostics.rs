@@ -14,9 +14,14 @@ fn module_with_operation(parameters: Vec<Type>, diagnostic: AmdGpuDiagnosticOper
         .result_type()
         .map(|_| ValueId(parameters.len() as u32));
     let mut block = BasicBlock::new(BlockId(0));
+    let is_trap = matches!(diagnostic, AmdGpuDiagnosticOperation::Trap);
     block.operations.push(diagnostic.operation(result));
-    block.terminator = Some(Terminator::Return {
-        values: result.into_iter().collect(),
+    block.terminator = Some(if is_trap {
+        Terminator::Unreachable
+    } else {
+        Terminator::Return {
+            values: result.into_iter().collect(),
+        }
     });
 
     let declaration = diagnostic.declaration();
@@ -135,6 +140,31 @@ fn reserved_diagnostic_calls_reject_arity_type_and_declaration_mutation() {
     mutated_declaration.functions[1].signature.results.clear();
     assert!(
         verify_module(&mutated_declaration)
+            .unwrap_err()
+            .contains(DiagnosticCode::InvalidAmdGpuDiagnosticOperation)
+    );
+}
+
+#[test]
+fn trap_rejects_fallthrough_and_nonterminal_placement() {
+    let mut fallthrough = module_with_operation(Vec::new(), AmdGpuDiagnosticOperation::Trap);
+    fallthrough.functions[0].body.as_mut().unwrap().blocks[0].terminator =
+        Some(Terminator::Return { values: vec![] });
+    assert!(
+        verify_module(&fallthrough)
+            .unwrap_err()
+            .contains(DiagnosticCode::InvalidAmdGpuDiagnosticOperation)
+    );
+
+    let mut nonterminal = module_with_operation(Vec::new(), AmdGpuDiagnosticOperation::Trap);
+    nonterminal.functions[0].body.as_mut().unwrap().blocks[0]
+        .operations
+        .push(Operation::effect_free(
+            ValueDef::new(ValueId(0), Type::BOOL),
+            OperationKind::Constant(Constant::Bool(false)),
+        ));
+    assert!(
+        verify_module(&nonterminal)
             .unwrap_err()
             .contains(DiagnosticCode::InvalidAmdGpuDiagnosticOperation)
     );

@@ -505,7 +505,8 @@ fn unsupported_widths_and_calls_are_reported_as_incomplete() {
 #[test]
 fn registered_diagnostic_intrinsics_have_a_complete_empty_effect_summary() {
     let trap = AmdGpuDiagnosticOperation::Trap;
-    let function = function(vec![], vec![trap.operation(None)]);
+    let mut function = function(vec![], vec![trap.operation(None)]);
+    function.body.as_mut().unwrap().blocks[0].terminator = Some(Terminator::Unreachable);
     let function_id = function.id.clone();
     let module = module_with_functions(vec![function, trap.declaration()]);
     let report =

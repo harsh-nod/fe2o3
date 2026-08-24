@@ -761,14 +761,6 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         entry_operations,
         projected_blocks,
     )?;
-    if blocks
-        .iter()
-        .any(|block| matches!(block.terminator(), ProductionRankedTerminatorV1::Trap))
-    {
-        incomplete.get_or_insert(
-            "target lowering for the ranked kernel.trap terminator is not authenticated",
-        );
-    }
     let ranked_ir = format_ranked_cfg(function_name(root_function)?, &blocks)?;
 
     let kernel = ProductionRankedKernelV1::new(

@@ -143,6 +143,7 @@ fn lower_diagnostic_operation(
     block: &mut BasicBlock,
     operation: TrustedAmdGpuDiagnosticOperation,
 ) -> Result<Terminator, TranslationDiagnostic> {
+    let terminates = matches!(operation, TrustedAmdGpuDiagnosticOperation::Trap);
     let arity = diagnostic_arity(operation);
     if call.operands.len() != arity {
         return Err(lowerer.call_arity(
@@ -197,7 +198,11 @@ fn lower_diagnostic_operation(
         )?;
         block.operations.push(diagnostic.operation(None));
     }
-    branch(lowerer, call)
+    if terminates {
+        Ok(Terminator::Unreachable)
+    } else {
+        branch(lowerer, call)
+    }
 }
 
 fn lower_u32_operands(

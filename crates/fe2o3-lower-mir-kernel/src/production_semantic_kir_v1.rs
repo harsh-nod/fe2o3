@@ -318,9 +318,8 @@ impl SemanticKirCorrespondenceV1 {
         &self,
         semantic_owner: &ProductionSemanticMirOwnerV1,
         module: &Module,
-        discharge_ranked_bounds: bool,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
-        validate_semantic_kir_correspondence(semantic_owner, module, self, discharge_ranked_bounds)
+        validate_semantic_kir_correspondence(semantic_owner, module, self)
     }
 }
 
@@ -597,7 +596,7 @@ impl ProductionSemanticKirOwnerV1 {
         semantic
             .verify_equivalence()
             .map_err(ProductionSemanticKirErrorV1::SemanticOwner)?;
-        let (module, correspondence) = lower_module(&semantic, limits, false)?;
+        let (module, correspondence) = lower_module(&semantic, limits)?;
         let canonical_kernel_ir_v7 = VerifiedCanonicalKernelIrV7::from_module(module.clone())
             .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV7)?;
         let owner = Self {
@@ -637,7 +636,7 @@ impl ProductionSemanticKirOwnerV1 {
                 "ranked proof custody contains a rejected mandatory kernel check",
             ));
         }
-        let (module, correspondence) = lower_module(&semantic, limits, true)?;
+        let (module, correspondence) = lower_module(&semantic, limits)?;
         let canonical_kernel_ir_v7 = VerifiedCanonicalKernelIrV7::from_module(module.clone())
             .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV7)?;
         let owner = Self {
@@ -668,7 +667,7 @@ impl ProductionSemanticKirOwnerV1 {
             .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV7)?;
         verify_module(&self.module).map_err(ProductionSemanticKirErrorV1::InvalidKernelIr)?;
         let (rederived_module, rederived_correspondence) =
-            lower_module(&self.semantic, self.limits, self.discharge_ranked_bounds)?;
+            lower_module(&self.semantic, self.limits)?;
         let rederived_canonical_kernel_ir_v7 =
             VerifiedCanonicalKernelIrV7::from_module(rederived_module.clone())
                 .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV7)?;
@@ -998,7 +997,6 @@ fn validate_semantic_kir_correspondence(
     owner: &ProductionSemanticMirOwnerV1,
     module: &Module,
     correspondence: &SemanticKirCorrespondenceV1,
-    discharge_ranked_bounds: bool,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     let semantic = owner.semantic();
     if correspondence.semantic_sha256 != *semantic.semantic_sha256().as_bytes()
@@ -1013,9 +1011,8 @@ fn validate_semantic_kir_correspondence(
         .functions()
         .get(selection.body().index() as usize)
         .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-    let synthetic_rule =
-        semantic_requires_runtime_assert_failure(function, discharge_ranked_bounds)
-            .then_some(SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap);
+    let synthetic_rule = semantic_requires_runtime_assert_failure(function)
+        .then_some(SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap);
     let order = semantic_cfg_preorder(function)
         .map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
     let expected = order
@@ -1208,18 +1205,11 @@ fn measured_operation_span(
     ))
 }
 
-fn semantic_requires_runtime_assert_failure(
-    function: &SemanticFunctionDeclV1,
-    discharge_ranked_bounds: bool,
-) -> bool {
+fn semantic_requires_runtime_assert_failure(function: &SemanticFunctionDeclV1) -> bool {
     function
         .blocks()
         .iter()
         .any(|block| match block.terminator().kind() {
-            SemanticTerminatorKindV1::Assert {
-                message: SemanticAssertMessageV1::BoundsCheck { .. },
-                ..
-            } if discharge_ranked_bounds => false,
             SemanticTerminatorKindV1::Assert { .. }
             | SemanticTerminatorKindV1::Abort
             | SemanticTerminatorKindV1::UnwindTerminate => true,
@@ -1230,7 +1220,6 @@ fn semantic_requires_runtime_assert_failure(
 fn lower_module(
     owner: &ProductionSemanticMirOwnerV1,
     limits: ProductionSemanticKirLimitsV1,
-    discharge_ranked_bounds: bool,
 ) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
     let semantic = owner.semantic();
     enforce_limit(
@@ -1271,8 +1260,7 @@ fn lower_module(
     let symbol = std::str::from_utf8(entry.export_symbol().as_bytes())
         .map_err(|_| unsupported(0, None, None, "kernel export symbol is not UTF-8"))?;
 
-    let has_runtime_assert =
-        semantic_requires_runtime_assert_failure(function, discharge_ranked_bounds);
+    let has_runtime_assert = semantic_requires_runtime_assert_failure(function);
     let lowered_block_count = function
         .blocks()
         .len()
@@ -1348,7 +1336,6 @@ fn lower_module(
             types: &parameter_types,
         },
         has_runtime_assert.then(|| BlockId(function.blocks().len() as u32)),
-        discharge_ranked_bounds,
         limits.max_operations,
     )?;
 
@@ -1528,7 +1515,7 @@ fn lower_module(
         terminator_operation_spans: terminator_operation_spans.into_boxed_slice(),
         synthetic_operation_spans: synthetic_operation_spans.into_boxed_slice(),
     };
-    correspondence.validate_layout_against(owner, &module, discharge_ranked_bounds)?;
+    correspondence.validate_layout_against(owner, &module)?;
     Ok((module, correspondence))
 }
 
@@ -2486,7 +2473,6 @@ struct SemanticFunctionLoweringV1<'a> {
     block_parameters: BTreeMap<u32, BTreeMap<u32, Vec<ValueDef>>>,
     next_value: u32,
     assert_failure_block: Option<BlockId>,
-    discharge_ranked_bounds: bool,
     max_operations: usize,
     emitted_operations: usize,
 }
@@ -2504,7 +2490,6 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         function: &'a SemanticFunctionDeclV1,
         parameters: SemanticParameterBindingsV1<'_>,
         assert_failure_block: Option<BlockId>,
-        discharge_ranked_bounds: bool,
         max_operations: usize,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         let mut locals = vec![None; function.locals().len()];
@@ -2560,7 +2545,6 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             block_parameters,
             next_value,
             assert_failure_block,
-            discharge_ranked_bounds,
             max_operations,
             emitted_operations: 0,
         })
@@ -3804,7 +3788,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             SemanticTerminatorKindV1::Assert {
                 condition,
                 expected,
-                message,
+                message: _,
                 target,
                 unwind,
             } => {
@@ -3815,22 +3799,6 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         None,
                         "semantic assert has a cleanup unwind edge",
                     ));
-                }
-                if self.discharge_ranked_bounds
-                    && matches!(message, SemanticAssertMessageV1::BoundsCheck { .. })
-                {
-                    if !*expected || !matches!(unwind, SemanticUnwindActionV1::Unreachable) {
-                        return Err(unsupported(
-                            0,
-                            Some(block.index()),
-                            None,
-                            "ranked bounds custody cannot discharge a noncanonical bounds assertion",
-                        ));
-                    }
-                    return Ok(Terminator::Branch {
-                        target: BlockId(target.target().index()),
-                        arguments: self.edge_arguments(block, target.target())?,
-                    });
                 }
                 let failure = self.assert_failure_block.ok_or_else(|| {
                     unsupported(

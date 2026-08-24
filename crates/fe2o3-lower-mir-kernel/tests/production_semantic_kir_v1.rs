@@ -1,6 +1,7 @@
 use fe2o3_kernel_ir::{
-    BinaryOp, BlockId, CheckedBinaryOperator, LaunchDomain, OperationKind, ScalarType, Type,
-    WorkgroupSize, decode_module_v7, verify_module,
+    AmdGpuDiagnosticOperation, BinaryOp, BlockId, CheckedBinaryOperator, LaunchDomain,
+    OperationKind, ScalarType, TargetCapability, Terminator, Type, WaveWidth, WorkgroupSize,
+    decode_module_v7, gfx942_xnack_minus_target_capability, verify_module,
 };
 use fe2o3_lower_mir_kernel::{
     PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1, ProductionFormalMemoryOwnerV1,
@@ -452,6 +453,48 @@ fn abort_owner() -> ProductionSemanticMirOwnerV1 {
     )
 }
 
+fn bounds_assert_owner() -> ProductionSemanticMirOwnerV1 {
+    let u32_ty = SemanticTypeIdV1::from_index(1);
+    let bool_ty = SemanticTypeIdV1::from_index(2);
+    let success = SemanticControlFlowEdgeV1::new(
+        SemanticEdgeRoleV1::AssertSuccess,
+        SemanticBlockIdV1::from_index(1),
+    );
+    owner_from_parts(
+        vec![
+            unit_type(),
+            scalar_type(
+                67,
+                SemanticScalarTypeV1::Integer {
+                    signed: false,
+                    bits: 32,
+                },
+            ),
+            scalar_type(68, SemanticScalarTypeV1::Bool),
+        ],
+        vec![return_local()],
+        0,
+        vec![
+            block(
+                69,
+                vec![],
+                SemanticTerminatorKindV1::Assert {
+                    condition: scalar_constant(bool_ty, 0, 1),
+                    expected: true,
+                    message: SemanticAssertMessageV1::BoundsCheck {
+                        length: scalar_constant(u32_ty, 4, 4),
+                        index: scalar_constant(u32_ty, 5, 4),
+                    },
+                    target: success,
+                    unwind: SemanticUnwindActionV1::Unreachable,
+                },
+            ),
+            block(70, vec![], SemanticTerminatorKindV1::Return),
+        ],
+        b"semantic_bounds_trap_test",
+    )
+}
+
 fn direct_enum_constant_owner() -> ProductionSemanticMirOwnerV1 {
     let u32_ty = SemanticTypeIdV1::from_index(1);
     let result_ty = SemanticTypeIdV1::from_index(2);
@@ -825,6 +868,121 @@ fn ranked_checks_remain_in_custody_through_kir_and_formal_memory() {
     lowered.verify_equivalence().unwrap();
     let formal = ProductionFormalMemoryOwnerV1::try_admit(lowered).unwrap();
     assert!(formal.semantic_kir().retains_mandatory_generic_checks());
+}
+
+#[test]
+fn ranked_trap_reaches_gfx942_llvm_as_trap_then_unreachable() {
+    let kernel = ProductionRankedKernelV1::new(
+        "semantic_bounds_trap_test",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![],
+            ProductionRankedTerminatorV1::Trap,
+        )],
+    )
+    .unwrap();
+    let construction =
+        ProductionConstructionV1::ranked_kernel("semantic_bounds_trap_module", kernel).unwrap();
+    let ranked =
+        compile_ranked_kernel_for_lowering_v1(construction, ProductionSessionLimitsV1::default())
+            .unwrap();
+    let receipt = ProductionRankedSemanticProjectionReceiptV1::assert_compiler_internal_projection(
+        bounds_assert_owner(),
+        ranked,
+        "func @semantic_bounds_trap_test { kernel.trap }".to_owned(),
+    )
+    .unwrap();
+    let lowered = ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
+        receipt,
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    lowered.verify_equivalence().unwrap();
+
+    let trap = AmdGpuDiagnosticOperation::Trap;
+    let expected_capabilities = trap.required_capabilities();
+    assert!(
+        expected_capabilities
+            .iter()
+            .all(|capability| lowered.module().required_capabilities.contains(capability))
+    );
+    let function = &lowered.module().functions[0];
+    assert!(
+        expected_capabilities
+            .iter()
+            .all(|capability| function.required_capabilities.contains(capability))
+    );
+    let trap_block = function
+        .body
+        .as_ref()
+        .unwrap()
+        .blocks
+        .iter()
+        .find(|block| {
+            block.operations.last().is_some_and(|operation| {
+                matches!(
+                    &operation.kind,
+                    OperationKind::Call { callee, arguments }
+                        if matches!(
+                            AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments),
+                            Some(AmdGpuDiagnosticOperation::Trap)
+                        )
+                )
+            })
+        })
+        .expect("lowered ranked trap block");
+    assert_eq!(trap_block.operations.len(), 1);
+    assert!(trap_block.operations[0].memory_effects().is_empty());
+    assert!(trap_block.operations[0].has_complete_effect_summary());
+    assert!(matches!(
+        trap_block.terminator,
+        Some(Terminator::Unreachable)
+    ));
+    let [synthetic] = lowered.correspondence().synthetic_operation_spans() else {
+        panic!("bounds failure must retain one synthetic trap span");
+    };
+    assert_eq!(
+        synthetic.rule(),
+        SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap
+    );
+
+    let admitted = ProductionFormalMemoryOwnerV1::try_admit(lowered).unwrap();
+    let mut target_module = admitted.semantic_kir().module().clone();
+    let target = gfx942_xnack_minus_target_capability();
+    let wave = TargetCapability::WaveWidth(WaveWidth::Wave64);
+    target_module.required_capabilities.insert(target.clone());
+    target_module.required_capabilities.insert(wave.clone());
+    let kernel = &mut target_module.kernels[0];
+    kernel.required_capabilities.insert(target.clone());
+    kernel.required_capabilities.insert(wave.clone());
+    let kernel_id = kernel.id.clone();
+    let entry_id = kernel.entry.clone();
+    let entry = target_module
+        .functions
+        .iter_mut()
+        .find(|function| function.id == entry_id)
+        .unwrap();
+    entry.required_capabilities.insert(target);
+    entry.required_capabilities.insert(wave);
+    verify_module(&target_module).unwrap();
+    let llvm =
+        dialect_amdgcn::lower_kernel_to_gfx942_xnack_minus_llvm_ir(&target_module, &kernel_id)
+            .unwrap();
+    assert_eq!(
+        llvm.matches("declare void @llvm.trap()").count(),
+        1,
+        "{llvm}"
+    );
+    assert_eq!(llvm.matches("call void @llvm.trap()").count(), 1, "{llvm}");
+    assert!(llvm.contains("call void @llvm.trap()\n  unreachable"));
+    assert!(!llvm.contains("call void @llvm.trap()\n  ret"));
+    assert!(!llvm.contains("call void @llvm.trap()\n  br"));
+
+    assert!(
+        dialect_amdgcn::lower_kernel_to_llvm_ir(&target_module, &kernel_id)
+            .unwrap_err()
+            .contains(dialect_amdgcn::LoweringDiagnosticCode::UnsupportedCapability)
+    );
 }
 
 #[test]
