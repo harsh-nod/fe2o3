@@ -25,16 +25,17 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAbiPassModeV1, SemanticAbiPointeeKindV1, SemanticAggregateKindV1,
     SemanticAssertMessageV1, SemanticAtomicAccessV1, SemanticAtomicOrderingV1,
     SemanticAtomicScopeV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticCallableDeclV1,
-    SemanticCallableIdV1, SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1,
-    SemanticDirectCallV1, SemanticDirectTailCallV1, SemanticDisjointIndexSpaceV1,
-    SemanticFunctionDeclV1, SemanticFunctionRoleV1, SemanticLocalIdV1, SemanticLocalRoleV1,
-    SemanticMfmaAccumulatorContractV1, SemanticMfmaAccumulatorDistributionV1,
-    SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1,
-    SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1, SemanticOperandV1,
-    SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticScalarTypeV1,
-    SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1, SemanticStatementKindV1,
-    SemanticTargetArchitectureV1, SemanticTerminatorKindV1, SemanticTypeIdV1, SemanticTypeShapeV1,
-    SemanticUnaryOpV1, SemanticUnwindActionV1,
+    SemanticCallableIdV1, SemanticCastKindV1, SemanticCompilerIntrinsicOperationV1,
+    SemanticConstantValueV1, SemanticDirectCallV1, SemanticDirectTailCallV1,
+    SemanticDisjointIndexSpaceV1, SemanticFunctionDeclV1, SemanticFunctionRoleV1,
+    SemanticLocalIdV1, SemanticLocalRoleV1, SemanticMfmaAccumulatorContractV1,
+    SemanticMfmaAccumulatorDistributionV1, SemanticMfmaOperandContractV1,
+    SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1,
+    SemanticMfmaStorageLayoutV1, SemanticOperandV1, SemanticPlaceV1, SemanticProjectionKindV1,
+    SemanticRvalueKindV1, SemanticScalarTypeV1, SemanticSourceArgumentOwnershipV1,
+    SemanticSourceProvenanceV1, SemanticStatementKindV1, SemanticTargetArchitectureV1,
+    SemanticTerminatorKindV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
+    SemanticUnwindActionV1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
@@ -307,6 +308,12 @@ struct AllocationContractV1 {
     allocation_origin: u64,
     noalias_class: u64,
     writable: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LocalProvenanceV1 {
+    stable_argument_origins: Vec<Option<u32>>,
+    allocation_origins: Vec<Option<u32>>,
 }
 
 struct ProjectionLocalContractsV1 {
@@ -1893,7 +1900,10 @@ fn project_intrinsic_contracts(
         .map_err(|error| ProductionRankedProjectionErrorV1::Unsupported(error.detail()))?;
     let enum_payload_dominance = SemanticEnumPayloadDominanceV1::analyze(function, types)
         .map_err(|error| ProductionRankedProjectionErrorV1::Unsupported(error.detail()))?;
-    let allocation_origins = local_allocation_origins(function)?;
+    let LocalProvenanceV1 {
+        stable_argument_origins,
+        allocation_origins,
+    } = local_provenance_v1(function)?;
     let local_allocations = local_allocation_contracts(types, function, &allocation_origins)?;
     let tensor_effects = project_authenticated_tensor_layouts_v1(
         callables,
@@ -1907,7 +1917,6 @@ fn project_intrinsic_contracts(
     let tensor_layouts = tensor_effects.layouts;
     let mut edge_count = 0_usize;
     let mut borrowed_locals = Vec::new();
-    let stable_argument_origins = local_stable_argument_origins(function)?;
     let mut runtime_index_arguments = vec![None; local_count];
     let mut next_runtime_argument = 1_usize;
     // Workgroup geometry and the runtime grid domain are independent. The
@@ -4807,17 +4816,22 @@ fn source_execution_layout_v1(
     })
 }
 
-fn local_stable_argument_origins(
+fn local_provenance_v1(
     function: &SemanticFunctionDeclV1,
-) -> Result<Vec<Option<u32>>, ProductionRankedProjectionErrorV1> {
+) -> Result<LocalProvenanceV1, ProductionRankedProjectionErrorV1> {
     let definitions = local_definition_counts(function);
-    let mut origins = vec![None; function.locals().len()];
-    let mut edges = vec![Vec::new(); function.locals().len()];
+    let local_count = function.locals().len();
+    let mut stable_argument_origins = vec![None; local_count];
+    let mut allocation_origins = vec![None; local_count];
+    let mut stable_edges = vec![Vec::new(); local_count];
+    let mut allocation_edges = vec![Vec::new(); local_count];
     for (local_index, local) in function.locals().iter().enumerate() {
         if let SemanticLocalRoleV1::Argument(argument) = local.role() {
-            origins[local_index] = Some(argument);
+            stable_argument_origins[local_index] = Some(argument);
+            allocation_origins[local_index] = Some(argument);
         }
     }
+    let mut edge_count = 0_usize;
     for block in function.blocks() {
         for statement in block.statements() {
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
@@ -4832,126 +4846,118 @@ fn local_stable_argument_origins(
             {
                 continue;
             }
-            let operand = match assignment.value().kind() {
-                SemanticRvalueKindV1::Use(operand) | SemanticRvalueKindV1::Cast { operand, .. } => {
-                    operand
-                }
-                _ => continue,
-            };
-            let Some(source) = simple_operand_local(operand) else {
-                continue;
-            };
-            let source = source.index() as usize;
             let destination = destination.local().index() as usize;
-            let Some(source_edges) = edges.get_mut(source) else {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "a stable-argument source is outside the semantic local table",
-                ));
+            let stable_source = match assignment.value().kind() {
+                SemanticRvalueKindV1::Use(operand) | SemanticRvalueKindV1::Cast { operand, .. } => {
+                    simple_operand_local(operand)
+                }
+                _ => None,
             };
-            if destination >= origins.len() {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "a stable-argument destination is outside the semantic local table",
-                ));
+            if let Some(source) = stable_source {
+                push_local_provenance_edge_v1(
+                    &mut stable_edges,
+                    source.index() as usize,
+                    destination,
+                    &mut edge_count,
+                )?;
+            };
+
+            let allocation_source = match assignment.value().kind() {
+                SemanticRvalueKindV1::Use(operand) => simple_operand_local(operand),
+                SemanticRvalueKindV1::Cast {
+                    kind: SemanticCastKindV1::Pointer,
+                    operand,
+                } => simple_operand_local(operand),
+                SemanticRvalueKindV1::Borrow { place, .. }
+                | SemanticRvalueKindV1::AddressOf { place, .. } => {
+                    reborrowed_allocation_local_v1(place)
+                }
+                _ => None,
+            };
+            if let Some(source) = allocation_source {
+                push_local_provenance_edge_v1(
+                    &mut allocation_edges,
+                    source.index() as usize,
+                    destination,
+                    &mut edge_count,
+                )?;
             }
-            source_edges.try_reserve(1).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "stable-argument dataflow storage cannot be reserved",
-                )
-            })?;
-            source_edges.push(destination);
         }
     }
 
+    propagate_exact_local_origins_v1(
+        &mut stable_argument_origins,
+        &stable_edges,
+        "a runtime index may derive from multiple kernel arguments",
+    )?;
+    propagate_exact_local_origins_v1(
+        &mut allocation_origins,
+        &allocation_edges,
+        "a local may alias multiple kernel allocation origins",
+    )?;
+    Ok(LocalProvenanceV1 {
+        stable_argument_origins,
+        allocation_origins,
+    })
+}
+
+fn push_local_provenance_edge_v1(
+    edges: &mut [Vec<usize>],
+    source: usize,
+    destination: usize,
+    edge_count: &mut usize,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    if source >= edges.len() || destination >= edges.len() {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "a local provenance edge is outside the semantic local table",
+        ));
+    }
+    *edge_count =
+        edge_count
+            .checked_add(1)
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "local provenance edge accounting overflowed",
+            ))?;
+    if *edge_count > MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1 {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "local provenance edges exceed the charged projection limit",
+        ));
+    }
+    edges[source].try_reserve(1).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "local provenance edge storage cannot be reserved",
+        )
+    })?;
+    edges[source].push(destination);
+    Ok(())
+}
+
+fn propagate_exact_local_origins_v1<T: Copy + Eq>(
+    origins: &mut [Option<T>],
+    edges: &[Vec<usize>],
+    conflict: &'static str,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
     let mut worklist = origins
         .iter()
         .enumerate()
         .filter_map(|(local, origin)| origin.map(|_| local))
         .collect::<VecDeque<_>>();
+    let mut work = 0_usize;
     while let Some(source) = worklist.pop_front() {
         let Some(origin) = origins[source] else {
             continue;
         };
         for &destination in &edges[source] {
-            match origins[destination] {
-                None => {
-                    origins[destination] = Some(origin);
-                    worklist.push_back(destination);
-                }
-                Some(existing) if existing == origin => {}
-                Some(_) => {
-                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                        "a runtime index may derive from multiple kernel arguments",
-                    ));
-                }
-            }
-        }
-    }
-    Ok(origins)
-}
-
-fn local_allocation_origins(
-    function: &SemanticFunctionDeclV1,
-) -> Result<Vec<Option<u32>>, ProductionRankedProjectionErrorV1> {
-    let definitions = local_definition_counts(function);
-    let mut origins = vec![None; function.locals().len()];
-    let mut aliases_by_source = vec![Vec::new(); function.locals().len()];
-    for (local_index, local) in function.locals().iter().enumerate() {
-        if let SemanticLocalRoleV1::Argument(argument) = local.role() {
-            origins[local_index] = Some(argument);
-        }
-    }
-    for block in function.blocks() {
-        for statement in block.statements() {
-            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
-                continue;
-            };
-            if !assignment.destination().projections().is_empty()
-                || definitions
-                    .get(assignment.destination().local().index() as usize)
-                    .copied()
-                    != Some(1)
-            {
-                continue;
-            }
-            let source = match assignment.value().kind() {
-                SemanticRvalueKindV1::Use(operand) => match operand {
-                    SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => Some(place),
-                    SemanticOperandV1::Constant(_) => None,
-                },
-                SemanticRvalueKindV1::Borrow { place, .. }
-                | SemanticRvalueKindV1::AddressOf { place, .. } => Some(place),
-                SemanticRvalueKindV1::Load(load) if load.atomic().is_none() => Some(load.source()),
-                _ => None,
-            };
-            let Some(source) = source else {
-                continue;
-            };
-            let source = source.local().index() as usize;
-            let destination = assignment.destination().local().index() as usize;
-            if source >= aliases_by_source.len() || destination >= aliases_by_source.len() {
+            work = work
+                .checked_add(1)
+                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                    "local provenance dataflow work accounting overflowed",
+                ))?;
+            if work > MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1 {
                 return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "an allocation-origin edge outside the semantic local table",
+                    "local provenance dataflow exceeds the charged projection limit",
                 ));
             }
-            aliases_by_source[source].try_reserve(1).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "allocation-origin edge storage cannot be reserved",
-                )
-            })?;
-            aliases_by_source[source].push(destination);
-        }
-    }
-
-    let mut worklist = origins
-        .iter()
-        .enumerate()
-        .filter_map(|(local, origin)| origin.map(|_| local))
-        .collect::<VecDeque<_>>();
-    while let Some(source) = worklist.pop_front() {
-        let Some(origin) = origins[source] else {
-            continue;
-        };
-        for &destination in &aliases_by_source[source] {
             match origins[destination] {
                 None => {
                     origins[destination] = Some(origin);
@@ -4959,14 +4965,41 @@ fn local_allocation_origins(
                 }
                 Some(existing) if existing == origin => {}
                 Some(_) => {
-                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                        "a local may alias multiple kernel allocation origins",
-                    ));
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(conflict));
                 }
             }
         }
     }
-    Ok(origins)
+    Ok(())
+}
+
+fn reborrowed_allocation_local_v1(place: &SemanticPlaceV1) -> Option<SemanticLocalIdV1> {
+    let mut projections = place.projections().iter();
+    matches!(
+        projections.next().map(|projection| projection.kind()),
+        Some(SemanticProjectionKindV1::Dereference)
+    )
+    .then(|| {
+        projections
+            .all(|projection| {
+                matches!(
+                    projection.kind(),
+                    SemanticProjectionKindV1::Field(_)
+                        | SemanticProjectionKindV1::Downcast(_)
+                        | SemanticProjectionKindV1::OpaqueCast
+                        | SemanticProjectionKindV1::Subtype
+                )
+            })
+            .then_some(place.local())
+    })
+    .flatten()
+}
+
+#[cfg(test)]
+fn local_stable_argument_origins(
+    function: &SemanticFunctionDeclV1,
+) -> Result<Vec<Option<u32>>, ProductionRankedProjectionErrorV1> {
+    Ok(local_provenance_v1(function)?.stable_argument_origins)
 }
 
 fn local_allocation_contracts(
@@ -6633,6 +6666,7 @@ fn checked_reference_origins(
     let definitions = local_definition_counts(function);
     let mut origins = vec![None; function.locals().len()];
     let mut aliases_by_source = vec![Vec::new(); function.locals().len()];
+    let mut edge_count = 0_usize;
     for block in function.blocks() {
         for statement in block.statements() {
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
@@ -6657,16 +6691,15 @@ fn checked_reference_origins(
             let Some(source) = source else {
                 continue;
             };
-            let edges = aliases_by_source
-                .get_mut(source.local().index() as usize)
-                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                    "a checked reference alias outside the semantic local table",
-                ))?;
-            edges.push(destination.local().index() as usize);
+            push_local_provenance_edge_v1(
+                &mut aliases_by_source,
+                source.local().index() as usize,
+                destination.local().index() as usize,
+                &mut edge_count,
+            )?;
         }
     }
 
-    let mut worklist = VecDeque::new();
     let mut access = 0_usize;
     for block in function.blocks() {
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
@@ -6692,7 +6725,6 @@ fn checked_reference_origins(
             ));
         }
         origins[destination.index() as usize] = Some(access);
-        worklist.push_back(destination.index() as usize);
         access += 1;
     }
     if access != guarded_access_count {
@@ -6700,22 +6732,11 @@ fn checked_reference_origins(
             "checked disjoint access inventory changed during projection",
         ));
     }
-    while let Some(source) = worklist.pop_front() {
-        let Some(origin) = origins[source] else {
-            continue;
-        };
-        for &destination in &aliases_by_source[source] {
-            let slot = &mut origins[destination];
-            if slot.is_none() {
-                *slot = Some(origin);
-                worklist.push_back(destination);
-            } else if *slot != Some(origin) {
-                return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "a checked disjoint reference with conflicting origins",
-                ));
-            }
-        }
-    }
+    propagate_exact_local_origins_v1(
+        &mut origins,
+        &aliases_by_source,
+        "a checked disjoint reference with conflicting origins",
+    )?;
     Ok(origins)
 }
 
@@ -11559,6 +11580,155 @@ mod tests {
             .unwrap()
             .is_none()
         );
+    }
+
+    #[test]
+    fn local_provenance_preserves_only_value_and_pointer_identity_operations() {
+        let pointer_place = |local| {
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], POINTER_TYPE)
+                .unwrap()
+        };
+        let assign = |destination, ty, value| {
+            statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                SemanticPlaceV1::new(SemanticLocalIdV1::from_index(destination), vec![], ty)
+                    .unwrap(),
+                SemanticRvalueV1::new(ty, value),
+            )))
+        };
+        let loaded_scalar = SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(3),
+            vec![
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, SCALAR_TYPE)
+                    .unwrap(),
+            ],
+            SCALAR_TYPE,
+        )
+        .unwrap();
+        let function = projection_function_with_locals(
+            vec![block(
+                96,
+                vec![
+                    assign(
+                        2,
+                        POINTER_TYPE,
+                        SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(pointer_place(1))),
+                    ),
+                    assign(
+                        3,
+                        POINTER_TYPE,
+                        SemanticRvalueKindV1::Cast {
+                            kind: SemanticCastKindV1::Pointer,
+                            operand: SemanticOperandV1::Copy(pointer_place(2)),
+                        },
+                    ),
+                    assign(
+                        4,
+                        SCALAR_TYPE,
+                        SemanticRvalueKindV1::Load(SemanticMemoryLoadV1::new(
+                            loaded_scalar,
+                            SemanticVolatilityV1::NonVolatile,
+                            None,
+                        )),
+                    ),
+                    assign(
+                        5,
+                        SCALAR_TYPE,
+                        SemanticRvalueKindV1::Cast {
+                            kind: SemanticCastKindV1::PointerExposeProvenance,
+                            operand: SemanticOperandV1::Copy(pointer_place(3)),
+                        },
+                    ),
+                ],
+                SemanticTerminatorKindV1::Return,
+            )],
+            vec![
+                local(96, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(97, POINTER_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(98, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+                local(99, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+                local(100, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(101, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        );
+
+        let provenance = local_provenance_v1(&function).unwrap();
+        assert_eq!(
+            provenance.stable_argument_origins,
+            vec![None, Some(0), Some(0), Some(0), None, Some(0)]
+        );
+        assert_eq!(
+            provenance.allocation_origins,
+            vec![None, Some(0), Some(0), Some(0), None, None]
+        );
+    }
+
+    #[test]
+    fn local_allocation_provenance_requires_an_exact_reborrow() {
+        let assign_borrow = |destination, place| {
+            statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                SemanticPlaceV1::new(
+                    SemanticLocalIdV1::from_index(destination),
+                    vec![],
+                    POINTER_TYPE,
+                )
+                .unwrap(),
+                SemanticRvalueV1::new(
+                    POINTER_TYPE,
+                    SemanticRvalueKindV1::Borrow {
+                        kind: SemanticBorrowKindV1::Shared,
+                        place,
+                    },
+                ),
+            )))
+        };
+        let dereference =
+            SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, SCALAR_TYPE).unwrap();
+        let pointee_place = SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(1),
+            vec![dereference],
+            SCALAR_TYPE,
+        )
+        .unwrap();
+        let pointer_slot =
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], POINTER_TYPE).unwrap();
+        let function = projection_function_with_locals(
+            vec![block(
+                102,
+                vec![
+                    assign_borrow(2, pointee_place),
+                    assign_borrow(3, pointer_slot),
+                ],
+                SemanticTerminatorKindV1::Return,
+            )],
+            vec![
+                local(102, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(103, POINTER_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(104, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+                local(105, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        );
+
+        let provenance = local_provenance_v1(&function).unwrap();
+        assert_eq!(
+            provenance.allocation_origins,
+            vec![None, Some(0), Some(0), None]
+        );
+        assert_eq!(
+            provenance.stable_argument_origins,
+            vec![None, Some(0), None, None]
+        );
+    }
+
+    #[test]
+    fn local_provenance_merge_conflicts_fail_closed() {
+        let mut origins = vec![Some(0), Some(1), None];
+        let edges = vec![vec![2], vec![2], vec![]];
+        assert!(matches!(
+            propagate_exact_local_origins_v1(&mut origins, &edges, "conflicting test origins",),
+            Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "conflicting test origins"
+            ))
+        ));
     }
 
     #[test]
