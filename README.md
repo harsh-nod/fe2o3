@@ -310,13 +310,12 @@ target lowering, and host execution into explicit ownership boundaries:
   These records validate representation and consistency. They do not prove a
   claim, compile a kernel, execute a service, or grant artifact/runtime
   authority.
-- Compiler composition: `fe2o3-compiler-driver` routes one explicit `Legacy`,
-  `PlironShadow`, or `PlironV1` request to one configured backend and never
-  falls back to a second route. `fe2o3-legacy-compiler` is only a dormant
-  adapter contract for the existing implementation in
-  `rustc-codegen-fe2o3`; no production selector uses the new driver or adapter
-  yet. The working codegen paths and `FE2O3_CODEGEN_PIPELINE` selection remain
-  owned by the existing integration crate.
+- Compiler composition: `fe2o3-compiler-driver` routes one explicit
+  `PlironShadow` or `PlironV1` request to one configured backend and never
+  falls back to a second route. Shadow is inspect-only and `PlironV1` is the
+  only candidate-producing compiler API route. The working codegen paths and
+  `FE2O3_CODEGEN_PIPELINE` selection remain owned by the existing integration
+  crate.
 - General kernel checks: `fe2o3-kernel-analysis` owns the fixed pre-lowering
   Kernel IR sequence for structure, control flow, bounds obligations, race
   freedom, barrier convergence, and workgroup-memory initialization/reuse.

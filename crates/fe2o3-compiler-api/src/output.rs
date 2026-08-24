@@ -975,7 +975,7 @@ mod tests {
 
     #[test]
     fn candidate_must_bind_to_terminal_hsaco_snapshot() {
-        let request = request(PipelineSelectorV1::Legacy, limits());
+        let request = request(PipelineSelectorV1::PlironV1, limits());
         assert_eq!(
             CompileOutputV1::new(
                 &request,

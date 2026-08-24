@@ -21,8 +21,6 @@ pub const MAX_TOTAL_SNAPSHOT_BYTES_V1: u32 = 64 * 1024 * 1024;
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum PipelineSelectorV1 {
-    /// Existing compatibility compiler pipeline.
-    Legacy = 1,
     /// Inspect-only Pliron comparison with no artifact-producing authority.
     PlironShadow = 2,
     /// Explicit Pliron V1 artifact-producing pipeline.
@@ -32,7 +30,7 @@ pub enum PipelineSelectorV1 {
 impl PipelineSelectorV1 {
     /// Reports whether this selector may return an executable candidate.
     pub const fn may_produce_candidate(self) -> bool {
-        matches!(self, Self::Legacy | Self::PlironV1)
+        matches!(self, Self::PlironV1)
     }
 }
 
@@ -431,8 +429,9 @@ mod tests {
     }
 
     #[test]
-    fn selectors_separate_shadow_from_candidate_producers() {
-        assert!(PipelineSelectorV1::Legacy.may_produce_candidate());
+    fn selectors_preserve_tags_and_separate_shadow_from_production() {
+        assert_eq!(PipelineSelectorV1::PlironShadow as u8, 2);
+        assert_eq!(PipelineSelectorV1::PlironV1 as u8, 3);
         assert!(!PipelineSelectorV1::PlironShadow.may_produce_candidate());
         assert!(PipelineSelectorV1::PlironV1.may_produce_candidate());
     }

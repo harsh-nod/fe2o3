@@ -169,8 +169,6 @@ authority. The backend fixture is not Rust user source.
 - `fe2o3-pliron-scalar-add-v1`: exact backend-fixture lineage, checkout policy,
   scalar finalizer join, and sealed one-shot HSA execution; not a general
   backend, source frontend, approval service, or runtime policy.
-- `fe2o3-legacy-compiler`: dormant adapter contract for the existing compiler
-  owner; it contains no codegen implementation.
 - `fe2o3-macros`: `#[kernel]` and future device extern annotations.
 - `reserved-fe2o3-symbols`: shared reserved symbol namespace.
 - `fe2o3-device`: no-std device API and intrinsic stubs.

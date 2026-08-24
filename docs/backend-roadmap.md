@@ -23,11 +23,11 @@ driver route or persistent-service model.
   implemented behind `dialect-mir`. `dialect-mir` remains a compatibility
   re-export and exposes a bounded Pliron `mir.*` module/function/block shell
   only with its non-default `pliron` feature.
-- `fe2o3-compiler-api` defines bounded target-neutral contracts for `Legacy`,
-  `PlironShadow`, and `PlironV1` requests and outputs.
+- `fe2o3-compiler-api` defines bounded target-neutral contracts for
+  `PlironShadow` and `PlironV1` requests and outputs.
   `fe2o3-compiler-driver` routes exactly one configured backend without
-  fallback, while `fe2o3-legacy-compiler` is a dormant adapter contract that
-  contains no existing codegen and is not production-selected.
+  fallback. Shadow cannot return a candidate, leaving `PlironV1` as the only
+  candidate-producing compiler API route.
 - `fe2o3-pliron` pins Pliron v0.17.0 commit
   `2610651306ea3ba670f68d5d8b1e1159bcd521ed` and implements a bounded D0
   context, private identity anchor, registration, verification, and pass-plan

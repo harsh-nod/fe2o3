@@ -155,30 +155,23 @@ impl DriverDiagnosticV1 {
     }
 }
 
-/// Compiler driver with one isolated backend slot per explicit selector.
+/// Compiler driver with isolated evidence and production backend slots.
 ///
 /// Routing is a total match over [`PipelineSelectorV1`]. An error from the
 /// selected slot is terminal and never causes another slot to be invoked.
 #[derive(Clone, Debug)]
-pub struct ExplicitPipelineDriverV1<Legacy, Shadow, Pliron> {
-    legacy: Legacy,
+pub struct ExplicitPipelineDriverV1<Shadow, Pliron> {
     pliron_shadow: Shadow,
     pliron_v1: Pliron,
 }
 
-impl<Legacy, Shadow, Pliron> ExplicitPipelineDriverV1<Legacy, Shadow, Pliron> {
+impl<Shadow, Pliron> ExplicitPipelineDriverV1<Shadow, Pliron> {
     /// Configures one backend for each explicit V1 selector.
-    pub const fn new(legacy: Legacy, pliron_shadow: Shadow, pliron_v1: Pliron) -> Self {
+    pub const fn new(pliron_shadow: Shadow, pliron_v1: Pliron) -> Self {
         Self {
-            legacy,
             pliron_shadow,
             pliron_v1,
         }
-    }
-
-    /// Returns a shared reference to the `Legacy` backend slot.
-    pub const fn legacy_backend(&self) -> &Legacy {
-        &self.legacy
     }
 
     /// Returns a shared reference to the `PlironShadow` backend slot.
@@ -191,26 +184,19 @@ impl<Legacy, Shadow, Pliron> ExplicitPipelineDriverV1<Legacy, Shadow, Pliron> {
         &self.pliron_v1
     }
 
-    /// Returns mutable access to all three isolated backend slots.
-    pub fn backends_mut(&mut self) -> (&mut Legacy, &mut Shadow, &mut Pliron) {
-        (
-            &mut self.legacy,
-            &mut self.pliron_shadow,
-            &mut self.pliron_v1,
-        )
+    /// Returns mutable access to both isolated backend slots.
+    pub fn backends_mut(&mut self) -> (&mut Shadow, &mut Pliron) {
+        (&mut self.pliron_shadow, &mut self.pliron_v1)
     }
 }
 
-impl<Legacy, Shadow, Pliron> TransactionalCompilerDriverV1
-    for ExplicitPipelineDriverV1<Legacy, Shadow, Pliron>
+impl<Shadow, Pliron> TransactionalCompilerDriverV1 for ExplicitPipelineDriverV1<Shadow, Pliron>
 where
-    Legacy: TransactionalCompilerBackendV1,
     Shadow: TransactionalCompilerBackendV1,
     Pliron: TransactionalCompilerBackendV1,
 {
     fn compile_transaction(&mut self, request: &CompileRequestV1) -> CompileOutputV1 {
         let result = match request.selector() {
-            PipelineSelectorV1::Legacy => self.legacy.compile_transaction(request),
             PipelineSelectorV1::PlironShadow => self.pliron_shadow.compile_transaction(request),
             PipelineSelectorV1::PlironV1 => self.pliron_v1.compile_transaction(request),
         };

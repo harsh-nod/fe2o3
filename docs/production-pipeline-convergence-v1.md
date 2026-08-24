@@ -269,9 +269,9 @@ Migration follows these rules:
    `legacy-v1` and exact-profile selectors are never fallbacks.
 6. Host-only Rust code may continue through rustc LLVM; that is not a device
    compiler route.
-7. After all slices migrate, remove `Legacy`, `PlironShadow`, and exact-profile
-   selection from production device compilation. Shadow/oracle execution may
-   remain in test-only tooling without candidate authority.
+7. Keep `PlironShadow` only as non-authoritative evidence outside production
+   device compilation. The compiler API `Legacy` route is removed, and
+   exact-profile qualification selectors retire as their slices migrate.
 
 The default switched to `production-v1` after the first scalar slice completed
 its compile, host-interface, artifact, and hardware gates. An incomplete

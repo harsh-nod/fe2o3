@@ -109,7 +109,7 @@ fn mutate_request_with_same_identity(
         _ => request.pipeline_configuration_identity(),
     };
     let selector = match mutation {
-        SameIdentityRequestMutation::Selector => PipelineSelectorV1::Legacy,
+        SameIdentityRequestMutation::Selector => PipelineSelectorV1::PlironShadow,
         _ => request.selector(),
     };
     let limits = match mutation {

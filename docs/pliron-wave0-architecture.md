@@ -81,11 +81,10 @@ The following infrastructure is implemented:
   executable schema, wire validation, control-flow analysis, and mem2reg
   implementation that previously lived behind `dialect-mir`.
 - `fe2o3-compiler-api` defines bounded target-neutral requests, snapshots,
-  receipts, diagnostics, outputs, and the `Legacy`, `PlironShadow`, and
-  `PlironV1` selectors. `fe2o3-compiler-driver` routes exactly one configured
-  backend and revalidates its output. `fe2o3-legacy-compiler` is a dormant
-  adapter contract only; it neither contains the existing compiler nor appears
-  in production selection.
+  receipts, diagnostics, outputs, and the `PlironShadow` and `PlironV1`
+  selectors. `fe2o3-compiler-driver` routes exactly one configured backend and
+  revalidates its output. Shadow remains inspect-only and `PlironV1` is the
+  only candidate-producing compiler API route.
 - `fe2o3-proof-contracts` defines solver-neutral property, status, obligation,
   TCB, and correspondence records. Structural validation does not authenticate
   evidence, run a solver, or promote proof authority.

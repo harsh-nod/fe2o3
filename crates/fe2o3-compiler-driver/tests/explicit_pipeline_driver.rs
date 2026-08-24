@@ -18,7 +18,6 @@ const BACKEND_DIAGNOSTIC_CODE: u32 = 0x4245_0001;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BackendSlot {
-    Legacy,
     PlironShadow,
     PlironV1,
 }
@@ -243,12 +242,10 @@ fn two_diagnostic_rejection(request: &CompileRequestV1) -> CompileOutputV1 {
 
 fn driver(
     calls: &Rc<RefCell<Vec<BackendCall>>>,
-    legacy: FakeAction,
     shadow: FakeAction,
     pliron: FakeAction,
-) -> ExplicitPipelineDriverV1<RecordingBackend, RecordingBackend, RecordingBackend> {
+) -> ExplicitPipelineDriverV1<RecordingBackend, RecordingBackend> {
     ExplicitPipelineDriverV1::new(
-        RecordingBackend::new(BackendSlot::Legacy, Rc::clone(calls), legacy),
         RecordingBackend::new(BackendSlot::PlironShadow, Rc::clone(calls), shadow),
         RecordingBackend::new(BackendSlot::PlironV1, Rc::clone(calls), pliron),
     )
@@ -281,10 +278,8 @@ fn every_selector_invokes_exactly_its_backend_slot() {
         &calls,
         FakeAction::ValidSourceRejection,
         FakeAction::ValidSourceRejection,
-        FakeAction::ValidSourceRejection,
     );
     let cases = [
-        (PipelineSelectorV1::Legacy, BackendSlot::Legacy, 0x10),
         (
             PipelineSelectorV1::PlironShadow,
             BackendSlot::PlironShadow,
@@ -316,11 +311,10 @@ fn every_selector_invokes_exactly_its_backend_slot() {
 }
 
 #[test]
-fn pliron_v1_failure_is_terminal_and_never_falls_back_to_legacy() {
+fn pliron_v1_failure_is_terminal_and_never_invokes_shadow() {
     let calls = Rc::new(RefCell::new(Vec::new()));
     let mut driver = driver(
         &calls,
-        FakeAction::ValidSourceRejection,
         FakeAction::ValidSourceRejection,
         FakeAction::Fail(CompilerBackendFailureV1::Unavailable),
     );
@@ -361,20 +355,33 @@ fn backend_failures_have_stable_fail_closed_diagnostics() {
     ];
 
     for (failure, reason) in cases {
-        let calls = Rc::new(RefCell::new(Vec::new()));
-        let mut driver = driver(
-            &calls,
-            FakeAction::Fail(failure),
-            FakeAction::ValidSourceRejection,
-            FakeAction::ValidSourceRejection,
-        );
-        let request = request(PipelineSelectorV1::Legacy, 0x14, 0x24, limits());
+        for (selector, slot) in [
+            (PipelineSelectorV1::PlironShadow, BackendSlot::PlironShadow),
+            (PipelineSelectorV1::PlironV1, BackendSlot::PlironV1),
+        ] {
+            let calls = Rc::new(RefCell::new(Vec::new()));
+            let failing = FakeAction::Fail(failure);
+            let mut driver = driver(
+                &calls,
+                if selector == PipelineSelectorV1::PlironShadow {
+                    failing.clone()
+                } else {
+                    FakeAction::ValidSourceRejection
+                },
+                if selector == PipelineSelectorV1::PlironV1 {
+                    failing
+                } else {
+                    FakeAction::ValidSourceRejection
+                },
+            );
+            let request = request(selector, 0x14, 0x24, limits());
 
-        let output = driver.compile_transaction(&request);
+            let output = driver.compile_transaction(&request);
 
-        assert_driver_rejection(&output, &request, reason);
-        assert_eq!(calls.borrow().len(), 1);
-        assert_eq!(calls.borrow()[0].slot, BackendSlot::Legacy);
+            assert_driver_rejection(&output, &request, reason);
+            assert_eq!(calls.borrow().len(), 1);
+            assert_eq!(calls.borrow()[0].slot, slot);
+        }
     }
 }
 
@@ -385,7 +392,6 @@ fn request_identity_mismatch_is_rejected_without_committing_backend_records() {
     let calls = Rc::new(RefCell::new(Vec::new()));
     let mut driver = driver(
         &calls,
-        FakeAction::ValidSourceRejection,
         FakeAction::ValidSourceRejection,
         FakeAction::returning(source_rejection(&foreign)),
     );
@@ -406,11 +412,10 @@ fn request_identity_mismatch_is_rejected_without_committing_backend_records() {
 #[test]
 fn selector_mismatch_is_rejected_even_when_request_identity_matches() {
     let routed = request(PipelineSelectorV1::PlironV1, 0x17, 0x27, limits());
-    let wrong_selector = request(PipelineSelectorV1::Legacy, 0x17, 0x27, limits());
+    let wrong_selector = request(PipelineSelectorV1::PlironShadow, 0x17, 0x27, limits());
     let calls = Rc::new(RefCell::new(Vec::new()));
     let mut driver = driver(
         &calls,
-        FakeAction::ValidSourceRejection,
         FakeAction::ValidSourceRejection,
         FakeAction::returning(source_rejection(&wrong_selector)),
     );
@@ -429,7 +434,6 @@ fn pliron_shadow_rejects_candidate_before_other_output_mismatches() {
     let calls = Rc::new(RefCell::new(Vec::new()));
     let mut driver = driver(
         &calls,
-        FakeAction::ValidSourceRejection,
         FakeAction::returning(candidate_output(&candidate_request)),
         FakeAction::ValidSourceRejection,
     );
@@ -447,34 +451,32 @@ fn pliron_shadow_rejects_candidate_before_other_output_mismatches() {
 
 #[test]
 fn backend_output_malformed_for_routed_input_is_rejected() {
-    let routed = request(PipelineSelectorV1::Legacy, 0x1a, 0x2a, limits());
-    let colliding_identity = request(PipelineSelectorV1::Legacy, 0x1a, 0x2b, limits());
+    let routed = request(PipelineSelectorV1::PlironV1, 0x1a, 0x2a, limits());
+    let colliding_identity = request(PipelineSelectorV1::PlironV1, 0x1a, 0x2b, limits());
     let calls = Rc::new(RefCell::new(Vec::new()));
     let mut driver = driver(
         &calls,
+        FakeAction::ValidSourceRejection,
         FakeAction::returning(source_rejection(&colliding_identity)),
-        FakeAction::ValidSourceRejection,
-        FakeAction::ValidSourceRejection,
     );
 
     let output = driver.compile_transaction(&routed);
 
     assert_driver_rejection(&output, &routed, DriverDiagnosticV1::InvalidBackendOutput);
     assert_eq!(calls.borrow().len(), 1);
-    assert_eq!(calls.borrow()[0].slot, BackendSlot::Legacy);
+    assert_eq!(calls.borrow()[0].slot, BackendSlot::PlironV1);
 }
 
 #[test]
 fn backend_output_valid_only_under_looser_limits_is_rejected() {
     let tight_limits = CompileLimitsV1::new(1, 1, 1, 1, 1, 1).unwrap();
-    let routed = request(PipelineSelectorV1::Legacy, 0x1b, 0x2c, tight_limits);
-    let permissive = request(PipelineSelectorV1::Legacy, 0x1b, 0x2c, limits());
+    let routed = request(PipelineSelectorV1::PlironV1, 0x1b, 0x2c, tight_limits);
+    let permissive = request(PipelineSelectorV1::PlironV1, 0x1b, 0x2c, limits());
     let calls = Rc::new(RefCell::new(Vec::new()));
     let mut driver = driver(
         &calls,
+        FakeAction::ValidSourceRejection,
         FakeAction::returning(two_diagnostic_rejection(&permissive)),
-        FakeAction::ValidSourceRejection,
-        FakeAction::ValidSourceRejection,
     );
 
     let output = driver.compile_transaction(&routed);
@@ -485,14 +487,13 @@ fn backend_output_valid_only_under_looser_limits_is_rejected() {
 
 #[test]
 fn valid_source_rejection_preserves_the_complete_receipt_chain() {
-    let request = request(PipelineSelectorV1::Legacy, 0x1c, 0x2d, limits());
+    let request = request(PipelineSelectorV1::PlironV1, 0x1c, 0x2d, limits());
     let expected = source_rejection(&request);
     let calls = Rc::new(RefCell::new(Vec::new()));
     let mut driver = driver(
         &calls,
+        FakeAction::ValidSourceRejection,
         FakeAction::returning(expected.clone()),
-        FakeAction::ValidSourceRejection,
-        FakeAction::ValidSourceRejection,
     );
 
     let output = driver.compile_transaction(&request);

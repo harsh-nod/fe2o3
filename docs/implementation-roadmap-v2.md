@@ -33,10 +33,10 @@ but both issues remain open.
 - Canonical, Pliron-independent ownership now exists for the MIR model,
   compiler API, solver-neutral proof contracts, target-neutral host-operation
   contracts, and executable-free persistent-service model.
-- `fe2o3-compiler-driver` provides fail-closed single-route API dispatch and
-  `fe2o3-legacy-compiler` provides a dormant adapter contract. Neither is wired
-  into production compiler selection; the current implementation remains in
-  `rustc-codegen-fe2o3`.
+- `fe2o3-compiler-driver` provides fail-closed single-route API dispatch for
+  inspect-only `PlironShadow` evidence and candidate-producing `PlironV1`.
+  It is not wired into production compiler selection; the current
+  implementation remains in `rustc-codegen-fe2o3`.
 - `fe2o3-pliron` provides the pinned D0 context, private context identity,
   registration, bounded pass-plan shell, and owner-held textual bridge. The
   bridge recursively verifies operations and meters complete owner/session tree

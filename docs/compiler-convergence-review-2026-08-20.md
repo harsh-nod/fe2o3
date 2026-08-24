@@ -140,7 +140,10 @@ must preserve the tests' path-substitution and build-custody properties.
 | `collected_*` selectors | Differential workload and hardware oracles | Matching slice passes general-route differential gates |
 | `mir_import`, `same_session_rustc_v1`, `mir_import_v2` | Existing semantic/custody observations | Sole AMD-target importer subsumes each required fact and hostile test |
 | detached MIR/Kernel/GPU Pliron services | #140 migration and conformance evidence | Closed session constructs and transforms the same graphs through opaque handles |
-| `fe2o3-legacy-compiler` | Standalone V1 API compatibility fixture, not a backend dependency | Compiler API V2 removes `Legacy` selection and its compatibility tests |
+
+The dormant `fe2o3-legacy-compiler` fixture and compiler API `Legacy` selector
+were subsequently removed. `PlironShadow` remains non-authoritative evidence,
+while `PlironV1` is the only candidate-producing compiler API route.
 
 ## Required next sequence
 

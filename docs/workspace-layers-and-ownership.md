@@ -161,18 +161,17 @@ authentication, proof, or storage release.
 ### Integration
 
 Integration owns CLI composition, rustc codegen integration, pipeline
-selection, legacy adaptation, shadow comparison, and end-to-end differential
+selection, shadow comparison, and end-to-end differential
 orchestration. Integration may compose any production layer but MUST NOT depend
-on examples or test fixtures. It is the only layer that selects `Legacy`,
-`PlironShadow`, or `PlironV1`.
+on examples or test fixtures. It is the only layer that selects `PlironShadow`
+or `PlironV1`.
 
-`fe2o3-compiler-api` defines those three selectors as inert request data.
+`fe2o3-compiler-api` defines those two selectors as inert request data.
 `fe2o3-compiler-driver` routes exactly one selected, configured backend and
-revalidates its bounded output. `fe2o3-legacy-compiler` only defines the
-dormant adapter contract for the current implementation owner. No production
-selection path depends on the new driver or adapter at this checkpoint; the
-working legacy and opt-in Kernel IR routes remain composed in
-`rustc-codegen-fe2o3`.
+revalidates its bounded output. Shadow cannot return an executable candidate;
+`PlironV1` is the only candidate-producing compiler API route. No production
+selection path depends on the new driver at this checkpoint; qualification
+routes remain composed separately in `rustc-codegen-fe2o3`.
 
 `fe2o3-pliron-scalar-add-v1` is an intentionally narrow integration crate. It
 composes one checked-in backend fixture, the admitted Pliron/V2 lineage, the
@@ -230,7 +229,7 @@ it does not mean production compilation exists.
 | Bounded vertical-slice composition | `fe2o3-pliron-scalar-add-v1` | Exact backend-fixture-to-MI300X scalar-add route landed with sealed one-shot consumption; Rust user-source integration, external attestation, and generalization remain open |
 | Proof overlays | `fe2o3-proof-contracts`, `dialect-proof` | Solver-neutral records and inert Pliron overlay landed; proof integration remains open |
 | AMD lowering | AMD model/dialect/lowering crates | Existing implementation extracted to `fe2o3-amdgcn-model`; future Pliron AMD lowering remains open |
-| Driver | `fe2o3-compiler-driver`, legacy adapter | API routing and dormant adapter landed; production selection and shadow comparison remain open |
+| Driver | `fe2o3-compiler-driver` | Two-route API dispatch landed; production selection remains open and shadow stays inspect-only |
 
 Dialect agents MUST NOT edit central registration or production selection.
 They provide a registration function and focused tests for the integration
