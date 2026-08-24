@@ -90,6 +90,7 @@ impl CodegenPipeline {
     ) -> RustcInvocationPolicyV1 {
         match self {
             Self::ProductionV1 => RustcInvocationPolicyV1::ProtectedV3,
+            Self::SimulationV1 => RustcInvocationPolicyV1::QualificationObserved,
             Self::CollectedRowSoftmaxV1 => {
                 if explicit_unprotected_qualification {
                     RustcInvocationPolicyV1::QualificationObserved
@@ -248,10 +249,19 @@ mod tests {
             CodegenPipeline::CollectedRowSoftmaxV1.rustc_invocation_policy(false),
             RustcInvocationPolicyV1::ProtectedV3,
         );
+        for explicit_unprotected_qualification in [false, true] {
+            assert_eq!(
+                CodegenPipeline::SimulationV1
+                    .rustc_invocation_policy(explicit_unprotected_qualification),
+                RustcInvocationPolicyV1::QualificationObserved,
+            );
+        }
         for pipeline in CodegenPipeline::ALL {
             if matches!(
                 pipeline,
-                CodegenPipeline::ProductionV1 | CodegenPipeline::CollectedRowSoftmaxV1
+                CodegenPipeline::ProductionV1
+                    | CodegenPipeline::SimulationV1
+                    | CodegenPipeline::CollectedRowSoftmaxV1
             ) {
                 continue;
             }

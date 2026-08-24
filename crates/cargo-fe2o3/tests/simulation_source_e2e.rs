@@ -1,4 +1,4 @@
-#![cfg(all(target_os = "linux", not(feature = "hardware-runtime")))]
+#![cfg(all(target_os = "linux", not(feature = "legacy-hsa-runtime")))]
 
 use std::env;
 use std::fs;
@@ -44,8 +44,8 @@ fn run_simulation(
     target: &Path,
     path: &std::ffi::OsStr,
 ) -> std::process::Output {
-    let manifest = workspace
-        .join("crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device/Cargo.toml");
+    let manifest =
+        workspace.join("crates/cargo-fe2o3/tests/fixtures/simulation-source-fill/Cargo.toml");
     Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
         .current_dir(workspace)
         .args(["simulate", "--request"])
@@ -66,8 +66,30 @@ fn run_simulation(
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env_remove("CARGO_PROFILE_DEV_DEBUG")
         .output()
         .expect("run source simulation")
+}
+
+fn assert_hostile_simulation_value_does_not_suppress_host_contract(manifest: &Path, target: &Path) {
+    let output = Command::new(env!("CARGO"))
+        .args(["check", "--offline", "--locked", "--manifest-path"])
+        .arg(manifest)
+        .arg("--target-dir")
+        .arg(target)
+        .env("FE2O3_SIMULATION_MODE_V1", "attacker")
+        .env_remove("FE2O3_CRATE_BINDING_ID_V1")
+        .output()
+        .expect("check typed fixture with hostile simulation value");
+    assert!(
+        !output.status.success(),
+        "hostile simulation value was accepted"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("could not resolve the fe2o3-host crate"),
+        "hostile simulation value did not retain normal host resolution:\n{stderr}"
+    );
 }
 
 fn assert_exact_fill_result(bytes: &[u8]) {
@@ -75,9 +97,35 @@ fn assert_exact_fill_result(bytes: &[u8]) {
     assert_eq!(result["schema"], "fe2o3-simulation-result-v1");
     assert_eq!(result["status"], "ok");
     assert_eq!(result["authority"], "observation_only");
+    assert_eq!(result["simulated"], true);
+    assert_eq!(result["hardware_observed"], false);
+    assert_eq!(result["hardware_validation"], false);
+    assert_eq!(result["performance_prediction"], false);
+    assert_eq!(
+        result["target_profile"]["identity"],
+        "amdgpu_64_little_endian_v1"
+    );
+    assert_eq!(result["target_profile"]["index_bits"], 64);
+    assert_eq!(result["target_profile"]["max_workgroup_invocations"], 1024);
+    assert_eq!(
+        result["schedule"]["identity"],
+        "workgroup_major_local_zyx_serial_v1"
+    );
+    let kir_sha256 = result["kir"]["sha256"].as_str().unwrap();
+    assert_eq!(kir_sha256.len(), 64);
+    assert!(kir_sha256.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    assert!(result["kir"]["canonical_bytes"].as_u64().unwrap() > 0);
+    assert_eq!(result["counts"]["arguments"], 1);
+    assert_eq!(result["counts"]["shared_buffers"], 0);
     assert_eq!(result["counts"]["invocations_executed"], 4);
-    assert_eq!(result["counts"]["workgroups_visited"], 4);
-    assert_eq!(result["counts"]["scheduled_slots_visited"], 4);
+    assert_eq!(result["counts"]["workgroups_visited"], 1);
+    assert_eq!(result["counts"]["scheduled_slots_visited"], 64);
+    assert_eq!(result["counts"]["steps_executed"], 48);
+    assert_eq!(result["counts"]["events_emitted"], 0);
+    assert_eq!(
+        result["conflict_assessment"]["status"],
+        "no_conflicts_observed"
+    );
     assert_eq!(
         result["arguments"][0]["value"]["bytes"],
         "0x11000000110000001100000011000000"
@@ -93,6 +141,12 @@ fn ordinary_source_simulation_is_exact_deterministic_and_never_probes_a_gpu() {
         .expect("FE2O3_TEST_SIMULATION_BACKEND must name the real backend");
     assert!(backend.is_absolute() && backend.is_file());
     let directory = TestDirectory::new();
+    let manifest =
+        workspace.join("crates/cargo-fe2o3/tests/fixtures/simulation-source-fill/Cargo.toml");
+    assert_hostile_simulation_value_does_not_suppress_host_contract(
+        &manifest,
+        &directory.0.join("target-hostile"),
+    );
     let request = workspace.join("crates/cargo-fe2o3/tests/fixtures/simulate-fill-request-v1.json");
     let trap = directory.0.join("path");
     fs::create_dir(&trap).unwrap();

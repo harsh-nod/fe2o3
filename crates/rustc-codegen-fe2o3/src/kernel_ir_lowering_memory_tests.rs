@@ -217,7 +217,12 @@ fn memory_v1_rejects_read_only_destinations_and_unsupported_elements() {
 
     let unsupported_element = {
         let mut module = memory_module();
-        module.functions[0].locals[1].ty = imported(slice_shape(false, MirTypeShape::F16));
+        module.functions[0].locals[1].ty = imported(slice_shape(
+            false,
+            MirTypeShape::Adt {
+                identity: "tests::UnsupportedElement".to_owned(),
+            },
+        ));
         module
     };
     let errors =

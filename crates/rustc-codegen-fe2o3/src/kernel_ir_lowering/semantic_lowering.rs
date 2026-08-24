@@ -10,6 +10,7 @@ mod control_flow;
 mod diagnostics;
 mod general_v3;
 mod memory_v1;
+mod typed_kernel_primitives;
 
 use super::{
     FunctionLowerer, TranslationDiagnostic, TranslationDiagnosticCode, TranslationLocation,
@@ -173,6 +174,11 @@ const CALL_HANDLERS: &[CallHandler] = &[
         name: "gfx942-memory-v1",
         claim: memory_v1::claim_call,
         lower: memory_v1::lower_call,
+    },
+    CallHandler {
+        name: "typed-kernel-primitives",
+        claim: typed_kernel_primitives::claim_call,
+        lower: typed_kernel_primitives::lower_call,
     },
     CallHandler {
         name: "general-v3",

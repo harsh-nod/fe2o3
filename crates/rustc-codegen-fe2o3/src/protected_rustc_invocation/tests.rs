@@ -130,13 +130,14 @@ fn absent_and_present_selection_is_exact_and_ordinary_compatible() {
         );
         assert_eq!(
             pipeline.rustc_invocation_policy(false),
-            if matches!(
-                pipeline,
-                CodegenPipeline::ProductionV1 | CodegenPipeline::CollectedRowSoftmaxV1
-            ) {
-                RustcInvocationPolicyV1::ProtectedV3
-            } else {
-                RustcInvocationPolicyV1::Unmanaged
+            match pipeline {
+                CodegenPipeline::ProductionV1 | CodegenPipeline::CollectedRowSoftmaxV1 => {
+                    RustcInvocationPolicyV1::ProtectedV3
+                }
+                CodegenPipeline::SimulationV1 => {
+                    RustcInvocationPolicyV1::QualificationObserved
+                }
+                _ => RustcInvocationPolicyV1::Unmanaged,
             }
         );
     }
@@ -238,6 +239,19 @@ fn qualification_routes_require_paired_authenticated_observations_and_no_authori
                 .is_none()
         );
     }
+    assert!(
+        admit_for_codegen_at(
+            CodegenPipeline::SimulationV1,
+            false,
+            TEST_CHILD_FD,
+            true,
+            false,
+            true,
+            true,
+        )
+        .unwrap()
+        .is_none()
+    );
 
     for (compiler_closure_marker_present, qualification_backend_marker_present) in
         [(false, false), (true, false), (false, true)]

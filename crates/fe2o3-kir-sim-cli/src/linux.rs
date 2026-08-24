@@ -1810,9 +1810,7 @@ fn write_success<W: Write + ?Sized>(
 ) -> io::Result<()> {
     writer.write_all(b"{\"schema\":\"")?;
     writer.write_all(RESULT_SCHEMA.as_bytes())?;
-    writer.write_all(
-        b"\",\"status\":\"ok\",\"authority\":\"observation_only\",\"kir\":{\"sha256\":\"",
-    )?;
+    writer.write_all(b"\",\"status\":\"ok\",\"authority\":\"observation_only\",\"simulated\":true,\"hardware_observed\":false,\"hardware_validation\":false,\"performance_prediction\":false,\"target_profile\":{\"identity\":\"amdgpu_64_little_endian_v1\",\"index_bits\":64,\"max_workgroup_invocations\":1024},\"kir\":{\"sha256\":\"")?;
     write_lower_hex(writer, execution.identity().digest(), false)?;
     write!(
         writer,

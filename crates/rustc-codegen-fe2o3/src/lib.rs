@@ -554,7 +554,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     let canonical =
                         fe2o3_kernel_ir::VerifiedCanonicalKernelIrV6::from_module(module)
                             .map_err(|error| format!("canonical KIR V6 custody failed: {error}"))?;
-                    fe2o3_artifact_transaction::publish_compiler_module_handoff_v1(
+                    fe2o3_artifact_transaction::publish_simulation_kernel_ir_handoff_v1(
                         output_dir,
                         &producer,
                         attempt,

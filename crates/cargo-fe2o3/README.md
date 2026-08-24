@@ -127,9 +127,11 @@ cargo fe2o3 simulate \
 
 The request uses `fe2o3-simulation-request-v1` and names one kernel, launch
 grid, workgroup, and typed scalar or buffer arguments. The result uses
-`fe2o3-simulation-result-v1`; omitting `--output` writes exactly one JSON
-document to stdout. Output-file publication is private, durable, atomic, and
-no-replace.
+`fe2o3-simulation-result-v1`; its additive evidence fields explicitly report
+`simulated=true`, no hardware observation or validation, no performance
+prediction, the scalar target profile, deterministic scheduler, and exact KIR
+identity. Omitting `--output` writes exactly one JSON document to stdout.
+Output-file publication is private, durable, atomic, and no-replace.
 
 The command securely reads and strictly admits the complete request before
 starting Cargo. It binds the byte length and SHA-256 and verifies both again
@@ -146,9 +148,11 @@ Simulation sets the existing `FE2O3_HIP_SYS_DISABLE` build boundary and the
 default `cargo-fe2o3` dependency and ELF closures exclude `fe2o3-core`,
 `fe2o3-host`, `fe2o3-hsa-runtime`, HIP, HSA, KFD, DRM, and ROCm libraries.
 It does not enumerate a GPU or initialize a GPU runtime. Hardware commands
-remain explicit and never fall back to simulation. The existing direct
-row-softmax runtime is compiled only with the explicit `hardware-runtime`
-feature; a default command image fails closed before that runtime boundary.
+remain explicit and never fall back to simulation. The existing legacy direct
+row-softmax HSA runtime and related hardware test fixtures are compiled only
+with the explicit `legacy-hsa-runtime` feature; a default command image fails
+closed before that compatibility boundary. New runtime work remains KFD-only.
+Simulation has no HSA, HIP, KFD, or ROCm runtime.
 
 This is a qualification route, not the production compiler transaction. It
 provides exact KIR V6 custody from the current generic frontend and runs every

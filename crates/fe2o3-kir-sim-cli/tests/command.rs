@@ -113,6 +113,22 @@ fn successful_stdout_is_complete_machine_readable_json() {
     assert_eq!(value["schema"], "fe2o3-simulation-result-v1");
     assert_eq!(value["status"], "ok");
     assert_eq!(value["authority"], "observation_only");
+    assert_eq!(value["simulated"], true);
+    assert_eq!(value["hardware_observed"], false);
+    assert_eq!(value["hardware_validation"], false);
+    assert_eq!(value["performance_prediction"], false);
+    assert_eq!(
+        value["target_profile"]["identity"],
+        "amdgpu_64_little_endian_v1"
+    );
+    assert_eq!(value["target_profile"]["index_bits"], 64);
+    assert_eq!(value["target_profile"]["max_workgroup_invocations"], 1024);
+    assert_eq!(
+        value["schedule"]["identity"],
+        "workgroup_major_local_zyx_serial_v1"
+    );
+    assert_eq!(value["kir"]["sha256"].as_str().unwrap().len(), 64);
+    assert!(value["kir"]["canonical_bytes"].as_u64().unwrap() > 0);
     assert_eq!(value["counts"]["invocations_executed"], 2);
     assert_eq!(value["counts"]["scheduled_slots_visited"], 2);
     assert_eq!(value["arguments"][0]["value"]["bytes"], "0x2a");

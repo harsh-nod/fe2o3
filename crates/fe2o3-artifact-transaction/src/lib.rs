@@ -70,6 +70,7 @@ fn encode_hex(bytes: &[u8]) -> String {
 pub use attempt::{
     AttemptCodecError, BackendPublicationReceiptV1, BackendPublicationReceiptV2,
     BackendPublicationReceiptV3, BuildAttempt, BuildInvocation, BuildSession,
+    SimulationObservationReceiptV1,
 };
 use attempt::{AttemptPhase, AttemptRegistry, MAX_ATTEMPT_BYTES, StartAttemptOutcome};
 pub use attempt_scoped_hsaco_publication::{
@@ -103,18 +104,21 @@ pub use compiler_module_handoff::{
     CompilerModuleHandoffSlotV2, CompilerModuleHandoffSlotV3,
     CompilerModuleHandoffTransactionIdentityV3, ConsumedCompilerModuleHandoffV1,
     ConsumedCompilerModuleHandoffV2, ConsumedCompilerModuleHandoffV3,
-    MAX_COMPILER_MODULE_HANDOFF_BYTES, MAX_COMPILER_MODULE_HANDOFF_BYTES_V3,
-    acquire_compiler_module_handoff_currentness_lease_v3,
+    ConsumedSimulationKernelIrHandoffV1, MAX_COMPILER_MODULE_HANDOFF_BYTES,
+    MAX_COMPILER_MODULE_HANDOFF_BYTES_V3, SimulationKernelIrHandoffIdentityV1,
+    SimulationKernelIrHandoffReceiptV1, SimulationKernelIrHandoffSlotV1,
+    acquire_compiler_module_handoff_currentness_lease_v3, complete_simulation_kernel_ir_attempt_v1,
     consume_compiler_module_handoff_in_slot_v1, consume_compiler_module_handoff_in_slot_v2,
     consume_compiler_module_handoff_in_slot_v3, consume_compiler_module_handoff_v1,
     consume_compiler_module_handoff_v2, consume_compiler_module_handoff_v3,
-    consume_compiler_module_handoff_with_currentness_v3,
+    consume_compiler_module_handoff_with_currentness_v3, consume_simulation_kernel_ir_handoff_v1,
     publish_compiler_module_handoff_in_slot_v1, publish_compiler_module_handoff_in_slot_v2,
     publish_compiler_module_handoff_in_slot_v3,
     publish_compiler_module_handoff_in_slot_with_currentness_v3,
     publish_compiler_module_handoff_v1, publish_compiler_module_handoff_v2,
     publish_compiler_module_handoff_v3, publish_compiler_module_handoff_with_currentness_v3,
-    recover_compiler_module_handoff_receipt_in_slot_v3, recover_compiler_module_handoff_receipt_v3,
+    publish_simulation_kernel_ir_handoff_v1, recover_compiler_module_handoff_receipt_in_slot_v3,
+    recover_compiler_module_handoff_receipt_v3,
 };
 pub use durable_link_publication::{
     DurableArtifactBoundaryV1, DurableCurrentLinkPublicationLeaseV1,

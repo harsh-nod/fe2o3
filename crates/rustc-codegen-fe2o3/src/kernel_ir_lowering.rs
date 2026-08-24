@@ -585,13 +585,21 @@ fn kernel_ir_launch_contract(
     }
     let [x, y, z] = required.as_array();
     let authenticated = WorkgroupSize::new(x, y, z);
-    if let Some(typed) = typed_workgroup
-        && authenticated != typed
-    {
+    let typed_launch_matches = match function.typed_profile {
+        None => true,
+        Some(MirKernelProfile::VecAddRustcLayoutV2) => {
+            authenticated == WorkgroupSize::new(256, 1, 1)
+        }
+        Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3) => {
+            authenticated == WorkgroupSize::new(64, 1, 1)
+                || authenticated == WorkgroupSize::new(256, 1, 1)
+        }
+    };
+    if !typed_launch_matches {
         return Err(diagnostic(
             TranslationDiagnosticCode::UnsupportedType,
             TranslationLocation::function(function),
-            "authenticated launch contract disagrees with the typed profile's exact 256x1x1 workgroup",
+            "authenticated launch contract disagrees with the typed profile: VecAdd requires exact 256x1x1 and General V3 requires exact 64x1x1 or 256x1x1",
         ));
     }
     Ok(Some(authenticated))
@@ -919,6 +927,11 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
     }
 
     fn is_general_v3_profile_context(&self) -> bool {
+        self.function.kind == MirFunctionKind::KernelEntry
+            && self.function.typed_profile
+                == Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3)
+    }
+    fn is_general_typed_kernel_context(&self) -> bool {
         self.function.kind == MirFunctionKind::KernelEntry
             && self.function.typed_profile
                 == Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3)
@@ -1404,8 +1417,15 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 otherwise,
             } => {
                 let selector = self.lower_operand(discriminant, block, &location)?;
-                if self.is_exact_general_v3_alpha_zeta_context()
+                if self.is_general_typed_kernel_context()
                     && self.value_type(selector, &location)? == &Type::BOOL
+                    && self.locals.values().any(|binding| {
+                        matches!(
+                            binding,
+                            LocalBinding::OptionPointer { discriminant, .. }
+                                if *discriminant == selector
+                        )
+                    })
                 {
                     let zero = targets.iter().find(|target| target.value == 0);
                     let one = targets.iter().find(|target| target.value == 1);
@@ -3293,11 +3313,7 @@ fn lower_device_ffi_type(physical: DeviceFfiPhysicalTypeV1) -> Type {
 }
 
 fn lower_element_type(shape: &MirTypeShape) -> Option<Type> {
-    match shape {
-        MirTypeShape::F32 => Some(Type::F32),
-        MirTypeShape::F64 => Some(Type::F64),
-        _ => None,
-    }
+    lower_scalar_type(shape)
 }
 
 fn lower_constant(constant: &MirConstant) -> Option<Constant> {
@@ -3365,6 +3381,57 @@ mod tests {
     use fe2o3_rustc_front::{
         FrontendLaunchBoundsV1, FrontendWorkgroupDimensionsV1, KernelFrontendContractV1,
     };
+
+    fn exact_frontend_launch_for_test(
+        x: u32,
+    ) -> crate::collector::AuthenticatedKernelFrontendContractV1 {
+        let dimensions = FrontendWorkgroupDimensionsV1::new([x, 1, 1]).unwrap();
+        let launch = FrontendLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None).unwrap();
+        crate::collector::AuthenticatedKernelFrontendContractV1::for_test(
+            KernelFrontendContractV1::new(Some(launch), None).unwrap(),
+        )
+    }
+
+    #[test]
+    fn typed_launch_contract_matches_the_profile_specific_macro_domain() {
+        let mut function = scalar_fixture().functions.remove(0);
+        function.typed_profile = Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3);
+        for x in [64, 256] {
+            function.frontend_contract = Some(exact_frontend_launch_for_test(x));
+            assert_eq!(
+                kernel_ir_launch_contract(&function).unwrap(),
+                Some(WorkgroupSize::new(x, 1, 1))
+            );
+        }
+
+        function.frontend_contract = Some(exact_frontend_launch_for_test(32));
+        assert!(kernel_ir_launch_contract(&function).is_err());
+
+        function.typed_profile = Some(MirKernelProfile::VecAddRustcLayoutV2);
+        function.frontend_contract = Some(exact_frontend_launch_for_test(64));
+        assert!(kernel_ir_launch_contract(&function).is_err());
+    }
+
+    #[test]
+    fn slice_elements_accept_every_admitted_scalar_shape() {
+        for shape in [
+            MirTypeShape::Bool,
+            MirTypeShape::I32,
+            MirTypeShape::U32,
+            MirTypeShape::I64,
+            MirTypeShape::ISize,
+            MirTypeShape::USize,
+            MirTypeShape::F16,
+            MirTypeShape::Bf16,
+            MirTypeShape::Bf16x2,
+            MirTypeShape::F32,
+            MirTypeShape::F64,
+        ] {
+            assert_eq!(lower_element_type(&shape), lower_scalar_type(&shape));
+            assert!(lower_element_type(&shape).is_some(), "{shape:?}");
+        }
+        assert_eq!(lower_element_type(&MirTypeShape::Unknown), None);
+    }
 
     #[test]
     fn production_kernel_ir_boundary_runs_general_checks() {
@@ -4143,7 +4210,7 @@ mod tests {
     }
 
     #[test]
-    fn session_recognized_call_rejects_unsupported_context_without_fallback() {
+    fn session_recognized_primitive_rejects_a_wrong_typed_destination() {
         let mut fixture = helper_call_fixture(
             MirCallee::trusted_for_test(TrustedDeviceItem::ThreadIndex1d),
             &[],
@@ -4152,13 +4219,13 @@ mod tests {
             Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3);
 
         let errors = translate_and_verify(&fixture)
-            .expect_err("recognized General V3 call outside its context must fail closed");
+            .expect_err("recognized General V3 primitive with the wrong destination must fail");
 
-        assert!(errors.contains(TranslationDiagnosticCode::UnsupportedCall));
+        assert!(errors.contains(TranslationDiagnosticCode::UnsupportedType));
         assert!(errors.diagnostics().iter().any(|diagnostic| {
-            diagnostic.message.contains(
-                "session-recognized semantic call `fe2o3_device::thread::index_1d` requires an exact General V3 alpha/zeta kernel context",
-            )
+            diagnostic
+                .message
+                .contains("destination is not the trusted ThreadIndex type")
         }));
         assert!(errors.diagnostics().iter().all(|diagnostic| {
             !diagnostic

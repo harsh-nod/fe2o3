@@ -27,12 +27,12 @@ mod pinned_codegen_backend;
 mod pinned_executable;
 #[cfg(test)]
 mod pinned_executable_test_directory;
-#[cfg(feature = "hardware-runtime")]
+#[cfg(feature = "legacy-hsa-runtime")]
 #[path = "../../../examples/row_softmax_v1/src/production_release.rs"]
 mod production_release;
-#[cfg(not(feature = "hardware-runtime"))]
+#[cfg(not(feature = "legacy-hsa-runtime"))]
 mod production_release_no_hardware;
-#[cfg(not(feature = "hardware-runtime"))]
+#[cfg(not(feature = "legacy-hsa-runtime"))]
 use production_release_no_hardware as production_release;
 mod project;
 mod protected_compiler_handoff_v3;
