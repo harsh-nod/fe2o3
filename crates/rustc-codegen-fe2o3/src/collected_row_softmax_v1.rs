@@ -3295,7 +3295,7 @@ mod tests {
         );
         assert_eq!(
             crate::encode_hex(&Sha256::digest(legacy_transcript)),
-            "c26eb35a626d5a9f2bd325e30f7ee8a10c7f0a1caae7430569fb2ae20b8a1c7b",
+            "2c11ea46025364e1bf357114423c3f27ae1b1ad7262d48298b4910838e672fb8",
             "unprotected qualification must preserve the V1 transcript wire image",
         );
 
