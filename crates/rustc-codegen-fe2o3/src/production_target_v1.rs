@@ -2,7 +2,10 @@
 
 use std::fmt;
 
-use dialect_mir::GFX942_TARGET_CPU;
+use fe2o3_amd_target::{
+    PRODUCTION_GFX942_DEVICE_CPU_V1, PRODUCTION_GFX942_DEVICE_TARGET_V1,
+    PRODUCTION_GFX942_RUSTC_FEATURES_V1, PRODUCTION_GFX942_RUSTC_TARGET_V1,
+};
 use rustc_middle::ty::TyCtxt;
 
 use crate::AmdGpuTarget;
@@ -10,11 +13,8 @@ use crate::semantic_layout_bridge::{
     SemanticLayoutBridgeError, SemanticLayoutTargetV1, rustc_semantic_layout_target_v1,
 };
 
-pub(crate) const PRODUCTION_TARGET_V1: &str = "gfx942:xnack-";
-const PRODUCTION_RUSTC_LLVM_TARGET_V1: &str = "amdgcn-amd-amdhsa";
+pub(crate) const PRODUCTION_TARGET_V1: &str = PRODUCTION_GFX942_DEVICE_TARGET_V1;
 pub(crate) const PRODUCTION_RUSTC_DATA_LAYOUT_V1: &str = "e-m:e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
-const PRODUCTION_RUSTC_CPU_V1: &str = "gfx942";
-const PRODUCTION_RUSTC_FEATURES_V1: &str = "-wavefrontsize32,+wavefrontsize64,-xnack";
 const PRODUCTION_RUSTC_POINTER_WIDTH_V1: u16 = 64;
 
 /// Move-only proof that the live rustc session was the exact production target
@@ -85,7 +85,7 @@ fn validate_authoritative_rustc_target_v1(
 ) -> Result<(), ProductionTargetErrorV1> {
     require_exact_target_text(
         "LLVM target",
-        PRODUCTION_RUSTC_LLVM_TARGET_V1,
+        PRODUCTION_GFX942_RUSTC_TARGET_V1,
         target.llvm_target(),
     )?;
     require_exact_target_text(
@@ -102,12 +102,12 @@ fn validate_authoritative_rustc_target_v1(
     }
     require_exact_target_text(
         "active CPU",
-        PRODUCTION_RUSTC_CPU_V1,
+        PRODUCTION_GFX942_DEVICE_CPU_V1,
         target.active_cpu().unwrap_or("unavailable"),
     )?;
     require_exact_target_text(
         "active target features",
-        PRODUCTION_RUSTC_FEATURES_V1,
+        PRODUCTION_GFX942_RUSTC_FEATURES_V1,
         target.active_features().unwrap_or("unavailable"),
     )
 }
@@ -129,7 +129,7 @@ fn require_exact_target_text(
 }
 
 fn configured_target_is_production_cpu_v1(target: &AmdGpuTarget) -> bool {
-    target.as_str() == GFX942_TARGET_CPU
+    target.as_str() == PRODUCTION_GFX942_DEVICE_CPU_V1
 }
 
 #[derive(Debug)]
@@ -151,7 +151,7 @@ impl fmt::Display for ProductionTargetErrorV1 {
         match self {
             Self::ConfiguredCpu { observed } => write!(
                 formatter,
-                "production-v1 requires configured target CPU {GFX942_TARGET_CPU:?}; found {observed:?}"
+                "production-v1 requires configured target CPU {PRODUCTION_GFX942_DEVICE_CPU_V1:?}; found {observed:?}"
             ),
             Self::RustcObservation(error) => {
                 write!(
@@ -209,12 +209,12 @@ mod tests {
     #[test]
     fn production_rustc_target_requires_every_authoritative_axis() {
         let exact = SemanticLayoutTargetV1::new_with_codegen_profile(
-            PRODUCTION_RUSTC_LLVM_TARGET_V1,
+            PRODUCTION_GFX942_RUSTC_TARGET_V1,
             PRODUCTION_RUSTC_DATA_LAYOUT_V1,
             PRODUCTION_RUSTC_POINTER_WIDTH_V1,
-            PRODUCTION_RUSTC_CPU_V1,
+            PRODUCTION_GFX942_DEVICE_CPU_V1,
             "",
-            PRODUCTION_RUSTC_FEATURES_V1,
+            PRODUCTION_GFX942_RUSTC_FEATURES_V1,
         )
         .unwrap();
         validate_authoritative_rustc_target_v1(&exact).unwrap();
@@ -224,61 +224,61 @@ mod tests {
                 "x86_64-unknown-linux-gnu",
                 PRODUCTION_RUSTC_DATA_LAYOUT_V1,
                 PRODUCTION_RUSTC_POINTER_WIDTH_V1,
-                PRODUCTION_RUSTC_CPU_V1,
+                PRODUCTION_GFX942_DEVICE_CPU_V1,
                 "",
-                PRODUCTION_RUSTC_FEATURES_V1,
+                PRODUCTION_GFX942_RUSTC_FEATURES_V1,
             )
             .unwrap(),
             SemanticLayoutTargetV1::new_with_codegen_profile(
-                PRODUCTION_RUSTC_LLVM_TARGET_V1,
+                PRODUCTION_GFX942_RUSTC_TARGET_V1,
                 "e-p:64:64",
                 PRODUCTION_RUSTC_POINTER_WIDTH_V1,
-                PRODUCTION_RUSTC_CPU_V1,
+                PRODUCTION_GFX942_DEVICE_CPU_V1,
                 "",
-                PRODUCTION_RUSTC_FEATURES_V1,
+                PRODUCTION_GFX942_RUSTC_FEATURES_V1,
             )
             .unwrap(),
             SemanticLayoutTargetV1::new_with_codegen_profile(
-                PRODUCTION_RUSTC_LLVM_TARGET_V1,
+                PRODUCTION_GFX942_RUSTC_TARGET_V1,
                 PRODUCTION_RUSTC_DATA_LAYOUT_V1,
                 32,
-                PRODUCTION_RUSTC_CPU_V1,
+                PRODUCTION_GFX942_DEVICE_CPU_V1,
                 "",
-                PRODUCTION_RUSTC_FEATURES_V1,
+                PRODUCTION_GFX942_RUSTC_FEATURES_V1,
             )
             .unwrap(),
             SemanticLayoutTargetV1::new_with_codegen_profile(
-                PRODUCTION_RUSTC_LLVM_TARGET_V1,
+                PRODUCTION_GFX942_RUSTC_TARGET_V1,
                 PRODUCTION_RUSTC_DATA_LAYOUT_V1,
                 PRODUCTION_RUSTC_POINTER_WIDTH_V1,
                 "gfx950",
                 "",
-                PRODUCTION_RUSTC_FEATURES_V1,
+                PRODUCTION_GFX942_RUSTC_FEATURES_V1,
             )
             .unwrap(),
             SemanticLayoutTargetV1::new_with_codegen_profile(
-                PRODUCTION_RUSTC_LLVM_TARGET_V1,
+                PRODUCTION_GFX942_RUSTC_TARGET_V1,
                 PRODUCTION_RUSTC_DATA_LAYOUT_V1,
                 PRODUCTION_RUSTC_POINTER_WIDTH_V1,
-                PRODUCTION_RUSTC_CPU_V1,
+                PRODUCTION_GFX942_DEVICE_CPU_V1,
                 "",
                 "-wavefrontsize32,+wavefrontsize64,+xnack",
             )
             .unwrap(),
             SemanticLayoutTargetV1::new_with_codegen_profile(
-                PRODUCTION_RUSTC_LLVM_TARGET_V1,
+                PRODUCTION_GFX942_RUSTC_TARGET_V1,
                 PRODUCTION_RUSTC_DATA_LAYOUT_V1,
                 PRODUCTION_RUSTC_POINTER_WIDTH_V1,
-                PRODUCTION_RUSTC_CPU_V1,
+                PRODUCTION_GFX942_DEVICE_CPU_V1,
                 "",
                 "-wavefrontsize32,+wavefrontsize64",
             )
             .unwrap(),
             SemanticLayoutTargetV1::new_with_codegen_profile(
-                PRODUCTION_RUSTC_LLVM_TARGET_V1,
+                PRODUCTION_GFX942_RUSTC_TARGET_V1,
                 PRODUCTION_RUSTC_DATA_LAYOUT_V1,
                 PRODUCTION_RUSTC_POINTER_WIDTH_V1,
-                PRODUCTION_RUSTC_CPU_V1,
+                PRODUCTION_GFX942_DEVICE_CPU_V1,
                 "",
                 "+wavefrontsize32,-wavefrontsize64,-xnack",
             )
@@ -349,7 +349,7 @@ mod tests {
             "--edition".to_owned(),
             "2024".to_owned(),
             "--target".to_owned(),
-            PRODUCTION_RUSTC_LLVM_TARGET_V1.to_owned(),
+            PRODUCTION_GFX942_RUSTC_TARGET_V1.to_owned(),
             "-Ctarget-cpu=gfx942".to_owned(),
             "-Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32".to_owned(),
             "-Zno-codegen".to_owned(),
