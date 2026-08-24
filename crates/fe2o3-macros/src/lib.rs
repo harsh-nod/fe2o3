@@ -1317,9 +1317,9 @@ fn expand_general_typed_kernel_with_imports(
                 pattern.mutability = None;
             }
         }
-        input.block = Box::new(parse_quote!({
+        *input.block = parse_quote!({
             let _: #result_device_path::KernelResult = #body_ident(#(#argument_names),*);
-        }));
+        });
         Some(helper)
     } else {
         input.sig.ident = internal_ident.clone();
@@ -2204,8 +2204,8 @@ fn generated_worker_v3_adapter_v1(
                 __fe2o3_kernel_host::__generated::GeneratedWorkerV3ArgumentBindingV1<'allocation>,
                 __fe2o3_kernel_host::__generated::GeneratedArgumentPackError,
             > {
-                let scalar_inputs = vec![#(#scalar_inputs),*];
-                let memory_arguments = vec![#(#memory_arguments),*];
+                let scalar_inputs = [#(#scalar_inputs),*].into_iter().collect();
+                let memory_arguments = [#(#memory_arguments),*].into_iter().collect();
                 Ok(
                     __fe2o3_kernel_host::__generated::GeneratedWorkerV3ArgumentBindingV1::
                         from_compiler_generated_parts_v1(scalar_inputs, memory_arguments),
@@ -2232,7 +2232,7 @@ fn generated_worker_v3_layout_v1(model: &GeneralTypedSignatureModelV1) -> proc_m
             #size,
             #alignment,
             __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
-            vec![#(#fields),*],
+            [#(#fields),*].into_iter().collect(),
         )
     }
 }
@@ -2432,19 +2432,19 @@ fn generated_scalar_gemm_v1_adapter(
                 >,
                 __fe2o3_kernel_host::__generated::GeneratedArgumentPackError,
             > {
-                let inputs = vec![
+                let inputs = [
                     self.a.bind_input_v1(plan, 0)?,
                     self.b.bind_input_v1(plan, 1)?,
                     self.c.bind_input_v1(plan, 2)?,
                     plan.scalar_u32(3, self.m)?,
                     plan.scalar_u32(4, self.n)?,
                     plan.scalar_u32(5, self.k)?,
-                ];
-                let accesses = vec![
+                ].into_iter().collect();
+                let accesses = [
                     self.a.argument_access_v1(),
                     self.b.argument_access_v1(),
                     self.c.argument_access_v1(),
-                ];
+                ].into_iter().collect();
                 // SAFETY: inputs contain each exact source argument once and
                 // access records are regenerated from the same retained slice
                 // capabilities in source order.
@@ -2518,7 +2518,7 @@ fn generated_scalar_gemm_v1_layout(
             #size,
             #alignment,
             __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
-            vec![#(#fields),*],
+            [#(#fields),*].into_iter().collect(),
         )
     }
 }
@@ -2641,19 +2641,27 @@ fn generated_alpha_zeta_cov6_adapter_v1(
             .expect("role was checked above")
         {
             AlphaZetaCov6MacroRoleV1::Alpha => (
-                quote!(vec![plan.scalar_f32(0, self.scale)?]),
-                quote!(vec![
-                    self.input.bind_argument_pair(plan, 1)?,
-                    self.output.bind_argument_pair(plan, 2)?,
-                ]),
+                quote!([plan.scalar_f32(0, self.scale)?].into_iter().collect()),
+                quote!(
+                    [
+                        self.input.bind_argument_pair(plan, 1)?,
+                        self.output.bind_argument_pair(plan, 2)?,
+                    ]
+                    .into_iter()
+                    .collect()
+                ),
             ),
             AlphaZetaCov6MacroRoleV1::Zeta => (
-                quote!(vec![plan.scalar_f32(2, self.bias)?]),
-                quote!(vec![
-                    self.a.bind_argument_pair(plan, 0)?,
-                    self.b.bind_argument_pair(plan, 1)?,
-                    self.output.bind_argument_pair(plan, 3)?,
-                ]),
+                quote!([plan.scalar_f32(2, self.bias)?].into_iter().collect()),
+                quote!(
+                    [
+                        self.a.bind_argument_pair(plan, 0)?,
+                        self.b.bind_argument_pair(plan, 1)?,
+                        self.output.bind_argument_pair(plan, 3)?,
+                    ]
+                    .into_iter()
+                    .collect()
+                ),
             ),
         };
 
@@ -2756,7 +2764,7 @@ fn generated_alpha_zeta_cov6_layout_v1(
             #size,
             #alignment,
             __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
-            vec![#(#fields),*],
+            [#(#fields),*].into_iter().collect(),
         )
     }
 }

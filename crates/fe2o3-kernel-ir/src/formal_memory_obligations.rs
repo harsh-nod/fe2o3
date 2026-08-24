@@ -494,8 +494,6 @@ pub fn derive_kernel_memory_obligations_from_verified(
                     });
                 }
                 OperationKind::Call { .. } => {}
-                OperationKind::Load { access, .. }
-                    if access.address_space == AddressSpace::Private => {}
                 OperationKind::Load { pointer, access } => {
                     if let Some(invocations) = access_invocations {
                         match derive_access(
@@ -513,8 +511,6 @@ pub fn derive_kernel_memory_obligations_from_verified(
                         }
                     }
                 }
-                OperationKind::Store { access, .. }
-                    if access.address_space == AddressSpace::Private => {}
                 OperationKind::Store {
                     pointer, access, ..
                 } => {
@@ -534,10 +530,6 @@ pub fn derive_kernel_memory_obligations_from_verified(
                         }
                     }
                 }
-                OperationKind::Alloca {
-                    address_space: AddressSpace::Private,
-                    ..
-                } => {}
                 OperationKind::Matrix(matrix) if matrix.memory_effects().is_empty() => {}
                 OperationKind::Alloca { .. }
                 | OperationKind::Barrier(_)
