@@ -666,7 +666,11 @@ mod tests {
     #[test]
     fn parent_custody_survives_child_exit_and_managed_completion() {
         let (custody, _) = protected_parent_custody(0x10);
-        assert!(Command::new("/bin/true").status().unwrap().success());
+        assert!(
+            crate::process_execution::status(&mut Command::new("/bin/true"))
+                .unwrap()
+                .success()
+        );
         let completed = custody.retain_through(|custody| {
             custody.revalidate().unwrap();
             assert!(!custody.grants_compiler_authority());

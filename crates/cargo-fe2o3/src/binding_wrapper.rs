@@ -5576,7 +5576,11 @@ mod tests {
                 .unwrap();
         assert_ne!(selected, disagreed);
         assert!(pinned.command().unwrap().status().unwrap().success());
-        assert!(!Command::new(disagreed).status().unwrap().success());
+        assert!(
+            !crate::process_execution::status(&mut Command::new(disagreed))
+                .unwrap()
+                .success()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -7902,7 +7906,8 @@ mod tests {
         ));
         drop(resume);
 
-        let status = Command::new(std::env::current_exe().unwrap())
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
             .arg("--exact")
             .arg("binding_wrapper::tests::protected_crash_restart_child")
             .arg("--nocapture")
@@ -7910,9 +7915,8 @@ mod tests {
             .env(PROTECTED_RESTART_CHILD_DIRECTORY_ENV, &directory)
             .env(PROTECTED_RESTART_CHILD_LABEL_ENV, &label)
             .env(PROTECTED_RESTART_CHILD_CLOSURE_SEED_ENV, seed.to_string())
-            .env("FE2O3_TEST_WORKER_V2_FAULT_POINT_V1", fault_point)
-            .status()
-            .unwrap();
+            .env("FE2O3_TEST_WORKER_V2_FAULT_POINT_V1", fault_point);
+        let status = crate::process_execution::status(&mut command).unwrap();
         assert_eq!(status.code(), Some(86));
         assert_eq!(v1_coordination_snapshot(&directory), v1_before);
 
@@ -8371,7 +8375,7 @@ mod tests {
         } else {
             command.env_remove(crate::PROTECTED_RELEASE_ACTION_ENV);
         }
-        let status = command.status().unwrap();
+        let status = crate::process_execution::status(&mut command).unwrap();
         assert!(status.success());
         assert_eq!(evidence_snapshot(&artifacts), before);
         fs::remove_dir_all(root).unwrap();

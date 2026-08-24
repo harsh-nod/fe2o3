@@ -955,7 +955,9 @@ mod platform {
 
         #[test]
         fn dead_wrapper_permits_are_pruned_before_capacity_accounting() {
-            let mut child = Command::new("/bin/sleep").arg("60").spawn().unwrap();
+            let mut command = Command::new("/bin/sleep");
+            command.arg("60");
+            let mut child = crate::process_execution::spawn(&mut command).unwrap();
             let child_identity = ProcessIdentityV1::observe(child.id()).unwrap();
             let child_pidfd = open_process_pidfd(child.id()).unwrap();
             let registry = InvocationAuthorizationRegistryV1::new();

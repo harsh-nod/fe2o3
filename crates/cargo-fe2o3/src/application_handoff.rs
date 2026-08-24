@@ -1889,6 +1889,56 @@ mod tests {
         }
     }
 
+    fn close_child_descriptor_range(first: u32, last: u32) -> bool {
+        if first > last {
+            return true;
+        }
+        // SAFETY: close_range operates only on the fork child's descriptor table.
+        unsafe { libc::syscall(libc::SYS_close_range, first, last, 0_u32) == 0 }
+    }
+
+    fn close_unintended_child_descriptors(preserved: RawFd) -> bool {
+        let Ok(preserved) = u32::try_from(preserved) else {
+            return false;
+        };
+        if preserved < 3 {
+            return close_child_descriptor_range(3, u32::MAX);
+        }
+        close_child_descriptor_range(3, preserved - 1)
+            && close_child_descriptor_range(preserved + 1, u32::MAX)
+    }
+
+    fn child_write_ready(descriptor: RawFd) -> bool {
+        let ready = [1_u8];
+        loop {
+            // SAFETY: the child owns a live pipe descriptor and `ready` is readable for one byte.
+            let written = unsafe { libc::write(descriptor, ready.as_ptr().cast(), ready.len()) };
+            if written == 1 {
+                return true;
+            }
+            if written < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return false;
+        }
+    }
+
+    fn await_child_ready(descriptor: RawFd) {
+        let mut ready = [0_u8];
+        loop {
+            // SAFETY: the parent owns a live pipe descriptor and `ready` is writable for one byte.
+            let read = unsafe { libc::read(descriptor, ready.as_mut_ptr().cast(), ready.len()) };
+            if read == 1 {
+                assert_eq!(ready, [1]);
+                return;
+            }
+            if read < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            panic!("raw fork child exited before closing inherited descriptors");
+        }
+    }
+
     fn process_exists(process: libc::pid_t) -> bool {
         // SAFETY: signal zero performs an existence/permission check without delivering a signal.
         unsafe { libc::kill(process, 0) == 0 }
@@ -2056,21 +2106,42 @@ mod tests {
     }
 
     fn spawn_paused_outsider() -> libc::pid_t {
-        // SAFETY: the child branch performs only the async-signal-safe `pause` syscall.
-        let outsider = unsafe { libc::fork() };
-        assert!(
-            outsider >= 0,
-            "fork outsider: {}",
-            io::Error::last_os_error()
+        let mut ready = [-1_i32; 2];
+        // SAFETY: `ready` points to two writable descriptor slots.
+        assert_eq!(
+            unsafe { libc::pipe2(ready.as_mut_ptr(), libc::O_CLOEXEC) },
+            0
         );
-        if outsider == 0 {
-            unsafe {
-                loop {
-                    libc::pause();
+        fe2o3_artifact_transaction::with_artifact_process_spawn_v1(|| {
+            // SAFETY: the child closes unintended descriptors, signals readiness, and pauses
+            // without returning to Rust. The parent does not release the barrier before readiness.
+            let outsider = unsafe { libc::fork() };
+            assert!(
+                outsider >= 0,
+                "fork outsider: {}",
+                io::Error::last_os_error()
+            );
+            if outsider == 0 {
+                unsafe {
+                    libc::close(ready[0]);
+                    if !close_unintended_child_descriptors(ready[1]) || !child_write_ready(ready[1])
+                    {
+                        libc::_exit(127);
+                    }
+                    libc::close(ready[1]);
+                    loop {
+                        libc::pause();
+                    }
                 }
             }
-        }
-        outsider
+            // SAFETY: the parent owns both raw pipe descriptors after fork.
+            unsafe { libc::close(ready[1]) };
+            await_child_ready(ready[0]);
+            // SAFETY: readiness consumed the only byte and the descriptor is no longer needed.
+            unsafe { libc::close(ready[0]) };
+            Ok::<_, io::Error>(outsider)
+        })
+        .unwrap()
     }
 
     #[test]
@@ -2086,7 +2157,7 @@ mod tests {
                 establish_fresh_application_session()
             });
         }
-        let error = command.spawn().unwrap_err();
+        let error = crate::process_execution::spawn(&mut command).unwrap_err();
         assert_eq!(error.raw_os_error(), Some(libc::EPERM));
     }
 
@@ -2094,7 +2165,7 @@ mod tests {
     fn unrelated_same_session_process_cannot_join_or_be_killed() {
         let mut application = fresh_session_command("/bin/sleep");
         application.arg("30");
-        let application = application.spawn().unwrap();
+        let application = crate::process_execution::spawn(&mut application).unwrap();
         let leader = application.id() as libc::pid_t;
         // SAFETY: the spawned child is live and its pre-exec callback completed before `spawn`.
         assert_eq!(unsafe { libc::getsid(leader) }, leader);
@@ -2106,35 +2177,48 @@ mod tests {
             unsafe { libc::pipe2(report.as_mut_ptr(), libc::O_CLOEXEC) },
             0
         );
-        // SAFETY: the child branch uses only async-signal-safe syscalls and never returns to Rust.
-        let outsider = unsafe { libc::fork() };
-        assert!(
-            outsider >= 0,
-            "fork outsider: {}",
-            io::Error::last_os_error()
-        );
-        if outsider == 0 {
-            unsafe {
-                libc::close(report[0]);
-                let joined = libc::setpgid(0, leader);
-                let error = *libc::__errno_location();
-                let values = [joined, error];
-                let _ = libc::write(
-                    report[1],
-                    values.as_ptr().cast(),
-                    std::mem::size_of_val(&values),
-                );
-                loop {
-                    libc::pause();
+        let (outsider, bytes) = fe2o3_artifact_transaction::with_artifact_process_spawn_v1(|| {
+            // SAFETY: the child closes unintended descriptors, writes one bounded report, and
+            // pauses without returning to Rust. Reading that report keeps the barrier held until
+            // inherited artifact lock aliases have been closed.
+            let outsider = unsafe { libc::fork() };
+            assert!(
+                outsider >= 0,
+                "fork outsider: {}",
+                io::Error::last_os_error()
+            );
+            if outsider == 0 {
+                unsafe {
+                    libc::close(report[0]);
+                    if !close_unintended_child_descriptors(report[1]) {
+                        libc::_exit(127);
+                    }
+                    let joined = libc::setpgid(0, leader);
+                    let error = *libc::__errno_location();
+                    let values = [joined, error];
+                    if libc::write(
+                        report[1],
+                        values.as_ptr().cast(),
+                        std::mem::size_of_val(&values),
+                    ) != std::mem::size_of_val(&values) as isize
+                    {
+                        libc::_exit(127);
+                    }
+                    libc::close(report[1]);
+                    loop {
+                        libc::pause();
+                    }
                 }
             }
-        }
-
-        // SAFETY: each branch owns the descriptor it closes; the remaining read end becomes `File`.
-        unsafe { libc::close(report[1]) };
-        let mut report = unsafe { File::from_raw_fd(report[0]) };
-        let mut bytes = [0_u8; std::mem::size_of::<[i32; 2]>()];
-        report.read_exact(&mut bytes).unwrap();
+            // SAFETY: the parent owns both raw pipe descriptors after fork; the read end is
+            // transferred into `File` for the bounded readiness report.
+            unsafe { libc::close(report[1]) };
+            let mut report = unsafe { File::from_raw_fd(report[0]) };
+            let mut bytes = [0_u8; std::mem::size_of::<[i32; 2]>()];
+            report.read_exact(&mut bytes).unwrap();
+            Ok::<_, io::Error>((outsider, bytes))
+        })
+        .unwrap();
         let joined = i32::from_ne_bytes(bytes[..4].try_into().unwrap());
         let join_error = i32::from_ne_bytes(bytes[4..].try_into().unwrap());
         // SAFETY: `outsider` remains live and inherited the test runner's session.
@@ -2162,7 +2246,7 @@ mod tests {
     #[test]
     fn exit_observation_keeps_process_group_leader_unreaped() {
         let mut command = fresh_session_command("/bin/true");
-        let mut child = command.spawn().unwrap();
+        let mut child = crate::process_execution::spawn(&mut command).unwrap();
         let leader = child.id() as libc::pid_t;
 
         wait_for_leader_exit_without_reaping(leader).unwrap();
@@ -2200,6 +2284,9 @@ mod tests {
         );
         if descendant == 0 {
             unsafe {
+                if !close_child_descriptor_range(3, u32::MAX) {
+                    libc::_exit(127);
+                }
                 loop {
                     libc::pause();
                 }
@@ -2254,7 +2341,7 @@ mod tests {
             .env(INVALID_ACK_CHILD_ENV, "1")
             .env(INVALID_ACK_FD_ENV, ack_fd.to_string())
             .env(INVALID_ACK_PID_FILE_ENV, &pid_file);
-        let application = command.spawn().unwrap();
+        let application = crate::process_execution::spawn(&mut command).unwrap();
         drop(ack_write);
 
         await_nonreaping_exit(&application);
@@ -2309,7 +2396,7 @@ mod tests {
     #[test]
     fn ack_exit_observation_retries_eintr_and_echild_fails_closed() {
         let mut command = fresh_session_command("/bin/true");
-        let child = command.spawn().unwrap();
+        let child = crate::process_execution::spawn(&mut command).unwrap();
         let leader = child.id() as libc::pid_t;
         wait_for_leader_exit_without_reaping(leader).unwrap();
 
@@ -2387,13 +2474,13 @@ mod tests {
             return;
         }
 
-        let output = Command::new(std::env::current_exe().unwrap())
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
             .arg("--exact")
             .arg("application_handoff::tests::repeated_signals_cannot_extend_the_ack_poll_deadline")
             .arg("--nocapture")
-            .env(REPEATED_SIGNAL_CHILD_ENV, "1")
-            .output()
-            .unwrap();
+            .env(REPEATED_SIGNAL_CHILD_ENV, "1");
+        let output = crate::process_execution::capture_output(&mut command).unwrap();
         assert!(
             output.status.success(),
             "isolated repeated-signal probe failed\nstdout:\n{}\nstderr:\n{}",
@@ -2459,7 +2546,7 @@ mod tests {
     fn early_exit_without_ack_remains_waitable_until_cleanup() {
         let (mut ack_read, ack_write) = cloexec_pipe().unwrap();
         let mut command = fresh_session_command("/bin/true");
-        let child = command.spawn().unwrap();
+        let child = crate::process_execution::spawn(&mut command).unwrap();
         drop(ack_write);
         assert!(
             read_application_handoff_ack(
@@ -2485,7 +2572,7 @@ mod tests {
     fn successful_wait_contains_before_reaping_leader() {
         for _ in 0..100 {
             let mut command = fresh_session_command("/bin/true");
-            let child = command.spawn().unwrap();
+            let child = crate::process_execution::spawn(&mut command).unwrap();
             assert!(
                 wait_and_contain_application_group(child, test_cleanup())
                     .unwrap()
@@ -2497,7 +2584,7 @@ mod tests {
     #[test]
     fn successful_wait_observation_error_still_transfers_and_reaps() {
         let mut command = fresh_session_command("/bin/true");
-        let mut child = command.spawn().unwrap();
+        let mut child = crate::process_execution::spawn(&mut command).unwrap();
         assert!(child.wait().unwrap().success());
         let error = wait_and_contain_application_group(child, test_cleanup()).unwrap_err();
         assert!(error.contains("observe application leader"), "{error}");
@@ -2517,7 +2604,7 @@ mod tests {
             .arg("sleep 30 & echo $! > \"$1\"")
             .arg("fe2o3-descendant-probe")
             .arg(&pid_file);
-        let child = command.spawn().unwrap();
+        let child = crate::process_execution::spawn(&mut command).unwrap();
         let status = wait_and_contain_application_group(child, test_cleanup()).unwrap();
         let descendant = std::fs::read_to_string(&pid_file)
             .unwrap()
@@ -2564,10 +2651,9 @@ mod tests {
 
         for _ in 0..2 {
             let reservation = supervisor.reserve().unwrap();
-            let child = fresh_session_command("/bin/sleep")
-                .arg("30")
-                .spawn()
-                .unwrap();
+            let mut command = fresh_session_command("/bin/sleep");
+            command.arg("30");
+            let child = crate::process_execution::spawn(&mut command).unwrap();
             let process_group = child.id() as libc::pid_t;
             let observed = Arc::new(AtomicBool::new(false));
             completed.push(Arc::clone(&observed));
@@ -2629,10 +2715,9 @@ mod tests {
         let supervisor = ReaperSupervisor::new(1);
         let hold = Arc::new(AtomicBool::new(true));
         let reservation = supervisor.reserve().unwrap();
-        let child = fresh_session_command("/bin/sleep")
-            .arg("30")
-            .spawn()
-            .unwrap();
+        let mut command = fresh_session_command("/bin/sleep");
+        command.arg("30");
+        let child = crate::process_execution::spawn(&mut command).unwrap();
         let process_group = child.id() as libc::pid_t;
         let timeout = Duration::from_millis(80);
         let started = Instant::now();
@@ -2693,7 +2778,8 @@ mod tests {
             (None, Arc::clone(&unrelated_completed)),
         ] {
             let reservation = supervisor.reserve().unwrap();
-            let child = fresh_session_command("/bin/true").spawn().unwrap();
+            let mut command = fresh_session_command("/bin/true");
+            let child = crate::process_execution::spawn(&mut command).unwrap();
             let process_group = child.id() as libc::pid_t;
             supervisor.transfer(ReapJob {
                 child,
@@ -2735,7 +2821,8 @@ mod tests {
     fn terminal_process_group_is_never_reused_for_sandbox_only_polling() {
         let supervisor = ReaperSupervisor::new(1);
         let reservation = supervisor.reserve().unwrap();
-        let child = fresh_session_command("/bin/true").spawn().unwrap();
+        let mut command = fresh_session_command("/bin/true");
+        let child = crate::process_execution::spawn(&mut command).unwrap();
         let process_group = child.id() as libc::pid_t;
         wait_for_leader_exit_without_reaping(process_group).unwrap();
         let release = Arc::new(AtomicBool::new(false));
@@ -2810,10 +2897,9 @@ mod tests {
         let fail = Arc::new(AtomicBool::new(true));
         let completed = Arc::new(AtomicBool::new(false));
         let reservation = supervisor.reserve().unwrap();
-        let child = fresh_session_command("/bin/sleep")
-            .arg("30")
-            .spawn()
-            .unwrap();
+        let mut command = fresh_session_command("/bin/sleep");
+        command.arg("30");
+        let child = crate::process_execution::spawn(&mut command).unwrap();
         let process_group = child.id() as libc::pid_t;
         let (completion, result) = mpsc::sync_channel(1);
         supervisor.transfer(ReapJob {
@@ -2879,10 +2965,9 @@ mod tests {
     fn worker_panic_is_observable_fails_closed_and_uses_process_fallback() {
         let supervisor = ReaperSupervisor::new(1);
         let reservation = supervisor.reserve().unwrap();
-        let child = fresh_session_command("/bin/sleep")
-            .arg("30")
-            .spawn()
-            .unwrap();
+        let mut command = fresh_session_command("/bin/sleep");
+        command.arg("30");
+        let child = crate::process_execution::spawn(&mut command).unwrap();
         let process_group = child.id() as libc::pid_t;
         let (completion, result) = mpsc::sync_channel(1);
         supervisor.panic_worker.store(true, Ordering::Release);
