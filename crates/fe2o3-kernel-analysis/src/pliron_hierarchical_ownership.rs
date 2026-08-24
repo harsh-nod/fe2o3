@@ -11,7 +11,10 @@ use std::{
     fmt,
 };
 
-use dialect_kernel::{DYNAMIC_EXTENT, OwnershipContractOp, OwnershipPartitionAttr, RankedViewOp};
+use dialect_kernel::{
+    DYNAMIC_EXTENT, OwnershipContractOp, OwnershipCoverageAttr, OwnershipPartitionAttr,
+    RankedAccessOp, RankedViewOp,
+};
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
     common_traits::Named,
@@ -27,6 +30,8 @@ use crate::pliron_barrier::trace_failure_detail;
 use crate::pliron_invocation_trace::{
     PlironInvocationTraceV1, PlironTraceEventV1, PlironTraceLocationV1,
 };
+use crate::pliron_race::run_pliron_ranked_race_check_with_analyses_v1;
+use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
 use crate::{KernelCheckPassKindV1, KernelCheckStatusV1};
 
 /// Maximum logical output elements materialized by one exact coverage proof.
@@ -202,6 +207,9 @@ pub enum HierarchicalOwnershipFindingV1 {
     TraceIncomplete {
         detail: String,
     },
+    EffectDomainIncomplete {
+        detail: String,
+    },
     DynamicExtentIncomplete {
         view: String,
         dimension: usize,
@@ -256,6 +264,7 @@ impl HierarchicalOwnershipFindingV1 {
             | Self::ExecutionLayoutIncomplete { .. }
             | Self::SparseIndexAnalysisIncomplete { .. }
             | Self::TraceIncomplete { .. }
+            | Self::EffectDomainIncomplete { .. }
             | Self::DynamicExtentIncomplete { .. }
             | Self::ElementLimitExceeded { .. }
             | Self::UnresolvedCoordinate { .. } => KernelCheckStatusV1::Incomplete,
@@ -300,6 +309,10 @@ impl fmt::Display for HierarchicalOwnershipFindingV1 {
             Self::TraceIncomplete { detail } => write!(
                 formatter,
                 "error[FE2O3-OWN-002]: GPU hierarchy ownership is incomplete because guarded invocation tracing failed: {detail}",
+            ),
+            Self::EffectDomainIncomplete { detail } => write!(
+                formatter,
+                "error[FE2O3-OWN-002]: exact effect-domain ownership is incomplete: {detail}",
             ),
             Self::DynamicExtentIncomplete { view, dimension } => write!(
                 formatter,
@@ -448,9 +461,11 @@ impl std::error::Error for HierarchicalOwnershipCheckErrorV1 {}
 
 #[derive(Clone)]
 struct ContractV1 {
+    location: HierarchicalOwnershipLocationV1,
     view: Value,
     view_name: String,
     view_op: RankedViewOp,
+    coverage: OwnershipCoverageAttr,
     partition: OwnershipPartitionAttr,
 }
 
@@ -495,41 +510,85 @@ pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
             },
         );
     }
-    analyses.prepare_exact_trace(context, function);
-    let sparse = analyses
-        .sparse_indices()
-        .expect("sparse analysis was checked before exact tracing");
-    let traces = match analyses.exact_trace() {
-        Ok(traces) => traces,
-        Err(failure) => {
-            return one(HierarchicalOwnershipFindingV1::TraceIncomplete {
-                detail: trace_failure_detail(failure),
+    let needs_effect_domain = contracts
+        .iter()
+        .any(|contract| contract.coverage == OwnershipCoverageAttr::ExactEffectDomain);
+    if needs_effect_domain {
+        let bounds = run_pliron_ranked_bounds_check_with_analyses_v1(context, function, analyses);
+        if !bounds.is_clean() {
+            return one(HierarchicalOwnershipFindingV1::EffectDomainIncomplete {
+                detail: "mandatory ranked bounds did not prove every potential write site safe"
+                    .to_owned(),
             });
         }
+        let race = run_pliron_ranked_race_check_with_analyses_v1(context, function, analyses);
+        if !race.is_clean() {
+            return one(HierarchicalOwnershipFindingV1::EffectDomainIncomplete {
+                detail: race
+                    .findings()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            });
+        }
+    }
+    let needs_exact_view = contracts
+        .iter()
+        .any(|contract| contract.coverage == OwnershipCoverageAttr::ExactView);
+    if needs_exact_view {
+        analyses.prepare_exact_trace(context, function);
+    }
+    let traces = if needs_exact_view {
+        match analyses.exact_trace() {
+            Ok(traces) => Some(traces),
+            Err(failure) => {
+                return one(HierarchicalOwnershipFindingV1::TraceIncomplete {
+                    detail: trace_failure_detail(failure),
+                });
+            }
+        }
+    } else {
+        None
     };
+    let sparse = analyses
+        .sparse_indices()
+        .expect("sparse analysis was checked before ownership");
 
     let mut findings = Vec::new();
     let mut regions = Vec::new();
     for contract in contracts {
-        let extents = match resolve_extents(context, sparse, &contract) {
-            Ok(extents) => extents,
-            Err(finding) => {
-                findings.push(*finding);
-                continue;
+        let (extents, element_count) = match contract.coverage {
+            OwnershipCoverageAttr::ExactView => {
+                let extents = match resolve_extents(context, sparse, &contract) {
+                    Ok(extents) => extents,
+                    Err(finding) => {
+                        findings.push(*finding);
+                        continue;
+                    }
+                };
+                let element_count = match bounded_element_count(&contract.view_name, &extents) {
+                    Ok(count) => count,
+                    Err(finding) => {
+                        findings.push(*finding);
+                        continue;
+                    }
+                };
+                (Some(extents), Some(element_count))
             }
-        };
-        let element_count = match bounded_element_count(&contract.view_name, &extents) {
-            Ok(count) => count,
-            Err(finding) => {
-                findings.push(*finding);
+            OwnershipCoverageAttr::ExactEffectDomain => {
+                if let Err(finding) = validate_effect_domain_site(context, function, &contract) {
+                    findings.push(*finding);
+                }
                 continue;
             }
         };
         analyze_contract(
+            context,
             &contract,
-            &extents,
+            extents.as_deref(),
             element_count,
-            traces,
+            traces.expect("exact-view contracts prepared exact traces"),
             layout.grid,
             &mut findings,
             &mut regions,
@@ -637,9 +696,13 @@ fn collect_contracts(
                 ));
             };
             contracts.push(ContractV1 {
+                location,
                 view,
                 view_name,
                 view_op: *view_op,
+                coverage: contract
+                    .coverage(context)
+                    .unwrap_or(OwnershipCoverageAttr::ExactView),
                 partition: contract
                     .partition(context)
                     .unwrap_or(OwnershipPartitionAttr::ExactSets),
@@ -647,6 +710,38 @@ fn collect_contracts(
         }
     }
     Ok(contracts)
+}
+
+fn validate_effect_domain_site(
+    context: &Context,
+    function: &FuncOp,
+    contract: &ContractV1,
+) -> Result<(), Box<HierarchicalOwnershipFindingV1>> {
+    let mut writes = 0_usize;
+    for block in function.get_region(context).deref(context).iter(context) {
+        for raw in block.deref(context).iter(context) {
+            let operation = Operation::get_op_dyn(raw, context);
+            let Some(access) = operation.downcast_ref::<RankedAccessOp>() else {
+                continue;
+            };
+            if access.view(context) == contract.view
+                && access
+                    .kind(context)
+                    .is_some_and(|kind| kind.writes_memory())
+            {
+                writes = writes.saturating_add(1);
+            }
+        }
+    }
+    if writes != 1 {
+        return Err(Box::new(
+            HierarchicalOwnershipFindingV1::MalformedContract {
+                location: contract.location,
+                detail: "ExactEffectDomain requires exactly one bounds-clean, race-free write site on the contracted view",
+            },
+        ));
+    }
+    Ok(())
 }
 
 fn resolve_extents(
@@ -707,9 +802,10 @@ fn bounded_element_count(
 
 #[allow(clippy::too_many_arguments)]
 fn analyze_contract(
+    context: &Context,
     contract: &ContractV1,
-    extents: &[u64],
-    element_count: usize,
+    extents: Option<&[u64]>,
+    element_count: Option<usize>,
     traces: &[PlironInvocationTraceV1],
     grid: u64,
     findings: &mut Vec<HierarchicalOwnershipFindingV1>,
@@ -752,16 +848,23 @@ fn analyze_contract(
                 });
                 return;
             };
-            if coordinate.len() != extents.len()
-                || coordinate
-                    .iter()
-                    .zip(extents)
-                    .any(|(coordinate, extent)| coordinate >= extent)
+            let rank = contract
+                .view_op
+                .view_type(context)
+                .map(|ty| ty.deref(context).shape().len())
+                .unwrap_or(0);
+            if coordinate.len() != rank
+                || extents.is_some_and(|extents| {
+                    coordinate
+                        .iter()
+                        .zip(extents)
+                        .any(|(coordinate, extent)| coordinate >= extent)
+                })
             {
                 findings.push(HierarchicalOwnershipFindingV1::OutOfRange {
                     view: contract.view_name.clone(),
                     coordinate,
-                    extents: extents.to_vec(),
+                    extents: extents.unwrap_or_default().to_vec(),
                     owner: witness,
                 });
                 return;
@@ -818,7 +921,8 @@ fn analyze_contract(
         }
     }
 
-    if owners.len() != element_count
+    if let (Some(extents), Some(element_count)) = (extents, element_count)
+        && owners.len() != element_count
         && let Some(coordinate) = first_domain_hole(extents, &owners)
     {
         findings.push(HierarchicalOwnershipFindingV1::CoverageHole {

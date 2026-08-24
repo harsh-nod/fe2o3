@@ -1,7 +1,7 @@
 use dialect_gpu::{ExecutionDomainAttr, ExecutionLayoutOp};
 use dialect_kernel::{
-    AccessKindAttr, DIALECT_NAME, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexType,
-    InvocationIndexOp, MemorySpaceAttr, OwnershipContractOp, OwnershipCoverageAttr,
+    AccessKindAttr, BranchOp, DIALECT_NAME, DimensionOp, IndexConstantOp, IndexLessThanBranchOp,
+    IndexType, InvocationIndexOp, MemorySpaceAttr, OwnershipContractOp, OwnershipCoverageAttr,
     OwnershipPartitionAttr, RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp,
     SemanticBinaryKindAttr, SemanticBinaryOp, SemanticSymbolOp, register_dialect,
 };
@@ -14,7 +14,8 @@ use fe2o3_kernel_analysis::{
     require_production_pliron_checks_before_lowering_v2, run_pliron_effect_refinement_check_v1,
 };
 use pliron::{
-    builtin::{ops::FuncOp, types::FunctionType},
+    basic_block::BasicBlock,
+    builtin::{op_interfaces::OneRegionInterface, ops::FuncOp, types::FunctionType},
     context::Context,
     dialect::DialectName,
     op::Op,
@@ -163,6 +164,18 @@ fn effect_function(
         FunctionType::get(context, argument_types, vec![]),
     );
     let entry = function.get_entry_block(context);
+    let guarded = matches!(extent, ExtentCase::RuntimeDynamic);
+    let body = guarded.then(|| {
+        let block = BasicBlock::new(context, Some("write".try_into().unwrap()), vec![]);
+        block.insert_at_back(function.get_region(context), context);
+        block
+    });
+    let exit = guarded.then(|| {
+        let block = BasicBlock::new(context, Some("exit".try_into().unwrap()), vec![]);
+        block.insert_at_back(function.get_region(context), context);
+        block
+    });
+    let write_block = body.unwrap_or(entry);
     let layout = ExecutionLayoutOp::new_with_domain(
         context,
         41,
@@ -199,7 +212,11 @@ fn effect_function(
         let contract = OwnershipContractOp::new(
             context,
             view.result(context),
-            OwnershipCoverageAttr::ExactView,
+            if guarded {
+                OwnershipCoverageAttr::ExactEffectDomain
+            } else {
+                OwnershipCoverageAttr::ExactView
+            },
             OwnershipPartitionAttr::ExactSets,
         )
         .unwrap();
@@ -235,10 +252,10 @@ fn effect_function(
         vec![invocation.result(context)],
     )
     .unwrap();
-    append(context, entry, &store);
+    append(context, write_block, &store);
     let contract_index = if orphan {
         let zero = IndexConstantOp::new(context, 0);
-        append(context, entry, &zero);
+        append(context, write_block, &zero);
         zero.result(context)
     } else {
         invocation.result(context)
@@ -257,28 +274,47 @@ fn effect_function(
         expressions[4],
         expressions[5],
     );
-    append(context, entry, &effect);
+    append(context, write_block, &effect);
     if unmodeled_write {
-        let zero = IndexConstantOp::new(context, 0);
-        let equivalent_index = IndexBinaryOp::new(
+        let second_type = RankedViewType::new(context, 32, true, vec![4]).unwrap();
+        let second_view = RankedViewOp::new_in_space_with_allocation_contract(
             context,
-            IndexBinaryKindAttr::Add,
-            invocation.result(context),
-            zero.result(context),
-        );
+            second_type,
+            vec![],
+            MemorySpaceAttr::Global,
+            18,
+            18,
+        )
+        .unwrap();
+        append(context, entry, &second_view);
         let second = RankedAccessOp::new(
             context,
             AccessKindAttr::Write,
-            view.result(context),
-            vec![equivalent_index.result(context)],
+            second_view.result(context),
+            vec![invocation.result(context)],
         )
         .unwrap();
-        append(context, entry, &zero);
-        append(context, entry, &equivalent_index);
-        append(context, entry, &second);
+        append(context, write_block, &second);
     }
-    let ret = ReturnOp::new(context);
-    append(context, entry, &ret);
+    if let (Some(body), Some(exit)) = (body, exit) {
+        let dimension = DimensionOp::new(context, view.result(context), 0).unwrap();
+        let guard = IndexLessThanBranchOp::new(
+            context,
+            invocation.result(context),
+            dimension.result(context),
+            body,
+            exit,
+        );
+        append(context, entry, &dimension);
+        append(context, entry, &guard);
+        let to_exit = BranchOp::new(context, exit);
+        let ret = ReturnOp::new(context);
+        append(context, body, &to_exit);
+        append(context, exit, &ret);
+    } else {
+        let ret = ReturnOp::new(context);
+        append(context, entry, &ret);
+    }
     function
 }
 
@@ -303,7 +339,7 @@ fn normalized_effects_prove_every_coordinate_across_the_hierarchy() {
 }
 
 #[test]
-fn mismatches_are_classified_and_include_exact_hierarchy_witnesses() {
+fn mismatches_are_classified_without_fabricating_dynamic_witnesses() {
     for (case, component) in [
         (FormulaCase::DomainMismatch, "domain"),
         (FormulaCase::PreconditionMismatch, "precondition"),
@@ -331,14 +367,8 @@ fn mismatches_are_classified_and_include_exact_hierarchy_witnesses() {
                 witness
             }
             other => panic!("unexpected {component} finding: {other:?}"),
-        }
-        .as_ref()
-        .expect("nonempty output has exact counterexample");
-        assert_eq!(witness.coordinate(), [0]);
-        assert_eq!(witness.invocation(), [0, 0, 0]);
-        assert_eq!(witness.workgroup(), 0);
-        assert_eq!(witness.subgroup(), 0);
-        assert_eq!(witness.lane(), 0);
+        };
+        assert!(witness.is_none());
         assert!(
             finding
                 .to_string()
@@ -362,10 +392,9 @@ fn missing_or_ambiguous_write_models_fail_closed() {
     let report = run_pliron_effect_refinement_check_v1(context, &missing);
     assert!(matches!(
         report.findings(),
-        [PlironEffectRefinementFindingV1::UnmodeledWrite { witness, .. }]
-            if witness.coordinate() == [0]
+        [PlironEffectRefinementFindingV1::UnmodeledWriteSite { .. }]
     ));
-    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
 
     let context = &mut setup();
     let orphan = effect_function(
@@ -417,7 +446,7 @@ fn ownership_and_mir_evidence_are_mandatory_prerequisites() {
 }
 
 #[test]
-fn staticized_dynamic_extent_is_proved_but_runtime_only_extent_is_incomplete() {
+fn staticized_and_guarded_runtime_dynamic_effect_domains_are_proved() {
     let context = &mut setup();
     let four = IndexConstantOp::new(context, 4);
     let function = effect_function(
@@ -447,15 +476,7 @@ fn staticized_dynamic_extent_is_proved_but_runtime_only_extent_is_incomplete() {
         false,
     );
     let report = run_pliron_effect_refinement_check_v1(context, &runtime);
-    assert!(matches!(
-        report.findings(),
-        [
-            PlironEffectRefinementFindingV1::DynamicOwnershipIncomplete {
-                dimension: Some(0),
-                ..
-            }
-        ]
-    ));
+    assert!(report.is_clean(), "{:#?}", report.findings());
 }
 
 #[test]

@@ -9,7 +9,10 @@ use std::{
     fmt,
 };
 
-use dialect_kernel::{DYNAMIC_EXTENT, OwnershipContractOp, RankedAccessOp, ranked_view_type};
+use dialect_kernel::{
+    DYNAMIC_EXTENT, MemorySpaceAttr, OwnershipContractOp, RankedAccessOp, RankedViewOp,
+    ranked_view_type,
+};
 use dialect_proof::{
     CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, PropertyAttr,
     RequireEffectRefinementOp,
@@ -25,11 +28,10 @@ use pliron::{
 
 use crate::KernelCheckStatusV1;
 use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
-use crate::pliron_barrier::trace_failure_detail;
 use crate::pliron_hierarchical_ownership::{
     HierarchicalOwnershipFindingV1, run_pliron_hierarchical_ownership_check_with_analyses_v1,
 };
-use crate::pliron_invocation_trace::{PlironTraceEventV1, PlironTraceLocationV1};
+use crate::pliron_invocation_trace::PlironTraceLocationV1;
 use crate::pliron_semantic_refinement::SemanticExpressionTableV1;
 
 pub const MAX_EFFECT_REFINEMENT_CONTRACTS_V1: usize = 4_096;
@@ -129,6 +131,10 @@ pub enum PlironEffectRefinementFindingV1 {
         view: String,
         witness: EffectRefinementWitnessV1,
     },
+    UnmodeledWriteSite {
+        view: String,
+        location: EffectRefinementLocationV1,
+    },
     ReferenceProofIncomplete {
         obligation: [u64; 4],
         location: EffectRefinementLocationV1,
@@ -181,6 +187,7 @@ impl PlironEffectRefinementFindingV1 {
             | Self::DomainMismatch { .. }
             | Self::PreconditionMismatch { .. }
             | Self::ValueMismatch { .. }
+            | Self::UnmodeledWriteSite { .. }
             | Self::OwnershipRejected { .. } => KernelCheckStatusV1::Rejected,
             Self::ResourceLimitExceeded { .. }
             | Self::MissingOwnershipContract { .. }
@@ -264,6 +271,11 @@ impl fmt::Display for PlironEffectRefinementFindingV1 {
                 witness.lane,
                 witness.location.block,
                 witness.location.operation
+            ),
+            Self::UnmodeledWriteSite { view, location } => write!(
+                f,
+                "error[FE2O3-EFFECT-008]: global write to {view} at block {} op {} has no exact effect-refinement contract; every observable global write must participate in the reference-effect bijection",
+                location.block, location.operation,
             ),
             Self::ReferenceProofIncomplete {
                 obligation,
@@ -611,75 +623,16 @@ pub(crate) fn run_pliron_effect_refinement_with_analyses_v1(
         return report(contracts.len(), 0, findings);
     }
 
-    analyses.prepare_exact_trace(context, function);
-    let traces = match analyses.exact_trace() {
-        Ok(traces) => traces,
-        Err(failure) => {
-            return one(
-                contracts.len(),
-                PlironEffectRefinementFindingV1::TraceIncomplete {
-                    detail: trace_failure_detail(failure),
-                },
-            );
+    for write in &writes {
+        if !by_write.contains_key(&write.location) {
+            findings.push(PlironEffectRefinementFindingV1::UnmodeledWriteSite {
+                view: write.view.unique_name(context).to_string(),
+                location: write.location,
+            });
         }
-    };
-    let effect_views = contracts
-        .iter()
-        .map(|contract| contract.view)
-        .collect::<HashSet<_>>();
-    let mut witness_by_write = HashMap::new();
-    for trace in traces {
-        for event in &trace.events {
-            let PlironTraceEventV1::Memory {
-                location,
-                view,
-                access,
-                indices,
-                ..
-            } = event
-            else {
-                continue;
-            };
-            if !effect_views.contains(view) || !access.writes_memory() {
-                continue;
-            }
-            let location = EffectRefinementLocationV1::from(*location);
-            let coordinate = match indices.iter().copied().collect::<Option<Vec<_>>>() {
-                Some(coordinate) => coordinate,
-                None => {
-                    return one(
-                        contracts.len(),
-                        PlironEffectRefinementFindingV1::TraceIncomplete {
-                            detail: format!(
-                                "write {} at block {} op {} has an unresolved logical coordinate",
-                                view.unique_name(context),
-                                location.block,
-                                location.operation
-                            ),
-                        },
-                    );
-                }
-            };
-            let witness = EffectRefinementWitnessV1 {
-                coordinate,
-                invocation: trace.invocation.clone(),
-                workgroup: trace.workgroup,
-                subgroup: trace.subgroup,
-                lane: trace.lane,
-                location,
-            };
-            witness_by_write
-                .entry(location)
-                .or_insert_with(|| witness.clone());
-            if !by_write.contains_key(&location) {
-                let view_name = view.unique_name(context).to_string();
-                findings.push(PlironEffectRefinementFindingV1::UnmodeledWrite {
-                    view: view_name,
-                    witness,
-                });
-                return report(contracts.len(), 0, findings);
-            }
-        }
+    }
+    if !findings.is_empty() {
+        return report(contracts.len(), 0, findings);
     }
 
     let expressions = match SemanticExpressionTableV1::from_function(context, function) {
@@ -699,8 +652,8 @@ pub(crate) fn run_pliron_effect_refinement_with_analyses_v1(
         if !validate_proof(contract, &obligations, &evidence, &mut findings) {
             continue;
         }
-        let write = write_by_contract[index].expect("correlated contract has write");
-        let witness = witness_by_write.get(&write).cloned();
+        let _write = write_by_contract[index].expect("correlated contract has write");
+        let witness = None;
         let mut pairs = contract
             .coordinates
             .iter()
@@ -835,6 +788,13 @@ fn collect(context: &Context, function: &FuncOp) -> CollectedV1 {
                 if access
                     .kind(context)
                     .is_some_and(|kind| kind.writes_memory())
+                    && access
+                        .view(context)
+                        .defining_op()
+                        .map(|definition| Operation::get_op_dyn(definition, context))
+                        .and_then(|definition| definition.downcast_ref::<RankedViewOp>().copied())
+                        .and_then(|view| view.memory_space(context))
+                        .is_none_or(|space| space == MemorySpaceAttr::Global)
                 {
                     writes.push(WriteSiteV1 {
                         location,

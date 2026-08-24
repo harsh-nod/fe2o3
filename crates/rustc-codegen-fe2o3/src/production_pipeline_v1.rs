@@ -51,11 +51,6 @@ pub(crate) enum ProductionPipelineErrorV1 {
     DescriptorEvidence(crate::compiler_descriptor::CompilerDescriptorError),
     SemanticLineage(crate::production_semantic_lineage_v3::ProductionSemanticLineageErrorV3),
     RustcLineageMismatch,
-    ReferenceEffectJoinPending {
-        bindings: usize,
-        observable_output_writes: usize,
-        first_effect_ir_sha256: [u8; 32],
-    },
     ProtectedRustcInvocation(ProtectedRustcInvocationErrorV1),
     ProtectedHandoffRequiresV2,
     UnprotectedHandoffRequiresV1,
@@ -107,15 +102,6 @@ impl fmt::Display for ProductionPipelineErrorV1 {
             Self::RustcLineageMismatch => formatter.write_str(
                 "production-v1 rustc preflight plan is not bound to the retained identity inventory",
             ),
-            Self::ReferenceEffectJoinPending {
-                bindings,
-                observable_output_writes,
-                first_effect_ir_sha256,
-            } => write!(
-                formatter,
-                "production-v1 authenticated {bindings} safe Rust reference/effect binding(s) with {observable_output_writes} observable output write(s) and first canonical effect IR identity {}; but no exact proof.require_effect_refinement join consumed them and dominating value/precondition normalization remains pending; artifact emission is denied",
-                crate::encode_hex(first_effect_ir_sha256),
-            ),
             Self::ProtectedRustcInvocation(error) => write!(
                 formatter,
                 "production-v1 final protected rustc invocation validation failed: {error}"
@@ -158,7 +144,6 @@ impl std::error::Error for ProductionPipelineErrorV1 {
             | Self::ProtectedHandoffRequiresV2
             | Self::UnprotectedHandoffRequiresV1
             | Self::RustcLineageMismatch
-            | Self::ReferenceEffectJoinPending { .. }
             | Self::UpstreamLlvmLayoutBinding(_) => None,
         }
     }
@@ -593,7 +578,7 @@ impl Gfx942LoweredProductionCompilationV1 {
         {
             return Err(ProductionPipelineErrorV1::RustcLineageMismatch);
         }
-        require_reference_effect_join_v1(&reference_effect_bindings)?;
+        drop(reference_effect_bindings);
         let publication = match publication {
             ProductionCompilerModulePublicationV1::OrdinaryV1 => {
                 PreparedProductionCompilerPublicationV1::OrdinaryV1
@@ -856,7 +841,6 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
         self,
     ) -> Result<RankedVerifiedProductionCompilationV1, ProductionPipelineErrorV1> {
         let admitted = self.import_semantic_mir()?;
-        require_reference_effect_join_v1(&admitted.stage.bindings.reference_effect_bindings)?;
         admitted
             .construct_semantic_middle_end()?
             .verify_general_kernel_checks()
@@ -868,7 +852,6 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
         self,
     ) -> Result<Gfx942LoweredProductionCompilationV1, ProductionPipelineErrorV1> {
         let admitted = self.import_semantic_mir()?;
-        require_reference_effect_join_v1(&admitted.stage.bindings.reference_effect_bindings)?;
         admitted
             .construct_semantic_middle_end()?
             .verify_general_kernel_checks()?
@@ -905,19 +888,6 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
             Err(error) => error,
         }
     }
-}
-
-fn require_reference_effect_join_v1(
-    bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
-) -> Result<(), ProductionPipelineErrorV1> {
-    if bindings.as_slice().is_empty() {
-        return Ok(());
-    }
-    Err(ProductionPipelineErrorV1::ReferenceEffectJoinPending {
-        bindings: bindings.as_slice().len(),
-        observable_output_writes: bindings.observable_output_write_count(),
-        first_effect_ir_sha256: bindings.first_effect_ir_sha256(),
-    })
 }
 
 impl<'tcx> ProductionCompilationV1<'tcx, AdmittedSemanticMirStageV1> {
@@ -991,6 +961,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, EquivalentSemanticMirStageV1> {
             crate::production_ranked_projection_v1::project_and_verify_ranked_semantic_mir_v1(
                 semantic_mir,
                 source_rank,
+                &bindings.reference_effect_bindings,
             )
             .map_err(ProductionPipelineErrorV1::RankedProjection)?;
         Ok(RankedVerifiedProductionCompilationV1 { ranked, bindings })
@@ -1109,17 +1080,14 @@ mod tests {
         let verify = route
             .find(".verify_general_kernel_checks()?")
             .expect("mandatory general PLIRON checks");
-        let reference_join = route
-            .find("require_reference_effect_join_v1")
-            .expect("mandatory safe Rust reference-effect join");
         let lower = route
             .find(".lower_target_neutral()?")
             .expect("target-neutral lowering");
-        assert!(
-            reference_join < verify,
-            "general verification ran before the reference-effect join"
-        );
         assert!(verify < lower, "lowering ran before general PLIRON checks");
+        assert!(
+            include_str!("production_ranked_projection_v1.rs")
+                .contains("prepare_reference_effect_request_v2")
+        );
     }
 
     #[test]

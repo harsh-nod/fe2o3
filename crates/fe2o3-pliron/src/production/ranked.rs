@@ -624,6 +624,7 @@ fn access_kind_tag(kind: AccessKindAttr) -> u8 {
 fn ownership_coverage_tag(coverage: OwnershipCoverageAttr) -> u8 {
     match coverage {
         OwnershipCoverageAttr::ExactView => 1,
+        OwnershipCoverageAttr::ExactEffectDomain => 2,
     }
 }
 fn ownership_partition_tag(partition: OwnershipPartitionAttr) -> u8 {

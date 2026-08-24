@@ -525,6 +525,9 @@ pub(crate) enum ProductionRankedProjectionErrorV1 {
         ranked_ir: String,
         access_sources: Vec<ProjectedAccessSourceV1>,
     },
+    ReferenceEffectJoin(
+        crate::production_reference_effect_join_v2::ProductionReferenceEffectJoinErrorV2,
+    ),
 }
 
 impl fmt::Display for ProductionRankedProjectionErrorV1 {
@@ -603,6 +606,7 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
                     indent_ir(ranked_ir),
                 )
             }
+            Self::ReferenceEffectJoin(error) => error.fmt(formatter),
         }
     }
 }
@@ -613,6 +617,7 @@ impl std::error::Error for ProductionRankedProjectionErrorV1 {
             Self::SemanticOwner(error) => Some(error),
             Self::Recipe(error) => Some(error),
             Self::Compile { error, .. } => Some(error),
+            Self::ReferenceEffectJoin(error) => Some(error),
             Self::Incomplete(_)
             | Self::UnprovenAssert { .. }
             | Self::Unsupported(_)
@@ -625,6 +630,7 @@ impl std::error::Error for ProductionRankedProjectionErrorV1 {
 pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     semantic_owner: ProductionSemanticMirOwnerV1,
     source_rank: u8,
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
 ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
     semantic_owner
         .verify_equivalence()
@@ -861,26 +867,38 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         entry_operations,
         projected_blocks,
     )?;
+    let reference_writes = projected_reference_gpu_writes_v2(function, &blocks, &sources)?;
     let access_sources = production_access_sources(&blocks, &sources)?;
-    let ranked_ir = format_ranked_cfg(function_name(root_function)?, &blocks)?;
     let kernel = ProductionRankedKernelV1::new(
         function_name(root_function)?,
         bounds_checks.argument_count,
         blocks,
     )
     .map_err(ProductionRankedProjectionErrorV1::Recipe)?;
-    let construction = ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, kernel)
-        .map_err(ProductionRankedProjectionErrorV1::Construction)?;
-    let lowering =
-        compile_ranked_kernel_for_lowering_v1(construction, ProductionSessionLimitsV1::default())
-            .map_err(|error| ProductionRankedProjectionErrorV1::Compile {
-            error,
-            ranked_ir: ranked_ir.clone(),
-            access_sources: sources,
-        })?;
     if let Some(detail) = incomplete {
         return Err(ProductionRankedProjectionErrorV1::Incomplete(detail));
     }
+    let lowering = if reference_bindings.as_slice().is_empty() {
+        let ranked_ir = format_ranked_cfg(function_name(root_function)?, kernel.blocks())?;
+        let construction = ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, kernel)
+            .map_err(ProductionRankedProjectionErrorV1::Construction)?;
+        compile_ranked_kernel_for_lowering_v1(construction, ProductionSessionLimitsV1::default())
+            .map_err(|error| ProductionRankedProjectionErrorV1::Compile {
+                error,
+                ranked_ir,
+                access_sources: sources,
+            })?
+    } else {
+        crate::production_reference_effect_join_v2::prepare_reference_effect_request_v2(
+            kernel,
+            reference_bindings,
+            &reference_writes,
+            &mut next_value,
+        )
+        .and_then(|request| request.prove_and_compile())
+        .map_err(ProductionRankedProjectionErrorV1::ReferenceEffectJoin)?
+    };
+    let ranked_ir = format_ranked_cfg(function_name(root_function)?, lowering.kernel().blocks())?;
     let receipt = ProductionRankedSemanticProjectionReceiptV1::assert_compiler_internal_projection(
         semantic_owner,
         lowering,
@@ -889,6 +907,100 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     )
     .map_err(ProductionRankedProjectionErrorV1::Custody)?;
     Ok(ProductionRankedSemanticProgramV1 { receipt })
+}
+
+fn projected_reference_gpu_writes_v2(
+    function: &SemanticFunctionDeclV1,
+    blocks: &[ProductionRankedBlockV1],
+    sources: &[ProjectedAccessSourceV1],
+) -> Result<
+    Vec<crate::production_reference_effect_join_v2::RankedGpuWriteV2>,
+    ProductionRankedProjectionErrorV1,
+> {
+    let mut allocation_origins = HashMap::new();
+    for block in blocks {
+        for operation in block.operations() {
+            match operation {
+                ProductionRankedOperationV1::View {
+                    result,
+                    allocation_origin,
+                    ..
+                }
+                | ProductionRankedOperationV1::ViewInSpace {
+                    result,
+                    allocation_origin,
+                    ..
+                } => {
+                    allocation_origins
+                        .insert(ProductionRankedValueV1::Local(*result), *allocation_origin);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut writes = Vec::new();
+    for source in sources
+        .iter()
+        .filter(|source| source.access.writes_memory())
+    {
+        let Some(
+            ProductionRankedOperationV1::Access { view, indices, .. }
+            | ProductionRankedOperationV1::AtomicAccess { view, indices, .. },
+        ) = blocks
+            .get(source.block)
+            .and_then(|block| block.operations().get(source.operation))
+        else {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a projected write correspondence does not identify one ranked write",
+            ));
+        };
+        let allocation_origin = allocation_origins.get(view).copied().ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "a projected write view has no exact allocation origin",
+            ),
+        )?;
+        let value = source
+            .semantic_site
+            .and_then(|site| site.statement.map(|statement| (site.block, statement)))
+            .and_then(|(block, statement)| {
+                function
+                    .blocks()
+                    .get(block)
+                    .and_then(|block| block.statements().get(statement))
+            })
+            .and_then(|statement| exact_semantic_store_constant_v2(statement.kind()));
+        writes.push(
+            crate::production_reference_effect_join_v2::RankedGpuWriteV2 {
+                block: source.block,
+                operation: source.operation,
+                allocation_origin,
+                view: *view,
+                indices: indices.clone(),
+                value,
+            },
+        );
+    }
+    Ok(writes)
+}
+
+fn exact_semantic_store_constant_v2(kind: &SemanticStatementKindV1) -> Option<u64> {
+    let operand = match kind {
+        SemanticStatementKindV1::Assign(assignment) => {
+            let SemanticRvalueKindV1::Use(operand) = assignment.value().kind() else {
+                return None;
+            };
+            operand
+        }
+        SemanticStatementKindV1::Store(store) => store.value(),
+        _ => return None,
+    };
+    let SemanticOperandV1::Constant(constant) = operand else {
+        return None;
+    };
+    let SemanticConstantValueV1::Scalar(value) = constant.value() else {
+        return None;
+    };
+    u64::try_from(value.bits()).ok()
 }
 
 fn production_access_sources(

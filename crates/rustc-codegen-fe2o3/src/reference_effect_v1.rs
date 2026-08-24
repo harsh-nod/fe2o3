@@ -495,19 +495,6 @@ impl AuthenticatedReferenceEffectBindingsV1 {
     pub(crate) fn as_slice(&self) -> &[AuthenticatedReferenceEffectBindingV1] {
         &self.bindings
     }
-
-    pub(crate) fn observable_output_write_count(&self) -> usize {
-        self.bindings
-            .iter()
-            .map(|binding| binding.observable_output_writes.len())
-            .sum()
-    }
-
-    pub(crate) fn first_effect_ir_sha256(&self) -> [u8; 32] {
-        self.bindings
-            .first()
-            .map_or([0; 32], |binding| binding.effect_ir_sha256)
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

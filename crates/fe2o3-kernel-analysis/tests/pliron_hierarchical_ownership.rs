@@ -439,6 +439,176 @@ fn guarded_dynamic_extent_proves_edge_coverage() {
 }
 
 #[test]
+fn exact_effect_domain_accepts_a_guarded_runtime_extent_without_whole_view_coverage() {
+    let context = &mut setup();
+    let (function, arguments) = function(context, "guarded_runtime_effect_domain", 1);
+    let entry = function.get_entry_block(context);
+    let body = block(context, &function, "write");
+    let exit = block(context, &function, "exit");
+    let execution = layout(context, [8, 1, 1], [4, 1, 1], 2);
+    let invocation = InvocationIndexOp::new(context, 0, 8);
+    let output = view(
+        context,
+        vec![0],
+        vec![arguments[0]],
+        MemorySpaceAttr::Global,
+    );
+    let dimension = DimensionOp::new(context, output.result(context), 0).unwrap();
+    let ownership = OwnershipContractOp::new(
+        context,
+        output.result(context),
+        OwnershipCoverageAttr::ExactEffectDomain,
+        OwnershipPartitionAttr::ExactSets,
+    )
+    .unwrap();
+    let guard = IndexLessThanBranchOp::new(
+        context,
+        invocation.result(context),
+        dimension.result(context),
+        body,
+        exit,
+    );
+    for operation in [
+        execution.get_operation(),
+        invocation.get_operation(),
+        output.get_operation(),
+        dimension.get_operation(),
+        ownership.get_operation(),
+        guard.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    let store = write(
+        context,
+        output.result(context),
+        vec![invocation.result(context)],
+    );
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    append(context, body, &store);
+    append(context, body, &to_exit);
+    append(context, exit, &ret);
+
+    let report = run_pliron_hierarchical_ownership_check_v1(context, &function);
+    assert!(report.is_clean(), "{:#?}", report.findings());
+    assert!(report.regions().is_empty());
+}
+
+#[test]
+fn exact_effect_domain_rejects_missing_guard_collision_and_duplicate_site() {
+    let context = &mut setup();
+    let (missing_guard, arguments) = function(context, "missing_guard", 1);
+    let entry = missing_guard.get_entry_block(context);
+    let execution = layout(context, [8, 1, 1], [4, 1, 1], 2);
+    let invocation = InvocationIndexOp::new(context, 0, 8);
+    let output = view(
+        context,
+        vec![0],
+        vec![arguments[0]],
+        MemorySpaceAttr::Global,
+    );
+    let ownership = OwnershipContractOp::new(
+        context,
+        output.result(context),
+        OwnershipCoverageAttr::ExactEffectDomain,
+        OwnershipPartitionAttr::ExactSets,
+    )
+    .unwrap();
+    for operation in [
+        execution.get_operation(),
+        invocation.get_operation(),
+        output.get_operation(),
+        ownership.get_operation(),
+        write(
+            context,
+            output.result(context),
+            vec![invocation.result(context)],
+        )
+        .get_operation(),
+        ReturnOp::new(context).get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    let report = run_pliron_hierarchical_ownership_check_v1(context, &missing_guard);
+    assert!(matches!(
+        report.findings(),
+        [HierarchicalOwnershipFindingV1::EffectDomainIncomplete { detail }]
+            if detail.contains("ranked bounds")
+    ));
+
+    let context = &mut setup();
+    let (collision, _) = function(context, "effect_collision", 0);
+    let entry = collision.get_entry_block(context);
+    let execution = layout(context, [2, 1, 1], [2, 1, 1], 2);
+    let invocation = InvocationIndexOp::new(context, 0, 2);
+    let zero = IndexConstantOp::new(context, 0);
+    let output = view(context, vec![1], vec![], MemorySpaceAttr::Global);
+    let ownership = OwnershipContractOp::new(
+        context,
+        output.result(context),
+        OwnershipCoverageAttr::ExactEffectDomain,
+        OwnershipPartitionAttr::ExactSets,
+    )
+    .unwrap();
+    for operation in [
+        execution.get_operation(),
+        invocation.get_operation(),
+        zero.get_operation(),
+        output.get_operation(),
+        ownership.get_operation(),
+        write(context, output.result(context), vec![zero.result(context)]).get_operation(),
+        ReturnOp::new(context).get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    assert!(matches!(
+        run_pliron_hierarchical_ownership_check_v1(context, &collision).findings(),
+        [HierarchicalOwnershipFindingV1::EffectDomainIncomplete { detail }]
+            if detail.contains("FE2O3-RACE-001")
+    ));
+
+    let context = &mut setup();
+    let (duplicate, _) = function(context, "duplicate_effect_site", 0);
+    let entry = duplicate.get_entry_block(context);
+    let execution = layout(context, [1, 1, 1], [1, 1, 1], 1);
+    let invocation = InvocationIndexOp::new(context, 0, 1);
+    let output = view(context, vec![1], vec![], MemorySpaceAttr::Global);
+    let ownership = OwnershipContractOp::new(
+        context,
+        output.result(context),
+        OwnershipCoverageAttr::ExactEffectDomain,
+        OwnershipPartitionAttr::ExactSets,
+    )
+    .unwrap();
+    for operation in [
+        execution.get_operation(),
+        invocation.get_operation(),
+        output.get_operation(),
+        ownership.get_operation(),
+        write(
+            context,
+            output.result(context),
+            vec![invocation.result(context)],
+        )
+        .get_operation(),
+        write(
+            context,
+            output.result(context),
+            vec![invocation.result(context)],
+        )
+        .get_operation(),
+        ReturnOp::new(context).get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    assert!(matches!(
+        run_pliron_hierarchical_ownership_check_v1(context, &duplicate).findings(),
+        [HierarchicalOwnershipFindingV1::MalformedContract { detail, .. }]
+            if detail.contains("exactly one")
+    ));
+}
+
+#[test]
 fn runtime_only_dynamic_extent_is_incomplete_not_fabricated() {
     let context = &mut setup();
     let (function, arguments) = function(context, "runtime_dynamic_extent", 1);
