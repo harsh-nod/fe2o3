@@ -395,6 +395,17 @@ pub enum Tiled2D<
     _IndexSpace(core::convert::Infallible, PhantomData<fn() -> IndexSpace>),
 }
 
+/// Type-level mapping for compact, dynamically-strided row output.
+///
+/// For source invocation `i`, lane count `L`, and component `c`, the matching
+/// access maps to row `i / L` and column `i % L + c * L`. Runtime row and
+/// column extents and the row stride are checked by the access operation.
+#[derive(Debug)]
+#[rustc_diagnostic_item = "fe2o3_device_row_striped_2d_index_space"]
+pub enum RowStriped2D<IndexSpace, const LANES_PER_ROW: usize, const ELEMENTS_PER_LANE: usize> {
+    _IndexSpace(core::convert::Infallible, PhantomData<fn() -> IndexSpace>),
+}
+
 /// Type-level mapping reserved for the unique leader of the full grid.
 ///
 /// Unlike `Index1D`, this space has no safe `ThreadIndex` producer. Mutable
@@ -462,6 +473,20 @@ pub struct DisjointTile2D<
     const LANES_PER_TILE: usize,
     const TILE_ROWS: usize,
     const TILE_COLUMNS: usize,
+    const ELEMENTS_PER_LANE: usize,
+> {
+    raw: usize,
+    _index_space: PhantomData<fn() -> IndexSpace>,
+    _not_send_sync: PhantomData<*mut ()>,
+}
+
+/// Move-only authority for one invocation's elements in a compact output row.
+#[repr(transparent)]
+#[must_use = "row-striped output authority is lost when the witness is discarded"]
+#[rustc_diagnostic_item = "fe2o3_device_disjoint_row_stripe_2d"]
+pub struct DisjointRowStripe2D<
+    IndexSpace,
+    const LANES_PER_ROW: usize,
     const ELEMENTS_PER_LANE: usize,
 > {
     raw: usize,
@@ -563,6 +588,18 @@ impl<IndexSpace> ThreadIndex<IndexSpace> {
         DisjointTile2D<IndexSpace, LANES_PER_TILE, TILE_ROWS, TILE_COLUMNS, ELEMENTS_PER_LANE>,
     > {
         DisjointTile2D::checked_from_raw(self.raw)
+    }
+
+    /// Converts this invocation index into one dynamically-strided row witness.
+    ///
+    /// The static geometry is rejected when either dimension is zero or the
+    /// greatest component column cannot be represented by `usize`.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_thread_index_checked_row_striped_2d"]
+    pub fn checked_row_striped_2d<const LANES_PER_ROW: usize, const ELEMENTS_PER_LANE: usize>(
+        self,
+    ) -> Option<DisjointRowStripe2D<IndexSpace, LANES_PER_ROW, ELEMENTS_PER_LANE>> {
+        DisjointRowStripe2D::checked_from_raw(self.raw)
     }
 }
 
@@ -713,6 +750,48 @@ impl<
         let column = tile_column
             .checked_mul(TILE_COLUMNS)?
             .checked_add(local_column)?;
+        if row >= rows || column >= columns {
+            return None;
+        }
+        row.checked_mul(row_stride)?.checked_add(column)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_model_index(raw: usize) -> Option<Self> {
+        Self::checked_from_raw(raw)
+    }
+}
+
+impl<IndexSpace, const LANES_PER_ROW: usize, const ELEMENTS_PER_LANE: usize>
+    DisjointRowStripe2D<IndexSpace, LANES_PER_ROW, ELEMENTS_PER_LANE>
+{
+    fn checked_from_raw(raw: usize) -> Option<Self> {
+        if LANES_PER_ROW == 0 || ELEMENTS_PER_LANE == 0 {
+            return None;
+        }
+        (ELEMENTS_PER_LANE - 1)
+            .checked_mul(LANES_PER_ROW)?
+            .checked_add(LANES_PER_ROW - 1)?;
+        Some(Self {
+            raw,
+            _index_space: PhantomData,
+            _not_send_sync: PhantomData,
+        })
+    }
+
+    pub(crate) fn component_index(
+        &self,
+        component: usize,
+        rows: usize,
+        columns: usize,
+        row_stride: usize,
+    ) -> Option<usize> {
+        if component >= ELEMENTS_PER_LANE || row_stride < columns {
+            return None;
+        }
+        let row = self.raw.checked_div(LANES_PER_ROW)?;
+        let lane = self.raw.checked_rem(LANES_PER_ROW)?;
+        let column = component.checked_mul(LANES_PER_ROW)?.checked_add(lane)?;
         if row >= rows || column >= columns {
             return None;
         }

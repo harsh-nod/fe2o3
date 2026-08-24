@@ -36,12 +36,12 @@ mod tensor_layout;
 pub use ranked_memory::{
     AccessKindAttr, AllocationEffectOp, AllocationOriginAttr, AnalysisSplitControlCountAttr,
     AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr, BranchArgsOp, BranchOp,
-    CheckedTiledIndex2DOp, DYNAMIC_EXTENT, DeterministicJoinOp, DimensionAttr, DimensionOp,
-    IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp,
-    IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexType,
-    IndexUnknownOp, IndexValueAttr, InvocationDimensionAttr, InvocationIndexOp, LaunchExtentAttr,
-    MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, NoAliasClassAttr,
-    RankedAccessOp, RankedMemoryError, RankedViewOp, RankedViewType, ReturnOp,
+    CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DYNAMIC_EXTENT, DeterministicJoinOp,
+    DimensionAttr, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
+    IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
+    IndexType, IndexUnknownOp, IndexValueAttr, InvocationDimensionAttr, InvocationIndexOp,
+    LaunchExtentAttr, MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr,
+    NoAliasClassAttr, RankedAccessOp, RankedMemoryError, RankedViewOp, RankedViewType, ReturnOp,
     SUPPORTED_ELEMENT_WIDTHS, TrapOp, is_index_type, ranked_view_type,
 };
 pub use semantic_contract::{
@@ -402,6 +402,7 @@ pub fn register_dialect(
     IndexBinaryOp::register(context);
     DeterministicJoinOp::register(context);
     CheckedTiledIndex2DOp::register(context);
+    CheckedRowStripedIndex2DOp::register(context);
     DimensionOp::register(context);
     RankedAccessOp::register(context);
     IndexLessThanBranchOp::register(context);

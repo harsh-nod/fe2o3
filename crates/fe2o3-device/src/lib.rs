@@ -85,9 +85,9 @@ pub use tensor::{
     gfx942_lds_bf16_tile_pair_m16x16_v1, gfx942_publish_lds_bf16_tile_pair_m16x16_v1,
 };
 pub use thread::{
-    Blocked, DisjointBlock, DisjointIndex, DisjointTile2D, GlobalGridSize, GlobalWorkitemId,
-    GridExclusive, GridLeader, GridSize, Index1D, Index2D, Invocation3D, Shifted, ThreadIndex,
-    Tiled2D, WorkgroupId, WorkgroupSize, WorkitemId,
+    Blocked, DisjointBlock, DisjointIndex, DisjointRowStripe2D, DisjointTile2D, GlobalGridSize,
+    GlobalWorkitemId, GridExclusive, GridLeader, GridSize, Index1D, Index2D, Invocation3D,
+    RowStriped2D, Shifted, ThreadIndex, Tiled2D, WorkgroupId, WorkgroupSize, WorkitemId,
 };
 pub use views::{
     DisjointStaticTileMut, StaticIndex, StaticTileRegionWitness, StaticView, StaticViewError,
@@ -451,12 +451,37 @@ impl<
     }
 }
 
+impl<T, IndexSpace, const LANES_PER_ROW: usize, const ELEMENTS_PER_LANE: usize>
+    DisjointSlice<T, RowStriped2D<IndexSpace, LANES_PER_ROW, ELEMENTS_PER_LANE>>
+{
+    /// Returns mutable access to one checked component of an output row.
+    ///
+    /// The witness-derived row/lane mapping is injective over
+    /// `(invocation, component)`. Logical edges, dynamic stride, arithmetic,
+    /// and the physical slice extent all fail closed.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_disjoint_slice_get_row_striped_2d_mut"]
+    pub fn get_row_striped_2d_mut(
+        &mut self,
+        stripe: &DisjointRowStripe2D<IndexSpace, LANES_PER_ROW, ELEMENTS_PER_LANE>,
+        component: usize,
+        rows: usize,
+        columns: usize,
+        row_stride: usize,
+    ) -> Option<&mut T> {
+        // SAFETY: the move-only witness and exact index-space type establish
+        // the injective row/lane/component mapping. `component_index` and
+        // `get_mut_at` check every dynamic bound and arithmetic operation.
+        unsafe { self.get_mut_at(stripe.component_index(component, rows, columns, row_stride)?) }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        Blocked, DisjointBlock, DisjointIndex, DisjointSlice, DisjointTile2D, GridExclusive,
-        GridLeader, Index1D, Index2D, KERNEL_MARKER_CONTRACT_VERSION_V1, Shifted, StaticIndex,
-        StaticViewError, Tiled2D,
+        Blocked, DisjointBlock, DisjointIndex, DisjointRowStripe2D, DisjointSlice, DisjointTile2D,
+        GridExclusive, GridLeader, Index1D, Index2D, KERNEL_MARKER_CONTRACT_VERSION_V1,
+        RowStriped2D, Shifted, StaticIndex, StaticViewError, Tiled2D,
     };
     use core::mem::{align_of, size_of};
 
@@ -605,6 +630,52 @@ mod tests {
         let witness = DisjointTile2D::<Index1D, 4, 2, 4, 2>::from_model_index(0).unwrap();
         assert!(slice.get_tiled_2d_mut(&witness, 2, 2, 4, 4).is_none());
         assert!(slice.get_tiled_2d_mut(&witness, 0, 2, 4, 3).is_none());
+    }
+
+    #[test]
+    fn row_striped_access_is_injective_and_preserves_dynamic_padding() {
+        type Layout = RowStriped2D<Index1D, 4, 3>;
+        type Witness = DisjointRowStripe2D<Index1D, 4, 3>;
+
+        let mut storage = [0_u32; 27];
+        let mut slice = unsafe {
+            DisjointSlice::<u32, Layout>::from_raw_parts(storage.as_mut_ptr(), storage.len())
+        };
+        for raw in 0..12 {
+            let witness = Witness::from_model_index(raw).unwrap();
+            for component in 0..3 {
+                if let Some(element) = slice.get_row_striped_2d_mut(&witness, component, 3, 7, 9) {
+                    assert_eq!(*element, 0, "row-striped mapping must be injective");
+                    *element = raw as u32 + 1;
+                }
+            }
+        }
+        for row in 0..3 {
+            assert!(
+                storage[row * 9..row * 9 + 7]
+                    .iter()
+                    .all(|value| *value != 0)
+            );
+            assert_eq!(&storage[row * 9 + 7..(row + 1) * 9], &[0, 0]);
+        }
+    }
+
+    #[test]
+    fn row_striped_access_rejects_invalid_geometry_edges_and_overflow() {
+        assert!(DisjointRowStripe2D::<Index1D, 0, 1>::from_model_index(0).is_none());
+        assert!(DisjointRowStripe2D::<Index1D, 1, 0>::from_model_index(0).is_none());
+        assert!(DisjointRowStripe2D::<Index1D, { usize::MAX }, 2>::from_model_index(0).is_none());
+
+        type Layout = RowStriped2D<Index1D, 4, 2>;
+        let mut storage = [0_u32; 16];
+        let mut slice = unsafe {
+            DisjointSlice::<u32, Layout>::from_raw_parts(storage.as_mut_ptr(), storage.len())
+        };
+        let valid = DisjointRowStripe2D::<Index1D, 4, 2>::from_model_index(3).unwrap();
+        assert!(slice.get_row_striped_2d_mut(&valid, 2, 2, 8, 8).is_none());
+        assert!(slice.get_row_striped_2d_mut(&valid, 0, 2, 8, 7).is_none());
+        let outside = DisjointRowStripe2D::<Index1D, 4, 2>::from_model_index(8).unwrap();
+        assert!(slice.get_row_striped_2d_mut(&outside, 0, 2, 8, 8).is_none());
     }
 
     #[test]

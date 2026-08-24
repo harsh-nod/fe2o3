@@ -1398,7 +1398,7 @@ impl<'a> CanonicalDecoderV1<'a> {
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
         let maximum_tag = if self.wire_version >= SemanticMirWireVersionV1::V5 {
-            38
+            40
         } else {
             36
         };
@@ -1612,6 +1612,24 @@ impl<'a> CanonicalDecoderV1<'a> {
                 view: SemanticTypeIdV1(self.u32()?),
                 element: SemanticTypeIdV1(self.u32()?),
             },
+            39 => SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedRowStriped2d {
+                input_witness: SemanticTypeIdV1(self.u32()?),
+                output_stripe: SemanticTypeIdV1(self.u32()?),
+                raw_index: SemanticTypeIdV1(self.u32()?),
+                input_space: self.disjoint_index_space()?,
+                output_space: self.disjoint_index_space()?,
+                lanes_per_row: self.u64()?,
+                elements_per_lane: self.u64()?,
+            },
+            40 => SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
+                disjoint_slice: SemanticTypeIdV1(self.u32()?),
+                stripe_witness: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                raw_index: SemanticTypeIdV1(self.u32()?),
+                index_space: self.disjoint_index_space()?,
+                lanes_per_row: self.u64()?,
+                elements_per_lane: self.u64()?,
+            },
             _ => unreachable!(),
         })
     }
@@ -1677,7 +1695,7 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn disjoint_index_space(
         &mut self,
     ) -> Result<SemanticDisjointIndexSpaceV1, SemanticMirDecodeErrorV1> {
-        Ok(match self.tagged("disjoint index space", 4)? {
+        Ok(match self.tagged("disjoint index space", 5)? {
             0 => SemanticDisjointIndexSpaceV1::Index1d,
             1 => SemanticDisjointIndexSpaceV1::ShiftedIndex1d {
                 offset: self.u64()?,
@@ -1691,6 +1709,10 @@ impl<'a> CanonicalDecoderV1<'a> {
                 lanes_per_tile: self.u64()?,
                 tile_rows: self.u64()?,
                 tile_columns: self.u64()?,
+                elements_per_lane: self.u64()?,
+            },
+            5 => SemanticDisjointIndexSpaceV1::RowStriped2dIndex1d {
+                lanes_per_row: self.u64()?,
                 elements_per_lane: self.u64()?,
             },
             _ => unreachable!(),
@@ -2848,6 +2870,10 @@ mod tests {
                 tile_columns: 8,
                 elements_per_lane: 1,
             },
+            SemanticDisjointIndexSpaceV1::RowStriped2dIndex1d {
+                lanes_per_row: 64,
+                elements_per_lane: 64,
+            },
         ];
         for space in index_spaces {
             component_round_trip(
@@ -3033,6 +3059,24 @@ mod tests {
                 tile_rows: 8,
                 tile_columns: 8,
                 elements_per_lane: 1,
+            },
+            SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedRowStriped2d {
+                input_witness: t(0),
+                output_stripe: t(1),
+                raw_index: t(2),
+                input_space: index_spaces[0],
+                output_space: index_spaces[5],
+                lanes_per_row: 64,
+                elements_per_lane: 64,
+            },
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
+                disjoint_slice: t(0),
+                stripe_witness: t(1),
+                element: t(2),
+                raw_index: t(3),
+                index_space: index_spaces[5],
+                lanes_per_row: 64,
+                elements_per_lane: 64,
             },
             SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { context: t(0) },
             SemanticCompilerIntrinsicOperationV1::SubgroupReduceF32 {

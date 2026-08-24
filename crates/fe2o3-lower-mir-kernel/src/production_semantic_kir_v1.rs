@@ -5274,6 +5274,21 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 *tile_columns,
                 *elements_per_lane,
             )?,
+            SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedRowStriped2d {
+                input_space,
+                output_space,
+                lanes_per_row,
+                elements_per_lane,
+                ..
+            } => self.lower_checked_row_striped_2d(
+                block,
+                call,
+                operations,
+                *input_space,
+                *output_space,
+                *lanes_per_row,
+                *elements_per_lane,
+            )?,
             SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { index_space, .. } => {
                 self.require_call_argument_count(block, call, 1)?;
                 let binding = self.lower_operand(block, None, &call.arguments()[0], operations)?;
@@ -5582,6 +5597,81 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     *lanes_per_tile,
                     *tile_rows,
                     *tile_columns,
+                    *elements_per_lane,
+                )?;
+                self.lower_checked_slice_access(
+                    block,
+                    call,
+                    operations,
+                    0,
+                    SemanticValueBindingV1::Value {
+                        id: index,
+                        ty: Type::INDEX,
+                    },
+                    Some(present),
+                )?
+            }
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
+                index_space,
+                lanes_per_row,
+                elements_per_lane,
+                ..
+            } => {
+                self.require_call_argument_count(block, call, 6)?;
+                let witness = self.lower_operand(block, None, &call.arguments()[1], operations)?;
+                let SemanticValueBindingV1::ComponentWitness {
+                    raw,
+                    index_space: actual,
+                    ..
+                } = witness
+                else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "get_row_striped_2d_mut lacks row ownership authority",
+                    ));
+                };
+                let expected = SemanticDisjointIndexSpaceV1::RowStriped2dIndex1d {
+                    lanes_per_row: *lanes_per_row,
+                    elements_per_lane: *elements_per_lane,
+                };
+                if actual != expected || *index_space != expected {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "get_row_striped_2d_mut mapping identity changed",
+                    ));
+                }
+                let mut indices = Vec::with_capacity(4);
+                for argument in &call.arguments()[2..6] {
+                    let value = self.lower_operand(block, None, argument, operations)?;
+                    let value = self.coerce_index(block, operations, value)?;
+                    indices.push(
+                        value
+                            .value()
+                            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
+                            .0,
+                    );
+                }
+                let [component, rows, columns, row_stride] = indices.try_into().map_err(|_| {
+                    unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "row-striped operand count changed",
+                    )
+                })?;
+                let (index, present) = self.lower_row_striped_2d_component_index(
+                    block,
+                    operations,
+                    raw,
+                    component,
+                    rows,
+                    columns,
+                    row_stride,
+                    *lanes_per_row,
                     *elements_per_lane,
                 )?;
                 self.lower_checked_slice_access(
@@ -6356,6 +6446,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             SemanticDisjointIndexSpaceV1::ShiftedIndex1d { .. }
             | SemanticDisjointIndexSpaceV1::BlockedIndex1d { .. }
             | SemanticDisjointIndexSpaceV1::Tiled2dIndex1d { .. }
+            | SemanticDisjointIndexSpaceV1::RowStriped2dIndex1d { .. }
             | SemanticDisjointIndexSpaceV1::GridExclusive => {
                 return Err(unsupported(
                     0,
@@ -6719,6 +6810,87 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn lower_checked_row_striped_2d(
+        &mut self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        operations: &mut Vec<Operation>,
+        input_space: SemanticDisjointIndexSpaceV1,
+        output_space: SemanticDisjointIndexSpaceV1,
+        lanes_per_row: u64,
+        elements_per_lane: u64,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        self.require_call_argument_count(block, call, 1)?;
+        let input = self.lower_operand(block, None, &call.arguments()[0], operations)?;
+        let SemanticValueBindingV1::IndexWitness {
+            id: raw,
+            index_space: actual,
+            disjoint: false,
+            availability: None,
+        } = input
+        else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "checked_row_striped_2d receiver is not thread-index authority",
+            ));
+        };
+        let expected = SemanticDisjointIndexSpaceV1::RowStriped2dIndex1d {
+            lanes_per_row,
+            elements_per_lane,
+        };
+        if actual != input_space
+            || input_space != SemanticDisjointIndexSpaceV1::Index1d
+            || output_space != expected
+            || !row_striped_2d_geometry_valid(lanes_per_row, elements_per_lane)
+        {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "checked_row_striped_2d mapping identity is malformed",
+            ));
+        }
+        let (present, _) = self
+            .emit(
+                operations,
+                Type::BOOL,
+                OperationKind::Constant(Constant::Bool(true)),
+            )?
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+        Ok(SemanticValueBindingV1::OptionComponentWitness {
+            present,
+            raw,
+            index_space: expected,
+            availability: self
+                .option_dominance
+                .availability(
+                    call.destination()
+                        .ok_or_else(|| {
+                            unsupported(
+                                0,
+                                Some(block.index()),
+                                None,
+                                "checked row-striped destination is missing",
+                            )
+                        })?
+                        .place()
+                        .local(),
+                )
+                .ok_or_else(|| {
+                    unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "checked-row-striped-2d Option lacks an authenticated Some edge",
+                    )
+                })?,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn lower_block_component_index(
         &mut self,
         block: SemanticBlockIdV1,
@@ -6993,6 +7165,101 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             tile_row_safe,
             row_add_safe,
             tile_column_safe,
+            column_add_safe,
+            row_multiply_safe,
+            index_add_safe,
+            component_valid,
+            stride_valid,
+            row_valid,
+            column_valid,
+        ];
+        let mut present = predicates[0];
+        for predicate in &predicates[1..] {
+            present = self.emit_bool_and(operations, present, *predicate)?;
+        }
+        Ok((index, present))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn lower_row_striped_2d_component_index(
+        &mut self,
+        block: SemanticBlockIdV1,
+        operations: &mut Vec<Operation>,
+        raw: ValueId,
+        component: ValueId,
+        rows: ValueId,
+        columns: ValueId,
+        row_stride: ValueId,
+        lanes_per_row: u64,
+        elements_per_lane: u64,
+    ) -> Result<(ValueId, ValueId), ProductionSemanticKirErrorV1> {
+        if !row_striped_2d_geometry_valid(lanes_per_row, elements_per_lane) {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "row-striped-2d geometry is malformed",
+            ));
+        }
+        let zero = self.emit_index_constant(operations, 0)?;
+        let one = self.emit_index_constant(operations, 1)?;
+        let maximum = self.emit_index_constant(operations, u64::MAX)?;
+        let lanes = self.emit_index_constant(operations, lanes_per_row)?;
+        let elements = self.emit_index_constant(operations, elements_per_lane)?;
+
+        let row = self.emit_index_binary(operations, BinaryOp::Divide, raw, lanes)?;
+        let lane = self.emit_index_binary(operations, BinaryOp::Remainder, raw, lanes)?;
+        let maximum_component =
+            self.emit_index_binary(operations, BinaryOp::Divide, maximum, lanes)?;
+        let component_multiply_safe = self.emit_compare(
+            operations,
+            ComparePredicate::LessThanOrEqual,
+            component,
+            maximum_component,
+        )?;
+        let column_base =
+            self.emit_index_binary(operations, BinaryOp::Multiply, component, lanes)?;
+        let column = self.emit_index_binary(operations, BinaryOp::Add, column_base, lane)?;
+        let column_add_safe = self.emit_compare(
+            operations,
+            ComparePredicate::LessThanOrEqual,
+            column_base,
+            column,
+        )?;
+
+        let stride_nonzero =
+            self.emit_compare(operations, ComparePredicate::LessThan, zero, row_stride)?;
+        let safe_stride = self.emit_select_index(operations, stride_nonzero, row_stride, one)?;
+        let maximum_row =
+            self.emit_index_binary(operations, BinaryOp::Divide, maximum, safe_stride)?;
+        let row_multiply_safe = self.emit_compare(
+            operations,
+            ComparePredicate::LessThanOrEqual,
+            row,
+            maximum_row,
+        )?;
+        let row_offset = self.emit_index_binary(operations, BinaryOp::Multiply, row, row_stride)?;
+        let index = self.emit_index_binary(operations, BinaryOp::Add, row_offset, column)?;
+        let index_add_safe = self.emit_compare(
+            operations,
+            ComparePredicate::LessThanOrEqual,
+            row_offset,
+            index,
+        )?;
+
+        let component_valid =
+            self.emit_compare(operations, ComparePredicate::LessThan, component, elements)?;
+        let stride_valid = self.emit_compare(
+            operations,
+            ComparePredicate::LessThanOrEqual,
+            columns,
+            row_stride,
+        )?;
+        let row_valid = self.emit_compare(operations, ComparePredicate::LessThan, row, rows)?;
+        let column_valid =
+            self.emit_compare(operations, ComparePredicate::LessThan, column, columns)?;
+        let predicates = [
+            component_multiply_safe,
             column_add_safe,
             row_multiply_safe,
             index_add_safe,
@@ -8575,6 +8842,11 @@ fn disjoint_slice_element(
                     disjoint_slice,
                     element,
                     ..
+                }
+                | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
+                    disjoint_slice,
+                    element,
+                    ..
                 },
             ..
         } if *disjoint_slice == ty => Some(*element),
@@ -8620,6 +8892,15 @@ fn tiled_2d_geometry_valid(
         && lanes_per_tile.is_multiple_of(tile_columns)
         && lanes_per_tile.checked_mul(elements_per_lane) == tile_rows.checked_mul(tile_columns)
         && (lanes_per_tile / tile_columns).checked_mul(elements_per_lane) == Some(tile_rows)
+}
+
+fn row_striped_2d_geometry_valid(lanes_per_row: u64, elements_per_lane: u64) -> bool {
+    lanes_per_row != 0
+        && elements_per_lane != 0
+        && (elements_per_lane - 1)
+            .checked_mul(lanes_per_row)
+            .and_then(|base| base.checked_add(lanes_per_row - 1))
+            .is_some()
 }
 
 const fn lower_compare(operation: SemanticBinaryOpV1) -> Option<ComparePredicate> {

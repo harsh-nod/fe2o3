@@ -2155,6 +2155,8 @@ const fn terminal_expansion_tag_v1(expansion: ProductionTerminalExpansionV1) -> 
         ProductionTerminalExpansionV1::F32MatrixAccumulatorZero => 56,
         ProductionTerminalExpansionV1::StridedReadView2DFromSharedSlice => 57,
         ProductionTerminalExpansionV1::StridedReadView2DLoadOr => 58,
+        ProductionTerminalExpansionV1::ThreadIndexCheckedRowStriped2d => 59,
+        ProductionTerminalExpansionV1::DisjointSliceGetRowStriped2dMut => 60,
     }
 }
 

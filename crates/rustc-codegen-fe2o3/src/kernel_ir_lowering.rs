@@ -1804,9 +1804,11 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | TrustedDeviceItem::ShiftedIndexSpace
                     | TrustedDeviceItem::BlockedIndexSpace
                     | TrustedDeviceItem::Tiled2DIndexSpace
+                    | TrustedDeviceItem::RowStriped2DIndexSpace
                     | TrustedDeviceItem::GridExclusiveIndexSpace
                     | TrustedDeviceItem::DisjointBlock
                     | TrustedDeviceItem::DisjointTile2D
+                    | TrustedDeviceItem::DisjointRowStripe2D
                     | TrustedDeviceItem::GridLeader
                     | TrustedDeviceItem::Gfx942CollectivesContext
                     | TrustedDeviceItem::Gfx942StaticLdsU32x256Type
@@ -1871,9 +1873,11 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | TrustedDeviceItem::DisjointSliceGetMutExclusive
                     | TrustedDeviceItem::ThreadIndexCheckedBlock
                     | TrustedDeviceItem::ThreadIndexCheckedTiled2D
+                    | TrustedDeviceItem::ThreadIndexCheckedRowStriped2D
                     | TrustedDeviceItem::DisjointBlockComponentIndex
                     | TrustedDeviceItem::DisjointSliceGetBlockMut
                     | TrustedDeviceItem::DisjointSliceGetTiled2DMut
+                    | TrustedDeviceItem::DisjointSliceGetRowStriped2DMut
                     | TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic
                     | TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic
                     | TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic

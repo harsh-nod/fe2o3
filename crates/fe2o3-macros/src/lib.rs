@@ -3196,6 +3196,24 @@ fn parse_disjoint_index_space_v1(ty: &Type) -> Option<RustDisjointIndexSpaceV1> 
             elements_per_lane,
         );
     }
+    if segment.ident == "RowStriped2D" {
+        let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+            return None;
+        };
+        if arguments.colon2_token.is_some() || arguments.args.len() != 3 {
+            return None;
+        }
+        let mut arguments = arguments.args.iter();
+        let Some(GenericArgument::Type(base)) = arguments.next() else {
+            return None;
+        };
+        if !is_index_1d_v1(base) {
+            return None;
+        }
+        let lanes_per_row = parse_u64_const_argument_v1(arguments.next()?)?;
+        let elements_per_lane = parse_u64_const_argument_v1(arguments.next()?)?;
+        return RustDisjointIndexSpaceV1::row_striped_2d_index_1d(lanes_per_row, elements_per_lane);
+    }
     if segment.ident != "Shifted" {
         return None;
     }

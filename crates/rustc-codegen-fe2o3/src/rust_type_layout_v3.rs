@@ -440,6 +440,36 @@ fn disjoint_index_space_v1<'tcx>(
                 ))
             })
         }
+        Some(TrustedDeviceItem::RowStriped2DIndexSpace) => {
+            let Some(base) = arguments.first().and_then(|argument| argument.as_type()) else {
+                return Err(GeneralTypedExtractError::new(format!(
+                    "{argument} has malformed genuine RowStriped2D index-space arguments"
+                )));
+            };
+            let lanes = arguments
+                .get(1)
+                .and_then(|argument| argument.as_const())
+                .and_then(|value| value.try_to_target_usize(tcx));
+            let elements = arguments
+                .get(2)
+                .and_then(|argument| argument.as_const())
+                .and_then(|value| value.try_to_target_usize(tcx));
+            let (Some(lanes), Some(elements)) = (lanes, elements) else {
+                return Err(GeneralTypedExtractError::new(format!(
+                    "{argument} has non-value or out-of-range RowStriped2D dimensions"
+                )));
+            };
+            if arguments.len() != 3 || base != trusted_index1d {
+                return Err(GeneralTypedExtractError::new(format!(
+                    "{argument} supports only genuine RowStriped2D<Index1D, L, E>, found `{ty}`"
+                )));
+            }
+            RustDisjointIndexSpaceV1::row_striped_2d_index_1d(lanes, elements).ok_or_else(|| {
+                GeneralTypedExtractError::new(format!(
+                    "{argument} has invalid or overflowing RowStriped2D geometry `{ty}`"
+                ))
+            })
+        }
         _ => Err(GeneralTypedExtractError::new(format!(
             "{argument} uses unsupported or untrusted disjoint index space `{ty}`"
         ))),

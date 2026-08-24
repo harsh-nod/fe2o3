@@ -1,10 +1,10 @@
 use dialect_kernel::{
     AccessKindAttr, AlgorithmOp, AlgorithmType, AllocationEffectOp, AnalysisSplitControlCountAttr,
     AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr, BranchArgsOp, BranchOp,
-    CheckedTiledIndex2DOp, DIALECT_NAME, DYNAMIC_EXTENT, DeterministicJoinOp, DimensionAttr,
-    DimensionOp, ITERATION_DOMAIN_ATTR_KEY, IndexConstantOp, IndexEqualBranchArgsOp,
-    IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexType,
-    IndexValueAttr, IterationDomainAttr, KernelError, MAX_DETERMINISTIC_JOIN_INPUTS_V1,
+    CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DIALECT_NAME, DYNAMIC_EXTENT,
+    DeterministicJoinOp, DimensionAttr, DimensionOp, ITERATION_DOMAIN_ATTR_KEY, IndexConstantOp,
+    IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
+    IndexType, IndexValueAttr, IterationDomainAttr, KernelError, MAX_DETERMINISTIC_JOIN_INPUTS_V1,
     MAX_ITERATION_RANK, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp, RankedMemoryError,
     RankedViewOp, RankedViewType, RegistrationError, RegistrationOutcome, SemanticOwner,
     StructuredAlgorithmOp, TensorConvergenceAttr, TensorLayoutOp, register_dialect,
@@ -670,6 +670,46 @@ fn checked_tiled_index_verifier_rejects_malformed_geometry_and_payload() {
     missing_operand.set_attr_kernel_tile_columns(context, IndexValueAttr(16));
     missing_operand.set_attr_kernel_elements_per_lane(context, IndexValueAttr(4));
     assert!(verify_op(&missing_operand, context).is_err());
+}
+
+#[test]
+fn checked_row_striped_index_verifier_rejects_zero_overflow_and_missing_operands() {
+    let context = &mut Context::new();
+    register_dialect(context, &kernel_name()).unwrap();
+    let values = (0..5)
+        .map(|value| IndexConstantOp::new(context, value))
+        .collect::<Vec<_>>();
+    let valid = CheckedRowStripedIndex2DOp::new(
+        context,
+        values[0].result(context),
+        values[1].result(context),
+        values[2].result(context),
+        values[3].result(context),
+        values[4].result(context),
+        [64, 64],
+    );
+    verify_op(&valid, context).unwrap();
+    valid.set_attr_kernel_lanes_per_row(context, IndexValueAttr(0));
+    assert!(verify_op(&valid, context).is_err());
+    valid.set_attr_kernel_lanes_per_row(context, IndexValueAttr(u64::MAX));
+    valid.set_attr_kernel_row_striped_elements_per_lane(context, IndexValueAttr(2));
+    assert!(verify_op(&valid, context).is_err());
+
+    let raw = Operation::new(
+        context,
+        CheckedRowStripedIndex2DOp::get_concrete_op_info(),
+        vec![IndexType::get(context).into()],
+        values[..4]
+            .iter()
+            .map(|value| value.result(context))
+            .collect(),
+        vec![],
+        0,
+    );
+    let missing = CheckedRowStripedIndex2DOp::from_operation(raw);
+    missing.set_attr_kernel_lanes_per_row(context, IndexValueAttr(64));
+    missing.set_attr_kernel_row_striped_elements_per_lane(context, IndexValueAttr(64));
+    assert!(verify_op(&missing, context).is_err());
 }
 
 #[test]

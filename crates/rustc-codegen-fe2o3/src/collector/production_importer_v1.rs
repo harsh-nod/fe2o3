@@ -1271,6 +1271,38 @@ fn terminal_operation_v1<'tcx>(
                 },
             )
         }
+        ProductionTerminalExpansionV1::ThreadIndexCheckedRowStriped2d
+            if inputs.len() == 1 && rust_inputs.len() == 1 =>
+        {
+            let input_space =
+                rust_index_witness_space_v1(tcx, rust_inputs[0], TrustedDeviceItem::ThreadIndex)
+                    .ok_or_else(|| {
+                        body_owner_table_mismatch_v1("terminal checked-row-striped-2d input")
+                    })?;
+            let rust_output_stripe = rust_option_payload_v1(tcx, rust_output).ok_or_else(|| {
+                body_owner_table_mismatch_v1("terminal checked-row-striped-2d result")
+            })?;
+            let (output_space, lanes_per_row, elements_per_lane) =
+                rust_disjoint_row_stripe_2d_v1(tcx, rust_output_stripe).ok_or_else(|| {
+                    body_owner_table_mismatch_v1("terminal checked-row-striped-2d witness")
+                })?;
+            if input_space != SemanticDisjointIndexSpaceV1::Index1d {
+                return Err(body_owner_table_mismatch_v1(
+                    "terminal checked-row-striped-2d input mapping",
+                ));
+            }
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedRowStriped2d {
+                    input_witness: inputs[0],
+                    output_stripe: option_payload_v1(types, output)?,
+                    raw_index: aggregate_field_v1(types, inputs[0], 0)?,
+                    input_space,
+                    output_space,
+                    lanes_per_row,
+                    elements_per_lane,
+                },
+            )
+        }
         ProductionTerminalExpansionV1::DisjointIndexGet
             if inputs.len() == 1 && rust_inputs.len() == 1 =>
         {
@@ -1485,6 +1517,39 @@ fn terminal_operation_v1<'tcx>(
                 },
             )
         }
+        ProductionTerminalExpansionV1::DisjointSliceGetRowStriped2dMut
+            if inputs.len() == 6 && rust_inputs.len() == 6 =>
+        {
+            let rust_slice = rust_reference_pointee_v1(rust_inputs[0])
+                .and_then(|ty| rust_disjoint_slice_v1(tcx, ty));
+            let rust_stripe = rust_reference_pointee_v1(rust_inputs[1])
+                .and_then(|ty| rust_disjoint_row_stripe_2d_v1(tcx, ty));
+            let Some((index_space, lanes_per_row, elements_per_lane)) = rust_stripe else {
+                return Err(body_owner_table_mismatch_v1(
+                    "terminal row-striped-2d witness identity",
+                ));
+            };
+            if rust_slice.map(|(_, space)| space) != Some(index_space) {
+                return Err(body_owner_table_mismatch_v1(
+                    "terminal row-striped-2d mapping identity",
+                ));
+            }
+            let disjoint_slice = pointer_pointee_v1(types, inputs[0])?;
+            let stripe_witness = pointer_pointee_v1(types, inputs[1])?;
+            let element_pointer = aggregate_field_v1(types, disjoint_slice, 0)?;
+            let element = pointer_pointee_v1(types, element_pointer)?;
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
+                    disjoint_slice,
+                    stripe_witness,
+                    element,
+                    raw_index: inputs[2],
+                    index_space,
+                    lanes_per_row,
+                    elements_per_lane,
+                },
+            )
+        }
         ProductionTerminalExpansionV1::ThreadIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupDimension(_)
@@ -1502,8 +1567,10 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::DisjointSliceGetMutExclusive
         | ProductionTerminalExpansionV1::ThreadIndexCheckedBlock
         | ProductionTerminalExpansionV1::ThreadIndexCheckedTiled2d
+        | ProductionTerminalExpansionV1::ThreadIndexCheckedRowStriped2d
         | ProductionTerminalExpansionV1::DisjointSliceGetBlockMut
         | ProductionTerminalExpansionV1::DisjointSliceGetTiled2dMut
+        | ProductionTerminalExpansionV1::DisjointSliceGetRowStriped2dMut
         | ProductionTerminalExpansionV1::MathContextCurrent
         | ProductionTerminalExpansionV1::MathF32(_)
         | ProductionTerminalExpansionV1::CollectiveContextCurrent
@@ -1870,6 +1937,19 @@ fn rust_disjoint_index_space_v1<'tcx>(
                 elements_per_lane,
             })
         }
+        Some(TrustedDeviceItem::RowStriped2DIndexSpace) if arguments.len() == 3 => {
+            if arguments[0].as_type()? != trusted_index1d_type_v1(tcx)? {
+                return None;
+            }
+            let lanes_per_row = arguments[1].as_const()?.try_to_target_usize(tcx)?;
+            let elements_per_lane = arguments[2].as_const()?.try_to_target_usize(tcx)?;
+            rust_row_striped_2d_geometry_valid_v1(lanes_per_row, elements_per_lane).then_some(
+                SemanticDisjointIndexSpaceV1::RowStriped2dIndex1d {
+                    lanes_per_row,
+                    elements_per_lane,
+                },
+            )
+        }
         _ => None,
     }
 }
@@ -1887,6 +1967,15 @@ fn rust_tiled_2d_geometry_valid_v1(
         && lanes_per_tile.is_multiple_of(tile_columns)
         && lanes_per_tile.checked_mul(elements_per_lane) == tile_rows.checked_mul(tile_columns)
         && (lanes_per_tile / tile_columns).checked_mul(elements_per_lane) == Some(tile_rows)
+}
+
+fn rust_row_striped_2d_geometry_valid_v1(lanes_per_row: u64, elements_per_lane: u64) -> bool {
+    lanes_per_row != 0
+        && elements_per_lane != 0
+        && (elements_per_lane - 1)
+            .checked_mul(lanes_per_row)
+            .and_then(|base| base.checked_add(lanes_per_row - 1))
+            .is_some()
 }
 
 fn rust_disjoint_block_v1<'tcx>(
@@ -1956,6 +2045,35 @@ fn rust_disjoint_tile_2d_v1<'tcx>(
         lanes_per_tile,
         tile_rows,
         tile_columns,
+        elements_per_lane,
+    ))
+}
+
+fn rust_disjoint_row_stripe_2d_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<(SemanticDisjointIndexSpaceV1, u64, u64)> {
+    let TyKind::Adt(definition, arguments) = *ty.kind() else {
+        return None;
+    };
+    if trusted_device_items::classify(tcx, definition.did())
+        != Some(TrustedDeviceItem::DisjointRowStripe2D)
+        || arguments.len() != 3
+        || arguments[0].as_type()? != trusted_index1d_type_v1(tcx)?
+    {
+        return None;
+    }
+    let lanes_per_row = arguments[1].as_const()?.try_to_target_usize(tcx)?;
+    let elements_per_lane = arguments[2].as_const()?.try_to_target_usize(tcx)?;
+    if !rust_row_striped_2d_geometry_valid_v1(lanes_per_row, elements_per_lane) {
+        return None;
+    }
+    Some((
+        SemanticDisjointIndexSpaceV1::RowStriped2dIndex1d {
+            lanes_per_row,
+            elements_per_lane,
+        },
+        lanes_per_row,
         elements_per_lane,
     ))
 }
@@ -2119,6 +2237,8 @@ const fn terminal_operation_tag_v1(
         ProductionTerminalExpansionV1::F32MatrixAccumulatorZero => 56,
         ProductionTerminalExpansionV1::StridedReadView2DFromSharedSlice => 57,
         ProductionTerminalExpansionV1::StridedReadView2DLoadOr => 58,
+        ProductionTerminalExpansionV1::ThreadIndexCheckedRowStriped2d => 59,
+        ProductionTerminalExpansionV1::DisjointSliceGetRowStriped2dMut => 60,
     }
 }
 

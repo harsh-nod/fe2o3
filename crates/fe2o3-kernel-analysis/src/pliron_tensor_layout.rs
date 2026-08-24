@@ -1336,7 +1336,9 @@ fn sparse_fact_is_subgroup_uniform(
                         *coefficient == 0 || invocation_axis_is_subgroup_uniform(dimension, layout)
                     })
         }
-        SparseIndexFactV1::Unknown | SparseIndexFactV1::CheckedTiled2D(_) => false,
+        SparseIndexFactV1::Unknown
+        | SparseIndexFactV1::CheckedTiled2D(_)
+        | SparseIndexFactV1::CheckedRowStriped2D(_) => false,
     }
 }
 

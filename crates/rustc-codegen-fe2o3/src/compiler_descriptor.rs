@@ -569,6 +569,13 @@ fn validate_production_v1_descriptor_evidence(
                     tile_columns: tile_columns.get(),
                     elements_per_lane: elements_per_lane.get(),
                 },
+                RustDisjointIndexSpaceV1::RowStriped2DIndex1D {
+                    lanes_per_row,
+                    elements_per_lane,
+                } => SemanticDisjointIndexSpaceV1::RowStriped2dIndex1d {
+                    lanes_per_row: lanes_per_row.get(),
+                    elements_per_lane: elements_per_lane.get(),
+                },
                 _ => {
                     return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
                         "supported disjoint mapping identity",
@@ -598,6 +605,16 @@ fn validate_production_v1_descriptor_evidence(
                             Some(SemanticDisjointIndexSpaceV1::GridExclusive)
                         }
                         SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut {
+                            disjoint_slice,
+                            index_space,
+                            ..
+                        } if *disjoint_slice == semantic_type_id => Some(*index_space),
+                        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut {
+                            disjoint_slice,
+                            index_space,
+                            ..
+                        }
+                        | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
                             disjoint_slice,
                             index_space,
                             ..

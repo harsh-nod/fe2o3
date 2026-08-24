@@ -1047,7 +1047,9 @@ fn symbolically_proves_disjoint(
                     )
             })
             .collect::<Vec<_>>();
-        if tiled_2d_effect_family_is_injective(&relevant, sparse, launch_extents) {
+        if tiled_2d_effect_family_is_injective(&relevant, sparse, launch_extents)
+            || row_striped_2d_effect_family_is_injective(&relevant, sparse, launch_extents)
+        {
             continue;
         }
         let mut representative = None;
@@ -1065,6 +1067,36 @@ fn symbolically_proves_disjoint(
         }
     }
     true
+}
+
+fn row_striped_2d_effect_family_is_injective(
+    effects: &[&EffectV1],
+    sparse: &SparseIndexAnalysisV1,
+    launch_extents: &[u64],
+) -> bool {
+    let Some(first_index) = effects.first().and_then(|effect| effect.indices.first()) else {
+        return false;
+    };
+    if effects.iter().any(|effect| effect.indices.len() != 1) {
+        return false;
+    }
+    let first_fact = sparse.fact(*first_index);
+    let Some(first) = first_fact.checked_row_striped_2d() else {
+        return false;
+    };
+    for effect in effects.iter().skip(1) {
+        let index_fact = sparse.fact(effect.indices[0]);
+        let Some(index) = index_fact.checked_row_striped_2d() else {
+            return false;
+        };
+        if index.invocation() != first.invocation()
+            || index.runtime_layout() != first.runtime_layout()
+            || index.geometry() != first.geometry()
+        {
+            return false;
+        }
+    }
+    checked_tiled_invocations_are_injective(&[first.invocation().clone()], launch_extents)
 }
 
 fn tiled_2d_effect_family_is_injective(

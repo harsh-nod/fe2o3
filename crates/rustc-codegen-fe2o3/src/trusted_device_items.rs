@@ -456,9 +456,11 @@ pub(crate) enum TrustedDeviceItem {
     ShiftedIndexSpace,
     BlockedIndexSpace,
     Tiled2DIndexSpace,
+    RowStriped2DIndexSpace,
     GridExclusiveIndexSpace,
     DisjointBlock,
     DisjointTile2D,
+    DisjointRowStripe2D,
     GridLeader,
     ThreadIndex1d,
     ThreadIndexGet,
@@ -466,6 +468,7 @@ pub(crate) enum TrustedDeviceItem {
     ThreadIndexCheckedShift,
     ThreadIndexCheckedBlock,
     ThreadIndexCheckedTiled2D,
+    ThreadIndexCheckedRowStriped2D,
     DisjointIndexGet,
     DisjointIndexCheckedShift,
     DisjointBlockComponentIndex,
@@ -479,6 +482,7 @@ pub(crate) enum TrustedDeviceItem {
     DisjointSliceGetMutExclusive,
     DisjointSliceGetBlockMut,
     DisjointSliceGetTiled2DMut,
+    DisjointSliceGetRowStriped2DMut,
     DisjointSliceGetMutAt,
     DisjointSliceLen,
     StridedReadView2D,
@@ -686,6 +690,11 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::Tiled2D",
     ),
     (
+        TrustedDeviceItem::RowStriped2DIndexSpace,
+        "fe2o3_device_row_striped_2d_index_space",
+        "fe2o3_device::RowStriped2D",
+    ),
+    (
         TrustedDeviceItem::GridExclusiveIndexSpace,
         "fe2o3_device_grid_exclusive_index_space",
         "fe2o3_device::GridExclusive",
@@ -704,6 +713,11 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::DisjointTile2D,
         "fe2o3_device_disjoint_tile_2d",
         "fe2o3_device::DisjointTile2D",
+    ),
+    (
+        TrustedDeviceItem::DisjointRowStripe2D,
+        "fe2o3_device_disjoint_row_stripe_2d",
+        "fe2o3_device::DisjointRowStripe2D",
     ),
     (
         TrustedDeviceItem::ThreadIndex1d,
@@ -734,6 +748,11 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::ThreadIndexCheckedTiled2D,
         "fe2o3_device_thread_index_checked_tiled_2d",
         "fe2o3_device::ThreadIndex::checked_tiled_2d",
+    ),
+    (
+        TrustedDeviceItem::ThreadIndexCheckedRowStriped2D,
+        "fe2o3_device_thread_index_checked_row_striped_2d",
+        "fe2o3_device::ThreadIndex::checked_row_striped_2d",
     ),
     (
         TrustedDeviceItem::DisjointIndexGet,
@@ -799,6 +818,11 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::DisjointSliceGetTiled2DMut,
         "fe2o3_device_disjoint_slice_get_tiled_2d_mut",
         "fe2o3_device::DisjointSlice::<T, Tiled2D<IndexSpace, LANES_PER_TILE, TILE_ROWS, TILE_COLUMNS, ELEMENTS_PER_LANE>>::get_tiled_2d_mut",
+    ),
+    (
+        TrustedDeviceItem::DisjointSliceGetRowStriped2DMut,
+        "fe2o3_device_disjoint_slice_get_row_striped_2d_mut",
+        "fe2o3_device::DisjointSlice::<T, RowStriped2D<IndexSpace, LANES_PER_ROW, ELEMENTS_PER_LANE>>::get_row_striped_2d_mut",
     ),
     (
         TrustedDeviceItem::DisjointSliceGetMutAt,
@@ -1543,10 +1567,12 @@ fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option
         TrustedDeviceItem::ShiftedIndexSpace => Some("fe2o3_device::thread::Shifted"),
         TrustedDeviceItem::BlockedIndexSpace => Some("fe2o3_device::thread::Blocked"),
         TrustedDeviceItem::Tiled2DIndexSpace => Some("fe2o3_device::thread::Tiled2D"),
+        TrustedDeviceItem::RowStriped2DIndexSpace => Some("fe2o3_device::thread::RowStriped2D"),
         TrustedDeviceItem::GridExclusiveIndexSpace => Some("fe2o3_device::thread::GridExclusive"),
         TrustedDeviceItem::GridLeader => Some("fe2o3_device::thread::GridLeader"),
         TrustedDeviceItem::DisjointBlock => Some("fe2o3_device::thread::DisjointBlock"),
         TrustedDeviceItem::DisjointTile2D => Some("fe2o3_device::thread::DisjointTile2D"),
+        TrustedDeviceItem::DisjointRowStripe2D => Some("fe2o3_device::thread::DisjointRowStripe2D"),
         TrustedDeviceItem::ThreadIndex1d => Some("fe2o3_device::thread::index_1d"),
         TrustedDeviceItem::ThreadIndexGet => Some("fe2o3_device::thread::{impl#7}::get"),
         TrustedDeviceItem::ThreadIndexIntoDisjoint => {
@@ -1560,6 +1586,9 @@ fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option
         }
         TrustedDeviceItem::ThreadIndexCheckedTiled2D => {
             Some("fe2o3_device::thread::{impl#7}::checked_tiled_2d")
+        }
+        TrustedDeviceItem::ThreadIndexCheckedRowStriped2D => {
+            Some("fe2o3_device::thread::{impl#7}::checked_row_striped_2d")
         }
         TrustedDeviceItem::DisjointIndexGet => Some("fe2o3_device::thread::{impl#8}::get"),
         TrustedDeviceItem::DisjointIndexCheckedShift => {
@@ -1581,6 +1610,9 @@ fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option
         }
         TrustedDeviceItem::DisjointSliceGetTiled2DMut => {
             Some("fe2o3_device::{impl#3}::get_tiled_2d_mut")
+        }
+        TrustedDeviceItem::DisjointSliceGetRowStriped2DMut => {
+            Some("fe2o3_device::{impl#4}::get_row_striped_2d_mut")
         }
         TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic => {
             Some("fe2o3_device::atomic::{impl#0}::as_atomic")
@@ -1776,9 +1808,13 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2
             | TrustedDeviceItem::DeviceMatrixMultiplyAccumulate
             | TrustedDeviceItem::Tiled2DIndexSpace
+            | TrustedDeviceItem::RowStriped2DIndexSpace
             | TrustedDeviceItem::DisjointTile2D
+            | TrustedDeviceItem::DisjointRowStripe2D
             | TrustedDeviceItem::ThreadIndexCheckedTiled2D
+            | TrustedDeviceItem::ThreadIndexCheckedRowStriped2D
             | TrustedDeviceItem::DisjointSliceGetTiled2DMut
+            | TrustedDeviceItem::DisjointSliceGetRowStriped2DMut
             | TrustedDeviceItem::StridedReadView2D
             | TrustedDeviceItem::StridedReadView2DError
             | TrustedDeviceItem::StridedReadView2DFromSharedSlice

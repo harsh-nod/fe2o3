@@ -22,6 +22,7 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     ThreadIndexCheckedShift,
     ThreadIndexCheckedBlock,
     ThreadIndexCheckedTiled2d,
+    ThreadIndexCheckedRowStriped2d,
     DisjointIndexGet,
     DisjointIndexCheckedShift,
     DisjointSliceLen,
@@ -31,6 +32,7 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     DisjointSliceGetMutExclusive,
     DisjointSliceGetBlockMut,
     DisjointSliceGetTiled2dMut,
+    DisjointSliceGetRowStriped2dMut,
     StridedReadView2DFromSharedSlice,
     StridedReadView2DLoadOr,
     WorkgroupBarrier,
@@ -115,6 +117,9 @@ impl ProductionSemanticTerminalRuleV1 {
             TrustedDeviceItem::ThreadIndexCheckedTiled2D => {
                 Self::Expand(ProductionTerminalExpansionV1::ThreadIndexCheckedTiled2d)
             }
+            TrustedDeviceItem::ThreadIndexCheckedRowStriped2D => {
+                Self::Expand(ProductionTerminalExpansionV1::ThreadIndexCheckedRowStriped2d)
+            }
             TrustedDeviceItem::DisjointIndexGet => {
                 Self::Expand(ProductionTerminalExpansionV1::DisjointIndexGet)
             }
@@ -141,6 +146,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             TrustedDeviceItem::DisjointSliceGetTiled2DMut => {
                 Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetTiled2dMut)
+            }
+            TrustedDeviceItem::DisjointSliceGetRowStriped2DMut => {
+                Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetRowStriped2dMut)
             }
             TrustedDeviceItem::StridedReadView2DFromSharedSlice => {
                 Self::Expand(ProductionTerminalExpansionV1::StridedReadView2DFromSharedSlice)
@@ -254,6 +262,9 @@ impl ProductionSemanticTerminalRuleV1 {
             Self::Expand(ProductionTerminalExpansionV1::ThreadIndexCheckedTiled2d) => {
                 TrustedDeviceItem::ThreadIndexCheckedTiled2D
             }
+            Self::Expand(ProductionTerminalExpansionV1::ThreadIndexCheckedRowStriped2d) => {
+                TrustedDeviceItem::ThreadIndexCheckedRowStriped2D
+            }
             Self::Expand(ProductionTerminalExpansionV1::DisjointIndexGet) => {
                 TrustedDeviceItem::DisjointIndexGet
             }
@@ -280,6 +291,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetTiled2dMut) => {
                 TrustedDeviceItem::DisjointSliceGetTiled2DMut
+            }
+            Self::Expand(ProductionTerminalExpansionV1::DisjointSliceGetRowStriped2dMut) => {
+                TrustedDeviceItem::DisjointSliceGetRowStriped2DMut
             }
             Self::Expand(ProductionTerminalExpansionV1::StridedReadView2DFromSharedSlice) => {
                 TrustedDeviceItem::StridedReadView2DFromSharedSlice
@@ -517,6 +531,14 @@ mod tests {
             (
                 TrustedDeviceItem::DisjointSliceGetTiled2DMut,
                 ProductionTerminalExpansionV1::DisjointSliceGetTiled2dMut,
+            ),
+            (
+                TrustedDeviceItem::ThreadIndexCheckedRowStriped2D,
+                ProductionTerminalExpansionV1::ThreadIndexCheckedRowStriped2d,
+            ),
+            (
+                TrustedDeviceItem::DisjointSliceGetRowStriped2DMut,
+                ProductionTerminalExpansionV1::DisjointSliceGetRowStriped2dMut,
             ),
         ];
         for (item, expansion) in cases {

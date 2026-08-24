@@ -163,6 +163,10 @@ enum CapabilityEdgeKindV1 {
         mapping: SemanticDisjointIndexSpaceV1,
         availability: SemanticOptionAvailabilityV1,
     },
+    CheckedRowStriped2d {
+        mapping: SemanticDisjointIndexSpaceV1,
+        availability: SemanticOptionAvailabilityV1,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2604,6 +2608,34 @@ fn project_intrinsic_contracts(
                     availability,
                 }
             }
+            SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedRowStriped2d {
+                output_space,
+                lanes_per_row,
+                elements_per_lane,
+                ..
+            } => {
+                let expected = SemanticDisjointIndexSpaceV1::RowStriped2dIndex1d {
+                    lanes_per_row: *lanes_per_row,
+                    elements_per_lane: *elements_per_lane,
+                };
+                if *output_space != expected
+                    || !row_striped_2d_geometry_valid_v1(*lanes_per_row, *elements_per_lane)
+                {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "a malformed row-striped-2d mapping reached ranked projection",
+                    ));
+                }
+                let destination = simple_call_destination(call)?;
+                let availability = option_dominance.availability(destination).ok_or(
+                    ProductionRankedProjectionErrorV1::Incomplete(
+                        "a checked row-striped-2d witness lacks authenticated Option Some availability",
+                    ),
+                )?;
+                CapabilityEdgeKindV1::CheckedRowStriped2d {
+                    mapping: expected,
+                    availability,
+                }
+            }
             _ => continue,
         };
         let destination = simple_call_destination(call)?.index() as usize;
@@ -2940,12 +2972,21 @@ fn project_intrinsic_contracts(
                     availability: Some(CapabilityAvailabilityV1::Option(availability)),
                     ..input
                 },
+                CapabilityEdgeKindV1::CheckedRowStriped2d {
+                    mapping,
+                    availability,
+                } => ProjectedDisjointIndexV1 {
+                    mapping,
+                    availability: Some(CapabilityAvailabilityV1::Option(availability)),
+                    ..input
+                },
             };
             if matches!(
                 edge.kind,
                 CapabilityEdgeKindV1::CheckedShift { .. }
                     | CapabilityEdgeKindV1::CheckedBlock { .. }
                     | CapabilityEdgeKindV1::CheckedTiled2d { .. }
+                    | CapabilityEdgeKindV1::CheckedRowStriped2d { .. }
             ) {
                 let predicate = option_predicates.get_mut(edge.destination).ok_or(
                     ProductionRankedProjectionErrorV1::Unsupported(
@@ -3338,6 +3379,87 @@ fn project_intrinsic_contracts(
                     lanes_per_tile: *lanes_per_tile,
                     tile_rows: *tile_rows,
                     tile_columns: *tile_columns,
+                    elements_per_lane: *elements_per_lane,
+                });
+                (
+                    *element,
+                    ProductionRankedValueV1::Local(index),
+                    projected.precondition,
+                )
+            }
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
+                element,
+                index_space,
+                lanes_per_row,
+                elements_per_lane,
+                ..
+            } => {
+                let projected = projected_disjoint_operand_v1(
+                    call,
+                    1,
+                    &index_values,
+                    &option_dominance,
+                    &enum_payload_dominance,
+                    block_index,
+                )?;
+                let expected = SemanticDisjointIndexSpaceV1::RowStriped2dIndex1d {
+                    lanes_per_row: *lanes_per_row,
+                    elements_per_lane: *elements_per_lane,
+                };
+                if projected.mapping != expected
+                    || *index_space != expected
+                    || !row_striped_2d_geometry_valid_v1(*lanes_per_row, *elements_per_lane)
+                {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "row-striped-2d accessor mapping identity changed",
+                    ));
+                }
+                let component = project_runtime_index_operand_v1(
+                    call.arguments().get(2),
+                    constants,
+                    &stable_argument_origins,
+                    &mut runtime_index_arguments,
+                    &mut next_runtime_argument,
+                    operations,
+                    next_value,
+                )?;
+                let rows = project_runtime_index_operand_v1(
+                    call.arguments().get(3),
+                    constants,
+                    &stable_argument_origins,
+                    &mut runtime_index_arguments,
+                    &mut next_runtime_argument,
+                    operations,
+                    next_value,
+                )?;
+                let columns = project_runtime_index_operand_v1(
+                    call.arguments().get(4),
+                    constants,
+                    &stable_argument_origins,
+                    &mut runtime_index_arguments,
+                    &mut next_runtime_argument,
+                    operations,
+                    next_value,
+                )?;
+                let row_stride = project_runtime_index_operand_v1(
+                    call.arguments().get(5),
+                    constants,
+                    &stable_argument_origins,
+                    &mut runtime_index_arguments,
+                    &mut next_runtime_argument,
+                    operations,
+                    next_value,
+                )?;
+                reserve_operation(operations)?;
+                let index = next_value_id(next_value)?;
+                operations.push(ProductionRankedOperationV1::CheckedRowStripedIndex2D {
+                    result: index,
+                    invocation: projected.value,
+                    component,
+                    rows,
+                    columns,
+                    row_stride,
+                    lanes_per_row: *lanes_per_row,
                     elements_per_lane: *elements_per_lane,
                 });
                 (
@@ -4415,6 +4537,7 @@ fn compiler_intrinsic_is_pure_total_scalar_dependency_v1(
             | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift { .. }
             | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedBlock { .. }
             | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedTiled2d { .. }
+            | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedRowStriped2d { .. }
             | SemanticCompilerIntrinsicOperationV1::ThreadIndexGet { .. }
             | SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { .. }
             | SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift { .. }
@@ -5704,6 +5827,15 @@ fn tiled_2d_geometry_valid_v1(
         && (lanes_per_tile / tile_columns).checked_mul(elements_per_lane) == Some(tile_rows)
 }
 
+fn row_striped_2d_geometry_valid_v1(lanes_per_row: u64, elements_per_lane: u64) -> bool {
+    lanes_per_row != 0
+        && elements_per_lane != 0
+        && (elements_per_lane - 1)
+            .checked_mul(lanes_per_row)
+            .and_then(|base| base.checked_add(lanes_per_row - 1))
+            .is_some()
+}
+
 fn push_capability_edge(
     edges_by_source: &mut [Vec<CapabilityEdgeV1>],
     edge_count: &mut usize,
@@ -6279,6 +6411,7 @@ fn operation_defines_value(operation: &ProductionRankedOperationV1) -> bool {
             | ProductionRankedOperationV1::InvocationIndex { .. }
             | ProductionRankedOperationV1::IndexBinary { .. }
             | ProductionRankedOperationV1::CheckedTiledIndex2D { .. }
+            | ProductionRankedOperationV1::CheckedRowStripedIndex2D { .. }
             | ProductionRankedOperationV1::Dimension { .. }
             | ProductionRankedOperationV1::SemanticSymbol { .. }
             | ProductionRankedOperationV1::SemanticConstant { .. }
@@ -7621,6 +7754,26 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             ranked_value_text_v1(*columns),
             ranked_value_text_v1(*row_stride),
         ),
+        ProductionRankedOperationV1::CheckedRowStripedIndex2D {
+            result,
+            invocation,
+            component,
+            rows,
+            columns,
+            row_stride,
+            lanes_per_row,
+            elements_per_lane,
+        } => format!(
+            "  %{} = kernel.checked_row_striped_index_2d <{}, {}>({}, {}, {}, {}, {})\n",
+            result.get(),
+            lanes_per_row,
+            elements_per_lane,
+            ranked_value_text_v1(*invocation),
+            ranked_value_text_v1(*component),
+            ranked_value_text_v1(*rows),
+            ranked_value_text_v1(*columns),
+            ranked_value_text_v1(*row_stride),
+        ),
         ProductionRankedOperationV1::Dimension {
             result,
             view,
@@ -7777,7 +7930,8 @@ fn checked_reference_origins(
                     | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut { .. }
                     | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive { .. }
                     | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut { .. }
-                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut { .. },
+                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut { .. }
+                    | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut { .. },
                 ..
             })
         ) {
@@ -10190,6 +10344,7 @@ mod tests {
                 | ProductionRankedOperationV1::DeterministicJoin { .. }
                 | ProductionRankedOperationV1::IndexBinary { .. }
                 | ProductionRankedOperationV1::CheckedTiledIndex2D { .. }
+                | ProductionRankedOperationV1::CheckedRowStripedIndex2D { .. }
                 | ProductionRankedOperationV1::Dimension { .. }
                 | ProductionRankedOperationV1::Barrier { .. }
                 | ProductionRankedOperationV1::Fence { .. }

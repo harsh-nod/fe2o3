@@ -8,9 +8,10 @@
 use std::collections::{HashMap, VecDeque};
 
 use dialect_kernel::{
-    AnalysisSplitOp, BranchArgsOp, CheckedTiledIndex2DOp, DimensionOp, IndexBinaryKindAttr,
-    IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp, IndexLessThanBranchArgsOp,
-    InvocationIndexOp, MAX_RANKED_MEMORY_RANK, RankedViewOp, ranked_view_type,
+    AnalysisSplitOp, BranchArgsOp, CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DimensionOp,
+    IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp,
+    IndexLessThanBranchArgsOp, InvocationIndexOp, MAX_RANKED_MEMORY_RANK, RankedViewOp,
+    ranked_view_type,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -134,6 +135,7 @@ pub enum SparseIndexFactV1 {
         modulus: u64,
     },
     CheckedTiled2D(SparseCheckedTiledIndex2DV1),
+    CheckedRowStriped2D(SparseCheckedRowStripedIndex2DV1),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -144,6 +146,34 @@ pub struct SparseCheckedTiledIndex2DV1 {
     columns: Value,
     row_stride: Value,
     geometry: [u64; 4],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SparseCheckedRowStripedIndex2DV1 {
+    invocation: SparseAffineIndexV1,
+    component: Value,
+    rows: Value,
+    columns: Value,
+    row_stride: Value,
+    geometry: [u64; 2],
+}
+
+impl SparseCheckedRowStripedIndex2DV1 {
+    pub const fn invocation(&self) -> &SparseAffineIndexV1 {
+        &self.invocation
+    }
+
+    pub const fn component(&self) -> Value {
+        self.component
+    }
+
+    pub const fn runtime_layout(&self) -> [Value; 3] {
+        [self.rows, self.columns, self.row_stride]
+    }
+
+    pub const fn geometry(&self) -> [u64; 2] {
+        self.geometry
+    }
 }
 
 impl SparseCheckedTiledIndex2DV1 {
@@ -168,14 +198,20 @@ impl SparseIndexFactV1 {
     pub const fn affine(&self) -> Option<&SparseAffineIndexV1> {
         match self {
             Self::Affine(affine) => Some(affine),
-            Self::Unknown | Self::Remainder { .. } | Self::CheckedTiled2D(_) => None,
+            Self::Unknown
+            | Self::Remainder { .. }
+            | Self::CheckedTiled2D(_)
+            | Self::CheckedRowStriped2D(_) => None,
         }
     }
 
     pub fn constant_value(&self) -> Option<u64> {
         match self {
             Self::Affine(affine) => affine.is_constant(),
-            Self::Unknown | Self::Remainder { .. } | Self::CheckedTiled2D(_) => None,
+            Self::Unknown
+            | Self::Remainder { .. }
+            | Self::CheckedTiled2D(_)
+            | Self::CheckedRowStriped2D(_) => None,
         }
     }
 
@@ -188,6 +224,7 @@ impl SparseIndexFactV1 {
             }
             Self::Remainder { .. } => None,
             Self::CheckedTiled2D(_) => None,
+            Self::CheckedRowStriped2D(_) => None,
         }
     }
 
@@ -197,12 +234,20 @@ impl SparseIndexFactV1 {
             Self::Affine(affine) => affine.maximum(launch_extents),
             Self::Remainder { modulus, .. } => modulus.checked_sub(1),
             Self::CheckedTiled2D(_) => None,
+            Self::CheckedRowStriped2D(_) => None,
         }
     }
 
     pub const fn checked_tiled_2d(&self) -> Option<&SparseCheckedTiledIndex2DV1> {
         match self {
             Self::CheckedTiled2D(fact) => Some(fact),
+            _ => None,
+        }
+    }
+
+    pub const fn checked_row_striped_2d(&self) -> Option<&SparseCheckedRowStripedIndex2DV1> {
+        match self {
+            Self::CheckedRowStriped2D(fact) => Some(fact),
             _ => None,
         }
     }
@@ -788,6 +833,30 @@ fn derive_operation(
         };
         return known(SparseIndexFactV1::CheckedTiled2D(
             SparseCheckedTiledIndex2DV1 {
+                invocation: invocation.clone(),
+                component,
+                rows,
+                columns,
+                row_stride,
+                geometry,
+            },
+        ));
+    }
+    if let Some(striped) = operation.downcast_ref::<CheckedRowStripedIndex2DOp>() {
+        let [invocation, component, rows, columns, row_stride] = striped.operands(context);
+        let SparseIndexLatticeV1::Known(invocation) =
+            lookup(invocation, lattice, definition_indices)
+        else {
+            return SparseIndexLatticeV1::Pending;
+        };
+        let Some(invocation) = invocation.affine() else {
+            return known(SparseIndexFactV1::Unknown);
+        };
+        let Some(geometry) = striped.geometry(context) else {
+            return known(SparseIndexFactV1::Unknown);
+        };
+        return known(SparseIndexFactV1::CheckedRowStriped2D(
+            SparseCheckedRowStripedIndex2DV1 {
                 invocation: invocation.clone(),
                 component,
                 rows,

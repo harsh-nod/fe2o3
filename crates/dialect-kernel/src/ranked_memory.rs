@@ -887,6 +887,99 @@ impl Verify for CheckedTiledIndex2DOp {
     }
 }
 
+/// Checked compact row-striped index mapping.
+///
+/// Operands are invocation, component, rows, columns, and row stride. Static
+/// attributes are lanes per row and elements per lane.
+#[pliron_op(
+    name = "kernel.checked_row_striped_index_2d",
+    format,
+    interfaces = [NResultsInterface<1>, NRegionsInterface<0>],
+    attributes = (
+        kernel_lanes_per_row: IndexValueAttr,
+        kernel_row_striped_elements_per_lane: IndexValueAttr
+    )
+)]
+pub struct CheckedRowStripedIndex2DOp;
+
+impl CheckedRowStripedIndex2DOp {
+    pub fn new(
+        context: &mut Context,
+        invocation: Value,
+        component: Value,
+        rows: Value,
+        columns: Value,
+        row_stride: Value,
+        geometry: [u64; 2],
+    ) -> Self {
+        let [lanes_per_row, elements_per_lane] = geometry;
+        let operation = Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![IndexType::get(context).into()],
+            vec![invocation, component, rows, columns, row_stride],
+            vec![],
+            0,
+        );
+        let op = Self::from_operation(operation);
+        op.set_attr_kernel_lanes_per_row(context, IndexValueAttr(lanes_per_row));
+        op.set_attr_kernel_row_striped_elements_per_lane(
+            context,
+            IndexValueAttr(elements_per_lane),
+        );
+        op
+    }
+
+    pub fn operands(&self, context: &Context) -> [Value; 5] {
+        let operation = self.get_operation().deref(context);
+        core::array::from_fn(|index| operation.get_operand(index))
+    }
+
+    pub fn geometry(&self, context: &Context) -> Option<[u64; 2]> {
+        Some([
+            self.get_attr_kernel_lanes_per_row(context)?.value(),
+            self.get_attr_kernel_row_striped_elements_per_lane(context)?
+                .value(),
+        ])
+    }
+
+    pub fn result(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_result(0)
+    }
+}
+
+impl Verify for CheckedRowStripedIndex2DOp {
+    fn verify(&self, context: &Context) -> PlironResult<()> {
+        verify_no_regions_results_successors(self, context, 1, 0)?;
+        let raw = self.get_operation();
+        let raw = raw.deref(context);
+        let geometry = self.geometry(context);
+        if raw.get_num_operands() != 5
+            || payload_attribute_count(&raw) != 2
+            || geometry.is_none_or(|[lanes, elements]| {
+                lanes == 0
+                    || elements == 0
+                    || (elements - 1)
+                        .checked_mul(lanes)
+                        .and_then(|base| base.checked_add(lanes - 1))
+                        .is_none()
+            })
+            || !is_index_type(self.result(context), context)
+        {
+            return verify_err!(
+                self.loc(context),
+                RankedMemoryError::MalformedPayload(
+                    "kernel.checked_row_striped_index_2d has malformed geometry or payload"
+                )
+            );
+        }
+        for operand in 0..5 {
+            require_index_operand(self, context, operand)?;
+        }
+        Ok(())
+    }
+}
+
 /// Reads one logical dimension from a ranked view.
 #[pliron_op(
     name = "kernel.dim",
@@ -2101,6 +2194,8 @@ fn verify_no_regions_results_successors(
                     | "kernel_tile_rows"
                     | "kernel_tile_columns"
                     | "kernel_elements_per_lane"
+                    | "kernel_lanes_per_row"
+                    | "kernel_row_striped_elements_per_lane"
             )
     });
     if raw.get_num_results() != results

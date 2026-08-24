@@ -1,9 +1,9 @@
 use dialect_gpu::{AddressSpaceAttr, ExecutionLayoutOp, FenceOp, MemoryOrderAttr, MemoryScopeAttr};
 use dialect_kernel::{
     AccessKindAttr, AllocationEffectOp, AtomicOrderingAttr, AtomicScopeAttr, BranchOp,
-    CheckedTiledIndex2DOp, DIALECT_NAME, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
-    IndexLessThanBranchOp, InvocationIndexOp, MemorySpaceAttr, RankedAccessOp, RankedViewOp,
-    RankedViewType, ReturnOp, register_dialect,
+    CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DIALECT_NAME, IndexBinaryKindAttr,
+    IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp, InvocationIndexOp, MemorySpaceAttr,
+    RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckPassKindV1, KernelCheckStatusV1, RankedRaceFindingV1,
@@ -755,6 +755,132 @@ fn checked_tiled_raw_invocation_is_injective_for_a_dynamic_launch() {
     append(context, exit, &ret);
 
     assert!(run_pliron_ranked_race_check_v1(context, &function).is_clean());
+}
+
+#[test]
+fn checked_row_striped_raw_invocation_is_injective_for_a_dynamic_launch() {
+    let context = &mut setup();
+    let function = function(context, "checked_row_striped_dynamic_raw_invocation");
+    let entry = function.get_entry_block(context);
+    let access_block = block(context, &function, "access");
+    let exit = block(context, &function, "exit");
+    let output = view(context, vec![1], MemorySpaceAttr::Global);
+    let invocation = InvocationIndexOp::new(context, 0, 0);
+    let zero = IndexConstantOp::new(context, 0);
+    let rows = IndexConstantOp::new(context, 7);
+    let columns = IndexConstantOp::new(context, 257);
+    let stride = IndexConstantOp::new(context, 269);
+    let striped = CheckedRowStripedIndex2DOp::new(
+        context,
+        invocation.result(context),
+        zero.result(context),
+        rows.result(context),
+        columns.result(context),
+        stride.result(context),
+        [64, 64],
+    );
+    let extent = IndexConstantOp::new(context, 1);
+    let guard = IndexLessThanBranchOp::new(
+        context,
+        striped.result(context),
+        extent.result(context),
+        access_block,
+        exit,
+    );
+    let write = access(
+        context,
+        AccessKindAttr::Write,
+        output.result(context),
+        striped.result(context),
+    );
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    for operation in [
+        output.get_operation(),
+        invocation.get_operation(),
+        zero.get_operation(),
+        rows.get_operation(),
+        columns.get_operation(),
+        stride.get_operation(),
+        striped.get_operation(),
+        extent.get_operation(),
+        guard.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    append(context, access_block, &write);
+    append(context, access_block, &to_exit);
+    append(context, exit, &ret);
+    assert!(run_pliron_ranked_race_check_v1(context, &function).is_clean());
+}
+
+#[test]
+fn checked_row_striped_overflowing_invocation_is_not_proved_injective() {
+    let context = &mut setup();
+    let function = function(context, "checked_row_striped_overflowing_invocation");
+    let entry = function.get_entry_block(context);
+    let access_block = block(context, &function, "access");
+    let exit = block(context, &function, "exit");
+    let output = view(context, vec![1], MemorySpaceAttr::Global);
+    let invocation = InvocationIndexOp::new(context, 0, 3);
+    let factor = IndexConstantOp::new(context, 1_u64 << 63);
+    let mapped_invocation = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Multiply,
+        invocation.result(context),
+        factor.result(context),
+    );
+    let zero = IndexConstantOp::new(context, 0);
+    let rows = IndexConstantOp::new(context, 7);
+    let columns = IndexConstantOp::new(context, 257);
+    let stride = IndexConstantOp::new(context, 269);
+    let striped = CheckedRowStripedIndex2DOp::new(
+        context,
+        mapped_invocation.result(context),
+        zero.result(context),
+        rows.result(context),
+        columns.result(context),
+        stride.result(context),
+        [64, 64],
+    );
+    let extent = IndexConstantOp::new(context, 1);
+    let guard = IndexLessThanBranchOp::new(
+        context,
+        striped.result(context),
+        extent.result(context),
+        access_block,
+        exit,
+    );
+    let write = access(
+        context,
+        AccessKindAttr::Write,
+        output.result(context),
+        striped.result(context),
+    );
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    for operation in [
+        output.get_operation(),
+        invocation.get_operation(),
+        factor.get_operation(),
+        mapped_invocation.get_operation(),
+        zero.get_operation(),
+        rows.get_operation(),
+        columns.get_operation(),
+        stride.get_operation(),
+        striped.get_operation(),
+        extent.get_operation(),
+        guard.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    append(context, access_block, &write);
+    append(context, access_block, &to_exit);
+    append(context, exit, &ret);
+    assert_eq!(
+        run_pliron_ranked_race_check_v1(context, &function).status(),
+        KernelCheckStatusV1::Incomplete
+    );
 }
 
 #[test]

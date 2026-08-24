@@ -13,11 +13,12 @@ use std::{
 use dialect_gpu::{BarrierOp, ExecutionLayoutOp, FenceOp};
 use dialect_kernel::{
     AccessKindAttr, AllocationEffectOp, AnalysisSplitOp, BranchArgsOp, BranchOp,
-    CheckedTiledIndex2DOp, DeterministicJoinOp, DimensionOp, IndexBinaryOp, IndexConstantOp,
-    IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
-    IndexUnknownOp, InvocationIndexOp, MAX_RANKED_MEMORY_RANK, RankedAccessOp, RankedViewOp,
-    RankedViewType, RequireEquivalentOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp,
-    SemanticSymbolOp, TensorLayoutOp, TrapOp, ranked_view_type,
+    CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DeterministicJoinOp, DimensionOp,
+    IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
+    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexUnknownOp, InvocationIndexOp,
+    MAX_RANKED_MEMORY_RANK, RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp,
+    ReturnOp, SemanticBinaryOp, SemanticConstantOp, SemanticSymbolOp, TensorLayoutOp, TrapOp,
+    ranked_view_type,
 };
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
@@ -270,6 +271,7 @@ enum RankedOperationKind {
     IndexBinary,
     DeterministicJoin,
     CheckedTiledIndex2D,
+    CheckedRowStripedIndex2D,
     Dimension,
     RankedAccess,
     AllocationEffect,
@@ -324,6 +326,11 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         Some(RankedOperationKind::DeterministicJoin)
     } else if operation.downcast_ref::<CheckedTiledIndex2DOp>().is_some() {
         Some(RankedOperationKind::CheckedTiledIndex2D)
+    } else if operation
+        .downcast_ref::<CheckedRowStripedIndex2DOp>()
+        .is_some()
+    {
+        Some(RankedOperationKind::CheckedRowStripedIndex2D)
     } else if operation.downcast_ref::<DimensionOp>().is_some() {
         Some(RankedOperationKind::Dimension)
     } else if operation.downcast_ref::<RankedAccessOp>().is_some() {

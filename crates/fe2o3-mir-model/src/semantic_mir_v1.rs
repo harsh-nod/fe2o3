@@ -4902,6 +4902,10 @@ pub enum SemanticDisjointIndexSpaceV1 {
         tile_columns: u64,
         elements_per_lane: u64,
     },
+    RowStriped2dIndex1d {
+        lanes_per_row: u64,
+        elements_per_lane: u64,
+    },
     GridExclusive,
 }
 
@@ -5142,6 +5146,15 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         tile_columns: u64,
         elements_per_lane: u64,
     },
+    ThreadIndexCheckedRowStriped2d {
+        input_witness: SemanticTypeIdV1,
+        output_stripe: SemanticTypeIdV1,
+        raw_index: SemanticTypeIdV1,
+        input_space: SemanticDisjointIndexSpaceV1,
+        output_space: SemanticDisjointIndexSpaceV1,
+        lanes_per_row: u64,
+        elements_per_lane: u64,
+    },
     DisjointIndexGet {
         index_witness: SemanticTypeIdV1,
         raw_index: SemanticTypeIdV1,
@@ -5203,6 +5216,15 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         lanes_per_tile: u64,
         tile_rows: u64,
         tile_columns: u64,
+        elements_per_lane: u64,
+    },
+    DisjointSliceGetRowStriped2dMut {
+        disjoint_slice: SemanticTypeIdV1,
+        stripe_witness: SemanticTypeIdV1,
+        element: SemanticTypeIdV1,
+        raw_index: SemanticTypeIdV1,
+        index_space: SemanticDisjointIndexSpaceV1,
+        lanes_per_row: u64,
         elements_per_lane: u64,
     },
     /// Effect-free compiler hint that the current control-flow path is cold.
@@ -6984,6 +7006,25 @@ fn record_intrinsic_capability_claims(
                 && claims.claim_mapping(input_witness, input_space)
                 && claims.claim_mapping(output_tile, expected)
         }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedRowStriped2d {
+            input_witness,
+            output_stripe,
+            input_space,
+            output_space,
+            lanes_per_row,
+            elements_per_lane,
+            ..
+        } => {
+            let expected = SemanticDisjointIndexSpaceV1::RowStriped2dIndex1d {
+                lanes_per_row,
+                elements_per_lane,
+            };
+            input_space == SemanticDisjointIndexSpaceV1::Index1d
+                && output_space == expected
+                && row_striped_2d_geometry_valid(lanes_per_row, elements_per_lane)
+                && claims.claim_mapping(input_witness, input_space)
+                && claims.claim_mapping(output_stripe, expected)
+        }
         SemanticCompilerIntrinsicOperationV1::DisjointIndexGet {
             index_witness,
             index_space,
@@ -7064,6 +7105,23 @@ fn record_intrinsic_capability_claims(
                 && claims.claim_mapping(disjoint_slice, expected)
                 && claims.claim_mapping(tile_witness, expected)
         }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
+            disjoint_slice,
+            stripe_witness,
+            index_space,
+            lanes_per_row,
+            elements_per_lane,
+            ..
+        } => {
+            let expected = SemanticDisjointIndexSpaceV1::RowStriped2dIndex1d {
+                lanes_per_row,
+                elements_per_lane,
+            };
+            index_space == expected
+                && row_striped_2d_geometry_valid(lanes_per_row, elements_per_lane)
+                && claims.claim_mapping(disjoint_slice, expected)
+                && claims.claim_mapping(stripe_witness, expected)
+        }
         SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { grid_leader } => {
             claims.claim_grid_leader(grid_leader)
         }
@@ -7106,6 +7164,15 @@ fn tiled_2d_geometry_valid(
         && lanes_per_tile.is_multiple_of(tile_columns)
         && lanes_per_tile.checked_mul(elements_per_lane) == tile_rows.checked_mul(tile_columns)
         && (lanes_per_tile / tile_columns).checked_mul(elements_per_lane) == Some(tile_rows)
+}
+
+fn row_striped_2d_geometry_valid(lanes_per_row: u64, elements_per_lane: u64) -> bool {
+    lanes_per_row != 0
+        && elements_per_lane != 0
+        && (elements_per_lane - 1)
+            .checked_mul(lanes_per_row)
+            .and_then(|base| base.checked_add(lanes_per_row - 1))
+            .is_some()
 }
 
 fn validate_non_body_callable_abi(
@@ -7477,6 +7544,28 @@ fn compiler_intrinsic_signature_matches(
                 && transparent_index_witness_matches(request, output_tile, raw_index)
                 && option_value_result_matches(request, output, output_tile)
         }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedRowStriped2d {
+            input_witness,
+            output_stripe,
+            raw_index,
+            input_space,
+            output_space,
+            lanes_per_row,
+            elements_per_lane,
+        } => {
+            inputs.len() == 1
+                && inputs[0] == input_witness
+                && input_space == SemanticDisjointIndexSpaceV1::Index1d
+                && output_space
+                    == SemanticDisjointIndexSpaceV1::RowStriped2dIndex1d {
+                        lanes_per_row,
+                        elements_per_lane,
+                    }
+                && row_striped_2d_geometry_valid(lanes_per_row, elements_per_lane)
+                && transparent_index_witness_matches(request, input_witness, raw_index)
+                && transparent_index_witness_matches(request, output_stripe, raw_index)
+                && option_value_result_matches(request, output, output_stripe)
+        }
         SemanticCompilerIntrinsicOperationV1::DisjointIndexGet {
             index_witness,
             raw_index,
@@ -7623,6 +7712,34 @@ fn compiler_intrinsic_signature_matches(
                 && mutable_reference_to(request, inputs[0], disjoint_slice)
                 && shared_reference_to(request, inputs[1], tile_witness)
                 && transparent_index_witness_matches(request, tile_witness, raw_index)
+                && exclusive_disjoint_slice_type_matches(
+                    request,
+                    disjoint_slice,
+                    element,
+                    raw_index,
+                )
+                && checked_mutable_access_result_matches(request, output, element)
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
+            disjoint_slice,
+            stripe_witness,
+            element,
+            raw_index,
+            index_space,
+            lanes_per_row,
+            elements_per_lane,
+        } => {
+            inputs.len() == 6
+                && inputs[2..].iter().all(|input| *input == raw_index)
+                && index_space
+                    == SemanticDisjointIndexSpaceV1::RowStriped2dIndex1d {
+                        lanes_per_row,
+                        elements_per_lane,
+                    }
+                && row_striped_2d_geometry_valid(lanes_per_row, elements_per_lane)
+                && mutable_reference_to(request, inputs[0], disjoint_slice)
+                && shared_reference_to(request, inputs[1], stripe_witness)
+                && transparent_index_witness_matches(request, stripe_witness, raw_index)
                 && exclusive_disjoint_slice_type_matches(
                     request,
                     disjoint_slice,
@@ -13595,6 +13712,16 @@ fn enqueue_compiler_intrinsic_type_references(
             pending.push_back(index_witness);
             pending.push_back(raw_index);
         }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedRowStriped2d {
+            input_witness,
+            output_stripe,
+            raw_index,
+            ..
+        } => {
+            pending.push_back(input_witness);
+            pending.push_back(output_stripe);
+            pending.push_back(raw_index);
+        }
         SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedBlock {
             input_witness,
             output_block,
@@ -13713,6 +13840,18 @@ fn enqueue_compiler_intrinsic_type_references(
         } => {
             pending.push_back(disjoint_slice);
             pending.push_back(tile_witness);
+            pending.push_back(element);
+            pending.push_back(raw_index);
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
+            disjoint_slice,
+            stripe_witness,
+            element,
+            raw_index,
+            ..
+        } => {
+            pending.push_back(disjoint_slice);
+            pending.push_back(stripe_witness);
             pending.push_back(element);
             pending.push_back(raw_index);
         }
@@ -15265,6 +15404,42 @@ fn encode_compiler_intrinsic_operation(
             writer.u32(view.0)?;
             writer.u32(element.0)
         }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedRowStriped2d {
+            input_witness,
+            output_stripe,
+            raw_index,
+            input_space,
+            output_space,
+            lanes_per_row,
+            elements_per_lane,
+        } => {
+            writer.u8(39)?;
+            writer.u32(input_witness.0)?;
+            writer.u32(output_stripe.0)?;
+            writer.u32(raw_index.0)?;
+            encode_disjoint_index_space(writer, input_space)?;
+            encode_disjoint_index_space(writer, output_space)?;
+            writer.u64(lanes_per_row)?;
+            writer.u64(elements_per_lane)
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
+            disjoint_slice,
+            stripe_witness,
+            element,
+            raw_index,
+            index_space,
+            lanes_per_row,
+            elements_per_lane,
+        } => {
+            writer.u8(40)?;
+            writer.u32(disjoint_slice.0)?;
+            writer.u32(stripe_witness.0)?;
+            writer.u32(element.0)?;
+            writer.u32(raw_index.0)?;
+            encode_disjoint_index_space(writer, index_space)?;
+            writer.u64(lanes_per_row)?;
+            writer.u64(elements_per_lane)
+        }
         SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift {
             input_witness,
             output_witness,
@@ -15464,6 +15639,14 @@ fn encode_disjoint_index_space(
             writer.u64(lanes_per_tile)?;
             writer.u64(tile_rows)?;
             writer.u64(tile_columns)?;
+            writer.u64(elements_per_lane)
+        }
+        SemanticDisjointIndexSpaceV1::RowStriped2dIndex1d {
+            lanes_per_row,
+            elements_per_lane,
+        } => {
+            writer.u8(5)?;
+            writer.u64(lanes_per_row)?;
             writer.u64(elements_per_lane)
         }
     }

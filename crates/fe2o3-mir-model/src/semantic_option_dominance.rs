@@ -94,6 +94,7 @@ impl SemanticOptionProducerV1 {
             SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift { .. }
                 | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedBlock { .. }
                 | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedTiled2d { .. }
+                | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedRowStriped2d { .. }
                 | SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift { .. }
                 | SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { .. }
                 | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { .. }

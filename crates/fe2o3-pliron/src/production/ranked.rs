@@ -11,13 +11,14 @@ use dialect_gpu::{
 };
 use dialect_kernel::{
     AccessKindAttr, AllocationEffectOp, AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr,
-    BranchArgsOp, BranchOp, CheckedTiledIndex2DOp, DYNAMIC_EXTENT, DeterministicJoinOp,
-    DimensionOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp,
-    IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexType,
-    IndexUnknownOp, InvocationIndexOp, MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK,
-    MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp,
-    SUPPORTED_ELEMENT_WIDTHS, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantOp,
-    SemanticSymbolOp, TensorConvergenceAttr, TensorLayoutOp, TrapOp,
+    BranchArgsOp, BranchOp, CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DYNAMIC_EXTENT,
+    DeterministicJoinOp, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
+    IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
+    IndexType, IndexUnknownOp, InvocationIndexOp, MAX_DETERMINISTIC_JOIN_INPUTS_V1,
+    MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType,
+    RequireEquivalentOp, ReturnOp, SUPPORTED_ELEMENT_WIDTHS, SemanticBinaryKindAttr,
+    SemanticBinaryOp, SemanticConstantOp, SemanticSymbolOp, TensorConvergenceAttr, TensorLayoutOp,
+    TrapOp,
 };
 use fe2o3_kernel_analysis::{
     MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_OPERATIONS, PlironAtomicLegalityReportV1,
@@ -140,6 +141,16 @@ pub enum ProductionRankedOperationV1 {
         lanes_per_tile: u64,
         tile_rows: u64,
         tile_columns: u64,
+        elements_per_lane: u64,
+    },
+    CheckedRowStripedIndex2D {
+        result: ProductionRankedValueIdV1,
+        invocation: ProductionRankedValueV1,
+        component: ProductionRankedValueV1,
+        rows: ProductionRankedValueV1,
+        columns: ProductionRankedValueV1,
+        row_stride: ProductionRankedValueV1,
+        lanes_per_row: u64,
         elements_per_lane: u64,
     },
     Dimension {
@@ -870,6 +881,30 @@ fn validate_operation(
             }
             Ok(Some((*result, RecipeValueKindV1::Index)))
         }
+        ProductionRankedOperationV1::CheckedRowStripedIndex2D {
+            result,
+            invocation,
+            component,
+            rows,
+            columns,
+            row_stride,
+            lanes_per_row,
+            elements_per_lane,
+        } => {
+            for value in [invocation, component, rows, columns, row_stride] {
+                require_index(*value, argument_count, locals)?;
+            }
+            if *lanes_per_row == 0
+                || *elements_per_lane == 0
+                || (*elements_per_lane - 1)
+                    .checked_mul(*lanes_per_row)
+                    .and_then(|base| base.checked_add(*lanes_per_row - 1))
+                    .is_none()
+            {
+                return Err(ProductionRankedKernelErrorV1::InvalidShape);
+            }
+            Ok(Some((*result, RecipeValueKindV1::Index)))
+        }
         ProductionRankedOperationV1::Dimension {
             result,
             view,
@@ -1009,6 +1044,18 @@ fn validate_block_argument_values_v1(
             }
         }
         ProductionRankedOperationV1::CheckedTiledIndex2D {
+            invocation,
+            component,
+            rows,
+            columns,
+            row_stride,
+            ..
+        } => {
+            for value in [invocation, component, rows, columns, row_stride] {
+                validate(*value)?;
+            }
+        }
+        ProductionRankedOperationV1::CheckedRowStripedIndex2D {
             invocation,
             component,
             rows,
@@ -1787,6 +1834,27 @@ fn materialize_operation(
                     *tile_columns,
                     *elements_per_lane,
                 ],
+            );
+            (op.get_operation(), Some((*result, op.result(context))))
+        }
+        ProductionRankedOperationV1::CheckedRowStripedIndex2D {
+            result,
+            invocation,
+            component,
+            rows,
+            columns,
+            row_stride,
+            lanes_per_row,
+            elements_per_lane,
+        } => {
+            let op = CheckedRowStripedIndex2DOp::new(
+                context,
+                resolve_value(*invocation, arguments, locals, block_arguments)?,
+                resolve_value(*component, arguments, locals, block_arguments)?,
+                resolve_value(*rows, arguments, locals, block_arguments)?,
+                resolve_value(*columns, arguments, locals, block_arguments)?,
+                resolve_value(*row_stride, arguments, locals, block_arguments)?,
+                [*lanes_per_row, *elements_per_lane],
             );
             (op.get_operation(), Some((*result, op.result(context))))
         }

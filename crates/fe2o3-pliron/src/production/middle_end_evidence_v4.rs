@@ -1164,6 +1164,26 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             digest.update(tile_columns.to_le_bytes());
             digest.update(elements_per_lane.to_le_bytes());
         }
+        ProductionRankedOperationV1::CheckedRowStripedIndex2D {
+            result,
+            invocation,
+            component,
+            rows,
+            columns,
+            row_stride,
+            lanes_per_row,
+            elements_per_lane,
+        } => {
+            digest.update([18]);
+            digest.update(result.get().to_le_bytes());
+            hash_value(digest, *invocation);
+            hash_value(digest, *component);
+            hash_value(digest, *rows);
+            hash_value(digest, *columns);
+            hash_value(digest, *row_stride);
+            digest.update(lanes_per_row.to_le_bytes());
+            digest.update(elements_per_lane.to_le_bytes());
+        }
         ProductionRankedOperationV1::Dimension {
             result,
             view,

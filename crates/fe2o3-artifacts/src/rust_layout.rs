@@ -69,6 +69,11 @@ pub enum RustDisjointIndexSpaceV1 {
         tile_columns: NonZeroU64,
         elements_per_lane: NonZeroU64,
     },
+    /// One compact row mapping over a runtime-strided 2D output view.
+    RowStriped2DIndex1D {
+        lanes_per_row: NonZeroU64,
+        elements_per_lane: NonZeroU64,
+    },
 }
 
 impl RustDisjointIndexSpaceV1 {
@@ -126,6 +131,34 @@ impl RustDisjointIndexSpaceV1 {
             lanes_per_tile,
             tile_rows,
             tile_columns,
+            elements_per_lane,
+        })
+    }
+
+    /// Constructs a row-striped mapping only when both dimensions and the
+    /// greatest component column are representable.
+    pub const fn row_striped_2d_index_1d(
+        lanes_per_row: u64,
+        elements_per_lane: u64,
+    ) -> Option<Self> {
+        let Some(lanes_per_row) = NonZeroU64::new(lanes_per_row) else {
+            return None;
+        };
+        let Some(elements_per_lane) = NonZeroU64::new(elements_per_lane) else {
+            return None;
+        };
+        let Some(component_base) = (elements_per_lane.get() - 1).checked_mul(lanes_per_row.get())
+        else {
+            return None;
+        };
+        if component_base
+            .checked_add(lanes_per_row.get() - 1)
+            .is_none()
+        {
+            return None;
+        }
+        Some(Self::RowStriped2DIndex1D {
+            lanes_per_row,
             elements_per_lane,
         })
     }
@@ -737,6 +770,14 @@ fn encode_index_space(writer: &mut CanonicalWriter, index_space: RustDisjointInd
             writer.u64(lanes_per_tile.get());
             writer.u64(tile_rows.get());
             writer.u64(tile_columns.get());
+            writer.u64(elements_per_lane.get());
+        }
+        RustDisjointIndexSpaceV1::RowStriped2DIndex1D {
+            lanes_per_row,
+            elements_per_lane,
+        } => {
+            writer.u8(6);
+            writer.u64(lanes_per_row.get());
             writer.u64(elements_per_lane.get());
         }
     }
