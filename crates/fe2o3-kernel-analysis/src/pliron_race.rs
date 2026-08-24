@@ -432,8 +432,13 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
             }
             if let Some(effect) = operation.downcast_ref::<AllocationEffectOp>() {
                 match effect.memory_space(context) {
-                    Some(MemorySpaceAttr::Private | MemorySpaceAttr::Workgroup) => continue,
                     Some(MemorySpaceAttr::Global) => {}
+                    Some(MemorySpaceAttr::Private | MemorySpaceAttr::Workgroup) => {
+                        return one(RankedRaceFindingV1::AllocationContractUnavailable {
+                            detail: "a whole-allocation effect uses an unsupported non-global memory space"
+                                .to_owned(),
+                        });
+                    }
                     None => {
                         return one(RankedRaceFindingV1::AllocationContractUnavailable {
                             detail: "a whole-allocation effect has no memory space".to_owned(),

@@ -1253,6 +1253,32 @@ fn whole_allocation_unknown_alias_read_fails_closed_against_an_output() {
 }
 
 #[test]
+fn malformed_non_global_allocation_effect_cannot_fail_open() {
+    let context = &mut setup();
+    let function = function(context, "malformed_non_global_allocation_effect");
+    let entry = function.get_entry_block(context);
+    let effect = AllocationEffectOp::new(
+        context,
+        AccessKindAttr::Read,
+        MemorySpaceAttr::Global,
+        581,
+        58,
+    )
+    .expect("valid allocation effect before hostile mutation");
+    effect.set_attr_kernel_allocation_effect_memory_space(context, MemorySpaceAttr::Workgroup);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &effect);
+    append(context, entry, &ret);
+
+    let report = run_pliron_ranked_race_check_v1(context, &function);
+    assert_eq!(report.status(), RankedRaceStatusV1::Rejected);
+    assert!(matches!(
+        report.findings(),
+        [RankedRaceFindingV1::BoundsPrerequisiteRejected]
+    ));
+}
+
+#[test]
 fn incompatible_potentially_aliasing_view_signatures_fail_closed() {
     let context = &mut setup();
     let function = function(context, "incompatible_alias_views");
