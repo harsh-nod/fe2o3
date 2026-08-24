@@ -103,7 +103,7 @@ const TRUSTED_REGISTRY_BUILD_SCRIPTS: [(&str, &str, &str); 15] = [
     ),
 ];
 const TRUSTED_FE2O3_MACROS_TREE: &str =
-    "4a5ad295190b51e11cf2ad78972e083379e2c1ecd3f5d6841b47b408a66bd1a9";
+    "ea9bef86f3ba6cedf85f01c0c1b2f79a276d6dd7ef1e88d789f726b44dc38607";
 const TRUSTED_FE2O3_HIP_SYS_TREE: &str =
     "fc950a51041eeb74fd756624e3c981fe24d52a6e8b4868da613e5b9a8c499429";
 

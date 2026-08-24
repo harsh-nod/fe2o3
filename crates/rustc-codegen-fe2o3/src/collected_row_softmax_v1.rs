@@ -32,6 +32,9 @@ use fe2o3_kernel_ir::{
     TargetCapability, Terminator, Type, ValueDef, ValueId, WaveWidth, WorkgroupSize,
     encode_module_v4, gfx942_xnack_minus_target_capability, verify_module,
 };
+use fe2o3_rustc_invocation::{
+    CARGO_METADATA_BUILD_OBSERVATION_ENV_V2, derive_cargo_metadata_build_observation_v2,
+};
 use rustc_abi::{CanonAbi, ExternAbi};
 use rustc_hir::{Mutability, Safety};
 use rustc_middle::ty::{FloatTy, Instance, InstanceKind, Ty, TyCtxt, TyKind, TypingEnv};
@@ -69,12 +72,9 @@ const REVIEWED_CRATE_METADATA: &str = "fe2o3-row-softmax-v1-reviewed";
 const COMPILER_SEMANTICS_DOMAIN_V1: &[u8] = b"fe2o3.row-softmax.compiler-semantics.v1";
 const CARGO_METADATA_OBSERVATION_DOMAIN_V1: &[u8] =
     b"fe2o3.row-softmax.cargo-metadata-observation.v1";
-const CARGO_METADATA_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2";
 #[cfg(feature = "row-softmax-metadata-mutation-test-only")]
 const CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1: &str = "FE2O3_CARGO_METADATA_MUTATION_TEST_ONLY_V1";
 const EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1: &str = "FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1";
-const CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2: &[u8] =
-    b"FE2O3/CARGO-METADATA-BUILD-OBSERVATION/V2\0";
 const ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1: &[u8] =
     b"FE2O3/ROW-SOFTMAX/EFFECTIVE-RUSTC-ARGV/V1\0";
 const MANAGED_ARTIFACT_DIRECTORY: &str =
@@ -1183,14 +1183,7 @@ fn admit_managed_build_authority(
 }
 
 fn cargo_metadata_build_transcript(metadata: &CargoMetadataBuildObservationV1) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2);
-    digest.update((metadata.ordered_tokens.len() as u64).to_le_bytes());
-    for token in &metadata.ordered_tokens {
-        digest.update((token.len() as u64).to_le_bytes());
-        digest.update(token.as_bytes());
-    }
-    digest.finalize().into()
+    derive_cargo_metadata_build_observation_v2(&metadata.ordered_tokens).into_bytes()
 }
 
 fn observe_managed_wrapper_effective_rustc_argv(
@@ -2833,14 +2826,8 @@ fn main() {
         let admitted = require_compiler_semantics(&reviewed_compiler_semantics("0123456789abcdef"))
             .expect("reviewed compiler semantics");
         let metadata = admitted.cargo_metadata_build_observation;
-        let mut transcript = Sha256::new();
-        transcript.update(CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2);
-        transcript.update((metadata.ordered_tokens.len() as u64).to_le_bytes());
-        for token in &metadata.ordered_tokens {
-            transcript.update((token.len() as u64).to_le_bytes());
-            transcript.update(token.as_bytes());
-        }
-        let transcript: [u8; 32] = transcript.finalize().into();
+        let transcript =
+            derive_cargo_metadata_build_observation_v2(&metadata.ordered_tokens).into_bytes();
         let attempt = fe2o3_artifact_transaction::BuildAttempt::from_env_value(&format!(
             "1:{}:{}",
             "11".repeat(16),

@@ -2,6 +2,7 @@
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
+mod codegen_metadata_v1;
 mod decode;
 mod decode_v2;
 mod decode_v3;
@@ -17,6 +18,11 @@ mod model_v2;
 mod model_v3;
 mod rustc_args_v2;
 
+pub use codegen_metadata_v1::{
+    CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2, CARGO_METADATA_BUILD_OBSERVATION_ENV_V2,
+    CargoMetadataBuildObservationV2, RustcCodegenMetadataErrorV1,
+    derive_cargo_metadata_build_observation_v2, ordered_rustc_codegen_metadata_v1,
+};
 pub use decode::decode_descriptor_v1;
 pub use decode_v2::decode_descriptor_v2;
 pub use decode_v3::decode_descriptor_v3;

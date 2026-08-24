@@ -399,6 +399,139 @@ fn classifier_separates_queries_from_compiles_and_rejects_ambiguity() {
 }
 
 #[test]
+fn ordered_codegen_metadata_accepts_every_rustc_spelling_and_preserves_order() {
+    let argv = [
+        "rustc",
+        "--crate-name",
+        "unit",
+        "unit.rs",
+        "-C",
+        "metadata=first",
+        "-Cmetadata=second",
+        "--codegen",
+        "metadata=third",
+        "--codegen=metadata=fourth",
+        "-Copt-level=2",
+        "--codegen",
+        "debuginfo=0",
+        "-Cmetadata=first",
+    ]
+    .map(std::ffi::OsString::from);
+    let RustcInvocationV2::Compile(compile) = classify_rustc_invocation_v2(&argv).unwrap() else {
+        panic!("fixture must be a compile invocation");
+    };
+
+    assert_eq!(
+        ordered_rustc_codegen_metadata_v1(compile).unwrap(),
+        ["first", "second", "third", "fourth", "first"]
+    );
+}
+
+#[test]
+fn cargo_metadata_observation_preserves_order_duplicates_and_exact_domain() {
+    let ordered = derive_cargo_metadata_build_observation_v2(&["first", "second", "first"]);
+    let reordered = derive_cargo_metadata_build_observation_v2(&["first", "first", "second"]);
+    let deduplicated = derive_cargo_metadata_build_observation_v2(&["first", "second"]);
+
+    assert_ne!(ordered, reordered);
+    assert_ne!(ordered, deduplicated);
+    assert_eq!(
+        ordered.to_hex(),
+        "02bb68e8c8b5aa67c836f32263beaa4738b50f4689f0622d75130fbf9f7008a9"
+    );
+    assert_ne!(ordered.into_bytes(), [0; 32]);
+}
+
+#[test]
+fn ordered_codegen_metadata_distinguishes_absent_and_empty_values() {
+    let absent =
+        ["rustc", "--crate-name", "unit", "unit.rs", "-Copt-level=2"].map(std::ffi::OsString::from);
+    let RustcInvocationV2::Compile(compile) = classify_rustc_invocation_v2(&absent).unwrap() else {
+        panic!("fixture must be a compile invocation");
+    };
+    assert!(
+        ordered_rustc_codegen_metadata_v1(compile)
+            .unwrap()
+            .is_empty()
+    );
+
+    for (tail, argument_index) in [
+        (vec!["-C", "metadata="], 5),
+        (vec!["-Cmetadata="], 4),
+        (vec!["--codegen", "metadata="], 5),
+        (vec!["--codegen=metadata="], 4),
+    ] {
+        let argv = ["rustc", "--crate-name", "unit", "unit.rs"]
+            .into_iter()
+            .chain(tail)
+            .map(std::ffi::OsString::from)
+            .collect::<Vec<_>>();
+        let RustcInvocationV2::Compile(compile) = classify_rustc_invocation_v2(&argv).unwrap()
+        else {
+            panic!("fixture must be a compile invocation");
+        };
+        assert_eq!(
+            ordered_rustc_codegen_metadata_v1(compile),
+            Err(RustcCodegenMetadataErrorV1::EmptyMetadata { argument_index })
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn ordered_codegen_metadata_rejects_non_utf8_split_and_joined_values() {
+    use std::os::unix::ffi::OsStringExt;
+
+    for (tail, argument_index) in [
+        (
+            vec![
+                std::ffi::OsString::from("-C"),
+                std::ffi::OsString::from_vec(b"metadata=private-\xff".to_vec()),
+            ],
+            5,
+        ),
+        (
+            vec![std::ffi::OsString::from_vec(
+                b"-Cmetadata=private-\xff".to_vec(),
+            )],
+            4,
+        ),
+        (
+            vec![
+                std::ffi::OsString::from("--codegen"),
+                std::ffi::OsString::from_vec(b"metadata=private-\xff".to_vec()),
+            ],
+            5,
+        ),
+        (
+            vec![std::ffi::OsString::from_vec(
+                b"--codegen=metadata=private-\xff".to_vec(),
+            )],
+            4,
+        ),
+    ] {
+        let argv = ["rustc", "--crate-name", "unit", "unit.rs"]
+            .map(std::ffi::OsString::from)
+            .into_iter()
+            .chain(tail)
+            .collect::<Vec<_>>();
+        let RustcInvocationV2::Compile(compile) = classify_rustc_invocation_v2(&argv).unwrap()
+        else {
+            panic!("fixture must be a compile invocation");
+        };
+        let error = ordered_rustc_codegen_metadata_v1(compile).unwrap_err();
+        assert_eq!(
+            error,
+            RustcCodegenMetadataErrorV1::NonUtf8CodegenOption { argument_index }
+        );
+        assert_eq!(
+            error.to_string(),
+            format!("rustc codegen option at argv[{argument_index}] is not valid UTF-8")
+        );
+    }
+}
+
+#[test]
 fn backend_assignment_is_a_unique_canonical_final_argument() {
     let base = fixture();
 

@@ -13,6 +13,7 @@ use fe2o3_artifacts::{
     Endianness, IdentityText, LaunchContract, Mutability, PointerWidth, ScalarType, TargetIdentity,
 };
 use fe2o3_compiler_ffi::CodeObjectVersion;
+use fe2o3_rustc_invocation::CARGO_METADATA_BUILD_OBSERVATION_ENV_V2;
 use rustc_middle::mir::{Body, VarDebugInfoContents};
 use rustc_middle::ty::{FloatTy, TyCtxt, TyKind, UintTy};
 use rustc_session::config::{DebugInfo, OptLevel};
@@ -48,7 +49,6 @@ const S09_LOCAL_LINE: usize = 70;
 const S09_OBSERVATION_LINE: usize = 71;
 const MAX_RUSTC_EXECUTABLE_BYTES: u64 = 256 * 1024 * 1024;
 
-const CARGO_METADATA_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2";
 const QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1: &str =
     "FE2O3_QUALIFICATION_CODEGEN_BACKEND_SHA256_V1";
 const WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_WORKER_CONFIG_BUILD_OBSERVATION_V2";

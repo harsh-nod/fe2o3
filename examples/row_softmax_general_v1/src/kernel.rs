@@ -24,7 +24,6 @@ fn accessed_extent(rows: u32, stride: u32) -> usize {
 /// lets `Tiled2D` prove every store disjoint without unsafe source code.
 #[kernel(
     typed,
-    namespace = "bc044acd534ec369d1249dfcbe80b601a2076e52996717aebd48f1b1783d0ddb",
     launch(required = [64, 1, 1], max = [64, 1, 1]),
     control_flow(loop_bounds(64, 64, 64))
 )]

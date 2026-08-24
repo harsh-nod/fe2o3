@@ -25,7 +25,6 @@ fn matrix_extent(rows: u32, columns: u32, stride: u32) -> usize {
 /// selects a strided weight and bias matrix without changing the pipeline.
 #[kernel(
     typed,
-    namespace = "11b4c081146112bdecd6d063245bc972fc594f802dc2f82f46edc93014094001",
     launch(required = [64, 1, 1], max = [64, 1, 1]),
     control_flow(loop_bounds(4294967295))
 )]

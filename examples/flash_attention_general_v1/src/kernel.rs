@@ -27,7 +27,6 @@ fn matrix_extent(rows: u32, columns: u32, stride: u32) -> usize {
 /// negative infinity. Logical edge rows are simply ignored by the caller.
 #[kernel(
     typed,
-    namespace = "a3e5de83648eb444171f96f51069694e6d86ae30f8ef64e18b5cf550044ab1db",
     launch(required = [64, 1, 1], max = [64, 1, 1]),
     control_flow(loop_bounds(256, 64, 256, 64, 16))
 )]

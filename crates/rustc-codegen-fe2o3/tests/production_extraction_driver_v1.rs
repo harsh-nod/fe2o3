@@ -124,8 +124,9 @@ fn production_collector_rejects_reachable_unsafe_rust_with_rooted_diagnostics() 
             )
             .env(
                 "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
-                "1111111111111111111111111111111111111111111111111111111111111111",
+                "55".repeat(32),
             )
+            .env("FE2O3_CRATE_BINDING_ID_V1", "77".repeat(32))
             .env(
                 "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
                 "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
@@ -191,13 +192,13 @@ fn run_extraction(target: &ScratchTarget) -> String {
             "FE2O3_EXTRACT_CRATE_V1",
             "fe2o3_production_extraction_fixture",
         )
-        // The production cargo-fe2o3 parent owns this observation. This
-        // process-isolation fixture has no production authority and supplies
-        // only a nonzero test value so collection can reach the importer gate.
+        // A caller-supplied observation has no authority. The selected
+        // extractor must replace this stale value from exact rustc metadata.
         .env(
             "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
-            "1111111111111111111111111111111111111111111111111111111111111111",
+            "55".repeat(32),
         )
+        .env("FE2O3_CRATE_BINDING_ID_V1", "77".repeat(32))
         .env(
             "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
             "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",

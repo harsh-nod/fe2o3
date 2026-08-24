@@ -29,8 +29,7 @@ use dialect_amdgcn::{
     DeviceMathDiagnosticItem, DeviceValueDiagnosticItem, Fe2o3DeviceDiagnosticItem,
 };
 use fe2o3_kernel_ir::{NarrowFloatFormat, WidenedFloatBinaryOp};
-
-const CARGO_METADATA_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2";
+use fe2o3_rustc_invocation::CARGO_METADATA_BUILD_OBSERVATION_ENV_V2;
 
 const MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2: &[u8] =
     b"FE2O3/MATRIX-PROVIDER-SOURCE-IDENTITY/V2\0";

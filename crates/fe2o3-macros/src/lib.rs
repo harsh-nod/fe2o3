@@ -815,22 +815,42 @@ fn expand_kernel(input: ItemFn, options: KernelOptions) -> syn::Result<proc_macr
 fn resolve_crate_binding(
     explicit_namespace: Option<CrateBindingIdV1>,
 ) -> syn::Result<CrateBindingIdV1> {
-    match proc_macro::tracked::env_var(CRATE_BINDING_ID_ENV_V1) {
-        Ok(value) => CrateBindingIdV1::from_hex(&value).map_err(|error| {
+    let compiler_binding = match proc_macro::tracked::env_var(CRATE_BINDING_ID_ENV_V1) {
+        Ok(value) => Some(CrateBindingIdV1::from_hex(&value).map_err(|error| {
             syn::Error::new(
                 proc_macro2::Span::call_site(),
                 format!("invalid {CRATE_BINDING_ID_ENV_V1}: {error}"),
             )
-        }),
-        Err(std::env::VarError::NotPresent) => explicit_namespace.ok_or_else(|| {
-            syn::Error::new(
+        })?),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(syn::Error::new(
                 proc_macro2::Span::call_site(),
-                "#[kernel(typed)] requires the cargo-fe2o3 rustc wrapper or an explicit 256-bit namespace",
-            )
-        }),
-        Err(std::env::VarError::NotUnicode(_)) => Err(syn::Error::new(
+                format!("{CRATE_BINDING_ID_ENV_V1} is not valid UTF-8"),
+            ));
+        }
+    };
+    reconcile_crate_binding_v1(compiler_binding, explicit_namespace)
+}
+
+fn reconcile_crate_binding_v1(
+    compiler_binding: Option<CrateBindingIdV1>,
+    explicit_namespace: Option<CrateBindingIdV1>,
+) -> syn::Result<CrateBindingIdV1> {
+    match (compiler_binding, explicit_namespace) {
+        (Some(compiler), Some(explicit)) if compiler != explicit => Err(syn::Error::new(
             proc_macro2::Span::call_site(),
-            format!("{CRATE_BINDING_ID_ENV_V1} is not valid UTF-8"),
+            format!(
+                "compiler-derived crate binding {} disagrees with explicit #[kernel(typed)] namespace {}",
+                compiler.to_hex(),
+                explicit.to_hex()
+            ),
+        )),
+        (Some(compiler), _) => Ok(compiler),
+        (None, Some(explicit)) => Ok(explicit),
+        (None, None) => Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "#[kernel(typed)] requires the cargo-fe2o3 rustc wrapper or an explicit 256-bit namespace",
         )),
     }
 }
@@ -4563,9 +4583,10 @@ mod tests {
         expand_legacy_kernel_with_imports, general_typed_global_mut_pointer_type_identity_v1,
         generated_general_typed_arguments_v1, generated_worker_v3_adapter_v1, host_import_for,
         model_general_typed_signature_v1, parse_device_ffi_options, parse_kernel_options,
-        validate_generated_device_ffi_contract_grammar, validate_kernel_assembly_boundary,
-        validate_kernel_source_safety, validate_typed_kernel_profile_v1,
-        validate_typed_kernel_signature, validate_typed_kernel_symbol_stem,
+        reconcile_crate_binding_v1, validate_generated_device_ffi_contract_grammar,
+        validate_kernel_assembly_boundary, validate_kernel_source_safety,
+        validate_typed_kernel_profile_v1, validate_typed_kernel_signature,
+        validate_typed_kernel_symbol_stem,
     };
     use fe2o3_artifacts::{
         AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Mutability,
@@ -4596,6 +4617,36 @@ mod tests {
             effects: "read_global,write_global".to_owned(),
             semantic: "1111111111111111111111111111111111111111111111111111111111111111".to_owned(),
         }
+    }
+
+    #[test]
+    fn compiler_and_explicit_crate_bindings_must_agree_exactly() {
+        let compiler = CrateBindingIdV1::from_bytes([0x11; 32]);
+        let explicit = CrateBindingIdV1::from_bytes([0x22; 32]);
+
+        assert_eq!(
+            reconcile_crate_binding_v1(Some(compiler), None).unwrap(),
+            compiler
+        );
+        assert_eq!(
+            reconcile_crate_binding_v1(None, Some(explicit)).unwrap(),
+            explicit
+        );
+        assert_eq!(
+            reconcile_crate_binding_v1(Some(compiler), Some(compiler)).unwrap(),
+            compiler
+        );
+        let mismatch = reconcile_crate_binding_v1(Some(compiler), Some(explicit)).unwrap_err();
+        let diagnostic = mismatch.to_string();
+        assert!(diagnostic.contains("compiler-derived crate binding"));
+        assert!(diagnostic.contains(&compiler.to_hex()));
+        assert!(diagnostic.contains(&explicit.to_hex()));
+        assert!(
+            reconcile_crate_binding_v1(None, None)
+                .unwrap_err()
+                .to_string()
+                .contains("requires the cargo-fe2o3 rustc wrapper")
+        );
     }
 
     #[test]

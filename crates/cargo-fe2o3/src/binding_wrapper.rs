@@ -55,8 +55,11 @@ use fe2o3_process_identity::{
     parent_prepared_process_consistency_digest_v3,
 };
 use fe2o3_rustc_invocation::{
-    RustcArgsErrorV2, RustcCompileInvocationV2, RustcInvocationV2, classify_rustc_invocation_v2,
+    CARGO_METADATA_BUILD_OBSERVATION_ENV_V2, CargoMetadataBuildObservationV2, RustcArgsErrorV2,
+    RustcCodegenMetadataErrorV1, RustcCompileInvocationV2, RustcInvocationV2,
+    classify_rustc_invocation_v2, derive_cargo_metadata_build_observation_v2,
     is_rustc_codegen_backend_selector_v2, is_rustc_option_terminator_v2,
+    ordered_rustc_codegen_metadata_v1,
 };
 use fe2o3_worker_v2_bundle::{
     RecoveredWorkerV3LoadEnvelopeV1, WorkerV2EnvelopeInputsV1, WorkerV2ProducerBindingV2,
@@ -112,7 +115,6 @@ const NON_PRODUCTION_REPRODUCTION_RECORD_ENV: &str =
     "FE2O3_NON_PRODUCTION_COMPILER_REPRODUCTION_RECORD_V1";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
 const BUILD_ATTEMPT_ENV: &str = "FE2O3_BUILD_ATTEMPT_V1";
-const CARGO_METADATA_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2";
 const CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1: &str = "FE2O3_CARGO_METADATA_MUTATION_TEST_ONLY_V1";
 const ROW_SOFTMAX_V1_PROVISION_VALUE: &str = "row-softmax-v1-provision";
 const ROW_SOFTMAX_V1_RUN_VALUE: &str = "row-softmax-v1-run";
@@ -142,14 +144,12 @@ const PROCESS_CONSISTENCY_EXPECTATION_FD_V3: std::os::fd::RawFd =
 const BUILD_ATTEMPT_INPUT_DOMAIN: &[u8] = b"FE2O3/BUILD-ATTEMPT-INPUT/V2\0";
 const ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1: &[u8] =
     b"FE2O3/ROW-SOFTMAX/EFFECTIVE-RUSTC-ARGV/V1\0";
-const CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2: &[u8] =
-    b"FE2O3/CARGO-METADATA-BUILD-OBSERVATION/V2\0";
 const WORKER_V2_CONFIG_ID_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-CONFIG-ID/V1\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CompileBuildObservationV2 {
     crate_binding: CrateBindingIdV1,
-    cargo_metadata_digest: [u8; 32],
+    cargo_metadata_digest: CargoMetadataBuildObservationV2,
 }
 
 impl CompileBuildObservationV2 {
@@ -165,28 +165,14 @@ impl CompileBuildObservationV2 {
 
         let crate_binding =
             derive_crate_binding_id_v1(crate_name, metadata.iter().map(String::as_str));
-        let mut digest = Sha256::new();
-        digest.update(CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2);
-        digest.update((metadata.len() as u64).to_le_bytes());
-        for value in metadata {
-            digest.update((value.len() as u64).to_le_bytes());
-            digest.update(value.as_bytes());
-        }
-
         Ok(Self {
             crate_binding,
-            cargo_metadata_digest: digest.finalize().into(),
+            cargo_metadata_digest: derive_cargo_metadata_build_observation_v2(metadata),
         })
     }
 
     fn cargo_metadata_digest_hex(self) -> String {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        let mut encoded = String::with_capacity(self.cargo_metadata_digest.len() * 2);
-        for byte in self.cargo_metadata_digest {
-            encoded.push(HEX[usize::from(byte >> 4)] as char);
-            encoded.push(HEX[usize::from(byte & 0x0f)] as char);
-        }
-        encoded
+        self.cargo_metadata_digest.to_hex()
     }
 }
 
@@ -196,12 +182,7 @@ pub(crate) enum BindingWrapperError {
     MissingMetadata {
         crate_name: String,
     },
-    InvalidCodegenOption {
-        argument_index: usize,
-    },
-    EmptyMetadata {
-        argument_index: usize,
-    },
+    CodegenMetadata(RustcCodegenMetadataErrorV1),
     MissingManagedEnvironment(&'static str),
     InvalidBuildSession,
     InvalidManagedRustcArguments(&'static str),
@@ -245,14 +226,7 @@ impl fmt::Display for BindingWrapperError {
                 formatter,
                 "rustc compile for crate `{crate_name}` has no explicit -C metadata value"
             ),
-            Self::InvalidCodegenOption { argument_index } => write!(
-                formatter,
-                "rustc codegen option at argv[{argument_index}] is not valid UTF-8"
-            ),
-            Self::EmptyMetadata { argument_index } => write!(
-                formatter,
-                "rustc metadata value at argv[{argument_index}] is empty"
-            ),
+            Self::CodegenMetadata(error) => error.fmt(formatter),
             Self::MissingManagedEnvironment(name) => {
                 write!(formatter, "managed rustc invocation is missing {name}")
             }
@@ -334,6 +308,7 @@ impl Error for BindingWrapperError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Arguments(error) => Some(error),
+            Self::CodegenMetadata(error) => Some(error),
             Self::Spawn(error) => Some(error),
             Self::CurrentDirectory(error) => Some(error),
             Self::WorkerV2Configuration(error) => Some(error),
@@ -345,8 +320,6 @@ impl Error for BindingWrapperError {
                 .map(|error| error as &(dyn Error + 'static)),
             Self::AttemptTermination { cleanup, .. } => Some(cleanup),
             Self::MissingMetadata { .. }
-            | Self::InvalidCodegenOption { .. }
-            | Self::EmptyMetadata { .. }
             | Self::MissingManagedEnvironment(_)
             | Self::InvalidBuildSession
             | Self::InvalidManagedRustcArguments(_)
@@ -365,6 +338,12 @@ impl Error for BindingWrapperError {
 impl From<RustcArgsErrorV2> for BindingWrapperError {
     fn from(value: RustcArgsErrorV2) -> Self {
         Self::Arguments(value)
+    }
+}
+
+impl From<RustcCodegenMetadataErrorV1> for BindingWrapperError {
+    fn from(value: RustcCodegenMetadataErrorV1) -> Self {
+        Self::CodegenMetadata(value)
     }
 }
 
@@ -405,7 +384,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
     ) = match invocation {
         RustcInvocationV2::Compile(compile) => {
             let managed_rustc_args = managed_rustc_args_from_environment()?;
-            let metadata = ordered_metadata_values(compile.argv())?;
+            let metadata = ordered_rustc_codegen_metadata_v1(compile)?;
             let build_observation =
                 CompileBuildObservationV2::from_ordered_metadata(compile.crate_name(), &metadata)?;
             let worker_v2 = PreparedWorkerV2Config::from_environment()
@@ -2988,7 +2967,7 @@ fn prepare_managed_attempt(
 ) -> Result<ManagedAttempt, BindingWrapperError> {
     #[cfg(feature = "compiler-handoff-observation-test-only")]
     let compiler_handoff_observation = {
-        let ordered_metadata = ordered_metadata_values(compile.argv())?;
+        let ordered_metadata = ordered_rustc_codegen_metadata_v1(compile)?;
         crate::compiler_handoff_observation::Request::for_compile(
             compile.crate_name(),
             compile.source_path(),
@@ -4932,33 +4911,6 @@ fn is_cargo_stdin_probe(argv: &[OsString]) -> bool {
         })
 }
 
-fn ordered_metadata_values(argv: &[OsString]) -> Result<Vec<String>, BindingWrapperError> {
-    let mut metadata = Vec::new();
-    let mut index = 1;
-    while index < argv.len() {
-        let argument = &argv[index];
-        if argument == "-C" || argument == "--codegen" {
-            let value_index = index + 1;
-            let value = argv
-                .get(value_index)
-                .expect("the invocation classifier checked separate option values");
-            inspect_codegen_value(value, value_index, &mut metadata)?;
-            index += 2;
-            continue;
-        }
-
-        if let Some(argument) = argument.to_str() {
-            if let Some(value) = argument.strip_prefix("-C") {
-                inspect_codegen_text(value, index, &mut metadata)?;
-            } else if let Some(value) = argument.strip_prefix("--codegen=") {
-                inspect_codegen_text(value, index, &mut metadata)?;
-            }
-        }
-        index += 1;
-    }
-    Ok(metadata)
-}
-
 fn canonicalize_rustc_metadata(argv: &mut [OsString]) {
     let canonical = crate::non_production_reproduction::canonical_metadata();
     let mut index = 1;
@@ -4983,32 +4935,6 @@ fn canonicalize_rustc_metadata(argv: &mut [OsString]) {
         }
         index += 1;
     }
-}
-
-fn inspect_codegen_value(
-    value: &OsStr,
-    argument_index: usize,
-    metadata: &mut Vec<String>,
-) -> Result<(), BindingWrapperError> {
-    let value = value
-        .to_str()
-        .ok_or(BindingWrapperError::InvalidCodegenOption { argument_index })?;
-    inspect_codegen_text(value, argument_index, metadata)
-}
-
-fn inspect_codegen_text(
-    value: &str,
-    argument_index: usize,
-    metadata: &mut Vec<String>,
-) -> Result<(), BindingWrapperError> {
-    let Some(value) = value.strip_prefix("metadata=") else {
-        return Ok(());
-    };
-    if value.is_empty() {
-        return Err(BindingWrapperError::EmptyMetadata { argument_index });
-    }
-    metadata.push(value.to_owned());
-    Ok(())
 }
 
 pub(crate) fn exit_code(status: ExitStatus) -> u8 {
@@ -5038,19 +4964,19 @@ mod tests {
         PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2, PRODUCTION_V1_PIPELINE,
         PreparedRustcConsistencyExpectation, ProtectedWorkerV2TransitionBlocker,
         QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1, ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1,
-        ROW_SOFTMAX_V1_PIPELINE, ROW_SOFTMAX_V1_RUN_VALUE, RustcInvocationV2,
-        WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2, WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2,
-        WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, WorkerV2BindingSchema,
-        append_prepared_rustc_arguments, canonicalize_rustc_metadata, classify_rustc_invocation_v2,
-        complete_recovered_protected_worker_v2, complete_recovered_worker_v2,
-        configure_build_observation_environment,
+        ROW_SOFTMAX_V1_PIPELINE, ROW_SOFTMAX_V1_RUN_VALUE, RustcCodegenMetadataErrorV1,
+        RustcInvocationV2, WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2,
+        WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2, WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
+        WorkerV2BindingSchema, append_prepared_rustc_arguments, canonicalize_rustc_metadata,
+        classify_rustc_invocation_v2, complete_recovered_protected_worker_v2,
+        complete_recovered_worker_v2, configure_build_observation_environment,
         configure_build_observation_environment_with_test_mutation,
         configure_worker_build_observation_environment, decode_managed_rustc_args,
         derive_build_attempt_input_with_config_identity, hex, is_cargo_stdin_probe,
         materialize_general_gemm_v1_child_environment, materialize_reviewed_child_environment,
         materialize_row_softmax_v1_child_environment, materialize_s09_child_environment,
         materialize_scalar_gemm_v1_child_environment, measure_build_executable,
-        observe_pinned_cargo_image_and_parent, ordered_metadata_values, os_bytes,
+        observe_pinned_cargo_image_and_parent, ordered_rustc_codegen_metadata_v1, os_bytes,
         pipeline_requires_protected_invocation, pre_spawn_failure, prepare_managed_attempt,
         prepared_rustc_command_sha256, process_start_time_ticks,
         protected_worker_v2_transition_blocker, publish_finish_and_clear,
@@ -5226,9 +5152,13 @@ mod tests {
             "--codegen=metadata=fourth",
             "-Copt-level=2",
         ]);
+        let RustcInvocationV2::Compile(compile) = classify_rustc_invocation_v2(&argv).unwrap()
+        else {
+            panic!("fixture must be a compile invocation");
+        };
 
         assert_eq!(
-            ordered_metadata_values(&argv).unwrap(),
+            ordered_rustc_codegen_metadata_v1(compile).unwrap(),
             ["first", "second", "third", "fourth"]
         );
     }
@@ -5237,6 +5167,9 @@ mod tests {
     fn canonicalizes_every_supported_rustc_metadata_form() {
         let mut argv = args(&[
             "rustc",
+            "--crate-name",
+            "unit",
+            "unit.rs",
             "-C",
             "metadata=first",
             "-Cmetadata=second",
@@ -5246,8 +5179,12 @@ mod tests {
             "-Copt-level=2",
         ]);
         canonicalize_rustc_metadata(&mut argv);
+        let RustcInvocationV2::Compile(compile) = classify_rustc_invocation_v2(&argv).unwrap()
+        else {
+            panic!("fixture must be a compile invocation");
+        };
         assert_eq!(
-            ordered_metadata_values(&argv).unwrap(),
+            ordered_rustc_codegen_metadata_v1(compile).unwrap(),
             [crate::non_production_reproduction::canonical_metadata(); 4]
         );
         assert_eq!(argv.last().unwrap(), "-Copt-level=2");
@@ -5542,17 +5479,15 @@ mod tests {
 
     #[test]
     fn rejects_empty_metadata() {
-        let error = ordered_metadata_values(&args(&[
-            "rustc",
-            "--crate-name",
-            "unit",
-            "unit.rs",
-            "-Cmetadata=",
-        ]))
-        .unwrap_err();
+        let argv = args(&["rustc", "--crate-name", "unit", "unit.rs", "-Cmetadata="]);
+        let RustcInvocationV2::Compile(compile) = classify_rustc_invocation_v2(&argv).unwrap()
+        else {
+            panic!("fixture must be a compile invocation");
+        };
+        let error = ordered_rustc_codegen_metadata_v1(compile).unwrap_err();
         assert!(matches!(
             error,
-            BindingWrapperError::EmptyMetadata { argument_index: 4 }
+            RustcCodegenMetadataErrorV1::EmptyMetadata { argument_index: 4 }
         ));
     }
 
@@ -5564,18 +5499,24 @@ mod tests {
         let invalid = OsString::from_vec(b"metadata=private-\xff-value".to_vec());
         let argv = vec![
             OsString::from("rustc"),
+            OsString::from("--crate-name"),
+            OsString::from("unit"),
             OsString::from("unit.rs"),
             OsString::from("-C"),
             invalid,
         ];
-        let error = ordered_metadata_values(&argv).unwrap_err();
+        let RustcInvocationV2::Compile(compile) = classify_rustc_invocation_v2(&argv).unwrap()
+        else {
+            panic!("fixture must be a compile invocation");
+        };
+        let error = ordered_rustc_codegen_metadata_v1(compile).unwrap_err();
         assert!(matches!(
             error,
-            BindingWrapperError::InvalidCodegenOption { argument_index: 3 }
+            RustcCodegenMetadataErrorV1::NonUtf8CodegenOption { argument_index: 5 }
         ));
         assert_eq!(
             error.to_string(),
-            "rustc codegen option at argv[3] is not valid UTF-8"
+            "rustc codegen option at argv[5] is not valid UTF-8"
         );
     }
 
