@@ -5103,11 +5103,20 @@ struct ScalarAssignmentSiteV1 {
     statement: usize,
 }
 
+struct AssertionDefinitionInventoryV1 {
+    counts: Vec<u8>,
+    blocks: Vec<Vec<usize>>,
+    assignments: Vec<Option<ScalarAssignmentSiteV1>>,
+    address_escaped: Vec<bool>,
+}
+
 struct SemanticAssertProofsV1<'a> {
     types: &'a [SemanticTypeDeclV1],
     function: &'a SemanticFunctionDeclV1,
     graph: ProjectedLoopCfgV1,
     definition_counts: Vec<u8>,
+    block_definitions: Vec<Vec<usize>>,
+    address_escaped: Vec<bool>,
     assignments: Vec<Option<ScalarAssignmentSiteV1>>,
     dominance: HashMap<(usize, usize), bool>,
     zero_exclusion: HashMap<(usize, usize), bool>,
@@ -5120,36 +5129,15 @@ impl<'a> SemanticAssertProofsV1<'a> {
         function: &'a SemanticFunctionDeclV1,
     ) -> Result<Vec<bool>, ProductionRankedProjectionErrorV1> {
         let graph = projected_loop_cfg_graph_v1(function)?;
-        let definition_counts = local_definition_counts(function);
-        let mut assignments = vec![None; function.locals().len()];
-        for (block_index, block) in function.blocks().iter().enumerate() {
-            for (statement_index, statement) in block.statements().iter().enumerate() {
-                let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
-                    continue;
-                };
-                if !assignment.destination().projections().is_empty() {
-                    continue;
-                }
-                let local = assignment.destination().local().index() as usize;
-                if definition_counts.get(local).copied() == Some(1) {
-                    let Some(slot) = assignments.get_mut(local) else {
-                        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                            "an assertion proof assignment is outside the semantic local table",
-                        ));
-                    };
-                    *slot = Some(ScalarAssignmentSiteV1 {
-                        block: block_index,
-                        statement: statement_index,
-                    });
-                }
-            }
-        }
+        let inventory = assertion_definition_inventory(function)?;
         let mut proof = Self {
             types,
             function,
             graph,
-            definition_counts,
-            assignments,
+            definition_counts: inventory.counts,
+            block_definitions: inventory.blocks,
+            address_escaped: inventory.address_escaped,
+            assignments: inventory.assignments,
             dominance: HashMap::new(),
             zero_exclusion: HashMap::new(),
             work: 0,
@@ -5264,6 +5252,9 @@ impl<'a> SemanticAssertProofsV1<'a> {
         let Some(maximum) = self.scalar_unsigned_maximum(declaration.ty()) else {
             return Ok(None);
         };
+        if self.address_escaped.get(local).copied() != Some(false) {
+            return Ok(None);
+        }
         if !visiting.insert(local) {
             return Ok(None);
         }
@@ -5297,13 +5288,17 @@ impl<'a> SemanticAssertProofsV1<'a> {
             }
             Some(_) | None => None,
         };
-        let result = if let Some(mut range) = result
-            && self.zero_excluding_edge_dominates(local, use_block)?
-        {
-            range.minimum = range.minimum.max(1);
-            Some(range)
-        } else {
-            result
+        let zero_is_excluded = self.zero_excluding_edge_dominates(local, use_block)?;
+        let result = match (result, zero_is_excluded) {
+            (Some(mut range), true) => {
+                range.minimum = range.minimum.max(1);
+                Some(range)
+            }
+            (None, true) => Some(UnsignedRangeProofV1 {
+                minimum: 1,
+                maximum,
+            }),
+            (result, false) => result,
         };
         visiting.remove(&local);
         Ok(result)
@@ -5342,14 +5337,13 @@ impl<'a> SemanticAssertProofsV1<'a> {
             } => {
                 let left = self.range_of_operand(left, site.block, site.statement, visiting)?;
                 let right = self.range_of_operand(right, site.block, site.statement, visiting)?;
-                self.range_of_binary(*operation, left, right, destination_maximum)
+                Self::range_of_binary(*operation, left, right, destination_maximum)
             }
             _ => Ok(None),
         }
     }
 
     fn range_of_binary(
-        &self,
         operation: SemanticBinaryOpV1,
         left: Option<UnsignedRangeProofV1>,
         right: Option<UnsignedRangeProofV1>,
@@ -5369,6 +5363,12 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 };
                 (maximum <= destination_maximum)
                     .then_some(UnsignedRangeProofV1 { minimum, maximum })
+            }
+            SemanticBinaryOpV1::Subtract if left.minimum >= right.maximum => {
+                Some(UnsignedRangeProofV1 {
+                    minimum: left.minimum - right.maximum,
+                    maximum: left.maximum - right.minimum,
+                })
             }
             SemanticBinaryOpV1::Divide if right.minimum != 0 => Some(UnsignedRangeProofV1 {
                 minimum: left.minimum / right.maximum,
@@ -5406,6 +5406,46 @@ impl<'a> SemanticAssertProofsV1<'a> {
                     }
                 },
             ),
+            SemanticBinaryOpV1::LessThan => Some(if left.maximum < right.minimum {
+                UnsignedRangeProofV1::exact(1)
+            } else if left.minimum >= right.maximum {
+                UnsignedRangeProofV1::exact(0)
+            } else {
+                UnsignedRangeProofV1 {
+                    minimum: 0,
+                    maximum: 1,
+                }
+            }),
+            SemanticBinaryOpV1::LessOrEqual => Some(if left.maximum <= right.minimum {
+                UnsignedRangeProofV1::exact(1)
+            } else if left.minimum > right.maximum {
+                UnsignedRangeProofV1::exact(0)
+            } else {
+                UnsignedRangeProofV1 {
+                    minimum: 0,
+                    maximum: 1,
+                }
+            }),
+            SemanticBinaryOpV1::GreaterThan => Some(if left.minimum > right.maximum {
+                UnsignedRangeProofV1::exact(1)
+            } else if left.maximum <= right.minimum {
+                UnsignedRangeProofV1::exact(0)
+            } else {
+                UnsignedRangeProofV1 {
+                    minimum: 0,
+                    maximum: 1,
+                }
+            }),
+            SemanticBinaryOpV1::GreaterOrEqual => Some(if left.minimum >= right.maximum {
+                UnsignedRangeProofV1::exact(1)
+            } else if left.maximum < right.minimum {
+                UnsignedRangeProofV1::exact(0)
+            } else {
+                UnsignedRangeProofV1 {
+                    minimum: 0,
+                    maximum: 1,
+                }
+            }),
             _ => None,
         };
         Ok(range)
@@ -5431,7 +5471,38 @@ impl<'a> SemanticAssertProofsV1<'a> {
         if let Some(result) = self.zero_exclusion.get(&(local, use_block)).copied() {
             return Ok(result);
         }
+        let block_count = self.function.blocks().len();
+        let can_reach_use = self.blocks_reaching(use_block)?;
         let mut excluding_edges = HashSet::new();
+        excluding_edges.try_reserve(block_count).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "assertion proof zero-excluding edge storage cannot be reserved",
+            )
+        })?;
+        let mut visiting = HashSet::new();
+        visiting
+            .try_reserve(self.function.locals().len())
+            .map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "assertion proof alias storage cannot be reserved",
+                )
+            })?;
+        let mut stability_visited = Vec::new();
+        stability_visited
+            .try_reserve_exact(block_count)
+            .map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "assertion proof stability storage cannot be reserved",
+                )
+            })?;
+        stability_visited.resize(block_count, 0_usize);
+        let mut stability_pending = VecDeque::new();
+        stability_pending.try_reserve(block_count).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "assertion proof stability worklist cannot be reserved",
+            )
+        })?;
+        let mut stability_generation = 0_usize;
         for (switch_block, block) in self.function.blocks().iter().enumerate() {
             self.charge(1)?;
             let SemanticTerminatorKindV1::SwitchInt {
@@ -5441,39 +5512,308 @@ impl<'a> SemanticAssertProofsV1<'a> {
             else {
                 continue;
             };
-            if simple_operand_local(discriminant).map(|value| value.index() as usize) != Some(local)
-                || targets.values().len() != 1
-                || targets.values()[0].value() != 0
-            {
+            let Some(discriminant_local) =
+                simple_operand_local(discriminant).map(|value| value.index() as usize)
+            else {
                 continue;
-            }
-            let definition_available = match self.definition_counts.get(local).copied() {
-                Some(0) => true,
-                Some(1) => {
-                    let Some(site) = self.assignments.get(local).copied().flatten() else {
-                        continue;
-                    };
-                    self.assignment_dominates_use(site, switch_block, block.statements().len())?
-                }
-                Some(_) | None => false,
             };
-            if !definition_available {
+            if targets.values().len() != 1 || targets.values()[0].value() != 0 {
                 continue;
             }
             let zero_target = targets.values()[0].edge().target().index() as usize;
             let nonzero_target = targets.otherwise().target().index() as usize;
+            visiting.clear();
+            let discriminant_is_tested = self.local_is_value_preserving_alias_of(
+                discriminant_local,
+                local,
+                switch_block,
+                block.statements().len(),
+                &mut visiting,
+            )?;
+            let discriminant_is_tested = discriminant_is_tested
+                && (discriminant_local == local || !self.block_defines_local(switch_block, local));
+            let excluding_target = if discriminant_is_tested {
+                Some(nonzero_target)
+            } else {
+                self.comparison_zero_excluding_target(
+                    discriminant_local,
+                    local,
+                    switch_block,
+                    zero_target,
+                    nonzero_target,
+                    &mut visiting,
+                )?
+            };
+            let Some(excluding_target) = excluding_target else {
+                continue;
+            };
             if zero_target == nonzero_target {
                 continue;
             }
-            excluding_edges.try_reserve(1).map_err(|_| {
+            stability_generation = stability_generation.checked_add(1).ok_or(
                 ProductionRankedProjectionErrorV1::Unsupported(
-                    "assertion proof zero-excluding edge storage cannot be reserved",
-                )
-            })?;
-            excluding_edges.insert((switch_block, nonzero_target));
+                    "assertion proof stability generation overflowed",
+                ),
+            )?;
+            let stable = self.local_is_stable_between_edge_and_use(
+                local,
+                excluding_target,
+                use_block,
+                &can_reach_use,
+                &mut stability_visited,
+                &mut stability_pending,
+                stability_generation,
+            )?;
+            if !stable {
+                continue;
+            }
+            excluding_edges.insert((switch_block, excluding_target));
         }
         let result = self.edge_set_dominates(&excluding_edges, use_block)?;
-        self.zero_exclusion.insert((local, use_block), result);
+        insert_assertion_proof_cache(&mut self.zero_exclusion, (local, use_block), result)?;
+        Ok(result)
+    }
+
+    fn blocks_reaching(
+        &mut self,
+        use_block: usize,
+    ) -> Result<Vec<bool>, ProductionRankedProjectionErrorV1> {
+        let block_count = self.function.blocks().len();
+        if use_block >= block_count {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "an assertion proof reachability query is outside the semantic CFG",
+            ));
+        }
+        let mut can_reach_use = Vec::new();
+        can_reach_use.try_reserve_exact(block_count).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "assertion proof reverse-reachability storage cannot be reserved",
+            )
+        })?;
+        can_reach_use.resize(block_count, false);
+        let mut reverse = VecDeque::new();
+        reverse.try_reserve(block_count).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "assertion proof reverse-reachability worklist cannot be reserved",
+            )
+        })?;
+        reverse.push_back(use_block);
+        can_reach_use[use_block] = true;
+        while let Some(block) = reverse.pop_front() {
+            self.charge(1)?;
+            self.charge(self.graph.predecessors[block].len())?;
+            for predecessor in &self.graph.predecessors[block] {
+                if !can_reach_use[*predecessor] {
+                    can_reach_use[*predecessor] = true;
+                    reverse.push_back(*predecessor);
+                }
+            }
+        }
+        Ok(can_reach_use)
+    }
+
+    fn local_is_stable_between_edge_and_use(
+        &mut self,
+        local: usize,
+        edge_target: usize,
+        use_block: usize,
+        can_reach_use: &[bool],
+        visited: &mut [usize],
+        pending: &mut VecDeque<usize>,
+        generation: usize,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        let block_count = self.function.blocks().len();
+        if local >= self.function.locals().len()
+            || edge_target >= block_count
+            || use_block >= block_count
+            || can_reach_use.len() != block_count
+            || visited.len() != block_count
+        {
+            return Ok(false);
+        }
+        if !can_reach_use[edge_target] {
+            return Ok(false);
+        }
+
+        pending.clear();
+        pending.push_back(edge_target);
+        visited[edge_target] = generation;
+        while let Some(block) = pending.pop_front() {
+            self.charge(1)?;
+            if self.block_defines_local(block, local) {
+                return Ok(false);
+            }
+            if block == use_block {
+                continue;
+            }
+            self.charge(self.graph.successors[block].len())?;
+            for successor in &self.graph.successors[block] {
+                if can_reach_use[*successor] && visited[*successor] != generation {
+                    visited[*successor] = generation;
+                    pending.push_back(*successor);
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    fn comparison_zero_excluding_target(
+        &mut self,
+        condition_local: usize,
+        tested_local: usize,
+        switch_block: usize,
+        false_target: usize,
+        true_target: usize,
+        visiting: &mut HashSet<usize>,
+    ) -> Result<Option<usize>, ProductionRankedProjectionErrorV1> {
+        if self.definition_counts.get(condition_local).copied() != Some(1) {
+            return Ok(None);
+        }
+        let Some(site) = self.assignments.get(condition_local).copied().flatten() else {
+            return Ok(None);
+        };
+        if site.block != switch_block {
+            return Ok(None);
+        }
+        if !self.assignment_dominates_use(
+            site,
+            switch_block,
+            self.function.blocks()[switch_block].statements().len(),
+        )? {
+            return Ok(None);
+        }
+        let SemanticStatementKindV1::Assign(assignment) =
+            self.function.blocks()[site.block].statements()[site.statement].kind()
+        else {
+            return Ok(None);
+        };
+        let SemanticRvalueKindV1::Binary {
+            operation,
+            left,
+            right,
+        } = assignment.value().kind()
+        else {
+            return Ok(None);
+        };
+        let left_local = simple_operand_local(left).map(|value| value.index() as usize);
+        let right_local = simple_operand_local(right).map(|value| value.index() as usize);
+        visiting.clear();
+        let left_is_tested = if let Some(left_local) = left_local {
+            self.local_is_value_preserving_alias_of(
+                left_local,
+                tested_local,
+                site.block,
+                site.statement,
+                visiting,
+            )?
+        } else {
+            false
+        };
+        visiting.clear();
+        let right_is_tested = if let Some(right_local) = right_local {
+            self.local_is_value_preserving_alias_of(
+                right_local,
+                tested_local,
+                site.block,
+                site.statement,
+                visiting,
+            )?
+        } else {
+            false
+        };
+        let compares_tested_local_to_zero = left_is_tested
+            && self.operand_is_exact_unsigned_zero(right)
+            || right_is_tested && self.operand_is_exact_unsigned_zero(left);
+        if !compares_tested_local_to_zero {
+            return Ok(None);
+        }
+        if self.block_defines_local(switch_block, tested_local) {
+            return Ok(None);
+        }
+        Ok(match operation {
+            SemanticBinaryOpV1::Equal => Some(false_target),
+            SemanticBinaryOpV1::NotEqual => Some(true_target),
+            _ => None,
+        })
+    }
+
+    fn operand_is_exact_unsigned_zero(&self, operand: &SemanticOperandV1) -> bool {
+        let SemanticOperandV1::Constant(constant) = operand else {
+            return false;
+        };
+        self.scalar_unsigned_maximum(constant.ty()).is_some()
+            && matches!(
+                constant.value(),
+                SemanticConstantValueV1::Scalar(value) if value.bits() == 0
+            )
+    }
+
+    fn block_defines_local(&self, block: usize, local: usize) -> bool {
+        self.block_definitions
+            .get(block)
+            .is_some_and(|definitions| definitions.binary_search(&local).is_ok())
+    }
+
+    fn local_is_value_preserving_alias_of(
+        &mut self,
+        candidate: usize,
+        source: usize,
+        use_block: usize,
+        use_statement: usize,
+        visiting: &mut HashSet<usize>,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        self.charge(1)?;
+        if candidate == source {
+            return Ok(true);
+        }
+        if !visiting.insert(candidate) || self.definition_counts.get(candidate).copied() != Some(1)
+        {
+            return Ok(false);
+        }
+        let Some(site) = self.assignments.get(candidate).copied().flatten() else {
+            visiting.remove(&candidate);
+            return Ok(false);
+        };
+        if site.block != use_block {
+            visiting.remove(&candidate);
+            return Ok(false);
+        }
+        if !self.assignment_dominates_use(site, use_block, use_statement)? {
+            visiting.remove(&candidate);
+            return Ok(false);
+        }
+        let SemanticStatementKindV1::Assign(assignment) =
+            self.function.blocks()[site.block].statements()[site.statement].kind()
+        else {
+            visiting.remove(&candidate);
+            return Ok(false);
+        };
+        let operand = match assignment.value().kind() {
+            SemanticRvalueKindV1::Use(operand) => Some(operand),
+            SemanticRvalueKindV1::Cast {
+                kind: SemanticCastKindV1::Integer,
+                operand,
+            } if self
+                .unsigned_integer_bits(assignment.value().result_type())
+                .zip(self.unsigned_integer_bits(operand.ty()))
+                .is_some_and(|(destination, source)| destination >= source) =>
+            {
+                Some(operand)
+            }
+            _ => None,
+        };
+        let result = if let Some(next) = operand.and_then(simple_operand_local) {
+            self.local_is_value_preserving_alias_of(
+                next.index() as usize,
+                source,
+                site.block,
+                site.statement,
+                visiting,
+            )?
+        } else {
+            false
+        };
+        visiting.remove(&candidate);
         Ok(result)
     }
 
@@ -5492,32 +5832,46 @@ impl<'a> SemanticAssertProofsV1<'a> {
         }
         if dominator == block {
             let result = self.graph.reachable[block];
-            self.dominance.insert((dominator, block), result);
+            insert_assertion_proof_cache(&mut self.dominance, (dominator, block), result)?;
             return Ok(result);
         }
         if !self.graph.reachable[dominator] || !self.graph.reachable[block] {
-            self.dominance.insert((dominator, block), false);
+            insert_assertion_proof_cache(&mut self.dominance, (dominator, block), false)?;
             return Ok(false);
         }
-        let mut visited = vec![false; self.graph.successors.len()];
+        let node_count = self.graph.successors.len();
+        let mut visited = Vec::new();
+        visited.try_reserve_exact(node_count).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "assertion proof dominance storage cannot be reserved",
+            )
+        })?;
+        visited.resize(node_count, false);
         let mut pending = Vec::new();
+        pending.try_reserve(node_count).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "assertion proof dominance worklist cannot be reserved",
+            )
+        })?;
         if self.graph.entry != dominator {
+            visited[self.graph.entry] = true;
             pending.push(self.graph.entry);
         }
         while let Some(current) = pending.pop() {
             self.charge(1)?;
-            if current == dominator || visited[current] {
-                continue;
-            }
             if current == block {
-                self.dominance.insert((dominator, block), false);
+                insert_assertion_proof_cache(&mut self.dominance, (dominator, block), false)?;
                 return Ok(false);
             }
-            visited[current] = true;
             self.charge(self.graph.successors[current].len())?;
-            pending.extend(self.graph.successors[current].iter().copied());
+            for successor in &self.graph.successors[current] {
+                if *successor != dominator && !visited[*successor] {
+                    visited[*successor] = true;
+                    pending.push(*successor);
+                }
+            }
         }
-        self.dominance.insert((dominator, block), true);
+        insert_assertion_proof_cache(&mut self.dominance, (dominator, block), true)?;
         Ok(true)
     }
 
@@ -5534,27 +5888,72 @@ impl<'a> SemanticAssertProofsV1<'a> {
         if excluding_edges.is_empty() || !self.graph.reachable[block] {
             return Ok(false);
         }
-        let mut visited = vec![false; self.graph.successors.len()];
-        let mut pending = vec![self.graph.entry];
+        let node_count = self.graph.successors.len();
+        let mut visited = Vec::new();
+        visited.try_reserve_exact(node_count).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "assertion proof edge-dominance storage cannot be reserved",
+            )
+        })?;
+        visited.resize(node_count, false);
+        let mut pending = Vec::new();
+        pending.try_reserve(node_count).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "assertion proof edge-dominance worklist cannot be reserved",
+            )
+        })?;
+        visited[self.graph.entry] = true;
+        pending.push(self.graph.entry);
         while let Some(current) = pending.pop() {
             self.charge(1)?;
-            if visited[current] {
-                continue;
-            }
             if current == block {
                 return Ok(false);
             }
-            visited[current] = true;
-            let successors = self.graph.successors[current].clone();
-            self.charge(successors.len())?;
-            for successor in successors {
-                if !excluding_edges.contains(&(current, successor)) {
-                    pending.push(successor);
+            self.charge(self.graph.successors[current].len())?;
+            for successor in &self.graph.successors[current] {
+                if !excluding_edges.contains(&(current, *successor)) && !visited[*successor] {
+                    visited[*successor] = true;
+                    pending.push(*successor);
                 }
             }
         }
         Ok(true)
     }
+}
+
+fn insert_assertion_proof_cache(
+    cache: &mut HashMap<(usize, usize), bool>,
+    key: (usize, usize),
+    value: bool,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    insert_assertion_proof_cache_with_limit(
+        cache,
+        key,
+        value,
+        MAX_PROJECTED_CAPABILITY_STATE_ENTRIES_V1,
+    )
+}
+
+fn insert_assertion_proof_cache_with_limit(
+    cache: &mut HashMap<(usize, usize), bool>,
+    key: (usize, usize),
+    value: bool,
+    limit: usize,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    if !cache.contains_key(&key) {
+        if cache.len() >= limit {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "assertion proof cache exceeds the bounded entry limit",
+            ));
+        }
+        cache.try_reserve(1).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "assertion proof cache storage cannot be reserved",
+            )
+        })?;
+    }
+    cache.insert(key, value);
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7962,35 +8361,15 @@ fn checked_reference_origins(
 fn local_definition_counts(function: &SemanticFunctionDeclV1) -> Vec<u8> {
     let mut definitions = vec![0_u8; function.locals().len()];
     let mut record = |place: &SemanticPlaceV1| {
-        if matches!(
-            place
-                .projections()
-                .first()
-                .map(|projection| projection.kind()),
-            Some(SemanticProjectionKindV1::Dereference)
-        ) {
-            return;
-        }
-        if let Some(slot) = definitions.get_mut(place.local().index() as usize) {
+        if let Some(slot) =
+            local_definition_index(place).and_then(|local| definitions.get_mut(local))
+        {
             *slot = slot.saturating_add(1);
         }
     };
     for block in function.blocks() {
         for statement in block.statements() {
-            match statement.kind() {
-                SemanticStatementKindV1::Assign(assignment) => record(assignment.destination()),
-                SemanticStatementKindV1::Store(store) => record(store.destination()),
-                SemanticStatementKindV1::AtomicRmw(atomic) => record(atomic.destination()),
-                SemanticStatementKindV1::AtomicCompareExchange(atomic) => {
-                    record(atomic.destination())
-                }
-                SemanticStatementKindV1::SetDiscriminant { place, .. }
-                | SemanticStatementKindV1::Deinitialize(place) => record(place),
-                SemanticStatementKindV1::StorageLive(_)
-                | SemanticStatementKindV1::StorageDead(_)
-                | SemanticStatementKindV1::Assume(_)
-                | SemanticStatementKindV1::Nop => {}
-            }
+            visit_statement_definition_places(statement.kind(), &mut record);
         }
         if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
             && let Some(destination) = call.destination()
@@ -7999,6 +8378,132 @@ fn local_definition_counts(function: &SemanticFunctionDeclV1) -> Vec<u8> {
         }
     }
     definitions
+}
+
+fn assertion_definition_inventory(
+    function: &SemanticFunctionDeclV1,
+) -> Result<AssertionDefinitionInventoryV1, ProductionRankedProjectionErrorV1> {
+    let local_count = function.locals().len();
+    let mut counts = vec![0_u8; local_count];
+    let mut assignments = vec![None; local_count];
+    let mut address_escaped = vec![false; local_count];
+    let mut blocks = Vec::new();
+    blocks
+        .try_reserve_exact(function.blocks().len())
+        .map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "assertion proof definition-block storage cannot be reserved",
+            )
+        })?;
+    for (block_index, block) in function.blocks().iter().enumerate() {
+        let mut definitions = Vec::new();
+        let capacity = block
+            .statements()
+            .len()
+            .checked_mul(2)
+            .and_then(|value| value.checked_add(1))
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "assertion proof block-definition capacity overflowed",
+            ))?;
+        definitions.try_reserve(capacity).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "assertion proof block-definition storage cannot be reserved",
+            )
+        })?;
+        for (statement_index, statement) in block.statements().iter().enumerate() {
+            if let SemanticStatementKindV1::Assign(assignment) = statement.kind() {
+                if assignment.destination().projections().is_empty()
+                    && let Some(local) = local_definition_index(assignment.destination())
+                {
+                    let Some(slot) = assignments.get_mut(local) else {
+                        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                            "an assertion proof assignment is outside the semantic local table",
+                        ));
+                    };
+                    if slot.is_none() {
+                        *slot = Some(ScalarAssignmentSiteV1 {
+                            block: block_index,
+                            statement: statement_index,
+                        });
+                    }
+                }
+                if let SemanticRvalueKindV1::Borrow { place, .. }
+                | SemanticRvalueKindV1::AddressOf { place, .. } = assignment.value().kind()
+                    && let Some(slot) = local_definition_index(place)
+                        .and_then(|local| address_escaped.get_mut(local))
+                {
+                    *slot = true;
+                }
+            }
+            visit_statement_definition_places(statement.kind(), &mut |place| {
+                if let Some(local) = local_definition_index(place) {
+                    if let Some(slot) = counts.get_mut(local) {
+                        *slot = slot.saturating_add(1);
+                    }
+                    definitions.push(local);
+                }
+            });
+        }
+        if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
+            && let Some(local) = call
+                .destination()
+                .and_then(|destination| local_definition_index(destination.place()))
+        {
+            if let Some(slot) = counts.get_mut(local) {
+                *slot = slot.saturating_add(1);
+            }
+            definitions.push(local);
+        }
+        definitions.sort_unstable();
+        definitions.dedup();
+        blocks.push(definitions);
+    }
+    for (local, assignment) in assignments.iter_mut().enumerate() {
+        if counts.get(local).copied() != Some(1) {
+            *assignment = None;
+        }
+    }
+    Ok(AssertionDefinitionInventoryV1 {
+        counts,
+        blocks,
+        assignments,
+        address_escaped,
+    })
+}
+
+fn visit_statement_definition_places(
+    kind: &SemanticStatementKindV1,
+    visitor: &mut impl FnMut(&SemanticPlaceV1),
+) {
+    match kind {
+        SemanticStatementKindV1::Assign(assignment) => visitor(assignment.destination()),
+        SemanticStatementKindV1::Store(store) => visitor(store.destination()),
+        SemanticStatementKindV1::AtomicRmw(atomic) => {
+            visitor(atomic.destination());
+            visitor(atomic.address());
+        }
+        SemanticStatementKindV1::AtomicCompareExchange(atomic) => {
+            visitor(atomic.destination());
+            visitor(atomic.address());
+        }
+        SemanticStatementKindV1::SetDiscriminant { place, .. }
+        | SemanticStatementKindV1::Deinitialize(place) => visitor(place),
+        SemanticStatementKindV1::StorageLive(_)
+        | SemanticStatementKindV1::StorageDead(_)
+        | SemanticStatementKindV1::Assume(_)
+        | SemanticStatementKindV1::Nop => {}
+    }
+}
+
+fn local_definition_index(place: &SemanticPlaceV1) -> Option<usize> {
+    (!matches!(
+        place
+            .projections()
+            .first()
+            .map(|projection| projection.kind()),
+        Some(SemanticProjectionKindV1::Dereference)
+    ))
+    .then_some(place.local().index() as usize)
 }
 
 fn checked_reference_origin(place: &SemanticPlaceV1, origins: &[Option<usize>]) -> Option<usize> {
@@ -9760,6 +10265,7 @@ mod tests {
     const U64_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(5);
     const U8_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(6);
     const I32_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(7);
+    const U64_POINTER_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(8);
 
     fn bytes(tag: u8) -> [u8; 32] {
         [tag; 32]
@@ -9857,6 +10363,21 @@ mod tests {
                 SemanticTypeShapeV1::Scalar(scalar),
             ));
         }
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(44)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(44)),
+            SemanticTypeLayoutV1::new(Some(8), 8).unwrap(),
+            SemanticTypeShapeV1::Pointer(
+                SemanticPointerTypeV1::new(
+                    U64_TYPE,
+                    SemanticMutabilityV1::Mutable,
+                    5,
+                    64,
+                    SemanticPointerMetadataV1::None,
+                )
+                .unwrap(),
+            ),
+        ));
         types
     }
 
@@ -13681,6 +14202,774 @@ mod tests {
             let function = assertion_proof_function(shape);
             assert!(!SemanticAssertProofsV1::analyze(&types, &function).unwrap()[6]);
         }
+    }
+
+    fn compared_zero_guard_assertion_function(
+        operation: SemanticBinaryOpV1,
+        compared_value: u128,
+    ) -> SemanticFunctionDeclV1 {
+        let comparison = |destination| {
+            typed_assignment(
+                destination,
+                BOOL_TYPE,
+                SemanticRvalueKindV1::Binary {
+                    operation,
+                    left: typed_operand(1, U64_TYPE),
+                    right: typed_constant(U64_TYPE, compared_value, 8),
+                },
+            )
+        };
+        let (false_target, true_target) = match operation {
+            SemanticBinaryOpV1::Equal => (1, 2),
+            SemanticBinaryOpV1::NotEqual => (2, 1),
+            _ => unreachable!("fixture admits only equality comparisons"),
+        };
+        projection_function_with_locals(
+            vec![
+                block(
+                    158,
+                    vec![comparison(2)],
+                    zero_switch(2, BOOL_TYPE, false_target, true_target),
+                ),
+                block(
+                    159,
+                    vec![typed_assignment(
+                        3,
+                        BOOL_TYPE,
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::Equal,
+                            left: typed_operand(1, U64_TYPE),
+                            right: typed_constant(U64_TYPE, 0, 8),
+                        },
+                    )],
+                    SemanticTerminatorKindV1::Assert {
+                        condition: typed_operand(3, BOOL_TYPE),
+                        expected: false,
+                        message: SemanticAssertMessageV1::RemainderByZero(typed_operand(
+                            1, U64_TYPE,
+                        )),
+                        target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 3),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
+                block(160, vec![], SemanticTerminatorKindV1::Return),
+                block(161, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(158, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(159, U64_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(160, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+                local(161, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
+    #[test]
+    fn compared_zero_guard_dominates_fresh_rust_remainder_assertion() {
+        let types = assertion_proof_types();
+        for operation in [SemanticBinaryOpV1::Equal, SemanticBinaryOpV1::NotEqual] {
+            let function = compared_zero_guard_assertion_function(operation, 0);
+            assert!(SemanticAssertProofsV1::analyze(&types, &function).unwrap()[1]);
+        }
+        let wrong_constant = compared_zero_guard_assertion_function(SemanticBinaryOpV1::Equal, 1);
+        assert!(!SemanticAssertProofsV1::analyze(&types, &wrong_constant).unwrap()[1]);
+    }
+
+    #[test]
+    fn value_preserving_guard_alias_dominates_fresh_rust_remainder_assertion() {
+        let types = assertion_proof_types();
+        let function = projection_function_with_locals(
+            vec![
+                block(
+                    162,
+                    vec![typed_assignment(
+                        2,
+                        U64_TYPE,
+                        SemanticRvalueKindV1::Use(typed_operand(1, U64_TYPE)),
+                    )],
+                    zero_switch(2, U64_TYPE, 2, 1),
+                ),
+                block(
+                    163,
+                    vec![typed_assignment(
+                        3,
+                        BOOL_TYPE,
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::Equal,
+                            left: typed_operand(1, U64_TYPE),
+                            right: typed_constant(U64_TYPE, 0, 8),
+                        },
+                    )],
+                    SemanticTerminatorKindV1::Assert {
+                        condition: typed_operand(3, BOOL_TYPE),
+                        expected: false,
+                        message: SemanticAssertMessageV1::RemainderByZero(typed_operand(
+                            1, U64_TYPE,
+                        )),
+                        target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 3),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
+                block(164, vec![], SemanticTerminatorKindV1::Return),
+                block(165, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(162, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(163, U64_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(164, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(165, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        );
+
+        assert!(SemanticAssertProofsV1::analyze(&types, &function).unwrap()[1]);
+    }
+
+    #[test]
+    fn guard_alias_proves_a_stable_value_merged_from_multiple_definitions() {
+        let types = assertion_proof_types();
+        let assign_value = |value| {
+            typed_assignment(
+                1,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, value, 8)),
+            )
+        };
+        let build = |reassign_after_alias| {
+            let mut guard_statements = vec![typed_assignment(
+                2,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_operand(1, U64_TYPE)),
+            )];
+            if reassign_after_alias {
+                guard_statements.push(assign_value(0));
+            }
+            projection_function_with_locals(
+                vec![
+                    block(166, vec![], zero_switch(4, BOOL_TYPE, 1, 2)),
+                    block(
+                        167,
+                        vec![assign_value(2)],
+                        SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3)),
+                    ),
+                    block(
+                        168,
+                        vec![assign_value(3)],
+                        SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3)),
+                    ),
+                    block(169, guard_statements, zero_switch(2, U64_TYPE, 5, 4)),
+                    block(
+                        170,
+                        vec![typed_assignment(
+                            3,
+                            BOOL_TYPE,
+                            SemanticRvalueKindV1::Binary {
+                                operation: SemanticBinaryOpV1::Equal,
+                                left: typed_operand(1, U64_TYPE),
+                                right: typed_constant(U64_TYPE, 0, 8),
+                            },
+                        )],
+                        SemanticTerminatorKindV1::Assert {
+                            condition: typed_operand(3, BOOL_TYPE),
+                            expected: false,
+                            message: SemanticAssertMessageV1::RemainderByZero(typed_operand(
+                                1, U64_TYPE,
+                            )),
+                            target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 6),
+                            unwind: SemanticUnwindActionV1::Unreachable,
+                        },
+                    ),
+                    block(171, vec![], SemanticTerminatorKindV1::Return),
+                    block(172, vec![], SemanticTerminatorKindV1::Return),
+                ],
+                vec![
+                    local(166, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                    local(167, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                    local(168, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                    local(169, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+                    local(170, BOOL_TYPE, SemanticLocalRoleV1::Argument(0)),
+                ],
+            )
+        };
+        let function = build(false);
+
+        assert!(SemanticAssertProofsV1::analyze(&types, &function).unwrap()[4]);
+        let reassigned = build(true);
+        assert!(!SemanticAssertProofsV1::analyze(&types, &reassigned).unwrap()[4]);
+    }
+
+    #[derive(Clone, Copy)]
+    enum HostileScalarDefinitionV1 {
+        Store,
+        AtomicRmw,
+        AtomicCompareExchange,
+    }
+
+    fn hostile_scalar_definition(kind: HostileScalarDefinitionV1) -> SemanticStatementV1 {
+        match kind {
+            HostileScalarDefinitionV1::Store => {
+                statement(SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+                    typed_place(1, U64_TYPE),
+                    typed_constant(U64_TYPE, 0, 8),
+                    SemanticVolatilityV1::NonVolatile,
+                    None,
+                )))
+            }
+            HostileScalarDefinitionV1::AtomicRmw => statement(SemanticStatementKindV1::AtomicRmw(
+                SemanticAtomicRmwV1::new(
+                    typed_place(5, U64_TYPE),
+                    typed_place(1, U64_TYPE),
+                    typed_constant(U64_TYPE, 0, 8),
+                    SemanticAtomicRmwOpV1::Exchange,
+                    atomic_access(),
+                ),
+            )),
+            HostileScalarDefinitionV1::AtomicCompareExchange => {
+                statement(SemanticStatementKindV1::AtomicCompareExchange(
+                    SemanticAtomicCompareExchangeV1::new(
+                        typed_place(5, U64_TYPE),
+                        typed_place(1, U64_TYPE),
+                        typed_constant(U64_TYPE, 1, 8),
+                        typed_constant(U64_TYPE, 0, 8),
+                        atomic_access(),
+                        SemanticAtomicOrderingV1::Relaxed,
+                        false,
+                    ),
+                ))
+            }
+        }
+    }
+
+    fn merged_guard_with_post_edge_definition(
+        statement: Option<HostileScalarDefinitionV1>,
+        call_destination: bool,
+    ) -> SemanticFunctionDeclV1 {
+        let assign_value = |value| {
+            typed_assignment(
+                1,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, value, 8)),
+            )
+        };
+        let post_guard_terminator = if call_destination {
+            SemanticTerminatorKindV1::Call(
+                SemanticDirectCallV1::new_callable(
+                    SemanticCallableIdV1::from_index(0),
+                    vec![],
+                    Some(SemanticCallDestinationV1::new(
+                        typed_place(1, U64_TYPE),
+                        cfg_edge(SemanticEdgeRoleV1::CallReturn, 5),
+                    )),
+                    SemanticUnwindActionV1::Unreachable,
+                )
+                .unwrap(),
+            )
+        } else {
+            SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 5))
+        };
+        let post_guard_statements = statement
+            .map(hostile_scalar_definition)
+            .into_iter()
+            .collect();
+        projection_function_with_locals(
+            vec![
+                block(173, vec![], zero_switch(4, BOOL_TYPE, 1, 2)),
+                block(
+                    174,
+                    vec![assign_value(2)],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3)),
+                ),
+                block(
+                    175,
+                    vec![assign_value(3)],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3)),
+                ),
+                block(
+                    176,
+                    vec![typed_assignment(
+                        2,
+                        U64_TYPE,
+                        SemanticRvalueKindV1::Use(typed_operand(1, U64_TYPE)),
+                    )],
+                    zero_switch(2, U64_TYPE, 6, 4),
+                ),
+                block(177, post_guard_statements, post_guard_terminator),
+                block(
+                    178,
+                    vec![typed_assignment(
+                        3,
+                        BOOL_TYPE,
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::Equal,
+                            left: typed_operand(1, U64_TYPE),
+                            right: typed_constant(U64_TYPE, 0, 8),
+                        },
+                    )],
+                    SemanticTerminatorKindV1::Assert {
+                        condition: typed_operand(3, BOOL_TYPE),
+                        expected: false,
+                        message: SemanticAssertMessageV1::RemainderByZero(typed_operand(
+                            1, U64_TYPE,
+                        )),
+                        target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 7),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
+                block(179, vec![], SemanticTerminatorKindV1::Return),
+                block(180, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(173, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(174, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(175, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(176, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+                local(177, BOOL_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(178, U64_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
+    #[test]
+    fn merged_nonzero_proof_is_invalidated_by_every_post_guard_definition_kind() {
+        let types = assertion_proof_types();
+        let clean = merged_guard_with_post_edge_definition(None, false);
+        assert!(SemanticAssertProofsV1::analyze(&types, &clean).unwrap()[5]);
+
+        for function in [
+            merged_guard_with_post_edge_definition(Some(HostileScalarDefinitionV1::Store), false),
+            merged_guard_with_post_edge_definition(
+                Some(HostileScalarDefinitionV1::AtomicRmw),
+                false,
+            ),
+            merged_guard_with_post_edge_definition(
+                Some(HostileScalarDefinitionV1::AtomicCompareExchange),
+                false,
+            ),
+            merged_guard_with_post_edge_definition(None, true),
+        ] {
+            assert!(!SemanticAssertProofsV1::analyze(&types, &function).unwrap()[5]);
+        }
+    }
+
+    fn stale_captured_guard(
+        kind: HostileScalarDefinitionV1,
+        comparison: bool,
+    ) -> SemanticFunctionDeclV1 {
+        let capture = if comparison {
+            typed_assignment(
+                2,
+                BOOL_TYPE,
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::NotEqual,
+                    left: typed_operand(1, U64_TYPE),
+                    right: typed_constant(U64_TYPE, 0, 8),
+                },
+            )
+        } else {
+            typed_assignment(
+                2,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_operand(1, U64_TYPE)),
+            )
+        };
+        let capture_ty = if comparison { BOOL_TYPE } else { U64_TYPE };
+        projection_function_with_locals(
+            vec![
+                block(
+                    181,
+                    vec![capture, hostile_scalar_definition(kind)],
+                    zero_switch(2, capture_ty, 2, 1),
+                ),
+                block(
+                    182,
+                    vec![typed_assignment(
+                        3,
+                        BOOL_TYPE,
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::Equal,
+                            left: typed_operand(1, U64_TYPE),
+                            right: typed_constant(U64_TYPE, 0, 8),
+                        },
+                    )],
+                    SemanticTerminatorKindV1::Assert {
+                        condition: typed_operand(3, BOOL_TYPE),
+                        expected: false,
+                        message: SemanticAssertMessageV1::DivisionByZero(typed_operand(
+                            1, U64_TYPE,
+                        )),
+                        target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 3),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
+                block(183, vec![], SemanticTerminatorKindV1::Return),
+                block(184, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(181, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(182, U64_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(183, capture_ty, SemanticLocalRoleV1::Temporary),
+                local(184, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+                local(185, U64_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
+    #[test]
+    fn aliases_and_comparisons_captured_before_a_write_do_not_prove_the_new_value() {
+        let types = assertion_proof_types();
+        for definition in [
+            HostileScalarDefinitionV1::Store,
+            HostileScalarDefinitionV1::AtomicRmw,
+            HostileScalarDefinitionV1::AtomicCompareExchange,
+        ] {
+            for comparison in [false, true] {
+                let function = stale_captured_guard(definition, comparison);
+                assert!(!SemanticAssertProofsV1::analyze(&types, &function).unwrap()[1]);
+            }
+        }
+    }
+
+    fn address_escaped_guard_function(unknown_call: bool) -> SemanticFunctionDeclV1 {
+        let borrowed = statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            typed_place(2, U64_POINTER_TYPE),
+            SemanticRvalueV1::new(
+                U64_POINTER_TYPE,
+                SemanticRvalueKindV1::Borrow {
+                    kind: SemanticBorrowKindV1::Mutable,
+                    place: typed_place(1, U64_TYPE),
+                },
+            ),
+        )));
+        let through_pointer = SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(2),
+            vec![
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, U64_TYPE).unwrap(),
+            ],
+            U64_TYPE,
+        )
+        .unwrap();
+        let (escaped_statements, escaped_terminator) = if unknown_call {
+            (
+                vec![],
+                SemanticTerminatorKindV1::Call(
+                    SemanticDirectCallV1::new_callable(
+                        SemanticCallableIdV1::from_index(0),
+                        vec![typed_operand(2, U64_POINTER_TYPE)],
+                        Some(SemanticCallDestinationV1::new(
+                            typed_place(0, SCALAR_TYPE),
+                            cfg_edge(SemanticEdgeRoleV1::CallReturn, 2),
+                        )),
+                        SemanticUnwindActionV1::Unreachable,
+                    )
+                    .unwrap(),
+                ),
+            )
+        } else {
+            (
+                vec![statement(SemanticStatementKindV1::Store(
+                    SemanticMemoryStoreV1::new(
+                        through_pointer,
+                        typed_constant(U64_TYPE, 0, 8),
+                        SemanticVolatilityV1::NonVolatile,
+                        None,
+                    ),
+                ))],
+                SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 2)),
+            )
+        };
+        projection_function_with_locals(
+            vec![
+                block(197, vec![borrowed], zero_switch(1, U64_TYPE, 3, 1)),
+                block(198, escaped_statements, escaped_terminator),
+                block(
+                    199,
+                    vec![typed_assignment(
+                        3,
+                        BOOL_TYPE,
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::Equal,
+                            left: typed_operand(1, U64_TYPE),
+                            right: typed_constant(U64_TYPE, 0, 8),
+                        },
+                    )],
+                    SemanticTerminatorKindV1::Assert {
+                        condition: typed_operand(3, BOOL_TYPE),
+                        expected: false,
+                        message: SemanticAssertMessageV1::DivisionByZero(typed_operand(
+                            1, U64_TYPE,
+                        )),
+                        target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 4),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
+                block(200, vec![], SemanticTerminatorKindV1::Return),
+                block(201, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(197, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(198, U64_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(199, U64_POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+                local(200, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
+    #[test]
+    fn address_taken_values_are_not_proved_stable_across_indirect_writes_or_calls() {
+        let types = assertion_proof_types();
+        for unknown_call in [false, true] {
+            let function = address_escaped_guard_function(unknown_call);
+            assert!(
+                assertion_definition_inventory(&function)
+                    .unwrap()
+                    .address_escaped[1]
+            );
+            assert!(!SemanticAssertProofsV1::analyze(&types, &function).unwrap()[2]);
+        }
+    }
+
+    fn guarded_value_with_optional_loop_redefinition(redefine: bool) -> SemanticFunctionDeclV1 {
+        let loop_statements = redefine
+            .then(|| {
+                vec![typed_assignment(
+                    1,
+                    U64_TYPE,
+                    SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 0, 8)),
+                )]
+            })
+            .unwrap_or_default();
+        projection_function_with_locals(
+            vec![
+                block(185, vec![], zero_switch(1, U64_TYPE, 3, 1)),
+                block(186, vec![], zero_switch(2, BOOL_TYPE, 4, 2)),
+                block(
+                    187,
+                    loop_statements,
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(188, vec![], SemanticTerminatorKindV1::Return),
+                block(
+                    189,
+                    vec![typed_assignment(
+                        3,
+                        BOOL_TYPE,
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::Equal,
+                            left: typed_operand(1, U64_TYPE),
+                            right: typed_constant(U64_TYPE, 0, 8),
+                        },
+                    )],
+                    SemanticTerminatorKindV1::Assert {
+                        condition: typed_operand(3, BOOL_TYPE),
+                        expected: false,
+                        message: SemanticAssertMessageV1::DivisionByZero(typed_operand(
+                            1, U64_TYPE,
+                        )),
+                        target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 5),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
+                block(190, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(185, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(186, U64_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(187, BOOL_TYPE, SemanticLocalRoleV1::Argument(1)),
+                local(188, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
+    #[test]
+    fn nonzero_proof_checks_every_reachable_loop_backedge_for_redefinitions() {
+        let types = assertion_proof_types();
+        let stable = guarded_value_with_optional_loop_redefinition(false);
+        assert!(SemanticAssertProofsV1::analyze(&types, &stable).unwrap()[4]);
+
+        let redefined = guarded_value_with_optional_loop_redefinition(true);
+        assert!(!SemanticAssertProofsV1::analyze(&types, &redefined).unwrap()[4]);
+    }
+
+    fn guarded_unsigned_subtract_function(guarded: bool) -> SemanticFunctionDeclV1 {
+        let entry = if guarded {
+            zero_switch(1, U64_TYPE, 3, 1)
+        } else {
+            SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1))
+        };
+        projection_function_with_locals(
+            vec![
+                block(191, vec![], entry),
+                block(
+                    192,
+                    vec![typed_assignment(
+                        2,
+                        BOOL_TYPE,
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::LessThan,
+                            left: typed_operand(1, U64_TYPE),
+                            right: typed_constant(U64_TYPE, 1, 8),
+                        },
+                    )],
+                    SemanticTerminatorKindV1::Assert {
+                        condition: typed_operand(2, BOOL_TYPE),
+                        expected: false,
+                        message: SemanticAssertMessageV1::Overflow {
+                            operation: SemanticBinaryOpV1::Subtract,
+                            left: typed_operand(1, U64_TYPE),
+                            right: typed_constant(U64_TYPE, 1, 8),
+                        },
+                        target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 2),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
+                block(
+                    193,
+                    vec![
+                        typed_assignment(
+                            3,
+                            U64_TYPE,
+                            SemanticRvalueKindV1::Binary {
+                                operation: SemanticBinaryOpV1::Subtract,
+                                left: typed_operand(1, U64_TYPE),
+                                right: typed_constant(U64_TYPE, 1, 8),
+                            },
+                        ),
+                        typed_assignment(
+                            4,
+                            U64_TYPE,
+                            SemanticRvalueKindV1::Binary {
+                                operation: SemanticBinaryOpV1::Add,
+                                left: typed_operand(3, U64_TYPE),
+                                right: typed_constant(U64_TYPE, 1, 8),
+                            },
+                        ),
+                        typed_assignment(
+                            5,
+                            BOOL_TYPE,
+                            SemanticRvalueKindV1::Binary {
+                                operation: SemanticBinaryOpV1::Equal,
+                                left: typed_operand(4, U64_TYPE),
+                                right: typed_constant(U64_TYPE, 0, 8),
+                            },
+                        ),
+                    ],
+                    SemanticTerminatorKindV1::Assert {
+                        condition: typed_operand(5, BOOL_TYPE),
+                        expected: false,
+                        message: SemanticAssertMessageV1::DivisionByZero(typed_operand(
+                            4, U64_TYPE,
+                        )),
+                        target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 4),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
+                block(194, vec![], SemanticTerminatorKindV1::Return),
+                block(195, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(191, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(192, U64_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(193, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+                local(194, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(195, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(196, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
+    #[test]
+    fn unsigned_subtraction_and_ordering_preserve_a_dominating_nonzero_contract() {
+        let types = assertion_proof_types();
+        let guarded =
+            SemanticAssertProofsV1::analyze(&types, &guarded_unsigned_subtract_function(true))
+                .unwrap();
+        assert!(guarded[1]);
+        assert!(guarded[2]);
+
+        let unguarded =
+            SemanticAssertProofsV1::analyze(&types, &guarded_unsigned_subtract_function(false))
+                .unwrap();
+        assert!(!unguarded[1]);
+        assert!(!unguarded[2]);
+    }
+
+    #[test]
+    fn unsigned_interval_subtraction_and_ordering_match_exhaustive_small_domains() {
+        let ranges = (0_u128..=4)
+            .flat_map(|minimum| {
+                (minimum..=4).map(move |maximum| UnsignedRangeProofV1 { minimum, maximum })
+            })
+            .collect::<Vec<_>>();
+        for left in &ranges {
+            for right in &ranges {
+                let subtraction = SemanticAssertProofsV1::<'_>::range_of_binary(
+                    SemanticBinaryOpV1::Subtract,
+                    Some(*left),
+                    Some(*right),
+                    Some(u128::from(u64::MAX)),
+                )
+                .unwrap();
+                if left.minimum >= right.maximum {
+                    let values = (left.minimum..=left.maximum)
+                        .flat_map(|lhs| (right.minimum..=right.maximum).map(move |rhs| lhs - rhs))
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        subtraction,
+                        Some(UnsignedRangeProofV1 {
+                            minimum: *values.iter().min().unwrap(),
+                            maximum: *values.iter().max().unwrap(),
+                        })
+                    );
+                } else {
+                    assert_eq!(subtraction, None);
+                }
+
+                for operation in [
+                    SemanticBinaryOpV1::LessThan,
+                    SemanticBinaryOpV1::LessOrEqual,
+                    SemanticBinaryOpV1::GreaterThan,
+                    SemanticBinaryOpV1::GreaterOrEqual,
+                ] {
+                    let values = (left.minimum..=left.maximum)
+                        .flat_map(|lhs| {
+                            (right.minimum..=right.maximum).map(move |rhs| match operation {
+                                SemanticBinaryOpV1::LessThan => lhs < rhs,
+                                SemanticBinaryOpV1::LessOrEqual => lhs <= rhs,
+                                SemanticBinaryOpV1::GreaterThan => lhs > rhs,
+                                SemanticBinaryOpV1::GreaterOrEqual => lhs >= rhs,
+                                _ => unreachable!("fixture admits only ordering operations"),
+                            })
+                        })
+                        .map(u128::from)
+                        .collect::<Vec<_>>();
+                    let actual = SemanticAssertProofsV1::<'_>::range_of_binary(
+                        operation,
+                        Some(*left),
+                        Some(*right),
+                        Some(1),
+                    )
+                    .unwrap()
+                    .unwrap();
+                    assert_eq!(actual.minimum, *values.iter().min().unwrap());
+                    assert_eq!(actual.maximum, *values.iter().max().unwrap());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn assertion_proof_cache_is_bounded_and_overwrites_without_growth() {
+        let mut cache = HashMap::new();
+        insert_assertion_proof_cache_with_limit(&mut cache, (0, 0), true, 2).unwrap();
+        insert_assertion_proof_cache_with_limit(&mut cache, (1, 0), false, 2).unwrap();
+        insert_assertion_proof_cache_with_limit(&mut cache, (0, 0), false, 2).unwrap();
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache[&(0, 0)], false);
+        assert!(matches!(
+            insert_assertion_proof_cache_with_limit(&mut cache, (2, 0), true, 2),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "assertion proof cache exceeds the bounded entry limit"
+            ))
+        ));
     }
 
     #[test]
