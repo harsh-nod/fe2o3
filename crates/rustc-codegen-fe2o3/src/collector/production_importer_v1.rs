@@ -1663,11 +1663,7 @@ fn rust_mfma_matrix_role_v1<'tcx>(
     }
 }
 
-fn rust_f32_array_v1<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    ty: Ty<'tcx>,
-    expected_length: u64,
-) -> bool {
+fn rust_f32_array_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>, expected_length: u64) -> bool {
     let TyKind::Array(element, length) = *ty.kind() else {
         return false;
     };
