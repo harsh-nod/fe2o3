@@ -90,6 +90,8 @@ fe2o3-kfd-uapi = { path = "crates/fe2o3-kfd-uapi" }
 fe2o3-kernel-descriptor = { path = "crates/fe2o3-kernel-descriptor" }
 fe2o3-kernel-analysis = { path = "crates/fe2o3-kernel-analysis", default-features = false }
 fe2o3-kernel-ir = { path = "crates/fe2o3-kernel-ir" }
+fe2o3-kir-sim = { path = "crates/fe2o3-kir-sim" }
+fe2o3-kir-sim-trace = { path = "crates/fe2o3-kir-sim-trace" }
 fe2o3-kir-pliron-bridge = { path = "crates/fe2o3-kir-pliron-bridge" }
 fe2o3-legacy-compiler = { path = "crates/fe2o3-legacy-compiler" }
 fe2o3-llvm-handoff = { path = "crates/fe2o3-llvm-handoff" }
@@ -105,6 +107,7 @@ fe2o3-pliron = { path = "crates/fe2o3-pliron" }
 fe2o3-pliron-owner-core = { path = "crates/fe2o3-pliron-owner-core" }
 fe2o3-pliron-worker-v2 = { path = "crates/fe2o3-pliron-worker-v2" }
 fe2o3-process-identity = { path = "crates/fe2o3-process-identity" }
+fe2o3-semantic-trace = { path = "crates/fe2o3-semantic-trace" }
 fe2o3-proof-contracts = { path = "crates/fe2o3-proof-contracts" }
 fe2o3-rustc-invocation = { path = "crates/fe2o3-rustc-invocation" }
 fe2o3-rustc-front = { path = "crates/fe2o3-rustc-front" }
@@ -118,6 +121,7 @@ reserved-fe2o3-symbols = { path = "crates/reserved-fe2o3-symbols" }
 rustc-codegen-fe2o3 = { path = "crates/rustc-codegen-fe2o3" }
 libc = "0.2.189"
 rustix = { version = "1.1.4", features = ["fs", "net"] }
+serde = { version = "1", features = ["derive"] }
 
 proc-macro2 = "1"
 proc-macro-crate = "3"
