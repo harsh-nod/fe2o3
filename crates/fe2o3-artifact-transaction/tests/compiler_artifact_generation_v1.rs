@@ -29,6 +29,7 @@ const SCOPE_PREFIX: &str = ".fe2o3-compiler-generation-v1-scope-";
 const RECORD_SUFFIX: &str = ".record";
 const REDO_SUFFIX: &str = ".redo";
 const RECOVERY_SUFFIX: &str = ".recovery";
+const STAGED_SUFFIX: &str = ".staged";
 const LOCK_FILE: &str = ".fe2o3-artifacts.lock";
 const MANIFEST_ENTRY_BYTES: usize = 1 + 8 + 32;
 const SCOPE_RECORD_MAGIC: &[u8] = b"FE2O3-COMPILER-ARTIFACT-SCOPE-V1\0";
@@ -238,6 +239,10 @@ fn blob_for(root: &Path, bytes: &[u8]) -> PathBuf {
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     root.join(format!("{BLOB_PREFIX}{hex}.bin"))
+}
+
+fn staged_for(final_path: &Path) -> PathBuf {
+    PathBuf::from(format!("{}{STAGED_SUFFIX}", final_path.display()))
 }
 
 fn replace_named_lock(root: &Path) -> PathBuf {
@@ -877,6 +882,168 @@ fn reused_visible_object_crosses_a_fresh_rename_boundary() {
         1,
         true,
     );
+}
+
+#[test]
+fn reused_object_recommit_stranding_is_recovered_and_retryable() {
+    let object = CompilerArtifactGenerationObjectV1::Artifact(CompilerArtifactRoleV1::SemanticMir);
+    for boundary in [
+        CompilerArtifactGenerationObjectBoundaryV1::RenameFinalToStaged,
+        CompilerArtifactGenerationObjectBoundaryV1::SyncRecoveredStagedName,
+    ] {
+        let directory = TestDirectory::new();
+        let store = directory.store();
+        assert_generation(
+            &committed(store.publish_generation_v1(&request(1, false))),
+            1,
+            false,
+        );
+        let final_path = blob_for(&directory.path, b"semantic-mir-generation-a");
+        let staged_path = staged_for(&final_path);
+
+        let recommit = store.publish_generation_v1_with_options(
+            &request(1, true),
+            CompilerArtifactGenerationOptionsV1::inject_fault(
+                CompilerArtifactGenerationFaultPointV1::Object {
+                    object,
+                    boundary,
+                    timing: CompilerArtifactGenerationFaultTimingV1::After,
+                },
+            ),
+        );
+        assert!(matches!(
+            recommit,
+            CompilerArtifactGenerationPublishOutcomeV1::NotCommitted(_)
+        ));
+        assert!(!final_path.exists(), "{boundary:?}");
+        assert!(staged_path.exists(), "{boundary:?}");
+
+        assert_generation(&store.recover_generation_v1().unwrap().unwrap(), 1, false);
+        assert!(final_path.exists(), "{boundary:?}");
+        assert!(!staged_path.exists(), "{boundary:?}");
+        assert_generation(
+            &committed(store.publish_generation_v1(&request(1, true))),
+            1,
+            true,
+        );
+    }
+}
+
+#[test]
+fn staged_object_recovery_is_itself_retryable_after_final_rename() {
+    let directory = TestDirectory::new();
+    let store = directory.store();
+    committed(store.publish_generation_v1(&request(1, false)));
+    let object = CompilerArtifactGenerationObjectV1::Artifact(CompilerArtifactRoleV1::SemanticMir);
+    let recommit = store.publish_generation_v1_with_options(
+        &request(1, true),
+        CompilerArtifactGenerationOptionsV1::inject_fault(
+            CompilerArtifactGenerationFaultPointV1::Object {
+                object,
+                boundary: CompilerArtifactGenerationObjectBoundaryV1::SyncRecoveredStagedName,
+                timing: CompilerArtifactGenerationFaultTimingV1::After,
+            },
+        ),
+    );
+    assert!(matches!(
+        recommit,
+        CompilerArtifactGenerationPublishOutcomeV1::NotCommitted(_)
+    ));
+
+    let first_recovery = store.recover_generation_v1_with_options(
+        CompilerArtifactGenerationOptionsV1::inject_fault(
+            CompilerArtifactGenerationFaultPointV1::Object {
+                object,
+                boundary: CompilerArtifactGenerationObjectBoundaryV1::RenameStagedToFinal,
+                timing: CompilerArtifactGenerationFaultTimingV1::After,
+            },
+        ),
+    );
+    assert!(first_recovery.is_err());
+    assert_generation(&store.recover_generation_v1().unwrap().unwrap(), 1, false);
+}
+
+#[test]
+fn referenced_staged_object_recovers_without_quota_headroom() {
+    let directory = TestDirectory::new();
+    let request = shared_payload_request();
+    let store = directory.store_with_quota(
+        u64::try_from(MAX_COMPILER_ARTIFACT_GENERATION_BYTES_V1).unwrap(),
+        3,
+    );
+    let published = committed(store.publish_generation_v1(&request));
+    assert_eq!(published.manifest().compiler_identity(), [0x41; 32]);
+    drop(published);
+    let final_path = blob_for(&directory.path, b"one-content-address-shared-by-four-roles");
+    let staged_path = staged_for(&final_path);
+    fs::rename(&final_path, &staged_path).unwrap();
+    let directory_fd = OpenOptions::new().read(true).open(&directory.path).unwrap();
+    rustix::fs::fsync(directory_fd).unwrap();
+    drop(store);
+
+    let reopened = directory.store_with_quota(
+        u64::try_from(MAX_COMPILER_ARTIFACT_GENERATION_BYTES_V1).unwrap(),
+        3,
+    );
+    let recovered = reopened.open_generation_v1().unwrap().unwrap();
+    assert_eq!(recovered.manifest().compiler_identity(), [0x41; 32]);
+    assert_eq!(managed_entries(&directory.path).len(), 3);
+    assert!(final_path.exists());
+    assert!(!staged_path.exists());
+}
+
+#[test]
+fn referenced_staged_tamper_symlink_and_hardlink_fail_closed() {
+    for attack in ["tamper", "symlink", "hardlink"] {
+        let directory = TestDirectory::new();
+        let store = directory.store();
+        committed(store.publish_generation_v1(&request(1, false)));
+        let final_path = blob_for(&directory.path, b"semantic-mir-generation-a");
+        let staged_path = staged_for(&final_path);
+        fs::rename(&final_path, &staged_path).unwrap();
+        match attack {
+            "tamper" => {
+                fs::set_permissions(&staged_path, fs::Permissions::from_mode(0o600)).unwrap();
+                fs::write(&staged_path, b"semantic-mir-generation-b").unwrap();
+                fs::set_permissions(&staged_path, fs::Permissions::from_mode(0o400)).unwrap();
+            }
+            "symlink" => {
+                let displaced = directory.path.join("displaced-staged-object");
+                fs::rename(&staged_path, &displaced).unwrap();
+                symlink(&displaced, &staged_path).unwrap();
+            }
+            "hardlink" => {
+                fs::hard_link(&staged_path, directory.path.join("staged-hardlink")).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        drop(store);
+
+        assert!(
+            CompilerArtifactGenerationStoreV1::open(&directory.path, scope()).is_err(),
+            "{attack}"
+        );
+        assert!(!final_path.exists(), "{attack}");
+    }
+}
+
+#[test]
+fn unreferenced_valid_staged_object_is_reclaimed_not_promoted() {
+    let directory = TestDirectory::new();
+    let store = directory.store();
+    committed(store.publish_generation_v1(&request(1, false)));
+    drop(store);
+
+    let unreferenced = b"unreferenced staged object";
+    let final_path = blob_for(&directory.path, unreferenced);
+    let staged_path = staged_for(&final_path);
+    fs::write(&staged_path, unreferenced).unwrap();
+    fs::set_permissions(&staged_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let reopened = directory.store();
+    assert_generation(&reopened.open_generation_v1().unwrap().unwrap(), 1, false);
+    assert!(!final_path.exists());
+    assert!(!staged_path.exists());
 }
 
 #[test]
@@ -2287,7 +2454,45 @@ fn abrupt_death_after_canonical_rename_requires_restart_durability_recovery() {
     }
 }
 
-fn crash_publish_at_canonical_boundary(
+#[test]
+fn abrupt_death_after_reused_object_is_staged_recovers_on_restart() {
+    for action in [
+        "crash-after-object-final-to-staged",
+        "crash-after-recovered-staged-sync",
+    ] {
+        let directory = TestDirectory::new();
+        let store = directory.store();
+        committed(store.publish_generation_v1(&request(1, false)));
+        let final_path = blob_for(&directory.path, b"semantic-mir-generation-a");
+        let staged_path = staged_for(&final_path);
+
+        let output = subprocess(action, &directory.path)
+            .wait_with_output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(86),
+            "{action}: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!final_path.exists(), "{action}");
+        assert!(staged_path.exists(), "{action}");
+        drop(store);
+
+        let restarted = directory.store();
+        assert_generation(&restarted.open_generation_v1().unwrap().unwrap(), 1, false);
+        assert!(final_path.exists(), "{action}");
+        assert!(!staged_path.exists(), "{action}");
+        assert_generation(
+            &committed(restarted.publish_generation_v1(&request(1, true))),
+            1,
+            true,
+        );
+    }
+}
+
+fn crash_publish_at_boundary(
     store: &CompilerArtifactGenerationStoreV1,
     point: CompilerArtifactGenerationFaultPointV1,
 ) -> ! {
@@ -2336,7 +2541,7 @@ fn compiler_artifact_generation_subprocess_helper() {
                 CompilerArtifactGenerationPublishOutcomeV1::CommitIndeterminate { .. }
             ));
         }
-        "crash-after-canonical-rename" => crash_publish_at_canonical_boundary(
+        "crash-after-canonical-rename" => crash_publish_at_boundary(
             &store,
             CompilerArtifactGenerationFaultPointV1::ScopeRecord {
                 operation: CompilerArtifactGenerationRecordOperationV1::Commit,
@@ -2344,12 +2549,32 @@ fn compiler_artifact_generation_subprocess_helper() {
                 timing: CompilerArtifactGenerationFaultTimingV1::After,
             },
         ),
-        "crash-before-canonical-sync" => crash_publish_at_canonical_boundary(
+        "crash-before-canonical-sync" => crash_publish_at_boundary(
             &store,
             CompilerArtifactGenerationFaultPointV1::ScopeRecord {
                 operation: CompilerArtifactGenerationRecordOperationV1::Commit,
                 boundary: CompilerArtifactGenerationRecordBoundaryV1::SyncCanonicalName,
                 timing: CompilerArtifactGenerationFaultTimingV1::Before,
+            },
+        ),
+        "crash-after-object-final-to-staged" => crash_publish_at_boundary(
+            &store,
+            CompilerArtifactGenerationFaultPointV1::Object {
+                object: CompilerArtifactGenerationObjectV1::Artifact(
+                    CompilerArtifactRoleV1::SemanticMir,
+                ),
+                boundary: CompilerArtifactGenerationObjectBoundaryV1::RenameFinalToStaged,
+                timing: CompilerArtifactGenerationFaultTimingV1::After,
+            },
+        ),
+        "crash-after-recovered-staged-sync" => crash_publish_at_boundary(
+            &store,
+            CompilerArtifactGenerationFaultPointV1::Object {
+                object: CompilerArtifactGenerationObjectV1::Artifact(
+                    CompilerArtifactRoleV1::SemanticMir,
+                ),
+                boundary: CompilerArtifactGenerationObjectBoundaryV1::SyncRecoveredStagedName,
+                timing: CompilerArtifactGenerationFaultTimingV1::After,
             },
         ),
         other => panic!("unknown subprocess action {other}"),

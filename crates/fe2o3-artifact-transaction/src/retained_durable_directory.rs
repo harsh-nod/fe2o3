@@ -650,7 +650,8 @@ impl RetainedDurableDirectoryV1 {
     /// A later sync alone cannot establish that the original rename was durable after a writeback
     /// error. This operation therefore moves the validated final object back to its distinct staged
     /// name, syncs that namespace mutation, and publishes it again through a fresh final rename and
-    /// directory sync. The cycle preserves the managed-entry count at exact quotas.
+    /// directory sync. If an earlier cycle already reached the staged name, this operation resumes
+    /// that exact staged object. The cycle preserves the managed-entry count at exact quotas.
     pub fn establish_recovered_artifact_durability(
         &self,
         staged: &str,
@@ -675,6 +676,15 @@ impl RetainedDurableDirectoryV1 {
         )?;
         let final_exists = self.read_published(final_entry, expected_bytes.len(), final_mode)?;
         match (staged_exists, final_exists) {
+            (Some(staged_bytes), None) if staged_bytes == expected_bytes => {
+                return self.publish_validated_staged(
+                    staged,
+                    final_entry,
+                    expected_bytes,
+                    final_mode,
+                    hooks,
+                );
+            }
             (None, Some(final_bytes)) if final_bytes == expected_bytes => {}
             (None, None) => {
                 return Err(RetainedDurableDirectoryErrorV1::MissingEntry {
@@ -731,7 +741,7 @@ impl RetainedDurableDirectoryV1 {
                 entry: staged.to_owned(),
             });
         }
-        self.publish_staged(staged, final_entry, expected_bytes, final_mode, hooks)
+        self.publish_validated_staged(staged, final_entry, expected_bytes, final_mode, hooks)
     }
 
     /// Atomically makes one exact staged artifact visible at its bound final component.
@@ -780,6 +790,17 @@ impl RetainedDurableDirectoryV1 {
                 });
             }
         }
+        self.publish_validated_staged(staged, final_entry, expected_bytes, final_mode, hooks)
+    }
+
+    fn publish_validated_staged(
+        &self,
+        staged: &str,
+        final_entry: &str,
+        expected_bytes: &[u8],
+        final_mode: u32,
+        hooks: &mut impl RetainedDurableDirectoryHooksV1,
+    ) -> Result<(), RetainedDurableDirectoryErrorV1> {
         let staged_fd = openat(
             &self.output.fd,
             staged,
@@ -815,11 +836,26 @@ impl RetainedDurableDirectoryV1 {
             RetainedDurableArtifactBoundaryV1::SyncFinalMode,
             RetainedDurableFaultTimingV1::After,
         )?;
+        let prepared = validate_managed_file(
+            &staged_fd,
+            staged,
+            self.service_uid,
+            ManagedMode::Exact(final_mode),
+        )?;
         hit_artifact(
             hooks,
             RetainedDurableArtifactBoundaryV1::RenameStagedToFinal,
             RetainedDurableFaultTimingV1::Before,
         )?;
+        let prepared_after_hook = validate_managed_file(
+            &staged_fd,
+            staged,
+            self.service_uid,
+            ManagedMode::Exact(final_mode),
+        )?;
+        let named_after_hook =
+            statat(&self.output.fd, staged, AtFlags::SYMLINK_NOFOLLOW).map_err(io::Error::from)?;
+        require_unchanged_managed_name(&prepared, &prepared_after_hook, &named_after_hook, staged)?;
         renameat_with(
             &self.output.fd,
             staged,
@@ -1109,6 +1145,37 @@ fn validate_final_mode(mode: u32) -> Result<(), RetainedDurableDirectoryErrorV1>
     Ok(())
 }
 
+fn require_unchanged_managed_name(
+    before: &rustix::fs::Stat,
+    after: &rustix::fs::Stat,
+    named: &rustix::fs::Stat,
+    entry: &str,
+) -> Result<(), RetainedDurableDirectoryErrorV1> {
+    let unchanged = before.st_dev == after.st_dev
+        && before.st_ino == after.st_ino
+        && before.st_mode == after.st_mode
+        && before.st_uid == after.st_uid
+        && before.st_nlink == after.st_nlink
+        && before.st_size == after.st_size
+        && before.st_mtime == after.st_mtime
+        && before.st_mtime_nsec == after.st_mtime_nsec
+        && before.st_ctime == after.st_ctime
+        && before.st_ctime_nsec == after.st_ctime_nsec;
+    let still_named = after.st_dev == named.st_dev
+        && after.st_ino == named.st_ino
+        && after.st_mode == named.st_mode
+        && after.st_uid == named.st_uid
+        && after.st_nlink == named.st_nlink
+        && after.st_size == named.st_size;
+    if !unchanged || !still_named {
+        return Err(RetainedDurableDirectoryV1::unsafe_entry(
+            entry,
+            "prepared staged entry changed before its final rename",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_name(entry: &str) -> Result<(), RetainedDurableDirectoryErrorV1> {
     let valid = !entry.is_empty()
         && entry.len() <= 240
@@ -1259,6 +1326,10 @@ mod tests {
 
     #[derive(Default)]
     struct ArtifactRecoveryHook {
+        fail_at: Option<(
+            RetainedDurableArtifactBoundaryV1,
+            RetainedDurableFaultTimingV1,
+        )>,
         fail_sync_call: Option<usize>,
         sync_calls: usize,
         events: Vec<(
@@ -1282,6 +1353,33 @@ mod tests {
             timing: RetainedDurableFaultTimingV1,
         ) -> io::Result<()> {
             self.events.push((boundary, timing));
+            if self.fail_at == Some((boundary, timing)) {
+                Err(io::Error::other("simulated artifact crash"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    struct StagedSubstitutionHook {
+        staged: PathBuf,
+        displaced: PathBuf,
+        replacement: Vec<u8>,
+    }
+
+    impl RetainedDurableDirectoryHooksV1 for StagedSubstitutionHook {
+        fn artifact(
+            &mut self,
+            boundary: RetainedDurableArtifactBoundaryV1,
+            timing: RetainedDurableFaultTimingV1,
+        ) -> io::Result<()> {
+            if boundary == RetainedDurableArtifactBoundaryV1::RenameStagedToFinal
+                && timing == RetainedDurableFaultTimingV1::Before
+            {
+                fs::rename(&self.staged, &self.displaced)?;
+                fs::write(&self.staged, &self.replacement)?;
+                fs::set_permissions(&self.staged, fs::Permissions::from_mode(0o444))?;
+            }
             Ok(())
         }
     }
@@ -1508,6 +1606,114 @@ mod tests {
             .verify_published_exact("object.final", expected, FINAL_MODE)
             .unwrap();
         assert!(store.read_private("object.staged", 1024).unwrap().is_none());
+    }
+
+    #[test]
+    fn recommit_resumes_after_final_is_renamed_or_staged_name_is_synced() {
+        const FINAL_MODE: u32 = 0o444;
+        for boundary in [
+            RetainedDurableArtifactBoundaryV1::RenameFinalToStaged,
+            RetainedDurableArtifactBoundaryV1::SyncRecoveredStagedName,
+        ] {
+            let directory = TestDirectory::new();
+            let store = directory.store();
+            let expected = b"restart-safe content-addressed object";
+            let mut no_faults = NoRetainedDurableDirectoryHooksV1;
+            store
+                .stage_artifact("object.staged", expected, 1024, &mut no_faults)
+                .unwrap();
+            store
+                .publish_staged(
+                    "object.staged",
+                    "object.final",
+                    expected,
+                    FINAL_MODE,
+                    &mut no_faults,
+                )
+                .unwrap();
+
+            let mut crash = ArtifactRecoveryHook {
+                fail_at: Some((boundary, RetainedDurableFaultTimingV1::After)),
+                ..ArtifactRecoveryHook::default()
+            };
+            assert!(
+                store
+                    .establish_recovered_artifact_durability(
+                        "object.staged",
+                        "object.final",
+                        expected,
+                        FINAL_MODE,
+                        &mut crash,
+                    )
+                    .is_err(),
+                "{boundary:?}"
+            );
+            assert!(
+                store
+                    .read_published("object.final", 1024, FINAL_MODE)
+                    .unwrap()
+                    .is_none(),
+                "{boundary:?}"
+            );
+            assert_eq!(
+                store
+                    .read_staged("object.staged", 1024, FINAL_MODE)
+                    .unwrap()
+                    .as_deref(),
+                Some(expected.as_slice()),
+                "{boundary:?}"
+            );
+
+            store
+                .establish_recovered_artifact_durability(
+                    "object.staged",
+                    "object.final",
+                    expected,
+                    FINAL_MODE,
+                    &mut no_faults,
+                )
+                .unwrap();
+            store
+                .verify_published_exact("object.final", expected, FINAL_MODE)
+                .unwrap();
+            assert!(store.read_private("object.staged", 1024).unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn staged_name_substitution_before_final_rename_is_rejected() {
+        const FINAL_MODE: u32 = 0o444;
+        let directory = TestDirectory::new();
+        let store = directory.store();
+        let expected = b"validated staged artifact";
+        let mut no_faults = NoRetainedDurableDirectoryHooksV1;
+        store
+            .stage_artifact("object.staged", expected, 1024, &mut no_faults)
+            .unwrap();
+        let mut substitution = StagedSubstitutionHook {
+            staged: directory.path.join("object.staged"),
+            displaced: directory.path.join("validated-staged-object"),
+            replacement: b"substitute staged artifact".to_vec(),
+        };
+
+        assert!(
+            store
+                .publish_staged(
+                    "object.staged",
+                    "object.final",
+                    expected,
+                    FINAL_MODE,
+                    &mut substitution,
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .read_published("object.final", 1024, FINAL_MODE)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(fs::read(substitution.displaced).unwrap(), expected);
     }
 
     #[test]

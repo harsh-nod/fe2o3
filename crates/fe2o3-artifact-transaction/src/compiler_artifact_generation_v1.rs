@@ -1547,7 +1547,7 @@ impl CompilerArtifactGenerationStoreV1 {
             if recovery.manifest != expected {
                 return ExpectedGenerationState::Absent;
             }
-            return match self.open_generation_for_record(&recovery, hooks) {
+            return match self.recover_and_open_generation_for_record(&recovery, hooks) {
                 Ok(_) => ExpectedGenerationState::Recoverable,
                 Err(_) => ExpectedGenerationState::Uncertain,
             };
@@ -1579,7 +1579,7 @@ impl CompilerArtifactGenerationStoreV1 {
             if !redo_is_legal {
                 return ExpectedGenerationState::Uncertain;
             }
-            return match self.open_generation_for_record(canonical, hooks) {
+            return match self.recover_and_open_generation_for_record(canonical, hooks) {
                 Ok(_) => ExpectedGenerationState::Recoverable,
                 Err(_) => ExpectedGenerationState::Uncertain,
             };
@@ -1597,7 +1597,7 @@ impl CompilerArtifactGenerationStoreV1 {
         if redo.manifest != expected || !legal {
             return ExpectedGenerationState::Absent;
         }
-        match self.open_generation_for_record(&redo, hooks) {
+        match self.recover_and_open_generation_for_record(&redo, hooks) {
             Ok(_) => ExpectedGenerationState::Recoverable,
             Err(_) => ExpectedGenerationState::Uncertain,
         }
@@ -2026,28 +2026,41 @@ impl CompilerArtifactGenerationStoreV1 {
         protected: &mut HashSet<String>,
     ) -> Result<(), CompilerArtifactGenerationErrorV1> {
         let manifest_name = manifest_name(record.manifest);
-        let manifest_entry = by_name
+        let staged_manifest_name = format!("{manifest_name}{STAGED_SUFFIX}");
+        let (manifest_candidate, manifest_entry, manifest_mode) = if let Some(entry) = by_name
             .get(&manifest_name)
             .and_then(|index| inventory.get(*index))
-            .ok_or_else(|| unsafe_entry(&manifest_name, "referenced manifest is absent"))?;
-        if manifest_entry.kind != ManagedEntryKind::Manifest
+        {
+            (&manifest_name, entry, CandidateMode::Published)
+        } else if let Some(entry) = by_name
+            .get(&staged_manifest_name)
+            .and_then(|index| inventory.get(*index))
+        {
+            (&staged_manifest_name, entry, CandidateMode::Staged)
+        } else {
+            return Err(unsafe_entry(
+                &manifest_name,
+                "referenced manifest is absent",
+            ));
+        };
+        let expected_manifest_kind = match manifest_mode {
+            CandidateMode::Published => ManagedEntryKind::Manifest,
+            CandidateMode::Staged => ManagedEntryKind::Staged,
+        };
+        if manifest_entry.kind != expected_manifest_kind
             || usize::try_from(manifest_entry.length).ok() != Some(record.manifest_length)
         {
             return Err(unsafe_entry(
-                &manifest_name,
+                manifest_candidate,
                 "referenced manifest inventory metadata is inconsistent",
             ));
         }
         let bytes = self
-            .read_candidate_exact(
-                &manifest_name,
-                record.manifest_length,
-                CandidateMode::Published,
-            )?
-            .ok_or_else(|| unsafe_entry(&manifest_name, "referenced manifest is absent"))?;
+            .read_candidate_exact(manifest_candidate, record.manifest_length, manifest_mode)?
+            .ok_or_else(|| unsafe_entry(manifest_candidate, "referenced manifest is absent"))?;
         if manifest_identity(&bytes) != record.manifest {
             return Err(unsafe_entry(
-                &manifest_name,
+                manifest_candidate,
                 "referenced manifest does not match its content address",
             ));
         }
@@ -2058,30 +2071,148 @@ impl CompilerArtifactGenerationStoreV1 {
                 "referenced manifest names a different scope or identity",
             ));
         }
-        if protected.contains(&manifest_name) {
+        if protected.contains(manifest_candidate) {
             return Ok(());
         }
-        protected.insert(manifest_name);
+        protected.insert(manifest_candidate.clone());
         for artifact in manifest.entries {
             let name = blob_name(artifact.sha256);
-            let entry = by_name
-                .get(&name)
-                .and_then(|index| inventory.get(*index))
-                .ok_or_else(|| unsafe_entry(&name, "referenced artifact is absent"))?;
-            if entry.kind != ManagedEntryKind::Blob || entry.length != artifact.length {
+            let staged_name = format!("{name}{STAGED_SUFFIX}");
+            let (candidate, entry, mode) =
+                if let Some(entry) = by_name.get(&name).and_then(|index| inventory.get(*index)) {
+                    (&name, entry, CandidateMode::Published)
+                } else if let Some(entry) = by_name
+                    .get(&staged_name)
+                    .and_then(|index| inventory.get(*index))
+                {
+                    (&staged_name, entry, CandidateMode::Staged)
+                } else {
+                    return Err(unsafe_entry(&name, "referenced artifact is absent"));
+                };
+            let expected_kind = match mode {
+                CandidateMode::Published => ManagedEntryKind::Blob,
+                CandidateMode::Staged => ManagedEntryKind::Staged,
+            };
+            if entry.kind != expected_kind || entry.length != artifact.length {
                 return Err(unsafe_entry(
-                    &name,
+                    candidate,
                     "referenced artifact inventory metadata is inconsistent",
                 ));
             }
-            let stat = statat(&self.output.fd, &name, AtFlags::SYMLINK_NOFOLLOW)
-                .map_err(io::Error::from)?;
             let expected_length = usize::try_from(artifact.length)
                 .map_err(|_| codec_error("artifact length does not fit this host"))?;
-            validate_content_stat(&stat, self.service_uid, expected_length, &name)?;
-            protected.insert(name);
+            match mode {
+                CandidateMode::Published => {
+                    let stat = statat(&self.output.fd, &name, AtFlags::SYMLINK_NOFOLLOW)
+                        .map_err(io::Error::from)?;
+                    validate_content_stat(&stat, self.service_uid, expected_length, &name)?;
+                }
+                CandidateMode::Staged => {
+                    let bytes = self
+                        .read_candidate_exact(candidate, expected_length, CandidateMode::Staged)?
+                        .ok_or_else(|| unsafe_entry(candidate, "referenced artifact is absent"))?;
+                    if sha256(&bytes) != artifact.sha256 {
+                        return Err(unsafe_entry(
+                            candidate,
+                            "referenced staged artifact does not match its content address",
+                        ));
+                    }
+                }
+            }
+            protected.insert(candidate.clone());
         }
         Ok(())
+    }
+
+    fn recover_and_open_generation_for_record(
+        &self,
+        record: &ScopeRecordV1,
+        hooks: &mut StoreHooks,
+    ) -> Result<CompilerArtifactGenerationLeaseV1, CompilerArtifactGenerationErrorV1> {
+        // Recommit every record-bound object before opening: after a prior interrupted recovery,
+        // either final or staged visibility can be the only remaining restart signal.
+        let manifest_name = manifest_name(record.manifest);
+        let manifest_bytes = self.recommit_referenced_object(
+            &manifest_name,
+            record.manifest_length,
+            MAX_COMPILER_ARTIFACT_GENERATION_MANIFEST_BYTES_V1,
+            ExpectedDigest::Manifest(record.manifest),
+            CompilerArtifactGenerationObjectV1::Manifest,
+            hooks,
+        )?;
+        let manifest = CompilerArtifactGenerationManifestV1::decode_canonical(&manifest_bytes)?;
+        if manifest.scope != record.scope
+            || manifest.identity != record.manifest
+            || manifest.canonical_bytes.len() != record.manifest_length
+        {
+            return Err(unsafe_entry(
+                &manifest_name,
+                "recovered manifest identity, scope, or length differs from the scope record",
+            ));
+        }
+        for entry in &manifest.entries {
+            let length = usize::try_from(entry.length)
+                .map_err(|_| codec_error("artifact length does not fit this host"))?;
+            self.recommit_referenced_object(
+                &blob_name(entry.sha256),
+                length,
+                entry.role.maximum_bytes(),
+                ExpectedDigest::Blob(entry.sha256),
+                CompilerArtifactGenerationObjectV1::Artifact(entry.role),
+                hooks,
+            )?;
+        }
+        self.open_generation_for_record(record, hooks)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn recommit_referenced_object(
+        &self,
+        final_name: &str,
+        expected_length: usize,
+        maximum_bytes: usize,
+        expected_digest: ExpectedDigest,
+        object: CompilerArtifactGenerationObjectV1,
+        hooks: &mut StoreHooks,
+    ) -> Result<Vec<u8>, CompilerArtifactGenerationErrorV1> {
+        if expected_length == 0 || expected_length > maximum_bytes {
+            return Err(unsafe_entry(
+                final_name,
+                "referenced object length is outside its bound",
+            ));
+        }
+        let staged_name = format!("{final_name}{STAGED_SUFFIX}");
+        let final_bytes =
+            self.read_candidate_exact(final_name, expected_length, CandidateMode::Published)?;
+        let staged_bytes =
+            self.read_candidate_exact(&staged_name, expected_length, CandidateMode::Staged)?;
+        let bytes = match (final_bytes, staged_bytes) {
+            (Some(bytes), None) | (None, Some(bytes)) => bytes,
+            (None, None) => {
+                return Err(unsafe_entry(final_name, "referenced object is absent"));
+            }
+            (Some(_), Some(_)) => {
+                return Err(unsafe_entry(
+                    final_name,
+                    "referenced object has both final and staged names",
+                ));
+            }
+        };
+        if !expected_digest.matches(&bytes) {
+            return Err(unsafe_entry(
+                final_name,
+                "referenced object does not match its content address",
+            ));
+        }
+        hooks.object = object;
+        self.durable.establish_recovered_artifact_durability(
+            &staged_name,
+            final_name,
+            &bytes,
+            CONTENT_MODE,
+            hooks,
+        )?;
+        Ok(bytes)
     }
 
     fn publish_object(
@@ -2220,7 +2351,7 @@ impl CompilerArtifactGenerationStoreV1 {
                 });
             }
             let recovery = ScopeRecordV1::decode_canonical(&recovery_bytes, scope)?;
-            let generation = self.open_generation_for_record(&recovery, hooks)?;
+            let generation = self.recover_and_open_generation_for_record(&recovery, hooks)?;
             self.ensure_actual_quota_locked()?;
             hooks.record_operation = CompilerArtifactGenerationRecordOperationV1::Recover;
             self.durable.promote_validated_redo(
@@ -2262,7 +2393,9 @@ impl CompilerArtifactGenerationStoreV1 {
                 ));
             }
             let canonical = ScopeRecordV1::decode_canonical(&recovered_bytes, scope)?;
-            return self.open_generation_for_record(&canonical, hooks).map(Some);
+            return self
+                .recover_and_open_generation_for_record(&canonical, hooks)
+                .map(Some);
         };
         let redo = ScopeRecordV1::decode_canonical(&redo_bytes, scope)?;
         let canonical = canonical_bytes
@@ -2272,7 +2405,7 @@ impl CompilerArtifactGenerationStoreV1 {
 
         let current = canonical
             .as_ref()
-            .map(|record| self.open_generation_for_record(record, hooks))
+            .map(|record| self.recover_and_open_generation_for_record(record, hooks))
             .transpose()?;
         let same_generation = canonical
             .as_ref()
@@ -2292,7 +2425,7 @@ impl CompilerArtifactGenerationStoreV1 {
         let redo_generation = if same_generation {
             None
         } else {
-            Some(self.open_generation_for_record(&redo, hooks)?)
+            Some(self.recover_and_open_generation_for_record(&redo, hooks)?)
         };
 
         hooks.record_operation = CompilerArtifactGenerationRecordOperationV1::Recover;
