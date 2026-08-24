@@ -97,7 +97,6 @@ fn attributed_kernel_enters_one_transaction_and_fails_without_fallback() {
         "missing fail-closed production diagnostic:\n{stderr}"
     );
     for forbidden in [
-        "legacy-v1",
         "kernel-ir-v1",
         "kernel-ir-worker-v2",
         "collected-executable-scalar-control-flow-v2",

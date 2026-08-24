@@ -3088,7 +3088,7 @@ impl MirModule {
         ];
 
         for function in &self.functions {
-            // `kind` is a V1 compatibility field consumed by record_lowering.
+            // `kind` preserves the imported MIR operation classification.
             // The closed role remains authoritative on `MirFunction::kind`.
             let kind = match function.kind {
                 MirFunctionKind::KernelEntry => "kernel",

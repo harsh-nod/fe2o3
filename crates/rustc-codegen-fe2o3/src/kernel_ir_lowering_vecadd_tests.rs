@@ -1,6 +1,6 @@
 use super::*;
 use crate::mir_import::{MirImportedType, MirLocal, MirLocalRole, MirSwitchTarget};
-use dialect_mir::{MirOp, MirType};
+use dialect_mir::MirType;
 
 #[test]
 fn vecadd_fixture_translates_to_verified_typed_cfg() {
@@ -171,24 +171,6 @@ fn unsupported_rvalue_reports_source_location() {
             .map(|source| source.file.as_str()),
         Some("examples/vecadd/src/main.rs")
     );
-}
-
-#[test]
-fn vecadd_fixture_still_populates_the_legacy_record_plan() {
-    let fixture = vecadd_fixture();
-    let plan = crate::record_lowering::plan_from_module(&fixture);
-    let function = plan.function("vecadd").expect("legacy vecadd plan");
-
-    assert_eq!(function.op_count(MirOp::Call), 4);
-    assert_eq!(function.op_count(MirOp::Load), 2);
-    assert_eq!(function.op_count(MirOp::Store), 1);
-    assert_eq!(
-        function.ops_by(MirOp::Store)[0].operation.as_deref(),
-        Some("add")
-    );
-    assert_eq!(function.op_count(MirOp::Lt), 2);
-    assert_eq!(function.op_count(MirOp::Assert), 2);
-    assert_eq!(function.op_count(MirOp::Switch), 1);
 }
 
 fn count_ops(operations: &[&Operation], predicate: impl Fn(&OperationKind) -> bool) -> usize {

@@ -54,7 +54,6 @@ mod production_semantic_types_v1;
 mod production_target_lineage_v3;
 mod production_target_v1;
 mod protected_rustc_invocation;
-mod record_lowering;
 mod rust_type_layout;
 mod rust_type_layout_general;
 mod rust_type_layout_v3;
@@ -115,7 +114,6 @@ pub const BACKEND_ENV: &str = "FE2O3_BACKEND";
 pub const VERBOSE_ENV: &str = "FE2O3_VERBOSE";
 pub const DUMP_MIR_ENV: &str = "FE2O3_DUMP_MIR";
 pub const DUMP_LLVM_ENV: &str = "FE2O3_DUMP_LLVM";
-pub const VERIFY_KERNEL_IR_ENV: &str = "FE2O3_VERIFY_KERNEL_IR";
 pub const CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 pub const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 pub const BUILD_ATTEMPT_ENV: &str = "FE2O3_BUILD_ATTEMPT_V1";
@@ -254,7 +252,6 @@ pub struct BackendConfig {
     pub verbose: bool,
     pub dump_mir: bool,
     pub dump_llvm: bool,
-    pub verify_kernel_ir: bool,
     codegen_pipeline: PipelineSelection,
     build_attempt: BuildAttemptSelection,
     pub hsaco_output_dir: Option<PathBuf>,
@@ -267,7 +264,6 @@ impl BackendConfig {
             verbose: env_flag(VERBOSE_ENV),
             dump_mir: env_flag(DUMP_MIR_ENV),
             dump_llvm: env_flag(DUMP_LLVM_ENV),
-            verify_kernel_ir: env_flag(VERIFY_KERNEL_IR_ENV),
             codegen_pipeline: PipelineSelection::from_env(),
             build_attempt: BuildAttemptSelection::from_env(),
             hsaco_output_dir: env::var(HSACO_DIR_ENV).ok().map(PathBuf::from),
@@ -1451,42 +1447,6 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                     reason: format!("compiler FFI MIR import failed: {error}"),
                                 })?;
                             match codegen_pipeline {
-                            CodegenPipeline::LegacyV1 => {
-                                match run_optional_kernel_ir_analysis(
-                                    self.config.verify_kernel_ir,
-                                    || {
-                                        kernel_ir_lowering::translate_and_verify_for_session(
-                                            &mir_module,
-                                            &self.config.target,
-                                            tcx.sess,
-                                        )
-                                    },
-                                ) {
-                                    Ok(Some(module)) => eprintln!(
-                                        "[rustc-codegen-fe2o3] verified MIR kernel IR analysis: {} kernel(s), {} function(s)",
-                                        module.kernels.len(),
-                                        module.functions.len()
-                                    ),
-                                    Ok(None) => {}
-                                    Err(errors) => {
-                                        return Err(amdgpu_llvm::EmitError::Preflight {
-                                            reason: format!(
-                                                "MIR kernel IR analysis failed: {errors}"
-                                            ),
-                                        });
-                                    }
-                                }
-                                let lowering_plan = record_lowering::plan_from_module(&mir_module);
-                                if self.config.dump_mir {
-                                    eprintln!("{}", mir_module.summary());
-                                    eprintln!("{}", lowering_plan.summary());
-                                }
-                                amdgpu_llvm::prepare_collection(
-                                    tcx,
-                                    &collection,
-                                    Some(&lowering_plan),
-                                )
-                            }
                             CodegenPipeline::ProductionV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
                                     reason: "internal error: production-v1 escaped its fail-closed transaction branch"
@@ -1635,15 +1595,12 @@ impl CodegenBackend for Fe2o3CodegenBackend {
             if kernel_count == 0
                 && let Some(output_dir) = output_dir
             {
-                let collection = collector::CollectionResult::default();
-                if let Err(error) = amdgpu_llvm::emit_collection(
-                    tcx,
-                    &collection,
+                if let Err(error) = amdgpu_llvm::emit_collection_after_preflight(
                     &producer,
-                    None,
                     output_dir,
                     &self.config.target,
                     build_attempt,
+                    || Ok(Vec::new()),
                 ) {
                     tcx.dcx().fatal(format!(
                         "[rustc-codegen-fe2o3] zero-kernel artifact reconciliation failed: {error}"
@@ -2428,17 +2385,6 @@ fn managed_artifact_output(
     }
 }
 
-fn run_optional_kernel_ir_analysis<T, E>(
-    enabled: bool,
-    analysis: impl FnOnce() -> Result<T, E>,
-) -> Result<Option<T>, E> {
-    if enabled {
-        analysis().map(Some)
-    } else {
-        Ok(None)
-    }
-}
-
 fn find_rocm_path() -> Option<PathBuf> {
     for var in ["ROCM_PATH", "HIP_PATH"] {
         if let Ok(value) = env::var(var) {
@@ -2475,7 +2421,7 @@ mod tests {
         AmdGpuTarget, BackendConfig, BuildAttemptSelection, PipelineSelection, RocmToolchain,
         TemporaryHostObjects, TypedKernelRootV1, TypedVerticalError, finalized_artifact_bytes,
         generate_typed_host_objects, llvm_compile_command, managed_artifact_output,
-        match_typed_artifacts, run_optional_kernel_ir_analysis, validate_hsaco_metadata_text,
+        match_typed_artifacts, validate_hsaco_metadata_text,
     };
     use crate::amdgpu_llvm::DeviceArtifact;
     use crate::collector::TypedKernelProfile;
@@ -2739,13 +2685,6 @@ mod tests {
     }
 
     #[test]
-    fn optional_kernel_ir_analysis_is_fail_closed_when_enabled() {
-        let result = run_optional_kernel_ir_analysis(true, || Err::<(), _>("translation failed"));
-
-        assert_eq!(result, Err("translation failed"));
-    }
-
-    #[test]
     fn invalid_pipeline_selection_is_versioned_and_strict() {
         for invalid in [
             "",
@@ -2769,7 +2708,6 @@ mod tests {
             let message = error.to_string();
             assert!(message.contains("FE2O3_CODEGEN_PIPELINE"));
             assert!(message.contains("production-v1"));
-            assert!(message.contains("legacy-v1"));
             assert!(message.contains("kernel-ir-v1"));
             assert!(message.contains("kernel-ir-worker-v2"));
             assert!(message.contains("collected-tiled-gemm-v1"));

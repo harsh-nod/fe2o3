@@ -17,7 +17,6 @@ pub(crate) enum PipelinePurposeV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CodegenPipeline {
     ProductionV1,
-    LegacyV1,
     KernelIrV1,
     KernelIrWorkerV2,
     CollectedExecutableScalarControlFlowV2,
@@ -33,9 +32,8 @@ pub(crate) enum CodegenPipeline {
 }
 
 impl CodegenPipeline {
-    pub(crate) const ALL: [Self; 14] = [
+    pub(crate) const ALL: [Self; 13] = [
         Self::ProductionV1,
-        Self::LegacyV1,
         Self::KernelIrV1,
         Self::KernelIrWorkerV2,
         Self::CollectedExecutableScalarControlFlowV2,
@@ -53,8 +51,7 @@ impl CodegenPipeline {
     pub(crate) const fn purpose(self) -> PipelinePurposeV1 {
         match self {
             Self::ProductionV1 => PipelinePurposeV1::Production,
-            Self::LegacyV1
-            | Self::KernelIrV1
+            Self::KernelIrV1
             | Self::KernelIrWorkerV2
             | Self::CollectedExecutableScalarControlFlowV2
             | Self::CollectedFlashAttentionV1
@@ -72,7 +69,6 @@ impl CodegenPipeline {
     pub(crate) const fn selector_name(self) -> &'static str {
         match self {
             Self::ProductionV1 => crate::production_pipeline_v1::PRODUCTION_PIPELINE_V1,
-            Self::LegacyV1 => "legacy-v1",
             Self::KernelIrV1 => "kernel-ir-v1",
             Self::KernelIrWorkerV2 => "kernel-ir-worker-v2",
             Self::CollectedExecutableScalarControlFlowV2 => {

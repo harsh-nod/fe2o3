@@ -113,12 +113,7 @@ fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
         "out-of-bounds diagnostic was incomplete:\n{}",
         oob.stderr,
     );
-    for forbidden in [
-        "legacy-v1",
-        "kernel-ir-v1",
-        "GeneralGemm",
-        "Unknown/Unproved",
-    ] {
+    for forbidden in ["kernel-ir-v1", "GeneralGemm", "Unknown/Unproved"] {
         assert!(
             !safe.stderr.contains(forbidden) && !oob.stderr.contains(forbidden),
             "production extraction entered forbidden path {forbidden:?}",

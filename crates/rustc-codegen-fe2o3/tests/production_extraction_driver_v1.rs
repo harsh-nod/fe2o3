@@ -240,7 +240,6 @@ fn run_extraction(target: &ScratchTarget) -> String {
         "found no registered kernel",
         "body record construction remains pending",
         "schema-shaped semantic",
-        "legacy-v1",
         "kernel-ir-v1",
     ] {
         assert!(

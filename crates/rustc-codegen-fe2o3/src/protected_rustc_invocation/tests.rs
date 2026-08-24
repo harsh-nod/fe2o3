@@ -132,12 +132,6 @@ fn absent_and_present_selection_is_exact_and_ordinary_compatible() {
             )
         );
     }
-
-    assert!(
-        admit_for_codegen(CodegenPipeline::LegacyV1)
-            .unwrap()
-            .is_none()
-    );
 }
 
 #[test]
@@ -171,7 +165,7 @@ fn unprotected_routes_reject_protected_signals_without_consuming_unknown_fds() {
     {
         assert!(matches!(
             admit_for_codegen_at(
-                CodegenPipeline::LegacyV1,
+                CodegenPipeline::KernelIrV1,
                 false,
                 TEST_CHILD_FD,
                 compiler_closure_marker_present,
@@ -188,7 +182,7 @@ fn unprotected_routes_reject_protected_signals_without_consuming_unknown_fds() {
 
     assert!(
         admit_for_codegen_at(
-            CodegenPipeline::LegacyV1,
+            CodegenPipeline::KernelIrV1,
             false,
             TEST_CHILD_FD,
             false,

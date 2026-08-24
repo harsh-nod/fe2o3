@@ -26,7 +26,8 @@ use std::path::Path;
 
 const FILL_KERNEL: &str = "fill";
 const VECADD_KERNEL: &str = "vecadd";
-const EXPLICIT_LEGACY_QUALIFICATION_HINT: &str = "select FE2O3_CODEGEN_PIPELINE=legacy-v1 only for the explicit qualification legacy route; production-v1 never falls back";
+const NO_QUALIFICATION_FALLBACK_HINT: &str =
+    "production-v1 does not fall back to a qualification-only lowering route";
 const WORKGROUP_X: u32 = 256;
 pub(crate) const TILED_GEMM_FRONTEND_TEST_LLVM_FILE: &str =
     "tiled_gemm_frontend_v1.imported.gfx942-xnack-.ll";
@@ -1487,12 +1488,12 @@ pub(crate) fn prepare_fill_collection(
     expected.sort();
     let [kernel_name] = expected.as_slice() else {
         return Err(reject(format!(
-            "supports exactly one kernel export from {FILL_KERNEL:?} or {VECADD_KERNEL:?}; collected {expected:?}; {EXPLICIT_LEGACY_QUALIFICATION_HINT}"
+            "supports exactly one kernel export from {FILL_KERNEL:?} or {VECADD_KERNEL:?}; collected {expected:?}; {NO_QUALIFICATION_FALLBACK_HINT}"
         )));
     };
     if !matches!(kernel_name.as_str(), FILL_KERNEL | VECADD_KERNEL) {
         return Err(reject(format!(
-            "does not support kernel export {kernel_name:?}; expected {FILL_KERNEL:?} or {VECADD_KERNEL:?}; {EXPLICIT_LEGACY_QUALIFICATION_HINT}"
+            "does not support kernel export {kernel_name:?}; expected {FILL_KERNEL:?} or {VECADD_KERNEL:?}; {NO_QUALIFICATION_FALLBACK_HINT}"
         )));
     }
 
@@ -3004,12 +3005,11 @@ mod tests {
     #[test]
     fn kernel_admission_is_exact_and_never_falls_back() {
         let error = prepare_fill_collection(translated_fill(), &["saxpy".to_string()])
-            .expect_err("saxpy must remain on legacy-v1");
+            .expect_err("saxpy must remain unsupported by this qualification oracle");
 
         let text = error.to_string();
         assert!(text.contains("does not support kernel export \"saxpy\""));
-        assert!(text.contains("explicit qualification legacy route"));
-        assert!(text.contains("production-v1 never falls back"));
+        assert!(text.contains("production-v1 does not fall back"));
     }
 
     #[test]
