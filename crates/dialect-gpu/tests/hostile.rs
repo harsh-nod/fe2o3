@@ -1,7 +1,7 @@
 use dialect_gpu::{
-    AddressSpaceAttr, BarrierOp, ExecutionLayoutOp, FenceOp, HierarchyAttr, HierarchyIdOp,
-    HierarchyIndexType, MemoryOrderAttr, MemoryScopeAttr, MemorySpaceOp, MemorySpaceType,
-    RegistrationError, RegistrationOutcome, SynchronizationOpInterface,
+    AddressSpaceAttr, BarrierOp, ExecutionDomainAttr, ExecutionLayoutOp, FenceOp, HierarchyAttr,
+    HierarchyIdOp, HierarchyIndexType, MemoryOrderAttr, MemoryScopeAttr, MemorySpaceOp,
+    MemorySpaceType, RegistrationError, RegistrationOutcome, SynchronizationOpInterface,
     TargetNeutralGpuOpInterface, barrier_op_attr_names, register_dialect,
 };
 use pliron::{
@@ -201,6 +201,31 @@ fn execution_layout_distinguishes_dynamic_global_axes_from_physical_workgroups()
     assert_eq!(dynamic.global_extents(&context), Some([0, 128, 1]));
     assert_eq!(dynamic.workgroup_extents(&context), Some([8, 8, 1]));
     assert_eq!(dynamic.subgroup_size(&context), Some(64));
+    assert_eq!(
+        dynamic.execution_domain(&context),
+        ExecutionDomainAttr::PotentiallyPartial
+    );
+
+    let authenticated_dynamic = ExecutionLayoutOp::new_with_domain(
+        &mut context,
+        9,
+        [0, 128, 1],
+        [8, 8, 1],
+        64,
+        ExecutionDomainAttr::FullPhysicalWorkgroups,
+    );
+    verify_op(&authenticated_dynamic, &context)
+        .expect("dynamic full-workgroup provenance is structurally consistent");
+
+    let contradictory = ExecutionLayoutOp::new_with_domain(
+        &mut context,
+        9,
+        [65, 1, 1],
+        [64, 1, 1],
+        64,
+        ExecutionDomainAttr::FullPhysicalWorkgroups,
+    );
+    assert!(verify_op(&contradictory, &context).is_err());
 
     let zero_workgroup = ExecutionLayoutOp::new(&mut context, 9, [64, 1, 1], [0, 1, 1], 1);
     assert!(verify_op(&zero_workgroup, &context).is_err());

@@ -603,6 +603,10 @@ impl Verify for InvocationIndexOp {
 }
 
 /// Target-neutral unsigned index arithmetic retained for sparse analysis.
+///
+/// Analyses may only use order-preserving affine reasoning when they prove the
+/// operation cannot overflow over the retained domain. Unproved overflow is
+/// not a source of control-uniformity or memory-safety authority.
 #[pliron_op(
     name = "kernel.index_binary",
     format,

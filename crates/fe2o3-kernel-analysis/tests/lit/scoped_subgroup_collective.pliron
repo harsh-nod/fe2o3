@@ -4,7 +4,7 @@
 builtin.func @scoped_subgroup_collective: builtin.function <() -> ()>
 {
   ^entry_block1v1():
-    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 7, gpu_execution_global_x: gpu.execution_extent 128, gpu_execution_global_y: gpu.execution_extent 1, gpu_execution_global_z: gpu.execution_extent 1, gpu_execution_workgroup_x: gpu.execution_extent 128, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 64]: <() -> ()>;
+    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 7, gpu_execution_global_x: gpu.execution_extent 128, gpu_execution_global_y: gpu.execution_extent 1, gpu_execution_global_z: gpu.execution_extent 1, gpu_execution_workgroup_x: gpu.execution_extent 128, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 64, gpu_execution_domain: gpu.execution_domain PotentiallyPartial]: <() -> ()>;
     v0 = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension 0, kernel_launch_extent: kernel.launch_extent 128]: <() -> (kernel.index )>;
     v1 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 64]: <() -> (kernel.index )>;
     kernel.index_lt_br (v0, v1) [^collective_block2v1, ^exit_block3v1] []: <(kernel.index , kernel.index ) -> ()>

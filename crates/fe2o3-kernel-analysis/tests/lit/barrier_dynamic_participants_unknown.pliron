@@ -1,0 +1,10 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: dynamic barrier convergence requires authenticated full physical workgroups
+builtin.func @barrier_dynamic_participants_unknown: builtin.function <() -> ()>
+{
+  ^entry_block1v1():
+    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 7, gpu_execution_global_x: gpu.execution_extent 0, gpu_execution_global_y: gpu.execution_extent 1, gpu_execution_global_z: gpu.execution_extent 1, gpu_execution_workgroup_x: gpu.execution_extent 64, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 64, gpu_execution_domain: gpu.execution_domain PotentiallyPartial]: <() -> ()>;
+    gpu.barrier Workgroup Workgroup Workgroup AcquireRelease;
+    kernel.return () [] []: <() -> ()>
+}

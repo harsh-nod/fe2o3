@@ -133,6 +133,13 @@ fn semantic_owner() -> ProductionSemanticMirOwnerV1 {
 }
 
 fn ranked_input(index: u64) -> ProductionRankedKernelLoweringInputV1 {
+    ranked_input_with_domain(index, true)
+}
+
+fn ranked_input_with_domain(
+    index: u64,
+    full_physical_workgroups: bool,
+) -> ProductionRankedKernelLoweringInputV1 {
     let view = ProductionRankedValueIdV1::new(0);
     let coordinate = ProductionRankedValueIdV1::new(1);
     let kernel = ProductionRankedKernelV1::new(
@@ -145,6 +152,7 @@ fn ranked_input(index: u64) -> ProductionRankedKernelLoweringInputV1 {
                     global_extents: [1, 1, 1],
                     workgroup_extents: [1, 1, 1],
                     subgroup_size: 1,
+                    full_physical_workgroups,
                 },
                 ProductionRankedOperationV1::View {
                     result: view,
@@ -327,8 +335,8 @@ fn construction_is_deterministic_and_binds_typed_kernel_and_ranked_ir() {
     assert_eq!(
         *first.identity().sha256(),
         [
-            159, 58, 253, 230, 248, 16, 252, 163, 179, 27, 253, 148, 220, 233, 17, 42, 27, 114,
-            205, 152, 125, 162, 40, 32, 125, 245, 239, 13, 190, 8, 143, 8,
+            37, 136, 99, 218, 23, 122, 185, 0, 192, 75, 3, 65, 162, 0, 168, 33, 20, 222, 53, 162,
+            223, 231, 10, 83, 54, 135, 69, 89, 187, 118, 205, 53,
         ]
     );
 
@@ -349,6 +357,16 @@ fn construction_is_deterministic_and_binds_typed_kernel_and_ranked_ir() {
         changed_ir.ranked_kernel_identity()
     );
     assert_ne!(first.identity(), changed_ir.identity());
+
+    let changed_domain_input = ranked_input_with_domain(7, false);
+    let changed_domain =
+        ProductionMiddleEndEvidenceV3::try_new(&semantic_owner(), &changed_domain_input, RANKED_IR)
+            .unwrap();
+    assert_ne!(
+        first.ranked_kernel_identity(),
+        changed_domain.ranked_kernel_identity()
+    );
+    assert_ne!(first.identity(), changed_domain.identity());
 }
 
 #[test]

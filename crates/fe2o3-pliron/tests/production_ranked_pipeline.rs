@@ -30,6 +30,7 @@ fn static_kernel(index: u64, extent: u64) -> ProductionRankedKernelV1 {
                     global_extents: [1, 1, 1],
                     workgroup_extents: [1, 1, 1],
                     subgroup_size: 1,
+                    full_physical_workgroups: true,
                 },
                 ProductionRankedOperationV1::View {
                     result: VIEW,
@@ -80,6 +81,7 @@ fn dynamic_kernel(guarded: bool) -> ProductionRankedKernelV1 {
                         global_extents: [1, 1, 1],
                         workgroup_extents: [1, 1, 1],
                         subgroup_size: 1,
+                        full_physical_workgroups: true,
                     },
                     view,
                 ],
@@ -101,6 +103,7 @@ fn dynamic_kernel(guarded: bool) -> ProductionRankedKernelV1 {
                     global_extents: [1, 1, 1],
                     workgroup_extents: [1, 1, 1],
                     subgroup_size: 1,
+                    full_physical_workgroups: true,
                 },
                 view,
                 access,
@@ -126,6 +129,7 @@ fn tensor_kernel(contract: TensorLayoutContractV1) -> ProductionRankedKernelV1 {
                     global_extents: [64, 1, 1],
                     workgroup_extents: [64, 1, 1],
                     subgroup_size: 64,
+                    full_physical_workgroups: true,
                 },
                 ProductionRankedOperationV1::TensorLayout {
                     contract,
@@ -153,6 +157,7 @@ fn deterministic_tensor_kernel() -> ProductionRankedKernelV1 {
                         global_extents: [0, 1, 1],
                         workgroup_extents: [64, 1, 1],
                         subgroup_size: 64,
+                        full_physical_workgroups: true,
                     },
                     ProductionRankedOperationV1::IndexConstant {
                         result: zero,
@@ -234,6 +239,7 @@ fn declared_multi_invocation_domain_checks_constant_write_without_index_use() {
                     global_extents: [64, 1, 1],
                     workgroup_extents: [64, 1, 1],
                     subgroup_size: 64,
+                    full_physical_workgroups: true,
                 },
                 ProductionRankedOperationV1::View {
                     result: VIEW,
@@ -588,6 +594,7 @@ fn divergent_barrier_is_terminal_in_the_closed_production_pipeline() {
                         global_extents: [4, 1, 1],
                         workgroup_extents: [4, 1, 1],
                         subgroup_size: 4,
+                        full_physical_workgroups: true,
                     },
                     ProductionRankedOperationV1::InvocationIndex {
                         result: invocation,
@@ -645,6 +652,7 @@ fn uninitialized_workgroup_read_is_terminal_before_lowering() {
                     global_extents: [8, 1, 1],
                     workgroup_extents: [8, 1, 1],
                     subgroup_size: 8,
+                    full_physical_workgroups: true,
                 },
                 ProductionRankedOperationV1::ViewInSpace {
                     result: view,
@@ -776,6 +784,7 @@ fn production_fence_does_not_authorize_cross_workgroup_plain_overlap() {
                     global_extents: [128, 1, 1],
                     workgroup_extents: [64, 1, 1],
                     subgroup_size: 64,
+                    full_physical_workgroups: true,
                 },
                 ProductionRankedOperationV1::ViewInSpace {
                     result: view,
@@ -831,6 +840,26 @@ fn production_fence_does_not_authorize_cross_workgroup_plain_overlap() {
 
 #[test]
 fn execution_layout_is_unique_canonical_and_checked() {
+    let contradictory_domain = ProductionRankedKernelV1::new(
+        "contradictory_domain",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![ProductionRankedOperationV1::ExecutionLayout {
+                grid_identity: 1,
+                global_extents: [65, 1, 1],
+                workgroup_extents: [64, 1, 1],
+                subgroup_size: 64,
+                full_physical_workgroups: true,
+            }],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .unwrap_err();
+    assert!(matches!(
+        contradictory_domain,
+        ProductionRankedKernelErrorV1::InvalidExecutionLayout
+    ));
+
     let invalid = ProductionRankedKernelV1::new(
         "invalid_layout",
         0,
@@ -840,6 +869,7 @@ fn execution_layout_is_unique_canonical_and_checked() {
                 global_extents: [96, 1, 1],
                 workgroup_extents: [96, 1, 1],
                 subgroup_size: 64,
+                full_physical_workgroups: true,
             }],
             ProductionRankedTerminatorV1::Return,
         )],
@@ -860,12 +890,14 @@ fn execution_layout_is_unique_canonical_and_checked() {
                     global_extents: [64, 1, 1],
                     workgroup_extents: [64, 1, 1],
                     subgroup_size: 64,
+                    full_physical_workgroups: true,
                 },
                 ProductionRankedOperationV1::ExecutionLayout {
                     grid_identity: 2,
                     global_extents: [64, 1, 1],
                     workgroup_extents: [64, 1, 1],
                     subgroup_size: 64,
+                    full_physical_workgroups: true,
                 },
             ],
             ProductionRankedTerminatorV1::Return,
@@ -974,6 +1006,7 @@ fn rank_two_static_shapes_are_checked_without_gemm_semantics() {
                     global_extents: [1, 1, 1],
                     workgroup_extents: [1, 1, 1],
                     subgroup_size: 1,
+                    full_physical_workgroups: true,
                 },
                 ProductionRankedOperationV1::View {
                     result: VIEW,

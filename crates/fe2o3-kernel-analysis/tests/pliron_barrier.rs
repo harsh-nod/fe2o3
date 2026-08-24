@@ -1,5 +1,6 @@
 use dialect_gpu::{
-    AddressSpaceAttr, BarrierOp, ExecutionLayoutOp, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr,
+    AddressSpaceAttr, BarrierOp, ExecutionDomainAttr, ExecutionLayoutOp, HierarchyAttr,
+    MemoryOrderAttr, MemoryScopeAttr,
 };
 use dialect_kernel::{
     BranchOp, DIALECT_NAME, IndexConstantOp, IndexLessThanBranchOp, InvocationIndexOp, ReturnOp,
@@ -55,6 +56,30 @@ fn function_with_domain(
         [global_extent, 1, 1],
         [workgroup_size, 1, 1],
         subgroup_size,
+    );
+    append(context, function.get_entry_block(context), &layout);
+    function
+}
+
+fn function_with_full_physical_workgroups(
+    context: &mut Context,
+    name: &str,
+    global_extent: u64,
+    workgroup_size: u64,
+    subgroup_size: u64,
+) -> FuncOp {
+    let function = FuncOp::new(
+        context,
+        name.try_into().unwrap(),
+        FunctionType::get(context, vec![], vec![]),
+    );
+    let layout = ExecutionLayoutOp::new_with_domain(
+        context,
+        7,
+        [global_extent, 1, 1],
+        [workgroup_size, 1, 1],
+        subgroup_size,
+        ExecutionDomainAttr::FullPhysicalWorkgroups,
     );
     append(context, function.get_entry_block(context), &layout);
     function
@@ -169,7 +194,8 @@ fn unresolved_branch_that_reconverges_before_barrier_is_clean() {
 #[test]
 fn unresolved_divergent_paths_are_rejected_without_inventing_a_trace() {
     let context = &mut setup();
-    let function = function_with_domain(context, "unresolved_divergent_barrier", 0, 4, 4);
+    let function =
+        function_with_full_physical_workgroups(context, "unresolved_divergent_barrier", 0, 4, 4);
     let entry = function.get_entry_block(context);
     let sync_block = block(context, &function, "sync");
     let exit = block(context, &function, "exit");
@@ -203,6 +229,25 @@ fn unresolved_divergent_paths_are_rejected_without_inventing_a_trace() {
             .to_string()
             .contains("divergent collective barrier paths")
     );
+}
+
+#[test]
+fn dynamic_uniform_barrier_without_participant_provenance_fails_closed() {
+    let context = &mut setup();
+    let function = function_with_domain(context, "dynamic_partial_barrier", 0, 4, 4);
+    let entry = function.get_entry_block(context);
+    let sync = barrier(context);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &sync);
+    append(context, entry, &ret);
+
+    let report = run_pliron_barrier_convergence_check_v1(context, &function);
+    assert!(!report.is_clean());
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        PlironBarrierFindingV1::AnalysisIncomplete { detail }
+            if detail.contains("full physical workgroups")
+    )));
 }
 
 #[test]

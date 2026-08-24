@@ -3,14 +3,14 @@ use fe2o3_pliron_owner_core::{
 };
 
 use crate::{
-    AddressSpaceAttr, BarrierOp, DIALECT_NAME, ExecutionExtentAttr, ExecutionLayoutOp, FenceOp,
-    GeneralGemmEpilogueAttr, GeneralGemmEpilogueOp, GeneralGemmEpochAttr, GeneralGemmEpochOp,
-    GeneralGemmGlobalTransferAttr, GeneralGemmGlobalTransferOp, GeneralGemmGridMappingAttr,
-    GeneralGemmGridMappingOp, GeneralGemmLdsTransferAttr, GeneralGemmLdsTransferOp,
-    GeneralGemmMfmaAttr, GeneralGemmMfmaOp, GeneralGemmPhaseLoopAttr, GeneralGemmPhaseLoopOp,
-    GeneralGemmRuntimeAbiAttr, GeneralGemmRuntimeAbiOp, GridIdentityAttr, HierarchyAttr,
-    HierarchyIdOp, HierarchyIndexType, MemoryOrderAttr, MemoryScopeAttr, MemorySpaceOp,
-    MemorySpaceType, SubgroupSizeAttr,
+    AddressSpaceAttr, BarrierOp, DIALECT_NAME, ExecutionDomainAttr, ExecutionExtentAttr,
+    ExecutionLayoutOp, FenceOp, GeneralGemmEpilogueAttr, GeneralGemmEpilogueOp,
+    GeneralGemmEpochAttr, GeneralGemmEpochOp, GeneralGemmGlobalTransferAttr,
+    GeneralGemmGlobalTransferOp, GeneralGemmGridMappingAttr, GeneralGemmGridMappingOp,
+    GeneralGemmLdsTransferAttr, GeneralGemmLdsTransferOp, GeneralGemmMfmaAttr, GeneralGemmMfmaOp,
+    GeneralGemmPhaseLoopAttr, GeneralGemmPhaseLoopOp, GeneralGemmRuntimeAbiAttr,
+    GeneralGemmRuntimeAbiOp, GridIdentityAttr, HierarchyAttr, HierarchyIdOp, HierarchyIndexType,
+    MemoryOrderAttr, MemoryScopeAttr, MemorySpaceOp, MemorySpaceType, SubgroupSizeAttr,
 };
 
 fn registration_hook(
@@ -23,6 +23,7 @@ fn registration_hook(
     service.register_attribute::<MemoryOrderAttr>()?;
     service.register_attribute::<GridIdentityAttr>()?;
     service.register_attribute::<ExecutionExtentAttr>()?;
+    service.register_attribute::<ExecutionDomainAttr>()?;
     service.register_attribute::<SubgroupSizeAttr>()?;
     service.register_attribute::<GeneralGemmRuntimeAbiAttr>()?;
     service.register_attribute::<GeneralGemmGridMappingAttr>()?;

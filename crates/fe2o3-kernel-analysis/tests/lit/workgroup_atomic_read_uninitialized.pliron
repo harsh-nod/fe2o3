@@ -6,7 +6,7 @@
 builtin.func @workgroup_atomic_read_uninitialized: builtin.function <() -> ()>
 {
   ^entry_block1v1():
-    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 7, gpu_execution_global_x: gpu.execution_extent 8, gpu_execution_global_y: gpu.execution_extent 1, gpu_execution_global_z: gpu.execution_extent 1, gpu_execution_workgroup_x: gpu.execution_extent 8, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 8]: <() -> ()>;
+    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 7, gpu_execution_global_x: gpu.execution_extent 8, gpu_execution_global_y: gpu.execution_extent 1, gpu_execution_global_z: gpu.execution_extent 1, gpu_execution_workgroup_x: gpu.execution_extent 8, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 8, gpu_execution_domain: gpu.execution_domain PotentiallyPartial]: <() -> ()>;
     v0 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Workgroup]: <() -> (kernel.ranked_view <32,true,[8]>)>;
     v1 = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension 0, kernel_launch_extent: kernel.launch_extent 8]: <() -> (kernel.index )>;
     kernel.access (v0, v1) [] [kernel_access_kind: kernel.access_kind AtomicRead, kernel_atomic_ordering: kernel.atomic_ordering Acquire, kernel_atomic_scope: kernel.atomic_scope Workgroup]: <(kernel.ranked_view <32,true,[8]>, kernel.index ) -> ()>;

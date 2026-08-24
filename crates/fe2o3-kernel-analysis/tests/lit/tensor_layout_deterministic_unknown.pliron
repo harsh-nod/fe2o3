@@ -4,7 +4,7 @@
 builtin.func @tensor_layout_deterministic_unknown: builtin.function <() -> ()>
 {
   ^entry_block1v1():
-    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 7, gpu_execution_global_x: gpu.execution_extent 0, gpu_execution_global_y: gpu.execution_extent 1, gpu_execution_global_z: gpu.execution_extent 1, gpu_execution_workgroup_x: gpu.execution_extent 64, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 64]: <() -> ()>;
+    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 7, gpu_execution_global_x: gpu.execution_extent 0, gpu_execution_global_y: gpu.execution_extent 1, gpu_execution_global_z: gpu.execution_extent 1, gpu_execution_workgroup_x: gpu.execution_extent 64, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 64, gpu_execution_domain: gpu.execution_domain FullPhysicalWorkgroups]: <() -> ()>;
     v0 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 0]: <() -> (kernel.index )>;
     v1 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 16]: <() -> (kernel.index )>;
     v2 = kernel.checked_tiled_index_2d (v0, v0, v1, v1, v1) [] [kernel_lanes_per_tile: kernel.index_value 64, kernel_tile_rows: kernel.index_value 16, kernel_tile_columns: kernel.index_value 16, kernel_elements_per_lane: kernel.index_value 4]: <(kernel.index , kernel.index , kernel.index , kernel.index , kernel.index ) -> (kernel.index )>;

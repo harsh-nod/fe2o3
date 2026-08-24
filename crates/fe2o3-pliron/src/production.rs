@@ -548,6 +548,7 @@ mod tests {
                         global_extents: [1, 1, 1],
                         workgroup_extents: [1, 1, 1],
                         subgroup_size: 1,
+                        full_physical_workgroups: true,
                     },
                     ProductionRankedOperationV1::View {
                         result: view,

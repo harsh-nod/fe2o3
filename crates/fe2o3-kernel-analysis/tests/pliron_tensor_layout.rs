@@ -1,4 +1,4 @@
-use dialect_gpu::ExecutionLayoutOp;
+use dialect_gpu::{ExecutionDomainAttr, ExecutionLayoutOp};
 use dialect_kernel::{
     AnalysisSplitOp, BranchArgsOp, BranchOp, CheckedTiledIndex2DOp, DIALECT_NAME,
     DeterministicJoinOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
@@ -63,6 +63,22 @@ fn append<O: Op>(context: &Context, block: Ptr<BasicBlock>, operation: &O) {
 }
 
 fn layout(
+    context: &mut Context,
+    global_x: u64,
+    workgroup_x: u64,
+    subgroup: u64,
+) -> ExecutionLayoutOp {
+    ExecutionLayoutOp::new_with_domain(
+        context,
+        7,
+        [global_x, 1, 1],
+        [workgroup_x, 1, 1],
+        subgroup,
+        ExecutionDomainAttr::FullPhysicalWorkgroups,
+    )
+}
+
+fn potentially_partial_layout(
     context: &mut Context,
     global_x: u64,
     workgroup_x: u64,
@@ -147,7 +163,7 @@ fn a_retained_partial_subgroup_is_rejected() {
     let context = &mut setup();
     let (function, _) = function(context, "partial_subgroup", 0);
     let entry = function.get_entry_block(context);
-    let execution = layout(context, 65, 64, 64);
+    let execution = potentially_partial_layout(context, 65, 64, 64);
     let matrix = tensor(context, 64);
     let ret = ReturnOp::new(context);
     append(context, entry, &execution);
@@ -174,7 +190,7 @@ fn cyclic_symbolic_fallback_never_accepts_a_partial_subgroup() {
     let (function, _) = function(context, "partial_subgroup_cycle", 0);
     let entry = function.get_entry_block(context);
     let body = block(context, &function, "body");
-    let execution = layout(context, 65, 64, 64);
+    let execution = potentially_partial_layout(context, 65, 64, 64);
     let enter = BranchOp::new(context, body);
     let matrix = tensor(context, 64);
     let repeat = BranchOp::new(context, body);
@@ -189,6 +205,58 @@ fn cyclic_symbolic_fallback_never_accepts_a_partial_subgroup() {
         finding,
         PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete { detail }
             if detail.contains("partial workgroup")
+    )));
+}
+
+#[test]
+fn forged_full_workgroups_conflicting_with_static_extent_fail_closed() {
+    let context = &mut setup();
+    let (function, _) = function(context, "forged_full_workgroups", 0);
+    let entry = function.get_entry_block(context);
+    let execution = ExecutionLayoutOp::new_with_domain(
+        context,
+        7,
+        [65, 1, 1],
+        [64, 1, 1],
+        64,
+        ExecutionDomainAttr::FullPhysicalWorkgroups,
+    );
+    let matrix = tensor(context, 64);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &execution);
+    append(context, entry, &matrix);
+    append(context, entry, &ret);
+
+    let report = run_pliron_tensor_layout_check_v1(context, &function);
+    assert!(matches!(report.status(), KernelCheckStatusV1::Incomplete));
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete { detail }
+            if detail.contains("gpu.execution_layout is malformed")
+    )));
+}
+
+#[test]
+fn cyclic_symbolic_fallback_never_accepts_an_unknown_global_extent() {
+    let context = &mut setup();
+    let (function, _) = function(context, "dynamic_subgroup_cycle", 0);
+    let entry = function.get_entry_block(context);
+    let body = block(context, &function, "body");
+    let execution = potentially_partial_layout(context, 0, 64, 64);
+    let enter = BranchOp::new(context, body);
+    let matrix = tensor(context, 64);
+    let repeat = BranchOp::new(context, body);
+    append(context, entry, &execution);
+    append(context, entry, &enter);
+    append(context, body, &matrix);
+    append(context, body, &repeat);
+
+    let report = run_pliron_tensor_layout_check_v1(context, &function);
+    assert!(matches!(report.status(), KernelCheckStatusV1::Incomplete));
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete { detail }
+            if detail.contains("full subgroup participation")
     )));
 }
 
@@ -214,6 +282,77 @@ fn dense_exact_traces_charge_every_scanned_operation() {
         finding,
         PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete { detail }
             if detail.contains("resource limit")
+    )));
+}
+
+fn overflowing_affine_control_report(
+    equality: bool,
+) -> fe2o3_kernel_analysis::PlironTensorLayoutReportV1 {
+    let context = &mut setup();
+    let (function, _) = function(context, "overflowing_affine_control", 0);
+    let entry = function.get_entry_block(context);
+    let matrix_block = block(context, &function, "matrix");
+    let exit = block(context, &function, "exit");
+    let execution = layout(context, 0, 64, 64);
+    let invocation = InvocationIndexOp::new(context, 0, 0);
+    let maximum = IndexConstantOp::new(context, u64::MAX);
+    let shifted = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        invocation.result(context),
+        maximum.result(context),
+    );
+    append(context, entry, &execution);
+    append(context, entry, &invocation);
+    append(context, entry, &maximum);
+    append(context, entry, &shifted);
+    if equality {
+        let choose = IndexEqualBranchOp::new(
+            context,
+            invocation.result(context),
+            shifted.result(context),
+            matrix_block,
+            exit,
+        );
+        append(context, entry, &choose);
+    } else {
+        let choose = IndexLessThanBranchOp::new(
+            context,
+            invocation.result(context),
+            shifted.result(context),
+            matrix_block,
+            exit,
+        );
+        append(context, entry, &choose);
+    }
+    let matrix = tensor(context, 64);
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    append(context, matrix_block, &matrix);
+    append(context, matrix_block, &to_exit);
+    append(context, exit, &ret);
+    run_pliron_tensor_layout_check_v1(context, &function)
+}
+
+#[test]
+fn overflowing_affine_order_comparison_cannot_prove_uniform_control() {
+    let report = overflowing_affine_control_report(false);
+    assert!(matches!(report.status(), KernelCheckStatusV1::Incomplete));
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete { detail }
+            if detail.contains("unresolved branch")
+    )));
+}
+
+#[test]
+fn overflowing_affine_equality_cannot_prove_uniform_control() {
+    let report = overflowing_affine_control_report(true);
+    assert!(matches!(report.status(), KernelCheckStatusV1::Incomplete));
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete { detail }
+            if detail.contains("unresolved branch")
     )));
 }
 

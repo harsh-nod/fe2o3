@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, fmt};
 
-use dialect_gpu::{AddressSpaceAttr, BarrierOp, HierarchyAttr};
+use dialect_gpu::{AddressSpaceAttr, BarrierOp, ExecutionDomainAttr, HierarchyAttr};
 use dialect_kernel::{
     AnalysisSplitOp, BranchArgsOp, BranchOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
     IndexLessThanBranchArgsOp, IndexLessThanBranchOp, ReturnOp,
@@ -17,7 +17,7 @@ use pliron::{
 
 use crate::pliron_invocation_trace::{
     PlironInvocationTraceV1, PlironTraceEventV1, PlironTraceFailureV1, PlironTraceLocationV1,
-    trace_pliron_invocations_v1,
+    pliron_execution_layout_v1, trace_pliron_invocations_v1,
 };
 use crate::{KernelCheckPassKindV1, run_pliron_ranked_bounds_check_v1};
 
@@ -178,6 +178,18 @@ pub(crate) fn run_pliron_barrier_convergence_check_after_bounds_v1(
     ) {
         return report(PlironBarrierFindingV1::AnalysisIncomplete {
             detail: trace_failure_detail(trace_failure),
+        });
+    }
+    if matches!(trace_failure, PlironTraceFailureV1::DynamicLaunch { .. })
+        && !matches!(
+            pliron_execution_layout_v1(context, function),
+            Ok(Some(layout))
+                if layout.execution_domain == ExecutionDomainAttr::FullPhysicalWorkgroups
+        )
+    {
+        return report(PlironBarrierFindingV1::AnalysisIncomplete {
+            detail: "dynamic barrier convergence requires authenticated full physical workgroups"
+                .to_owned(),
         });
     }
     match summarize_all_barrier_paths(context, function) {

@@ -1020,6 +1020,7 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             global_extents,
             workgroup_extents,
             subgroup_size,
+            full_physical_workgroups,
         } => {
             digest.update([15]);
             digest.update(grid_identity.to_le_bytes());
@@ -1030,6 +1031,7 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
                 digest.update(extent.to_le_bytes());
             }
             digest.update(subgroup_size.to_le_bytes());
+            digest.update([u8::from(*full_physical_workgroups)]);
         }
         ProductionRankedOperationV1::View {
             result,

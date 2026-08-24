@@ -3281,6 +3281,7 @@ fn source_execution_layout_v1(
         global_extents: [0; 3],
         workgroup_extents,
         subgroup_size,
+        full_physical_workgroups: true,
     })
 }
 
@@ -4411,9 +4412,14 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             global_extents,
             workgroup_extents,
             subgroup_size,
+            full_physical_workgroups,
         } => format!(
-            "  gpu.execution_layout <grid={}, global={:?}, workgroup={:?}, subgroup={}>\n",
-            grid_identity, global_extents, workgroup_extents, subgroup_size,
+            "  gpu.execution_layout <grid={}, global={:?}, workgroup={:?}, subgroup={}, full_physical_workgroups={}>\n",
+            grid_identity,
+            global_extents,
+            workgroup_extents,
+            subgroup_size,
+            full_physical_workgroups,
         ),
         ProductionRankedOperationV1::View {
             result,
@@ -6974,6 +6980,7 @@ mod tests {
                 | ProductionRankedOperationV1::Barrier { .. }
                 | ProductionRankedOperationV1::Fence { .. }
                 | ProductionRankedOperationV1::TensorLayout { .. }
+                | ProductionRankedOperationV1::DeterministicJoin { .. }
                 | ProductionRankedOperationV1::SemanticSymbol { .. }
                 | ProductionRankedOperationV1::SemanticConstant { .. }
                 | ProductionRankedOperationV1::SemanticBinary { .. }
@@ -7249,6 +7256,7 @@ mod tests {
                         global_extents: [64, 1, 1],
                         workgroup_extents: [64, 1, 1],
                         subgroup_size: 64,
+                        full_physical_workgroups: true,
                     },
                     ProductionRankedOperationV1::Barrier {
                         execution_scope: HierarchyAttr::Workgroup,
@@ -8001,6 +8009,7 @@ mod tests {
                 global_extents: [0; 3],
                 workgroup_extents: [64, 1, 1],
                 subgroup_size: 64,
+                full_physical_workgroups: true,
             }
         );
     }
@@ -9235,17 +9244,11 @@ mod tests {
                             vec![
                                 SemanticSwitchTargetV1::new(
                                     variants[0],
-                                    cfg_edge(
-                                        SemanticEdgeRoleV1::SwitchValue,
-                                        variant_targets[0],
-                                    ),
+                                    cfg_edge(SemanticEdgeRoleV1::SwitchValue, variant_targets[0]),
                                 ),
                                 SemanticSwitchTargetV1::new(
                                     variants[1],
-                                    cfg_edge(
-                                        SemanticEdgeRoleV1::SwitchValue,
-                                        variant_targets[1],
-                                    ),
+                                    cfg_edge(SemanticEdgeRoleV1::SwitchValue, variant_targets[1]),
                                 ),
                             ],
                             cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 3),

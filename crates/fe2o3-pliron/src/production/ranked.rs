@@ -6,8 +6,8 @@ use std::{
 };
 
 use dialect_gpu::{
-    AddressSpaceAttr, BarrierOp, ExecutionLayoutOp, FenceOp, HierarchyAttr, MemoryOrderAttr,
-    MemoryScopeAttr,
+    AddressSpaceAttr, BarrierOp, ExecutionDomainAttr, ExecutionLayoutOp, FenceOp, HierarchyAttr,
+    MemoryOrderAttr, MemoryScopeAttr,
 };
 use dialect_kernel::{
     AccessKindAttr, AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr, BranchArgsOp, BranchOp,
@@ -83,6 +83,7 @@ pub enum ProductionRankedOperationV1 {
         global_extents: [u64; 3],
         workgroup_extents: [u64; 3],
         subgroup_size: u64,
+        full_physical_workgroups: bool,
     },
     View {
         result: ProductionRankedValueIdV1,
@@ -410,8 +411,10 @@ impl ProductionRankedKernelV1 {
             for (operation_index, operation) in block.operations.iter().enumerate() {
                 validate_block_argument_values_v1(operation, block_index, &self.blocks)?;
                 if let ProductionRankedOperationV1::ExecutionLayout {
+                    global_extents,
                     workgroup_extents,
                     subgroup_size,
+                    full_physical_workgroups,
                     ..
                 } = operation
                 {
@@ -426,6 +429,12 @@ impl ProductionRankedKernelV1 {
                         || *subgroup_size == 0
                         || workgroup_size.is_some_and(|size| *subgroup_size > size)
                         || workgroup_size.is_some_and(|size| !size.is_multiple_of(*subgroup_size))
+                        || (*full_physical_workgroups
+                            && global_extents.iter().zip(workgroup_extents).any(
+                                |(global, workgroup)| {
+                                    *global != 0 && !global.is_multiple_of(*workgroup)
+                                },
+                            ))
                     {
                         return Err(ProductionRankedKernelErrorV1::InvalidExecutionLayout);
                     }
@@ -1590,13 +1599,20 @@ fn materialize_operation(
             global_extents,
             workgroup_extents,
             subgroup_size,
+            full_physical_workgroups,
         } => {
-            let op = ExecutionLayoutOp::new(
+            let execution_domain = if *full_physical_workgroups {
+                ExecutionDomainAttr::FullPhysicalWorkgroups
+            } else {
+                ExecutionDomainAttr::PotentiallyPartial
+            };
+            let op = ExecutionLayoutOp::new_with_domain(
                 context,
                 *grid_identity,
                 *global_extents,
                 *workgroup_extents,
                 *subgroup_size,
+                execution_domain,
             );
             (op.get_operation(), None)
         }

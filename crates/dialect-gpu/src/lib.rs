@@ -142,6 +142,18 @@ impl ExecutionExtentAttr {
     }
 }
 
+/// Provenance of the invocation participant domain retained by the compiler.
+///
+/// `FullPhysicalWorkgroups` is not inferred from a dynamic logical extent. It
+/// may only be selected by authenticated launch lineage whose physical grid is
+/// expressed as complete workgroups.
+#[pliron_attr(name = "gpu.execution_domain", format, verifier = "succ")]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ExecutionDomainAttr {
+    PotentiallyPartial,
+    FullPhysicalWorkgroups,
+}
+
 /// Linear subgroup size retained by the target-neutral execution model.
 #[pliron_attr(name = "gpu.subgroup_size", format = "$0", verifier = "succ")]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -295,8 +307,10 @@ impl Verify for HierarchyIdOp {
 /// retained global domain and physical workgroup shape independently from any
 /// SSA use of an invocation coordinate. A zero global extent denotes a dynamic
 /// axis; workgroup extents and subgroup width are static and nonzero. At most
-/// one operation may appear in a kernel entry; scoped concurrency analysis
-/// enforces that function-level invariant.
+/// `FullPhysicalWorkgroups` records authenticated launch provenance separately
+/// from those logical extents; absence of that attribute is conservatively
+/// `PotentiallyPartial`. At most one operation may appear in a kernel entry;
+/// scoped concurrency analysis enforces that function-level invariant.
 #[pliron_op(
     name = "gpu.execution_layout",
     format,
@@ -314,7 +328,8 @@ impl Verify for HierarchyIdOp {
         gpu_execution_workgroup_x: ExecutionExtentAttr,
         gpu_execution_workgroup_y: ExecutionExtentAttr,
         gpu_execution_workgroup_z: ExecutionExtentAttr,
-        gpu_execution_subgroup_size: SubgroupSizeAttr
+        gpu_execution_subgroup_size: SubgroupSizeAttr,
+        gpu_execution_domain: ExecutionDomainAttr
     )
 )]
 pub struct ExecutionLayoutOp;
@@ -326,6 +341,36 @@ impl ExecutionLayoutOp {
         global_extents: [u64; 3],
         workgroup_extents: [u64; 3],
         subgroup_size: u64,
+    ) -> Self {
+        let domain =
+            if global_extents
+                .into_iter()
+                .zip(workgroup_extents)
+                .all(|(global, workgroup)| {
+                    global != 0 && workgroup != 0 && global.is_multiple_of(workgroup)
+                })
+            {
+                ExecutionDomainAttr::FullPhysicalWorkgroups
+            } else {
+                ExecutionDomainAttr::PotentiallyPartial
+            };
+        Self::new_with_domain(
+            context,
+            grid_identity,
+            global_extents,
+            workgroup_extents,
+            subgroup_size,
+            domain,
+        )
+    }
+
+    pub fn new_with_domain(
+        context: &mut Context,
+        grid_identity: u64,
+        global_extents: [u64; 3],
+        workgroup_extents: [u64; 3],
+        subgroup_size: u64,
+        domain: ExecutionDomainAttr,
     ) -> Self {
         let operation = Operation::new(
             context,
@@ -344,6 +389,7 @@ impl ExecutionLayoutOp {
         op.set_attr_gpu_execution_workgroup_y(context, ExecutionExtentAttr(workgroup_extents[1]));
         op.set_attr_gpu_execution_workgroup_z(context, ExecutionExtentAttr(workgroup_extents[2]));
         op.set_attr_gpu_execution_subgroup_size(context, SubgroupSizeAttr(subgroup_size));
+        op.set_attr_gpu_execution_domain(context, domain);
         op
     }
 
@@ -372,11 +418,17 @@ impl ExecutionLayoutOp {
         self.get_attr_gpu_execution_subgroup_size(context)
             .map(|value| value.size())
     }
+
+    pub fn execution_domain(&self, context: &Context) -> ExecutionDomainAttr {
+        self.get_attr_gpu_execution_domain(context)
+            .map(|domain| *domain)
+            .unwrap_or(ExecutionDomainAttr::PotentiallyPartial)
+    }
 }
 
 impl Verify for ExecutionLayoutOp {
     fn verify(&self, context: &Context) -> Result<()> {
-        verify_closed_shape(self, context, 0, 0, 8)?;
+        verify_closed_shape(self, context, 0, 0, 9)?;
         let grid_identity = required_attr(
             self,
             context,
@@ -401,6 +453,12 @@ impl Verify for ExecutionLayoutOp {
             self.get_attr_gpu_execution_subgroup_size(context),
             "subgroup_size",
         )?;
+        let domain = required_attr(
+            self,
+            context,
+            self.get_attr_gpu_execution_domain(context),
+            "execution_domain",
+        )?;
         let _ = grid_identity;
         let workgroup_size = workgroup_extents
             .into_iter()
@@ -414,6 +472,17 @@ impl Verify for ExecutionLayoutOp {
             return verify_err!(
                 self.loc(context),
                 "gpu.execution_layout requires nonzero workgroup axes and an integral number of subgroups"
+            );
+        }
+        if domain == ExecutionDomainAttr::FullPhysicalWorkgroups
+            && _global_extents
+                .into_iter()
+                .zip(workgroup_extents)
+                .any(|(global, workgroup)| global != 0 && !global.is_multiple_of(workgroup))
+        {
+            return verify_err!(
+                self.loc(context),
+                "gpu.execution_layout full physical workgroups conflict with a partial static extent"
             );
         }
         Ok(())
@@ -799,6 +868,7 @@ pub fn register_dialect(
     <MemoryOrderAttr as Attribute>::register::<MemoryOrderAttr>(context);
     <GridIdentityAttr as Attribute>::register::<GridIdentityAttr>(context);
     <ExecutionExtentAttr as Attribute>::register::<ExecutionExtentAttr>(context);
+    <ExecutionDomainAttr as Attribute>::register::<ExecutionDomainAttr>(context);
     <SubgroupSizeAttr as Attribute>::register::<SubgroupSizeAttr>(context);
     <GeneralGemmRuntimeAbiAttr as Attribute>::register::<GeneralGemmRuntimeAbiAttr>(context);
     <GeneralGemmGridMappingAttr as Attribute>::register::<GeneralGemmGridMappingAttr>(context);

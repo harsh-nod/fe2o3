@@ -513,11 +513,13 @@ fn symbolic_subgroup_convergence(
     layout: PlironExecutionLayoutV1,
     tensor_sites: &[(usize, usize)],
 ) -> Result<(), PlironTensorLayoutFindingV1> {
-    if layout
+    let potentially_partial = layout
         .global_extents
         .iter()
         .zip(layout.workgroup_extents)
-        .any(|(global, workgroup)| !global.is_multiple_of(workgroup))
+        .any(|(global, workgroup)| *global == 0 || !global.is_multiple_of(workgroup));
+    if potentially_partial
+        && layout.execution_domain != dialect_gpu::ExecutionDomainAttr::FullPhysicalWorkgroups
     {
         return Err(
             PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
@@ -803,7 +805,10 @@ fn classify_subgroup_predicate(
             .any(|(dimension, (lhs, rhs))| {
                 lhs != rhs && !invocation_axis_is_subgroup_uniform(dimension, layout)
             });
-        if !differing_lane_coefficient {
+        if !differing_lane_coefficient
+            && affine_is_total_over_layout(lhs, layout)
+            && affine_is_total_over_layout(rhs, layout)
+        {
             return SubgroupBranchUniformityV1::Uniform;
         }
     }
@@ -861,6 +866,8 @@ fn classify_subgroup_equality(
             .all(|(dimension, (lhs, rhs))| {
                 lhs == rhs || invocation_axis_is_subgroup_uniform(dimension, layout)
             })
+        && affine_is_total_over_layout(lhs, layout)
+        && affine_is_total_over_layout(rhs, layout)
     {
         return SubgroupBranchUniformityV1::Uniform;
     }
@@ -877,6 +884,32 @@ fn classify_subgroup_equality(
         return SubgroupBranchUniformityV1::Varying;
     }
     SubgroupBranchUniformityV1::Unknown
+}
+
+fn affine_is_total_over_layout(
+    affine: &crate::SparseAffineIndexV1,
+    layout: PlironExecutionLayoutV1,
+) -> bool {
+    let mut maximum = affine.constant_term();
+    for (dimension, coefficient) in affine.coefficients().iter().copied().enumerate() {
+        if coefficient == 0 {
+            continue;
+        }
+        let Some(extent) = layout.global_extents.get(dimension).copied() else {
+            return false;
+        };
+        let Some(coordinate) = extent.checked_sub(1) else {
+            return false;
+        };
+        let Some(term) = coefficient.checked_mul(coordinate) else {
+            return false;
+        };
+        let Some(next) = maximum.checked_add(term) else {
+            return false;
+        };
+        maximum = next;
+    }
+    true
 }
 
 fn analyze_pliron_subgroup_uniformity(

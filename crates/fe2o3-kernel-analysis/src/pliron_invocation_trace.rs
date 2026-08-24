@@ -8,8 +8,8 @@
 use std::collections::{HashMap, HashSet};
 
 use dialect_gpu::{
-    AddressSpaceAttr, BarrierOp, ExecutionLayoutOp, FenceOp, HierarchyAttr, MemoryOrderAttr,
-    MemoryScopeAttr,
+    AddressSpaceAttr, BarrierOp, ExecutionDomainAttr, ExecutionLayoutOp, FenceOp, HierarchyAttr,
+    MemoryOrderAttr, MemoryScopeAttr,
 };
 use dialect_kernel::{
     AccessKindAttr, BranchArgsOp, BranchOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
@@ -128,6 +128,7 @@ pub(crate) struct PlironExecutionLayoutV1 {
     pub(crate) global_extents: [u64; 3],
     pub(crate) workgroup_extents: [u64; 3],
     pub(crate) subgroup_size: u64,
+    pub(crate) execution_domain: ExecutionDomainAttr,
 }
 
 impl PlironExecutionLayoutV1 {
@@ -178,12 +179,20 @@ pub(crate) fn pliron_execution_layout_v1(
             if block_index != 0 || layout.is_some() {
                 return Err(PlironTraceFailureV1::InvalidExecutionLayout);
             }
-            let (Some(grid), Some(global_extents), Some(workgroup_extents), Some(subgroup_size)) = (
+            let (
+                Some(grid),
+                Some(global_extents),
+                Some(workgroup_extents),
+                Some(subgroup_size),
+                execution_domain,
+            ) = (
                 candidate.grid_identity(context),
                 candidate.global_extents(context),
                 candidate.workgroup_extents(context),
                 candidate.subgroup_size(context),
-            ) else {
+                candidate.execution_domain(context),
+            )
+            else {
                 return Err(PlironTraceFailureV1::InvalidExecutionLayout);
             };
             let workgroup_size = workgroup_extents
@@ -194,6 +203,13 @@ pub(crate) fn pliron_execution_layout_v1(
                 || subgroup_size == 0
                 || workgroup_size.is_some_and(|size| subgroup_size > size)
                 || workgroup_size.is_some_and(|size| !size.is_multiple_of(subgroup_size))
+                || (execution_domain == ExecutionDomainAttr::FullPhysicalWorkgroups
+                    && global_extents
+                        .iter()
+                        .zip(workgroup_extents)
+                        .any(|(global, workgroup)| {
+                            *global != 0 && !global.is_multiple_of(workgroup)
+                        }))
             {
                 return Err(PlironTraceFailureV1::InvalidExecutionLayout);
             }
@@ -202,6 +218,7 @@ pub(crate) fn pliron_execution_layout_v1(
                 global_extents,
                 workgroup_extents,
                 subgroup_size,
+                execution_domain,
             });
         }
     }
