@@ -214,9 +214,9 @@ fn safe_general_gemm_mir_reaches_kir_and_exact_semantic_mutations_are_diagnostic
         "positive safe source retained a MIR Assert terminator:\n{positive_stderr}"
     );
     assert!(
-        positive_stderr.contains(
-            "general typed V3 requires kernel-ir-worker-v2 shared publication"
-        ) && positive_stderr.contains("publication state: NotStarted")
+        positive_stderr
+            .contains("general typed V3 requires kernel-ir-worker-v2 shared publication")
+            && positive_stderr.contains("publication state: NotStarted")
             && !positive_stderr.contains("reached verified symbolic semantic template"),
         "positive safe source missed the checked-MIR fail-closed boundary:\n{positive_stderr}"
     );
