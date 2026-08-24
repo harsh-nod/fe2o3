@@ -112,6 +112,7 @@ const BUILD_HELPER_ENV: &str = "FE2O3_SCALAR_CF_ISOLATED_BUILD_HELPER";
 const BUILD_HELPER_SOCKET_ENV: &str = "FE2O3_SCALAR_CF_BUILD_SOCKET_FD";
 const BUILD_HELPER_WORKSPACE_ENV: &str = "FE2O3_SCALAR_CF_BUILD_WORKSPACE";
 const BUILD_HELPER_MOUNT_ENV: &str = "FE2O3_SCALAR_CF_BUILD_MOUNT";
+const CONFIGURED_ARTIFACT_GUARD_CHILD_ENV: &str = "FE2O3_SCALAR_CF_CONFIGURED_ARTIFACT_GUARD_CHILD";
 const SCALAR_GEMM_HANDOFF_OUTPUT_ENV: &str = "FE2O3_SCALAR_GEMM_V1_HANDOFF_OUTPUT";
 const BACKEND_BUILD_TIMEOUT: Duration = Duration::from_secs(600);
 const COMPILER_TIMEOUT: Duration = Duration::from_secs(120);
@@ -535,6 +536,43 @@ fn is_known_namespace_policy_denial(stderr: &str) -> bool {
     stderr.contains("/proc/self/uid_map: Operation not permitted")
         || stderr.contains("unshare failed: Operation not permitted")
         || stderr.contains("unshare: Operation not permitted")
+}
+
+fn rerun_with_configured_artifact_path_guard(test_name: &str) -> bool {
+    if std::env::var_os(CONFIGURED_ARTIFACT_GUARD_CHILD_ENV).is_some() {
+        return false;
+    }
+
+    let guard_root = PrivateBuildRoot::new(&workspace());
+    let guard_directory = guard_root.0.join("artifact-path-guard");
+    let mut builder = std::fs::DirBuilder::new();
+    builder.mode(0o700);
+    builder
+        .create(&guard_directory)
+        .expect("create private configured artifact path guard");
+    let metadata = std::fs::metadata(&guard_directory)
+        .expect("inspect private configured artifact path guard");
+    let identity = format!("{:016x}:{:016x}", metadata.dev(), metadata.ino());
+
+    let mut command = Command::new(std::env::current_exe().expect("current integration test"));
+    command
+        .args(["--exact", test_name, "--nocapture"])
+        .env(CONFIGURED_ARTIFACT_GUARD_CHILD_ENV, "1")
+        .env("FE2O3_ARTIFACT_PATH_GUARD_DIR", &guard_directory)
+        .env("FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY", identity);
+    let output = run_bounded(
+        &mut command,
+        BACKEND_BUILD_TIMEOUT,
+        "configured artifact-path-guard test subprocess",
+    )
+    .expect("run configured artifact-path-guard test subprocess within deadline");
+    assert!(
+        output.status.success(),
+        "configured artifact-path-guard test subprocess failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    true
 }
 
 fn receive_backend_from_child(
@@ -4032,6 +4070,11 @@ fn scalar_gemm_v1_frontend_receipt_selects_only_the_reviewed_full_portable_mir()
 #[test]
 fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
     if isolated_backend_environment_is_unavailable() {
+        return;
+    }
+    if rerun_with_configured_artifact_path_guard(
+        "tiled_gemm_v1_source_authentication_and_adversaries_fail_closed",
+    ) {
         return;
     }
     let workspace = workspace();
