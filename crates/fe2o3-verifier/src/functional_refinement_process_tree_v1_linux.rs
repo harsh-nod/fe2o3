@@ -12,8 +12,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
-use std::sync::Mutex;
-#[cfg(test)]
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use rustix::fs::OFlags;
@@ -143,9 +141,6 @@ const FILTER_LEN: usize = DENIED_FILTER_START + DENIED_SYSCALLS.len() * 2 + 1;
 static LAST_TEST_DESCENDANT: AtomicI32 = AtomicI32::new(0);
 #[cfg(test)]
 static FIRST_TEST_DESCENDANT: AtomicI32 = AtomicI32::new(0);
-#[cfg(test)]
-static HOSTILE_TEST_LOCK: Mutex<()> = Mutex::new(());
-
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct SockFilter {
@@ -1882,7 +1877,7 @@ mod tests {
         allowed_mappings: &[AllowedRuntimeExecutableV1],
         validate_mappings: bool,
     ) -> HostileRun {
-        let _guard = HOSTILE_TEST_LOCK
+        let _guard = super::super::RUNTIME_CLOSURE_PROCESS_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         FIRST_TEST_DESCENDANT.store(0, Ordering::SeqCst);
@@ -2038,6 +2033,9 @@ mod tests {
     #[test]
     #[ignore = "requires a complete pinned functional-refinement runtime test closure"]
     fn pinned_functional_refinement_runtime_executes_a_real_verus_proof() {
+        let _guard = super::super::RUNTIME_CLOSURE_PROCESS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = std::env::var_os("FE2O3_FUNCTIONAL_REFINEMENT_TEST_RUNTIME_ROOT")
             .expect("set the synthetic retained runtime root");
         let manifest = super::super::ManifestV2::parse_functional_refinement_runtime_v1().unwrap();

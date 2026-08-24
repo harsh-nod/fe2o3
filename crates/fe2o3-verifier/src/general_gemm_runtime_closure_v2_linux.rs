@@ -9,6 +9,9 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
+#[cfg(test)]
+use std::sync::Mutex;
+
 use rustix::fs::{
     AtFlags, FileType, MemfdFlags, Mode, OFlags, ResolveFlags, SealFlags, fchmod, fcntl_add_seals,
     fcntl_get_seals, fstat, inotify, memfd_create, open, openat, openat2, readlinkat, statat,
@@ -28,12 +31,14 @@ use super::{
     GeneralGemmRuntimeClosureErrorV2, GeneralGemmRuntimeProcessOutputV2, InterpreterSpecV2,
     MAX_TARGET_FILE_BYTES, ManifestV2,
 };
-
 #[path = "functional_refinement_process_tree_v1_linux.rs"]
 mod functional_refinement_process_tree_v1;
 
 const MAX_DIRECTORY_ENTRIES: usize = 256;
 const MAX_TOTAL_RUNTIME_BYTES: u64 = 1024 * 1024 * 1024;
+
+#[cfg(test)]
+static RUNTIME_CLOSURE_PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 const RUST_VERIFY_FD: RawFd = 180;
 const Z3_FD: RawFd = 181;
@@ -1491,6 +1496,11 @@ mod tests {
 
     impl TestClosure {
         fn new() -> Self {
+            // A concurrent fork would duplicate a fixture writer and its later
+            // exec-close would look like a post-retention CLOSE_WRITE event.
+            let _process_guard = RUNTIME_CLOSURE_PROCESS_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let root = std::env::temp_dir().join(format!(
                 "fe2o3-general-gemm-runtime-v2-{}-{}",
                 std::process::id(),
@@ -1789,6 +1799,9 @@ mod tests {
     #[test]
     fn proof_child_boundary_clears_environment_and_installs_only_explicit_inputs() {
         let tree = TestClosure::new();
+        let _process_guard = RUNTIME_CLOSURE_PROCESS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let empty = File::open(tree.root.join("empty")).unwrap();
         let source = File::open(tree.root.join("lib")).unwrap();
         let generated_input = CanonicalGeneratedVerusProofInputV3::new(
