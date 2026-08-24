@@ -704,7 +704,61 @@ fn checked_tiled_overflowing_invocation_is_not_proved_injective() {
 }
 
 #[test]
-fn dynamic_launch_identity_is_total_and_injective_after_a_bounds_guard() {
+fn checked_tiled_raw_invocation_is_injective_for_a_dynamic_launch() {
+    let context = &mut setup();
+    let function = function(context, "checked_tiled_dynamic_raw_invocation");
+    let entry = function.get_entry_block(context);
+    let access_block = block(context, &function, "access");
+    let exit = block(context, &function, "exit");
+    let output = view(context, vec![1], MemorySpaceAttr::Global);
+    let invocation = InvocationIndexOp::new(context, 0, 0);
+    let zero = IndexConstantOp::new(context, 0);
+    let sixteen = IndexConstantOp::new(context, 16);
+    let tiled = CheckedTiledIndex2DOp::new(
+        context,
+        invocation.result(context),
+        zero.result(context),
+        sixteen.result(context),
+        sixteen.result(context),
+        sixteen.result(context),
+        [64, 16, 16, 4],
+    );
+    let extent = IndexConstantOp::new(context, 1);
+    let guard = IndexLessThanBranchOp::new(
+        context,
+        tiled.result(context),
+        extent.result(context),
+        access_block,
+        exit,
+    );
+    let write = access(
+        context,
+        AccessKindAttr::Write,
+        output.result(context),
+        tiled.result(context),
+    );
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    for operation in [
+        output.get_operation(),
+        invocation.get_operation(),
+        zero.get_operation(),
+        sixteen.get_operation(),
+        tiled.get_operation(),
+        extent.get_operation(),
+        guard.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    append(context, access_block, &write);
+    append(context, access_block, &to_exit);
+    append(context, exit, &ret);
+
+    assert!(run_pliron_ranked_race_check_v1(context, &function).is_clean());
+}
+
+#[test]
+fn dynamic_launch_identity_remains_unresolved_after_a_bounds_guard() {
     let context = &mut setup();
     let function = function(context, "dynamic_identity");
     let entry = function.get_entry_block(context);
@@ -737,7 +791,12 @@ fn dynamic_launch_identity_is_total_and_injective_after_a_bounds_guard() {
     append(context, access_block, &to_exit);
     append(context, exit, &ret);
 
-    assert!(run_pliron_ranked_race_check_v1(context, &function).is_clean());
+    let report = run_pliron_ranked_race_check_v1(context, &function);
+    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        RankedRaceFindingV1::DynamicLaunchExtent { dimension: 0 }
+    )));
 }
 
 #[test]

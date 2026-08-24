@@ -1024,7 +1024,35 @@ fn tiled_2d_effect_family_is_injective(
             return false;
         }
     }
-    affine_facts_are_injective(&[first.invocation().clone()], launch_extents)
+    checked_tiled_invocations_are_injective(&[first.invocation().clone()], launch_extents)
+}
+
+fn checked_tiled_invocations_are_injective(
+    facts: &[SparseAffineIndexV1],
+    launch_extents: &[u64],
+) -> bool {
+    affine_facts_are_injective(facts, launch_extents)
+        || affine_facts_contain_unit_coordinate_embedding(facts, launch_extents)
+}
+
+fn affine_facts_contain_unit_coordinate_embedding(
+    facts: &[SparseAffineIndexV1],
+    launch_extents: &[u64],
+) -> bool {
+    let active_dimensions = launch_extents
+        .iter()
+        .enumerate()
+        .filter_map(|(dimension, extent)| (*extent != 1).then_some(dimension))
+        .collect::<Vec<_>>();
+    active_dimensions.iter().all(|embedded_dimension| {
+        facts.iter().any(|affine| {
+            affine.constant_term() == 0
+                && active_dimensions.iter().all(|dimension| {
+                    affine.coefficients().get(*dimension).copied()
+                        == Some(u64::from(dimension == embedded_dimension))
+                })
+        })
+    })
 }
 
 fn same_index_formula(first: &[Value], second: &[Value], sparse: &SparseIndexAnalysisV1) -> bool {
@@ -1076,22 +1104,17 @@ fn affine_facts_are_injective(facts: &[SparseAffineIndexV1], launch_extents: &[u
 
 fn affine_is_total_over_launch(affine: &SparseAffineIndexV1, launch_extents: &[u64]) -> bool {
     let mut maximum = affine.constant_term();
-    let mut dynamic_dimensions = 0_usize;
     for (dimension, coefficient) in affine.coefficients().iter().copied().enumerate() {
         if coefficient == 0 {
             continue;
         }
-        let Some(extent) = launch_extents.get(dimension).copied() else {
+        let Some(maximum_coordinate) = launch_extents
+            .get(dimension)
+            .copied()
+            .and_then(|extent| extent.checked_sub(1))
+        else {
             return false;
         };
-        if extent == 0 {
-            if coefficient != 1 {
-                return false;
-            }
-            dynamic_dimensions += 1;
-            continue;
-        }
-        let maximum_coordinate = extent - 1;
         let Some(contribution) = coefficient.checked_mul(maximum_coordinate) else {
             return false;
         };
@@ -1100,7 +1123,7 @@ fn affine_is_total_over_launch(affine: &SparseAffineIndexV1, launch_extents: &[u
         };
         maximum = next;
     }
-    dynamic_dimensions == 0 || dynamic_dimensions == 1 && maximum == 0
+    true
 }
 
 // Full rank modulo a prime implies full rank over the integers. A rank loss
