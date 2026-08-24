@@ -1,0 +1,20 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK: PASS
+builtin.func @effect_refinement_match: builtin.function <() -> ()>
+{
+  ^entry_block1v1():
+    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 41, gpu_execution_global_x: gpu.execution_extent 4, gpu_execution_global_y: gpu.execution_extent 1, gpu_execution_global_z: gpu.execution_extent 1, gpu_execution_workgroup_x: gpu.execution_extent 2, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 2, gpu_execution_domain: gpu.execution_domain FullPhysicalWorkgroups]: <() -> ()>;
+    v0 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Global, kernel_allocation_origin: kernel.allocation_origin 17, kernel_noalias_class: kernel.noalias_class 17]: <() -> (kernel.ranked_view <32,true,[4]>)>;
+    v1 = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension 0, kernel_launch_extent: kernel.launch_extent 4]: <() -> (kernel.index )>;
+    kernel.ownership_contract (v0) [] [kernel_ownership_coverage: kernel.ownership_coverage ExactView, kernel_ownership_partition: kernel.ownership_partition ExactSets]: <(kernel.ranked_view <32,true,[4]>) -> ()>;
+    v2 = kernel.semantic_symbol () [] [kernel_semantic_symbol: kernel.semantic_symbol 0]: <() -> (kernel.semantic_scalar )>;
+    v3 = kernel.semantic_symbol () [] [kernel_semantic_symbol: kernel.semantic_symbol 1]: <() -> (kernel.semantic_scalar )>;
+    v4 = kernel.semantic_binary (v2, v3) [] [kernel_semantic_binary_kind: kernel.semantic_binary_kind Add]: <(kernel.semantic_scalar , kernel.semantic_scalar ) -> (kernel.semantic_scalar )>;
+    v5 = kernel.semantic_binary (v3, v2) [] [kernel_semantic_binary_kind: kernel.semantic_binary_kind Add]: <(kernel.semantic_scalar , kernel.semantic_scalar ) -> (kernel.semantic_scalar )>;
+    proof.obligation 0000000000000001000000000000000200000000000000030000000000000004 0000000000000005000000000000000600000000000000070000000000000008 0000000000000009000000000000000a000000000000000b000000000000000c FunctionalRefinement;
+    proof.evidence_ref 000000000000000d000000000000000e000000000000000f0000000000000010 0000000000000001000000000000000200000000000000030000000000000004 FunctionalRefinement Proved Mir;
+    kernel.access (v0, v1) [] [kernel_access_kind: kernel.access_kind Write]: <(kernel.ranked_view <32,true,[4]>, kernel.index ) -> ()>;
+    proof.require_effect_refinement (v0, v1, v2, v2, v3, v3, v4, v5) [] [proof_require_effect_refinement_obligation_id: proof.id 0000000000000001000000000000000200000000000000030000000000000004]: <(kernel.ranked_view <32,true,[4]>, kernel.index , kernel.semantic_scalar , kernel.semantic_scalar , kernel.semantic_scalar , kernel.semantic_scalar , kernel.semantic_scalar , kernel.semantic_scalar ) -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

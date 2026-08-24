@@ -1,7 +1,11 @@
+use dialect_kernel::{
+    DIALECT_NAME as KERNEL_DIALECT_NAME, IndexConstantOp, RankedViewOp, RankedViewType,
+    SemanticSymbolOp,
+};
 use dialect_proof::{
     CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, ObligationRefType,
     ProofIdAttr, ProofOverlayOpInterface, PropertyAttr, RegistrationError, RegistrationOutcome,
-    evidence_ref_op_attr_names, register_dialect,
+    RequireEffectRefinementOp, evidence_ref_op_attr_names, register_dialect,
 };
 use pliron::{
     attribute::{AttrObj, verify_attr},
@@ -11,6 +15,7 @@ use pliron::{
     },
     combine::{Parser, eof},
     context::Context,
+    dialect::DialectName,
     identifier::Identifier,
     op::{Op, op_cast, verify_op},
     operation::{Operation, OperationParserConfig},
@@ -261,4 +266,63 @@ fn verifier_rejects_missing_wrong_extra_and_structural_payloads() {
     malformed.set_attr_proof_obligation_model_id(&context, id(390));
     malformed.set_attr_proof_obligation_property(&context, PropertyAttr::Determinism);
     assert!(verify_op(&malformed, &context).is_err());
+}
+
+#[test]
+fn effect_refinement_locally_requires_ranked_indices_and_six_semantic_expressions() {
+    let mut context = Context::new();
+    dialect_kernel::register_dialect(
+        &mut context,
+        &DialectName::try_new(KERNEL_DIALECT_NAME).unwrap(),
+    )
+    .unwrap();
+    register_dialect(&mut context).unwrap();
+    let view_type = RankedViewType::new(&mut context, 32, true, vec![4]).unwrap();
+    let view = RankedViewOp::new(&mut context, view_type, vec![]).unwrap();
+    let index = IndexConstantOp::new(&mut context, 0);
+    let scalar = SemanticSymbolOp::new(&mut context, 7);
+    let view_value = view.result(&context);
+    let index_value = index.result(&context);
+    let scalar_value = scalar.result(&context);
+    let valid = RequireEffectRefinementOp::new(
+        &mut context,
+        id(400),
+        view_value,
+        vec![index_value],
+        scalar_value,
+        scalar_value,
+        scalar_value,
+        scalar_value,
+        scalar_value,
+        scalar_value,
+    );
+    verify_op(&valid, &context).expect("closed typed effect contract");
+
+    let missing_index = RequireEffectRefinementOp::new(
+        &mut context,
+        id(410),
+        view_value,
+        vec![],
+        scalar_value,
+        scalar_value,
+        scalar_value,
+        scalar_value,
+        scalar_value,
+        scalar_value,
+    );
+    assert!(verify_op(&missing_index, &context).is_err());
+
+    let wrong_semantic = RequireEffectRefinementOp::new(
+        &mut context,
+        id(420),
+        view_value,
+        vec![index_value],
+        index_value,
+        scalar_value,
+        scalar_value,
+        scalar_value,
+        scalar_value,
+        scalar_value,
+    );
+    assert!(verify_op(&wrong_semantic, &context).is_err());
 }

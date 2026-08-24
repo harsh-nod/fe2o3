@@ -11,7 +11,7 @@ use dialect_kernel::{
 };
 use dialect_proof::{
     CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, PropertyAttr,
-    RequireRefinementOp,
+    RequireEffectRefinementOp, RequireRefinementOp,
 };
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
@@ -22,6 +22,10 @@ use pliron::{
 };
 
 use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
+use crate::pliron_effect_refinement::{
+    PlironEffectRefinementReportV1, clean_effect_refinement_report_v1,
+    run_pliron_effect_refinement_with_analyses_v1,
+};
 use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
 use crate::{KernelCheckPassKindV1, KernelCheckStatusV1};
 
@@ -33,6 +37,119 @@ enum SemanticNodeV1 {
     Symbol(u32),
     Constant(u64),
     Binary(SemanticBinaryKindAttr, usize, usize),
+}
+
+/// Shared canonical expression table used by scalar and effect refinement.
+pub(crate) struct SemanticExpressionTableV1 {
+    nodes: Vec<SemanticNodeV1>,
+    facts: HashMap<pliron::value::Value, usize>,
+}
+
+impl SemanticExpressionTableV1 {
+    pub(crate) fn from_function(context: &Context, function: &FuncOp) -> Result<Self, ()> {
+        let definitions = function
+            .get_region(context)
+            .deref(context)
+            .iter(context)
+            .flat_map(|block| block.deref(context).iter(context))
+            .filter(|operation| {
+                let operation = Operation::get_op_dyn(*operation, context);
+                operation.downcast_ref::<SemanticSymbolOp>().is_some()
+                    || operation.downcast_ref::<SemanticConstantOp>().is_some()
+                    || operation.downcast_ref::<SemanticBinaryOp>().is_some()
+            })
+            .collect::<Vec<_>>();
+        Self::build(context, &definitions)
+    }
+
+    fn build(
+        context: &Context,
+        definitions: &[pliron::context::Ptr<Operation>],
+    ) -> Result<Self, ()> {
+        if definitions.len() > MAX_PLIRON_SEMANTIC_NODES_V1 {
+            return Err(());
+        }
+        let mut nodes = Vec::new();
+        let mut interned = HashMap::new();
+        let mut facts = HashMap::new();
+        for _ in 0..=definitions.len() {
+            let mut changed = false;
+            for definition in definitions {
+                let operation = Operation::get_op_dyn(*definition, context);
+                let node = if let Some(symbol) = operation.downcast_ref::<SemanticSymbolOp>() {
+                    symbol.symbol(context).map(SemanticNodeV1::Symbol)
+                } else if let Some(constant) = operation.downcast_ref::<SemanticConstantOp>() {
+                    constant.value(context).map(SemanticNodeV1::Constant)
+                } else if let Some(binary) = operation.downcast_ref::<SemanticBinaryOp>() {
+                    let lhs = facts.get(&binary.lhs(context)).copied();
+                    let rhs = facts.get(&binary.rhs(context)).copied();
+                    match (binary.kind(context), lhs, rhs) {
+                        (Some(kind), Some(lhs), Some(rhs)) => {
+                            let (lhs, rhs) = if lhs <= rhs { (lhs, rhs) } else { (rhs, lhs) };
+                            Some(SemanticNodeV1::Binary(kind, lhs, rhs))
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                let Some(node) = node else { continue };
+                let identity = if let Some(identity) = interned.get(&node).copied() {
+                    identity
+                } else {
+                    if nodes.len() == MAX_PLIRON_SEMANTIC_NODES_V1 {
+                        return Err(());
+                    }
+                    let identity = nodes.len();
+                    nodes.push(node.clone());
+                    interned.insert(node, identity);
+                    identity
+                };
+                let result = definition.deref(context).get_result(0);
+                if facts.insert(result, identity) != Some(identity) {
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        Ok(Self { nodes, facts })
+    }
+
+    pub(crate) fn identity(&self, value: pliron::value::Value) -> Option<usize> {
+        self.facts.get(&value).copied()
+    }
+
+    pub(crate) fn equivalent(
+        &self,
+        actual: pliron::value::Value,
+        expected: pliron::value::Value,
+    ) -> Option<bool> {
+        Some(self.identity(actual)? == self.identity(expected)?)
+    }
+
+    pub(crate) fn describe_value(&self, value: pliron::value::Value) -> Option<String> {
+        self.identity(value).map(|identity| self.describe(identity))
+    }
+
+    fn describe(&self, identity: usize) -> String {
+        match &self.nodes[identity] {
+            SemanticNodeV1::Symbol(symbol) => format!("s{symbol}"),
+            SemanticNodeV1::Constant(value) => format!("c0x{value:016x}"),
+            SemanticNodeV1::Binary(kind, lhs, rhs) => {
+                let operator = match kind {
+                    SemanticBinaryKindAttr::Add => "+",
+                    SemanticBinaryKindAttr::Multiply => "*",
+                };
+                format!(
+                    "({} {operator} {})",
+                    self.describe(*lhs),
+                    self.describe(*rhs)
+                )
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -133,6 +250,7 @@ pub struct PlironSemanticRefinementReportV1 {
     findings: Vec<PlironSemanticRefinementFindingV1>,
     reference_obligations: usize,
     proved_reference_obligations: usize,
+    effect_refinement: PlironEffectRefinementReportV1,
 }
 
 impl PlironSemanticRefinementReportV1 {
@@ -146,6 +264,7 @@ impl PlironSemanticRefinementReportV1 {
             .fold(KernelCheckStatusV1::Clean, |status, finding| {
                 status.join(finding.status())
             })
+            .join(self.effect_refinement.status())
     }
 
     pub fn findings(&self) -> &[PlironSemanticRefinementFindingV1] {
@@ -176,6 +295,10 @@ impl PlironSemanticRefinementReportV1 {
             && self.reference_obligations == self.proved_reference_obligations
     }
 
+    pub const fn effect_refinement(&self) -> &PlironEffectRefinementReportV1 {
+        &self.effect_refinement
+    }
+
     pub const fn grants_compiler_refinement_authority(&self) -> bool {
         false
     }
@@ -198,11 +321,20 @@ impl PlironSemanticRefinementCheckErrorV1 {
 
 impl fmt::Display for PlironSemanticRefinementCheckErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut wrote = false;
         for (index, finding) in self.report.findings.iter().enumerate() {
             if index != 0 {
                 formatter.write_str("\n")?;
             }
             finding.fmt(formatter)?;
+            wrote = true;
+        }
+        for finding in self.report.effect_refinement.findings() {
+            if wrote {
+                formatter.write_str("\n")?;
+            }
+            finding.fmt(formatter)?;
+            wrote = true;
         }
         Ok(())
     }
@@ -219,16 +351,18 @@ pub fn run_pliron_semantic_refinement_check_v1(
     {
         return one(PlironSemanticRefinementFindingV1::BoundsPrerequisiteRejected);
     }
-    run_pliron_semantic_refinement_check_after_bounds_v1(context, function)
+    run_pliron_semantic_refinement_check_after_bounds_v1(context, function, &mut analyses)
 }
 
 pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
     context: &Context,
     function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
 ) -> PlironSemanticRefinementReportV1 {
     let mut definitions = Vec::new();
     let mut requirements = Vec::new();
     let mut reference_requirements = Vec::new();
+    let mut effect_requirement_ids = HashSet::new();
     let mut obligations = Vec::new();
     let mut evidence = Vec::new();
     for (block_index, block) in function
@@ -259,6 +393,9 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
                     requirement.actual(context),
                     requirement.expected(context),
                 ));
+            } else if let Some(requirement) = operation.downcast_ref::<RequireEffectRefinementOp>()
+            {
+                effect_requirement_ids.insert(requirement.obligation_id(context).unwrap_or([0; 4]));
             } else if let Some(obligation) = operation.downcast_ref::<ObligationOp>() {
                 obligations.push((
                     block_index,
@@ -408,7 +545,9 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
     }
     for (block, operation, identity, _, _, property) in &obligations {
         if *property == Some(PropertyAttr::FunctionalRefinement)
-            && identity.is_none_or(|identity| !used_obligations.contains(&identity))
+            && identity.is_none_or(|identity| {
+                !used_obligations.contains(&identity) && !effect_requirement_ids.contains(&identity)
+            })
         {
             push(
                 &mut findings,
@@ -422,54 +561,13 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
         }
     }
 
-    let mut nodes = Vec::new();
-    let mut interned = HashMap::new();
-    let mut facts = HashMap::new();
-    for _ in 0..=definitions.len() {
-        let mut changed = false;
-        for definition in &definitions {
-            let operation = Operation::get_op_dyn(*definition, context);
-            let node = if let Some(symbol) = operation.downcast_ref::<SemanticSymbolOp>() {
-                symbol.symbol(context).map(SemanticNodeV1::Symbol)
-            } else if let Some(constant) = operation.downcast_ref::<SemanticConstantOp>() {
-                constant.value(context).map(SemanticNodeV1::Constant)
-            } else if let Some(binary) = operation.downcast_ref::<SemanticBinaryOp>() {
-                let lhs = facts.get(&binary.lhs(context)).copied();
-                let rhs = facts.get(&binary.rhs(context)).copied();
-                match (binary.kind(context), lhs, rhs) {
-                    (Some(kind), Some(lhs), Some(rhs)) => {
-                        let (lhs, rhs) = if lhs <= rhs { (lhs, rhs) } else { (rhs, lhs) };
-                        Some(SemanticNodeV1::Binary(kind, lhs, rhs))
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            };
-            let Some(node) = node else { continue };
-            let identity = if let Some(identity) = interned.get(&node).copied() {
-                identity
-            } else {
-                if nodes.len() == MAX_PLIRON_SEMANTIC_NODES_V1 {
-                    return one(PlironSemanticRefinementFindingV1::ResourceLimitExceeded);
-                }
-                let identity = nodes.len();
-                nodes.push(node.clone());
-                interned.insert(node, identity);
-                identity
-            };
-            let result = definition.deref(context).get_result(0);
-            if facts.insert(result, identity) != Some(identity) {
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
+    let expressions = match SemanticExpressionTableV1::build(context, &definitions) {
+        Ok(expressions) => expressions,
+        Err(()) => return one(PlironSemanticRefinementFindingV1::ResourceLimitExceeded),
+    };
 
     for (block, operation, actual, expected) in requirements {
-        let Some(actual_node) = facts.get(&actual).copied() else {
+        let Some(actual_node) = expressions.identity(actual) else {
             push(
                 &mut findings,
                 PlironSemanticRefinementFindingV1::UnresolvedExpression {
@@ -480,7 +578,7 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
             );
             continue;
         };
-        let Some(expected_node) = facts.get(&expected).copied() else {
+        let Some(expected_node) = expressions.identity(expected) else {
             push(
                 &mut findings,
                 PlironSemanticRefinementFindingV1::UnresolvedExpression {
@@ -497,15 +595,15 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
                 PlironSemanticRefinementFindingV1::ExpressionMismatch {
                     block,
                     operation,
-                    actual: describe(actual_node, &nodes),
-                    expected: describe(expected_node, &nodes),
+                    actual: expressions.describe(actual_node),
+                    expected: expressions.describe(expected_node),
                 },
             );
         }
     }
     let mut proved_reference_obligations = 0;
     for (block, operation, _, actual, expected) in reference_requirements {
-        let Some(actual_node) = facts.get(&actual).copied() else {
+        let Some(actual_node) = expressions.identity(actual) else {
             push(
                 &mut findings,
                 PlironSemanticRefinementFindingV1::UnresolvedExpression {
@@ -516,7 +614,7 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
             );
             continue;
         };
-        let Some(expected_node) = facts.get(&expected).copied() else {
+        let Some(expected_node) = expressions.identity(expected) else {
             push(
                 &mut findings,
                 PlironSemanticRefinementFindingV1::UnresolvedExpression {
@@ -533,27 +631,30 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
                 PlironSemanticRefinementFindingV1::ExpressionMismatch {
                     block,
                     operation,
-                    actual: describe(actual_node, &nodes),
-                    expected: describe(expected_node, &nodes),
+                    actual: expressions.describe(actual_node),
+                    expected: expressions.describe(expected_node),
                 },
             );
         } else if contract_valid.contains(&(block, operation)) {
             proved_reference_obligations += 1;
         }
     }
+    let effect_refinement =
+        run_pliron_effect_refinement_with_analyses_v1(context, function, analyses);
     PlironSemanticRefinementReportV1 {
         findings,
         reference_obligations: reference_count,
         proved_reference_obligations,
+        effect_refinement,
     }
 }
 
 pub(crate) fn require_pliron_semantic_refinement_with_analyses_v1(
     context: &Context,
     function: &FuncOp,
-    _analyses: &mut PlironAnalysisManagerV1,
+    analyses: &mut PlironAnalysisManagerV1,
 ) -> Result<PlironSemanticRefinementReportV1, PlironSemanticRefinementCheckErrorV1> {
-    let report = run_pliron_semantic_refinement_check_after_bounds_v1(context, function);
+    let report = run_pliron_semantic_refinement_check_after_bounds_v1(context, function, analyses);
     if report.is_clean() {
         Ok(report)
     } else {
@@ -570,24 +671,6 @@ pub fn require_pliron_semantic_refinement_before_lowering_v1(
         Ok(report)
     } else {
         Err(PlironSemanticRefinementCheckErrorV1 { report })
-    }
-}
-
-fn describe(identity: usize, nodes: &[SemanticNodeV1]) -> String {
-    match &nodes[identity] {
-        SemanticNodeV1::Symbol(symbol) => format!("s{symbol}"),
-        SemanticNodeV1::Constant(value) => format!("c0x{value:016x}"),
-        SemanticNodeV1::Binary(kind, lhs, rhs) => {
-            let operator = match kind {
-                SemanticBinaryKindAttr::Add => "+",
-                SemanticBinaryKindAttr::Multiply => "*",
-            };
-            format!(
-                "({} {operator} {})",
-                describe(*lhs, nodes),
-                describe(*rhs, nodes)
-            )
-        }
     }
 }
 
@@ -610,6 +693,7 @@ fn one(finding: PlironSemanticRefinementFindingV1) -> PlironSemanticRefinementRe
         findings: vec![finding],
         reference_obligations: 0,
         proved_reference_obligations: 0,
+        effect_refinement: clean_effect_refinement_report_v1(),
     }
 }
 
@@ -663,6 +747,7 @@ mod status_tests {
             ],
             reference_obligations: 1,
             proved_reference_obligations: 0,
+            effect_refinement: clean_effect_refinement_report_v1(),
         };
         assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
         assert!(!report.is_clean());
@@ -671,6 +756,7 @@ mod status_tests {
                 findings: vec![],
                 reference_obligations: 0,
                 proved_reference_obligations: 0,
+                effect_refinement: clean_effect_refinement_report_v1(),
             }
             .status(),
             KernelCheckStatusV1::Clean
