@@ -5348,6 +5348,37 @@ fn build_ranked_cfg(
                         "a uniform induction region containing control without typed edge arguments",
                     ));
                 }
+                ProjectedCfgTerminatorV1::ExactSwitch(switch) if switch.targets.is_empty() => {
+                    ProductionRankedTerminatorV1::BranchArgs {
+                        arguments: vec![argument],
+                        target: ranked_block_id(projected_target(
+                            &base_blocks,
+                            require_loop_target(switch.otherwise)?,
+                        )?)?,
+                    }
+                }
+                ProjectedCfgTerminatorV1::ExactSwitch(switch) if switch.targets.len() == 1 => {
+                    let (variant, target) = switch.targets[0];
+                    ProductionRankedTerminatorV1::IndexEqualArgs {
+                        lhs: switch.discriminant,
+                        rhs: variant,
+                        true_arguments: vec![argument],
+                        false_arguments: vec![argument],
+                        true_block: ranked_block_id(projected_target(
+                            &base_blocks,
+                            require_loop_target(target)?,
+                        )?)?,
+                        false_block: ranked_block_id(projected_target(
+                            &base_blocks,
+                            require_loop_target(switch.otherwise)?,
+                        )?)?,
+                    }
+                }
+                ProjectedCfgTerminatorV1::ExactSwitch(_) => {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a uniform induction deterministic switch requires unrepresentable control expansion",
+                    ));
+                }
                 ProjectedCfgTerminatorV1::Return => {
                     return Err(ProductionRankedProjectionErrorV1::Incomplete(
                         "a uniform induction body returns before its unique latch",
@@ -8320,7 +8351,6 @@ mod tests {
                 | ProductionRankedOperationV1::Barrier { .. }
                 | ProductionRankedOperationV1::Fence { .. }
                 | ProductionRankedOperationV1::TensorLayout { .. }
-                | ProductionRankedOperationV1::DeterministicJoin { .. }
                 | ProductionRankedOperationV1::SemanticSymbol { .. }
                 | ProductionRankedOperationV1::SemanticConstant { .. }
                 | ProductionRankedOperationV1::SemanticBinary { .. }
@@ -11874,6 +11904,7 @@ mod tests {
         let (blocks, _) = build_ranked_cfg(
             &function,
             &vec![None; function.locals().len()],
+            &vec![None; function.blocks().len()],
             &inductions,
             entry_operations,
             projected,
@@ -11920,6 +11951,7 @@ mod tests {
         let (blocks, _) = build_ranked_cfg(
             &function,
             &predicates,
+            &vec![None; function.blocks().len()],
             &inductions,
             entry_operations,
             (0..function.blocks().len())
@@ -11936,6 +11968,52 @@ mod tests {
             } if true_arguments.len() == 1 && false_arguments.len() == 1
         ));
         ProductionRankedKernelV1::new("branched_uniform_loop", next_argument, blocks).unwrap();
+    }
+
+    #[test]
+    fn internal_deterministic_switch_forwards_exact_ssa_arguments() {
+        let function = multi_block_induction_function(
+            InductionCfgShape::Branched,
+            SemanticLocalRoleV1::Argument(0),
+            16,
+        );
+        let (inductions, entry_operations, next_argument) =
+            project_test_inductions(&function).unwrap();
+        let zero = entry_operations
+            .iter()
+            .find_map(|operation| match operation {
+                ProductionRankedOperationV1::IndexConstant { result, value: 0 } => {
+                    Some(ProductionRankedValueV1::Local(*result))
+                }
+                _ => None,
+            })
+            .expect("the induction initializer must materialize zero");
+        let mut deterministic_switches = vec![None; function.blocks().len()];
+        deterministic_switches[2] = Some(ProjectedDeterministicSwitchV1 {
+            discriminant: ProductionRankedValueV1::Argument(1),
+            targets: vec![(zero, 3)],
+            otherwise: 4,
+        });
+        let (blocks, _) = build_ranked_cfg(
+            &function,
+            &vec![None; function.locals().len()],
+            &deterministic_switches,
+            &inductions,
+            entry_operations,
+            (0..function.blocks().len())
+                .map(|_| ProjectedSemanticBlockV1 { items: vec![] })
+                .collect(),
+        )
+        .unwrap();
+        assert!(matches!(
+            blocks[3].terminator(),
+            ProductionRankedTerminatorV1::IndexEqualArgs {
+                true_arguments,
+                false_arguments,
+                ..
+            } if true_arguments.len() == 1 && false_arguments.len() == 1
+        ));
+        ProductionRankedKernelV1::new("deterministic_uniform_loop", next_argument, blocks).unwrap();
     }
 
     #[test]
@@ -12085,6 +12163,7 @@ mod tests {
             build_ranked_cfg(
                 &function,
                 &vec![None; function.locals().len()],
+                &vec![None; function.blocks().len()],
                 &inductions,
                 entry_operations,
                 (0..function.blocks().len())
@@ -12123,6 +12202,7 @@ mod tests {
             build_ranked_cfg(
                 &function,
                 &vec![None; function.locals().len()],
+                &vec![None; function.blocks().len()],
                 &inductions,
                 entry_operations,
                 projected,
