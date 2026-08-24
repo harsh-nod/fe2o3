@@ -1460,6 +1460,19 @@ fn materialize_row_softmax_v1_child_environment(
         if apply_managed_loader_environment(&mut final_environment, &name, value.as_deref())? {
             continue;
         }
+        if name == OsStr::new(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV) {
+            let existing = final_environment.get(name.as_os_str());
+            let idempotent = matches!(
+                (value.as_deref(), existing),
+                (Some(value), Some(existing)) if value == "1" && existing == "1"
+            ) || matches!((value.as_deref(), existing), (None, None));
+            if !idempotent {
+                return Err(BindingWrapperError::BuildObservation(format!(
+                    "row-softmax command changed the exact qualification marker {name:?}"
+                )));
+            }
+            continue;
+        }
         if !managed_s09_child_environment(&name) {
             return Err(BindingWrapperError::BuildObservation(format!(
                 "row-softmax command has unreviewed explicit environment mutation {name:?}"
@@ -2562,6 +2575,7 @@ impl CompilerCapabilities {
         command: &mut Command,
     ) -> Result<(), BindingWrapperError> {
         self.prepare_artifact_command(command)?;
+        configure_qualification_route_marker(command, cfg!(debug_assertions));
         command
             .env_remove(CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2)
             .env(
@@ -2646,6 +2660,14 @@ impl CompilerCapabilities {
         let broker = measure_build_executable("/proc/self/exe", "cargo-fe2o3 broker image")?;
         RowSoftmaxV1AuthorityPolicyV1::new(provider, attempt, broker, compiler)
             .map_err(|error| BindingWrapperError::BuildObservation(error.to_string()))
+    }
+}
+
+fn configure_qualification_route_marker(command: &mut Command, debug_build: bool) {
+    if debug_build {
+        command.env(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV, "1");
+    } else {
+        command.env_remove(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV);
     }
 }
 
@@ -5089,11 +5111,12 @@ mod tests {
     use super::{
         BindingWrapperError, BuildExecutableSnapshot,
         CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, CARGO_METADATA_BUILD_OBSERVATION_ENV_V2,
-        CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1, CompileBuildObservationV2, CompilerCapabilities,
-        CompleteReviewedChildEnvironmentV2, CompletionFailure,
-        DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, GeneralGemmChildPinsV1,
-        LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2, LinuxObjectIdentityV3, ManagedAttempt,
-        ManagedAttemptRevocationGuard, OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2,
+        CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1, CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2,
+        CompileBuildObservationV2, CompilerCapabilities, CompleteReviewedChildEnvironmentV2,
+        CompletionFailure, DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
+        GeneralGemmChildPinsV1, LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2, LinuxObjectIdentityV3,
+        ManagedAttempt, ManagedAttemptRevocationGuard,
+        OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2,
         OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2,
         PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2, PRODUCTION_V1_PIPELINE,
         PreparedRustcConsistencyExpectation, ProtectedWorkerV2TransitionBlocker,
@@ -5105,14 +5128,14 @@ mod tests {
         complete_recovered_protected_worker_v2, complete_recovered_worker_v2,
         configure_build_observation_environment,
         configure_build_observation_environment_with_test_mutation,
-        configure_worker_build_observation_environment, decode_managed_rustc_args,
-        derive_build_attempt_input_with_config_identity, hex, is_cargo_stdin_probe,
-        materialize_general_gemm_v1_child_environment, materialize_reviewed_child_environment,
-        materialize_row_softmax_v1_child_environment, materialize_s09_child_environment,
-        materialize_scalar_gemm_v1_child_environment, measure_build_executable,
-        observe_pinned_cargo_image_and_parent, ordered_metadata_values, os_bytes,
-        pipeline_requires_protected_invocation, pre_spawn_failure, prepare_managed_attempt,
-        prepared_rustc_command_sha256, process_start_time_ticks,
+        configure_qualification_route_marker, configure_worker_build_observation_environment,
+        decode_managed_rustc_args, derive_build_attempt_input_with_config_identity, hex,
+        is_cargo_stdin_probe, materialize_general_gemm_v1_child_environment,
+        materialize_reviewed_child_environment, materialize_row_softmax_v1_child_environment,
+        materialize_s09_child_environment, materialize_scalar_gemm_v1_child_environment,
+        measure_build_executable, observe_pinned_cargo_image_and_parent, ordered_metadata_values,
+        os_bytes, pipeline_requires_protected_invocation, pre_spawn_failure,
+        prepare_managed_attempt, prepared_rustc_command_sha256, process_start_time_ticks,
         protected_worker_v2_transition_blocker, publish_finish_and_clear,
         publish_finish_and_clear_protected, reject_authority_linker_arguments,
         reject_uninspectable_rustc_args, resolve_command_executable_with_path,
@@ -6761,6 +6784,7 @@ mod tests {
             .env("TMPDIR", "/proc/self/fd/197/private")
             .env("LD_LIBRARY_PATH", "/proc/self/fd/193")
             .env_remove("LD_PRELOAD")
+            .env(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV, "1")
             .env(QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1, "ab".repeat(32))
             .env("FE2O3_BUILD_ATTEMPT_V1", "attempt");
         let mut inherited = fixed().to_vec();
@@ -6797,6 +6821,68 @@ mod tests {
             OsString::from("1"),
         )));
 
+        let mut protected_command = Command::new("/proc/self/fd/194");
+        protected_command
+            .env("LANG", "C.UTF-8")
+            .env("PATH", "/usr/bin")
+            .env("TMPDIR", "/proc/self/fd/197/private")
+            .env(CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2, "cd".repeat(32))
+            .env_remove(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV);
+        let mut protected_inherited = fixed().to_vec();
+        protected_inherited.push((
+            OsString::from(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV),
+            OsString::from("01".repeat(32)),
+        ));
+        let protected = materialize_row_softmax_v1_child_environment(
+            &mut protected_command,
+            protected_inherited,
+        )
+        .expect("materialize protected row-softmax environment");
+        assert!(
+            !protected
+                .entries
+                .iter()
+                .any(|(name, _)| name == crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV)
+        );
+
+        for (inherited_marker, explicit_marker) in [
+            (Some("1"), Some("changed")),
+            (Some("1"), None),
+            (None, Some("1")),
+        ] {
+            let mut command = Command::new("/proc/self/fd/194");
+            command
+                .env("LANG", "C.UTF-8")
+                .env("PATH", "/usr/bin")
+                .env("TMPDIR", "/proc/self/fd/197/private")
+                .env(QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1, "ab".repeat(32));
+            match explicit_marker {
+                Some(value) => {
+                    command.env(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV, value);
+                }
+                None => {
+                    command.env_remove(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV);
+                }
+            }
+            let mut inherited = fixed().to_vec();
+            if let Some(value) = inherited_marker {
+                inherited.push((
+                    OsString::from(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV),
+                    OsString::from(value),
+                ));
+            }
+            inherited.push((
+                OsString::from(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV),
+                OsString::from("01".repeat(32)),
+            ));
+            let error =
+                materialize_row_softmax_v1_child_environment(&mut command, inherited).unwrap_err();
+            assert!(
+                error.to_string().contains("exact qualification marker"),
+                "{error}"
+            );
+        }
+
         for name in [
             "LD_PRELOAD",
             "LD_AUDIT",
@@ -6816,6 +6902,26 @@ mod tests {
             let error =
                 materialize_row_softmax_v1_child_environment(&mut command, inherited).unwrap_err();
             assert!(error.to_string().contains(name), "{error}");
+        }
+    }
+
+    #[test]
+    fn qualification_route_owns_its_exact_nonproduction_marker() {
+        for (debug_build, expected) in [(true, Some("1")), (false, None)] {
+            let mut command = Command::new("/toolchain/rustc");
+            command.env(
+                crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV,
+                "hostile-ambient-value",
+            );
+            configure_qualification_route_marker(&mut command, debug_build);
+            let actual = command
+                .get_envs()
+                .find(|(name, _)| {
+                    *name == OsStr::new(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV)
+                })
+                .and_then(|(_, value)| value)
+                .and_then(OsStr::to_str);
+            assert_eq!(actual, expected);
         }
     }
 
