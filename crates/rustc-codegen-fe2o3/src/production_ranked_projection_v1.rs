@@ -683,12 +683,14 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
                 .copied()
                 .map(|result| ProductionRankedOperationV1::SemanticConstant { result, value: 0 }),
         );
-        entry_operations.extend(values.iter().skip(3).copied().enumerate().map(
-            |(axis, result)| ProductionRankedOperationV1::SemanticSymbol {
-                result,
-                symbol: axis as u32,
-            },
-        ));
+        for (axis, result) in values.iter().skip(3).copied().enumerate() {
+            let symbol = u32::try_from(axis).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "reference-effect logical point rank does not fit the semantic symbol domain",
+                )
+            })?;
+            entry_operations.push(ProductionRankedOperationV1::SemanticSymbol { result, symbol });
+        }
         Some(values)
     };
     let mut incomplete = None;

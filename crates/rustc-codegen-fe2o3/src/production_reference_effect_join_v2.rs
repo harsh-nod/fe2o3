@@ -185,10 +185,13 @@ pub(crate) fn prepare_reference_effect_request_v2(
     let reference_value =
         reference_constant_expression_value(reference_write.rhs.clone(), *element)?;
     let reference_indices = reference_ranked_indices_v2(&kernel, &reference_write.coordinate)?;
-    if reserved_values.len() != 3 + reference_indices.len() {
+    let expected_reserved_values = 3_usize
+        .checked_add(reference_indices.len())
+        .ok_or(ProductionReferenceEffectJoinErrorV2::ReservedValueCountOverflow)?;
+    if reserved_values.len() != expected_reserved_values {
         return Err(
             ProductionReferenceEffectJoinErrorV2::InvalidReservedValueCount {
-                expected: 3 + reference_indices.len(),
+                expected: expected_reserved_values,
                 actual: reserved_values.len(),
             },
         );
@@ -229,7 +232,10 @@ pub(crate) fn prepare_reference_effect_request_v2(
         reference_value,
     )?;
     for (axis, identity) in reserved_values[3..].iter().copied().enumerate() {
-        validate_reserved_semantic_symbol_v2(&entry_operations, identity, axis as u32)?;
+        let expected_symbol = u32::try_from(axis).map_err(|_| {
+            ProductionReferenceEffectJoinErrorV2::InvalidReservedValue(identity.get())
+        })?;
+        validate_reserved_semantic_symbol_v2(&entry_operations, identity, expected_symbol)?;
     }
     entry_operations.push(ProductionRankedOperationV1::OwnershipContract {
         view: write.view,
@@ -871,6 +877,7 @@ pub(crate) enum ProductionReferenceEffectJoinErrorV2 {
         expected: usize,
         actual: usize,
     },
+    ReservedValueCountOverflow,
     InvalidReservedValue(u32),
     Subjects(String),
     Recipe(ProductionRankedKernelErrorV1),
@@ -928,6 +935,9 @@ impl fmt::Display for ProductionReferenceEffectJoinErrorV2 {
             Self::InvalidReservedValueCount { expected, actual } => write!(
                 formatter,
                 "source-to-proof V2 reserved {actual} semantic values but the exact effect requires {expected}"
+            ),
+            Self::ReservedValueCountOverflow => formatter.write_str(
+                "source-to-proof V2 logical point rank overflows the reserved semantic value domain",
             ),
             Self::InvalidReservedValue(identity) => write!(
                 formatter,
