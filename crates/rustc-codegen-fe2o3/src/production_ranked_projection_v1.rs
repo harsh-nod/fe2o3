@@ -8193,6 +8193,18 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             ranked_value_text_v1(*view),
             format_ranked_values(indices),
         ),
+        ProductionRankedOperationV1::ValueAccess {
+            kind,
+            view,
+            indices,
+            value,
+        } => format!(
+            "  kernel.value_access {:?} {}[{}] = {}\n",
+            kind,
+            ranked_value_text_v1(*view),
+            format_ranked_values(indices),
+            ranked_value_text_v1(*value),
+        ),
         ProductionRankedOperationV1::AtomicAccess {
             kind,
             ordering,
@@ -8206,6 +8218,22 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             scope,
             ranked_value_text_v1(*view),
             format_ranked_values(indices),
+        ),
+        ProductionRankedOperationV1::AtomicValueAccess {
+            kind,
+            ordering,
+            scope,
+            view,
+            indices,
+            value,
+        } => format!(
+            "  kernel.atomic_value_access {:?} <{:?}, {:?}> {}[{}] = {}\n",
+            kind,
+            ordering,
+            scope,
+            ranked_value_text_v1(*view),
+            format_ranked_values(indices),
+            ranked_value_text_v1(*value),
         ),
         ProductionRankedOperationV1::OwnershipContract {
             view,
@@ -10925,7 +10953,9 @@ mod tests {
             .iter()
             .filter_map(|operation| match operation {
                 ProductionRankedOperationV1::Access { kind, .. }
+                | ProductionRankedOperationV1::ValueAccess { kind, .. }
                 | ProductionRankedOperationV1::AtomicAccess { kind, .. }
+                | ProductionRankedOperationV1::AtomicValueAccess { kind, .. }
                 | ProductionRankedOperationV1::AllocationEffect { kind, .. } => Some(*kind),
                 ProductionRankedOperationV1::View { .. }
                 | ProductionRankedOperationV1::ExecutionLayout { .. }
@@ -10946,7 +10976,11 @@ mod tests {
                 | ProductionRankedOperationV1::SemanticConstant { .. }
                 | ProductionRankedOperationV1::SemanticBinary { .. }
                 | ProductionRankedOperationV1::RequireEquivalent { .. }
-                | ProductionRankedOperationV1::RequireReferenceEquivalent { .. } => None,
+                | ProductionRankedOperationV1::RequireReferenceEquivalent { .. }
+                | ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
+                | ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
+                | ProductionRankedOperationV1::RequireEffectRefinement { .. }
+                | ProductionRankedOperationV1::RequestEffectRefinement { .. } => None,
             })
             .collect()
     }
