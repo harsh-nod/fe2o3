@@ -4,6 +4,13 @@ use std::{error::Error, fmt};
 
 use pliron::{builtin::ops::FuncOp, context::Context};
 
+use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
+use crate::pliron_barrier::require_pliron_barrier_convergence_with_analyses_v1;
+use crate::pliron_race::require_pliron_ranked_race_freedom_with_analyses_v1;
+use crate::pliron_ranked_bounds::require_pliron_ranked_bounds_with_analyses_v1;
+use crate::pliron_semantic_refinement::require_pliron_semantic_refinement_with_analyses_v1;
+use crate::pliron_tensor_layout::require_pliron_tensor_layout_with_analyses_v1;
+use crate::pliron_workgroup_memory::require_pliron_workgroup_memory_with_analyses_v1;
 use crate::{
     KernelCheckPassKindV1, PlironAtomicLegalityCheckErrorV1, PlironAtomicLegalityReportV1,
     PlironAtomicTargetContextV1, PlironBarrierCheckErrorV1, PlironBarrierReportV1,
@@ -12,12 +19,6 @@ use crate::{
     PlironWorkgroupMemoryReportV1, RankedBoundsCheckErrorV1, RankedBoundsReportV1,
     RankedRaceCheckErrorV1, RankedRaceReportV1, require_pliron_atomic_legality_before_lowering_v1,
     require_pliron_atomic_legality_with_target_before_lowering_v1,
-    require_pliron_barrier_convergence_after_bounds_v1,
-    require_pliron_ranked_bounds_before_lowering_v1,
-    require_pliron_ranked_race_freedom_after_bounds_v1,
-    require_pliron_semantic_refinement_after_bounds_v1,
-    require_pliron_tensor_layout_before_lowering_v1,
-    require_pliron_workgroup_memory_after_prerequisites_v1,
 };
 
 /// Complete mandatory production sequence. This is one indivisible production
@@ -159,9 +160,22 @@ fn require_production_pliron_checks(
     function: &FuncOp,
     atomic_target: Option<&PlironAtomicTargetContextV1>,
 ) -> Result<ProductionPlironPreloweringReportV1, ProductionPlironPreloweringErrorV1> {
-    let tensor_layout = require_pliron_tensor_layout_before_lowering_v1(context, function)
+    // A fresh manager is part of the transaction boundary. A later pipeline
+    // invocation, including post-lowering revalidation, necessarily recomputes
+    // facts from that invocation's immutable IR.
+    let mut analyses = PlironAnalysisManagerV1::new(function);
+    require_production_pliron_checks_with_analyses(context, function, atomic_target, &mut analyses)
+}
+
+fn require_production_pliron_checks_with_analyses(
+    context: &Context,
+    function: &FuncOp,
+    atomic_target: Option<&PlironAtomicTargetContextV1>,
+    analyses: &mut PlironAnalysisManagerV1,
+) -> Result<ProductionPlironPreloweringReportV1, ProductionPlironPreloweringErrorV1> {
+    let tensor_layout = require_pliron_tensor_layout_with_analyses_v1(context, function, analyses)
         .map_err(ProductionPlironPreloweringErrorV1::TensorLayout)?;
-    let bounds = require_pliron_ranked_bounds_before_lowering_v1(context, function)
+    let bounds = require_pliron_ranked_bounds_with_analyses_v1(context, function, analyses)
         .map_err(ProductionPlironPreloweringErrorV1::Bounds)?;
     let atomics = match atomic_target {
         Some(target) => {
@@ -170,14 +184,15 @@ fn require_production_pliron_checks(
         None => require_pliron_atomic_legality_before_lowering_v1(context, function),
     }
     .map_err(ProductionPlironPreloweringErrorV1::Atomic)?;
-    let race = require_pliron_ranked_race_freedom_after_bounds_v1(context, function)
+    let race = require_pliron_ranked_race_freedom_with_analyses_v1(context, function, analyses)
         .map_err(ProductionPlironPreloweringErrorV1::Race)?;
-    let barriers = require_pliron_barrier_convergence_after_bounds_v1(context, function)
+    let barriers = require_pliron_barrier_convergence_with_analyses_v1(context, function, analyses)
         .map_err(ProductionPlironPreloweringErrorV1::Barrier)?;
-    let workgroup = require_pliron_workgroup_memory_after_prerequisites_v1(context, function)
+    let workgroup = require_pliron_workgroup_memory_with_analyses_v1(context, function, analyses)
         .map_err(ProductionPlironPreloweringErrorV1::Workgroup)?;
-    let semantics = require_pliron_semantic_refinement_after_bounds_v1(context, function)
-        .map_err(ProductionPlironPreloweringErrorV1::Semantic)?;
+    let semantics =
+        require_pliron_semantic_refinement_with_analyses_v1(context, function, analyses)
+            .map_err(ProductionPlironPreloweringErrorV1::Semantic)?;
     Ok(ProductionPlironPreloweringReportV1 {
         tensor_layout,
         bounds,
@@ -187,4 +202,128 @@ fn require_production_pliron_checks(
         workgroup,
         semantics,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use dialect_gpu::{ExecutionDomainAttr, ExecutionLayoutOp};
+    use dialect_kernel::{
+        DIALECT_NAME, ReturnOp, TensorConvergenceAttr, TensorLayoutOp, register_dialect,
+    };
+    use fe2o3_kernel_ir::TensorLayoutContractV1;
+    use pliron::{
+        builtin::{ops::FuncOp, types::FunctionType},
+        context::Context,
+        dialect::DialectName,
+        op::Op,
+    };
+
+    use super::*;
+    use crate::pliron_analysis_manager::PlironAnalysisComputationCountsV1;
+
+    fn setup() -> Context {
+        let mut context = Context::new();
+        register_dialect(
+            &mut context,
+            &DialectName::try_new(DIALECT_NAME).expect("valid kernel dialect name"),
+        )
+        .expect("register kernel dialect");
+        dialect_gpu::register_dialect(&mut context).expect("register gpu dialect");
+        context
+    }
+
+    fn valid_tensor_function(context: &mut Context, name: &str) -> (FuncOp, ReturnOp) {
+        let function = FuncOp::new(
+            context,
+            name.try_into().expect("valid function name"),
+            FunctionType::get(context, vec![], vec![]),
+        );
+        let entry = function.get_entry_block(context);
+        let layout = ExecutionLayoutOp::new_with_domain(
+            context,
+            7,
+            [64, 1, 1],
+            [64, 1, 1],
+            64,
+            ExecutionDomainAttr::FullPhysicalWorkgroups,
+        );
+        let tensor = TensorLayoutOp::new(
+            context,
+            &TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64(),
+            TensorConvergenceAttr::UniformSubgroup,
+            64,
+        );
+        let ret = ReturnOp::new(context);
+        for operation in [
+            layout.get_operation(),
+            tensor.get_operation(),
+            ret.get_operation(),
+        ] {
+            operation.insert_at_back(entry, context);
+        }
+        (function, ret)
+    }
+
+    #[test]
+    fn production_run_reuses_each_analysis_root_exactly_once() {
+        let context = &mut setup();
+        let (function, _) = valid_tensor_function(context, "analysis_reuse");
+        let mut analyses = PlironAnalysisManagerV1::new(&function);
+
+        let report =
+            require_production_pliron_checks_with_analyses(context, &function, None, &mut analyses)
+                .expect("valid tensor function passes the production pipeline");
+
+        assert!(report.is_clean());
+        assert_eq!(
+            analyses.computation_counts(),
+            PlironAnalysisComputationCountsV1 {
+                sparse_indices: 1,
+                execution_layout: 1,
+                exact_trace: 1,
+            }
+        );
+        assert_eq!(
+            analyses.cached_entries(),
+            super::super::pliron_analysis_manager::MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1
+        );
+    }
+
+    #[test]
+    fn revalidation_uses_a_fresh_manager_after_ir_changes() {
+        let context = &mut setup();
+        let (function, ret) = valid_tensor_function(context, "fresh_revalidation");
+        let mut first = PlironAnalysisManagerV1::new(&function);
+        require_production_pliron_checks_with_analyses(context, &function, None, &mut first)
+            .expect("initial IR passes");
+        assert_eq!(first.computation_counts().execution_layout, 1);
+        drop(first);
+
+        let conflicting_layout = ExecutionLayoutOp::new_with_domain(
+            context,
+            7,
+            [128, 1, 1],
+            [64, 1, 1],
+            64,
+            ExecutionDomainAttr::FullPhysicalWorkgroups,
+        );
+        conflicting_layout
+            .get_operation()
+            .insert_before(context, ret.get_operation());
+
+        let mut revalidation = PlironAnalysisManagerV1::new(&function);
+        let error = require_production_pliron_checks_with_analyses(
+            context,
+            &function,
+            None,
+            &mut revalidation,
+        )
+        .expect_err("fresh analysis rejects conflicting execution layouts");
+
+        assert!(matches!(
+            error,
+            ProductionPlironPreloweringErrorV1::TensorLayout(_)
+        ));
+        assert_eq!(revalidation.computation_counts().execution_layout, 1);
+    }
 }

@@ -15,13 +15,13 @@ use pliron::{
     value::Value,
 };
 
+use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
+use crate::pliron_barrier::run_pliron_barrier_convergence_check_with_analyses_v1;
 use crate::pliron_invocation_trace::{
-    PlironInvocationTraceV1, PlironTraceEventV1, PlironTraceLocationV1, trace_pliron_invocations_v1,
+    PlironInvocationTraceV1, PlironTraceEventV1, PlironTraceLocationV1,
 };
-use crate::{
-    KernelCheckPassKindV1, run_pliron_barrier_convergence_check_v1,
-    run_pliron_ranked_bounds_check_v1, trace_failure_detail,
-};
+use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
+use crate::{KernelCheckPassKindV1, trace_failure_detail};
 
 pub const MAX_PLIRON_WORKGROUP_FINDINGS_V1: usize = 4_096;
 
@@ -217,18 +217,23 @@ pub fn run_pliron_workgroup_memory_check_v1(
     context: &Context,
     function: &FuncOp,
 ) -> PlironWorkgroupMemoryReportV1 {
-    if !run_pliron_ranked_bounds_check_v1(context, function).is_clean() {
+    let mut analyses = PlironAnalysisManagerV1::new(function);
+    if !run_pliron_ranked_bounds_check_with_analyses_v1(context, function, &mut analyses).is_clean()
+    {
         return one(PlironWorkgroupMemoryFindingV1::BoundsPrerequisiteRejected);
     }
-    if !run_pliron_barrier_convergence_check_v1(context, function).is_clean() {
+    if !run_pliron_barrier_convergence_check_with_analyses_v1(context, function, &mut analyses)
+        .is_clean()
+    {
         return one(PlironWorkgroupMemoryFindingV1::BarrierPrerequisiteRejected);
     }
-    run_pliron_workgroup_memory_check_after_prerequisites_v1(context, function)
+    run_pliron_workgroup_memory_check_with_analyses_v1(context, function, &mut analyses)
 }
 
-pub(crate) fn run_pliron_workgroup_memory_check_after_prerequisites_v1(
+pub(crate) fn run_pliron_workgroup_memory_check_with_analyses_v1(
     context: &Context,
     function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
 ) -> PlironWorkgroupMemoryReportV1 {
     if !function
         .get_region(context)
@@ -247,7 +252,8 @@ pub(crate) fn run_pliron_workgroup_memory_check_after_prerequisites_v1(
     {
         return PlironWorkgroupMemoryReportV1 { findings: vec![] };
     }
-    let traces = match trace_pliron_invocations_v1(context, function) {
+    analyses.prepare_exact_trace(context, function);
+    let traces = match analyses.exact_trace() {
         Ok(traces) => traces,
         Err(failure) => {
             return one(PlironWorkgroupMemoryFindingV1::AnalysisIncomplete {
@@ -289,11 +295,12 @@ pub(crate) fn run_pliron_workgroup_memory_check_after_prerequisites_v1(
     analyze_scoped_traces(traces)
 }
 
-pub(crate) fn require_pliron_workgroup_memory_after_prerequisites_v1(
+pub(crate) fn require_pliron_workgroup_memory_with_analyses_v1(
     context: &Context,
     function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
 ) -> Result<PlironWorkgroupMemoryReportV1, PlironWorkgroupMemoryCheckErrorV1> {
-    let report = run_pliron_workgroup_memory_check_after_prerequisites_v1(context, function);
+    let report = run_pliron_workgroup_memory_check_with_analyses_v1(context, function, analyses);
     if report.is_clean() {
         Ok(report)
     } else {
@@ -313,14 +320,14 @@ pub fn require_pliron_workgroup_memory_safety_before_lowering_v1(
     }
 }
 
-fn analyze_scoped_traces(traces: Vec<PlironInvocationTraceV1>) -> PlironWorkgroupMemoryReportV1 {
-    let has_unknown_alias = match validate_workgroup_allocation_contract(&traces) {
+fn analyze_scoped_traces(traces: &[PlironInvocationTraceV1]) -> PlironWorkgroupMemoryReportV1 {
+    let has_unknown_alias = match validate_workgroup_allocation_contract(traces) {
         Ok(has_unknown_alias) => has_unknown_alias,
         Err(detail) => {
             return one(PlironWorkgroupMemoryFindingV1::AnalysisIncomplete { detail });
         }
     };
-    let mut by_workgroup: BTreeMap<(u64, u64), Vec<PlironInvocationTraceV1>> = BTreeMap::new();
+    let mut by_workgroup: BTreeMap<(u64, u64), Vec<&PlironInvocationTraceV1>> = BTreeMap::new();
     for trace in traces {
         by_workgroup
             .entry((trace.grid, trace.workgroup))
@@ -466,7 +473,7 @@ fn validate_workgroup_allocation_contract(
 }
 
 fn analyze_workgroup_traces(
-    traces: &[PlironInvocationTraceV1],
+    traces: &[&PlironInvocationTraceV1],
     has_unknown_alias: bool,
 ) -> PlironWorkgroupMemoryReportV1 {
     let mut published = HashSet::new();

@@ -12,6 +12,8 @@ mod machine_effect;
 #[cfg(feature = "authenticated-machine-effect")]
 mod physical_machine_effect;
 #[cfg(feature = "pliron-analysis")]
+mod pliron_analysis_manager;
+#[cfg(feature = "pliron-analysis")]
 mod pliron_atomic_legality;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_barrier;

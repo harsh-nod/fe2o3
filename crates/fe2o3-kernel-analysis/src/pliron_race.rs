@@ -25,12 +25,11 @@ use pliron::{
     value::Value,
 };
 
-use crate::pliron_invocation_trace::{PlironTraceFailureV1, pliron_execution_layout_v1};
+use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
+use crate::pliron_invocation_trace::PlironTraceFailureV1;
+use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
 use crate::pliron_sparse_index::SparseAffineIndexV1;
-use crate::{
-    KernelCheckPassKindV1, SparseIndexAnalysisV1, SparseIndexFailureV1,
-    analyze_pliron_sparse_indices_v1, run_pliron_ranked_bounds_check_v1,
-};
+use crate::{KernelCheckPassKindV1, SparseIndexAnalysisV1, SparseIndexFailureV1};
 
 pub const MAX_PLIRON_RACE_INVOCATIONS_V1: u64 = 65_536;
 pub const MAX_PLIRON_RACE_EFFECT_INSTANCES_V1: usize = 1_048_576;
@@ -379,17 +378,27 @@ struct ConflictClassV1 {
 }
 
 pub fn run_pliron_ranked_race_check_v1(context: &Context, function: &FuncOp) -> RankedRaceReportV1 {
-    if !run_pliron_ranked_bounds_check_v1(context, function).is_clean() {
+    let mut analyses = PlironAnalysisManagerV1::new(function);
+    if !run_pliron_ranked_bounds_check_with_analyses_v1(context, function, &mut analyses).is_clean()
+    {
         return one(RankedRaceFindingV1::BoundsPrerequisiteRejected);
     }
-    run_pliron_ranked_race_check_after_bounds_v1(context, function)
+    run_pliron_ranked_race_check_with_analyses_v1(context, function, &mut analyses)
 }
 
-pub(crate) fn run_pliron_ranked_race_check_after_bounds_v1(
+pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
     context: &Context,
     function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
 ) -> RankedRaceReportV1 {
-    let sparse = match analyze_pliron_sparse_indices_v1(context, function) {
+    analyses.prepare_sparse_indices(context, function);
+    if let Err(failure) = analyses.sparse_indices() {
+        return one(RankedRaceFindingV1::SparseIndexAnalysisFailed {
+            detail: sparse_failure(failure),
+        });
+    }
+    analyses.prepare_execution_layout(context, function);
+    let sparse = match analyses.sparse_indices() {
         Ok(sparse) => sparse,
         Err(failure) => {
             return one(RankedRaceFindingV1::SparseIndexAnalysisFailed {
@@ -569,7 +578,7 @@ pub(crate) fn run_pliron_ranked_race_check_after_bounds_v1(
         }
     }
 
-    let layout = match pliron_execution_layout_v1(context, function) {
+    let layout = match analyses.execution_layout() {
         Ok(layout) => layout,
         Err(failure) => {
             return one(RankedRaceFindingV1::ExecutionLayoutUnavailable {
@@ -808,11 +817,12 @@ pub(crate) fn run_pliron_ranked_race_check_after_bounds_v1(
     RankedRaceReportV1 { findings }
 }
 
-pub(crate) fn require_pliron_ranked_race_freedom_after_bounds_v1(
+pub(crate) fn require_pliron_ranked_race_freedom_with_analyses_v1(
     context: &Context,
     function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
 ) -> Result<RankedRaceReportV1, RankedRaceCheckErrorV1> {
-    let report = run_pliron_ranked_race_check_after_bounds_v1(context, function);
+    let report = run_pliron_ranked_race_check_with_analyses_v1(context, function, analyses);
     if report.is_clean() {
         Ok(report)
     } else {

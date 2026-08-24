@@ -22,15 +22,13 @@ use pliron::{
     value::Value,
 };
 
+use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::pliron_barrier::trace_failure_detail;
 use crate::pliron_invocation_trace::{
     PlironExecutionLayoutV1, PlironInvocationTraceV1, PlironTraceEventV1, PlironTraceFailureV1,
-    PlironTraceLocationV1, pliron_execution_layout_v1, trace_pliron_invocations_v1,
+    PlironTraceLocationV1,
 };
-use crate::{
-    KernelCheckPassKindV1, KernelCheckStatusV1, SparseIndexAnalysisV1, SparseIndexFactV1,
-    analyze_pliron_sparse_indices_v1,
-};
+use crate::{KernelCheckPassKindV1, KernelCheckStatusV1, SparseIndexAnalysisV1, SparseIndexFactV1};
 
 pub const MAX_PLIRON_TENSOR_LAYOUT_OPERATIONS_V1: usize = 16_384;
 pub const MAX_PLIRON_TENSOR_LAYOUT_FINDINGS_V1: usize = 256;
@@ -260,6 +258,15 @@ pub fn run_pliron_tensor_layout_check_v1(
     context: &Context,
     function: &FuncOp,
 ) -> PlironTensorLayoutReportV1 {
+    let mut analyses = PlironAnalysisManagerV1::new(function);
+    run_pliron_tensor_layout_check_with_analyses_v1(context, function, &mut analyses)
+}
+
+pub(crate) fn run_pliron_tensor_layout_check_with_analyses_v1(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+) -> PlironTensorLayoutReportV1 {
     let mut findings = Vec::new();
     let mut operation_count = 0;
     let mut tensor_sites = Vec::new();
@@ -321,7 +328,8 @@ pub fn run_pliron_tensor_layout_check_v1(
         }
     }
     if !tensor_sites.is_empty() {
-        let layout = match pliron_execution_layout_v1(context, function) {
+        analyses.prepare_execution_layout(context, function);
+        let layout = match analyses.execution_layout() {
             Ok(Some(layout)) => layout,
             Ok(None) => {
                 findings.push(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
@@ -367,7 +375,8 @@ pub fn run_pliron_tensor_layout_check_v1(
                 });
             }
         }
-        match trace_pliron_invocations_v1(context, function) {
+        analyses.prepare_exact_trace(context, function);
+        match analyses.exact_trace() {
             Ok(traces) => {
                 if let Some(finding) = exact_subgroup_trace_finding(&traces, layout.subgroup_size) {
                     findings.push(finding);
@@ -383,6 +392,7 @@ pub fn run_pliron_tensor_layout_check_v1(
                 context,
                 function,
                 layout,
+                analyses,
                 &tensor_sites
                     .iter()
                     .map(|(block, operation, _, _)| (*block, *operation))
@@ -511,6 +521,7 @@ fn symbolic_subgroup_convergence(
     context: &Context,
     function: &FuncOp,
     layout: PlironExecutionLayoutV1,
+    analyses: &mut PlironAnalysisManagerV1,
     tensor_sites: &[(usize, usize)],
 ) -> Result<(), PlironTensorLayoutFindingV1> {
     let potentially_partial = layout
@@ -528,7 +539,8 @@ fn symbolic_subgroup_convergence(
             },
         );
     }
-    let sparse = analyze_pliron_sparse_indices_v1(context, function).map_err(|failure| {
+    analyses.prepare_sparse_indices(context, function);
+    let sparse = analyses.sparse_indices().map_err(|failure| {
         PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
             detail: format!("sparse predicate analysis failed: {failure:?}"),
         }
@@ -1326,6 +1338,19 @@ pub fn require_pliron_tensor_layout_before_lowering_v1(
     function: &FuncOp,
 ) -> Result<PlironTensorLayoutReportV1, PlironTensorLayoutCheckErrorV1> {
     let report = run_pliron_tensor_layout_check_v1(context, function);
+    if report.is_clean() {
+        Ok(report)
+    } else {
+        Err(PlironTensorLayoutCheckErrorV1 { report })
+    }
+}
+
+pub(crate) fn require_pliron_tensor_layout_with_analyses_v1(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+) -> Result<PlironTensorLayoutReportV1, PlironTensorLayoutCheckErrorV1> {
+    let report = run_pliron_tensor_layout_check_with_analyses_v1(context, function, analyses);
     if report.is_clean() {
         Ok(report)
     } else {

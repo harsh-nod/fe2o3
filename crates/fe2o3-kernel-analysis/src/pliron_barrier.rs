@@ -15,11 +15,12 @@ use pliron::{
     operation::Operation,
 };
 
+use crate::KernelCheckPassKindV1;
+use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::pliron_invocation_trace::{
     PlironInvocationTraceV1, PlironTraceEventV1, PlironTraceFailureV1, PlironTraceLocationV1,
-    pliron_execution_layout_v1, trace_pliron_invocations_v1,
 };
-use crate::{KernelCheckPassKindV1, run_pliron_ranked_bounds_check_v1};
+use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PlironBarrierFindingV1 {
@@ -129,15 +130,18 @@ pub fn run_pliron_barrier_convergence_check_v1(
     context: &Context,
     function: &FuncOp,
 ) -> PlironBarrierReportV1 {
-    if !run_pliron_ranked_bounds_check_v1(context, function).is_clean() {
+    let mut analyses = PlironAnalysisManagerV1::new(function);
+    if !run_pliron_ranked_bounds_check_with_analyses_v1(context, function, &mut analyses).is_clean()
+    {
         return report(PlironBarrierFindingV1::BoundsPrerequisiteRejected);
     }
-    run_pliron_barrier_convergence_check_after_bounds_v1(context, function)
+    run_pliron_barrier_convergence_check_with_analyses_v1(context, function, &mut analyses)
 }
 
-pub(crate) fn run_pliron_barrier_convergence_check_after_bounds_v1(
+pub(crate) fn run_pliron_barrier_convergence_check_with_analyses_v1(
     context: &Context,
     function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
 ) -> PlironBarrierReportV1 {
     if !function
         .get_region(context)
@@ -153,7 +157,8 @@ pub(crate) fn run_pliron_barrier_convergence_check_after_bounds_v1(
     {
         return PlironBarrierReportV1 { findings: vec![] };
     }
-    let trace_failure = match trace_pliron_invocations_v1(context, function) {
+    analyses.prepare_exact_trace(context, function);
+    let trace_failure = match analyses.exact_trace() {
         Ok(traces) => {
             if traces.is_empty() {
                 return report(PlironBarrierFindingV1::AnalysisIncomplete {
@@ -182,7 +187,7 @@ pub(crate) fn run_pliron_barrier_convergence_check_after_bounds_v1(
     }
     if matches!(trace_failure, PlironTraceFailureV1::DynamicLaunch { .. })
         && !matches!(
-            pliron_execution_layout_v1(context, function),
+            analyses.execution_layout(),
             Ok(Some(layout))
                 if layout.execution_domain == ExecutionDomainAttr::FullPhysicalWorkgroups
         )
@@ -371,11 +376,12 @@ fn summarize_barrier_paths_from(
     Ok(complete)
 }
 
-pub(crate) fn require_pliron_barrier_convergence_after_bounds_v1(
+pub(crate) fn require_pliron_barrier_convergence_with_analyses_v1(
     context: &Context,
     function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
 ) -> Result<PlironBarrierReportV1, PlironBarrierCheckErrorV1> {
-    let report = run_pliron_barrier_convergence_check_after_bounds_v1(context, function);
+    let report = run_pliron_barrier_convergence_check_with_analyses_v1(context, function, analyses);
     if report.is_clean() {
         Ok(report)
     } else {

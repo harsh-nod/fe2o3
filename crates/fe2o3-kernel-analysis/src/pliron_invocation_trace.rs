@@ -25,9 +25,7 @@ use pliron::{
     value::Value,
 };
 
-use crate::{
-    MAX_PLIRON_RACE_INVOCATIONS_V1, SparseIndexFailureV1, analyze_pliron_sparse_indices_v1,
-};
+use crate::{MAX_PLIRON_RACE_INVOCATIONS_V1, SparseIndexFailureV1};
 
 pub const MAX_PLIRON_TRACE_TOTAL_STEPS_V1: usize = 1_048_576;
 
@@ -225,13 +223,12 @@ pub(crate) fn pliron_execution_layout_v1(
     Ok(layout)
 }
 
-pub(crate) fn trace_pliron_invocations_v1(
+pub(crate) fn trace_pliron_invocations_with_inputs_v1(
     context: &Context,
     function: &FuncOp,
+    sparse: &crate::SparseIndexAnalysisV1,
+    layout: Option<PlironExecutionLayoutV1>,
 ) -> Result<Vec<PlironInvocationTraceV1>, PlironTraceFailureV1> {
-    let sparse = analyze_pliron_sparse_indices_v1(context, function)
-        .map_err(PlironTraceFailureV1::Sparse)?;
-    let layout = pliron_execution_layout_v1(context, function)?;
     let needs_scoped_layout = function
         .get_region(context)
         .deref(context)

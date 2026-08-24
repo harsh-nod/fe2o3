@@ -30,10 +30,8 @@ use pliron::{
     value::Value,
 };
 
-use crate::{
-    KernelCheckPassKindV1, SparseIndexAnalysisV1, SparseIndexFailureV1,
-    analyze_pliron_sparse_indices_v1,
-};
+use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
+use crate::{KernelCheckPassKindV1, SparseIndexAnalysisV1, SparseIndexFailureV1};
 
 pub const MAX_RANKED_BOUNDS_BLOCKS: usize = 1_024;
 pub const MAX_RANKED_BOUNDS_OPERATIONS: usize = 65_536;
@@ -504,6 +502,15 @@ pub fn run_pliron_ranked_bounds_check_v1(
     context: &Context,
     function: &FuncOp,
 ) -> RankedBoundsReportV1 {
+    let mut analyses = PlironAnalysisManagerV1::new(function);
+    run_pliron_ranked_bounds_check_with_analyses_v1(context, function, &mut analyses)
+}
+
+pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+) -> RankedBoundsReportV1 {
     let mut budget = RankedBoundsBudget::default();
     let region = function.get_region(context);
     let mut blocks = Vec::new();
@@ -585,7 +592,8 @@ pub fn run_pliron_ranked_bounds_check_v1(
         return structural_failure();
     }
 
-    let sparse_indices = match analyze_pliron_sparse_indices_v1(context, function) {
+    analyses.prepare_sparse_indices(context, function);
+    let sparse_indices = match analyses.sparse_indices() {
         Ok(analysis) => analysis,
         Err(failure) => {
             return finding_failure(sparse_index_failure(failure));
@@ -778,7 +786,7 @@ pub fn run_pliron_ranked_bounds_check_v1(
                         facts: &inputs[block_index],
                         fact_indices: &fact_indices,
                         context,
-                        sparse_indices: &sparse_indices,
+                        sparse_indices,
                         findings: &mut findings,
                         budget: &mut budget,
                     },
@@ -802,6 +810,19 @@ pub fn require_pliron_ranked_bounds_before_lowering_v1(
     function: &FuncOp,
 ) -> Result<RankedBoundsReportV1, RankedBoundsCheckErrorV1> {
     let report = run_pliron_ranked_bounds_check_v1(context, function);
+    if report.is_clean() {
+        Ok(report)
+    } else {
+        Err(RankedBoundsCheckErrorV1 { report })
+    }
+}
+
+pub(crate) fn require_pliron_ranked_bounds_with_analyses_v1(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+) -> Result<RankedBoundsReportV1, RankedBoundsCheckErrorV1> {
+    let report = run_pliron_ranked_bounds_check_with_analyses_v1(context, function, analyses);
     if report.is_clean() {
         Ok(report)
     } else {

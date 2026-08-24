@@ -14,7 +14,9 @@ use pliron::{
     operation::Operation,
 };
 
-use crate::{KernelCheckPassKindV1, run_pliron_ranked_bounds_check_v1};
+use crate::KernelCheckPassKindV1;
+use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
+use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
 
 pub const MAX_PLIRON_SEMANTIC_NODES_V1: usize = 65_536;
 pub const MAX_PLIRON_SEMANTIC_FINDINGS_V1: usize = 4_096;
@@ -129,7 +131,9 @@ pub fn run_pliron_semantic_refinement_check_v1(
     context: &Context,
     function: &FuncOp,
 ) -> PlironSemanticRefinementReportV1 {
-    if !run_pliron_ranked_bounds_check_v1(context, function).is_clean() {
+    let mut analyses = PlironAnalysisManagerV1::new(function);
+    if !run_pliron_ranked_bounds_check_with_analyses_v1(context, function, &mut analyses).is_clean()
+    {
         return one(PlironSemanticRefinementFindingV1::BoundsPrerequisiteRejected);
     }
     run_pliron_semantic_refinement_check_after_bounds_v1(context, function)
@@ -256,9 +260,10 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
     PlironSemanticRefinementReportV1 { findings }
 }
 
-pub(crate) fn require_pliron_semantic_refinement_after_bounds_v1(
+pub(crate) fn require_pliron_semantic_refinement_with_analyses_v1(
     context: &Context,
     function: &FuncOp,
+    _analyses: &mut PlironAnalysisManagerV1,
 ) -> Result<PlironSemanticRefinementReportV1, PlironSemanticRefinementCheckErrorV1> {
     let report = run_pliron_semantic_refinement_check_after_bounds_v1(context, function);
     if report.is_clean() {
