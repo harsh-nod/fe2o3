@@ -78,7 +78,7 @@ fn schema_identity_is_linux_kfd_1_18() {
 fn memory_lifecycle_schema_composes_with_frozen_base_schema() {
     assert_eq!(
         KFD_MEMORY_LIFECYCLE_SCHEMA_ID,
-        "linux-kfd-memory-lifecycle-1.18-generic-ioc-v1"
+        "linux-kfd-memory-lifecycle-1.18-generic-ioc-v2"
     );
     assert_eq!(
         KFD_UAPI_GPUVM_SOURCE_SHA256,
@@ -102,14 +102,14 @@ fn memory_lifecycle_schema_composes_with_frozen_base_schema() {
     assert_eq!(
         KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES,
         [
-            0xe2, 0xd6, 0x98, 0x7b, 0x7c, 0x8e, 0x61, 0xa4, 0x05, 0xb2, 0xf7, 0x75, 0xd5, 0xd0,
-            0x04, 0xf4, 0x58, 0xa0, 0x96, 0x24, 0x14, 0x59, 0xe4, 0xcf, 0xdf, 0x90, 0xbd, 0x44,
-            0x97, 0xf4, 0xd5, 0x8a,
+            0x5c, 0x21, 0x0c, 0x3d, 0x7a, 0xda, 0x17, 0x79, 0x4b, 0x10, 0xcd, 0xe6, 0xf4, 0x8a,
+            0x28, 0xf1, 0x05, 0xa6, 0xe7, 0x9d, 0xd8, 0xdc, 0xe7, 0x7c, 0x66, 0xb1, 0x4d, 0xca,
+            0x60, 0x74, 0xee, 0xa8,
         ]
     );
     assert_eq!(
         KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256,
-        "e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a"
+        "5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8"
     );
 }
 
@@ -117,7 +117,7 @@ fn memory_lifecycle_schema_composes_with_frozen_base_schema() {
 fn device_memory_schema_composes_without_changing_r2_admission() {
     assert_eq!(
         KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_ID,
-        "linux-kfd-gfx942-device-memory-lifecycle-1.18-v1"
+        "linux-kfd-gfx942-device-memory-lifecycle-1.18-v2"
     );
     assert!(
         KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST.contains(&format!(
@@ -220,7 +220,7 @@ fn admitted_memory_flags_match_kfd_uapi_1_18_golden() {
 
     assert_eq!(KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT, 0x8400_0002);
     assert_eq!(KFD_ALLOC_MEMORY_FLAGS_KERNARG, 0x8600_0002);
-    assert_eq!(KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE, 0x8e00_0002);
+    assert_eq!(KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE, 0xce00_0002);
     assert_eq!(KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE, 0xc400_0002);
     assert_eq!(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL, 0x8000_0001);
     assert_eq!(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC, 0xa000_0001);
@@ -284,7 +284,7 @@ fn memory_flag_admission_rejects_hostile_and_unreviewed_patterns() {
         KFD_IOC_ALLOC_MEM_FLAGS_GTT,
         KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT | 1,
         KFD_ALLOC_MEMORY_FLAGS_KERNARG | (1 << 24),
-        KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE | KFD_IOC_ALLOC_MEM_FLAGS_EXECUTABLE,
+        KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE & !KFD_IOC_ALLOC_MEM_FLAGS_EXECUTABLE,
         u32::MAX,
     ] {
         assert_eq!(

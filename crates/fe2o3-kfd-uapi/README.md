@@ -24,8 +24,8 @@ silently broaden existing R1 admission evidence.
 
 The memory-lifecycle definitions are bound independently by
 KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST under schema ID
-linux-kfd-memory-lifecycle-1.18-generic-ioc-v1, with SHA-256
-e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a.
+linux-kfd-memory-lifecycle-1.18-generic-ioc-v2, with SHA-256
+5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8.
 That manifest composes with R1 by including its exact schema ID and digest,
 then binds the active KFD header and GPUVM implementation provenance, target,
 package, allocation flags and profiles, layouts, and request numbers.
@@ -38,8 +38,8 @@ no allocation, CPU mapping, content, or GPU publication authority.
 
 The compute-AQL queue records are bound by a third, independently named
 KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST under schema ID
-linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v1, with SHA-256
-b11f3c8c766dd25394350646e35269e10c8a33acb98f74cba2a82e95fa185c4e.
+linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v2, with SHA-256
+9e16e0e6b76387d9602dcfdef2ad6614b09202e8553ec21cbbcf5953781f6119.
 It includes the exact frozen R1 and R2 digests as prerequisites and adds the
 queue ABI plus the exact reviewed gfx942 queue semantic source set. Neither
 version admission nor the two prerequisite manifests authenticate this queue
@@ -52,8 +52,8 @@ authorize ACQUIRE_VM, memory operations, or queue operations.
 
 The additive event and queue-exception records are bound by
 `KFD_EVENT_QUEUE_EXCEPTION_SCHEMA_MANIFEST` under schema ID
-`linux-kfd-event-and-queue-exception-1.18-gfx942-v1`, with SHA-256
-`8d754af12ed2fcd0c238e1f9e38fbbdab053f44fc5d613b227fdcdd616fcc849`.
+`linux-kfd-event-and-queue-exception-1.18-gfx942-v2`, with SHA-256
+`bdde2e2d9b03690d6a63dba3d91074da214d87ece9ae1894c4d7a160bced58b8`.
 That schema includes the exact four frozen prerequisite schema IDs and digests;
 it does not edit or reinterpret their manifests. It also pins the active KFD
 event, process-exception, debug, chardev, and private-header sources and the
@@ -63,8 +63,8 @@ closure and does not authenticate the running module.
 
 The separate additive runtime-transition schema is
 `KFD_RUNTIME_ENABLE_SCHEMA_MANIFEST`, under schema ID
-`linux-kfd-runtime-enable-1.18-queue-exception-v1`, with SHA-256
-`4c762d1e35a5940f0972290151de51e6e19722f81874a6446c66ddc70a062ac1`.
+`linux-kfd-runtime-enable-1.18-queue-exception-v2`, with SHA-256
+`fa47481b10ea4bd89438d10b82bd8197088906e55f5f0c827dc7aa5aba906288`.
 It composes the frozen event schema and pins the exact active header,
 `kfd_chardev.c`, `kfd_debug.c`, and `kfd_process.c` paths needed for the
 process-global enable-before-any-queue predicate and context-save exception

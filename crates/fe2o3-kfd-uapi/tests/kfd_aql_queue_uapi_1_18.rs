@@ -31,7 +31,7 @@ use sha2::{Digest, Sha256};
 fn queue_schema_is_separate_and_composes_with_frozen_prerequisites() {
     assert_eq!(
         KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_ID,
-        "linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v1"
+        "linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v2"
     );
     assert_eq!(
         KFD_UAPI_SCHEMA_MANIFEST_SHA256,
@@ -39,13 +39,13 @@ fn queue_schema_is_separate_and_composes_with_frozen_prerequisites() {
     );
     assert_eq!(
         KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256,
-        "e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a"
+        "5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8"
     );
     assert!(KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST.contains(
         "base_schema_manifest_sha256=e4aad5d8e3177ea6d70298adab7741c377cb091373553ce689f3525e7514d9b4"
     ));
     assert!(KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST.contains(
-        "memory_schema_manifest_sha256=e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a"
+        "memory_schema_manifest_sha256=5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8"
     ));
 
     let digest = Sha256::digest(KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST);
@@ -60,10 +60,10 @@ fn queue_schema_is_separate_and_composes_with_frozen_prerequisites() {
 fn gfx942_output_schema_is_separate_and_composes_with_queue_schema() {
     assert_eq!(
         KFD_GFX942_QUEUE_RESOURCE_SCHEMA_ID,
-        "linux-kfd-gfx942-queue-resources-1.18-v1"
+        "linux-kfd-gfx942-queue-resources-1.18-v2"
     );
     assert!(KFD_GFX942_QUEUE_RESOURCE_SCHEMA_MANIFEST.contains(
-        "queue_schema_manifest_sha256=b11f3c8c766dd25394350646e35269e10c8a33acb98f74cba2a82e95fa185c4e"
+        "queue_schema_manifest_sha256=9e16e0e6b76387d9602dcfdef2ad6614b09202e8553ec21cbbcf5953781f6119"
     ));
     assert!(
         KFD_GFX942_QUEUE_RESOURCE_SCHEMA_MANIFEST

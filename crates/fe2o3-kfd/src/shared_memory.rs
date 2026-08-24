@@ -44,9 +44,9 @@ const MAX_PUBLIC_DEVICE_PARALLEL_FILL_WORKERS_V1: usize = 16;
 
 /// Canonical contract for bounded device-local allocation leases.
 pub const GFX942_DEVICE_MEMORY_LEASE_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-device-memory-lease-r1-v1\n",
+    "profile=fe2o3-mi300x-gfx942-device-memory-lease-r2-v1\n",
     "device_profile_sha256=e12ea33b259666e7928612403109640b03b0d637b893a2c15b87d17a4211c8de\n",
-    "kfd_device_memory_schema_sha256=8592027abc19962181c29b42962909e152d4ef4194036a1659dc601992cf709a\n",
+    "kfd_device_memory_schema_sha256=0594e7289aa2527cdc76f94371178f78c08e422dff44c985826d7e2fc7bdb951\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device-and-vm\n",
     "profile=device-local-vram-hbm-writable:0x80000001\n",
     "bounds=allocation-records:64,retained-bytes:206158430208,alignment-power-of-two-max:4096,page:4096\n",
@@ -61,17 +61,17 @@ pub const GFX942_DEVICE_MEMORY_LEASE_MANIFEST_V1: &str = concat!(
 );
 
 pub const GFX942_DEVICE_MEMORY_LEASE_MANIFEST_SHA256_V1: &str =
-    "29cbf694e5cbd1ae30258d85653042b23178b0a8d1676e2a1560df22cbbdfed3";
+    "5e614f6b3c5fc9d92b331393c3eff63641d3c32910b115de234d0918e97edc19";
 
 pub const GFX942_DEVICE_MEMORY_LEASE_MANIFEST_SHA256_BYTES_V1: [u8; 32] = [
-    0x29, 0xcb, 0xf6, 0x94, 0xe5, 0xcb, 0xd1, 0xae, 0x30, 0x25, 0x8d, 0x85, 0x65, 0x30, 0x42, 0xb2,
-    0x31, 0x78, 0xb0, 0xa8, 0xd1, 0x67, 0x6e, 0x2a, 0x15, 0x60, 0xdf, 0x22, 0xcb, 0xbd, 0xfe, 0xd3,
+    0x5e, 0x61, 0x4f, 0x6b, 0x3c, 0x5f, 0xc9, 0xd9, 0x2b, 0x33, 0x13, 0x93, 0xc3, 0xef, 0xf6, 0x36,
+    0x41, 0xd3, 0xc3, 0x29, 0x10, 0xb1, 0x15, 0xde, 0x23, 0x4d, 0x09, 0x18, 0xe9, 0x7e, 0xdc, 0x19,
 ];
 
 /// Canonical contract for CPU initialization of public device-local storage.
 pub const GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-device-memory-initialization-r3-v1\n",
-    "uapi_profile_sha256=3b9f1164fc74672f019cbd092c142b4a6d830920424b87282cfdf5b8f50afd81\n",
+    "profile=fe2o3-mi300x-gfx942-device-memory-initialization-r4-v1\n",
+    "uapi_profile_sha256=51a5d64a5d6a6c12a1f65e0734bcdf4bf7a8b67ba02210c5526b5088585f916f\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device-and-vm\n",
     "allocation=device-local-vram-hbm-public-writable:0xa0000001,separate-from-uninitialized:0x80000001\n",
     "source=owned-nonempty-byte-slice-or-private-field-repeated-byte-recipe,exact-length-and-sha256-content-precommit,bounded-memory-repeated-byte-hash-before-native-allocation\n",
@@ -83,14 +83,14 @@ pub const GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_V1`].
 pub const GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_SHA256_V1: &str =
-    "edb019f0d3787705d92e879e5353cfd776a2a97fea5129a498bc57226131b730";
+    "e187789f3fbbaafa4d9d0e78f0012d12cb113fdfadb4aa61a3d2fce4dd044daa";
 
 /// Canonical contract for the bounded multi-allocation R2 adapter.
 pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-shared-gtt-memory-r6-v1\n",
-    "base_memory_profile_sha256=7bdca672c4921ee56a850d41040045f4a8fbe5a20176628a4ea982dd80fbe8ec\n",
-    "kfd_memory_schema_sha256=e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a\n",
-    "profiles=host-visible-coherent:0x84000002,kernarg:0x86000002,aql-queue:0x8e000002,executable:0xc4000002\n",
+    "profile=fe2o3-mi300x-shared-gtt-memory-r7-v1\n",
+    "base_memory_profile_sha256=9623a22bfb2686afa9e4d99dcec0a352c7fd7c6514b84ff714c40cfb9095d2b8\n",
+    "kfd_memory_schema_sha256=5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8\n",
+    "profiles=host-visible-coherent:0x84000002,kernarg:0x86000002,aql-queue:0xce000002,executable:0xc4000002\n",
     "bounds=allocations:64,single-cpu-bytes:2147483648,total-gpu-va-bytes:8589934592,page:4096\n",
     "aql=logical-ring:power-of-two-4096..2147483648,gpu-va:checked-double,cpu-vma:single-physical-copy\n",
     "va_allocator=kernel-selected-prot-none-guards-retained-until-successful-free,checked-nonoverlap\n",
@@ -109,11 +109,11 @@ pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
 );
 
 pub const SHARED_GTT_MEMORY_PROFILE_SHA256_V1: &str =
-    "1b046d5ea66bc56580930a59d8d0a4dabb1b129fd9e228aee5e8f72b4a7a6378";
+    "b5bef892fcaceb19c2e5b75c158b3ef75acefbe6c70109aa8ba83585dd2ef307";
 
 pub const SHARED_GTT_MEMORY_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
-    0x1b, 0x04, 0x6d, 0x5e, 0xa6, 0x6b, 0xc5, 0x65, 0x80, 0x93, 0x0a, 0x59, 0xd8, 0xd0, 0xa4, 0xda,
-    0xbb, 0x1b, 0x12, 0x9f, 0xd9, 0xe2, 0x28, 0xae, 0xe5, 0xe8, 0xf7, 0x2b, 0x4a, 0x7a, 0x63, 0x78,
+    0xb5, 0xbe, 0xf8, 0x92, 0xfc, 0xac, 0xeb, 0x19, 0xc2, 0xe5, 0xb7, 0x5c, 0x15, 0x8b, 0x3e, 0xf7,
+    0x5a, 0xce, 0xfb, 0xe6, 0xc7, 0x01, 0x09, 0xaa, 0x8b, 0xa8, 0x35, 0x85, 0xdd, 0x2e, 0xf3, 0x07,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3195,7 +3195,7 @@ fn project_release(
 const _: () = {
     assert!(KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT == 0x8400_0002);
     assert!(KFD_ALLOC_MEMORY_FLAGS_KERNARG == 0x8600_0002);
-    assert!(KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE == 0x8e00_0002);
+    assert!(KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE == 0xce00_0002);
     assert!(KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE == 0xc400_0002);
     assert!(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL == 0x8000_0001);
     assert!(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC == 0xa000_0001);
@@ -3599,7 +3599,7 @@ mod tests {
         let mut executable = engine.allocate::<ExecutableGttV1>(8192).unwrap();
         assert_eq!(
             engine.backend.flags,
-            vec![0x8400_0002, 0x8600_0002, 0x8e00_0002, 0xc400_0002]
+            vec![0x8400_0002, 0x8600_0002, 0xce00_0002, 0xc400_0002]
         );
         assert_eq!(ordinary.layout().cpu_mapping_bytes(), 8192);
         assert_eq!(aql.layout().cpu_mapping_bytes(), 4096);

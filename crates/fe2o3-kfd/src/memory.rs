@@ -28,9 +28,9 @@ pub const HOST_VISIBLE_MEMORY_PAGE_BYTES_V1: u64 = 4_096;
 /// consequently Contracted at the syscall boundary and makes no refinement or
 /// kernel-correctness claim.
 pub const HOST_VISIBLE_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-single-device-host-visible-memory-r2-v1\n",
+    "profile=fe2o3-mi300x-single-device-host-visible-memory-r3-v1\n",
     "device_profile_sha256=e12ea33b259666e7928612403109640b03b0d637b893a2c15b87d17a4211c8de\n",
-    "kfd_memory_schema_sha256=e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a\n",
+    "kfd_memory_schema_sha256=5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8\n",
     "platform=linux-x86_64,kernel:6.8.0-124-generic,amdgpu:6.16.13,page:4096\n",
     "module_zst_sha256=e5a327a8f46459e07ee3f59cc991d16feee17103e199d39149823879b7fcff0b\n",
     "module_ko_sha256=61317154cee502ea97a74818879dff4b20abf8f074a2f4d19a94288e25d4ac3a\n",
@@ -64,12 +64,12 @@ pub const HOST_VISIBLE_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`HOST_VISIBLE_MEMORY_PROFILE_MANIFEST_V1`].
 pub const HOST_VISIBLE_MEMORY_PROFILE_SHA256_V1: &str =
-    "7bdca672c4921ee56a850d41040045f4a8fbe5a20176628a4ea982dd80fbe8ec";
+    "9623a22bfb2686afa9e4d99dcec0a352c7fd7c6514b84ff714c40cfb9095d2b8";
 
 /// Typed digest bytes of [`HOST_VISIBLE_MEMORY_PROFILE_MANIFEST_V1`].
 pub const HOST_VISIBLE_MEMORY_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
-    0x7b, 0xdc, 0xa6, 0x72, 0xc4, 0x92, 0x1e, 0xe5, 0x6a, 0x85, 0x0d, 0x41, 0x04, 0x00, 0x45, 0xf4,
-    0xa8, 0xfb, 0xe5, 0xa2, 0x01, 0x76, 0x62, 0x8a, 0x4e, 0xa9, 0x82, 0xdd, 0x80, 0xfb, 0xe8, 0xec,
+    0x96, 0x23, 0xa2, 0x2b, 0xfb, 0x26, 0x86, 0xaf, 0xa9, 0xe4, 0xd9, 0x9d, 0xce, 0xc0, 0xa3, 0x52,
+    0xc7, 0xfd, 0x7c, 0x65, 0x14, 0xb8, 0x4f, 0xf7, 0x14, 0xc4, 0x0c, 0xfb, 0x90, 0x95, 0xd2, 0xb8,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

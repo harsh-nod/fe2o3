@@ -18,18 +18,18 @@ use core::mem::{align_of, offset_of, size_of};
 pub const KFD_UAPI_SCHEMA_ID: &str = "linux-kfd-uapi-1.18-generic-ioc-v1";
 
 /// Stable name of the reviewed R2 VM and memory-lifecycle UAPI extension.
-pub const KFD_MEMORY_LIFECYCLE_SCHEMA_ID: &str = "linux-kfd-memory-lifecycle-1.18-generic-ioc-v1";
+pub const KFD_MEMORY_LIFECYCLE_SCHEMA_ID: &str = "linux-kfd-memory-lifecycle-1.18-generic-ioc-v2";
 
 /// Stable name of the reviewed gfx942 device-local memory extension.
 pub const KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_ID: &str =
-    "linux-kfd-gfx942-device-memory-lifecycle-1.18-v1";
+    "linux-kfd-gfx942-device-memory-lifecycle-1.18-v2";
 
 /// Stable name of the reviewed R4 compute-AQL queue-lifecycle UAPI extension.
 pub const KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_ID: &str =
-    "linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v1";
+    "linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v2";
 
 /// Stable name of the reviewed gfx942 CREATE_QUEUE output-observation schema.
-pub const KFD_GFX942_QUEUE_RESOURCE_SCHEMA_ID: &str = "linux-kfd-gfx942-queue-resources-1.18-v1";
+pub const KFD_GFX942_QUEUE_RESOURCE_SCHEMA_ID: &str = "linux-kfd-gfx942-queue-resources-1.18-v2";
 
 /// Path of the Linux UAPI header from which this schema was reviewed.
 pub const KFD_UAPI_SOURCE_HEADER: &str = "include/uapi/linux/kfd_ioctl.h";
@@ -162,7 +162,7 @@ pub const KFD_UAPI_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
 /// A future memory authority must bind both manifest digests; successful R1
 /// version or device admission alone does not admit memory syscalls.
 pub const KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST: &str = concat!(
-    "schema_id=linux-kfd-memory-lifecycle-1.18-generic-ioc-v1\n",
+    "schema_id=linux-kfd-memory-lifecycle-1.18-generic-ioc-v2\n",
     "base_schema_id=linux-kfd-uapi-1.18-generic-ioc-v1\n",
     "base_schema_manifest_sha256=e4aad5d8e3177ea6d70298adab7741c377cb091373553ce689f3525e7514d9b4\n",
     "target=linux-x86_64-generic-ioc\n",
@@ -174,7 +174,7 @@ pub const KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST: &str = concat!(
     "kfd_uapi=1.18\n",
     "acquire_vm=size:8,align:4,drm_fd:0,gpu_id:4,request:40084b15\n",
     "alloc_flags=gtt:00000002,writable:80000000,executable:40000000,aql_queue:08000000,coherent:04000000,uncached:02000000\n",
-    "alloc_profiles=host_visible_coherent:84000002,kernarg:86000002,aql_queue:8e000002,executable:c4000002\n",
+    "alloc_profiles=host_visible_coherent:84000002,kernarg:86000002,aql_queue:ce000002,executable:c4000002\n",
     "alloc_memory=size:40,align:8,va_addr:0,size_field:8,handle:16,mmap_offset:24,gpu_id:32,flags:36,request:c0284b16\n",
     "free_memory=size:8,align:8,handle:0,request:40084b17\n",
     "map_memory=size:24,align:8,handle:0,device_ids_array_ptr:8,n_devices:16,n_success:20,request:c0184b18\n",
@@ -183,12 +183,12 @@ pub const KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST: &str = concat!(
 
 /// SHA-256 of KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST.
 pub const KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256: &str =
-    "e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a";
+    "5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8";
 
 /// Typed digest bytes of KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST.
 pub const KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
-    0xe2, 0xd6, 0x98, 0x7b, 0x7c, 0x8e, 0x61, 0xa4, 0x05, 0xb2, 0xf7, 0x75, 0xd5, 0xd0, 0x04, 0xf4,
-    0x58, 0xa0, 0x96, 0x24, 0x14, 0x59, 0xe4, 0xcf, 0xdf, 0x90, 0xbd, 0x44, 0x97, 0xf4, 0xd5, 0x8a,
+    0x5c, 0x21, 0x0c, 0x3d, 0x7a, 0xda, 0x17, 0x79, 0x4b, 0x10, 0xcd, 0xe6, 0xf4, 0x8a, 0x28, 0xf1,
+    0x05, 0xa6, 0xe7, 0x9d, 0xd8, 0xdc, 0xe7, 0x7c, 0x66, 0xb1, 0x4d, 0xca, 0x60, 0x74, 0xee, 0xa8,
 ];
 
 /// Canonical manifest for the additive gfx942 device-local allocation profile.
@@ -197,9 +197,9 @@ pub const KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
 /// exact VRAM+writable profile separately. It is ABI evidence only; it grants
 /// no allocation, mapping, address, copy, or dispatch authority.
 pub const KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST: &str = concat!(
-    "schema_id=linux-kfd-gfx942-device-memory-lifecycle-1.18-v1\n",
-    "memory_schema_id=linux-kfd-memory-lifecycle-1.18-generic-ioc-v1\n",
-    "memory_schema_manifest_sha256=e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a\n",
+    "schema_id=linux-kfd-gfx942-device-memory-lifecycle-1.18-v2\n",
+    "memory_schema_id=linux-kfd-memory-lifecycle-1.18-generic-ioc-v2\n",
+    "memory_schema_manifest_sha256=5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18\n",
     "source_header=include/uapi/linux/kfd_ioctl.h\n",
     "source_header_sha256=b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d\n",
@@ -213,12 +213,12 @@ pub const KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST: &str = concat!(
 
 /// SHA-256 of [`KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST`].
 pub const KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256: &str =
-    "8592027abc19962181c29b42962909e152d4ef4194036a1659dc601992cf709a";
+    "0594e7289aa2527cdc76f94371178f78c08e422dff44c985826d7e2fc7bdb951";
 
 /// Typed digest bytes of [`KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST`].
 pub const KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
-    0x85, 0x92, 0x02, 0x7a, 0xbc, 0x19, 0x96, 0x21, 0x81, 0xc2, 0x9b, 0x42, 0x96, 0x29, 0x09, 0xe1,
-    0x52, 0xd4, 0xef, 0x41, 0x94, 0x03, 0x6a, 0x16, 0x59, 0xdc, 0x60, 0x19, 0x92, 0xcf, 0x70, 0x9a,
+    0x05, 0x94, 0xe7, 0x28, 0x9a, 0xa2, 0x52, 0x7c, 0xdc, 0x76, 0xf9, 0x43, 0x71, 0x17, 0x8f, 0x78,
+    0xc0, 0x8e, 0x42, 0x2d, 0xff, 0x44, 0xc9, 0x85, 0x82, 0x6d, 0x7e, 0x2f, 0xc7, 0xbd, 0xb9, 0x51,
 ];
 
 /// Canonical manifest for CPU-initializable gfx942 device-local storage.
@@ -226,9 +226,9 @@ pub const KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
 /// This additive profile retains the ordinary device-local schema unchanged.
 /// It admits one exact additional flag set and remains ABI evidence only.
 pub const KFD_PUBLIC_DEVICE_MEMORY_SCHEMA_MANIFEST: &str = concat!(
-    "schema_id=linux-kfd-gfx942-public-device-memory-1.18-v1\n",
-    "device_memory_schema_id=linux-kfd-gfx942-device-memory-lifecycle-1.18-v1\n",
-    "device_memory_schema_sha256=8592027abc19962181c29b42962909e152d4ef4194036a1659dc601992cf709a\n",
+    "schema_id=linux-kfd-gfx942-public-device-memory-1.18-v2\n",
+    "device_memory_schema_id=linux-kfd-gfx942-device-memory-lifecycle-1.18-v2\n",
+    "device_memory_schema_sha256=0594e7289aa2527cdc76f94371178f78c08e422dff44c985826d7e2fc7bdb951\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18\n",
     "source_header=include/uapi/linux/kfd_ioctl.h\n",
     "source_header_sha256=b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d\n",
@@ -239,12 +239,12 @@ pub const KFD_PUBLIC_DEVICE_MEMORY_SCHEMA_MANIFEST: &str = concat!(
 
 /// SHA-256 of [`KFD_PUBLIC_DEVICE_MEMORY_SCHEMA_MANIFEST`].
 pub const KFD_PUBLIC_DEVICE_MEMORY_SCHEMA_MANIFEST_SHA256: &str =
-    "3b9f1164fc74672f019cbd092c142b4a6d830920424b87282cfdf5b8f50afd81";
+    "51a5d64a5d6a6c12a1f65e0734bcdf4bf7a8b67ba02210c5526b5088585f916f";
 
 /// Typed digest bytes of [`KFD_PUBLIC_DEVICE_MEMORY_SCHEMA_MANIFEST`].
 pub const KFD_PUBLIC_DEVICE_MEMORY_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
-    0x3b, 0x9f, 0x11, 0x64, 0xfc, 0x74, 0x67, 0x2f, 0x01, 0x9c, 0xbd, 0x09, 0x2c, 0x14, 0x2b, 0x4a,
-    0x6d, 0x83, 0x09, 0x20, 0x42, 0x4b, 0x87, 0x28, 0x2c, 0xfd, 0xf5, 0xb8, 0xf5, 0x0a, 0xfd, 0x81,
+    0x51, 0xa5, 0xd6, 0x4a, 0x5d, 0x6a, 0x6c, 0x12, 0xa1, 0xf6, 0x5e, 0x07, 0x34, 0xbc, 0xdf, 0x4b,
+    0xf7, 0xa8, 0xb6, 0x7b, 0xa0, 0x22, 0x10, 0xc5, 0x52, 0x6b, 0x50, 0x88, 0x58, 0x5f, 0x91, 0x6f,
 ];
 
 /// Canonical manifest for the reviewed R4 compute-AQL queue UAPI extension.
@@ -258,11 +258,11 @@ pub const KFD_PUBLIC_DEVICE_MEMORY_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
 /// definitions. It does not claim a complete transitive kernel build closure
 /// or authenticate the code loaded by a running kernel.
 pub const KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST: &str = concat!(
-    "schema_id=linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v1\n",
+    "schema_id=linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v2\n",
     "base_schema_id=linux-kfd-uapi-1.18-generic-ioc-v1\n",
     "base_schema_manifest_sha256=e4aad5d8e3177ea6d70298adab7741c377cb091373553ce689f3525e7514d9b4\n",
-    "memory_schema_id=linux-kfd-memory-lifecycle-1.18-generic-ioc-v1\n",
-    "memory_schema_manifest_sha256=e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a\n",
+    "memory_schema_id=linux-kfd-memory-lifecycle-1.18-generic-ioc-v2\n",
+    "memory_schema_manifest_sha256=5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8\n",
     "target=linux-x86_64-generic-ioc\n",
     "source_header=include/uapi/linux/kfd_ioctl.h\n",
     "source_header_sha256=b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d\n",
@@ -313,12 +313,12 @@ pub const KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST: &str = concat!(
 
 /// SHA-256 of [`KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST`].
 pub const KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST_SHA256: &str =
-    "b11f3c8c766dd25394350646e35269e10c8a33acb98f74cba2a82e95fa185c4e";
+    "9e16e0e6b76387d9602dcfdef2ad6614b09202e8553ec21cbbcf5953781f6119";
 
 /// Typed digest bytes of [`KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST`].
 pub const KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
-    0xb1, 0x1f, 0x3c, 0x8c, 0x76, 0x6d, 0xd2, 0x53, 0x94, 0x35, 0x06, 0x46, 0xe3, 0x52, 0x69, 0xe1,
-    0x0c, 0x8a, 0x33, 0xac, 0xb9, 0x8f, 0x74, 0xcb, 0xa2, 0xa8, 0x2e, 0x95, 0xfa, 0x18, 0x5c, 0x4e,
+    0x9e, 0x16, 0xe0, 0xe6, 0xb7, 0x63, 0x87, 0xd9, 0x60, 0x2d, 0xcf, 0xde, 0xf2, 0xad, 0x66, 0x14,
+    0xb0, 0x92, 0x02, 0xe8, 0x55, 0x3e, 0xc2, 0x1c, 0xbb, 0xcf, 0x59, 0x53, 0x78, 0x1f, 0x61, 0x19,
 ];
 
 /// Canonical manifest for reviewed gfx942 CREATE_QUEUE output observations.
@@ -328,9 +328,9 @@ pub const KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
 /// queue ownership, doorbell mapping or MMIO authority, and it does not make a
 /// successful ioctl trustworthy.
 pub const KFD_GFX942_QUEUE_RESOURCE_SCHEMA_MANIFEST: &str = concat!(
-    "schema_id=linux-kfd-gfx942-queue-resources-1.18-v1\n",
-    "queue_schema_id=linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v1\n",
-    "queue_schema_manifest_sha256=b11f3c8c766dd25394350646e35269e10c8a33acb98f74cba2a82e95fa185c4e\n",
+    "schema_id=linux-kfd-gfx942-queue-resources-1.18-v2\n",
+    "queue_schema_id=linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v2\n",
+    "queue_schema_manifest_sha256=9e16e0e6b76387d9602dcfdef2ad6614b09202e8553ec21cbbcf5953781f6119\n",
     "target=linux-x86_64,gfx942,kfd:1.18,non-mes\n",
     "pqm_source=amd/amdkfd/kfd_process_queue_manager.c\n",
     "pqm_source_sha256=8526e258824dbe145e4209cf0fed26463729234ba24369f39e3413e7e6e028db\n",
@@ -349,12 +349,12 @@ pub const KFD_GFX942_QUEUE_RESOURCE_SCHEMA_MANIFEST: &str = concat!(
 
 /// SHA-256 of the gfx942 queue-resource schema manifest.
 pub const KFD_GFX942_QUEUE_RESOURCE_SCHEMA_MANIFEST_SHA256: &str =
-    "63753a9c0dcef0f69e0235b95b44fe6ce22cb5b0d1df6f60a971a5ed28f15904";
+    "8ff2ac20f6001d6f5405423d78e8ad6cec109ac3370fe86d7691c5c4782c1803";
 
 /// Typed digest bytes of the gfx942 queue-resource schema manifest.
 pub const KFD_GFX942_QUEUE_RESOURCE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
-    0x63, 0x75, 0x3a, 0x9c, 0x0d, 0xce, 0xf0, 0xf6, 0x9e, 0x02, 0x35, 0xb9, 0x5b, 0x44, 0xfe, 0x6c,
-    0xe2, 0x2c, 0xb5, 0xb0, 0xd1, 0xdf, 0x6f, 0x60, 0xa9, 0x71, 0xa5, 0xed, 0x28, 0xf1, 0x59, 0x04,
+    0x8f, 0xf2, 0xac, 0x20, 0xf6, 0x00, 0x1d, 0x6f, 0x54, 0x05, 0x42, 0x3d, 0x78, 0xe8, 0xad, 0x6c,
+    0xec, 0x10, 0x9a, 0xc3, 0x37, 0x0f, 0xe8, 0x6d, 0x76, 0x91, 0xc5, 0xc4, 0x78, 0x2c, 0x18, 0x03,
 ];
 
 /// Major version declared by the reviewed AMDGPU 6.16.13 KFD UAPI header.
@@ -405,9 +405,10 @@ pub const KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT: u32 = KFD_IOC_ALLOC_MEM_
 pub const KFD_ALLOC_MEMORY_FLAGS_KERNARG: u32 =
     KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT | KFD_IOC_ALLOC_MEM_FLAGS_UNCACHED;
 
-/// Exact admitted profile for an AQL queue ring's double-mapped storage.
-pub const KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE: u32 =
-    KFD_ALLOC_MEMORY_FLAGS_KERNARG | KFD_IOC_ALLOC_MEM_FLAGS_AQL_QUEUE_MEM;
+/// Exact admitted profile for executable AQL queue ring storage.
+pub const KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE: u32 = KFD_ALLOC_MEMORY_FLAGS_KERNARG
+    | KFD_IOC_ALLOC_MEM_FLAGS_AQL_QUEUE_MEM
+    | KFD_IOC_ALLOC_MEM_FLAGS_EXECUTABLE;
 
 /// Exact admitted profile for host-visible executable memory.
 pub const KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE: u32 =
@@ -1606,7 +1607,7 @@ const _: () = {
     assert!(AMDKFD_IOC_SMI_EVENTS == 0xc008_4b1f);
     assert!(KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT == 0x8400_0002);
     assert!(KFD_ALLOC_MEMORY_FLAGS_KERNARG == 0x8600_0002);
-    assert!(KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE == 0x8e00_0002);
+    assert!(KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE == 0xce00_0002);
     assert!(KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE == 0xc400_0002);
     assert!(KFD_SMI_EVENT_GPU_RESET_MASK == 0x0c);
 };
