@@ -28,8 +28,8 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticDisjointIndexSpaceV1, SemanticEnumEncodingV1, SemanticEnumVariantV1,
     SemanticF32MathFunctionV1, SemanticFieldsShapeV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
     SemanticLocalRoleV1, SemanticMfmaAccumulatorContractV1, SemanticMfmaOperandContractV1,
-    SemanticMfmaStorageLayoutV1, SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1,
-    SemanticPointerMetadataV1, SemanticProjectionKindV1, SemanticRustcVariantsV1,
+    SemanticMfmaProfileV1, SemanticMfmaStorageLayoutV1, SemanticMutabilityV1, SemanticOperandV1,
+    SemanticPlaceV1, SemanticPointerMetadataV1, SemanticProjectionKindV1, SemanticRustcVariantsV1,
     SemanticRvalueKindV1, SemanticScalarTypeV1, SemanticScalarValueV1, SemanticStatementKindV1,
     SemanticSubgroupReductionKindV1, SemanticTerminatorKindV1, SemanticTypeDeclV1,
     SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
@@ -1597,7 +1597,271 @@ const MAX_PROMOTED_BLOCK_PARAMETERS_V1: usize = 16_384;
 #[derive(Clone, Debug)]
 struct SemanticPromotedLocalV1 {
     semantic_type: SemanticTypeIdV1,
+    binding: SemanticPromotedBindingV1,
     kernel_types: Box<[Type]>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SemanticPromotedBindingV1 {
+    Ordinary,
+    MatrixFragment {
+        contract: SemanticMfmaOperandContractV1,
+        storage_layout: SemanticMfmaStorageLayoutV1,
+    },
+    AccumulatorFragment {
+        contract: SemanticMfmaAccumulatorContractV1,
+    },
+}
+
+impl SemanticPromotedBindingV1 {
+    fn transport_types(
+        self,
+        types: &[SemanticTypeDeclV1],
+        semantic_type: SemanticTypeIdV1,
+    ) -> Result<Vec<Type>, ProductionSemanticKirErrorV1> {
+        let mut transport = match self {
+            Self::Ordinary => lower_ssa_value_types(types, semantic_type)?,
+            Self::MatrixFragment { contract, .. } => {
+                vec![Type::Scalar(ScalarType::Bf16); contract.profile.operand_components_per_lane()]
+            }
+            Self::AccumulatorFragment { contract } => match contract.profile {
+                SemanticMfmaProfileV1::Bf16F32M16N16K16 => {
+                    vec![Type::Scalar(ScalarType::F32); 4]
+                }
+            },
+        };
+        if !matches!(self, Self::Ordinary) {
+            transport.push(Type::Scalar(ScalarType::U32));
+        }
+        Ok(transport)
+    }
+
+    fn transport_values(
+        self,
+        binding: &SemanticValueBindingV1,
+    ) -> Result<Vec<(ValueId, Type)>, &'static str> {
+        match (self, binding) {
+            (Self::Ordinary, binding) => binding.values(),
+            (
+                Self::MatrixFragment {
+                    contract,
+                    storage_layout,
+                },
+                SemanticValueBindingV1::MatrixFragment {
+                    values,
+                    contract: actual_contract,
+                    storage_layout: actual_storage_layout,
+                    lane,
+                },
+            ) if contract == *actual_contract && storage_layout == *actual_storage_layout => {
+                let mut transport = values.clone();
+                transport.push((*lane, Type::Scalar(ScalarType::U32)));
+                Ok(transport)
+            }
+            (
+                Self::AccumulatorFragment { contract },
+                SemanticValueBindingV1::AccumulatorFragment {
+                    values,
+                    contract: actual_contract,
+                    lane,
+                },
+            ) if contract == *actual_contract => {
+                let mut transport = values.clone();
+                transport.push((*lane, Type::Scalar(ScalarType::U32)));
+                Ok(transport)
+            }
+            (Self::MatrixFragment { .. }, _) => {
+                Err("promoted matrix fragment lacks its authenticated producer metadata")
+            }
+            (Self::AccumulatorFragment { .. }, _) => {
+                Err("promoted accumulator fragment lacks its authenticated producer metadata")
+            }
+        }
+    }
+
+    fn binding_from_transport(
+        self,
+        types: &[SemanticTypeDeclV1],
+        semantic_type: SemanticTypeIdV1,
+        values: &[ValueDef],
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        if matches!(self, Self::Ordinary) {
+            return binding_from_value_defs(types, semantic_type, values);
+        }
+        let (lane, components) = values.split_last().ok_or_else(|| {
+            unsupported(
+                0,
+                None,
+                None,
+                "typed fragment SSA transport is missing its lane token",
+            )
+        })?;
+        if lane.ty != Type::Scalar(ScalarType::U32) {
+            return Err(unsupported(
+                0,
+                None,
+                None,
+                "typed fragment SSA lane token changed type",
+            ));
+        }
+        let expected = self.transport_types(types, semantic_type)?;
+        let expected_components = &expected[..expected.len() - 1];
+        if components.len() != expected_components.len()
+            || components
+                .iter()
+                .zip(expected_components)
+                .any(|(actual, expected)| &actual.ty != expected)
+        {
+            return Err(unsupported(
+                0,
+                None,
+                None,
+                "typed fragment SSA component types changed",
+            ));
+        }
+        let components = components
+            .iter()
+            .map(|value| (value.id, value.ty.clone()))
+            .collect();
+        match self {
+            Self::Ordinary => unreachable!("ordinary binding returned above"),
+            Self::MatrixFragment {
+                contract,
+                storage_layout,
+            } => Ok(SemanticValueBindingV1::MatrixFragment {
+                values: components,
+                contract,
+                storage_layout,
+                lane: lane.id,
+            }),
+            Self::AccumulatorFragment { contract } => {
+                Ok(SemanticValueBindingV1::AccumulatorFragment {
+                    values: components,
+                    contract,
+                    lane: lane.id,
+                })
+            }
+        }
+    }
+}
+
+fn insert_compiler_issued_ssa_binding_v1(
+    bindings: &mut BTreeMap<SemanticTypeIdV1, SemanticPromotedBindingV1>,
+    ty: SemanticTypeIdV1,
+    binding: SemanticPromotedBindingV1,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    if let Some(existing) = bindings.insert(ty, binding)
+        && existing != binding
+    {
+        return Err(unsupported(
+            0,
+            None,
+            None,
+            "one semantic fragment type has conflicting compiler-issued contracts",
+        ));
+    }
+    Ok(())
+}
+
+fn compiler_issued_ssa_bindings_v1(
+    callables: &[SemanticCallableDeclV1],
+) -> Result<BTreeMap<SemanticTypeIdV1, SemanticPromotedBindingV1>, ProductionSemanticKirErrorV1> {
+    let mut bindings = BTreeMap::new();
+    for callable in callables {
+        let SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } = callable else {
+            continue;
+        };
+        match operation {
+            SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad {
+                fragment,
+                contract,
+                storage_layout,
+                ..
+            }
+            | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
+                fragment,
+                contract,
+                storage_layout,
+                ..
+            } => insert_compiler_issued_ssa_binding_v1(
+                &mut bindings,
+                *fragment,
+                SemanticPromotedBindingV1::MatrixFragment {
+                    contract: *contract,
+                    storage_layout: *storage_layout,
+                },
+            )?,
+            SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
+                fragment,
+                contract,
+                ..
+            }
+            | SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
+                accumulator_fragment: fragment,
+                accumulator: contract,
+                ..
+            } => insert_compiler_issued_ssa_binding_v1(
+                &mut bindings,
+                *fragment,
+                SemanticPromotedBindingV1::AccumulatorFragment {
+                    contract: *contract,
+                },
+            )?,
+            _ => {}
+        }
+    }
+
+    for callable in callables {
+        let SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } = callable else {
+            continue;
+        };
+        match operation {
+            SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
+                lhs_fragment,
+                rhs_fragment,
+                lhs,
+                rhs,
+                ..
+            } => {
+                for (fragment, expected) in [(*lhs_fragment, *lhs), (*rhs_fragment, *rhs)] {
+                    if let Some(binding) = bindings.get(&fragment)
+                        && !matches!(
+                            binding,
+                            SemanticPromotedBindingV1::MatrixFragment { contract, .. }
+                                if *contract == expected
+                        )
+                    {
+                        return Err(unsupported(
+                            0,
+                            None,
+                            None,
+                            "matrix consumer contract conflicts with its compiler-issued fragment type",
+                        ));
+                    }
+                }
+            }
+            SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues {
+                fragment,
+                ..
+            } => {
+                if let Some(binding) = bindings.get(fragment)
+                    && !matches!(
+                        binding,
+                        SemanticPromotedBindingV1::AccumulatorFragment { .. }
+                    )
+                {
+                    return Err(unsupported(
+                        0,
+                        None,
+                        None,
+                        "accumulator projection conflicts with its compiler-issued fragment type",
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(bindings)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1609,8 +1873,10 @@ struct SemanticControlFlowSsaPlanV1 {
 impl SemanticControlFlowSsaPlanV1 {
     fn analyze(
         types: &[SemanticTypeDeclV1],
+        callables: &[SemanticCallableDeclV1],
         function: &SemanticFunctionDeclV1,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        let compiler_issued_bindings = compiler_issued_ssa_bindings_v1(callables)?;
         let mut definition_counts = vec![0_u32; function.locals().len()];
         let mut projected = BTreeSet::new();
         for block in function.blocks() {
@@ -1650,13 +1916,18 @@ impl SemanticControlFlowSsaPlanV1 {
             if definition_counts[local] < 2 || projected.contains(&(local as u32)) {
                 continue;
             }
-            if let Ok(kernel_types) = lower_ssa_value_types(types, declaration.ty())
+            let binding = compiler_issued_bindings
+                .get(&declaration.ty())
+                .copied()
+                .unwrap_or(SemanticPromotedBindingV1::Ordinary);
+            if let Ok(kernel_types) = binding.transport_types(types, declaration.ty())
                 && !kernel_types.is_empty()
             {
                 promoted.insert(
                     local as u32,
                     SemanticPromotedLocalV1 {
                         semantic_type: declaration.ty(),
+                        binding,
                         kernel_types: kernel_types.into_boxed_slice(),
                     },
                 );
@@ -2202,7 +2473,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         }
         let mut next_value = u32::try_from(function.locals().len())
             .map_err(|_| unsupported(0, None, None, "local count does not fit Kernel IR"))?;
-        let control_flow_ssa = SemanticControlFlowSsaPlanV1::analyze(types, function)?;
+        let control_flow_ssa = SemanticControlFlowSsaPlanV1::analyze(types, callables, function)?;
         let mut block_parameters = BTreeMap::new();
         for block in 0..function.blocks().len() as u32 {
             if block == function.entry().index() {
@@ -2269,10 +2540,10 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 unsupported(0, Some(block.index()), None, "block parameters are missing")
             })?;
         for (local, parameters) in parameters {
-            let semantic_type = self.control_flow_ssa.promoted[&local].semantic_type;
-            self.locals[local as usize] = Some(binding_from_value_defs(
+            let promoted = &self.control_flow_ssa.promoted[&local];
+            self.locals[local as usize] = Some(promoted.binding.binding_from_transport(
                 self.types,
-                semantic_type,
+                promoted.semantic_type,
                 &parameters,
             )?);
             target.parameters.extend(parameters);
@@ -2287,7 +2558,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
     ) -> Result<Vec<ValueId>, ProductionSemanticKirErrorV1> {
         let mut arguments = Vec::new();
         for local in self.control_flow_ssa.live_in(target.index()) {
-            let values = self
+            let binding = self
                 .locals
                 .get(*local as usize)
                 .and_then(Option::as_ref)
@@ -2296,10 +2567,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     block: block.index(),
                     statement: None,
                     local: *local,
-                })?
-                .values()
+                })?;
+            let promoted = &self.control_flow_ssa.promoted[local];
+            let values = promoted
+                .binding
+                .transport_values(binding)
                 .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-            let expected = &self.control_flow_ssa.promoted[local].kernel_types;
+            let expected = &promoted.kernel_types;
             if values.len() != expected.len()
                 || values
                     .iter()
@@ -7560,8 +7834,9 @@ mod resource_tests {
     use super::*;
     use fe2o3_mir_model::semantic_mir_v1::{
         SemanticBackendReprV1, SemanticFieldsShapeV1, SemanticLayoutIdentityV1,
-        SemanticRustcVariantsV1, SemanticTypeIdentityV1, SemanticTypeLayoutDetailsV1,
-        SemanticTypeLayoutV1,
+        SemanticMfmaAccumulatorDistributionV1, SemanticMfmaOperandRoleV1,
+        SemanticMfmaRegisterDistributionV1, SemanticRustcVariantsV1, SemanticTypeIdentityV1,
+        SemanticTypeLayoutDetailsV1, SemanticTypeLayoutV1,
     };
 
     fn unit_type() -> SemanticTypeDeclV1 {
@@ -7584,6 +7859,203 @@ mod resource_tests {
             .unwrap(),
             SemanticTypeShapeV1::Unit,
         )
+    }
+
+    fn operand_contract(role: SemanticMfmaOperandRoleV1) -> SemanticMfmaOperandContractV1 {
+        SemanticMfmaOperandContractV1 {
+            role,
+            profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
+            register_distribution: SemanticMfmaRegisterDistributionV1::Tile16x16,
+            wave_width: 64,
+        }
+    }
+
+    fn accumulator_contract() -> SemanticMfmaAccumulatorContractV1 {
+        SemanticMfmaAccumulatorContractV1 {
+            profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
+            distribution: SemanticMfmaAccumulatorDistributionV1::RowMajor,
+            wave_width: 64,
+        }
+    }
+
+    #[test]
+    fn promoted_accumulator_carries_contract_components_and_lane() {
+        let descriptor = SemanticPromotedBindingV1::AccumulatorFragment {
+            contract: accumulator_contract(),
+        };
+        let values = (10..14)
+            .map(|id| (ValueId(id), Type::Scalar(ScalarType::F32)))
+            .collect::<Vec<_>>();
+        let binding = SemanticValueBindingV1::AccumulatorFragment {
+            values: values.clone(),
+            contract: accumulator_contract(),
+            lane: ValueId(42),
+        };
+
+        let transport = descriptor.transport_values(&binding).unwrap();
+        assert_eq!(transport[..4], values);
+        assert_eq!(transport[4], (ValueId(42), Type::Scalar(ScalarType::U32)));
+        let definitions = transport
+            .iter()
+            .map(|(id, ty)| ValueDef::new(*id, ty.clone()))
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            descriptor
+                .binding_from_transport(
+                    std::slice::from_ref(&unit_type()),
+                    SemanticTypeIdV1::from_index(0),
+                    &definitions,
+                )
+                .unwrap(),
+            SemanticValueBindingV1::AccumulatorFragment {
+                values: reconstructed,
+                contract,
+                lane: ValueId(42),
+            } if reconstructed == values && contract == accumulator_contract()
+        ));
+    }
+
+    #[test]
+    fn promoted_matrix_fragment_carries_layout_contract_and_lane() {
+        let contract = operand_contract(SemanticMfmaOperandRoleV1::A);
+        let descriptor = SemanticPromotedBindingV1::MatrixFragment {
+            contract,
+            storage_layout: SemanticMfmaStorageLayoutV1::LdsXor4,
+        };
+        let values = (20..24)
+            .map(|id| (ValueId(id), Type::Scalar(ScalarType::Bf16)))
+            .collect::<Vec<_>>();
+        let binding = SemanticValueBindingV1::MatrixFragment {
+            values: values.clone(),
+            contract,
+            storage_layout: SemanticMfmaStorageLayoutV1::LdsXor4,
+            lane: ValueId(51),
+        };
+
+        let transport = descriptor.transport_values(&binding).unwrap();
+        assert_eq!(transport.len(), 5);
+        let definitions = transport
+            .iter()
+            .map(|(id, ty)| ValueDef::new(*id, ty.clone()))
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            descriptor
+                .binding_from_transport(
+                    std::slice::from_ref(&unit_type()),
+                    SemanticTypeIdV1::from_index(0),
+                    &definitions,
+                )
+                .unwrap(),
+            SemanticValueBindingV1::MatrixFragment {
+                values: reconstructed,
+                contract: reconstructed_contract,
+                storage_layout: SemanticMfmaStorageLayoutV1::LdsXor4,
+                lane: ValueId(51),
+            } if reconstructed == values && reconstructed_contract == contract
+        ));
+    }
+
+    #[test]
+    fn promoted_fragment_rejects_forged_or_conflicting_metadata() {
+        let descriptor = SemanticPromotedBindingV1::AccumulatorFragment {
+            contract: accumulator_contract(),
+        };
+        let ordinary = SemanticValueBindingV1::Aggregate(
+            (0..4)
+                .map(|id| SemanticValueBindingV1::Value {
+                    id: ValueId(id),
+                    ty: Type::Scalar(ScalarType::F32),
+                })
+                .collect(),
+        );
+        assert_eq!(
+            descriptor.transport_values(&ordinary).unwrap_err(),
+            "promoted accumulator fragment lacks its authenticated producer metadata"
+        );
+
+        let mut wrong_contract = accumulator_contract();
+        wrong_contract.wave_width = 32;
+        let wrong = SemanticValueBindingV1::AccumulatorFragment {
+            values: (0..4)
+                .map(|id| (ValueId(id), Type::Scalar(ScalarType::F32)))
+                .collect(),
+            contract: wrong_contract,
+            lane: ValueId(9),
+        };
+        assert!(descriptor.transport_values(&wrong).is_err());
+
+        let mut bindings = BTreeMap::new();
+        let ty = SemanticTypeIdV1::from_index(7);
+        insert_compiler_issued_ssa_binding_v1(&mut bindings, ty, descriptor).unwrap();
+        assert!(
+            insert_compiler_issued_ssa_binding_v1(
+                &mut bindings,
+                ty,
+                SemanticPromotedBindingV1::AccumulatorFragment {
+                    contract: wrong_contract,
+                },
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("conflicting compiler-issued contracts")
+        );
+    }
+
+    #[test]
+    fn promoted_fragment_rejects_changed_lane_and_component_types() {
+        let descriptor = SemanticPromotedBindingV1::AccumulatorFragment {
+            contract: accumulator_contract(),
+        };
+        let mut definitions = (0..4)
+            .map(|id| ValueDef::new(ValueId(id), Type::Scalar(ScalarType::F32)))
+            .collect::<Vec<_>>();
+        definitions.push(ValueDef::new(ValueId(4), Type::INDEX));
+        assert!(
+            descriptor
+                .binding_from_transport(
+                    std::slice::from_ref(&unit_type()),
+                    SemanticTypeIdV1::from_index(0),
+                    &definitions,
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("lane token changed type")
+        );
+
+        definitions[4] = ValueDef::new(ValueId(4), Type::Scalar(ScalarType::U32));
+        definitions[0] = ValueDef::new(ValueId(0), Type::Scalar(ScalarType::F64));
+        assert!(
+            descriptor
+                .binding_from_transport(
+                    std::slice::from_ref(&unit_type()),
+                    SemanticTypeIdV1::from_index(0),
+                    &definitions,
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("component types changed")
+        );
+    }
+
+    #[test]
+    fn ordinary_aggregate_transport_does_not_gain_fragment_authority() {
+        let binding = SemanticValueBindingV1::Aggregate(
+            (0..4)
+                .map(|id| SemanticValueBindingV1::Value {
+                    id: ValueId(id),
+                    ty: Type::Scalar(ScalarType::F32),
+                })
+                .collect(),
+        );
+        let values = SemanticPromotedBindingV1::Ordinary
+            .transport_values(&binding)
+            .unwrap();
+        assert_eq!(values.len(), 4);
+        assert!(
+            values
+                .iter()
+                .all(|(_, ty)| *ty == Type::Scalar(ScalarType::F32))
+        );
     }
 
     struct OperationSpanFixture {
