@@ -272,7 +272,6 @@ impl fmt::Display for PlironAtomicLegalityFindingV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlironAtomicLegalityReportV1 {
-    status: KernelCheckStatusV1,
     findings: Vec<PlironAtomicLegalityFindingV1>,
 }
 
@@ -281,16 +280,20 @@ impl PlironAtomicLegalityReportV1 {
         KernelCheckPassKindV1::AtomicLegality
     }
 
-    pub const fn status(&self) -> KernelCheckStatusV1 {
-        self.status
+    pub fn status(&self) -> KernelCheckStatusV1 {
+        self.findings
+            .iter()
+            .fold(KernelCheckStatusV1::Clean, |status, finding| {
+                status.join(finding.status())
+            })
     }
 
     pub fn findings(&self) -> &[PlironAtomicLegalityFindingV1] {
         &self.findings
     }
 
-    pub const fn is_clean(&self) -> bool {
-        matches!(self.status, KernelCheckStatusV1::Clean)
+    pub fn is_clean(&self) -> bool {
+        self.status() == KernelCheckStatusV1::Clean
     }
 
     pub const fn grants_compiler_refinement_authority(&self) -> bool {
@@ -486,12 +489,7 @@ fn run_check(
 }
 
 fn report(findings: Vec<PlironAtomicLegalityFindingV1>) -> PlironAtomicLegalityReportV1 {
-    let status = findings
-        .iter()
-        .fold(KernelCheckStatusV1::Clean, |status, finding| {
-            status.join(finding.status())
-        });
-    PlironAtomicLegalityReportV1 { status, findings }
+    PlironAtomicLegalityReportV1 { findings }
 }
 
 const fn ordering_is_valid(kind: AccessKindAttr, ordering: AtomicOrderingAttr) -> bool {

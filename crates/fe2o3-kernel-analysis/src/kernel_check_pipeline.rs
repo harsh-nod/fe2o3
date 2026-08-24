@@ -623,30 +623,24 @@ fn write_memory_incomplete_reason(
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KernelCheckPassReportV1 {
     pass: KernelCheckPassKindV1,
-    status: KernelCheckStatusV1,
     findings: Vec<KernelCheckFindingV1>,
 }
 
 impl KernelCheckPassReportV1 {
     fn new(pass: KernelCheckPassKindV1, findings: Vec<KernelCheckFindingV1>) -> Self {
-        let status = findings
-            .iter()
-            .fold(KernelCheckStatusV1::Clean, |status, finding| {
-                status.join(finding.status())
-            });
-        Self {
-            pass,
-            status,
-            findings,
-        }
+        Self { pass, findings }
     }
 
     pub const fn pass(&self) -> KernelCheckPassKindV1 {
         self.pass
     }
 
-    pub const fn status(&self) -> KernelCheckStatusV1 {
-        self.status
+    pub fn status(&self) -> KernelCheckStatusV1 {
+        self.findings
+            .iter()
+            .fold(KernelCheckStatusV1::Clean, |status, finding| {
+                status.join(finding.status())
+            })
     }
 
     pub fn findings(&self) -> &[KernelCheckFindingV1] {
@@ -678,7 +672,7 @@ impl KernelCheckReportV1 {
         self.passes
             .iter()
             .fold(KernelCheckStatusV1::Clean, |status, pass| {
-                status.join(pass.status)
+                status.join(pass.status())
             })
     }
 
