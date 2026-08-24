@@ -642,6 +642,7 @@ struct FunctionLowerer<'function, 'declarations> {
     locals: BTreeMap<usize, LocalBinding>,
     value_types: BTreeMap<ValueId, Type>,
     trusted_thread_indices: BTreeSet<ValueId>,
+    trusted_disjoint_indices: BTreeSet<ValueId>,
     guarded_pointer_values: BTreeMap<ValueId, usize>,
     return_type: Option<Type>,
     next_value: u32,
@@ -675,6 +676,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             locals: BTreeMap::new(),
             value_types: BTreeMap::new(),
             trusted_thread_indices: BTreeSet::new(),
+            trusted_disjoint_indices: BTreeSet::new(),
             guarded_pointer_values: BTreeMap::new(),
             return_type: None,
             next_value: 0,
@@ -925,6 +927,27 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
     }
     fn is_gfx942_memory_v1_context(&self) -> bool {
         self.is_general_v3_profile_context() && self.float_target.is_some()
+    }
+
+    fn is_memory_v1_source_context(&self) -> bool {
+        self.function.blocks.iter().any(|block| {
+            matches!(
+                block.terminator.as_ref().map(|terminator| &terminator.kind),
+                Some(MirTerminatorKind::Call {
+                    callee: Some(callee),
+                    ..
+                }) if matches!(
+                    callee.trusted_item(),
+                    Some(
+                        TrustedDeviceItem::MemoryOffsetFrom
+                            | TrustedDeviceItem::MemoryVolatileLoad
+                            | TrustedDeviceItem::MemoryVolatileStore
+                            | TrustedDeviceItem::MemoryCopyNonOverlapping
+                            | TrustedDeviceItem::MemoryCopyOneNonOverlapping
+                    )
+                )
+            )
+        })
     }
 
     fn gfx942_collective_workgroup_size(&self) -> Option<u32> {
@@ -1905,7 +1928,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     TrustedDeviceItem::MemoryOffsetFrom
                     | TrustedDeviceItem::MemoryVolatileLoad
                     | TrustedDeviceItem::MemoryVolatileStore
-                    | TrustedDeviceItem::MemoryCopyNonOverlapping,
+                    | TrustedDeviceItem::MemoryCopyNonOverlapping
+                    | TrustedDeviceItem::MemoryCopyOneNonOverlapping,
                 ) => {
                     unreachable!("memory operations are handled by semantic lowering")
                 }

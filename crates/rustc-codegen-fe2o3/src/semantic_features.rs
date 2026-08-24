@@ -134,6 +134,7 @@ mod tests {
             TrustedDeviceItem::MemoryVolatileLoad,
             TrustedDeviceItem::MemoryVolatileStore,
             TrustedDeviceItem::MemoryCopyNonOverlapping,
+            TrustedDeviceItem::MemoryCopyOneNonOverlapping,
         ] {
             let recognized = SessionRecognizedSemanticItem::trusted_device_for_test(item);
             assert_eq!(recognized.trusted_device_item(), item);

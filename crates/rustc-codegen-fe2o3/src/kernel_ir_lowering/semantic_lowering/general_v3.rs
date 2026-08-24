@@ -52,6 +52,11 @@ pub(super) fn claim_call(
     if !lowerer.is_general_v3_profile_context() {
         return HandlerClaim::NotOwned;
     }
+    if call.item == SessionRecognizedSemanticItem::TrustedDevice(TrustedDeviceItem::ThreadIndex1d)
+        && lowerer.is_memory_v1_source_context()
+    {
+        return HandlerClaim::NotOwned;
+    }
     if !lowerer.is_exact_general_v3_alpha_zeta_context() {
         return HandlerClaim::Reject(diagnostic(
             TranslationDiagnosticCode::UnsupportedCall,

@@ -41,8 +41,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x0f, 0x1d, 0x24, 0xf4, 0xb6, 0xf3, 0xa5, 0x24, 0x29, 0xe0, 0x8b, 0x0c, 0x92, 0x3d, 0xb4, 0xc6,
-    0xdd, 0x93, 0x55, 0xa6, 0xb3, 0xaa, 0x1d, 0x8a, 0xf9, 0xf1, 0x94, 0x0f, 0xf1, 0x3f, 0x78, 0x5a,
+    0xaf, 0xf6, 0xf0, 0xc1, 0xa5, 0x26, 0x5b, 0x96, 0xea, 0x47, 0x93, 0x5d, 0xbc, 0x2b, 0xff, 0xca,
+    0x2a, 0x76, 0xbd, 0x23, 0x56, 0x6e, 0x90, 0x0b, 0xde, 0x42, 0x2f, 0x68, 0xfd, 0x35, 0x4a, 0x0b,
 ];
 #[allow(
     dead_code,
@@ -490,6 +490,7 @@ pub(crate) enum TrustedDeviceItem {
     MemoryVolatileLoad,
     MemoryVolatileStore,
     MemoryCopyNonOverlapping,
+    MemoryCopyOneNonOverlapping,
     Gfx942CollectivesContext,
     Gfx942CollectivesCurrent,
     Gfx942SubgroupReduceSumF32,
@@ -812,7 +813,12 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
     (
         TrustedDeviceItem::MemoryCopyNonOverlapping,
         "fe2o3_device_memory_copy_nonoverlapping_v1",
-        "fe2o3_device::memory::copy_nonoverlapping",
+        "fe2o3_device::memory::copy_nonoverlapping_unchecked",
+    ),
+    (
+        TrustedDeviceItem::MemoryCopyOneNonOverlapping,
+        "fe2o3_device_memory_copy_one_nonoverlapping_v1",
+        "fe2o3_device::memory::copy_one_nonoverlapping",
     ),
     (
         TrustedDeviceItem::Gfx942CollectivesContext,
@@ -3535,6 +3541,7 @@ mod tests {
             TrustedDeviceItem::MemoryVolatileLoad,
             TrustedDeviceItem::MemoryVolatileStore,
             TrustedDeviceItem::MemoryCopyNonOverlapping,
+            TrustedDeviceItem::MemoryCopyOneNonOverlapping,
             TrustedDeviceItem::Gfx942CollectivesContext,
             TrustedDeviceItem::Gfx942CollectivesCurrent,
             TrustedDeviceItem::Gfx942SubgroupReduceSumF32,

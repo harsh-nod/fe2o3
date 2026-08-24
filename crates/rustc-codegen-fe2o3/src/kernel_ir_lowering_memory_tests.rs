@@ -32,7 +32,7 @@ fn recognized_memory_calls_reach_verified_ir_and_gfx942_llvm() {
             Some(intrinsic)
         })
         .collect::<Vec<_>>();
-    assert_eq!(intrinsics.len(), 4);
+    assert_eq!(intrinsics.len(), 5);
     assert!(matches!(
         intrinsics[0],
         MemoryIntrinsicOperation::PointerDistance {
@@ -80,13 +80,61 @@ fn recognized_memory_calls_reach_verified_ir_and_gfx942_llvm() {
         } if *layout == MemoryElementType::Scalar(ScalarType::F32).expected_layout()
             && *contract == CopyNonOverlappingContract::supported_rust()
     ));
+    assert!(matches!(
+        intrinsics[4],
+        MemoryIntrinsicOperation::CopyNonOverlapping {
+            element: MemoryElementType::Scalar(ScalarType::F32),
+            source_address_space: AddressSpace::Global,
+            destination_address_space: AddressSpace::Global,
+            layout,
+            contract,
+            ..
+        } if *layout == MemoryElementType::Scalar(ScalarType::F32).expected_layout()
+            && *contract == CopyNonOverlappingContract::supported_rust()
+    ));
+    let MemoryIntrinsicOperation::CopyNonOverlapping {
+        count: copy_one_count,
+        ..
+    } = intrinsics[3]
+    else {
+        unreachable!("checked one-element copy intrinsic")
+    };
+    assert!(
+        function
+            .body
+            .as_ref()
+            .expect("memory body")
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .any(|operation| {
+                operation
+                    .results
+                    .iter()
+                    .any(|result| result.id == *copy_one_count)
+                    && operation.kind == OperationKind::Constant(Constant::Index(1))
+            })
+    );
+    let MemoryIntrinsicOperation::CopyNonOverlapping {
+        count: general_count,
+        ..
+    } = intrinsics[4]
+    else {
+        unreachable!("checked general copy intrinsic")
+    };
+    assert_eq!(
+        *general_count,
+        function.body.as_ref().expect("memory body").parameters[3],
+        "the unsafe expert copy must retain its runtime count parameter"
+    );
+    assert_ne!(general_count, copy_one_count);
 
     let llvm = dialect_amdgcn::lower_device_module_to_gfx942_xnack_minus_llvm_ir(&module)
         .expect("gfx942 memory LLVM");
     assert!(llvm.contains("sdiv exact i64"));
     assert!(llvm.contains("load volatile float, ptr addrspace(1)"));
     assert!(llvm.contains("store volatile float"));
-    assert!(llvm.contains("mul nuw i64 %arg4, 4"));
+    assert!(llvm.contains("mul nuw i64 %arg3, 4"));
     assert!(llvm.contains("call void @llvm.memcpy.p1.p1.i64"));
     assert!(llvm.contains("ptr addrspace(1) align 4"));
 }
@@ -183,12 +231,12 @@ fn memory_v1_rejects_read_only_destinations_and_unsupported_elements() {
 fn memory_v1_rejects_a_copy_whose_slice_identity_overlaps() {
     let mut module = memory_module();
     module.functions[0].locals[1].ty = imported(slice_shape(true, MirTypeShape::F32));
-    module.functions[0].locals[10].ty = imported(MirTypeShape::Reference {
+    module.functions[0].locals[12].ty = imported(MirTypeShape::Reference {
         pointee: Box::new(slice_shape(true, MirTypeShape::F32)),
         mutable: true,
     });
-    module.functions[0].blocks[3].statements[0].operands = vec![operand(1)];
-    let MirTerminatorKind::Call { operands, .. } = &mut module.functions[0].blocks[3]
+    module.functions[0].blocks[5].statements[0].operands = vec![operand(1)];
+    let MirTerminatorKind::Call { operands, .. } = &mut module.functions[0].blocks[5]
         .terminator
         .as_mut()
         .expect("copy terminator")
@@ -196,7 +244,7 @@ fn memory_v1_rejects_a_copy_whose_slice_identity_overlaps() {
     else {
         panic!("copy call")
     };
-    operands[2] = operand(10);
+    operands[2] = operand(12);
 
     let errors =
         translate_and_verify_for_target(&module, &AmdGpuTarget::new("gfx942")).unwrap_err();
@@ -204,6 +252,37 @@ fn memory_v1_rejects_a_copy_whose_slice_identity_overlaps() {
         diagnostic
             .message
             .contains("cannot prove dynamic region disjointness")
+    }));
+}
+
+#[test]
+fn memory_v1_rejects_integer_and_unproven_write_authority() {
+    let mut integer = memory_module();
+    let MirTerminatorKind::Call { operands, .. } = &mut integer.functions[0].blocks[4]
+        .terminator
+        .as_mut()
+        .expect("store terminator")
+        .kind
+    else {
+        panic!("store call")
+    };
+    operands[1] = operand(4);
+    let errors =
+        translate_and_verify_for_target(&integer, &AmdGpuTarget::new("gfx942")).unwrap_err();
+    assert!(errors.diagnostics().iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("shared reference to the trusted DisjointIndex type")
+    }));
+
+    let mut unproven = memory_module();
+    unproven.functions[0].blocks[4].statements[1].operands = vec![operand(4)];
+    let errors =
+        translate_and_verify_for_target(&unproven, &AmdGpuTarget::new("gfx942")).unwrap_err();
+    assert!(errors.diagnostics().iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("did not originate from trusted thread::index_1d().into_disjoint()")
     }));
 }
 
@@ -215,78 +294,115 @@ fn memory_module() -> MirModule {
             rust_path: "tests::memory_v1".to_owned(),
             kind: MirFunctionKind::KernelEntry,
             typed_profile: Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3),
-            arg_count: 5,
-            local_count: 12,
+            arg_count: 4,
+            local_count: 17,
             locals: vec![
                 local(0, MirLocalRole::Return, MirTypeShape::Unit),
                 local(1, MirLocalRole::Arg, slice_shape(false, MirTypeShape::F32)),
                 local(2, MirLocalRole::Arg, disjoint_shape(MirTypeShape::F32)),
                 local(3, MirLocalRole::Arg, MirTypeShape::USize),
                 local(4, MirLocalRole::Arg, MirTypeShape::USize),
-                local(5, MirLocalRole::Arg, MirTypeShape::USize),
-                local(6, MirLocalRole::Temp, MirTypeShape::ISize),
-                local(7, MirLocalRole::Temp, MirTypeShape::F32),
+                trusted_adt_local(5, TrustedDeviceItem::ThreadIndex),
+                trusted_adt_local(6, TrustedDeviceItem::DisjointIndex),
+                local(7, MirLocalRole::Temp, MirTypeShape::ISize),
+                local(8, MirLocalRole::Temp, MirTypeShape::F32),
                 local(
-                    8,
+                    9,
                     MirLocalRole::Temp,
                     MirTypeShape::Reference {
                         pointee: Box::new(disjoint_shape(MirTypeShape::F32)),
                         mutable: true,
                     },
                 ),
-                local(9, MirLocalRole::Temp, MirTypeShape::Unit),
-                local(
-                    10,
-                    MirLocalRole::Temp,
-                    MirTypeShape::Reference {
-                        pointee: Box::new(disjoint_shape(MirTypeShape::F32)),
-                        mutable: true,
-                    },
-                ),
+                trusted_adt_reference_local(10, TrustedDeviceItem::DisjointIndex),
                 local(11, MirLocalRole::Temp, MirTypeShape::Unit),
+                local(
+                    12,
+                    MirLocalRole::Temp,
+                    MirTypeShape::Reference {
+                        pointee: Box::new(disjoint_shape(MirTypeShape::F32)),
+                        mutable: true,
+                    },
+                ),
+                trusted_adt_reference_local(13, TrustedDeviceItem::DisjointIndex),
+                local(14, MirLocalRole::Temp, MirTypeShape::Unit),
+                local(
+                    15,
+                    MirLocalRole::Temp,
+                    MirTypeShape::Reference {
+                        pointee: Box::new(disjoint_shape(MirTypeShape::F32)),
+                        mutable: true,
+                    },
+                ),
+                local(16, MirLocalRole::Temp, MirTypeShape::Unit),
             ],
             blocks: vec![
                 block(
                     0,
                     Vec::new(),
-                    call(
-                        TrustedDeviceItem::MemoryOffsetFrom,
-                        vec![operand(1), operand(4), operand(3)],
-                        6,
-                        1,
-                    ),
+                    call(TrustedDeviceItem::ThreadIndex1d, Vec::new(), 5, 1),
                 ),
                 block(
                     1,
                     Vec::new(),
                     call(
-                        TrustedDeviceItem::MemoryVolatileLoad,
-                        vec![operand(1), operand(3)],
-                        7,
+                        TrustedDeviceItem::ThreadIndexIntoDisjoint,
+                        vec![operand(5)],
+                        6,
                         2,
                     ),
                 ),
                 block(
                     2,
-                    vec![assign_ref(0, 8, 2)],
+                    Vec::new(),
                     call(
-                        TrustedDeviceItem::MemoryVolatileStore,
-                        vec![operand(8), operand(4), operand(7)],
-                        9,
+                        TrustedDeviceItem::MemoryOffsetFrom,
+                        vec![operand(1), operand(4), operand(3)],
+                        7,
                         3,
                     ),
                 ),
                 block(
                     3,
-                    vec![assign_ref(0, 10, 2)],
+                    Vec::new(),
                     call(
-                        TrustedDeviceItem::MemoryCopyNonOverlapping,
-                        vec![operand(1), operand(3), operand(10), operand(4), operand(5)],
-                        11,
+                        TrustedDeviceItem::MemoryVolatileLoad,
+                        vec![operand(1), operand(3)],
+                        8,
                         4,
                     ),
                 ),
-                block(4, Vec::new(), MirTerminatorKind::Return),
+                block(
+                    4,
+                    vec![assign_ref(0, 9, 2, true), assign_ref(1, 10, 6, false)],
+                    call(
+                        TrustedDeviceItem::MemoryVolatileStore,
+                        vec![operand(9), operand(10), operand(8)],
+                        11,
+                        5,
+                    ),
+                ),
+                block(
+                    5,
+                    vec![assign_ref(0, 12, 2, true), assign_ref(1, 13, 6, false)],
+                    call(
+                        TrustedDeviceItem::MemoryCopyOneNonOverlapping,
+                        vec![operand(1), operand(3), operand(12), operand(13)],
+                        14,
+                        6,
+                    ),
+                ),
+                block(
+                    6,
+                    vec![assign_ref(0, 15, 2, true)],
+                    call(
+                        TrustedDeviceItem::MemoryCopyNonOverlapping,
+                        vec![operand(1), operand(3), operand(15), operand(3), operand(4)],
+                        16,
+                        7,
+                    ),
+                ),
+                block(7, Vec::new(), MirTerminatorKind::Return),
             ],
             frontend_contract: None,
             matrix_frontend_abi: None,
@@ -316,15 +432,17 @@ fn call(
     }
 }
 
-fn assign_ref(index: usize, destination: usize, source: usize) -> MirStatement {
+fn assign_ref(index: usize, destination: usize, source: usize, mutable: bool) -> MirStatement {
     MirStatement {
         index,
         kind: MirStatementKind::Assign,
         destination: Some(place(destination)),
         operands: vec![operand(source)],
-        rvalue: Some(MirRvalueKind::Reference(
-            crate::mir_import::MirBorrowKind::MutableDefault,
-        )),
+        rvalue: Some(MirRvalueKind::Reference(if mutable {
+            crate::mir_import::MirBorrowKind::MutableDefault
+        } else {
+            crate::mir_import::MirBorrowKind::Shared
+        })),
         semantic_rvalue_type: None,
         operation: None,
         source: None,
@@ -362,6 +480,29 @@ fn local(index: usize, role: MirLocalRole, shape: MirTypeShape) -> MirLocal {
         role,
         ty: imported(shape),
     }
+}
+
+fn trusted_adt_local(index: usize, item: TrustedDeviceItem) -> MirLocal {
+    local(
+        index,
+        MirLocalRole::Temp,
+        MirTypeShape::Adt {
+            identity: item.canonical_path().to_owned(),
+        },
+    )
+}
+
+fn trusted_adt_reference_local(index: usize, item: TrustedDeviceItem) -> MirLocal {
+    local(
+        index,
+        MirLocalRole::Temp,
+        MirTypeShape::Reference {
+            pointee: Box::new(MirTypeShape::Adt {
+                identity: item.canonical_path().to_owned(),
+            }),
+            mutable: false,
+        },
+    )
 }
 
 fn imported(shape: MirTypeShape) -> MirImportedType {
