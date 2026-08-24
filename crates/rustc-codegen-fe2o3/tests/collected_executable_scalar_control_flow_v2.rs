@@ -4054,7 +4054,7 @@ fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
         exact.status.success()
             && exact_stderr.contains("consumed its single-use frontend receipt")
             && exact_stderr
-                .contains("48df32b608f5dafa300f35d18641b657f7758365791120d649495b1aea72dfe8")
+                .contains("15c4577f61babefb12a9e9e5622154d30de53f2dfccac669bf691a8074178cd3")
             && exact_stderr.contains("explicit kernarg 64 bytes, complete COV6 kernarg 320 bytes")
             && exact_stderr.contains("exact one-wave 64x1x1 one-tile launch with no LDS")
             && exact_stderr.contains("selected canonical fe2o3::tiled_gemm_v1")
