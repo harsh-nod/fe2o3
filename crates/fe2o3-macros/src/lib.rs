@@ -37,6 +37,9 @@ use crate::control_flow_v1::{
     parse_control_flow_options_v1,
 };
 
+const SIMULATION_MODE_ENV_V1: &str = "FE2O3_SIMULATION_MODE_V1";
+const SIMULATION_ATTEMPT_ENV_V1: &str = "FE2O3_SIMULATION_ATTEMPT_V1";
+
 #[proc_macro_derive(DeviceCopy)]
 pub fn derive_device_copy(item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
@@ -796,7 +799,11 @@ fn expand_kernel(input: ItemFn, options: KernelOptions) -> syn::Result<proc_macr
 
     let device_import = fe2o3_device_import()?;
     let device_path = fe2o3_device_path()?;
-    let host_import = if options.mode == KernelMode::Typed {
+    // Every supported source kernel observes the attempt even when its emitted
+    // tokens have no simulation-specific host adapter to omit.
+    let simulation_mode = simulation_mode_selected_v1()?;
+    let omit_host_adapter = options.mode == KernelMode::Typed && simulation_mode;
+    let host_import = if options.mode == KernelMode::Typed && !omit_host_adapter {
         Some(fe2o3_host_import()?)
     } else {
         None
@@ -810,6 +817,56 @@ fn expand_kernel(input: ItemFn, options: KernelOptions) -> syn::Result<proc_macr
         host_import.as_ref(),
         crate_binding,
     )
+}
+
+fn simulation_mode_selected_v1() -> syn::Result<bool> {
+    let mode = tracked_environment_value_v1(SIMULATION_MODE_ENV_V1)?;
+    let attempt = tracked_environment_value_v1(SIMULATION_ATTEMPT_ENV_V1)?;
+    if mode.as_deref().is_some_and(simulation_mode_value_v1) {
+        match attempt {
+            Some(attempt) if simulation_attempt_value_v1(&attempt) => Ok(true),
+            Some(_) => Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                format!(
+                    "{SIMULATION_ATTEMPT_ENV_V1} must be exactly 32 lowercase hexadecimal digits and nonzero"
+                ),
+            )),
+            None => Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                format!("{SIMULATION_MODE_ENV_V1}=1 requires {SIMULATION_ATTEMPT_ENV_V1}"),
+            )),
+        }
+    } else if attempt.is_some() {
+        Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            format!("{SIMULATION_ATTEMPT_ENV_V1} is only valid with {SIMULATION_MODE_ENV_V1}=1"),
+        ))
+    } else {
+        Ok(false)
+    }
+}
+
+fn tracked_environment_value_v1(name: &str) -> syn::Result<Option<String>> {
+    match proc_macro::tracked::env_var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            format!("{name} is not valid UTF-8"),
+        )),
+    }
+}
+
+fn simulation_mode_value_v1(value: &str) -> bool {
+    value == "1"
+}
+
+fn simulation_attempt_value_v1(value: &str) -> bool {
+    value.len() == 32
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && value.as_bytes().iter().any(|byte| *byte != b'0')
 }
 
 fn resolve_crate_binding(
@@ -900,13 +957,21 @@ fn expand_kernel_with_imports(
         );
     }
 
-    expand_legacy_kernel_with_imports(input, options, device_import, host_import, crate_binding)
+    expand_legacy_kernel_with_imports(
+        input,
+        options,
+        device_import,
+        device_path,
+        host_import,
+        crate_binding,
+    )
 }
 
 fn expand_legacy_kernel_with_imports(
     mut input: ItemFn,
     options: KernelOptions,
     device_import: &proc_macro2::TokenStream,
+    device_path: Option<&proc_macro2::TokenStream>,
     host_import: Option<&proc_macro2::TokenStream>,
     crate_binding: Option<CrateBindingIdV1>,
 ) -> syn::Result<proc_macro2::TokenStream> {
@@ -977,6 +1042,10 @@ fn expand_legacy_kernel_with_imports(
     let abi = input.sig.abi.clone();
     let output = input.sig.output.clone();
     let function_pointer = quote!(#safety #abi fn(#(#argument_types),*) #output);
+    let device_api = device_path
+        .cloned()
+        .unwrap_or_else(|| quote!(__fe2o3_kernel_device));
+    let fallback_device_import = device_path.is_none().then_some(device_import);
     input.sig.ident = internal_ident.clone();
 
     let (registration_type, registration_value) = match (mode, crate_binding, kernel_binding) {
@@ -1024,7 +1093,7 @@ fn expand_legacy_kernel_with_imports(
             let crate_binding = syn::LitStr::new(&crate_binding.to_hex(), original_ident.span());
             let kernel_binding = syn::LitStr::new(&kernel_binding.to_hex(), original_ident.span());
             quote! {
-                unsafe impl __fe2o3_kernel_device::CrossCrateTypedKernelV1
+                unsafe impl #device_api::CrossCrateTypedKernelV1
                     for #type_marker_ident
                 {
                     const REGISTRATION_VERSION: u16 = #KERNEL_REGISTRATION_VERSION_V2;
@@ -1101,8 +1170,9 @@ fn expand_legacy_kernel_with_imports(
         }
     });
 
-    let typed_module = if let Some(kernel_binding) = kernel_binding {
-        let host_import = host_import.expect("typed expansion requires a host import");
+    let typed_module = if let (Some(kernel_binding), Some(host_import)) =
+        (kernel_binding, host_import)
+    {
         let module_ident = format_ident!("{original_name}_gpu");
         let artifact_pointer_ident =
             format_ident!("{}", artifact_pointer_symbol_v1(kernel_binding));
@@ -1184,11 +1254,11 @@ fn expand_legacy_kernel_with_imports(
         #control_flow_registration
 
         const _: () = {
-            #device_import
+            #fallback_device_import
 
             // SAFETY: every associated value below is generated from the same
             // parsed function and the same collector-visible registration.
-            unsafe impl __fe2o3_kernel_device::KernelMarkerV1 for #type_marker_ident {
+            unsafe impl #device_api::KernelMarkerV1 for #type_marker_ident {
                 type Function = #function_pointer;
                 type Registration = #registration_type;
 
@@ -1310,6 +1380,10 @@ fn expand_general_typed_kernel_with_imports(
         input.sig.output.clone()
     };
     let function_pointer = quote!(#safety #abi fn(#(#argument_types),*) #output);
+    let device_api = device_path
+        .cloned()
+        .unwrap_or_else(|| quote!(__fe2o3_kernel_device));
+    let fallback_device_import = device_path.is_none().then_some(device_import);
     let argument_names = input
         .sig
         .inputs
@@ -1337,9 +1411,9 @@ fn expand_general_typed_kernel_with_imports(
                 pattern.mutability = None;
             }
         }
-        input.block = Box::new(parse_quote!({
+        *input.block = parse_quote!({
             let _: #result_device_path::KernelResult = #body_ident(#(#argument_names),*);
-        }));
+        });
         Some(helper)
     } else {
         input.sig.ident = internal_ident.clone();
@@ -1431,7 +1505,6 @@ fn expand_general_typed_kernel_with_imports(
             );
         }
     });
-    let host_import = host_import.expect("typed expansion requires a host import");
     let module_ident = format_ident!("{original_name}_gpu");
     let semantic_witness_pointer_ident =
         format_ident!("{}", semantic_witness_pointer_symbol_v1(kernel_binding));
@@ -1440,7 +1513,9 @@ fn expand_general_typed_kernel_with_imports(
     let binding_bytes = kernel_binding.as_bytes().into_iter();
     let generated_host_contract_profile_bytes = generated_host_contract.as_bytes().into_iter();
     let generated_host_contract_witness_bytes = generated_host_contract.as_bytes().into_iter();
-    let typed_module = quote! {
+    let typed_module = host_import.map_or_else(
+        || quote! {},
+        |host_import| quote! {
         #[cfg(not(target_arch = "amdgpu"))]
         pub mod #module_ident {
             unsafe extern "C" {
@@ -1492,7 +1567,7 @@ fn expand_general_typed_kernel_with_imports(
                 }
             };
         }
-    };
+    });
 
     Ok(quote! {
         #[doc(hidden)]
@@ -1521,11 +1596,11 @@ fn expand_general_typed_kernel_with_imports(
         #control_flow_registration
 
         const _: () = {
-            #device_import
+            #fallback_device_import
 
             // SAFETY: every associated value below is generated from the same
             // parsed function and the same collector-visible registration.
-            unsafe impl __fe2o3_kernel_device::KernelMarkerV1 for #type_marker_ident {
+            unsafe impl #device_api::KernelMarkerV1 for #type_marker_ident {
                 type Function = #function_pointer;
                 type Registration = #registration_type;
 
@@ -2224,8 +2299,8 @@ fn generated_worker_v3_adapter_v1(
                 __fe2o3_kernel_host::__generated::GeneratedWorkerV3ArgumentBindingV1<'allocation>,
                 __fe2o3_kernel_host::__generated::GeneratedArgumentPackError,
             > {
-                let scalar_inputs = vec![#(#scalar_inputs),*];
-                let memory_arguments = vec![#(#memory_arguments),*];
+                let scalar_inputs = [#(#scalar_inputs),*].into_iter().collect();
+                let memory_arguments = [#(#memory_arguments),*].into_iter().collect();
                 Ok(
                     __fe2o3_kernel_host::__generated::GeneratedWorkerV3ArgumentBindingV1::
                         from_compiler_generated_parts_v1(scalar_inputs, memory_arguments),
@@ -2252,7 +2327,7 @@ fn generated_worker_v3_layout_v1(model: &GeneralTypedSignatureModelV1) -> proc_m
             #size,
             #alignment,
             __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
-            vec![#(#fields),*],
+            [#(#fields),*].into_iter().collect(),
         )
     }
 }
@@ -2452,19 +2527,19 @@ fn generated_scalar_gemm_v1_adapter(
                 >,
                 __fe2o3_kernel_host::__generated::GeneratedArgumentPackError,
             > {
-                let inputs = vec![
+                let inputs = [
                     self.a.bind_input_v1(plan, 0)?,
                     self.b.bind_input_v1(plan, 1)?,
                     self.c.bind_input_v1(plan, 2)?,
                     plan.scalar_u32(3, self.m)?,
                     plan.scalar_u32(4, self.n)?,
                     plan.scalar_u32(5, self.k)?,
-                ];
-                let accesses = vec![
+                ].into_iter().collect();
+                let accesses = [
                     self.a.argument_access_v1(),
                     self.b.argument_access_v1(),
                     self.c.argument_access_v1(),
-                ];
+                ].into_iter().collect();
                 // SAFETY: inputs contain each exact source argument once and
                 // access records are regenerated from the same retained slice
                 // capabilities in source order.
@@ -2538,7 +2613,7 @@ fn generated_scalar_gemm_v1_layout(
             #size,
             #alignment,
             __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
-            vec![#(#fields),*],
+            [#(#fields),*].into_iter().collect(),
         )
     }
 }
@@ -2661,19 +2736,27 @@ fn generated_alpha_zeta_cov6_adapter_v1(
             .expect("role was checked above")
         {
             AlphaZetaCov6MacroRoleV1::Alpha => (
-                quote!(vec![plan.scalar_f32(0, self.scale)?]),
-                quote!(vec![
-                    self.input.bind_argument_pair(plan, 1)?,
-                    self.output.bind_argument_pair(plan, 2)?,
-                ]),
+                quote!([plan.scalar_f32(0, self.scale)?].into_iter().collect()),
+                quote!(
+                    [
+                        self.input.bind_argument_pair(plan, 1)?,
+                        self.output.bind_argument_pair(plan, 2)?,
+                    ]
+                    .into_iter()
+                    .collect()
+                ),
             ),
             AlphaZetaCov6MacroRoleV1::Zeta => (
-                quote!(vec![plan.scalar_f32(2, self.bias)?]),
-                quote!(vec![
-                    self.a.bind_argument_pair(plan, 0)?,
-                    self.b.bind_argument_pair(plan, 1)?,
-                    self.output.bind_argument_pair(plan, 3)?,
-                ]),
+                quote!([plan.scalar_f32(2, self.bias)?].into_iter().collect()),
+                quote!(
+                    [
+                        self.a.bind_argument_pair(plan, 0)?,
+                        self.b.bind_argument_pair(plan, 1)?,
+                        self.output.bind_argument_pair(plan, 3)?,
+                    ]
+                    .into_iter()
+                    .collect()
+                ),
             ),
         };
 
@@ -2776,7 +2859,7 @@ fn generated_alpha_zeta_cov6_layout_v1(
             #size,
             #alignment,
             __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
-            vec![#(#fields),*],
+            [#(#fields),*].into_iter().collect(),
         )
     }
 }
@@ -4601,10 +4684,10 @@ mod tests {
         expand_legacy_kernel_with_imports, general_typed_global_mut_pointer_type_identity_v1,
         generated_general_typed_arguments_v1, generated_worker_v3_adapter_v1, host_import_for,
         model_general_typed_signature_v1, parse_device_ffi_options, parse_kernel_options,
-        reconcile_crate_binding_v1, validate_generated_device_ffi_contract_grammar,
-        validate_kernel_assembly_boundary, validate_kernel_source_safety,
-        validate_typed_kernel_profile_v1, validate_typed_kernel_signature,
-        validate_typed_kernel_symbol_stem,
+        reconcile_crate_binding_v1, simulation_attempt_value_v1, simulation_mode_value_v1,
+        validate_generated_device_ffi_contract_grammar, validate_kernel_assembly_boundary,
+        validate_kernel_source_safety, validate_typed_kernel_profile_v1,
+        validate_typed_kernel_signature, validate_typed_kernel_symbol_stem,
     };
     use fe2o3_artifacts::{
         AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Mutability,
@@ -5325,6 +5408,90 @@ mod tests {
     }
 
     #[test]
+    fn simulation_mode_selector_is_closed_to_exact_one() {
+        assert!(simulation_mode_value_v1("1"));
+        for hostile in ["", "0", "true", "TRUE", "01", "attacker", "1 "] {
+            assert!(!simulation_mode_value_v1(hostile), "accepted {hostile:?}");
+        }
+        assert!(simulation_attempt_value_v1(
+            "0123456789abcdef0123456789abcdef"
+        ));
+        for hostile in [
+            "",
+            "0",
+            "00000000000000000000000000000000",
+            "0123456789ABCDEF0123456789abcdef",
+            "0123456789abcdef0123456789abcdeg",
+            "0123456789abcdef0123456789abcdef00",
+        ] {
+            assert!(
+                !simulation_attempt_value_v1(hostile),
+                "accepted {hostile:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_simulation_expansion_retains_device_contracts_without_host_adapters() {
+        let device_import = device_import_for(FoundCrate::Name("gpu_device".to_owned()));
+        let device_path = device_path_for(FoundCrate::Name("gpu_device".to_owned()));
+        let crate_binding = derive_crate_binding_id_v1("fixture", ["simulation-device-only"]);
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+
+        let general: ItemFn = parse_quote! {
+            pub fn fill(mut output: DisjointSlice<u32>) {
+                let _ = &mut output;
+            }
+        };
+        let general = expand_kernel_with_imports(
+            general,
+            options.clone(),
+            &device_import,
+            Some(&device_path),
+            None,
+            Some(crate_binding),
+        )
+        .unwrap()
+        .to_string();
+        assert!(general.contains("static __fe2o3_kernel_registration_fill"));
+        assert!(general.contains("3u16 , 4u16"));
+        assert!(general.contains(TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3));
+        assert!(general.contains("KernelMarkerV1 for __fe2o3_kernel_marker_fill"));
+        assert!(general.contains("unsafe impl :: gpu_device :: KernelMarkerV1"));
+        assert!(!general.contains("extern crate gpu_device as __fe2o3_kernel_device"));
+        assert!(general.contains("fn __fe2o3_host_kernel_v1_"));
+        assert!(!general.contains("pub mod fill_gpu"));
+        assert!(!general.contains("__fe2o3_kernel_host"));
+        assert!(!general.contains("semantic_witness_from_backend_v1"));
+
+        let vecadd: ItemFn = parse_quote! {
+            pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
+                let _ = (a, b, &mut c);
+            }
+        };
+        let vecadd = expand_kernel_with_imports(
+            vecadd,
+            options,
+            &device_import,
+            Some(&device_path),
+            None,
+            Some(crate_binding),
+        )
+        .unwrap()
+        .to_string();
+        assert!(vecadd.contains("static __fe2o3_kernel_registration_vecadd"));
+        assert!(vecadd.contains("2u16 , 3u16"));
+        assert!(vecadd.contains("CrossCrateTypedKernelV1"));
+        assert!(vecadd.contains("unsafe impl :: gpu_device :: KernelMarkerV1"));
+        assert!(vecadd.contains("unsafe impl :: gpu_device :: CrossCrateTypedKernelV1"));
+        assert!(!vecadd.contains("extern crate gpu_device as __fe2o3_kernel_device"));
+        assert!(vecadd.contains("fn __fe2o3_host_kernel_v1_"));
+        assert!(!vecadd.contains("pub mod vecadd_gpu"));
+        assert!(!vecadd.contains("__fe2o3_kernel_host"));
+        assert!(!vecadd.contains("artifact_bytes_from_backend_v1"));
+    }
+
+    #[test]
     fn exact_vecadd_dispatch_preserves_the_legacy_v2_token_stream() {
         let input: ItemFn = parse_quote! {
             pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
@@ -5349,6 +5516,7 @@ mod tests {
             input,
             options,
             &device_import,
+            None,
             Some(&host_import),
             Some(crate_binding),
         )

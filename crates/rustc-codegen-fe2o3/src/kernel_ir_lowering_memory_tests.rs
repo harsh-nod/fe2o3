@@ -125,6 +125,57 @@ fn memory_calls_forward_promoted_ssa_values_to_their_successor() {
 }
 
 #[test]
+fn memory_v1_lowers_authenticated_disjoint_slice_length() {
+    let module = MirModule {
+        functions: vec![MirFunction {
+            semantic_instance: None,
+            export_name: "memory_len_v1".to_owned(),
+            rust_path: "tests::memory_len_v1".to_owned(),
+            kind: MirFunctionKind::KernelEntry,
+            typed_profile: Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3),
+            arg_count: 1,
+            local_count: 4,
+            locals: vec![
+                local(0, MirLocalRole::Return, MirTypeShape::Unit),
+                local(1, MirLocalRole::Arg, disjoint_shape(MirTypeShape::F32)),
+                local(
+                    2,
+                    MirLocalRole::Temp,
+                    MirTypeShape::Reference {
+                        pointee: Box::new(disjoint_shape(MirTypeShape::F32)),
+                        mutable: false,
+                    },
+                ),
+                local(3, MirLocalRole::Temp, MirTypeShape::USize),
+            ],
+            blocks: vec![
+                block(
+                    0,
+                    vec![assign_shared_ref(0, 2, 1)],
+                    call(TrustedDeviceItem::DisjointSliceLen, vec![operand(2)], 3, 1),
+                ),
+                block(1, Vec::new(), MirTerminatorKind::Return),
+            ],
+            frontend_contract: None,
+            matrix_frontend_abi: None,
+        }],
+    };
+
+    let lowered = translate_and_verify_for_target(&module, &AmdGpuTarget::new("gfx942:xnack-"))
+        .expect("authenticated DisjointSlice length");
+    let body = lowered.functions[0]
+        .body
+        .as_ref()
+        .expect("memory length body");
+    assert!(
+        body.blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .any(|operation| matches!(operation.kind, OperationKind::SliceLength { .. }))
+    );
+}
+
+#[test]
 fn recognized_memory_calls_fail_closed_outside_the_bounded_profile() {
     let untyped = {
         let mut module = memory_module();
@@ -166,7 +217,12 @@ fn memory_v1_rejects_read_only_destinations_and_unsupported_elements() {
 
     let unsupported_element = {
         let mut module = memory_module();
-        module.functions[0].locals[1].ty = imported(slice_shape(false, MirTypeShape::F16));
+        module.functions[0].locals[1].ty = imported(slice_shape(
+            false,
+            MirTypeShape::Adt {
+                identity: "tests::UnsupportedElement".to_owned(),
+            },
+        ));
         module
     };
     let errors =
@@ -324,6 +380,21 @@ fn assign_ref(index: usize, destination: usize, source: usize) -> MirStatement {
         operands: vec![operand(source)],
         rvalue: Some(MirRvalueKind::Reference(
             crate::mir_import::MirBorrowKind::MutableDefault,
+        )),
+        semantic_rvalue_type: None,
+        operation: None,
+        source: None,
+    }
+}
+
+fn assign_shared_ref(index: usize, destination: usize, source: usize) -> MirStatement {
+    MirStatement {
+        index,
+        kind: MirStatementKind::Assign,
+        destination: Some(place(destination)),
+        operands: vec![operand(source)],
+        rvalue: Some(MirRvalueKind::Reference(
+            crate::mir_import::MirBorrowKind::Shared,
         )),
         semantic_rvalue_type: None,
         operation: None,

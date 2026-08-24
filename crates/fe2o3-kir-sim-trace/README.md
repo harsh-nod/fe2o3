@@ -1,9 +1,9 @@
 # fe2o3-kir-sim-trace
 
-This crate adapts the serial CPU KIR simulator's ephemeral event stream to the
-collector-neutral semantic trace V1 model. It has no HIP, HSA, KFD, ROCgdb, or
-rocprof dependency and grants no compiler, proof, artifact, load, launch, or
-GPU-equivalence authority.
+This crate adapts the deterministic cooperative CPU KIR simulator's ephemeral
+event stream to the collector-neutral semantic trace V1 model. It has no HIP,
+HSA, KFD, ROCgdb, or rocprof dependency and grants no compiler, proof, artifact,
+load, launch, or GPU-equivalence authority.
 
 ## Truth boundary
 
@@ -13,6 +13,12 @@ GPU-equivalence authority.
 - Site claims are vector ordinals in a catalog built from that admitted module.
   Function names, block IDs, and source names never become occurrence identity.
 - All emitted facts are Observed by CpuKirSimulator during CpuKirSimulation.
+- Static LDS create/release events have workgroup scope. Completed LDS reads and
+  writes and barrier arrivals have exact lane scope. One release event has
+  workgroup scope for each compatible phase. Its participant count remains on
+  the ephemeral simulator event; semantic trace V1 consumers recover the active
+  logical participants from invocation scopes rather than from an invented wave
+  history.
 - Raw simulator allocation numbers are remapped to nonzero, generation-aware,
   trace-local IDs. Exact simulator preexisting/create/release observations bind
   layout and lifetime; the adapter invents neither. Empty argument buffers and
@@ -23,20 +29,23 @@ GPU-equivalence authority.
   identity hashes KIR, target, launch, argument metadata, values, initialization
   state, and shared buffers. Treat that deterministic digest as sensitive:
   low-entropy inputs can be guessed offline. It grants no authority.
-- Wave32 or Wave64 is an explicit visualization profile. The simulator remains
-  serial. Tail masks use the exact logical grid and canonical x-fastest D1-D3
-  linearization.
+- Wave32 or Wave64 is an explicit visualization profile. Cooperative workgroup
+  execution still does not simulate physical waves. Tail masks use the exact
+  logical grid and canonical x-fastest D1-D3 linearization.
 - Event and byte budgets use exact canonical codec sizes. Dispatch closure is
-  reserved before execution. If an invocation would cross a limit, its partial
-  records are removed, the rejected callback is reported to the simulator as
-  not retained, callbacks stop nonfatally, the execution result is unchanged,
-  and the retained trace ends with the observed dispatch outcome.
+  reserved before execution. If a cooperative workgroup would cross a limit,
+  every record from that active workgroup is removed, including partial lane,
+  barrier, and LDS lifecycles. The rejected callback is reported to the
+  simulator as not retained, callbacks stop nonfatally, the execution result is
+  unchanged, and the retained trace ends with the observed dispatch outcome.
 - The trace resident limit is shared by the retained site catalog and all
   collector vectors. Catalog strings are copied fallibly, function and block
   resolution uses sorted indexes, allocation lookup is logarithmic, and frame,
-  operation, allocation, and event vectors grow lazily and geometrically within
-  that one ledger. Large simulator hard limits therefore do not cause
-  trace-side preallocation or per-event reallocation.
+  per-invocation frame and operation stacks plus allocation and event vectors
+  grow lazily and geometrically within that one ledger. Multiple live lanes are
+  kept separate and one workgroup checkpoint makes truncation deterministic.
+  Large simulator hard limits therefore do not cause trace-side preallocation
+  or per-event reallocation.
 
 The simulator's schedule identity and bounded memory-conflict assessment remain
 on SimulationExecutionV1. Semantic trace V1 has no typed field for those facts;

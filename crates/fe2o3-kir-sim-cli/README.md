@@ -73,7 +73,10 @@ extent; multiple views may intentionally overlap.
 Files are bounded to 16 MiB, arguments and shared buffers to 4,096 each, one
 decoded buffer to 4 MiB, and all distinct and shared decoded buffers together
 to 16 MiB. Success is streamed as bounded deterministic
-fe2o3-simulation-result-v1 JSON. Every failure is stable
+fe2o3-simulation-result-v1 JSON. Additive evidence fields explicitly state that
+the result was simulated, hardware was neither observed nor validated, no
+performance prediction was made, and identify the scalar target profile,
+scheduler, and exact canonical KIR. Every failure is stable
 fe2o3-simulation-error-v1 JSON on stderr. Parsing failures use closed application
 codes selected from private structural markers, while other malformed JSON is
 classified by serde's closed syntax/data categories. Input failures identify
@@ -100,8 +103,9 @@ wire/count/depth caps.
 
 Success contains status ok, authority observation_only, the exact V7 SHA-256
 and canonical byte length, all execution counters including padded scheduled
-slots, the deterministic schedule identity, bounded cross-invocation conflict
-assessment, copied argument values, and copied shared backing buffers and views.
+slots, the deterministic cooperative workgroup schedule identity, bounded
+cross-invocation conflict assessment, copied argument values, and copied shared
+backing buffers and views.
 Scalar bits, buffer bytes, and initialization bitsets retain their exact typed
 lowercase hexadecimal encodings. Result bytes are measured exactly and capped
 at 64 MiB before output publication begins, then emitted directly through a

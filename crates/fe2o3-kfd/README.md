@@ -361,3 +361,41 @@ It does not prove the Rust adapter, ioctl/mmap implementation, kernel, firmware,
 hardware, CPU/GPU atomic coherence, or concrete-to-model refinement. The
 private CPU publication sequence is implemented and hostile-tested, but live
 dispatch and completion remain excluded.
+
+## Direct-KFD semantic observation boundary
+
+`observe_kfd_live_queue_v1` converts the existing detached queue observation
+and an optional detached device-binding observation into a fixed-size,
+read-only `KfdSemanticObservationReportV1`. The adapter performs no I/O,
+device enumeration, allocation, launch, wait, or runtime call. It is
+kernel-agnostic: its observed facts describe the queue and its safe resource
+geometry, not the behavior of a particular kernel. A matching detached
+`ComputeAqlQueueDestroyedV1` can advance a live report to the destroyed
+lifecycle.
+
+The caller must supply a nonzero 32-byte observation scope. Domain-separated
+SHA-256 identities commit every exact source field, including raw device,
+queue, event, offset, and aperture observations, but the report exports only
+scoped opaque evidence/device/queue identities. It never exports a raw queue or
+event ID, GPU or CPU address, aperture, PCI location, descriptor, handle,
+pointer, or MMIO capability. The scope is pseudonymization and correlation
+input, not authentication or confidentiality; publishing or reusing it can
+make low-entropy source facts guessable. The report itself does not retain or
+return the scope.
+
+The fixed capability matrix marks device binding, queue lifecycle, and safe
+resource geometry as observed when supplied. Queue exception delivery,
+dispatch submission and completion, dispatch timing, artifact/KIR binding,
+workgroups, waves, lanes, memory accesses, and registers/values are explicitly
+unavailable with typed reasons. In particular, confirmed queue, event, runtime,
+doorbell, and allocation teardown is not evidence that a dispatch existed,
+completed, or succeeded. The adapter therefore does not emit Semantic Trace V1
+and does not depend on the semantic-trace crate. An authenticated dispatch plus
+completion observation and exact artifact/KIR binding are required before that
+adapter can be added without fabricating execution history.
+
+`KFD_SEMANTIC_OBSERVATION_MANIFEST_V1` binds these inputs, output bounds,
+redactions, availability claims, and authority exclusions. Reports and
+capability queries are fixed-size and allocation-free. Hostile tests use only
+crate-private detached-fact constructors; they perform no KFD, DRM, HIP, HSA,
+or ROCm runtime discovery.

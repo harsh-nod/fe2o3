@@ -68,7 +68,7 @@ const SOURCE_REMAP_DESTINATION: &str = "/fe2o3-reviewed-workspace/moe-top2-v1.rs
 const WORKSPACE_REMAP_DESTINATION: &str = "/fe2o3-reviewed-workspace";
 const REVIEWED_ROOT_INSTANCE_IDENTITY: &str = "kernel::__fe2o3_host_kernel_v1_0d0504325353eb74b0c9ace47560290e2278a7cd7c20e3b1c6c70f4a7e37b1ab";
 const COMPILER_SEMANTICS_DOMAIN_V1: &[u8] = b"fe2o3.moe-top2.compiler-semantics.v1";
-const TRUSTED_DEFINITIONS_DOMAIN_V4: &[u8] = b"fe2o3.moe-top2.trusted-definitions-and-terminals.v4";
+const TRUSTED_DEFINITIONS_DOMAIN_V5: &[u8] = b"fe2o3.moe-top2.trusted-definitions-and-terminals.v5";
 const AUTHORITY_DOMAIN_V1: &[u8] = b"fe2o3.moe-top2.source-authority.v1";
 const FN_ABI_DOMAIN_V1: &[u8] = b"fe2o3.moe-top2.rustc-fn-abi.v1";
 const FN_ABI_CALLING_CONVENTION_RUST_V2: u8 = 0;
@@ -82,7 +82,7 @@ const PROFILE_LAUNCH_BINDING_V1: &[u8] =
 const ROUTING_BINDING_V1: &[u8] = b"t=8;e=4;k=2;capacity=4;logits=finite-f32-token-major;top2=descending-score-lower-expert-tie;requested=exact-route-count;admitted=min(requested,4);offsets=exclusive-expert-scan;drop=stable-route-prefix;slot=offset+stable-rank-unique-bounded;permutation-inverse=round-trip;sentinel=u32-max-for-dropped-and-tail";
 const DESCRIPTOR_BINDING_V1: &[u8] = b"logical=moe_top2_route_f32_t8_e4_k2_c4_v1;export=moe_top2_route_f32_t8_e4_k2_c4_v1;descriptor=moe_top2_route_f32_t8_e4_k2_c4_v1.kd;explicit-kernarg=128;complete-cov6-kernarg=384;wg=64,1,1;wave=64;static-lds=0;dynamic-lds=0";
 const CANONICAL_IR_BINDING_V1: &[u8] = b"fe2o3::moe_top2_route_f32_t8_e4_k2_c4_v1;args=logits-shared-f32x32,seven-lane0-owned-u32-outputs;ordered-routing=validate,select,count,clamp,scan,initialize,stable-rank,slot,permutation-inverse,commit;ownership=lane0-total-exclusive-in-bounds;lanes1..63-inactive";
-const CORRESPONDENCE_BINDING_V1: &[u8] = b"exact attributed source plus wrapper/session registration, exact rustc FnAbi, location-independent V4 provider-semantic definitions, identity-bound reviewed semantic terminals, and complete reachable portable-MIR modulo those terminals select a closed deterministic MoE top-2 semantic sidecar;reviewed correspondence only;not generic lowering, IEEE-754 refinement, terminal-body refinement, compiler refinement, or source-to-Verus/model refinement";
+const CORRESPONDENCE_BINDING_V1: &[u8] = b"exact attributed source plus wrapper/session registration, exact rustc FnAbi, location-independent V5 provider-semantic definitions, identity-bound reviewed semantic terminals, and complete reachable portable-MIR modulo those terminals select a closed deterministic MoE top-2 semantic sidecar;reviewed correspondence only;not generic lowering, IEEE-754 refinement, terminal-body refinement, compiler refinement, or source-to-Verus/model refinement";
 const EXACT_FRONTEND_CONTRACT_V1: &[u8] = &[
     70, 69, 50, 79, 51, 75, 70, 0, 1, 0, 1, 0, 52, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 64, 0, 0, 0, 1,
     0, 0, 0, 1, 0, 0, 0, 64, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
@@ -91,8 +91,8 @@ const EXACT_FRONTEND_CONTRACT_V1: &[u8] = &[
 // Filled from the pinned compiler fixture after path-independent portable-MIR
 // import. Any reachable body, call target, type, or operation drift changes it.
 const PORTABLE_MIR_CLOSURE_IDENTITY_V1: [u8; 32] = [
-    0x93, 0x4c, 0x22, 0x05, 0x97, 0x3e, 0x24, 0x21, 0x6d, 0x53, 0x7c, 0x5f, 0x89, 0xbc, 0x65, 0xd8,
-    0xe1, 0x5d, 0xd6, 0x83, 0x76, 0xdc, 0xe4, 0x77, 0xd1, 0x76, 0x8e, 0x29, 0x36, 0xb4, 0xfc, 0x13,
+    0xed, 0xef, 0xfa, 0x59, 0x72, 0x9d, 0xf7, 0x75, 0xae, 0x94, 0xd5, 0xd5, 0xeb, 0x11, 0x10, 0xb8,
+    0xff, 0xd6, 0xbf, 0x07, 0xe9, 0x65, 0x9b, 0xa2, 0xa9, 0x6f, 0xc3, 0x7c, 0x97, 0x5d, 0x9b, 0x86,
 ];
 const RUSTC_FN_ABI_IDENTITY_V1: [u8; 32] = [
     0xdd, 0xc0, 0x17, 0x2c, 0xfc, 0x37, 0x01, 0x6c, 0x86, 0xbe, 0x2b, 0x57, 0x9c, 0x4c, 0x98, 0xb1,
@@ -102,9 +102,9 @@ const COMPILER_SEMANTICS_IDENTITY_V1: [u8; 32] = [
     0x49, 0x50, 0xc2, 0x25, 0xe0, 0xcd, 0xbd, 0xce, 0x4e, 0x12, 0x30, 0x16, 0x69, 0x84, 0x94, 0x99,
     0x70, 0x29, 0x0d, 0xed, 0xc1, 0x9e, 0x8d, 0xc4, 0xcd, 0x31, 0xf8, 0x65, 0xf1, 0x62, 0x5a, 0x4a,
 ];
-const TRUSTED_TERMINAL_IDENTITY_V4: [u8; 32] = [
-    0xd4, 0xb3, 0x79, 0x89, 0x66, 0xbc, 0x3f, 0x91, 0xce, 0x41, 0xd9, 0x68, 0xeb, 0xdf, 0x8b, 0x1e,
-    0x4e, 0x77, 0x40, 0x52, 0x78, 0x10, 0x91, 0x76, 0x7b, 0x83, 0x1e, 0x92, 0x64, 0x02, 0x6e, 0x04,
+const TRUSTED_TERMINAL_IDENTITY_V5: [u8; 32] = [
+    0x65, 0xf6, 0x51, 0xd8, 0xb5, 0x8e, 0x39, 0x4c, 0xda, 0x64, 0xa9, 0xf2, 0x50, 0xf2, 0xe4, 0x2d,
+    0xae, 0x7b, 0x7d, 0x6c, 0xf9, 0x60, 0x57, 0x54, 0xd8, 0x11, 0xd7, 0x72, 0xe7, 0x15, 0xc8, 0xb4,
 ];
 
 const ARGUMENT_KINDS_V1: [GeneralTypedArgumentKindV3; 8] = [
@@ -120,18 +120,16 @@ const ARGUMENT_KINDS_V1: [GeneralTypedArgumentKindV3; 8] = [
 
 const REQUIRED_TRUSTED_ITEMS_V1: &[TrustedDeviceItem] = &[
     TrustedDeviceItem::DisjointSlice,
-    TrustedDeviceItem::ThreadIndex1d,
-    TrustedDeviceItem::ThreadIndexGet,
+    TrustedDeviceItem::GridLeaderCurrent,
     TrustedDeviceItem::DisjointSliceLen,
-    TrustedDeviceItem::DisjointSliceGetMutAt,
+    TrustedDeviceItem::DisjointSliceGetMutExclusive,
     TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Trap),
 ];
 
 const REVIEWED_SEMANTIC_TERMINALS_V1: &[TrustedDeviceItem] = &[
-    TrustedDeviceItem::ThreadIndex1d,
-    TrustedDeviceItem::ThreadIndexGet,
+    TrustedDeviceItem::GridLeaderCurrent,
     TrustedDeviceItem::DisjointSliceLen,
-    TrustedDeviceItem::DisjointSliceGetMutAt,
+    TrustedDeviceItem::DisjointSliceGetMutExclusive,
     TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Trap),
 ];
 
@@ -1038,7 +1036,7 @@ fn trusted_definitions_and_terminals_identity<'tcx>(
     collection: &CollectionResult<'tcx>,
 ) -> Result<[u8; 32], CollectedMoeTop2ErrorV1> {
     let mut digest = Sha256::new();
-    hash_field(&mut digest, TRUSTED_DEFINITIONS_DOMAIN_V4);
+    hash_field(&mut digest, TRUSTED_DEFINITIONS_DOMAIN_V5);
     hash_field(&mut digest, COLLECTED_MOE_TOP2_PIPELINE_V1.as_bytes());
     let mut provider = None;
     for item in REQUIRED_TRUSTED_ITEMS_V1 {
@@ -1236,10 +1234,10 @@ fn trusted_definitions_and_terminals_identity<'tcx>(
     .map_err(CollectedMoeTop2ErrorV1::TrustedDefinitions)?;
     hash_field(&mut digest, &core_terminal_identity);
     let actual: [u8; 32] = digest.finalize().into();
-    if actual != TRUSTED_TERMINAL_IDENTITY_V4 {
+    if actual != TRUSTED_TERMINAL_IDENTITY_V5 {
         return Err(CollectedMoeTop2ErrorV1::TrustedDefinitions(format!(
             "trusted-definition/semantic-terminal identity drifted: expected {}, found {}",
-            crate::encode_hex(&TRUSTED_TERMINAL_IDENTITY_V4),
+            crate::encode_hex(&TRUSTED_TERMINAL_IDENTITY_V5),
             crate::encode_hex(&actual)
         )));
     }
@@ -1446,7 +1444,7 @@ mod validated_authority {
         } else if authority.fn_abi_identity != RUSTC_FN_ABI_IDENTITY_V1 {
             Some("rustc FnAbi")
         } else if authority.compiler_semantics_identity != COMPILER_SEMANTICS_IDENTITY_V1
-            || authority.trusted_definitions_identity != TRUSTED_TERMINAL_IDENTITY_V4
+            || authority.trusted_definitions_identity != TRUSTED_TERMINAL_IDENTITY_V5
         {
             Some("compiler/trusted definition closure")
         } else if authority.frontend_contract_identity != sha256(EXACT_FRONTEND_CONTRACT_V1) {
@@ -1532,7 +1530,7 @@ fn exact_authority_for_test() -> MoeTop2AuthorityV1 {
         portable_mir_identity: PORTABLE_MIR_CLOSURE_IDENTITY_V1,
         compiler_semantics_identity: COMPILER_SEMANTICS_IDENTITY_V1,
         fn_abi_identity: RUSTC_FN_ABI_IDENTITY_V1,
-        trusted_definitions_identity: TRUSTED_TERMINAL_IDENTITY_V4,
+        trusted_definitions_identity: TRUSTED_TERMINAL_IDENTITY_V5,
         frontend_contract_identity: sha256(EXACT_FRONTEND_CONTRACT_V1),
         abi_identity: sha256(ABI_BINDING_V1),
         effects_identity: sha256(EFFECT_BINDING_V1),

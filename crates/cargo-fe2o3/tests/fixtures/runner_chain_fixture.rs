@@ -36,6 +36,7 @@ fn run() -> Result<(), String> {
     let record = serde_json::json!({
         "artifact_fd_open": fs::symlink_metadata("/proc/self/fd/197").is_ok(),
         "backend_fd_open": fs::symlink_metadata("/proc/self/fd/198").is_ok(),
+        "inherited_fds": inherited_descriptors(),
         "prefix_hex": prefix.iter().map(|value| hex(os_bytes(value))).collect::<Vec<_>>(),
         "application_hex": hex(os_bytes(application)),
         "application_args_hex": application_args.iter().map(|value| hex(os_bytes(value))).collect::<Vec<_>>(),
@@ -58,6 +59,16 @@ fn run() -> Result<(), String> {
     } else {
         Err(format!("application failed with status {status}"))
     }
+}
+
+#[cfg(unix)]
+fn inherited_descriptors() -> Vec<i32> {
+    (3..1024)
+        .filter(|descriptor| {
+            // SAFETY: F_GETFD only probes whether this numeric descriptor survived exec.
+            (unsafe { libc::fcntl(*descriptor, libc::F_GETFD) }) >= 0
+        })
+        .collect()
 }
 
 fn is_build_control(name: &OsStr) -> bool {

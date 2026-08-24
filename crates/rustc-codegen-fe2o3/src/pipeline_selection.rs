@@ -14,9 +14,22 @@ pub(crate) enum PipelinePurposeV1 {
     QualificationOracle,
 }
 
+/// Rustc-process evidence required independently of a pipeline's product role.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RustcInvocationPolicyV1 {
+    /// Publication-capable compilation requires the sealed V3 descriptor.
+    ProtectedV3,
+    /// Qualification-only compilation retains authenticated backend
+    /// observations but grants no publication authority.
+    QualificationObserved,
+    /// Ambient rustc invocation with no fe2o3 authority or observations.
+    Unmanaged,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CodegenPipeline {
     ProductionV1,
+    SimulationV1,
     KernelIrV1,
     KernelIrWorkerV2,
     CollectedExecutableScalarControlFlowV2,
@@ -32,8 +45,9 @@ pub(crate) enum CodegenPipeline {
 }
 
 impl CodegenPipeline {
-    pub(crate) const ALL: [Self; 13] = [
+    pub(crate) const ALL: [Self; 14] = [
         Self::ProductionV1,
+        Self::SimulationV1,
         Self::KernelIrV1,
         Self::KernelIrWorkerV2,
         Self::CollectedExecutableScalarControlFlowV2,
@@ -51,7 +65,8 @@ impl CodegenPipeline {
     pub(crate) const fn purpose(self) -> PipelinePurposeV1 {
         match self {
             Self::ProductionV1 => PipelinePurposeV1::Production,
-            Self::KernelIrV1
+            Self::SimulationV1
+            | Self::KernelIrV1
             | Self::KernelIrWorkerV2
             | Self::CollectedExecutableScalarControlFlowV2
             | Self::CollectedFlashAttentionV1
@@ -66,9 +81,44 @@ impl CodegenPipeline {
         }
     }
 
+    pub(crate) const fn rustc_invocation_policy(
+        self,
+        explicit_unprotected_qualification: bool,
+    ) -> RustcInvocationPolicyV1 {
+        match self {
+            Self::ProductionV1 => RustcInvocationPolicyV1::ProtectedV3,
+            Self::SimulationV1 => RustcInvocationPolicyV1::QualificationObserved,
+            Self::CollectedRowSoftmaxV1 => {
+                if explicit_unprotected_qualification {
+                    RustcInvocationPolicyV1::QualificationObserved
+                } else {
+                    RustcInvocationPolicyV1::ProtectedV3
+                }
+            }
+            Self::KernelIrV1
+            | Self::KernelIrWorkerV2
+            | Self::CollectedExecutableScalarControlFlowV2
+            | Self::CollectedFlashAttentionV1
+            | Self::CollectedGeneralGemmV1
+            | Self::CollectedMoeTop2V1
+            | Self::CollectedScalarGemmV1
+            | Self::CollectedTiledGemmV1
+            | Self::CollectedWave64CollectivesV1
+            | Self::CollectedLdsReductionV1
+            | Self::CollectedScopedAtomicV1 => {
+                if explicit_unprotected_qualification {
+                    RustcInvocationPolicyV1::QualificationObserved
+                } else {
+                    RustcInvocationPolicyV1::Unmanaged
+                }
+            }
+        }
+    }
+
     pub(crate) const fn selector_name(self) -> &'static str {
         match self {
             Self::ProductionV1 => crate::production_pipeline_v1::PRODUCTION_PIPELINE_V1,
+            Self::SimulationV1 => crate::production_pipeline_v1::SIMULATION_PIPELINE_V1,
             Self::KernelIrV1 => "kernel-ir-v1",
             Self::KernelIrWorkerV2 => "kernel-ir-worker-v2",
             Self::CollectedExecutableScalarControlFlowV2 => {
@@ -239,7 +289,10 @@ mod tests {
     use std::collections::BTreeSet;
     use std::ffi::OsStr;
 
-    use super::{CodegenPipeline, DevicePipelineRouteV1, PipelinePurposeV1, PipelineSelection};
+    use super::{
+        CodegenPipeline, DevicePipelineRouteV1, PipelinePurposeV1, PipelineSelection,
+        RustcInvocationPolicyV1,
+    };
 
     #[test]
     fn exactly_one_selectable_route_is_a_production_pipeline() {
@@ -330,6 +383,43 @@ mod tests {
                     .device_route(false)
                     .expect_err("implicit qualification route must be impossible")
                     .contains("was not explicitly selected")
+            );
+        }
+    }
+
+    #[test]
+    fn invocation_authority_is_independent_of_pipeline_purpose() {
+        assert_eq!(
+            CodegenPipeline::ProductionV1.rustc_invocation_policy(true),
+            RustcInvocationPolicyV1::ProtectedV3,
+        );
+        assert_eq!(
+            CodegenPipeline::CollectedRowSoftmaxV1.rustc_invocation_policy(false),
+            RustcInvocationPolicyV1::ProtectedV3,
+        );
+        for explicit_unprotected_qualification in [false, true] {
+            assert_eq!(
+                CodegenPipeline::SimulationV1
+                    .rustc_invocation_policy(explicit_unprotected_qualification),
+                RustcInvocationPolicyV1::QualificationObserved,
+            );
+        }
+        for pipeline in CodegenPipeline::ALL {
+            if matches!(
+                pipeline,
+                CodegenPipeline::ProductionV1
+                    | CodegenPipeline::SimulationV1
+                    | CodegenPipeline::CollectedRowSoftmaxV1
+            ) {
+                continue;
+            }
+            assert_eq!(
+                pipeline.rustc_invocation_policy(false),
+                RustcInvocationPolicyV1::Unmanaged,
+            );
+            assert_eq!(
+                pipeline.rustc_invocation_policy(true),
+                RustcInvocationPolicyV1::QualificationObserved,
             );
         }
     }

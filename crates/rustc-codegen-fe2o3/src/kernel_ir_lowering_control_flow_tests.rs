@@ -42,6 +42,37 @@ fn gfx942_loop_break_and_continue_lower_to_verified_block_arguments() {
 }
 
 #[test]
+fn boolean_switch_with_complement_default_lowers_to_conditional_branch() {
+    let module = translate_and_verify(&boolean_branch_fixture())
+        .expect("canonical rustc boolean branch must lower");
+    let body = module.functions[0]
+        .body
+        .as_ref()
+        .expect("boolean branch body");
+    assert!(matches!(
+        body.blocks[0].terminator,
+        Some(Terminator::ConditionalBranch { .. })
+    ));
+}
+
+#[test]
+fn boolean_switch_rejects_non_boolean_cases() {
+    let mut fixture = boolean_branch_fixture();
+    let MirTerminatorKind::SwitchInt { targets, .. } = &mut fixture.functions[0].blocks[0]
+        .terminator
+        .as_mut()
+        .expect("boolean switch")
+        .kind
+    else {
+        panic!("boolean switch")
+    };
+    targets[0].value = 2;
+
+    let error = translate_and_verify(&fixture).expect_err("non-boolean case must fail closed");
+    assert!(error.to_string().contains("non-boolean case value 2"));
+}
+
+#[test]
 fn mutable_control_flow_rejects_every_non_gfx942_profile() {
     for target in ["gfx90a", "gfx950"] {
         let error = translate_and_verify_for_target(&loop_fixture(), &AmdGpuTarget::new(target))
@@ -306,6 +337,50 @@ fn enum_fixture() -> MirModule {
     }
 }
 
+fn boolean_branch_fixture() -> MirModule {
+    MirModule {
+        functions: vec![MirFunction {
+            semantic_instance: None,
+            export_name: "boolean_branch".to_owned(),
+            rust_path: "tests::boolean_branch".to_owned(),
+            kind: MirFunctionKind::KernelEntry,
+            typed_profile: None,
+            frontend_contract: None,
+            matrix_frontend_abi: None,
+            arg_count: 0,
+            local_count: 2,
+            locals: vec![
+                local(0, MirLocalRole::Return, MirTypeShape::Unit),
+                local(1, MirLocalRole::Temp, MirTypeShape::Bool),
+            ],
+            blocks: vec![
+                MirBlock {
+                    index: 0,
+                    statements: vec![assign(0, 1, vec![bool_constant(true)], MirRvalueKind::Use)],
+                    terminator: Some(terminator(MirTerminatorKind::SwitchInt {
+                        discriminant: operand(1),
+                        targets: vec![MirSwitchTarget {
+                            value: 0,
+                            target: 1,
+                        }],
+                        otherwise: 2,
+                    })),
+                },
+                MirBlock {
+                    index: 1,
+                    statements: Vec::new(),
+                    terminator: Some(terminator(MirTerminatorKind::Return)),
+                },
+                MirBlock {
+                    index: 2,
+                    statements: Vec::new(),
+                    terminator: Some(terminator(MirTerminatorKind::Return)),
+                },
+            ],
+        }],
+    }
+}
+
 fn local(index: usize, role: MirLocalRole, shape: MirTypeShape) -> MirLocal {
     let (kind, rust) = match shape {
         MirTypeShape::Unit => (MirType::Unit, "()"),
@@ -358,6 +433,19 @@ fn u32_constant(value: u32) -> MirOperandRef {
             semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
         },
         literal: MirConstant::U32(value),
+        value: value.to_string(),
+    }
+}
+
+fn bool_constant(value: bool) -> MirOperandRef {
+    MirOperandRef::Constant {
+        ty: MirImportedType {
+            kind: MirType::I1,
+            rust: "bool".to_owned(),
+            shape: MirTypeShape::Bool,
+            semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
+        },
+        literal: MirConstant::Bool(value),
         value: value.to_string(),
     }
 }

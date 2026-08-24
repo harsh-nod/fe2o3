@@ -29,6 +29,7 @@ use rustix::fs::{
 use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use sha2::{Digest, Sha256};
 
 use crate::schema::{ErrorKind, Stage};
 
@@ -70,6 +71,7 @@ enum UnsupportedFeatureCode {
     Fence,
     WorkgroupBarrier,
     WorkgroupMemory,
+    DynamicWorkgroupMemory,
     Matrix,
     Wave,
     InlineAssembly,
@@ -827,22 +829,89 @@ pub(crate) fn main() -> ExitCode {
     }
 }
 
+pub(crate) fn run_captured_kir_v7(
+    canonical_kir_v7: &[u8],
+    request: OsString,
+    expected_request: Option<crate::SimulationRequestIdentityV1>,
+    output: Option<OsString>,
+) -> ExitCode {
+    let result = run_with_captured_kir(
+        canonical_kir_v7,
+        Options {
+            kir_v7: OsString::new(),
+            request,
+            output,
+        },
+        expected_request,
+    );
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            write_error(&error);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+pub(crate) fn bind_request_v1(
+    request: OsString,
+) -> Result<crate::SimulationRequestIdentityV1, String> {
+    let bytes = secure_read(
+        Path::new(&request),
+        MAX_REQUEST_BYTES,
+        InputCode::Request,
+        "simulation request",
+    )
+    .map_err(|failure| failure.0.message.clone())?;
+    let document: RequestDocument = serde_json::from_slice(&bytes).map_err(|error| {
+        format!(
+            "request JSON is invalid at line {} column {}",
+            error.line(),
+            error.column()
+        )
+    })?;
+    prepare_request(document).map_err(|failure| failure.0.message.clone())?;
+    Ok(crate::SimulationRequestIdentityV1 {
+        sha256: Sha256::digest(&bytes).into(),
+        length: bytes.len(),
+    })
+}
+
 fn run(arguments: impl Iterator<Item = OsString>) -> Result<(), Failure> {
     let options = parse_options(arguments)?;
-    let limits = cli_simulation_limits();
     let kir = secure_read(
         Path::new(&options.kir_v7),
         MAX_KIR_BYTES,
         InputCode::KirV7,
         "canonical KIR V7",
     )?;
-    let canonical = VerifiedCanonicalKernelIrV7::from_canonical_bytes(kir).map_err(|error| {
-        Failure::new(
-            Stage::KirAdmission,
-            kir_error_kind(&error),
-            bounded_display(&error),
-        )
-    })?;
+    run_with_captured_kir(&kir, options, None)
+}
+
+fn run_with_captured_kir(
+    kir: &[u8],
+    options: Options,
+    expected_request: Option<crate::SimulationRequestIdentityV1>,
+) -> Result<(), Failure> {
+    if kir.len() > MAX_KIR_BYTES {
+        return Err(Failure::input(
+            InputCode::KirV7,
+            ErrorKind::InputTooLarge,
+            format!(
+                "canonical KIR V7 input is {} bytes; maximum is {MAX_KIR_BYTES}",
+                kir.len()
+            ),
+        ));
+    }
+    let limits = cli_simulation_limits();
+    let canonical =
+        VerifiedCanonicalKernelIrV7::from_canonical_bytes(kir.to_vec()).map_err(|error| {
+            Failure::new(
+                Stage::KirAdmission,
+                kir_error_kind(&error),
+                bounded_display(&error),
+            )
+        })?;
     let admitted = AdmittedSimulationModuleV1::admit(canonical, limits).map_err(|error| {
         Failure::new(
             Stage::SimulatorAdmission,
@@ -856,6 +925,16 @@ fn run(arguments: impl Iterator<Item = OsString>) -> Result<(), Failure> {
         InputCode::Request,
         "simulation request",
     )?;
+    if expected_request.is_some_and(|expected| {
+        expected.length != request_bytes.len()
+            || expected.sha256 != <[u8; 32]>::from(Sha256::digest(&request_bytes))
+    }) {
+        return Err(Failure::input(
+            InputCode::Request,
+            ErrorKind::InputChanged,
+            "simulation request changed after its pre-build admission",
+        ));
+    }
     let document: RequestDocument = serde_json::from_slice(&request_bytes).map_err(|error| {
         Failure::new(
             Stage::Request,
@@ -1566,6 +1645,18 @@ fn execution_kind(error: &SimulationExecutionErrorKindV1) -> ErrorKind {
         SimulationExecutionErrorKindV1::UninitializedRead { .. } => {
             ErrorKind::ExecutionUninitializedRead
         }
+        SimulationExecutionErrorKindV1::WorkgroupUseBeforePublish { .. } => {
+            ErrorKind::ExecutionWorkgroupUseBeforePublish
+        }
+        SimulationExecutionErrorKindV1::DivergentWorkgroupBarrier(_) => {
+            ErrorKind::ExecutionDivergentWorkgroupBarrier
+        }
+        SimulationExecutionErrorKindV1::MismatchedWorkgroupBarrier(_) => {
+            ErrorKind::ExecutionMismatchedWorkgroupBarrier
+        }
+        SimulationExecutionErrorKindV1::WorkgroupSchedulerNoProgress { .. } => {
+            ErrorKind::ExecutionWorkgroupSchedulerNoProgress
+        }
         SimulationExecutionErrorKindV1::ReachedUnreachable => {
             ErrorKind::ExecutionReachedUnreachable
         }
@@ -1598,6 +1689,9 @@ fn unsupported_code(feature: &UnsupportedFeatureV1) -> UnsupportedFeatureCode {
         UnsupportedFeatureV1::Fence => UnsupportedFeatureCode::Fence,
         UnsupportedFeatureV1::WorkgroupBarrier => UnsupportedFeatureCode::WorkgroupBarrier,
         UnsupportedFeatureV1::WorkgroupMemory => UnsupportedFeatureCode::WorkgroupMemory,
+        UnsupportedFeatureV1::DynamicWorkgroupMemory => {
+            UnsupportedFeatureCode::DynamicWorkgroupMemory
+        }
         UnsupportedFeatureV1::Matrix => UnsupportedFeatureCode::Matrix,
         UnsupportedFeatureV1::Wave => UnsupportedFeatureCode::Wave,
         UnsupportedFeatureV1::InlineAssembly => UnsupportedFeatureCode::InlineAssembly,
@@ -1716,9 +1810,7 @@ fn write_success<W: Write + ?Sized>(
 ) -> io::Result<()> {
     writer.write_all(b"{\"schema\":\"")?;
     writer.write_all(RESULT_SCHEMA.as_bytes())?;
-    writer.write_all(
-        b"\",\"status\":\"ok\",\"authority\":\"observation_only\",\"kir\":{\"sha256\":\"",
-    )?;
+    writer.write_all(b"\",\"status\":\"ok\",\"authority\":\"observation_only\",\"simulated\":true,\"hardware_observed\":false,\"hardware_validation\":false,\"performance_prediction\":false,\"target_profile\":{\"identity\":\"amdgpu_64_little_endian_v1\",\"index_bits\":64,\"max_workgroup_invocations\":1024},\"kir\":{\"sha256\":\"")?;
     write_lower_hex(writer, execution.identity().digest(), false)?;
     write!(
         writer,
@@ -1757,6 +1849,9 @@ const fn schedule_name(schedule: SimulationScheduleIdentityV1) -> &'static str {
     match schedule {
         SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxSerialV1 => {
             "workgroup_major_local_zyx_serial_v1"
+        }
+        SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxCooperativeV1 => {
+            "workgroup_major_local_zyx_cooperative_v1"
         }
     }
 }
@@ -2929,6 +3024,51 @@ mod tests {
         assert_eq!(
             serde_json::to_value(UnsupportedFeatureCode::InlineAssembly).unwrap(),
             "inline_assembly"
+        );
+        assert_eq!(
+            serde_json::to_value(unsupported_code(
+                &UnsupportedFeatureV1::DynamicWorkgroupMemory
+            ))
+            .unwrap(),
+            "dynamic_workgroup_memory"
+        );
+        assert_eq!(
+            execution_kind(&SimulationExecutionErrorKindV1::WorkgroupUseBeforePublish {
+                allocation: 1,
+                offset: 2,
+                bytes: 3,
+            }),
+            ErrorKind::ExecutionWorkgroupUseBeforePublish
+        );
+        assert_eq!(
+            execution_kind(
+                &SimulationExecutionErrorKindV1::WorkgroupSchedulerNoProgress { phase: 4 }
+            ),
+            ErrorKind::ExecutionWorkgroupSchedulerNoProgress
+        );
+        for (kind, expected) in [
+            (
+                ErrorKind::ExecutionWorkgroupUseBeforePublish,
+                "execution_workgroup_use_before_publish",
+            ),
+            (
+                ErrorKind::ExecutionDivergentWorkgroupBarrier,
+                "execution_divergent_workgroup_barrier",
+            ),
+            (
+                ErrorKind::ExecutionMismatchedWorkgroupBarrier,
+                "execution_mismatched_workgroup_barrier",
+            ),
+            (
+                ErrorKind::ExecutionWorkgroupSchedulerNoProgress,
+                "execution_workgroup_scheduler_no_progress",
+            ),
+        ] {
+            assert_eq!(serde_json::to_value(kind).unwrap(), expected);
+        }
+        assert_eq!(
+            schedule_name(SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxCooperativeV1),
+            "workgroup_major_local_zyx_cooperative_v1"
         );
         assert_eq!(
             preflight_kind(&SimulationPreflightErrorV1::TargetValueOutOfRange { argument: 7 }),

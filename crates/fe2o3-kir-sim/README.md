@@ -15,14 +15,29 @@ after that decode; it is not a pre-decode allocator cap.
 
 The first execution profile supports integer and boolean scalar operations,
 structured control flow, internal helper calls, private allocations, global
-buffer arguments, ordinary and guarded scalar loads, and one-, two-, or
-three-dimensional launch hierarchy intrinsics. A false guarded load evaluates
-only its predicate and fallback; it does not validate the pointer, record a
-memory access, or emit a memory-read event. Workgroups and local slots are
-visited in canonical Z/Y/X
-lexicographic order, with every invocation run to completion. Padded local slots
-are included in admission and execution accounting. The target profile enforces
-its legal workgroup volume before scheduling begins.
+buffer arguments, ordinary and guarded scalar loads, static scalar
+workgroup-memory declarations, convergent workgroup barriers, and one-, two-,
+or three-dimensional launch hierarchy intrinsics. A false guarded load
+evaluates only its predicate and fallback; it does not validate the pointer,
+record a memory access, or emit a memory-read event. Workgroups and local slots
+are created in canonical Z/Y/X
+lexicographic order. Invocations in one workgroup then advance cooperatively and
+yield at barriers; a phase releases only after every live in-grid participant
+arrives at the same site with identical barrier semantics. Padded local slots
+are included in admission and execution accounting but never become barrier
+participants. The target profile enforces its legal workgroup volume before
+scheduling begins.
+
+Each static `WorkgroupMemory` operation denotes one zeroed-but-uninitialized
+allocation site per workgroup. The allocation is shared by that workgroup and
+released before the next workgroup starts. Loads and stores reuse the ordinary
+typed-pointer address-space, access, alignment, bounds, initialization, and
+provenance checks. A lane can read its own initialized write immediately; a
+different lane can read those bytes only after a compatible workgroup barrier
+publishes them. Uninitialized access and cross-lane use before publication are
+distinct typed failures. Workgroup allocations, bytes, publication ownership,
+all cooperative machines, and their frame storage are included in preflight
+resource accounting.
 
 Every result identifies this schedule and carries a bounded, byte-level
 cross-invocation global-memory conflict assessment. A conflict or an incomplete
@@ -39,9 +54,16 @@ diagnostics retain a deterministic prefix of at most 4,096 scan-order
 occurrences and at most 1 MiB of owned identifier bytes, and separately report
 the exact total, so hostile identifiers cannot amplify diagnostics into
 unbounded storage.
-Floating-point operations, external calls, atomics, synchronization,
-workgroup memory, wave operations, matrix operations, memory intrinsics, and
-inline assembly are rejected by this V7 profile.
+The regression suite runs the maximum admitted call chain and recursive limit on
+an unchanged 128 KiB native thread stack. Large ordinary-operation and
+non-return-terminator evaluators remain separate leaf calls from the cooperative
+scheduler; exact compiler stack-frame sizes are diagnostic measurements, not a
+stable ABI.
+Floating-point operations, external calls, generic barriers, atomics, fences,
+dynamic or non-scalar workgroup memory, wave operations, matrix operations,
+memory intrinsics, and inline assembly are rejected by this profile. Workgroup
+barriers do not simulate physical waves, atomics, cache behavior, timing, or
+performance.
 
 Callers consume an exact V7 owner with `AdmittedSimulationModuleV1::admit`, then
 provide an explicit target, resource limits, launch shape, and typed scalar or
@@ -57,7 +79,9 @@ mutates the borrowed request. For debugger integration, `simulate_with_sink`
 honors the request's event policy, while `simulate_observed_with_sink` explicitly
 enables delivery without cloning or mutating the request. Bounded in-process
 events include exact invocation and operation lifecycle boundaries, allocation
-lifecycles, block entry, selected branch target, memory, call, and return sites.
+lifecycles, block entry, selected branch target, memory, call and return sites,
+per-lane barrier arrivals, and one workgroup barrier release with the exact live
+participant count.
 Event sites and call targets carry canonical module-function ordinals, so
 hot-path observation neither clones nor repeatedly compares owned function
 identifiers; adapters resolve each ordinal against the admitted module.

@@ -26,6 +26,7 @@ const BACKEND_RECEIPT_PENDING_PROVENANCE_V2: u8 = 5;
 const BACKEND_RECEIPT_PROVENANCE_V3: u8 = 6;
 const BACKEND_RECEIPT_PENDING_PROVENANCE_V3: u8 = 7;
 const BACKEND_RECEIPT_ENVELOPE_CUSTODY_V3: u8 = 8;
+const BACKEND_RECEIPT_SIMULATION_OBSERVATION_V1: u8 = 9;
 const BACKEND_PROVENANCE_RECEIPT_BYTES_V1: usize = 7 * 32;
 pub(crate) const COMPILER_CLOSURE_BYTES_V2: usize = (6 * 32) + 2 + 32;
 const BACKEND_PROVENANCE_RECEIPT_BYTES_V2: usize =
@@ -158,6 +159,35 @@ pub struct BuildAttempt {
     generation: u64,
     session: BuildSession,
     invocation: BuildInvocation,
+}
+
+/// Durable identity of one authority-free CPU simulation observation.
+///
+/// This receipt retires a managed compiler attempt after its exact canonical KIR was consumed.
+/// It is neither code-object provenance nor evidence of hardware execution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SimulationObservationReceiptV1 {
+    canonical_kir_sha256: [u8; 32],
+}
+
+impl SimulationObservationReceiptV1 {
+    pub(crate) const fn new(canonical_kir_sha256: [u8; 32]) -> Self {
+        Self {
+            canonical_kir_sha256,
+        }
+    }
+
+    pub const fn canonical_kir_sha256(self) -> [u8; 32] {
+        self.canonical_kir_sha256
+    }
+
+    pub const fn grants_artifact_authority(self) -> bool {
+        false
+    }
+
+    pub const fn proves_hardware_execution(self) -> bool {
+        false
+    }
 }
 
 /// Durable provenance fields bound to one successful exact-byte backend publication.
@@ -594,10 +624,23 @@ pub(crate) enum BackendReceiptV1 {
     PendingProvenanceV3(BackendPublicationReceiptV3),
     ProvenanceV3(BackendPublicationReceiptV3),
     EnvelopeCustodyV3(BackendPublicationReceiptV3, WorkerV3LoadReadinessReceiptV1),
+    SimulationObservation(SimulationObservationReceiptV1),
 }
 
 impl BackendReceiptV1 {
-    pub(crate) const fn is_completed(self) -> bool {
+    pub(crate) const fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::LegacyCoordination
+                | Self::Provenance(_)
+                | Self::ProvenanceV2(_)
+                | Self::ProvenanceV3(_)
+                | Self::EnvelopeCustodyV3(_, _)
+                | Self::SimulationObservation(_)
+        )
+    }
+
+    pub(crate) const fn is_artifact_completion(self) -> bool {
         matches!(
             self,
             Self::LegacyCoordination
@@ -809,6 +852,10 @@ impl AttemptRegistry {
                     push_backend_publication_receipt_v3(&mut bytes, receipt)?;
                     bytes.extend_from_slice(&readiness.encode_canonical()?);
                 }
+                Some(BackendReceiptV1::SimulationObservation(receipt)) => {
+                    bytes.push(BACKEND_RECEIPT_SIMULATION_OBSERVATION_V1);
+                    bytes.extend_from_slice(&receipt.canonical_kir_sha256);
+                }
             }
         }
         if bytes.len() > MAX_ATTEMPT_BYTES {
@@ -878,6 +925,13 @@ impl AttemptRegistry {
                         return Err(AttemptCodecError::WorkerV3LoadReadinessMismatch);
                     }
                     Some(BackendReceiptV1::EnvelopeCustodyV3(receipt, readiness))
+                }
+                BACKEND_RECEIPT_SIMULATION_OBSERVATION_V1 => {
+                    let mut canonical_kir_sha256 = [0; 32];
+                    canonical_kir_sha256.copy_from_slice(decoder.take(32)?);
+                    Some(BackendReceiptV1::SimulationObservation(
+                        SimulationObservationReceiptV1::new(canonical_kir_sha256),
+                    ))
                 }
                 value => return Err(AttemptCodecError::InvalidBackendReceiptTag(value)),
             };
@@ -1094,6 +1148,20 @@ impl AttemptRegistry {
         Ok(())
     }
 
+    pub(crate) fn record_simulation_observation_receipt(
+        &mut self,
+        stable_source: &str,
+        attempt: BuildAttempt,
+        receipt: SimulationObservationReceiptV1,
+    ) -> Result<(), AttemptCodecError> {
+        let record = self.exact_record_mut(stable_source, attempt)?;
+        if record.phase != AttemptPhase::BackendClaimed || record.backend_receipt.is_some() {
+            return Err(AttemptCodecError::InvalidTransition);
+        }
+        record.backend_receipt = Some(BackendReceiptV1::SimulationObservation(receipt));
+        Ok(())
+    }
+
     pub(crate) fn record_backend_publication_receipt(
         &mut self,
         stable_source: &str,
@@ -1238,7 +1306,7 @@ impl AttemptRegistry {
         if record.phase == AttemptPhase::Completed {
             return if record
                 .backend_receipt
-                .is_some_and(BackendReceiptV1::is_completed)
+                .is_some_and(BackendReceiptV1::is_terminal)
             {
                 Ok(())
             } else {
@@ -1248,7 +1316,7 @@ impl AttemptRegistry {
         if record.phase != AttemptPhase::BackendClaimed
             || !record
                 .backend_receipt
-                .is_some_and(BackendReceiptV1::is_completed)
+                .is_some_and(BackendReceiptV1::is_terminal)
         {
             return Err(AttemptCodecError::InvalidTransition);
         }
@@ -1416,7 +1484,7 @@ impl AttemptRegistry {
                 || (record.phase == AttemptPhase::Completed
                     && !record
                         .backend_receipt
-                        .is_some_and(BackendReceiptV1::is_completed))
+                        .is_some_and(BackendReceiptV1::is_terminal))
             {
                 return Err(AttemptCodecError::InvalidTransition);
             }
@@ -1647,6 +1715,7 @@ fn record_size(
                 BACKEND_PROVENANCE_RECEIPT_BYTES_V3
                     + crate::MAX_WORKER_V3_LOAD_READINESS_RECEIPT_BYTES_V1
             }
+            Some(BackendReceiptV1::SimulationObservation(_)) => 32,
             Some(BackendReceiptV1::LegacyCoordination) | None => 0,
         }
 }
@@ -2508,8 +2577,8 @@ mod tests {
             Err(AttemptCodecError::InvalidPhase(9))
         );
         assert_eq!(
-            AttemptRegistry::decode(&raw_registry(1, &[("path:a", "a", 1, SESSION_A, 0, 9)])),
-            Err(AttemptCodecError::InvalidBackendReceiptTag(9))
+            AttemptRegistry::decode(&raw_registry(1, &[("path:a", "a", 1, SESSION_A, 0, 10)])),
+            Err(AttemptCodecError::InvalidBackendReceiptTag(10))
         );
         assert_eq!(
             AttemptRegistry::decode(&raw_registry(1, &[("path:a", "a", 1, SESSION_A, 0, 1)])),

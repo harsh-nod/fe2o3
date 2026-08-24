@@ -985,7 +985,7 @@ fn stderr(output: &Output) -> String {
 const CHILD_COMMITMENT_MISMATCH_DIAGNOSTIC: &[u8] =
     b"host consumer fixture: application handoff commitment does not bind the envelope and current executable";
 const CHILD_AMD_WAVE_DIAGNOSTIC: &[u8] = b"host consumer fixture: failed to recover inherited Worker V2 envelope: Worker V2 host admission failed: HIP observations are too coarse to establish required capability AmdWave";
-const PARENT_TRUNCATED_ACK_DIAGNOSTIC: &[u8] = b"cargo-fe2o3 application runner: invalid application handoff acknowledgment: application handoff acknowledgment is truncated (0 bytes)";
+const PARENT_TRUNCATED_ACK_DIAGNOSTIC: &[u8] = b"cargo-fe2o3 application runner: invalid Worker V2 application acknowledgment: application handoff acknowledgment is truncated (0 bytes)";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ApplicationRejectionDiagnostic {
@@ -2508,7 +2508,7 @@ fn missing_or_mismeasured_configuration_prevents_rustc_spawn() {
 
 #[cfg(debug_assertions)]
 #[test]
-fn s09_environment_stripping_cannot_downgrade_the_prepared_broker() {
+fn s09_environment_stripping_fails_before_the_prepared_broker_can_be_downgraded() {
     let directory = TestDirectory::new();
     let config = write_s09_config(&directory);
     let mut options = VerticalRunOptions::new("publish");
@@ -2518,7 +2518,7 @@ fn s09_environment_stripping_cannot_downgrade_the_prepared_broker() {
     assert!(!output.status.success());
     assert!(!directory.0.join("spawned").exists());
     assert!(
-        stderr(&output).contains("profile/config identity"),
+        stderr(&output).contains("requires FE2O3_WORKER_V2_CONFIG_V2"),
         "{}",
         stderr(&output)
     );

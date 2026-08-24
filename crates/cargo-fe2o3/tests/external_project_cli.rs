@@ -28,6 +28,8 @@ use rustix::io::Errno;
 use sha2::{Digest, Sha256};
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+#[cfg(unix)]
+const ARTIFACT_CHILD_FD: i32 = 197;
 const PROTECTED_RELEASE_CARGO_REPORT: &str = ".fe2o3-protected-release-cargo-report-v1.json";
 const PROTECTED_RELEASE_CARGO_READY: &str = ".fe2o3-protected-release-cargo-ready-v1";
 const PROTECTED_RELEASE_CARGO_HOLD: &str = ".fe2o3-protected-release-cargo-hold-v1";
@@ -401,6 +403,7 @@ fn cargo_fe2o3_command() -> Command {
 fn cargo_fe2o3_command_with_program(program: &Path) -> Command {
     let mut command = Command::new(program);
     command
+        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-v1")
         .env_remove("RUSTUP_HOME")
         .env_remove("RUSTUP_TOOLCHAIN")
         .env_remove("RUSTC")
@@ -1068,6 +1071,7 @@ fn substituted_multithreaded_image_cannot_replay_wrapper_from_non_leader_thread(
         .env("FE2O3_TEST_DISPLACED_WRAPPER", &displaced_wrapper)
         .env("FE2O3_TEST_WRAPPER_RACE_TRACE", &race_trace)
         .env("FE2O3_TEST_MULTITHREADED_TRACE", &thread_trace)
+        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-v1")
         .env("LD_LIBRARY_PATH", harness_loader)
         .env_remove("RUSTUP_HOME")
         .env_remove("RUSTUP_TOOLCHAIN")
@@ -3280,7 +3284,7 @@ fn hostile_orphan_descendants_cannot_retain_supervisor_slots() {
             let report: serde_json::Value =
                 serde_json::from_slice(&fs::read(&report).expect("read holder report"))
                     .expect("decode holder report");
-            assert_eq!(report["inherited_fds"], serde_json::json!([]));
+            assert_runtime_artifact_descriptor(&report, &root);
             let child = fs::read_to_string(&marker)
                 .expect("read holder PID")
                 .parse::<i32>()
@@ -3350,7 +3354,7 @@ fn hostile_application_cannot_forge_pending_supervisor_success() {
         serde_json::from_slice(&fs::read(&report).expect("read forgery report"))
             .expect("decode forgery report");
     assert_eq!(report["forged_supervisor_result"], false);
-    assert_eq!(report["inherited_fds"], serde_json::json!([]));
+    assert_runtime_artifact_descriptor(&report, &root);
     let application = fs::read_to_string(&marker)
         .expect("read application PID")
         .parse::<i32>()
@@ -3388,7 +3392,7 @@ fn hostile_application_cannot_unlock_supervisor_admission() {
     let report: serde_json::Value =
         serde_json::from_slice(&fs::read(&report).expect("read slot report"))
             .expect("decode slot report");
-    assert_eq!(report["inherited_fds"], serde_json::json!([]));
+    assert_runtime_artifact_descriptor(&report, &root);
     assert_eq!(report["slot_unlocks"], serde_json::json!([]));
     fs::remove_dir_all(root).expect("remove slot fixture");
 }
@@ -3766,6 +3770,7 @@ fn assert_runner_chain_report(path: &Path, mode: &str, preserved_environment: Op
             .expect("decode runner report");
     assert_eq!(report["artifact_fd_open"], false);
     assert_eq!(report["backend_fd_open"], false);
+    assert_eq!(report["inherited_fds"], serde_json::json!([]));
     assert_eq!(report["leaked_environment"], serde_json::json!([]));
     assert_eq!(
         report["preserved_environment_hex"],
@@ -3779,6 +3784,19 @@ fn assert_runner_chain_report(path: &Path, mode: &str, preserved_environment: Op
             .expect("prefix array")
             .iter()
             .any(|value| value == &hex(mode.as_bytes()))
+    );
+}
+
+#[cfg(unix)]
+fn assert_runtime_artifact_descriptor(report: &serde_json::Value, root: &Path) {
+    let inherited = report["inherited_fds"]
+        .as_array()
+        .expect("inherited descriptor array");
+    assert_eq!(inherited.len(), 1);
+    assert_eq!(inherited[0]["fd"], ARTIFACT_CHILD_FD);
+    assert_eq!(
+        inherited[0]["target"],
+        root.join("runner-artifact").to_str().unwrap()
     );
 }
 

@@ -552,7 +552,51 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                 device_pipeline_route
             {
                 let output_dir = output_dir.expect("kernel output was required above");
-                if codegen_pipeline == CodegenPipeline::CollectedGeneralGemmV1 {
+                if codegen_pipeline == CodegenPipeline::SimulationV1 {
+                    let attempt = build_attempt.unwrap_or_else(|| {
+                        tcx.dcx().fatal(
+                            "[rustc-codegen-fe2o3] simulation-v1 requires a managed build attempt",
+                        )
+                    });
+                    let captured = (|| -> Result<_, String> {
+                        let collection = collect_qualification_oracle_input(
+                            tcx,
+                            mono_partitions.codegen_units,
+                            self.config.verbose,
+                            &self.config.target,
+                            qualification_pipeline,
+                        )?;
+                        let mir_module = mir_import::import_collection(tcx, &collection)
+                            .map_err(|error| format!("compiler FFI MIR import failed: {error}"))?;
+                        let module = kernel_ir_lowering::translate_and_verify_for_session(
+                            &mir_module,
+                            &self.config.target,
+                            tcx.sess,
+                        )
+                        .map_err(|errors| format!("MIR translation failed: {errors}"))?;
+                        let canonical =
+                            fe2o3_kernel_ir::VerifiedCanonicalKernelIrV7::from_module(module)
+                                .map_err(|error| {
+                                    format!("canonical KIR V7 custody failed: {error}")
+                                })?;
+                        fe2o3_artifact_transaction::publish_simulation_kernel_ir_handoff_v1(
+                            output_dir,
+                            &producer,
+                            attempt,
+                            canonical.canonical_bytes(),
+                        )
+                        .map_err(|error| format!("attempt-scoped KIR capture failed: {error}"))
+                    })();
+                    match captured {
+                        Ok(receipt) => eprintln!(
+                            "[rustc-codegen-fe2o3] simulation-v1 captured {} exact canonical KIR V7 byte(s) from the generic verified MIR lowering into an inert attempt-scoped handoff; target lowering, artifact, runtime, and GPU authority remain false",
+                            receipt.length(),
+                        ),
+                        Err(error) => tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] simulation-v1 failed without fallback: {error}"
+                        )),
+                    }
+                } else if codegen_pipeline == CodegenPipeline::CollectedGeneralGemmV1 {
                     let qualification = (|| -> Result<_, String> {
                         let attempt = build_attempt.ok_or_else(|| {
                             format!(
@@ -746,7 +790,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             llvm_bytes,
                             publication_bytes,
                         )) => eprintln!(
-                            "[rustc-codegen-fe2o3] {} authenticated exact attributed source bytes and fallback namespace, distinct wrapper/session-derived ordinary #[kernel(typed)] root `{root}`, exact rustc FnAbi, location-independent V4 provider-semantic definitions and reviewed semantic-terminal manifest, and complete reachable portable-MIR closure modulo those identity-bound terminals {portable_mir}; consumed sealed source authority {authority} to select closed causal FlashAttention B{batches}/H{heads}/N{sequence}/D{dimension} semantic KIR with {recurrence_steps} ordered recurrence steps, exact grid {grid:?}, adjacent-pair output ownership, and descriptor/resource identity {descriptor}; published an inert Worker V2 compiler handoff ({canonical_handoff_bytes} canonical bytes, {llvm_bytes} LLVM bytes, {publication_bytes} receipt bytes) with exact COV6/Wave64/WG64 ABI and unresolved `__ocml_exp_f32` boundary {ocml_boundary}; this grants no terminal-body or compiler-refinement proof, exponential-law/IEEE/OCML semantic proof, provider selection, final machine-body semantics, worker execution, link result, HSACO, runtime, GPU, numerical, performance, load, launch, or hardware authority",
+                            "[rustc-codegen-fe2o3] {} authenticated exact attributed source bytes and fallback namespace, distinct wrapper/session-derived ordinary #[kernel(typed)] root `{root}`, exact rustc FnAbi, location-independent V5 provider-semantic definitions and reviewed semantic-terminal manifest, and complete reachable portable-MIR closure modulo those identity-bound terminals {portable_mir}; consumed sealed source authority {authority} to select closed causal FlashAttention B{batches}/H{heads}/N{sequence}/D{dimension} semantic KIR with {recurrence_steps} ordered recurrence steps, exact grid {grid:?}, adjacent-pair output ownership, and descriptor/resource identity {descriptor}; published an inert Worker V2 compiler handoff ({canonical_handoff_bytes} canonical bytes, {llvm_bytes} LLVM bytes, {publication_bytes} receipt bytes) with exact COV6/Wave64/WG64 ABI and unresolved `__ocml_exp_f32` boundary {ocml_boundary}; this grants no terminal-body or compiler-refinement proof, exponential-law/IEEE/OCML semantic proof, provider selection, final machine-body semantics, worker execution, link result, HSACO, runtime, GPU, numerical, performance, load, launch, or hardware authority",
                             collected_flash_attention_v1::COLLECTED_FLASH_ATTENTION_PIPELINE_V1,
                         ),
                         Err(error) => tcx.dcx().fatal(format!(
@@ -828,7 +872,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             llvm_bytes,
                             publication_bytes,
                         )) => eprintln!(
-                            "[rustc-codegen-fe2o3] {} authenticated rustc-loaded exact attributed source contents and fallback namespace, distinct wrapper/session-derived ordinary #[kernel(typed)] root `{root}`, opaque exact rustc FnAbi identity plus bounded structural projection, location-independent V4 provider-semantic definitions and reviewed semantic-terminal manifest, and complete reachable portable-MIR closure modulo those identity-bound terminals {portable_mir}; checked private same-session producer-derived structural source/FnAbi/MIR/KIR record {structural_record}, explicitly not semantic refinement; consumed sealed source authority {authority} (bound value {consumed_authority}) to select closed deterministic finite-input MoE top-2 T{tokens}/E{experts}/K{top_k}/C{capacity} semantic KIR {kir} with {routing_steps} ordered routing steps, exact grid {grid:?}, lane-zero exclusive output ownership, stable-prefix capacity dropping, permutation/inverse and sentinel-tail semantics, and descriptor/resource identity {descriptor}; published an inert Worker V2 compiler-module handoff ({canonical_handoff_bytes} canonical bytes, {llvm_bytes} LLVM bytes, {publication_bytes} receipt bytes) for one explicit kernel, five private helpers, no providers/imports, canonical target-machine layout identity, exact COV6 ABI/resources/effects, and no COMGR or subprocess linker; whole-module MIR diagnostics and ordered aggregate canonical KIR/profile entries collectively encoding all current fields do not prove semantic MIR-to-KIR correspondence; no generic lowering, IEEE FP32 refinement, terminal-body refinement, compiler-refinement proof, source-to-Verus/model refinement, worker execution, finalizer, link result, artifact, host, runtime, load, launch, GPU, or hardware authority was entered",
+                            "[rustc-codegen-fe2o3] {} authenticated rustc-loaded exact attributed source contents and fallback namespace, distinct wrapper/session-derived ordinary #[kernel(typed)] root `{root}`, opaque exact rustc FnAbi identity plus bounded structural projection, location-independent V5 provider-semantic definitions and reviewed semantic-terminal manifest, and complete reachable portable-MIR closure modulo those identity-bound terminals {portable_mir}; checked private same-session producer-derived structural source/FnAbi/MIR/KIR record {structural_record}, explicitly not semantic refinement; consumed sealed source authority {authority} (bound value {consumed_authority}) to select closed deterministic finite-input MoE top-2 T{tokens}/E{experts}/K{top_k}/C{capacity} semantic KIR {kir} with {routing_steps} ordered routing steps, exact grid {grid:?}, lane-zero exclusive output ownership, stable-prefix capacity dropping, permutation/inverse and sentinel-tail semantics, and descriptor/resource identity {descriptor}; published an inert Worker V2 compiler-module handoff ({canonical_handoff_bytes} canonical bytes, {llvm_bytes} LLVM bytes, {publication_bytes} receipt bytes) for one explicit kernel, five private helpers, no providers/imports, canonical target-machine layout identity, exact COV6 ABI/resources/effects, and no COMGR or subprocess linker; whole-module MIR diagnostics and ordered aggregate canonical KIR/profile entries collectively encoding all current fields do not prove semantic MIR-to-KIR correspondence; no generic lowering, IEEE FP32 refinement, terminal-body refinement, compiler-refinement proof, source-to-Verus/model refinement, worker execution, finalizer, link result, artifact, host, runtime, load, launch, GPU, or hardware authority was entered",
                             collected_moe_top2_v1::COLLECTED_MOE_TOP2_PIPELINE_V1,
                         ),
                         Err(error) => tcx.dcx().fatal(format!(
@@ -1460,9 +1504,9 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                     reason: format!("compiler FFI MIR import failed: {error}"),
                                 })?;
                             match codegen_pipeline {
-                            CodegenPipeline::ProductionV1 => {
+                            CodegenPipeline::ProductionV1 | CodegenPipeline::SimulationV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
-                                    reason: "internal error: production-v1 escaped its fail-closed transaction branch"
+                                    reason: "internal error: production/simulation semantic custody escaped its fail-closed transaction branch"
                                         .to_owned(),
                                 })
                             }

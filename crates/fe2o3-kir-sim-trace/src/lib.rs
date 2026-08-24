@@ -13,10 +13,11 @@ use fe2o3_kir_sim::{
     SimulationTargetV1,
 };
 use fe2o3_semantic_trace::{
-    ActiveMaskV1, AddressSpaceV1, AllocationEventV1, CaptureBoundariesV1, DiagnosticEventV1,
-    DiagnosticKindV1, DispatchEventV1, DispatchIdentityDomainV1, DispatchIdentityV1,
-    DispatchOutcomeV1, DroppedEventCountV1, ExecutionKindV1, ExecutionScopeV1, FactProvenanceV1,
-    InvocationEventV1, KernelIrIdentityClaimV1, KirSiteClaimV1, KirSitePointV1, LaunchGeometryV1,
+    ActiveMaskV1, AddressSpaceV1, AllocationEventV1, BarrierActionV1, BarrierEventV1,
+    BarrierScopeV1, CaptureBoundariesV1, DiagnosticEventV1, DiagnosticKindV1, DispatchEventV1,
+    DispatchIdentityDomainV1, DispatchIdentityV1, DispatchOutcomeV1, DroppedEventCountV1,
+    ExecutionKindV1, ExecutionScopeV1, FactProvenanceV1, InvocationEventV1,
+    KernelIrIdentityClaimV1, KirSiteClaimV1, KirSitePointV1, LaunchGeometryV1,
     MAX_TRACE_RESIDENT_BYTES_V1, MemoryAccessKindV1, MemoryEventV1, MemoryOutcomeV1,
     OpaqueIdentityV1, OperationEventV1, OperationOccurrenceIdV1, ProducerIdentityV1,
     ProducerKindV1, ProducerTextV1, TimestampV1, TraceAllocationIdV1, TraceBoundsV1,
@@ -56,7 +57,13 @@ struct FunctionCatalogV1 {
 struct BlockCatalogV1 {
     id: BlockId,
     ordinal: u64,
-    operations: Vec<Option<AddressSpaceV1>>,
+    operations: Vec<OperationCatalogV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct OperationCatalogV1 {
+    address_space: Option<AddressSpaceV1>,
+    workgroup_barrier: Option<u32>,
 }
 
 impl KirSiteCatalogV1 {
@@ -71,6 +78,7 @@ impl KirSiteCatalogV1 {
         resident: &mut AdapterResidentLedgerV1,
     ) -> Result<Self, TraceAdapterErrorV1> {
         let mut functions = Vec::new();
+        let mut next_workgroup_barrier = 1_u32;
         resident.try_reserve_vec(&mut functions, module.module().functions.len())?;
         for (function_index, function) in module.module().functions.iter().enumerate() {
             let id = resident.copy_string(function.id.as_str())?;
@@ -81,12 +89,26 @@ impl KirSiteCatalogV1 {
                     let mut operations = Vec::new();
                     resident.try_reserve_vec(&mut operations, block.operations.len())?;
                     for operation in &block.operations {
-                        operations.push(match &operation.kind {
+                        let address_space = match &operation.kind {
                             OperationKind::Load { access, .. }
                             | OperationKind::Store { access, .. } => {
                                 Some(map_address_space(access.address_space))
                             }
                             _ => None,
+                        };
+                        let workgroup_barrier =
+                            if matches!(operation.kind, OperationKind::WorkgroupBarrier(_)) {
+                                let barrier = next_workgroup_barrier;
+                                next_workgroup_barrier = next_workgroup_barrier
+                                    .checked_add(1)
+                                    .ok_or(TraceAdapterErrorV1::UnrepresentableCatalog)?;
+                                Some(barrier)
+                            } else {
+                                None
+                            };
+                        operations.push(OperationCatalogV1 {
+                            address_space,
+                            workgroup_barrier,
                         });
                     }
                     blocks.push(BlockCatalogV1 {
@@ -177,8 +199,16 @@ impl KirSiteCatalogV1 {
         Self::block(function, site.block)?
             .operations
             .get(operation)
-            .copied()
-            .flatten()
+            .and_then(|operation| operation.address_space)
+    }
+
+    fn workgroup_barrier_event(&self, site: &SimulationEventSiteV1) -> Option<u32> {
+        let operation = usize::try_from(site.operation?).ok()?;
+        let function = self.function_by_ordinal(site.function_ordinal)?;
+        Self::block(function, site.block)?
+            .operations
+            .get(operation)?
+            .workgroup_barrier
     }
 
     fn block_entry_event(&self, site: &SimulationEventSiteV1) -> Option<KirSiteClaimV1> {
@@ -375,7 +405,7 @@ impl From<TraceValidationErrorV1> for TraceAdapterErrorV1 {
     }
 }
 
-/// Runs the serial CPU simulator and records a bounded semantic trace.
+/// Runs the deterministic cooperative CPU simulator and records a bounded semantic trace.
 pub fn simulate_with_semantic_trace_v1(
     module: &AdmittedSimulationModuleV1,
     request: &SimulationRequestV1,
@@ -501,13 +531,12 @@ struct TraceCollectorV1<'a> {
     resident: AdapterResidentLedgerV1,
     catalog: &'a KirSiteCatalogV1,
     events: Vec<TraceEventV1>,
-    invocation: Option<(SimulationInvocationV1, ExecutionScopeV1)>,
-    operations: Vec<OperationStateV1>,
-    frames: Vec<u64>,
+    invocations: Vec<InvocationTraceStateV1>,
+    next_invocation_state: usize,
     next_frame: u64,
     next_occurrence: u64,
     allocations: Vec<AllocationMappingV1>,
-    invocation_checkpoint: Option<(usize, u64)>,
+    workgroup_checkpoint: Option<(usize, u64)>,
     truncation: Option<TruncationReasonV1>,
 }
 
@@ -517,9 +546,18 @@ struct OperationStateV1 {
     occurrence: OperationOccurrenceIdV1,
 }
 
+struct InvocationTraceStateV1 {
+    invocation: SimulationInvocationV1,
+    scope: ExecutionScopeV1,
+    operations: Vec<OperationStateV1>,
+    frames: Vec<u64>,
+    ended: bool,
+}
+
 struct AllocationMappingV1 {
     raw: u64,
     trace: TraceAllocationIdV1,
+    address_space: AddressSpaceV1,
     released: bool,
 }
 
@@ -550,13 +588,12 @@ impl<'a> TraceCollectorV1<'a> {
             resident,
             catalog,
             events,
-            invocation: None,
-            operations: Vec::new(),
-            frames: Vec::new(),
+            invocations: Vec::new(),
+            next_invocation_state: 0,
             next_frame: 1,
             next_occurrence: 1,
             allocations: Vec::new(),
-            invocation_checkpoint: None,
+            workgroup_checkpoint: None,
             truncation: None,
         })
     }
@@ -633,13 +670,11 @@ impl<'a> TraceCollectorV1<'a> {
         if self.truncation.is_none() {
             self.truncation = Some(reason);
         }
-        if let Some((events, bytes)) = self.invocation_checkpoint.take() {
+        if let Some((events, bytes)) = self.workgroup_checkpoint.take() {
             self.events.truncate(events);
             self.encoded_bytes = bytes;
         }
-        self.invocation = None;
-        self.operations.clear();
-        self.frames.clear();
+        self.invocations.clear();
     }
 
     fn emit_footer(&mut self, event: DispatchEventV1) {
@@ -662,12 +697,20 @@ impl<'a> TraceCollectorV1<'a> {
     }
 
     fn begin_invocation(&mut self, invocation: SimulationInvocationV1) {
-        if self.invocation.is_some() || !self.operations.is_empty() || !self.frames.is_empty() {
+        let starts_workgroup = self.invocations.iter().all(|state| state.ended);
+        if starts_workgroup {
+            self.next_invocation_state = 0;
+            self.workgroup_checkpoint = Some((self.events.len(), self.encoded_bytes));
+        }
+        if self
+            .invocations
+            .iter()
+            .any(|state| !state.ended && state.invocation == invocation)
+        {
             self.truncation = Some(TruncationReasonV1::ProducerFailure);
             return;
         }
         let frame = self.next_frame;
-        self.invocation_checkpoint = Some((self.events.len(), self.encoded_bytes));
         let Some(next_frame) = self.next_frame.checked_add(1) else {
             self.truncation = Some(TruncationReasonV1::ProducerFailure);
             return;
@@ -676,7 +719,24 @@ impl<'a> TraceCollectorV1<'a> {
             self.truncation = Some(TruncationReasonV1::ProducerFailure);
             return;
         };
-        if self.resident.try_reserve_vec(&mut self.frames, 1).is_err() {
+        let position = self.next_invocation_state;
+        if position == self.invocations.len()
+            && self
+                .resident
+                .try_reserve_vec(&mut self.invocations, 1)
+                .is_err()
+        {
+            self.truncation = Some(TruncationReasonV1::ProducerFailure);
+            return;
+        }
+        let mut new_frames = Vec::new();
+        let reserve = if position < self.invocations.len() {
+            let (resident, invocations) = (&mut self.resident, &mut self.invocations);
+            resident.try_reserve_vec(&mut invocations[position].frames, 1)
+        } else {
+            self.resident.try_reserve_vec(&mut new_frames, 1)
+        };
+        if reserve.is_err() {
             self.truncation = Some(TruncationReasonV1::ProducerFailure);
             return;
         }
@@ -687,15 +747,39 @@ impl<'a> TraceCollectorV1<'a> {
         );
         if self.truncation.is_none() {
             self.next_frame = next_frame;
-            self.frames.push(frame);
-            self.invocation = Some((invocation, scope));
+            self.next_invocation_state += 1;
+            if position < self.invocations.len() {
+                let state = &mut self.invocations[position];
+                state.invocation = invocation;
+                state.scope = scope;
+                state.operations.clear();
+                state.frames.push(frame);
+                state.ended = false;
+            } else {
+                new_frames.push(frame);
+                self.invocations.push(InvocationTraceStateV1 {
+                    invocation,
+                    scope,
+                    operations: Vec::new(),
+                    frames: new_frames,
+                    ended: false,
+                });
+            }
         }
     }
 
     fn current_scope(&self, invocation: SimulationInvocationV1) -> Option<ExecutionScopeV1> {
-        self.invocation
-            .filter(|current| current.0 == invocation)
-            .map(|current| current.1)
+        self.invocations
+            .iter()
+            .rev()
+            .find(|state| state.invocation == invocation)
+            .map(|state| state.scope)
+    }
+
+    fn invocation_position(&self, invocation: SimulationInvocationV1) -> Option<usize> {
+        self.invocations
+            .iter()
+            .rposition(|state| state.invocation == invocation)
     }
 
     fn record_event(&mut self, event: &SimulationEventV1) {
@@ -710,6 +794,16 @@ impl<'a> TraceCollectorV1<'a> {
             self.truncation = Some(TruncationReasonV1::ProducerFailure);
             return;
         };
+        let Some(invocation_position) = self.invocation_position(event.invocation) else {
+            self.truncation = Some(TruncationReasonV1::ProducerFailure);
+            return;
+        };
+        if self.invocations[invocation_position].ended
+            && !matches!(event.kind, SimulationEventKindV1::AllocationReleased { .. })
+        {
+            self.truncation = Some(TruncationReasonV1::ProducerFailure);
+            return;
+        }
         let Some(site) = self.catalog.claim_event(&event.site) else {
             self.truncation = Some(TruncationReasonV1::ProducerFailure);
             return;
@@ -719,7 +813,7 @@ impl<'a> TraceCollectorV1<'a> {
                 self.truncate(TruncationReasonV1::ProducerFailure);
             }
             SimulationEventKindV1::InvocationEnd { .. } => {
-                if !self.operations.is_empty() {
+                if !self.invocations[invocation_position].operations.is_empty() {
                     self.truncation = Some(TruncationReasonV1::ProducerFailure);
                     return;
                 }
@@ -729,9 +823,8 @@ impl<'a> TraceCollectorV1<'a> {
                     TraceEventKindV1::Invocation(InvocationEventV1::End),
                 );
                 if self.truncation.is_none() {
-                    self.invocation = None;
-                    self.frames.clear();
-                    self.invocation_checkpoint = None;
+                    self.invocations[invocation_position].ended = true;
+                    self.invocations[invocation_position].frames.clear();
                 }
             }
             SimulationEventKindV1::BlockEnter => {
@@ -742,7 +835,8 @@ impl<'a> TraceCollectorV1<'a> {
                 self.emit(scope, Some(entry), TraceEventKindV1::BlockEnter);
             }
             SimulationEventKindV1::OperationBegin => {
-                let Some(frame) = self.frames.last().copied() else {
+                let Some(frame) = self.invocations[invocation_position].frames.last().copied()
+                else {
                     self.truncation = Some(TruncationReasonV1::ProducerFailure);
                     return;
                 };
@@ -755,11 +849,11 @@ impl<'a> TraceCollectorV1<'a> {
                     self.truncation = Some(TruncationReasonV1::ProducerFailure);
                     return;
                 };
-                if self
-                    .resident
-                    .try_reserve_vec(&mut self.operations, 1)
-                    .is_err()
-                {
+                let reserve = {
+                    let (resident, invocations) = (&mut self.resident, &mut self.invocations);
+                    resident.try_reserve_vec(&mut invocations[invocation_position].operations, 1)
+                };
+                if reserve.is_err() {
                     self.truncation = Some(TruncationReasonV1::ProducerFailure);
                     return;
                 }
@@ -770,15 +864,17 @@ impl<'a> TraceCollectorV1<'a> {
                 );
                 if self.truncation.is_none() {
                     self.next_occurrence = next_occurrence;
-                    self.operations.push(OperationStateV1 {
-                        site,
-                        scope,
-                        occurrence,
-                    });
+                    self.invocations[invocation_position]
+                        .operations
+                        .push(OperationStateV1 {
+                            site,
+                            scope,
+                            occurrence,
+                        });
                 }
             }
             SimulationEventKindV1::OperationEnd { .. } => {
-                let Some(operation) = self.operations.pop() else {
+                let Some(operation) = self.invocations[invocation_position].operations.pop() else {
                     self.truncation = Some(TruncationReasonV1::ProducerFailure);
                     return;
                 };
@@ -794,7 +890,11 @@ impl<'a> TraceCollectorV1<'a> {
             }
             SimulationEventKindV1::Call { .. } => {
                 let frame = self.next_frame;
-                if self.resident.try_reserve_vec(&mut self.frames, 1).is_err() {
+                let reserve = {
+                    let (resident, invocations) = (&mut self.resident, &mut self.invocations);
+                    resident.try_reserve_vec(&mut invocations[invocation_position].frames, 1)
+                };
+                if reserve.is_err() {
                     self.truncation = Some(TruncationReasonV1::ProducerFailure);
                     return;
                 }
@@ -803,10 +903,10 @@ impl<'a> TraceCollectorV1<'a> {
                     return;
                 };
                 self.next_frame = next_frame;
-                self.frames.push(frame);
+                self.invocations[invocation_position].frames.push(frame);
             }
             SimulationEventKindV1::Return => {
-                self.frames.pop();
+                self.invocations[invocation_position].frames.pop();
             }
             SimulationEventKindV1::Terminator => {}
             SimulationEventKindV1::Branch { target } => {
@@ -850,6 +950,45 @@ impl<'a> TraceCollectorV1<'a> {
                 MemoryAccessKindV1::Write,
                 &event.site,
             ),
+            SimulationEventKindV1::WorkgroupBarrierArrive { phase } => {
+                let Some(barrier) = self.catalog.workgroup_barrier_event(&event.site) else {
+                    self.truncation = Some(TruncationReasonV1::ProducerFailure);
+                    return;
+                };
+                self.emit(
+                    scope,
+                    Some(site),
+                    TraceEventKindV1::Barrier(BarrierEventV1::new(
+                        barrier,
+                        *phase,
+                        BarrierScopeV1::Workgroup,
+                        BarrierActionV1::Arrive,
+                    )),
+                );
+            }
+            SimulationEventKindV1::WorkgroupBarrierRelease {
+                phase,
+                participants: _,
+            } => {
+                let Some(barrier) = self.catalog.workgroup_barrier_event(&event.site) else {
+                    self.truncation = Some(TruncationReasonV1::ProducerFailure);
+                    return;
+                };
+                let Some(workgroup_scope) = workgroup_scope(self.dispatch, event.invocation) else {
+                    self.truncation = Some(TruncationReasonV1::ProducerFailure);
+                    return;
+                };
+                self.emit(
+                    workgroup_scope,
+                    Some(site),
+                    TraceEventKindV1::Barrier(BarrierEventV1::new(
+                        barrier,
+                        *phase,
+                        BarrierScopeV1::Workgroup,
+                        BarrierActionV1::Release,
+                    )),
+                );
+            }
             SimulationEventKindV1::AllocationPreexisting {
                 allocation,
                 address_space,
@@ -866,14 +1005,26 @@ impl<'a> TraceCollectorV1<'a> {
                 allocation,
                 address_space,
                 bytes,
-            } => self.record_allocation(
-                scope,
-                Some(site),
-                *allocation,
-                map_address_space(*address_space),
-                *bytes,
-                false,
-            ),
+            } => {
+                let address_space = map_address_space(*address_space);
+                let allocation_scope = if address_space == AddressSpaceV1::Workgroup {
+                    let Some(scope) = workgroup_scope(self.dispatch, event.invocation) else {
+                        self.truncation = Some(TruncationReasonV1::ProducerFailure);
+                        return;
+                    };
+                    scope
+                } else {
+                    scope
+                };
+                self.record_allocation(
+                    allocation_scope,
+                    Some(site),
+                    *allocation,
+                    address_space,
+                    *bytes,
+                    false,
+                );
+            }
             SimulationEventKindV1::AllocationReleased { allocation } => {
                 let Ok(position) = self
                     .allocations
@@ -888,8 +1039,17 @@ impl<'a> TraceCollectorV1<'a> {
                     return;
                 }
                 let trace = mapping.trace;
+                let release_scope = if mapping.address_space == AddressSpaceV1::Workgroup {
+                    let Some(scope) = workgroup_scope(self.dispatch, event.invocation) else {
+                        self.truncation = Some(TruncationReasonV1::ProducerFailure);
+                        return;
+                    };
+                    scope
+                } else {
+                    scope
+                };
                 self.emit(
-                    scope,
+                    release_scope,
                     Some(site),
                     TraceEventKindV1::Allocation(AllocationEventV1::Release { allocation: trace }),
                 );
@@ -980,11 +1140,13 @@ impl<'a> TraceCollectorV1<'a> {
             match position {
                 Ok(position) => {
                     self.allocations[position].trace = allocation;
+                    self.allocations[position].address_space = address_space;
                     self.allocations[position].released = false;
                 }
                 Err(_) => self.allocations.push(AllocationMappingV1 {
                     raw,
                     trace: allocation,
+                    address_space,
                     released: false,
                 }),
             }
@@ -1038,7 +1200,7 @@ impl<'a> TraceCollectorV1<'a> {
     }
 
     fn finish_execution(&mut self, succeeded: bool) {
-        if self.invocation.is_some() || !self.operations.is_empty() || !self.frames.is_empty() {
+        if self.invocations.iter().any(|state| !state.ended) {
             self.truncate(TruncationReasonV1::ProducerFailure);
         }
         self.emit_footer(DispatchEventV1::End(if succeeded {
@@ -1175,6 +1337,20 @@ fn lane_scope(
         lane,
         invocation.global,
         mask,
+    ))
+}
+
+fn workgroup_scope(
+    dispatch: DispatchIdentityV1,
+    invocation: SimulationInvocationV1,
+) -> Option<ExecutionScopeV1> {
+    Some(ExecutionScopeV1::workgroup(
+        dispatch,
+        [
+            u32::try_from(invocation.workgroup[0]).ok()?,
+            u32::try_from(invocation.workgroup[1]).ok()?,
+            u32::try_from(invocation.workgroup[2]).ok()?,
+        ],
     ))
 }
 

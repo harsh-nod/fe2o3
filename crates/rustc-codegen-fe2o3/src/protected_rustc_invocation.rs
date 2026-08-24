@@ -16,11 +16,13 @@ use fe2o3_compiler_closure_capability::{
 use fe2o3_rustc_invocation::{CompileEnvironmentV2, RustcInvocationDescriptorV3};
 use sha2::{Digest as _, Sha256};
 
-use crate::pipeline_selection::CodegenPipeline;
+use crate::pipeline_selection::{CodegenPipeline, RustcInvocationPolicyV1};
 
 const EXACT_PROTECTED_TARGET_V1: &str = "gfx942:xnack-";
 const EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1: &str = "FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1";
 const CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2";
+const QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1: &str =
+    "FE2O3_QUALIFICATION_CODEGEN_BACKEND_SHA256_V1";
 const NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_ENV_V1: &str =
     "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1";
 const RUNNING_RUSTC_PATH: &str = "/proc/self/exe";
@@ -97,7 +99,10 @@ pub(crate) enum ProtectedRustcInvocationErrorV1 {
         descriptor_present: bool,
         compiler_closure_marker_present: bool,
         backend_marker_present: bool,
+        qualification_backend_marker_present: bool,
     },
+    QualificationObservationsMissing,
+    QualificationCodegenBackendObservationMismatch,
     Observation(String),
     ArgumentsMismatch,
     WorkingDirectoryMismatch,
@@ -131,9 +136,16 @@ impl fmt::Display for ProtectedRustcInvocationErrorV1 {
                 descriptor_present,
                 compiler_closure_marker_present,
                 backend_marker_present,
+                qualification_backend_marker_present,
             } => write!(
                 formatter,
-                "protected rustc invocation signals are forbidden on this pipeline route (descriptor: {descriptor_present}, compiler-closure marker: {compiler_closure_marker_present}, backend marker: {backend_marker_present})"
+                "rustc invocation signals are forbidden on this pipeline route (descriptor: {descriptor_present}, compiler-closure marker: {compiler_closure_marker_present}, protected-backend marker: {backend_marker_present}, qualification-backend marker: {qualification_backend_marker_present})"
+            ),
+            Self::QualificationObservationsMissing => formatter.write_str(
+                "qualification-observed rustc requires paired compiler-closure and qualification-backend observations",
+            ),
+            Self::QualificationCodegenBackendObservationMismatch => formatter.write_str(
+                "qualification backend observation differs from the retained loaded backend image",
             ),
             Self::Observation(detail) => write!(
                 formatter,
@@ -195,12 +207,30 @@ impl std::error::Error for ProtectedRustcInvocationErrorV1 {}
 pub(crate) fn admit_for_codegen(
     pipeline: CodegenPipeline,
 ) -> Result<Option<AdmittedProtectedRustcInvocationV1>, ProtectedRustcInvocationErrorV1> {
+    let explicit_unprotected_qualification = explicit_unprotected_qualification_enabled();
+    let compiler_closure_marker_present =
+        env::var_os(EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1).is_some();
+    let backend_marker_present = env::var_os(CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2).is_some();
+    let qualification_backend_marker_present =
+        env::var_os(QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1).is_some();
+    let qualification_observations_authenticated = if pipeline
+        .rustc_invocation_policy(explicit_unprotected_qualification)
+        == RustcInvocationPolicyV1::QualificationObserved
+        && compiler_closure_marker_present
+        && qualification_backend_marker_present
+    {
+        authenticate_qualification_observations()?
+    } else {
+        false
+    };
     admit_for_codegen_at(
         pipeline,
-        explicit_unprotected_qualification_enabled(),
+        explicit_unprotected_qualification,
         RUSTC_INVOCATION_CHILD_FD_V1,
-        env::var_os(EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1).is_some(),
-        env::var_os(CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2).is_some(),
+        compiler_closure_marker_present,
+        backend_marker_present,
+        qualification_backend_marker_present,
+        qualification_observations_authenticated,
     )
 }
 
@@ -210,28 +240,43 @@ fn admit_for_codegen_at(
     child_fd: RawFd,
     compiler_closure_marker_present: bool,
     backend_marker_present: bool,
+    qualification_backend_marker_present: bool,
+    qualification_observations_authenticated: bool,
 ) -> Result<Option<AdmittedProtectedRustcInvocationV1>, ProtectedRustcInvocationErrorV1> {
-    if !requires_v3_capability(pipeline, explicit_unprotected_qualification) {
-        let qualification_closure_marker = pipeline == CodegenPipeline::CollectedRowSoftmaxV1
-            && explicit_unprotected_qualification;
-        if qualification_closure_marker {
-            if backend_marker_present {
+    match pipeline.rustc_invocation_policy(explicit_unprotected_qualification) {
+        RustcInvocationPolicyV1::Unmanaged => {
+            reject_unexpected_rustc_signals_at(
+                child_fd,
+                compiler_closure_marker_present,
+                backend_marker_present,
+                qualification_backend_marker_present,
+            )?;
+            return Ok(None);
+        }
+        RustcInvocationPolicyV1::QualificationObserved => {
+            reject_unexpected_rustc_signals_at(child_fd, false, backend_marker_present, false)?;
+            if !compiler_closure_marker_present || !qualification_backend_marker_present {
+                return Err(ProtectedRustcInvocationErrorV1::QualificationObservationsMissing);
+            }
+            if !qualification_observations_authenticated {
                 return Err(
-                    ProtectedRustcInvocationErrorV1::UnexpectedProtectedSignals {
-                        descriptor_present: false,
-                        compiler_closure_marker_present: false,
-                        backend_marker_present: true,
-                    },
+                    ProtectedRustcInvocationErrorV1::QualificationCodegenBackendObservationMismatch,
                 );
             }
             return Ok(None);
         }
-        reject_unexpected_protected_signals_at(
-            child_fd,
-            compiler_closure_marker_present,
-            backend_marker_present,
-        )?;
-        return Ok(None);
+        RustcInvocationPolicyV1::ProtectedV3 => {
+            if qualification_backend_marker_present {
+                return Err(
+                    ProtectedRustcInvocationErrorV1::UnexpectedProtectedSignals {
+                        descriptor_present: false,
+                        compiler_closure_marker_present: false,
+                        backend_marker_present: false,
+                        qualification_backend_marker_present: true,
+                    },
+                );
+            }
+        }
     }
 
     let capability = retain_inherited_capability_at(child_fd)?;
@@ -239,10 +284,11 @@ fn admit_for_codegen_at(
     validate_capability(capability, observation).map(Some)
 }
 
-fn reject_unexpected_protected_signals_at(
+fn reject_unexpected_rustc_signals_at(
     child_fd: RawFd,
     compiler_closure_marker_present: bool,
     backend_marker_present: bool,
+    qualification_backend_marker_present: bool,
 ) -> Result<(), ProtectedRustcInvocationErrorV1> {
     // Do not close an unexpected descriptor here: an ordinary rustc process
     // may have reused this number for a Rust-owned file. Returning an error
@@ -260,12 +306,17 @@ fn reject_unexpected_protected_signals_at(
             )));
         }
     };
-    if descriptor_present || compiler_closure_marker_present || backend_marker_present {
+    if descriptor_present
+        || compiler_closure_marker_present
+        || backend_marker_present
+        || qualification_backend_marker_present
+    {
         Err(
             ProtectedRustcInvocationErrorV1::UnexpectedProtectedSignals {
                 descriptor_present,
                 compiler_closure_marker_present,
                 backend_marker_present,
+                qualification_backend_marker_present,
             },
         )
     } else {
@@ -273,21 +324,32 @@ fn reject_unexpected_protected_signals_at(
     }
 }
 
-fn requires_v3_capability(
-    pipeline: CodegenPipeline,
-    explicit_unprotected_qualification: bool,
-) -> bool {
-    match pipeline {
-        CodegenPipeline::ProductionV1 => true,
-        CodegenPipeline::CollectedRowSoftmaxV1 => !explicit_unprotected_qualification,
-        _ => false,
-    }
-}
-
 fn explicit_unprotected_qualification_enabled() -> bool {
     cfg!(debug_assertions)
         && env::var_os(NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_ENV_V1).as_deref()
             == Some(OsStr::new("1"))
+}
+
+fn authenticate_qualification_observations() -> Result<bool, ProtectedRustcInvocationErrorV1> {
+    let _compiler_closure = sha256_environment(EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1)?;
+    let backend_observation = sha256_environment(QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1)?;
+    let running_backend = measure_bounded_regular_file(
+        Path::new(fe2o3_artifact_transaction::BROKERED_CODEGEN_BACKEND_PATH_V1),
+        "qualification backend",
+    )
+    .map_err(ProtectedRustcInvocationErrorV1::Observation)?;
+    if backend_observation != running_backend {
+        return Err(
+            ProtectedRustcInvocationErrorV1::QualificationCodegenBackendObservationMismatch,
+        );
+    }
+    Ok(true)
+}
+
+fn sha256_environment(name: &'static str) -> Result<[u8; 32], ProtectedRustcInvocationErrorV1> {
+    let encoded = env::var(name)
+        .map_err(|_| ProtectedRustcInvocationErrorV1::InvalidClosedObservation { name })?;
+    decode_sha256_observation(name, &encoded)
 }
 
 fn retain_inherited_capability_at(
@@ -452,6 +514,13 @@ fn closed_sha256_observation(
         .find(|entry| entry.key() == name)
         .map(|entry| entry.value())
         .ok_or(ProtectedRustcInvocationErrorV1::InvalidClosedObservation { name })?;
+    decode_sha256_observation(name, encoded)
+}
+
+fn decode_sha256_observation(
+    name: &'static str,
+    encoded: &str,
+) -> Result<[u8; 32], ProtectedRustcInvocationErrorV1> {
     if encoded.len() != 64
         || !encoded
             .bytes()

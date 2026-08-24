@@ -13,6 +13,7 @@ fe2o3-kir-sim.workspace = true
 rustix = { workspace = true, features = ["fs"] }
 serde.workspace = true
 serde_json = "1"
+sha2.workspace = true
 
 [[bin]]
 name = "fe2o3-kir-sim"

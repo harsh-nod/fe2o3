@@ -50,6 +50,7 @@ impl ExternalProject {
             .env("CARGO", env!("CARGO_BIN_EXE_cargo-fe2o3-cargo-fixture"))
             .env("FE2O3_BACKEND", &self.backend)
             .env("FE2O3_TARGET", "gfx942")
+            .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-v1")
             .env("FE2O3_TEST_CARGO_LOG", &self.log)
             .env("FE2O3_TEST_WORKSPACE_ROOT", &self.fixture)
             .env("FE2O3_TEST_TARGET_DIRECTORY", &self.target)
@@ -57,7 +58,8 @@ impl ExternalProject {
             .env_remove("RUSTC_WRAPPER")
             .env_remove("RUSTC_WORKSPACE_WRAPPER")
             .env_remove("RUSTFLAGS")
-            .env_remove("CARGO_ENCODED_RUSTFLAGS");
+            .env_remove("CARGO_ENCODED_RUSTFLAGS")
+            .env_remove("LD_LIBRARY_PATH");
         command
     }
 

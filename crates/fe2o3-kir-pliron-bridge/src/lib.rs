@@ -835,6 +835,7 @@ fn preflight_operation_kind(
         OperationKind::MemoryIntrinsic(_) => {
             Err(unsupported_in_version(version, "semantic memory intrinsic"))
         }
+        OperationKind::GuardedLoad { .. } => Err(unsupported_in_version(version, "guarded load")),
         OperationKind::Cast { to, .. } => preflight_type(size, to, 0),
         OperationKind::Call { callee, arguments } => {
             size.text("call callee", callee.as_str())?;
