@@ -26,10 +26,10 @@ use fe2o3_kernel_ir::{
     TILED_GEMM_LDS_GRID_V1_LAUNCH_EXTENT_Y, TargetCapability, Terminator, TiledGemmLdsEdgesV1Error,
     TiledGemmLdsEdgesV1Profile, TiledGemmLdsGridV1Error, TiledGemmLdsGridV1Profile,
     TiledGemmLdsK32V2Error, TiledGemmLdsK32V2Profile, TiledGemmLdsV1Error, TiledGemmLdsV1Profile,
-    TiledGemmV1Error, TiledGemmV1Profile, Type, ValueId, VerificationErrors, WaveOperation,
-    WaveOperationKind, WaveWidth, WidenedFloatBinaryOp, WorkgroupMemoryExtent, WorkgroupSize,
-    analyze_control_flow, encode_module_v4, gfx942_xnack_minus_target_capability, verify_module,
-    verify_scalar_gemm_v1_module, verify_tiled_gemm_lds_edges_v1_module,
+    TiledGemmV1Error, TiledGemmV1Profile, Type, UnaryOp, ValueId, VerificationErrors,
+    WaveOperation, WaveOperationKind, WaveWidth, WidenedFloatBinaryOp, WorkgroupMemoryExtent,
+    WorkgroupSize, analyze_control_flow, encode_module_v4, gfx942_xnack_minus_target_capability,
+    verify_module, verify_scalar_gemm_v1_module, verify_tiled_gemm_lds_edges_v1_module,
     verify_tiled_gemm_lds_grid_v1_module, verify_tiled_gemm_lds_k32_v2_module,
     verify_tiled_gemm_lds_v1_module, verify_tiled_gemm_v1_module,
 };
@@ -5090,6 +5090,16 @@ impl<'a> FunctionLowerer<'a> {
                     ));
                 }
             }
+            OperationKind::Unary { op, operand } => {
+                let ty = self.value_type(*operand);
+                if !supported_unary(*op, ty) {
+                    return Err(LoweringErrors::one(
+                        location,
+                        LoweringDiagnosticCode::UnsupportedOperation,
+                        format!("G1 does not lower {op:?} for {ty:?}"),
+                    ));
+                }
+            }
             OperationKind::Compare { lhs, .. } => {
                 let ty = self.value_type(*lhs);
                 if !ty.as_scalar().is_some_and(|scalar| {
@@ -5254,9 +5264,7 @@ impl<'a> FunctionLowerer<'a> {
                     ));
                 }
             }
-            OperationKind::Intrinsic(_)
-            | OperationKind::Unary { .. }
-            | OperationKind::Alloca { .. } => {
+            OperationKind::Intrinsic(_) | OperationKind::Alloca { .. } => {
                 return Err(LoweringErrors::one(
                     location,
                     LoweringDiagnosticCode::UnsupportedOperation,
@@ -6317,6 +6325,27 @@ impl<'a> FunctionLowerer<'a> {
                 result_name.as_deref(),
                 intrinsic,
             ),
+            OperationKind::Unary { op, operand } => {
+                let result = result_name.expect("validated unary result");
+                let (operand, ty) = self.value(*operand);
+                match unary_lowering_style(*op, ty).expect("preflight accepted the unary operation")
+                {
+                    LlvmUnaryStyle::FloatNegate => {
+                        writeln!(output, "  {result} = fneg {} {operand}", llvm_type(ty)).unwrap();
+                    }
+                    LlvmUnaryStyle::SignedNegate => {
+                        writeln!(output, "  {result} = sub {} 0, {operand}", llvm_type(ty))
+                            .unwrap();
+                    }
+                    LlvmUnaryStyle::BooleanNot => {
+                        writeln!(output, "  {result} = xor i1 {operand}, true").unwrap();
+                    }
+                    LlvmUnaryStyle::IntegerNot => {
+                        writeln!(output, "  {result} = xor {} {operand}, -1", llvm_type(ty))
+                            .unwrap();
+                    }
+                }
+            }
             OperationKind::Binary { op, lhs, rhs } => {
                 if matches!(op, BinaryOp::Checked(_)) {
                     self.emit_checked_binary(output, block, operation_index, operation);
@@ -7704,6 +7733,31 @@ fn supported_binary(op: BinaryOp, ty: &Type, target: LoweringTarget) -> bool {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LlvmUnaryStyle {
+    FloatNegate,
+    SignedNegate,
+    BooleanNot,
+    IntegerNot,
+}
+
+fn unary_lowering_style(op: UnaryOp, ty: &Type) -> Option<LlvmUnaryStyle> {
+    let scalar = ty.as_scalar()?;
+    match (op, scalar) {
+        (UnaryOp::Negate, ScalarType::F32) => Some(LlvmUnaryStyle::FloatNegate),
+        (UnaryOp::Negate, scalar) if scalar.is_signed_integer() && supported_integer(scalar) => {
+            Some(LlvmUnaryStyle::SignedNegate)
+        }
+        (UnaryOp::Not, ScalarType::Bool) => Some(LlvmUnaryStyle::BooleanNot),
+        (UnaryOp::Not, scalar) if supported_integer(scalar) => Some(LlvmUnaryStyle::IntegerNot),
+        _ => None,
+    }
+}
+
+fn supported_unary(op: UnaryOp, ty: &Type) -> bool {
+    unary_lowering_style(op, ty).is_some()
+}
+
 fn validate_pointer(
     ty: &Type,
     location: &LoweringLocation,
@@ -8356,5 +8410,73 @@ mod tests {
         ] {
             assert_eq!(binary_opcode(operator, &Type::BOOL), opcode);
         }
+    }
+
+    #[test]
+    fn unary_support_matrix_distinguishes_logical_not_and_bitwise_complement() {
+        let scalars = [
+            ScalarType::Bool,
+            ScalarType::I8,
+            ScalarType::I16,
+            ScalarType::I32,
+            ScalarType::I64,
+            ScalarType::I128,
+            ScalarType::U8,
+            ScalarType::U16,
+            ScalarType::U32,
+            ScalarType::U64,
+            ScalarType::U128,
+            ScalarType::Index,
+            ScalarType::F16,
+            ScalarType::Bf16,
+            ScalarType::F32,
+            ScalarType::F64,
+        ];
+        let ordinary_integer = |scalar| {
+            matches!(
+                scalar,
+                ScalarType::I8
+                    | ScalarType::I16
+                    | ScalarType::I32
+                    | ScalarType::I64
+                    | ScalarType::U8
+                    | ScalarType::U16
+                    | ScalarType::U32
+                    | ScalarType::U64
+                    | ScalarType::Index
+            )
+        };
+
+        for scalar in scalars {
+            let ty = Type::Scalar(scalar);
+            let expected_negate = matches!(
+                scalar,
+                ScalarType::I8
+                    | ScalarType::I16
+                    | ScalarType::I32
+                    | ScalarType::I64
+                    | ScalarType::F32
+            );
+            let expected_not = scalar == ScalarType::Bool || ordinary_integer(scalar);
+            assert_eq!(
+                supported_unary(UnaryOp::Negate, &ty),
+                expected_negate,
+                "unexpected Negate support for {scalar:?}"
+            );
+            assert_eq!(
+                supported_unary(UnaryOp::Not, &ty),
+                expected_not,
+                "unexpected Not support for {scalar:?}"
+            );
+        }
+
+        assert_eq!(
+            unary_lowering_style(UnaryOp::Not, &Type::BOOL),
+            Some(LlvmUnaryStyle::BooleanNot)
+        );
+        assert_eq!(
+            unary_lowering_style(UnaryOp::Not, &Type::Scalar(ScalarType::I32)),
+            Some(LlvmUnaryStyle::IntegerNot)
+        );
     }
 }
