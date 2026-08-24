@@ -8,6 +8,7 @@
 
 use std::{error::Error, fmt};
 
+use dialect_kernel::SemanticScalarType;
 use pliron::{
     attribute::Attribute,
     builtin::op_interfaces::{NOpdsInterface, NRegionsInterface, NResultsInterface},
@@ -21,7 +22,8 @@ use pliron::{
     parsable::{Parsable, ParseResult, StateStream},
     printable::{self, Printable},
     result::Result,
-    r#type::Type,
+    r#type::{Type, Typed},
+    value::Value,
     verify_err, verify_err_noloc,
 };
 
@@ -263,6 +265,26 @@ impl ObligationOp {
         op.set_attr_proof_obligation_property(context, property);
         op
     }
+
+    pub fn obligation_id(&self, context: &Context) -> Option<[u64; 4]> {
+        self.get_attr_proof_obligation_obligation_id(context)
+            .map(|identity| identity.words())
+    }
+
+    pub fn subject_id(&self, context: &Context) -> Option<[u64; 4]> {
+        self.get_attr_proof_obligation_subject_id(context)
+            .map(|identity| identity.words())
+    }
+
+    pub fn model_id(&self, context: &Context) -> Option<[u64; 4]> {
+        self.get_attr_proof_obligation_model_id(context)
+            .map(|identity| identity.words())
+    }
+
+    pub fn property(&self, context: &Context) -> Option<PropertyAttr> {
+        self.get_attr_proof_obligation_property(context)
+            .map(|property| *property)
+    }
 }
 
 impl Verify for ObligationOp {
@@ -342,9 +364,29 @@ impl EvidenceRefOp {
         op
     }
 
+    pub fn evidence_id(&self, context: &Context) -> Option<[u64; 4]> {
+        self.get_attr_proof_evidence_ref_evidence_id(context)
+            .map(|identity| identity.words())
+    }
+
+    pub fn obligation_id(&self, context: &Context) -> Option<[u64; 4]> {
+        self.get_attr_proof_evidence_ref_obligation_id(context)
+            .map(|identity| identity.words())
+    }
+
+    pub fn property(&self, context: &Context) -> Option<PropertyAttr> {
+        self.get_attr_proof_evidence_ref_property(context)
+            .map(|property| *property)
+    }
+
     pub fn status(&self, context: &Context) -> Option<EvidenceStatusAttr> {
         self.get_attr_proof_evidence_ref_status(context)
             .map(|status| *status)
+    }
+
+    pub fn covered_boundary(&self, context: &Context) -> Option<CoveredBoundaryAttr> {
+        self.get_attr_proof_evidence_ref_covered_boundary(context)
+            .map(|boundary| *boundary)
     }
 }
 
@@ -391,6 +433,80 @@ impl Verify for EvidenceRefOp {
     }
 }
 
+/// Joins one exact functional-refinement proof obligation to one pair of
+/// target-neutral semantic expressions.
+///
+/// This operation remains inert. The semantic-refinement analysis validates
+/// the referenced obligation and evidence and proves expression equality; the
+/// operation alone grants no authority.
+#[pliron_op(
+    name = "proof.require_refinement",
+    format,
+    interfaces = [NResultsInterface<0>, NRegionsInterface<0>],
+    attributes = (proof_require_refinement_obligation_id: ProofIdAttr)
+)]
+pub struct RequireRefinementOp;
+
+impl RequireRefinementOp {
+    pub fn new(
+        context: &mut Context,
+        obligation_id: ProofIdAttr,
+        actual: Value,
+        expected: Value,
+    ) -> Self {
+        let operation = Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![],
+            vec![actual, expected],
+            vec![],
+            0,
+        );
+        let op = Self::from_operation(operation);
+        op.set_attr_proof_require_refinement_obligation_id(context, obligation_id);
+        op
+    }
+
+    pub fn obligation_id(&self, context: &Context) -> Option<[u64; 4]> {
+        self.get_attr_proof_require_refinement_obligation_id(context)
+            .map(|identity| identity.words())
+    }
+
+    pub fn actual(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_operand(0)
+    }
+
+    pub fn expected(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_operand(1)
+    }
+}
+
+impl Verify for RequireRefinementOp {
+    fn verify(&self, context: &Context) -> Result<()> {
+        verify_closed_shape_with_operands(self, context, 2, 1)?;
+        required_attr(
+            self,
+            context,
+            self.get_attr_proof_require_refinement_obligation_id(context),
+            "obligation_id",
+        )?;
+        for operand in 0..2 {
+            let value = self.get_operation().deref(context).get_operand(operand);
+            if !value
+                .get_type(context)
+                .deref(context)
+                .is::<SemanticScalarType>()
+            {
+                return verify_err!(
+                    self.loc(context),
+                    "proof refinement operand {operand} is not kernel.semantic_scalar"
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
 fn verification_error(op: &dyn Op, context: &Context, message: &str) -> pliron::result::Error {
     pliron::verify_error!(op.loc(context), "{message}")
 }
@@ -407,9 +523,18 @@ fn required_attr<T: Clone>(
 }
 
 fn verify_closed_shape(op: &dyn Op, context: &Context, attributes: usize) -> Result<()> {
+    verify_closed_shape_with_operands(op, context, 0, attributes)
+}
+
+fn verify_closed_shape_with_operands(
+    op: &dyn Op,
+    context: &Context,
+    operands: usize,
+    attributes: usize,
+) -> Result<()> {
     let operation = op.get_operation();
     let operation = operation.deref(context);
-    if operation.get_num_operands() != 0
+    if operation.get_num_operands() != operands
         || operation.get_num_results() != 0
         || operation.get_num_successors() != 0
         || operation.num_regions() != 0
@@ -449,6 +574,7 @@ pub fn register_dialect(
     <EvidenceRefType as Type>::register(context);
     <ObligationOp as Op>::register(context);
     <EvidenceRefOp as Op>::register(context);
+    <RequireRefinementOp as Op>::register(context);
 
     let marker = context.aux_data.insert(Box::new(RegistrationMarker));
     context

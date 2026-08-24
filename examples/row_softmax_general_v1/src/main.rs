@@ -1,5 +1,6 @@
 use fe2o3_core::{DeviceBuffer, GpuContext, GpuModule, LaunchConfig, Stream};
 use fe2o3_host::launch;
+use fe2o3_row_softmax_general_v1::reference::{ReferenceLayoutV1, evaluate_reference_v1};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy)]
@@ -92,18 +93,22 @@ fn run_case(
     let output_device = DeviceBuffer::from_host(&stream, &output)?;
     launch_case(&stream, module, &input_device, &output_device, case)?;
     let actual = output_device.to_host_vec(&stream)?;
+    let expected = evaluate_reference_v1(
+        &input,
+        &output,
+        ReferenceLayoutV1 {
+            rows: case.rows,
+            columns: case.columns,
+            input_stride: case.input_stride,
+            output_stride: case.output_stride,
+        },
+    )
+    .expect("qualification case satisfies the safe CPU reference contract");
 
     let mut maximum_error = 0.0_f32;
     for row in 0..case.rows as usize {
-        let values = &input[row * case.input_stride as usize
-            ..row * case.input_stride as usize + case.columns as usize];
-        let maximum = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-        let denominator = values
-            .iter()
-            .map(|value| (*value - maximum).exp())
-            .sum::<f32>();
         for column in 0..case.columns as usize {
-            let expected = (values[column] - maximum).exp() / denominator;
+            let expected = expected[row * case.output_stride as usize + column];
             let observed = actual[row * case.output_stride as usize + column];
             maximum_error = maximum_error.max((observed - expected).abs());
             assert!(

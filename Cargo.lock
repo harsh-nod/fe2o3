@@ -554,6 +554,7 @@ dependencies = [
 name = "dialect-proof"
 version = "0.1.0"
 dependencies = [
+ "dialect-kernel",
  "fe2o3-pliron-owner-core",
  "pliron",
 ]
@@ -1048,6 +1049,7 @@ version = "0.1.0"
 dependencies = [
  "dialect-gpu",
  "dialect-kernel",
+ "dialect-proof",
  "fe2o3-kernel-ir",
  "pliron",
  "rustix",
@@ -1268,6 +1270,7 @@ dependencies = [
  "dialect-gpu",
  "dialect-kernel",
  "dialect-mir",
+ "dialect-proof",
  "fe2o3-kernel-analysis",
  "fe2o3-kernel-ir",
  "fe2o3-mir-model",

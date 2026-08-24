@@ -1294,6 +1294,25 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             hash_value(digest, *actual);
             hash_value(digest, *expected);
         }
+        ProductionRankedOperationV1::RequireReferenceEquivalent {
+            actual,
+            expected,
+            proof,
+        } => {
+            digest.update([23]);
+            hash_value(digest, *actual);
+            hash_value(digest, *expected);
+            for identity in [
+                proof.obligation_id(),
+                proof.subject_id(),
+                proof.model_id(),
+                proof.evidence_id(),
+            ] {
+                for word in identity {
+                    digest.update(word.to_le_bytes());
+                }
+            }
+        }
     }
 }
 

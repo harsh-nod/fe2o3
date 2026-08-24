@@ -1,5 +1,6 @@
 use fe2o3_core::{DeviceBuffer, GpuContext, GpuModule, LaunchConfig, Stream};
 use fe2o3_device::Bf16;
+use fe2o3_flash_attention_general_v1::reference::{ReferenceLayoutV1, evaluate_reference_v1};
 use fe2o3_host::launch;
 use std::path::PathBuf;
 
@@ -200,54 +201,39 @@ fn run_case(
         },
     )?;
     let actual = output_device.to_host_vec(&stream)?;
+    let expected = evaluate_reference_v1(
+        &q,
+        &k,
+        &v,
+        &mask,
+        &output,
+        ReferenceLayoutV1 {
+            batch_heads: case.batch_heads,
+            queries: case.queries,
+            query_rows_padded: case.query_rows_padded,
+            keys: case.keys,
+            keys_padded: case.keys_padded,
+            depth: case.depth,
+            value_dimension: case.value_dimension,
+            query_stride: case.q_stride,
+            key_depth_stride: case.k_depth_stride,
+            key_head_stride: k_head_stride,
+            value_stride: case.v_stride,
+            value_head_stride: v_head_stride,
+            mask_stride: case.mask_stride,
+            output_stride: case.output_stride,
+            scale,
+        },
+    )
+    .expect("qualification case satisfies the safe CPU reference contract");
 
     let mut max_error = 0.0_f32;
     for head in 0..case.batch_heads {
         for row in 0..case.query_rows_padded {
             let global_row = head * case.query_rows_padded + row;
-            let mut scores = vec![f32::NEG_INFINITY; case.keys as usize];
-            if row < case.queries {
-                for key in 0..case.keys {
-                    if !mask[global_row as usize * case.mask_stride as usize + key as usize]
-                        .is_finite()
-                    {
-                        continue;
-                    }
-                    let mut score = 0.0_f32;
-                    for d in 0..case.depth {
-                        score += Bf16::from_bits(
-                            q[global_row as usize * case.q_stride as usize + d as usize],
-                        )
-                        .to_f32()
-                            * Bf16::from_bits(
-                                k[head as usize * k_head_stride as usize
-                                    + d as usize * case.k_depth_stride as usize
-                                    + key as usize],
-                            )
-                            .to_f32();
-                    }
-                    scores[key as usize] = score * scale;
-                }
-            }
-            let maximum = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-            let denominator = if maximum == f32::NEG_INFINITY {
-                0.0
-            } else {
-                scores
-                    .iter()
-                    .map(|score| (*score - maximum).exp())
-                    .sum::<f32>()
-            };
             for d in 0..case.value_dimension {
-                let mut expected = 0.0_f32;
-                if denominator > 0.0 {
-                    for key in 0..case.keys {
-                        expected += ((scores[key as usize] - maximum).exp() / denominator)
-                            * v[head as usize * v_head_stride as usize
-                                + key as usize * case.v_stride as usize
-                                + d as usize];
-                    }
-                }
+                let expected =
+                    expected[global_row as usize * case.output_stride as usize + d as usize];
                 let observed =
                     actual[global_row as usize * case.output_stride as usize + d as usize];
                 assert!(

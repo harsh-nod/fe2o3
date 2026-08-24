@@ -94,9 +94,9 @@ pub fn row_softmax_general_v1(
             columns as usize,
             output_stride as usize,
         ) {
-            *element = math.exp_f32(
-                input.load_or(row, lane + component * 64, f32::NEG_INFINITY) - maximum,
-            ) / denominator;
+            *element = math
+                .exp_f32(input.load_or(row, lane + component * 64, f32::NEG_INFINITY) - maximum)
+                / denominator;
         }
         component += 1;
     }

@@ -20,6 +20,10 @@ use dialect_kernel::{
     SemanticBinaryOp, SemanticConstantOp, SemanticSymbolOp, TensorConvergenceAttr, TensorLayoutOp,
     TrapOp,
 };
+use dialect_proof::{
+    CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, ProofIdAttr,
+    PropertyAttr, RequireRefinementOp,
+};
 use fe2o3_kernel_analysis::{
     MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_OPERATIONS, PlironAtomicLegalityReportV1,
     PlironBarrierReportV1, PlironSemanticRefinementReportV1, PlironTensorLayoutReportV1,
@@ -73,6 +77,60 @@ pub enum ProductionRankedValueV1 {
     Argument(u32),
     BlockArgument { block: u32, argument: u32 },
     Local(ProductionRankedValueIdV1),
+}
+
+/// Exact identities for one externally proved safe-Rust reference obligation.
+///
+/// Construction validates only the closed identity shape. The proof overlay
+/// remains non-authoritative; an evidence importer must authenticate these
+/// identities before a caller treats the resulting clean report as proof.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductionReferenceProofV1 {
+    obligation_id: [u64; 4],
+    subject_id: [u64; 4],
+    model_id: [u64; 4],
+    evidence_id: [u64; 4],
+}
+
+impl ProductionReferenceProofV1 {
+    pub fn declare_exact(
+        obligation_id: [u64; 4],
+        subject_id: [u64; 4],
+        model_id: [u64; 4],
+        evidence_id: [u64; 4],
+    ) -> Result<Self, ProductionRankedKernelErrorV1> {
+        let identities = [obligation_id, subject_id, model_id, evidence_id];
+        if identities.iter().any(|identity| *identity == [0; 4])
+            || identities
+                .iter()
+                .enumerate()
+                .any(|(index, identity)| identities[..index].contains(identity))
+        {
+            return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+        }
+        Ok(Self {
+            obligation_id,
+            subject_id,
+            model_id,
+            evidence_id,
+        })
+    }
+
+    pub const fn obligation_id(&self) -> [u64; 4] {
+        self.obligation_id
+    }
+
+    pub const fn subject_id(&self) -> [u64; 4] {
+        self.subject_id
+    }
+
+    pub const fn model_id(&self) -> [u64; 4] {
+        self.model_id
+    }
+
+    pub const fn evidence_id(&self) -> [u64; 4] {
+        self.evidence_id
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -215,6 +273,13 @@ pub enum ProductionRankedOperationV1 {
     RequireEquivalent {
         actual: ProductionRankedValueV1,
         expected: ProductionRankedValueV1,
+    },
+    /// Requires one semantic equality and binds it to exact source-level Verus
+    /// proof identities. The generic semantic pass validates the join.
+    RequireReferenceEquivalent {
+        actual: ProductionRankedValueV1,
+        expected: ProductionRankedValueV1,
+        proof: ProductionReferenceProofV1,
     },
 }
 
@@ -380,8 +445,23 @@ impl ProductionRankedKernelV1 {
             });
         }
         let operation_count = self.blocks.iter().try_fold(0_usize, |total, block| {
+            let materialized = block
+                .operations
+                .iter()
+                .try_fold(0_usize, |count, operation| {
+                    count.checked_add(
+                        if matches!(
+                            operation,
+                            ProductionRankedOperationV1::RequireReferenceEquivalent { .. }
+                        ) {
+                            3
+                        } else {
+                            1
+                        },
+                    )
+                })?;
             total
-                .checked_add(block.operations.len() + 1)?
+                .checked_add(materialized.checked_add(1)?)?
                 .checked_add(usize::from(matches!(
                     block.terminator,
                     ProductionRankedTerminatorV1::BranchArgsAdd { .. }
@@ -556,6 +636,7 @@ pub enum ProductionRankedKernelErrorV1 {
     InvalidShape,
     InvalidExecutionLayout,
     InvalidAllocationContract,
+    InvalidReferenceContract,
     UnsupportedElementWidth(u32),
     DynamicExtentCountMismatch {
         expected: usize,
@@ -614,6 +695,9 @@ impl fmt::Display for ProductionRankedKernelErrorV1 {
             ),
             Self::InvalidAllocationContract => formatter.write_str(
                 "ranked views/effects require supported memory semantics and consistent allocation origins/no-alias classes",
+            ),
+            Self::InvalidReferenceContract => formatter.write_str(
+                "functional-reference proof identities must be nonzero and pairwise distinct",
             ),
             Self::UnsupportedElementWidth(width) => write!(
                 formatter,
@@ -967,7 +1051,10 @@ fn validate_operation(
             require_semantic(*rhs, argument_count, locals)?;
             Ok(Some((*result, RecipeValueKindV1::Semantic)))
         }
-        ProductionRankedOperationV1::RequireEquivalent { actual, expected } => {
+        ProductionRankedOperationV1::RequireEquivalent { actual, expected }
+        | ProductionRankedOperationV1::RequireReferenceEquivalent {
+            actual, expected, ..
+        } => {
             require_semantic(*actual, argument_count, locals)?;
             require_semantic(*expected, argument_count, locals)?;
             Ok(None)
@@ -1075,7 +1162,10 @@ fn validate_block_argument_values_v1(
                 validate(*value)?;
             }
         }
-        ProductionRankedOperationV1::RequireEquivalent { actual, expected } => {
+        ProductionRankedOperationV1::RequireEquivalent { actual, expected }
+        | ProductionRankedOperationV1::RequireReferenceEquivalent {
+            actual, expected, ..
+        } => {
             validate(*actual)?;
             validate(*expected)?;
         }
@@ -1471,6 +1561,28 @@ impl ProductionPlironSessionV1 {
         {
             return Err(ProductionSessionErrorV1::RankedRecipe(
                 ProductionRankedKernelErrorV1::MissingGpuDialect,
+            ));
+        }
+        let has_reference = kernel.blocks.iter().any(|block| {
+            block.operations.iter().any(|operation| {
+                matches!(
+                    operation,
+                    ProductionRankedOperationV1::RequireReferenceEquivalent { .. }
+                )
+            })
+        });
+        if has_reference
+            && !self
+                .inner
+                .manifest()
+                .registration_order()
+                .iter()
+                .any(|name| name == dialect_proof::DIALECT_NAME)
+        {
+            return Err(ProductionSessionErrorV1::RankedRecipe(
+                ProductionRankedKernelErrorV1::Materialization(
+                    "production reference construction requires the proof dialect registration",
+                ),
             ));
         }
         let operation = self
@@ -2080,6 +2192,37 @@ fn materialize_operation(
             );
             (op.get_operation(), None)
         }
+        ProductionRankedOperationV1::RequireReferenceEquivalent {
+            actual,
+            expected,
+            proof,
+        } => {
+            let obligation_id = ProofIdAttr::new(proof.obligation_id());
+            let obligation = ObligationOp::new(
+                context,
+                obligation_id.clone(),
+                ProofIdAttr::new(proof.subject_id()),
+                ProofIdAttr::new(proof.model_id()),
+                PropertyAttr::FunctionalRefinement,
+            );
+            obligation.get_operation().insert_at_back(block, context);
+            let evidence = EvidenceRefOp::new(
+                context,
+                ProofIdAttr::new(proof.evidence_id()),
+                obligation_id.clone(),
+                PropertyAttr::FunctionalRefinement,
+                EvidenceStatusAttr::Proved,
+                CoveredBoundaryAttr::Source,
+            );
+            evidence.get_operation().insert_at_back(block, context);
+            let op = RequireRefinementOp::new(
+                context,
+                obligation_id,
+                resolve_value(*actual, arguments, locals, block_arguments)?,
+                resolve_value(*expected, arguments, locals, block_arguments)?,
+            );
+            (op.get_operation(), None)
+        }
     };
     operation.insert_at_back(block, context);
     if let Some((identity, value)) = result {
@@ -2419,9 +2562,13 @@ pub fn compile_ranked_kernel_for_lowering_v1(
         .map_err(ProductionRankedCompileErrorV1::Registration)?;
     let gpu_registration = dialect_gpu::dialect_registration()
         .map_err(ProductionRankedCompileErrorV1::Registration)?;
-    let mut session =
-        ProductionPlironSessionV1::new(limits, [kernel_registration, gpu_registration])
-            .map_err(ProductionRankedCompileErrorV1::Context)?;
+    let proof_registration = dialect_proof::dialect_registration()
+        .map_err(ProductionRankedCompileErrorV1::Registration)?;
+    let mut session = ProductionPlironSessionV1::new(
+        limits,
+        [kernel_registration, gpu_registration, proof_registration],
+    )
+    .map_err(ProductionRankedCompileErrorV1::Context)?;
     let registered = session
         .register_construction(construction)
         .map_err(ProductionRankedCompileErrorV1::Session)?;

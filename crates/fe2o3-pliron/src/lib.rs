@@ -16,9 +16,10 @@ pub use production::{
     ProductionRankedCompileErrorV1, ProductionRankedKernelErrorV1,
     ProductionRankedKernelLoweringInputV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
     ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
-    ProductionRootHandleV1, ProductionSemanticMirErrorV1, ProductionSemanticMirLimitsV1,
-    ProductionSemanticMirOwnerV1, ProductionSessionErrorV1, ProductionSessionLimitErrorV1,
-    ProductionSessionLimitsV1, ProductionStageHandleV1, compile_ranked_kernel_for_lowering_v1,
+    ProductionReferenceProofV1, ProductionRootHandleV1, ProductionSemanticMirErrorV1,
+    ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1, ProductionSessionErrorV1,
+    ProductionSessionLimitErrorV1, ProductionSessionLimitsV1, ProductionStageHandleV1,
+    compile_ranked_kernel_for_lowering_v1,
 };
 
 use std::{

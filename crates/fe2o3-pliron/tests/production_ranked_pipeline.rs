@@ -12,7 +12,8 @@ use fe2o3_pliron::{
     ProductionPlironSessionV1, ProductionRankedBlockV1, ProductionRankedCompileErrorV1,
     ProductionRankedKernelErrorV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
     ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
-    ProductionSessionErrorV1, ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
+    ProductionReferenceProofV1, ProductionSessionErrorV1, ProductionSessionLimitsV1,
+    compile_ranked_kernel_for_lowering_v1,
 };
 
 const VIEW: ProductionRankedValueIdV1 = ProductionRankedValueIdV1::new(0);
@@ -657,6 +658,138 @@ fn declared_expression_mismatch_is_terminal_in_production() {
         ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedSemantic(_))
     ));
     assert!(error.to_string().contains("error[FE2O3-SEMANTIC-001]"));
+}
+
+fn reference_proof() -> ProductionReferenceProofV1 {
+    ProductionReferenceProofV1::declare_exact(
+        [1, 2, 3, 4],
+        [5, 6, 7, 8],
+        [9, 10, 11, 12],
+        [13, 14, 15, 16],
+    )
+    .expect("exact nonzero proof identities")
+}
+
+#[test]
+fn proved_safe_rust_reference_is_mandatory_in_the_production_pipeline() {
+    let lhs = ProductionRankedValueIdV1::new(0);
+    let rhs = ProductionRankedValueIdV1::new(1);
+    let actual = ProductionRankedValueIdV1::new(2);
+    let expected = ProductionRankedValueIdV1::new(3);
+    let kernel = ProductionRankedKernelV1::new(
+        "proved_reference",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::SemanticSymbol {
+                    result: lhs,
+                    symbol: 0,
+                },
+                ProductionRankedOperationV1::SemanticSymbol {
+                    result: rhs,
+                    symbol: 1,
+                },
+                ProductionRankedOperationV1::SemanticBinary {
+                    result: actual,
+                    kind: SemanticBinaryKindAttr::Add,
+                    lhs: local(lhs),
+                    rhs: local(rhs),
+                },
+                ProductionRankedOperationV1::SemanticBinary {
+                    result: expected,
+                    kind: SemanticBinaryKindAttr::Add,
+                    lhs: local(rhs),
+                    rhs: local(lhs),
+                },
+                ProductionRankedOperationV1::RequireReferenceEquivalent {
+                    actual: local(actual),
+                    expected: local(expected),
+                    proof: reference_proof(),
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .expect("valid workload-neutral reference recipe");
+
+    let input = compile_ranked_kernel_for_lowering_v1(
+        construction(kernel),
+        ProductionSessionLimitsV1::default(),
+    )
+    .expect("proved reference reaches checked lowering input");
+    assert_eq!(input.semantic_report().reference_obligation_count(), 1);
+    assert_eq!(
+        input.semantic_report().proved_reference_obligation_count(),
+        1
+    );
+    assert!(
+        input
+            .semantic_report()
+            .all_reference_obligations_are_proved()
+    );
+    assert!(!input.grants_compiler_refinement_authority());
+}
+
+#[test]
+fn proved_reference_identity_cannot_hide_a_wrong_expression() {
+    let actual = ProductionRankedValueIdV1::new(0);
+    let expected = ProductionRankedValueIdV1::new(1);
+    let kernel = ProductionRankedKernelV1::new(
+        "wrong_proved_reference",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::SemanticSymbol {
+                    result: actual,
+                    symbol: 0,
+                },
+                ProductionRankedOperationV1::SemanticSymbol {
+                    result: expected,
+                    symbol: 1,
+                },
+                ProductionRankedOperationV1::RequireReferenceEquivalent {
+                    actual: local(actual),
+                    expected: local(expected),
+                    proof: reference_proof(),
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .expect("structurally valid reference recipe");
+
+    let error = compile_ranked_kernel_for_lowering_v1(
+        construction(kernel),
+        ProductionSessionLimitsV1::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedSemantic(_))
+    ));
+    assert!(error.to_string().contains("error[FE2O3-SEMANTIC-001]"));
+}
+
+#[test]
+fn malformed_reference_identities_are_rejected_before_pliron_allocation() {
+    assert_eq!(
+        ProductionReferenceProofV1::declare_exact(
+            [0; 4],
+            [5, 6, 7, 8],
+            [9, 10, 11, 12],
+            [13, 14, 15, 16],
+        ),
+        Err(ProductionRankedKernelErrorV1::InvalidReferenceContract)
+    );
+    assert_eq!(
+        ProductionReferenceProofV1::declare_exact(
+            [1, 2, 3, 4],
+            [1, 2, 3, 4],
+            [9, 10, 11, 12],
+            [13, 14, 15, 16],
+        ),
+        Err(ProductionRankedKernelErrorV1::InvalidReferenceContract)
+    );
 }
 
 #[test]

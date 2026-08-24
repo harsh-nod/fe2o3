@@ -2,6 +2,7 @@ use fe2o3_core::{DeviceBuffer, Event, GpuContext, GpuModule, LaunchConfig, Strea
 use fe2o3_device::Bf16;
 use fe2o3_host::launch;
 use fe2o3_tiled_gemm_general_v1::kernel::GENERAL_TILED_GEMM_WORKGROUP_V1;
+use fe2o3_tiled_gemm_general_v1::reference::{ReferenceProblemV1, evaluate_reference_v1};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy)]
@@ -158,20 +159,22 @@ fn run_case(
     }
 
     let initial = c.clone();
-    let mut expected = c.clone();
-    for row in 0..case.m {
-        for column in 0..case.n {
-            let mut sum = 0.0_f32;
-            for depth in 0..case.k {
-                sum += Bf16::from_bits(a[row as usize * case.lda as usize + depth as usize])
-                    .to_f32()
-                    * Bf16::from_bits(b[depth as usize * case.ldb as usize + column as usize])
-                        .to_f32();
-            }
-            let index = row as usize * case.ldc as usize + column as usize;
-            expected[index] = case.alpha * sum + case.beta * expected[index];
-        }
-    }
+    let expected = evaluate_reference_v1(
+        &a,
+        &b,
+        &c,
+        ReferenceProblemV1 {
+            rows: case.m,
+            columns: case.n,
+            reduction: case.k,
+            lhs_stride: case.lda,
+            rhs_stride: case.ldb,
+            output_stride: case.ldc,
+            product_scale: case.alpha,
+            output_scale: case.beta,
+        },
+    )
+    .expect("qualification case satisfies the safe CPU reference contract");
 
     let a_device = DeviceBuffer::from_host(&stream, &a)?;
     let b_device = DeviceBuffer::from_host(&stream, &b)?;

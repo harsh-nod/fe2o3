@@ -9,5 +9,6 @@ description = "Bounded non-authoritative proof overlay Pliron dialect for fe2o3.
 publish = false
 
 [dependencies]
+dialect-kernel.workspace = true
 fe2o3-pliron-owner-core.workspace = true
 pliron.workspace = true

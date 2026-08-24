@@ -78,6 +78,7 @@ fn run_fixture(path: &Path) {
     let mut context = Context::new();
     register_dialect(&mut context, &DialectName::try_new(DIALECT_NAME).unwrap()).unwrap();
     dialect_gpu::register_dialect(&mut context).unwrap();
+    dialect_proof::register_dialect(&mut context).unwrap();
     let operation = parse_from_str(Operation::top_level_parser(), &mut context, &ir)
         .unwrap_or_else(|error| panic!("{} failed to parse: {error:?}", path.display()));
     verify_operation(operation, &context)

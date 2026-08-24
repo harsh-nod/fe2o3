@@ -10,11 +10,12 @@ description = "Conservative kernel IR and bounded machine-effect analyses for fe
 [features]
 default = ["authenticated-machine-effect", "pliron-analysis"]
 authenticated-machine-effect = ["dep:rustix", "dep:sha2"]
-pliron-analysis = ["dep:dialect-gpu", "dep:dialect-kernel", "dep:pliron"]
+pliron-analysis = ["dep:dialect-gpu", "dep:dialect-kernel", "dep:dialect-proof", "dep:pliron"]
 
 [dependencies]
 dialect-gpu = { workspace = true, optional = true }
 dialect-kernel = { workspace = true, optional = true }
+dialect-proof = { workspace = true, optional = true }
 fe2o3-kernel-ir.workspace = true
 pliron = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }

@@ -2,6 +2,7 @@ use fe2o3_core::{DeviceBuffer, GpuContext, GpuModule, LaunchConfig, Stream};
 use fe2o3_device::Bf16;
 use fe2o3_host::launch;
 use fe2o3_moe_grouped_expert_general_v1::kernel::MOE_EXPERT_WORKGROUP_V1;
+use fe2o3_moe_grouped_expert_general_v1::reference::{ReferenceLayoutV1, evaluate_reference_v1};
 use std::path::PathBuf;
 
 const TOKENS: u32 = 41;
@@ -115,6 +116,7 @@ fn main() -> fe2o3_core::Result<()> {
     let sentinel = -83.0_f32;
     for output_columns in [1, 15, 16, 17, MAX_OUTPUT_COLUMNS] {
         let mut combined = vec![0.0_f32; TOKENS as usize * output_columns as usize];
+        let mut expected_combined = vec![0.0_f32; combined.len()];
         for expert in 0..EXPERTS {
             let entries = &routes[expert as usize];
             let rows_padded = (entries.len() as u32).div_ceil(16) * 16;
@@ -147,13 +149,43 @@ fn main() -> fe2o3_core::Result<()> {
                 expert,
             )?;
             let actual = output_device.to_host_vec(&stream)?;
+            let expected = evaluate_reference_v1(
+                &routed_tokens,
+                &weights,
+                &gates,
+                &bias,
+                &output,
+                ReferenceLayoutV1 {
+                    rows_padded,
+                    output_columns,
+                    reduction: REDUCTION,
+                    token_stride: TOKEN_STRIDE,
+                    weight_stride: WEIGHT_STRIDE,
+                    expert_weight_stride: EXPERT_WEIGHT_STRIDE,
+                    bias_stride: BIAS_STRIDE,
+                    output_stride: OUTPUT_STRIDE,
+                    expert,
+                    experts: EXPERTS,
+                },
+            )
+            .expect("qualification case satisfies the safe CPU reference contract");
             for (row, (token, _)) in entries.iter().copied().enumerate() {
                 for column in 0..output_columns as usize {
                     combined[token as usize * output_columns as usize + column] +=
                         actual[row * OUTPUT_STRIDE as usize + column];
+                    expected_combined[token as usize * output_columns as usize + column] +=
+                        expected[row * OUTPUT_STRIDE as usize + column];
                 }
             }
             for row in 0..rows_padded as usize {
+                for column in 0..output_columns as usize {
+                    let observed = actual[row * OUTPUT_STRIDE as usize + column];
+                    let reference = expected[row * OUTPUT_STRIDE as usize + column];
+                    assert!(
+                        (observed - reference).abs() <= 2.0e-3,
+                        "expert {expert} row {row} column {column}: actual={observed} expected={reference}"
+                    );
+                }
                 assert!(
                     actual[row * OUTPUT_STRIDE as usize + output_columns as usize
                         ..(row + 1) * OUTPUT_STRIDE as usize]
@@ -174,36 +206,14 @@ fn main() -> fe2o3_core::Result<()> {
         }
 
         let mut maximum_error = 0.0_f32;
-        for token in 0..TOKENS {
-            for column in 0..output_columns {
-                let mut expected = 0.0_f32;
-                for (expert, gate) in
-                    [(token % EXPERTS, 0.65_f32), ((token + 1) % EXPERTS, 0.35)]
-                {
-                    let mut projection = 0.0_f32;
-                    for d in 0..REDUCTION {
-                        projection += Bf16::from_bits(
-                            source[token as usize * TOKEN_STRIDE as usize + d as usize],
-                        )
-                        .to_f32()
-                            * Bf16::from_bits(
-                                weights[expert as usize * EXPERT_WEIGHT_STRIDE as usize
-                                    + d as usize * WEIGHT_STRIDE as usize
-                                    + column as usize],
-                            )
-                            .to_f32();
-                    }
-                    projection += bias[expert as usize * BIAS_STRIDE as usize + column as usize];
-                    expected += gate * projection;
-                }
-                let actual = combined[token as usize * output_columns as usize + column as usize];
-                let error = (actual - expected).abs();
-                maximum_error = maximum_error.max(error);
-                assert!(
-                    error <= 2.0e-3,
-                    "N={output_columns} token {token} column {column}: actual={actual} expected={expected}"
-                );
-            }
+        for (index, actual) in combined.iter().copied().enumerate() {
+            let expected = expected_combined[index];
+            let error = (actual - expected).abs();
+            maximum_error = maximum_error.max(error);
+            assert!(
+                error <= 2.0e-3,
+                "N={output_columns} logical output {index}: actual={actual} expected={expected}"
+            );
         }
         println!(
             "PASS top2-routed-moe tokens={TOKENS} experts={EXPERTS} K={REDUCTION} N={output_columns} routes={} max_error={maximum_error}",

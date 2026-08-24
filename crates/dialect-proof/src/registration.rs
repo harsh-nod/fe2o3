@@ -4,7 +4,7 @@ use fe2o3_pliron_owner_core::{
 
 use crate::{
     CoveredBoundaryAttr, DIALECT_NAME, EvidenceRefOp, EvidenceRefType, EvidenceStatusAttr,
-    ObligationOp, ObligationRefType, ProofIdAttr, PropertyAttr,
+    ObligationOp, ObligationRefType, ProofIdAttr, PropertyAttr, RequireRefinementOp,
 };
 
 fn registration_hook(
@@ -19,6 +19,7 @@ fn registration_hook(
     service.register_type::<EvidenceRefType>()?;
     service.register_operation::<ObligationOp>()?;
     service.register_operation::<EvidenceRefOp>()?;
+    service.register_operation::<RequireRefinementOp>()?;
     Ok(())
 }
 

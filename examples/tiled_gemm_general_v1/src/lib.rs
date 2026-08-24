@@ -9,6 +9,8 @@
 //! owns the documented unsafe module-load and launch boundary.
 
 pub mod kernel;
+#[cfg(not(target_arch = "amdgpu"))]
+pub mod reference;
 
 /// Whether the attributed kernel contains only safe ordinary Rust.
 pub const GENERAL_TILED_GEMM_SAFE_SOURCE_PRESENT_V1: bool = true;

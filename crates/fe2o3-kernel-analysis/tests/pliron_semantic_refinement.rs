@@ -2,6 +2,10 @@ use dialect_kernel::{
     DIALECT_NAME, RequireEquivalentOp, ReturnOp, SemanticBinaryKindAttr, SemanticBinaryOp,
     SemanticScalarType, SemanticSymbolOp, register_dialect,
 };
+use dialect_proof::{
+    CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, ProofIdAttr,
+    PropertyAttr, RequireRefinementOp,
+};
 use fe2o3_kernel_analysis::{
     KernelCheckPassKindV1, PlironSemanticRefinementFindingV1,
     require_pliron_semantic_refinement_before_lowering_v1, run_pliron_semantic_refinement_check_v1,
@@ -18,7 +22,36 @@ use pliron::{
 fn setup() -> Context {
     let mut context = Context::new();
     register_dialect(&mut context, &DialectName::try_new(DIALECT_NAME).unwrap()).unwrap();
+    dialect_proof::register_dialect(&mut context).unwrap();
     context
+}
+
+fn proof_id(seed: u64) -> ProofIdAttr {
+    ProofIdAttr::new([seed, seed + 1, seed + 2, seed + 3])
+}
+
+fn append_reference_contract(
+    context: &mut Context,
+    block: Ptr<BasicBlock>,
+    actual: pliron::value::Value,
+    expected: pliron::value::Value,
+    property: PropertyAttr,
+    status: EvidenceStatusAttr,
+    boundary: CoveredBoundaryAttr,
+) {
+    let obligation = ObligationOp::new(context, proof_id(1), proof_id(10), proof_id(20), property);
+    let evidence = EvidenceRefOp::new(
+        context,
+        proof_id(30),
+        proof_id(1),
+        property,
+        status,
+        boundary,
+    );
+    let refinement = RequireRefinementOp::new(context, proof_id(1), actual, expected);
+    append(context, block, &obligation);
+    append(context, block, &evidence);
+    append(context, block, &refinement);
 }
 
 fn function(context: &mut Context, name: &str, arguments: usize) -> FuncOp {
@@ -227,4 +260,221 @@ fn structurally_different_association_is_not_silently_reassociated() {
         operation.insert_at_back(entry, context);
     }
     assert!(!run_pliron_semantic_refinement_check_v1(context, &function).is_clean());
+}
+
+#[test]
+fn exact_proved_source_reference_is_joined_to_semantic_equality() {
+    let context = &mut setup();
+    let function = function(context, "reference_ok", 0);
+    let entry = function.get_entry_block(context);
+    let lhs = SemanticSymbolOp::new(context, 0);
+    let rhs = SemanticSymbolOp::new(context, 1);
+    let actual = SemanticBinaryOp::new(
+        context,
+        SemanticBinaryKindAttr::Add,
+        lhs.result(context),
+        rhs.result(context),
+    );
+    let expected = SemanticBinaryOp::new(
+        context,
+        SemanticBinaryKindAttr::Add,
+        rhs.result(context),
+        lhs.result(context),
+    );
+    for operation in [
+        lhs.get_operation(),
+        rhs.get_operation(),
+        actual.get_operation(),
+        expected.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    append_reference_contract(
+        context,
+        entry,
+        actual.result(context),
+        expected.result(context),
+        PropertyAttr::FunctionalRefinement,
+        EvidenceStatusAttr::Proved,
+        CoveredBoundaryAttr::Source,
+    );
+    let ret = ReturnOp::new(context);
+    append(context, entry, &ret);
+
+    let report = run_pliron_semantic_refinement_check_v1(context, &function);
+    assert!(report.is_clean(), "{:#?}", report.findings());
+    assert_eq!(report.reference_obligation_count(), 1);
+    assert_eq!(report.proved_reference_obligation_count(), 1);
+    assert!(report.all_reference_obligations_are_proved());
+    assert!(!report.grants_compiler_refinement_authority());
+}
+
+#[test]
+fn proved_reference_rejects_a_semantic_mismatch() {
+    let context = &mut setup();
+    let function = function(context, "reference_mismatch", 0);
+    let entry = function.get_entry_block(context);
+    let actual = SemanticSymbolOp::new(context, 0);
+    let expected = SemanticSymbolOp::new(context, 1);
+    append(context, entry, &actual);
+    append(context, entry, &expected);
+    append_reference_contract(
+        context,
+        entry,
+        actual.result(context),
+        expected.result(context),
+        PropertyAttr::FunctionalRefinement,
+        EvidenceStatusAttr::Proved,
+        CoveredBoundaryAttr::Source,
+    );
+    let ret = ReturnOp::new(context);
+    append(context, entry, &ret);
+
+    let error =
+        require_pliron_semantic_refinement_before_lowering_v1(context, &function).unwrap_err();
+    assert!(error.to_string().contains("error[FE2O3-SEMANTIC-001]"));
+    assert_eq!(error.report().reference_obligation_count(), 1);
+    assert_eq!(error.report().proved_reference_obligation_count(), 0);
+}
+
+#[test]
+fn reference_without_evidence_fails_closed() {
+    let context = &mut setup();
+    let function = function(context, "reference_missing_evidence", 0);
+    let entry = function.get_entry_block(context);
+    let value = SemanticSymbolOp::new(context, 0);
+    let obligation = ObligationOp::new(
+        context,
+        proof_id(1),
+        proof_id(10),
+        proof_id(20),
+        PropertyAttr::FunctionalRefinement,
+    );
+    let refinement = RequireRefinementOp::new(
+        context,
+        proof_id(1),
+        value.result(context),
+        value.result(context),
+    );
+    append(context, entry, &value);
+    append(context, entry, &obligation);
+    append(context, entry, &refinement);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &ret);
+
+    let error =
+        require_pliron_semantic_refinement_before_lowering_v1(context, &function).unwrap_err();
+    assert!(error.to_string().contains("error[FE2O3-SEMANTIC-003]"));
+    assert!(error.to_string().contains("evidence_ref record is missing"));
+}
+
+#[test]
+fn non_proved_or_wrong_boundary_evidence_is_incomplete() {
+    for (name, status, boundary, expected) in [
+        (
+            "checked_only",
+            EvidenceStatusAttr::Checked,
+            CoveredBoundaryAttr::Source,
+            "requires exact Proved evidence",
+        ),
+        (
+            "wrong_boundary",
+            EvidenceStatusAttr::Proved,
+            CoveredBoundaryAttr::Mir,
+            "must cover the exact source boundary",
+        ),
+    ] {
+        let context = &mut setup();
+        let function = function(context, name, 0);
+        let entry = function.get_entry_block(context);
+        let value = SemanticSymbolOp::new(context, 0);
+        append(context, entry, &value);
+        append_reference_contract(
+            context,
+            entry,
+            value.result(context),
+            value.result(context),
+            PropertyAttr::FunctionalRefinement,
+            status,
+            boundary,
+        );
+        let ret = ReturnOp::new(context);
+        append(context, entry, &ret);
+        let error =
+            require_pliron_semantic_refinement_before_lowering_v1(context, &function).unwrap_err();
+        assert!(error.to_string().contains(expected));
+    }
+}
+
+#[test]
+fn wrong_property_and_duplicate_evidence_are_rejected() {
+    let context = &mut setup();
+    let wrong_function = function(context, "wrong_property", 0);
+    let entry = wrong_function.get_entry_block(context);
+    let value = SemanticSymbolOp::new(context, 0);
+    append(context, entry, &value);
+    append_reference_contract(
+        context,
+        entry,
+        value.result(context),
+        value.result(context),
+        PropertyAttr::Bounds,
+        EvidenceStatusAttr::Proved,
+        CoveredBoundaryAttr::Source,
+    );
+    let ret = ReturnOp::new(context);
+    append(context, entry, &ret);
+    let error = require_pliron_semantic_refinement_before_lowering_v1(context, &wrong_function)
+        .unwrap_err();
+    assert!(error.to_string().contains("error[FE2O3-SEMANTIC-004]"));
+    assert!(error.to_string().contains("not FunctionalRefinement"));
+
+    let context = &mut setup();
+    let function = function(context, "duplicate_evidence", 0);
+    let entry = function.get_entry_block(context);
+    let value = SemanticSymbolOp::new(context, 0);
+    append(context, entry, &value);
+    append_reference_contract(
+        context,
+        entry,
+        value.result(context),
+        value.result(context),
+        PropertyAttr::FunctionalRefinement,
+        EvidenceStatusAttr::Proved,
+        CoveredBoundaryAttr::Source,
+    );
+    let duplicate = EvidenceRefOp::new(
+        context,
+        proof_id(40),
+        proof_id(1),
+        PropertyAttr::FunctionalRefinement,
+        EvidenceStatusAttr::Proved,
+        CoveredBoundaryAttr::Source,
+    );
+    append(context, entry, &duplicate);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &ret);
+    let error =
+        require_pliron_semantic_refinement_before_lowering_v1(context, &function).unwrap_err();
+    assert!(error.to_string().contains("more than one evidence record"));
+}
+
+#[test]
+fn orphan_functional_obligation_is_incomplete() {
+    let context = &mut setup();
+    let function = function(context, "orphan", 0);
+    let entry = function.get_entry_block(context);
+    let obligation = ObligationOp::new(
+        context,
+        proof_id(1),
+        proof_id(10),
+        proof_id(20),
+        PropertyAttr::FunctionalRefinement,
+    );
+    append(context, entry, &obligation);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &ret);
+    let error =
+        require_pliron_semantic_refinement_before_lowering_v1(context, &function).unwrap_err();
+    assert!(error.to_string().contains("has no semantic equality"));
 }
