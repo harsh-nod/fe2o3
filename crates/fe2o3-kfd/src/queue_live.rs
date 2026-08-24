@@ -65,16 +65,16 @@ static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and fixed-batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r21-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r22-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
-    "memory_profile_sha256=1b046d5ea66bc56580930a59d8d0a4dabb1b129fd9e228aee5e8f72b4a7a6378\n",
-    "queue_resource_profile_sha256=b8317e4288e14c6d7546b53887ec2a10e1938ffba9595271d174a2a652320f4f\n",
+    "memory_profile_sha256=b5bef892fcaceb19c2e5b75c158b3ef75acefbe6c70109aa8ba83585dd2ef307\n",
+    "queue_resource_profile_sha256=150787f0092bc9edc0ecf3a4b7df06742485765aca693751a4416654665598e2\n",
     "aql_dispatch_schema_sha256=82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0\n",
     "aql_fixed_batch_schema_sha256=a3c74fe4aa26a62772253de267812f2fb1626247685d8c4e8ed8bbb2a5a9e34a\n",
     "aql_completion_schema_sha256=2cbc02677fc02a906090875f63ff01db82d2eba0888934ee74a7e0f3b82d7fb3\n",
     "dispatch_binding_schema_sha256=4307f4e7aedd1a1b8582fd150966fb5d8b9a4c95955759abcf5d755faa113da4\n",
-    "event_schema_sha256=8d754af12ed2fcd0c238e1f9e38fbbdab053f44fc5d613b227fdcdd616fcc849\n",
-    "runtime_enable_schema_sha256=4c762d1e35a5940f0972290151de51e6e19722f81874a6446c66ddc70a062ac1\n",
+    "event_schema_sha256=bdde2e2d9b03690d6a63dba3d91074da214d87ece9ae1894c4d7a160bced58b8\n",
+    "runtime_enable_schema_sha256=fa47481b10ea4bd89438d10b82bd8197088906e55f5f0c827dc7aa5aba906288\n",
     "source.rocr.queues.c=b7ead541340ac996c2305b2e9660cb3176edcd61ee509d4880f02659fbb6f32b\n",
     "source.rocr.hsakamttypes.h=fd9e3e9a0874614e70e518ee420aacd2d171452c2755d05b2cf54b55144ec78e\n",
     "source.kfd_events.c=295114e5bacb3be94cdc17b6760e893198ee51d1c77d5837cfab999c3823485a\n",
@@ -103,7 +103,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "2dd03306031fb2a2fc577bb76c21660677ba624b7b8ddfcc4a76c0d02bbf0508";
+    "fb46a2e6df77f247f5dbb8da1b8d27c21e2bcfd17717568d2de7590feeb47c53";
 
 type RingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -2694,11 +2694,11 @@ mod tests {
         );
         assert_eq!(
             SHARED_GTT_MEMORY_PROFILE_SHA256_V1,
-            "1b046d5ea66bc56580930a59d8d0a4dabb1b129fd9e228aee5e8f72b4a7a6378"
+            "b5bef892fcaceb19c2e5b75c158b3ef75acefbe6c70109aa8ba83585dd2ef307"
         );
         assert_eq!(
             fe2o3_kfd_uapi::KFD_RUNTIME_ENABLE_SCHEMA_SHA256,
-            "4c762d1e35a5940f0972290151de51e6e19722f81874a6446c66ddc70a062ac1"
+            "fa47481b10ea4bd89438d10b82bd8197088906e55f5f0c827dc7aa5aba906288"
         );
         let digest = Sha256::digest(GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1);
         let rendered: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();

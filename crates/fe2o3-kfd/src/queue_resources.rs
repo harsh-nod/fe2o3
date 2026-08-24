@@ -32,10 +32,10 @@ const EXPECTED_COMPUTE_QUEUE_COUNT: u32 = 24;
 
 /// Canonical contract for read-only gfx942 queue-resource planning.
 pub const GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-spx-nps1-topology-queue-resources-r4-v1\n",
+    "profile=fe2o3-mi300x-gfx942-spx-nps1-topology-queue-resources-r5-v1\n",
     "device_profile_sha256=e12ea33b259666e7928612403109640b03b0d637b893a2c15b87d17a4211c8de\n",
     "device_profile_digest_role=compositional-prerequisite-identifier-only,no-device-token-or-xnack-evidence\n",
-    "kfd_queue_output_schema_sha256=63753a9c0dcef0f69e0235b95b44fe6ce22cb5b0d1df6f60a971a5ed28f15904\n",
+    "kfd_queue_output_schema_sha256=8ff2ac20f6001d6f5405423d78e8ad6cec109ac3370fe86d7691c5c4782c1803\n",
     "platform=linux-x86_64,kernel:6.8.0-124-generic,amdgpu:6.16.13,page:4096\n",
     "module_zst_sha256=e5a327a8f46459e07ee3f59cc991d16feee17103e199d39149823879b7fcff0b\n",
     "module_ko_sha256=61317154cee502ea97a74818879dff4b20abf8f074a2f4d19a94288e25d4ac3a\n",
@@ -78,12 +78,12 @@ pub const GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1.
 pub const GFX942_QUEUE_RESOURCE_PROFILE_SHA256_V1: &str =
-    "b8317e4288e14c6d7546b53887ec2a10e1938ffba9595271d174a2a652320f4f";
+    "150787f0092bc9edc0ecf3a4b7df06742485765aca693751a4416654665598e2";
 
 /// Typed digest bytes of GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1.
 pub const GFX942_QUEUE_RESOURCE_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
-    0xb8, 0x31, 0x7e, 0x42, 0x88, 0xe1, 0x4c, 0x6d, 0x75, 0x46, 0xb5, 0x38, 0x87, 0xec, 0x2a, 0x10,
-    0xe1, 0x93, 0x8f, 0xfb, 0xa9, 0x59, 0x52, 0x71, 0xd1, 0x74, 0xa2, 0xa6, 0x52, 0x32, 0x0f, 0x4f,
+    0x15, 0x07, 0x87, 0xf0, 0x09, 0x2b, 0xc9, 0xed, 0xc0, 0xec, 0xf3, 0xa4, 0xb7, 0xdf, 0x06, 0x74,
+    0x24, 0x85, 0x76, 0x5a, 0xca, 0x69, 0x37, 0x51, 0xa4, 0x41, 0x66, 0x54, 0x66, 0x55, 0x98, 0xe2,
 ];
 
 /// Resource role names shared with the abstract queue lifecycle model.
