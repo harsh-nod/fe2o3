@@ -7696,8 +7696,9 @@ fn supported_binary(op: BinaryOp, ty: &Type, target: LoweringTarget) -> bool {
             !matches!(target, LoweringTarget::Baseline)
         }
         BinaryOp::Divide | BinaryOp::Remainder => supported_integer(scalar),
-        BinaryOp::BitAnd => scalar == ScalarType::Bool || supported_integer(scalar),
-        BinaryOp::BitXor => supported_integer(scalar),
+        BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
+            scalar == ScalarType::Bool || supported_integer(scalar)
+        }
         BinaryOp::Checked(_) => scalar.is_integer(),
         _ => false,
     }
@@ -8091,6 +8092,7 @@ fn binary_opcode(op: BinaryOp, ty: &Type) -> &'static str {
         }
         (BinaryOp::Remainder, false) => "urem",
         (BinaryOp::BitAnd, false) => "and",
+        (BinaryOp::BitOr, false) => "or",
         (BinaryOp::BitXor, false) => "xor",
         (BinaryOp::Add, true) => "fadd",
         (BinaryOp::Subtract, true) => "fsub",
@@ -8267,5 +8269,92 @@ mod tests {
             &Type::F32,
             LoweringTarget::Baseline
         ));
+    }
+
+    #[test]
+    fn binary_support_matrix_is_explicit_for_every_scalar_and_operator() {
+        let scalars = [
+            ScalarType::Bool,
+            ScalarType::I8,
+            ScalarType::I16,
+            ScalarType::I32,
+            ScalarType::I64,
+            ScalarType::I128,
+            ScalarType::U8,
+            ScalarType::U16,
+            ScalarType::U32,
+            ScalarType::U64,
+            ScalarType::U128,
+            ScalarType::Index,
+            ScalarType::F16,
+            ScalarType::Bf16,
+            ScalarType::F32,
+            ScalarType::F64,
+        ];
+        let operators = [
+            BinaryOp::Add,
+            BinaryOp::Subtract,
+            BinaryOp::Multiply,
+            BinaryOp::Divide,
+            BinaryOp::Remainder,
+            BinaryOp::BitAnd,
+            BinaryOp::BitOr,
+            BinaryOp::BitXor,
+            BinaryOp::ShiftLeft,
+            BinaryOp::ShiftRight,
+            BinaryOp::Checked(CheckedBinaryOperator::Add),
+            BinaryOp::Checked(CheckedBinaryOperator::Subtract),
+            BinaryOp::Checked(CheckedBinaryOperator::Multiply),
+        ];
+        let ordinary_integer = |scalar| {
+            matches!(
+                scalar,
+                ScalarType::I8
+                    | ScalarType::I16
+                    | ScalarType::I32
+                    | ScalarType::I64
+                    | ScalarType::U8
+                    | ScalarType::U16
+                    | ScalarType::U32
+                    | ScalarType::U64
+                    | ScalarType::Index
+            )
+        };
+
+        for target in [LoweringTarget::Baseline, LoweringTarget::Gfx942XnackMinusV1] {
+            for scalar in scalars {
+                for operator in operators {
+                    let expected = match operator {
+                        BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply => {
+                            ordinary_integer(scalar) || scalar == ScalarType::F32
+                        }
+                        BinaryOp::Divide => {
+                            ordinary_integer(scalar)
+                                || (scalar == ScalarType::F32
+                                    && !matches!(target, LoweringTarget::Baseline))
+                        }
+                        BinaryOp::Remainder => ordinary_integer(scalar),
+                        BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
+                            scalar == ScalarType::Bool || ordinary_integer(scalar)
+                        }
+                        BinaryOp::Checked(_) => scalar.is_integer(),
+                        BinaryOp::ShiftLeft | BinaryOp::ShiftRight => false,
+                    };
+                    assert_eq!(
+                        supported_binary(operator, &Type::Scalar(scalar), target),
+                        expected,
+                        "unexpected support for {operator:?} over {scalar:?} on {target:?}"
+                    );
+                }
+            }
+        }
+
+        for (operator, opcode) in [
+            (BinaryOp::BitAnd, "and"),
+            (BinaryOp::BitOr, "or"),
+            (BinaryOp::BitXor, "xor"),
+        ] {
+            assert_eq!(binary_opcode(operator, &Type::BOOL), opcode);
+        }
     }
 }
