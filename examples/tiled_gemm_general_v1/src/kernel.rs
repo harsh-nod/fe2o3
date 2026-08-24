@@ -10,12 +10,11 @@ use fe2o3_device::{
 /// Exact workgroup dimensions required by the wave64 matrix profile.
 pub const GENERAL_TILED_GEMM_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
 
-fn accessed_extent(rows: u32, columns: u32, stride: u32) -> Option<usize> {
+fn accessed_extent(rows: u32, columns: u32, stride: u32) -> u64 {
     if rows == 0 || columns == 0 {
-        return Some(0);
+        return 0;
     }
-    let row_offset = ((rows - 1) as usize).checked_mul(stride as usize)?;
-    row_offset.checked_add(columns as usize)
+    u64::from(rows - 1) * u64::from(stride) + u64::from(columns)
 }
 
 /// Computes `C = alpha * A * B + beta * C` for dynamic row-major matrices.
@@ -45,10 +44,14 @@ pub fn tiled_gemm_general_v1(
     let invalid_stride = (m != 0 && k != 0 && lda < k)
         || (k != 0 && n != 0 && ldb < n)
         || (m != 0 && n != 0 && ldc < n);
-    let a_extent = accessed_extent(m, k, lda).ok_or(KernelError::InvalidArgument)?;
-    let b_extent = accessed_extent(k, n, ldb).ok_or(KernelError::InvalidArgument)?;
-    let c_extent = accessed_extent(m, n, ldc).ok_or(KernelError::InvalidArgument)?;
-    if invalid_stride || a.len() < a_extent || b.len() < b_extent || c.len() < c_extent {
+    let a_extent = accessed_extent(m, k, lda);
+    let b_extent = accessed_extent(k, n, ldb);
+    let c_extent = accessed_extent(m, n, ldc);
+    if invalid_stride
+        || (a.len() as u64) < a_extent
+        || (b.len() as u64) < b_extent
+        || (c.len() as u64) < c_extent
+    {
         return Err(KernelError::InvalidArgument);
     }
 
@@ -104,8 +107,12 @@ mod tests {
 
     #[test]
     fn strided_extents_include_only_accessed_elements() {
-        assert_eq!(accessed_extent(3, 2, 5), Some(12));
-        assert_eq!(accessed_extent(0, 2, 5), Some(0));
-        assert_eq!(accessed_extent(3, 0, 5), Some(0));
+        assert_eq!(accessed_extent(3, 2, 5), 12);
+        assert_eq!(accessed_extent(0, 2, 5), 0);
+        assert_eq!(accessed_extent(3, 0, 5), 0);
+        assert_eq!(
+            accessed_extent(u32::MAX, u32::MAX, u32::MAX),
+            u64::from(u32::MAX) * u64::from(u32::MAX)
+        );
     }
 }
