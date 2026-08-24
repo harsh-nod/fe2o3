@@ -14,7 +14,9 @@ use dialect_kernel::{
     AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, DYNAMIC_EXTENT, IndexBinaryKindAttr,
     MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, SUPPORTED_ELEMENT_WIDTHS, TensorConvergenceAttr,
 };
-use fe2o3_kernel_analysis::MAX_RANKED_BOUNDS_OPERATIONS;
+use fe2o3_kernel_analysis::{
+    MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_EDGES, MAX_RANKED_BOUNDS_OPERATIONS,
+};
 use fe2o3_lower_mir_kernel::{
     ProductionRankedSemanticProjectionReceiptV1, ProductionSemanticKirErrorV1,
 };
@@ -28,9 +30,10 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticMfmaAccumulatorContractV1, SemanticMfmaAccumulatorDistributionV1,
     SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1,
     SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1, SemanticOperandV1,
-    SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticSourceProvenanceV1,
-    SemanticStatementKindV1, SemanticTargetArchitectureV1, SemanticTerminatorKindV1,
-    SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1, SemanticUnwindActionV1,
+    SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticScalarTypeV1,
+    SemanticSourceProvenanceV1, SemanticStatementKindV1, SemanticTargetArchitectureV1,
+    SemanticTerminatorKindV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
+    SemanticUnwindActionV1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
@@ -53,6 +56,8 @@ const MAX_PROJECTED_RANKED_IR_BYTES_V1: usize = MAX_RANKED_BOUNDS_OPERATIONS * 2
 const MAX_PROJECTED_TENSOR_STATE_ENTRIES_V1: usize = MAX_RANKED_BOUNDS_OPERATIONS * 4;
 const MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1: usize = MAX_RANKED_BOUNDS_OPERATIONS * 16;
 const MAX_PROJECTED_TENSOR_ENUM_DEPTH_V1: usize = 8;
+const MAX_PROJECTED_LOOP_GRAPH_WORK_V1: usize =
+    MAX_RANKED_BOUNDS_BLOCKS * (MAX_RANKED_BOUNDS_BLOCKS + MAX_RANKED_BOUNDS_EDGES);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ProjectedAccessSourceV1 {
@@ -183,15 +188,23 @@ struct IntrinsicProjectionV1 {
     extent_argument_count: usize,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct ProjectedUniformInductionV1 {
     preheader: usize,
     header: usize,
-    body_and_latch: usize,
+    body_entry: usize,
+    latch: usize,
     exit: usize,
+    loop_blocks: Vec<usize>,
     initial: ProductionRankedValueV1,
     bound: ProductionRankedValueV1,
     step: ProductionRankedValueV1,
+}
+
+impl ProjectedUniformInductionV1 {
+    fn contains_block(&self, block: usize) -> bool {
+        self.loop_blocks.binary_search(&block).is_ok()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2840,6 +2853,7 @@ fn project_intrinsic_contracts(
         }
     }
     let uniform_inductions = project_uniform_inductions_v1(
+        types,
         function,
         constants,
         &stable_argument_origins,
@@ -2891,6 +2905,7 @@ fn retain_identical_direct_switch_predicate_v1(
 
 #[allow(clippy::too_many_arguments)]
 fn project_uniform_inductions_v1(
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     constants: &[Option<u64>],
     stable_argument_origins: &[Option<u32>],
@@ -2900,6 +2915,8 @@ fn project_uniform_inductions_v1(
     operations: &mut Vec<ProductionRankedOperationV1>,
     next_value: &mut u32,
 ) -> Result<Vec<ProjectedUniformInductionV1>, ProductionRankedProjectionErrorV1> {
+    let graph = projected_loop_cfg_graph_v1(function)?;
+    let mut graph_work = 0_usize;
     let mut inductions = Vec::new();
     for (header, block) in function.blocks().iter().enumerate() {
         let SemanticTerminatorKindV1::SwitchInt {
@@ -2915,38 +2932,45 @@ fn project_uniform_inductions_v1(
         if targets.values().len() != 1 || targets.values()[0].value() != 0 {
             continue;
         }
-        let Some((induction, bound_operand)) = block.statements().iter().find_map(|statement| {
+        let mut discriminant_definitions = block.statements().iter().filter_map(|statement| {
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
                 return None;
             };
-            if !assignment.destination().projections().is_empty()
-                || assignment.destination().local() != discriminant
-            {
-                return None;
-            }
-            let SemanticRvalueKindV1::Binary {
-                operation: SemanticBinaryOpV1::LessThan,
-                left,
-                right,
-            } = assignment.value().kind()
-            else {
-                return None;
-            };
-            Some((simple_operand_local(left)?, right))
-        }) else {
+            (assignment.destination().projections().is_empty()
+                && assignment.destination().local() == discriminant)
+                .then_some(assignment)
+        });
+        let Some(comparison) = discriminant_definitions.next() else {
+            continue;
+        };
+        if discriminant_definitions.next().is_some() {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a uniform induction comparison with multiple header definitions",
+            ));
+        }
+        let SemanticRvalueKindV1::Binary {
+            operation: SemanticBinaryOpV1::LessThan,
+            left,
+            right: bound_operand,
+        } = comparison.value().kind()
+        else {
+            continue;
+        };
+        let Some(induction) = simple_operand_local(left) else {
             continue;
         };
         if local_definitions.get(induction.index() as usize).copied() != Some(2) {
             continue;
         }
-        let body_and_latch = targets.otherwise().target().index() as usize;
+        let body_entry = targets.otherwise().target().index() as usize;
         let exit = targets.values()[0].edge().target().index() as usize;
-        if body_and_latch >= function.blocks().len() || exit >= function.blocks().len() {
-            continue;
+        if body_entry >= function.blocks().len() || exit >= function.blocks().len() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a uniform induction successor outside the semantic CFG",
+            ));
         }
         let mut initial = None;
         let mut step = None;
-        let mut preheader = None;
         for (candidate, candidate_block) in function.blocks().iter().enumerate() {
             for statement in candidate_block.statements() {
                 let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
@@ -2959,43 +2983,61 @@ fn project_uniform_inductions_v1(
                 }
                 match assignment.value().kind() {
                     SemanticRvalueKindV1::Use(operand) => {
-                        initial = Some(operand);
-                        preheader = Some(candidate);
+                        if initial.replace((candidate, operand)).is_some() {
+                            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                                "a uniform induction with multiple initial definitions",
+                            ));
+                        }
                     }
                     SemanticRvalueKindV1::Binary {
                         operation: SemanticBinaryOpV1::Add,
                         left,
                         right,
                     } if simple_operand_local(left) == Some(induction) => {
-                        step = Some((candidate, right));
+                        if step.replace((candidate, right)).is_some() {
+                            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                                "a uniform induction with multiple latch definitions",
+                            ));
+                        }
                     }
                     SemanticRvalueKindV1::Binary {
                         operation: SemanticBinaryOpV1::Add,
                         left,
                         right,
                     } if simple_operand_local(right) == Some(induction) => {
-                        step = Some((candidate, left));
+                        if step.replace((candidate, left)).is_some() {
+                            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                                "a uniform induction with multiple latch definitions",
+                            ));
+                        }
                     }
-                    _ => {}
+                    _ => {
+                        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                            "a uniform induction with a non-canonical definition",
+                        ));
+                    }
                 }
             }
         }
-        let (Some(initial), Some(preheader), Some((latch, step))) = (initial, preheader, step)
-        else {
-            continue;
+        let (Some((initial_block, initial)), Some((step_block, step))) = (initial, step) else {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a uniform induction without exact initial and latch definitions",
+            ));
         };
-        if latch != body_and_latch
-            || !matches!(
-                function.blocks()[preheader].terminator().kind(),
-                SemanticTerminatorKindV1::Goto(edge) if edge.target().index() as usize == header
-            )
-            || !matches!(
-                function.blocks()[latch].terminator().kind(),
-                SemanticTerminatorKindV1::Goto(edge) if edge.target().index() as usize == header
-            )
-        {
-            continue;
+        if positive_unsigned_constant_operand_v1(step, constants, types).is_none() {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a uniform induction whose positive step is not statically established",
+            ));
         }
+        let topology = project_natural_loop_topology_v1(
+            &graph,
+            header,
+            body_entry,
+            exit,
+            initial_block,
+            step_block,
+            &mut graph_work,
+        )?;
         let Some(initial) = project_uniform_switch_operand_v1(
             initial,
             constants,
@@ -3008,7 +3050,9 @@ fn project_uniform_inductions_v1(
             next_value,
         )?
         else {
-            continue;
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a uniform induction with a lane-varying initial value",
+            ));
         };
         let Some(bound) = project_uniform_switch_operand_v1(
             bound_operand,
@@ -3022,7 +3066,9 @@ fn project_uniform_inductions_v1(
             next_value,
         )?
         else {
-            continue;
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a uniform induction with a lane-varying bound",
+            ));
         };
         let Some(step) = project_uniform_switch_operand_v1(
             step,
@@ -3036,13 +3082,17 @@ fn project_uniform_inductions_v1(
             next_value,
         )?
         else {
-            continue;
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a uniform induction with a lane-varying step",
+            ));
         };
         if inductions
             .iter()
             .any(|existing: &ProjectedUniformInductionV1| {
-                [existing.preheader, existing.header, existing.body_and_latch].contains(&preheader)
-                    || [preheader, header, body_and_latch].contains(&existing.preheader)
+                existing
+                    .loop_blocks
+                    .iter()
+                    .any(|block| topology.loop_blocks.binary_search(block).is_ok())
             })
         {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -3050,16 +3100,295 @@ fn project_uniform_inductions_v1(
             ));
         }
         inductions.push(ProjectedUniformInductionV1 {
-            preheader,
+            preheader: topology.preheader,
             header,
-            body_and_latch,
+            body_entry,
+            latch: topology.latch,
             exit,
+            loop_blocks: topology.loop_blocks,
             initial,
             bound,
             step,
         });
     }
     Ok(inductions)
+}
+
+#[derive(Debug)]
+struct ProjectedLoopCfgV1 {
+    successors: Vec<Vec<usize>>,
+    predecessors: Vec<Vec<usize>>,
+    reachable: Vec<bool>,
+    entry: usize,
+}
+
+#[derive(Debug)]
+struct ProjectedNaturalLoopTopologyV1 {
+    preheader: usize,
+    latch: usize,
+    loop_blocks: Vec<usize>,
+}
+
+fn project_loop_graph_charge_v1(
+    work: &mut usize,
+    amount: usize,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    *work = work
+        .checked_add(amount)
+        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+            "uniform induction CFG analysis work overflow",
+        ))?;
+    if *work > MAX_PROJECTED_LOOP_GRAPH_WORK_V1 {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "uniform induction CFG analysis exceeds its work limit",
+        ));
+    }
+    Ok(())
+}
+
+fn projected_loop_cfg_graph_v1(
+    function: &SemanticFunctionDeclV1,
+) -> Result<ProjectedLoopCfgV1, ProductionRankedProjectionErrorV1> {
+    let block_count = function.blocks().len();
+    if block_count == 0 || block_count > MAX_RANKED_BOUNDS_BLOCKS {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "semantic CFG exceeds the ranked block limit before loop analysis",
+        ));
+    }
+    let checked_target = |target: SemanticBlockIdV1| {
+        let target = target.index() as usize;
+        (target < block_count).then_some(target).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "a semantic CFG edge outside the function during loop analysis",
+            ),
+        )
+    };
+    let mut successors = Vec::with_capacity(block_count);
+    let mut edge_count = 0_usize;
+    for block in function.blocks() {
+        let mut block_successors = match block.terminator().kind() {
+            SemanticTerminatorKindV1::Goto(edge) => vec![checked_target(edge.target())?],
+            SemanticTerminatorKindV1::SwitchInt { targets, .. } => {
+                let mut successors = targets
+                    .values()
+                    .iter()
+                    .map(|target| checked_target(target.edge().target()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let otherwise = checked_target(targets.otherwise().target())?;
+                if !(targets.values().len() == 2
+                    && targets.values().iter().any(|target| target.value() == 0)
+                    && targets.values().iter().any(|target| target.value() == 1)
+                    && switch_fallback_is_empty_unreachable_v1(function, otherwise))
+                {
+                    successors.push(otherwise);
+                }
+                successors
+            }
+            SemanticTerminatorKindV1::Call(call) => call
+                .destination()
+                .map(|destination| checked_target(destination.edge().target()))
+                .transpose()?
+                .into_iter()
+                .collect(),
+            SemanticTerminatorKindV1::Assert { target, .. }
+            | SemanticTerminatorKindV1::Drop { target, .. } => {
+                vec![checked_target(target.target())?]
+            }
+            SemanticTerminatorKindV1::FalseEdge { .. } => {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a false edge before uniform induction CFG normalization",
+                ));
+            }
+            SemanticTerminatorKindV1::Return
+            | SemanticTerminatorKindV1::TailCall(_)
+            | SemanticTerminatorKindV1::UnwindResume
+            | SemanticTerminatorKindV1::UnwindTerminate
+            | SemanticTerminatorKindV1::Abort
+            | SemanticTerminatorKindV1::Unreachable => Vec::new(),
+        };
+        block_successors.sort_unstable();
+        block_successors.dedup();
+        edge_count = edge_count.checked_add(block_successors.len()).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "semantic CFG edge count overflow during loop analysis",
+            ),
+        )?;
+        if edge_count > MAX_RANKED_BOUNDS_EDGES {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "semantic CFG exceeds the ranked edge limit before loop analysis",
+            ));
+        }
+        successors.push(block_successors);
+    }
+    let mut predecessors = vec![Vec::new(); block_count];
+    for (source, targets) in successors.iter().enumerate() {
+        for &target in targets {
+            predecessors[target].push(source);
+        }
+    }
+    let entry = function.entry().index() as usize;
+    if entry >= block_count {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "semantic entry block outside the function during loop analysis",
+        ));
+    }
+    let mut reachable = vec![false; block_count];
+    let mut pending = vec![entry];
+    while let Some(block) = pending.pop() {
+        if reachable[block] {
+            continue;
+        }
+        reachable[block] = true;
+        pending.extend(successors[block].iter().copied());
+    }
+    Ok(ProjectedLoopCfgV1 {
+        successors,
+        predecessors,
+        reachable,
+        entry,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_natural_loop_topology_v1(
+    graph: &ProjectedLoopCfgV1,
+    header: usize,
+    body_entry: usize,
+    exit: usize,
+    initial_block: usize,
+    step_block: usize,
+    work: &mut usize,
+) -> Result<ProjectedNaturalLoopTopologyV1, ProductionRankedProjectionErrorV1> {
+    if !graph.reachable.get(header).copied().unwrap_or(false) {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "a uniform induction header is unreachable",
+        ));
+    }
+    let mut reachable_without_header = vec![false; graph.successors.len()];
+    let mut pending = Vec::new();
+    if graph.entry != header {
+        pending.push(graph.entry);
+    }
+    while let Some(block) = pending.pop() {
+        project_loop_graph_charge_v1(work, 1)?;
+        if block == header || reachable_without_header[block] {
+            continue;
+        }
+        reachable_without_header[block] = true;
+        project_loop_graph_charge_v1(work, graph.successors[block].len())?;
+        pending.extend(graph.successors[block].iter().copied());
+    }
+    let header_predecessors = graph.predecessors[header]
+        .iter()
+        .copied()
+        .filter(|predecessor| graph.reachable[*predecessor])
+        .collect::<Vec<_>>();
+    let backedges = header_predecessors
+        .iter()
+        .copied()
+        .filter(|predecessor| !reachable_without_header[*predecessor])
+        .collect::<Vec<_>>();
+    let preheaders = header_predecessors
+        .iter()
+        .copied()
+        .filter(|predecessor| reachable_without_header[*predecessor])
+        .collect::<Vec<_>>();
+    if backedges.len() != 1 {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "a uniform induction without one unique dominated backedge",
+        ));
+    }
+    if preheaders.len() != 1 {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "a uniform induction without one unique preheader",
+        ));
+    }
+    let latch = backedges[0];
+    let preheader = preheaders[0];
+    if latch != step_block || preheader != initial_block {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "uniform induction definitions do not belong to the unique preheader and latch",
+        ));
+    }
+    if graph.successors[preheader].as_slice() != [header]
+        || graph.successors[latch].as_slice() != [header]
+    {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "a uniform induction preheader or latch has non-canonical control",
+        ));
+    }
+    let mut in_loop = vec![false; graph.successors.len()];
+    in_loop[header] = true;
+    in_loop[latch] = true;
+    let mut pending = vec![latch];
+    while let Some(block) = pending.pop() {
+        project_loop_graph_charge_v1(work, 1)?;
+        if block == header {
+            continue;
+        }
+        project_loop_graph_charge_v1(work, graph.predecessors[block].len())?;
+        for &predecessor in &graph.predecessors[block] {
+            if !graph.reachable[predecessor] || in_loop[predecessor] {
+                continue;
+            }
+            in_loop[predecessor] = true;
+            pending.push(predecessor);
+        }
+    }
+    if !in_loop.get(body_entry).copied().unwrap_or(false)
+        || in_loop.get(exit).copied().unwrap_or(false)
+    {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "a uniform induction body and exit do not form a natural loop",
+        ));
+    }
+    for (block, &inside) in in_loop.iter().enumerate() {
+        if !inside {
+            continue;
+        }
+        if reachable_without_header[block] {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "an irreducible entry enters a uniform induction body",
+            ));
+        }
+        for &predecessor in &graph.predecessors[block] {
+            if graph.reachable[predecessor]
+                && !in_loop[predecessor]
+                && !(block == header && predecessor == preheader)
+            {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a uniform induction region has more than one entry",
+                ));
+            }
+        }
+    }
+    let mut exits = Vec::new();
+    for (source, &inside) in in_loop.iter().enumerate() {
+        if !inside {
+            continue;
+        }
+        project_loop_graph_charge_v1(work, graph.successors[source].len())?;
+        for &target in &graph.successors[source] {
+            if !in_loop[target] {
+                exits.push((source, target));
+            }
+        }
+    }
+    if exits.as_slice() != [(header, exit)] {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "a uniform induction region does not have one unique header exit",
+        ));
+    }
+    let loop_blocks = in_loop
+        .iter()
+        .enumerate()
+        .filter_map(|(block, inside)| inside.then_some(block))
+        .collect();
+    Ok(ProjectedNaturalLoopTopologyV1 {
+        preheader,
+        latch,
+        loop_blocks,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3915,11 +4244,7 @@ fn build_ranked_cfg(
     let entry = function.entry().index() as usize;
     let reachable = reachable_projected_blocks(entry, &terminators)?;
     for induction in uniform_inductions {
-        for semantic_block in [
-            induction.preheader,
-            induction.header,
-            induction.body_and_latch,
-        ] {
+        for &semantic_block in &induction.loop_blocks {
             let block = projected_blocks.get(semantic_block).ok_or(
                 ProductionRankedProjectionErrorV1::Unsupported(
                     "a uniform induction block outside the semantic CFG",
@@ -3928,6 +4253,16 @@ fn build_ranked_cfg(
             if projected_block_expansion(block, &terminators[semantic_block])? != 1 {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "a uniform induction region containing expanded guarded control",
+                ));
+            }
+            if semantic_block != induction.header
+                && matches!(
+                    terminators[semantic_block],
+                    ProjectedCfgTerminatorV1::AnalysisSplit { .. }
+                )
+            {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a uniform induction region containing control without typed edge arguments",
                 ));
             }
         }
@@ -4049,7 +4384,7 @@ fn build_ranked_cfg(
             .find(|induction| induction.header == semantic_index)
         {
             let header = ranked_block_id(current)?;
-            let body = projected_target(&base_blocks, induction.body_and_latch)?;
+            let body = projected_target(&base_blocks, induction.body_entry)?;
             push_block_at_with_index_arguments(
                 &mut blocks,
                 current,
@@ -4074,9 +4409,9 @@ fn build_ranked_cfg(
         }
         if let Some(induction) = uniform_inductions
             .iter()
-            .find(|induction| induction.body_and_latch == semantic_index)
+            .find(|induction| induction.latch == semantic_index)
         {
-            let body = ranked_block_id(current)?;
+            let latch = ranked_block_id(current)?;
             push_block_at_with_index_arguments(
                 &mut blocks,
                 current,
@@ -4084,13 +4419,87 @@ fn build_ranked_cfg(
                 operations,
                 ProductionRankedTerminatorV1::BranchArgsAdd {
                     value: ProductionRankedValueV1::BlockArgument {
-                        block: body,
+                        block: latch,
                         argument: 0,
                     },
                     step: induction.step,
                     target: ranked_block_id(projected_target(&base_blocks, induction.header)?)?,
                 },
             )?;
+            continue;
+        }
+        if let Some(induction) = uniform_inductions
+            .iter()
+            .find(|induction| induction.contains_block(semantic_index))
+        {
+            let block = ranked_block_id(current)?;
+            let argument = ProductionRankedValueV1::BlockArgument { block, argument: 0 };
+            let require_loop_target = |target: usize| {
+                induction.contains_block(target).then_some(target).ok_or(
+                    ProductionRankedProjectionErrorV1::Incomplete(
+                        "a uniform induction body edge escapes its unique exit",
+                    ),
+                )
+            };
+            let terminator = match terminator {
+                ProjectedCfgTerminatorV1::Branch(target) => {
+                    ProductionRankedTerminatorV1::BranchArgs {
+                        arguments: vec![argument],
+                        target: ranked_block_id(projected_target(
+                            &base_blocks,
+                            require_loop_target(target)?,
+                        )?)?,
+                    }
+                }
+                ProjectedCfgTerminatorV1::Predicate {
+                    predicate,
+                    true_block,
+                    false_block: _,
+                } if predicate.comparisons.is_empty() => ProductionRankedTerminatorV1::BranchArgs {
+                    arguments: vec![argument],
+                    target: ranked_block_id(projected_target(
+                        &base_blocks,
+                        require_loop_target(true_block)?,
+                    )?)?,
+                },
+                ProjectedCfgTerminatorV1::Predicate {
+                    predicate,
+                    true_block,
+                    false_block,
+                } if predicate.comparisons.len() == 1 => {
+                    let (lhs, rhs) = predicate.comparisons[0];
+                    ProductionRankedTerminatorV1::IndexLessThanArgs {
+                        lhs,
+                        rhs,
+                        true_arguments: vec![argument],
+                        false_arguments: vec![argument],
+                        true_block: ranked_block_id(projected_target(
+                            &base_blocks,
+                            require_loop_target(true_block)?,
+                        )?)?,
+                        false_block: ranked_block_id(projected_target(
+                            &base_blocks,
+                            require_loop_target(false_block)?,
+                        )?)?,
+                    }
+                }
+                ProjectedCfgTerminatorV1::Predicate { .. } => {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a uniform induction predicate requires unrepresentable control expansion",
+                    ));
+                }
+                ProjectedCfgTerminatorV1::AnalysisSplit { .. } => {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a uniform induction region containing control without typed edge arguments",
+                    ));
+                }
+                ProjectedCfgTerminatorV1::Return => {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a uniform induction body returns before its unique latch",
+                    ));
+                }
+            };
+            push_block_at_with_index_arguments(&mut blocks, current, 1, operations, terminator)?;
             continue;
         }
         match terminator {
@@ -5578,6 +5987,25 @@ fn constant_operand_value(operand: &SemanticOperandV1, constants: &[Option<u64>]
         }
         ConstantDefinitionV1::Missing | ConstantDefinitionV1::Invalid => None,
     }
+}
+
+fn positive_unsigned_constant_operand_v1(
+    operand: &SemanticOperandV1,
+    constants: &[Option<u64>],
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+) -> Option<u64> {
+    let SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+        signed: false,
+        bits,
+    }) =
+        types.get(operand.ty().index() as usize)?.shape()
+    else {
+        return None;
+    };
+    if *bits == 0 || *bits > 64 {
+        return None;
+    }
+    constant_operand_value(operand, constants).filter(|step| *step > 0)
 }
 
 fn record_constant_definition(
@@ -9460,6 +9888,356 @@ mod tests {
         )
     }
 
+    #[derive(Clone, Copy)]
+    enum InductionCfgShape {
+        Chain,
+        Branched,
+        TwoLatches,
+        ExtraExit,
+        AnalysisSplit,
+        IrreducibleEntry,
+        MultiplePreheaders,
+        ReusedComparisonLocal,
+        MultipleHeaderComparisons,
+    }
+
+    fn multi_block_induction_function(
+        shape: InductionCfgShape,
+        bound_role: SemanticLocalRoleV1,
+        step: u64,
+    ) -> SemanticFunctionDeclV1 {
+        multi_block_induction_function_with_operands(
+            shape,
+            bound_role,
+            constant(0),
+            constant(step.into()),
+        )
+    }
+
+    fn multi_block_induction_function_with_operands(
+        shape: InductionCfgShape,
+        bound_role: SemanticLocalRoleV1,
+        initial_value: SemanticOperandV1,
+        step_value: SemanticOperandV1,
+    ) -> SemanticFunctionDeclV1 {
+        let induction = SemanticLocalIdV1::from_index(1);
+        let predicate = SemanticLocalIdV1::from_index(2);
+        let bound = SemanticLocalIdV1::from_index(3);
+        let body_predicate = SemanticLocalIdV1::from_index(4);
+        let place = |local| SemanticPlaceV1::new(local, vec![], SCALAR_TYPE).unwrap();
+        let operand = |local| SemanticOperandV1::Copy(place(local));
+        let assign = |destination, value| {
+            statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                place(destination),
+                SemanticRvalueV1::new(SCALAR_TYPE, value),
+            )))
+        };
+        let initialize = || {
+            assign(
+                induction,
+                SemanticRvalueKindV1::Use(initial_value.clone()),
+            )
+        };
+        let compare = || {
+            assign(
+                predicate,
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::LessThan,
+                    left: operand(induction),
+                    right: operand(bound),
+                },
+            )
+        };
+        let increment = || {
+            assign(
+                induction,
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::Add,
+                    left: operand(induction),
+                    right: step_value.clone(),
+                },
+            )
+        };
+        let switch = |discriminant: SemanticOperandV1, false_target, true_target| {
+            SemanticTerminatorKindV1::SwitchInt {
+                discriminant,
+                targets: SemanticSwitchTargetsV1::new(
+                    vec![SemanticSwitchTargetV1::new(
+                        0,
+                        cfg_edge(SemanticEdgeRoleV1::SwitchValue, false_target),
+                    )],
+                    cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, true_target),
+                )
+                .unwrap(),
+            }
+        };
+        let blocks = match shape {
+            InductionCfgShape::Chain => vec![
+                block(
+                    110,
+                    vec![initialize()],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(111, vec![compare()], switch(operand(predicate), 5, 2)),
+                block(
+                    112,
+                    vec![],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3)),
+                ),
+                block(
+                    113,
+                    vec![],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 4)),
+                ),
+                block(
+                    114,
+                    vec![increment()],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(115, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            InductionCfgShape::Branched => vec![
+                block(
+                    120,
+                    vec![initialize()],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(121, vec![compare()], switch(operand(predicate), 6, 2)),
+                block(122, vec![], switch(operand(body_predicate), 3, 4)),
+                block(
+                    123,
+                    vec![],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 5)),
+                ),
+                block(
+                    124,
+                    vec![],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 5)),
+                ),
+                block(
+                    125,
+                    vec![increment()],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(126, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            InductionCfgShape::TwoLatches => vec![
+                block(
+                    130,
+                    vec![initialize()],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(131, vec![compare()], switch(operand(predicate), 5, 2)),
+                block(132, vec![], switch(operand(body_predicate), 3, 4)),
+                block(
+                    133,
+                    vec![increment()],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(
+                    134,
+                    vec![],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(135, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            InductionCfgShape::ExtraExit => vec![
+                block(
+                    140,
+                    vec![initialize()],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(141, vec![compare()], switch(operand(predicate), 4, 2)),
+                block(142, vec![], switch(operand(body_predicate), 5, 3)),
+                block(
+                    143,
+                    vec![increment()],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(144, vec![], SemanticTerminatorKindV1::Return),
+                block(145, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            InductionCfgShape::AnalysisSplit => vec![
+                block(
+                    150,
+                    vec![initialize()],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(151, vec![compare()], switch(operand(predicate), 5, 2)),
+                block(152, vec![], switch(operand(body_predicate), 3, 3)),
+                block(
+                    153,
+                    vec![],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 4)),
+                ),
+                block(
+                    154,
+                    vec![increment()],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(155, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            InductionCfgShape::IrreducibleEntry => vec![
+                block(160, vec![], switch(operand(body_predicate), 1, 3)),
+                block(
+                    161,
+                    vec![initialize()],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 2)),
+                ),
+                block(162, vec![compare()], switch(operand(predicate), 5, 3)),
+                block(
+                    163,
+                    vec![],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 4)),
+                ),
+                block(
+                    164,
+                    vec![increment()],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 2)),
+                ),
+                block(165, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            InductionCfgShape::MultiplePreheaders => vec![
+                block(170, vec![], switch(operand(body_predicate), 1, 2)),
+                block(
+                    171,
+                    vec![initialize()],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3)),
+                ),
+                block(
+                    172,
+                    vec![],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3)),
+                ),
+                block(173, vec![compare()], switch(operand(predicate), 6, 4)),
+                block(
+                    174,
+                    vec![],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 5)),
+                ),
+                block(
+                    175,
+                    vec![increment()],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3)),
+                ),
+                block(176, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            InductionCfgShape::ReusedComparisonLocal => vec![
+                block(
+                    180,
+                    vec![
+                        initialize(),
+                        assign(predicate, SemanticRvalueKindV1::Use(constant(0))),
+                    ],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(181, vec![compare()], switch(operand(predicate), 4, 2)),
+                block(
+                    182,
+                    vec![],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3)),
+                ),
+                block(
+                    183,
+                    vec![increment()],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(184, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            InductionCfgShape::MultipleHeaderComparisons => vec![
+                block(
+                    190,
+                    vec![initialize()],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(
+                    191,
+                    vec![compare(), compare()],
+                    switch(operand(predicate), 4, 2),
+                ),
+                block(
+                    192,
+                    vec![],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3)),
+                ),
+                block(
+                    193,
+                    vec![increment()],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(194, vec![], SemanticTerminatorKindV1::Return),
+            ],
+        };
+        projection_function_with_locals(
+            blocks,
+            vec![
+                local(100, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(101, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(102, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(103, SCALAR_TYPE, bound_role),
+                local(104, SCALAR_TYPE, SemanticLocalRoleV1::Argument(1)),
+                local(105, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
+    fn project_test_inductions(
+        function: &SemanticFunctionDeclV1,
+    ) -> Result<
+        (
+            Vec<ProjectedUniformInductionV1>,
+            Vec<ProductionRankedOperationV1>,
+            usize,
+        ),
+        ProductionRankedProjectionErrorV1,
+    > {
+        let constants = constant_locals(function);
+        let origins = local_stable_argument_origins(function).unwrap();
+        let definitions = local_definition_counts(function);
+        let mut arguments = vec![None; function.locals().len()];
+        let mut next_argument = 1;
+        let mut operations = Vec::new();
+        let mut next_value = 0;
+        let inductions = project_uniform_inductions_v1(
+            &projection_types(),
+            function,
+            &constants,
+            &origins,
+            &definitions,
+            &mut arguments,
+            &mut next_argument,
+            &mut operations,
+            &mut next_value,
+        )?;
+        Ok((inductions, operations, next_argument))
+    }
+
+    fn assert_incomplete<T>(
+        result: Result<T, ProductionRankedProjectionErrorV1>,
+        expected: &'static str,
+    ) {
+        match result {
+            Err(ProductionRankedProjectionErrorV1::Incomplete(actual)) => {
+                assert_eq!(actual, expected);
+            }
+            Err(other) => panic!("expected incomplete projection, got {other}"),
+            Ok(_) => panic!("expected incomplete projection"),
+        }
+    }
+
+    fn assert_loop_unsupported<T>(
+        result: Result<T, ProductionRankedProjectionErrorV1>,
+        expected: &'static str,
+    ) {
+        match result {
+            Err(ProductionRankedProjectionErrorV1::Unsupported(actual)) => {
+                assert_eq!(actual, expected);
+            }
+            Err(other) => panic!("expected unsupported projection, got {other}"),
+            Ok(_) => panic!("expected unsupported projection"),
+        }
+    }
+
     #[test]
     fn dynamic_parameter_induction_projects_to_legal_ranked_ssa_edges() {
         let function = uniform_induction_function(SemanticLocalRoleV1::Argument(0));
@@ -9471,6 +10249,7 @@ mod tests {
         let mut entry_operations = Vec::new();
         let mut next_value = 0;
         let inductions = project_uniform_inductions_v1(
+            &projection_types(),
             &function,
             &constants,
             &origins,
@@ -9507,6 +10286,304 @@ mod tests {
     }
 
     #[test]
+    fn multi_block_induction_threads_ssa_and_preserves_body_effects() {
+        let function = multi_block_induction_function(
+            InductionCfgShape::Chain,
+            SemanticLocalRoleV1::Argument(0),
+            16,
+        );
+        let (inductions, entry_operations, next_argument) =
+            project_test_inductions(&function).unwrap();
+        assert_eq!(inductions[0].loop_blocks, vec![1, 2, 3, 4]);
+        let barrier = ProductionRankedOperationV1::Barrier {
+            execution_scope: HierarchyAttr::Workgroup,
+            memory_scope: MemoryScopeAttr::Workgroup,
+            address_space: AddressSpaceAttr::Workgroup,
+            order: MemoryOrderAttr::AcquireRelease,
+        };
+        let mut projected = (0..function.blocks().len())
+            .map(|_| ProjectedSemanticBlockV1 { items: vec![] })
+            .collect::<Vec<_>>();
+        projected[2].items.push(ProjectedBlockItemV1::Effect {
+            operation: barrier.clone(),
+            source: None,
+        });
+        let (blocks, _) = build_ranked_cfg(
+            &function,
+            &vec![None; function.locals().len()],
+            &inductions,
+            entry_operations,
+            projected,
+        )
+        .unwrap();
+        for block in &blocks[2..=5] {
+            assert_eq!(block.index_argument_count(), 1);
+        }
+        assert_eq!(blocks[3].operations(), [barrier]);
+        assert!(matches!(
+            blocks[3].terminator(),
+            ProductionRankedTerminatorV1::BranchArgs { arguments, .. }
+                if arguments.len() == 1
+        ));
+        assert!(matches!(
+            blocks[4].terminator(),
+            ProductionRankedTerminatorV1::BranchArgs { arguments, .. }
+                if arguments.len() == 1
+        ));
+        assert!(matches!(
+            blocks[5].terminator(),
+            ProductionRankedTerminatorV1::BranchArgsAdd { .. }
+        ));
+        ProductionRankedKernelV1::new("multi_block_uniform_loop", next_argument, blocks).unwrap();
+    }
+
+    #[test]
+    fn internal_uniform_predicate_forwards_exact_ssa_arguments() {
+        let function = multi_block_induction_function(
+            InductionCfgShape::Branched,
+            SemanticLocalRoleV1::Argument(0),
+            16,
+        );
+        let (inductions, entry_operations, next_argument) =
+            project_test_inductions(&function).unwrap();
+        let predicate = GuardPredicateV1 {
+            comparisons: vec![(
+                ProductionRankedValueV1::Argument(0),
+                ProductionRankedValueV1::Argument(1),
+            )],
+        };
+        let mut predicates = vec![None; function.locals().len()];
+        predicates[4] = Some(predicate);
+        let (blocks, _) = build_ranked_cfg(
+            &function,
+            &predicates,
+            &inductions,
+            entry_operations,
+            (0..function.blocks().len())
+                .map(|_| ProjectedSemanticBlockV1 { items: vec![] })
+                .collect(),
+        )
+        .unwrap();
+        assert!(matches!(
+            blocks[3].terminator(),
+            ProductionRankedTerminatorV1::IndexLessThanArgs {
+                true_arguments,
+                false_arguments,
+                ..
+            } if true_arguments.len() == 1 && false_arguments.len() == 1
+        ));
+        ProductionRankedKernelV1::new("branched_uniform_loop", next_argument, blocks).unwrap();
+    }
+
+    #[test]
+    fn malformed_induction_topologies_fail_closed() {
+        for (shape, message) in [
+            (
+                InductionCfgShape::TwoLatches,
+                "a uniform induction without one unique dominated backedge",
+            ),
+            (
+                InductionCfgShape::ExtraExit,
+                "a uniform induction region does not have one unique header exit",
+            ),
+            (
+                InductionCfgShape::IrreducibleEntry,
+                "a uniform induction without one unique dominated backedge",
+            ),
+            (
+                InductionCfgShape::MultiplePreheaders,
+                "a uniform induction without one unique preheader",
+            ),
+        ] {
+            let function =
+                multi_block_induction_function(shape, SemanticLocalRoleV1::Argument(0), 16);
+            assert_incomplete(project_test_inductions(&function), message);
+        }
+    }
+
+    #[test]
+    fn non_positive_induction_step_fails_closed() {
+        let function = multi_block_induction_function(
+            InductionCfgShape::Chain,
+            SemanticLocalRoleV1::Argument(0),
+            0,
+        );
+        assert_incomplete(
+            project_test_inductions(&function),
+            "a uniform induction whose positive step is not statically established",
+        );
+    }
+
+    #[test]
+    fn varying_initial_and_nonconstant_step_fail_closed() {
+        let varying = SemanticOperandV1::Copy(
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(5), vec![], SCALAR_TYPE).unwrap(),
+        );
+        let varying_initial = multi_block_induction_function_with_operands(
+            InductionCfgShape::Chain,
+            SemanticLocalRoleV1::Argument(0),
+            varying.clone(),
+            constant(16),
+        );
+        assert_incomplete(
+            project_test_inductions(&varying_initial),
+            "a uniform induction with a lane-varying initial value",
+        );
+
+        let varying_step = multi_block_induction_function_with_operands(
+            InductionCfgShape::Chain,
+            SemanticLocalRoleV1::Argument(0),
+            constant(0),
+            varying,
+        );
+        assert_incomplete(
+            project_test_inductions(&varying_step),
+            "a uniform induction whose positive step is not statically established",
+        );
+    }
+
+    #[test]
+    fn loop_comparison_requires_one_exact_header_definition() {
+        let reused = multi_block_induction_function(
+            InductionCfgShape::ReusedComparisonLocal,
+            SemanticLocalRoleV1::Argument(0),
+            16,
+        );
+        assert_eq!(project_test_inductions(&reused).unwrap().0.len(), 1);
+
+        let ambiguous = multi_block_induction_function(
+            InductionCfgShape::MultipleHeaderComparisons,
+            SemanticLocalRoleV1::Argument(0),
+            16,
+        );
+        assert_incomplete(
+            project_test_inductions(&ambiguous),
+            "a uniform induction comparison with multiple header definitions",
+        );
+    }
+
+    #[test]
+    fn signed_step_bits_cannot_mint_a_positive_induction_step() {
+        let signed_type = SemanticTypeIdV1::from_index(3);
+        let wide_unsigned_type = SemanticTypeIdV1::from_index(4);
+        let mut types = projection_types();
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(5)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(5)),
+            SemanticTypeLayoutV1::new(Some(4), 4).unwrap(),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                signed: true,
+                bits: 32,
+            }),
+        ));
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(6)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(6)),
+            SemanticTypeLayoutV1::new(Some(16), 16).unwrap(),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits: 128,
+            }),
+        ));
+        let signed_minus_one = SemanticOperandV1::Constant(SemanticConstantV1::new(
+            signed_type,
+            SemanticConstantValueV1::Scalar(
+                SemanticScalarValueV1::new(u32::MAX.into(), 4).unwrap(),
+            ),
+        ));
+        let wide_unsigned_one = SemanticOperandV1::Constant(SemanticConstantV1::new(
+            wide_unsigned_type,
+            SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(1, 16).unwrap()),
+        ));
+
+        assert_eq!(
+            positive_unsigned_constant_operand_v1(&signed_minus_one, &[], &types),
+            None
+        );
+        assert_eq!(
+            positive_unsigned_constant_operand_v1(&wide_unsigned_one, &[], &types),
+            None
+        );
+        assert_eq!(
+            positive_unsigned_constant_operand_v1(&constant(u32::MAX.into()), &[], &types),
+            Some(u32::MAX.into())
+        );
+    }
+
+    #[test]
+    fn body_control_without_typed_edges_fails_closed() {
+        let function = multi_block_induction_function(
+            InductionCfgShape::AnalysisSplit,
+            SemanticLocalRoleV1::Argument(0),
+            16,
+        );
+        let (inductions, entry_operations, _) = project_test_inductions(&function).unwrap();
+        assert_incomplete(
+            build_ranked_cfg(
+                &function,
+                &vec![None; function.locals().len()],
+                &inductions,
+                entry_operations,
+                (0..function.blocks().len())
+                    .map(|_| ProjectedSemanticBlockV1 { items: vec![] })
+                    .collect(),
+            ),
+            "a uniform induction region containing control without typed edge arguments",
+        );
+    }
+
+    #[test]
+    fn guarded_body_expansion_fails_closed_before_ssa_construction() {
+        let function = multi_block_induction_function(
+            InductionCfgShape::Chain,
+            SemanticLocalRoleV1::Argument(0),
+            16,
+        );
+        let (inductions, entry_operations, _) = project_test_inductions(&function).unwrap();
+        let mut projected = (0..function.blocks().len())
+            .map(|_| ProjectedSemanticBlockV1 { items: vec![] })
+            .collect::<Vec<_>>();
+        projected[2]
+            .items
+            .push(ProjectedBlockItemV1::Guarded(GuardedRankedAccessV1 {
+                view: ProductionRankedValueIdV1::new(0),
+                indices: vec![ProductionRankedValueV1::Argument(0)],
+                comparisons: vec![(
+                    ProductionRankedValueV1::Argument(0),
+                    ProductionRankedValueV1::Argument(1),
+                )],
+                access: AccessKindAttr::Read,
+                memory_space: MemorySpaceAttr::Global,
+                source: SemanticSourceProvenanceV1::unavailable(),
+            }));
+        assert_incomplete(
+            build_ranked_cfg(
+                &function,
+                &vec![None; function.locals().len()],
+                &inductions,
+                entry_operations,
+                projected,
+            ),
+            "a uniform induction region containing expanded guarded control",
+        );
+    }
+
+    #[test]
+    fn loop_graph_work_overflow_and_amplification_are_bounded() {
+        let mut work = usize::MAX;
+        assert_loop_unsupported(
+            project_loop_graph_charge_v1(&mut work, 1),
+            "uniform induction CFG analysis work overflow",
+        );
+        let mut work = MAX_PROJECTED_LOOP_GRAPH_WORK_V1;
+        assert_loop_unsupported(
+            project_loop_graph_charge_v1(&mut work, 1),
+            "uniform induction CFG analysis exceeds its work limit",
+        );
+        assert!(MAX_PROJECTED_LOOP_GRAPH_WORK_V1.checked_add(1).is_some());
+    }
+
+    #[test]
     fn lane_derived_induction_bound_cannot_mint_uniform_control() {
         let function = uniform_induction_function(SemanticLocalRoleV1::Temporary);
         let constants = constant_locals(&function);
@@ -9516,8 +10593,9 @@ mod tests {
         let mut next_argument = 1;
         let mut operations = Vec::new();
         let mut next_value = 0;
-        assert!(
+        assert_incomplete(
             project_uniform_inductions_v1(
+                &projection_types(),
                 &function,
                 &constants,
                 &origins,
@@ -9526,9 +10604,8 @@ mod tests {
                 &mut next_argument,
                 &mut operations,
                 &mut next_value,
-            )
-            .unwrap()
-            .is_empty()
+            ),
+            "a uniform induction with a lane-varying bound",
         );
     }
 
