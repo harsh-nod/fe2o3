@@ -666,6 +666,31 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         source_rank,
     )?];
     let mut next_value = 0_u32;
+    let reserved_reference_values = if reference_bindings.as_slice().is_empty() {
+        None
+    } else {
+        let count = crate::production_reference_effect_join_v2::reserved_reference_value_count_v2(
+            reference_bindings,
+        )?;
+        let mut values = Vec::with_capacity(count);
+        for _ in 0..count {
+            values.push(next_value_id(&mut next_value)?);
+        }
+        entry_operations.extend(
+            values
+                .iter()
+                .take(3)
+                .copied()
+                .map(|result| ProductionRankedOperationV1::SemanticConstant { result, value: 0 }),
+        );
+        entry_operations.extend(values.iter().skip(3).copied().enumerate().map(
+            |(axis, result)| ProductionRankedOperationV1::SemanticSymbol {
+                result,
+                symbol: axis as u32,
+            },
+        ));
+        Some(values)
+    };
     let mut incomplete = None;
     let mut projected_views = vec![None; function.locals().len()];
     let mut discarded_ir = String::new();
@@ -889,11 +914,15 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
                 access_sources: sources,
             })?
     } else {
+        let reserved_reference_values =
+            reserved_reference_values.ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "reference-effect scalar reservations were not retained",
+            ))?;
         crate::production_reference_effect_join_v2::prepare_reference_effect_request_v2(
             kernel,
             reference_bindings,
             &reference_writes,
-            &mut next_value,
+            reserved_reference_values,
         )
         .and_then(|request| request.prove_and_compile())
         .map_err(ProductionRankedProjectionErrorV1::ReferenceEffectJoin)?

@@ -41,6 +41,25 @@ pub(crate) struct RankedGpuWriteV2 {
     pub(crate) value: Option<u64>,
 }
 
+pub(crate) fn reserved_reference_value_count_v2(
+    bindings: &AuthenticatedReferenceEffectBindingsV1,
+) -> Result<usize, crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1> {
+    let coordinate_count = bindings
+        .as_slice()
+        .first()
+        .and_then(|binding| binding.observable_output_writes.first())
+        .and_then(|write| match &write.coordinate {
+            ReferenceOutputCoordinateV1::LogicalPoint(axes) => Some(axes.len()),
+            _ => None,
+        })
+        .unwrap_or(0);
+    3_usize.checked_add(coordinate_count).ok_or(
+        crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1::Unsupported(
+            "reference-effect scalar reservation count overflowed",
+        ),
+    )
+}
+
 /// Move-only compiler custody over a request derived from exact collector and
 /// ranked-projection state. Generic receipt APIs cannot construct this type.
 pub(crate) struct CompilerOwnedReferenceEffectRequestV2 {
@@ -99,7 +118,7 @@ pub(crate) fn prepare_reference_effect_request_v2(
     kernel: ProductionRankedKernelV1,
     bindings: &AuthenticatedReferenceEffectBindingsV1,
     writes: &[RankedGpuWriteV2],
-    next_value: &mut u32,
+    reserved_values: Vec<ProductionRankedValueIdV1>,
 ) -> Result<CompilerOwnedReferenceEffectRequestV2, ProductionReferenceEffectJoinErrorV2> {
     let [binding] = bindings.as_slice() else {
         return Err(ProductionReferenceEffectJoinErrorV2::BindingCount(
@@ -166,6 +185,14 @@ pub(crate) fn prepare_reference_effect_request_v2(
     let reference_value =
         reference_constant_expression_value(reference_write.rhs.clone(), *element)?;
     let reference_indices = reference_ranked_indices_v2(&kernel, &reference_write.coordinate)?;
+    if reserved_values.len() != 3 + reference_indices.len() {
+        return Err(
+            ProductionReferenceEffectJoinErrorV2::InvalidReservedValueCount {
+                expected: 3 + reference_indices.len(),
+                actual: reserved_values.len(),
+            },
+        );
+    }
     let subjects = FunctionalRefinementSubjectsV2::new(
         SafeReferenceKindV2::Mir,
         DigestV1::from_untrusted_bytes(binding.reference.function_sha256),
@@ -182,25 +209,28 @@ pub(crate) fn prepare_reference_effect_request_v2(
     ) {
         return Err(ProductionReferenceEffectJoinErrorV2::AmbiguousOwnership);
     }
-    let true_value = allocate_value(next_value)?;
-    let gpu_value_id = allocate_value(next_value)?;
-    let reference_value_id = allocate_value(next_value)?;
+    let true_value = reserved_values[0];
+    let gpu_value_id = reserved_values[1];
+    let reference_value_id = reserved_values[2];
+    let coordinate_values = reserved_values[3..]
+        .iter()
+        .copied()
+        .map(ProductionRankedValueV1::Local)
+        .collect::<Vec<_>>();
     let entry = blocks
         .first_mut()
         .ok_or(ProductionReferenceEffectJoinErrorV2::WriteLocation)?;
     let mut entry_operations = entry.operations().to_vec();
-    entry_operations.push(ProductionRankedOperationV1::SemanticConstant {
-        result: true_value,
-        value: 1,
-    });
-    entry_operations.push(ProductionRankedOperationV1::SemanticConstant {
-        result: gpu_value_id,
-        value: gpu_scalar,
-    });
-    entry_operations.push(ProductionRankedOperationV1::SemanticConstant {
-        result: reference_value_id,
-        value: reference_value,
-    });
+    replace_reserved_semantic_constant_v2(&mut entry_operations, true_value, 1)?;
+    replace_reserved_semantic_constant_v2(&mut entry_operations, gpu_value_id, gpu_scalar)?;
+    replace_reserved_semantic_constant_v2(
+        &mut entry_operations,
+        reference_value_id,
+        reference_value,
+    )?;
+    for (axis, identity) in reserved_values[3..].iter().copied().enumerate() {
+        validate_reserved_semantic_symbol_v2(&entry_operations, identity, axis as u32)?;
+    }
     entry_operations.push(ProductionRankedOperationV1::OwnershipContract {
         view: write.view,
         coverage: OwnershipCoverageAttr::ExactEffectDomain,
@@ -261,8 +291,8 @@ pub(crate) fn prepare_reference_effect_request_v2(
         ),
         write.view,
         write.indices.clone(),
-        write.indices.clone(),
-        reference_indices,
+        coordinate_values.clone(),
+        coordinate_values,
         ProductionRankedValueV1::Local(true_value),
         ProductionRankedValueV1::Local(true_value),
         ProductionRankedValueV1::Local(true_value),
@@ -755,14 +785,56 @@ fn terminator_successors_v2(terminator: &ProductionRankedTerminatorV1) -> Vec<us
     }
 }
 
-fn allocate_value(
-    next_value: &mut u32,
-) -> Result<ProductionRankedValueIdV1, ProductionReferenceEffectJoinErrorV2> {
-    let value = ProductionRankedValueIdV1::new(*next_value);
-    *next_value = next_value
-        .checked_add(1)
-        .ok_or(ProductionReferenceEffectJoinErrorV2::ValueIdentityOverflow)?;
-    Ok(value)
+fn replace_reserved_semantic_constant_v2(
+    operations: &mut [ProductionRankedOperationV1],
+    identity: ProductionRankedValueIdV1,
+    replacement: u64,
+) -> Result<(), ProductionReferenceEffectJoinErrorV2> {
+    let mut found = false;
+    for operation in operations {
+        if operation_result_v2(operation) != Some(identity) {
+            continue;
+        }
+        let ProductionRankedOperationV1::SemanticConstant { value, .. } = operation else {
+            return Err(ProductionReferenceEffectJoinErrorV2::InvalidReservedValue(
+                identity.get(),
+            ));
+        };
+        if found {
+            return Err(ProductionReferenceEffectJoinErrorV2::InvalidReservedValue(
+                identity.get(),
+            ));
+        }
+        *value = replacement;
+        found = true;
+    }
+    if !found {
+        return Err(ProductionReferenceEffectJoinErrorV2::InvalidReservedValue(
+            identity.get(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_reserved_semantic_symbol_v2(
+    operations: &[ProductionRankedOperationV1],
+    identity: ProductionRankedValueIdV1,
+    expected_symbol: u32,
+) -> Result<(), ProductionReferenceEffectJoinErrorV2> {
+    let mut definitions = operations
+        .iter()
+        .filter(|operation| operation_result_v2(operation) == Some(identity));
+    let valid = matches!(
+        definitions.next(),
+        Some(ProductionRankedOperationV1::SemanticSymbol { symbol, .. })
+            if *symbol == expected_symbol
+    ) && definitions.next().is_none();
+    if !valid {
+        return Err(ProductionReferenceEffectJoinErrorV2::InvalidReservedValue(
+            identity.get(),
+        ));
+    }
+    Ok(())
 }
 
 fn contract_identity(effect_ir: [u8; 32], write: &RankedGpuWriteV2) -> u64 {
@@ -795,7 +867,11 @@ pub(crate) enum ProductionReferenceEffectJoinErrorV2 {
     },
     AmbiguousOwnership,
     WriteLocation,
-    ValueIdentityOverflow,
+    InvalidReservedValueCount {
+        expected: usize,
+        actual: usize,
+    },
+    InvalidReservedValue(u32),
     Subjects(String),
     Recipe(ProductionRankedKernelErrorV1),
     Construction(String),
@@ -849,9 +925,14 @@ impl fmt::Display for ProductionReferenceEffectJoinErrorV2 {
             Self::WriteLocation => {
                 formatter.write_str("source-to-proof V2 GPU write location is outside the ranked CFG")
             }
-            Self::ValueIdentityOverflow => {
-                formatter.write_str("source-to-proof V2 ranked value identity overflowed")
-            }
+            Self::InvalidReservedValueCount { expected, actual } => write!(
+                formatter,
+                "source-to-proof V2 reserved {actual} semantic values but the exact effect requires {expected}"
+            ),
+            Self::InvalidReservedValue(identity) => write!(
+                formatter,
+                "source-to-proof V2 reserved semantic value %{identity} is missing, duplicated, or has the wrong ranked type"
+            ),
             Self::Subjects(detail) => {
                 write!(formatter, "source-to-proof V2 subject identity is invalid: {detail}")
             }
