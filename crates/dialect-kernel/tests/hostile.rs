@@ -5,9 +5,10 @@ use dialect_kernel::{
     DeterministicJoinOp, DimensionAttr, DimensionOp, ITERATION_DOMAIN_ATTR_KEY, IndexConstantOp,
     IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
     IndexType, IndexValueAttr, IterationDomainAttr, KernelError, MAX_DETERMINISTIC_JOIN_INPUTS_V1,
-    MAX_ITERATION_RANK, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp, RankedMemoryError,
-    RankedViewOp, RankedViewType, RegistrationError, RegistrationOutcome, SemanticOwner,
-    StructuredAlgorithmOp, TensorConvergenceAttr, TensorLayoutOp, register_dialect,
+    MAX_ITERATION_RANK, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, OwnershipContractOp,
+    OwnershipCoverageAttr, OwnershipPartitionAttr, RankedAccessOp, RankedMemoryError, RankedViewOp,
+    RankedViewType, RegistrationError, RegistrationOutcome, SemanticOwner, StructuredAlgorithmOp,
+    TensorConvergenceAttr, TensorLayoutOp, register_dialect,
 };
 use fe2o3_kernel_ir::{TensorInstructionProfileV1, TensorLayoutContractV1, TensorSymbolicMapV1};
 use pliron::{
@@ -601,6 +602,79 @@ fn ranked_memory_local_verifiers_reject_foreign_indices_rank_mismatch_and_writes
     let hostile = RankedAccessOp::from_operation(raw);
     hostile.set_attr_kernel_access_kind(context, AccessKindAttr::Read);
     assert!(verify_op(&hostile, context).is_err());
+}
+
+#[test]
+fn ownership_contract_local_verifier_rejects_forged_view_and_payload_claims() {
+    let context = &mut Context::new();
+    register_dialect(context, &kernel_name()).unwrap();
+    let writable_type = RankedViewType::new(context, 32, true, vec![8]).unwrap();
+    let global =
+        RankedViewOp::new_in_space(context, writable_type, vec![], MemorySpaceAttr::Global)
+            .unwrap();
+    let valid = OwnershipContractOp::new(
+        context,
+        global.result(context),
+        OwnershipCoverageAttr::ExactView,
+        OwnershipPartitionAttr::DenseRectangles,
+    )
+    .unwrap();
+    verify_op(&valid, context).unwrap();
+
+    let readonly_type = RankedViewType::new(context, 32, false, vec![8]).unwrap();
+    let readonly = RankedViewOp::new(context, readonly_type, vec![]).unwrap();
+    assert!(matches!(
+        OwnershipContractOp::new(
+            context,
+            readonly.result(context),
+            OwnershipCoverageAttr::ExactView,
+            OwnershipPartitionAttr::ExactSets,
+        ),
+        Err(RankedMemoryError::WriteThroughReadOnlyView)
+    ));
+    let workgroup =
+        RankedViewOp::new_in_space(context, writable_type, vec![], MemorySpaceAttr::Workgroup)
+            .unwrap();
+    assert!(
+        OwnershipContractOp::new(
+            context,
+            workgroup.result(context),
+            OwnershipCoverageAttr::ExactView,
+            OwnershipPartitionAttr::ExactSets,
+        )
+        .is_err()
+    );
+
+    let attributes = "kernel_ownership_coverage: kernel.ownership_coverage ExactView, kernel_ownership_partition: kernel.ownership_partition ExactSets";
+    let source = |view_type: &str, view_space: &str, contract_attributes: &str| {
+        format!(
+            "builtin.func @ownership_payload: builtin.function <() -> ()>\n{{\n  ^entry_block1v1():\n    v0 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space {view_space}]: <() -> ({view_type})>;\n    kernel.ownership_contract (v0) [] [{contract_attributes}]: <({view_type}) -> ()>;\n    kernel.return () [] []: <() -> ()>\n}}"
+        )
+    };
+    let valid_source = source("kernel.ranked_view <32,true,[8]>", "Global", attributes);
+    let parsed = parse_from_str(Operation::top_level_parser(), context, &valid_source).unwrap();
+    verify_operation(parsed, context).unwrap();
+
+    for hostile in [
+        source("kernel.ranked_view <32,false,[8]>", "Global", attributes),
+        source("kernel.ranked_view <32,true,[8]>", "Workgroup", attributes),
+        source(
+            "kernel.ranked_view <32,true,[8]>",
+            "Global",
+            "kernel_ownership_coverage: kernel.ownership_coverage ExactView",
+        ),
+        source(
+            "kernel.ranked_view <32,true,[8]>",
+            "Global",
+            &format!("{attributes}, kernel_index_value: kernel.index_value 0"),
+        ),
+    ] {
+        let operation = parse_from_str(Operation::top_level_parser(), context, &hostile).unwrap();
+        assert!(
+            verify_operation(operation, context).is_err(),
+            "forged ownership payload verified: {hostile}"
+        );
+    }
 }
 
 #[test]

@@ -1,0 +1,12 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: error[FE2O3-OWN-002]
+// CHECK: dynamic extent has no compile-time value
+builtin.func @ownership_dynamic_incomplete: builtin.function <(kernel.index ) -> ()>
+{
+  ^entry_block1v1(extent_v0: kernel.index ):
+    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 41, gpu_execution_global_x: gpu.execution_extent 8, gpu_execution_global_y: gpu.execution_extent 1, gpu_execution_global_z: gpu.execution_extent 1, gpu_execution_workgroup_x: gpu.execution_extent 4, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 2, gpu_execution_domain: gpu.execution_domain FullPhysicalWorkgroups]: <() -> ()>;
+    v1 = kernel.ranked_view (extent_v0) [] [kernel_memory_space: kernel.memory_space Global, kernel_allocation_origin: kernel.allocation_origin 17, kernel_noalias_class: kernel.noalias_class 17]: <(kernel.index ) -> (kernel.ranked_view <32,true,[0]>)>;
+    kernel.ownership_contract (v1) [] [kernel_ownership_coverage: kernel.ownership_coverage ExactView, kernel_ownership_partition: kernel.ownership_partition ExactSets]: <(kernel.ranked_view <32,true,[0]>) -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

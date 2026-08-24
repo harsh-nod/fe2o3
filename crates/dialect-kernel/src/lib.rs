@@ -41,7 +41,8 @@ pub use ranked_memory::{
     IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
     IndexType, IndexUnknownOp, IndexValueAttr, InvocationDimensionAttr, InvocationIndexOp,
     LaunchExtentAttr, MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr,
-    NoAliasClassAttr, RankedAccessOp, RankedMemoryError, RankedViewOp, RankedViewType, ReturnOp,
+    NoAliasClassAttr, OwnershipContractOp, OwnershipCoverageAttr, OwnershipPartitionAttr,
+    RankedAccessOp, RankedMemoryError, RankedViewOp, RankedViewType, ReturnOp,
     SUPPORTED_ELEMENT_WIDTHS, TrapOp, is_index_type, ranked_view_type,
 };
 pub use semantic_contract::{

@@ -118,7 +118,9 @@ impl ProductionMiddleEndEvidencePassV4 {
             KernelCheckPassKindV1::BarrierConvergence => Some(Self::BarrierConvergence),
             KernelCheckPassKindV1::WorkgroupMemory => Some(Self::WorkgroupMemory),
             KernelCheckPassKindV1::SemanticRefinement => Some(Self::SemanticRefinement),
-            KernelCheckPassKindV1::Structural | KernelCheckPassKindV1::ControlFlow => None,
+            KernelCheckPassKindV1::Structural
+            | KernelCheckPassKindV1::ControlFlow
+            | KernelCheckPassKindV1::HierarchicalOwnership => None,
         }
     }
 }

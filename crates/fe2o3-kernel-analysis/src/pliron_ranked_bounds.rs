@@ -16,9 +16,9 @@ use dialect_kernel::{
     CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DeterministicJoinOp, DimensionOp,
     IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
     IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexUnknownOp, InvocationIndexOp,
-    MAX_RANKED_MEMORY_RANK, RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp,
-    ReturnOp, SemanticBinaryOp, SemanticConstantOp, SemanticSymbolOp, TensorLayoutOp, TrapOp,
-    ranked_view_type,
+    MAX_RANKED_MEMORY_RANK, OwnershipContractOp, RankedAccessOp, RankedViewOp, RankedViewType,
+    RequireEquivalentOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp, SemanticSymbolOp,
+    TensorLayoutOp, TrapOp, ranked_view_type,
 };
 use dialect_proof::{EvidenceRefOp, ObligationOp, RequireRefinementOp};
 use pliron::{
@@ -275,6 +275,7 @@ enum RankedOperationKind {
     CheckedRowStripedIndex2D,
     Dimension,
     RankedAccess,
+    OwnershipContract,
     AllocationEffect,
     IndexLessThanBranch,
     IndexLessThanBranchArgs,
@@ -339,6 +340,8 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         Some(RankedOperationKind::Dimension)
     } else if operation.downcast_ref::<RankedAccessOp>().is_some() {
         Some(RankedOperationKind::RankedAccess)
+    } else if operation.downcast_ref::<OwnershipContractOp>().is_some() {
+        Some(RankedOperationKind::OwnershipContract)
     } else if operation.downcast_ref::<AllocationEffectOp>().is_some() {
         Some(RankedOperationKind::AllocationEffect)
     } else if operation.downcast_ref::<IndexLessThanBranchOp>().is_some() {

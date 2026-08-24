@@ -211,6 +211,28 @@ pub enum AccessKindAttr {
     AtomicReadModifyWrite,
 }
 
+/// Coverage expected from the writes associated with an ownership contract.
+///
+/// The attribute describes the obligation only. Whole-function analysis must
+/// derive the owners from actual `kernel.access` operations.
+#[pliron_attr(name = "kernel.ownership_coverage", format, verifier = "succ")]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum OwnershipCoverageAttr {
+    /// Every logical element of the ranked view has exactly one invocation
+    /// owner after guarded control flow is applied.
+    ExactView,
+}
+
+/// Shape requirement for hierarchy-level ownership summaries.
+#[pliron_attr(name = "kernel.ownership_partition", format, verifier = "succ")]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum OwnershipPartitionAttr {
+    /// Subgroup and workgroup regions may be arbitrary exact sets.
+    ExactSets,
+    /// Every nonempty subgroup and workgroup region must be a dense rectangle.
+    DenseRectangles,
+}
+
 /// Ordering requested by one target-neutral atomic access.
 #[pliron_attr(name = "kernel.atomic_ordering", format, verifier = "succ")]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -1225,6 +1247,123 @@ impl Verify for RankedAccessOp {
     }
 }
 
+/// Requests a hierarchy-level ownership proof for one logical output view.
+///
+/// This operation is inert metadata. Its local verifier establishes only that
+/// the operand is a writable global ranked view and that the payload is
+/// closed. The hierarchy ownership compiler pass proves bounds, injectivity,
+/// coverage, and subgroup/workgroup/grid partitioning from actual writes.
+#[pliron_op(
+    name = "kernel.ownership_contract",
+    format,
+    interfaces = [NResultsInterface<0>, NRegionsInterface<0>],
+    attributes = (
+        kernel_ownership_coverage: OwnershipCoverageAttr,
+        kernel_ownership_partition: OwnershipPartitionAttr
+    )
+)]
+pub struct OwnershipContractOp;
+
+impl OwnershipContractOp {
+    pub fn new(
+        context: &mut Context,
+        view: Value,
+        coverage: OwnershipCoverageAttr,
+        partition: OwnershipPartitionAttr,
+    ) -> Result<Self, RankedMemoryError> {
+        let view_type =
+            ranked_view_type(view, context).ok_or(RankedMemoryError::ForeignViewType)?;
+        if !view_type.deref(context).writable() {
+            return Err(RankedMemoryError::WriteThroughReadOnlyView);
+        }
+        let Some(definition) = view.defining_op() else {
+            return Err(RankedMemoryError::ForeignViewType);
+        };
+        let definition = Operation::get_op_dyn(definition, context);
+        let Some(view_op) = definition.downcast_ref::<RankedViewOp>() else {
+            return Err(RankedMemoryError::ForeignViewType);
+        };
+        if view_op.memory_space(context) != Some(MemorySpaceAttr::Global) {
+            return Err(RankedMemoryError::MalformedPayload(
+                "kernel.ownership_contract requires a global ranked view",
+            ));
+        }
+        let operation = Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![],
+            vec![view],
+            vec![],
+            0,
+        );
+        let op = Self::from_operation(operation);
+        op.set_attr_kernel_ownership_coverage(context, coverage);
+        op.set_attr_kernel_ownership_partition(context, partition);
+        Ok(op)
+    }
+
+    pub fn view(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_operand(0)
+    }
+
+    pub fn coverage(&self, context: &Context) -> Option<OwnershipCoverageAttr> {
+        self.get_attr_kernel_ownership_coverage(context)
+            .map(|coverage| *coverage)
+    }
+
+    pub fn partition(&self, context: &Context) -> Option<OwnershipPartitionAttr> {
+        self.get_attr_kernel_ownership_partition(context)
+            .map(|partition| *partition)
+    }
+}
+
+impl Verify for OwnershipContractOp {
+    fn verify(&self, context: &Context) -> PlironResult<()> {
+        verify_no_regions_results_successors(self, context, 0, 0)?;
+        let operation = self.get_operation();
+        let operation = operation.deref(context);
+        if operation.get_num_operands() != 1
+            || payload_attribute_count(&operation) != 2
+            || self.coverage(context).is_none()
+            || self.partition(context).is_none()
+        {
+            return verify_err!(
+                self.loc(context),
+                RankedMemoryError::MalformedPayload(
+                    "kernel.ownership_contract has malformed payload"
+                )
+            );
+        }
+        let view = self.view(context);
+        let Some(view_type) = ranked_view_type(view, context) else {
+            return verify_err!(self.loc(context), RankedMemoryError::ForeignViewType);
+        };
+        if !view_type.deref(context).writable() {
+            return verify_err!(
+                self.loc(context),
+                RankedMemoryError::WriteThroughReadOnlyView
+            );
+        }
+        let Some(definition) = view.defining_op() else {
+            return verify_err!(self.loc(context), RankedMemoryError::ForeignViewType);
+        };
+        let definition = Operation::get_op_dyn(definition, context);
+        if definition
+            .downcast_ref::<RankedViewOp>()
+            .and_then(|view| view.memory_space(context))
+            != Some(MemorySpaceAttr::Global)
+        {
+            return verify_err!(
+                self.loc(context),
+                RankedMemoryError::MalformedPayload(
+                    "kernel.ownership_contract requires a global ranked view"
+                )
+            );
+        }
+        Ok(())
+    }
+}
+
 /// Conservative whole-allocation memory effect with no fabricated coordinate.
 #[pliron_op(
     name = "kernel.allocation_effect",
@@ -2196,6 +2335,8 @@ fn verify_no_regions_results_successors(
                     | "kernel_elements_per_lane"
                     | "kernel_lanes_per_row"
                     | "kernel_row_striped_elements_per_lane"
+                    | "kernel_ownership_coverage"
+                    | "kernel_ownership_partition"
             )
     });
     if raw.get_num_results() != results

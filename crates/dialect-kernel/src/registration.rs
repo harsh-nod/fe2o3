@@ -11,10 +11,11 @@ use crate::{
     IndexConstantOp, IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp,
     IndexLessThanBranchOp, IndexType, IndexUnknownOp, IndexValueAttr, InvocationDimensionAttr,
     InvocationIndexOp, IterationDomainAttr, LaunchExtentAttr, MemorySpaceAttr, NoAliasClassAttr,
-    RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp,
-    SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr, SemanticConstantOp,
-    SemanticScalarType, SemanticSymbolAttr, SemanticSymbolOp, TensorConvergenceAttr,
-    TensorFragmentAttr, TensorInstructionAttr, TensorLayoutOp, TrapOp,
+    OwnershipContractOp, OwnershipCoverageAttr, OwnershipPartitionAttr, RankedAccessOp,
+    RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp, SemanticBinaryKindAttr,
+    SemanticBinaryOp, SemanticConstantAttr, SemanticConstantOp, SemanticScalarType,
+    SemanticSymbolAttr, SemanticSymbolOp, TensorConvergenceAttr, TensorFragmentAttr,
+    TensorInstructionAttr, TensorLayoutOp, TrapOp,
 };
 
 fn registration_hook(
@@ -36,6 +37,8 @@ fn registration_hook(
     service.register_attribute::<MemorySpaceAttr>()?;
     service.register_attribute::<AllocationOriginAttr>()?;
     service.register_attribute::<NoAliasClassAttr>()?;
+    service.register_attribute::<OwnershipCoverageAttr>()?;
+    service.register_attribute::<OwnershipPartitionAttr>()?;
     service.register_attribute::<InvocationDimensionAttr>()?;
     service.register_attribute::<LaunchExtentAttr>()?;
     service.register_attribute::<AnalysisSplitControlCountAttr>()?;
@@ -58,6 +61,7 @@ fn registration_hook(
     service.register_operation::<CheckedRowStripedIndex2DOp>()?;
     service.register_operation::<DimensionOp>()?;
     service.register_operation::<RankedAccessOp>()?;
+    service.register_operation::<OwnershipContractOp>()?;
     service.register_operation::<AllocationEffectOp>()?;
     service.register_operation::<IndexLessThanBranchOp>()?;
     service.register_operation::<IndexLessThanBranchArgsOp>()?;

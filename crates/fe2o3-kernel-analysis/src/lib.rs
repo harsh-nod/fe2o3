@@ -18,6 +18,8 @@ mod pliron_atomic_legality;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_barrier;
 #[cfg(feature = "pliron-analysis")]
+mod pliron_hierarchical_ownership;
+#[cfg(feature = "pliron-analysis")]
 mod pliron_invocation_trace;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_pipeline;
@@ -57,6 +59,8 @@ pub use physical_machine_effect::*;
 pub use pliron_atomic_legality::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_barrier::*;
+#[cfg(feature = "pliron-analysis")]
+pub use pliron_hierarchical_ownership::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_pipeline::*;
 #[cfg(feature = "pliron-analysis")]
