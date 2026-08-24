@@ -9,10 +9,31 @@ use fe2o3_kernel_ir::{
     derive_kernel_memory_obligations_for_launch,
 };
 
-use crate::{ProductionSemanticKirErrorV1, ProductionSemanticKirOwnerV1};
+use crate::{
+    ProductionMemoryDischargeFailureV1, ProductionSemanticKirErrorV1, ProductionSemanticKirOwnerV1,
+};
 
 /// The per-active-axis extent of the smallest structural witness launch.
 pub const PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1: u64 = 2;
+const FORMAL_REASON_DIAGNOSTIC_LIMIT_V1: usize = 16;
+
+fn format_formal_reasons(
+    formatter: &mut fmt::Formatter<'_>,
+    reasons: &[FormalMemoryIncompleteReason],
+) -> fmt::Result {
+    formatter
+        .debug_list()
+        .entries(reasons.iter().take(FORMAL_REASON_DIAGNOSTIC_LIMIT_V1))
+        .finish()?;
+    if reasons.len() > FORMAL_REASON_DIAGNOSTIC_LIMIT_V1 {
+        write!(
+            formatter,
+            " ({} more)",
+            reasons.len() - FORMAL_REASON_DIAGNOSTIC_LIMIT_V1
+        )?;
+    }
+    Ok(())
+}
 
 /// Fail-closed diagnostics from production formal-memory admission.
 #[derive(Debug)]
@@ -30,6 +51,20 @@ pub enum ProductionFormalMemoryErrorV1 {
     Incomplete {
         /// Canonically ordered reasons formal extraction was incomplete.
         reasons: Box<[FormalMemoryIncompleteReason]>,
+    },
+    /// Ranked checks could not correlate a dynamic index to its exact access.
+    UnsupportedIndexDischarge {
+        /// Canonically ordered formal reasons that required ranked discharge.
+        reasons: Box<[FormalMemoryIncompleteReason]>,
+        /// Stable failure at the ranked/Kernel-IR composition boundary.
+        detail: ProductionMemoryDischargeFailureV1,
+    },
+    /// Ranked checks could not discharge structurally guarded accesses.
+    GuardedAccessDischarge {
+        /// Canonically ordered formal reasons that required ranked discharge.
+        reasons: Box<[FormalMemoryIncompleteReason]>,
+        /// Stable failure at the ranked/Kernel-IR composition boundary.
+        detail: ProductionMemoryDischargeFailureV1,
     },
     /// The modeled memory accesses contain an inherent cross-invocation conflict.
     InterInvocationConflicts {
@@ -49,12 +84,30 @@ impl fmt::Display for ProductionFormalMemoryErrorV1 {
                 "formal memory admission requires exactly one kernel; found {actual}",
             ),
             Self::Analysis(error) => write!(formatter, "formal memory extraction failed: {error}"),
-            Self::Incomplete { reasons } => write!(
-                formatter,
-                "formal memory extraction is incomplete for {} reason(s): {:?}",
-                reasons.len(),
-                reasons.first(),
-            ),
+            Self::Incomplete { reasons } => {
+                write!(
+                    formatter,
+                    "formal memory extraction is incomplete for {} reason(s): ",
+                    reasons.len(),
+                )?;
+                format_formal_reasons(formatter, reasons)
+            }
+            Self::GuardedAccessDischarge { reasons, detail } => {
+                write!(
+                    formatter,
+                    "ranked checks could not discharge {} guarded access reason(s): {detail}; locations: ",
+                    reasons.len(),
+                )?;
+                format_formal_reasons(formatter, reasons)
+            }
+            Self::UnsupportedIndexDischarge { reasons, detail } => {
+                write!(
+                    formatter,
+                    "ranked checks could not discharge {} unsupported index reason(s): {detail}; locations: ",
+                    reasons.len(),
+                )?;
+                format_formal_reasons(formatter, reasons)
+            }
             Self::InterInvocationConflicts { conflicts } => write!(
                 formatter,
                 "formal memory admission found {} inter-invocation conflict(s)",
@@ -74,6 +127,8 @@ impl Error for ProductionFormalMemoryErrorV1 {
             Self::Analysis(error) => Some(error),
             Self::KernelCount { .. }
             | Self::Incomplete { .. }
+            | Self::UnsupportedIndexDischarge { .. }
+            | Self::GuardedAccessDischarge { .. }
             | Self::InterInvocationConflicts { .. }
             | Self::ObligationMismatch => None,
         }
@@ -223,44 +278,46 @@ fn derive_admitted_obligations(
             (obligations, Vec::new().into_boxed_slice())
         }
         FormalMemoryObligationAnalysis::Incomplete { partial, reasons } => {
-            let guarded_locations = reasons
-                .iter()
-                .filter_map(|reason| match reason {
+            let mut guarded_reasons = Vec::new();
+            let mut guarded_locations = Vec::new();
+            let mut unsupported_indices = Vec::new();
+            let mut reasons_are_ranked_dischargeable = true;
+            for reason in &reasons {
+                match reason {
                     FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof { location } => {
-                        Some(*location)
+                        guarded_reasons.push(reason.clone());
+                        guarded_locations.push(*location);
                     }
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            let unsupported_indices = reasons
-                .iter()
-                .filter(|reason| {
-                    matches!(
-                        reason,
-                        FormalMemoryIncompleteReason::UnsupportedIndexExpression { .. }
-                    )
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            let reasons_are_ranked_dischargeable = reasons.iter().all(|reason| {
-                matches!(
-                    reason,
-                    FormalMemoryIncompleteReason::UnsupportedIndexExpression { .. }
-                        | FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof { .. }
-                )
-            });
-            if !reasons_are_ranked_dischargeable
-                || (!unsupported_indices.is_empty()
-                    && !semantic_kir.retained_generic_checks_discharge_unsupported_indices(
-                        &unsupported_indices,
-                    ))
-                || (!guarded_locations.is_empty()
-                    && !semantic_kir
-                        .retained_generic_checks_discharge_guarded_accesses(&guarded_locations))
-            {
+                    FormalMemoryIncompleteReason::UnsupportedIndexExpression { .. } => {
+                        unsupported_indices.push(reason.clone());
+                    }
+                    _ => reasons_are_ranked_dischargeable = false,
+                }
+            }
+            if !reasons_are_ranked_dischargeable {
                 return Err(ProductionFormalMemoryErrorV1::Incomplete {
                     reasons: reasons.into_boxed_slice(),
                 });
+            }
+            if !unsupported_indices.is_empty() {
+                if let Err(detail) = semantic_kir
+                    .retained_generic_checks_discharge_unsupported_indices(&unsupported_indices)
+                {
+                    return Err(ProductionFormalMemoryErrorV1::UnsupportedIndexDischarge {
+                        reasons: unsupported_indices.into_boxed_slice(),
+                        detail,
+                    });
+                }
+            }
+            if !guarded_locations.is_empty() {
+                if let Err(detail) = semantic_kir
+                    .retained_generic_checks_discharge_guarded_accesses(&guarded_locations)
+                {
+                    return Err(ProductionFormalMemoryErrorV1::GuardedAccessDischarge {
+                        reasons: guarded_reasons.into_boxed_slice(),
+                        detail,
+                    });
+                }
             }
             (partial, reasons.into_boxed_slice())
         }
@@ -285,4 +342,56 @@ fn witness_extents(domain: &LaunchDomain) -> [u64; 3] {
         };
     }
     witness
+}
+
+#[cfg(test)]
+mod tests {
+    use fe2o3_kernel_ir::{BlockId, FunctionOperationLocation, ValueId};
+
+    use super::*;
+
+    fn guarded_reason(operation_index: usize) -> FormalMemoryIncompleteReason {
+        FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof {
+            location: FunctionOperationLocation::new(BlockId(2), operation_index),
+        }
+    }
+
+    #[test]
+    fn discharge_diagnostics_name_exact_access_bound_and_bounded_reason_set() {
+        let reasons = (0..17).map(guarded_reason).collect::<Vec<_>>();
+        let error = ProductionFormalMemoryErrorV1::GuardedAccessDischarge {
+            reasons: reasons.into_boxed_slice(),
+            detail: ProductionMemoryDischargeFailureV1::GuardedBound {
+                location: FunctionOperationLocation::new(BlockId(2), 3),
+                index: ValueId(41),
+                slice: ValueId(7),
+                detail: "guard predicate does not prove the selected index is in bounds",
+            },
+        };
+
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains("17 guarded access reason(s)"));
+        assert!(diagnostic.contains("operation_index: 3"));
+        assert!(diagnostic.contains("index ValueId(41)"));
+        assert!(diagnostic.contains("slice ValueId(7)"));
+        assert!(diagnostic.contains("(1 more)"));
+    }
+
+    #[test]
+    fn unsupported_index_diagnostic_names_the_exact_consumer() {
+        let location = FunctionOperationLocation::new(BlockId(5), 8);
+        let error = ProductionFormalMemoryErrorV1::UnsupportedIndexDischarge {
+            reasons: vec![guarded_reason(0)].into_boxed_slice(),
+            detail: ProductionMemoryDischargeFailureV1::Access {
+                location,
+                detail: "semantic memory access site has no ranked access receipt",
+            },
+        };
+
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains("unsupported index reason(s)"));
+        assert!(diagnostic.contains("semantic memory access site has no ranked access receipt"));
+        assert!(diagnostic.contains("block: BlockId(5)"));
+        assert!(diagnostic.contains("operation_index: 8"));
+    }
 }

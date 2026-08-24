@@ -780,32 +780,46 @@ impl ProductionSemanticKirOwnerV1 {
     pub(crate) fn retained_generic_checks_discharge_unsupported_indices(
         &self,
         reasons: &[FormalMemoryIncompleteReason],
-    ) -> bool {
-        self.generic_checks.as_ref().is_some_and(|checks| {
-            mandatory_generic_checks_are_clean(&checks.lowering)
-                && unsupported_indices_match_ranked_sources(
-                    &self.module,
-                    &self.correspondence,
-                    &checks.lowering,
-                    &checks.access_sources,
-                    reasons,
-                    self.limits.max_operations,
-                )
-        })
+    ) -> Result<(), ProductionMemoryDischargeFailureV1> {
+        let Some(checks) = &self.generic_checks else {
+            return Err(ProductionMemoryDischargeFailureV1::stage(
+                "verified Kernel IR does not retain mandatory ranked checks",
+            ));
+        };
+        if !mandatory_generic_checks_are_clean(&checks.lowering) {
+            return Err(ProductionMemoryDischargeFailureV1::stage(
+                "a retained mandatory ranked check is not clean",
+            ));
+        }
+        unsupported_indices_match_ranked_sources_result(
+            &self.module,
+            &self.correspondence,
+            &checks.lowering,
+            &checks.access_sources,
+            reasons,
+            self.limits.max_operations,
+        )
     }
 
     pub(crate) fn retained_generic_checks_discharge_guarded_accesses(
         &self,
         guarded_locations: &[FunctionOperationLocation],
-    ) -> bool {
-        self.generic_checks
-            .as_ref()
-            .is_some_and(|checks| mandatory_generic_checks_are_clean(&checks.lowering))
-            && guarded_accesses_have_structural_bounds(
-                &self.module,
-                guarded_locations,
-                self.limits.max_operations,
-            )
+    ) -> Result<(), ProductionMemoryDischargeFailureV1> {
+        let Some(checks) = &self.generic_checks else {
+            return Err(ProductionMemoryDischargeFailureV1::stage(
+                "verified Kernel IR does not retain mandatory ranked checks",
+            ));
+        };
+        if !mandatory_generic_checks_are_clean(&checks.lowering) {
+            return Err(ProductionMemoryDischargeFailureV1::stage(
+                "a retained mandatory ranked check is not clean",
+            ));
+        }
+        guarded_accesses_have_structural_bounds_result(
+            &self.module,
+            guarded_locations,
+            self.limits.max_operations,
+        )
     }
     /// Exact target-neutral lowering evidence is not artifact or launch authority.
     pub const fn grants_artifact_or_launch_authority(&self) -> bool {
@@ -911,52 +925,138 @@ struct RankedCorrelationIndexV1 {
     view_definitions: BTreeMap<ProductionRankedValueIdV1, RankedViewDefinitionV1>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Exact failure at the ranked-check/Kernel-IR memory-proof boundary.
+pub enum ProductionMemoryDischargeFailureV1 {
+    /// A module-wide correlation or resource invariant failed.
+    Stage(&'static str),
+    /// One exact Kernel IR access failed correlation.
+    Access {
+        /// Location of the failing access or pointer operation.
+        location: FunctionOperationLocation,
+        /// Stable failure classification.
+        detail: &'static str,
+    },
+    /// A guarded access lacks proof of its exact selected index bound.
+    GuardedBound {
+        /// Location of the failing guarded load.
+        location: FunctionOperationLocation,
+        /// Index selected when the guard is true.
+        index: ValueId,
+        /// Slice whose dynamic length must bound `index`.
+        slice: ValueId,
+        /// Stable failure classification.
+        detail: &'static str,
+    },
+}
+
+impl ProductionMemoryDischargeFailureV1 {
+    const fn stage(detail: &'static str) -> Self {
+        Self::Stage(detail)
+    }
+
+    const fn access(location: FunctionOperationLocation, detail: &'static str) -> Self {
+        Self::Access { location, detail }
+    }
+
+    const fn guarded_bound(
+        location: FunctionOperationLocation,
+        index: ValueId,
+        slice: ValueId,
+        detail: &'static str,
+    ) -> Self {
+        Self::GuardedBound {
+            location,
+            index,
+            slice,
+            detail,
+        }
+    }
+}
+
+impl fmt::Display for ProductionMemoryDischargeFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Stage(detail) => formatter.write_str(detail),
+            Self::Access { location, detail } => {
+                write!(formatter, "{detail} at {location:?}")
+            }
+            Self::GuardedBound {
+                location,
+                index,
+                slice,
+                detail,
+            } => write!(
+                formatter,
+                "{detail} at {location:?}: index {index:?} must be below the length of slice {slice:?}",
+            ),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct IndexedUnsupportedReasonV1 {
     pointer: ValueId,
     allocation_parameter: u32,
+    location: FunctionOperationLocation,
 }
 
-fn unsupported_indices_match_ranked_sources(
+fn unsupported_indices_match_ranked_sources_result(
     module: &Module,
     correspondence: &SemanticKirCorrespondenceV1,
     lowering: &ProductionRankedKernelLoweringInputV1,
     sources: &[ProductionRankedAccessSourceV1],
     reasons: &[FormalMemoryIncompleteReason],
     max_operations: usize,
-) -> bool {
+) -> Result<(), ProductionMemoryDischargeFailureV1> {
     if reasons.len() > max_operations || sources.len() > max_operations {
-        return false;
+        return Err(ProductionMemoryDischargeFailureV1::stage(
+            "unsupported-index correlation exceeded its input resource limit",
+        ));
     }
     let [kernel] = module.kernels.as_slice() else {
-        return false;
+        return Err(ProductionMemoryDischargeFailureV1::stage(
+            "unsupported-index correlation requires exactly one kernel",
+        ));
     };
     let Some(function) = module
         .functions
         .iter()
         .find(|function| function.id == kernel.entry)
     else {
-        return false;
+        return Err(ProductionMemoryDischargeFailureV1::stage(
+            "unsupported-index correlation cannot find the selected kernel entry",
+        ));
     };
     let Some(body) = function.body.as_ref() else {
-        return false;
+        return Err(ProductionMemoryDischargeFailureV1::stage(
+            "unsupported-index correlation selected a kernel declaration without a body",
+        ));
     };
     let Some(steps) =
         max_operations.checked_mul(UNSUPPORTED_INDEX_CORRELATION_STEPS_PER_OPERATION_V1)
     else {
-        return false;
+        return Err(ProductionMemoryDischargeFailureV1::stage(
+            "unsupported-index correlation resource budget overflowed",
+        ));
     };
     let mut budget = UnsupportedIndexCorrelationBudgetV1 { remaining: steps };
     let Some(kir) = build_kir_correlation_index(body, max_operations, &mut budget) else {
-        return false;
+        return Err(ProductionMemoryDischargeFailureV1::stage(
+            "unsupported-index correlation could not index exact Kernel IR",
+        ));
     };
     let Some(semantic_sites) = index_semantic_access_sites(correspondence, &kir, &mut budget)
     else {
-        return false;
+        return Err(ProductionMemoryDischargeFailureV1::stage(
+            "unsupported-index correlation could not index semantic access sites",
+        ));
     };
     let Some(ranked) = index_ranked_correlation(lowering, sources, max_operations, &mut budget)
     else {
-        return false;
+        return Err(ProductionMemoryDischargeFailureV1::stage(
+            "unsupported-index correlation could not index ranked access receipts",
+        ));
     };
 
     let mut indexed_reasons = Vec::with_capacity(reasons.len());
@@ -968,16 +1068,27 @@ fn unsupported_indices_match_ranked_sources(
             allocation,
         } = reason
         else {
-            return false;
+            return Err(ProductionMemoryDischargeFailureV1::stage(
+                "unsupported-index correlation received another incomplete-reason kind",
+            ));
         };
         let Some(defining_operation) = kir.operations.get(location) else {
-            return false;
+            return Err(ProductionMemoryDischargeFailureV1::access(
+                *location,
+                "unsupported index location is absent from exact Kernel IR",
+            ));
         };
         let OperationKind::GetElementPointer { offset, .. } = defining_operation.kind else {
-            return false;
+            return Err(ProductionMemoryDischargeFailureV1::access(
+                *location,
+                "unsupported index location is not a pointer-offset operation",
+            ));
         };
         let [pointer] = defining_operation.results.as_slice() else {
-            return false;
+            return Err(ProductionMemoryDischargeFailureV1::access(
+                *location,
+                "unsupported pointer offset does not define exactly one pointer",
+            ));
         };
         if offset != *index
             || !kir
@@ -986,50 +1097,95 @@ fn unsupported_indices_match_ranked_sources(
                 .is_some_and(|definition| std::ptr::eq(*definition, *defining_operation))
             || budget.charge().is_none()
         {
-            return false;
+            return Err(ProductionMemoryDischargeFailureV1::access(
+                *location,
+                "unsupported index does not match its exact pointer definition",
+            ));
         }
         indexed_reasons.push(IndexedUnsupportedReasonV1 {
             pointer: pointer.id,
             allocation_parameter: allocation.parameter_index(),
+            location: *location,
         });
         reason_pointers.insert(pointer.id);
     }
     let Some(consumers_by_pointer) =
         propagate_pointer_consumers(&kir, &reason_pointers, &mut budget)
     else {
-        return false;
+        return Err(ProductionMemoryDischargeFailureV1::stage(
+            "unsupported-index correlation could not propagate pointer consumers",
+        ));
     };
 
     let mut used_ranked_locations = BTreeSet::new();
     for reason in indexed_reasons {
         if budget.charge().is_none() {
-            return false;
+            return Err(ProductionMemoryDischargeFailureV1::stage(
+                "unsupported-index correlation exhausted its work budget",
+            ));
         }
         let Some(consumers) = consumers_by_pointer.get(&reason.pointer) else {
-            return false;
+            return Err(ProductionMemoryDischargeFailureV1::access(
+                reason.location,
+                "unsupported pointer has no memory consumer",
+            ));
         };
-        let [consumer] = consumers.as_slice() else {
-            return false;
-        };
-        let Some(site) = semantic_sites.get(&consumer.location) else {
-            return false;
-        };
-        let Some(source) = ranked.sources_by_site.get(site) else {
-            return false;
-        };
-        if !used_ranked_locations.insert((source.ranked_block, source.ranked_operation))
-            || !indexed_ranked_source_matches_allocation(
-                &ranked,
-                source,
-                consumer.access,
-                consumer.memory_space,
-                reason.allocation_parameter,
-            )
-        {
-            return false;
+        if consumers.is_empty() {
+            return Err(ProductionMemoryDischargeFailureV1::access(
+                reason.location,
+                "unsupported pointer has no memory consumer",
+            ));
+        }
+        for consumer in consumers {
+            let Some(site) = semantic_sites.get(&consumer.location) else {
+                return Err(ProductionMemoryDischargeFailureV1::access(
+                    consumer.location,
+                    "Kernel IR memory consumer has no exact semantic access site",
+                ));
+            };
+            let Some(source) = ranked.sources_by_site.get(site) else {
+                return Err(ProductionMemoryDischargeFailureV1::access(
+                    consumer.location,
+                    "semantic memory access site has no ranked access receipt",
+                ));
+            };
+            if !used_ranked_locations.insert((source.ranked_block, source.ranked_operation))
+                || !indexed_ranked_source_matches_allocation(
+                    &ranked,
+                    source,
+                    consumer.access,
+                    consumer.memory_space,
+                    reason.allocation_parameter,
+                )
+            {
+                return Err(ProductionMemoryDischargeFailureV1::access(
+                    consumer.location,
+                    "ranked access receipt does not match the exact allocation or access kind",
+                ));
+            }
         }
     }
-    true
+    Ok(())
+}
+
+#[cfg(test)]
+fn unsupported_indices_match_ranked_sources(
+    module: &Module,
+    correspondence: &SemanticKirCorrespondenceV1,
+    lowering: &ProductionRankedKernelLoweringInputV1,
+    sources: &[ProductionRankedAccessSourceV1],
+    reasons: &[FormalMemoryIncompleteReason],
+    max_operations: usize,
+) -> bool {
+    unsupported_indices_match_ranked_sources_result(
+        module,
+        correspondence,
+        lowering,
+        sources,
+        reasons,
+        max_operations,
+    )
+    .is_ok()
 }
 
 fn build_kir_correlation_index<'module>(
@@ -1454,19 +1610,25 @@ impl GuardedAddressProofBudgetV1 {
     }
 }
 
-fn guarded_accesses_have_structural_bounds(
+fn guarded_accesses_have_structural_bounds_result(
     module: &Module,
     guarded_locations: &[FunctionOperationLocation],
     max_operations: usize,
-) -> bool {
+) -> Result<(), ProductionMemoryDischargeFailureV1> {
     let [kernel] = module.kernels.as_slice() else {
-        return false;
+        return Err(ProductionMemoryDischargeFailureV1::stage(
+            "guarded proof requires exactly one kernel",
+        ));
     };
     let Some(function) = module.function(&kernel.entry) else {
-        return false;
+        return Err(ProductionMemoryDischargeFailureV1::stage(
+            "guarded proof cannot find the selected kernel entry",
+        ));
     };
     let Some(body) = function.body.as_ref() else {
-        return false;
+        return Err(ProductionMemoryDischargeFailureV1::stage(
+            "guarded proof selected a kernel declaration without a body",
+        ));
     };
 
     let mut definitions = BTreeMap::new();
@@ -1475,7 +1637,9 @@ fn guarded_accesses_have_structural_bounds(
             .insert(*parameter, GuardedAddressDefinitionV1::Parameter)
             .is_some()
         {
-            return false;
+            return Err(ProductionMemoryDischargeFailureV1::stage(
+                "guarded proof found a duplicate function parameter definition",
+            ));
         }
     }
 
@@ -1487,20 +1651,29 @@ fn guarded_accesses_have_structural_bounds(
                 .insert(parameter.id, GuardedAddressDefinitionV1::Parameter)
                 .is_some()
             {
-                return false;
+                return Err(ProductionMemoryDischargeFailureV1::stage(
+                    "guarded proof found a duplicate block parameter definition",
+                ));
             }
         }
         for (ordinal, operation) in block.operations.iter().enumerate() {
             operation_count = match operation_count.checked_add(1) {
                 Some(count) if count <= max_operations => count,
-                _ => return false,
+                _ => {
+                    return Err(ProductionMemoryDischargeFailureV1::stage(
+                        "guarded proof exceeded the operation resource limit",
+                    ));
+                }
             };
             for result in &operation.results {
                 if definitions
                     .insert(result.id, GuardedAddressDefinitionV1::Operation(operation))
                     .is_some()
                 {
-                    return false;
+                    return Err(ProductionMemoryDischargeFailureV1::access(
+                        FunctionOperationLocation::new(block.id, ordinal),
+                        "guarded proof found a duplicate operation result definition",
+                    ));
                 }
             }
             if matches!(
@@ -1510,7 +1683,10 @@ fn guarded_accesses_have_structural_bounds(
             ) {
                 let location = FunctionOperationLocation::new(block.id, ordinal);
                 if actual.insert(location, operation).is_some() {
-                    return false;
+                    return Err(ProductionMemoryDischargeFailureV1::access(
+                        location,
+                        "guarded proof found a duplicate guarded-load location",
+                    ));
                 }
             }
         }
@@ -1521,20 +1697,51 @@ fn guarded_accesses_have_structural_bounds(
         || provided.len() != guarded_locations.len()
         || actual.keys().copied().collect::<BTreeSet<_>>() != provided
     {
-        return false;
+        return Err(ProductionMemoryDischargeFailureV1::stage(
+            "formal guarded-load locations do not match retained Kernel IR",
+        ));
     }
 
     let Some(proof_steps) =
         max_operations.checked_mul(GUARDED_ADDRESS_PROOF_STEPS_PER_OPERATION_V1)
     else {
-        return false;
+        return Err(ProductionMemoryDischargeFailureV1::stage(
+            "guarded proof resource budget overflowed",
+        ));
     };
     let mut budget = GuardedAddressProofBudgetV1 {
         remaining: proof_steps,
     };
-    actual
-        .values()
-        .all(|operation| guarded_load_has_structural_bound(operation, &definitions, &mut budget))
+    for (location, operation) in actual {
+        if guarded_load_has_structural_bound(operation, &definitions, &mut budget) {
+            continue;
+        }
+        if let Some((_predicate, index, slice)) =
+            guarded_load_bound_subject(operation, &definitions)
+        {
+            return Err(ProductionMemoryDischargeFailureV1::guarded_bound(
+                location,
+                index,
+                slice,
+                "guard predicate does not prove the selected index is in bounds",
+            ));
+        }
+        return Err(ProductionMemoryDischargeFailureV1::access(
+            location,
+            "guarded load does not retain the required slice/index/zero-fallback structure",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn guarded_accesses_have_structural_bounds(
+    module: &Module,
+    guarded_locations: &[FunctionOperationLocation],
+    max_operations: usize,
+) -> bool {
+    guarded_accesses_have_structural_bounds_result(module, guarded_locations, max_operations)
+        .is_ok()
 }
 
 fn guarded_load_has_structural_bound(
@@ -1542,21 +1749,42 @@ fn guarded_load_has_structural_bound(
     definitions: &BTreeMap<ValueId, GuardedAddressDefinitionV1<'_>>,
     budget: &mut GuardedAddressProofBudgetV1,
 ) -> bool {
+    let Some((predicate, index, slice)) = guarded_load_bound_subject(operation, definitions) else {
+        return false;
+    };
+    let mut visiting = BTreeSet::new();
+    let mut memo = BTreeMap::new();
+    predicate_implies_slice_bound(
+        predicate,
+        index,
+        slice,
+        definitions,
+        budget,
+        &mut visiting,
+        &mut memo,
+    )
+    .unwrap_or(false)
+}
+
+fn guarded_load_bound_subject(
+    operation: &Operation,
+    definitions: &BTreeMap<ValueId, GuardedAddressDefinitionV1<'_>>,
+) -> Option<(ValueId, ValueId, ValueId)> {
     let OperationKind::GuardedLoad {
         pointer, predicate, ..
     } = &operation.kind
     else {
-        return false;
+        return None;
     };
     let Some(OperationKind::GetElementPointer { base, offset }) =
         operation_definition(definitions, *pointer).map(|operation| &operation.kind)
     else {
-        return false;
+        return None;
     };
     let Some(OperationKind::SliceData { slice }) =
         operation_definition(definitions, *base).map(|operation| &operation.kind)
     else {
-        return false;
+        return None;
     };
     let Some(OperationKind::Select {
         condition,
@@ -1564,7 +1792,7 @@ fn guarded_load_has_structural_bound(
         false_value,
     }) = operation_definition(definitions, *offset).map(|operation| &operation.kind)
     else {
-        return false;
+        return None;
     };
     if *condition != *predicate
         || !matches!(
@@ -1572,21 +1800,9 @@ fn guarded_load_has_structural_bound(
             Some(OperationKind::Constant(Constant::Index(0)))
         )
     {
-        return false;
+        return None;
     }
-
-    let mut visiting = BTreeSet::new();
-    let mut memo = BTreeMap::new();
-    predicate_implies_slice_bound(
-        *predicate,
-        *index,
-        *slice,
-        definitions,
-        budget,
-        &mut visiting,
-        &mut memo,
-    )
-    .unwrap_or(false)
+    Some((*predicate, *index, *slice))
 }
 
 fn operation_definition<'module>(
@@ -8454,6 +8670,17 @@ fn lower_cast(kind: SemanticCastKindV1, from: &Type, to: &Type) -> Option<CastKi
     let (Some(from), Some(to)) = (from.as_scalar(), to.as_scalar()) else {
         return None;
     };
+    match (kind, from, to) {
+        (SemanticCastKindV1::Integer, ScalarType::U32, ScalarType::Index) => {
+            return Some(CastKind::ZeroExtend);
+        }
+        (SemanticCastKindV1::Integer, ScalarType::U64, ScalarType::Index)
+        | (SemanticCastKindV1::Integer, ScalarType::Index, ScalarType::U64) => {
+            return Some(CastKind::Bitcast);
+        }
+        _ if from == ScalarType::Index || to == ScalarType::Index => return None,
+        _ => {}
+    }
     let (from_width, to_width) = (from.bit_width()?, to.bit_width()?);
     match kind {
         SemanticCastKindV1::Integer if to.is_integer() => {
@@ -8745,6 +8972,69 @@ mod resource_tests {
         ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionSessionLimitsV1,
         compile_ranked_kernel_for_lowering_v1,
     };
+
+    #[test]
+    fn semantic_casts_use_only_the_exact_kernel_ir_index_bridges() {
+        assert_eq!(
+            lower_cast(
+                SemanticCastKindV1::Integer,
+                &Type::Scalar(ScalarType::U32),
+                &Type::INDEX,
+            ),
+            Some(CastKind::ZeroExtend)
+        );
+        assert_eq!(
+            lower_cast(
+                SemanticCastKindV1::Integer,
+                &Type::Scalar(ScalarType::U64),
+                &Type::INDEX,
+            ),
+            Some(CastKind::Bitcast)
+        );
+        assert_eq!(
+            lower_cast(
+                SemanticCastKindV1::Integer,
+                &Type::INDEX,
+                &Type::Scalar(ScalarType::U64),
+            ),
+            Some(CastKind::Bitcast)
+        );
+        for (from, to) in [
+            (ScalarType::U8, ScalarType::Index),
+            (ScalarType::U64, ScalarType::Index),
+            (ScalarType::I32, ScalarType::Index),
+            (ScalarType::Index, ScalarType::U32),
+            (ScalarType::Index, ScalarType::F64),
+        ] {
+            if (from, to) == (ScalarType::U64, ScalarType::Index) {
+                assert_eq!(
+                    lower_cast(
+                        SemanticCastKindV1::Float,
+                        &Type::Scalar(from),
+                        &Type::Scalar(to),
+                    ),
+                    None
+                );
+            } else {
+                assert_eq!(
+                    lower_cast(
+                        SemanticCastKindV1::Integer,
+                        &Type::Scalar(from),
+                        &Type::Scalar(to),
+                    ),
+                    None
+                );
+            }
+        }
+        assert_eq!(
+            lower_cast(
+                SemanticCastKindV1::Integer,
+                &Type::Scalar(ScalarType::U32),
+                &Type::Scalar(ScalarType::U64),
+            ),
+            Some(CastKind::ZeroExtend)
+        );
+    }
 
     #[test]
     fn admitted_strided_read_scalars_have_exact_byte_alignments() {
@@ -9777,6 +10067,28 @@ mod resource_tests {
     }
 
     #[test]
+    fn guarded_address_proof_audits_unreported_structural_loads() {
+        let mut fixture = generated_matrix_tail_fixture(2);
+        let operations = guarded_fixture_operations_mut(&mut fixture);
+        let always_true = operations[3].results[0].id;
+        let OperationKind::Select { condition, .. } = &mut operations[16].kind else {
+            panic!("second fixture select changed");
+        };
+        *condition = always_true;
+        let OperationKind::GuardedLoad { predicate, .. } = &mut operations[18].kind else {
+            panic!("second fixture guarded load changed");
+        };
+        *predicate = always_true;
+        verify_module(&fixture.module)
+            .expect("hostile unreported predicate remains valid Kernel IR");
+        assert!(!guarded_accesses_have_structural_bounds(
+            &fixture.module,
+            &fixture.locations,
+            19,
+        ));
+    }
+
+    #[test]
     fn guarded_address_proof_rejects_true_predicate_with_unsafe_index() {
         let mut fixture = generated_matrix_tail_fixture(1);
         let operations = guarded_fixture_operations_mut(&mut fixture);
@@ -9807,11 +10119,26 @@ mod resource_tests {
         };
         *predicate = ComparePredicate::Equal;
         verify_module(&wrong_bound.module).expect("hostile comparison remains valid Kernel IR");
-        assert!(!guarded_accesses_have_structural_bounds(
+        let failure = guarded_accesses_have_structural_bounds_result(
             &wrong_bound.module,
             &wrong_bound.locations,
             12,
+        )
+        .expect_err("wrong comparison must not prove a slice bound");
+        assert!(matches!(
+            failure,
+            ProductionMemoryDischargeFailureV1::GuardedBound {
+                location,
+                index: ValueId(9),
+                slice: ValueId(0),
+                ..
+            } if location == wrong_bound.locations[0]
         ));
+        assert!(
+            failure
+                .to_string()
+                .contains("must be below the length of slice")
+        );
 
         let mut wrong_slice = generated_matrix_tail_fixture(1);
         let OperationKind::SliceLength { slice } =
@@ -10026,41 +10353,51 @@ mod resource_tests {
         access: AccessKindAttr,
         allocation_origin: u64,
     ) -> ProductionRankedKernelLoweringInputV1 {
+        ranked_correlation_input_for_accesses(&[access], allocation_origin)
+    }
+
+    fn ranked_correlation_input_for_accesses(
+        accesses: &[AccessKindAttr],
+        allocation_origin: u64,
+    ) -> ProductionRankedKernelLoweringInputV1 {
         let view = ProductionRankedValueIdV1::new(0);
         let index = ProductionRankedValueIdV1::new(1);
+        let mut operations = vec![
+            ProductionRankedOperationV1::ExecutionLayout {
+                grid_identity: 1,
+                global_extents: [64, 1, 1],
+                workgroup_extents: [64, 1, 1],
+                subgroup_size: 64,
+                full_physical_workgroups: true,
+            },
+            ProductionRankedOperationV1::ViewInSpace {
+                result: view,
+                element_width: 32,
+                writable: accesses.iter().copied().any(AccessKindAttr::writes_memory),
+                shape: vec![64],
+                dynamic_extents: vec![],
+                memory_space: dialect_kernel::MemorySpaceAttr::Global,
+                allocation_origin,
+                noalias_class: allocation_origin,
+            },
+            ProductionRankedOperationV1::InvocationIndex {
+                result: index,
+                dimension: 0,
+                launch_extent: 64,
+            },
+        ];
+        operations.extend(accesses.iter().copied().map(|kind| {
+            ProductionRankedOperationV1::Access {
+                kind,
+                view: ProductionRankedValueV1::Local(view),
+                indices: vec![ProductionRankedValueV1::Local(index)],
+            }
+        }));
         let kernel = ProductionRankedKernelV1::new(
             "unsupported_index_correlation",
             0,
             vec![ProductionRankedBlockV1::new(
-                vec![
-                    ProductionRankedOperationV1::ExecutionLayout {
-                        grid_identity: 1,
-                        global_extents: [64, 1, 1],
-                        workgroup_extents: [64, 1, 1],
-                        subgroup_size: 64,
-                        full_physical_workgroups: true,
-                    },
-                    ProductionRankedOperationV1::ViewInSpace {
-                        result: view,
-                        element_width: 32,
-                        writable: access != AccessKindAttr::Read,
-                        shape: vec![64],
-                        dynamic_extents: vec![],
-                        memory_space: dialect_kernel::MemorySpaceAttr::Global,
-                        allocation_origin,
-                        noalias_class: allocation_origin,
-                    },
-                    ProductionRankedOperationV1::InvocationIndex {
-                        result: index,
-                        dimension: 0,
-                        launch_extent: 64,
-                    },
-                    ProductionRankedOperationV1::Access {
-                        kind: access,
-                        view: ProductionRankedValueV1::Local(view),
-                        indices: vec![ProductionRankedValueV1::Local(index)],
-                    },
-                ],
+                operations,
                 ProductionRankedTerminatorV1::Return,
             )],
         )
@@ -10073,7 +10410,7 @@ mod resource_tests {
     }
 
     #[test]
-    fn unsupported_index_discharge_requires_exact_location_index_and_unique_consumer() {
+    fn unsupported_index_discharge_requires_exact_location_index_and_consumer_receipts() {
         let fixture = unsupported_index_correlation_fixture();
         let lowering = ranked_correlation_input(AccessKindAttr::Read, 1);
         assert!(unsupported_indices_match_ranked_sources(
@@ -10150,6 +10487,67 @@ mod resource_tests {
             &[fixture.source],
             &fixture.reasons,
             16,
+        ));
+    }
+
+    #[test]
+    fn unsupported_index_discharge_correlates_every_consumer_of_one_address() {
+        let fixture = unsupported_index_correlation_fixture();
+        let mut module = fixture.module.clone();
+        module.functions[0].body.as_mut().unwrap().blocks[0]
+            .operations
+            .push(Operation::effect_free(
+                ValueDef::new(ValueId(6), Type::Scalar(ScalarType::F32)),
+                OperationKind::Load {
+                    pointer: ValueId(4),
+                    access: MemoryAccess::new(AddressSpace::Global, 4),
+                },
+            ));
+        verify_module(&module).expect("shared-address fixture remains valid Kernel IR");
+        let mut correspondence = fixture.correspondence.clone();
+        correspondence.statement_operation_spans[0].operation_count = 6;
+        correspondence.terminator_operation_spans[0].first_operation_ordinal = 6;
+        let lowering =
+            ranked_correlation_input_for_accesses(&[AccessKindAttr::Read, AccessKindAttr::Read], 1);
+        let sources = [
+            fixture.source,
+            ProductionRankedAccessSourceV1::new(0, Some(0), 1, 0, 4),
+        ];
+
+        assert!(unsupported_indices_match_ranked_sources(
+            &module,
+            &correspondence,
+            &lowering,
+            &sources,
+            &fixture.reasons,
+            16,
+        ));
+        assert!(!unsupported_indices_match_ranked_sources(
+            &module,
+            &correspondence,
+            &lowering,
+            &sources[..1],
+            &fixture.reasons,
+            16,
+        ));
+        let failure = unsupported_indices_match_ranked_sources_result(
+            &module,
+            &correspondence,
+            &lowering,
+            &sources[..1],
+            &fixture.reasons,
+            16,
+        )
+        .expect_err("the second access has no ranked receipt");
+        assert!(matches!(
+            failure,
+            ProductionMemoryDischargeFailureV1::Access {
+                location: FunctionOperationLocation {
+                    block: BlockId(0),
+                    operation_index: 5,
+                },
+                ..
+            }
         ));
     }
 
