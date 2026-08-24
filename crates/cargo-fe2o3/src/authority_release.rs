@@ -599,9 +599,7 @@ fn launch(args: &[OsString]) -> Result<ExitStatus, String> {
         &contract.descriptors[3..],
         contract.parent_pid,
     )?;
-    let mut child = command
-        .as_command_mut()
-        .spawn()
+    let mut child = crate::process_execution::spawn(command.as_command_mut())
         .map_err(|error| format!("cannot exec sealed release child: {error}"))?;
     drop(child_control);
 

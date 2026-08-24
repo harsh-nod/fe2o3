@@ -84,10 +84,11 @@ fn run_passthrough(
 
     let mut retry_delay = Duration::from_millis(1);
     for attempt in 0..=EXECUTABLE_BUSY_RETRIES {
-        let result = Command::new(invocation.executable())
+        let mut command = Command::new(invocation.executable());
+        command
             .args(invocation.forwarded_args())
-            .stdin(Stdio::null())
-            .status();
+            .stdin(Stdio::null());
+        let result = crate::process_execution::status(&mut command);
         match result {
             Err(error)
                 if error.kind() == ErrorKind::ExecutableFileBusy

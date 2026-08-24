@@ -385,8 +385,7 @@ fn metadata_output(
         command.args(["metadata", "--no-deps", "--format-version", "1"]);
         command.args(routing_args);
         command.current_dir(invocation_dir.child_path());
-        command
-            .output()
+        crate::process_execution::capture_output(&mut command)
             .map_err(|error| format!("failed to run cargo metadata: {error}"))
     }
 }

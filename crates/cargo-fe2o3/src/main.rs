@@ -27,6 +27,7 @@ mod pinned_codegen_backend;
 mod pinned_executable;
 #[cfg(test)]
 mod pinned_executable_test_directory;
+mod process_execution;
 #[path = "../../../examples/row_softmax_v1/src/production_release.rs"]
 mod production_release;
 mod project;
@@ -1365,9 +1366,9 @@ fn split_joined_os_option(argument: &OsStr, option: &str) -> Option<OsString> {
 
 fn host_rustc_target() -> Result<String, String> {
     let rustc = env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
-    let output = Command::new(rustc)
-        .arg("-vV")
-        .output()
+    let mut command = Command::new(rustc);
+    command.arg("-vV");
+    let output = process_execution::capture_output(&mut command)
         .map_err(|error| format!("failed to query rustc host target: {error}"))?;
     if !output.status.success() {
         return Err(format!("rustc -vV failed with status {}", output.status));
@@ -1510,9 +1511,7 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
             sealed_application.identity_v3(),
             application_timeouts,
         )?;
-        let mut process = child
-            .as_command_mut()
-            .spawn()
+        let mut process = process_execution::spawn(child.as_command_mut())
             .map_err(|error| format!("failed to launch pinned Cargo application: {error}"))?;
         let active_handoff = match pending_ack.await_after_spawn(&mut process) {
             Ok(active_handoff) => active_handoff,
@@ -1583,8 +1582,7 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
     application_exec::configure_closed_descriptor_baseline(&mut child);
     artifact_dir.replace_for_child_at(&mut child, ARTIFACT_CHILD_FD)?;
     child.env(HSACO_DIR_ENV, format!("/proc/self/fd/{ARTIFACT_CHILD_FD}"));
-    child
-        .status()
+    process_execution::status(&mut child)
         .map_err(|error| format!("failed to launch Cargo runner/application: {error}"))
 }
 
@@ -2366,9 +2364,9 @@ fn dylib_path(target_dir: &Path) -> PathBuf {
 
 fn find_workspace_root() -> Result<PathBuf, String> {
     let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let output = Command::new(cargo)
-        .args(["locate-project", "--workspace", "--message-format", "json"])
-        .output()
+    let mut command = Command::new(cargo);
+    command.args(["locate-project", "--workspace", "--message-format", "json"]);
+    let output = process_execution::capture_output(&mut command)
         .map_err(|error| format!("failed to run cargo locate-project: {error}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2468,7 +2466,7 @@ fn amd_gpu_target() -> String {
 }
 
 fn detect_amd_gpu_target() -> Option<String> {
-    let output = Command::new("rocminfo").output().ok()?;
+    let output = process_execution::capture_output(&mut Command::new("rocminfo")).ok()?;
     if !output.status.success() {
         return None;
     }

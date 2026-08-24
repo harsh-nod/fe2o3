@@ -655,11 +655,11 @@ mod platform {
         }
 
         pub(crate) fn status(&mut self) -> io::Result<ExitStatus> {
-            self.command.status()
+            crate::process_execution::status(&mut self.command)
         }
 
         pub(crate) fn output(&mut self) -> io::Result<Output> {
-            self.command.output()
+            crate::process_execution::capture_output(&mut self.command)
         }
 
         #[cfg(test)]
@@ -1874,15 +1874,14 @@ mod platform {
             let descriptor_path = pinned.descriptor_path.clone();
             let _prepared = pinned.prepare_command(Command::new("/bin/true")).unwrap();
 
-            let status = Command::new("/bin/sh")
-                .args([
-                    OsStr::new("-c"),
-                    OsStr::new("test ! -e \"$1\""),
-                    OsStr::new("backend-leak-probe"),
-                    descriptor_path.as_os_str(),
-                ])
-                .status()
-                .unwrap();
+            let mut command = Command::new("/bin/sh");
+            command.args([
+                OsStr::new("-c"),
+                OsStr::new("test ! -e \"$1\""),
+                OsStr::new("backend-leak-probe"),
+                descriptor_path.as_os_str(),
+            ]);
+            let status = crate::process_execution::status(&mut command).unwrap();
             assert!(status.success());
             assert!(
                 rustix::io::fcntl_getfd(&pinned.file)

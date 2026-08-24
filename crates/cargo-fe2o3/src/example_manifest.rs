@@ -311,10 +311,11 @@ fn is_safe_name_stem(name: &str) -> bool {
 
 fn workspace_projection(workspace_root: &Path) -> Result<Vec<WorkspaceExample>, String> {
     let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let output = Command::new(cargo)
+    let mut command = Command::new(cargo);
+    command
         .args(["metadata", "--locked", "--no-deps", "--format-version", "1"])
-        .current_dir(workspace_root)
-        .output()
+        .current_dir(workspace_root);
+    let output = crate::process_execution::capture_output(&mut command)
         .map_err(|error| format!("failed to run cargo metadata: {error}"))?;
     if !output.status.success() {
         return Err(format!(
