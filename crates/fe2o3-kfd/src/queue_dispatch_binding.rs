@@ -525,14 +525,14 @@ impl Gfx942CompletedDispatchReadbackV1 {
 
 /// Frozen claim boundary for the addressless fixed-dispatch binding slice.
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r9-v1\n",
+    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r10-v1\n",
     "target=gfx942:xnack-,COV6,one-selected-current-device-vm-and-queue-generation\n",
     "code=1-through-32-validated-amdhsa-kernel-envelopes,content-and-selected-descriptor-identity,exact-zero-then-copy-materialization-into-owned-gtt,read-only-seal-before-map,per-packet-program-selection,unused-inspected-programs-retained-without-publication,descriptor-resolution-with-checked-relative-arithmetic\n",
     "kernarg=public-inert-complete-byte-images,exact-inspected-size-and-power-of-two-alignment,optional-exact-trailing-256-byte-COV6-implicit-suffix-must-be-caller-zero,metadata-declared-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds-only,queue-pointer-and-runtime-service-or-address-fields-rejected,all-global-buffer-fields-zero,checked-nonoverlapping-8-byte-internal-device-pointer-patches,one-owned-kernarg-gtt-arena-with-N-distinct-checked-aligned-slices,private-initialization-before-map\n",
     "geometry=block-count-floor-grid-div-workgroup,remainder-grid-mod-workgroup,inactive-dimensions-count-and-group-one-remainder-zero,uniform-workgroup-rejects-any-nonzero-remainder\n",
-    "data=1-through-16-actual-linear-mapped-device-local-or-host-visible-coherent-authorities,exact-device-vm-and-allocation-generation,complete-device-local-live-set,checked-bounded-subranges,inspected-actual-access-derived-internally,read-or-readwrite-requires-sealed-full-extent-initialization,write-only-admits-uninitialized-exclusive-storage,optional-enclosing-snapshot-requires-coherent-full-initialization\n",
+    "data=1-through-16-actual-linear-mapped-device-local-or-host-visible-coherent-authorities,exact-device-vm-and-allocation-generation,complete-device-local-live-set,all-authorities-retained-even-when-no-packet-references-them,checked-bounded-referenced-subranges,inspected-actual-access-derived-internally-only-for-referenced-authorities,read-or-readwrite-requires-sealed-full-extent-initialization,write-only-admits-uninitialized-exclusive-storage,optional-enclosing-snapshot-requires-coherent-full-initialization\n",
     "batch=1-through-8192,aql-fixed-batch-v2,minimum-ring-packet-capacity-checked,all-program-code-owners,N-distinct-kernarg-slices,one-generation-bound-template-per-packet,one-reservation-one-write-counter-fetch-add-one-final-doorbell-and-one-signal-per-packet-composition\n",
-    "retention=queue-owns-all-code-kernarg-and-data-authorities-through-exact-ready-and-recycle,ordinary-destroy-releases-all,returning-destroy-requires-one-exact-recycled-generation-and-returns-actual-mapped-authorities-with-owning-memory-session,fully-initialized-state-preserved-without-stale-current-content-digest,initially-uninitialized-remains-uninitialized\n",
+    "retention=queue-owns-all-code-kernarg-and-data-authorities-through-exact-ready-and-recycle,unreferenced-data-has-no-inspected-effect-or-readback-authority,ordinary-destroy-releases-all,returning-destroy-requires-one-exact-recycled-generation-and-returns-actual-mapped-authorities-with-owning-memory-session,fully-initialized-state-preserved-without-stale-current-content-digest,initially-uninitialized-remains-uninitialized\n",
     "readback=owned-byte-copy-only-after-exact-completion-and-signal-recycle,exact-dispatch-generation-and-retained-host-visible-allocation-authority,ordinary-request-must-be-contained-in-exactly-one-metadata-inspected-write-or-readwrite-binding;optional-snapshot-request-must-exactly-match-one-retained-strictly-enclosing-initialized-range-with-one-isolated-inspected-writable-interior;device-local-readonly-unwritten-out-of-range-overlapping-subrange-and-stale-requests-rejected,no-initialization-promotion\n",
     "queue-transfer=ordinary-path-still-rejects-device-memory,dispatch-path-requires-exact-complete-distinct-set-of-every-live-mapped-c3-lease-before-model-mutation\n",
     "failure=all-layout-and-identity-validation-before-native-preparation;post-side-effect-failure,currentness,publication,completion,timeout,recycle-or-release-ambiguity-poisons-and-requires-teardown\n",
@@ -544,7 +544,7 @@ pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1`].
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1: &str =
-    "c2a6dc42c42f471c6bfc6dabf1e8e3786196b1edcb867835e9c87f4ea3bf8a74";
+    "16c261456a2c2ab9d0f8ea7e6286b7c849338579d6b45dbbd78c455a2a70c3ab";
 
 type CodeAuthority = SharedGttQueueResourceAuthorityV1<
     AqlDispatchCodeResourceRoleV1,
@@ -870,8 +870,17 @@ struct RetainedDataPremiseV1 {
     layout: Gfx942FixedDispatchDataLayoutV1,
     role_identity: [u8; 32],
     valid_bytes: u64,
-    effect: DeviceDataEffectV1,
+    effect: Option<DeviceDataEffectV1>,
     initialized_content: Option<Gfx942DeviceContentDescriptorV1>,
+    fully_initialized: bool,
+    writable_ranges: Box<[CompletedWritableRangeV1]>,
+    completed_snapshots: Box<[CompletedSnapshotRangeV1]>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct PublicRetainedDataPlanV1 {
+    layout: Gfx942FixedDispatchDataLayoutV1,
+    effect: Option<DeviceDataEffectV1>,
     fully_initialized: bool,
     writable_ranges: Box<[CompletedWritableRangeV1]>,
     completed_snapshots: Box<[CompletedSnapshotRangeV1]>,
@@ -898,7 +907,7 @@ impl ReturnedDispatchDataLeaseV1 {
         self.premise.valid_bytes
     }
 
-    pub(super) const fn effect(&self) -> DeviceDataEffectV1 {
+    pub(super) const fn effect(&self) -> Option<DeviceDataEffectV1> {
         self.premise.effect
     }
 
@@ -1249,7 +1258,7 @@ fn validate_completed_read_request(
     }
     if !matches!(
         premise.effect,
-        DeviceDataEffectV1::WriteOnly | DeviceDataEffectV1::ReadWrite
+        Some(DeviceDataEffectV1::WriteOnly | DeviceDataEffectV1::ReadWrite)
     ) {
         return Err(Gfx942DispatchBindingErrorV1::InvalidData {
             index: request.data_index,
@@ -1573,7 +1582,7 @@ pub(super) fn prepare_dispatch_resources<const N: usize>(
             },
             role_identity: premise.role_identity,
             valid_bytes: premise.valid_bytes,
-            effect: premise.effect,
+            effect: Some(premise.effect),
             initialized_content: None,
             fully_initialized: false,
             writable_ranges: Box::new([]),
@@ -1819,7 +1828,6 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
         });
     }
 
-    let mut referenced_data = vec![false; data.len()];
     let mut data_effects = vec![None; data.len()];
     let mut data_writable_ranges = vec![Vec::new(); data.len()];
     let mut data_completed_snapshots = vec![Vec::new(); data.len()];
@@ -1863,7 +1871,6 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
             &input,
             &data_layouts,
             PublicDataBindingStateV1 {
-                referenced: &mut referenced_data,
                 effects: &mut data_effects,
                 writable_ranges: &mut data_writable_ranges,
                 completed_snapshots: &mut data_completed_snapshots,
@@ -1901,24 +1908,20 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
             group_segment_size,
         });
     }
-    if let Some(index) = referenced_data.iter().position(|value| !value) {
-        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
-            index,
-            detail: "allocation not referenced by batch",
-        });
-    }
-    validate_initialization_premises(&data_effects, &data_initialized)?;
-    validate_completed_snapshot_premises(
+    let data_plans = plan_public_retained_data(
         &data_layouts,
         &data_initialized,
-        &data_writable_ranges,
-        &data_completed_snapshots,
+        data_effects,
+        data_writable_ranges,
+        data_completed_snapshots,
     )?;
 
     let mut data_authorities = Vec::with_capacity(data.len());
     let mut data_premises = Vec::with_capacity(data.len());
-    for (index, input) in data.into_iter().enumerate() {
+    for (input, plan) in data.into_iter().zip(data_plans) {
         let input = input.into_parts();
+        debug_assert_eq!(input.layout, plan.layout);
+        debug_assert_eq!(input.fully_initialized, plan.fully_initialized);
         let authority = match input.storage {
             DispatchDataInputStorageV1::Device(lease) => DispatchDataAuthorityV1::Device(
                 memory.retain_gfx942_device_memory_for_dispatch(lease)?,
@@ -1929,15 +1932,14 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
         };
         data_authorities.push(authority);
         data_premises.push(RetainedDataPremiseV1 {
-            layout: input.layout,
+            layout: plan.layout,
             role_identity: [0; 32],
-            valid_bytes: input.layout.requested_bytes(),
-            effect: data_effects[index].expect("referenced data has an inspected effect"),
+            valid_bytes: plan.layout.requested_bytes(),
+            effect: plan.effect,
             initialized_content: input.initialized_content,
-            fully_initialized: input.fully_initialized,
-            writable_ranges: core::mem::take(&mut data_writable_ranges[index]).into_boxed_slice(),
-            completed_snapshots: core::mem::take(&mut data_completed_snapshots[index])
-                .into_boxed_slice(),
+            fully_initialized: plan.fully_initialized,
+            writable_ranges: plan.writable_ranges,
+            completed_snapshots: plan.completed_snapshots,
         });
     }
 
@@ -2364,7 +2366,6 @@ fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
 }
 
 struct PublicDataBindingStateV1<'a> {
-    referenced: &'a mut [bool],
     effects: &'a mut [Option<DeviceDataEffectV1>],
     writable_ranges: &'a mut [Vec<CompletedWritableRangeV1>],
     completed_snapshots: &'a mut [Vec<CompletedSnapshotRangeV1>],
@@ -2429,7 +2430,6 @@ fn validate_public_packet_bindings(
                     .dispatch_pointee_alignment(binding.explicit_argument_index),
             },
         )?;
-        state.referenced[binding.data_index] = true;
         state.effects[binding.data_index] =
             Some(merge_effect(state.effects[binding.data_index], effect));
         if matches!(
@@ -2670,6 +2670,58 @@ fn validate_initialization_premises(
         }
     }
     Ok(())
+}
+
+fn plan_public_retained_data(
+    layouts: &[Gfx942FixedDispatchDataLayoutV1],
+    initialized: &[bool],
+    effects: Vec<Option<DeviceDataEffectV1>>,
+    writable_ranges: Vec<Vec<CompletedWritableRangeV1>>,
+    completed_snapshots: Vec<Vec<CompletedSnapshotRangeV1>>,
+) -> Result<Vec<PublicRetainedDataPlanV1>, Gfx942DispatchBindingErrorV1> {
+    let expected = layouts.len();
+    let observed = [
+        initialized.len(),
+        effects.len(),
+        writable_ranges.len(),
+        completed_snapshots.len(),
+    ];
+    if observed.iter().any(|&len| len != expected) {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: observed
+                .into_iter()
+                .chain(core::iter::once(expected))
+                .min()
+                .unwrap_or(0),
+            detail: "public retained data cardinality",
+        });
+    }
+    validate_initialization_premises(&effects, initialized)?;
+    validate_completed_snapshot_premises(
+        layouts,
+        initialized,
+        &writable_ranges,
+        &completed_snapshots,
+    )?;
+    Ok(layouts
+        .iter()
+        .copied()
+        .zip(initialized.iter().copied())
+        .zip(effects)
+        .zip(writable_ranges)
+        .zip(completed_snapshots)
+        .map(
+            |((((layout, fully_initialized), effect), writable_ranges), completed_snapshots)| {
+                PublicRetainedDataPlanV1 {
+                    layout,
+                    effect,
+                    fully_initialized,
+                    writable_ranges: writable_ranges.into_boxed_slice(),
+                    completed_snapshots: completed_snapshots.into_boxed_slice(),
+                }
+            },
+        )
+        .collect())
 }
 
 fn validate_completed_snapshot_premises(
@@ -3591,6 +3643,61 @@ mod tests {
     }
 
     #[test]
+    fn public_fixed_batch_retains_untouched_roster_premises() {
+        let layout = Gfx942FixedDispatchDataLayoutV1 {
+            kind: Gfx942FixedDispatchDataKindV1::DeviceLocal,
+            requested_bytes: 256,
+            alignment: 64,
+        };
+        for untouched_initialized in [false, true] {
+            let initialized = [false, untouched_initialized];
+            let plans = plan_public_retained_data(
+                &[layout, layout],
+                &initialized,
+                vec![Some(DeviceDataEffectV1::WriteOnly), None],
+                vec![
+                    vec![CompletedWritableRangeV1 {
+                        offset: 0,
+                        byte_len: 256,
+                    }],
+                    vec![],
+                ],
+                vec![vec![], vec![]],
+            )
+            .unwrap();
+
+            assert_eq!(plans.len(), 2);
+            assert_eq!(plans[0].effect, Some(DeviceDataEffectV1::WriteOnly));
+            assert!(!plans[0].fully_initialized);
+            assert_eq!(plans[1].effect, None);
+            assert_eq!(plans[1].fully_initialized, untouched_initialized);
+            assert!(plans[1].writable_ranges.is_empty());
+            assert!(plans[1].completed_snapshots.is_empty());
+        }
+
+        assert!(matches!(
+            validate_initialization_premises(
+                &[
+                    Some(DeviceDataEffectV1::WriteOnly),
+                    Some(DeviceDataEffectV1::ReadOnly),
+                ],
+                &[false, false],
+            ),
+            Err(Gfx942DispatchBindingErrorV1::InvalidData { index: 1, .. })
+        ));
+        assert!(
+            validate_initialization_premises(
+                &[
+                    Some(DeviceDataEffectV1::WriteOnly),
+                    Some(DeviceDataEffectV1::ReadOnly),
+                ],
+                &[false, true],
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
     fn packet_and_data_bounds_are_exact() {
         assert_eq!(
             validate_packet_count::<0>().unwrap_err().to_string(),
@@ -3874,7 +3981,7 @@ mod tests {
             },
             role_identity: [0; 32],
             valid_bytes: 256,
-            effect,
+            effect: Some(effect),
             initialized_content: None,
             fully_initialized: false,
             writable_ranges: ranges
@@ -3957,6 +4064,19 @@ mod tests {
             &[],
         );
         assert!(validate_completed_read_request(&owner, &[readonly], request).is_err());
+        let mut untouched = readback_premise(
+            Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+            DeviceDataEffectV1::ReadOnly,
+            &[],
+        );
+        untouched.effect = None;
+        assert!(matches!(
+            validate_completed_read_request(&owner, &[untouched], request),
+            Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: 0,
+                detail: "completed read requires inspected write access",
+            })
+        ));
         let device = readback_premise(
             Gfx942FixedDispatchDataKindV1::DeviceLocal,
             DeviceDataEffectV1::WriteOnly,
@@ -4067,6 +4187,20 @@ mod tests {
             )
             .is_err()
         );
+        let mut untouched = readback_premise(
+            Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+            DeviceDataEffectV1::ReadOnly,
+            &[],
+        );
+        untouched.effect = None;
+        untouched.fully_initialized = true;
+        assert!(matches!(
+            validate_completed_snapshot_request(&owner, &[untouched], request),
+            Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: 0,
+                detail: "completed snapshot requires one exact admitted range",
+            })
+        ));
     }
 
     #[test]
