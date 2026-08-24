@@ -8,6 +8,9 @@ It provides:
 
 - bounded one-, two-, and three-dimensional dispatch geometry;
 - the exact INVALID unpublished 64-byte kernel-dispatch packet layout;
+- the exact INVALID unpublished 64-byte zero-dependency BARRIER_AND packet,
+  including zero reserved/dependency fields and the system-scoped `0x1403`
+  release header;
 - a linear prepared value that exposes only the invariant system-scoped final
   header after the exact INVALID body;
 - checked monotonic single-producer reservation arithmetic and slot wrapping;
@@ -57,6 +60,12 @@ The prepared-batch target preserves body-before-header call order but remains
 inert. Its callback trait does not authenticate a target implementation,
 perform a release atomic, or prove that indices name the reservation's native
 slots. Those joins remain private responsibilities of the queue owner.
+
+The prepared BARRIER_AND value is likewise inert. Its exact bytes and typed
+publication callback do not by themselves prove queue consumption, signal
+completion, progress, liveness, or teardown. A higher-level queue owner must
+bind the signal, publish the packet, observe completion, recycle the signal,
+and explicitly destroy the queue.
 
 GPU writes to the signal value and their visibility to a Rust atomic load are
 contracted platform/coherency facts. Rust's language memory model alone does

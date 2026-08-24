@@ -17,11 +17,13 @@ use sha2::{Digest, Sha256};
 
 use super::completion::{
     COMPLETION_SIGNAL_ARENA_BYTES_V1, CompletionPacketTemplateV1, CompletionSignalArenaOwnerV1,
-    Gfx942CompletedBatchV1, Gfx942CompletionBatchV1, Gfx942CompletionErrorV1,
-    Gfx942CompletionPollV1, Gfx942CompletionPollWithProgressV1,
+    Gfx942BarrierProbeRecycleObservationV1, Gfx942BarrierProbeV1, Gfx942BarrierProbeWaitFailureV1,
+    Gfx942CompletedBarrierProbeV1, Gfx942CompletedBatchV1, Gfx942CompletionBatchV1,
+    Gfx942CompletionErrorV1, Gfx942CompletionPollV1, Gfx942CompletionPollWithProgressV1,
     Gfx942CompletionRecycleObservationV1, Gfx942CompletionWaitFailureV1,
     Gfx942TimeoutExecutionObservationV1, Gfx942TimeoutSignalObservationV1,
-    NativeCompletionSignalBackendV1, initialize_pending_completion_signal_arena,
+    MAX_COMPLETION_POLL_ATTEMPTS_V1, NativeCompletionSignalBackendV1,
+    initialize_pending_completion_signal_arena,
 };
 use super::dispatch_binding::{
     DeviceDataAllocationInputV1, DispatchGeometryV1, DispatchResourceOwnerV1,
@@ -36,13 +38,13 @@ use super::dispatch_binding::{
 };
 use super::submit::{
     NativeAqlSubmissionBackendV1, NativeAqlSubmissionErrorV1, NativeAqlSubmissionOwnerV1,
-    initialize_control_atomics, initialize_invalid_ring,
+    NativeBarrierAndSubmissionFailureV1, initialize_control_atomics, initialize_invalid_ring,
 };
 use super::*;
 use crate::queue_linux::{
     LinuxCwsrShadowPagesV1, LinuxCwsrShadowsReadyForReleaseV1, LinuxDoorbellErrorV1,
     LinuxDoorbellSliceV1, LinuxKfdRuntimeEnabledV1, LinuxQueueExceptionEventV1,
-    QueueExceptionWaitObservationV1,
+    QueueExceptionWaitObservationV1, arm_process_global_kfd_runtime_gate_for_teardown_v1,
 };
 use crate::shared_memory::{
     AqlCompletionSignalResourceRoleV1, AqlContextSaveResourceRoleV1, AqlControlResourceRoleV1,
@@ -56,7 +58,7 @@ use crate::{
     SHARED_GTT_MEMORY_PROFILE_SHA256_V1, plan_gfx942_aql_queue_resources,
 };
 use fe2o3_aql::{
-    AqlCompletionObservationV1, AqlKernelDispatchPacketV1, AqlPreparedKernelDispatchBatchV2,
+    AqlCompletionObservationV1, AqlPreparedBarrierAndV1, AqlPreparedKernelDispatchBatchV2,
     AqlPreparedKernelDispatchV1, classify_acquired_completion_value_v1,
 };
 
@@ -65,13 +67,14 @@ static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and fixed-batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r22-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r23-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
     "memory_profile_sha256=b5bef892fcaceb19c2e5b75c158b3ef75acefbe6c70109aa8ba83585dd2ef307\n",
     "queue_resource_profile_sha256=150787f0092bc9edc0ecf3a4b7df06742485765aca693751a4416654665598e2\n",
     "aql_dispatch_schema_sha256=82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0\n",
+    "aql_barrier_and_schema_sha256=bdca900cd5c6eaccbddfc5a854e956382a08ce87bec4ccd5284baacf932cdfb5\n",
     "aql_fixed_batch_schema_sha256=a3c74fe4aa26a62772253de267812f2fb1626247685d8c4e8ed8bbb2a5a9e34a\n",
-    "aql_completion_schema_sha256=2cbc02677fc02a906090875f63ff01db82d2eba0888934ee74a7e0f3b82d7fb3\n",
+    "aql_completion_schema_sha256=56c7fb38daeffda945cffeb287ed61f26ee9446dbf8edbbd5337dd008309bd0f\n",
     "dispatch_binding_schema_sha256=4307f4e7aedd1a1b8582fd150966fb5d8b9a4c95955759abcf5d755faa113da4\n",
     "event_schema_sha256=bdde2e2d9b03690d6a63dba3d91074da214d87ece9ae1894c4d7a160bced58b8\n",
     "runtime_enable_schema_sha256=fa47481b10ea4bd89438d10b82bd8197088906e55f5f0c827dc7aa5aba906288\n",
@@ -85,8 +88,9 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "gtt_policy=ring:aql-queue,control-and-completion-signals:host-visible-coherent,eop-and-cwsr:executable;fe2o3-policy-not-rocr-equivalence\n",
     "runtime=one-process-global-fe2o3-owner;exact-enable-r_debug0-mode1-capabilities0-before-event-and-any-queue;ttmp-save-excluded;foreign-kfd-clients-excluded\n",
     "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-explicit-two-atomic-u64-zero;completion-arena-exact-8192-typed-64-byte-user-signals-pending-1-before-gpu-map;one-first-internal-auto-reset-signal-event-id-1-through-255-before-create;8-cwsr-bo-and-shadow-headers-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,one-first-shadow-aligned-error-reason-zero,exact-event-id\n",
-    "submission=crate-private-non-clone-single-producer,aql-fixed-batch-v2-count-1-through-8192-and-ring-capacity-bounded,heap-owned-fixed-cardinality-state,no-mapped-slice-or-raw-pointer-escape,rptr-wptr-acquire,one-actual-wptr-acq-rel-fetch-add-by-count,all-invalid-bodies-before-per-packet-independent-0x1402-or-wait-for-prior-0x1502-ordered-u32-release-headers,conservative-service-default-wait-for-prior,release-fence-x86-sfence,one-final-volatile-u64-doorbell-store-of-last-packet-id\n",
-    "completion=crate-private-non-clone-generation-bound-batches,unique-signal-per-packet,signal-code-kernarg-dispatch-and-queue-generations-retained,bounded-atomic-acquire-poll-with-one-pre-post-currentness-envelope-and-same-scan-redacted-progress,pending-ready-fault-timeout-distinct,timeout-retains-private-batch-through-sequential-pre-post-currentness-enveloped-addressless-write-read-counter-packet-zero-header-setup-signal-zero-kind-value-and-CWSR-reason-observation-before-poison,release-reset-only-after-all-signals-zero\n",
+    "submission=crate-private-non-clone-single-producer,aql-fixed-batch-v2-count-1-through-8192-and-ring-capacity-bounded,heap-owned-fixed-cardinality-state,no-mapped-slice-or-raw-pointer-escape,rptr-wptr-acquire,one-actual-wptr-acq-rel-fetch-add-by-count,all-invalid-bodies-before-per-packet-independent-0x1402-or-wait-for-prior-0x1502-ordered-u32-release-headers,exact-one-zero-setup-barrier-and-0x1403,conservative-service-default-wait-for-prior,release-fence-x86-sfence,one-final-volatile-u64-doorbell-store-of-last-packet-id\n",
+    "completion=crate-private-non-clone-generation-bound-fixed-batches-and-one-signal-barrier-probe,fixed-batch-signal-code-kernarg-dispatch-and-queue-generations-retained,barrier-probe-queue-and-signal-generations-only,bounded-atomic-acquire-poll-with-one-pre-post-currentness-envelope-and-same-scan-redacted-progress,pending-ready-fault-timeout-distinct,timeout-retains-private-linear-operation-through-sequential-pre-post-currentness-enveloped-addressless-write-read-counter-first-retained-packet-header-setup-first-retained-signal-kind-value-and-CWSR-reason-observation-before-poison,release-reset-only-after-all-retained-signals-zero\n",
+    "liveness-probe=public-consuming-checked-device-entry,typed-nonzero-bounded-polls-validated-before-device-consumption,exact-fresh-zero-history-no-dispatch-queue,one-zero-dependency-system-scope-barrier,queue-and-signal-generation-only,submission-retryable-only-by-explicit-before-side-effect-stage-classification,success-requires-currentness-packet-count1-write1-read0or1-timing-sensitive-header0x1403-setup0-user-signal-completed-zero-exception-then-signal-reset-and-confirmed-explicit-queue-destroy,Creation-has-no-live-queue,QuarantinedExecution-retains-opaque-custody-until-process-teardown,process-global-runtime-gate-poison-armed-before-destroy-and-cleared-only-after-confirmed-success,TerminalTeardown-and-panic-retain-permanent-gate-poison-and-recover-no-authority-native-resource-disposition-indeterminate-process-termination-required-no-retry-reopen-or-confirmed-cleanup\n",
     "dispatch=public-addressless-linear-fixed-batch,1-through-32-inspected-programs,1-through-8192-packets,validated-code-materialization,zero-pointer-kernarg-internal-injection,metadata-derived-COV6-geometry-and-dynamic-lds-implicit-subset-with-caller-zero-suffix,queue-pointer-and-runtime-address-fields-rejected,exact-mapped-data-set-retained-even-when-unreferenced-by-current-batch,referenced-subset-only-inspected-access-and-sealed-initialization-gates,ordinary-release-or-exact-recycle-gated-attached-or-detached-return-after-destroy\n",
     "readback=coherent-host-data-only,owned-bounded-copy-after-exact-acquire-observed-completion-and-signal-recycle,exact-dispatch-generation,ordinary-range-within-one-inspected-write-or-readwrite-binding-or-exact-admitted-initialized-enclosing-snapshot,no-native-address-or-mapped-borrow,no-whole-allocation-initialization-promotion\n",
     "rebinding=exact-completion-and-signal-recycle-before-detach,code-and-kernarg-released,queue-ring-signal-event-doorbell-and-runtime-remain-live,exact-complete-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,all-mapped-data-retained-with-inspected-effects-only-for-currently-referenced-subset,new-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest\n",
@@ -97,13 +101,13 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "event-lifecycle=linear-private-kfd-event,no-event-page-mmap,queue-destroy-before-event-destroy-before-runtime-disable-before-cwsr-free-and-full-reservation-munmap,no-drop-ioctl-or-unmap\n",
     "cwsr-address-semantics=bo-cpu-vma-is-not-create-address;exact-8-owned-fixed-private-anonymous-pages,prot-none-then-dontfork-then-rw;headers-mirrored-and-read-back-in-bo-and-shadows;cpu-visible-debug-suspend-checkpoint-wave-state-copy-unsupported;ordinary-hardware-preemption-restore-contracted\n",
     "exception-observation=crate-private-one-shot-timeout-0-through-1000ms-wait-and-terminal-timeout-direct-volatile-CWSR-reason,wait-and-payload-must-agree,unknown-reason-rejected,zero-reason-is-racy-snapshot-not-absence-proof,no-atomic-or-lossless-delivery-claim\n",
-    "failure=counter-divergence-regression-currentness-and-any-possible-side-effect-runtime-event-shadow-wait-publication-completion-observation-timeout-reset-or-teardown-error-terminally-poisons;timeout-snapshot-capture-failure-reports-currentness-or-observation-instead-of-unbound-evidence;no-in-process-recovery-rollback-or-cleanup-after-terminal-observation;only-pre-side-effect-full-or-insufficient-space-retryable\n",
-    "excluded=live-batch-success-evidence,actual-hardware-completion-fault-or-exception-delivery-refinement,effect-correctness-beyond-inspected-metadata,full-write-coverage,numerical-correctness,update,multi-producer,foreign-kfd-process-coordination,cpu-visible-debug-suspend-checkpoint-wave-state-copy\n",
+    "failure=counter-divergence-regression-currentness-and-any-possible-side-effect-runtime-event-shadow-wait-publication-completion-observation-timeout-reset-or-teardown-error-terminally-poisons;timeout-snapshot-capture-failure-reports-currentness-or-observation-instead-of-unbound-evidence;no-in-process-recovery-rollback-or-cleanup-after-terminal-observation;only-explicitly-classified-pre-side-effect-full-or-insufficient-space-retryable\n",
+    "excluded=kernel-dispatch-hardware-completion-fault-or-exception-delivery-refinement,kernel-effect-correctness-beyond-inspected-metadata,full-kernel-write-coverage,kernel-numerical-correctness,update,multi-producer,foreign-kfd-process-coordination,cpu-visible-debug-suspend-checkpoint-wave-state-copy\n",
 );
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "fb46a2e6df77f247f5dbb8da1b8d27c21e2bcfd17717568d2de7590feeb47c53";
+    "5e2aec3d7727414a6a5bbb4f26e9d41efdb6ec13b403e86b790faf591b3ad6ca";
 
 type RingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -225,10 +229,10 @@ impl NativeAqlSubmissionBackendV1 for LinuxAqlSubmissionBackendV1<'_> {
     fn write_unpublished(
         &mut self,
         slot: u32,
-        packet: &AqlKernelDispatchPacketV1,
+        packet: &[u8; fe2o3_aql::AQL_KERNEL_DISPATCH_PACKET_BYTES_V1],
     ) -> Result<(), NativeAqlSubmissionErrorV1> {
         self.memory
-            .write_aql_ring_slot(self.ring, slot, &packet.encode_unpublished_le())
+            .write_aql_ring_slot(self.ring, slot, packet)
             .map_err(|_| NativeAqlSubmissionErrorV1::PacketBody)
     }
 
@@ -391,6 +395,199 @@ impl ComputeAqlQueueObservationV1 {
 pub struct ComputeAqlQueueDestroyedV1 {
     queue_id: u32,
     released_resources: u8,
+}
+
+/// Addressless final state captured after one barrier completed and before recycle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942BarrierProbeExecutionObservationV1 {
+    inner: Gfx942TimeoutExecutionObservationV1,
+}
+
+impl Gfx942BarrierProbeExecutionObservationV1 {
+    pub const fn packet_count(self) -> u16 {
+        self.inner.packet_count()
+    }
+
+    pub const fn write_counter(self) -> u64 {
+        self.inner.write_counter()
+    }
+
+    pub const fn read_counter(self) -> u64 {
+        self.inner.read_counter()
+    }
+
+    pub const fn packet_header(self) -> u16 {
+        self.inner.first_packet_header()
+    }
+
+    pub const fn packet_setup(self) -> u16 {
+        self.inner.first_packet_setup()
+    }
+
+    pub const fn signal_kind(self) -> i64 {
+        self.inner.first_signal_kind()
+    }
+
+    pub const fn signal(self) -> Gfx942TimeoutSignalObservationV1 {
+        self.inner.first_signal()
+    }
+
+    pub const fn queue_exception_reason_mask(self) -> u64 {
+        self.inner.queue_exception_reason_mask()
+    }
+
+    pub const fn currentness_confirmed(self) -> bool {
+        self.inner.currentness_confirmed()
+    }
+}
+
+/// Redacted success evidence returned only after signal recycle and queue destruction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942BarrierProbeSuccessV1 {
+    poll_bound: u32,
+    execution: Gfx942BarrierProbeExecutionObservationV1,
+    recycled_signal_count: u16,
+    destroyed: ComputeAqlQueueDestroyedV1,
+}
+
+/// Pre-consumption bounded poll count for the one-shot barrier probe.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942BarrierProbePollBoundV1(u32);
+
+impl Gfx942BarrierProbePollBoundV1 {
+    pub const fn new(polls: u32) -> Result<Self, Gfx942BarrierProbePollBoundErrorV1> {
+        if polls == 0 {
+            return Err(Gfx942BarrierProbePollBoundErrorV1::Zero);
+        }
+        if polls > MAX_COMPLETION_POLL_ATTEMPTS_V1 {
+            return Err(Gfx942BarrierProbePollBoundErrorV1::ExceedsMaximum {
+                requested: polls,
+                maximum: MAX_COMPLETION_POLL_ATTEMPTS_V1,
+            });
+        }
+        Ok(Self(polls))
+    }
+
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+
+    pub const fn maximum() -> u32 {
+        MAX_COMPLETION_POLL_ATTEMPTS_V1
+    }
+}
+
+/// Pure rejection from constructing a barrier-probe poll bound.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Gfx942BarrierProbePollBoundErrorV1 {
+    /// A zero-attempt operation cannot establish completion.
+    Zero,
+    /// The requested count exceeds the frozen bounded-poll limit.
+    ExceedsMaximum { requested: u32, maximum: u32 },
+}
+
+impl Gfx942BarrierProbeSuccessV1 {
+    pub const fn poll_bound(self) -> u32 {
+        self.poll_bound
+    }
+
+    pub const fn execution(self) -> Gfx942BarrierProbeExecutionObservationV1 {
+        self.execution
+    }
+
+    pub const fn recycled_signal_count(self) -> u16 {
+        self.recycled_signal_count
+    }
+
+    pub const fn destroyed(self) -> ComputeAqlQueueDestroyedV1 {
+        self.destroyed
+    }
+}
+
+/// Opaque queue custody after a terminal one-shot probe failure.
+///
+/// No queue operation or native authority accessor is exposed. The retained
+/// process resources remain quarantined until process teardown.
+#[must_use = "the terminal probe queue remains quarantined until process teardown"]
+pub struct QuarantinedGfx942BarrierProbeV1 {
+    queue: ComputeAqlQueueSessionV1,
+}
+
+impl fmt::Debug for QuarantinedGfx942BarrierProbeV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("QuarantinedGfx942BarrierProbeV1")
+            .field("queue", &self.queue.observation())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Failure phase from the consuming fresh-queue barrier probe.
+#[must_use = "inspect the failure and retain quarantined execution custody"]
+pub enum Gfx942BarrierProbeFailureV1 {
+    /// Fresh queue creation failed before a live queue was returned.
+    Creation {
+        error: ComputeAqlQueueSessionErrorV1,
+    },
+    /// Execution failed and exact queue custody is quarantined.
+    QuarantinedExecution {
+        error: ComputeAqlQueueSessionErrorV1,
+        retained: Box<QuarantinedGfx942BarrierProbeV1>,
+    },
+    /// Native teardown failed after probe completion and signal recycle.
+    ///
+    /// Native teardown and resource disposition are indeterminate. This
+    /// variant recovers no authority and requires process termination; it
+    /// does not permit retry, reopen, or any confirmed-cleanup claim.
+    TerminalTeardown {
+        error: ComputeAqlQueueSessionErrorV1,
+    },
+}
+
+impl Gfx942BarrierProbeFailureV1 {
+    pub const fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
+        match self {
+            Self::Creation { error }
+            | Self::QuarantinedExecution { error, .. }
+            | Self::TerminalTeardown { error } => error,
+        }
+    }
+
+    /// Returns the full addressless timeout snapshot when this was a timeout.
+    pub fn timeout_observation(&self) -> Option<&Gfx942TimeoutExecutionObservationV1> {
+        match self.error() {
+            ComputeAqlQueueSessionErrorV1::Completion(Gfx942CompletionErrorV1::Timeout {
+                observation,
+                ..
+            }) => Some(observation.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// Returns opaque retained queue custody when failure preceded teardown.
+    pub fn into_quarantined(self) -> Option<QuarantinedGfx942BarrierProbeV1> {
+        match self {
+            Self::QuarantinedExecution { retained, .. } => Some(*retained),
+            Self::Creation { .. } | Self::TerminalTeardown { .. } => None,
+        }
+    }
+}
+
+impl fmt::Debug for Gfx942BarrierProbeFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942BarrierProbeFailureV1")
+            .field("error", self.error())
+            .field(
+                "phase",
+                &match self {
+                    Self::Creation { .. } => "creation",
+                    Self::QuarantinedExecution { .. } => "quarantined-execution",
+                    Self::TerminalTeardown { .. } => "terminal-teardown",
+                },
+            )
+            .finish()
+    }
 }
 
 impl ComputeAqlQueueDestroyedV1 {
@@ -686,6 +883,54 @@ impl CheckedGfx942XnackMinusDevice {
         )
     }
 
+    /// Runs one fresh-queue BARRIER_AND liveness probe through full teardown.
+    ///
+    /// Success is returned only after the completion signal was acquired as
+    /// zero, reset to pending, and the native queue and all queue resources
+    /// were explicitly destroyed and released. The typed poll bound is
+    /// constructed before this consuming operation. An execution failure
+    /// retains opaque queue custody until process teardown. A terminal
+    /// teardown failure recovers no authority because the native resource
+    /// disposition is indeterminate and also requires process termination.
+    pub fn run_compute_aql_barrier_probe(
+        self,
+        ring_bytes: u32,
+        poll_bound: Gfx942BarrierProbePollBoundV1,
+    ) -> Result<Gfx942BarrierProbeSuccessV1, Gfx942BarrierProbeFailureV1> {
+        let polls = poll_bound.get();
+        let mut queue = self
+            .create_compute_aql_queue(ring_bytes)
+            .map_err(|error| Gfx942BarrierProbeFailureV1::Creation { error })?;
+        let probe = match queue.submit_barrier_probe() {
+            Ok(probe) => probe,
+            Err(error) => return Err(quarantine_barrier_probe_failure(queue, error)),
+        };
+        let completed = match queue.wait_barrier_probe(probe, polls) {
+            Ok(completed) => completed,
+            Err(error) => return Err(quarantine_barrier_probe_failure(queue, error)),
+        };
+        let execution = match queue.observe_completed_barrier_probe(&completed) {
+            Ok(execution) => execution,
+            Err(error) => return Err(quarantine_barrier_probe_failure(queue, error.into())),
+        };
+        let recycle = match queue.recycle_barrier_probe(completed) {
+            Ok(recycle) => recycle,
+            Err(error) => return Err(quarantine_barrier_probe_failure(queue, error)),
+        };
+        let recycled_signal_count = recycle.packet_count();
+        let teardown_arm = arm_process_global_kfd_runtime_gate_for_teardown_v1();
+        let destroyed = queue
+            .destroy()
+            .map_err(|error| Gfx942BarrierProbeFailureV1::TerminalTeardown { error })?;
+        teardown_arm.confirm_destroyed();
+        Ok(Gfx942BarrierProbeSuccessV1 {
+            poll_bound: polls,
+            execution: Gfx942BarrierProbeExecutionObservationV1 { inner: execution },
+            recycled_signal_count,
+            destroyed,
+        })
+    }
+
     /// Private source-complete preparation path. There is intentionally no
     /// safe public producer for its data premises or typed kernarg images.
     #[allow(dead_code)]
@@ -714,6 +959,16 @@ impl CheckedGfx942XnackMinusDevice {
                     .map_err(ComputeAqlQueueSessionErrorV1::DispatchBinding)
             },
         )
+    }
+}
+
+fn quarantine_barrier_probe_failure(
+    queue: ComputeAqlQueueSessionV1,
+    error: ComputeAqlQueueSessionErrorV1,
+) -> Gfx942BarrierProbeFailureV1 {
+    Gfx942BarrierProbeFailureV1::QuarantinedExecution {
+        error,
+        retained: Box::new(QuarantinedGfx942BarrierProbeV1 { queue }),
     }
 }
 
@@ -1342,6 +1597,217 @@ impl ComputeAqlQueueSessionV1 {
         result
     }
 
+    fn submit_prepared_barrier(
+        &mut self,
+        packet: AqlPreparedBarrierAndV1,
+    ) -> Result<u64, NativeBarrierAndSubmissionFailureV1> {
+        if self.terminal_poisoned {
+            return Err(NativeBarrierAndSubmissionFailureV1::Terminal(
+                NativeAqlSubmissionErrorV1::Poisoned,
+            ));
+        }
+        let exception = self
+            .exception
+            .as_ref()
+            .ok_or(NativeAqlSubmissionErrorV1::InvalidQueue(
+                "missing queue exception gate",
+            ))
+            .map_err(NativeBarrierAndSubmissionFailureV1::Terminal)?;
+        let owner = self
+            .submission
+            .as_mut()
+            .ok_or(NativeAqlSubmissionErrorV1::InvalidQueue(
+                "missing submission owner",
+            ))
+            .map_err(NativeBarrierAndSubmissionFailureV1::Terminal)?;
+        let engine = self
+            .engine
+            .as_mut()
+            .ok_or(NativeAqlSubmissionErrorV1::InvalidQueue(
+                "missing queue engine",
+            ))
+            .map_err(NativeBarrierAndSubmissionFailureV1::Terminal)?;
+        if engine.phase(self.key) != Some(ComputeAqlQueuePhaseV1::Active) {
+            return Err(NativeBarrierAndSubmissionFailureV1::Terminal(
+                NativeAqlSubmissionErrorV1::InvalidQueue("queue is not active"),
+            ));
+        }
+        let (backend, resources) = (&mut engine.backend, &mut engine.resources);
+        let resource = resources
+            .iter_mut()
+            .find(|resource| resource.key == self.key)
+            .ok_or(NativeAqlSubmissionErrorV1::InvalidQueue(
+                "missing queue resources",
+            ))
+            .map_err(NativeBarrierAndSubmissionFailureV1::Terminal)?;
+        let authority = resource
+            .authority
+            .as_mut()
+            .ok_or(NativeAqlSubmissionErrorV1::InvalidQueue(
+                "released queue resources",
+            ))
+            .map_err(NativeBarrierAndSubmissionFailureV1::Terminal)?;
+        let doorbell = self
+            .doorbell
+            .as_mut()
+            .ok_or(NativeAqlSubmissionErrorV1::InvalidQueue("missing doorbell"))
+            .map_err(NativeBarrierAndSubmissionFailureV1::Terminal)?;
+        let mut native = LinuxAqlSubmissionBackendV1 {
+            memory: &mut backend.session,
+            ring: &mut authority.ring,
+            control: &mut authority.control,
+            doorbell,
+            exception,
+        };
+        let result = owner.submit_barrier_and(packet, &mut native);
+        if matches!(
+            &result,
+            Err(NativeBarrierAndSubmissionFailureV1::Terminal(_))
+        ) {
+            self.terminal_poisoned = true;
+        }
+        result
+    }
+
+    /// Publishes one isolated zero-dependency BARRIER_AND queue probe.
+    ///
+    /// The probe leases one existing completion slot and binds only the exact
+    /// queue and signal generations. It does not mint or retain code, kernarg,
+    /// or dispatch-generation evidence.
+    pub(crate) fn submit_barrier_probe(
+        &mut self,
+    ) -> Result<Gfx942BarrierProbeV1, ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942CompletionErrorV1::Poisoned.into());
+        }
+        let bound = self.completion_owner.bind_barrier_probe()?;
+        let (packet, retention) = bound.into_parts();
+        match self.submit_prepared_barrier(packet) {
+            Ok(packet_id) => match self
+                .completion_owner
+                .mark_barrier_probe_published(retention, packet_id)
+            {
+                Ok(probe) => Ok(probe),
+                Err(error) => {
+                    self.poison_terminal();
+                    Err(error.into())
+                }
+            },
+            Err(NativeBarrierAndSubmissionFailureV1::RetryableBeforeSideEffect(error)) => {
+                if let Err(cancel_error) =
+                    self.completion_owner.cancel_bound_barrier_probe(retention)
+                {
+                    self.poison_terminal();
+                    return Err(cancel_error.into());
+                }
+                Err(map_submission(error))
+            }
+            Err(NativeBarrierAndSubmissionFailureV1::Terminal(error)) => {
+                self.poison_terminal();
+                Err(map_submission(error))
+            }
+        }
+    }
+
+    /// Waits for one barrier completion with an exact bounded poll count.
+    pub(crate) fn wait_barrier_probe(
+        &mut self,
+        probe: Gfx942BarrierProbeV1,
+        polls: u32,
+    ) -> Result<Gfx942CompletedBarrierProbeV1, ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942CompletionErrorV1::Poisoned.into());
+        }
+        let result =
+            (|| -> Result<Gfx942CompletedBarrierProbeV1, Gfx942BarrierProbeWaitFailureV1> {
+                let owner = &mut self.completion_owner;
+                let engine =
+                    self.engine
+                        .as_mut()
+                        .ok_or(Gfx942BarrierProbeWaitFailureV1::Terminal(
+                            Gfx942CompletionErrorV1::Observation,
+                        ))?;
+                if engine.phase(self.key) != Some(ComputeAqlQueuePhaseV1::Active) {
+                    return Err(Gfx942BarrierProbeWaitFailureV1::Terminal(
+                        Gfx942CompletionErrorV1::Observation,
+                    ));
+                }
+                let signals = self.completion_signals.as_mut().ok_or(
+                    Gfx942BarrierProbeWaitFailureV1::Terminal(Gfx942CompletionErrorV1::Observation),
+                )?;
+                let exception =
+                    self.exception
+                        .as_ref()
+                        .ok_or(Gfx942BarrierProbeWaitFailureV1::Terminal(
+                            Gfx942CompletionErrorV1::Observation,
+                        ))?;
+                let mut backend = LinuxCompletionSignalBackendV1 {
+                    memory: &mut engine.backend.session,
+                    signals,
+                    exception,
+                };
+                owner.wait_barrier_probe_bounded(probe, polls, &mut backend)
+            })();
+        match result {
+            Ok(completed) => Ok(completed),
+            Err(Gfx942BarrierProbeWaitFailureV1::Terminal(error)) => {
+                self.poison_terminal();
+                Err(error.into())
+            }
+            Err(Gfx942BarrierProbeWaitFailureV1::Timeout { probe, polls }) => {
+                let observation = observe_then_poison(
+                    self,
+                    |session| session.observe_barrier_probe_timeout(&probe),
+                    Self::poison_terminal,
+                );
+                match observation {
+                    Ok(observation) => Err(Gfx942CompletionErrorV1::Timeout {
+                        polls,
+                        observation: Box::new(observation),
+                    }
+                    .into()),
+                    Err(error) => Err(error.into()),
+                }
+            }
+        }
+    }
+
+    /// Resets the completed barrier signal and returns the queue to ready state.
+    pub(crate) fn recycle_barrier_probe(
+        &mut self,
+        completed: Gfx942CompletedBarrierProbeV1,
+    ) -> Result<Gfx942BarrierProbeRecycleObservationV1, ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942CompletionErrorV1::Poisoned.into());
+        }
+        let result =
+            (|| -> Result<Gfx942BarrierProbeRecycleObservationV1, Gfx942CompletionErrorV1> {
+                let owner = &mut self.completion_owner;
+                let engine = self
+                    .engine
+                    .as_mut()
+                    .ok_or(Gfx942CompletionErrorV1::Observation)?;
+                let signals = self
+                    .completion_signals
+                    .as_mut()
+                    .ok_or(Gfx942CompletionErrorV1::Observation)?;
+                let exception = self
+                    .exception
+                    .as_ref()
+                    .ok_or(Gfx942CompletionErrorV1::Observation)?;
+                let mut backend = LinuxCompletionSignalBackendV1 {
+                    memory: &mut engine.backend.session,
+                    signals,
+                    exception,
+                };
+                owner.recycle_barrier_probe(completed, &mut backend)
+            })();
+        if result.is_err() {
+            self.poison_terminal();
+        }
+        result.map_err(Into::into)
+    }
+
     /// Private dispatch-composition boundary. Each template is bound to one
     /// unique retained completion signal before the existing all-body/then-
     /// all-header batch publication. This remains unreachable from safe public
@@ -1735,8 +2201,46 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         batch: &Gfx942CompletionBatchV1<N>,
     ) -> Result<Gfx942TimeoutExecutionObservationV1, Gfx942CompletionErrorV1> {
-        self.check_timeout_observation_currentness()?;
         let (first_packet_id, first_signal_slot) = batch.first_packet_and_signal_slot()?;
+        let packet_count = u16::try_from(N).map_err(|_| Gfx942CompletionErrorV1::Observation)?;
+        self.observe_timeout_packet_and_signal(packet_count, first_packet_id, first_signal_slot)
+    }
+
+    fn observe_barrier_probe_timeout(
+        &mut self,
+        probe: &Gfx942BarrierProbeV1,
+    ) -> Result<Gfx942TimeoutExecutionObservationV1, Gfx942CompletionErrorV1> {
+        let (packet_id, signal_slot) = probe.packet_and_signal_slot()?;
+        self.observe_timeout_packet_and_signal(1, packet_id, signal_slot)
+    }
+
+    fn observe_completed_barrier_probe(
+        &mut self,
+        completed: &Gfx942CompletedBarrierProbeV1,
+    ) -> Result<Gfx942TimeoutExecutionObservationV1, Gfx942CompletionErrorV1> {
+        let (packet_id, signal_slot) = completed.packet_and_signal_slot()?;
+        match self.observe_timeout_packet_and_signal(1, packet_id, signal_slot) {
+            Ok(observation) => match validate_barrier_probe_success_snapshot(observation) {
+                Ok(observation) => Ok(observation),
+                Err(error) => {
+                    self.poison_terminal();
+                    Err(error)
+                }
+            },
+            Err(error) => {
+                self.poison_terminal();
+                Err(error)
+            }
+        }
+    }
+
+    fn observe_timeout_packet_and_signal(
+        &mut self,
+        packet_count: u16,
+        first_packet_id: u64,
+        first_signal_slot: u32,
+    ) -> Result<Gfx942TimeoutExecutionObservationV1, Gfx942CompletionErrorV1> {
+        self.check_timeout_observation_currentness()?;
         let (
             (write_counter, read_counter),
             (_, first_packet_header, first_packet_setup),
@@ -1790,7 +2294,6 @@ impl ComputeAqlQueueSessionV1 {
                 Gfx942TimeoutSignalObservationV1::Fault(value)
             }
         };
-        let packet_count = u16::try_from(N).map_err(|_| Gfx942CompletionErrorV1::Observation)?;
         Ok(Gfx942TimeoutExecutionObservationV1::new(
             packet_count,
             write_counter,
@@ -2224,6 +2727,26 @@ impl ComputeAqlQueueSessionV1 {
     }
 }
 
+fn validate_barrier_probe_success_snapshot(
+    observation: Gfx942TimeoutExecutionObservationV1,
+) -> Result<Gfx942TimeoutExecutionObservationV1, Gfx942CompletionErrorV1> {
+    // The device may advance the read counter before or after this sequential
+    // host snapshot. Both zero and one are valid for the single published packet.
+    if observation.packet_count() != 1
+        || observation.write_counter() != 1
+        || observation.read_counter() > 1
+        || observation.first_packet_header() != fe2o3_aql::AQL_SYSTEM_SCOPED_BARRIER_AND_HEADER_V1
+        || observation.first_packet_setup() != 0
+        || observation.first_signal_kind() != fe2o3_aql::AMD_SIGNAL_KIND_USER_V1
+        || observation.first_signal() != Gfx942TimeoutSignalObservationV1::Completed
+        || !observation.currentness_confirmed()
+        || observation.queue_exception_reason_mask() != 0
+    {
+        return Err(Gfx942CompletionErrorV1::Observation);
+    }
+    Ok(observation)
+}
+
 impl Drop for ComputeAqlQueueSessionV1 {
     fn drop(&mut self) {
         // Model ownership can be restored without native effects. There is
@@ -2499,6 +3022,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn barrier_probe_poll_bound_rejects_before_device_consumption() {
+        assert_eq!(
+            Gfx942BarrierProbePollBoundV1::new(0),
+            Err(Gfx942BarrierProbePollBoundErrorV1::Zero)
+        );
+        assert_eq!(Gfx942BarrierProbePollBoundV1::new(1).unwrap().get(), 1);
+        assert_eq!(
+            Gfx942BarrierProbePollBoundV1::new(Gfx942BarrierProbePollBoundV1::maximum())
+                .unwrap()
+                .get(),
+            Gfx942BarrierProbePollBoundV1::maximum()
+        );
+        assert_eq!(
+            Gfx942BarrierProbePollBoundV1::new(Gfx942BarrierProbePollBoundV1::maximum() + 1),
+            Err(Gfx942BarrierProbePollBoundErrorV1::ExceedsMaximum {
+                requested: Gfx942BarrierProbePollBoundV1::maximum() + 1,
+                maximum: Gfx942BarrierProbePollBoundV1::maximum(),
+            })
+        );
+    }
+
+    #[test]
     fn timeout_capture_always_precedes_terminal_poison() {
         #[derive(Default)]
         struct State {
@@ -2538,6 +3083,87 @@ mod tests {
             map_timeout_memory_observation_error(MemorySessionError::InvalidAllocationAuthority),
             Gfx942CompletionErrorV1::Observation
         );
+    }
+
+    #[derive(Clone, Copy)]
+    struct BarrierSnapshotInput {
+        packet_count: u16,
+        write: u64,
+        read: u64,
+        header: u16,
+        setup: u16,
+        kind: i64,
+        signal: Gfx942TimeoutSignalObservationV1,
+        reason: u64,
+    }
+
+    impl BarrierSnapshotInput {
+        fn valid(read: u64) -> Self {
+            Self {
+                packet_count: 1,
+                write: 1,
+                read,
+                header: fe2o3_aql::AQL_SYSTEM_SCOPED_BARRIER_AND_HEADER_V1,
+                setup: 0,
+                kind: fe2o3_aql::AMD_SIGNAL_KIND_USER_V1,
+                signal: Gfx942TimeoutSignalObservationV1::Completed,
+                reason: 0,
+            }
+        }
+
+        fn observation(self) -> Gfx942TimeoutExecutionObservationV1 {
+            Gfx942TimeoutExecutionObservationV1::new(
+                self.packet_count,
+                self.write,
+                self.read,
+                self.header,
+                self.setup,
+                self.kind,
+                self.signal,
+                self.reason,
+            )
+        }
+    }
+
+    #[test]
+    fn barrier_success_snapshot_accepts_only_the_exact_redacted_contract() {
+        for read in [0, 1] {
+            let observation = BarrierSnapshotInput::valid(read).observation();
+            assert_eq!(
+                validate_barrier_probe_success_snapshot(observation),
+                Ok(observation)
+            );
+        }
+
+        let valid = BarrierSnapshotInput::valid(1);
+        let hostile = [
+            BarrierSnapshotInput {
+                packet_count: 2,
+                ..valid
+            }
+            .observation(),
+            BarrierSnapshotInput { write: 2, ..valid }.observation(),
+            BarrierSnapshotInput { read: 2, ..valid }.observation(),
+            BarrierSnapshotInput {
+                header: 0x1402,
+                ..valid
+            }
+            .observation(),
+            BarrierSnapshotInput { setup: 1, ..valid }.observation(),
+            BarrierSnapshotInput { kind: 0, ..valid }.observation(),
+            BarrierSnapshotInput {
+                signal: Gfx942TimeoutSignalObservationV1::Pending,
+                ..valid
+            }
+            .observation(),
+            BarrierSnapshotInput { reason: 1, ..valid }.observation(),
+        ];
+        for observation in hostile {
+            assert_eq!(
+                validate_barrier_probe_success_snapshot(observation),
+                Err(Gfx942CompletionErrorV1::Observation)
+            );
+        }
     }
 
     fn detached_preflight(
@@ -2681,12 +3307,16 @@ mod tests {
             "82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0"
         );
         assert_eq!(
+            fe2o3_aql::AQL_BARRIER_AND_ABI_SCHEMA_MANIFEST_SHA256_V1,
+            "bdca900cd5c6eaccbddfc5a854e956382a08ce87bec4ccd5284baacf932cdfb5"
+        );
+        assert_eq!(
             fe2o3_aql::AQL_FIXED_BATCH_MODEL_MANIFEST_SHA256_V2,
             "a3c74fe4aa26a62772253de267812f2fb1626247685d8c4e8ed8bbb2a5a9e34a"
         );
         assert_eq!(
             super::super::completion::GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1,
-            "2cbc02677fc02a906090875f63ff01db82d2eba0888934ee74a7e0f3b82d7fb3"
+            "56c7fb38daeffda945cffeb287ed61f26ee9446dbf8edbbd5337dd008309bd0f"
         );
         assert_eq!(
             super::super::dispatch_binding::GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1,

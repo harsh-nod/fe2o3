@@ -53,6 +53,7 @@ pub const AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_BYTES_V1: [u8; 32] = [
 ];
 
 pub const AQL_KERNEL_DISPATCH_PACKET_BYTES_V1: usize = 64;
+pub const AQL_BARRIER_AND_PACKET_BYTES_V1: usize = 64;
 pub const AMD_SIGNAL_BYTES_V1: usize = 64;
 pub const AMD_SIGNAL_ALIGNMENT_V1: usize = 64;
 pub const AMD_SIGNAL_KIND_USER_V1: i64 = 1;
@@ -61,6 +62,7 @@ pub const AMD_SIGNAL_VALUE_COMPLETE_V1: i64 = 0;
 pub const AQL_INVALID_PACKET_HEADER_V1: u16 = 1;
 pub const AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1: u16 = 0x1402;
 pub const AQL_SYSTEM_SCOPED_WAIT_FOR_PRIOR_KERNEL_DISPATCH_HEADER_V1: u16 = 0x1502;
+pub const AQL_SYSTEM_SCOPED_BARRIER_AND_HEADER_V1: u16 = 0x1403;
 pub const AQL_MIN_RING_BYTES_V1: u32 = 4096;
 pub const AQL_MAX_RING_BYTES_V1: u32 = 1 << 31;
 /// Maximum packets admitted by one V1 arithmetic batch reservation.
@@ -104,6 +106,36 @@ impl AqlDispatchOrderingV1 {
             _ => None,
         }
     }
+}
+
+/// Stable name of the reviewed zero-dependency BARRIER_AND packet contract.
+pub const AQL_BARRIER_AND_ABI_SCHEMA_ID_V1: &str =
+    "rocr-7.2.4-amdhsa-aql-barrier-and-zero-dependency-v1";
+
+/// Canonical wire-format and publication manifest for one liveness barrier.
+pub const AQL_BARRIER_AND_ABI_SCHEMA_MANIFEST_V1: &str = r#"schema=rocr-7.2.4-amdhsa-aql-barrier-and-zero-dependency-v1
+platform=linux-x86_64,little-endian,pointer-width:64
+rocr_commit=97f5574fe2fdc7bef44fb01545347912ee9f1779,tag:rocm-7.2.4
+source.hsa.h=51ea864cc3e83a9ce824c294dd98a5724eeec87b76fafded1a01d406206ce0f5
+dispatch_signal_schema_sha256=82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0
+packet=size:64,align:8,header:0,reserved0:2,reserved1:4,dep-signals:8,16,24,32,40,reserved2:48,completion-signal:56
+publication=initial-type:invalid-1,initial-reserved0-zero,reserved1-zero,reserved2-zero,system-scope-zero-dependency-final-header:0x1403,single-release-u32-at-offset-0,type:3,acquire:system-2,release:system-2
+dependencies=all-five-signal-handles-zero,all-five-dependency-bytes-zero
+completion=nonzero,64-byte-aligned,external-retained-user-signal
+authority=inert-wire-value-only,no-address-provenance,no-allocation,no-typed-object-placement,no-queue,no-publication,no-doorbell,no-execution
+"#;
+
+/// SHA-256 of [`AQL_BARRIER_AND_ABI_SCHEMA_MANIFEST_V1`].
+pub const AQL_BARRIER_AND_ABI_SCHEMA_MANIFEST_SHA256_V1: &str =
+    "bdca900cd5c6eaccbddfc5a854e956382a08ce87bec4ccd5284baacf932cdfb5";
+
+/// Returns whether a first-word publication has one reviewed packet header and setup pair.
+///
+/// Kernel dispatches retain setup dimensions one through three. BARRIER_AND
+/// reserves the upper halfword and therefore requires it to remain zero.
+pub const fn is_reviewed_aql_publication_v1(header: u16, setup: u16) -> bool {
+    (AqlDispatchOrderingV1::from_header(header).is_some() && setup >= 1 && setup <= 3)
+        || (header == AQL_SYSTEM_SCOPED_BARRIER_AND_HEADER_V1 && setup == 0)
 }
 
 /// Stable name of the inert V1 batch-reservation model.
@@ -586,6 +618,101 @@ pub enum AqlDispatchPacketError {
     CompletionSignal(AqlAddressObservationError),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AqlBarrierAndPacketErrorV1 {
+    CompletionSignal(AqlAddressObservationError),
+}
+
+/// Exact unpublished 64-byte AMDHSA BARRIER_AND packet.
+///
+/// All five dependency signal handles are zero. A higher-level retained queue
+/// owner can use this inert value as one input to a liveness probe, but the
+/// value itself is not liveness or execution evidence. Its only external
+/// binding is the completion signal. A queue implementation must copy the
+/// complete INVALID body into one exclusively owned slot before publishing the
+/// paired header.
+#[derive(Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct AqlBarrierAndPacketV1 {
+    full_header: u32,
+    reserved1: u32,
+    dep_signals: [u64; 5],
+    reserved2: u64,
+    completion_signal: u64,
+}
+
+impl AqlBarrierAndPacketV1 {
+    /// Constructs one unpublished system-scoped zero-dependency barrier.
+    pub fn new_unpublished(
+        completion_signal: ObservedGpuAddressV1,
+    ) -> Result<AqlPreparedBarrierAndV1, AqlBarrierAndPacketErrorV1> {
+        let completion_signal = completion_signal
+            .require_alignment(AMD_SIGNAL_ALIGNMENT_V1 as u64)
+            .map_err(AqlBarrierAndPacketErrorV1::CompletionSignal)?;
+        Ok(AqlPreparedBarrierAndV1 {
+            packet: Self {
+                full_header: u32::from(AQL_INVALID_PACKET_HEADER_V1),
+                reserved1: 0,
+                dep_signals: [0; 5],
+                reserved2: 0,
+                completion_signal: completion_signal.raw(),
+            },
+        })
+    }
+
+    pub const fn is_unpublished(&self) -> bool {
+        self.full_header == AQL_INVALID_PACKET_HEADER_V1 as u32
+    }
+
+    pub const fn completion_signal(&self) -> u64 {
+        self.completion_signal
+    }
+
+    pub fn encode_unpublished_le(&self) -> [u8; AQL_BARRIER_AND_PACKET_BYTES_V1] {
+        let mut bytes = [0_u8; AQL_BARRIER_AND_PACKET_BYTES_V1];
+        bytes[0..4].copy_from_slice(&self.full_header.to_le_bytes());
+        bytes[4..8].copy_from_slice(&self.reserved1.to_le_bytes());
+        for (index, signal) in self.dep_signals.iter().enumerate() {
+            let offset = 8 + index * size_of::<u64>();
+            bytes[offset..offset + size_of::<u64>()].copy_from_slice(&signal.to_le_bytes());
+        }
+        bytes[48..56].copy_from_slice(&self.reserved2.to_le_bytes());
+        bytes[56..64].copy_from_slice(&self.completion_signal.to_le_bytes());
+        bytes
+    }
+}
+
+/// Linear unpublished zero-dependency barrier paired with its exact header.
+#[derive(Debug, Eq, PartialEq)]
+pub struct AqlPreparedBarrierAndV1 {
+    packet: AqlBarrierAndPacketV1,
+}
+
+impl AqlPreparedBarrierAndV1 {
+    pub fn publish_with<T: AqlBarrierAndPublicationTargetV1>(
+        self,
+        target: &mut T,
+    ) -> Result<(), T::Error> {
+        target.write_unpublished_barrier(&self.packet)?;
+        target.publish_barrier_release_header(AQL_SYSTEM_SCOPED_BARRIER_AND_HEADER_V1)
+    }
+}
+
+/// Backend boundary keeping one barrier body and its final header paired.
+///
+/// Implementing this inert trait grants no queue, signal, address, packet-slot,
+/// or doorbell authority.
+pub trait AqlBarrierAndPublicationTargetV1 {
+    type Error;
+
+    fn write_unpublished_barrier(
+        &mut self,
+        packet: &AqlBarrierAndPacketV1,
+    ) -> Result<(), Self::Error>;
+
+    fn publish_barrier_release_header(&mut self, header: u16) -> Result<(), Self::Error>;
+}
+
 /// Exact unpublished 64-byte AMDHSA kernel-dispatch packet.
 ///
 /// The packet starts with type `INVALID` and its exact setup dimensions. A
@@ -984,6 +1111,14 @@ pub enum AqlCompletionObservationV1 {
 }
 
 const _: () = {
+    assert!(size_of::<AqlBarrierAndPacketV1>() == AQL_BARRIER_AND_PACKET_BYTES_V1);
+    assert!(align_of::<AqlBarrierAndPacketV1>() == 8);
+    assert!(offset_of!(AqlBarrierAndPacketV1, full_header) == 0);
+    assert!(offset_of!(AqlBarrierAndPacketV1, reserved1) == 4);
+    assert!(offset_of!(AqlBarrierAndPacketV1, dep_signals) == 8);
+    assert!(offset_of!(AqlBarrierAndPacketV1, reserved2) == 48);
+    assert!(offset_of!(AqlBarrierAndPacketV1, completion_signal) == 56);
+
     assert!(size_of::<AqlKernelDispatchPacketV1>() == AQL_KERNEL_DISPATCH_PACKET_BYTES_V1);
     assert!(align_of::<AqlKernelDispatchPacketV1>() == 8);
     assert!(offset_of!(AqlKernelDispatchPacketV1, full_header) == 0);

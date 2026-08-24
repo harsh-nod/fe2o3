@@ -1,19 +1,19 @@
 //! Private, bounded completion authority for the retained compute-AQL queue.
 //!
-//! Every packet in a batch receives one distinct ROCr user signal from one
-//! coherent GTT arena. Numeric addresses remain inside this module. The host
-//! state machine retains exact queue, signal-allocation, kernarg-allocation,
-//! and data-allocation generations until all signal values have been observed
-//! with acquire ordering and the batch has been explicitly recycled.
+//! Every fixed-batch packet and the isolated barrier probe receive distinct
+//! ROCr user signals from one coherent GTT arena. Numeric addresses remain
+//! inside this module. Fixed-batch state retains exact dispatch generations;
+//! the barrier probe retains only its exact queue and signal generations until
+//! completion has been observed and explicitly recycled.
 
 use core::fmt;
 
 use fe2o3_aql::{
     AMD_SIGNAL_ALIGNMENT_V1, AMD_SIGNAL_BYTES_V1, AQL_MAX_FIXED_BATCH_PACKETS_V2,
-    AmdBusyCompletionSignalV1, AqlCompletionObservationV1, AqlDispatchGeometryV1,
-    AqlDispatchOrderingV1, AqlDispatchPacketError, AqlKernelDispatchPacketV1,
-    AqlPreparedKernelDispatchBatchErrorV1, AqlPreparedKernelDispatchBatchV2,
-    AqlPreparedKernelDispatchV1, ObservedGpuAddressV1,
+    AmdBusyCompletionSignalV1, AqlBarrierAndPacketErrorV1, AqlBarrierAndPacketV1,
+    AqlCompletionObservationV1, AqlDispatchGeometryV1, AqlDispatchOrderingV1,
+    AqlDispatchPacketError, AqlKernelDispatchPacketV1, AqlPreparedKernelDispatchBatchErrorV1,
+    AqlPreparedKernelDispatchBatchV2, AqlPreparedKernelDispatchV1, ObservedGpuAddressV1,
 };
 use fe2o3_runtime_model::{MemoryMappingKeyV1, QueueKeyV1};
 
@@ -26,15 +26,17 @@ pub(super) const MAX_COMPLETION_POLL_ATTEMPTS_V1: u32 = 1_000_000;
 
 /// Canonical claim boundary for the private completion-signal slice.
 pub const GFX942_AQL_COMPLETION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-aql-completion-r6-v1\n",
+    "profile=fe2o3-mi300x-gfx942-aql-completion-r7-v1\n",
     "aql_dispatch_schema_sha256=82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0\n",
+    "aql_barrier_and_schema_sha256=bdca900cd5c6eaccbddfc5a854e956382a08ce87bec4ccd5284baacf932cdfb5\n",
     "aql_fixed_batch_schema_sha256=a3c74fe4aa26a62772253de267812f2fb1626247685d8c4e8ed8bbb2a5a9e34a\n",
     "arena=one-host-visible-coherent-gtt-allocation,524288-bytes,8192-distinct-64-byte-aligned-user-signals\n",
     "batch=1-through-8192,heap-owned-fixed-cardinality-state,one-unique-signal-per-packet,no-aggregate-alias\n",
     "initialization=typed-amd-busy-signal-construction,kind-user-1,value-pending-1,event-fields-zero,before-gpu-map\n",
-    "binding=crate-private-packet-construction,per-packet-independent-or-wait-for-prior-ordering-retained,no-public-signal-address,exact-queue-vm-signal-code-kernarg-and-nonzero-dispatch-generations-retained,actual-resource-lifetimes-owned-by-private-c5-queue-owner\n",
-    "observation=bounded-busy-poll,one-pre-post-currentness-envelope-around-one-exact-batch-of-atomic-i64-acquire-loads,same-scan-redacted-packet-completed-pending-and-first-pending-index-progress,all-signals-zero-before-ready,unexpected-value-is-fault,timeout-retains-batch-privately-until-addressless-counter-packet-zero-signal-zero-exception-currentness-snapshot\n",
-    "recycle=only-after-exact-all-signal-completion,atomic-i64-release-reset-to-pending,checked-slot-generation-increment\n",
+    "fixed-batch-binding=crate-private-packet-construction,per-packet-independent-or-wait-for-prior-ordering-retained,no-public-signal-address,exact-queue-vm-signal-code-kernarg-and-nonzero-dispatch-generations-retained,actual-resource-lifetimes-owned-by-private-c5-queue-owner\n",
+    "observation=bounded-busy-poll,one-pre-post-currentness-envelope-around-one-exact-retained-signal-set-of-atomic-i64-acquire-loads,same-scan-redacted-packet-completed-pending-and-first-pending-index-progress,all-retained-signals-zero-before-ready,unexpected-value-is-fault,timeout-retains-linear-operation-privately-until-addressless-counter-first-retained-packet-first-retained-signal-exception-currentness-snapshot\n",
+    "recycle=fixed-batch-only-after-exact-all-signal-completion-or-barrier-probe-only-after-exact-one-signal-completion,atomic-i64-release-reset-to-pending,checked-slot-generation-increment\n",
+    "barrier-probe=isolated-owner-phase,exact-one-slot,queue-and-signal-generations-only,no-code-kernarg-or-dispatch-generation,bound-published-completed-recycled-linear-custody,zero-dependency-system-scope-header-0x1403\n",
     "failure=currentness-native-observation-unexpected-value-timeout-invalid-poll-bound-generation-exhaustion-or-reset-ambiguity-poisons-owner-and-queue;timeout-snapshot-precedes-poison-and-grants-no-native-authority;teardown-required\n",
     "release=queue-destroy-first,only-when-every-batch-was-completed-and-recycled,explicit-unmap-and-free,no-drop-native-effects\n",
     "proof=host-state-machine-and-mock-fault-tests-only,cpu-gpu-atomic-coherence-device-write-visibility-firmware-signal-and-quiescence-refinement-contracted\n",
@@ -43,11 +45,12 @@ pub const GFX942_AQL_COMPLETION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_AQL_COMPLETION_MANIFEST_V1`].
 pub const GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1: &str =
-    "2cbc02677fc02a906090875f63ff01db82d2eba0888934ee74a7e0f3b82d7fb3";
+    "56c7fb38daeffda945cffeb287ed61f26ee9446dbf8edbbd5337dd008309bd0f";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CompletionOwnerPhaseV1 {
     Ready,
+    ProbeActive,
     Poisoned,
 }
 
@@ -150,6 +153,125 @@ impl CompletionPacketTemplateV1 {
 struct CompletionSlotLeaseV1 {
     index: u32,
     generation: u64,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(super) struct BarrierProbeRetentionV1 {
+    probe_id: u64,
+    queue: QueueKeyV1,
+    signal_mapping: MemoryMappingKeyV1,
+    slot: CompletionSlotLeaseV1,
+    packet_id: Option<u64>,
+}
+
+pub(super) struct BoundBarrierProbeV1 {
+    packet: fe2o3_aql::AqlPreparedBarrierAndV1,
+    retention: BarrierProbeRetentionV1,
+}
+
+impl BoundBarrierProbeV1 {
+    pub(super) fn into_parts(
+        self,
+    ) -> (fe2o3_aql::AqlPreparedBarrierAndV1, BarrierProbeRetentionV1) {
+        (self.packet, self.retention)
+    }
+}
+
+/// Linear custody for one published zero-dependency BARRIER_AND probe.
+#[must_use = "a published barrier probe must be observed or retained for teardown"]
+pub struct Gfx942BarrierProbeV1 {
+    retention: BarrierProbeRetentionV1,
+}
+
+impl fmt::Debug for Gfx942BarrierProbeV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942BarrierProbeV1")
+            .finish_non_exhaustive()
+    }
+}
+
+impl Gfx942BarrierProbeV1 {
+    pub(super) fn packet_and_signal_slot(&self) -> Result<(u64, u32), Gfx942CompletionErrorV1> {
+        Ok((
+            self.retention
+                .packet_id
+                .ok_or(Gfx942CompletionErrorV1::StaleBatchGeneration)?,
+            self.retention.slot.index,
+        ))
+    }
+}
+
+/// Linear completion evidence for one barrier probe.
+#[must_use = "the completed barrier signal must be explicitly recycled"]
+pub struct Gfx942CompletedBarrierProbeV1 {
+    retention: BarrierProbeRetentionV1,
+}
+
+impl fmt::Debug for Gfx942CompletedBarrierProbeV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942CompletedBarrierProbeV1")
+            .finish_non_exhaustive()
+    }
+}
+
+impl Gfx942CompletedBarrierProbeV1 {
+    pub(super) fn packet_and_signal_slot(&self) -> Result<(u64, u32), Gfx942CompletionErrorV1> {
+        Ok((
+            self.retention
+                .packet_id
+                .ok_or(Gfx942CompletionErrorV1::StaleBatchGeneration)?,
+            self.retention.slot.index,
+        ))
+    }
+}
+
+/// Same-scan, addressless progress for one barrier probe.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942BarrierProbeProgressV1 {
+    signal: Gfx942TimeoutSignalObservationV1,
+}
+
+impl Gfx942BarrierProbeProgressV1 {
+    pub const fn packet_count(self) -> u16 {
+        1
+    }
+
+    pub const fn signal(self) -> Gfx942TimeoutSignalObservationV1 {
+        self.signal
+    }
+}
+
+/// Linear result of one nonblocking barrier-signal observation.
+#[derive(Debug)]
+pub enum Gfx942BarrierProbePollV1 {
+    Pending {
+        probe: Gfx942BarrierProbeV1,
+        progress: Gfx942BarrierProbeProgressV1,
+    },
+    Ready {
+        completed: Gfx942CompletedBarrierProbeV1,
+        progress: Gfx942BarrierProbeProgressV1,
+    },
+}
+
+/// Evidence that one completed barrier signal was reset to pending.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942BarrierProbeRecycleObservationV1;
+
+impl Gfx942BarrierProbeRecycleObservationV1 {
+    pub const fn packet_count(self) -> u16 {
+        1
+    }
+}
+
+pub(super) enum Gfx942BarrierProbeWaitFailureV1 {
+    Terminal(Gfx942CompletionErrorV1),
+    Timeout {
+        probe: Box<Gfx942BarrierProbeV1>,
+        polls: u32,
+    },
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -337,10 +459,12 @@ impl Gfx942TimeoutSignalObservationV1 {
     }
 }
 
-/// Currentness-enveloped, addressless execution state captured before timeout poison.
+/// Currentness-enveloped, addressless execution state for retained queue work.
 ///
 /// The fields are sequential observations, not one atomic device snapshot. The
-/// packet and signal selected for inspection remain private queue-relative ordinals.
+/// packet and signal selected for inspection remain private queue-relative
+/// ordinals. Timeout paths capture this before poison; the one-shot barrier
+/// success path captures it after completion and before signal recycle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Gfx942TimeoutExecutionObservationV1 {
     packet_count: u16,
@@ -377,7 +501,7 @@ impl Gfx942TimeoutExecutionObservationV1 {
         }
     }
 
-    /// Returns the exact fixed-batch packet count.
+    /// Returns the exact retained packet count represented by the snapshot.
     pub const fn packet_count(self) -> u16 {
         self.packet_count
     }
@@ -392,22 +516,22 @@ impl Gfx942TimeoutExecutionObservationV1 {
         self.read_counter
     }
 
-    /// Returns packet zero's acquiring low 16-bit header observation.
+    /// Returns the first retained packet's acquiring low 16-bit header observation.
     pub const fn first_packet_header(self) -> u16 {
         self.first_packet_header
     }
 
-    /// Returns packet zero's acquiring high 16-bit setup observation.
+    /// Returns the first retained packet's acquiring high 16-bit setup observation.
     pub const fn first_packet_setup(self) -> u16 {
         self.first_packet_setup
     }
 
-    /// Returns signal zero's immutable kind-word observation.
+    /// Returns the first retained signal's immutable kind-word observation.
     pub const fn first_signal_kind(self) -> i64 {
         self.first_signal_kind
     }
 
-    /// Returns signal zero's acquiring value classification.
+    /// Returns the first retained signal's acquiring value classification.
     pub const fn first_signal(self) -> Gfx942TimeoutSignalObservationV1 {
         self.first_signal
     }
@@ -464,6 +588,7 @@ pub enum Gfx942CompletionErrorV1 {
     Poisoned,
     Initialization,
     PacketBinding(AqlDispatchPacketError),
+    BarrierPacketBinding(AqlBarrierAndPacketErrorV1),
     BatchConstruction(AqlPreparedKernelDispatchBatchErrorV1),
     Currentness,
     Observation,
@@ -553,6 +678,216 @@ impl CompletionSignalArenaOwnerV1 {
             }; COMPLETION_SIGNAL_CAPACITY_V1],
             phase: CompletionOwnerPhaseV1::Ready,
         })
+    }
+
+    pub(super) fn bind_barrier_probe(
+        &mut self,
+    ) -> Result<BoundBarrierProbeV1, Gfx942CompletionErrorV1> {
+        self.require_ready()?;
+        if self
+            .slots
+            .iter()
+            .any(|record| record.phase != CompletionSlotPhaseV1::Available)
+        {
+            return Err(Gfx942CompletionErrorV1::BatchStillRetained);
+        }
+        let next_probe_id = self
+            .next_batch_id
+            .checked_add(1)
+            .ok_or(Gfx942CompletionErrorV1::BatchIdentityExhausted)?;
+        let slot = CompletionSlotLeaseV1 {
+            index: 0,
+            generation: self.slots[0].generation,
+        };
+        let signal = ObservedGpuAddressV1::new(self.gpu_base)
+            .map_err(|_| Gfx942CompletionErrorV1::InvalidArena("completion address"))?;
+        let packet = AqlBarrierAndPacketV1::new_unpublished(signal)
+            .map_err(Gfx942CompletionErrorV1::BarrierPacketBinding)?;
+        self.slots[0].phase = CompletionSlotPhaseV1::Bound {
+            batch_id: self.next_batch_id,
+        };
+        let retention = BarrierProbeRetentionV1 {
+            probe_id: self.next_batch_id,
+            queue: self.queue,
+            signal_mapping: self.signal_mapping,
+            slot,
+            packet_id: None,
+        };
+        self.next_batch_id = next_probe_id;
+        self.phase = CompletionOwnerPhaseV1::ProbeActive;
+        Ok(BoundBarrierProbeV1 { packet, retention })
+    }
+
+    pub(super) fn cancel_bound_barrier_probe(
+        &mut self,
+        retention: BarrierProbeRetentionV1,
+    ) -> Result<(), Gfx942CompletionErrorV1> {
+        self.validate_barrier_probe(
+            &retention,
+            None,
+            CompletionSlotPhaseV1::Bound {
+                batch_id: retention.probe_id,
+            },
+        )?;
+        self.slots[retention.slot.index as usize].phase = CompletionSlotPhaseV1::Available;
+        self.phase = CompletionOwnerPhaseV1::Ready;
+        Ok(())
+    }
+
+    pub(super) fn mark_barrier_probe_published(
+        &mut self,
+        mut retention: BarrierProbeRetentionV1,
+        packet_id: u64,
+    ) -> Result<Gfx942BarrierProbeV1, Gfx942CompletionErrorV1> {
+        self.validate_barrier_probe(
+            &retention,
+            None,
+            CompletionSlotPhaseV1::Bound {
+                batch_id: retention.probe_id,
+            },
+        )?;
+        self.slots[retention.slot.index as usize].phase = CompletionSlotPhaseV1::Published {
+            batch_id: retention.probe_id,
+        };
+        retention.packet_id = Some(packet_id);
+        Ok(Gfx942BarrierProbeV1 { retention })
+    }
+
+    pub(super) fn observe_barrier_probe_once<B: NativeCompletionSignalBackendV1>(
+        &mut self,
+        probe: Gfx942BarrierProbeV1,
+        backend: &mut B,
+    ) -> Result<Gfx942BarrierProbePollV1, Gfx942CompletionErrorV1> {
+        self.validate_barrier_probe(
+            &probe.retention,
+            probe.retention.packet_id,
+            CompletionSlotPhaseV1::Published {
+                batch_id: probe.retention.probe_id,
+            },
+        )?;
+        let observations = match backend.observe_batch_acquire(&[probe.retention.slot.index]) {
+            Ok(observations) if observations.len() == 1 => observations,
+            Ok(_) | Err(Gfx942CompletionErrorV1::Observation) => {
+                return self.poison(Gfx942CompletionErrorV1::Observation);
+            }
+            Err(Gfx942CompletionErrorV1::Currentness) => {
+                return self.poison(Gfx942CompletionErrorV1::Currentness);
+            }
+            Err(_) => return self.poison(Gfx942CompletionErrorV1::Observation),
+        };
+        match observations[0] {
+            AqlCompletionObservationV1::Pending => Ok(Gfx942BarrierProbePollV1::Pending {
+                probe,
+                progress: Gfx942BarrierProbeProgressV1 {
+                    signal: Gfx942TimeoutSignalObservationV1::Pending,
+                },
+            }),
+            AqlCompletionObservationV1::Completed => {
+                self.slots[probe.retention.slot.index as usize].phase =
+                    CompletionSlotPhaseV1::Completed {
+                        batch_id: probe.retention.probe_id,
+                    };
+                Ok(Gfx942BarrierProbePollV1::Ready {
+                    completed: Gfx942CompletedBarrierProbeV1 {
+                        retention: probe.retention,
+                    },
+                    progress: Gfx942BarrierProbeProgressV1 {
+                        signal: Gfx942TimeoutSignalObservationV1::Completed,
+                    },
+                })
+            }
+            AqlCompletionObservationV1::Unexpected(value) => {
+                self.poison(Gfx942CompletionErrorV1::Fault {
+                    slot: probe.retention.slot.index,
+                    value,
+                })
+            }
+        }
+    }
+
+    pub(super) fn wait_barrier_probe_bounded<B: NativeCompletionSignalBackendV1>(
+        &mut self,
+        mut probe: Gfx942BarrierProbeV1,
+        polls: u32,
+        backend: &mut B,
+    ) -> Result<Gfx942CompletedBarrierProbeV1, Gfx942BarrierProbeWaitFailureV1> {
+        if polls > MAX_COMPLETION_POLL_ATTEMPTS_V1 {
+            return self
+                .poison(Gfx942CompletionErrorV1::InvalidPollBound {
+                    requested: polls,
+                    maximum: MAX_COMPLETION_POLL_ATTEMPTS_V1,
+                })
+                .map_err(Gfx942BarrierProbeWaitFailureV1::Terminal);
+        }
+        self.validate_barrier_probe(
+            &probe.retention,
+            probe.retention.packet_id,
+            CompletionSlotPhaseV1::Published {
+                batch_id: probe.retention.probe_id,
+            },
+        )
+        .map_err(Gfx942BarrierProbeWaitFailureV1::Terminal)?;
+        for _ in 0..polls {
+            match self
+                .observe_barrier_probe_once(probe, backend)
+                .map_err(Gfx942BarrierProbeWaitFailureV1::Terminal)?
+            {
+                Gfx942BarrierProbePollV1::Pending {
+                    probe: pending,
+                    progress,
+                } => {
+                    debug_assert_eq!(progress.packet_count(), 1);
+                    debug_assert_eq!(progress.signal(), Gfx942TimeoutSignalObservationV1::Pending);
+                    probe = pending;
+                }
+                Gfx942BarrierProbePollV1::Ready {
+                    completed,
+                    progress,
+                } => {
+                    debug_assert_eq!(progress.packet_count(), 1);
+                    debug_assert_eq!(
+                        progress.signal(),
+                        Gfx942TimeoutSignalObservationV1::Completed
+                    );
+                    return Ok(completed);
+                }
+            }
+        }
+        Err(Gfx942BarrierProbeWaitFailureV1::Timeout {
+            probe: Box::new(probe),
+            polls,
+        })
+    }
+
+    pub(super) fn recycle_barrier_probe<B: NativeCompletionSignalBackendV1>(
+        &mut self,
+        completed: Gfx942CompletedBarrierProbeV1,
+        backend: &mut B,
+    ) -> Result<Gfx942BarrierProbeRecycleObservationV1, Gfx942CompletionErrorV1> {
+        self.validate_barrier_probe(
+            &completed.retention,
+            completed.retention.packet_id,
+            CompletionSlotPhaseV1::Completed {
+                batch_id: completed.retention.probe_id,
+            },
+        )?;
+        let record = &self.slots[completed.retention.slot.index as usize];
+        let Some(next_generation) = record.generation.checked_add(1) else {
+            return self.poison(Gfx942CompletionErrorV1::SignalGenerationExhausted);
+        };
+        self.checked_currentness(backend)?;
+        if backend
+            .reset_pending_release(completed.retention.slot.index)
+            .is_err()
+        {
+            return self.poison(Gfx942CompletionErrorV1::Recycle);
+        }
+        self.checked_currentness(backend)?;
+        let record = &mut self.slots[completed.retention.slot.index as usize];
+        record.generation = next_generation;
+        record.phase = CompletionSlotPhaseV1::Available;
+        self.phase = CompletionOwnerPhaseV1::Ready;
+        Ok(Gfx942BarrierProbeRecycleObservationV1)
     }
 
     pub(super) fn bind_batch<const N: usize>(
@@ -932,6 +1267,34 @@ impl CompletionSignalArenaOwnerV1 {
         Ok(())
     }
 
+    fn validate_barrier_probe(
+        &self,
+        retention: &BarrierProbeRetentionV1,
+        expected_packet_id: Option<u64>,
+        expected_phase: CompletionSlotPhaseV1,
+    ) -> Result<(), Gfx942CompletionErrorV1> {
+        self.require_probe_active()?;
+        let Some(record) = self.slots.get(retention.slot.index as usize) else {
+            return Err(Gfx942CompletionErrorV1::StaleBatchGeneration);
+        };
+        let requires_packet_id = matches!(
+            expected_phase,
+            CompletionSlotPhaseV1::Published { .. } | CompletionSlotPhaseV1::Completed { .. }
+        );
+        if retention.probe_id == 0
+            || (requires_packet_id && retention.packet_id.is_none())
+            || retention.queue != self.queue
+            || retention.signal_mapping != self.signal_mapping
+            || retention.slot.index != 0
+            || retention.slot.generation != record.generation
+            || retention.packet_id != expected_packet_id
+            || record.phase != expected_phase
+        {
+            return Err(Gfx942CompletionErrorV1::StaleBatchGeneration);
+        }
+        Ok(())
+    }
+
     fn checked_currentness<B: NativeCompletionSignalBackendV1>(
         &mut self,
         backend: &mut B,
@@ -944,6 +1307,14 @@ impl CompletionSignalArenaOwnerV1 {
 
     fn require_ready(&self) -> Result<(), Gfx942CompletionErrorV1> {
         if self.phase == CompletionOwnerPhaseV1::Ready {
+            Ok(())
+        } else {
+            Err(Gfx942CompletionErrorV1::Poisoned)
+        }
+    }
+
+    fn require_probe_active(&self) -> Result<(), Gfx942CompletionErrorV1> {
+        if self.phase == CompletionOwnerPhaseV1::ProbeActive {
             Ok(())
         } else {
             Err(Gfx942CompletionErrorV1::Poisoned)
@@ -991,9 +1362,9 @@ fn validate_packet_count<const N: usize>() -> Result<(), Gfx942CompletionErrorV1
 mod tests {
     use super::*;
     use fe2o3_aql::{
-        AMD_SIGNAL_VALUE_COMPLETE_V1, AMD_SIGNAL_VALUE_PENDING_V1,
-        AqlPacketBatchPublicationTargetV1, classify_acquired_completion_value_v1,
-        encode_pending_completion_signal_bytes_v1,
+        AMD_SIGNAL_VALUE_COMPLETE_V1, AMD_SIGNAL_VALUE_PENDING_V1, AqlBarrierAndPacketV1,
+        AqlBarrierAndPublicationTargetV1, AqlPacketBatchPublicationTargetV1,
+        classify_acquired_completion_value_v1, encode_pending_completion_signal_bytes_v1,
     };
     use fe2o3_runtime_model::{
         AllocationGenerationV1, AllocationIdV1, DeviceGenerationV1, DeviceKeyV1, MappingIdV1,
@@ -1019,6 +1390,29 @@ mod tests {
     struct PacketCapture {
         signals: Vec<u64>,
         headers: Vec<u16>,
+    }
+
+    #[derive(Default)]
+    struct BarrierCapture {
+        bytes: Option<[u8; 64]>,
+        header: Option<u16>,
+    }
+
+    impl AqlBarrierAndPublicationTargetV1 for BarrierCapture {
+        type Error = ();
+
+        fn write_unpublished_barrier(
+            &mut self,
+            packet: &AqlBarrierAndPacketV1,
+        ) -> Result<(), Self::Error> {
+            self.bytes = Some(packet.encode_unpublished_le());
+            Ok(())
+        }
+
+        fn publish_barrier_release_header(&mut self, header: u16) -> Result<(), Self::Error> {
+            self.header = Some(header);
+            Ok(())
+        }
     }
 
     impl AqlPacketBatchPublicationTargetV1 for PacketCapture {
@@ -1166,6 +1560,205 @@ mod tests {
         let (_, retention) = bound.into_parts();
         owner.validate_bound(&retention).unwrap();
         owner.mark_published(retention, 99).unwrap()
+    }
+
+    fn publish_barrier(owner: &mut CompletionSignalArenaOwnerV1) -> Gfx942BarrierProbeV1 {
+        let bound = owner.bind_barrier_probe().unwrap();
+        let (_, retention) = bound.into_parts();
+        owner.mark_barrier_probe_published(retention, 41).unwrap()
+    }
+
+    #[test]
+    fn barrier_probe_binds_only_queue_and_signal_then_recycles() {
+        let mut owner = owner();
+        let bound = owner.bind_barrier_probe().unwrap();
+        assert!(matches!(
+            owner.bind_batch([template(0)]),
+            Err(Gfx942CompletionErrorV1::Poisoned)
+        ));
+        let (packet, retention) = bound.into_parts();
+        let mut capture = BarrierCapture::default();
+        packet.publish_with(&mut capture).unwrap();
+        let bytes = capture.bytes.unwrap();
+        assert_eq!(u32::from_le_bytes(bytes[..4].try_into().unwrap()), 1);
+        assert!(bytes[8..48].iter().all(|byte| *byte == 0));
+        assert_eq!(
+            u64::from_le_bytes(bytes[56..64].try_into().unwrap()),
+            0x20_0000
+        );
+        assert_eq!(capture.header, Some(0x1403));
+
+        let probe = owner.mark_barrier_probe_published(retention, 41).unwrap();
+        let mut backend = MockBackend::pending();
+        let probe = match owner
+            .observe_barrier_probe_once(probe, &mut backend)
+            .unwrap()
+        {
+            Gfx942BarrierProbePollV1::Pending { probe, progress } => {
+                assert_eq!(progress.packet_count(), 1);
+                assert_eq!(progress.signal(), Gfx942TimeoutSignalObservationV1::Pending);
+                probe
+            }
+            Gfx942BarrierProbePollV1::Ready { .. } => panic!("pending probe reported ready"),
+        };
+        backend.values[0] = AMD_SIGNAL_VALUE_COMPLETE_V1;
+        let completed = match owner
+            .observe_barrier_probe_once(probe, &mut backend)
+            .unwrap()
+        {
+            Gfx942BarrierProbePollV1::Ready {
+                completed,
+                progress,
+            } => {
+                assert_eq!(
+                    progress.signal(),
+                    Gfx942TimeoutSignalObservationV1::Completed
+                );
+                completed
+            }
+            Gfx942BarrierProbePollV1::Pending { .. } => panic!("completed probe remained pending"),
+        };
+        assert_eq!(
+            owner.recycle_barrier_probe(completed, &mut backend),
+            Ok(Gfx942BarrierProbeRecycleObservationV1)
+        );
+        assert_eq!(backend.values[0], AMD_SIGNAL_VALUE_PENDING_V1);
+        owner.ensure_releasable().unwrap();
+        assert!(owner.bind_batch([template(0)]).is_ok());
+    }
+
+    #[test]
+    fn barrier_probe_rejects_missing_packet_and_zero_identity() {
+        let mut missing_packet = owner();
+        let bound = missing_packet.bind_barrier_probe().unwrap();
+        let (_, retention) = bound.into_parts();
+        missing_packet.slots[0].phase = CompletionSlotPhaseV1::Published {
+            batch_id: retention.probe_id,
+        };
+        let mut backend = MockBackend::pending();
+        assert!(matches!(
+            missing_packet
+                .observe_barrier_probe_once(Gfx942BarrierProbeV1 { retention }, &mut backend),
+            Err(Gfx942CompletionErrorV1::StaleBatchGeneration)
+        ));
+
+        let mut zero_identity = owner();
+        let probe = publish_barrier(&mut zero_identity);
+        let mut retention = probe.retention;
+        zero_identity.slots[0].phase = CompletionSlotPhaseV1::Published { batch_id: 0 };
+        retention.probe_id = 0;
+        assert!(matches!(
+            zero_identity
+                .observe_barrier_probe_once(Gfx942BarrierProbeV1 { retention }, &mut backend),
+            Err(Gfx942CompletionErrorV1::StaleBatchGeneration)
+        ));
+    }
+
+    #[test]
+    fn barrier_probe_generation_exhaustion_terminally_poisons_owner() {
+        let mut owner = owner();
+        let probe = publish_barrier(&mut owner);
+        let mut backend = MockBackend::pending();
+        backend.values[0] = AMD_SIGNAL_VALUE_COMPLETE_V1;
+        let Gfx942BarrierProbePollV1::Ready { mut completed, .. } = owner
+            .observe_barrier_probe_once(probe, &mut backend)
+            .unwrap()
+        else {
+            panic!("completed probe remained pending");
+        };
+        owner.slots[0].generation = u64::MAX;
+        completed.retention.slot.generation = u64::MAX;
+        assert_eq!(
+            owner.recycle_barrier_probe(completed, &mut backend),
+            Err(Gfx942CompletionErrorV1::SignalGenerationExhausted)
+        );
+        assert!(matches!(
+            owner.bind_barrier_probe(),
+            Err(Gfx942CompletionErrorV1::Poisoned)
+        ));
+    }
+
+    #[test]
+    fn barrier_probe_cancel_restores_release_and_dispatch_admission() {
+        let mut owner = owner();
+        let bound = owner.bind_barrier_probe().unwrap();
+        let (_, retention) = bound.into_parts();
+        assert_eq!(
+            owner.ensure_releasable(),
+            Err(Gfx942CompletionErrorV1::Poisoned)
+        );
+        owner.cancel_bound_barrier_probe(retention).unwrap();
+        owner.ensure_releasable().unwrap();
+        assert!(owner.bind_batch([template(0)]).is_ok());
+    }
+
+    #[test]
+    fn barrier_probe_timeout_retains_custody_until_outer_quarantine() {
+        let mut owner = owner();
+        let probe = publish_barrier(&mut owner);
+        let mut backend = MockBackend::pending();
+        let failure = owner
+            .wait_barrier_probe_bounded(probe, 2, &mut backend)
+            .unwrap_err();
+        let Gfx942BarrierProbeWaitFailureV1::Timeout { probe, polls } = failure else {
+            panic!("pending probe did not time out");
+        };
+        assert_eq!(polls, 2);
+        assert_eq!(probe.packet_and_signal_slot().unwrap(), (41, 0));
+        assert_eq!(backend.observe_calls, 2);
+        assert_eq!(
+            owner.ensure_releasable(),
+            Err(Gfx942CompletionErrorV1::Poisoned)
+        );
+    }
+
+    #[test]
+    fn barrier_probe_currentness_fault_and_reset_failures_poison() {
+        let mut currentness = owner();
+        let probe = publish_barrier(&mut currentness);
+        let mut backend = MockBackend::pending();
+        backend.fail_currentness_at = Some(1);
+        assert!(matches!(
+            currentness.observe_barrier_probe_once(probe, &mut backend),
+            Err(Gfx942CompletionErrorV1::Currentness)
+        ));
+        assert!(matches!(
+            currentness.bind_barrier_probe(),
+            Err(Gfx942CompletionErrorV1::Poisoned)
+        ));
+
+        let mut fault = owner();
+        let probe = publish_barrier(&mut fault);
+        let mut backend = MockBackend::pending();
+        backend.values[0] = -7;
+        assert!(matches!(
+            fault.observe_barrier_probe_once(probe, &mut backend),
+            Err(Gfx942CompletionErrorV1::Fault { slot: 0, value: -7 })
+        ));
+        assert!(matches!(
+            fault.bind_barrier_probe(),
+            Err(Gfx942CompletionErrorV1::Poisoned)
+        ));
+
+        let mut reset = owner();
+        let probe = publish_barrier(&mut reset);
+        let mut backend = MockBackend::pending();
+        backend.values[0] = AMD_SIGNAL_VALUE_COMPLETE_V1;
+        let Gfx942BarrierProbePollV1::Ready { completed, .. } = reset
+            .observe_barrier_probe_once(probe, &mut backend)
+            .unwrap()
+        else {
+            panic!("completed probe remained pending");
+        };
+        backend.fail_reset_at = Some(1);
+        assert_eq!(
+            reset.recycle_barrier_probe(completed, &mut backend),
+            Err(Gfx942CompletionErrorV1::Recycle)
+        );
+        assert!(matches!(
+            reset.bind_barrier_probe(),
+            Err(Gfx942CompletionErrorV1::Poisoned)
+        ));
     }
 
     #[test]
