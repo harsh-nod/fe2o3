@@ -7,7 +7,7 @@ use crate::rust_type_layout_v3::{
     GeneralTypedArgumentKindV3, GeneralTypedExtractError, extract_general_typed_kernel_v3,
 };
 use fe2o3_artifacts::{
-    RustLayoutEvidenceV1, TypeIdentity, derive_generated_host_contract_identity_v1,
+    LaunchContract, RustLayoutEvidenceV1, TypeIdentity, derive_generated_host_contract_identity_v1,
 };
 use fe2o3_compiler_ffi::{
     CompilerDescriptorSourceErrorV1, CompilerDescriptorSourceV1, CompilerFfiEnvelopeV1,
@@ -55,6 +55,7 @@ pub(crate) struct TypedDescriptorRootV1 {
     arguments: TypedArgumentListV1<TypedDescriptorArgumentV1>,
     explicit_argument_bytes: u32,
     kernarg_alignment_bytes: u32,
+    source_launch: Option<LaunchContract>,
 }
 
 impl TypedDescriptorRootV1 {
@@ -70,6 +71,10 @@ impl TypedDescriptorRootV1 {
             } => Some((self.kernel_binding, generated_host_contract_identity)),
             TypedKernelProfile::VecAddRustcLayoutV2 => None,
         }
+    }
+
+    pub(crate) const fn source_launch(&self) -> Option<&LaunchContract> {
+        self.source_launch.as_ref()
     }
 }
 
@@ -133,45 +138,51 @@ fn typed_descriptor_roots_from_collection_with_policy<'tcx>(
                         field: "kernel binding",
                     }
                 })?;
-                let (arguments, explicit_argument_bytes, kernarg_alignment_bytes) = match profile {
-                    TypedKernelProfile::VecAddRustcLayoutV2 => {
-                        let [input_a, input_b, output] =
-                            extract_exact_typed_vecadd_layout(tcx, function.instance)
-                                .map_err(CompilerDescriptorError::RustLayout)?;
-                        (
-                            TypedArgumentListV1::new(vec![
-                                TypedDescriptorArgumentV1 {
-                                    name: "input_a".to_owned(),
-                                    kind: DescriptorArgumentKindV1::SharedSlice(ScalarTypeV1::F32),
-                                    access: AccessMode::ReadOnly,
-                                    offset: 0,
-                                    layout: input_a,
-                                },
-                                TypedDescriptorArgumentV1 {
-                                    name: "input_b".to_owned(),
-                                    kind: DescriptorArgumentKindV1::SharedSlice(ScalarTypeV1::F32),
-                                    access: AccessMode::ReadOnly,
-                                    offset: 16,
-                                    layout: input_b,
-                                },
-                                TypedDescriptorArgumentV1 {
-                                    name: "output".to_owned(),
-                                    kind: DescriptorArgumentKindV1::DisjointSlice(
-                                        ScalarTypeV1::F32,
-                                    ),
-                                    access: AccessMode::WriteOnly,
-                                    offset: 32,
-                                    layout: output,
-                                },
-                            ]),
-                            EXPLICIT_ARGUMENT_BYTES,
-                            KERNARG_ALIGNMENT_BYTES,
-                        )
-                    }
-                    TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 {
-                        generated_host_contract_identity,
-                    } => {
-                        let launch = match function.general_typed_contract.as_ref() {
+                let (arguments, explicit_argument_bytes, kernarg_alignment_bytes, source_launch) =
+                    match profile {
+                        TypedKernelProfile::VecAddRustcLayoutV2 => {
+                            let [input_a, input_b, output] =
+                                extract_exact_typed_vecadd_layout(tcx, function.instance)
+                                    .map_err(CompilerDescriptorError::RustLayout)?;
+                            (
+                                TypedArgumentListV1::new(vec![
+                                    TypedDescriptorArgumentV1 {
+                                        name: "input_a".to_owned(),
+                                        kind: DescriptorArgumentKindV1::SharedSlice(
+                                            ScalarTypeV1::F32,
+                                        ),
+                                        access: AccessMode::ReadOnly,
+                                        offset: 0,
+                                        layout: input_a,
+                                    },
+                                    TypedDescriptorArgumentV1 {
+                                        name: "input_b".to_owned(),
+                                        kind: DescriptorArgumentKindV1::SharedSlice(
+                                            ScalarTypeV1::F32,
+                                        ),
+                                        access: AccessMode::ReadOnly,
+                                        offset: 16,
+                                        layout: input_b,
+                                    },
+                                    TypedDescriptorArgumentV1 {
+                                        name: "output".to_owned(),
+                                        kind: DescriptorArgumentKindV1::DisjointSlice(
+                                            ScalarTypeV1::F32,
+                                        ),
+                                        access: AccessMode::WriteOnly,
+                                        offset: 32,
+                                        layout: output,
+                                    },
+                                ]),
+                                EXPLICIT_ARGUMENT_BYTES,
+                                KERNARG_ALIGNMENT_BYTES,
+                                None,
+                            )
+                        }
+                        TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 {
+                            generated_host_contract_identity,
+                        } => {
+                            let launch = match function.general_typed_contract.as_ref() {
                             Some(retained) => retained.launch().clone(),
                             None if require_retained_evidence => {
                                 return Err(CompilerDescriptorError::MissingTypedField {
@@ -192,78 +203,83 @@ fn typed_descriptor_roots_from_collection_with_policy<'tcx>(
                                 })?
                             }
                         };
-                        let contract = extract_general_typed_kernel_v3(
-                            tcx,
-                            function.instance,
-                            &logical_name,
-                            &function.export_name,
-                            &launch,
-                        )
-                        .map_err(CompilerDescriptorError::GeneralRustLayout)?;
-                        if function
-                            .general_typed_contract
-                            .as_ref()
-                            .is_some_and(|retained| retained != &contract)
-                        {
-                            return Err(CompilerDescriptorError::RetainedGeneralContractMismatch(
-                                function.export_name.clone(),
-                            ));
-                        }
-                        let derived = derive_generated_host_contract_identity_v1(
-                            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
-                            kernel_binding.as_bytes(),
-                            &logical_name,
-                            &function.export_name,
-                            contract.abi(),
-                            contract.launch(),
-                        );
-                        if derived.as_bytes() != &generated_host_contract_identity.as_bytes() {
-                            return Err(CompilerDescriptorError::GeneratedHostContractMismatch(
-                                function.export_name.clone(),
-                            ));
-                        }
-                        let fields = contract.abi().fields();
-                        let arguments = contract
-                            .arguments()
-                            .iter()
-                            .zip(fields)
-                            .enumerate()
-                            .map(|(index, (argument, field))| {
-                                Ok(TypedDescriptorArgumentV1 {
-                                    name: field.name().as_str().to_owned(),
-                                    kind: descriptor_argument_kind(argument.kind()),
-                                    access: match argument.kind() {
-                                        GeneralTypedArgumentKindV3::Scalar(_) => {
-                                            AccessMode::ByValue
-                                        }
-                                        GeneralTypedArgumentKindV3::SharedSlice(_) => {
-                                            AccessMode::ReadOnly
-                                        }
-                                        GeneralTypedArgumentKindV3::DisjointSlice(_) => {
-                                            AccessMode::ReadWrite
-                                        }
-                                    },
-                                    offset: u32::try_from(field.offset()).map_err(|_| {
-                                        CompilerDescriptorError::ArgumentOffsetOverflow {
-                                            kernel: function.export_name.clone(),
-                                            index,
-                                        }
-                                    })?,
-                                    layout: argument.layout().clone(),
+                            let contract = extract_general_typed_kernel_v3(
+                                tcx,
+                                function.instance,
+                                &logical_name,
+                                &function.export_name,
+                                &launch,
+                            )
+                            .map_err(CompilerDescriptorError::GeneralRustLayout)?;
+                            if function
+                                .general_typed_contract
+                                .as_ref()
+                                .is_some_and(|retained| retained != &contract)
+                            {
+                                return Err(
+                                    CompilerDescriptorError::RetainedGeneralContractMismatch(
+                                        function.export_name.clone(),
+                                    ),
+                                );
+                            }
+                            let derived = derive_generated_host_contract_identity_v1(
+                                MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+                                kernel_binding.as_bytes(),
+                                &logical_name,
+                                &function.export_name,
+                                contract.abi(),
+                                contract.launch(),
+                            );
+                            if derived.as_bytes() != &generated_host_contract_identity.as_bytes() {
+                                return Err(
+                                    CompilerDescriptorError::GeneratedHostContractMismatch(
+                                        function.export_name.clone(),
+                                    ),
+                                );
+                            }
+                            let fields = contract.abi().fields();
+                            let arguments = contract
+                                .arguments()
+                                .iter()
+                                .zip(fields)
+                                .enumerate()
+                                .map(|(index, (argument, field))| {
+                                    Ok(TypedDescriptorArgumentV1 {
+                                        name: field.name().as_str().to_owned(),
+                                        kind: descriptor_argument_kind(argument.kind()),
+                                        access: match argument.kind() {
+                                            GeneralTypedArgumentKindV3::Scalar(_) => {
+                                                AccessMode::ByValue
+                                            }
+                                            GeneralTypedArgumentKindV3::SharedSlice(_) => {
+                                                AccessMode::ReadOnly
+                                            }
+                                            GeneralTypedArgumentKindV3::DisjointSlice(_) => {
+                                                AccessMode::ReadWrite
+                                            }
+                                        },
+                                        offset: u32::try_from(field.offset()).map_err(|_| {
+                                            CompilerDescriptorError::ArgumentOffsetOverflow {
+                                                kernel: function.export_name.clone(),
+                                                index,
+                                            }
+                                        })?,
+                                        layout: argument.layout().clone(),
+                                    })
                                 })
-                            })
-                            .collect::<Result<Vec<_>, CompilerDescriptorError>>()?;
-                        (
-                            TypedArgumentListV1::new(arguments),
-                            u32::try_from(contract.abi().size()).map_err(|_| {
-                                CompilerDescriptorError::ExplicitArgumentSizeOverflow(
-                                    function.export_name.clone(),
-                                )
-                            })?,
-                            contract.abi().alignment(),
-                        )
-                    }
-                };
+                                .collect::<Result<Vec<_>, CompilerDescriptorError>>()?;
+                            (
+                                TypedArgumentListV1::new(arguments),
+                                u32::try_from(contract.abi().size()).map_err(|_| {
+                                    CompilerDescriptorError::ExplicitArgumentSizeOverflow(
+                                        function.export_name.clone(),
+                                    )
+                                })?,
+                                contract.abi().alignment(),
+                                Some(contract.launch().clone()),
+                            )
+                        }
+                    };
                 let arguments = arguments.map_err(|error| {
                     CompilerDescriptorError::InvalidArgumentCollection {
                         kernel: function.export_name.clone(),
@@ -307,6 +323,7 @@ fn typed_descriptor_roots_from_collection_with_policy<'tcx>(
                     arguments,
                     explicit_argument_bytes,
                     kernarg_alignment_bytes,
+                    source_launch,
                 })
             })
         })
@@ -358,8 +375,10 @@ pub(crate) fn construct_compiler_descriptor_source_v1(
         compiler_module,
         typed_roots,
         DescriptorConstructionProfileV1 {
-            workgroup_x: WORKGROUP_X,
-            max_grid_x: u32::MAX,
+            rank: 1,
+            workgroup: [WORKGROUP_X, 1, 1],
+            max_grid: [u32::MAX, 1, 1],
+            max_flat_workgroup_size: WORKGROUP_X,
             static_shared_memory_bytes: 0,
             allow_exact_tiled_matrix: false,
             allow_workgroup_memory: false,
@@ -385,18 +404,20 @@ pub(crate) fn construct_production_v1_compiler_descriptor_source_v1(
     formal
         .verify_equivalence()
         .map_err(CompilerDescriptorError::ProductionFormalMemory)?;
-    validate_production_v1_descriptor_evidence(module, typed_roots, formal)?;
+    let geometry = validate_production_v1_descriptor_evidence(module, typed_roots, formal)?;
     construct_compiler_descriptor_source_with_profile_v1(
         envelope,
         module,
         compiler_module,
         typed_roots,
         DescriptorConstructionProfileV1 {
-            workgroup_x: 64,
-            max_grid_x: u32::MAX,
-            static_shared_memory_bytes: 0,
-            allow_exact_tiled_matrix: false,
-            allow_workgroup_memory: false,
+            rank: geometry.rank(),
+            workgroup: geometry.workgroup(),
+            max_grid: geometry.max_grid(),
+            max_flat_workgroup_size: geometry.max_flat_workgroup_size(),
+            static_shared_memory_bytes: geometry.static_shared_memory_bytes(),
+            allow_exact_tiled_matrix: geometry.allow_exact_tiled_matrix(),
+            allow_workgroup_memory: geometry.allow_workgroup_memory(),
             producer_version: "production-v1-gfx942-cov6-v1",
         },
     )?
@@ -409,7 +430,7 @@ fn validate_production_v1_descriptor_evidence(
     module: &Module,
     typed_roots: &[TypedDescriptorRootV1],
     formal: &fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
-) -> Result<(), CompilerDescriptorError> {
+) -> Result<crate::production_geometry_v1::ProductionGeometryV1, CompilerDescriptorError> {
     use fe2o3_artifacts::{RustDisjointIndexSpaceV1, RustSourceTypeShapeV1};
     use fe2o3_kernel_ir::{
         AccessMode as KirAccessMode, AddressSpace, FormalMemoryAccessKind, FormalParameterKind,
@@ -455,7 +476,6 @@ fn validate_production_v1_descriptor_evidence(
             "defined target-bound entry",
         ))?;
     if kernel.id.as_str() != root.export_name
-        || kernel.workgroup_size != Some(WorkgroupSize::new(64, 1, 1))
         || entry.signature.parameters.len() != root.arguments.len()
         || body.parameters.len() != root.arguments.len()
         || formal.obligations().kernel() != &kernel.id
@@ -465,6 +485,17 @@ fn validate_production_v1_descriptor_evidence(
             "target/formal kernel closure",
         ));
     }
+    let source_launch =
+        root.source_launch()
+            .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "authenticated source launch",
+            ))?;
+    let geometry = crate::production_geometry_v1::derive_production_geometry_v1(
+        module,
+        semantic_function,
+        source_launch,
+    )
+    .map_err(CompilerDescriptorError::ProductionGeometry)?;
 
     for (index, (root_argument, kernel_type)) in root
         .arguments
@@ -662,7 +693,7 @@ fn validate_production_v1_descriptor_evidence(
             ));
         }
     }
-    Ok(())
+    Ok(geometry)
 }
 
 pub(crate) fn validate_production_v1_semantic_ownership_evidence(
@@ -807,8 +838,10 @@ pub(crate) fn construct_tiled_gemm_v1_compiler_descriptor_source_v1(
         compiler_module,
         typed_roots,
         DescriptorConstructionProfileV1 {
-            workgroup_x: fe2o3_kernel_ir::TILED_GEMM_V1_LANES,
-            max_grid_x: 1,
+            rank: 1,
+            workgroup: [fe2o3_kernel_ir::TILED_GEMM_V1_LANES, 1, 1],
+            max_grid: [1, 1, 1],
+            max_flat_workgroup_size: fe2o3_kernel_ir::TILED_GEMM_V1_LANES,
             static_shared_memory_bytes: 0,
             allow_exact_tiled_matrix: true,
             allow_workgroup_memory: false,
@@ -892,8 +925,14 @@ pub(crate) fn construct_row_softmax_v1_compiler_descriptor_source_v1(
         compiler_module,
         typed_roots,
         DescriptorConstructionProfileV1 {
-            workgroup_x: crate::collected_row_softmax_v1::ROW_SOFTMAX_ELEMENTS_V1,
-            max_grid_x: 1,
+            rank: 1,
+            workgroup: [
+                crate::collected_row_softmax_v1::ROW_SOFTMAX_ELEMENTS_V1,
+                1,
+                1,
+            ],
+            max_grid: [1, 1, 1],
+            max_flat_workgroup_size: crate::collected_row_softmax_v1::ROW_SOFTMAX_ELEMENTS_V1,
             static_shared_memory_bytes: 0,
             allow_exact_tiled_matrix: false,
             allow_workgroup_memory: false,
@@ -961,8 +1000,10 @@ pub(crate) fn construct_flash_attention_v1_compiler_descriptor_source_v1(
         compiler_module,
         typed_roots,
         DescriptorConstructionProfileV1 {
-            workgroup_x: 64,
-            max_grid_x: 1,
+            rank: 1,
+            workgroup: [64, 1, 1],
+            max_grid: [1, 1, 1],
+            max_flat_workgroup_size: 64,
             static_shared_memory_bytes: 0,
             allow_exact_tiled_matrix: false,
             allow_workgroup_memory: false,
@@ -1123,8 +1164,10 @@ pub(crate) fn construct_moe_top2_v1_compiler_descriptor_source_v1(
 
 #[derive(Clone, Copy)]
 struct DescriptorConstructionProfileV1 {
-    workgroup_x: u32,
-    max_grid_x: u32,
+    rank: u8,
+    workgroup: [u32; 3],
+    max_grid: [u32; 3],
+    max_flat_workgroup_size: u32,
     static_shared_memory_bytes: u32,
     allow_exact_tiled_matrix: bool,
     allow_workgroup_memory: bool,
@@ -1133,8 +1176,10 @@ struct DescriptorConstructionProfileV1 {
 
 const fn tiled_gemm_lds_slice1_descriptor_profile_v1() -> DescriptorConstructionProfileV1 {
     DescriptorConstructionProfileV1 {
-        workgroup_x: fe2o3_kernel_ir::TILED_GEMM_LDS_V1_LANES,
-        max_grid_x: 1,
+        rank: 1,
+        workgroup: [fe2o3_kernel_ir::TILED_GEMM_LDS_V1_LANES, 1, 1],
+        max_grid: [1, 1, 1],
+        max_flat_workgroup_size: fe2o3_kernel_ir::TILED_GEMM_LDS_V1_LANES,
         static_shared_memory_bytes: fe2o3_kernel_ir::TILED_GEMM_LDS_V1_STATIC_LDS_BYTES,
         allow_exact_tiled_matrix: true,
         allow_workgroup_memory: true,
@@ -1208,10 +1253,16 @@ fn construct_compiler_descriptor_source_with_profile_v1(
             .iter()
             .find(|kernel| kernel.id.as_str() == root.export_name)
             .ok_or_else(|| CompilerDescriptorError::MissingTypedKernel(root.export_name.clone()))?;
-        if kernel.workgroup_size != Some(WorkgroupSize::new(profile.workgroup_x, 1, 1)) {
+        if kernel.workgroup_size
+            != Some(WorkgroupSize::new(
+                profile.workgroup[0],
+                profile.workgroup[1],
+                profile.workgroup[2],
+            ))
+        {
             return Err(CompilerDescriptorError::UnexpectedWorkgroupSize {
                 kernel: root.export_name.clone(),
-                expected_x: profile.workgroup_x,
+                expected: profile.workgroup,
             });
         }
 
@@ -1282,10 +1333,18 @@ fn construct_compiler_descriptor_source_with_profile_v1(
                 root.kernarg_alignment_bytes,
             )?,
             LaunchConstraintsV1::new(
-                1,
-                BlockSizeV1::Exact(DimensionsV1::new(profile.workgroup_x, 1, 1)?),
-                DimensionsV1::new(profile.max_grid_x, 1, 1)?,
-                profile.workgroup_x,
+                profile.rank,
+                BlockSizeV1::Exact(DimensionsV1::new(
+                    profile.workgroup[0],
+                    profile.workgroup[1],
+                    profile.workgroup[2],
+                )?),
+                DimensionsV1::new(
+                    profile.max_grid[0],
+                    profile.max_grid[1],
+                    profile.max_grid[2],
+                )?,
+                profile.max_flat_workgroup_size,
                 profile.static_shared_memory_bytes,
                 0,
             )?,
@@ -1855,7 +1914,7 @@ pub(crate) enum CompilerDescriptorError {
     MissingTypedKernel(String),
     UnexpectedWorkgroupSize {
         kernel: String,
-        expected_x: u32,
+        expected: [u32; 3],
     },
     NonCanonicalTiledGemmModule,
     NonCanonicalTiledGemmLdsSlice1Module,
@@ -1866,6 +1925,7 @@ pub(crate) enum CompilerDescriptorError {
     FlashAttentionDescriptorMismatch(&'static str),
     NonCanonicalMoeTop2Module,
     ProductionFormalMemory(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
+    ProductionGeometry(crate::production_geometry_v1::ProductionGeometryErrorV1),
     ProductionDescriptorMismatch(&'static str),
     UnsupportedCapability(String),
     Validation(ValidationError),
@@ -1967,9 +2027,9 @@ impl fmt::Display for CompilerDescriptorError {
                     "typed descriptor kernel `{kernel}` is absent from kernel IR"
                 )
             }
-            Self::UnexpectedWorkgroupSize { kernel, expected_x } => write!(
+            Self::UnexpectedWorkgroupSize { kernel, expected } => write!(
                 formatter,
-                "typed descriptor kernel `{kernel}` does not have the exact {expected_x}x1x1 workgroup"
+                "typed descriptor kernel `{kernel}` does not have the exact {expected:?} workgroup"
             ),
             Self::NonCanonicalTiledGemmModule => formatter.write_str(
                 "tiled GEMM descriptor construction requires the exact canonical tiled_gemm_v1 module",
@@ -2000,6 +2060,9 @@ impl fmt::Display for CompilerDescriptorError {
             ),
             Self::ProductionFormalMemory(error) => {
                 write!(formatter, "production formal-memory evidence failed: {error}")
+            }
+            Self::ProductionGeometry(error) => {
+                write!(formatter, "production geometry evidence failed: {error}")
             }
             Self::ProductionDescriptorMismatch(field) => write!(
                 formatter,
@@ -2134,6 +2197,7 @@ pub(crate) fn scalar_gemm_v1_descriptor_source_for_test() -> CompilerDescriptorS
         arguments: TypedArgumentListV1::new(arguments).unwrap(),
         explicit_argument_bytes: 64,
         kernarg_alignment_bytes: 8,
+        source_launch: None,
     };
     let module = fe2o3_kernel_ir::scalar_gemm_v1_module();
     let compiler_module =
@@ -2226,6 +2290,7 @@ pub(crate) fn tiled_gemm_v1_descriptor_source_for_test() -> CompilerDescriptorSo
         arguments: TypedArgumentListV1::new(arguments).unwrap(),
         explicit_argument_bytes: 64,
         kernarg_alignment_bytes: 8,
+        source_launch: None,
     };
     let module = fe2o3_kernel_ir::tiled_gemm_v1_module();
     let compiler_module =
@@ -2330,6 +2395,7 @@ fn tiled_gemm_lds_slice1_descriptor_inputs_for_test() -> (
         arguments: TypedArgumentListV1::new(arguments).unwrap(),
         explicit_argument_bytes: 48,
         kernarg_alignment_bytes: 8,
+        source_launch: None,
     };
     let module = fe2o3_kernel_ir::tiled_gemm_lds_v1_module();
     let compiler_module =
@@ -2435,6 +2501,7 @@ pub(crate) fn row_softmax_v1_descriptor_source_for_test() -> CompilerDescriptorS
         arguments: TypedArgumentListV1::new(arguments).unwrap(),
         explicit_argument_bytes: 32,
         kernarg_alignment_bytes: 8,
+        source_launch: None,
     };
     let module = crate::collected_row_softmax_v1::canonical_row_softmax_v1_module();
     let compiler_module =
@@ -2602,6 +2669,7 @@ mod tests {
             arguments: TypedArgumentListV1::new(arguments).unwrap(),
             explicit_argument_bytes: 48,
             kernarg_alignment_bytes: 8,
+            source_launch: None,
         }
     }
 
@@ -2679,6 +2747,7 @@ mod tests {
             arguments: TypedArgumentListV1::new(arguments).unwrap(),
             explicit_argument_bytes,
             kernarg_alignment_bytes: 8,
+            source_launch: None,
         }
     }
 
@@ -2871,6 +2940,74 @@ mod tests {
         let bound = bind_compiler_descriptor_source_v1(llvm, &source).unwrap();
         assert_eq!(bound.descriptor_source_identity(), Some(source_identity));
         assert!(bound.llvm_ir().contains(".section .fe2o3.kd.v1"));
+    }
+
+    #[test]
+    fn profile_constructor_preserves_rank_xyz_grid_and_flat_geometry() {
+        for (rank, workgroup, max_grid, domain) in [
+            (
+                1,
+                [128, 1, 1],
+                [17, 1, 1],
+                LaunchDomain::D1 {
+                    x: LaunchExtent::Dynamic,
+                },
+            ),
+            (
+                2,
+                [16, 16, 1],
+                [17, 19, 1],
+                LaunchDomain::D2 {
+                    x: LaunchExtent::Dynamic,
+                    y: LaunchExtent::Dynamic,
+                },
+            ),
+            (
+                3,
+                [4, 4, 4],
+                [17, 19, 23],
+                LaunchDomain::D3 {
+                    x: LaunchExtent::Dynamic,
+                    y: LaunchExtent::Dynamic,
+                    z: LaunchExtent::Dynamic,
+                },
+            ),
+        ] {
+            let envelope = envelope(CodeObjectVersion::V6);
+            let mut module = module();
+            module.kernels[0].domain = domain;
+            module.kernels[0].workgroup_size =
+                Some(WorkgroupSize::new(workgroup[0], workgroup[1], workgroup[2]));
+            let llvm = construct_inert_compiler_module_text_v1(&module).unwrap();
+            let flat = workgroup.into_iter().product::<u32>();
+            let source = construct_compiler_descriptor_source_with_profile_v1(
+                &envelope,
+                &module,
+                &llvm,
+                &[root(0x42)],
+                DescriptorConstructionProfileV1 {
+                    rank,
+                    workgroup,
+                    max_grid,
+                    max_flat_workgroup_size: flat,
+                    static_shared_memory_bytes: 0,
+                    allow_exact_tiled_matrix: false,
+                    allow_workgroup_memory: false,
+                    producer_version: "geometry-test-v1",
+                },
+            )
+            .unwrap()
+            .unwrap();
+            let launch = source.table().kernels()[0].launch();
+            assert_eq!(launch.rank(), rank);
+            let BlockSizeV1::Exact(block) = launch.block_size() else {
+                panic!("production profile must emit an exact block");
+            };
+            assert_eq!([block.x(), block.y(), block.z()], workgroup);
+            let grid = launch.max_grid();
+            assert_eq!([grid.x(), grid.y(), grid.z()], max_grid);
+            assert_eq!(launch.max_flat_workgroup_size(), flat);
+        }
     }
 
     #[test]

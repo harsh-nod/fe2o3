@@ -986,7 +986,7 @@ fn unknown_and_32_bit_index_widths_never_complete() {
 }
 
 #[test]
-fn unsupported_rank_and_static_extent_mismatch_fail_closed() {
+fn rank_mismatch_and_static_extent_mismatch_fail_closed() {
     let rank_two = module_with_kernel(
         vec![],
         vec![],
@@ -997,7 +997,10 @@ fn unsupported_rank_and_static_extent_mismatch_fail_closed() {
     );
     assert_eq!(
         analyze(&rank_two, 4).incomplete_reasons(),
-        &[FormalMemoryIncompleteReason::LaunchRankUnsupported { rank: 2 }]
+        &[FormalMemoryIncompleteReason::LaunchRankMismatch {
+            domain_rank: 2,
+            extent_rank: 1,
+        }]
     );
 
     let static_domain = module_with_kernel(
@@ -1013,6 +1016,205 @@ fn unsupported_rank_and_static_extent_mismatch_fail_closed() {
             expected: 8,
             actual: 4,
         }]
+    );
+}
+
+#[test]
+fn ranked_launches_have_injective_row_major_invocation_ranges() {
+    for (rank, extents) in [(2, [3, 2, 1]), (3, [3, 2, 2])] {
+        let domain = if rank == 2 {
+            LaunchDomain::D2 {
+                x: LaunchExtent::Dynamic,
+                y: LaunchExtent::Dynamic,
+            }
+        } else {
+            LaunchDomain::D3 {
+                x: LaunchExtent::Dynamic,
+                y: LaunchExtent::Dynamic,
+                z: LaunchExtent::Dynamic,
+            }
+        };
+        let module = module_with_kernel(vec![], vec![], domain);
+        let analysis = derive_kernel_memory_obligations_for_launch(
+            &module,
+            &KernelId::new("kernel"),
+            ExplicitLaunchExtent::Exact { rank, extents },
+            FormalIndexWidth::Bits64,
+        )
+        .unwrap();
+        assert!(analysis.is_complete());
+        let count = extents[..usize::from(rank)].iter().product::<u64>();
+        assert_eq!(
+            analysis.obligations().invocations(),
+            Some(InvocationRange1d::from_count(count).unwrap())
+        );
+
+        let mut indices = std::collections::BTreeSet::new();
+        for z in 0..extents[2] {
+            for y in 0..extents[1] {
+                for x in 0..extents[0] {
+                    indices.insert(row_major_invocation_index(rank, extents, [x, y, z]).unwrap());
+                }
+            }
+        }
+        assert_eq!(
+            indices.into_iter().collect::<Vec<_>>(),
+            (0..count).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn static_ranked_launches_admit_their_exact_shape() {
+    for (rank, extents, domain) in [
+        (
+            1,
+            [7, 1, 1],
+            LaunchDomain::D1 {
+                x: LaunchExtent::Static(7),
+            },
+        ),
+        (
+            2,
+            [3, 5, 1],
+            LaunchDomain::D2 {
+                x: LaunchExtent::Static(3),
+                y: LaunchExtent::Static(5),
+            },
+        ),
+        (
+            3,
+            [3, 5, 7],
+            LaunchDomain::D3 {
+                x: LaunchExtent::Static(3),
+                y: LaunchExtent::Static(5),
+                z: LaunchExtent::Static(7),
+            },
+        ),
+    ] {
+        let module = module_with_kernel(vec![], vec![], domain);
+        let analysis = derive_kernel_memory_obligations_for_launch(
+            &module,
+            &KernelId::new("kernel"),
+            ExplicitLaunchExtent::Exact { rank, extents },
+            FormalIndexWidth::Bits64,
+        )
+        .unwrap();
+        assert!(analysis.is_complete());
+        assert_eq!(
+            analysis.obligations().invocations(),
+            Some(
+                InvocationRange1d::from_count(
+                    extents[..usize::from(rank)].iter().product::<u64>(),
+                )
+                .unwrap()
+            )
+        );
+    }
+}
+
+#[test]
+fn ranked_launch_shape_rank_overflow_and_static_axes_fail_closed() {
+    let rank_two = module_with_kernel(
+        vec![],
+        vec![],
+        LaunchDomain::D2 {
+            x: LaunchExtent::Dynamic,
+            y: LaunchExtent::Dynamic,
+        },
+    );
+    for (extent, expected) in [
+        (
+            ExplicitLaunchExtent::Exact {
+                rank: 4,
+                extents: [2, 2, 2],
+            },
+            FormalMemoryIncompleteReason::LaunchRankUnsupported { rank: 4 },
+        ),
+        (
+            ExplicitLaunchExtent::Exact {
+                rank: 1,
+                extents: [2, 2, 1],
+            },
+            FormalMemoryIncompleteReason::LaunchRankMismatch {
+                domain_rank: 2,
+                extent_rank: 1,
+            },
+        ),
+        (
+            ExplicitLaunchExtent::Exact {
+                rank: 2,
+                extents: [2, 0, 1],
+            },
+            FormalMemoryIncompleteReason::LaunchExtentZero,
+        ),
+        (
+            ExplicitLaunchExtent::Exact {
+                rank: 2,
+                extents: [u64::MAX, 2, 1],
+            },
+            FormalMemoryIncompleteReason::LaunchExtentOverflow {
+                rank: 2,
+                extents: [u64::MAX, 2, 1],
+            },
+        ),
+    ] {
+        let analysis = derive_kernel_memory_obligations_for_launch(
+            &rank_two,
+            &KernelId::new("kernel"),
+            extent,
+            FormalIndexWidth::Bits64,
+        )
+        .unwrap();
+        assert_eq!(analysis.incomplete_reasons(), &[expected]);
+    }
+
+    let rank_one = module_with_kernel(vec![], vec![], dynamic_1d());
+    let shape = derive_kernel_memory_obligations_for_launch(
+        &rank_one,
+        &KernelId::new("kernel"),
+        ExplicitLaunchExtent::Exact {
+            rank: 1,
+            extents: [2, 2, 1],
+        },
+        FormalIndexWidth::Bits64,
+    )
+    .unwrap();
+    assert_eq!(
+        shape.incomplete_reasons(),
+        &[FormalMemoryIncompleteReason::LaunchExtentShapeMismatch {
+            rank: 1,
+            extents: [2, 2, 1],
+        }]
+    );
+
+    let static_rank_two = module_with_kernel(
+        vec![],
+        vec![],
+        LaunchDomain::D2 {
+            x: LaunchExtent::Static(2),
+            y: LaunchExtent::Static(3),
+        },
+    );
+    let mismatch = derive_kernel_memory_obligations_for_launch(
+        &static_rank_two,
+        &KernelId::new("kernel"),
+        ExplicitLaunchExtent::Exact {
+            rank: 2,
+            extents: [2, 4, 1],
+        },
+        FormalIndexWidth::Bits64,
+    )
+    .unwrap();
+    assert_eq!(
+        mismatch.incomplete_reasons(),
+        &[
+            FormalMemoryIncompleteReason::StaticLaunchAxisExtentMismatch {
+                axis: Axis::Y,
+                expected: 3,
+                actual: 4,
+            }
+        ]
     );
 }
 

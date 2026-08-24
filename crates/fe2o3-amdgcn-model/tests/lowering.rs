@@ -1747,7 +1747,7 @@ fn kernel_selection_requires_an_exact_identity() {
 }
 
 #[test]
-fn dynamic_higher_rank_domains_are_rejected_and_workgroup_size_is_mandatory() {
+fn dynamic_higher_rank_domains_preserve_xyz_workgroups_and_workgroup_size_is_mandatory() {
     let mut missing_size = fill_module();
     missing_size.kernels[0].workgroup_size = None;
     assert_eq!(
@@ -1755,23 +1755,57 @@ fn dynamic_higher_rank_domains_are_rejected_and_workgroup_size_is_mandatory() {
         LoweringDiagnosticCode::MissingWorkgroupSize
     );
 
-    for domain in [
-        LaunchDomain::D2 {
-            x: LaunchExtent::Dynamic,
-            y: LaunchExtent::Static(1),
-        },
-        LaunchDomain::D3 {
-            x: LaunchExtent::Dynamic,
-            y: LaunchExtent::Static(1),
-            z: LaunchExtent::Static(1),
-        },
+    for (domain, workgroup, flat) in [
+        (
+            LaunchDomain::D2 {
+                x: LaunchExtent::Dynamic,
+                y: LaunchExtent::Dynamic,
+            },
+            WorkgroupSize::new(64, 1, 1),
+            64,
+        ),
+        (
+            LaunchDomain::D2 {
+                x: LaunchExtent::Dynamic,
+                y: LaunchExtent::Dynamic,
+            },
+            WorkgroupSize::new(16, 16, 1),
+            256,
+        ),
+        (
+            LaunchDomain::D3 {
+                x: LaunchExtent::Dynamic,
+                y: LaunchExtent::Dynamic,
+                z: LaunchExtent::Dynamic,
+            },
+            WorkgroupSize::new(4, 4, 4),
+            64,
+        ),
     ] {
         let mut module = fill_module();
+        let rank = domain.rank();
         module.kernels[0].domain = domain;
-        assert_eq!(
-            first_code(&module, "fill"),
-            LoweringDiagnosticCode::UnsupportedLaunchDomain
-        );
+        module.kernels[0].workgroup_size = Some(workgroup);
+        let llvm = lower_kernel_to_llvm_ir(&module, &KernelId::new("fill")).unwrap();
+        assert!(llvm.contains(&format!(
+            "\"amdgpu-flat-work-group-size\"=\"{flat},{flat}\""
+        )));
+        assert!(llvm.contains(&format!(
+            "!0 = !{{i32 {}, i32 {}, i32 {}}}",
+            workgroup.x, workgroup.y, workgroup.z
+        )));
+        assert!(llvm.contains("call i32 @llvm.amdgcn.workitem.id.y()"));
+        assert!(llvm.contains("call i32 @llvm.amdgcn.workgroup.id.y()"));
+        assert!(llvm.contains("call i32 @llvm.amdgcn.grid.size.x()"));
+        if rank == 2 {
+            assert!(llvm.contains(".row = mul i64"));
+            assert!(!llvm.contains("call i32 @llvm.amdgcn.grid.size.y()"));
+        } else {
+            assert!(llvm.contains("call i32 @llvm.amdgcn.workitem.id.z()"));
+            assert!(llvm.contains("call i32 @llvm.amdgcn.workgroup.id.z()"));
+            assert!(llvm.contains("call i32 @llvm.amdgcn.grid.size.y()"));
+            assert!(llvm.contains(".plane_row_scaled = mul i64"));
+        }
     }
 }
 
@@ -1824,6 +1858,27 @@ fn invalid_or_unbounded_workgroup_geometry_is_rejected() {
             LoweringDiagnosticCode::InputVerification(DiagnosticCode::InvalidWorkgroupSize)
         );
     }
+
+    let mut rank2_inactive_axis = fill_module();
+    rank2_inactive_axis.kernels[0].domain = LaunchDomain::D2 {
+        x: LaunchExtent::Dynamic,
+        y: LaunchExtent::Dynamic,
+    };
+    rank2_inactive_axis.kernels[0].workgroup_size = Some(WorkgroupSize::new(64, 1, 2));
+    assert_eq!(
+        first_code(&rank2_inactive_axis, "fill"),
+        LoweringDiagnosticCode::InputVerification(DiagnosticCode::InvalidWorkgroupSize)
+    );
+
+    let mut rank2_zero_extent = fill_module();
+    rank2_zero_extent.kernels[0].domain = LaunchDomain::D2 {
+        x: LaunchExtent::Dynamic,
+        y: LaunchExtent::Static(0),
+    };
+    assert_eq!(
+        first_code(&rank2_zero_extent, "fill"),
+        LoweringDiagnosticCode::InputVerification(DiagnosticCode::InvalidLaunchDomain)
+    );
 }
 
 #[test]
@@ -1838,7 +1893,9 @@ fn static_multidimensional_workgroups_preserve_exact_and_flat_geometry() {
     let llvm = lower_kernel_to_llvm_ir(&module, &KernelId::new("fill")).unwrap();
     assert!(llvm.contains("\"amdgpu-flat-work-group-size\"=\"64,64\""));
     assert!(llvm.contains("!0 = !{i32 32, i32 2, i32 1}"));
-    assert!(llvm.contains(".base = mul i64 %v2.group, 32"));
+    assert!(llvm.contains(".x.base = mul i64 %v2.x.group, 32"));
+    assert!(llvm.contains(".y.base = mul i64 %v2.y.group, 2"));
+    assert!(llvm.contains("%v2.row = mul i64 %v2.y, %v2.grid.x"));
 
     let mut unsupported_axis = module;
     let OperationKind::Intrinsic(intrinsic) =

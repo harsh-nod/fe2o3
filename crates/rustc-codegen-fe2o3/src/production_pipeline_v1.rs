@@ -18,7 +18,6 @@ use crate::protected_rustc_invocation::{
 };
 
 pub(crate) const PRODUCTION_PIPELINE_V1: &str = "production-v1";
-const PRODUCTION_GFX942_DEFAULT_WORKGROUP_X_V1: u32 = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProductionDispositionV1 {
@@ -44,6 +43,7 @@ pub(crate) enum ProductionPipelineErrorV1 {
     MiddleEndEvidence(fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV4),
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     FormalMemoryAdmission(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
+    Geometry(crate::production_geometry_v1::ProductionGeometryErrorV1),
     TargetBinding(fe2o3_kernel_ir::VerificationErrors),
     Gfx942Lowering(dialect_amdgcn::LoweringErrors),
     UpstreamLlvmLayoutBinding(String),
@@ -81,6 +81,9 @@ impl fmt::Display for ProductionPipelineErrorV1 {
             }
             Self::FormalMemoryAdmission(error) => {
                 write!(formatter, "production-v1 formal memory admission failed: {error}")
+            }
+            Self::Geometry(error) => {
+                write!(formatter, "production-v1 geometry validation failed: {error}")
             }
             Self::TargetBinding(error) => {
                 write!(formatter, "production-v1 gfx942 target binding failed: {error}")
@@ -127,6 +130,7 @@ impl std::error::Error for ProductionPipelineErrorV1 {
             Self::MiddleEndEvidence(error) => Some(error),
             Self::TargetNeutralLowering(error) => Some(error),
             Self::FormalMemoryAdmission(error) => Some(error),
+            Self::Geometry(error) => Some(error),
             Self::TargetBinding(error) => Some(error),
             Self::Gfx942Lowering(error) => Some(error),
             Self::DescriptorEvidence(error) => Some(error),
@@ -349,6 +353,35 @@ impl FormalMemoryAdmittedProductionCompilationV1 {
             ranked_verification,
             bindings,
         } = self;
+        let semantic = admitted.semantic_kir().semantic().semantic();
+        let [semantic_root] = semantic.roots() else {
+            return Err(ProductionPipelineErrorV1::Geometry(
+                crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
+            ));
+        };
+        let semantic_function = semantic
+            .functions()
+            .get(semantic_root.index() as usize)
+            .ok_or(ProductionPipelineErrorV1::Geometry(
+                crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
+            ))?;
+        let [typed_root] = bindings.typed_descriptor_roots.as_slice() else {
+            return Err(ProductionPipelineErrorV1::Geometry(
+                crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
+            ));
+        };
+        let source_launch = typed_root
+            .source_launch()
+            .ok_or(ProductionPipelineErrorV1::Geometry(
+            crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
+        ))?;
+        crate::production_geometry_v1::derive_production_geometry_v1(
+            admitted.semantic_kir().module(),
+            semantic_function,
+            source_launch,
+        )
+        .map_err(ProductionPipelineErrorV1::Geometry)?;
+
         let mut target_module = admitted.semantic_kir().module().clone();
         let target = fe2o3_kernel_ir::gfx942_xnack_minus_target_capability();
         let wave = fe2o3_kernel_ir::TargetCapability::WaveWidth(fe2o3_kernel_ir::WaveWidth::Wave64);
@@ -358,9 +391,6 @@ impl FormalMemoryAdmittedProductionCompilationV1 {
             .kernels
             .first_mut()
             .expect("formal admission requires exactly one kernel");
-        kernel.workgroup_size.get_or_insert_with(|| {
-            fe2o3_kernel_ir::WorkgroupSize::new(PRODUCTION_GFX942_DEFAULT_WORKGROUP_X_V1, 1, 1)
-        });
         kernel.required_capabilities.insert(target.clone());
         kernel.required_capabilities.insert(wave.clone());
         let kernel_id = kernel.id.clone();
@@ -900,9 +930,21 @@ impl<'tcx> ProductionCompilationV1<'tcx, EquivalentSemanticMirStageV1> {
             semantic_mir.semantic(),
         )
         .map_err(ProductionPipelineErrorV1::DescriptorEvidence)?;
+        let [typed_root] = bindings.typed_descriptor_roots.as_slice() else {
+            return Err(ProductionPipelineErrorV1::Geometry(
+                crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
+            ));
+        };
+        let source_rank = typed_root
+            .source_launch()
+            .ok_or(ProductionPipelineErrorV1::Geometry(
+                crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
+            ))?
+            .rank();
         let ranked =
             crate::production_ranked_projection_v1::project_and_verify_ranked_semantic_mir_v1(
                 semantic_mir,
+                source_rank,
             )
             .map_err(ProductionPipelineErrorV1::RankedProjection)?;
         Ok(RankedVerifiedProductionCompilationV1 { ranked, bindings })
@@ -917,10 +959,22 @@ impl RankedVerifiedProductionCompilationV1 {
         let (receipt, ranked_verification) = ranked
             .into_verified_receipt()
             .map_err(ProductionPipelineErrorV1::MiddleEndEvidence)?;
+        let [typed_root] = bindings.typed_descriptor_roots.as_slice() else {
+            return Err(ProductionPipelineErrorV1::Geometry(
+                crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
+            ));
+        };
+        let source_rank = typed_root
+            .source_launch()
+            .ok_or(ProductionPipelineErrorV1::Geometry(
+                crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
+            ))?
+            .rank();
         let lowered =
             fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
                 receipt,
                 fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+                source_rank,
             )
             .map_err(ProductionPipelineErrorV1::TargetNeutralLowering)?;
         Ok(TargetNeutralProductionCompilationV1 {

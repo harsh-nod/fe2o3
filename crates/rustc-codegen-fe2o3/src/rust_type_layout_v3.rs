@@ -4,10 +4,10 @@ use std::fmt;
 
 use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
-    Dimensions, LaunchContract, MAX_ABI_FIELDS, Mutability, Name, PointerWidth,
-    RustDisjointIndexSpaceV1, RustLayoutEvidenceV1, RustPhysicalComponentKindV1,
-    RustPhysicalComponentV1, RustPointerMutabilityV1, RustScalarElementTypeV1,
-    RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1, ScalarType, TypeIdentity,
+    LaunchContract, MAX_ABI_FIELDS, Mutability, Name, PointerWidth, RustDisjointIndexSpaceV1,
+    RustLayoutEvidenceV1, RustPhysicalComponentKindV1, RustPhysicalComponentV1,
+    RustPointerMutabilityV1, RustScalarElementTypeV1, RustSourceTypeShapeV1, RustTypeEvidenceV1,
+    RustcAbiClassV1, ScalarType, TypeIdentity,
 };
 use rustc_abi::{BackendRepr, ExternAbi, HasDataLayout, Primitive};
 use rustc_hir::def::DefKind;
@@ -25,7 +25,6 @@ const POINTER_BYTES: u64 = 8;
 const POINTER_ALIGNMENT: u32 = 8;
 const SLICE_BYTES: u64 = 16;
 const DEFAULT_WORKGROUP: [u32; 3] = [256, 1, 1];
-const WAVE64_WORKGROUP: [u32; 3] = [64, 1, 1];
 
 const ALPHA_ARGUMENT_KINDS: [GeneralTypedArgumentKindV3; 3] = [
     GeneralTypedArgumentKindV3::Scalar(RustScalarElementTypeV1::F32),
@@ -216,16 +215,17 @@ fn validate_general_typed_launch_v3(
         ));
     };
     let dimensions = [dimensions.x(), dimensions.y(), dimensions.z()];
-    if launch.rank() != 1
-        || (dimensions != DEFAULT_WORKGROUP && dimensions != WAVE64_WORKGROUP)
-        || launch.max_grid()
-            != Dimensions::new(u32::MAX, 1, 1)
-                .map_err(|error| GeneralTypedExtractError::new(error.to_string()))?
-        || launch.static_shared_memory_bytes() != 0
+    let flat_workgroup_size = dimensions
+        .into_iter()
+        .try_fold(1_u32, u32::checked_mul)
+        .ok_or_else(|| GeneralTypedExtractError::new("exact workgroup size overflows u32"))?;
+    if (launch.rank() < 2 && dimensions[1] != 1)
+        || (launch.rank() < 3 && dimensions[2] != 1)
+        || flat_workgroup_size > fe2o3_mir_model::semantic_mir_v1::MAX_SEMANTIC_WORKGROUP_THREADS_V1
         || launch.max_dynamic_shared_memory_bytes() != 0
     {
         return Err(GeneralTypedExtractError::new(
-            "general typed V3 supports only exact 64x1x1 or 256x1x1 launch contracts",
+            "general typed V3 requires a target-sized exact XYZ workgroup and no dynamic shared memory",
         ));
     }
     if exact_argument_names(logical_name, export_name, arguments).is_some()
@@ -825,7 +825,7 @@ fn trusted_index1d_type<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Ty<'tcx>, GeneralType
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fe2o3_artifacts::{DigestBytes, derive_generated_host_contract_identity_v1};
+    use fe2o3_artifacts::{DigestBytes, Dimensions, derive_generated_host_contract_identity_v1};
     use reserved_fe2o3_symbols::{
         GeneratedHostContractIdV3, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
     };

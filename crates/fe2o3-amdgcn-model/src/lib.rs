@@ -36,6 +36,7 @@ impl Dim {
 pub enum AmdgcnIntrinsic {
     WorkItemId(Dim),
     WorkGroupId(Dim),
+    GridSize(Dim),
     DispatchPtr,
     SBarrier,
     MbcntLo,
@@ -55,6 +56,9 @@ impl AmdgcnIntrinsic {
             Self::WorkGroupId(Dim::X) => "llvm.amdgcn.workgroup.id.x",
             Self::WorkGroupId(Dim::Y) => "llvm.amdgcn.workgroup.id.y",
             Self::WorkGroupId(Dim::Z) => "llvm.amdgcn.workgroup.id.z",
+            Self::GridSize(Dim::X) => "llvm.amdgcn.grid.size.x",
+            Self::GridSize(Dim::Y) => "llvm.amdgcn.grid.size.y",
+            Self::GridSize(Dim::Z) => "llvm.amdgcn.grid.size.z",
             Self::DispatchPtr => "llvm.amdgcn.dispatch.ptr",
             Self::SBarrier => "llvm.amdgcn.s.barrier",
             Self::MbcntLo => "llvm.amdgcn.mbcnt.lo",

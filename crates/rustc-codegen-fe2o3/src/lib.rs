@@ -42,6 +42,7 @@ mod mir_import_v2;
 mod moe_top2_v1_codegen;
 mod monomorphization_dead;
 mod pipeline_selection;
+mod production_geometry_v1;
 mod production_pipeline_v1;
 mod production_ranked_projection_v1;
 mod production_rustc_driver_v1;

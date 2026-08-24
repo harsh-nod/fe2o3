@@ -549,9 +549,32 @@ fn write_memory_incomplete_reason(
         FormalMemoryIncompleteReason::LaunchRankUnsupported { rank } => {
             write!(formatter, "launch rank {rank} is unsupported")
         }
+        FormalMemoryIncompleteReason::LaunchRankMismatch {
+            domain_rank,
+            extent_rank,
+        } => write!(
+            formatter,
+            "launch-domain rank {domain_rank} does not match analyzed rank {extent_rank}",
+        ),
+        FormalMemoryIncompleteReason::LaunchExtentShapeMismatch { rank, extents } => write!(
+            formatter,
+            "rank-{rank} analyzed launch has invalid extents {extents:?}",
+        ),
+        FormalMemoryIncompleteReason::LaunchExtentOverflow { rank, extents } => write!(
+            formatter,
+            "rank-{rank} analyzed launch extents {extents:?} overflow the invocation range",
+        ),
         FormalMemoryIncompleteReason::StaticLaunchExtentMismatch { expected, actual } => write!(
             formatter,
             "static launch extent {expected} does not match analyzed extent {actual}",
+        ),
+        FormalMemoryIncompleteReason::StaticLaunchAxisExtentMismatch {
+            axis,
+            expected,
+            actual,
+        } => write!(
+            formatter,
+            "static {axis:?} launch extent {expected} does not match analyzed extent {actual}",
         ),
         FormalMemoryIncompleteReason::CallEffectsUnavailable { location, callee } => write!(
             formatter,

@@ -3950,20 +3950,35 @@ fn collect_intrinsic_declarations<'a>(
                     );
                 }
                 OperationKind::Intrinsic(_) => {
-                    insert_intrinsic(
-                        &mut declarations,
-                        AmdgcnIntrinsic::WorkItemId(Dim::X),
-                        "i32",
-                        "",
-                        IntrinsicAttribute::ReadNone,
-                    );
-                    insert_intrinsic(
-                        &mut declarations,
-                        AmdgcnIntrinsic::WorkGroupId(Dim::X),
-                        "i32",
-                        "",
-                        IntrinsicAttribute::ReadNone,
-                    );
+                    let rank = lowerer.kernel.map_or(1, |kernel| kernel.domain.rank());
+                    for dim in [Dim::X, Dim::Y, Dim::Z].into_iter().take(usize::from(rank)) {
+                        insert_intrinsic(
+                            &mut declarations,
+                            AmdgcnIntrinsic::WorkItemId(dim),
+                            "i32",
+                            "",
+                            IntrinsicAttribute::ReadNone,
+                        );
+                        insert_intrinsic(
+                            &mut declarations,
+                            AmdgcnIntrinsic::WorkGroupId(dim),
+                            "i32",
+                            "",
+                            IntrinsicAttribute::ReadNone,
+                        );
+                    }
+                    for dim in [Dim::X, Dim::Y]
+                        .into_iter()
+                        .take(usize::from(rank.saturating_sub(1)))
+                    {
+                        insert_intrinsic(
+                            &mut declarations,
+                            AmdgcnIntrinsic::GridSize(dim),
+                            "i32",
+                            "",
+                            IntrinsicAttribute::ReadNone,
+                        );
+                    }
                 }
                 OperationKind::Binary {
                     op: BinaryOp::Checked(operator),
@@ -4358,11 +4373,8 @@ fn validate_launch(
         LaunchDomain::D2 {
             x: LaunchExtent::Static(_),
             y: LaunchExtent::Static(_),
-        } if !matches!(
-            target,
-            LoweringTarget::Gfx942TiledGemmLdsGridV1 | LoweringTarget::Gfx942TiledGemmLdsEdgesV1
-        ) => {}
-        LaunchDomain::D3 {
+        }
+        | LaunchDomain::D3 {
             x: LaunchExtent::Static(_),
             y: LaunchExtent::Static(_),
             z: LaunchExtent::Static(_),
@@ -4370,11 +4382,18 @@ fn validate_launch(
             target,
             LoweringTarget::Gfx942TiledGemmLdsGridV1 | LoweringTarget::Gfx942TiledGemmLdsEdgesV1
         ) => {}
+        LaunchDomain::D2 { .. } | LaunchDomain::D3 { .. }
+            if matches!(
+                target,
+                LoweringTarget::Baseline
+                    | LoweringTarget::Gfx942StrictFloatV1
+                    | LoweringTarget::Gfx942XnackMinusV1
+            ) => {}
         LaunchDomain::D2 { .. } | LaunchDomain::D3 { .. } => {
             return Err(LoweringErrors::one(
                 LoweringLocation::kernel(module, kernel),
                 LoweringDiagnosticCode::UnsupportedLaunchDomain,
-                "higher-rank launch domains require fully static extents outside the authenticated tiled GEMM LDS grid profiles",
+                "the authenticated specialized profile requires its exact static launch domain",
             ));
         }
     }
@@ -4552,6 +4571,141 @@ fn lower_hex(bytes: &[u8]) -> String {
 impl<'a> FunctionLowerer<'a> {
     fn flat_workgroup_size(&self) -> Option<u32> {
         self.workgroup_size.and_then(checked_flat_workgroup_size)
+    }
+
+    fn emit_logical_global_id(&self, output: &mut dyn fmt::Write, result: &str) {
+        let kernel = self
+            .kernel
+            .expect("global invocation index requires a kernel");
+        let workgroup = self
+            .workgroup_size
+            .expect("global invocation index requires a kernel workgroup size");
+        if kernel.domain.rank() == 1 {
+            writeln!(
+                output,
+                "  {result}.local.i32 = call i32 @{}()",
+                AmdgcnIntrinsic::WorkItemId(Dim::X).llvm_name()
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "  {result}.group.i32 = call i32 @{}()",
+                AmdgcnIntrinsic::WorkGroupId(Dim::X).llvm_name()
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "  {result}.local = zext i32 {result}.local.i32 to i64"
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "  {result}.group = zext i32 {result}.group.i32 to i64"
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "  {result}.base = mul i64 {result}.group, {}",
+                workgroup.x
+            )
+            .unwrap();
+            writeln!(output, "  {result} = add i64 {result}.base, {result}.local").unwrap();
+            return;
+        }
+
+        for (dim, extent) in [
+            (Dim::X, workgroup.x),
+            (Dim::Y, workgroup.y),
+            (Dim::Z, workgroup.z),
+        ]
+        .into_iter()
+        .take(usize::from(kernel.domain.rank()))
+        {
+            let suffix = dim.suffix();
+            writeln!(
+                output,
+                "  {result}.{suffix}.local.i32 = call i32 @{}()",
+                AmdgcnIntrinsic::WorkItemId(dim).llvm_name()
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "  {result}.{suffix}.group.i32 = call i32 @{}()",
+                AmdgcnIntrinsic::WorkGroupId(dim).llvm_name()
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "  {result}.{suffix}.local = zext i32 {result}.{suffix}.local.i32 to i64"
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "  {result}.{suffix}.group = zext i32 {result}.{suffix}.group.i32 to i64"
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "  {result}.{suffix}.base = mul i64 {result}.{suffix}.group, {extent}"
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "  {result}.{suffix} = add i64 {result}.{suffix}.base, {result}.{suffix}.local"
+            )
+            .unwrap();
+        }
+        writeln!(
+            output,
+            "  {result}.grid.x.i32 = call i32 @{}()",
+            AmdgcnIntrinsic::GridSize(Dim::X).llvm_name()
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  {result}.grid.x = zext i32 {result}.grid.x.i32 to i64"
+        )
+        .unwrap();
+        if kernel.domain.rank() == 2 {
+            writeln!(
+                output,
+                "  {result}.row = mul i64 {result}.y, {result}.grid.x"
+            )
+            .unwrap();
+            writeln!(output, "  {result} = add i64 {result}.row, {result}.x").unwrap();
+            return;
+        }
+        writeln!(
+            output,
+            "  {result}.grid.y.i32 = call i32 @{}()",
+            AmdgcnIntrinsic::GridSize(Dim::Y).llvm_name()
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  {result}.grid.y = zext i32 {result}.grid.y.i32 to i64"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  {result}.plane = mul i64 {result}.z, {result}.grid.y"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  {result}.plane_row = add i64 {result}.plane, {result}.y"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  {result}.plane_row_scaled = mul i64 {result}.plane_row, {result}.grid.x"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  {result} = add i64 {result}.plane_row_scaled, {result}.x"
+        )
+        .unwrap();
     }
 
     fn new(
@@ -6265,12 +6419,6 @@ impl<'a> FunctionLowerer<'a> {
                     writeln!(output, "  {result} = add i64 {result}.group, 0").unwrap();
                     return Ok(());
                 }
-                writeln!(
-                    output,
-                    "  {result}.local.i32 = call i32 @{}()",
-                    AmdgcnIntrinsic::WorkItemId(Dim::X).llvm_name()
-                )
-                .unwrap();
                 if matches!(
                     intrinsic.kind,
                     IntrinsicKind::InvocationIndex {
@@ -6278,13 +6426,15 @@ impl<'a> FunctionLowerer<'a> {
                         axis: Axis::X,
                     }
                 ) {
-                    writeln!(
-                        output,
-                        "  {result}.group.i32 = call i32 @{}()",
-                        AmdgcnIntrinsic::WorkGroupId(Dim::X).llvm_name()
-                    )
-                    .unwrap();
+                    self.emit_logical_global_id(output, &result);
+                    return Ok(());
                 }
+                writeln!(
+                    output,
+                    "  {result}.local.i32 = call i32 @{}()",
+                    AmdgcnIntrinsic::WorkItemId(Dim::X).llvm_name()
+                )
+                .unwrap();
                 writeln!(
                     output,
                     "  {result}.local = zext i32 {result}.local.i32 to i64"
@@ -6296,26 +6446,6 @@ impl<'a> FunctionLowerer<'a> {
                         axis: Axis::X,
                     } => {
                         writeln!(output, "  {result} = add i64 {result}.local, 0").unwrap();
-                    }
-                    IntrinsicKind::InvocationIndex {
-                        kind: IndexKind::Global,
-                        axis: Axis::X,
-                    } => {
-                        writeln!(
-                            output,
-                            "  {result}.group = zext i32 {result}.group.i32 to i64"
-                        )
-                        .unwrap();
-                        writeln!(
-                            output,
-                            "  {result}.base = mul i64 {result}.group, {}",
-                            self.workgroup_size
-                                .expect("global invocation index requires a kernel workgroup size")
-                                .x
-                        )
-                        .unwrap();
-                        writeln!(output, "  {result} = add i64 {result}.base, {result}.local")
-                            .unwrap();
                     }
                     _ => unreachable!("preflight rejected unsupported intrinsic"),
                 }

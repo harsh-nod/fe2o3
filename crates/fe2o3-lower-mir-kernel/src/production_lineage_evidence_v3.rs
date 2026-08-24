@@ -10,8 +10,8 @@ use fe2o3_kernel_ir::{
 use sha2::{Digest, Sha256};
 
 use crate::{
-    PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1, ProductionFormalMemoryErrorV1,
-    ProductionFormalMemoryOwnerV1, ProductionSemanticKirErrorV1, ProductionSemanticKirOwnerV1,
+    ProductionFormalMemoryErrorV1, ProductionFormalMemoryOwnerV1, ProductionSemanticKirErrorV1,
+    ProductionSemanticKirOwnerV1,
 };
 
 /// Wire version for exact MIR-to-KIR correspondence lineage evidence.
@@ -380,11 +380,6 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV3 {
             &canonical_kir_v5_identity,
         )?;
 
-        if owner.witness_extent() != PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1 {
-            return Err(ProductionLineageEvidenceErrorV3::InvalidFormalAdmission(
-                "live owner witness extent does not match the production policy",
-            ));
-        }
         if !owner.obligations().inter_invocation_conflicts().is_empty() {
             return Err(ProductionLineageEvidenceErrorV3::InvalidFormalAdmission(
                 "live owner retains inter-invocation conflicts",
@@ -405,7 +400,7 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV3 {
         let canonical_bytes = encode_formal_memory_admission(
             canonical_kir_v5_identity,
             receipt_identity,
-            owner.witness_extent(),
+            owner.witness_invocation_count(),
             FormalMemoryCompletenessPolicyV3::RequireCompleteConflictFree,
             FormalMemoryCompletenessStatusV3::Complete,
             0,
@@ -441,9 +436,9 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV3 {
             &formal_obligation_receipt_identity,
         )?;
         let witness_extent = reader.u64()?;
-        if witness_extent != PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1 {
+        if !is_production_witness_invocation_count(witness_extent) {
             return Err(ProductionLineageEvidenceErrorV3::InvalidFormalAdmission(
-                "witness extent does not match the production policy",
+                "flattened witness invocation count does not match the production policy",
             ));
         }
         let completeness_policy = decode_completeness_policy(reader.u16()?)?;
@@ -580,7 +575,7 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV3 {
         &self.canonical_bytes[self.formal_obligation_receipt_offset..]
     }
 
-    /// Returns the exact structural witness extent.
+    /// Returns the exact flattened structural witness invocation count.
     pub const fn witness_extent(&self) -> u64 {
         self.witness_extent
     }
@@ -1036,7 +1031,7 @@ fn encode_formal_memory_admission(
         "formal-obligation receipt identity",
         &formal_obligation_receipt_identity,
     )?;
-    if witness_extent != PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1
+    if !is_production_witness_invocation_count(witness_extent)
         || completeness_policy != FormalMemoryCompletenessPolicyV3::RequireCompleteConflictFree
         || completeness_status != FormalMemoryCompletenessStatusV3::Complete
         || static_conflict_count != 0
@@ -1254,6 +1249,10 @@ fn validate_formal_receipt_witness(
     Ok(())
 }
 
+const fn is_production_witness_invocation_count(count: u64) -> bool {
+    count != 0
+}
+
 fn push_u16(bytes: &mut Vec<u8>, value: u16) {
     bytes.extend_from_slice(&value.to_le_bytes());
 }
@@ -1340,7 +1339,7 @@ mod tests {
     use fe2o3_pliron::{ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1};
 
     use super::*;
-    use crate::ProductionSemanticKirLimitsV1;
+    use crate::{PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1, ProductionSemanticKirLimitsV1};
 
     const SEMANTIC_SHA_OFFSET: usize = COMMON_HEADER_BYTES_V3;
     const KIR_IDENTITY_OFFSET: usize = SEMANTIC_SHA_OFFSET + 32;

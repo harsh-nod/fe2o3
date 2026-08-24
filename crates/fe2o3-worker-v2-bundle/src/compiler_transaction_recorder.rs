@@ -2862,22 +2862,28 @@ fn validate_kernel_launch(
     descriptor: &KernelDescriptorV1,
 ) -> Result<(), CompilerTransactionRecorderErrorV1> {
     let expected = descriptor.launch();
+    let BlockSizeV1::Exact(expected_block) = expected.block_size() else {
+        return Err(CompilerTransactionRecorderErrorV1::ArtifactLaunchMismatch);
+    };
+    let expected_flat_workgroup = expected_block
+        .x()
+        .checked_mul(expected_block.y())
+        .and_then(|xy| xy.checked_mul(expected_block.z()));
     let max_grid = expected.max_grid();
     let actual_grid = launch.max_grid();
-    let block_matches = match (launch.block_size(), expected.block_size()) {
-        (BlockSize::Any, BlockSizeV1::Any) => true,
-        (BlockSize::Exact(actual), BlockSizeV1::Exact(expected))
-        | (BlockSize::AtMost(actual), BlockSizeV1::AtMost(expected)) => {
-            actual.x() == expected.x() && actual.y() == expected.y() && actual.z() == expected.z()
-        }
-        _ => false,
-    };
+    let block_matches = matches!(
+        launch.block_size(),
+        BlockSize::Exact(actual)
+            if actual.x() == expected_block.x()
+                && actual.y() == expected_block.y()
+                && actual.z() == expected_block.z()
+    );
     if launch.rank() != expected.rank()
         || !block_matches
         || actual_grid.x() != max_grid.x()
         || actual_grid.y() != max_grid.y()
         || actual_grid.z() != max_grid.z()
-        || expected.max_flat_workgroup_size() != 256
+        || expected_flat_workgroup != Some(expected.max_flat_workgroup_size())
         || launch.static_shared_memory_bytes() != expected.static_shared_memory_bytes()
         || launch.max_dynamic_shared_memory_bytes() != expected.max_dynamic_shared_memory_bytes()
     {

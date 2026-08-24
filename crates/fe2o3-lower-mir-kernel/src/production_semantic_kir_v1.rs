@@ -559,7 +559,7 @@ pub struct ProductionSemanticKirOwnerV1 {
     canonical_kernel_ir_v7: VerifiedCanonicalKernelIrV7,
     correspondence: SemanticKirCorrespondenceV1,
     limits: ProductionSemanticKirLimitsV1,
-    discharge_ranked_bounds: bool,
+    launch_rank: Option<u8>,
     generic_checks: Option<RetainedGenericKernelChecksV1>,
 }
 
@@ -581,7 +581,7 @@ impl fmt::Debug for ProductionSemanticKirOwnerV1 {
             )
             .field("correspondence", &self.correspondence)
             .field("limits", &self.limits)
-            .field("discharge_ranked_bounds", &self.discharge_ranked_bounds)
+            .field("launch_rank", &self.launch_rank)
             .field("retains_generic_checks", &self.generic_checks.is_some())
             .finish_non_exhaustive()
     }
@@ -596,7 +596,7 @@ impl ProductionSemanticKirOwnerV1 {
         semantic
             .verify_equivalence()
             .map_err(ProductionSemanticKirErrorV1::SemanticOwner)?;
-        let (module, correspondence) = lower_module(&semantic, limits)?;
+        let (module, correspondence) = lower_module(&semantic, limits, None)?;
         let canonical_kernel_ir_v7 = VerifiedCanonicalKernelIrV7::from_module(module.clone())
             .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV7)?;
         let owner = Self {
@@ -605,7 +605,7 @@ impl ProductionSemanticKirOwnerV1 {
             canonical_kernel_ir_v7,
             correspondence,
             limits,
-            discharge_ranked_bounds: false,
+            launch_rank: None,
             generic_checks: None,
         };
         owner.verify_equivalence()?;
@@ -617,6 +617,7 @@ impl ProductionSemanticKirOwnerV1 {
     pub fn try_lower_after_ranked_checks(
         receipt: ProductionRankedSemanticProjectionReceiptV1,
         limits: ProductionSemanticKirLimitsV1,
+        launch_rank: u8,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         let ProductionRankedSemanticProjectionReceiptV1 {
             semantic,
@@ -636,7 +637,7 @@ impl ProductionSemanticKirOwnerV1 {
                 "ranked proof custody contains a rejected mandatory kernel check",
             ));
         }
-        let (module, correspondence) = lower_module(&semantic, limits)?;
+        let (module, correspondence) = lower_module(&semantic, limits, Some(launch_rank))?;
         let canonical_kernel_ir_v7 = VerifiedCanonicalKernelIrV7::from_module(module.clone())
             .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV7)?;
         let owner = Self {
@@ -645,7 +646,7 @@ impl ProductionSemanticKirOwnerV1 {
             canonical_kernel_ir_v7,
             correspondence,
             limits,
-            discharge_ranked_bounds: true,
+            launch_rank: Some(launch_rank),
             generic_checks: Some(RetainedGenericKernelChecksV1 {
                 semantic_sha256,
                 function_name,
@@ -667,7 +668,7 @@ impl ProductionSemanticKirOwnerV1 {
             .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV7)?;
         verify_module(&self.module).map_err(ProductionSemanticKirErrorV1::InvalidKernelIr)?;
         let (rederived_module, rederived_correspondence) =
-            lower_module(&self.semantic, self.limits)?;
+            lower_module(&self.semantic, self.limits, self.launch_rank)?;
         let rederived_canonical_kernel_ir_v7 =
             VerifiedCanonicalKernelIrV7::from_module(rederived_module.clone())
                 .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV7)?;
@@ -1220,6 +1221,7 @@ fn semantic_requires_runtime_assert_failure(function: &SemanticFunctionDeclV1) -
 fn lower_module(
     owner: &ProductionSemanticMirOwnerV1,
     limits: ProductionSemanticKirLimitsV1,
+    authenticated_launch_rank: Option<u8>,
 ) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
     let semantic = owner.semantic();
     enforce_limit(
@@ -1484,18 +1486,36 @@ fn lower_module(
     if has_runtime_assert {
         module.functions.push(trap.declaration());
     }
-    let mut kernel = Kernel::new(
-        symbol,
-        function_id,
-        LaunchDomain::D1 {
-            x: LaunchExtent::Dynamic,
-        },
-    );
-    if let Some(required) = entry
+    let required_workgroup = entry
         .source_contract()
         .launch()
-        .and_then(|launch| launch.required())
-    {
+        .and_then(|launch| launch.required());
+    let dimensions = required_workgroup.map(|required| required.as_array());
+    let launch_rank = authenticated_launch_rank.unwrap_or(1);
+    let launch = match (launch_rank, dimensions) {
+        (1, Some([_, 1, 1]) | None) => LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+        (2, Some([_, _, 1]) | None) => LaunchDomain::D2 {
+            x: LaunchExtent::Dynamic,
+            y: LaunchExtent::Dynamic,
+        },
+        (3, Some(_) | None) => LaunchDomain::D3 {
+            x: LaunchExtent::Dynamic,
+            y: LaunchExtent::Dynamic,
+            z: LaunchExtent::Dynamic,
+        },
+        _ => {
+            return Err(unsupported(
+                0,
+                None,
+                None,
+                "authenticated launch rank disagrees with source workgroup axes",
+            ));
+        }
+    };
+    let mut kernel = Kernel::new(symbol, function_id, launch);
+    if let Some(required) = required_workgroup {
         let [x, y, z] = required.as_array();
         kernel.workgroup_size = Some(WorkgroupSize::new(x, y, z));
     }

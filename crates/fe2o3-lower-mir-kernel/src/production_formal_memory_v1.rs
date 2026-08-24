@@ -3,14 +3,15 @@
 use std::{error::Error, fmt};
 
 use fe2o3_kernel_ir::{
-    ExplicitLaunchExtent1d, FormalIndexWidth, FormalMemoryIncompleteReason,
+    ExplicitLaunchExtent, FormalIndexWidth, FormalMemoryIncompleteReason,
     FormalMemoryObligationAnalysis, FormalMemoryObligationError, FormalMemoryObligations,
-    InterInvocationConflictRequirement, derive_kernel_memory_obligations,
+    InterInvocationConflictRequirement, LaunchDomain, LaunchExtent,
+    derive_kernel_memory_obligations_for_launch,
 };
 
 use crate::{ProductionSemanticKirErrorV1, ProductionSemanticKirOwnerV1};
 
-/// The smallest launch that exposes behavior between distinct invocations.
+/// The per-active-axis extent of the smallest structural witness launch.
 pub const PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1: u64 = 2;
 
 /// Fail-closed diagnostics from production formal-memory admission.
@@ -81,12 +82,12 @@ impl Error for ProductionFormalMemoryErrorV1 {
 
 /// Move-only owner of exact semantic KIR and composed memory-safety evidence.
 ///
-/// Admission uses a two-invocation witness so cross-invocation affine overlap
-/// is observable. Affine effects retain complete formal obligations. Dynamic
-/// index expressions may instead be discharged by the exact owner-held ranked
-/// bounds/race receipt; no other incomplete formal reason is admitted. Retained
-/// bounds and alias records are runtime obligations, not evidence about any
-/// concrete launch or allocation.
+/// Admission uses extent two on every active launch axis so cross-invocation
+/// affine overlap is observable in each dimension. Affine effects retain
+/// complete formal obligations. Dynamic index expressions may instead be
+/// discharged by the exact owner-held ranked bounds/race receipt; no other
+/// incomplete formal reason is admitted. Retained bounds and alias records are
+/// runtime obligations, not evidence about any concrete launch or allocation.
 #[must_use = "dropping formal admission abandons the target-neutral safety witness"]
 pub struct ProductionFormalMemoryOwnerV1 {
     semantic_kir: ProductionSemanticKirOwnerV1,
@@ -168,9 +169,22 @@ impl ProductionFormalMemoryOwnerV1 {
         &self.ranked_discharged_reasons
     }
 
-    /// Returns the fixed two-invocation structural witness extent.
+    /// Returns the structural fallback extent used for every dynamic axis.
     pub const fn witness_extent(&self) -> u64 {
         PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1
+    }
+
+    /// Returns exact per-axis extents of the admitted structural witness.
+    pub fn witness_extents(&self) -> [u64; 3] {
+        witness_extents(&self.semantic_kir.module().kernels[0].domain)
+    }
+
+    /// Returns the exact flattened invocation count in the structural witness.
+    pub fn witness_invocation_count(&self) -> u64 {
+        let Some(invocations) = self.obligations.invocations() else {
+            return 0;
+        };
+        invocations.end_exclusive() - invocations.start()
     }
 
     /// Formal admission alone never grants artifact or launch authority.
@@ -191,10 +205,16 @@ fn derive_admitted_obligations(
             actual: module.kernels.len(),
         });
     }
-    let analysis = derive_kernel_memory_obligations(
+    let domain = &module.kernels[0].domain;
+    let rank = domain.rank();
+    let witness = ExplicitLaunchExtent::Exact {
+        rank,
+        extents: witness_extents(domain),
+    };
+    let analysis = derive_kernel_memory_obligations_for_launch(
         module,
         &module.kernels[0].id,
-        ExplicitLaunchExtent1d::Exact(PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1),
+        witness,
         FormalIndexWidth::Bits64,
     )
     .map_err(ProductionFormalMemoryErrorV1::Analysis)?;
@@ -241,4 +261,15 @@ fn derive_admitted_obligations(
         });
     }
     Ok((obligations, ranked_discharged_reasons))
+}
+
+fn witness_extents(domain: &LaunchDomain) -> [u64; 3] {
+    let mut witness = [1_u64; 3];
+    for (axis, extent) in domain.extents().enumerate() {
+        witness[axis] = match extent {
+            LaunchExtent::Static(extent) => u64::from(extent),
+            LaunchExtent::Dynamic => PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1,
+        };
+    }
+    witness
 }

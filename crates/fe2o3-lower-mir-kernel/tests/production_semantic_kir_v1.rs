@@ -4,10 +4,10 @@ use fe2o3_kernel_ir::{
     decode_module_v7, gfx942_xnack_minus_target_capability, verify_module,
 };
 use fe2o3_lower_mir_kernel::{
-    PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1, ProductionFormalMemoryOwnerV1,
-    ProductionRankedSemanticProjectionReceiptV1, ProductionSemanticKirErrorV1,
-    ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1, ProductionSemanticKirResourceV1,
-    SemanticKirSyntheticOperationRuleV1,
+    InertCanonicalFormalMemoryAdmissionEvidenceV3, PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1,
+    ProductionFormalMemoryOwnerV1, ProductionRankedSemanticProjectionReceiptV1,
+    ProductionSemanticKirErrorV1, ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1,
+    ProductionSemanticKirResourceV1, SemanticKirSyntheticOperationRuleV1,
 };
 use fe2o3_mir_model::semantic_mir_v1::*;
 use fe2o3_pliron::{
@@ -838,36 +838,82 @@ fn runtime_assert_failure_trap_has_typed_synthetic_coverage() {
 
 #[test]
 fn ranked_checks_remain_in_custody_through_kir_and_formal_memory() {
-    let kernel = ProductionRankedKernelV1::new(
-        "semantic_kir_test",
-        0,
-        vec![ProductionRankedBlockV1::new(
-            vec![],
-            ProductionRankedTerminatorV1::Return,
-        )],
-    )
-    .unwrap();
-    let construction =
-        ProductionConstructionV1::ranked_kernel("semantic_kir_test_module", kernel).unwrap();
-    let ranked =
-        compile_ranked_kernel_for_lowering_v1(construction, ProductionSessionLimitsV1::default())
+    for (rank, expected_domain) in [
+        (
+            1,
+            LaunchDomain::D1 {
+                x: fe2o3_kernel_ir::LaunchExtent::Dynamic,
+            },
+        ),
+        (
+            2,
+            LaunchDomain::D2 {
+                x: fe2o3_kernel_ir::LaunchExtent::Dynamic,
+                y: fe2o3_kernel_ir::LaunchExtent::Dynamic,
+            },
+        ),
+        (
+            3,
+            LaunchDomain::D3 {
+                x: fe2o3_kernel_ir::LaunchExtent::Dynamic,
+                y: fe2o3_kernel_ir::LaunchExtent::Dynamic,
+                z: fe2o3_kernel_ir::LaunchExtent::Dynamic,
+            },
+        ),
+    ] {
+        let kernel = ProductionRankedKernelV1::new(
+            "semantic_kir_test",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                vec![],
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap();
+        let construction =
+            ProductionConstructionV1::ranked_kernel("semantic_kir_test_module", kernel).unwrap();
+        let ranked = compile_ranked_kernel_for_lowering_v1(
+            construction,
+            ProductionSessionLimitsV1::default(),
+        )
+        .unwrap();
+        let receipt =
+            ProductionRankedSemanticProjectionReceiptV1::assert_compiler_internal_projection(
+                semantic_owner(false, false),
+                ranked,
+                "func @semantic_kir_test { kernel.return }".to_owned(),
+            )
             .unwrap();
-    let receipt = ProductionRankedSemanticProjectionReceiptV1::assert_compiler_internal_projection(
-        semantic_owner(false, false),
-        ranked,
-        "func @semantic_kir_test { kernel.return }".to_owned(),
-    )
-    .unwrap();
-    let lowered = ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
-        receipt,
-        ProductionSemanticKirLimitsV1::default(),
-    )
-    .unwrap();
+        let lowered = ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
+            receipt,
+            ProductionSemanticKirLimitsV1::default(),
+            rank,
+        )
+        .unwrap();
 
-    assert!(lowered.retains_mandatory_generic_checks());
-    lowered.verify_equivalence().unwrap();
-    let formal = ProductionFormalMemoryOwnerV1::try_admit(lowered).unwrap();
-    assert!(formal.semantic_kir().retains_mandatory_generic_checks());
+        assert!(lowered.retains_mandatory_generic_checks());
+        assert_eq!(lowered.module().kernels[0].domain, expected_domain);
+        assert_eq!(
+            lowered.module().kernels[0].workgroup_size,
+            Some(WorkgroupSize::new(64, 1, 1))
+        );
+        lowered.verify_equivalence().unwrap();
+        let formal = ProductionFormalMemoryOwnerV1::try_admit(lowered).unwrap();
+        assert!(formal.semantic_kir().retains_mandatory_generic_checks());
+        assert_eq!(
+            formal.witness_extents(),
+            match rank {
+                1 => [2, 1, 1],
+                2 => [2, 2, 1],
+                3 => [2, 2, 2],
+                _ => unreachable!(),
+            }
+        );
+        let evidence =
+            InertCanonicalFormalMemoryAdmissionEvidenceV3::from_live_owner(&formal).unwrap();
+        assert_eq!(evidence.witness_extent(), 1_u64 << rank);
+        evidence.revalidate().unwrap();
+    }
 }
 
 #[test]

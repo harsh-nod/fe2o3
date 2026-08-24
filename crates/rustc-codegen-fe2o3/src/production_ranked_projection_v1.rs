@@ -592,6 +592,7 @@ impl std::error::Error for ProductionRankedProjectionErrorV1 {
 
 pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     semantic_owner: ProductionSemanticMirOwnerV1,
+    source_rank: u8,
 ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
     semantic_owner
         .verify_equivalence()
@@ -624,6 +625,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     let mut entry_operations = vec![source_execution_layout_v1(
         semantic.target().architecture(),
         root_function,
+        source_rank,
     )?];
     let mut next_value = 0_u32;
     let mut incomplete = None;
@@ -5126,6 +5128,7 @@ fn assign_index_capability(
 fn source_execution_layout_v1(
     architecture: SemanticTargetArchitectureV1,
     function: &SemanticFunctionDeclV1,
+    source_rank: u8,
 ) -> Result<ProductionRankedOperationV1, ProductionRankedProjectionErrorV1> {
     let entry = function
         .kernel_entry()
@@ -5141,6 +5144,16 @@ fn source_execution_layout_v1(
         ))?
         .as_array();
     let workgroup_extents = required.map(u64::from);
+    let global_extents = match source_rank {
+        1 if required[1] == 1 && required[2] == 1 => [0, 1, 1],
+        2 if required[2] == 1 => [0, 0, 1],
+        3 => [0, 0, 0],
+        _ => {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "authenticated launch rank disagrees with source workgroup axes",
+            ));
+        }
+    };
     let subgroup_size = match architecture {
         SemanticTargetArchitectureV1::AmdGpuGfx942 => 64,
     };
@@ -5154,7 +5167,7 @@ fn source_execution_layout_v1(
         })?;
     Ok(ProductionRankedOperationV1::ExecutionLayout {
         grid_identity: identity,
-        global_extents: [0, 1, 1],
+        global_extents,
         workgroup_extents,
         subgroup_size,
         full_physical_workgroups: true,
@@ -10519,31 +10532,44 @@ mod tests {
     }
 
     #[test]
-    fn source_execution_layout_keeps_only_the_d1_grid_extent_dynamic() {
-        let dimensions = SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap();
-        let launch =
-            SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None).unwrap();
-        let source_contract =
-            SemanticKernelSourceContractV1::new(Some(launch), None, None).unwrap();
-        let function =
-            projection_function(vec![block(30, vec![], SemanticTerminatorKindV1::Return)])
-                .with_kernel_entry(SemanticKernelEntryV1::new(
-                    SemanticLinkSymbolV1::new(b"typed_kernel".to_vec()).unwrap(),
-                    SemanticKernelBindingIdentityV1::from_sha256(bytes(42)),
-                    source_contract,
-                ));
+    fn source_execution_layout_derives_active_grid_axes_from_xyz_workgroup() {
+        for (rank, workgroup, global_extents) in [
+            (1, [128, 1, 1], [0, 1, 1]),
+            (2, [64, 1, 1], [0, 0, 1]),
+            (2, [8, 8, 1], [0, 0, 1]),
+            (3, [64, 1, 1], [0, 0, 0]),
+            (3, [4, 4, 4], [0, 0, 0]),
+        ] {
+            let dimensions = SemanticWorkgroupDimensionsV1::new(workgroup).unwrap();
+            let launch =
+                SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None)
+                    .unwrap();
+            let source_contract =
+                SemanticKernelSourceContractV1::new(Some(launch), None, None).unwrap();
+            let function =
+                projection_function(vec![block(30, vec![], SemanticTerminatorKindV1::Return)])
+                    .with_kernel_entry(SemanticKernelEntryV1::new(
+                        SemanticLinkSymbolV1::new(b"typed_kernel".to_vec()).unwrap(),
+                        SemanticKernelBindingIdentityV1::from_sha256(bytes(42)),
+                        source_contract,
+                    ));
 
-        assert_eq!(
-            source_execution_layout_v1(SemanticTargetArchitectureV1::AmdGpuGfx942, &function)
+            assert_eq!(
+                source_execution_layout_v1(
+                    SemanticTargetArchitectureV1::AmdGpuGfx942,
+                    &function,
+                    rank,
+                )
                 .unwrap(),
-            ProductionRankedOperationV1::ExecutionLayout {
-                grid_identity: u64::from_le_bytes([42; 8]),
-                global_extents: [0, 1, 1],
-                workgroup_extents: [64, 1, 1],
-                subgroup_size: 64,
-                full_physical_workgroups: true,
-            }
-        );
+                ProductionRankedOperationV1::ExecutionLayout {
+                    grid_identity: u64::from_le_bytes([42; 8]),
+                    global_extents,
+                    workgroup_extents: workgroup.map(u64::from),
+                    subgroup_size: 64,
+                    full_physical_workgroups: true,
+                }
+            );
+        }
     }
 
     #[test]

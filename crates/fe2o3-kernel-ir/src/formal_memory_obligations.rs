@@ -7,8 +7,8 @@ use std::{
 use crate::{
     AccessMode, AddressSpace, Axis, BinaryOp, ByteExpression, Constant, Function, FunctionId,
     FunctionOperationLocation, IndexKind, IntrinsicKind, InvocationRange1d, KernelId, LaunchDomain,
-    LaunchExtent, MemoryAccess, Module, Operation, OperationKind, ScalarType, Type, ValueId,
-    VerificationErrors, VerifiedKernelIrModuleV1, verify_module_ref,
+    LaunchExtent, MemoryAccess, Module, Operation, OperationKind, RegionValidationError,
+    ScalarType, Type, ValueId, VerificationErrors, VerifiedKernelIrModuleV1, verify_module_ref,
 };
 
 mod receipt_v1;
@@ -24,6 +24,56 @@ pub use receipt_v1::*;
 pub enum ExplicitLaunchExtent1d {
     Exact(u64),
     Unknown,
+}
+
+/// Caller-supplied ranked launch extents used for formal extraction.
+///
+/// Active axes are interpreted in X-major row-major order. Inactive axes must
+/// have extent one. As with [`ExplicitLaunchExtent1d`], these values are
+/// descriptive inputs and do not authenticate a runtime launch.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ExplicitLaunchExtent {
+    Exact { rank: u8, extents: [u64; 3] },
+    Unknown,
+}
+
+impl From<ExplicitLaunchExtent1d> for ExplicitLaunchExtent {
+    fn from(value: ExplicitLaunchExtent1d) -> Self {
+        match value {
+            ExplicitLaunchExtent1d::Exact(x) => Self::Exact {
+                rank: 1,
+                extents: [x, 1, 1],
+            },
+            ExplicitLaunchExtent1d::Unknown => Self::Unknown,
+        }
+    }
+}
+
+/// Returns the row-major logical invocation index for one ranked coordinate.
+///
+/// Invalid ranks, inactive-axis shapes, out-of-range coordinates, and
+/// arithmetic overflow return `None`.
+pub fn row_major_invocation_index(
+    rank: u8,
+    extents: [u64; 3],
+    coordinate: [u64; 3],
+) -> Option<u64> {
+    if !(1..=3).contains(&rank)
+        || (rank < 2 && (extents[1] != 1 || coordinate[1] != 0))
+        || (rank < 3 && (extents[2] != 1 || coordinate[2] != 0))
+        || extents.contains(&0)
+        || coordinate
+            .into_iter()
+            .zip(extents)
+            .any(|(coordinate, extent)| coordinate >= extent)
+    {
+        return None;
+    }
+    coordinate[2]
+        .checked_mul(extents[1])?
+        .checked_add(coordinate[1])?
+        .checked_mul(extents[0])?
+        .checked_add(coordinate[0])
 }
 
 /// Caller-supplied pointer-sized integer width used for formal extraction.
@@ -261,7 +311,24 @@ pub enum FormalMemoryIncompleteReason {
     LaunchRankUnsupported {
         rank: u8,
     },
+    LaunchRankMismatch {
+        domain_rank: u8,
+        extent_rank: u8,
+    },
+    LaunchExtentShapeMismatch {
+        rank: u8,
+        extents: [u64; 3],
+    },
+    LaunchExtentOverflow {
+        rank: u8,
+        extents: [u64; 3],
+    },
     StaticLaunchExtentMismatch {
+        expected: u32,
+        actual: u64,
+    },
+    StaticLaunchAxisExtentMismatch {
+        axis: Axis,
         expected: u32,
         actual: u64,
     },
@@ -399,6 +466,7 @@ impl FormalMemoryObligationAnalysis {
 pub enum FormalMemoryObligationError {
     InvalidModule(VerificationErrors),
     MissingKernel { kernel: KernelId },
+    InvalidInvocationRange(RegionValidationError),
 }
 
 impl fmt::Display for FormalMemoryObligationError {
@@ -408,6 +476,12 @@ impl fmt::Display for FormalMemoryObligationError {
             Self::MissingKernel { kernel } => {
                 write!(formatter, "kernel {kernel} is not present in the module")
             }
+            Self::InvalidInvocationRange(error) => {
+                write!(
+                    formatter,
+                    "formal launch invocation range is invalid: {error}"
+                )
+            }
         }
     }
 }
@@ -416,6 +490,7 @@ impl Error for FormalMemoryObligationError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::InvalidModule(errors) => Some(errors),
+            Self::InvalidInvocationRange(error) => Some(error),
             Self::MissingKernel { .. } => None,
         }
     }
@@ -435,8 +510,28 @@ pub fn derive_kernel_memory_obligations(
     launch_extent: ExplicitLaunchExtent1d,
     index_width: FormalIndexWidth,
 ) -> Result<FormalMemoryObligationAnalysis, FormalMemoryObligationError> {
+    derive_kernel_memory_obligations_for_launch(
+        module,
+        kernel_id,
+        launch_extent.into(),
+        index_width,
+    )
+}
+
+/// Derives formal memory obligations for an explicit ranked launch shape.
+pub fn derive_kernel_memory_obligations_for_launch(
+    module: &Module,
+    kernel_id: &KernelId,
+    launch_extent: ExplicitLaunchExtent,
+    index_width: FormalIndexWidth,
+) -> Result<FormalMemoryObligationAnalysis, FormalMemoryObligationError> {
     let verified = verify_module_ref(module).map_err(FormalMemoryObligationError::InvalidModule)?;
-    derive_kernel_memory_obligations_from_verified(verified, kernel_id, launch_extent, index_width)
+    derive_kernel_memory_obligations_from_verified_for_launch(
+        verified,
+        kernel_id,
+        launch_extent,
+        index_width,
+    )
 }
 
 /// Derives formal memory obligations while reusing a prior Kernel IR
@@ -449,6 +544,22 @@ pub fn derive_kernel_memory_obligations_from_verified(
     verified: VerifiedKernelIrModuleV1<'_>,
     kernel_id: &KernelId,
     launch_extent: ExplicitLaunchExtent1d,
+    index_width: FormalIndexWidth,
+) -> Result<FormalMemoryObligationAnalysis, FormalMemoryObligationError> {
+    derive_kernel_memory_obligations_from_verified_for_launch(
+        verified,
+        kernel_id,
+        launch_extent.into(),
+        index_width,
+    )
+}
+
+/// Derives formal memory obligations for a ranked launch while reusing prior
+/// Kernel IR verification.
+pub fn derive_kernel_memory_obligations_from_verified_for_launch(
+    verified: VerifiedKernelIrModuleV1<'_>,
+    kernel_id: &KernelId,
+    launch_extent: ExplicitLaunchExtent,
     index_width: FormalIndexWidth,
 ) -> Result<FormalMemoryObligationAnalysis, FormalMemoryObligationError> {
     let module = verified.module();
@@ -472,7 +583,7 @@ pub fn derive_kernel_memory_obligations_from_verified(
     if !index_width_supported {
         reasons.insert(FormalMemoryIncompleteReason::UnsupportedIndexWidth { width: index_width });
     }
-    let invocations = resolve_invocations(&kernel.domain, launch_extent, &mut reasons);
+    let invocations = resolve_invocations(&kernel.domain, launch_extent, &mut reasons)?;
     let access_invocations = index_width_supported.then_some(invocations).flatten();
     let allocations = formal_allocations(function);
     let allocation_by_value: BTreeMap<_, _> = allocations
@@ -637,33 +748,66 @@ pub fn derive_kernel_memory_obligations_from_verified(
 
 fn resolve_invocations(
     domain: &LaunchDomain,
-    launch_extent: ExplicitLaunchExtent1d,
+    launch_extent: ExplicitLaunchExtent,
     reasons: &mut BTreeSet<FormalMemoryIncompleteReason>,
-) -> Option<InvocationRange1d> {
-    let LaunchDomain::D1 { x } = domain else {
-        reasons.insert(FormalMemoryIncompleteReason::LaunchRankUnsupported {
-            rank: domain.rank(),
-        });
-        return None;
-    };
-    let ExplicitLaunchExtent1d::Exact(actual) = launch_extent else {
+) -> Result<Option<InvocationRange1d>, FormalMemoryObligationError> {
+    let ExplicitLaunchExtent::Exact { rank, extents } = launch_extent else {
         reasons.insert(FormalMemoryIncompleteReason::LaunchExtentUnknown);
-        return None;
+        return Ok(None);
     };
-    if actual == 0 {
-        reasons.insert(FormalMemoryIncompleteReason::LaunchExtentZero);
-        return None;
+    if !(1..=3).contains(&rank) {
+        reasons.insert(FormalMemoryIncompleteReason::LaunchRankUnsupported { rank });
+        return Ok(None);
     }
-    if let LaunchExtent::Static(expected) = x
-        && u64::from(*expected) != actual
-    {
-        reasons.insert(FormalMemoryIncompleteReason::StaticLaunchExtentMismatch {
-            expected: *expected,
-            actual,
+    if domain.rank() != rank {
+        reasons.insert(FormalMemoryIncompleteReason::LaunchRankMismatch {
+            domain_rank: domain.rank(),
+            extent_rank: rank,
         });
-        return None;
+        return Ok(None);
     }
-    Some(InvocationRange1d::from_count(actual).expect("nonzero launch extent is a valid range"))
+    if (rank < 2 && extents[1] != 1) || (rank < 3 && extents[2] != 1) {
+        reasons.insert(FormalMemoryIncompleteReason::LaunchExtentShapeMismatch { rank, extents });
+        return Ok(None);
+    }
+    if extents.contains(&0) {
+        reasons.insert(FormalMemoryIncompleteReason::LaunchExtentZero);
+        return Ok(None);
+    }
+    for (index, expected) in domain.extents().enumerate() {
+        let LaunchExtent::Static(expected) = expected else {
+            continue;
+        };
+        let actual = extents[index];
+        if u64::from(expected) == actual {
+            continue;
+        }
+        if rank == 1 {
+            reasons.insert(FormalMemoryIncompleteReason::StaticLaunchExtentMismatch {
+                expected,
+                actual,
+            });
+        } else {
+            reasons.insert(
+                FormalMemoryIncompleteReason::StaticLaunchAxisExtentMismatch {
+                    axis: [Axis::X, Axis::Y, Axis::Z][index],
+                    expected,
+                    actual,
+                },
+            );
+        }
+        return Ok(None);
+    }
+    let Some(count) = extents[..usize::from(rank)]
+        .iter()
+        .try_fold(1_u64, |count, extent| count.checked_mul(*extent))
+    else {
+        reasons.insert(FormalMemoryIncompleteReason::LaunchExtentOverflow { rank, extents });
+        return Ok(None);
+    };
+    InvocationRange1d::from_count(count)
+        .map(Some)
+        .map_err(FormalMemoryObligationError::InvalidInvocationRange)
 }
 
 fn formal_allocations(function: &Function) -> Vec<FormalAllocationParameter> {
