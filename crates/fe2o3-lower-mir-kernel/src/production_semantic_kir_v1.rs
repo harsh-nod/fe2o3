@@ -2450,6 +2450,31 @@ fn require_current_wave_lane(
     Ok((value, wave))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SemanticMfmaOperandBasesV1<T> {
+    minor: T,
+    reduction: T,
+}
+
+fn semantic_mfma_operand_bases_v1<T>(
+    role: fe2o3_mir_model::semantic_mir_v1::SemanticMfmaOperandRoleV1,
+    first: T,
+    second: T,
+) -> SemanticMfmaOperandBasesV1<T> {
+    use fe2o3_mir_model::semantic_mir_v1::SemanticMfmaOperandRoleV1;
+
+    match role {
+        SemanticMfmaOperandRoleV1::A => SemanticMfmaOperandBasesV1 {
+            minor: first,
+            reduction: second,
+        },
+        SemanticMfmaOperandRoleV1::B => SemanticMfmaOperandBasesV1 {
+            minor: second,
+            reduction: first,
+        },
+    }
+}
+
 struct SemanticFunctionLoweringV1<'a> {
     types: &'a [SemanticTypeDeclV1],
     callables: &'a [SemanticCallableDeclV1],
@@ -5114,16 +5139,17 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             self.emit_index_binary(operations, BinaryOp::Divide, lane_index, sixteen)?;
         let lane_group =
             self.emit_index_binary(operations, BinaryOp::Multiply, lane_group, four)?;
+        let bases = semantic_mfma_operand_bases_v1(contract.role, first_base, second_base);
         let (row_or_column, minor_safe) = self.emit_checked_index(
             operations,
             CheckedBinaryOperator::Add,
-            first_base,
+            bases.minor,
             lane_minor,
         )?;
         let (first_reduction, reduction_safe) = self.emit_checked_index(
             operations,
             CheckedBinaryOperator::Add,
-            second_base,
+            bases.reduction,
             lane_group,
         )?;
         let mut present = self.emit_bool_and(operations, minor_safe, reduction_safe)?;
@@ -7917,6 +7943,78 @@ mod resource_tests {
             distribution: SemanticMfmaAccumulatorDistributionV1::RowMajor,
             wave_width: 64,
         }
+    }
+
+    #[test]
+    fn mfma_operand_roles_map_independent_nonzero_bases_to_row_major_coordinates() {
+        let minor_base = 11_u64;
+        let reduction_base = 37_u64;
+        let lane_minor = 5_u64;
+        let lane_group = 8_u64;
+        let component = 3_u64;
+        let stride = 101_u64;
+
+        let a = semantic_mfma_operand_bases_v1(
+            SemanticMfmaOperandRoleV1::A,
+            minor_base,
+            reduction_base,
+        );
+        let b = semantic_mfma_operand_bases_v1(
+            SemanticMfmaOperandRoleV1::B,
+            reduction_base,
+            minor_base,
+        );
+        assert_eq!(a, b);
+
+        let minor = a.minor + lane_minor;
+        let reduction = a.reduction + lane_group + component;
+        assert_eq!(minor, 16);
+        assert_eq!(reduction, 48);
+        assert_eq!(minor * stride + reduction, 1_664);
+        assert_eq!(reduction * stride + minor, 4_864);
+    }
+
+    #[test]
+    fn mfma_operand_role_mapping_exposes_hostile_swapped_contracts() {
+        let minor_base = 11_u64;
+        let reduction_base = 37_u64;
+        let expected = SemanticMfmaOperandBasesV1 {
+            minor: minor_base,
+            reduction: reduction_base,
+        };
+
+        assert_eq!(
+            semantic_mfma_operand_bases_v1(
+                SemanticMfmaOperandRoleV1::A,
+                minor_base,
+                reduction_base,
+            ),
+            expected
+        );
+        assert_eq!(
+            semantic_mfma_operand_bases_v1(
+                SemanticMfmaOperandRoleV1::B,
+                reduction_base,
+                minor_base,
+            ),
+            expected
+        );
+        assert_ne!(
+            semantic_mfma_operand_bases_v1(
+                SemanticMfmaOperandRoleV1::B,
+                minor_base,
+                reduction_base,
+            ),
+            expected
+        );
+        assert_ne!(
+            semantic_mfma_operand_bases_v1(
+                SemanticMfmaOperandRoleV1::A,
+                reduction_base,
+                minor_base,
+            ),
+            expected
+        );
     }
 
     #[test]
