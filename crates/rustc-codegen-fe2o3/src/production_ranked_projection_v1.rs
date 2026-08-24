@@ -5997,8 +5997,7 @@ fn positive_unsigned_constant_operand_v1(
     let SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
         signed: false,
         bits,
-    }) =
-        types.get(operand.ty().index() as usize)?.shape()
+    }) = types.get(operand.ty().index() as usize)?.shape()
     else {
         return None;
     };
@@ -9932,12 +9931,7 @@ mod tests {
                 SemanticRvalueV1::new(SCALAR_TYPE, value),
             )))
         };
-        let initialize = || {
-            assign(
-                induction,
-                SemanticRvalueKindV1::Use(initial_value.clone()),
-            )
-        };
+        let initialize = || assign(induction, SemanticRvalueKindV1::Use(initial_value.clone()));
         let compare = || {
             assign(
                 predicate,
