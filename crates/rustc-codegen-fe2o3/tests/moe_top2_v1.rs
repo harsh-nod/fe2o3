@@ -23,7 +23,7 @@ const SOURCE_REMAP: &str = "/fe2o3-reviewed-workspace/moe-top2-v1.rs";
 const WORKSPACE_REMAP: &str = "/fe2o3-reviewed-workspace";
 const SOURCE: &str = include_str!("../../../examples/moe_top2_v1/src/kernel.rs");
 const STRUCTURAL_CORRESPONDENCE: &str =
-    "8eb5625bc27bc6883c6cc1fa71063ccfbf04fe7f898567ea2a433aabab871a33";
+    "f6b6140e4a85c3317db58f70eae55a5b2300743dc60470d723f3b0c9624f67d8";
 
 static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(0);
 static FRONTEND_DEPENDENCIES: OnceLock<Result<(), String>> = OnceLock::new();
@@ -406,8 +406,8 @@ fn live_rustc_admission_emits_pinned_structural_record() {
         "exact handoff failed:\n{stderr}"
     );
     for marker in [
-        "opaque exact rustc FnAbi identity plus bounded structural projection, location-independent V4 provider-semantic definitions and reviewed semantic-terminal manifest",
-        "complete reachable portable-MIR closure modulo those identity-bound terminals 934c2205973e24216d537c5f89bc65d8e15dd68376dce477d1768e2936b4fc13",
+        "opaque exact rustc FnAbi identity plus bounded structural projection, location-independent V5 provider-semantic definitions and reviewed semantic-terminal manifest",
+        "complete reachable portable-MIR closure modulo those identity-bound terminals edeffa59729df775ae94d5d5eb1110b8ffd6bf07e9659ba2a96fc37c975d9b86",
         "checked private same-session producer-derived structural source/FnAbi/MIR/KIR record",
         "explicitly not semantic refinement",
         "whole-module MIR diagnostics and ordered aggregate canonical KIR/profile entries collectively encoding all current fields do not prove semantic MIR-to-KIR correspondence",
@@ -539,7 +539,7 @@ fn hostile_source_mir_profile_and_ownership_mutations_fail_closed() {
             "abi-output-type",
             mutation(
                 SOURCE,
-                "mut top2_experts: DisjointSlice<u32>",
+                "mut top2_experts: DisjointSlice<u32, GridExclusive>",
                 "top2_experts: &[u32]",
             ),
         ),
@@ -547,8 +547,8 @@ fn hostile_source_mir_profile_and_ownership_mutations_fail_closed() {
             "abi-output-element",
             mutation(
                 SOURCE,
-                "mut inverse: DisjointSlice<u32>",
-                "mut inverse: DisjointSlice<u64>",
+                "mut inverse: DisjointSlice<u32, GridExclusive>",
+                "mut inverse: DisjointSlice<u64, GridExclusive>",
             ),
         ),
         (
@@ -660,23 +660,27 @@ fn hostile_source_mir_profile_and_ownership_mutations_fail_closed() {
             ),
         ),
         (
-            "ownership-lane",
-            mutation(SOURCE, "if lane != 0", "if lane > 1"),
+            "ownership-leader",
+            mutation(
+                SOURCE,
+                "} else {\n        return;\n    }\n    if logits.len()",
+                "} else {\n        fe2o3_device::trap();\n        return;\n    }\n    if logits.len()",
+            ),
         ),
         (
             "commit-index",
             mutation(
                 SOURCE,
-                "write_value_v1(&mut inverse, index, staged_inverse[index]);",
-                "write_value_v1(&mut inverse, index, staged_inverse[0]);",
+                "write_value_v1(&mut inverse, &leader, index, staged_inverse[index]);",
+                "write_value_v1(&mut inverse, &leader, index, staged_inverse[0]);",
             ),
         ),
         (
             "terminal-call",
             mutation(
                 SOURCE,
-                "if lane >= 64 {\n        fe2o3_device::trap();\n        return;\n    }",
-                "if lane >= 64 {\n        return;\n    }",
+                "let Some(slot) = output.get_mut_exclusive(leader, index) else {\n        fe2o3_device::trap();",
+                "let Some(slot) = output.get_mut_exclusive(leader, index) else {\n        // trap removed",
             ),
         ),
     ];
@@ -807,8 +811,10 @@ fn authority_is_location_independent_and_provider_source_bound() {
     let hostile_text = command_text(&hostile);
     assert!(!hostile.status.success(), "mutated provider authenticated");
     assert!(
-        hostile_text.contains("trusted-definition/semantic-terminal identity drifted"),
-        "provider substitution did not fail at trusted identity:\n{hostile_text}"
+        hostile_text.contains(
+            "safe execution provider source closure does not match the reviewed V1 identity"
+        ),
+        "provider substitution did not fail during trusted layout extraction:\n{hostile_text}"
     );
     assert!(
         !hostile_text.contains(
