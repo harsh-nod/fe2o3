@@ -87,7 +87,7 @@ pub fn moe_grouped_expert_general_v1(
     let raw = thread_index.get();
     let lane = raw % 64;
     let lane_column = lane % 16;
-    let tiles_per_row = (output_columns as usize).div_ceil(16);
+    let tiles_per_row = ((output_columns as usize - 1) / 16) + 1;
     let tile = raw / 64;
     let tile_row = tile / tiles_per_row;
     let tile_column = tile % tiles_per_row;
