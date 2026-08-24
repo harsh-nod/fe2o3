@@ -38,8 +38,12 @@ use std::process::Command;
 #[cfg(target_os = "linux")]
 use std::process::{ExitStatus, Output};
 
-/// Bounds hashing work for a selected codegen-backend object.
-pub(crate) const MAX_CODEGEN_BACKEND_BYTES: u64 = 512 * 1024 * 1024;
+/// Bounds hashing and sealed-image storage for a selected codegen-backend object.
+///
+/// Debug builds of the LLVM-backed compiler currently exceed 512 MiB. Keep this backend-specific
+/// ceiling large enough to authenticate those builds while retaining a fixed pre-read resource
+/// bound; copying and hashing still use fixed-size chunks.
+pub(crate) const MAX_CODEGEN_BACKEND_BYTES: u64 = 1024 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ChildDescriptorInheritance {

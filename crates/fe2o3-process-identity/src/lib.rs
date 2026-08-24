@@ -27,7 +27,9 @@ use std::process::Command;
 use sha2::{Digest, Sha256};
 
 pub const S09_PROCESS_CONSISTENCY_EXPECTATION_FD_V3: RawFd = 194;
-pub const MAX_EXECUTABLE_BYTES_V3: u64 = 512 * 1024 * 1024;
+// Measurement streams the executable through a fixed-size buffer. Keep a
+// finite admission bound while accommodating large rustc and debug binaries.
+pub const MAX_EXECUTABLE_BYTES_V3: u64 = 1024 * 1024 * 1024;
 pub const MAX_PROTECTED_SOURCE_BYTES_V3: u64 = 16 * 1024 * 1024;
 pub const MAX_ARGUMENTS_V3: usize = 65_536;
 pub const MAX_ENVIRONMENT_ENTRIES_V3: usize = 4_096;
