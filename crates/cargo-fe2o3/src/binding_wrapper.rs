@@ -2701,6 +2701,14 @@ impl CompilerCapabilities {
     }
 }
 
+fn configure_qualification_route_marker(command: &mut Command, debug_build: bool) {
+    if debug_build {
+        command.env(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV, "1");
+    } else {
+        command.env_remove(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV);
+    }
+}
+
 fn scope_unmanaged_dependency_environment(command: &mut Command) {
     for name in [
         "FE2O3_CODEGEN_PIPELINE",

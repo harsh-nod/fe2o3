@@ -367,6 +367,50 @@ fn enum_fixture() -> MirModule {
     }
 }
 
+fn boolean_branch_fixture() -> MirModule {
+    MirModule {
+        functions: vec![MirFunction {
+            semantic_instance: None,
+            export_name: "boolean_branch".to_owned(),
+            rust_path: "tests::boolean_branch".to_owned(),
+            kind: MirFunctionKind::KernelEntry,
+            typed_profile: None,
+            frontend_contract: None,
+            matrix_frontend_abi: None,
+            arg_count: 0,
+            local_count: 2,
+            locals: vec![
+                local(0, MirLocalRole::Return, MirTypeShape::Unit),
+                local(1, MirLocalRole::Temp, MirTypeShape::Bool),
+            ],
+            blocks: vec![
+                MirBlock {
+                    index: 0,
+                    statements: vec![assign(0, 1, vec![bool_constant(true)], MirRvalueKind::Use)],
+                    terminator: Some(terminator(MirTerminatorKind::SwitchInt {
+                        discriminant: operand(1),
+                        targets: vec![MirSwitchTarget {
+                            value: 0,
+                            target: 1,
+                        }],
+                        otherwise: 2,
+                    })),
+                },
+                MirBlock {
+                    index: 1,
+                    statements: Vec::new(),
+                    terminator: Some(terminator(MirTerminatorKind::Return)),
+                },
+                MirBlock {
+                    index: 2,
+                    statements: Vec::new(),
+                    terminator: Some(terminator(MirTerminatorKind::Return)),
+                },
+            ],
+        }],
+    }
+}
+
 fn fragment_plan_fixture() -> MirFunction {
     let fragment = MirTypeShape::Adt {
         identity: TrustedDeviceItem::F32AccumulatorFragment

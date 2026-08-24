@@ -28,6 +28,7 @@ mod pinned_executable;
 #[cfg(test)]
 mod pinned_executable_test_directory;
 mod process_execution;
+#[cfg(feature = "legacy-hsa-runtime")]
 #[path = "../../../examples/row_softmax_v1/src/production_release.rs"]
 mod production_release;
 #[cfg(not(feature = "legacy-hsa-runtime"))]
