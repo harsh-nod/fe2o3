@@ -9,7 +9,7 @@ use fe2o3_aql::{
     AQL_MAX_BATCH_PACKETS_V1, AQL_MAX_FIXED_BATCH_PACKETS_V2,
     AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1, AmdBusyCompletionSignalV1,
     AqlAddressObservationError, AqlCompletionObservationV1, AqlDispatchGeometryV1,
-    AqlDispatchPacketError, AqlGeometryError, AqlKernelDispatchPacketV1,
+    AqlDispatchOrderingV1, AqlDispatchPacketError, AqlGeometryError, AqlKernelDispatchPacketV1,
     AqlPacketBatchPublicationTargetV1, AqlPacketPublicationTargetV1,
     AqlPreparedKernelDispatchBatchErrorV1, AqlPreparedKernelDispatchBatchV1,
     AqlPreparedKernelDispatchBatchV2, AqlPreparedKernelDispatchV1, AqlRingCapacityError,
@@ -50,7 +50,7 @@ fn batch_reservation_model_digest_is_frozen_without_changing_the_wire_abi() {
     assert_eq!(AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1, 0x1402);
     assert_eq!(
         AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_V1,
-        "b691e0df36e2c1f0695f49a19d49d3fbbe4380e8e9999b01368df02783952edf"
+        "82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0"
     );
 }
 
@@ -143,6 +143,38 @@ fn prepared_batch_writes_every_invalid_body_before_any_release_header() {
             BatchEvent::Header(1, 0x1402),
             BatchEvent::Header(2, 0x1402),
             BatchEvent::Header(3, 0x1402),
+        ]
+    );
+}
+
+#[test]
+fn prepared_batch_retains_each_exact_dispatch_ordering_header() {
+    assert_eq!(AqlDispatchOrderingV1::Independent.header(), 0x1402);
+    assert_eq!(AqlDispatchOrderingV1::WaitForPrior.header(), 0x1502);
+    assert_eq!(
+        AqlDispatchOrderingV1::from_header(0x1402),
+        Some(AqlDispatchOrderingV1::Independent)
+    );
+    assert_eq!(
+        AqlDispatchOrderingV1::from_header(0x1502),
+        Some(AqlDispatchOrderingV1::WaitForPrior)
+    );
+    assert_eq!(AqlDispatchOrderingV1::from_header(0x1503), None);
+
+    let batch = AqlPreparedKernelDispatchBatchV1::<2>::try_from_packets([
+        prepared_packet_with_ordering(AqlDispatchOrderingV1::Independent),
+        prepared_packet_with_ordering(AqlDispatchOrderingV1::WaitForPrior),
+    ])
+    .unwrap();
+    let mut target = BatchCaptureTarget::default();
+    batch.publish_with(&mut target).unwrap();
+    assert_eq!(
+        target.events,
+        [
+            BatchEvent::Body(0),
+            BatchEvent::Body(1),
+            BatchEvent::Header(0, 0x1402),
+            BatchEvent::Header(1, 0x1502),
         ]
     );
 }
@@ -690,7 +722,11 @@ fn assert_batch_failure_unchanged(
 }
 
 fn prepared_packet() -> AqlPreparedKernelDispatchV1 {
-    AqlKernelDispatchPacketV1::new_unpublished(
+    prepared_packet_with_ordering(AqlDispatchOrderingV1::Independent)
+}
+
+fn prepared_packet_with_ordering(ordering: AqlDispatchOrderingV1) -> AqlPreparedKernelDispatchV1 {
+    AqlKernelDispatchPacketV1::new_unpublished_with_ordering(
         AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
         0,
         0,
@@ -698,6 +734,7 @@ fn prepared_packet() -> AqlPreparedKernelDispatchV1 {
         ObservedGpuAddressV1::new(0x2000).unwrap(),
         16,
         ObservedGpuAddressV1::new(0x3000).unwrap(),
+        ordering,
     )
     .unwrap()
 }

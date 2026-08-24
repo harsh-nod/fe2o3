@@ -21,7 +21,7 @@ use fe2o3_kfd_uapi::{
 };
 
 #[cfg(test)]
-use fe2o3_aql::{AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1, AqlPreparedKernelDispatchV1};
+use fe2o3_aql::{AqlDispatchOrderingV1, AqlPreparedKernelDispatchV1};
 
 pub(crate) const GFX942_CWSR_XCC_COUNT_V1: usize = 8;
 pub(crate) const GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1: usize = 0x162_1000;
@@ -357,7 +357,7 @@ pub(super) fn publish_slot_header_release(
     slot_index: u32,
     header: u16,
 ) -> Result<(), NativeAqlSubmissionErrorV1> {
-    if header != AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1 {
+    if AqlDispatchOrderingV1::from_header(header).is_none() {
         return Err(NativeAqlSubmissionErrorV1::PacketHeader);
     }
     let slot = packet_slot(bytes, slot_index)?;

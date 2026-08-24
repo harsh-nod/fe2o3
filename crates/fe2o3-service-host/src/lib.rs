@@ -121,8 +121,9 @@ pub use queue::{
     ServiceCompletedSnapshotRequestV1, ServicePublishedQueueSessionV1, ServiceQueueBindFailureV1,
     ServiceQueueCreateFailureV1, ServiceQueueDataUpdateFailureV1, ServiceQueueErrorV1,
     ServiceQueueOperationFailureV1, ServiceQueuePartitionedDataUpdateV1, ServiceQueuePollV1,
-    ServiceQueueReleaseFailureV1, ServiceQueueReleaseObservationV1, ServiceQueueSessionV1,
-    ServiceQueueUnboundSessionV1, ServiceRecycledQueueSessionV1,
+    ServiceQueuePollWithProgressV1, ServiceQueueProgressV1, ServiceQueueReleaseFailureV1,
+    ServiceQueueReleaseObservationV1, ServiceQueueSessionV1, ServiceQueueUnboundSessionV1,
+    ServiceRecycledQueueSessionV1,
 };
 
 pub use binding::{QueueSlotBindingV1, ServiceContractV1, ServiceKeyV1};

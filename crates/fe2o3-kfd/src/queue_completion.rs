@@ -11,8 +11,9 @@ use core::fmt;
 use fe2o3_aql::{
     AMD_SIGNAL_ALIGNMENT_V1, AMD_SIGNAL_BYTES_V1, AQL_MAX_FIXED_BATCH_PACKETS_V2,
     AmdBusyCompletionSignalV1, AqlCompletionObservationV1, AqlDispatchGeometryV1,
-    AqlDispatchPacketError, AqlKernelDispatchPacketV1, AqlPreparedKernelDispatchBatchErrorV1,
-    AqlPreparedKernelDispatchBatchV2, AqlPreparedKernelDispatchV1, ObservedGpuAddressV1,
+    AqlDispatchOrderingV1, AqlDispatchPacketError, AqlKernelDispatchPacketV1,
+    AqlPreparedKernelDispatchBatchErrorV1, AqlPreparedKernelDispatchBatchV2,
+    AqlPreparedKernelDispatchV1, ObservedGpuAddressV1,
 };
 use fe2o3_runtime_model::{MemoryMappingKeyV1, QueueKeyV1};
 
@@ -25,14 +26,14 @@ pub(super) const MAX_COMPLETION_POLL_ATTEMPTS_V1: u32 = 1_000_000;
 
 /// Canonical claim boundary for the private completion-signal slice.
 pub const GFX942_AQL_COMPLETION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-aql-completion-r4-v1\n",
-    "aql_dispatch_schema_sha256=b691e0df36e2c1f0695f49a19d49d3fbbe4380e8e9999b01368df02783952edf\n",
-    "aql_fixed_batch_schema_sha256=e989398f327c97df8108855a9c97316dd5c6b6b5af68704a14da64990dc4aa8a\n",
+    "profile=fe2o3-mi300x-gfx942-aql-completion-r5-v1\n",
+    "aql_dispatch_schema_sha256=82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0\n",
+    "aql_fixed_batch_schema_sha256=a3c74fe4aa26a62772253de267812f2fb1626247685d8c4e8ed8bbb2a5a9e34a\n",
     "arena=one-host-visible-coherent-gtt-allocation,524288-bytes,8192-distinct-64-byte-aligned-user-signals\n",
     "batch=1-through-8192,heap-owned-fixed-cardinality-state,one-unique-signal-per-packet,no-aggregate-alias\n",
     "initialization=typed-amd-busy-signal-construction,kind-user-1,value-pending-1,event-fields-zero,before-gpu-map\n",
-    "binding=crate-private-packet-construction,no-public-signal-address,exact-queue-vm-signal-code-kernarg-and-nonzero-dispatch-generations-retained,actual-resource-lifetimes-owned-by-private-c5-queue-owner\n",
-    "observation=bounded-busy-poll,atomic-i64-acquire,all-signals-zero-before-ready,unexpected-value-is-fault\n",
+    "binding=crate-private-packet-construction,per-packet-independent-or-wait-for-prior-ordering-retained,no-public-signal-address,exact-queue-vm-signal-code-kernarg-and-nonzero-dispatch-generations-retained,actual-resource-lifetimes-owned-by-private-c5-queue-owner\n",
+    "observation=bounded-busy-poll,one-pre-post-currentness-envelope-around-one-exact-batch-of-atomic-i64-acquire-loads,same-scan-redacted-packet-completed-pending-and-first-pending-index-progress,all-signals-zero-before-ready,unexpected-value-is-fault\n",
     "recycle=only-after-exact-all-signal-completion,atomic-i64-release-reset-to-pending,checked-slot-generation-increment\n",
     "failure=currentness-native-observation-unexpected-value-timeout-invalid-poll-bound-generation-exhaustion-or-reset-ambiguity-poisons-owner-and-queue;teardown-required\n",
     "release=queue-destroy-first,only-when-every-batch-was-completed-and-recycled,explicit-unmap-and-free,no-drop-native-effects\n",
@@ -42,7 +43,7 @@ pub const GFX942_AQL_COMPLETION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_AQL_COMPLETION_MANIFEST_V1`].
 pub const GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1: &str =
-    "abb0fe30cddd4a93bf36ba3df4dea38bd899339e9e62eaacceeb5bbc5208378b";
+    "9e4c70e71001d7de3270bce4f1b1f0afbaafa9b81ad5b3e18e39f507c2375306";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CompletionOwnerPhaseV1 {
@@ -92,6 +93,7 @@ impl CompletionDispatchGenerationBindingV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CompletionPacketTemplateV1 {
     geometry: AqlDispatchGeometryV1,
+    ordering: AqlDispatchOrderingV1,
     private_segment_size: u32,
     group_segment_size: u32,
     kernel_object: ObservedGpuAddressV1,
@@ -123,6 +125,7 @@ impl CompletionPacketTemplateV1 {
     #[allow(clippy::too_many_arguments, dead_code)]
     pub(crate) const fn new(
         geometry: AqlDispatchGeometryV1,
+        ordering: AqlDispatchOrderingV1,
         private_segment_size: u32,
         group_segment_size: u32,
         kernel_object: ObservedGpuAddressV1,
@@ -132,6 +135,7 @@ impl CompletionPacketTemplateV1 {
     ) -> Self {
         Self {
             geometry,
+            ordering,
             private_segment_size,
             group_segment_size,
             kernel_object,
@@ -241,6 +245,51 @@ pub enum Gfx942CompletionPollV1<const N: usize> {
     Ready(Gfx942CompletedBatchV1<N>),
 }
 
+/// Redacted progress observed while scanning one exact completion batch.
+///
+/// Signal loads occur sequentially, not as one atomic snapshot. Counts record
+/// what that scan observed, and the first pending index can already be stale by
+/// the time this value is returned.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942CompletionProgressV1 {
+    packet_count: u16,
+    completed_count: u16,
+    pending_count: u16,
+    first_pending_batch_index: Option<u16>,
+}
+
+impl Gfx942CompletionProgressV1 {
+    pub const fn packet_count(self) -> u16 {
+        self.packet_count
+    }
+
+    pub const fn completed_count(self) -> u16 {
+        self.completed_count
+    }
+
+    pub const fn pending_count(self) -> u16 {
+        self.pending_count
+    }
+
+    /// Returns the earliest batch-local index observed pending in this scan.
+    pub const fn first_pending_batch_index(self) -> Option<u16> {
+        self.first_pending_batch_index
+    }
+}
+
+/// Linear completion custody paired with the progress from the same signal scan.
+#[derive(Debug)]
+pub enum Gfx942CompletionPollWithProgressV1<const N: usize> {
+    Pending {
+        batch: Gfx942CompletionBatchV1<N>,
+        progress: Gfx942CompletionProgressV1,
+    },
+    Ready {
+        completed: Gfx942CompletedBatchV1<N>,
+        progress: Gfx942CompletionProgressV1,
+    },
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Gfx942CompletionRecycleObservationV1 {
     packet_count: u16,
@@ -286,10 +335,21 @@ impl std::error::Error for Gfx942CompletionErrorV1 {}
 
 pub(super) trait NativeCompletionSignalBackendV1 {
     fn check_currentness(&mut self) -> Result<(), Gfx942CompletionErrorV1>;
-    fn observe_acquire(
+    fn observe_batch_acquire_in_current_scope(
         &mut self,
-        slot_index: u32,
-    ) -> Result<AqlCompletionObservationV1, Gfx942CompletionErrorV1>;
+        slot_indices: &[u32],
+    ) -> Result<Vec<AqlCompletionObservationV1>, Gfx942CompletionErrorV1>;
+
+    fn observe_batch_acquire(
+        &mut self,
+        slot_indices: &[u32],
+    ) -> Result<Vec<AqlCompletionObservationV1>, Gfx942CompletionErrorV1> {
+        self.check_currentness()?;
+        let observations = self.observe_batch_acquire_in_current_scope(slot_indices)?;
+        self.check_currentness()?;
+        Ok(observations)
+    }
+
     fn reset_pending_release(&mut self, slot_index: u32) -> Result<(), Gfx942CompletionErrorV1>;
 }
 
@@ -383,7 +443,7 @@ impl CompletionSignalArenaOwnerV1 {
             let signal = ObservedGpuAddressV1::new(raw)
                 .map_err(|_| Gfx942CompletionErrorV1::InvalidArena("completion address"))?;
             prepared.push(
-                AqlKernelDispatchPacketV1::new_unpublished(
+                AqlKernelDispatchPacketV1::new_unpublished_with_ordering(
                     template.geometry,
                     template.private_segment_size,
                     template.group_segment_size,
@@ -391,6 +451,7 @@ impl CompletionSignalArenaOwnerV1 {
                     template.kernarg_address,
                     template.kernarg_alignment,
                     signal,
+                    template.ordering,
                 )
                 .map_err(Gfx942CompletionErrorV1::PacketBinding)?,
             );
@@ -479,18 +540,53 @@ impl CompletionSignalArenaOwnerV1 {
         batch: Gfx942CompletionBatchV1<N>,
         backend: &mut B,
     ) -> Result<Gfx942CompletionPollV1<N>, Gfx942CompletionErrorV1> {
+        match self.observe_once_with_progress(batch, backend)? {
+            Gfx942CompletionPollWithProgressV1::Pending { batch, .. } => {
+                Ok(Gfx942CompletionPollV1::Pending(batch))
+            }
+            Gfx942CompletionPollWithProgressV1::Ready { completed, .. } => {
+                Ok(Gfx942CompletionPollV1::Ready(completed))
+            }
+        }
+    }
+
+    pub(super) fn observe_once_with_progress<const N: usize, B: NativeCompletionSignalBackendV1>(
+        &mut self,
+        batch: Gfx942CompletionBatchV1<N>,
+        backend: &mut B,
+    ) -> Result<Gfx942CompletionPollWithProgressV1<N>, Gfx942CompletionErrorV1> {
         self.require_ready()?;
         self.validate_published(&batch.retention)?;
-        self.checked_currentness(backend)?;
-        let mut pending = false;
-        for slot in batch.retention.slots.iter() {
-            let observation = match backend.observe_acquire(slot.index) {
-                Ok(observation) => observation,
-                Err(_) => return self.poison(Gfx942CompletionErrorV1::Observation),
-            };
+        let slot_indices: Vec<u32> = batch
+            .retention
+            .slots
+            .iter()
+            .map(|slot| slot.index)
+            .collect();
+        let observations = match backend.observe_batch_acquire(&slot_indices) {
+            Ok(observations) if observations.len() == N => observations,
+            Ok(_) | Err(Gfx942CompletionErrorV1::Observation) => {
+                return self.poison(Gfx942CompletionErrorV1::Observation);
+            }
+            Err(Gfx942CompletionErrorV1::Currentness) => {
+                return self.poison(Gfx942CompletionErrorV1::Currentness);
+            }
+            Err(_) => return self.poison(Gfx942CompletionErrorV1::Observation),
+        };
+        let mut completed_count = 0_u16;
+        let mut pending_count = 0_u16;
+        let mut first_pending_batch_index = None;
+        for (batch_index, (slot, observation)) in
+            batch.retention.slots.iter().zip(observations).enumerate()
+        {
             match observation {
-                AqlCompletionObservationV1::Pending => pending = true,
-                AqlCompletionObservationV1::Completed => {}
+                AqlCompletionObservationV1::Pending => {
+                    pending_count += 1;
+                    if first_pending_batch_index.is_none() {
+                        first_pending_batch_index = Some(batch_index as u16);
+                    }
+                }
+                AqlCompletionObservationV1::Completed => completed_count += 1,
                 AqlCompletionObservationV1::Unexpected(value) => {
                     return self.poison(Gfx942CompletionErrorV1::Fault {
                         slot: slot.index,
@@ -499,18 +595,26 @@ impl CompletionSignalArenaOwnerV1 {
                 }
             }
         }
-        self.checked_currentness(backend)?;
-        if pending {
-            return Ok(Gfx942CompletionPollV1::Pending(batch));
+        let progress = Gfx942CompletionProgressV1 {
+            packet_count: N as u16,
+            completed_count,
+            pending_count,
+            first_pending_batch_index,
+        };
+        if pending_count != 0 {
+            return Ok(Gfx942CompletionPollWithProgressV1::Pending { batch, progress });
         }
         for slot in batch.retention.slots.iter() {
             self.slots[slot.index as usize].phase = CompletionSlotPhaseV1::Completed {
                 batch_id: batch.retention.batch_id,
             };
         }
-        Ok(Gfx942CompletionPollV1::Ready(Gfx942CompletedBatchV1 {
-            retention: batch.retention,
-        }))
+        Ok(Gfx942CompletionPollWithProgressV1::Ready {
+            completed: Gfx942CompletedBatchV1 {
+                retention: batch.retention,
+            },
+            progress,
+        })
     }
 
     pub(super) fn wait_bounded<const N: usize, B: NativeCompletionSignalBackendV1>(
@@ -740,7 +844,7 @@ mod tests {
     #[derive(Default)]
     struct PacketCapture {
         signals: Vec<u64>,
-        headers: usize,
+        headers: Vec<u16>,
     }
 
     impl AqlPacketBatchPublicationTargetV1 for PacketCapture {
@@ -758,9 +862,9 @@ mod tests {
         fn publish_release_header(
             &mut self,
             _batch_index: u32,
-            _header: u16,
+            header: u16,
         ) -> Result<(), Self::Error> {
-            self.headers += 1;
+            self.headers.push(header);
             Ok(())
         }
     }
@@ -789,17 +893,21 @@ mod tests {
             }
         }
 
-        fn observe_acquire(
+        fn observe_batch_acquire_in_current_scope(
             &mut self,
-            slot_index: u32,
-        ) -> Result<AqlCompletionObservationV1, Gfx942CompletionErrorV1> {
-            self.observe_calls += 1;
-            if self.fail_observe_at == Some(self.observe_calls) {
-                return Err(Gfx942CompletionErrorV1::Observation);
+            slot_indices: &[u32],
+        ) -> Result<Vec<AqlCompletionObservationV1>, Gfx942CompletionErrorV1> {
+            let mut observations = Vec::with_capacity(slot_indices.len());
+            for &slot_index in slot_indices {
+                self.observe_calls += 1;
+                if self.fail_observe_at == Some(self.observe_calls) {
+                    return Err(Gfx942CompletionErrorV1::Observation);
+                }
+                observations.push(classify_acquired_completion_value_v1(
+                    self.values[slot_index as usize],
+                ));
             }
-            Ok(classify_acquired_completion_value_v1(
-                self.values[slot_index as usize],
-            ))
+            Ok(observations)
         }
 
         fn reset_pending_release(
@@ -861,6 +969,7 @@ mod tests {
     fn template(index: u64) -> CompletionPacketTemplateV1 {
         CompletionPacketTemplateV1::new(
             AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+            AqlDispatchOrderingV1::WaitForPrior,
             0,
             0,
             ObservedGpuAddressV1::new(0x40_0000).unwrap(),
@@ -966,7 +1075,19 @@ mod tests {
             capture.signals,
             vec![0x20_0000, 0x20_0040, 0x20_0080, 0x20_00c0]
         );
-        assert_eq!(capture.headers, 4);
+        assert_eq!(capture.headers, vec![0x1502; 4]);
+    }
+
+    #[test]
+    fn completion_binding_preserves_mixed_packet_ordering() {
+        let mut owner = owner();
+        let mut independent = template(0);
+        independent.ordering = AqlDispatchOrderingV1::Independent;
+        let bound = owner.bind_batch([independent, template(1)]).unwrap();
+        let (packets, _) = bound.into_parts();
+        let mut capture = PacketCapture::default();
+        packets.publish_with(&mut capture).unwrap();
+        assert_eq!(capture.headers, vec![0x1402, 0x1502]);
     }
 
     #[test]
@@ -1021,6 +1142,53 @@ mod tests {
         assert_eq!(backend.values[..4], [AMD_SIGNAL_VALUE_PENDING_V1; 4]);
         assert!(owner.ensure_releasable().is_ok());
         assert!(owner.bind_batch([template(4); 4]).is_ok());
+    }
+
+    #[test]
+    fn progress_uses_one_currentness_envelope_for_the_exact_batch_scan() {
+        let mut owner = owner();
+        let batch = publish(
+            &mut owner,
+            [template(0), template(1), template(2), template(3)],
+        );
+        let mut backend = MockBackend::pending();
+        backend.values[0] = AMD_SIGNAL_VALUE_COMPLETE_V1;
+        backend.values[2] = AMD_SIGNAL_VALUE_COMPLETE_V1;
+        let batch = match owner
+            .observe_once_with_progress(batch, &mut backend)
+            .unwrap()
+        {
+            Gfx942CompletionPollWithProgressV1::Pending { batch, progress } => {
+                assert_eq!(progress.packet_count(), 4);
+                assert_eq!(progress.completed_count(), 2);
+                assert_eq!(progress.pending_count(), 2);
+                assert_eq!(progress.first_pending_batch_index(), Some(1));
+                batch
+            }
+            Gfx942CompletionPollWithProgressV1::Ready { .. } => {
+                panic!("partially completed batch reported ready")
+            }
+        };
+        assert_eq!(backend.currentness_calls, 2);
+        assert_eq!(backend.observe_calls, 4);
+
+        backend.values[..4].fill(AMD_SIGNAL_VALUE_COMPLETE_V1);
+        match owner
+            .observe_once_with_progress(batch, &mut backend)
+            .unwrap()
+        {
+            Gfx942CompletionPollWithProgressV1::Ready { progress, .. } => {
+                assert_eq!(progress.packet_count(), 4);
+                assert_eq!(progress.completed_count(), 4);
+                assert_eq!(progress.pending_count(), 0);
+                assert_eq!(progress.first_pending_batch_index(), None);
+            }
+            Gfx942CompletionPollWithProgressV1::Pending { .. } => {
+                panic!("completed batch reported pending")
+            }
+        }
+        assert_eq!(backend.currentness_calls, 4);
+        assert_eq!(backend.observe_calls, 8);
     }
 
     #[test]

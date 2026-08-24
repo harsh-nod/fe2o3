@@ -35,7 +35,7 @@ source.queue.h=aa1cd1acea3405e8c18076b406dd91b5433438792f7cbe8ac5bc3d46df25a9ca
 source.amd_hsa_kernel_code.h=2f48b1fff5432fb96aa460d3c5ac0bccb2e8996adfa5ecdb508722f3911ff9d0
 legacy_release_u32_reference.fe2o3_hsa_runtime.native.runtime.c=99dc188ad8b12561b66ac4a156fdbcfec068c1797fad75afa43a45d3a830554f,not-invalid-body-evidence
 packet=size:64,align:8,header:0,setup:2,workgroup:4,grid:12,private:24,group:28,kernel-object:32,kernarg:40,reserved2:48,completion-signal:56
-publication=initial-type:invalid-1,initial-setup-dimensions:1..3,prepared-api-exposes-invariant-final-header-only,backend-preserves-copied-setup,single-release-u32-at-offset-0,type:2,barrier:0,acquire:system-2,release:system-2,header:0x1402
+publication=initial-type:invalid-1,initial-setup-dimensions:1..3,prepared-retains-exact-final-header,ordering:independent-barrier0-header0x1402|wait-for-prior-barrier1-header0x1502,backend-preserves-copied-setup,single-release-u32-at-offset-0,type:2,acquire:system-2,release:system-2
 ring-reservation=mutable-single-producer-model,packet-bytes:64,ring-bytes:4096..2147483648-power-of-two,capacity:64..33554432,monotonic-u64-no-wrap,nondecreasing-read,read<=write,distance<=capacity,slot:packet-id&(capacity-1)
 signal=size:64,align:64,kind-offset:0,value-offset:8,kind:user-1,pending:1,complete:0,event-fields:zero,byte-encoder:exact-64,classifier:1-pending|0-completed|other-unexpected-preserved,busy-poll-only
 address-observations=nonzero,kernel-object-align:64,completion-signal-align:64,kernarg-align:caller-supplied-power-of-two-1..4096
@@ -44,12 +44,12 @@ authority=inert-wire-values-only,no-address-provenance,no-allocation,no-typed-ob
 
 /// SHA-256 of [`AQL_DISPATCH_ABI_SCHEMA_MANIFEST_V1`].
 pub const AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_V1: &str =
-    "b691e0df36e2c1f0695f49a19d49d3fbbe4380e8e9999b01368df02783952edf";
+    "82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0";
 
 /// Typed SHA-256 bytes of [`AQL_DISPATCH_ABI_SCHEMA_MANIFEST_V1`].
 pub const AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_BYTES_V1: [u8; 32] = [
-    0xb6, 0x91, 0xe0, 0xdf, 0x36, 0xe2, 0xc1, 0xf0, 0x69, 0x5f, 0x49, 0xa1, 0x9d, 0x49, 0xd3, 0xfb,
-    0xbe, 0x43, 0x80, 0xe8, 0xe9, 0x99, 0x9b, 0x01, 0x36, 0x8d, 0xf0, 0x27, 0x83, 0x95, 0x2e, 0xdf,
+    0x82, 0xfb, 0xd7, 0xcf, 0x0b, 0x6c, 0x86, 0x47, 0xdc, 0xe3, 0xf9, 0xb1, 0x1e, 0x4f, 0x13, 0xa2,
+    0xda, 0xdf, 0xe3, 0x42, 0x35, 0x09, 0xf7, 0x69, 0xa4, 0xbc, 0x6c, 0xc8, 0x7b, 0xb7, 0xac, 0xd0,
 ];
 
 pub const AQL_KERNEL_DISPATCH_PACKET_BYTES_V1: usize = 64;
@@ -60,6 +60,7 @@ pub const AMD_SIGNAL_VALUE_PENDING_V1: i64 = 1;
 pub const AMD_SIGNAL_VALUE_COMPLETE_V1: i64 = 0;
 pub const AQL_INVALID_PACKET_HEADER_V1: u16 = 1;
 pub const AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1: u16 = 0x1402;
+pub const AQL_SYSTEM_SCOPED_WAIT_FOR_PRIOR_KERNEL_DISPATCH_HEADER_V1: u16 = 0x1502;
 pub const AQL_MIN_RING_BYTES_V1: u32 = 4096;
 pub const AQL_MAX_RING_BYTES_V1: u32 = 1 << 31;
 /// Maximum packets admitted by one V1 arithmetic batch reservation.
@@ -75,6 +76,35 @@ pub const AQL_MAX_BATCH_PACKETS_V1: u32 = 256;
 /// maximum batch. The bound is a host resource policy, not a hardware queue
 /// limit.
 pub const AQL_MAX_FIXED_BATCH_PACKETS_V2: u32 = 8192;
+
+/// Execution-order policy encoded in one kernel-dispatch packet header.
+///
+/// System-scoped acquire and release fences govern memory visibility. They do
+/// not by themselves make a dispatch wait for preceding queue packets.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u16)]
+pub enum AqlDispatchOrderingV1 {
+    /// The dispatch may become eligible independently of prior queue packets.
+    Independent = AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1,
+    /// The dispatch waits until all preceding queue packets have completed.
+    WaitForPrior = AQL_SYSTEM_SCOPED_WAIT_FOR_PRIOR_KERNEL_DISPATCH_HEADER_V1,
+}
+
+impl AqlDispatchOrderingV1 {
+    /// Returns the exact system-scoped kernel-dispatch header.
+    pub const fn header(self) -> u16 {
+        self as u16
+    }
+
+    /// Admits exactly one reviewed system-scoped dispatch header.
+    pub const fn from_header(header: u16) -> Option<Self> {
+        match header {
+            AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1 => Some(Self::Independent),
+            AQL_SYSTEM_SCOPED_WAIT_FOR_PRIOR_KERNEL_DISPATCH_HEADER_V1 => Some(Self::WaitForPrior),
+            _ => None,
+        }
+    }
+}
 
 /// Stable name of the inert V1 batch-reservation model.
 pub const AQL_BATCH_RESERVATION_MODEL_SCHEMA_ID_V1: &str =
@@ -104,13 +134,13 @@ state=single-producer-write,last-observed-read,power-of-two-ring-capacity
 admission=nondecreasing-read,read<=write,distance<=capacity,count<=capacity,count<=available,checked-u64-next-write
 slots=packet-id&(capacity-1),ordered,distinct-within-admitted-batch,wrap-aware
 transition=all-checks-before-write-or-last-read-mutation
-publication=all-invalid-bodies-before-any-release-header,one-final-doorbell-required-by-later-native-owner
+publication=all-invalid-bodies-before-any-per-packet-retained-exact-release-header,independent:0x1402,wait-for-prior:0x1502,one-final-doorbell-required-by-later-native-owner
 authority=inert-arithmetic-and-packet-values-only,no-native-reservation,no-counter-access,no-packet-write,no-publication,no-doorbell,no-completion
 "#;
 
 /// SHA-256 of [`AQL_FIXED_BATCH_MODEL_MANIFEST_V2`].
 pub const AQL_FIXED_BATCH_MODEL_MANIFEST_SHA256_V2: &str =
-    "e989398f327c97df8108855a9c97316dd5c6b6b5af68704a14da64990dc4aa8a";
+    "a3c74fe4aa26a62772253de267812f2fb1626247685d8c4e8ed8bbb2a5a9e34a";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AqlAddressObservationError {
@@ -591,6 +621,30 @@ impl AqlKernelDispatchPacketV1 {
         kernarg_alignment: u64,
         completion_signal: ObservedGpuAddressV1,
     ) -> Result<AqlPreparedKernelDispatchV1, AqlDispatchPacketError> {
+        Self::new_unpublished_with_ordering(
+            geometry,
+            private_segment_size,
+            group_segment_size,
+            kernel_object,
+            kernarg_address,
+            kernarg_alignment,
+            completion_signal,
+            AqlDispatchOrderingV1::Independent,
+        )
+    }
+
+    /// Constructs an unpublished packet with an explicit execution-order policy.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_unpublished_with_ordering(
+        geometry: AqlDispatchGeometryV1,
+        private_segment_size: u32,
+        group_segment_size: u32,
+        kernel_object: ObservedGpuAddressV1,
+        kernarg_address: ObservedGpuAddressV1,
+        kernarg_alignment: u64,
+        completion_signal: ObservedGpuAddressV1,
+        ordering: AqlDispatchOrderingV1,
+    ) -> Result<AqlPreparedKernelDispatchV1, AqlDispatchPacketError> {
         let kernel_object = kernel_object
             .require_alignment(64)
             .map_err(AqlDispatchPacketError::KernelObject)?;
@@ -620,7 +674,7 @@ impl AqlKernelDispatchPacketV1 {
             reserved2: 0,
             completion_signal: completion_signal.raw(),
         };
-        Ok(AqlPreparedKernelDispatchV1 { packet })
+        Ok(AqlPreparedKernelDispatchV1 { packet, ordering })
     }
 
     pub const fn is_unpublished(&self) -> bool {
@@ -667,15 +721,21 @@ impl AqlKernelDispatchPacketV1 {
 #[derive(Debug, Eq, PartialEq)]
 pub struct AqlPreparedKernelDispatchV1 {
     packet: AqlKernelDispatchPacketV1,
+    ordering: AqlDispatchOrderingV1,
 }
 
 impl AqlPreparedKernelDispatchV1 {
+    /// Returns the explicit execution-order policy retained for publication.
+    pub const fn ordering(&self) -> AqlDispatchOrderingV1 {
+        self.ordering
+    }
+
     pub fn publish_with<T: AqlPacketPublicationTargetV1>(
         self,
         target: &mut T,
     ) -> Result<(), T::Error> {
         target.write_unpublished(&self.packet)?;
-        target.publish_release_header(AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1)
+        target.publish_release_header(self.ordering.header())
     }
 }
 
@@ -726,11 +786,8 @@ impl<const N: usize> AqlPreparedKernelDispatchBatchV1<N> {
         for (batch_index, packet) in self.packets.iter().enumerate() {
             target.write_unpublished(batch_index as u32, &packet.packet)?;
         }
-        for batch_index in 0..N {
-            target.publish_release_header(
-                batch_index as u32,
-                AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1,
-            )?;
+        for (batch_index, packet) in self.packets.iter().enumerate() {
+            target.publish_release_header(batch_index as u32, packet.ordering.header())?;
         }
         Ok(())
     }
@@ -788,11 +845,8 @@ impl<const N: usize> AqlPreparedKernelDispatchBatchV2<N> {
         for (batch_index, packet) in self.packets.iter().enumerate() {
             target.write_unpublished(batch_index as u32, &packet.packet)?;
         }
-        for batch_index in 0..N {
-            target.publish_release_header(
-                batch_index as u32,
-                AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1,
-            )?;
+        for (batch_index, packet) in self.packets.iter().enumerate() {
+            target.publish_release_header(batch_index as u32, packet.ordering.header())?;
         }
         Ok(())
     }
