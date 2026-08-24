@@ -1,0 +1,15 @@
+[package]
+name = "fe2o3-kir-sim"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Bounded deterministic CPU execution for verified canonical fe2o3 Kernel IR."
+
+[dependencies]
+fe2o3-kernel-ir.workspace = true
+
+[lib]
+name = "fe2o3_kir_sim"
+path = "src/lib.rs"

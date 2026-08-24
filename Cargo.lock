@@ -1098,6 +1098,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-kir-sim"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-kernel-ir",
+]
+
+[[package]]
+name = "fe2o3-kir-sim-cli"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-kernel-ir",
+ "fe2o3-kir-sim",
+ "rustix",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "fe2o3-kir-sim-trace"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-kernel-ir",
+ "fe2o3-kir-sim",
+ "fe2o3-semantic-trace",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-legacy-compiler"
 version = "0.1.0"
 dependencies = [
@@ -1504,6 +1532,10 @@ dependencies = [
  "fe2o3-device",
  "fe2o3-host",
 ]
+
+[[package]]
+name = "fe2o3-semantic-trace"
+version = "0.1.0"
 
 [[package]]
 name = "fe2o3-service-host"

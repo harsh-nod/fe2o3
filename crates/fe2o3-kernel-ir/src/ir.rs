@@ -20,6 +20,14 @@ macro_rules! string_id {
             pub fn as_str(&self) -> &str {
                 &self.0
             }
+
+            /// Returns bytes retained by the identity string allocation.
+            ///
+            /// Resource-bounded consumers use allocation capacity rather than
+            /// visible length so caller-supplied spare capacity is not hidden.
+            pub fn retained_capacity_bytes(&self) -> usize {
+                self.0.capacity()
+            }
         }
 
         impl From<&str> for $name {

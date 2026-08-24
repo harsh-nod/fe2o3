@@ -31,6 +31,7 @@
         "fe2o3-protected-publisher",
         "fe2o3-rustc-invocation",
         "fe2o3-runtime-model",
+        "fe2o3-semantic-trace",
         "fe2o3-service-model",
         "reserved-fe2o3-symbols"
       ]
@@ -90,6 +91,8 @@
         "fe2o3-host",
         "fe2o3-hsa-runtime",
         "fe2o3-kfd",
+        "fe2o3-kir-sim",
+        "fe2o3-kir-sim-trace",
         "fe2o3-service-host",
         "fe2o3-worker-v2-bundle"
       ]
@@ -103,6 +106,7 @@
         "fe2o3-differential",
         "fe2o3-general-gemm-compiler",
         "fe2o3-legacy-compiler",
+        "fe2o3-kir-sim-cli",
         "fe2o3-llvm-route-conformance",
         "fe2o3-pliron-conformance",
         "fe2o3-pliron-llvm-smoke",
