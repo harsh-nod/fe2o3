@@ -3819,21 +3819,49 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 left,
                 right,
             } => {
-                let (semantic_left, semantic_right) = (left, right);
                 let semantic_left_type = semantic_operand_type(left);
                 let semantic_right_type = semantic_operand_type(right);
                 let semantic_operands_match = semantic_left_type == semantic_right_type;
-                let (mut left, mut left_ty) = self
-                    .lower_operand(block, statement, left, operations)?
+                let semantic_lowered_type = semantic_operands_match
+                    .then(|| lower_scalar_type(self.types, semantic_left_type))
+                    .transpose()?;
+                let canonical_left = semantic_lowered_type
+                    .as_ref()
+                    .and_then(|ty| canonical_index_constant_v1(left, ty));
+                let canonical_right = semantic_lowered_type
+                    .as_ref()
+                    .and_then(|ty| canonical_index_constant_v1(right, ty));
+                let canonicalize_left = canonical_left.is_some()
+                    && canonical_right.is_none()
+                    && self.operand_transport_type(block, statement, right)? == Some(Type::INDEX);
+                let canonicalize_right = canonical_right.is_some()
+                    && canonical_left.is_none()
+                    && self.operand_transport_type(block, statement, left)? == Some(Type::INDEX);
+                let left = if canonicalize_left {
+                    self.emit(
+                        operations,
+                        Type::INDEX,
+                        OperationKind::Constant(canonical_left.expect("checked above")),
+                    )?
+                } else {
+                    self.lower_operand(block, statement, left, operations)?
+                };
+                let right = if canonicalize_right {
+                    self.emit(
+                        operations,
+                        Type::INDEX,
+                        OperationKind::Constant(canonical_right.expect("checked above")),
+                    )?
+                } else {
+                    self.lower_operand(block, statement, right, operations)?
+                };
+                let (mut left, mut left_ty) = left
                     .value()
                     .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
-                let (mut right, mut right_ty) = self
-                    .lower_operand(block, statement, right, operations)?
+                let (mut right, mut right_ty) = right
                     .value()
                     .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
                 if let Some((convert_left, coercion)) = index_binary_coercion_v1(
-                    semantic_left,
-                    semantic_right,
                     semantic_operands_match,
                     left,
                     &left_ty,
@@ -4180,6 +4208,30 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 )
             }
         }
+    }
+
+    fn operand_transport_type(
+        &self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        operand: &SemanticOperandV1,
+    ) -> Result<Option<Type>, ProductionSemanticKirErrorV1> {
+        let (SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)) = operand else {
+            return Ok(None);
+        };
+        if place.projections().iter().any(|projection| {
+            matches!(
+                projection.kind(),
+                SemanticProjectionKindV1::Index(_) | SemanticProjectionKindV1::Dereference
+            )
+        }) {
+            return Ok(None);
+        }
+        Ok(self
+            .resolve_place(block, statement, place)?
+            .value()
+            .ok()
+            .map(|(_, ty)| ty))
     }
 
     fn normalize_checked_operand(
@@ -9065,8 +9117,6 @@ fn canonical_index_constant_v1(
 
 #[allow(clippy::too_many_arguments)]
 fn index_binary_coercion_v1(
-    semantic_left: &SemanticOperandV1,
-    semantic_right: &SemanticOperandV1,
     semantic_operands_match: bool,
     left: ValueId,
     left_type: &Type,
@@ -9076,23 +9126,19 @@ fn index_binary_coercion_v1(
     if !semantic_operands_match {
         return None;
     }
-    let (convert_left, semantic_operand, value, source_type) = match (left_type, right_type) {
-        (Type::Scalar(ScalarType::Index), Type::Scalar(ScalarType::U64)) => {
-            (false, semantic_right, right, right_type)
-        }
-        (Type::Scalar(ScalarType::U64), Type::Scalar(ScalarType::Index)) => {
-            (true, semantic_left, left, left_type)
-        }
+    let (convert_left, value) = match (left_type, right_type) {
+        (Type::Scalar(ScalarType::Index), Type::Scalar(ScalarType::U64)) => (false, right),
+        (Type::Scalar(ScalarType::U64), Type::Scalar(ScalarType::Index)) => (true, left),
         _ => return None,
     };
-    let operation = canonical_index_constant_v1(semantic_operand, source_type)
-        .map(OperationKind::Constant)
-        .unwrap_or(OperationKind::Cast {
+    Some((
+        convert_left,
+        OperationKind::Cast {
             kind: CastKind::Bitcast,
             value,
             to: Type::INDEX,
-        });
-    Some((convert_left, operation))
+        },
+    ))
 }
 
 fn semantic_enum_shape(
@@ -9381,70 +9427,184 @@ mod resource_tests {
     }
 
     #[test]
-    fn matched_usize_constants_canonicalize_to_index_in_both_operand_orders() {
+    fn matched_usize_constants_are_recognized_in_both_operand_orders() {
         let semantic_type = SemanticTypeIdV1::from_index(0);
         let constant = SemanticOperandV1::Constant(SemanticConstantV1::new(
             semantic_type,
             SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(64, 8).unwrap()),
         ));
-        let dynamic = SemanticOperandV1::Copy(
-            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(0), vec![], semantic_type).unwrap(),
-        );
         let u64_type = Type::Scalar(ScalarType::U64);
 
-        let left = index_binary_coercion_v1(
-            &constant,
-            &dynamic,
-            true,
-            ValueId(1),
-            &u64_type,
-            ValueId(2),
-            &Type::INDEX,
-        )
-        .unwrap();
+        assert_eq!(
+            canonical_index_constant_v1(&constant, &u64_type),
+            Some(Constant::Index(64))
+        );
+        let left = index_binary_coercion_v1(true, ValueId(1), &u64_type, ValueId(2), &Type::INDEX)
+            .unwrap();
         assert!(left.0);
         assert!(matches!(
             left.1,
-            OperationKind::Constant(Constant::Index(64))
+            OperationKind::Cast {
+                kind: CastKind::Bitcast,
+                value: ValueId(1),
+                to: Type::Scalar(ScalarType::Index),
+            }
         ));
 
-        let right = index_binary_coercion_v1(
-            &dynamic,
-            &constant,
-            true,
-            ValueId(2),
-            &Type::INDEX,
-            ValueId(1),
-            &u64_type,
-        )
-        .unwrap();
+        let right = index_binary_coercion_v1(true, ValueId(2), &Type::INDEX, ValueId(1), &u64_type)
+            .unwrap();
         assert!(!right.0);
         assert!(matches!(
             right.1,
-            OperationKind::Constant(Constant::Index(64))
+            OperationKind::Cast {
+                kind: CastKind::Bitcast,
+                value: ValueId(1),
+                to: Type::Scalar(ScalarType::Index),
+            }
+        ));
+    }
+
+    #[test]
+    fn binary_lowering_emits_one_canonical_index_constant_without_dead_u64_ir() {
+        fn lower(
+            constant_on_left: bool,
+            max_operations: usize,
+        ) -> Result<Vec<Operation>, ProductionSemanticKirErrorV1> {
+            let unit = SemanticTypeIdV1::from_index(0);
+            let u64_ty = SemanticTypeIdV1::from_index(1);
+            let types = [unit_type(), u64_type()];
+            let source = SemanticSourceProvenanceV1::unavailable();
+            let abi = SemanticFunctionAbiV1::from_rustc(
+                SemanticAbiIdentityV1::from_sha256([21; 32]),
+                SemanticLayoutIdentityV1::from_sha256([22; 32]),
+                SemanticCanonAbiV1::GpuKernel,
+                SemanticExternAbiV1::GpuKernel,
+                false,
+                false,
+                0,
+                vec![],
+                SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+            )
+            .unwrap();
+            let block = SemanticBasicBlockV1::new(
+                SemanticBlockIdentityV1::from_sha256([23; 32]),
+                source,
+                vec![],
+                SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Return),
+            )
+            .unwrap();
+            let function = SemanticFunctionDeclV1::new(
+                SemanticFunctionIdentityV1::from_sha256([24; 32]),
+                SemanticFunctionRoleV1::InternalHelper,
+                SemanticItemDefinitionIdentityV1::from_sha256([25; 32]),
+                SemanticMonomorphizationIdentityV1::from_sha256([26; 32]),
+                SemanticGenericTypeArgumentsIdentityV1::from_sha256([27; 32]),
+                SemanticConstGenericArgumentsIdentityV1::from_sha256([28; 32]),
+                source,
+                abi,
+                vec![
+                    SemanticLocalDeclV1::new(
+                        SemanticLocalIdentityV1::from_sha256([29; 32]),
+                        unit,
+                        SemanticLocalRoleV1::Return,
+                        source,
+                    ),
+                    SemanticLocalDeclV1::new(
+                        SemanticLocalIdentityV1::from_sha256([30; 32]),
+                        u64_ty,
+                        SemanticLocalRoleV1::Temporary,
+                        source,
+                    ),
+                ],
+                SemanticBlockIdV1::from_index(0),
+                vec![block],
+            )
+            .unwrap();
+            let mut lowering = SemanticFunctionLoweringV1::new(
+                &types,
+                &[],
+                &function,
+                SemanticParameterBindingsV1 {
+                    declarations: &[],
+                    values: &[],
+                    types: &[],
+                },
+                None,
+                max_operations,
+            )
+            .unwrap();
+            lowering.locals[1] = Some(SemanticValueBindingV1::Value {
+                id: ValueId(0),
+                ty: Type::INDEX,
+            });
+            lowering.next_value = 1;
+            let constant = SemanticOperandV1::Constant(SemanticConstantV1::new(
+                u64_ty,
+                SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(64, 8).unwrap()),
+            ));
+            let dynamic = SemanticOperandV1::Copy(
+                SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], u64_ty).unwrap(),
+            );
+            let (left, right) = if constant_on_left {
+                (constant, dynamic)
+            } else {
+                (dynamic, constant)
+            };
+            let mut operations = Vec::new();
+            lowering.lower_rvalue(
+                SemanticBlockIdV1::from_index(0),
+                Some(0),
+                u64_ty,
+                &SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::Add,
+                    left,
+                    right,
+                },
+                &mut operations,
+            )?;
+            Ok(operations)
+        }
+
+        for operations in [lower(true, 2).unwrap(), lower(false, 2).unwrap()] {
+            assert_eq!(operations.len(), 2);
+            assert_eq!(
+                operations
+                    .iter()
+                    .filter(|operation| matches!(
+                        &operation.kind,
+                        OperationKind::Constant(Constant::Index(64))
+                    ))
+                    .count(),
+                1
+            );
+            assert!(!operations.iter().any(|operation| matches!(
+                &operation.kind,
+                OperationKind::Constant(Constant::U64(64)) | OperationKind::Cast { .. }
+            )));
+            assert!(matches!(
+                &operations[1].kind,
+                OperationKind::Binary {
+                    op: BinaryOp::Add,
+                    ..
+                }
+            ));
+        }
+        assert!(matches!(
+            lower(true, 1),
+            Err(ProductionSemanticKirErrorV1::ResourceLimit {
+                resource: ProductionSemanticKirResourceV1::Operations,
+                actual: 2,
+                limit: 1,
+            })
         ));
     }
 
     #[test]
     fn index_binary_coercion_keeps_dynamic_values_and_mismatches_fail_closed() {
-        let semantic_type = SemanticTypeIdV1::from_index(0);
-        let dynamic = |local| {
-            SemanticOperandV1::Copy(
-                SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], semantic_type)
-                    .unwrap(),
-            )
-        };
         let u64_type = Type::Scalar(ScalarType::U64);
-        let dynamic_coercion = index_binary_coercion_v1(
-            &dynamic(0),
-            &dynamic(1),
-            true,
-            ValueId(1),
-            &Type::INDEX,
-            ValueId(2),
-            &u64_type,
-        )
-        .unwrap();
+        let dynamic_coercion =
+            index_binary_coercion_v1(true, ValueId(1), &Type::INDEX, ValueId(2), &u64_type)
+                .unwrap();
         assert!(matches!(
             dynamic_coercion,
             (
@@ -9457,16 +9617,8 @@ mod resource_tests {
             )
         ));
         assert!(
-            index_binary_coercion_v1(
-                &dynamic(0),
-                &dynamic(1),
-                false,
-                ValueId(1),
-                &Type::INDEX,
-                ValueId(2),
-                &u64_type,
-            )
-            .is_none()
+            index_binary_coercion_v1(false, ValueId(1), &Type::INDEX, ValueId(2), &u64_type,)
+                .is_none()
         );
     }
 
@@ -9489,6 +9641,18 @@ mod resource_tests {
             )
             .unwrap(),
             SemanticTypeShapeV1::Unit,
+        )
+    }
+
+    fn u64_type() -> SemanticTypeDeclV1 {
+        SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([31; 32]),
+            SemanticLayoutIdentityV1::from_sha256([32; 32]),
+            SemanticTypeLayoutV1::new(Some(8), 8).unwrap(),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits: 64,
+            }),
         )
     }
 
