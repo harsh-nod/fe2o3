@@ -1534,6 +1534,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-semantic-import"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-semantic-trace",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-semantic-query"
 version = "0.1.0"
 dependencies = [
