@@ -61,14 +61,14 @@ static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and fixed-batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r18-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r19-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
     "memory_profile_sha256=286ad8af398b666217d5ec8c0a19390a4736cfcf6624e363214c7488b8e2e535\n",
     "queue_resource_profile_sha256=b8317e4288e14c6d7546b53887ec2a10e1938ffba9595271d174a2a652320f4f\n",
     "aql_dispatch_schema_sha256=b691e0df36e2c1f0695f49a19d49d3fbbe4380e8e9999b01368df02783952edf\n",
     "aql_fixed_batch_schema_sha256=e989398f327c97df8108855a9c97316dd5c6b6b5af68704a14da64990dc4aa8a\n",
     "aql_completion_schema_sha256=abb0fe30cddd4a93bf36ba3df4dea38bd899339e9e62eaacceeb5bbc5208378b\n",
-    "dispatch_binding_schema_sha256=c2a6dc42c42f471c6bfc6dabf1e8e3786196b1edcb867835e9c87f4ea3bf8a74\n",
+    "dispatch_binding_schema_sha256=16c261456a2c2ab9d0f8ea7e6286b7c849338579d6b45dbbd78c455a2a70c3ab\n",
     "event_schema_sha256=8d754af12ed2fcd0c238e1f9e38fbbdab053f44fc5d613b227fdcdd616fcc849\n",
     "runtime_enable_schema_sha256=4c762d1e35a5940f0972290151de51e6e19722f81874a6446c66ddc70a062ac1\n",
     "source.rocr.queues.c=b7ead541340ac996c2305b2e9660cb3176edcd61ee509d4880f02659fbb6f32b\n",
@@ -83,9 +83,9 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-explicit-two-atomic-u64-zero;completion-arena-exact-8192-typed-64-byte-user-signals-pending-1-before-gpu-map;one-first-internal-auto-reset-signal-event-id-1-through-255-before-create;8-cwsr-bo-and-shadow-headers-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,one-first-shadow-aligned-error-reason-zero,exact-event-id\n",
     "submission=crate-private-non-clone-single-producer,aql-fixed-batch-v2-count-1-through-8192-and-ring-capacity-bounded,heap-owned-fixed-cardinality-state,no-mapped-slice-or-raw-pointer-escape,rptr-wptr-acquire,one-actual-wptr-acq-rel-fetch-add-by-count,all-invalid-bodies-before-any-ordered-u32-release-headers,release-fence-x86-sfence,one-final-volatile-u64-doorbell-store-of-last-packet-id\n",
     "completion=crate-private-non-clone-generation-bound-batches,unique-signal-per-packet,signal-code-kernarg-dispatch-and-queue-generations-retained,bounded-atomic-acquire-poll,pending-ready-fault-timeout-distinct,release-reset-only-after-all-signals-zero\n",
-    "dispatch=public-addressless-linear-fixed-batch,1-through-32-inspected-programs,1-through-8192-packets,validated-code-materialization,zero-pointer-kernarg-internal-injection,metadata-derived-COV6-geometry-and-dynamic-lds-implicit-subset-with-caller-zero-suffix,queue-pointer-and-runtime-address-fields-rejected,exact-mapped-data-set,inspected-access-and-sealed-initialization-gates,ordinary-release-or-exact-recycle-gated-attached-or-detached-return-after-destroy\n",
+    "dispatch=public-addressless-linear-fixed-batch,1-through-32-inspected-programs,1-through-8192-packets,validated-code-materialization,zero-pointer-kernarg-internal-injection,metadata-derived-COV6-geometry-and-dynamic-lds-implicit-subset-with-caller-zero-suffix,queue-pointer-and-runtime-address-fields-rejected,exact-mapped-data-set-retained-even-when-unreferenced-by-current-batch,referenced-subset-only-inspected-access-and-sealed-initialization-gates,ordinary-release-or-exact-recycle-gated-attached-or-detached-return-after-destroy\n",
     "readback=coherent-host-data-only,owned-bounded-copy-after-exact-acquire-observed-completion-and-signal-recycle,exact-dispatch-generation,ordinary-range-within-one-inspected-write-or-readwrite-binding-or-exact-admitted-initialized-enclosing-snapshot,no-native-address-or-mapped-borrow,no-whole-allocation-initialization-promotion\n",
-    "rebinding=exact-completion-and-signal-recycle-before-detach,code-and-kernarg-released,queue-ring-signal-event-doorbell-and-runtime-remain-live,exact-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,new-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest\n",
+    "rebinding=exact-completion-and-signal-recycle-before-detach,code-and-kernarg-released,queue-ring-signal-event-doorbell-and-runtime-remain-live,exact-complete-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,all-mapped-data-retained-with-inspected-effects-only-for-currently-referenced-subset,new-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest\n",
     "doorbell=complete-8192-byte-kfd-slice,exact-returned-offset,madv-dontfork,no-public-address-pointer-or-mmio-accessor\n",
     "lifecycle=runtime-enable,event-create,queue-create;all-completion-batches-observed-and-recycled;queue-destroy,event-destroy,runtime-disable,doorbell-release,cwsr-queue-resource-and-completion-arena-release;no-drop-ioctl-store-munmap-or-free\n",
     "currentness=pid-and-device-before-publication,after-bounded-preparation,and-before-mmio\n",
@@ -99,7 +99,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "390111808b6cc4260aac7dd14d25ca1adb11c302f674abe0732d434c43745928";
+    "50b89ee1fe242070931236a610d5f37b627e535c5682fa01e023849811882e0c";
 
 type RingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -689,9 +689,10 @@ impl SharedGttMemorySessionV1 {
     /// authority into it.
     ///
     /// The operation does not expose native addresses. Inspected global-buffer
-    /// access determines whether each move-only storage input must carry sealed
-    /// initialization authority. Every inspected program is retained even when
-    /// no packet in this batch selects it. Queue creation does not establish
+    /// access determines whether each referenced move-only storage input must
+    /// carry sealed initialization authority. Every mapped storage input and
+    /// inspected program is retained even when no packet in this batch selects
+    /// it. Queue creation does not establish
     /// kernel numerical correctness, memory-effect refinement, or hardware
     /// execution.
     pub fn create_compute_aql_queue_with_fixed_dispatch<const N: usize>(
@@ -968,9 +969,9 @@ impl ComputeAqlQueueSessionV1 {
     ///
     /// The queue must have no attached batch. The complete detached data set is
     /// rebound, and its device-local subset is revalidated against the retained
-    /// KFD session before the new owner is installed. Every inspected program
-    /// is retained even when no packet in this batch selects it. This does not
-    /// publish.
+    /// KFD session before the new owner is installed. Every mapped storage input
+    /// and inspected program is retained even when no packet in this batch
+    /// selects it. This does not publish.
     pub fn bind_fixed_dispatch<const N: usize>(
         &mut self,
         programs: Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>>,
@@ -2435,7 +2436,7 @@ mod tests {
         );
         assert_eq!(
             super::super::dispatch_binding::GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1,
-            "c2a6dc42c42f471c6bfc6dabf1e8e3786196b1edcb867835e9c87f4ea3bf8a74"
+            "16c261456a2c2ab9d0f8ea7e6286b7c849338579d6b45dbbd78c455a2a70c3ab"
         );
         assert_eq!(
             SHARED_GTT_MEMORY_PROFILE_SHA256_V1,
