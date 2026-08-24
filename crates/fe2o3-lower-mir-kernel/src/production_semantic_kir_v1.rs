@@ -1613,13 +1613,24 @@ enum SemanticPromotedBindingV1 {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SemanticCurrentWaveV1 {
+    width: u32,
+}
+
+impl SemanticCurrentWaveV1 {
+    const fn new(width: u32) -> Self {
+        Self { width }
+    }
+}
+
 impl SemanticPromotedBindingV1 {
     fn transport_types(
         self,
         types: &[SemanticTypeDeclV1],
         semantic_type: SemanticTypeIdV1,
     ) -> Result<Vec<Type>, ProductionSemanticKirErrorV1> {
-        let mut transport = match self {
+        let transport = match self {
             Self::Ordinary => lower_ssa_value_types(types, semantic_type)?,
             Self::MatrixFragment { contract, .. } => {
                 vec![Type::Scalar(ScalarType::Bf16); contract.profile.operand_components_per_lane()]
@@ -1630,10 +1641,19 @@ impl SemanticPromotedBindingV1 {
                 }
             },
         };
-        if !matches!(self, Self::Ordinary) {
-            transport.push(Type::Scalar(ScalarType::U32));
-        }
         Ok(transport)
+    }
+
+    const fn current_wave(self) -> Option<SemanticCurrentWaveV1> {
+        match self {
+            Self::Ordinary => None,
+            Self::MatrixFragment { contract, .. } => {
+                Some(SemanticCurrentWaveV1::new(contract.wave_width))
+            }
+            Self::AccumulatorFragment { contract } => {
+                Some(SemanticCurrentWaveV1::new(contract.wave_width))
+            }
+        }
     }
 
     fn transport_values(
@@ -1651,24 +1671,23 @@ impl SemanticPromotedBindingV1 {
                     values,
                     contract: actual_contract,
                     storage_layout: actual_storage_layout,
-                    lane,
+                    wave,
                 },
-            ) if contract == *actual_contract && storage_layout == *actual_storage_layout => {
-                let mut transport = values.clone();
-                transport.push((*lane, Type::Scalar(ScalarType::U32)));
-                Ok(transport)
+            ) if contract == *actual_contract
+                && storage_layout == *actual_storage_layout
+                && self.current_wave() == Some(*wave) =>
+            {
+                Ok(values.clone())
             }
             (
                 Self::AccumulatorFragment { contract },
                 SemanticValueBindingV1::AccumulatorFragment {
                     values,
                     contract: actual_contract,
-                    lane,
+                    wave,
                 },
-            ) if contract == *actual_contract => {
-                let mut transport = values.clone();
-                transport.push((*lane, Type::Scalar(ScalarType::U32)));
-                Ok(transport)
+            ) if contract == *actual_contract && self.current_wave() == Some(*wave) => {
+                Ok(values.clone())
             }
             (Self::MatrixFragment { .. }, _) => {
                 Err("promoted matrix fragment lacks its authenticated producer metadata")
@@ -1688,28 +1707,11 @@ impl SemanticPromotedBindingV1 {
         if matches!(self, Self::Ordinary) {
             return binding_from_value_defs(types, semantic_type, values);
         }
-        let (lane, components) = values.split_last().ok_or_else(|| {
-            unsupported(
-                0,
-                None,
-                None,
-                "typed fragment SSA transport is missing its lane token",
-            )
-        })?;
-        if lane.ty != Type::Scalar(ScalarType::U32) {
-            return Err(unsupported(
-                0,
-                None,
-                None,
-                "typed fragment SSA lane token changed type",
-            ));
-        }
         let expected = self.transport_types(types, semantic_type)?;
-        let expected_components = &expected[..expected.len() - 1];
-        if components.len() != expected_components.len()
-            || components
+        if values.len() != expected.len()
+            || values
                 .iter()
-                .zip(expected_components)
+                .zip(&expected)
                 .any(|(actual, expected)| &actual.ty != expected)
         {
             return Err(unsupported(
@@ -1719,10 +1721,13 @@ impl SemanticPromotedBindingV1 {
                 "typed fragment SSA component types changed",
             ));
         }
-        let components = components
+        let components = values
             .iter()
             .map(|value| (value.id, value.ty.clone()))
             .collect();
+        let wave = self
+            .current_wave()
+            .expect("typed promoted binding has a current-wave association");
         match self {
             Self::Ordinary => unreachable!("ordinary binding returned above"),
             Self::MatrixFragment {
@@ -1732,13 +1737,13 @@ impl SemanticPromotedBindingV1 {
                 values: components,
                 contract,
                 storage_layout,
-                lane: lane.id,
+                wave,
             }),
             Self::AccumulatorFragment { contract } => {
                 Ok(SemanticValueBindingV1::AccumulatorFragment {
                     values: components,
                     contract,
-                    lane: lane.id,
+                    wave,
                 })
             }
         }
@@ -2256,16 +2261,20 @@ enum SemanticValueBindingV1 {
     MathContext,
     CollectiveContext,
     MatrixContext,
+    WaveLane {
+        value: ValueId,
+        wave: SemanticCurrentWaveV1,
+    },
     MatrixFragment {
         values: Vec<(ValueId, Type)>,
         contract: SemanticMfmaOperandContractV1,
         storage_layout: SemanticMfmaStorageLayoutV1,
-        lane: ValueId,
+        wave: SemanticCurrentWaveV1,
     },
     AccumulatorFragment {
         values: Vec<(ValueId, Type)>,
         contract: SemanticMfmaAccumulatorContractV1,
-        lane: ValueId,
+        wave: SemanticCurrentWaveV1,
     },
     Value {
         id: ValueId,
@@ -2328,6 +2337,7 @@ impl SemanticValueBindingV1 {
         match self {
             Self::Value { id, ty } => Ok((*id, ty.clone())),
             Self::IndexWitness { id, .. } => Ok((*id, Type::INDEX)),
+            Self::WaveLane { value, .. } => Ok((*value, Type::Scalar(ScalarType::U32))),
             Self::Unit
             | Self::Aggregate(_)
             | Self::Enum { .. }
@@ -2357,6 +2367,9 @@ impl SemanticValueBindingV1 {
         match self {
             Self::Value { id, ty } => values.push((*id, ty.clone())),
             Self::IndexWitness { id, .. } => values.push((*id, Type::INDEX)),
+            Self::WaveLane { value, .. } => {
+                values.push((*value, Type::Scalar(ScalarType::U32)));
+            }
             Self::Aggregate(fields) => {
                 for field in fields {
                     field.append_values(values)?;
@@ -2420,6 +2433,21 @@ fn require_single_u32_component(
         description,
     )?[0]
         .0)
+}
+
+fn require_current_wave_lane(
+    block: SemanticBlockIdV1,
+    binding: SemanticValueBindingV1,
+    expected_width: u32,
+    description: &'static str,
+) -> Result<(ValueId, SemanticCurrentWaveV1), ProductionSemanticKirErrorV1> {
+    let SemanticValueBindingV1::WaveLane { value, wave } = binding else {
+        return Err(unsupported(0, Some(block.index()), None, description));
+    };
+    if wave.width != expected_width {
+        return Err(unsupported(0, Some(block.index()), None, description));
+    }
+    Ok((value, wave))
 }
 
 struct SemanticFunctionLoweringV1<'a> {
@@ -2729,6 +2757,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     | SemanticValueBindingV1::MathContext
                     | SemanticValueBindingV1::CollectiveContext
                     | SemanticValueBindingV1::MatrixContext
+                    | SemanticValueBindingV1::WaveLane { .. }
                     | SemanticValueBindingV1::MatrixFragment { .. }
                     | SemanticValueBindingV1::AccumulatorFragment { .. }
                     | SemanticValueBindingV1::Value { .. }
@@ -3954,7 +3983,16 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         WaveWidth::Wave64,
                     )),
                 )?;
-                binding_from_value_defs(self.types, *lane, &lane_id)?
+                let lane_binding = binding_from_value_defs(self.types, *lane, &lane_id)?;
+                let value = require_single_u32_component(
+                    block,
+                    lane_binding,
+                    "typed MFMA lane has no exact u32 representation",
+                )?;
+                SemanticValueBindingV1::WaveLane {
+                    value,
+                    wave: SemanticCurrentWaveV1::new(*wave_width),
+                }
             }
             SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor {
                 result,
@@ -3994,9 +4032,10 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 ..
             } => {
                 self.require_call_argument_count(block, call, 1)?;
-                let lane = require_single_u32_component(
+                let (_, wave) = require_current_wave_lane(
                     block,
                     self.lower_operand(block, None, &call.arguments()[0], operations)?,
+                    contract.wave_width,
                     "zero accumulator lane",
                 )?;
                 let mut values = Vec::with_capacity(4);
@@ -4015,7 +4054,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 SemanticValueBindingV1::AccumulatorFragment {
                     values,
                     contract: *contract,
-                    lane,
+                    wave,
                 }
             }
             SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues {
@@ -4071,7 +4110,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     values: lhs,
                     contract: lhs_contract,
                     storage_layout: lhs_storage,
-                    lane: lhs_lane,
+                    wave: lhs_wave,
                 } = lhs
                 else {
                     return Err(unsupported(
@@ -4085,7 +4124,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     values: rhs,
                     contract: rhs_contract,
                     storage_layout: rhs_storage,
-                    lane: rhs_lane,
+                    wave: rhs_wave,
                 } = rhs
                 else {
                     return Err(unsupported(
@@ -4098,7 +4137,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 let SemanticValueBindingV1::AccumulatorFragment {
                     values: accumulator,
                     contract: accumulator_contract,
-                    lane: accumulator_lane,
+                    wave: accumulator_wave,
                 } = accumulator
                 else {
                     return Err(unsupported(
@@ -4111,8 +4150,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 if lhs_contract != *expected_lhs
                     || rhs_contract != *expected_rhs
                     || accumulator_contract != *expected_accumulator
-                    || lhs_lane != rhs_lane
-                    || lhs_lane != accumulator_lane
+                    || lhs_wave != rhs_wave
+                    || lhs_wave != accumulator_wave
                 {
                     return Err(unsupported(
                         0,
@@ -4184,7 +4223,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         .map(|value| (value.id, value.ty))
                         .collect(),
                     contract: accumulator_contract,
-                    lane: accumulator_lane,
+                    wave: accumulator_wave,
                 }
             }
             SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { .. } => {
@@ -5039,9 +5078,10 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         let rows = *rows;
         let columns = *columns;
         let stride = *stride;
-        let lane = require_single_u32_component(
+        let (lane, wave) = require_current_wave_lane(
             block,
             self.lower_operand(block, None, &call.arguments()[1], operations)?,
+            contract.wave_width,
             "typed matrix load lane",
         )?;
         let lane_index = self.emit_id(
@@ -5189,7 +5229,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             values,
             contract,
             storage_layout,
-            lane,
+            wave,
         };
         let Some((option_type, fragment_type)) = legacy_option else {
             return Ok(fragment);
@@ -6558,6 +6598,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             | SemanticValueBindingV1::MathContext
             | SemanticValueBindingV1::CollectiveContext
             | SemanticValueBindingV1::MatrixContext
+            | SemanticValueBindingV1::WaveLane { .. }
             | SemanticValueBindingV1::MatrixFragment { .. }
             | SemanticValueBindingV1::AccumulatorFragment { .. }
             | SemanticValueBindingV1::Value { .. }
@@ -7879,7 +7920,7 @@ mod resource_tests {
     }
 
     #[test]
-    fn promoted_accumulator_carries_contract_components_and_lane() {
+    fn promoted_accumulator_preserves_current_wave_without_a_phi_token() {
         let descriptor = SemanticPromotedBindingV1::AccumulatorFragment {
             contract: accumulator_contract(),
         };
@@ -7889,12 +7930,11 @@ mod resource_tests {
         let binding = SemanticValueBindingV1::AccumulatorFragment {
             values: values.clone(),
             contract: accumulator_contract(),
-            lane: ValueId(42),
+            wave: SemanticCurrentWaveV1::new(64),
         };
 
         let transport = descriptor.transport_values(&binding).unwrap();
-        assert_eq!(transport[..4], values);
-        assert_eq!(transport[4], (ValueId(42), Type::Scalar(ScalarType::U32)));
+        assert_eq!(transport, values);
         let definitions = transport
             .iter()
             .map(|(id, ty)| ValueDef::new(*id, ty.clone()))
@@ -7910,13 +7950,15 @@ mod resource_tests {
             SemanticValueBindingV1::AccumulatorFragment {
                 values: reconstructed,
                 contract,
-                lane: ValueId(42),
-            } if reconstructed == values && contract == accumulator_contract()
+                wave,
+            } if reconstructed == values
+                && contract == accumulator_contract()
+                && wave == SemanticCurrentWaveV1::new(64)
         ));
     }
 
     #[test]
-    fn promoted_matrix_fragment_carries_layout_contract_and_lane() {
+    fn promoted_matrix_fragment_preserves_layout_contract_and_current_wave() {
         let contract = operand_contract(SemanticMfmaOperandRoleV1::A);
         let descriptor = SemanticPromotedBindingV1::MatrixFragment {
             contract,
@@ -7929,11 +7971,11 @@ mod resource_tests {
             values: values.clone(),
             contract,
             storage_layout: SemanticMfmaStorageLayoutV1::LdsXor4,
-            lane: ValueId(51),
+            wave: SemanticCurrentWaveV1::new(64),
         };
 
         let transport = descriptor.transport_values(&binding).unwrap();
-        assert_eq!(transport.len(), 5);
+        assert_eq!(transport.len(), 4);
         let definitions = transport
             .iter()
             .map(|(id, ty)| ValueDef::new(*id, ty.clone()))
@@ -7950,8 +7992,10 @@ mod resource_tests {
                 values: reconstructed,
                 contract: reconstructed_contract,
                 storage_layout: SemanticMfmaStorageLayoutV1::LdsXor4,
-                lane: ValueId(51),
-            } if reconstructed == values && reconstructed_contract == contract
+                wave,
+            } if reconstructed == values
+                && reconstructed_contract == contract
+                && wave == SemanticCurrentWaveV1::new(64)
         ));
     }
 
@@ -7980,9 +8024,18 @@ mod resource_tests {
                 .map(|id| (ValueId(id), Type::Scalar(ScalarType::F32)))
                 .collect(),
             contract: wrong_contract,
-            lane: ValueId(9),
+            wave: SemanticCurrentWaveV1::new(32),
         };
         assert!(descriptor.transport_values(&wrong).is_err());
+
+        let wrong_wave = SemanticValueBindingV1::AccumulatorFragment {
+            values: (0..4)
+                .map(|id| (ValueId(id), Type::Scalar(ScalarType::F32)))
+                .collect(),
+            contract: accumulator_contract(),
+            wave: SemanticCurrentWaveV1::new(32),
+        };
+        assert!(descriptor.transport_values(&wrong_wave).is_err());
 
         let mut bindings = BTreeMap::new();
         let ty = SemanticTypeIdV1::from_index(7);
@@ -8002,7 +8055,7 @@ mod resource_tests {
     }
 
     #[test]
-    fn promoted_fragment_rejects_changed_lane_and_component_types() {
+    fn promoted_fragment_rejects_changed_component_count_and_types() {
         let descriptor = SemanticPromotedBindingV1::AccumulatorFragment {
             contract: accumulator_contract(),
         };
@@ -8019,10 +8072,10 @@ mod resource_tests {
                 )
                 .unwrap_err()
                 .to_string()
-                .contains("lane token changed type")
+                .contains("component types changed")
         );
 
-        definitions[4] = ValueDef::new(ValueId(4), Type::Scalar(ScalarType::U32));
+        definitions.pop();
         definitions[0] = ValueDef::new(ValueId(0), Type::Scalar(ScalarType::F64));
         assert!(
             descriptor
@@ -8035,6 +8088,51 @@ mod resource_tests {
                 .to_string()
                 .contains("component types changed")
         );
+    }
+
+    #[test]
+    fn current_wave_lane_rejects_plain_values_and_wrong_widths() {
+        let block = SemanticBlockIdV1::from_index(3);
+        let plain = SemanticValueBindingV1::Value {
+            id: ValueId(7),
+            ty: Type::Scalar(ScalarType::U32),
+        };
+        assert!(require_current_wave_lane(block, plain, 64, "lane authority").is_err());
+
+        let wrong_width = SemanticValueBindingV1::WaveLane {
+            value: ValueId(8),
+            wave: SemanticCurrentWaveV1::new(32),
+        };
+        assert!(require_current_wave_lane(block, wrong_width, 64, "lane authority").is_err());
+
+        let lane = SemanticValueBindingV1::WaveLane {
+            value: ValueId(9),
+            wave: SemanticCurrentWaveV1::new(64),
+        };
+        assert_eq!(
+            require_current_wave_lane(block, lane, 64, "lane authority").unwrap(),
+            (ValueId(9), SemanticCurrentWaveV1::new(64))
+        );
+    }
+
+    #[test]
+    fn repeated_current_lane_reads_share_physical_wave_provenance() {
+        let block = SemanticBlockIdV1::from_index(4);
+        let first = SemanticValueBindingV1::WaveLane {
+            value: ValueId(20),
+            wave: SemanticCurrentWaveV1::new(64),
+        };
+        let second = SemanticValueBindingV1::WaveLane {
+            value: ValueId(21),
+            wave: SemanticCurrentWaveV1::new(64),
+        };
+        let (first_value, first_wave) =
+            require_current_wave_lane(block, first, 64, "lane authority").unwrap();
+        let (second_value, second_wave) =
+            require_current_wave_lane(block, second, 64, "lane authority").unwrap();
+
+        assert_ne!(first_value, second_value);
+        assert_eq!(first_wave, second_wave);
     }
 
     #[test]
