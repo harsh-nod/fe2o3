@@ -1,5 +1,5 @@
 use std::io::Write as _;
-use std::os::unix::fs::OpenOptionsExt as _;
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
@@ -30,10 +30,13 @@ static FRONTEND_DEPENDENCIES: OnceLock<Result<(), String>> = OnceLock::new();
 
 struct TestOutput {
     path: PathBuf,
+    guard_directory: PathBuf,
+    guard_identity: String,
 }
 
 impl TestOutput {
     fn new(workspace: &Path) -> Self {
+        fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
         let path = cargo_target(workspace).join(format!(
             "flash-attention-v1-{}-{}",
             std::process::id(),
@@ -43,7 +46,18 @@ impl TestOutput {
             std::fs::remove_dir_all(&path).expect("remove stale FlashAttention test output");
         }
         std::fs::create_dir_all(&path).expect("create FlashAttention test output");
-        Self { path }
+        let guard_directory = path.join("artifact-path-guard");
+        std::fs::create_dir(&guard_directory).expect("create FlashAttention artifact path guard");
+        std::fs::set_permissions(&guard_directory, std::fs::Permissions::from_mode(0o700))
+            .expect("secure FlashAttention artifact path guard");
+        let metadata = std::fs::metadata(&guard_directory)
+            .expect("inspect FlashAttention artifact path guard");
+        let guard_identity = format!("{:016x}:{:016x}", metadata.dev(), metadata.ino());
+        Self {
+            path,
+            guard_directory,
+            guard_identity,
+        }
     }
 }
 
@@ -215,6 +229,11 @@ fn compile(
         )
         .env("FE2O3_HSACO_DIR", &artifact_dir)
         .env("FE2O3_BUILD_ATTEMPT_V1", attempt.to_env_value())
+        .env("FE2O3_ARTIFACT_PATH_GUARD_DIR", &output.guard_directory)
+        .env(
+            "FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY",
+            &output.guard_identity,
+        )
         .env("FE2O3_TARGET", profile.target)
         .env("FE2O3_CODEGEN_PIPELINE", PIPELINE)
         .output()
@@ -363,7 +382,7 @@ fn exact_phase_a_source_authenticates_complete_flash_attention_profile() {
     assert!(result.status.success(), "exact handoff failed:\n{stderr}");
     for marker in [
         "exact rustc FnAbi, location-independent V5 provider-semantic definitions and reviewed semantic-terminal manifest",
-        "complete reachable portable-MIR closure modulo those identity-bound terminals ff6089e88638045482847285d4966924f31922d0c1cde5ca3087b9e29978b905",
+        "complete reachable portable-MIR closure modulo those identity-bound terminals 36f26659b1d8e722ee5358d0b87be34b26ddd22a914376f3ec582843da9c0fc9",
         "closed causal FlashAttention B1/H1/N8/D16 semantic KIR with 10 ordered recurrence steps",
         "adjacent-pair output ownership",
         "published an inert Worker V2 compiler handoff",
@@ -412,11 +431,11 @@ fn hostile_source_mir_profile_and_ownership_mutations_fail_closed() {
             format!("{SOURCE}\n// hostile source drift\n"),
         ),
         (
-            "namespace",
+            "explicit-namespace",
             mutation(
                 SOURCE,
-                "4dfe870bb76dd32b49144ee70ec4925eab8677b7cbd1a1bfe99fa2294f85fec8",
-                "5dfe870bb76dd32b49144ee70ec4925eab8677b7cbd1a1bfe99fa2294f85fec8",
+                "    typed,\n",
+                "    typed,\n    namespace = \"4dfe870bb76dd32b49144ee70ec4925eab8677b7cbd1a1bfe99fa2294f85fec8\",\n",
             ),
         ),
         (

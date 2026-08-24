@@ -1,6 +1,6 @@
 //! Exact profile namespace and source-identity admission.
 
-/// Canonical identity string whose SHA-256 is the attributed namespace.
+/// Canonical identity string whose SHA-256 is the reviewed profile namespace.
 pub const FLASH_ATTENTION_PROFILE_IDENTITY_V1: &str = "fe2o3.flash_attention_v1.causal.qkv_f32.b1_h1_n8_d16.row_major.scale_0p25.gfx942_xnack_minus.wave64";
 
 /// SHA-256 of [`FLASH_ATTENTION_PROFILE_IDENTITY_V1`].
@@ -13,7 +13,7 @@ pub const FLASH_ATTENTION_KERNEL_NAMESPACE_V1: &str =
 /// bytes. It is intentionally stored outside `kernel.rs` to avoid a circular
 /// self-hash.
 pub const FLASH_ATTENTION_KERNEL_SOURCE_SHA256_V1: &str =
-    "6dbaa2af88fd5edcdf0485f3da47b1319ce299422a77b99af56f9a3e77c2a421";
+    "da4f51b86cec00886d0261a35a2d4f97b67515c5449bb776feba4d4e5e1417cf";
 
 /// Exact source-identity mismatch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

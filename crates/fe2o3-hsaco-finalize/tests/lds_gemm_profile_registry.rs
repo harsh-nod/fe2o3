@@ -18,11 +18,11 @@ use fe2o3_kernel_descriptor::{
     ProducerIdentityV1, ScalarTypeV1, SourceTypeDescriptorV1, SourceTypeRecordV1, Text, ValidName,
 };
 use fe2o3_kernel_ir::{
-    TILED_GEMM_LDS_EDGES_V1_KERNEL_ID, TILED_GEMM_LDS_GRID_V1_KERNEL_ID,
+    KERNEL_IR_VERSION_V7, TILED_GEMM_LDS_EDGES_V1_KERNEL_ID, TILED_GEMM_LDS_GRID_V1_KERNEL_ID,
     TILED_GEMM_LDS_K32_V2_KERNEL_ID, TILED_GEMM_LDS_V1_ALLOCATION_COUNT,
     TILED_GEMM_LDS_V1_KERNEL_ID, TILED_GEMM_LDS_V1_LDS_ALIGNMENT,
     TILED_GEMM_LDS_V1_STATIC_LDS_BYTES, TILED_GEMM_LDS_V1_TILE_BYTES, TiledGemmLdsV1Profile,
-    encode_module_v5, tiled_gemm_lds_v1_module,
+    encode_module_v7, tiled_gemm_lds_v1_module,
 };
 use sha2::{Digest, Sha256};
 
@@ -275,7 +275,7 @@ fn executable_evidence(envelope: &CompilerFfiEnvelopeV1, llvm_body: &str) -> Bui
 }
 
 fn resource_transcript(authority: &[u8; 32], descriptor_identity: &[u8; 32]) -> Vec<u8> {
-    let kernel_ir = encode_module_v5(&tiled_gemm_lds_v1_module()).expect("canonical Kernel IR");
+    let kernel_ir = encode_module_v7(&tiled_gemm_lds_v1_module()).expect("canonical Kernel IR");
     let canonical_ir = canonical_ir_commitment(&kernel_ir);
     let geometry = [64, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
     let mut transcript = Vec::new();
@@ -404,9 +404,14 @@ fn canonical_public_fixture_is_admitted_deterministically_without_authority() {
     assert_eq!(first.contract().identity(), second.contract().identity());
     assert_eq!(first.kernel_ir(), &tiled_gemm_lds_v1_module());
     assert_eq!(first.canonical_llvm_body(), canonical_llvm_body());
+    let canonical_kernel_ir = encode_module_v7(&tiled_gemm_lds_v1_module()).unwrap();
+    assert_eq!(
+        canonical_kernel_ir[8..10],
+        KERNEL_IR_VERSION_V7.to_le_bytes()
+    );
     assert_eq!(
         first.kernel_ir_identity().byte_len(),
-        encode_module_v5(&tiled_gemm_lds_v1_module()).unwrap().len() as u64
+        canonical_kernel_ir.len() as u64
     );
     assert_eq!(
         first.llvm_body_identity().byte_len(),

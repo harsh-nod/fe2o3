@@ -1,7 +1,7 @@
 //! Exact-source authentication for the masked Wave64 collectives V1 profile.
 //!
-//! This layer authenticates the attributed source bytes (including their
-//! Phase A fallback namespace), the distinct wrapper/session-derived
+//! This layer authenticates the attributed source bytes, the separate reviewed
+//! profile namespace, the distinct compiler-derived
 //! registration binding, rustc ABI, and complete reachable portable-MIR
 //! closure before selecting the closed semantic profile in `fe2o3-kernel-ir`.
 //! The selection is reviewed correspondence, not a compiler-refinement proof.
@@ -46,10 +46,9 @@ const REVIEWED_RUSTC_COMMIT: &str = "55e86c996809902e8bbad512cfb4d2c18be446d9";
 const REVIEWED_RUSTC_LLVM: &str = "22.1.2";
 const REVIEWED_CRATE_NAME: &str = "fe2o3_collected_wave64_collectives_v1_fixture";
 const REVIEWED_CRATE_METADATA: &str = "fe2o3-wave64-collectives-v1-reviewed";
-// The ordinary macro wrapper overrides the source fallback namespace with the
-// binding derived from this exact crate name and ordered metadata. Authority
-// commits both identities so the override is visible and cannot substitute
-// either the public source bytes or the compiler session.
+// The ordinary macro wrapper derives its registration binding from this exact
+// crate name and ordered metadata. Authority separately commits that compiler
+// binding, the reviewed profile namespace, and the public source bytes.
 const REVIEWED_COMPILER_CRATE_BINDING: &str =
     "ba3fa024069d9cee1b86cf6fc1ad80a77d9de5457de020b70182cdc265e64569";
 const SOURCE_REMAP_DESTINATION: &str = "/fe2o3-reviewed-workspace/wave64-collectives-v1.rs";
@@ -67,7 +66,7 @@ const PROFILE_LAUNCH_BINDING_V1: &[u8] =
 const NUMERICAL_BINDING_V1: &[u8] = b"input=f32-finite-integral-abs-le-1024;all-64-lane-sums-exact-binary32;mask=u64;empty-mask=accepted-positive-zero";
 const DESCRIPTOR_BINDING_V1: &[u8] = b"logical=wave64_collectives_v1;export=wave64_collectives_v1;descriptor=wave64_collectives_v1.kd;explicit-kernarg=72;complete-cov6-kernarg=328;wg=64,1,1;wave=64";
 const CANONICAL_IR_BINDING_V1: &[u8] = b"fe2o3::wave64_collectives_v1;args=input-f32-slice,active-mask-u64,three-lane-owned-f32-slices;ordered-collectives=reduce-sum,inclusive-scan-sum,exclusive-scan-sum;inactive=contribute-and-publish-positive-zero";
-const CORRESPONDENCE_BINDING_V1: &[u8] = b"exact source bytes including Phase A fallback namespace plus distinct wrapper/session-derived attributed registration plus complete reachable portable-MIR closure select the closed Wave64 collectives semantic sidecar;reviewed correspondence only;not a compiler-refinement proof";
+const CORRESPONDENCE_BINDING_V1: &[u8] = b"exact source bytes plus separate reviewed profile namespace and compiler-derived attributed registration plus complete reachable portable-MIR closure select the closed Wave64 collectives semantic sidecar;reviewed correspondence only;not a compiler-refinement proof";
 const EXACT_FRONTEND_CONTRACT_V1: &[u8] = &[
     70, 69, 50, 79, 51, 75, 70, 0, 1, 0, 1, 0, 52, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 64, 0, 0, 0, 1,
     0, 0, 0, 1, 0, 0, 0, 64, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
@@ -78,8 +77,8 @@ const EXACT_FRONTEND_CONTRACT_V1: &[u8] = &[
 // disambiguators while binding every reachable body, monomorphization, call
 // target, semantically complete type/value, and operation.
 const PORTABLE_MIR_CLOSURE_IDENTITY_V1: [u8; 32] = [
-    0x0d, 0x2f, 0x88, 0x5d, 0xf4, 0x01, 0x67, 0xe6, 0x4f, 0x2e, 0x3c, 0x8f, 0x21, 0x2b, 0xba, 0xeb,
-    0x74, 0xd0, 0x53, 0xd0, 0x4a, 0x99, 0xdd, 0x3f, 0x67, 0x6b, 0x48, 0x1e, 0xbe, 0x6c, 0x4e, 0xd4,
+    0x55, 0x04, 0x3a, 0x3a, 0xc1, 0xaa, 0x25, 0xbd, 0x5e, 0x47, 0x58, 0x8b, 0x61, 0xc0, 0xb5, 0xfe,
+    0xdd, 0x0c, 0x9f, 0x4e, 0xbd, 0x1c, 0x59, 0x25, 0x5d, 0x0c, 0xfd, 0xbb, 0xd3, 0x06, 0x41, 0x4c,
 ];
 const RUSTC_FN_ABI_IDENTITY_V1: [u8; 32] = [
     0xfa, 0x8c, 0xfc, 0xa7, 0x9d, 0x34, 0x7f, 0x48, 0x86, 0x0e, 0xae, 0xd4, 0x26, 0x51, 0xa5, 0x29,
@@ -474,20 +473,6 @@ fn observe_source_identity(
             "source file `{file_name}` is unavailable for exact-byte authentication: {error}"
         ))
     })?;
-    let namespace_declaration = format!(
-        "namespace = \"{}\"",
-        crate::encode_hex(&WAVE64_COLLECTIVES_V1_NAMESPACE)
-    );
-    if bytes
-        .windows(namespace_declaration.len())
-        .filter(|window| *window == namespace_declaration.as_bytes())
-        .count()
-        != 1
-    {
-        return Err(CollectedWave64CollectivesErrorV1::Admission(
-            "exact source must contain the unique reviewed Phase A namespace declaration".into(),
-        ));
-    }
     let actual = sha256(&bytes);
     if actual != WAVE64_COLLECTIVES_V1_SOURCE_SHA256 {
         return Err(CollectedWave64CollectivesErrorV1::SourceIdentity {

@@ -15,7 +15,6 @@ const _: CoreAtomicDefaultScope = CORE_ATOMIC_DEFAULT_SCOPE;
 /// Host admission guarantees that the exact mathematical sum fits in `u32`.
 #[kernel(
     typed,
-    namespace = "409357ef99d9ec78c960cca0e21a4e153c60af522c1c4d726a9f23b5c7271b91",
     launch(required = [64, 1, 1], max = [64, 1, 1])
 )]
 pub fn scoped_atomic_add_u32_v1(values: &[u32], eligible: &[u32], target: DeviceGlobalMutPtr<u32>) {

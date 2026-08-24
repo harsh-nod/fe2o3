@@ -124,7 +124,6 @@ fn output_pair_v1(
 /// intermediate.
 #[kernel(
     typed,
-    namespace = "4dfe870bb76dd32b49144ee70ec4925eab8677b7cbd1a1bfe99fa2294f85fec8",
     launch(required = [64, 1, 1], max = [64, 1, 1])
 )]
 pub fn flash_attention_causal_f32_b1_h1_n8_d16_v1(

@@ -375,8 +375,8 @@ fn exact_phase_a_source_authenticates_complete_wave64_profile() {
     );
     for marker in [
         "authenticated exact source bytes",
-        "Phase A fallback namespace, distinct wrapper/session-derived ordinary #[kernel(typed)] root",
-        "complete reachable portable-MIR closure 0d2f885df40167e64f2e3c8f212bbaeb74d053d04a99dd3f676b481ebe6c4ed4",
+        "separate reviewed profile namespace, distinct compiler-derived ordinary #[kernel(typed)] root",
+        "complete reachable portable-MIR closure 55043a3ac1aa25bd5e47588b61c0b5fedd0c9f4ebd1c59255d0cfdbbd306414c",
         "3 ordered collectives, 3 lane-owned outputs",
         "exact grid [1, 1, 1]",
         "reviewed source-to-profile correspondence only",
@@ -393,11 +393,11 @@ fn hostile_source_and_compiler_profile_mutations_fail_closed() {
     let source_mutations = [
         ("source-bytes", format!("{SOURCE}\n// hostile byte\n")),
         (
-            "source-namespace",
+            "explicit-namespace",
             mutation(
                 SOURCE,
-                "2863304ebf7f501a7f177c5b8f5a456261ee34760472727ba3f0205ccf5ce9cc",
-                "3863304ebf7f501a7f177c5b8f5a456261ee34760472727ba3f0205ccf5ce9cc",
+                "    typed,\n",
+                "    typed,\n    namespace = \"2863304ebf7f501a7f177c5b8f5a456261ee34760472727ba3f0205ccf5ce9cc\",\n",
             ),
         ),
         (

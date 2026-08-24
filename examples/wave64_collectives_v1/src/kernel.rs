@@ -17,7 +17,6 @@ pub const WAVE64_COLLECTIVES_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
 /// their increasing-lane-order prefixes.
 #[kernel(
     typed,
-    namespace = "2863304ebf7f501a7f177c5b8f5a456261ee34760472727ba3f0205ccf5ce9cc",
     launch(required = [64, 1, 1], max = [64, 1, 1])
 )]
 pub fn wave64_collectives_v1(

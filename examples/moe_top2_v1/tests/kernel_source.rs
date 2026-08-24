@@ -41,7 +41,7 @@ fn exact_ordinary_attributed_kernel_is_discovered() {
         .unwrap();
     let arguments = attribute.meta.require_list().unwrap().tokens.to_string();
     assert!(arguments.contains("typed"));
-    assert!(arguments.contains(MOE_KERNEL_NAMESPACE_V1));
+    assert!(!arguments.contains("namespace"));
     assert!(arguments.contains("required = [64 , 1 , 1]"));
     assert!(arguments.contains("max = [64 , 1 , 1]"));
     assert!(arguments.contains("loop_bounds (8 , 4 , 16 , 16 , 4)"));

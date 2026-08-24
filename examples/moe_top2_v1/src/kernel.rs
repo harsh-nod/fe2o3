@@ -94,7 +94,6 @@ fn write_value_v1(
 /// physical lanes 1 through 63 are inactive and perform no writes.
 #[kernel(
     typed,
-    namespace = "4180ef61545684e646bd5227333e7514d22a2d379d7d657397df4d41f7a192d1",
     launch(required = [64, 1, 1], max = [64, 1, 1]),
     control_flow(loop_bounds(8, 4, 16, 16, 4))
 )]

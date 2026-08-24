@@ -518,7 +518,7 @@ fn assert_exact_profile_authenticates(kind: ProfileKind, source: &str, label: &s
     );
     for marker in [
         "authenticated exact source bytes",
-        "wrapper/session-derived ordinary #[kernel(typed)] root",
+        "separate reviewed profile namespace, distinct compiler-derived ordinary #[kernel(typed)] root",
         "exact rustc FnAbi, frozen V4 provider-semantic definitions and reviewed semantic-terminal manifest",
         "complete reachable portable-MIR closure modulo those identity-bound terminals",
         "reviewed source-to-profile and source-to-terminal correspondence only",
@@ -681,11 +681,11 @@ fn hostile_lds_source_and_compiler_mutations_fail_closed() {
     let sources = [
         ("lds-source-byte", format!("{LDS_SOURCE}\n// hostile\n")),
         (
-            "lds-namespace",
+            "lds-explicit-namespace",
             mutation(
                 LDS_SOURCE,
-                "6bc8f449f458cf8f31b4625b38b7204dd34f20beeabb80b55454a5666be749b5",
-                "7bc8f449f458cf8f31b4625b38b7204dd34f20beeabb80b55454a5666be749b5",
+                "    typed,\n",
+                "    typed,\n    namespace = \"6bc8f449f458cf8f31b4625b38b7204dd34f20beeabb80b55454a5666be749b5\",\n",
             ),
         ),
         (
@@ -776,11 +776,11 @@ fn hostile_atomic_source_and_compiler_mutations_fail_closed() {
             format!("{ATOMIC_SOURCE}\n// hostile\n"),
         ),
         (
-            "atomic-namespace",
+            "atomic-explicit-namespace",
             mutation(
                 ATOMIC_SOURCE,
-                "409357ef99d9ec78c960cca0e21a4e153c60af522c1c4d726a9f23b5c7271b91",
-                "509357ef99d9ec78c960cca0e21a4e153c60af522c1c4d726a9f23b5c7271b91",
+                "    typed,\n",
+                "    typed,\n    namespace = \"409357ef99d9ec78c960cca0e21a4e153c60af522c1c4d726a9f23b5c7271b91\",\n",
             ),
         ),
         (

@@ -29,6 +29,7 @@ fn source_is_one_ordinary_typed_kernel_without_algorithm_macros() {
     assert!(tokens.contains("typed"));
     assert!(tokens.contains("launch"));
     assert!(tokens.contains("64"));
+    assert!(!tokens.contains("namespace"));
     assert!(!SOURCE.contains("macro_rules!"));
 }
 

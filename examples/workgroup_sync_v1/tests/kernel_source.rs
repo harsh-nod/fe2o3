@@ -26,6 +26,7 @@ fn reduction_is_ordinary_attributed_rust_with_fixed_wave64_contract() {
         assert!(REDUCTION_SOURCE.contains(marker), "missing {marker}");
     }
     assert!(!REDUCTION_SOURCE.contains("macro_rules!"));
+    assert!(!REDUCTION_SOURCE.contains("namespace"));
     assert!(!REDUCTION_SOURCE.contains("from_raw_parts(&group"));
     assert!(!REDUCTION_SOURCE.contains("*mut i32"));
     assert!(!REDUCTION_SOURCE.contains("unsafe"));
@@ -49,6 +50,7 @@ fn atomic_source_states_address_space_order_scope_and_eligibility() {
         assert!(ATOMIC_SOURCE.contains(marker), "missing {marker}");
     }
     assert!(!ATOMIC_SOURCE.contains("macro_rules!"));
+    assert!(!ATOMIC_SOURCE.contains("namespace"));
     assert!(!ATOMIC_SOURCE.contains("include_str!"));
     assert!(!ATOMIC_SOURCE.contains("unsafe"));
     assert!(!ATOMIC_SOURCE.contains("AtomicU32::from_ptr"));

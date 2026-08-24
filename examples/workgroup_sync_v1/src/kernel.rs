@@ -1,4 +1,4 @@
-//! Attributed source profiles and their explicit compiler-registration boundary.
+//! Attributed source profiles with compiler-derived registration identity.
 
 #![allow(missing_docs)] // Generated typed-kernel modules do not carry rustdoc in V1.
 
@@ -22,7 +22,6 @@ pub const SCOPED_ATOMIC_COMPILER_PROFILE_REGISTERED_V1: bool = false;
 /// uniform publish/read barriers, and a final barrier before scratch reuse.
 #[kernel(
     typed,
-    namespace = "6bc8f449f458cf8f31b4625b38b7204dd34f20beeabb80b55454a5666be749b5",
     launch(required = [64, 1, 1], max = [64, 1, 1])
 )]
 pub fn lds_publish_read_reduce_i32_v1(

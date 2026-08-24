@@ -9,8 +9,8 @@ const CLOSURE: &[u8] = include_bytes!("../verus/MEMORY_VERUS_CLOSURE_MANIFEST");
 const RUNNER: &str = include_str!("../run-memory-verus.sh");
 const NEGATIVES: &str = include_str!("../verus/MEMORY_NEGATIVE_SHA256");
 
-const PROOF_SHA256: &str = "b31171a3e41633c63797edca7599add8598156caee7a42d19d6d74475bd44cc4";
-const KERNEL_SHA256: &str = "6dbaa2af88fd5edcdf0485f3da47b1319ce299422a77b99af56f9a3e77c2a421";
+const PROOF_SHA256: &str = "ba9931ba3657cd697ad5ffb853fd1193bd300f3f458b4b780019a033ef826c13";
+const KERNEL_SHA256: &str = "da4f51b86cec00886d0261a35a2d4f97b67515c5449bb776feba4d4e5e1417cf";
 const CLOSURE_SHA256: &str = "f06883e4ce463bcb9a3c8f911064ac85054c7822dc331db1a79f75f9e8878b01";
 const TRANSCRIPT: &str = "FE2O3_FLASH_ATTENTION_MEMORY_V1_VERUS_OK mutations=8 obligations=13";
 const TRANSCRIPT_SHA256: &str = "b72d9ec94325fc134abe7f1aa0f1bb434f2d14882807497eadb43c2746f369f5";
@@ -22,11 +22,32 @@ fn sha256(bytes: &[u8]) -> String {
         .collect()
 }
 
+fn assert_proof_source_identity_matches_kernel(proof: &[u8], kernel_sha256: &str) {
+    assert_eq!(kernel_sha256.len(), 64);
+    let proof = std::str::from_utf8(proof).unwrap();
+    let source_identity = proof
+        .split_once("pub open spec fn source_identity_v1()")
+        .expect("proof source identity")
+        .1
+        .split_once("\n}")
+        .expect("proof source identity terminator")
+        .0;
+    assert_eq!(source_identity.matches("0x").count(), 4);
+    for offset in (0..64).step_by(16) {
+        assert!(
+            source_identity.contains(&format!("0x{}u64", &kernel_sha256[offset..offset + 16])),
+            "proof source identity omits kernel digest limb {}",
+            &kernel_sha256[offset..offset + 16]
+        );
+    }
+}
+
 #[test]
 fn bounded_memory_proof_and_execution_closure_are_identity_bound() {
     assert_eq!(PROOF.len(), 9_810);
     assert_eq!(sha256(PROOF), PROOF_SHA256);
     assert_eq!(sha256(KERNEL), KERNEL_SHA256);
+    assert_proof_source_identity_matches_kernel(PROOF, KERNEL_SHA256);
     assert_eq!(sha256(CLOSURE), CLOSURE_SHA256);
     assert_eq!(sha256(TRANSCRIPT.as_bytes()), TRANSCRIPT_SHA256);
     assert_eq!(

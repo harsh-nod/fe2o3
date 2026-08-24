@@ -22,7 +22,7 @@ use fe2o3_kernel_ir::{
     TILED_GEMM_LDS_K32_V2_KERNEL_ID, TILED_GEMM_LDS_V1_ALLOCATION_COUNT,
     TILED_GEMM_LDS_V1_KERNEL_ID, TILED_GEMM_LDS_V1_LANES, TILED_GEMM_LDS_V1_LDS_ALIGNMENT,
     TILED_GEMM_LDS_V1_STATIC_LDS_BYTES, TILED_GEMM_LDS_V1_TILE_BYTES, TiledGemmLdsV1Profile,
-    encode_module_v5, tiled_gemm_lds_v1_module,
+    encode_module_v7, tiled_gemm_lds_v1_module,
 };
 use sha2::{Digest, Sha256};
 
@@ -508,7 +508,7 @@ pub fn inspect_exact_lds_gemm_compiler_import_v1(
     }
 
     let kernel_ir = tiled_gemm_lds_v1_module();
-    let kernel_ir_bytes = encode_module_v5(&kernel_ir)
+    let kernel_ir_bytes = encode_module_v7(&kernel_ir)
         .map_err(|error| ExactLdsGemmProfileAdmissionErrorV1::KernelIr(error.to_string()))?;
     let canonical_ir_commitment = canonical_ir_commitment(&kernel_ir_bytes);
     let lowering = lower_tiled_gemm_lds_v1_to_gfx942_llvm_ir(

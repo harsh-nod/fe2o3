@@ -1403,7 +1403,7 @@ impl MirCallee {
 
     pub(crate) fn trusted_item(&self) -> Option<TrustedDeviceItem> {
         self.session_recognized_item()
-            .map(SessionRecognizedSemanticItem::trusted_device_item)
+            .and_then(SessionRecognizedSemanticItem::trusted_device_item)
     }
 
     pub(crate) fn external_import_evidence(&self) -> Option<&MirExternalImport> {
@@ -2042,7 +2042,7 @@ fn trusted_adt_item(tcx: TyCtxt<'_>, ty: Ty<'_>) -> Option<TrustedDeviceItem> {
         return None;
     };
     semantic_features::classify(tcx, definition.did())
-        .map(SessionRecognizedSemanticItem::trusted_device_item)
+        .and_then(SessionRecognizedSemanticItem::trusted_device_item)
 }
 
 pub(crate) fn observe_row_softmax_provider_authority_v1(
@@ -2380,7 +2380,7 @@ fn matrix_method_instance<'tcx>(
             .ok()
             .flatten()?;
         (semantic_features::classify(tcx, instance.def_id())
-            .map(SessionRecognizedSemanticItem::trusted_device_item)
+            .and_then(SessionRecognizedSemanticItem::trusted_device_item)
             == Some(TrustedDeviceItem::DeviceMatrixMultiplyAccumulate))
         .then_some(instance)
     });
@@ -2746,11 +2746,7 @@ fn authenticated_kernel_root_import_evidence_v1<'tcx>(
         ))
     })?;
     let def_path = tcx.def_path_str(function.instance.def_id());
-    let module_path = definition_module_path_v1(&def_path).ok_or_else(|| {
-        MirImportError::new(format!(
-            "General V3 kernel definition `{def_path}` has no enclosing module"
-        ))
-    })?;
+    let module_path = definition_module_path_v1(&def_path);
     let observed_symbol = tcx.symbol_name(function.instance).name.to_string();
     let expected_symbol = host_kernel_symbol_v1(binding);
     let logical_name = function.logical_name.as_deref().ok_or_else(|| {
@@ -2791,8 +2787,8 @@ fn authenticated_kernel_root_import_evidence_v1<'tcx>(
     }))
 }
 
-fn definition_module_path_v1(path: &str) -> Option<&str> {
-    path.rsplit_once("::").map(|(module, _)| module)
+fn definition_module_path_v1(path: &str) -> &str {
+    path.rsplit_once("::").map_or("", |(module, _)| module)
 }
 
 fn definition_basename_v1(path: &str) -> Option<&str> {
@@ -5142,7 +5138,8 @@ impl PortableMirSemanticEncoderV2 {
             MirCalleeIdentity::SessionRecognized(item) => {
                 self.tag(2);
                 self.text(item.canonical_path())?;
-                if item.trusted_device_item() == TrustedDeviceItem::ThreadIndexCheckedTiled2D {
+                if item.trusted_device_item() == Some(TrustedDeviceItem::ThreadIndexCheckedTiled2D)
+                {
                     let evidence = callee.checked_tiled_2d_evidence_v1();
                     self.boolean(evidence.is_some());
                     if let Some(evidence) = evidence {
@@ -5647,7 +5644,7 @@ fn import_type<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>, ty: Ty<'tcx>) 
         },
         TyKind::RawPtr(_, _) => MirType::Ptr,
         TyKind::Adt(adt, _) => match semantic_features::classify(tcx, adt.did())
-            .map(SessionRecognizedSemanticItem::trusted_device_item)
+            .and_then(SessionRecognizedSemanticItem::trusted_device_item)
         {
             Some(TrustedDeviceItem::DisjointSlice) => MirType::DisjointSlice,
             Some(TrustedDeviceItem::DeviceValue(
@@ -5702,7 +5699,7 @@ fn import_type_shape<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> MirTypeShape {
             length: length.try_to_target_usize(tcx),
         },
         TyKind::Adt(adt, args) => match semantic_features::classify(tcx, adt.did())
-            .map(SessionRecognizedSemanticItem::trusted_device_item)
+            .and_then(SessionRecognizedSemanticItem::trusted_device_item)
         {
             Some(TrustedDeviceItem::DisjointSlice) => MirTypeShape::DisjointSlice {
                 element: Box::new(import_type_shape(tcx, args.type_at(0))),
@@ -6557,7 +6554,7 @@ fn semantic_call_evidence_v1<'tcx>(
     instance: Instance<'tcx>,
     item: SessionRecognizedSemanticItem,
 ) -> Result<Option<MirSemanticCallEvidenceV1>, String> {
-    if item.trusted_device_item() != TrustedDeviceItem::ThreadIndexCheckedTiled2D {
+    if item.trusted_device_item() != Some(TrustedDeviceItem::ThreadIndexCheckedTiled2D) {
         return Ok(None);
     }
     let signature = tcx.instantiate_bound_regions_with_erased(
@@ -6609,7 +6606,7 @@ fn authenticate_generated_kernel_body_bridge_v1<'tcx>(
     if definition_basename_v1(&callee_path) != Some(expected_body_name.as_str()) {
         return Ok(None);
     }
-    if definition_module_path_v1(&callee_path) != Some(root.module_path.as_str()) {
+    if definition_module_path_v1(&callee_path) != root.module_path.as_str() {
         return Err(format!(
             "binding-derived generated body `{callee_path}` is outside authenticated module `{}`",
             root.module_path
@@ -6703,6 +6700,16 @@ mod tests {
     use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Mutex, OnceLock};
+
+    #[test]
+    fn definition_module_path_supports_crate_root_and_nested_items() {
+        assert_eq!(definition_module_path_v1("root_item"), "");
+        assert_eq!(definition_module_path_v1("module::nested_item"), "module");
+        assert_eq!(
+            definition_module_path_v1("outer::inner::nested_item"),
+            "outer::inner"
+        );
+    }
 
     const BODY_TYPE_IDENTITY_SOURCE: &str = r#"
 #![allow(dead_code)]
@@ -6964,6 +6971,47 @@ fn imported_flow(input: Wrapper<u32>) -> Wrapper<u64> {
             first.to_hex(),
             "5dce95ed570b079957b04b5692c2ab0f897b6c7478505260692d88831ad14ff5"
         );
+    }
+
+    #[test]
+    fn portable_semantic_digest_v2_retains_compiler_only_terminal_identity() {
+        let mut module = portable_semantic_module();
+        let MirTerminatorKind::Call { callee, .. } = &mut module.functions[0].blocks[0]
+            .terminator
+            .as_mut()
+            .unwrap()
+            .kind
+        else {
+            panic!("fixture call terminator");
+        };
+        let terminal = SessionRecognizedSemanticItem::FlashAttentionCompilerIntrinsic(
+            crate::collected_flash_attention_v1::FlashAttentionCompilerIntrinsicV1::FabsF32,
+        );
+        *callee = Some(MirCallee::session_recognized(terminal));
+        let callee = callee.as_ref().unwrap();
+        assert_eq!(callee.session_recognized_item(), Some(terminal));
+        assert_eq!(callee.trusted_item(), None);
+
+        let environment = portable_semantic_environment();
+        let first = portable_digest(&module, &environment);
+        assert_eq!(first, portable_digest(&module.clone(), &environment));
+        assert_ne!(first.as_bytes(), &[0; 32]);
+
+        let mut changed = module;
+        let MirTerminatorKind::Call { callee, .. } = &mut changed.functions[0].blocks[0]
+            .terminator
+            .as_mut()
+            .unwrap()
+            .kind
+        else {
+            panic!("fixture call terminator");
+        };
+        *callee = Some(MirCallee::session_recognized(
+            SessionRecognizedSemanticItem::WorkgroupSyncCompilerIntrinsic(
+                crate::semantic_features::WorkgroupSyncCompilerIntrinsicV1::ColdPath,
+            ),
+        ));
+        assert_ne!(portable_digest(&changed, &environment), first);
     }
 
     #[test]

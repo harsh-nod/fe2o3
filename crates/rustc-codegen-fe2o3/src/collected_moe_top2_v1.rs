@@ -1,7 +1,7 @@
 //! Exact-source authentication for deterministic MoE top-2 routing V1.
 //!
 //! This layer authenticates the attributed source bytes (including their
-//! Phase A fallback namespace), the distinct wrapper/session-derived
+//! separate Phase A profile namespace), the distinct wrapper/session-derived
 //! registration binding, rustc ABI, and complete reachable portable-MIR
 //! closure before selecting the closed semantic profile in `fe2o3-kernel-ir`.
 //! The selection is reviewed correspondence, not compiler, IEEE-754, or
@@ -58,10 +58,10 @@ const REVIEWED_RUSTC_COMMIT: &str = "55e86c996809902e8bbad512cfb4d2c18be446d9";
 const REVIEWED_RUSTC_LLVM: &str = "22.1.2";
 const REVIEWED_CRATE_NAME: &str = "fe2o3_collected_moe_top2_v1_fixture";
 const REVIEWED_CRATE_METADATA: &str = "fe2o3-moe-top2-v1-reviewed";
-// The ordinary macro wrapper overrides the source fallback namespace with the
-// binding derived from this exact crate name and ordered metadata. Authority
-// commits both identities so the override is visible and cannot substitute
-// either the public source bytes or the compiler session.
+// The ordinary macro wrapper derives its registration binding from the
+// exact crate name and ordered metadata. Authority separately commits that
+// compiler binding, the reviewed profile namespace, and the public source
+// bytes.
 const REVIEWED_COMPILER_CRATE_BINDING: &str =
     "fce826d20b8f2e4eca29180a2d9fc34949b51a07841dd7f79258625fc6a9f296";
 const SOURCE_REMAP_DESTINATION: &str = "/fe2o3-reviewed-workspace/moe-top2-v1.rs";
@@ -91,8 +91,8 @@ const EXACT_FRONTEND_CONTRACT_V1: &[u8] = &[
 // Filled from the pinned compiler fixture after path-independent portable-MIR
 // import. Any reachable body, call target, type, or operation drift changes it.
 const PORTABLE_MIR_CLOSURE_IDENTITY_V1: [u8; 32] = [
-    0x6d, 0xf9, 0x0b, 0x02, 0xce, 0xe9, 0x4c, 0x4e, 0x7c, 0x01, 0xf8, 0x6f, 0x2b, 0xc3, 0xc7, 0x35,
-    0xdc, 0xef, 0x0a, 0xb1, 0xd5, 0xe3, 0x4c, 0xe6, 0xa8, 0xb0, 0xd8, 0x76, 0x1c, 0x99, 0x96, 0x11,
+    0xed, 0xef, 0xfa, 0x59, 0x72, 0x9d, 0xf7, 0x75, 0xae, 0x94, 0xd5, 0xd5, 0xeb, 0x11, 0x10, 0xb8,
+    0xff, 0xd6, 0xbf, 0x07, 0xe9, 0x65, 0x9b, 0xa2, 0xa9, 0x6f, 0xc3, 0x7c, 0x97, 0x5d, 0x9b, 0x86,
 ];
 const RUSTC_FN_ABI_IDENTITY_V1: [u8; 32] = [
     0xdd, 0xc0, 0x17, 0x2c, 0xfc, 0x37, 0x01, 0x6c, 0x86, 0xbe, 0x2b, 0x57, 0x9c, 0x4c, 0x98, 0xb1,
@@ -103,8 +103,8 @@ const COMPILER_SEMANTICS_IDENTITY_V1: [u8; 32] = [
     0x70, 0x29, 0x0d, 0xed, 0xc1, 0x9e, 0x8d, 0xc4, 0xcd, 0x31, 0xf8, 0x65, 0xf1, 0x62, 0x5a, 0x4a,
 ];
 const TRUSTED_TERMINAL_IDENTITY_V5: [u8; 32] = [
-    0x0e, 0xc9, 0x88, 0xa9, 0xbb, 0xea, 0x88, 0xc3, 0x55, 0x76, 0x36, 0x9d, 0xe5, 0x73, 0x8a, 0xf5,
-    0x25, 0xec, 0xcb, 0x79, 0xf1, 0xcf, 0x9a, 0xe7, 0x0f, 0xcd, 0xc3, 0x79, 0x2b, 0x50, 0xa5, 0xeb,
+    0x23, 0x12, 0xca, 0x44, 0xa5, 0x3a, 0x34, 0xd2, 0x24, 0xec, 0x4e, 0x12, 0x26, 0x40, 0x92, 0x07,
+    0x51, 0x3a, 0xdb, 0xe1, 0x57, 0x56, 0x3e, 0xf6, 0xbf, 0x68, 0xe0, 0xec, 0x3c, 0xdb, 0x12, 0xbd,
 ];
 
 const ARGUMENT_KINDS_V1: [GeneralTypedArgumentKindV3; 8] = [
@@ -682,21 +682,6 @@ fn rustc_loaded_source_witness(
             "kernel root source was not retained in rustc's loaded SourceFile".into(),
         )
     })?;
-    let namespace_declaration = format!(
-        "namespace = \"{}\"",
-        crate::encode_hex(&MOE_TOP2_V1_NAMESPACE)
-    );
-    if contents
-        .as_bytes()
-        .windows(namespace_declaration.len())
-        .filter(|window| *window == namespace_declaration.as_bytes())
-        .count()
-        != 1
-    {
-        return Err(CollectedMoeTop2ErrorV1::Admission(
-            "exact source must contain the unique reviewed Phase A namespace declaration".into(),
-        ));
-    }
     let actual = sha256(contents.as_bytes());
     if actual != MOE_TOP2_V1_SOURCE_SHA256 {
         return Err(CollectedMoeTop2ErrorV1::SourceIdentity {

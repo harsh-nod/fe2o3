@@ -25,7 +25,7 @@ pub(super) fn claim_call(
 ) -> HandlerClaim {
     if !matches!(
         call.item.trusted_device_item(),
-        TrustedDeviceItem::AmdGpuInline(_) | TrustedDeviceItem::AmdGpuDiagnostic(_)
+        Some(TrustedDeviceItem::AmdGpuInline(_) | TrustedDeviceItem::AmdGpuDiagnostic(_))
     ) {
         return HandlerClaim::NotOwned;
     }
@@ -68,10 +68,10 @@ pub(super) fn lower_call(
     block: &mut BasicBlock,
 ) -> Result<Terminator, TranslationDiagnostic> {
     match call.item.trusted_device_item() {
-        TrustedDeviceItem::AmdGpuInline(operation) => {
+        Some(TrustedDeviceItem::AmdGpuInline(operation)) => {
             lower_inline_operation(lowerer, call, block, operation)
         }
-        TrustedDeviceItem::AmdGpuDiagnostic(operation) => {
+        Some(TrustedDeviceItem::AmdGpuDiagnostic(operation)) => {
             lower_diagnostic_operation(lowerer, call, block, operation)
         }
         _ => unreachable!("only claimed AMDGPU operations may be lowered"),

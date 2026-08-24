@@ -13,8 +13,8 @@ const NEGATIVE_MANIFEST: &str = include_str!("../verus/NEGATIVE_SHA256");
 
 const PROFILE_IDENTITY: &str = "fe2o3.flash_attention_v1.causal.qkv_f32.b1_h1_n8_d16.row_major.scale_0p25.gfx942_xnack_minus.wave64";
 const MODEL_SCHEMA: &str = "fe2o3.flash_attention_verus_v1.exact_rational.b1_h1_n8_d16.causal_online_max_rescale_sum_numerator_output_ownership";
-const PROOF_SHA256: &str = "e98b9fffc6e4c2fbcc5bca0ca706ac6575f93814afecf67be73de0f2d087d467";
-const KERNEL_SHA256: &str = "6dbaa2af88fd5edcdf0485f3da47b1319ce299422a77b99af56f9a3e77c2a421";
+const PROOF_SHA256: &str = "8fa4dce0bb6d60b24c0a61f9eb525bd5b90234689dbc215438499404cab8a21c";
+const KERNEL_SHA256: &str = "da4f51b86cec00886d0261a35a2d4f97b67515c5449bb776feba4d4e5e1417cf";
 const PROFILE_SHA256: &str = "4dfe870bb76dd32b49144ee70ec4925eab8677b7cbd1a1bfe99fa2294f85fec8";
 const MODEL_SCHEMA_SHA256: &str =
     "f26a435e375adfeb1753dd7429870532b90c88bbd46054b9498c82408bcd062b";
@@ -32,11 +32,32 @@ fn sha256(bytes: &[u8]) -> String {
         .collect()
 }
 
+fn assert_proof_source_identity_matches_kernel(proof: &[u8], kernel_sha256: &str) {
+    assert_eq!(kernel_sha256.len(), 64);
+    let proof = std::str::from_utf8(proof).unwrap();
+    let source_identity = proof
+        .split_once("pub open spec fn source_identity_v1()")
+        .expect("proof source identity")
+        .1
+        .split_once("\n}")
+        .expect("proof source identity terminator")
+        .0;
+    assert_eq!(source_identity.matches("0x").count(), 4);
+    for offset in (0..64).step_by(16) {
+        assert!(
+            source_identity.contains(&format!("0x{}u64", &kernel_sha256[offset..offset + 16])),
+            "proof source identity omits kernel digest limb {}",
+            &kernel_sha256[offset..offset + 16]
+        );
+    }
+}
+
 #[test]
 fn exact_proof_kernel_profile_model_and_tooling_are_identity_bound() {
     assert_eq!(PROOF.len(), 19_309);
     assert_eq!(sha256(PROOF), PROOF_SHA256);
     assert_eq!(sha256(KERNEL), KERNEL_SHA256);
+    assert_proof_source_identity_matches_kernel(PROOF, KERNEL_SHA256);
     assert_eq!(sha256(PROFILE_IDENTITY.as_bytes()), PROFILE_SHA256);
     assert_eq!(sha256(MODEL_SCHEMA.as_bytes()), MODEL_SCHEMA_SHA256);
     assert_eq!(sha256(SOURCE_CHECKER), SOURCE_CHECKER_SHA256);

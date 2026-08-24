@@ -1,6 +1,6 @@
 //! Exact profile namespace and source-identity admission.
 
-/// Canonical identity string whose SHA-256 is the attributed namespace.
+/// Canonical identity string whose SHA-256 is the reviewed profile namespace.
 pub const MOE_PROFILE_IDENTITY_V1: &str = "fe2o3.moe_top2_v1.logits_f32.t8_e4_k2.capacity4.token_major.lower_expert_ties.stable_drop.gfx942_xnack_minus.wave64";
 
 /// SHA-256 of [`MOE_PROFILE_IDENTITY_V1`].
@@ -11,7 +11,7 @@ pub const MOE_KERNEL_NAMESPACE_V1: &str =
 ///
 /// This lives outside `kernel.rs` to avoid a circular self-hash.
 pub const MOE_KERNEL_SOURCE_SHA256_V1: &str =
-    "0260f144150e6fee7d9bd6a3d919e99ded0e43666509770f6e6186f5100fee25";
+    "0e4570bd52866dd23b8b00d83983aadc818c77580de8f7f5e2982e12a57e20e2";
 
 /// Exact source-identity mismatch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

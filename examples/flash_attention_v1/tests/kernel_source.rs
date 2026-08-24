@@ -42,7 +42,7 @@ fn source_is_exactly_one_ordinary_attributed_kernel() {
 }
 
 #[test]
-fn attribute_discovers_exact_namespace_and_wave64_launch() {
+fn attribute_uses_compiler_binding_and_exact_wave64_launch() {
     let kernel = kernel_functions().pop().unwrap();
     let attribute = kernel
         .attrs
@@ -54,7 +54,7 @@ fn attribute_discovers_exact_namespace_and_wave64_launch() {
     };
     let tokens = arguments.tokens.to_string();
     assert!(tokens.contains("typed"));
-    assert!(tokens.contains(FLASH_ATTENTION_KERNEL_NAMESPACE_V1));
+    assert!(!tokens.contains("namespace"));
     assert!(tokens.contains("required = [64 , 1 , 1]"));
     assert!(tokens.contains("max = [64 , 1 , 1]"));
 }

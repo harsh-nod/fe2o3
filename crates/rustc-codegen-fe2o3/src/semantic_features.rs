@@ -77,18 +77,12 @@ impl SessionRecognizedSemanticItem {
         }
     }
 
-    pub(crate) fn trusted_device_item(self) -> TrustedDeviceItem {
+    pub(crate) const fn trusted_device_item(self) -> Option<TrustedDeviceItem> {
         match self {
-            Self::TrustedDevice(item) => item,
-            Self::FlashAttentionCompilerIntrinsic(_) => {
-                unreachable!("compiler-only FlashAttention terminals never enter generic lowering")
-            }
-            Self::MoeTop2CompilerIntrinsic(_) => {
-                unreachable!("compiler-only MoE top-2 terminals never enter generic lowering")
-            }
-            Self::WorkgroupSyncCompilerIntrinsic(_) => {
-                unreachable!("compiler-only workgroup-sync terminals never enter generic lowering")
-            }
+            Self::TrustedDevice(item) => Some(item),
+            Self::FlashAttentionCompilerIntrinsic(_)
+            | Self::MoeTop2CompilerIntrinsic(_)
+            | Self::WorkgroupSyncCompilerIntrinsic(_) => None,
         }
     }
 
@@ -137,8 +131,48 @@ mod tests {
             TrustedDeviceItem::MemoryCopyOneNonOverlapping,
         ] {
             let recognized = SessionRecognizedSemanticItem::trusted_device_for_test(item);
-            assert_eq!(recognized.trusted_device_item(), item);
+            assert_eq!(recognized.trusted_device_item(), Some(item));
             assert_eq!(recognized.canonical_path(), item.canonical_path());
+        }
+    }
+
+    #[test]
+    fn compiler_only_terminals_do_not_claim_device_lowering_authority() {
+        let compiler_only = [
+            (
+                SessionRecognizedSemanticItem::FlashAttentionCompilerIntrinsic(
+                    crate::collected_flash_attention_v1::FlashAttentionCompilerIntrinsicV1::FabsF32,
+                ),
+                "core::intrinsics::fabs::<f32>",
+            ),
+            (
+                SessionRecognizedSemanticItem::MoeTop2CompilerIntrinsic(
+                    crate::collected_moe_top2_v1::MoeTop2CompilerIntrinsicV1::FabsF32,
+                ),
+                "core::intrinsics::fabs::<f32>",
+            ),
+            (
+                SessionRecognizedSemanticItem::WorkgroupSyncCompilerIntrinsic(
+                    super::WorkgroupSyncCompilerIntrinsicV1::ThreadIdxX,
+                ),
+                "fe2o3_device::thread::thread_idx_x",
+            ),
+            (
+                SessionRecognizedSemanticItem::WorkgroupSyncCompilerIntrinsic(
+                    super::WorkgroupSyncCompilerIntrinsicV1::ColdPath,
+                ),
+                "core::intrinsics::cold_path",
+            ),
+            (
+                SessionRecognizedSemanticItem::WorkgroupSyncCompilerIntrinsic(
+                    super::WorkgroupSyncCompilerIntrinsicV1::AtomicXadd,
+                ),
+                "core::intrinsics::atomic_xadd",
+            ),
+        ];
+        for (recognized, expected_path) in compiler_only {
+            assert_eq!(recognized.trusted_device_item(), None);
+            assert_eq!(recognized.canonical_path(), expected_path);
         }
     }
 }

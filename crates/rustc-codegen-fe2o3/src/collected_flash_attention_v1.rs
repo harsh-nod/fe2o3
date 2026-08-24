@@ -1,7 +1,7 @@
 //! Exact-source authentication for the masked FlashAttention V1 profile.
 //!
 //! This layer authenticates the attributed source bytes (including their
-//! Phase A fallback namespace), the distinct wrapper/session-derived
+//! separate Phase A profile namespace), the distinct wrapper/session-derived
 //! registration binding, rustc ABI, and complete reachable portable-MIR
 //! closure before selecting the closed semantic profile in `fe2o3-kernel-ir`.
 //! The selection is reviewed correspondence, not a compiler-refinement proof.
@@ -46,10 +46,9 @@ const REVIEWED_RUSTC_COMMIT: &str = "55e86c996809902e8bbad512cfb4d2c18be446d9";
 const REVIEWED_RUSTC_LLVM: &str = "22.1.2";
 const REVIEWED_CRATE_NAME: &str = "fe2o3_collected_flash_attention_v1_fixture";
 const REVIEWED_CRATE_METADATA: &str = "fe2o3-flash-attention-v1-reviewed";
-// The ordinary macro wrapper overrides the source fallback namespace with the
-// binding derived from this exact crate name and ordered metadata. Authority
-// commits both identities so the override is visible and cannot substitute
-// either the public source bytes or the compiler session.
+// The ordinary macro wrapper derives its registration binding from this exact
+// crate name and ordered metadata. Authority separately commits that compiler
+// binding, the reviewed profile namespace, and the public source bytes.
 const REVIEWED_COMPILER_CRATE_BINDING: &str =
     "8b7c5dabd2bbc2855b328b84aa387119d8caae550aa6798779461ee3bed0bfc8";
 const SOURCE_REMAP_DESTINATION: &str = "/fe2o3-reviewed-workspace/flash-attention-v1.rs";
@@ -78,8 +77,8 @@ const EXACT_FRONTEND_CONTRACT_V1: &[u8] = &[
 // Filled from the pinned compiler fixture after path-independent portable-MIR
 // import. Any reachable body, call target, type, or operation drift changes it.
 const PORTABLE_MIR_CLOSURE_IDENTITY_V1: [u8; 32] = [
-    0xff, 0x60, 0x89, 0xe8, 0x86, 0x38, 0x04, 0x54, 0x82, 0x84, 0x72, 0x85, 0xd4, 0x96, 0x69, 0x24,
-    0xf3, 0x19, 0x22, 0xd0, 0xc1, 0xcd, 0xe5, 0xca, 0x30, 0x87, 0xb9, 0xe2, 0x99, 0x78, 0xb9, 0x05,
+    0x36, 0xf2, 0x66, 0x59, 0xb1, 0xd8, 0xe7, 0x22, 0xee, 0x53, 0x58, 0xd0, 0xb8, 0x7b, 0xe3, 0x4b,
+    0x26, 0xdd, 0xd2, 0x2a, 0x91, 0x43, 0x76, 0xf3, 0xec, 0x58, 0x28, 0x43, 0xda, 0x9c, 0x0f, 0xc9,
 ];
 const RUSTC_FN_ABI_IDENTITY_V1: [u8; 32] = [
     0x2c, 0x80, 0x3c, 0x84, 0xc1, 0x7a, 0x11, 0xc8, 0x34, 0xba, 0xe4, 0x53, 0x66, 0x9c, 0x09, 0xe1,
@@ -90,8 +89,8 @@ const COMPILER_SEMANTICS_IDENTITY_V1: [u8; 32] = [
     0x96, 0xcd, 0x30, 0x3e, 0x66, 0x4c, 0xa6, 0x75, 0x3b, 0x9b, 0xbd, 0x23, 0xd9, 0x1f, 0x44, 0x3b,
 ];
 const TRUSTED_TERMINAL_IDENTITY_V5: [u8; 32] = [
-    0x00, 0xa1, 0x97, 0x03, 0x5d, 0x7c, 0x90, 0x37, 0xf9, 0xd3, 0xaa, 0x57, 0x8d, 0x00, 0xc8, 0xb0,
-    0x00, 0xc3, 0x39, 0x58, 0x9b, 0x9b, 0x10, 0x02, 0x66, 0x76, 0xd3, 0x1b, 0x6d, 0x07, 0x2e, 0x84,
+    0x7e, 0x6c, 0x6c, 0xad, 0x0a, 0x58, 0xd2, 0x45, 0x0e, 0xc6, 0xa6, 0xc4, 0xa1, 0xcc, 0x8a, 0x28,
+    0x4f, 0x04, 0x2b, 0xaa, 0xaf, 0x80, 0x48, 0x18, 0x53, 0x26, 0xb6, 0xf5, 0x31, 0x97, 0x60, 0x10,
 ];
 
 const ARGUMENT_KINDS_V1: [GeneralTypedArgumentKindV3; 4] = [
@@ -607,20 +606,6 @@ fn observe_source_identity(
             "source file `{file_name}` is unavailable for exact-byte authentication: {error}"
         ))
     })?;
-    let namespace_declaration = format!(
-        "namespace = \"{}\"",
-        crate::encode_hex(&FLASH_ATTENTION_V1_NAMESPACE)
-    );
-    if bytes
-        .windows(namespace_declaration.len())
-        .filter(|window| *window == namespace_declaration.as_bytes())
-        .count()
-        != 1
-    {
-        return Err(CollectedFlashAttentionErrorV1::Admission(
-            "exact source must contain the unique reviewed Phase A namespace declaration".into(),
-        ));
-    }
     let actual = sha256(&bytes);
     if actual != FLASH_ATTENTION_V1_SOURCE_SHA256 {
         return Err(CollectedFlashAttentionErrorV1::SourceIdentity {

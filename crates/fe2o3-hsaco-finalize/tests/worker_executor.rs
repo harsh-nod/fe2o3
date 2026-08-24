@@ -12,7 +12,8 @@ use std::{
 use fe2o3_artifact_transaction::{
     BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
     consume_compiler_module_handoff_v1, consume_compiler_module_handoff_v2,
-    publish_compiler_module_handoff_v1, publish_compiler_module_handoff_v2,
+    enable_same_mount_namespace_artifact_path_guard_v1, publish_compiler_module_handoff_v1,
+    publish_compiler_module_handoff_v2,
 };
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::{
@@ -160,6 +161,7 @@ fn returns_only_inert_identity_bound_output() {
 
 #[test]
 fn consumed_compiler_handoff_executes_v2_without_gaining_authority() {
+    enable_same_mount_namespace_artifact_path_guard_v1();
     let directory =
         std::env::temp_dir().join(format!("fe2o3-worker-v2-handoff-{}", std::process::id()));
     let _ = fs::remove_dir_all(&directory);
@@ -239,6 +241,7 @@ define i32 @kernel_export(i32 %value) { ret i32 %value }\n";
 
 #[test]
 fn protected_consumed_handoff_executes_without_losing_v2_identity_or_closure() {
+    enable_same_mount_namespace_artifact_path_guard_v1();
     let directory = std::env::temp_dir().join(format!(
         "fe2o3-protected-worker-v2-handoff-{}",
         std::process::id()
