@@ -9,7 +9,8 @@ use fe2o3_kfd_uapi::{
     KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE, KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL,
     KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC, KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE,
     KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT, KFD_ALLOC_MEMORY_FLAGS_KERNARG,
-    KFD_IOC_ALLOC_MEM_FLAGS_AQL_QUEUE_MEM, KfdAllocMemoryFlags,
+    KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE, KFD_IOC_ALLOC_MEM_FLAGS_AQL_QUEUE_MEM,
+    KfdAllocMemoryFlags,
 };
 use fe2o3_runtime_model::{
     AllocationGenerationV1, AllocationIdV1, DeviceIdentityStateV1, DeviceKeyV1, GpuVaRangeV1,
@@ -87,34 +88,37 @@ pub const GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_SHA256_V1: &str =
 
 /// Canonical contract for the bounded multi-allocation R2 adapter.
 pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-shared-gtt-memory-r8-v1\n",
+    "profile=fe2o3-mi300x-shared-gtt-memory-r9-v1\n",
     "base_memory_profile_sha256=9623a22bfb2686afa9e4d99dcec0a352c7fd7c6514b84ff714c40cfb9095d2b8\n",
     "kfd_memory_schema_sha256=5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8\n",
-    "profiles=host-visible-coherent:0x84000002,kernarg:0x86000002,aql-queue:0xce000002,executable:0xc4000002,executable-aql-probe:0xc4000002\n",
+    "kfd_userptr_memory_schema_sha256=c1cee09bdf884d2c14a5dbb89c1f6f7885962c75b1457caf412821490919ee9e\n",
+    "profiles=host-visible-coherent:0x84000002,kernarg:0x86000002,aql-queue:0xce000002,executable:0xc4000002,executable-aql-probe:0xc4000002,userptr-aql-probe:0xd6000004\n",
     "bounds=allocations:64,single-cpu-bytes:2147483648,total-gpu-va-bytes:8589934592,page:4096\n",
     "aql=logical-ring:power-of-two-4096..2147483648,gpu-va:checked-double,cpu-vma:single-physical-copy\n",
     "aql-executable-probe=crate-private-ring-profile,logical-ring:power-of-two-4096..2147483648,gpu-va-and-cpu-vma:exact-logical-size,no-aql-queue-mem-or-uncached-flags,one-shot-barrier-probe-only\n",
+    "aql-userptr-probe=crate-private-ring-profile,logical-ring:power-of-two-4096..2147483648,gpu-va-and-cpu-vma:exact-same-address-logical-size,userptr-executable-coherent-uncached-no-substitute,no-aql-queue-mem,one-shot-barrier-probe-only\n",
     "va_allocator=kernel-selected-prot-none-guards-retained-until-successful-free,checked-nonoverlap\n",
     "authority=one-retained-kfd-render-vm,multiple-linear-redacted-tokens,no-fd-handle-va-or-pointer-export\n",
     "queue-bridge=crate-private-role-marked-linear-mapped-capabilities,ring-control-eop-cwsr-completion-signal-dispatch-code-dispatch-kernarg-and-dispatch-host-data-roles,private-va-mapping-publication-facts,no-public-mint\n",
     "device-dispatch-bridge=exact-complete-distinct-set-of-every-live-mapped-c3-lease-required-before-model-transfer,actual-linear-lease-retained,private-address-facts\n",
-    "queue-gtt-policy=reusable-and-dispatch-ring:aql-special,diagnostic-barrier-ring:plain-executable-gtt,control-and-completion-signals:host-visible-coherent,eop-and-cwsr:executable,neither-ring-claims-rocr-userptr-equivalence\n",
+    "queue-gtt-policy=reusable-and-dispatch-ring:aql-special,diagnostic-barrier-ring:plain-executable-gtt-or-selected-gpu-userptr-with-exact-final-rocr-derived-flags-and-no-full-rocr-allocation-or-map-order-parity,control-and-completion-signals:host-visible-coherent,eop-and-cwsr:executable\n",
     "cpu_views=closure-scoped-before-map;mapped-queue-diagnostic-access-only-through-private-packet-id-and-signal-slot-bounded-acquire-or-volatile-observation;mapped-completion-access-only-through-slot-bounded-acquire-observe-and-release-reset;mapped-dispatch-data-copy-is-crate-private-bounded-owned-and-generation-gated-by-the-retaining-queue,no-safe-mapped-borrow-escape\n",
     "completion-bridge=exact-retained-ring-and-host-coherent-mappings,private-packet-id-and-64-byte-signal-slot-index,backend-atomic-u32-header-and-atomic-i64-value-acquire-observe,immutable-kind-volatile-observe,and-release-reset,currentness-sandwiched\n",
     "executable=ordinary-ExecutableGttV1-only:cpu-construction-rw-to-vma-read-only-before-gpu-map,gpu-writable-flag-remains-contracted;diagnostic-ExecutableAqlQueueProbeGttV1-remains-cpu-mutable-after-gpu-map-for-aql-publication\n",
+    "userptr-lifecycle=reserve-vma,anonymous-dontfork-read-write-pages,register-same-cpu-and-gpu-address,map-gpu,unmap-gpu,free-bo-before-cpu-vma-unmap,no-separate-reservation-unmap\n",
     "failure=global-quarantine-after-started-or-ambiguous-native-transaction,no-drop-cleanup-or-retry\n",
     "fork=current-base-contract,prot-none-dontfork-before-rw,no-raw-fork-clone-during-setup\n",
     "model=completion-only-append-journal,profile-kind-and-gpu-va-span,no-cpu-vma-or-seal-transition\n",
     "proof=no-concrete-verus-refinement,kernel-and-model-coupling-contracted,hostile-tests-only\n",
-    "excluded=queue-ioctl,doorbell,packet-publication,dispatch-generation-policy,completion-policy-or-aggregation,userptr,peer-map,hardware-coherence-proof\n",
+    "excluded=queue-ioctl,doorbell,packet-publication,dispatch-generation-policy,completion-policy-or-aggregation,general-userptr-api,peer-map,hardware-coherence-proof\n",
 );
 
 pub const SHARED_GTT_MEMORY_PROFILE_SHA256_V1: &str =
-    "2b5f5d7a992b4af88797b56f5c2ef959d2fee5d03ff4a96d65450f8169002d96";
+    "b872d5ae807e1686a23b2c806773adda7023f6077a5f7e9e5616181c88ac13ea";
 
 pub const SHARED_GTT_MEMORY_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
-    0x2b, 0x5f, 0x5d, 0x7a, 0x99, 0x2b, 0x4a, 0xf8, 0x87, 0x97, 0xb5, 0x6f, 0x5c, 0x2e, 0xf9, 0x59,
-    0xd2, 0xfe, 0xe5, 0xd0, 0x3f, 0xf4, 0xa9, 0x6d, 0x65, 0x45, 0x0f, 0x81, 0x69, 0x00, 0x2d, 0x96,
+    0xb8, 0x72, 0xd5, 0xae, 0x80, 0x7e, 0x16, 0x86, 0xa2, 0x3b, 0x2c, 0x80, 0x67, 0x73, 0xad, 0xda,
+    0x70, 0x23, 0xf6, 0x07, 0x7a, 0x5f, 0x7e, 0x9e, 0x56, 0x16, 0x18, 0x1c, 0x88, 0xac, 0x13, 0xea,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -367,6 +371,7 @@ pub trait GttProfileV1: sealed::Profile + 'static {
     const FLAGS: KfdAllocMemoryFlags;
     const KIND: MemoryKindV1;
     const NAME: &'static str;
+    const IS_USERPTR: bool;
 }
 
 pub trait MutableGpuGttProfileV1: GttProfileV1 + sealed::MutableProfile {}
@@ -376,15 +381,17 @@ pub enum KernargGttV1 {}
 pub enum AqlQueueGttV1 {}
 pub enum ExecutableGttV1 {}
 pub(crate) enum ExecutableAqlQueueProbeGttV1 {}
+pub(crate) enum UserptrAqlQueueProbeGttV1 {}
 
 macro_rules! define_profile {
-    ($type:ty, $profile:expr, $flags:expr, $kind:expr, $name:expr) => {
+    ($type:ty, $profile:expr, $flags:expr, $kind:expr, $name:expr, $userptr:expr) => {
         impl sealed::Profile for $type {}
         impl GttProfileV1 for $type {
             const PROFILE: SharedGttProfileV1 = $profile;
             const FLAGS: KfdAllocMemoryFlags = $flags;
             const KIND: MemoryKindV1 = $kind;
             const NAME: &'static str = $name;
+            const IS_USERPTR: bool = $userptr;
         }
     };
 }
@@ -394,45 +401,60 @@ define_profile!(
     SharedGttProfileV1::HostVisibleCoherent,
     KfdAllocMemoryFlags::HOST_VISIBLE_COHERENT,
     MemoryKindV1::HostVisibleCoherent,
-    "host-visible coherent GTT"
+    "host-visible coherent GTT",
+    false
 );
 define_profile!(
     KernargGttV1,
     SharedGttProfileV1::Kernarg,
     KfdAllocMemoryFlags::KERNARG,
     MemoryKindV1::Kernarg,
-    "kernarg GTT"
+    "kernarg GTT",
+    false
 );
 define_profile!(
     AqlQueueGttV1,
     SharedGttProfileV1::AqlQueue,
     KfdAllocMemoryFlags::AQL_QUEUE,
     MemoryKindV1::QueueStorage,
-    "AQL queue GTT"
+    "AQL queue GTT",
+    false
 );
 define_profile!(
     ExecutableGttV1,
     SharedGttProfileV1::Executable,
     KfdAllocMemoryFlags::EXECUTABLE,
     MemoryKindV1::Executable,
-    "host-visible executable GTT"
+    "host-visible executable GTT",
+    false
 );
 define_profile!(
     ExecutableAqlQueueProbeGttV1,
     SharedGttProfileV1::AqlQueue,
     KfdAllocMemoryFlags::EXECUTABLE,
     MemoryKindV1::QueueStorage,
-    "executable AQL queue probe GTT"
+    "executable AQL queue probe GTT",
+    false
+);
+define_profile!(
+    UserptrAqlQueueProbeGttV1,
+    SharedGttProfileV1::AqlQueue,
+    KfdAllocMemoryFlags::USERPTR_EXECUTABLE,
+    MemoryKindV1::QueueStorage,
+    "USERPTR AQL queue probe",
+    true
 );
 
 impl sealed::MutableProfile for HostVisibleCoherentGttV1 {}
 impl sealed::MutableProfile for KernargGttV1 {}
 impl sealed::MutableProfile for AqlQueueGttV1 {}
 impl sealed::MutableProfile for ExecutableAqlQueueProbeGttV1 {}
+impl sealed::MutableProfile for UserptrAqlQueueProbeGttV1 {}
 impl MutableGpuGttProfileV1 for HostVisibleCoherentGttV1 {}
 impl MutableGpuGttProfileV1 for KernargGttV1 {}
 impl MutableGpuGttProfileV1 for AqlQueueGttV1 {}
 impl MutableGpuGttProfileV1 for ExecutableAqlQueueProbeGttV1 {}
+impl MutableGpuGttProfileV1 for UserptrAqlQueueProbeGttV1 {}
 
 pub trait GttAllocationStateV1: sealed::State + 'static {}
 pub trait CpuReadableGttStateV1: GttAllocationStateV1 {}
@@ -791,6 +813,7 @@ struct SharedAllocationRecord<B: MemoryBackend> {
     layout: SharedGttAllocationLayoutV1,
     gpu_va: u64,
     mmap_offset: u64,
+    userptr: bool,
     reservation: Option<B::Reservation>,
     mapping: Option<B::Mapping>,
     handle: Option<u64>,
@@ -937,7 +960,24 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
                 "overlapping GPU VA reservation",
             ));
         }
-        let outcome = self.backend.alloc(gpu_va, layout.gpu_va_bytes, P::FLAGS);
+        let prepared_userptr = if P::IS_USERPTR {
+            let mapping = match self
+                .backend
+                .prepare_userptr(&mut reservation, layout.cpu_mapping_bytes)
+            {
+                Ok(mapping) => mapping,
+                Err(error) => return self.quarantine(error),
+            };
+            self.check_currentness()?;
+            Some(mapping)
+        } else {
+            None
+        };
+        let outcome = if P::IS_USERPTR {
+            self.backend.alloc_userptr(gpu_va, layout.gpu_va_bytes)
+        } else {
+            self.backend.alloc(gpu_va, layout.gpu_va_bytes, P::FLAGS)
+        };
         let args = outcome.value;
         if let Err(error) = outcome.result {
             return self.quarantine(error);
@@ -947,10 +987,11 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             || args.gpu_id != self.backend.gpu_id()
             || args.flags != P::FLAGS.bits()
             || args.handle == 0
-            || args.mmap_offset == 0
-            || !args
-                .mmap_offset
-                .is_multiple_of(HOST_VISIBLE_MEMORY_PAGE_BYTES_V1)
+            || (!P::IS_USERPTR
+                && (args.mmap_offset == 0
+                    || !args
+                        .mmap_offset
+                        .is_multiple_of(HOST_VISIBLE_MEMORY_PAGE_BYTES_V1)))
         {
             return self.quarantine(MemorySessionError::KernelResultMalformed(
                 "shared ALLOC_MEMORY_OF_GPU output",
@@ -958,28 +999,37 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         }
         if self.allocations.iter().any(|record| {
             record.phase != SharedAllocationPhaseV1::Released
-                && (record.handle == Some(args.handle) || record.mmap_offset == args.mmap_offset)
+                && (record.handle == Some(args.handle)
+                    || (!P::IS_USERPTR
+                        && !record.userptr
+                        && record.mmap_offset == args.mmap_offset))
         }) || self.device_memory.iter().any(|record| {
             record.phase != DeviceMemoryPhaseV1::Released
-                && (record.handle == Some(args.handle) || record.mmap_offset == args.mmap_offset)
+                && (record.handle == Some(args.handle)
+                    || (!P::IS_USERPTR && record.mmap_offset == args.mmap_offset))
         }) {
             return self.quarantine(MemorySessionError::KernelResultMalformed(
                 "shared allocation handle or mmap-offset collision",
             ));
         }
         self.check_currentness()?;
-        let mut mapping = match self.backend.map_cpu(
-            &mut reservation,
-            args.mmap_offset,
-            layout.cpu_mapping_bytes,
-            true,
-        ) {
-            Ok(mapping) => mapping,
-            Err(error) => return self.quarantine(error),
+        let mapping = if let Some(mapping) = prepared_userptr {
+            mapping
+        } else {
+            let mut mapping = match self.backend.map_cpu(
+                &mut reservation,
+                args.mmap_offset,
+                layout.cpu_mapping_bytes,
+                true,
+            ) {
+                Ok(mapping) => mapping,
+                Err(error) => return self.quarantine(error),
+            };
+            if let Err(error) = self.backend.prepare_cpu_mapping(&mut mapping) {
+                return self.quarantine(error);
+            }
+            mapping
         };
-        if let Err(error) = self.backend.prepare_cpu_mapping(&mut mapping) {
-            return self.quarantine(error);
-        }
         self.check_currentness()?;
         self.allocations.push(SharedAllocationRecord {
             id,
@@ -988,6 +1038,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             layout,
             gpu_va,
             mmap_offset: args.mmap_offset,
+            userptr: P::IS_USERPTR,
             reservation: Some(reservation),
             mapping: Some(mapping),
             handle: Some(args.handle),
@@ -1462,6 +1513,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
                     && record.generation == token.generation
                     && record.profile == P::PROFILE
                     && record.layout == token.layout
+                    && record.userptr == P::IS_USERPTR
                     && record.phase == expected
             })
             .ok_or(MemorySessionError::InvalidAllocationAuthority)
@@ -1481,6 +1533,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
                     && record.generation == token.generation
                     && record.profile == P::PROFILE
                     && record.layout == token.layout
+                    && record.userptr == P::IS_USERPTR
                     && record.phase != SharedAllocationPhaseV1::Released
             })
             .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
@@ -1881,6 +1934,42 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             return self.quarantine(MemorySessionError::KernelResultMalformed(
                 "shared FREE_MEMORY_OF_GPU exactly-once",
             ));
+        }
+        if P::IS_USERPTR {
+            let handle = self.allocations[index]
+                .handle
+                .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+            self.allocations[index].free_attempted = true;
+            if let Err(error) = self.backend.free(handle) {
+                return self.quarantine(error);
+            }
+            self.allocations[index].handle = None;
+            self.check_currentness()?;
+            let unmap_result = {
+                let (backend, allocations) = (&mut self.backend, &mut self.allocations);
+                let mapping = allocations[index]
+                    .mapping
+                    .as_mut()
+                    .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+                backend.unmap_cpu(mapping)
+            };
+            if let Err(error) = unmap_result {
+                return self.quarantine(error);
+            }
+            self.allocations[index].mapping = None;
+            self.check_currentness()?;
+            if self.allocations[index].reservation.take().is_none() {
+                return self.quarantine(MemorySessionError::InvalidAllocationAuthority);
+            }
+            self.check_currentness()?;
+            self.allocations[index].phase = SharedAllocationPhaseV1::Released;
+            self.retained_gpu_va_bytes = self
+                .retained_gpu_va_bytes
+                .checked_sub(token.layout.gpu_va_bytes)
+                .ok_or(MemorySessionError::KernelResultMalformed(
+                    "shared retained GPU VA accounting",
+                ))?;
+            return Ok(());
         }
         let unmap_result = {
             let (backend, allocations) = (&mut self.backend, &mut self.allocations);
@@ -2560,6 +2649,20 @@ impl SharedGttMemorySessionV1 {
         self.retain_queue_resource(token)
     }
 
+    pub(crate) fn retain_userptr_aql_probe_ring_resource(
+        &self,
+        token: SharedGttAllocationV1<UserptrAqlQueueProbeGttV1, GttGpuAccessibleMutableV1>,
+    ) -> Result<
+        SharedGttQueueResourceAuthorityV1<
+            AqlRingResourceRoleV1,
+            UserptrAqlQueueProbeGttV1,
+            GttGpuAccessibleMutableV1,
+        >,
+        MemorySessionError,
+    > {
+        self.retain_queue_resource(token)
+    }
+
     #[allow(dead_code)]
     pub(crate) fn retain_aql_control_resource(
         &self,
@@ -2809,6 +2912,16 @@ impl SharedGttMemorySessionV1 {
         ring_bytes: usize,
     ) -> Result<
         SharedGttAllocationV1<ExecutableAqlQueueProbeGttV1, GttCpuWritableV1>,
+        MemorySessionError,
+    > {
+        self.allocate_profile(ring_bytes)
+    }
+
+    pub(crate) fn allocate_userptr_aql_queue_probe(
+        &mut self,
+        ring_bytes: usize,
+    ) -> Result<
+        SharedGttAllocationV1<UserptrAqlQueueProbeGttV1, GttCpuWritableV1>,
         MemorySessionError,
     > {
         self.allocate_profile(ring_bytes)
@@ -3232,6 +3345,7 @@ const _: () = {
     assert!(KFD_ALLOC_MEMORY_FLAGS_KERNARG == 0x8600_0002);
     assert!(KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE == 0xce00_0002);
     assert!(KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE == 0xc400_0002);
+    assert!(KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE == 0xd600_0004);
     assert!(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL == 0x8000_0001);
     assert!(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC == 0xa000_0001);
 };
@@ -3278,6 +3392,8 @@ mod tests {
         last_unmapped_bytes: Option<Vec<u8>>,
         last_unmapped_readback_calls: usize,
         operations: Vec<&'static str>,
+        last_userptr_input: Option<(u64, u64, u64)>,
+        userptr_mmap_offset: Option<u64>,
     }
 
     impl FakeBackend {
@@ -3307,6 +3423,8 @@ mod tests {
                 last_unmapped_bytes: None,
                 last_unmapped_readback_calls: 0,
                 operations: Vec::new(),
+                last_userptr_input: None,
+                userptr_mmap_offset: None,
             }
         }
 
@@ -3391,6 +3509,58 @@ mod tests {
                 },
             }
         }
+        fn prepare_userptr(
+            &mut self,
+            reservation: &mut Self::Reservation,
+            bytes: usize,
+        ) -> Result<Self::Mapping, MemorySessionError> {
+            self.operations.push("prepare_userptr");
+            self.check("prepare_userptr")?;
+            if reservation.1 != bytes {
+                return Err(MemorySessionError::KernelResultMalformed(
+                    "fake USERPTR reservation geometry",
+                ));
+            }
+            let mut mapping = FakeMapping {
+                bytes: vec![0; bytes],
+                active: true,
+                writable: false,
+                corrupt_readback: self.corrupt_readback,
+                readback_calls: Cell::new(0),
+            };
+            self.prepare_cpu_mapping(&mut mapping)?;
+            Ok(mapping)
+        }
+        fn alloc_userptr(
+            &mut self,
+            address: u64,
+            bytes: u64,
+        ) -> KernelOutcome<KfdIoctlAllocMemoryOfGpuArgs> {
+            self.alloc_calls += 1;
+            self.operations.push("alloc_userptr");
+            self.flags.push(KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE);
+            self.last_userptr_input = Some((address, address, bytes));
+            let handle = self.next_handle;
+            self.next_handle += 1;
+            let mut args = KfdIoctlAllocMemoryOfGpuArgs::new_userptr(address, bytes, 7);
+            args.handle = handle;
+            // KFD overwrites the input CPU pointer with an opaque BO offset.
+            args.mmap_offset = self.userptr_mmap_offset.unwrap_or(0x90_000 + handle * 4096);
+            if self.corrupt_flags {
+                args.flags ^= 1;
+            }
+            KernelOutcome {
+                value: args,
+                result: if self.alloc_oom {
+                    Err(MemorySessionError::Syscall {
+                        operation: "AMDKFD_IOC_ALLOC_MEMORY_OF_GPU(USERPTR)",
+                        source: rustix::io::Errno::NOMEM,
+                    })
+                } else {
+                    self.check("alloc_userptr")
+                },
+            }
+        }
         fn map_cpu(
             &mut self,
             _reservation: &mut Self::Reservation,
@@ -3440,6 +3610,7 @@ mod tests {
         }
         fn unmap_gpu(&mut self, _handle: u64, _old_success: u32) -> KernelOutcome<u32> {
             self.unmap_gpu_calls += 1;
+            self.operations.push("unmap_gpu");
             KernelOutcome {
                 value: self.unmap_progress,
                 result: if self.unmap_errno {
@@ -3489,6 +3660,7 @@ mod tests {
         }
         fn free(&mut self, _handle: u64) -> Result<(), MemorySessionError> {
             self.free_calls += 1;
+            self.operations.push("free");
             self.check("free")
         }
     }
@@ -3522,6 +3694,10 @@ mod tests {
         }
         assert_eq!(digest.as_slice(), SHARED_GTT_MEMORY_PROFILE_SHA256_BYTES_V1);
         assert_eq!(digest_hex, SHARED_GTT_MEMORY_PROFILE_SHA256_V1);
+        assert!(
+            SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1
+                .contains(fe2o3_kfd_uapi::KFD_USERPTR_MEMORY_SCHEMA_MANIFEST_SHA256)
+        );
     }
 
     #[test]
@@ -3739,6 +3915,243 @@ mod tests {
         assert_eq!(engine.backend.unmap_gpu_calls, 1);
         assert_eq!(engine.backend.free_calls, 1);
         assert_eq!(engine.backend.release_va_calls, 1);
+    }
+
+    #[test]
+    fn userptr_probe_ring_is_exact_one_x_registration() {
+        let special = profile_layout::<AqlQueueGttV1>(4096).unwrap();
+        let userptr = profile_layout::<UserptrAqlQueueProbeGttV1>(4096).unwrap();
+
+        assert_eq!(special.gpu_va_bytes(), 8192);
+        assert_eq!(userptr.profile(), SharedGttProfileV1::AqlQueue);
+        assert_eq!(userptr.requested_bytes(), 4096);
+        assert_eq!(userptr.cpu_mapping_bytes(), 4096);
+        assert_eq!(userptr.gpu_va_bytes(), 4096);
+        assert_eq!(userptr.uapi_flags(), 0xd600_0004);
+        assert_eq!(
+            userptr.uapi_flags() & fe2o3_kfd_uapi::KFD_IOC_ALLOC_MEM_FLAGS_GTT,
+            0
+        );
+        assert_eq!(
+            userptr.uapi_flags() & fe2o3_kfd_uapi::KFD_IOC_ALLOC_MEM_FLAGS_AQL_QUEUE_MEM,
+            0
+        );
+        assert_ne!(
+            userptr.uapi_flags() & fe2o3_kfd_uapi::KFD_IOC_ALLOC_MEM_FLAGS_USERPTR,
+            0
+        );
+        assert_ne!(
+            userptr.uapi_flags() & fe2o3_kfd_uapi::KFD_IOC_ALLOC_MEM_FLAGS_NO_SUBSTITUTE,
+            0
+        );
+        for invalid in [0, 1024, 4095, 4097, 8193] {
+            assert!(profile_layout::<UserptrAqlQueueProbeGttV1>(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn userptr_probe_frees_bo_before_unmapping_original_vma() {
+        let mut engine = acquired();
+        let mut ring = engine.allocate::<UserptrAqlQueueProbeGttV1>(4096).unwrap();
+        assert_eq!(engine.backend.flags, vec![0xd600_0004]);
+        assert_eq!(
+            engine.backend.last_userptr_input,
+            Some((0x2_0000, 0x2_0000, 4096))
+        );
+        assert_eq!(engine.allocations[0].mmap_offset, 0x91_000);
+        assert_ne!(
+            engine.allocations[0].mmap_offset,
+            engine.allocations[0].gpu_va
+        );
+        engine
+            .with_bytes_mut(&mut ring, |bytes| bytes.fill(0xa5))
+            .unwrap();
+        let ring = engine.map_mutable(ring).unwrap();
+        let ring = engine.unmap_mutable(ring).unwrap();
+        engine
+            .release(ring, SharedAllocationPhaseV1::CpuWritable)
+            .unwrap();
+
+        assert_eq!(
+            engine.backend.operations,
+            [
+                "prepare_userptr",
+                "prepare_cpu_mapping",
+                "alloc_userptr",
+                "map_gpu",
+                "unmap_gpu",
+                "free",
+                "unmap_cpu",
+            ]
+        );
+        assert_eq!(engine.backend.release_va_calls, 0);
+        assert_eq!(engine.retained_gpu_va_bytes, 0);
+        assert_eq!(
+            engine.allocations[0].phase,
+            SharedAllocationPhaseV1::Released
+        );
+    }
+
+    #[test]
+    fn userptr_probe_native_failures_quarantine_without_reordered_cleanup() {
+        for operation in ["prepare_userptr", "prepare_cpu_mapping", "alloc_userptr"] {
+            let mut engine = acquired();
+            engine.backend.fail_operation = Some(operation);
+            assert!(engine.allocate::<UserptrAqlQueueProbeGttV1>(4096).is_err());
+            assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
+            assert_eq!(engine.backend.free_calls, 0);
+            assert_eq!(engine.backend.release_va_calls, 0);
+        }
+
+        let mut map = acquired();
+        let ring = map.allocate::<UserptrAqlQueueProbeGttV1>(4096).unwrap();
+        map.backend.map_errno = true;
+        assert!(map.map_mutable(ring).is_err());
+        assert_eq!(map.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert_eq!(map.backend.free_calls, 0);
+
+        let mut unmap = acquired();
+        let ring = unmap
+            .allocate::<UserptrAqlQueueProbeGttV1>(4096)
+            .and_then(|ring| unmap.map_mutable(ring))
+            .unwrap();
+        unmap.backend.unmap_errno = true;
+        assert!(unmap.unmap_mutable(ring).is_err());
+        assert_eq!(unmap.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert_eq!(unmap.backend.free_calls, 0);
+
+        let mut free = acquired();
+        let ring = free.allocate::<UserptrAqlQueueProbeGttV1>(4096).unwrap();
+        free.backend.fail_operation = Some("free");
+        assert!(
+            free.release(ring, SharedAllocationPhaseV1::CpuWritable)
+                .is_err()
+        );
+        assert_eq!(free.backend.free_calls, 1);
+        assert!(free.allocations[0].handle.is_some());
+        assert!(free.allocations[0].mapping.is_some());
+        assert_eq!(free.backend.release_va_calls, 0);
+
+        let mut cpu_unmap = acquired();
+        let ring = cpu_unmap
+            .allocate::<UserptrAqlQueueProbeGttV1>(4096)
+            .unwrap();
+        cpu_unmap.backend.fail_operation = Some("unmap_cpu");
+        assert!(
+            cpu_unmap
+                .release(ring, SharedAllocationPhaseV1::CpuWritable)
+                .is_err()
+        );
+        assert!(cpu_unmap.allocations[0].handle.is_none());
+        assert!(cpu_unmap.allocations[0].mapping.is_some());
+        assert_eq!(cpu_unmap.backend.release_va_calls, 0);
+        assert_eq!(
+            &cpu_unmap.backend.operations[cpu_unmap.backend.operations.len() - 2..],
+            ["free", "unmap_cpu"]
+        );
+    }
+
+    #[test]
+    fn userptr_output_mmap_offset_is_opaque_and_not_collision_authority() {
+        let mut zero = acquired();
+        zero.backend.userptr_mmap_offset = Some(0);
+        let ring = zero.allocate::<UserptrAqlQueueProbeGttV1>(4096).unwrap();
+        assert_eq!(zero.allocations[0].mmap_offset, 0);
+        zero.release(ring, SharedAllocationPhaseV1::CpuWritable)
+            .unwrap();
+
+        let mut collide_with_ordinary = acquired();
+        let ordinary = collide_with_ordinary
+            .allocate::<HostVisibleCoherentGttV1>(4096)
+            .unwrap();
+        let ordinary_offset = collide_with_ordinary.allocations[0].mmap_offset;
+        collide_with_ordinary.backend.userptr_mmap_offset = Some(ordinary_offset);
+        let userptr = collide_with_ordinary
+            .allocate::<UserptrAqlQueueProbeGttV1>(4096)
+            .unwrap();
+        collide_with_ordinary
+            .release(userptr, SharedAllocationPhaseV1::CpuWritable)
+            .unwrap();
+        collide_with_ordinary
+            .release(ordinary, SharedAllocationPhaseV1::CpuWritable)
+            .unwrap();
+
+        let mut collide_with_later_gtt = acquired();
+        collide_with_later_gtt.backend.userptr_mmap_offset = Some(0x42_000);
+        let userptr = collide_with_later_gtt
+            .allocate::<UserptrAqlQueueProbeGttV1>(4096)
+            .unwrap();
+        let ordinary = collide_with_later_gtt
+            .allocate::<HostVisibleCoherentGttV1>(4096)
+            .unwrap();
+        collide_with_later_gtt
+            .release(userptr, SharedAllocationPhaseV1::CpuWritable)
+            .unwrap();
+        collide_with_later_gtt
+            .release(ordinary, SharedAllocationPhaseV1::CpuWritable)
+            .unwrap();
+    }
+
+    #[test]
+    fn userptr_allocation_currentness_failures_require_process_terminal_custody() {
+        for currentness_call in [3, 4, 5, 6] {
+            let mut engine = acquired();
+            engine.backend.fail_currentness_at = Some(currentness_call);
+            assert!(engine.allocate::<UserptrAqlQueueProbeGttV1>(4096).is_err());
+            assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
+            assert_eq!(engine.backend.free_calls, 0);
+            assert_eq!(engine.backend.release_va_calls, 0);
+        }
+
+        let mut malformed = acquired();
+        malformed.backend.corrupt_flags = true;
+        assert!(
+            malformed
+                .allocate::<UserptrAqlQueueProbeGttV1>(4096)
+                .is_err()
+        );
+        assert_eq!(malformed.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert_eq!(malformed.backend.free_calls, 0);
+        assert_eq!(malformed.backend.release_va_calls, 0);
+    }
+
+    #[test]
+    fn userptr_release_currentness_failures_retain_exact_terminal_custody() {
+        for (currentness_call, mapping_retained, reservation_retained) in
+            [(8, true, true), (9, false, true), (10, false, false)]
+        {
+            let mut engine = acquired();
+            let ring = engine.allocate::<UserptrAqlQueueProbeGttV1>(4096).unwrap();
+            engine.backend.fail_currentness_at = Some(currentness_call);
+
+            assert!(matches!(
+                engine.release(ring, SharedAllocationPhaseV1::CpuWritable),
+                Err(MemorySessionError::Injected("currentness"))
+            ));
+            assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
+            assert!(engine.allocations[0].handle.is_none());
+            assert_eq!(engine.allocations[0].mapping.is_some(), mapping_retained);
+            assert_eq!(
+                engine.allocations[0].reservation.is_some(),
+                reservation_retained
+            );
+            assert_eq!(
+                engine.allocations[0].phase,
+                SharedAllocationPhaseV1::CpuWritable
+            );
+            assert_eq!(engine.retained_gpu_va_bytes, 4096);
+            assert_eq!(engine.backend.free_calls, 1);
+            assert_eq!(engine.backend.release_va_calls, 0);
+            assert!(engine.backend.operations.ends_with(if mapping_retained {
+                &["free"]
+            } else {
+                &["free", "unmap_cpu"]
+            }));
+            assert!(matches!(
+                engine.allocate::<HostVisibleCoherentGttV1>(4096),
+                Err(MemorySessionError::SharedSessionQuarantined)
+            ));
+        }
     }
 
     #[test]

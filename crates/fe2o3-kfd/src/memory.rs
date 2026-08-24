@@ -307,6 +307,27 @@ pub(super) trait MemoryBackend {
         bytes: u64,
         flags: KfdAllocMemoryFlags,
     ) -> KernelOutcome<KfdIoctlAllocMemoryOfGpuArgs>;
+    fn prepare_userptr(
+        &mut self,
+        _reservation: &mut Self::Reservation,
+        _bytes: usize,
+    ) -> Result<Self::Mapping, MemorySessionError> {
+        Err(MemorySessionError::KernelResultMalformed(
+            "USERPTR mapping backend",
+        ))
+    }
+    fn alloc_userptr(
+        &mut self,
+        address: u64,
+        bytes: u64,
+    ) -> KernelOutcome<KfdIoctlAllocMemoryOfGpuArgs> {
+        KernelOutcome {
+            value: KfdIoctlAllocMemoryOfGpuArgs::new_userptr(address, bytes, self.gpu_id()),
+            result: Err(MemorySessionError::KernelResultMalformed(
+                "USERPTR allocation backend",
+            )),
+        }
+    }
     fn map_cpu(
         &mut self,
         reservation: &mut Self::Reservation,

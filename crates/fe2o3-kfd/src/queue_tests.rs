@@ -887,6 +887,11 @@ fn ambiguous_unknown_id_globally_poisons_create_and_known_id_collision_is_retain
 
 #[test]
 fn manifest_digest_is_exact() {
+    assert!(
+        NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1.contains(&format!(
+            "compute_session_sha256={GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1}\n"
+        ))
+    );
     let actual = Sha256::digest(NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1.as_bytes())
         .iter()
         .map(|byte| format!("{byte:02x}"))

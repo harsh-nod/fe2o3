@@ -20,6 +20,10 @@ pub const KFD_UAPI_SCHEMA_ID: &str = "linux-kfd-uapi-1.18-generic-ioc-v1";
 /// Stable name of the reviewed R2 VM and memory-lifecycle UAPI extension.
 pub const KFD_MEMORY_LIFECYCLE_SCHEMA_ID: &str = "linux-kfd-memory-lifecycle-1.18-generic-ioc-v2";
 
+/// Additive exact USERPTR registration profile used by an isolated queue probe.
+pub const KFD_USERPTR_MEMORY_SCHEMA_ID: &str =
+    "linux-kfd-userptr-executable-memory-1.18-generic-ioc-v1";
+
 /// Stable name of the reviewed gfx942 device-local memory extension.
 pub const KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_ID: &str =
     "linux-kfd-gfx942-device-memory-lifecycle-1.18-v2";
@@ -189,6 +193,37 @@ pub const KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256: &str =
 pub const KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
     0x5c, 0x21, 0x0c, 0x3d, 0x7a, 0xda, 0x17, 0x79, 0x4b, 0x10, 0xcd, 0xe6, 0xf4, 0x8a, 0x28, 0xf1,
     0x05, 0xa6, 0xe7, 0x9d, 0xd8, 0xdc, 0xe7, 0x7c, 0x66, 0xb1, 0x4d, 0xca, 0x60, 0x74, 0xee, 0xa8,
+];
+
+/// Additive ABI contract for one executable coherent USERPTR registration.
+///
+/// The frozen R2 GTT admission set remains unchanged. This schema only admits
+/// the exact ROCr 7.2.4 registration flags and the overloaded USERPTR input
+/// meaning of `mmap_offset`; it grants no allocation or queue authority.
+pub const KFD_USERPTR_MEMORY_SCHEMA_MANIFEST: &str = concat!(
+    "schema_id=linux-kfd-userptr-executable-memory-1.18-generic-ioc-v1\n",
+    "memory_schema_id=linux-kfd-memory-lifecycle-1.18-generic-ioc-v2\n",
+    "memory_schema_manifest_sha256=5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8\n",
+    "target=linux-x86_64-generic-ioc\n",
+    "source_header=include/uapi/linux/kfd_ioctl.h\n",
+    "source_header_sha256=b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d\n",
+    "gpuvm_source=amd/amdgpu/amdgpu_amdkfd_gpuvm.c\n",
+    "gpuvm_source_sha256=c7cca2ee47a08c99bb73906662d82dd7d0b5738468fbef54848e5e6dd62ba50d\n",
+    "rocr_fmm_source_sha256=a2addccabb82e0ca184eaaf722e976e254a898ccfc945d4d956c4e273e196aef\n",
+    "alloc_flags=userptr:00000004,writable:80000000,executable:40000000,no_substitute:10000000,coherent:04000000,uncached:02000000\n",
+    "alloc_profile=userptr_executable_coherent_uncached_no_substitute:d6000004\n",
+    "alloc_memory=mmap_offset-input-is-page-aligned-live-cpu-address,output-is-opaque-kernel-mmap-offset-and-is-never-used-as-the-cpu-address\n",
+    "authority=wire-profile-only,no-ioctl-vma-pointer-map-free-or-queue-authority\n",
+);
+
+/// SHA-256 of [`KFD_USERPTR_MEMORY_SCHEMA_MANIFEST`].
+pub const KFD_USERPTR_MEMORY_SCHEMA_MANIFEST_SHA256: &str =
+    "c1cee09bdf884d2c14a5dbb89c1f6f7885962c75b1457caf412821490919ee9e";
+
+/// Typed SHA-256 bytes of [`KFD_USERPTR_MEMORY_SCHEMA_MANIFEST`].
+pub const KFD_USERPTR_MEMORY_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
+    0xc1, 0xce, 0xe0, 0x9b, 0xdf, 0x88, 0x4d, 0x2c, 0x14, 0xa5, 0xdb, 0xb8, 0x9c, 0x1f, 0x6f, 0x78,
+    0x85, 0x96, 0x2c, 0x75, 0xb1, 0x45, 0x7c, 0xaf, 0x41, 0x28, 0x21, 0x49, 0x09, 0x19, 0xee, 0x9e,
 ];
 
 /// Canonical manifest for the additive gfx942 device-local allocation profile.
@@ -375,6 +410,9 @@ pub const AMDKFD_IOCTL_BASE: u8 = b'K';
 /// GTT/system-memory allocation type admitted by this schema.
 pub const KFD_IOC_ALLOC_MEM_FLAGS_GTT: u32 = 1 << 1;
 
+/// Register an existing userspace VMA as shared virtual memory.
+pub const KFD_IOC_ALLOC_MEM_FLAGS_USERPTR: u32 = 1 << 2;
+
 /// Device-local VRAM allocation type from the reviewed KFD UAPI.
 pub const KFD_IOC_ALLOC_MEM_FLAGS_VRAM: u32 = 1 << 0;
 
@@ -383,6 +421,9 @@ pub const KFD_IOC_ALLOC_MEM_FLAGS_WRITABLE: u32 = 1 << 31;
 
 /// Permit CPU mappings of a device-local allocation.
 pub const KFD_IOC_ALLOC_MEM_FLAGS_PUBLIC: u32 = 1 << 29;
+
+/// Reject fallback to a substitute memory domain.
+pub const KFD_IOC_ALLOC_MEM_FLAGS_NO_SUBSTITUTE: u32 = 1 << 28;
 
 /// Permit GPU instruction fetches from the allocation.
 pub const KFD_IOC_ALLOC_MEM_FLAGS_EXECUTABLE: u32 = 1 << 30;
@@ -413,6 +454,14 @@ pub const KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE: u32 = KFD_ALLOC_MEMORY_FLAGS_KERNARG
 /// Exact admitted profile for host-visible executable memory.
 pub const KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE: u32 =
     KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT | KFD_IOC_ALLOC_MEM_FLAGS_EXECUTABLE;
+
+/// Exact ROCr 7.2.4 USERPTR profile for an executable system-memory ring.
+pub const KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE: u32 = KFD_IOC_ALLOC_MEM_FLAGS_USERPTR
+    | KFD_IOC_ALLOC_MEM_FLAGS_WRITABLE
+    | KFD_IOC_ALLOC_MEM_FLAGS_EXECUTABLE
+    | KFD_IOC_ALLOC_MEM_FLAGS_NO_SUBSTITUTE
+    | KFD_IOC_ALLOC_MEM_FLAGS_COHERENT
+    | KFD_IOC_ALLOC_MEM_FLAGS_UNCACHED;
 
 /// Exact gfx942 profile for writable device-local VRAM/HBM.
 pub const KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL: u32 =
@@ -590,6 +639,7 @@ impl KfdAllocMemoryFlags {
     pub const KERNARG: Self = Self(KFD_ALLOC_MEMORY_FLAGS_KERNARG);
     pub const AQL_QUEUE: Self = Self(KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE);
     pub const EXECUTABLE: Self = Self(KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE);
+    pub const USERPTR_EXECUTABLE: Self = Self(KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE);
     pub const DEVICE_LOCAL: Self = Self(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL);
     pub const DEVICE_LOCAL_PUBLIC: Self = Self(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC);
 
@@ -647,6 +697,16 @@ pub const fn admit_kfd_public_device_memory_flags(
 ) -> Result<KfdAllocMemoryFlags, KfdAllocMemoryFlagsError> {
     match flags {
         KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC => Ok(KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC),
+        flags => Err(KfdAllocMemoryFlagsError::Unsupported { flags }),
+    }
+}
+
+/// Admits only the additive executable coherent USERPTR profile.
+pub const fn admit_kfd_userptr_executable_memory_flags(
+    flags: u32,
+) -> Result<KfdAllocMemoryFlags, KfdAllocMemoryFlagsError> {
+    match flags {
+        KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE => Ok(KfdAllocMemoryFlags::USERPTR_EXECUTABLE),
         flags => Err(KfdAllocMemoryFlagsError::Unsupported { flags }),
     }
 }
@@ -1070,8 +1130,9 @@ impl KfdIoctlAcquireVmArgs {
 ///
 /// `va_addr`, the returned `handle`, and the returned `mmap_offset` are opaque
 /// integer values. This data-only crate neither dereferences them nor assigns
-/// ownership. USERPTR is not admitted, so the input `mmap_offset` is always
-/// initialized to zero by [`Self::new`].
+/// ownership. Ordinary GTT profiles initialize input `mmap_offset` to zero.
+/// [`Self::new_userptr`] instead binds the input field to a live CPU VMA; KFD
+/// may overwrite that field with an unrelated opaque mmap offset on return.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
 pub struct KfdIoctlAllocMemoryOfGpuArgs {
@@ -1096,6 +1157,23 @@ impl KfdIoctlAllocMemoryOfGpuArgs {
             mmap_offset: 0,
             gpu_id,
             flags: flags.bits(),
+        }
+    }
+
+    /// Constructs an exact USERPTR registration request.
+    ///
+    /// The higher layer must retain the page-aligned CPU VMA at `address`
+    /// through GPU unmap and `FREE_MEMORY_OF_GPU`. KFD may overwrite
+    /// `mmap_offset` on return, so the higher layer must retain the original CPU
+    /// address independently. This builder grants no address authority.
+    pub const fn new_userptr(address: u64, size: u64, gpu_id: u32) -> Self {
+        Self {
+            va_addr: address,
+            size,
+            handle: 0,
+            mmap_offset: address,
+            gpu_id,
+            flags: KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE,
         }
     }
 }

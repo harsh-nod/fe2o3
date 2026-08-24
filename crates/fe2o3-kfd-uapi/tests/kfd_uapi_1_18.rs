@@ -7,14 +7,15 @@ use fe2o3_kfd_uapi::{
     AMDKFD_IOCTL_BASE, IoctlDirection, KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE,
     KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL, KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC,
     KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE, KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT,
-    KFD_ALLOC_MEMORY_FLAGS_KERNARG, KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_ID,
-    KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST,
+    KFD_ALLOC_MEMORY_FLAGS_KERNARG, KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE,
+    KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_ID, KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST,
     KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256,
     KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES,
     KFD_IOC_ALLOC_MEM_FLAGS_AQL_QUEUE_MEM, KFD_IOC_ALLOC_MEM_FLAGS_COHERENT,
     KFD_IOC_ALLOC_MEM_FLAGS_EXECUTABLE, KFD_IOC_ALLOC_MEM_FLAGS_GTT,
-    KFD_IOC_ALLOC_MEM_FLAGS_PUBLIC, KFD_IOC_ALLOC_MEM_FLAGS_UNCACHED, KFD_IOC_ALLOC_MEM_FLAGS_VRAM,
-    KFD_IOC_ALLOC_MEM_FLAGS_WRITABLE, KFD_IOCTL_MAJOR_VERSION,
+    KFD_IOC_ALLOC_MEM_FLAGS_NO_SUBSTITUTE, KFD_IOC_ALLOC_MEM_FLAGS_PUBLIC,
+    KFD_IOC_ALLOC_MEM_FLAGS_UNCACHED, KFD_IOC_ALLOC_MEM_FLAGS_USERPTR,
+    KFD_IOC_ALLOC_MEM_FLAGS_VRAM, KFD_IOC_ALLOC_MEM_FLAGS_WRITABLE, KFD_IOCTL_MAJOR_VERSION,
     KFD_IOCTL_MAX_ADMITTED_MINOR_VERSION, KFD_IOCTL_MIN_ADMITTED_MINOR_VERSION,
     KFD_IOCTL_MINOR_VERSION, KFD_MEMORY_LIFECYCLE_SCHEMA_ID, KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST,
     KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256, KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES,
@@ -24,14 +25,16 @@ use fe2o3_kfd_uapi::{
     KFD_UAPI_CHARDEV_SOURCE_SHA256, KFD_UAPI_DEVICE_SOURCE_SHA256, KFD_UAPI_GPUVM_SOURCE_SHA256,
     KFD_UAPI_SCHEMA_ID, KFD_UAPI_SCHEMA_MANIFEST, KFD_UAPI_SCHEMA_MANIFEST_SHA256,
     KFD_UAPI_SCHEMA_MANIFEST_SHA256_BYTES, KFD_UAPI_SMI_EVENTS_SOURCE_SHA256,
-    KFD_UAPI_SOURCE_HEADER_SHA256, KFD_XNACK_MODE_DISABLED, KFD_XNACK_MODE_ENABLED,
-    KFD_XNACK_MODE_QUERY, KfdAllocMemoryFlags, KfdAllocMemoryFlagsError, KfdIoctlAcquireVmArgs,
-    KfdIoctlAllocMemoryOfGpuArgs, KfdIoctlFreeMemoryOfGpuArgs, KfdIoctlGetProcessAperturesNewArgs,
-    KfdIoctlGetVersionArgs, KfdIoctlMapMemoryToGpuArgs, KfdIoctlSetXnackModeArgs,
-    KfdIoctlSmiEventsArgs, KfdIoctlUnmapMemoryFromGpuArgs, KfdProcessDeviceApertures,
-    KfdUapiVersion, KfdUapiVersionError, admit_kfd_alloc_memory_flags,
-    admit_kfd_device_memory_flags, admit_kfd_public_device_memory_flags, encode_ioctl,
-    negotiate_kfd_uapi_version,
+    KFD_UAPI_SOURCE_HEADER_SHA256, KFD_USERPTR_MEMORY_SCHEMA_ID,
+    KFD_USERPTR_MEMORY_SCHEMA_MANIFEST, KFD_USERPTR_MEMORY_SCHEMA_MANIFEST_SHA256,
+    KFD_USERPTR_MEMORY_SCHEMA_MANIFEST_SHA256_BYTES, KFD_XNACK_MODE_DISABLED,
+    KFD_XNACK_MODE_ENABLED, KFD_XNACK_MODE_QUERY, KfdAllocMemoryFlags, KfdAllocMemoryFlagsError,
+    KfdIoctlAcquireVmArgs, KfdIoctlAllocMemoryOfGpuArgs, KfdIoctlFreeMemoryOfGpuArgs,
+    KfdIoctlGetProcessAperturesNewArgs, KfdIoctlGetVersionArgs, KfdIoctlMapMemoryToGpuArgs,
+    KfdIoctlSetXnackModeArgs, KfdIoctlSmiEventsArgs, KfdIoctlUnmapMemoryFromGpuArgs,
+    KfdProcessDeviceApertures, KfdUapiVersion, KfdUapiVersionError, admit_kfd_alloc_memory_flags,
+    admit_kfd_device_memory_flags, admit_kfd_public_device_memory_flags,
+    admit_kfd_userptr_executable_memory_flags, encode_ioctl, negotiate_kfd_uapi_version,
 };
 use sha2::{Digest, Sha256};
 
@@ -142,6 +145,24 @@ fn device_memory_schema_composes_without_changing_r2_admission() {
 }
 
 #[test]
+fn userptr_memory_schema_is_additive_and_frozen() {
+    assert_eq!(
+        KFD_USERPTR_MEMORY_SCHEMA_ID,
+        "linux-kfd-userptr-executable-memory-1.18-generic-ioc-v1"
+    );
+    assert!(KFD_USERPTR_MEMORY_SCHEMA_MANIFEST.contains(&format!(
+        "memory_schema_manifest_sha256={KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256}\n"
+    )));
+    let digest = Sha256::digest(KFD_USERPTR_MEMORY_SCHEMA_MANIFEST);
+    let rendered: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    assert_eq!(rendered, KFD_USERPTR_MEMORY_SCHEMA_MANIFEST_SHA256);
+    assert_eq!(
+        digest.as_slice(),
+        KFD_USERPTR_MEMORY_SCHEMA_MANIFEST_SHA256_BYTES
+    );
+}
+
+#[test]
 fn public_device_memory_schema_is_additive_and_frozen() {
     assert!(KFD_PUBLIC_DEVICE_MEMORY_SCHEMA_MANIFEST.contains(&format!(
         "device_memory_schema_sha256={KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256}\n"
@@ -212,8 +233,10 @@ fn admitted_memory_flags_match_kfd_uapi_1_18_golden() {
     assert_eq!(KFD_IOC_ALLOC_MEM_FLAGS_VRAM, 0x0000_0001);
     assert_eq!(KFD_IOC_ALLOC_MEM_FLAGS_PUBLIC, 0x2000_0000);
     assert_eq!(KFD_IOC_ALLOC_MEM_FLAGS_GTT, 0x0000_0002);
+    assert_eq!(KFD_IOC_ALLOC_MEM_FLAGS_USERPTR, 0x0000_0004);
     assert_eq!(KFD_IOC_ALLOC_MEM_FLAGS_WRITABLE, 0x8000_0000);
     assert_eq!(KFD_IOC_ALLOC_MEM_FLAGS_EXECUTABLE, 0x4000_0000);
+    assert_eq!(KFD_IOC_ALLOC_MEM_FLAGS_NO_SUBSTITUTE, 0x1000_0000);
     assert_eq!(KFD_IOC_ALLOC_MEM_FLAGS_AQL_QUEUE_MEM, 0x0800_0000);
     assert_eq!(KFD_IOC_ALLOC_MEM_FLAGS_COHERENT, 0x0400_0000);
     assert_eq!(KFD_IOC_ALLOC_MEM_FLAGS_UNCACHED, 0x0200_0000);
@@ -222,6 +245,7 @@ fn admitted_memory_flags_match_kfd_uapi_1_18_golden() {
     assert_eq!(KFD_ALLOC_MEMORY_FLAGS_KERNARG, 0x8600_0002);
     assert_eq!(KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE, 0xce00_0002);
     assert_eq!(KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE, 0xc400_0002);
+    assert_eq!(KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE, 0xd600_0004);
     assert_eq!(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL, 0x8000_0001);
     assert_eq!(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC, 0xa000_0001);
 
@@ -245,6 +269,16 @@ fn admitted_memory_flags_match_kfd_uapi_1_18_golden() {
         admit_kfd_alloc_memory_flags(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL),
         Err(KfdAllocMemoryFlagsError::Unsupported {
             flags: KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL,
+        })
+    );
+    assert_eq!(
+        admit_kfd_userptr_executable_memory_flags(KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE),
+        Ok(KfdAllocMemoryFlags::USERPTR_EXECUTABLE)
+    );
+    assert_eq!(
+        admit_kfd_alloc_memory_flags(KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE),
+        Err(KfdAllocMemoryFlagsError::Unsupported {
+            flags: KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE,
         })
     );
     assert_eq!(
@@ -292,6 +326,17 @@ fn memory_flag_admission_rejects_hostile_and_unreviewed_patterns() {
             Err(KfdAllocMemoryFlagsError::Unsupported { flags })
         );
     }
+}
+
+#[test]
+fn userptr_builder_binds_the_live_cpu_address_input() {
+    let request = KfdIoctlAllocMemoryOfGpuArgs::new_userptr(0x20_000, 0x10_000, 7);
+    assert_eq!(request.va_addr, 0x20_000);
+    assert_eq!(request.mmap_offset, 0x20_000);
+    assert_eq!(request.size, 0x10_000);
+    assert_eq!(request.handle, 0);
+    assert_eq!(request.gpu_id, 7);
+    assert_eq!(request.flags, KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE);
 }
 
 #[test]

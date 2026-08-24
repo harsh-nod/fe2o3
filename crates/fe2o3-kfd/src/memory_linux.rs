@@ -332,6 +332,53 @@ impl MemoryBackend for LinuxMemoryBackend {
         }
     }
 
+    fn prepare_userptr(
+        &mut self,
+        reservation: &mut Self::Reservation,
+        bytes: usize,
+    ) -> Result<Self::Mapping, MemorySessionError> {
+        if reservation.replaced || bytes == 0 || bytes != reservation.bytes {
+            return Err(MemorySessionError::KernelResultMalformed(
+                "USERPTR reservation geometry",
+            ));
+        }
+        let mut mapping = LinuxCpuMapping {
+            address: reservation.address,
+            bytes,
+            active: true,
+            accessible: false,
+        };
+        // FE reuses its kernel-selected PRIVATE|ANONYMOUS|NORESERVE guard and
+        // makes those exact pages accessible in place. ROCr instead replaces a
+        // reserved range with MAP_FIXED pages; DONTFORK and NORESERVE are FE
+        // safety differences and do not claim syscall-identical allocation.
+        if let Err(error) = self.prepare_cpu_mapping(&mut mapping) {
+            reservation.replaced = true;
+            return Err(error);
+        }
+        reservation.replaced = true;
+        Ok(mapping)
+    }
+
+    fn alloc_userptr(
+        &mut self,
+        address: u64,
+        bytes: u64,
+    ) -> KernelOutcome<KfdIoctlAllocMemoryOfGpuArgs> {
+        let mut args = KfdIoctlAllocMemoryOfGpuArgs::new_userptr(address, bytes, self.gpu_id());
+        // SAFETY: the exact USERPTR input VMA is page-aligned, DONTFORK,
+        // read/write, and retained by the safe engine through explicit FREE.
+        let request = unsafe { Updater::<ALLOC_MEMORY_OPCODE, _>::new(&mut args) };
+        // SAFETY: the reviewed in/out record and live VMA remain exclusively
+        // owned for the call; all kernel-written fields remain untrusted.
+        let result = unsafe { rustix::ioctl::ioctl(&self.device.kfd.opened.fd, request) }
+            .map_err(|source| Self::syscall("AMDKFD_IOC_ALLOC_MEMORY_OF_GPU(USERPTR)", source));
+        KernelOutcome {
+            value: args,
+            result,
+        }
+    }
+
     fn map_cpu(
         &mut self,
         reservation: &mut Self::Reservation,
@@ -663,7 +710,8 @@ impl MemoryBackend for LinuxMemoryBackend {
             ));
         }
         // SAFETY: the mapping is exclusively borrowed and no safe slice can
-        // survive a closure call. Explicit munmap must precede FREE.
+        // survive a closure call. The engine establishes the backing-specific
+        // ordering relative to FREE before invoking this primitive.
         unsafe { rustix::mm::munmap(mapping.address.as_ptr(), mapping.bytes) }
             .map_err(|source| Self::syscall("munmap AMDGPU BO", source))?;
         mapping.active = false;
