@@ -1,7 +1,7 @@
 //! Strict canonical evidence for the production semantic middle end.
 //!
 //! The live-produced value binds an exact semantic-MIR owner, the checked
-//! ranked kernel, deterministic ranked IR, and the six fixed clean analysis
+//! ranked kernel, deterministic ranked IR, and the seven fixed clean analysis
 //! reports. The decoded form is deliberately named `Inert`: byte integrity is
 //! not producer authentication, a refinement proof, or execution authority.
 
@@ -12,7 +12,7 @@ use dialect_kernel::{
     AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, IndexBinaryKindAttr, MemorySpaceAttr,
     SemanticBinaryKindAttr,
 };
-use fe2o3_kernel_analysis::{GENERAL_PLIRON_KERNEL_CHECK_PASS_ORDER_V1, KernelCheckPassKindV1};
+use fe2o3_kernel_analysis::{KernelCheckPassKindV1, PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V1};
 use fe2o3_kernel_ir::{
     MatrixElement, TensorElementPackingV1, TensorFragmentLayoutV1, TensorInstructionProfileV1,
     TensorLayoutContractV1, TensorLdsSwizzleV1, TensorMultiplicityV1, TensorOperandRoleV1,
@@ -26,37 +26,37 @@ use super::{
     ProductionSemanticMirErrorV1, ProductionSemanticMirOwnerV1,
 };
 
-const MAGIC_V3: [u8; 8] = *b"F2MEV3\0\0";
-const VERSION_V3: u16 = 3;
-const FLAGS_V3: u16 = 0;
-const ASSURANCE_INTERNAL_CHECKS_ONLY_V3: u8 = 1;
-const EQUIVALENCE_REVALIDATED_V3: u8 = 1;
-const CLEAN_STATUS_V3: u8 = 1;
-const PASS_COUNT_V3: usize = 6;
-const PASS_RECORD_BYTES_V3: usize = 10;
+const MAGIC_V4: [u8; 8] = *b"F2MEV4\0\0";
+const VERSION_V4: u16 = 4;
+const FLAGS_V4: u16 = 0;
+const ASSURANCE_INTERNAL_CHECKS_ONLY_V4: u8 = 1;
+const EQUIVALENCE_REVALIDATED_V4: u8 = 1;
+const CLEAN_STATUS_V4: u8 = 1;
+const PASS_COUNT_V4: usize = 7;
+const PASS_RECORD_BYTES_V4: usize = 10;
 const SHA256_BYTES: usize = 32;
-const IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/PRODUCTION-MIDDLE-END-EVIDENCE-IDENTITY/V3\0";
-const RANKED_KERNEL_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/PRODUCTION-RANKED-KERNEL-IDENTITY/V3\0";
+const IDENTITY_DOMAIN_V4: &[u8] = b"FE2O3/PRODUCTION-MIDDLE-END-EVIDENCE-IDENTITY/V4\0";
+const RANKED_KERNEL_IDENTITY_DOMAIN_V4: &[u8] = b"FE2O3/PRODUCTION-RANKED-KERNEL-IDENTITY/V4\0";
 
 /// Stable wire domain for a production middle-end evidence record.
-pub const PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V3: &[u8] =
-    b"fe2o3.production-middle-end-evidence.v3";
+pub const PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V4: &[u8] =
+    b"fe2o3.production-middle-end-evidence.v4";
 
 /// Fixed assurance policy. It intentionally does not claim Verus verification.
-pub const PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V3: &[u8] = b"fe2o3.internal-checks-only.v3";
+pub const PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V4: &[u8] = b"fe2o3.internal-checks-only.v4";
 
-/// Maximum complete record size, chosen to fit one V3 lineage receipt.
-pub const MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V3: usize = 4 * 1024 * 1024;
+/// Maximum complete record size, chosen to fit one V4 lineage receipt.
+pub const MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V4: usize = 4 * 1024 * 1024;
 
-const FIXED_RECORD_BYTES_V3: usize = MAGIC_V3.len()
+const FIXED_RECORD_BYTES_V4: usize = MAGIC_V4.len()
     + 2
     + 2
     + 8
     + 4
     + 2
-    + PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V3.len()
+    + PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V4.len()
     + 2
-    + PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V3.len()
+    + PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V4.len()
     + 1
     + 1
     + 2
@@ -64,23 +64,24 @@ const FIXED_RECORD_BYTES_V3: usize = MAGIC_V3.len()
     + SHA256_BYTES
     + 4
     + 1
-    + PASS_COUNT_V3 * PASS_RECORD_BYTES_V3
+    + PASS_COUNT_V4 * PASS_RECORD_BYTES_V4
     + SHA256_BYTES;
 
 /// Maximum deterministic ranked-IR bytes retained by one complete record.
-pub const MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V3: usize =
-    MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V3 - FIXED_RECORD_BYTES_V3;
+pub const MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V4: usize =
+    MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V4 - FIXED_RECORD_BYTES_V4;
 
-/// Assurance represented by the V3 middle-end record.
+/// Assurance represented by the V4 middle-end record.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum ProductionMiddleEndAssuranceV3 {
-    /// fe2o3's six internal analyses completed cleanly; no Verus proof is claimed.
+pub enum ProductionMiddleEndAssuranceV4 {
+    /// fe2o3's seven internal analyses completed cleanly; no Verus proof is claimed.
     InternalChecksOnly,
 }
 
-/// One pass in the fixed V3 middle-end order.
+/// One pass in the fixed V4 middle-end order.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum ProductionMiddleEndEvidencePassV3 {
+pub enum ProductionMiddleEndEvidencePassV4 {
+    TensorLayout,
     MemoryBounds,
     AtomicLegality,
     RaceFreedom,
@@ -89,56 +90,57 @@ pub enum ProductionMiddleEndEvidencePassV3 {
     SemanticRefinement,
 }
 
-impl ProductionMiddleEndEvidencePassV3 {
+impl ProductionMiddleEndEvidencePassV4 {
     const fn tag(self) -> u8 {
         match self {
-            Self::MemoryBounds => 1,
-            Self::AtomicLegality => 2,
-            Self::RaceFreedom => 3,
-            Self::BarrierConvergence => 4,
-            Self::WorkgroupMemory => 5,
-            Self::SemanticRefinement => 6,
+            Self::TensorLayout => 1,
+            Self::MemoryBounds => 2,
+            Self::AtomicLegality => 3,
+            Self::RaceFreedom => 4,
+            Self::BarrierConvergence => 5,
+            Self::WorkgroupMemory => 6,
+            Self::SemanticRefinement => 7,
         }
     }
 
     const fn from_analysis(pass: KernelCheckPassKindV1) -> Option<Self> {
         match pass {
+            KernelCheckPassKindV1::TensorLayout => Some(Self::TensorLayout),
             KernelCheckPassKindV1::MemoryBounds => Some(Self::MemoryBounds),
             KernelCheckPassKindV1::AtomicLegality => Some(Self::AtomicLegality),
             KernelCheckPassKindV1::RaceFreedom => Some(Self::RaceFreedom),
             KernelCheckPassKindV1::BarrierConvergence => Some(Self::BarrierConvergence),
             KernelCheckPassKindV1::WorkgroupMemory => Some(Self::WorkgroupMemory),
             KernelCheckPassKindV1::SemanticRefinement => Some(Self::SemanticRefinement),
-            KernelCheckPassKindV1::Structural
-            | KernelCheckPassKindV1::ControlFlow
-            | KernelCheckPassKindV1::TensorLayout => None,
+            KernelCheckPassKindV1::Structural | KernelCheckPassKindV1::ControlFlow => None,
         }
     }
 }
 
-/// Fixed pass order encoded by every V3 record.
-pub const PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V3: [ProductionMiddleEndEvidencePassV3;
-    PASS_COUNT_V3] = [
-    ProductionMiddleEndEvidencePassV3::MemoryBounds,
-    ProductionMiddleEndEvidencePassV3::AtomicLegality,
-    ProductionMiddleEndEvidencePassV3::RaceFreedom,
-    ProductionMiddleEndEvidencePassV3::BarrierConvergence,
-    ProductionMiddleEndEvidencePassV3::WorkgroupMemory,
-    ProductionMiddleEndEvidencePassV3::SemanticRefinement,
+/// Fixed pass order encoded by every V4 record.
+pub const PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V4: [ProductionMiddleEndEvidencePassV4;
+    PASS_COUNT_V4] = [
+    ProductionMiddleEndEvidencePassV4::TensorLayout,
+    ProductionMiddleEndEvidencePassV4::MemoryBounds,
+    ProductionMiddleEndEvidencePassV4::AtomicLegality,
+    ProductionMiddleEndEvidencePassV4::RaceFreedom,
+    ProductionMiddleEndEvidencePassV4::BarrierConvergence,
+    ProductionMiddleEndEvidencePassV4::WorkgroupMemory,
+    ProductionMiddleEndEvidencePassV4::SemanticRefinement,
 ];
 
 /// Exact success facts encoded for one mandatory pass.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct ProductionMiddleEndPassSuccessV3 {
-    pass: ProductionMiddleEndEvidencePassV3,
+pub struct ProductionMiddleEndPassSuccessV4 {
+    pass: ProductionMiddleEndEvidencePassV4,
 }
 
-impl ProductionMiddleEndPassSuccessV3 {
-    const fn new(pass: ProductionMiddleEndEvidencePassV3) -> Self {
+impl ProductionMiddleEndPassSuccessV4 {
+    const fn new(pass: ProductionMiddleEndEvidencePassV4) -> Self {
         Self { pass }
     }
 
-    pub const fn pass(self) -> ProductionMiddleEndEvidencePassV3 {
+    pub const fn pass(self) -> ProductionMiddleEndEvidencePassV4 {
         self.pass
     }
 
@@ -159,23 +161,24 @@ impl ProductionMiddleEndPassSuccessV3 {
     }
 }
 
-const PASS_SUCCESSES_V3: [ProductionMiddleEndPassSuccessV3; PASS_COUNT_V3] = [
-    ProductionMiddleEndPassSuccessV3::new(ProductionMiddleEndEvidencePassV3::MemoryBounds),
-    ProductionMiddleEndPassSuccessV3::new(ProductionMiddleEndEvidencePassV3::AtomicLegality),
-    ProductionMiddleEndPassSuccessV3::new(ProductionMiddleEndEvidencePassV3::RaceFreedom),
-    ProductionMiddleEndPassSuccessV3::new(ProductionMiddleEndEvidencePassV3::BarrierConvergence),
-    ProductionMiddleEndPassSuccessV3::new(ProductionMiddleEndEvidencePassV3::WorkgroupMemory),
-    ProductionMiddleEndPassSuccessV3::new(ProductionMiddleEndEvidencePassV3::SemanticRefinement),
+const PASS_SUCCESSES_V4: [ProductionMiddleEndPassSuccessV4; PASS_COUNT_V4] = [
+    ProductionMiddleEndPassSuccessV4::new(ProductionMiddleEndEvidencePassV4::TensorLayout),
+    ProductionMiddleEndPassSuccessV4::new(ProductionMiddleEndEvidencePassV4::MemoryBounds),
+    ProductionMiddleEndPassSuccessV4::new(ProductionMiddleEndEvidencePassV4::AtomicLegality),
+    ProductionMiddleEndPassSuccessV4::new(ProductionMiddleEndEvidencePassV4::RaceFreedom),
+    ProductionMiddleEndPassSuccessV4::new(ProductionMiddleEndEvidencePassV4::BarrierConvergence),
+    ProductionMiddleEndPassSuccessV4::new(ProductionMiddleEndEvidencePassV4::WorkgroupMemory),
+    ProductionMiddleEndPassSuccessV4::new(ProductionMiddleEndEvidencePassV4::SemanticRefinement),
 ];
 
-/// Domain-separated identity of one exact canonical V3 record.
+/// Domain-separated identity of one exact canonical V4 record.
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct ProductionMiddleEndEvidenceIdentityV3 {
+pub struct ProductionMiddleEndEvidenceIdentityV4 {
     sha256: [u8; SHA256_BYTES],
     byte_len: u64,
 }
 
-impl ProductionMiddleEndEvidenceIdentityV3 {
+impl ProductionMiddleEndEvidenceIdentityV4 {
     pub const fn sha256(&self) -> &[u8; SHA256_BYTES] {
         &self.sha256
     }
@@ -195,158 +198,158 @@ impl ProductionMiddleEndEvidenceIdentityV3 {
     }
 }
 
-impl fmt::Debug for ProductionMiddleEndEvidenceIdentityV3 {
+impl fmt::Debug for ProductionMiddleEndEvidenceIdentityV4 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("ProductionMiddleEndEvidenceIdentityV3")
+            .debug_struct("ProductionMiddleEndEvidenceIdentityV4")
             .field("sha256", &self.sha256)
             .field("byte_len", &self.byte_len)
             .finish()
     }
 }
 
-/// Strictly decoded, internally consistent V3 bytes.
+/// Strictly decoded, internally consistent V4 bytes.
 ///
 /// This type is inert: decoding does not establish a live producer, replay
 /// freshness, derivation correctness, Verus proof, or any execution authority.
 #[derive(Eq, PartialEq)]
-pub struct InertProductionMiddleEndEvidenceV3 {
+pub struct InertProductionMiddleEndEvidenceV4 {
     source_semantic_identity: [u8; SHA256_BYTES],
     ranked_kernel_identity: [u8; SHA256_BYTES],
     ranked_ir_range: Range<usize>,
-    identity: ProductionMiddleEndEvidenceIdentityV3,
+    identity: ProductionMiddleEndEvidenceIdentityV4,
     canonical_bytes: Box<[u8]>,
 }
 
-impl InertProductionMiddleEndEvidenceV3 {
-    /// Strictly decodes one complete canonical V3 record with no fallback.
+impl InertProductionMiddleEndEvidenceV4 {
+    /// Strictly decodes one complete canonical V4 record with no fallback.
     /// All declared and aggregate bounds are checked before allocation.
-    pub fn decode(bytes: &[u8]) -> Result<Self, ProductionMiddleEndEvidenceCodecErrorV3> {
-        if bytes.len() > MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V3 {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::TooLarge {
+    pub fn decode(bytes: &[u8]) -> Result<Self, ProductionMiddleEndEvidenceCodecErrorV4> {
+        if bytes.len() > MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V4 {
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::TooLarge {
                 actual: bytes.len(),
-                limit: MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V3,
+                limit: MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V4,
             });
         }
 
-        let mut reader = ReaderV3::new(bytes);
-        if reader.fixed::<8>()? != MAGIC_V3 {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::InvalidMagic);
+        let mut reader = ReaderV4::new(bytes);
+        if reader.fixed::<8>()? != MAGIC_V4 {
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::InvalidMagic);
         }
         let version = reader.u16()?;
-        if version != VERSION_V3 {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::UnsupportedVersion(
+        if version != VERSION_V4 {
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::UnsupportedVersion(
                 version,
             ));
         }
         let flags = reader.u16()?;
-        if flags != FLAGS_V3 {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::UnsupportedFlags(
+        if flags != FLAGS_V4 {
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::UnsupportedFlags(
                 flags,
             ));
         }
         let declared_len = reader.u64()?;
         let declared_len_usize = usize::try_from(declared_len)
-            .map_err(|_| ProductionMiddleEndEvidenceCodecErrorV3::InvalidLength(declared_len))?;
-        if declared_len_usize > MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V3 {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::TooLarge {
+            .map_err(|_| ProductionMiddleEndEvidenceCodecErrorV4::InvalidLength(declared_len))?;
+        if declared_len_usize > MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V4 {
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::TooLarge {
                 actual: declared_len_usize,
-                limit: MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V3,
+                limit: MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V4,
             });
         }
         if declared_len_usize > bytes.len() {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::Truncated);
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::Truncated);
         }
         if declared_len_usize < bytes.len() {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::TrailingBytes);
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::TrailingBytes);
         }
-        if declared_len_usize < FIXED_RECORD_BYTES_V3 + 1 {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::InvalidLength(
+        if declared_len_usize < FIXED_RECORD_BYTES_V4 + 1 {
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::InvalidLength(
                 declared_len,
             ));
         }
         if reader.u32()? != 0 {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::NonzeroReserved);
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::NonzeroReserved);
         }
 
         let domain_len = usize::from(reader.u16()?);
-        if domain_len != PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V3.len()
-            || reader.take(domain_len)? != PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V3
+        if domain_len != PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V4.len()
+            || reader.take(domain_len)? != PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V4
         {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::InvalidDomain);
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::InvalidDomain);
         }
         let policy_len = usize::from(reader.u16()?);
-        if policy_len != PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V3.len()
-            || reader.take(policy_len)? != PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V3
+        if policy_len != PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V4.len()
+            || reader.take(policy_len)? != PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V4
         {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::InvalidPolicy);
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::InvalidPolicy);
         }
         let assurance = reader.u8()?;
-        if assurance != ASSURANCE_INTERNAL_CHECKS_ONLY_V3 {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::InvalidAssurance(
+        if assurance != ASSURANCE_INTERNAL_CHECKS_ONLY_V4 {
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::InvalidAssurance(
                 assurance,
             ));
         }
-        if reader.u8()? != EQUIVALENCE_REVALIDATED_V3 {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::SemanticEquivalenceNotEstablished);
+        if reader.u8()? != EQUIVALENCE_REVALIDATED_V4 {
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::SemanticEquivalenceNotEstablished);
         }
         if reader.u16()? != 0 {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::NonzeroReserved);
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::NonzeroReserved);
         }
 
         let source_semantic_identity = reader.fixed::<SHA256_BYTES>()?;
         if source_semantic_identity == [0; SHA256_BYTES] {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::ZeroSemanticIdentity);
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::ZeroSemanticIdentity);
         }
         let ranked_kernel_identity = reader.fixed::<SHA256_BYTES>()?;
         if ranked_kernel_identity == [0; SHA256_BYTES] {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::ZeroRankedKernelIdentity);
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::ZeroRankedKernelIdentity);
         }
 
         let ranked_ir_len = usize::try_from(reader.u32()?).map_err(|_| {
-            ProductionMiddleEndEvidenceCodecErrorV3::RankedIrTooLarge {
+            ProductionMiddleEndEvidenceCodecErrorV4::RankedIrTooLarge {
                 actual: usize::MAX,
-                limit: MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V3,
+                limit: MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V4,
             }
         })?;
-        if ranked_ir_len > MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V3 {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::RankedIrTooLarge {
+        if ranked_ir_len > MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V4 {
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::RankedIrTooLarge {
                 actual: ranked_ir_len,
-                limit: MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V3,
+                limit: MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V4,
             });
         }
         let ranked_ir_bytes = reader.take(ranked_ir_len)?;
         validate_ranked_ir(ranked_ir_bytes)?;
 
         let pass_count = reader.u8()?;
-        if usize::from(pass_count) != PASS_COUNT_V3 {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::InvalidPassCount(
+        if usize::from(pass_count) != PASS_COUNT_V4 {
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::InvalidPassCount(
                 pass_count,
             ));
         }
-        for (index, expected) in PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V3
+        for (index, expected) in PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V4
             .iter()
             .copied()
             .enumerate()
         {
             let actual = reader.u8()?;
             if actual != expected.tag() {
-                return Err(ProductionMiddleEndEvidenceCodecErrorV3::InvalidPassOrder {
+                return Err(ProductionMiddleEndEvidenceCodecErrorV4::InvalidPassOrder {
                     index,
                     expected,
                     actual,
                 });
             }
             let status = reader.u8()?;
-            if status != CLEAN_STATUS_V3 {
-                return Err(ProductionMiddleEndEvidenceCodecErrorV3::InvalidPassStatus {
+            if status != CLEAN_STATUS_V4 {
+                return Err(ProductionMiddleEndEvidenceCodecErrorV4::InvalidPassStatus {
                     pass: expected,
                     actual: status,
                 });
             }
             let findings = reader.u32()?;
             if findings != 0 {
-                return Err(ProductionMiddleEndEvidenceCodecErrorV3::NonzeroFindings {
+                return Err(ProductionMiddleEndEvidenceCodecErrorV4::NonzeroFindings {
                     pass: expected,
                     actual: findings,
                 });
@@ -355,34 +358,34 @@ impl InertProductionMiddleEndEvidenceV3 {
             let artifact_authority = reader.u8()?;
             if compiler_authority != 0 || artifact_authority != 0 {
                 return Err(
-                    ProductionMiddleEndEvidenceCodecErrorV3::AuthorityClaimInEncoding {
+                    ProductionMiddleEndEvidenceCodecErrorV4::AuthorityClaimInEncoding {
                         pass: expected,
                     },
                 );
             }
             if reader.u16()? != 0 {
-                return Err(ProductionMiddleEndEvidenceCodecErrorV3::NonzeroReserved);
+                return Err(ProductionMiddleEndEvidenceCodecErrorV4::NonzeroReserved);
             }
         }
 
         let terminal_offset = reader.offset();
         let declared_identity = reader.fixed::<SHA256_BYTES>()?;
         if declared_identity == [0; SHA256_BYTES] {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::ZeroIdentity);
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::ZeroIdentity);
         }
         if !reader.is_empty() {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::TrailingBytes);
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::TrailingBytes);
         }
         if derive_evidence_identity(&bytes[..terminal_offset]) != Some(declared_identity) {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::IdentityMismatch);
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::IdentityMismatch);
         }
 
         let ranked_ir = std::str::from_utf8(ranked_ir_bytes)
-            .map_err(|_| ProductionMiddleEndEvidenceCodecErrorV3::InvalidRankedIrUtf8)?;
+            .map_err(|_| ProductionMiddleEndEvidenceCodecErrorV4::InvalidRankedIrUtf8)?;
         let reconstructed =
             encode_record(source_semantic_identity, ranked_kernel_identity, ranked_ir)?;
         if reconstructed.canonical_bytes.as_ref() != bytes {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::NonCanonical);
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::NonCanonical);
         }
         Ok(Self {
             source_semantic_identity,
@@ -393,12 +396,12 @@ impl InertProductionMiddleEndEvidenceV3 {
         })
     }
 
-    pub const fn assurance(&self) -> ProductionMiddleEndAssuranceV3 {
-        ProductionMiddleEndAssuranceV3::InternalChecksOnly
+    pub const fn assurance(&self) -> ProductionMiddleEndAssuranceV4 {
+        ProductionMiddleEndAssuranceV4::InternalChecksOnly
     }
 
     pub const fn policy(&self) -> &'static [u8] {
-        PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V3
+        PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V4
     }
 
     pub const fn source_semantic_identity(&self) -> &[u8; SHA256_BYTES] {
@@ -411,16 +414,16 @@ impl InertProductionMiddleEndEvidenceV3 {
 
     pub fn ranked_ir(&self) -> &str {
         std::str::from_utf8(&self.canonical_bytes[self.ranked_ir_range.clone()])
-            .expect("validated V3 ranked IR remains UTF-8")
+            .expect("validated V4 ranked IR remains UTF-8")
     }
 
     pub const fn pass_successes(
         &self,
-    ) -> &'static [ProductionMiddleEndPassSuccessV3; PASS_COUNT_V3] {
-        &PASS_SUCCESSES_V3
+    ) -> &'static [ProductionMiddleEndPassSuccessV4; PASS_COUNT_V4] {
+        &PASS_SUCCESSES_V4
     }
 
-    pub const fn identity(&self) -> ProductionMiddleEndEvidenceIdentityV3 {
+    pub const fn identity(&self) -> ProductionMiddleEndEvidenceIdentityV4 {
         self.identity
     }
 
@@ -453,10 +456,10 @@ impl InertProductionMiddleEndEvidenceV3 {
     }
 }
 
-impl fmt::Debug for InertProductionMiddleEndEvidenceV3 {
+impl fmt::Debug for InertProductionMiddleEndEvidenceV4 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("InertProductionMiddleEndEvidenceV3")
+            .debug_struct("InertProductionMiddleEndEvidenceV4")
             .field("source_semantic_identity", &self.source_semantic_identity)
             .field("ranked_kernel_identity", &self.ranked_kernel_identity)
             .field("identity", &self.identity)
@@ -464,53 +467,53 @@ impl fmt::Debug for InertProductionMiddleEndEvidenceV3 {
     }
 }
 
-/// Move-only V3 middle-end evidence constructed from the two live owners.
+/// Move-only V4 middle-end evidence constructed from the two live owners.
 ///
 /// The value carries no authority. Its distinct type records that construction
-/// revalidated the live semantic owner, ranked structure, and all six reports.
-/// Strict decoding returns [`InertProductionMiddleEndEvidenceV3`] instead.
+/// revalidated the live semantic owner, ranked structure, and all seven reports.
+/// Strict decoding returns [`InertProductionMiddleEndEvidenceV4`] instead.
 ///
 /// ```compile_fail
-/// use fe2o3_pliron::ProductionMiddleEndEvidenceV3;
+/// use fe2o3_pliron::ProductionMiddleEndEvidenceV4;
 /// fn requires_clone<T: Clone>() {}
-/// requires_clone::<ProductionMiddleEndEvidenceV3>();
+/// requires_clone::<ProductionMiddleEndEvidenceV4>();
 /// ```
 #[must_use = "dropping middle-end evidence abandons the live-produced stage record"]
-pub struct ProductionMiddleEndEvidenceV3 {
-    inert: InertProductionMiddleEndEvidenceV3,
+pub struct ProductionMiddleEndEvidenceV4 {
+    inert: InertProductionMiddleEndEvidenceV4,
 }
 
-impl ProductionMiddleEndEvidenceV3 {
+impl ProductionMiddleEndEvidenceV4 {
     /// Revalidates both live owners and constructs their exact canonical record.
     pub fn try_new(
         semantic: &ProductionSemanticMirOwnerV1,
         ranked: &ProductionRankedKernelLoweringInputV1,
         deterministic_ranked_ir: &str,
-    ) -> Result<Self, ProductionMiddleEndEvidenceCodecErrorV3> {
+    ) -> Result<Self, ProductionMiddleEndEvidenceCodecErrorV4> {
         validate_ranked_ir(deterministic_ranked_ir.as_bytes())?;
         semantic
             .verify_equivalence()
-            .map_err(ProductionMiddleEndEvidenceCodecErrorV3::SemanticOwner)?;
+            .map_err(ProductionMiddleEndEvidenceCodecErrorV4::SemanticOwner)?;
         let source_semantic_identity = *semantic.semantic().semantic_sha256().as_bytes();
         if source_semantic_identity == [0; SHA256_BYTES] {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::ZeroSemanticIdentity);
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::ZeroSemanticIdentity);
         }
         let actual_semantic_identity: [u8; SHA256_BYTES] =
             Sha256::digest(semantic.semantic().canonical_encoding()).into();
         if actual_semantic_identity != source_semantic_identity
             || semantic.locator().semantic_sha256().as_bytes() != &source_semantic_identity
         {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::SemanticSourceIdentityMismatch);
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::SemanticSourceIdentityMismatch);
         }
 
         ranked
             .revalidate_structure()
-            .map_err(ProductionMiddleEndEvidenceCodecErrorV3::RankedKernel)?;
+            .map_err(ProductionMiddleEndEvidenceCodecErrorV4::RankedKernel)?;
         validate_live_reports(ranked)?;
 
         let ranked_kernel_identity = derive_ranked_kernel_identity(ranked);
         if ranked_kernel_identity == [0; SHA256_BYTES] {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::ZeroRankedKernelIdentity);
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::ZeroRankedKernelIdentity);
         }
         let encoded = encode_record(
             source_semantic_identity,
@@ -518,7 +521,7 @@ impl ProductionMiddleEndEvidenceV3 {
             deterministic_ranked_ir,
         )?;
         Ok(Self {
-            inert: InertProductionMiddleEndEvidenceV3 {
+            inert: InertProductionMiddleEndEvidenceV4 {
                 source_semantic_identity,
                 ranked_kernel_identity,
                 ranked_ir_range: encoded.ranked_ir_range,
@@ -528,15 +531,15 @@ impl ProductionMiddleEndEvidenceV3 {
         })
     }
 
-    pub const fn as_inert(&self) -> &InertProductionMiddleEndEvidenceV3 {
+    pub const fn as_inert(&self) -> &InertProductionMiddleEndEvidenceV4 {
         &self.inert
     }
 
-    pub fn into_inert(self) -> InertProductionMiddleEndEvidenceV3 {
+    pub fn into_inert(self) -> InertProductionMiddleEndEvidenceV4 {
         self.inert
     }
 
-    pub const fn assurance(&self) -> ProductionMiddleEndAssuranceV3 {
+    pub const fn assurance(&self) -> ProductionMiddleEndAssuranceV4 {
         self.inert.assurance()
     }
 
@@ -554,11 +557,11 @@ impl ProductionMiddleEndEvidenceV3 {
 
     pub const fn pass_successes(
         &self,
-    ) -> &'static [ProductionMiddleEndPassSuccessV3; PASS_COUNT_V3] {
+    ) -> &'static [ProductionMiddleEndPassSuccessV4; PASS_COUNT_V4] {
         self.inert.pass_successes()
     }
 
-    pub const fn identity(&self) -> ProductionMiddleEndEvidenceIdentityV3 {
+    pub const fn identity(&self) -> ProductionMiddleEndEvidenceIdentityV4 {
         self.inert.identity()
     }
 
@@ -591,31 +594,31 @@ impl ProductionMiddleEndEvidenceV3 {
     }
 }
 
-impl fmt::Debug for ProductionMiddleEndEvidenceV3 {
+impl fmt::Debug for ProductionMiddleEndEvidenceV4 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("ProductionMiddleEndEvidenceV3")
+            .debug_struct("ProductionMiddleEndEvidenceV4")
             .field("identity", &self.identity())
             .field("assurance", &self.assurance())
             .finish_non_exhaustive()
     }
 }
 
-/// Fail-closed construction and decoding errors for the V3 codec.
+/// Fail-closed construction and decoding errors for the V4 codec.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ProductionMiddleEndEvidenceCodecErrorV3 {
+pub enum ProductionMiddleEndEvidenceCodecErrorV4 {
     SemanticOwner(ProductionSemanticMirErrorV1),
     RankedKernel(ProductionRankedKernelErrorV1),
     SemanticSourceIdentityMismatch,
     ReportPassOrderMismatch {
         index: usize,
-        expected: ProductionMiddleEndEvidencePassV3,
+        expected: ProductionMiddleEndEvidencePassV4,
     },
     ReportNotClean {
-        pass: ProductionMiddleEndEvidencePassV3,
+        pass: ProductionMiddleEndEvidencePassV4,
     },
     ReportAuthorityClaim {
-        pass: ProductionMiddleEndEvidencePassV3,
+        pass: ProductionMiddleEndEvidencePassV4,
     },
     EmptyRankedIr,
     RankedIrTooLarge {
@@ -647,19 +650,19 @@ pub enum ProductionMiddleEndEvidenceCodecErrorV3 {
     InvalidPassCount(u8),
     InvalidPassOrder {
         index: usize,
-        expected: ProductionMiddleEndEvidencePassV3,
+        expected: ProductionMiddleEndEvidencePassV4,
         actual: u8,
     },
     InvalidPassStatus {
-        pass: ProductionMiddleEndEvidencePassV3,
+        pass: ProductionMiddleEndEvidencePassV4,
         actual: u8,
     },
     NonzeroFindings {
-        pass: ProductionMiddleEndEvidencePassV3,
+        pass: ProductionMiddleEndEvidencePassV4,
         actual: u32,
     },
     AuthorityClaimInEncoding {
-        pass: ProductionMiddleEndEvidencePassV3,
+        pass: ProductionMiddleEndEvidencePassV4,
     },
     ZeroIdentity,
     IdentityMismatch,
@@ -667,7 +670,7 @@ pub enum ProductionMiddleEndEvidenceCodecErrorV3 {
     AllocationFailed,
 }
 
-impl fmt::Display for ProductionMiddleEndEvidenceCodecErrorV3 {
+impl fmt::Display for ProductionMiddleEndEvidenceCodecErrorV4 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::SemanticOwner(error) => {
@@ -758,7 +761,7 @@ impl fmt::Display for ProductionMiddleEndEvidenceCodecErrorV3 {
     }
 }
 
-impl Error for ProductionMiddleEndEvidenceCodecErrorV3 {
+impl Error for ProductionMiddleEndEvidenceCodecErrorV4 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::SemanticOwner(error) => Some(error),
@@ -769,7 +772,7 @@ impl Error for ProductionMiddleEndEvidenceCodecErrorV3 {
 }
 
 #[derive(Clone, Copy)]
-struct ObservedPassFactV3 {
+struct ObservedPassFactV4 {
     pass: KernelCheckPassKindV1,
     clean: bool,
     findings: usize,
@@ -779,9 +782,30 @@ struct ObservedPassFactV3 {
 
 fn validate_live_reports(
     ranked: &ProductionRankedKernelLoweringInputV1,
-) -> Result<(), ProductionMiddleEndEvidenceCodecErrorV3> {
+) -> Result<(), ProductionMiddleEndEvidenceCodecErrorV4> {
+    if ranked.production_pipeline_report().pass_order()
+        != &PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V1
+    {
+        return Err(
+            ProductionMiddleEndEvidenceCodecErrorV4::ReportPassOrderMismatch {
+                index: 0,
+                expected: ProductionMiddleEndEvidencePassV4::TensorLayout,
+            },
+        );
+    }
     let facts = [
-        ObservedPassFactV3 {
+        ObservedPassFactV4 {
+            pass: ranked.tensor_layout_report().pass(),
+            clean: ranked.tensor_layout_report().is_clean(),
+            findings: ranked.tensor_layout_report().findings().len(),
+            compiler_authority: ranked
+                .tensor_layout_report()
+                .grants_compiler_refinement_authority(),
+            artifact_authority: ranked
+                .tensor_layout_report()
+                .grants_artifact_or_launch_authority(),
+        },
+        ObservedPassFactV4 {
             pass: ranked.bounds_report().pass(),
             clean: ranked.bounds_report().is_clean(),
             findings: ranked.bounds_report().findings().len(),
@@ -790,7 +814,7 @@ fn validate_live_reports(
                 .grants_compiler_refinement_authority(),
             artifact_authority: ranked.bounds_report().grants_artifact_or_launch_authority(),
         },
-        ObservedPassFactV3 {
+        ObservedPassFactV4 {
             pass: ranked.atomic_report().pass(),
             clean: ranked.atomic_report().is_clean(),
             findings: ranked.atomic_report().findings().len(),
@@ -799,14 +823,14 @@ fn validate_live_reports(
                 .grants_compiler_refinement_authority(),
             artifact_authority: ranked.atomic_report().grants_artifact_or_launch_authority(),
         },
-        ObservedPassFactV3 {
+        ObservedPassFactV4 {
             pass: ranked.race_report().pass(),
             clean: ranked.race_report().is_clean(),
             findings: ranked.race_report().findings().len(),
             compiler_authority: ranked.race_report().grants_compiler_refinement_authority(),
             artifact_authority: ranked.race_report().grants_artifact_or_launch_authority(),
         },
-        ObservedPassFactV3 {
+        ObservedPassFactV4 {
             pass: ranked.barrier_report().pass(),
             clean: ranked.barrier_report().is_clean(),
             findings: ranked.barrier_report().findings().len(),
@@ -817,7 +841,7 @@ fn validate_live_reports(
                 .barrier_report()
                 .grants_artifact_or_launch_authority(),
         },
-        ObservedPassFactV3 {
+        ObservedPassFactV4 {
             pass: ranked.workgroup_report().pass(),
             clean: ranked.workgroup_report().is_clean(),
             findings: ranked.workgroup_report().findings().len(),
@@ -828,7 +852,7 @@ fn validate_live_reports(
                 .workgroup_report()
                 .grants_artifact_or_launch_authority(),
         },
-        ObservedPassFactV3 {
+        ObservedPassFactV4 {
             pass: ranked.semantic_report().pass(),
             clean: ranked.semantic_report().is_clean(),
             findings: ranked.semantic_report().findings().len(),
@@ -844,33 +868,33 @@ fn validate_live_reports(
 }
 
 fn validate_observed_pass_facts(
-    facts: &[ObservedPassFactV3; PASS_COUNT_V3],
-) -> Result<(), ProductionMiddleEndEvidenceCodecErrorV3> {
+    facts: &[ObservedPassFactV4; PASS_COUNT_V4],
+) -> Result<(), ProductionMiddleEndEvidenceCodecErrorV4> {
     for (index, ((fact, analysis_expected), evidence_expected)) in facts
         .iter()
-        .zip(GENERAL_PLIRON_KERNEL_CHECK_PASS_ORDER_V1.iter())
-        .zip(PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V3.iter())
+        .zip(PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V1.iter())
+        .zip(PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V4.iter())
         .enumerate()
     {
         if fact.pass != *analysis_expected
-            || ProductionMiddleEndEvidencePassV3::from_analysis(fact.pass)
+            || ProductionMiddleEndEvidencePassV4::from_analysis(fact.pass)
                 != Some(*evidence_expected)
         {
             return Err(
-                ProductionMiddleEndEvidenceCodecErrorV3::ReportPassOrderMismatch {
+                ProductionMiddleEndEvidenceCodecErrorV4::ReportPassOrderMismatch {
                     index,
                     expected: *evidence_expected,
                 },
             );
         }
         if !fact.clean || fact.findings != 0 {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV3::ReportNotClean {
+            return Err(ProductionMiddleEndEvidenceCodecErrorV4::ReportNotClean {
                 pass: *evidence_expected,
             });
         }
         if fact.compiler_authority || fact.artifact_authority {
             return Err(
-                ProductionMiddleEndEvidenceCodecErrorV3::ReportAuthorityClaim {
+                ProductionMiddleEndEvidenceCodecErrorV4::ReportAuthorityClaim {
                     pass: *evidence_expected,
                 },
             );
@@ -879,79 +903,79 @@ fn validate_observed_pass_facts(
     Ok(())
 }
 
-fn validate_ranked_ir(bytes: &[u8]) -> Result<(), ProductionMiddleEndEvidenceCodecErrorV3> {
+fn validate_ranked_ir(bytes: &[u8]) -> Result<(), ProductionMiddleEndEvidenceCodecErrorV4> {
     if bytes.is_empty() {
-        return Err(ProductionMiddleEndEvidenceCodecErrorV3::EmptyRankedIr);
+        return Err(ProductionMiddleEndEvidenceCodecErrorV4::EmptyRankedIr);
     }
-    if bytes.len() > MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V3 {
-        return Err(ProductionMiddleEndEvidenceCodecErrorV3::RankedIrTooLarge {
+    if bytes.len() > MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V4 {
+        return Err(ProductionMiddleEndEvidenceCodecErrorV4::RankedIrTooLarge {
             actual: bytes.len(),
-            limit: MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V3,
+            limit: MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V4,
         });
     }
     std::str::from_utf8(bytes)
-        .map_err(|_| ProductionMiddleEndEvidenceCodecErrorV3::InvalidRankedIrUtf8)?;
+        .map_err(|_| ProductionMiddleEndEvidenceCodecErrorV4::InvalidRankedIrUtf8)?;
     for (offset, byte) in bytes.iter().copied().enumerate() {
         if byte != b'\n' && !(b' '..=b'~').contains(&byte) {
             return Err(
-                ProductionMiddleEndEvidenceCodecErrorV3::NonCanonicalRankedIrByte { offset },
+                ProductionMiddleEndEvidenceCodecErrorV4::NonCanonicalRankedIrByte { offset },
             );
         }
     }
     if bytes.last() != Some(&b'\n') {
-        return Err(ProductionMiddleEndEvidenceCodecErrorV3::RankedIrMissingFinalNewline);
+        return Err(ProductionMiddleEndEvidenceCodecErrorV4::RankedIrMissingFinalNewline);
     }
     Ok(())
 }
 
-struct EncodedRecordV3 {
+struct EncodedRecordV4 {
     canonical_bytes: Box<[u8]>,
     ranked_ir_range: Range<usize>,
-    identity: ProductionMiddleEndEvidenceIdentityV3,
+    identity: ProductionMiddleEndEvidenceIdentityV4,
 }
 
 fn encode_record(
     source_semantic_identity: [u8; SHA256_BYTES],
     ranked_kernel_identity: [u8; SHA256_BYTES],
     ranked_ir: &str,
-) -> Result<EncodedRecordV3, ProductionMiddleEndEvidenceCodecErrorV3> {
+) -> Result<EncodedRecordV4, ProductionMiddleEndEvidenceCodecErrorV4> {
     validate_ranked_ir(ranked_ir.as_bytes())?;
     if source_semantic_identity == [0; SHA256_BYTES] {
-        return Err(ProductionMiddleEndEvidenceCodecErrorV3::ZeroSemanticIdentity);
+        return Err(ProductionMiddleEndEvidenceCodecErrorV4::ZeroSemanticIdentity);
     }
     if ranked_kernel_identity == [0; SHA256_BYTES] {
-        return Err(ProductionMiddleEndEvidenceCodecErrorV3::ZeroRankedKernelIdentity);
+        return Err(ProductionMiddleEndEvidenceCodecErrorV4::ZeroRankedKernelIdentity);
     }
-    let total_len = FIXED_RECORD_BYTES_V3.checked_add(ranked_ir.len()).ok_or(
-        ProductionMiddleEndEvidenceCodecErrorV3::TooLarge {
+    let total_len = FIXED_RECORD_BYTES_V4.checked_add(ranked_ir.len()).ok_or(
+        ProductionMiddleEndEvidenceCodecErrorV4::TooLarge {
             actual: usize::MAX,
-            limit: MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V3,
+            limit: MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V4,
         },
     )?;
-    if total_len > MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V3 {
-        return Err(ProductionMiddleEndEvidenceCodecErrorV3::TooLarge {
+    if total_len > MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V4 {
+        return Err(ProductionMiddleEndEvidenceCodecErrorV4::TooLarge {
             actual: total_len,
-            limit: MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V3,
+            limit: MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V4,
         });
     }
 
     let mut canonical = Vec::new();
     canonical
         .try_reserve_exact(total_len)
-        .map_err(|_| ProductionMiddleEndEvidenceCodecErrorV3::AllocationFailed)?;
-    canonical.extend_from_slice(&MAGIC_V3);
-    canonical.extend_from_slice(&VERSION_V3.to_le_bytes());
-    canonical.extend_from_slice(&FLAGS_V3.to_le_bytes());
+        .map_err(|_| ProductionMiddleEndEvidenceCodecErrorV4::AllocationFailed)?;
+    canonical.extend_from_slice(&MAGIC_V4);
+    canonical.extend_from_slice(&VERSION_V4.to_le_bytes());
+    canonical.extend_from_slice(&FLAGS_V4.to_le_bytes());
     canonical.extend_from_slice(&(total_len as u64).to_le_bytes());
     canonical.extend_from_slice(&0_u32.to_le_bytes());
     canonical
-        .extend_from_slice(&(PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V3.len() as u16).to_le_bytes());
-    canonical.extend_from_slice(PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V3);
+        .extend_from_slice(&(PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V4.len() as u16).to_le_bytes());
+    canonical.extend_from_slice(PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V4);
     canonical
-        .extend_from_slice(&(PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V3.len() as u16).to_le_bytes());
-    canonical.extend_from_slice(PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V3);
-    canonical.push(ASSURANCE_INTERNAL_CHECKS_ONLY_V3);
-    canonical.push(EQUIVALENCE_REVALIDATED_V3);
+        .extend_from_slice(&(PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V4.len() as u16).to_le_bytes());
+    canonical.extend_from_slice(PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V4);
+    canonical.push(ASSURANCE_INTERNAL_CHECKS_ONLY_V4);
+    canonical.push(EQUIVALENCE_REVALIDATED_V4);
     canonical.extend_from_slice(&0_u16.to_le_bytes());
     canonical.extend_from_slice(&source_semantic_identity);
     canonical.extend_from_slice(&ranked_kernel_identity);
@@ -959,25 +983,25 @@ fn encode_record(
     let ranked_ir_start = canonical.len();
     canonical.extend_from_slice(ranked_ir.as_bytes());
     let ranked_ir_end = canonical.len();
-    canonical.push(PASS_COUNT_V3 as u8);
-    for pass in PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V3 {
+    canonical.push(PASS_COUNT_V4 as u8);
+    for pass in PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V4 {
         canonical.push(pass.tag());
-        canonical.push(CLEAN_STATUS_V3);
+        canonical.push(CLEAN_STATUS_V4);
         canonical.extend_from_slice(&0_u32.to_le_bytes());
         canonical.push(0);
         canonical.push(0);
         canonical.extend_from_slice(&0_u16.to_le_bytes());
     }
     let evidence_sha256 = derive_evidence_identity(&canonical)
-        .ok_or(ProductionMiddleEndEvidenceCodecErrorV3::ZeroIdentity)?;
+        .ok_or(ProductionMiddleEndEvidenceCodecErrorV4::ZeroIdentity)?;
     canonical.extend_from_slice(&evidence_sha256);
     if canonical.len() != total_len {
-        return Err(ProductionMiddleEndEvidenceCodecErrorV3::NonCanonical);
+        return Err(ProductionMiddleEndEvidenceCodecErrorV4::NonCanonical);
     }
-    Ok(EncodedRecordV3 {
+    Ok(EncodedRecordV4 {
         canonical_bytes: canonical.into_boxed_slice(),
         ranked_ir_range: ranked_ir_start..ranked_ir_end,
-        identity: ProductionMiddleEndEvidenceIdentityV3 {
+        identity: ProductionMiddleEndEvidenceIdentityV4 {
             sha256: evidence_sha256,
             byte_len: total_len as u64,
         },
@@ -986,7 +1010,7 @@ fn encode_record(
 
 fn derive_evidence_identity(preimage: &[u8]) -> Option<[u8; SHA256_BYTES]> {
     let mut digest = Sha256::new();
-    digest.update(IDENTITY_DOMAIN_V3);
+    digest.update(IDENTITY_DOMAIN_V4);
     digest.update((preimage.len() as u64).to_le_bytes());
     digest.update(preimage);
     let identity: [u8; SHA256_BYTES] = digest.finalize().into();
@@ -998,7 +1022,7 @@ fn derive_ranked_kernel_identity(
 ) -> [u8; SHA256_BYTES] {
     let kernel = ranked.kernel();
     let mut digest = Sha256::new();
-    digest.update(RANKED_KERNEL_IDENTITY_DOMAIN_V3);
+    digest.update(RANKED_KERNEL_IDENTITY_DOMAIN_V4);
     hash_blob(&mut digest, kernel.function_name().as_bytes());
     hash_usize(&mut digest, kernel.argument_count());
     hash_usize(&mut digest, kernel.blocks().len());
@@ -1524,12 +1548,12 @@ const fn semantic_binary_tag(value: SemanticBinaryKindAttr) -> u8 {
     }
 }
 
-struct ReaderV3<'a> {
+struct ReaderV4<'a> {
     bytes: &'a [u8],
     offset: usize,
 }
 
-impl<'a> ReaderV3<'a> {
+impl<'a> ReaderV4<'a> {
     const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, offset: 0 }
     }
@@ -1542,40 +1566,40 @@ impl<'a> ReaderV3<'a> {
         self.offset == self.bytes.len()
     }
 
-    fn take(&mut self, length: usize) -> Result<&'a [u8], ProductionMiddleEndEvidenceCodecErrorV3> {
+    fn take(&mut self, length: usize) -> Result<&'a [u8], ProductionMiddleEndEvidenceCodecErrorV4> {
         let end = self
             .offset
             .checked_add(length)
-            .ok_or(ProductionMiddleEndEvidenceCodecErrorV3::Truncated)?;
+            .ok_or(ProductionMiddleEndEvidenceCodecErrorV4::Truncated)?;
         let value = self
             .bytes
             .get(self.offset..end)
-            .ok_or(ProductionMiddleEndEvidenceCodecErrorV3::Truncated)?;
+            .ok_or(ProductionMiddleEndEvidenceCodecErrorV4::Truncated)?;
         self.offset = end;
         Ok(value)
     }
 
     fn fixed<const N: usize>(
         &mut self,
-    ) -> Result<[u8; N], ProductionMiddleEndEvidenceCodecErrorV3> {
+    ) -> Result<[u8; N], ProductionMiddleEndEvidenceCodecErrorV4> {
         self.take(N)?
             .try_into()
-            .map_err(|_| ProductionMiddleEndEvidenceCodecErrorV3::Truncated)
+            .map_err(|_| ProductionMiddleEndEvidenceCodecErrorV4::Truncated)
     }
 
-    fn u8(&mut self) -> Result<u8, ProductionMiddleEndEvidenceCodecErrorV3> {
+    fn u8(&mut self) -> Result<u8, ProductionMiddleEndEvidenceCodecErrorV4> {
         Ok(self.fixed::<1>()?[0])
     }
 
-    fn u16(&mut self) -> Result<u16, ProductionMiddleEndEvidenceCodecErrorV3> {
+    fn u16(&mut self) -> Result<u16, ProductionMiddleEndEvidenceCodecErrorV4> {
         Ok(u16::from_le_bytes(self.fixed()?))
     }
 
-    fn u32(&mut self) -> Result<u32, ProductionMiddleEndEvidenceCodecErrorV3> {
+    fn u32(&mut self) -> Result<u32, ProductionMiddleEndEvidenceCodecErrorV4> {
         Ok(u32::from_le_bytes(self.fixed()?))
     }
 
-    fn u64(&mut self) -> Result<u64, ProductionMiddleEndEvidenceCodecErrorV3> {
+    fn u64(&mut self) -> Result<u64, ProductionMiddleEndEvidenceCodecErrorV4> {
         Ok(u64::from_le_bytes(self.fixed()?))
     }
 }
@@ -1584,8 +1608,8 @@ impl<'a> ReaderV3<'a> {
 mod tests {
     use super::*;
 
-    fn clean_facts() -> [ObservedPassFactV3; PASS_COUNT_V3] {
-        GENERAL_PLIRON_KERNEL_CHECK_PASS_ORDER_V1.map(|pass| ObservedPassFactV3 {
+    fn clean_facts() -> [ObservedPassFactV4; PASS_COUNT_V4] {
+        PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V1.map(|pass| ObservedPassFactV4 {
             pass,
             clean: true,
             findings: 0,
@@ -1596,21 +1620,21 @@ mod tests {
 
     #[test]
     fn every_live_report_fact_is_fail_closed() {
-        for index in 0..PASS_COUNT_V3 {
-            let expected = PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V3[index];
+        for index in 0..PASS_COUNT_V4 {
+            let expected = PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V4[index];
 
             let mut facts = clean_facts();
             facts[index].clean = false;
             assert_eq!(
                 validate_observed_pass_facts(&facts),
-                Err(ProductionMiddleEndEvidenceCodecErrorV3::ReportNotClean { pass: expected })
+                Err(ProductionMiddleEndEvidenceCodecErrorV4::ReportNotClean { pass: expected })
             );
 
             let mut facts = clean_facts();
             facts[index].findings = 1;
             assert_eq!(
                 validate_observed_pass_facts(&facts),
-                Err(ProductionMiddleEndEvidenceCodecErrorV3::ReportNotClean { pass: expected })
+                Err(ProductionMiddleEndEvidenceCodecErrorV4::ReportNotClean { pass: expected })
             );
 
             let mut facts = clean_facts();
@@ -1618,7 +1642,7 @@ mod tests {
             assert_eq!(
                 validate_observed_pass_facts(&facts),
                 Err(
-                    ProductionMiddleEndEvidenceCodecErrorV3::ReportAuthorityClaim {
+                    ProductionMiddleEndEvidenceCodecErrorV4::ReportAuthorityClaim {
                         pass: expected,
                     }
                 )
@@ -1629,7 +1653,7 @@ mod tests {
             assert_eq!(
                 validate_observed_pass_facts(&facts),
                 Err(
-                    ProductionMiddleEndEvidenceCodecErrorV3::ReportAuthorityClaim {
+                    ProductionMiddleEndEvidenceCodecErrorV4::ReportAuthorityClaim {
                         pass: expected,
                     }
                 )
@@ -1644,9 +1668,9 @@ mod tests {
         assert_eq!(
             validate_observed_pass_facts(&facts),
             Err(
-                ProductionMiddleEndEvidenceCodecErrorV3::ReportPassOrderMismatch {
+                ProductionMiddleEndEvidenceCodecErrorV4::ReportPassOrderMismatch {
                     index: 0,
-                    expected: ProductionMiddleEndEvidencePassV3::MemoryBounds,
+                    expected: ProductionMiddleEndEvidencePassV4::TensorLayout,
                 }
             )
         );
@@ -1657,19 +1681,19 @@ mod tests {
         assert!(validate_ranked_ir(b"func @kernel {\n}\n").is_ok());
         assert_eq!(
             validate_ranked_ir(b""),
-            Err(ProductionMiddleEndEvidenceCodecErrorV3::EmptyRankedIr)
+            Err(ProductionMiddleEndEvidenceCodecErrorV4::EmptyRankedIr)
         );
         assert_eq!(
             validate_ranked_ir(b"func @kernel {}"),
-            Err(ProductionMiddleEndEvidenceCodecErrorV3::RankedIrMissingFinalNewline)
+            Err(ProductionMiddleEndEvidenceCodecErrorV4::RankedIrMissingFinalNewline)
         );
         assert_eq!(
             validate_ranked_ir(b"func @kernel {\r\n}\n"),
-            Err(ProductionMiddleEndEvidenceCodecErrorV3::NonCanonicalRankedIrByte { offset: 14 })
+            Err(ProductionMiddleEndEvidenceCodecErrorV4::NonCanonicalRankedIrByte { offset: 14 })
         );
         assert_eq!(
             validate_ranked_ir(b"func\0\n"),
-            Err(ProductionMiddleEndEvidenceCodecErrorV3::NonCanonicalRankedIrByte { offset: 4 })
+            Err(ProductionMiddleEndEvidenceCodecErrorV4::NonCanonicalRankedIrByte { offset: 4 })
         );
     }
 

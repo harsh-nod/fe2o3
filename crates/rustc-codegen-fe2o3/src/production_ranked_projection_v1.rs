@@ -373,19 +373,19 @@ pub(crate) struct ProductionRankedSemanticProgramV1 {
     receipt: ProductionRankedSemanticProjectionReceiptV1,
 }
 
-/// Move-only custody of the exact ranked graph and all successful general
-/// kernel checks. Only the production projection can construct this owner.
+/// Move-only custody of the exact ranked graph and all seven mandatory
+/// production checks. Only the production projection can construct this owner.
 #[must_use = "dropping ranked verification abandons its production lineage"]
-pub(crate) struct AuthenticatedRankedVerificationV3 {
-    middle_end_evidence: fe2o3_pliron::ProductionMiddleEndEvidenceV3,
+pub(crate) struct AuthenticatedRankedVerificationV4 {
+    middle_end_evidence: fe2o3_pliron::ProductionMiddleEndEvidenceV4,
 }
 
-impl AuthenticatedRankedVerificationV3 {
+impl AuthenticatedRankedVerificationV4 {
     pub(crate) fn ranked_ir(&self) -> &str {
         self.middle_end_evidence.ranked_ir()
     }
 
-    pub(crate) const fn middle_end_evidence(&self) -> &fe2o3_pliron::ProductionMiddleEndEvidenceV3 {
+    pub(crate) const fn middle_end_evidence(&self) -> &fe2o3_pliron::ProductionMiddleEndEvidenceV4 {
         &self.middle_end_evidence
     }
 }
@@ -424,18 +424,18 @@ impl ProductionRankedSemanticProgramV1 {
     ) -> Result<
         (
             ProductionRankedSemanticProjectionReceiptV1,
-            AuthenticatedRankedVerificationV3,
+            AuthenticatedRankedVerificationV4,
         ),
-        fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV3,
+        fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV4,
     > {
-        let middle_end_evidence = fe2o3_pliron::ProductionMiddleEndEvidenceV3::try_new(
+        let middle_end_evidence = fe2o3_pliron::ProductionMiddleEndEvidenceV4::try_new(
             self.receipt.semantic(),
             self.receipt.lowering(),
             self.receipt.ranked_ir(),
         )?;
         Ok((
             self.receipt,
-            AuthenticatedRankedVerificationV3 {
+            AuthenticatedRankedVerificationV4 {
                 middle_end_evidence,
             },
         ))

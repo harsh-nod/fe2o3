@@ -4,12 +4,12 @@ use dialect_kernel::AccessKindAttr;
 use dialect_mir::pliron::MirProductionPlironLimitsV1;
 use fe2o3_mir_model::semantic_mir_v1::*;
 use fe2o3_pliron::{
-    InertProductionMiddleEndEvidenceV3, MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V3,
-    MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V3, PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V3,
-    PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V3, PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V3,
-    ProductionConstructionV1, ProductionMiddleEndAssuranceV3,
-    ProductionMiddleEndEvidenceCodecErrorV3, ProductionMiddleEndEvidencePassV3,
-    ProductionMiddleEndEvidenceV3, ProductionRankedBlockV1, ProductionRankedKernelLoweringInputV1,
+    InertProductionMiddleEndEvidenceV4, MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V4,
+    MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V4, PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V4,
+    PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V4, PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V4,
+    ProductionConstructionV1, ProductionMiddleEndAssuranceV4,
+    ProductionMiddleEndEvidenceCodecErrorV4, ProductionMiddleEndEvidencePassV4,
+    ProductionMiddleEndEvidenceV4, ProductionRankedBlockV1, ProductionRankedKernelLoweringInputV1,
     ProductionRankedKernelV1, ProductionRankedOperationV1, ProductionRankedTerminatorV1,
     ProductionRankedValueIdV1, ProductionRankedValueV1, ProductionSemanticMirLimitsV1,
     ProductionSemanticMirOwnerV1, ProductionSessionLimitsV1, ShellLimits,
@@ -183,8 +183,8 @@ fn ranked_input_with_domain(
         .unwrap()
 }
 
-fn evidence(index: u64, ranked_ir: &str) -> ProductionMiddleEndEvidenceV3 {
-    ProductionMiddleEndEvidenceV3::try_new(&semantic_owner(), &ranked_input(index), ranked_ir)
+fn evidence(index: u64, ranked_ir: &str) -> ProductionMiddleEndEvidenceV4 {
+    ProductionMiddleEndEvidenceV4::try_new(&semantic_owner(), &ranked_input(index), ranked_ir)
         .unwrap()
 }
 
@@ -261,14 +261,15 @@ fn layout(bytes: &[u8]) -> Layout {
 #[test]
 fn live_evidence_round_trips_with_exact_internal_success_facts() {
     let live = evidence(7, RANKED_IR);
-    let decoded = InertProductionMiddleEndEvidenceV3::decode(live.canonical_bytes()).unwrap();
+    let decoded = InertProductionMiddleEndEvidenceV4::decode(live.canonical_bytes()).unwrap();
     let wire = layout(live.canonical_bytes());
 
     assert_eq!(decoded.canonical_bytes(), live.canonical_bytes());
-    assert_eq!(&live.canonical_bytes()[8..10], &3_u16.to_le_bytes());
+    assert_eq!(&live.canonical_bytes()[8..10], &4_u16.to_le_bytes());
+    assert_eq!(live.canonical_bytes()[wire.pass_count], 7);
     assert_eq!(
         &live.canonical_bytes()[wire.domain],
-        PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V3
+        PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V4
     );
     assert_eq!(decoded.identity(), live.identity());
     assert!(
@@ -280,14 +281,18 @@ fn live_evidence_round_trips_with_exact_internal_success_facts() {
     assert_ne!(*decoded.source_semantic_identity(), [0; 32]);
     assert_ne!(*decoded.ranked_kernel_identity(), [0; 32]);
     assert_eq!(decoded.ranked_ir(), RANKED_IR);
-    assert_eq!(decoded.policy(), PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V3);
+    assert_eq!(decoded.policy(), PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V4);
     assert_eq!(
         decoded.assurance(),
-        ProductionMiddleEndAssuranceV3::InternalChecksOnly
+        ProductionMiddleEndAssuranceV4::InternalChecksOnly
     );
     assert_eq!(
         decoded.pass_successes().map(|success| success.pass()),
-        PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V3
+        PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V4
+    );
+    assert_eq!(
+        decoded.pass_successes()[0].pass(),
+        ProductionMiddleEndEvidencePassV4::TensorLayout
     );
     for success in decoded.pass_successes() {
         assert!(success.is_clean());
@@ -335,8 +340,8 @@ fn construction_is_deterministic_and_binds_typed_kernel_and_ranked_ir() {
     assert_eq!(
         *first.identity().sha256(),
         [
-            37, 136, 99, 218, 23, 122, 185, 0, 192, 75, 3, 65, 162, 0, 168, 33, 20, 222, 53, 162,
-            223, 231, 10, 83, 54, 135, 69, 89, 187, 118, 205, 53,
+            38, 203, 3, 120, 5, 159, 188, 183, 165, 252, 147, 76, 122, 85, 205, 194, 153, 68,
+            67, 119, 181, 133, 83, 188, 125, 180, 90, 180, 110, 153, 164, 204,
         ]
     );
 
@@ -357,16 +362,20 @@ fn construction_is_deterministic_and_binds_typed_kernel_and_ranked_ir() {
         changed_ir.ranked_kernel_identity()
     );
     assert_ne!(first.identity(), changed_ir.identity());
+}
 
-    let changed_domain_input = ranked_input_with_domain(7, false);
-    let changed_domain =
-        ProductionMiddleEndEvidenceV3::try_new(&semantic_owner(), &changed_domain_input, RANKED_IR)
+#[test]
+fn participant_domain_changes_ranked_and_evidence_identity() {
+    let full = evidence(7, RANKED_IR);
+    let partial_input = ranked_input_with_domain(7, false);
+    let partial =
+        ProductionMiddleEndEvidenceV4::try_new(&semantic_owner(), &partial_input, RANKED_IR)
             .unwrap();
     assert_ne!(
-        first.ranked_kernel_identity(),
-        changed_domain.ranked_kernel_identity()
+        full.ranked_kernel_identity(),
+        partial.ranked_kernel_identity()
     );
-    assert_ne!(first.identity(), changed_domain.identity());
+    assert_ne!(full.identity(), partial.identity());
 }
 
 #[test]
@@ -377,90 +386,90 @@ fn strict_decoder_rejects_schema_policy_success_and_authority_mutations() {
     let mut mutation = canonical.clone();
     mutation[0] ^= 1;
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&mutation),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::InvalidMagic)
+        InertProductionMiddleEndEvidenceV4::decode(&mutation),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::InvalidMagic)
     );
 
     let mut mutation = canonical.clone();
-    mutation[8..10].copy_from_slice(&4_u16.to_le_bytes());
+    mutation[8..10].copy_from_slice(&5_u16.to_le_bytes());
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&mutation),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::UnsupportedVersion(
-            4
+        InertProductionMiddleEndEvidenceV4::decode(&mutation),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::UnsupportedVersion(
+            5
         ))
     );
 
     let mut mutation = canonical.clone();
     mutation[10..12].copy_from_slice(&1_u16.to_le_bytes());
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&mutation),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::UnsupportedFlags(1))
+        InertProductionMiddleEndEvidenceV4::decode(&mutation),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::UnsupportedFlags(1))
     );
 
     let mut mutation = canonical.clone();
     mutation[20] = 1;
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&mutation),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::NonzeroReserved)
+        InertProductionMiddleEndEvidenceV4::decode(&mutation),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::NonzeroReserved)
     );
 
     let mut mutation = canonical.clone();
     mutation[layout.domain.start] ^= 1;
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&mutation),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::InvalidDomain)
+        InertProductionMiddleEndEvidenceV4::decode(&mutation),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::InvalidDomain)
     );
 
     let mut mutation = canonical.clone();
     mutation[layout.policy.start] ^= 1;
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&mutation),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::InvalidPolicy)
+        InertProductionMiddleEndEvidenceV4::decode(&mutation),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::InvalidPolicy)
     );
 
     let mut mutation = canonical.clone();
     mutation[layout.assurance] = 2;
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&mutation),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::InvalidAssurance(2))
+        InertProductionMiddleEndEvidenceV4::decode(&mutation),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::InvalidAssurance(2))
     );
 
     let mut mutation = canonical.clone();
     mutation[layout.equivalence] = 0;
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&mutation),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::SemanticEquivalenceNotEstablished)
+        InertProductionMiddleEndEvidenceV4::decode(&mutation),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::SemanticEquivalenceNotEstablished)
     );
 
     let mut mutation = canonical.clone();
     mutation[layout.source_identity.clone()].fill(0);
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&mutation),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::ZeroSemanticIdentity)
+        InertProductionMiddleEndEvidenceV4::decode(&mutation),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::ZeroSemanticIdentity)
     );
 
     let mut mutation = canonical.clone();
     mutation[layout.kernel_identity.clone()].fill(0);
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&mutation),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::ZeroRankedKernelIdentity)
+        InertProductionMiddleEndEvidenceV4::decode(&mutation),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::ZeroRankedKernelIdentity)
     );
 
     let mut mutation = canonical.clone();
     mutation[layout.pass_count] = 4;
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&mutation),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::InvalidPassCount(4))
+        InertProductionMiddleEndEvidenceV4::decode(&mutation),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::InvalidPassCount(4))
     );
 
     let first_pass = layout.pass_records.start;
     let mut mutation = canonical.clone();
     mutation[first_pass] = 2;
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&mutation),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::InvalidPassOrder {
+        InertProductionMiddleEndEvidenceV4::decode(&mutation),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::InvalidPassOrder {
             index: 0,
-            expected: ProductionMiddleEndEvidencePassV3::MemoryBounds,
+            expected: ProductionMiddleEndEvidencePassV4::TensorLayout,
             actual: 2,
         })
     );
@@ -468,9 +477,9 @@ fn strict_decoder_rejects_schema_policy_success_and_authority_mutations() {
     let mut mutation = canonical.clone();
     mutation[first_pass + 1] = 0;
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&mutation),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::InvalidPassStatus {
-            pass: ProductionMiddleEndEvidencePassV3::MemoryBounds,
+        InertProductionMiddleEndEvidenceV4::decode(&mutation),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::InvalidPassStatus {
+            pass: ProductionMiddleEndEvidencePassV4::TensorLayout,
             actual: 0,
         })
     );
@@ -478,9 +487,9 @@ fn strict_decoder_rejects_schema_policy_success_and_authority_mutations() {
     let mut mutation = canonical.clone();
     mutation[first_pass + 2] = 1;
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&mutation),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::NonzeroFindings {
-            pass: ProductionMiddleEndEvidencePassV3::MemoryBounds,
+        InertProductionMiddleEndEvidenceV4::decode(&mutation),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::NonzeroFindings {
+            pass: ProductionMiddleEndEvidencePassV4::TensorLayout,
             actual: 1,
         })
     );
@@ -489,10 +498,10 @@ fn strict_decoder_rejects_schema_policy_success_and_authority_mutations() {
         let mut mutation = canonical.clone();
         mutation[authority_offset] = 1;
         assert_eq!(
-            InertProductionMiddleEndEvidenceV3::decode(&mutation),
+            InertProductionMiddleEndEvidenceV4::decode(&mutation),
             Err(
-                ProductionMiddleEndEvidenceCodecErrorV3::AuthorityClaimInEncoding {
-                    pass: ProductionMiddleEndEvidencePassV3::MemoryBounds,
+                ProductionMiddleEndEvidenceCodecErrorV4::AuthorityClaimInEncoding {
+                    pass: ProductionMiddleEndEvidencePassV4::TensorLayout,
                 }
             )
         );
@@ -501,8 +510,8 @@ fn strict_decoder_rejects_schema_policy_success_and_authority_mutations() {
     let mut mutation = canonical;
     mutation[first_pass + 8] = 1;
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&mutation),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::NonzeroReserved)
+        InertProductionMiddleEndEvidenceV4::decode(&mutation),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::NonzeroReserved)
     );
 }
 
@@ -514,68 +523,68 @@ fn strict_decoder_rejects_ranked_ir_identity_length_and_truncation_mutations() {
     let mut mutation = canonical.clone();
     mutation[layout.ranked_ir.start] ^= 1;
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&mutation),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::IdentityMismatch)
+        InertProductionMiddleEndEvidenceV4::decode(&mutation),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::IdentityMismatch)
     );
 
     let mut mutation = canonical.clone();
     mutation[layout.ranked_ir.start] = 0;
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&mutation),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::NonCanonicalRankedIrByte { offset: 0 })
+        InertProductionMiddleEndEvidenceV4::decode(&mutation),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::NonCanonicalRankedIrByte { offset: 0 })
     );
 
     let mut mutation = canonical.clone();
     mutation[layout.ranked_ir.start] = 0xff;
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&mutation),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::InvalidRankedIrUtf8)
+        InertProductionMiddleEndEvidenceV4::decode(&mutation),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::InvalidRankedIrUtf8)
     );
 
     let mut mutation = canonical.clone();
     mutation[layout.ranked_ir.end - 1] = b' ';
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&mutation),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::RankedIrMissingFinalNewline)
+        InertProductionMiddleEndEvidenceV4::decode(&mutation),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::RankedIrMissingFinalNewline)
     );
 
     let mut mutation = canonical.clone();
     mutation[layout.ranked_ir_len..layout.ranked_ir_len + 4].copy_from_slice(
-        &u32::try_from(MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V3 + 1)
+        &u32::try_from(MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V4 + 1)
             .unwrap()
             .to_le_bytes(),
     );
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&mutation),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::RankedIrTooLarge {
-            actual: MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V3 + 1,
-            limit: MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V3,
+        InertProductionMiddleEndEvidenceV4::decode(&mutation),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::RankedIrTooLarge {
+            actual: MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V4 + 1,
+            limit: MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V4,
         })
     );
 
     let mut mutation = canonical.clone();
     mutation[layout.identity.clone()].fill(0);
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&mutation),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::ZeroIdentity)
+        InertProductionMiddleEndEvidenceV4::decode(&mutation),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::ZeroIdentity)
     );
 
     let mut mutation = canonical.clone();
     mutation[layout.identity.start] ^= 1;
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&mutation),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::IdentityMismatch)
+        InertProductionMiddleEndEvidenceV4::decode(&mutation),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::IdentityMismatch)
     );
 
     let mut trailing = canonical.clone();
     trailing.push(0);
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&trailing),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::TrailingBytes)
+        InertProductionMiddleEndEvidenceV4::decode(&trailing),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::TrailingBytes)
     );
 
     for length in 0..canonical.len() {
-        assert!(InertProductionMiddleEndEvidenceV3::decode(&canonical[..length]).is_err());
+        assert!(InertProductionMiddleEndEvidenceV4::decode(&canonical[..length]).is_err());
     }
 }
 
@@ -583,34 +592,34 @@ fn strict_decoder_rejects_ranked_ir_identity_length_and_truncation_mutations() {
 fn constructor_and_decoder_enforce_aggregate_bounds_before_copying() {
     let maximum_ir = format!(
         "{}\n",
-        "x".repeat(MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V3 - 1)
+        "x".repeat(MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V4 - 1)
     );
     let maximum = evidence(7, &maximum_ir);
     assert_eq!(
         maximum.canonical_bytes().len(),
-        MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V3
+        MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V4
     );
-    assert!(InertProductionMiddleEndEvidenceV3::decode(maximum.canonical_bytes()).is_ok());
+    assert!(InertProductionMiddleEndEvidenceV4::decode(maximum.canonical_bytes()).is_ok());
 
     let too_large_ir = format!(
         "{}\n",
-        "x".repeat(MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V3)
+        "x".repeat(MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V4)
     );
     assert_eq!(
-        ProductionMiddleEndEvidenceV3::try_new(&semantic_owner(), &ranked_input(7), &too_large_ir,)
+        ProductionMiddleEndEvidenceV4::try_new(&semantic_owner(), &ranked_input(7), &too_large_ir,)
             .unwrap_err(),
-        ProductionMiddleEndEvidenceCodecErrorV3::RankedIrTooLarge {
-            actual: MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V3 + 1,
-            limit: MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V3,
+        ProductionMiddleEndEvidenceCodecErrorV4::RankedIrTooLarge {
+            actual: MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V4 + 1,
+            limit: MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V4,
         }
     );
 
-    let oversized = vec![0; MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V3 + 1];
+    let oversized = vec![0; MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V4 + 1];
     assert_eq!(
-        InertProductionMiddleEndEvidenceV3::decode(&oversized),
-        Err(ProductionMiddleEndEvidenceCodecErrorV3::TooLarge {
-            actual: MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V3 + 1,
-            limit: MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V3,
+        InertProductionMiddleEndEvidenceV4::decode(&oversized),
+        Err(ProductionMiddleEndEvidenceCodecErrorV4::TooLarge {
+            actual: MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V4 + 1,
+            limit: MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V4,
         })
     );
 }
@@ -618,18 +627,18 @@ fn constructor_and_decoder_enforce_aggregate_bounds_before_copying() {
 #[test]
 fn constructor_rejects_noncanonical_ranked_ir() {
     for (ranked_ir, expected) in [
-        ("", ProductionMiddleEndEvidenceCodecErrorV3::EmptyRankedIr),
+        ("", ProductionMiddleEndEvidenceCodecErrorV4::EmptyRankedIr),
         (
             "func @kernel {}",
-            ProductionMiddleEndEvidenceCodecErrorV3::RankedIrMissingFinalNewline,
+            ProductionMiddleEndEvidenceCodecErrorV4::RankedIrMissingFinalNewline,
         ),
         (
             "func @kernel {\r\n}\n",
-            ProductionMiddleEndEvidenceCodecErrorV3::NonCanonicalRankedIrByte { offset: 14 },
+            ProductionMiddleEndEvidenceCodecErrorV4::NonCanonicalRankedIrByte { offset: 14 },
         ),
     ] {
         assert_eq!(
-            ProductionMiddleEndEvidenceV3::try_new(&semantic_owner(), &ranked_input(7), ranked_ir,)
+            ProductionMiddleEndEvidenceV4::try_new(&semantic_owner(), &ranked_input(7), ranked_ir,)
                 .unwrap_err(),
             expected
         );

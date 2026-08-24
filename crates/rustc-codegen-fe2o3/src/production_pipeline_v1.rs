@@ -41,7 +41,7 @@ pub(crate) enum ProductionPipelineErrorV1 {
     SemanticImport(crate::collector::ProductionSemanticImportErrorV1),
     SemanticMiddleEnd(fe2o3_pliron::ProductionSemanticMirErrorV1),
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
-    MiddleEndEvidence(fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV3),
+    MiddleEndEvidence(fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV4),
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     FormalMemoryAdmission(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
     TargetBinding(fe2o3_kernel_ir::VerificationErrors),
@@ -257,7 +257,7 @@ pub(crate) struct RankedVerifiedProductionCompilationV1 {
 /// Kernel IR, correspondence evidence, and the original transaction bindings.
 pub(crate) struct TargetNeutralProductionCompilationV1 {
     lowered: fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
-    ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV3,
+    ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV4,
     bindings: AuthenticatedProductionBindingsV1,
 }
 
@@ -265,7 +265,7 @@ pub(crate) struct TargetNeutralProductionCompilationV1 {
 /// Kernel IR, composed formal/ranked memory evidence, and transaction bindings.
 pub(crate) struct FormalMemoryAdmittedProductionCompilationV1 {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
-    ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV3,
+    ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV4,
     bindings: AuthenticatedProductionBindingsV1,
 }
 
@@ -273,7 +273,7 @@ pub(crate) struct FormalMemoryAdmittedProductionCompilationV1 {
 /// Kernel IR, deterministic gfx942 LLVM text, and transaction bindings.
 pub(crate) struct Gfx942LoweredProductionCompilationV1 {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
-    ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV3,
+    ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV4,
     target_module: fe2o3_kernel_ir::Module,
     llvm_ir: String,
     bindings: AuthenticatedProductionBindingsV1,
@@ -297,7 +297,7 @@ struct PreparedProductionWorkerPublicationV1 {
     rustc_identity_inventory: crate::collector::AuthenticatedRustcIdentityInventoryV3,
     rustc_preflight_plan: crate::collector::AuthenticatedRustcPreflightPlanV3,
     rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
-    ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV3,
+    ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV4,
     prepared: crate::worker_v2_producer::PreparedProductionLineageWorkerHandoffV3,
 }
 

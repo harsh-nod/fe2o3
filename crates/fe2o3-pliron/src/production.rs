@@ -21,11 +21,11 @@ use super::{
     OperationShapeV1, PlironSession, ShellLimits, validate_name,
 };
 
-mod middle_end_evidence_v3;
+mod middle_end_evidence_v4;
 mod ranked;
 mod semantic_mir;
 
-pub use middle_end_evidence_v3::*;
+pub use middle_end_evidence_v4::*;
 pub use ranked::*;
 pub use semantic_mir::*;
 
@@ -450,7 +450,7 @@ impl ProductionPlironSessionV1 {
                 identity: root_identity,
                 ranked_function: materialized.ranked_function,
                 ranked_kernel: materialized.ranked_kernel,
-                general_check_report: None,
+                production_pipeline_report: None,
             },
         );
         self.next_root = next_root;
@@ -720,7 +720,7 @@ mod tests {
             .construct_registered(registered)
             .expect("construction");
         let (verified, root) = session
-            .verify_general_ranked_kernel_checks(stage, root)
+            .verify_production_ranked_kernel_pipeline(stage, root)
             .expect("generic kernel verification");
         session
             .inner

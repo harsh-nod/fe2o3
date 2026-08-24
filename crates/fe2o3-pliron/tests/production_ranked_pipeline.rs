@@ -3,6 +3,7 @@ use dialect_kernel::{
     AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, MemorySpaceAttr, SemanticBinaryKindAttr,
     TensorConvergenceAttr,
 };
+use fe2o3_kernel_analysis::{KernelCheckPassKindV1, PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V1};
 use fe2o3_kernel_ir::{TensorInstructionProfileV1, TensorLayoutContractV1, TensorSymbolicMapV1};
 use fe2o3_pliron::{
     DialectRegistration, HARD_MAX_SESSION_OPERATION_TREE_ITEMS, ProductionConstructionV1,
@@ -214,6 +215,19 @@ fn static_non_gemm_kernel_reaches_safety_verified_lowering_input() {
     .expect("safe static kernel");
 
     assert_eq!(input.kernel().function_name(), "static_copy");
+    assert_eq!(
+        input.production_pipeline_report().pass_order(),
+        &PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V1
+    );
+    assert_eq!(
+        input.production_pipeline_report().pass_order()[0],
+        KernelCheckPassKindV1::TensorLayout
+    );
+    assert!(
+        !input
+            .production_pipeline_report()
+            .grants_compiler_refinement_authority()
+    );
     assert!(input.bounds_report().is_clean());
     assert!(input.tensor_layout_report().is_clean());
     assert!(input.atomic_report().is_clean());
@@ -1071,7 +1085,7 @@ fn builtin_module_cannot_be_relabelled_as_kernel_checks_verified() {
         .construct_registered(registered)
         .expect("empty module");
     assert!(matches!(
-        session.verify_general_ranked_kernel_checks(stage, root),
+        session.verify_production_ranked_kernel_pipeline(stage, root),
         Err(ProductionSessionErrorV1::WrongConstructionKind)
     ));
 }
@@ -1092,7 +1106,7 @@ fn same_session_stage_root_substitution_is_rejected_before_analysis() {
     let (first_stage, _) = session.construct_registered(first).unwrap();
     let (_, second_root) = session.construct_registered(second).unwrap();
     assert!(matches!(
-        session.verify_general_ranked_kernel_checks(first_stage, second_root),
+        session.verify_production_ranked_kernel_pipeline(first_stage, second_root),
         Err(ProductionSessionErrorV1::StageRootMismatch)
     ));
     assert!(!session.is_poisoned());

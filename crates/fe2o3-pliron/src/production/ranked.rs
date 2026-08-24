@@ -20,9 +20,9 @@ use dialect_kernel::{
     TensorConvergenceAttr, TensorLayoutOp,
 };
 use fe2o3_kernel_analysis::{
-    GeneralPlironKernelCheckErrorV1, MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_OPERATIONS,
-    PlironAtomicLegalityReportV1, PlironBarrierReportV1, PlironSemanticRefinementReportV1,
-    PlironTensorLayoutReportV1, PlironWorkgroupMemoryReportV1, ProductionPlironPreloweringErrorV1,
+    MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_OPERATIONS, PlironAtomicLegalityReportV1,
+    PlironBarrierReportV1, PlironSemanticRefinementReportV1, PlironTensorLayoutReportV1,
+    PlironWorkgroupMemoryReportV1, ProductionPlironPreloweringErrorV1,
     ProductionPlironPreloweringReportV1, RankedBoundsReportV1, RankedRaceReportV1,
     require_production_pliron_checks_before_lowering_v1,
 };
@@ -1175,7 +1175,7 @@ pub(super) struct ConstructedRootV1 {
     pub(super) identity: RootIdentityV1,
     pub(super) ranked_function: Option<Ptr<Operation>>,
     pub(super) ranked_kernel: Option<ProductionRankedKernelV1>,
-    pub(super) general_check_report: Option<ProductionPlironPreloweringReportV1>,
+    pub(super) production_pipeline_report: Option<ProductionPlironPreloweringReportV1>,
 }
 
 pub(super) struct MaterializedConstructionV1 {
@@ -1200,7 +1200,7 @@ impl ProductionConstructionV1 {
 }
 
 impl ProductionPlironSessionV1 {
-    fn run_general_kernel_checks_guarded(
+    fn run_production_pipeline_guarded(
         &mut self,
         function: Ptr<Operation>,
     ) -> Result<ProductionPlironPreloweringReportV1, ProductionSessionErrorV1> {
@@ -1210,7 +1210,7 @@ impl ProductionPlironSessionV1 {
         }));
         match result {
             Ok(Ok(report)) => Ok(report),
-            Ok(Err(error)) => Err(production_general_check_error(error)),
+            Ok(Err(error)) => Err(production_pipeline_check_error(error)),
             Err(_) => {
                 self.poisoned = true;
                 Err(ProductionSessionErrorV1::Operation(
@@ -1399,7 +1399,7 @@ impl ProductionPlironSessionV1 {
 
     /// Runs the fixed generic verifier pipeline in one prerequisite-aware
     /// sweep and returns only the final safety typestate.
-    pub fn verify_general_ranked_kernel_checks(
+    pub fn verify_production_ranked_kernel_pipeline(
         &mut self,
         stage: ProductionStageHandleV1<ConstructedGraphStageV1>,
         root: ProductionRootHandleV1<ConstructedGraphStageV1>,
@@ -1420,18 +1420,18 @@ impl ProductionPlironSessionV1 {
         if root.stage != stage.identity || root.identity != record.identity {
             return Err(ProductionSessionErrorV1::StageRootMismatch);
         }
-        if record.general_check_report.is_some() {
+        if record.production_pipeline_report.is_some() {
             return Err(ProductionSessionErrorV1::StaleStage);
         }
         let function = record
             .ranked_function
             .ok_or(ProductionSessionErrorV1::WrongConstructionKind)?;
-        let report = self.run_general_kernel_checks_guarded(function)?;
+        let report = self.run_production_pipeline_guarded(function)?;
         let record = self
             .constructed_roots
             .get_mut(&stage.identity)
             .ok_or(ProductionSessionErrorV1::StaleStage)?;
-        record.general_check_report = Some(report);
+        record.production_pipeline_report = Some(report);
         Ok((
             ProductionStageHandleV1 {
                 owner: stage.owner,
@@ -1468,7 +1468,7 @@ impl ProductionPlironSessionV1 {
             (
                 record.identity,
                 record.ranked_function,
-                record.general_check_report.clone(),
+                record.production_pipeline_report.clone(),
             )
         };
         if root.stage != stage.identity
@@ -1478,7 +1478,7 @@ impl ProductionPlironSessionV1 {
             return Err(ProductionSessionErrorV1::StageRootMismatch);
         }
         let function = function.ok_or(ProductionSessionErrorV1::WrongConstructionKind)?;
-        let revalidated = match self.run_general_kernel_checks_guarded(function) {
+        let revalidated = match self.run_production_pipeline_guarded(function) {
             Ok(report) => report,
             Err(_) => {
                 self.poisoned = true;
@@ -1500,7 +1500,7 @@ impl ProductionPlironSessionV1 {
             .ranked_kernel
             .ok_or(ProductionSessionErrorV1::WrongConstructionKind)?;
         let report = record
-            .general_check_report
+            .production_pipeline_report
             .ok_or(ProductionSessionErrorV1::StageRootMismatch)?;
         if !report.is_clean() {
             return Err(ProductionSessionErrorV1::RankedRecipe(
@@ -1509,24 +1509,9 @@ impl ProductionPlironSessionV1 {
                 ),
             ));
         }
-        let (tensor_layout_report, general_report) = report.into_parts();
-        let (
-            bounds_report,
-            atomic_report,
-            race_report,
-            barrier_report,
-            workgroup_report,
-            semantic_report,
-        ) = general_report.into_parts();
         Ok(ProductionRankedKernelLoweringInputV1 {
             kernel,
-            tensor_layout_report,
-            bounds_report,
-            atomic_report,
-            race_report,
-            barrier_report,
-            workgroup_report,
-            semantic_report,
+            production_pipeline_report: report,
             _session: self,
             _stage: stage,
             _root: root,
@@ -1534,30 +1519,29 @@ impl ProductionPlironSessionV1 {
     }
 }
 
-fn production_general_check_error(
+fn production_pipeline_check_error(
     error: ProductionPlironPreloweringErrorV1,
 ) -> ProductionSessionErrorV1 {
-    let error = match error {
-        ProductionPlironPreloweringErrorV1::TensorLayout(error) => {
-            return ProductionSessionErrorV1::RankedTensorLayout(error);
-        }
-        ProductionPlironPreloweringErrorV1::General(error) => error,
-    };
     match error {
-        GeneralPlironKernelCheckErrorV1::Bounds(error) => {
+        ProductionPlironPreloweringErrorV1::TensorLayout(error) => {
+            ProductionSessionErrorV1::RankedTensorLayout(error)
+        }
+        ProductionPlironPreloweringErrorV1::Bounds(error) => {
             ProductionSessionErrorV1::RankedBounds(error)
         }
-        GeneralPlironKernelCheckErrorV1::Atomic(error) => {
+        ProductionPlironPreloweringErrorV1::Atomic(error) => {
             ProductionSessionErrorV1::RankedAtomic(error)
         }
-        GeneralPlironKernelCheckErrorV1::Race(error) => ProductionSessionErrorV1::RankedRace(error),
-        GeneralPlironKernelCheckErrorV1::Barrier(error) => {
+        ProductionPlironPreloweringErrorV1::Race(error) => {
+            ProductionSessionErrorV1::RankedRace(error)
+        }
+        ProductionPlironPreloweringErrorV1::Barrier(error) => {
             ProductionSessionErrorV1::RankedBarrier(error)
         }
-        GeneralPlironKernelCheckErrorV1::Workgroup(error) => {
+        ProductionPlironPreloweringErrorV1::Workgroup(error) => {
             ProductionSessionErrorV1::RankedWorkgroup(error)
         }
-        GeneralPlironKernelCheckErrorV1::Semantic(error) => {
+        ProductionPlironPreloweringErrorV1::Semantic(error) => {
             ProductionSessionErrorV1::RankedSemantic(error)
         }
     }
@@ -2038,13 +2022,7 @@ fn materialize_terminator(
 #[must_use = "safety-verified ranked input must be consumed by a checked lowering stage"]
 pub struct ProductionRankedKernelLoweringInputV1 {
     kernel: ProductionRankedKernelV1,
-    tensor_layout_report: PlironTensorLayoutReportV1,
-    bounds_report: RankedBoundsReportV1,
-    atomic_report: PlironAtomicLegalityReportV1,
-    race_report: RankedRaceReportV1,
-    barrier_report: PlironBarrierReportV1,
-    workgroup_report: PlironWorkgroupMemoryReportV1,
-    semantic_report: PlironSemanticRefinementReportV1,
+    production_pipeline_report: ProductionPlironPreloweringReportV1,
     _session: ProductionPlironSessionV1,
     _stage: ProductionStageHandleV1<KernelChecksVerifiedGraphStageV1>,
     _root: ProductionRootHandleV1<KernelChecksVerifiedGraphStageV1>,
@@ -2076,42 +2054,41 @@ impl ProductionRankedKernelLoweringInputV1 {
         &self.kernel
     }
 
+    /// Indivisible lineage from the mandatory seven-pass production pipeline.
+    pub const fn production_pipeline_report(&self) -> &ProductionPlironPreloweringReportV1 {
+        &self.production_pipeline_report
+    }
+
     pub const fn bounds_report(&self) -> &RankedBoundsReportV1 {
-        &self.bounds_report
+        self.production_pipeline_report.bounds()
     }
 
     pub const fn tensor_layout_report(&self) -> &PlironTensorLayoutReportV1 {
-        &self.tensor_layout_report
+        self.production_pipeline_report.tensor_layout()
     }
 
     pub const fn atomic_report(&self) -> &PlironAtomicLegalityReportV1 {
-        &self.atomic_report
+        self.production_pipeline_report.atomics()
     }
 
     pub const fn race_report(&self) -> &RankedRaceReportV1 {
-        &self.race_report
+        self.production_pipeline_report.race()
     }
 
     pub const fn barrier_report(&self) -> &PlironBarrierReportV1 {
-        &self.barrier_report
+        self.production_pipeline_report.barriers()
     }
 
     pub const fn workgroup_report(&self) -> &PlironWorkgroupMemoryReportV1 {
-        &self.workgroup_report
+        self.production_pipeline_report.workgroup()
     }
 
     pub const fn semantic_report(&self) -> &PlironSemanticRefinementReportV1 {
-        &self.semantic_report
+        self.production_pipeline_report.semantics()
     }
 
     pub fn all_mandatory_reports_are_clean(&self) -> bool {
-        self.tensor_layout_report.is_clean()
-            && self.bounds_report.is_clean()
-            && self.atomic_report.is_clean()
-            && self.race_report.is_clean()
-            && self.barrier_report.is_clean()
-            && self.workgroup_report.is_clean()
-            && self.semantic_report.is_clean()
+        self.production_pipeline_report.is_clean()
     }
 
     pub const fn grants_artifact_or_launch_authority(&self) -> bool {
@@ -2175,7 +2152,7 @@ pub fn compile_ranked_kernel_for_lowering_v1(
         .construct_registered(registered)
         .map_err(ProductionRankedCompileErrorV1::Session)?;
     let (verified, root) = session
-        .verify_general_ranked_kernel_checks(constructed, root)
+        .verify_production_ranked_kernel_pipeline(constructed, root)
         .map_err(ProductionRankedCompileErrorV1::Session)?;
     session
         .prepare_ranked_lowering(verified, root)
