@@ -4036,6 +4036,10 @@ fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
     let workspace = workspace();
     let backend = build_backend(&workspace);
     assert!(TILED_GEMM_FIXTURE.contains("launch(required = [64, 1, 1], max = [64, 1, 1])"));
+    assert!(TILED_GEMM_FIXTURE.contains("Tiled2D<Index1D, 64, 16, 16, 4>"));
+    assert!(TILED_GEMM_FIXTURE.contains("checked_tiled_2d::<64, 16, 16, 4>()"));
+    assert!(TILED_GEMM_FIXTURE.contains("get_tiled_2d_mut"));
+    assert!(!TILED_GEMM_FIXTURE.contains("unsafe"));
     assert!(
         !TILED_GEMM_FIXTURE.contains("static __fe2o3_kernel_frontend_contract_v1_tiled_gemm_v1")
     );
@@ -4054,7 +4058,7 @@ fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
         exact.status.success()
             && exact_stderr.contains("consumed its single-use frontend receipt")
             && exact_stderr
-                .contains("15c4577f61babefb12a9e9e5622154d30de53f2dfccac669bf691a8074178cd3")
+                .contains("8fbc1de394eb46ff9103a1842ae248bc5bfcdbc6820bd60525153ec066bcc18a")
             && exact_stderr.contains("explicit kernarg 64 bytes, complete COV6 kernarg 320 bytes")
             && exact_stderr.contains("exact one-wave 64x1x1 one-tile launch with no LDS")
             && exact_stderr.contains("selected canonical fe2o3::tiled_gemm_v1")
@@ -4087,6 +4091,30 @@ fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
         "same-name source mutation minted tiled authority:\n{same_name_stderr}"
     );
     assert_tiled_gemm_published_no_handoff(&same_name_output);
+
+    let mapping_source = TILED_GEMM_FIXTURE.replacen(
+        "d.get_tiled_2d_mut(&output_tile, 0, 16, 16, 16)",
+        "d.get_tiled_2d_mut(&output_tile, 1, 16, 16, 16)",
+        1,
+    );
+    assert_ne!(mapping_source, TILED_GEMM_FIXTURE);
+    let mapping_output = TestOutputDir::new(&workspace);
+    let mapping = compile_tiled_gemm(
+        &workspace,
+        backend,
+        &mapping_output,
+        &mapping_source,
+        "gfx942:xnack-",
+        &[],
+    );
+    let mapping_stderr = stderr(&mapping);
+    assert!(
+        !mapping.status.success()
+            && mapping_stderr.contains("portable MIR identity mismatch")
+            && !mapping_stderr.contains("published tiled GEMM Worker V2 handoff"),
+        "output-component mapping mutation minted tiled authority:\n{mapping_stderr}"
+    );
+    assert_tiled_gemm_published_no_handoff(&mapping_output);
 
     let lookalike_source = TILED_GEMM_FIXTURE
         .replacen(

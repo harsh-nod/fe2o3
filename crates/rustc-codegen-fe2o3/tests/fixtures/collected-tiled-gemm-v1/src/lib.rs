@@ -1,7 +1,7 @@
 #![allow(non_upper_case_globals)]
 
 use fe2o3_device::{
-    Bf16MfmaFragment, Blocked, DeviceMatrix, DisjointSlice, F32AccumulatorFragment, Index1D,
+    Bf16MfmaFragment, DeviceMatrix, DisjointSlice, F32AccumulatorFragment, Index1D, Tiled2D,
     kernel, thread,
 };
 
@@ -14,7 +14,7 @@ pub fn tiled_gemm_v1(
     a: &[u16],
     b: &[u16],
     c: &[f32],
-    mut d: DisjointSlice<f32, Blocked<Index1D, 16, 4>>,
+    mut d: DisjointSlice<f32, Tiled2D<Index1D, 64, 16, 16, 4>>,
 ) {
     let thread_index = thread::index_1d();
     let lane = thread_index.get();
@@ -41,22 +41,22 @@ pub fn tiled_gemm_v1(
         c[(depth_base + 3) * 16 + lane_column],
     ]);
 
-    let matrix = DeviceMatrix::current();
-    let result = matrix.multiply_accumulate(lhs, rhs, accumulator).into_values();
-    let Some(output_block) = thread_index.checked_block::<16, 4>() else {
+    let Some(output_tile) = thread_index.checked_tiled_2d::<64, 16, 16, 4>() else {
         return;
     };
+    let matrix = DeviceMatrix::current();
+    let result = matrix.multiply_accumulate(lhs, rhs, accumulator).into_values();
 
-    if let Some(output) = d.get_block_mut(&output_block, 0) {
+    if let Some(output) = d.get_tiled_2d_mut(&output_tile, 0, 16, 16, 16) {
         *output = result[0];
     }
-    if let Some(output) = d.get_block_mut(&output_block, 1) {
+    if let Some(output) = d.get_tiled_2d_mut(&output_tile, 1, 16, 16, 16) {
         *output = result[1];
     }
-    if let Some(output) = d.get_block_mut(&output_block, 2) {
+    if let Some(output) = d.get_tiled_2d_mut(&output_tile, 2, 16, 16, 16) {
         *output = result[2];
     }
-    if let Some(output) = d.get_block_mut(&output_block, 3) {
+    if let Some(output) = d.get_tiled_2d_mut(&output_tile, 3, 16, 16, 16) {
         *output = result[3];
     }
 }
