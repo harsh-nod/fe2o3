@@ -41,8 +41,8 @@ use fe2o3_mir_model::{
     semantic_option_producers_v1,
 };
 use fe2o3_pliron::{
-    ProductionRankedKernelLoweringInputV1, ProductionRankedOperationV1, ProductionRankedValueV1,
-    ProductionSemanticMirErrorV1, ProductionSemanticMirOwnerV1,
+    ProductionRankedKernelLoweringInputV1, ProductionRankedOperationV1, ProductionRankedValueIdV1,
+    ProductionRankedValueV1, ProductionSemanticMirErrorV1, ProductionSemanticMirOwnerV1,
 };
 
 const DEFAULT_MAX_FUNCTIONS_V1: usize = 1_024;
@@ -862,6 +862,61 @@ struct SemanticAccessSiteV1 {
     ordinal: u32,
 }
 
+// All correlation indexing and dependency propagation share this aggregate cap.
+const UNSUPPORTED_INDEX_CORRELATION_STEPS_PER_OPERATION_V1: usize = 64;
+
+struct UnsupportedIndexCorrelationBudgetV1 {
+    remaining: usize,
+}
+
+impl UnsupportedIndexCorrelationBudgetV1 {
+    fn charge(&mut self) -> Option<()> {
+        self.remaining = self.remaining.checked_sub(1)?;
+        Some(())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct KirMemoryConsumerV1 {
+    location: FunctionOperationLocation,
+    pointer: ValueId,
+    access: dialect_kernel::AccessKindAttr,
+    memory_space: dialect_kernel::MemorySpaceAttr,
+}
+
+struct KirCorrelationIndexV1<'module> {
+    blocks: BTreeMap<BlockId, &'module [Operation]>,
+    operations: BTreeMap<FunctionOperationLocation, &'module Operation>,
+    definitions: BTreeMap<ValueId, &'module Operation>,
+    pointer_dependents: BTreeMap<ValueId, BTreeSet<ValueId>>,
+    memory_consumers: Vec<KirMemoryConsumerV1>,
+}
+
+#[derive(Clone, Copy)]
+struct RankedViewDefinitionV1 {
+    allocation_origin: u64,
+    memory_space: dialect_kernel::MemorySpaceAttr,
+}
+
+#[derive(Clone, Copy)]
+struct IndexedRankedAccessSourceV1 {
+    ranked_block: u32,
+    ranked_operation: u32,
+    access: dialect_kernel::AccessKindAttr,
+    view: ProductionRankedValueV1,
+}
+
+struct RankedCorrelationIndexV1 {
+    sources_by_site: BTreeMap<SemanticAccessSiteV1, IndexedRankedAccessSourceV1>,
+    view_definitions: BTreeMap<ProductionRankedValueIdV1, RankedViewDefinitionV1>,
+}
+
+#[derive(Clone, Copy)]
+struct IndexedUnsupportedReasonV1 {
+    pointer: ValueId,
+    allocation_parameter: u32,
+}
+
 fn unsupported_indices_match_ranked_sources(
     module: &Module,
     correspondence: &SemanticKirCorrespondenceV1,
@@ -870,7 +925,7 @@ fn unsupported_indices_match_ranked_sources(
     reasons: &[FormalMemoryIncompleteReason],
     max_operations: usize,
 ) -> bool {
-    if reasons.len() > max_operations || !ranked_access_sources_are_well_formed(lowering, sources) {
+    if reasons.len() > max_operations || sources.len() > max_operations {
         return false;
     }
     let [kernel] = module.kernels.as_slice() else {
@@ -886,23 +941,26 @@ fn unsupported_indices_match_ranked_sources(
     let Some(body) = function.body.as_ref() else {
         return false;
     };
-    let operation_count = body.blocks.iter().try_fold(0_usize, |count, block| {
-        count.checked_add(block.operations.len())
-    });
-    if operation_count.is_none_or(|count| count > max_operations) {
+    let Some(steps) =
+        max_operations.checked_mul(UNSUPPORTED_INDEX_CORRELATION_STEPS_PER_OPERATION_V1)
+    else {
         return false;
-    }
-    let definitions = body
-        .blocks
-        .iter()
-        .flat_map(|block| block.operations.iter())
-        .flat_map(|operation| {
-            operation
-                .result_ids()
-                .map(move |result| (result, operation))
-        })
-        .collect::<BTreeMap<_, _>>();
-    let mut used_ranked_locations = BTreeSet::new();
+    };
+    let mut budget = UnsupportedIndexCorrelationBudgetV1 { remaining: steps };
+    let Some(kir) = build_kir_correlation_index(body, max_operations, &mut budget) else {
+        return false;
+    };
+    let Some(semantic_sites) = index_semantic_access_sites(correspondence, &kir, &mut budget)
+    else {
+        return false;
+    };
+    let Some(ranked) = index_ranked_correlation(lowering, sources, max_operations, &mut budget)
+    else {
+        return false;
+    };
+
+    let mut indexed_reasons = Vec::with_capacity(reasons.len());
+    let mut reason_pointers = BTreeSet::new();
     for reason in reasons {
         let FormalMemoryIncompleteReason::UnsupportedIndexExpression {
             location,
@@ -912,7 +970,7 @@ fn unsupported_indices_match_ranked_sources(
         else {
             return false;
         };
-        let Some(defining_operation) = operation_at(body, *location) else {
+        let Some(defining_operation) = kir.operations.get(location) else {
             return false;
         };
         let OperationKind::GetElementPointer { offset, .. } = defining_operation.kind else {
@@ -921,61 +979,51 @@ fn unsupported_indices_match_ranked_sources(
         let [pointer] = defining_operation.results.as_slice() else {
             return false;
         };
-        if offset != *index {
+        if offset != *index
+            || !kir
+                .definitions
+                .get(&pointer.id)
+                .is_some_and(|definition| std::ptr::eq(*definition, *defining_operation))
+            || budget.charge().is_none()
+        {
             return false;
         }
-        let mut consumers = Vec::new();
-        for block in &body.blocks {
-            for (operation_index, operation) in block.operations.iter().enumerate() {
-                let Some((candidate_pointer, expected_access, expected_memory_space)) =
-                    kir_memory_access(operation)
-                else {
-                    continue;
-                };
-                let Some(mut budget) = max_operations.checked_mul(8) else {
-                    return false;
-                };
-                let depends = pointer_depends_on(
-                    candidate_pointer,
-                    pointer.id,
-                    &definitions,
-                    &mut budget,
-                    &mut BTreeSet::new(),
-                );
-                let Ok(depends) = depends else {
-                    return false;
-                };
-                if depends {
-                    consumers.push((
-                        FunctionOperationLocation::new(block.id, operation_index),
-                        expected_access,
-                        expected_memory_space,
-                    ));
-                }
-            }
-        }
-        let [(consumer, expected_access, expected_memory_space)] = consumers.as_slice() else {
-            return false;
-        };
-        let Some(site) = semantic_access_site(body, correspondence, *consumer) else {
-            return false;
-        };
-        let mut matching_sources = sources.iter().filter(|source| {
-            source.semantic_block == site.block
-                && source.semantic_statement == site.statement
-                && source.semantic_access_ordinal == site.ordinal
+        indexed_reasons.push(IndexedUnsupportedReasonV1 {
+            pointer: pointer.id,
+            allocation_parameter: allocation.parameter_index(),
         });
-        let Some(source) = matching_sources.next() else {
+        reason_pointers.insert(pointer.id);
+    }
+    let Some(consumers_by_pointer) =
+        propagate_pointer_consumers(&kir, &reason_pointers, &mut budget)
+    else {
+        return false;
+    };
+
+    let mut used_ranked_locations = BTreeSet::new();
+    for reason in indexed_reasons {
+        if budget.charge().is_none() {
+            return false;
+        }
+        let Some(consumers) = consumers_by_pointer.get(&reason.pointer) else {
             return false;
         };
-        if matching_sources.next().is_some()
-            || !used_ranked_locations.insert((source.ranked_block, source.ranked_operation))
-            || !ranked_source_matches_allocation(
-                lowering,
+        let [consumer] = consumers.as_slice() else {
+            return false;
+        };
+        let Some(site) = semantic_sites.get(&consumer.location) else {
+            return false;
+        };
+        let Some(source) = ranked.sources_by_site.get(site) else {
+            return false;
+        };
+        if !used_ranked_locations.insert((source.ranked_block, source.ranked_operation))
+            || !indexed_ranked_source_matches_allocation(
+                &ranked,
                 source,
-                *expected_access,
-                *expected_memory_space,
-                allocation.parameter_index(),
+                consumer.access,
+                consumer.memory_space,
+                reason.allocation_parameter,
             )
         {
             return false;
@@ -984,11 +1032,159 @@ fn unsupported_indices_match_ranked_sources(
     true
 }
 
-fn operation_at(body: &FunctionBody, location: FunctionOperationLocation) -> Option<&Operation> {
-    body.blocks
-        .iter()
-        .find(|block| block.id == location.block)
-        .and_then(|block| block.operations.get(location.operation_index))
+fn build_kir_correlation_index<'module>(
+    body: &'module FunctionBody,
+    max_operations: usize,
+    budget: &mut UnsupportedIndexCorrelationBudgetV1,
+) -> Option<KirCorrelationIndexV1<'module>> {
+    let mut blocks = BTreeMap::new();
+    let mut operations = BTreeMap::new();
+    let mut definitions = BTreeMap::new();
+    let mut memory_consumers = Vec::new();
+    let mut operation_count = 0_usize;
+    for block in &body.blocks {
+        budget.charge()?;
+        if blocks
+            .insert(block.id, block.operations.as_slice())
+            .is_some()
+        {
+            return None;
+        }
+        for (operation_index, operation) in block.operations.iter().enumerate() {
+            operation_count = operation_count.checked_add(1)?;
+            if operation_count > max_operations {
+                return None;
+            }
+            budget.charge()?;
+            let location = FunctionOperationLocation::new(block.id, operation_index);
+            if operations.insert(location, operation).is_some() {
+                return None;
+            }
+            for result in &operation.results {
+                budget.charge()?;
+                if definitions.insert(result.id, operation).is_some() {
+                    return None;
+                }
+            }
+            if let Some((pointer, access, memory_space)) = kir_memory_access(operation) {
+                budget.charge()?;
+                memory_consumers.push(KirMemoryConsumerV1 {
+                    location,
+                    pointer,
+                    access,
+                    memory_space,
+                });
+            }
+        }
+    }
+
+    let mut pointer_dependents = BTreeMap::<ValueId, BTreeSet<ValueId>>::new();
+    let mut pointer_indegree = BTreeMap::<ValueId, usize>::new();
+    for operation in operations.values() {
+        budget.charge()?;
+        let dependencies = match &operation.kind {
+            OperationKind::GetElementPointer { base, .. } => Some([Some(*base), None]),
+            OperationKind::Cast { value, .. } => Some([Some(*value), None]),
+            OperationKind::Select {
+                true_value,
+                false_value,
+                ..
+            } => Some([Some(*true_value), Some(*false_value)]),
+            _ => None,
+        };
+        let Some(dependencies) = dependencies else {
+            continue;
+        };
+        for result in &operation.results {
+            for dependency in dependencies.into_iter().flatten() {
+                budget.charge()?;
+                if pointer_dependents
+                    .entry(dependency)
+                    .or_default()
+                    .insert(result.id)
+                {
+                    budget.charge()?;
+                    pointer_indegree.entry(dependency).or_insert(0);
+                    let degree = pointer_indegree.entry(result.id).or_insert(0);
+                    *degree = degree.checked_add(1)?;
+                }
+            }
+        }
+    }
+    if pointer_dependency_graph_has_cycle(&pointer_dependents, pointer_indegree, budget)? {
+        return None;
+    }
+    Some(KirCorrelationIndexV1 {
+        blocks,
+        operations,
+        definitions,
+        pointer_dependents,
+        memory_consumers,
+    })
+}
+
+fn pointer_dependency_graph_has_cycle(
+    outgoing: &BTreeMap<ValueId, BTreeSet<ValueId>>,
+    mut indegree: BTreeMap<ValueId, usize>,
+    budget: &mut UnsupportedIndexCorrelationBudgetV1,
+) -> Option<bool> {
+    let mut ready = BTreeSet::new();
+    for (value, degree) in &indegree {
+        budget.charge()?;
+        if *degree == 0 {
+            ready.insert(*value);
+        }
+    }
+    let mut visited = 0_usize;
+    while let Some(value) = ready.pop_first() {
+        budget.charge()?;
+        visited = visited.checked_add(1)?;
+        for result in outgoing.get(&value).into_iter().flatten() {
+            budget.charge()?;
+            let degree = indegree.get_mut(result)?;
+            *degree = degree.checked_sub(1)?;
+            if *degree == 0 {
+                ready.insert(*result);
+            }
+        }
+    }
+    Some(visited != indegree.len())
+}
+
+fn propagate_pointer_consumers(
+    kir: &KirCorrelationIndexV1<'_>,
+    roots: &BTreeSet<ValueId>,
+    budget: &mut UnsupportedIndexCorrelationBudgetV1,
+) -> Option<BTreeMap<ValueId, Vec<KirMemoryConsumerV1>>> {
+    let mut roots_by_value = BTreeMap::<ValueId, BTreeSet<ValueId>>::new();
+    let mut worklist = VecDeque::new();
+    for root in roots {
+        budget.charge()?;
+        roots_by_value.entry(*root).or_default().insert(*root);
+        worklist.push_back((*root, *root));
+    }
+    while let Some((value, root)) = worklist.pop_front() {
+        budget.charge()?;
+        for dependent in kir.pointer_dependents.get(&value).into_iter().flatten() {
+            budget.charge()?;
+            if roots_by_value.entry(*dependent).or_default().insert(root) {
+                budget.charge()?;
+                worklist.push_back((*dependent, root));
+            }
+        }
+    }
+    let mut consumers_by_root = BTreeMap::<ValueId, Vec<KirMemoryConsumerV1>>::new();
+    for consumer in &kir.memory_consumers {
+        budget.charge()?;
+        let Some(dependencies) = roots_by_value.get(&consumer.pointer) else {
+            continue;
+        };
+        for root in dependencies {
+            budget.charge()?;
+            consumers_by_root.entry(*root).or_default().push(*consumer);
+        }
+    }
+    Some(consumers_by_root)
 }
 
 fn kir_memory_access(
@@ -1033,182 +1229,209 @@ fn is_kir_ranked_access(operation: &Operation) -> bool {
     kir_memory_access(operation).is_some() || matches!(operation.kind, OperationKind::Atomic(_))
 }
 
-fn pointer_depends_on(
-    value: ValueId,
-    target: ValueId,
-    definitions: &BTreeMap<ValueId, &Operation>,
-    budget: &mut usize,
-    visited: &mut BTreeSet<ValueId>,
-) -> Result<bool, ()> {
-    if value == target {
-        return Ok(true);
-    }
-    if !visited.insert(value) {
-        return Ok(false);
-    }
-    *budget = budget.checked_sub(1).ok_or(())?;
-    let Some(operation) = definitions.get(&value) else {
-        return Ok(false);
-    };
-    match operation.kind {
-        OperationKind::GetElementPointer { base, .. } => {
-            pointer_depends_on(base, target, definitions, budget, visited)
-        }
-        OperationKind::Cast { value, .. } => {
-            pointer_depends_on(value, target, definitions, budget, visited)
-        }
-        OperationKind::Select {
-            true_value,
-            false_value,
-            ..
-        } => {
-            if pointer_depends_on(true_value, target, definitions, budget, visited)? {
-                Ok(true)
-            } else {
-                pointer_depends_on(false_value, target, definitions, budget, visited)
-            }
-        }
-        _ => Ok(false),
-    }
-}
-
-fn semantic_access_site(
-    body: &FunctionBody,
+fn index_semantic_access_sites(
     correspondence: &SemanticKirCorrespondenceV1,
-    location: FunctionOperationLocation,
-) -> Option<SemanticAccessSiteV1> {
-    let statement = correspondence
-        .statement_operation_spans()
-        .iter()
-        .find_map(|span| {
-            operation_is_in_span(
-                location,
-                span.kernel_ir_block(),
-                span.first_operation_ordinal(),
-                span.operation_count(),
-            )
-            .then_some((
-                span.semantic_block().index(),
-                Some(span.statement_ordinal()),
-                span,
-            ))
-        });
-    let terminator = correspondence
-        .terminator_operation_spans()
-        .iter()
-        .find_map(|span| {
-            operation_is_in_span(
-                location,
-                span.kernel_ir_block(),
-                span.first_operation_ordinal(),
-                span.operation_count(),
-            )
-            .then_some((
-                span.semantic_block().index(),
-                None,
-                span.first_operation_ordinal(),
-                span.operation_count(),
-            ))
-        });
-    if statement.is_some() == terminator.is_some() {
-        return None;
-    }
-    let (block, statement, first, count) = if let Some((block, statement, span)) = statement {
-        (
-            block,
-            statement,
+    kir: &KirCorrelationIndexV1<'_>,
+    budget: &mut UnsupportedIndexCorrelationBudgetV1,
+) -> Option<BTreeMap<FunctionOperationLocation, SemanticAccessSiteV1>> {
+    let mut sites = BTreeMap::new();
+    for span in correspondence.statement_operation_spans() {
+        budget.charge()?;
+        index_semantic_access_span(
+            kir,
+            span.kernel_ir_block(),
             span.first_operation_ordinal(),
             span.operation_count(),
-        )
-    } else {
-        terminator?
-    };
-    let kir_block = body
-        .blocks
-        .iter()
-        .find(|candidate| candidate.id == location.block)?;
-    let first = first as usize;
-    let end = first.checked_add(count as usize)?;
-    let ordinal = kir_block
-        .operations
-        .get(first..location.operation_index)?
-        .iter()
-        .filter(|operation| is_kir_ranked_access(operation))
-        .count();
-    if location.operation_index >= end {
-        return None;
+            span.semantic_block().index(),
+            Some(span.statement_ordinal()),
+            &mut sites,
+            budget,
+        )?;
     }
-    Some(SemanticAccessSiteV1 {
-        block,
-        statement,
-        ordinal: u32::try_from(ordinal).ok()?,
-    })
+    for span in correspondence.terminator_operation_spans() {
+        budget.charge()?;
+        index_semantic_access_span(
+            kir,
+            span.kernel_ir_block(),
+            span.first_operation_ordinal(),
+            span.operation_count(),
+            span.semantic_block().index(),
+            None,
+            &mut sites,
+            budget,
+        )?;
+    }
+    Some(sites)
 }
 
-fn operation_is_in_span(
-    location: FunctionOperationLocation,
+#[allow(clippy::too_many_arguments)]
+fn index_semantic_access_span(
+    kir: &KirCorrelationIndexV1<'_>,
     block: BlockId,
     first: u32,
     count: u32,
-) -> bool {
-    location.block == block
-        && (first as usize..(first as usize).saturating_add(count as usize))
-            .contains(&location.operation_index)
+    semantic_block: u32,
+    semantic_statement: Option<u32>,
+    sites: &mut BTreeMap<FunctionOperationLocation, SemanticAccessSiteV1>,
+    budget: &mut UnsupportedIndexCorrelationBudgetV1,
+) -> Option<()> {
+    let operations = kir.blocks.get(&block)?;
+    let first = first as usize;
+    let end = first.checked_add(count as usize)?;
+    let operations = operations.get(first..end)?;
+    let mut access_ordinal = 0_u32;
+    for (relative_ordinal, operation) in operations.iter().enumerate() {
+        budget.charge()?;
+        if !is_kir_ranked_access(operation) {
+            continue;
+        }
+        let operation_index = first.checked_add(relative_ordinal)?;
+        let location = FunctionOperationLocation::new(block, operation_index);
+        let site = SemanticAccessSiteV1 {
+            block: semantic_block,
+            statement: semantic_statement,
+            ordinal: access_ordinal,
+        };
+        if sites.insert(location, site).is_some() {
+            return None;
+        }
+        access_ordinal = access_ordinal.checked_add(1)?;
+    }
+    Some(())
 }
 
-fn ranked_source_matches_allocation(
+fn index_ranked_correlation(
     lowering: &ProductionRankedKernelLoweringInputV1,
-    source: &ProductionRankedAccessSourceV1,
+    sources: &[ProductionRankedAccessSourceV1],
+    max_operations: usize,
+    budget: &mut UnsupportedIndexCorrelationBudgetV1,
+) -> Option<RankedCorrelationIndexV1> {
+    if sources.len() > DEFAULT_MAX_OPERATIONS_V1 {
+        return None;
+    }
+    let mut operation_count = 0_usize;
+    let mut view_definitions = BTreeMap::new();
+    for block in lowering.kernel().blocks() {
+        budget.charge()?;
+        for operation in block.operations() {
+            operation_count = operation_count.checked_add(1)?;
+            if operation_count > max_operations {
+                return None;
+            }
+            budget.charge()?;
+            let definition = match operation {
+                ProductionRankedOperationV1::View {
+                    result,
+                    allocation_origin,
+                    ..
+                } => Some((
+                    *result,
+                    RankedViewDefinitionV1 {
+                        allocation_origin: *allocation_origin,
+                        memory_space: dialect_kernel::MemorySpaceAttr::Global,
+                    },
+                )),
+                ProductionRankedOperationV1::ViewInSpace {
+                    result,
+                    memory_space,
+                    allocation_origin,
+                    ..
+                } => Some((
+                    *result,
+                    RankedViewDefinitionV1 {
+                        allocation_origin: *allocation_origin,
+                        memory_space: *memory_space,
+                    },
+                )),
+                _ => None,
+            };
+            if let Some((result, definition)) = definition {
+                budget.charge()?;
+                if view_definitions.insert(result, definition).is_some() {
+                    return None;
+                }
+            }
+        }
+    }
+
+    let mut ranked_locations = BTreeSet::new();
+    let mut source_ordinals = BTreeMap::<(u32, Option<u32>), BTreeSet<u32>>::new();
+    let mut sources_by_site = BTreeMap::new();
+    for source in sources {
+        budget.charge()?;
+        let operation = lowering
+            .kernel()
+            .blocks()
+            .get(source.ranked_block as usize)?
+            .operations()
+            .get(source.ranked_operation as usize)?;
+        let (access, view) = match operation {
+            ProductionRankedOperationV1::Access { kind, view, .. }
+            | ProductionRankedOperationV1::AtomicAccess { kind, view, .. } => (*kind, *view),
+            _ => return None,
+        };
+        if !ranked_locations.insert((source.ranked_block, source.ranked_operation))
+            || !source_ordinals
+                .entry((source.semantic_block, source.semantic_statement))
+                .or_default()
+                .insert(source.semantic_access_ordinal)
+        {
+            return None;
+        }
+        let site = SemanticAccessSiteV1 {
+            block: source.semantic_block,
+            statement: source.semantic_statement,
+            ordinal: source.semantic_access_ordinal,
+        };
+        if sources_by_site
+            .insert(
+                site,
+                IndexedRankedAccessSourceV1 {
+                    ranked_block: source.ranked_block,
+                    ranked_operation: source.ranked_operation,
+                    access,
+                    view,
+                },
+            )
+            .is_some()
+        {
+            return None;
+        }
+    }
+    for ordinals in source_ordinals.values() {
+        budget.charge()?;
+        if !ordinals
+            .iter()
+            .copied()
+            .eq(0..u32::try_from(ordinals.len()).unwrap_or(u32::MAX))
+        {
+            return None;
+        }
+    }
+    Some(RankedCorrelationIndexV1 {
+        sources_by_site,
+        view_definitions,
+    })
+}
+
+fn indexed_ranked_source_matches_allocation(
+    ranked: &RankedCorrelationIndexV1,
+    source: &IndexedRankedAccessSourceV1,
     expected_access: dialect_kernel::AccessKindAttr,
     expected_memory_space: dialect_kernel::MemorySpaceAttr,
     parameter_index: u32,
 ) -> bool {
-    let Some(operation) = lowering
-        .kernel()
-        .blocks()
-        .get(source.ranked_block as usize)
-        .and_then(|block| block.operations().get(source.ranked_operation as usize))
-    else {
+    let ProductionRankedValueV1::Local(view) = source.view else {
         return false;
     };
-    let (access, view) = match operation {
-        ProductionRankedOperationV1::Access { kind, view, .. }
-        | ProductionRankedOperationV1::AtomicAccess { kind, view, .. } => (*kind, *view),
-        _ => return false,
-    };
-    let ProductionRankedValueV1::Local(view) = view else {
+    let Some(definition) = ranked.view_definitions.get(&view) else {
         return false;
     };
-    let mut definitions = lowering
-        .kernel()
-        .blocks()
-        .iter()
-        .flat_map(|block| block.operations())
-        .filter_map(|operation| match operation {
-            ProductionRankedOperationV1::View {
-                result,
-                allocation_origin,
-                ..
-            } if *result == view => {
-                Some((*allocation_origin, dialect_kernel::MemorySpaceAttr::Global))
-            }
-            ProductionRankedOperationV1::ViewInSpace {
-                result,
-                memory_space,
-                allocation_origin,
-                ..
-            } if *result == view => Some((*allocation_origin, *memory_space)),
-            _ => None,
-        });
-    let Some((origin, memory_space)) = definitions.next() else {
-        return false;
-    };
-    access == expected_access
-        && memory_space == expected_memory_space
-        && definitions.next().is_none()
+    source.access == expected_access
+        && definition.memory_space == expected_memory_space
         && u64::from(parameter_index)
             .checked_add(1)
-            .is_some_and(|expected| origin == expected)
+            .is_some_and(|expected| definition.allocation_origin == expected)
 }
 
 // Keep hostile shared predicate graphs bounded independently of the lowering budget.
@@ -9783,5 +10006,130 @@ mod resource_tests {
             &fixture.reasons,
             4,
         ));
+    }
+
+    #[test]
+    fn unsupported_index_correlation_is_bounded_at_the_exact_operation_limit() {
+        let mut fixture = unsupported_index_correlation_fixture();
+        let operations =
+            &mut fixture.module.functions[0].body.as_mut().unwrap().blocks[0].operations;
+        for raw_id in 6..=16 {
+            operations.push(Operation::effect_free(
+                ValueDef::new(ValueId(raw_id), Type::INDEX),
+                OperationKind::Constant(Constant::Index(u64::from(raw_id))),
+            ));
+        }
+        fixture.correspondence.statement_operation_spans[0].operation_count = 16;
+        fixture.correspondence.terminator_operation_spans[0].first_operation_ordinal = 16;
+        verify_module(&fixture.module).expect("near-limit fixture remains valid Kernel IR");
+        let lowering = ranked_correlation_input(AccessKindAttr::Read, 1);
+
+        for _ in 0..8 {
+            assert!(unsupported_indices_match_ranked_sources(
+                &fixture.module,
+                &fixture.correspondence,
+                &lowering,
+                &[fixture.source],
+                &fixture.reasons,
+                16,
+            ));
+            assert!(!unsupported_indices_match_ranked_sources(
+                &fixture.module,
+                &fixture.correspondence,
+                &lowering,
+                &[fixture.source],
+                &fixture.reasons,
+                15,
+            ));
+        }
+    }
+
+    #[test]
+    fn unsupported_index_correlation_rejects_fanout_cycles_and_ambiguous_spans() {
+        let fixture = unsupported_index_correlation_fixture();
+        let lowering = ranked_correlation_input(AccessKindAttr::Read, 1);
+        let pointer_type = Type::pointer(
+            Type::Scalar(ScalarType::F32),
+            AddressSpace::Global,
+            AccessMode::ReadOnly,
+        );
+
+        let mut storage_exhausted = fixture.module.clone();
+        let gep =
+            &mut storage_exhausted.functions[0].body.as_mut().unwrap().blocks[0].operations[3];
+        for raw_id in 6..=400 {
+            gep.results
+                .push(ValueDef::new(ValueId(raw_id), pointer_type.clone()));
+        }
+
+        let mut fanout = fixture.module.clone();
+        let fanout_operations =
+            &mut fanout.functions[0].body.as_mut().unwrap().blocks[0].operations;
+        for offset in 0..24 {
+            let pointer = ValueId(10 + offset);
+            fanout_operations.push(Operation::effect_free(
+                ValueDef::new(pointer, pointer_type.clone()),
+                OperationKind::Cast {
+                    kind: CastKind::Bitcast,
+                    value: ValueId(4),
+                    to: pointer_type.clone(),
+                },
+            ));
+            fanout_operations.push(Operation::effect_free(
+                ValueDef::new(ValueId(100 + offset), Type::Scalar(ScalarType::F32)),
+                OperationKind::Load {
+                    pointer,
+                    access: MemoryAccess::new(AddressSpace::Global, 4),
+                },
+            ));
+        }
+
+        let mut cyclic = fixture.module.clone();
+        let OperationKind::GetElementPointer { base, .. } =
+            &mut cyclic.functions[0].body.as_mut().unwrap().blocks[0].operations[3].kind
+        else {
+            unreachable!();
+        };
+        *base = ValueId(4);
+
+        let mut ambiguous_correspondence = fixture.correspondence.clone();
+        let duplicate = ambiguous_correspondence.statement_operation_spans[0];
+        ambiguous_correspondence.statement_operation_spans =
+            vec![duplicate, duplicate].into_boxed_slice();
+
+        for _ in 0..8 {
+            assert!(!unsupported_indices_match_ranked_sources(
+                &storage_exhausted,
+                &fixture.correspondence,
+                &lowering,
+                &[fixture.source],
+                &fixture.reasons,
+                5,
+            ));
+            assert!(!unsupported_indices_match_ranked_sources(
+                &fanout,
+                &fixture.correspondence,
+                &lowering,
+                &[fixture.source],
+                &fixture.reasons,
+                64,
+            ));
+            assert!(!unsupported_indices_match_ranked_sources(
+                &cyclic,
+                &fixture.correspondence,
+                &lowering,
+                &[fixture.source],
+                &fixture.reasons,
+                16,
+            ));
+            assert!(!unsupported_indices_match_ranked_sources(
+                &fixture.module,
+                &ambiguous_correspondence,
+                &lowering,
+                &[fixture.source],
+                &fixture.reasons,
+                16,
+            ));
+        }
     }
 }
