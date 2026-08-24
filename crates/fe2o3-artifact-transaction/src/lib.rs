@@ -207,10 +207,6 @@ use std::process;
 use std::sync::Weak;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
-#[cfg(feature = "test-hooks")]
-use std::thread;
-#[cfg(feature = "test-hooks")]
-use std::time::Duration;
 pub use worker_v2_publication_intent::{
     MAX_WORKER_V2_PUBLICATION_INTENT_CLEANUP_ESCROW_CAPSULE_BYTES_V1,
     MAX_WORKER_V2_PUBLICATION_INTENT_OUTPUT_BYTES,
@@ -640,26 +636,97 @@ pub fn install_begin_build_attempt_lock_probe_v1(
     BeginBuildAttemptLockProbeV1 { inner }
 }
 
-#[cfg(feature = "test-hooks")]
-fn test_artifact_fork_exec_barrier_v1() -> &'static Mutex<()> {
-    static BARRIER: OnceLock<Mutex<()>> = OnceLock::new();
-    BARRIER.get_or_init(|| Mutex::new(()))
+struct ArtifactProcessSpawnStateV1 {
+    pid: u32,
+    active_spawns: u64,
 }
 
-/// Runs a test subprocess spawn while nonblocking artifact-lock acquisition is paused.
+struct ArtifactProcessSpawnCoordinatorV1 {
+    state: Mutex<ArtifactProcessSpawnStateV1>,
+    idle: Condvar,
+}
+
+impl ArtifactProcessSpawnCoordinatorV1 {
+    fn global() -> &'static Self {
+        static COORDINATOR: OnceLock<ArtifactProcessSpawnCoordinatorV1> = OnceLock::new();
+        COORDINATOR.get_or_init(|| Self {
+            state: Mutex::new(ArtifactProcessSpawnStateV1 {
+                pid: process::id(),
+                active_spawns: 0,
+            }),
+            idle: Condvar::new(),
+        })
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, ArtifactProcessSpawnStateV1> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let pid = process::id();
+        if state.pid != pid {
+            state.pid = pid;
+            state.active_spawns = 0;
+        }
+        state
+    }
+
+    fn begin_spawn(&'static self) -> ArtifactProcessSpawnLeaseV1 {
+        let mut state = self.state();
+        state.active_spawns = state
+            .active_spawns
+            .checked_add(1)
+            .expect("concurrent artifact process spawn count overflowed");
+        ArtifactProcessSpawnLeaseV1 { coordinator: self }
+    }
+
+    fn release_lock_descriptors(&self, release: impl FnOnce()) {
+        let mut state = self.state();
+        while state.active_spawns != 0 {
+            state = self
+                .idle
+                .wait(state)
+                .unwrap_or_else(|error| error.into_inner());
+        }
+        // Keep the state lock held while descriptors close so a new child cannot inherit them.
+        release();
+    }
+}
+
+struct ArtifactProcessSpawnLeaseV1 {
+    coordinator: &'static ArtifactProcessSpawnCoordinatorV1,
+}
+
+impl Drop for ArtifactProcessSpawnLeaseV1 {
+    fn drop(&mut self) {
+        let mut state = self.coordinator.state();
+        state.active_spawns = state
+            .active_spawns
+            .checked_sub(1)
+            .expect("artifact process spawn lease underflowed");
+        if state.active_spawns == 0 {
+            self.coordinator.idle.notify_all();
+        }
+    }
+}
+
+/// Runs one process creation operation without exposing inherited artifact-lock aliases.
 ///
-/// Linux children briefly retain the parent's `CLOEXEC` OFD locks between `fork` and `exec`.
-/// Holding this test-only barrier until `Command::spawn` observes successful execution prevents
-/// parallel tests from mistaking that transient inherited alias for durable external contention.
+/// On Linux, a child temporarily retains the parent's `CLOEXEC` OFD and `flock` descriptors
+/// between `fork` and `exec`. Every process creation in a process that uses this crate's artifact
+/// transactions must pass its `Command::spawn` operation through this function. Artifact lock
+/// release then waits for all coordinated children to exec or fail, ensuring that a child can
+/// never become the sole owner of an inherited lock alias. Lock acquisition remains nonblocking
+/// and reports only genuine lock contention.
+pub fn with_artifact_process_spawn_v1<T, E>(spawn: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
+    let _spawn = ArtifactProcessSpawnCoordinatorV1::global().begin_spawn();
+    spawn()
+}
+
+/// Compatibility entry point for test fixtures that predate production spawn coordination.
 #[cfg(feature = "test-hooks")]
 #[doc(hidden)]
 pub fn with_test_artifact_fork_exec_barrier_v1<T, E>(
     spawn: impl FnOnce() -> Result<T, E>,
 ) -> Result<T, E> {
-    let _barrier = test_artifact_fork_exec_barrier_v1()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    spawn()
+    with_artifact_process_spawn_v1(spawn)
 }
 
 /// Starts or resumes the durable artifact generation for one rustc invocation.
@@ -1080,6 +1147,55 @@ mod tests {
     use std::time::{Duration, Instant};
 
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    fn spawn_test_process(command: &mut process::Command) -> io::Result<process::Child> {
+        with_artifact_process_spawn_v1(|| command.spawn())
+    }
+
+    fn run_test_process(command: &mut process::Command) -> io::Result<process::ExitStatus> {
+        let mut child = spawn_test_process(command)?;
+        child.wait()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn close_child_descriptor_range(first: u32, last: u32) -> bool {
+        if first > last {
+            return true;
+        }
+        // SAFETY: this helper is called only in a fork child that immediately exits or pauses.
+        unsafe { libc::syscall(libc::SYS_close_range, first, last, 0_u32) == 0 }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn close_unintended_child_descriptors(preserved: i32) -> bool {
+        let Ok(preserved) = u32::try_from(preserved) else {
+            return false;
+        };
+        if preserved < 3 {
+            return close_child_descriptor_range(3, u32::MAX);
+        }
+        close_child_descriptor_range(3, preserved - 1)
+            && close_child_descriptor_range(preserved + 1, u32::MAX)
+    }
+
+    #[cfg(target_os = "linux")]
+    struct RawChildGuard(libc::pid_t);
+
+    #[cfg(target_os = "linux")]
+    impl Drop for RawChildGuard {
+        fn drop(&mut self) {
+            // SAFETY: the guard owns one unreaped child that deliberately pauses forever.
+            unsafe {
+                libc::kill(self.0, libc::SIGKILL);
+                let mut status = 0;
+                while libc::waitpid(self.0, &mut status, 0) < 0 {
+                    if io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+                        break;
+                    }
+                }
+            }
+        }
+    }
 
     struct TestDirectory {
         path: PathBuf,
@@ -1849,7 +1965,7 @@ mod tests {
             if let Some(identity) = identity {
                 command.env(FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV, identity);
             }
-            let status = command.status().unwrap();
+            let status = run_test_process(&mut command).unwrap();
             assert!(status.success(), "configured path-guard helper failed");
             assert_eq!(output.exists(), output_created);
         }
@@ -1863,7 +1979,8 @@ mod tests {
         fs::create_dir(&runtime).unwrap();
         fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
         let output = temp.path.join("default-replaced-domain-output");
-        let status = process::Command::new(std::env::current_exe().unwrap())
+        let mut command = process::Command::new(std::env::current_exe().unwrap());
+        command
             .arg("--exact")
             .arg("tests::filesystem_path_guard_configuration_subprocess_helper")
             .arg("--nocapture")
@@ -1874,9 +1991,8 @@ mod tests {
             .env("FE2O3_TEST_PATH_GUARD_OUTPUT", &output)
             .env("XDG_RUNTIME_DIR", &runtime)
             .env_remove(FILESYSTEM_PATH_GUARD_DIRECTORY_ENV)
-            .env_remove(FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV)
-            .status()
-            .unwrap();
+            .env_remove(FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV);
+        let status = run_test_process(&mut command).unwrap();
         assert!(status.success(), "default path-guard helper failed");
         assert!(output.exists());
     }
@@ -1892,7 +2008,8 @@ mod tests {
         let identity = format!("{:016x}:{:016x}", metadata.dev(), metadata.ino());
         let first = temp.path.join("first-output-alias");
         let second = temp.path.join("second-output-alias");
-        let status = process::Command::new(std::env::current_exe().unwrap())
+        let mut command = process::Command::new(std::env::current_exe().unwrap());
+        command
             .arg("--exact")
             .arg("tests::filesystem_path_guard_configuration_subprocess_helper")
             .arg("--nocapture")
@@ -1903,9 +2020,8 @@ mod tests {
             .env("FE2O3_TEST_PATH_GUARD_OUTPUT", &first)
             .env("FE2O3_TEST_PATH_GUARD_ALIAS_OUTPUT", &second)
             .env(FILESYSTEM_PATH_GUARD_DIRECTORY_ENV, &configured)
-            .env(FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV, &identity)
-            .status()
-            .unwrap();
+            .env(FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV, &identity);
+        let status = run_test_process(&mut command).unwrap();
         assert!(
             status.success(),
             "configured alias contention helper failed"
@@ -1927,7 +2043,8 @@ mod tests {
         let release = temp.path.join("cross-process-holder-release");
         let helper = "tests::filesystem_path_guard_configuration_subprocess_helper";
 
-        let mut holder = process::Command::new(std::env::current_exe().unwrap())
+        let mut holder_command = process::Command::new(std::env::current_exe().unwrap());
+        holder_command
             .arg("--exact")
             .arg(helper)
             .arg("--nocapture")
@@ -1939,9 +2056,8 @@ mod tests {
             .env("FE2O3_TEST_PATH_GUARD_READY", &ready)
             .env("FE2O3_TEST_PATH_GUARD_RELEASE", &release)
             .env(FILESYSTEM_PATH_GUARD_DIRECTORY_ENV, &configured)
-            .env(FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV, &identity)
-            .spawn()
-            .unwrap();
+            .env(FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV, &identity);
+        let mut holder = spawn_test_process(&mut holder_command).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         while !ready.exists() {
             if let Some(status) = holder.try_wait().unwrap() {
@@ -1955,7 +2071,8 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
 
-        let contender = process::Command::new(std::env::current_exe().unwrap())
+        let mut contender_command = process::Command::new(std::env::current_exe().unwrap());
+        contender_command
             .arg("--exact")
             .arg(helper)
             .arg("--nocapture")
@@ -1965,9 +2082,8 @@ mod tests {
             )
             .env("FE2O3_TEST_PATH_GUARD_OUTPUT", &second)
             .env(FILESYSTEM_PATH_GUARD_DIRECTORY_ENV, &configured)
-            .env(FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV, &identity)
-            .status()
-            .unwrap();
+            .env(FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV, &identity);
+        let contender = run_test_process(&mut contender_command).unwrap();
         fs::write(&release, b"release").unwrap();
         let holder = holder.wait().unwrap();
         assert!(
@@ -1977,40 +2093,206 @@ mod tests {
         assert!(holder.success(), "configured path-guard holder failed");
     }
 
-    #[cfg(all(target_os = "linux", feature = "test-hooks"))]
+    #[cfg(target_os = "linux")]
     #[test]
-    fn test_fork_exec_barrier_pauses_nonblocking_lock_acquisition() {
+    fn coordinated_fork_exec_does_not_leak_inherited_lock_aliases() {
         enable_same_mount_namespace_artifact_path_guard_v1();
         let temp = TestDirectory::new();
         let output = PinnedOutput::open(&temp.path.join("fork-exec-barrier-output")).unwrap();
         let contender = output.try_clone().unwrap();
-        let (entered_tx, entered_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let barrier = thread::spawn(move || {
-            with_test_artifact_fork_exec_barrier_v1(|| -> Result<(), ()> {
-                entered_tx.send(()).unwrap();
-                release_rx.recv().unwrap();
-                Ok(())
-            })
-            .unwrap();
+        let held = output.lock().unwrap();
+        let unrelated = PinnedOutput::open(&temp.path.join("unrelated-output")).unwrap();
+        let (mut ready_parent, ready_child) = UnixStream::pair().unwrap();
+        let (mut release_parent, release_child) = UnixStream::pair().unwrap();
+        let spawn = thread::spawn(move || {
+            let mut command = process::Command::new("/bin/sleep");
+            command.arg("30");
+            let ready_fd = ready_child.as_raw_fd();
+            let release_fd = release_child.as_raw_fd();
+            // SAFETY: the callback performs only async-signal-safe single-byte descriptor I/O.
+            unsafe {
+                command.pre_exec(move || {
+                    let ready = [1_u8];
+                    if libc::write(ready_fd, ready.as_ptr().cast(), ready.len()) != 1 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    let mut release = [0_u8];
+                    loop {
+                        let read =
+                            libc::read(release_fd, release.as_mut_ptr().cast(), release.len());
+                        if read == 1 {
+                            return Ok(());
+                        }
+                        let error = io::Error::last_os_error();
+                        if error.kind() != io::ErrorKind::Interrupted {
+                            return Err(error);
+                        }
+                    }
+                });
+            }
+            with_artifact_process_spawn_v1(|| command.spawn()).unwrap()
         });
-        entered_rx.recv().unwrap();
+        let mut ready = [0_u8];
+        ready_parent.read_exact(&mut ready).unwrap();
+        assert_eq!(ready, [1]);
 
-        let (completed_tx, completed_rx) = mpsc::channel();
-        let acquisition = thread::spawn(move || {
-            let acquired = contender.try_lock().unwrap().is_some();
-            completed_tx.send(acquired).unwrap();
+        let started = Instant::now();
+        let unrelated_lock = unrelated
+            .try_lock()
+            .unwrap()
+            .expect("an in-flight spawn synthesized Busy for an unrelated artifact");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "unrelated nonblocking acquisition waited on process creation"
+        );
+
+        // The child has inherited the holder's OFD aliases and is paused before exec. Releasing
+        // the parent lock must wait, so the child never becomes the alias's sole owner.
+        let (dropped_tx, dropped_rx) = mpsc::channel();
+        let lock_release = thread::spawn(move || {
+            drop(held);
+            dropped_tx.send(()).unwrap();
         });
         assert!(
-            completed_rx
-                .recv_timeout(Duration::from_millis(100))
-                .is_err(),
-            "nonblocking acquisition crossed the test fork/exec boundary"
+            dropped_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "artifact lock descriptors closed before the fork/exec window ended"
         );
-        release_tx.send(()).unwrap();
-        barrier.join().unwrap();
-        assert!(completed_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+        let started = Instant::now();
+        assert!(
+            contender.try_lock().unwrap().is_none(),
+            "nonblocking acquisition crossed the active fork/exec boundary"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "nonblocking acquisition waited on the fork/exec boundary"
+        );
+        release_parent.write_all(&[1]).unwrap();
+        let mut child = spawn.join().unwrap();
+        dropped_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        lock_release.join().unwrap();
+        drop(
+            contender
+                .lock()
+                .expect("successful exec releases the child lock aliases"),
+        );
+        drop(unrelated_lock);
+        assert!(child.try_wait().unwrap().is_none());
+        child.kill().unwrap();
+        assert!(!child.wait().unwrap().success());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn nonblocking_lock_reports_immediate_busy_under_intentional_contention() {
+        enable_same_mount_namespace_artifact_path_guard_v1();
+        let temp = TestDirectory::new();
+        let output = PinnedOutput::open(&temp.path.join("immediate-busy-output")).unwrap();
+        let held = output.lock().unwrap();
+        let contender = output.try_clone().unwrap();
+        let (completed_tx, completed_rx) = mpsc::channel();
+        let acquisition = thread::spawn(move || {
+            completed_tx
+                .send(contender.try_lock().unwrap().is_none())
+                .unwrap();
+        });
+
+        let immediate_busy = completed_rx.recv_timeout(Duration::from_millis(40));
+        drop(held);
         acquisition.join().unwrap();
+        assert!(immediate_busy.unwrap_or_else(|_| {
+            panic!("nonblocking lock acquisition waited instead of reporting Busy")
+        }));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn lock_release_waits_for_every_active_process_spawn() {
+        enable_same_mount_namespace_artifact_path_guard_v1();
+        let temp = TestDirectory::new();
+        let output = PinnedOutput::open(&temp.path.join("counted-spawn-output")).unwrap();
+        let contender = output.try_clone().unwrap();
+        let held = output.lock().unwrap();
+        let coordinator = ArtifactProcessSpawnCoordinatorV1::global();
+        let first = coordinator.begin_spawn();
+        let second = coordinator.begin_spawn();
+        let (dropped_tx, dropped_rx) = mpsc::channel();
+        let release = thread::spawn(move || {
+            drop(held);
+            dropped_tx.send(()).unwrap();
+        });
+
+        assert!(dropped_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        drop(first);
+        assert!(dropped_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        drop(second);
+        dropped_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        release.join().unwrap();
+        drop(contender.try_lock().unwrap().unwrap());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn paused_raw_child_cannot_retain_parent_lock_aliases() {
+        enable_same_mount_namespace_artifact_path_guard_v1();
+        let temp = TestDirectory::new();
+        let output = PinnedOutput::open(&temp.path.join("raw-fork-alias-output")).unwrap();
+        let contender = output.try_clone().unwrap();
+        let held = output.lock().unwrap();
+        let mut ready = [-1_i32; 2];
+        // SAFETY: `ready` points to two writable descriptor slots.
+        assert_eq!(
+            unsafe { libc::pipe2(ready.as_mut_ptr(), libc::O_CLOEXEC) },
+            0
+        );
+
+        let child = with_artifact_process_spawn_v1(|| {
+            // SAFETY: the child closes the exact inherited lock aliases, reports readiness, and
+            // pauses without returning to Rust. The parent reads readiness before releasing the
+            // fork barrier, and reaps the child only after the barrier has been released.
+            let child = unsafe { libc::fork() };
+            assert!(child >= 0, "fork: {}", io::Error::last_os_error());
+            if child == 0 {
+                unsafe {
+                    libc::close(ready[0]);
+                    let byte = [1_u8];
+                    if !close_unintended_child_descriptors(ready[1])
+                        || libc::write(ready[1], byte.as_ptr().cast(), byte.len()) != 1
+                    {
+                        libc::_exit(127);
+                    }
+                    libc::close(ready[1]);
+                    loop {
+                        libc::pause();
+                    }
+                }
+            }
+            // SAFETY: the parent owns both pipe descriptors after fork.
+            unsafe { libc::close(ready[1]) };
+            let mut byte = [0_u8];
+            loop {
+                // SAFETY: the read descriptor and one-byte destination are valid.
+                let read = unsafe { libc::read(ready[0], byte.as_mut_ptr().cast(), byte.len()) };
+                if read == 1 {
+                    break;
+                }
+                if read < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                panic!("raw child exited before releasing inherited lock aliases");
+            }
+            // SAFETY: readiness has been consumed and the parent no longer needs the pipe.
+            unsafe { libc::close(ready[0]) };
+            Ok::<_, io::Error>(child)
+        })
+        .unwrap();
+        let _child = RawChildGuard(child);
+
+        drop(held);
+        drop(
+            contender
+                .lock()
+                .expect("paused child retained an inherited artifact lock alias"),
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -2565,7 +2847,20 @@ mod tests {
     }
 
     #[test]
-    fn ofd_publication_lock_is_inherited_until_cloexec() {
+    fn uncoordinated_fork_inherits_publication_lock_until_cloexec() {
+        const ISOLATED_HELPER_ENV: &str = "FE2O3_TEST_UNCOORDINATED_OFD_FORK_HELPER";
+        if std::env::var_os(ISOLATED_HELPER_ENV).is_none() {
+            let mut command = process::Command::new(std::env::current_exe().unwrap());
+            command
+                .arg("--exact")
+                .arg("tests::uncoordinated_fork_inherits_publication_lock_until_cloexec")
+                .arg("--nocapture")
+                .env(ISOLATED_HELPER_ENV, "1");
+            assert!(run_test_process(&mut command).unwrap().success());
+            return;
+        }
+
+        enable_same_mount_namespace_artifact_path_guard_v1();
         let temp = TestDirectory::new();
         let output = PinnedOutput::open(&temp.path.join("output")).unwrap();
         let lock = output.lock().unwrap();
@@ -2595,7 +2890,10 @@ mod tests {
                     Ok(())
                 });
             }
-            command.status().unwrap()
+            // This isolated helper intentionally bypasses production coordination to establish
+            // the Linux inheritance behavior that the production boundary must contain.
+            let mut child = command.spawn().unwrap();
+            child.wait().unwrap()
         });
 
         let mut ready = [0];
@@ -2609,8 +2907,7 @@ mod tests {
         assert!(child.join().unwrap().success());
         drop(
             output
-                .try_lock()
-                .unwrap()
+                .lock()
                 .expect("CLOEXEC must release the forked child's OFD lock alias"),
         );
     }
@@ -2998,7 +3295,8 @@ mod tests {
                     fs::canonicalize(&relocated_stage)?
                 );
                 let object = hsaco.with_extension("o");
-                let status = process::Command::new("sh")
+                let mut command = process::Command::new("sh");
+                command
                     .args([
                         "-c",
                         "ir=$(cat \"$1\") || exit; printf 'object:%s' \"$ir\" > \"$2\"; printf 'hsaco:%s' \"$ir\" > \"$3\"",
@@ -3006,8 +3304,8 @@ mod tests {
                     ])
                     .arg(llvm_ir)
                     .arg(&object)
-                    .arg(hsaco)
-                    .status()?;
+                    .arg(hsaco);
+                let status = run_test_process(&mut command)?;
                 if status.success() {
                     Ok(())
                 } else {
@@ -3625,16 +3923,6 @@ impl PinnedOutput {
     }
 
     fn try_lock(&self) -> Result<Option<OutputLock>, EmitError> {
-        #[cfg(feature = "test-hooks")]
-        {
-            for _ in 0..50 {
-                if let Some(lock) = self.lock_with(true, None)? {
-                    return Ok(Some(lock));
-                }
-                thread::sleep(Duration::from_millis(1));
-            }
-        }
-
         self.lock_with(true, None)
     }
 
@@ -3657,12 +3945,6 @@ impl PinnedOutput {
         #[cfg(feature = "test-hooks")] observation: Option<&BeginBuildAttemptLockObservationV1>,
         #[cfg(not(feature = "test-hooks"))] _observation: Option<&()>,
     ) -> Result<Option<OutputLock>, EmitError> {
-        #[cfg(feature = "test-hooks")]
-        let _fork_exec_barrier = nonblocking.then(|| {
-            test_artifact_fork_exec_barrier_v1()
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-        });
         let validate_lock = |stat: &rustix::fs::Stat| {
             if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
                 return Err(EmitError::InvalidArtifactDestination {
@@ -4465,10 +4747,12 @@ struct OutputLock {
 
 impl Drop for OutputLock {
     fn drop(&mut self) {
-        drop(self.fd.take());
-        drop(self.root_guard.take());
-        drop(self.path_guard.take());
-        drop(self.reservation.take());
+        ArtifactProcessSpawnCoordinatorV1::global().release_lock_descriptors(|| {
+            drop(self.fd.take());
+            drop(self.root_guard.take());
+            drop(self.path_guard.take());
+            drop(self.reservation.take());
+        });
     }
 }
 
