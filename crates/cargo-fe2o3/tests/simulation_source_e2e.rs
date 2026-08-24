@@ -109,7 +109,7 @@ fn assert_exact_fill_result(bytes: &[u8]) {
     assert_eq!(result["target_profile"]["max_workgroup_invocations"], 1024);
     assert_eq!(
         result["schedule"]["identity"],
-        "workgroup_major_local_zyx_serial_v1"
+        "workgroup_major_local_zyx_cooperative_v1"
     );
     let kir_sha256 = result["kir"]["sha256"].as_str().unwrap();
     assert_eq!(kir_sha256.len(), 64);

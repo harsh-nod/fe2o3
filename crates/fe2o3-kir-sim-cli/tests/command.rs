@@ -125,7 +125,7 @@ fn successful_stdout_is_complete_machine_readable_json() {
     assert_eq!(value["target_profile"]["max_workgroup_invocations"], 1024);
     assert_eq!(
         value["schedule"]["identity"],
-        "workgroup_major_local_zyx_serial_v1"
+        "workgroup_major_local_zyx_cooperative_v1"
     );
     assert_eq!(value["kir"]["sha256"].as_str().unwrap().len(), 64);
     assert!(value["kir"]["canonical_bytes"].as_u64().unwrap() > 0);
