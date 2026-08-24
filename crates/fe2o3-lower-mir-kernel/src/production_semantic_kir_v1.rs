@@ -19,7 +19,8 @@ use fe2o3_kernel_ir::{
     SwitchCase, SynchronizationScope, TensorLayoutContractV1, Terminator, Type, UnaryOp, ValueDef,
     ValueId, VerificationErrors, VerifiedCanonicalKernelIrErrorV7,
     VerifiedCanonicalKernelIrIdentityV7, VerifiedCanonicalKernelIrV7, WaveOperation,
-    WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupSize, verify_module,
+    WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupSize, plan_integer_cast_v1,
+    verify_module,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAggregateKindV1, SemanticAssertMessageV1, SemanticAxisV1, SemanticBinaryOpV1,
@@ -3993,7 +3994,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         ty: input_ty,
                     });
                 }
-                let Some(kind) = lower_cast(*kind, &input_ty, &target) else {
+                let Some(path) = lower_cast_path(*kind, &input_ty, &target) else {
                     return Err(unsupported(
                         0,
                         Some(block.index()),
@@ -4001,15 +4002,28 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         "semantic cast has no exact Kernel IR cast rule",
                     ));
                 };
-                self.emit(
-                    operations,
-                    target.clone(),
-                    OperationKind::Cast {
-                        kind,
-                        value: input,
-                        to: target,
-                    },
-                )
+                let mut input = input;
+                let mut result = SemanticValueBindingV1::Value {
+                    id: input,
+                    ty: input_ty,
+                };
+                for (kind, target) in path.into_iter().flatten() {
+                    let target = Type::Scalar(target);
+                    result = self.emit(
+                        operations,
+                        target.clone(),
+                        OperationKind::Cast {
+                            kind,
+                            value: input,
+                            to: target,
+                        },
+                    )?;
+                    input = result
+                        .value()
+                        .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?
+                        .0;
+                }
+                Ok(result)
             }
             SemanticRvalueKindV1::Load(load) if load.atomic().is_none() => {
                 let (pointer, pointer_ty) = self
@@ -9044,23 +9058,25 @@ const fn lower_binary(operation: SemanticBinaryOpV1) -> Option<BinaryOp> {
     }
 }
 
-fn lower_cast(kind: SemanticCastKindV1, from: &Type, to: &Type) -> Option<CastKind> {
+fn lower_cast_path(
+    kind: SemanticCastKindV1,
+    from: &Type,
+    to: &Type,
+) -> Option<[Option<(CastKind, ScalarType)>; 2]> {
     let (Some(from), Some(to)) = (from.as_scalar(), to.as_scalar()) else {
         return None;
     };
-    match (kind, from, to) {
-        (SemanticCastKindV1::Integer, ScalarType::U32, ScalarType::Index) => {
-            return Some(CastKind::ZeroExtend);
-        }
-        (SemanticCastKindV1::Integer, ScalarType::U64, ScalarType::Index)
-        | (SemanticCastKindV1::Integer, ScalarType::Index, ScalarType::U64) => {
-            return Some(CastKind::Bitcast);
-        }
-        _ if from == ScalarType::Index || to == ScalarType::Index => return None,
-        _ => {}
+    if kind == SemanticCastKindV1::Integer
+        && (from.is_integer() || from == ScalarType::Bool)
+        && to.is_integer()
+    {
+        return plan_integer_cast_v1(from, to);
+    }
+    if from == ScalarType::Index || to == ScalarType::Index {
+        return None;
     }
     let (from_width, to_width) = (from.bit_width()?, to.bit_width()?);
-    match kind {
+    let cast = match kind {
         SemanticCastKindV1::Integer if to.is_integer() => {
             if from.is_float() {
                 Some(CastKind::FloatToInteger)
@@ -9094,7 +9110,8 @@ fn lower_cast(kind: SemanticCastKindV1, from: &Type, to: &Type) -> Option<CastKi
         | SemanticCastKindV1::PointerExposeProvenance
         | SemanticCastKindV1::PointerWithExposedProvenance
         | SemanticCastKindV1::Transmute => None,
-    }
+    }?;
+    Some([Some((cast, to)), None])
 }
 
 fn canonical_index_constant_v1(
@@ -9346,65 +9363,76 @@ mod resource_tests {
     };
 
     #[test]
-    fn semantic_casts_use_only_the_exact_kernel_ir_index_bridges() {
+    fn semantic_casts_use_the_shared_bounded_kernel_ir_index_paths() {
         assert_eq!(
-            lower_cast(
+            lower_cast_path(
                 SemanticCastKindV1::Integer,
                 &Type::Scalar(ScalarType::U32),
                 &Type::INDEX,
             ),
-            Some(CastKind::ZeroExtend)
+            Some([Some((CastKind::ZeroExtend, ScalarType::Index)), None])
         );
         assert_eq!(
-            lower_cast(
+            lower_cast_path(
                 SemanticCastKindV1::Integer,
                 &Type::Scalar(ScalarType::U64),
                 &Type::INDEX,
             ),
-            Some(CastKind::Bitcast)
+            Some([Some((CastKind::Bitcast, ScalarType::Index)), None])
         );
         assert_eq!(
-            lower_cast(
+            lower_cast_path(
                 SemanticCastKindV1::Integer,
                 &Type::INDEX,
                 &Type::Scalar(ScalarType::U64),
             ),
-            Some(CastKind::Bitcast)
+            Some([Some((CastKind::Bitcast, ScalarType::U64)), None])
         );
-        for (from, to) in [
-            (ScalarType::U8, ScalarType::Index),
-            (ScalarType::U64, ScalarType::Index),
-            (ScalarType::I32, ScalarType::Index),
-            (ScalarType::Index, ScalarType::U32),
-            (ScalarType::Index, ScalarType::F64),
-        ] {
-            if (from, to) == (ScalarType::U64, ScalarType::Index) {
-                assert_eq!(
-                    lower_cast(
-                        SemanticCastKindV1::Float,
-                        &Type::Scalar(from),
-                        &Type::Scalar(to),
-                    ),
-                    None
-                );
-            } else {
-                assert_eq!(
-                    lower_cast(
-                        SemanticCastKindV1::Integer,
-                        &Type::Scalar(from),
-                        &Type::Scalar(to),
-                    ),
-                    None
-                );
-            }
-        }
         assert_eq!(
-            lower_cast(
+            lower_cast_path(
+                SemanticCastKindV1::Integer,
+                &Type::Scalar(ScalarType::I32),
+                &Type::INDEX,
+            ),
+            Some([
+                Some((CastKind::SignExtend, ScalarType::U64)),
+                Some((CastKind::Bitcast, ScalarType::Index)),
+            ])
+        );
+        assert_eq!(
+            lower_cast_path(
+                SemanticCastKindV1::Integer,
+                &Type::INDEX,
+                &Type::Scalar(ScalarType::U32),
+            ),
+            Some([
+                Some((CastKind::Bitcast, ScalarType::U64)),
+                Some((CastKind::Truncate, ScalarType::U32)),
+            ])
+        );
+        assert_eq!(
+            lower_cast_path(
+                SemanticCastKindV1::Integer,
+                &Type::INDEX,
+                &Type::Scalar(ScalarType::F64),
+            ),
+            None
+        );
+        assert_eq!(
+            lower_cast_path(
+                SemanticCastKindV1::Float,
+                &Type::Scalar(ScalarType::U64),
+                &Type::INDEX,
+            ),
+            None
+        );
+        assert_eq!(
+            lower_cast_path(
                 SemanticCastKindV1::Integer,
                 &Type::Scalar(ScalarType::U32),
                 &Type::Scalar(ScalarType::U64),
             ),
-            Some(CastKind::ZeroExtend)
+            Some([Some((CastKind::ZeroExtend, ScalarType::U64)), None])
         );
     }
 

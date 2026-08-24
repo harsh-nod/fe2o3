@@ -114,6 +114,48 @@ fn every_scalar_cast_pair_matches_the_closed_structural_contract() {
 }
 
 #[test]
+fn integer_cast_planner_covers_every_integer_pair_with_verified_steps() {
+    for from in SCALARS {
+        for to in SCALARS {
+            let path = plan_integer_cast_v1(from, to);
+            let expected = (from.is_integer() || from == ScalarType::Bool) && to.is_integer();
+            assert_eq!(
+                path.is_some(),
+                expected,
+                "planner coverage for {from:?} -> {to:?}"
+            );
+            let Some(path) = path else {
+                continue;
+            };
+            let mut current = from;
+            for (kind, target) in path.into_iter().flatten() {
+                assert!(
+                    expected_scalar_cast(kind, current, target),
+                    "invalid planned step {kind:?}: {current:?} -> {target:?}"
+                );
+                current = target;
+            }
+            assert_eq!(current, to, "planner result for {from:?} -> {to:?}");
+        }
+    }
+
+    assert_eq!(
+        plan_integer_cast_v1(ScalarType::Index, ScalarType::U32),
+        Some([
+            Some((CastKind::Bitcast, ScalarType::U64)),
+            Some((CastKind::Truncate, ScalarType::U32)),
+        ])
+    );
+    assert_eq!(
+        plan_integer_cast_v1(ScalarType::I32, ScalarType::Index),
+        Some([
+            Some((CastKind::SignExtend, ScalarType::U64)),
+            Some((CastKind::Bitcast, ScalarType::Index)),
+        ])
+    );
+}
+
+#[test]
 fn accepts_only_the_documented_index_representation_bridges() {
     for (kind, from, to) in [
         (CastKind::ZeroExtend, ScalarType::U32, ScalarType::Index),

@@ -62,6 +62,7 @@ struct TestDirectory(PathBuf);
 
 impl TestDirectory {
     fn new(label: &str) -> Self {
+        fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
         let path = std::env::temp_dir().join(format!(
             "fe2o3-worker-v3-load-readiness-{label}-{}-{}",
             std::process::id(),
@@ -355,6 +356,7 @@ fn abrupt_crash_child_terminates_at_one_exact_boundary() {
     let Ok(output) = std::env::var(ABRUPT_OUTPUT) else {
         return;
     };
+    fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
     let claim = DurablePublishedHsacoClaimV3::decode_canonical(
         &fs::read(std::env::var(ABRUPT_CLAIM).unwrap()).unwrap(),
     )
@@ -682,6 +684,7 @@ fn process_restart_child_revalidates_terminal_custody() {
     let Ok(output) = std::env::var(CHILD_OUTPUT) else {
         return;
     };
+    fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
     let attempts = discover_worker_v3_load_readiness_attempts_v1(Path::new(&output)).unwrap();
     let [attempt] = attempts.as_slice() else {
         panic!("expected one discoverable custody attempt, got {attempts:?}");

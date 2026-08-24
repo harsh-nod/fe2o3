@@ -1579,6 +1579,63 @@ pub enum CastKind {
     Bitcast,
 }
 
+/// A bounded, target-neutral sequence for one Rust integer cast.
+///
+/// `Index` has no guessed bit width in Kernel IR. Casts which cannot use the
+/// exact `U32 -> Index` hardware-index promotion cross the compiler's explicit
+/// `U64 <-> Index` representation bridge instead.
+pub type IntegerCastPathV1 = [Option<(CastKind, ScalarType)>; 2];
+
+/// Plans the verified Kernel IR operations for an integer cast.
+///
+/// Each tuple contains the cast kind and its result type. The path contains at
+/// most two operations and is empty for an identity conversion.
+pub fn plan_integer_cast_v1(from: ScalarType, to: ScalarType) -> Option<IntegerCastPathV1> {
+    if !(from.is_integer() || from == ScalarType::Bool) || !to.is_integer() {
+        return None;
+    }
+    if from == to {
+        return Some([None, None]);
+    }
+    match (from, to) {
+        (ScalarType::U32, ScalarType::Index) => {
+            Some([Some((CastKind::ZeroExtend, ScalarType::Index)), None])
+        }
+        (ScalarType::U64, ScalarType::Index) | (ScalarType::Index, ScalarType::U64) => {
+            Some([Some((CastKind::Bitcast, to)), None])
+        }
+        (ScalarType::Index, _) => Some([
+            Some((CastKind::Bitcast, ScalarType::U64)),
+            Some((fixed_width_integer_cast_v1(ScalarType::U64, to)?, to)),
+        ]),
+        (_, ScalarType::Index) => Some([
+            Some((
+                fixed_width_integer_cast_v1(from, ScalarType::U64)?,
+                ScalarType::U64,
+            )),
+            Some((CastKind::Bitcast, ScalarType::Index)),
+        ]),
+        _ => Some([Some((fixed_width_integer_cast_v1(from, to)?, to)), None]),
+    }
+}
+
+fn fixed_width_integer_cast_v1(from: ScalarType, to: ScalarType) -> Option<CastKind> {
+    if from == ScalarType::Index
+        || to == ScalarType::Index
+        || !(from.is_integer() || from == ScalarType::Bool)
+        || !to.is_integer()
+        || from == to
+    {
+        return None;
+    }
+    Some(match from.bit_width()?.cmp(&to.bit_width()?) {
+        std::cmp::Ordering::Greater => CastKind::Truncate,
+        std::cmp::Ordering::Less if from.is_signed_integer() => CastKind::SignExtend,
+        std::cmp::Ordering::Less => CastKind::ZeroExtend,
+        std::cmp::Ordering::Equal => CastKind::Bitcast,
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct MemoryAccess {
     pub address_space: AddressSpace,

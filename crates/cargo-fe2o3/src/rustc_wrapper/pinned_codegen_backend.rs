@@ -38,8 +38,12 @@ use std::process::Command;
 #[cfg(target_os = "linux")]
 use std::process::{ExitStatus, Output};
 
-/// Bounds hashing work for a selected codegen-backend object.
-pub(crate) const MAX_CODEGEN_BACKEND_BYTES: u64 = 512 * 1024 * 1024;
+/// Bounds hashing and sealed-image storage for a selected codegen-backend object.
+///
+/// Debug builds of the LLVM-backed compiler currently exceed 512 MiB. Keep this backend-specific
+/// ceiling large enough to authenticate those builds while retaining a fixed pre-read resource
+/// bound; copying and hashing still use fixed-size chunks.
+pub(crate) const MAX_CODEGEN_BACKEND_BYTES: u64 = 1024 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ChildDescriptorInheritance {
@@ -651,11 +655,11 @@ mod platform {
         }
 
         pub(crate) fn status(&mut self) -> io::Result<ExitStatus> {
-            self.command.status()
+            crate::process_execution::status(&mut self.command)
         }
 
         pub(crate) fn output(&mut self) -> io::Result<Output> {
-            self.command.output()
+            crate::process_execution::capture_output(&mut self.command)
         }
 
         #[cfg(test)]
@@ -1228,6 +1232,7 @@ mod platform {
 
         impl TestDirectory {
             fn new() -> Self {
+                fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
                 let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
                 let path = std::env::temp_dir().join(format!(
                     "cargo-fe2o3-pinned-codegen-backend-{}-{id}",
@@ -1869,15 +1874,14 @@ mod platform {
             let descriptor_path = pinned.descriptor_path.clone();
             let _prepared = pinned.prepare_command(Command::new("/bin/true")).unwrap();
 
-            let status = Command::new("/bin/sh")
-                .args([
-                    OsStr::new("-c"),
-                    OsStr::new("test ! -e \"$1\""),
-                    OsStr::new("backend-leak-probe"),
-                    descriptor_path.as_os_str(),
-                ])
-                .status()
-                .unwrap();
+            let mut command = Command::new("/bin/sh");
+            command.args([
+                OsStr::new("-c"),
+                OsStr::new("test ! -e \"$1\""),
+                OsStr::new("backend-leak-probe"),
+                descriptor_path.as_os_str(),
+            ]);
+            let status = crate::process_execution::status(&mut command).unwrap();
             assert!(status.success());
             assert!(
                 rustix::io::fcntl_getfd(&pinned.file)

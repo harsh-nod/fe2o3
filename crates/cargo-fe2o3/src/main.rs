@@ -27,6 +27,7 @@ mod pinned_codegen_backend;
 mod pinned_executable;
 #[cfg(test)]
 mod pinned_executable_test_directory;
+mod process_execution;
 #[cfg(feature = "legacy-hsa-runtime")]
 #[path = "../../../examples/row_softmax_v1/src/production_release.rs"]
 mod production_release;
@@ -71,6 +72,7 @@ const SIMULATION_FAILURE_ALREADY_REPORTED: &str =
     "cargo fe2o3 simulate emitted a structured simulation error";
 const EXPECTED_RUSTC_SHA256_ENV: &str = "FE2O3_EXPECTED_RUSTC_SHA256_V1";
 const EXPECTED_COMPILER_CLOSURE_SHA256_ENV: &str = "FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1";
+const CARGO_PRIMARY_PACKAGE_ENV: &str = "CARGO_PRIMARY_PACKAGE";
 const AUTHORITY_CARGO_SHA256_ENV: &str = "FE2O3_AUTHORITY_CARGO_SHA256_V1";
 const AUTHORITY_RUSTC_SHA256_ENV: &str = "FE2O3_AUTHORITY_RUSTC_SHA256_V1";
 const AUTHORITY_RUSTC_PATH_ENV: &str = "FE2O3_AUTHORITY_RUSTC_PATH_V1";
@@ -1074,6 +1076,9 @@ fn run_cargo_with_backend_inner(
         .env("RUSTC_WRAPPER", "")
         .env("CARGO_BUILD_RUSTC_WRAPPER", "")
         .env("RUSTC_WORKSPACE_WRAPPER", workspace_wrapper)
+        // Cargo owns this per-unit marker. Do not let the caller preselect
+        // dependency units before Cargo computes its unit graph.
+        .env_remove(CARGO_PRIMARY_PACKAGE_ENV)
         .env(BINDING_WRAPPER_MODE_ENV, "1")
         .env(MANAGED_RUSTC_ARGS_ENV, &context.managed_rustc_args)
         .env(
@@ -1562,9 +1567,9 @@ fn split_joined_os_option(argument: &OsStr, option: &str) -> Option<OsString> {
 
 fn host_rustc_target() -> Result<String, String> {
     let rustc = env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
-    let output = Command::new(rustc)
-        .arg("-vV")
-        .output()
+    let mut command = Command::new(rustc);
+    command.arg("-vV");
+    let output = process_execution::capture_output(&mut command)
         .map_err(|error| format!("failed to query rustc host target: {error}"))?;
     if !output.status.success() {
         return Err(format!("rustc -vV failed with status {}", output.status));
@@ -1707,9 +1712,7 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
             sealed_application.identity_v3(),
             application_timeouts,
         )?;
-        let mut process = child
-            .as_command_mut()
-            .spawn()
+        let mut process = process_execution::spawn(child.as_command_mut())
             .map_err(|error| format!("failed to launch pinned Cargo application: {error}"))?;
         let active_handoff = match pending_ack.await_after_spawn(&mut process) {
             Ok(active_handoff) => active_handoff,
@@ -1782,8 +1785,7 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
         artifact_dir.replace_for_child_at(&mut child, ARTIFACT_CHILD_FD)?;
         child.env(HSACO_DIR_ENV, format!("/proc/self/fd/{ARTIFACT_CHILD_FD}"));
     }
-    child
-        .status()
+    process_execution::status(&mut child)
         .map_err(|error| format!("failed to launch Cargo runner/application: {error}"))
 }
 
@@ -2565,9 +2567,9 @@ fn dylib_path(target_dir: &Path) -> PathBuf {
 
 fn find_workspace_root() -> Result<PathBuf, String> {
     let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let output = Command::new(cargo)
-        .args(["locate-project", "--workspace", "--message-format", "json"])
-        .output()
+    let mut command = Command::new(cargo);
+    command.args(["locate-project", "--workspace", "--message-format", "json"]);
+    let output = process_execution::capture_output(&mut command)
         .map_err(|error| format!("failed to run cargo locate-project: {error}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2679,7 +2681,7 @@ fn resolve_amd_gpu_target(
 }
 
 fn detect_amd_gpu_target() -> Option<String> {
-    let output = Command::new("rocminfo").output().ok()?;
+    let output = process_execution::capture_output(&mut Command::new("rocminfo")).ok()?;
     if !output.status.success() {
         return None;
     }

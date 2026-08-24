@@ -1,8 +1,17 @@
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use fe2o3_artifact_transaction::{EmitError, ProducerIdentity, emit_artifact_transaction};
+use fe2o3_artifacts::DigestAlgorithm;
+use serde_json::json;
+
+#[path = "support/cargo_fe2o3.rs"]
+mod cargo_fe2o3;
+
+const CONFIGURED_ARTIFACT_GUARD_CHILD_ENV: &str =
+    "FE2O3_GENERAL_GEMM_CONFIGURED_ARTIFACT_GUARD_CHILD";
 
 fn backend_test_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -28,6 +37,41 @@ fn cargo_target_directory(workspace: &Path) -> PathBuf {
     } else {
         workspace.join(configured)
     }
+}
+
+fn rerun_with_configured_artifact_path_guard(test_name: &str) -> bool {
+    if std::env::var_os(CONFIGURED_ARTIFACT_GUARD_CHILD_ENV).is_some() {
+        return false;
+    }
+
+    let workspace = workspace();
+    let guard_directory = cargo_target_directory(&workspace).join(format!(
+        "general-gemm-artifact-path-guard-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&guard_directory);
+    std::fs::create_dir(&guard_directory).expect("create private general GEMM artifact path guard");
+    std::fs::set_permissions(&guard_directory, std::fs::Permissions::from_mode(0o700))
+        .expect("secure private general GEMM artifact path guard");
+    let metadata = std::fs::metadata(&guard_directory)
+        .expect("inspect private general GEMM artifact path guard");
+    let identity = format!("{:016x}:{:016x}", metadata.dev(), metadata.ino());
+    let child =
+        Command::new(std::env::current_exe().expect("current general GEMM integration test"))
+            .args(["--exact", test_name, "--nocapture"])
+            .env(CONFIGURED_ARTIFACT_GUARD_CHILD_ENV, "1")
+            .env("FE2O3_ARTIFACT_PATH_GUARD_DIR", &guard_directory)
+            .env("FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY", identity)
+            .output()
+            .expect("run general GEMM test with a configured artifact path guard");
+    let _ = std::fs::remove_dir_all(&guard_directory);
+    assert!(
+        child.status.success(),
+        "configured artifact-path-guard general GEMM test failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr)
+    );
+    true
 }
 
 fn fixture(workspace: &Path) -> PathBuf {
@@ -64,6 +108,93 @@ fn managed_build(
         .env("FE2O3_HSACO_DIR", artifacts)
         .output()
         .expect("run managed general GEMM frontend build")
+}
+
+struct WorkerV2MissingEnvelope(PathBuf);
+
+impl WorkerV2MissingEnvelope {
+    fn new(workspace: &Path) -> Self {
+        let worker = std::env::current_exe().expect("current test executable");
+        let working_directory = workspace.join("examples/tiled_gemm_general_v1");
+        let bytes = std::fs::read(&worker).expect("read current test executable");
+        let digest = DigestAlgorithm::Sha256
+            .calculate(&bytes)
+            .bytes()
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let path = cargo_target_directory(workspace).join(format!(
+            "general-gemm-worker-v2-missing-envelope-{}.json",
+            std::process::id()
+        ));
+        let config = json!({
+            "candidate_output_max_bytes": 4_194_304,
+            "format": "fe2o3-worker-v2-config-v2",
+            "limits": {
+                "stderr_bytes": 65_536,
+                "stdout_bytes": 8_388_608,
+                "timeout_ms": 30_000
+            },
+            "link_options": [
+                {"name": "code-object-version", "value": "6"},
+                {"name": "opt-level", "value": "2"},
+                {"name": "strip-debug", "value": "true"},
+                {"name": "verify-each", "value": "true"}
+            ],
+            "providers": [],
+            "units": [{
+                "crate_name": "fe2o3_tiled_gemm_general_v1",
+                "source": "src/lib.rs",
+                "working_directory": working_directory
+            }],
+            "worker": {
+                "byte_len": bytes.len(),
+                "llvm_build_identity": "test-only-unreached-llvm",
+                "path": worker,
+                "sha256": digest,
+                "worker_build_identity": "test-only-unreached-worker"
+            }
+        });
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&config).expect("encode Worker V2 test config"),
+        )
+        .expect("write Worker V2 test config");
+        Self(path)
+    }
+}
+
+impl Drop for WorkerV2MissingEnvelope {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn managed_worker_v2_build(
+    workspace: &Path,
+    manifest: &Path,
+    cargo_args: &[&str],
+    artifacts: &Path,
+    config: &Path,
+) -> Output {
+    cargo_fe2o3::non_production_command(workspace)
+        .current_dir(workspace)
+        .args(["build", "--locked", "--manifest-path"])
+        .arg(manifest)
+        .args(cargo_args)
+        .env(
+            "FE2O3_BACKEND",
+            cargo_target_directory(workspace).join("debug/librustc_codegen_fe2o3.so"),
+        )
+        .env("CARGO_TARGET_DIR", cargo_target_directory(workspace))
+        .env("FE2O3_TARGET", "gfx942:xnack-")
+        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
+        .env("FE2O3_WORKER_V2_CONFIG_V2", config)
+        .env("FE2O3_DUMP_MIR", "1")
+        .env("FE2O3_HSACO_DIR", artifacts)
+        .output()
+        .expect("run managed Worker V2 general GEMM frontend build")
 }
 
 fn clear_artifacts(path: &Path) {
@@ -138,6 +269,11 @@ fn assert_failed_without_artifact(output: &Output, artifacts: &Path) -> String {
 
 #[test]
 fn safe_general_gemm_mir_reaches_kir_and_exact_semantic_mutations_are_diagnostic() {
+    if rerun_with_configured_artifact_path_guard(
+        "safe_general_gemm_mir_reaches_kir_and_exact_semantic_mutations_are_diagnostic",
+    ) {
+        return;
+    }
     let _lock = backend_test_lock();
     let workspace = workspace();
     let fixture = fixture(&workspace);
@@ -202,20 +338,57 @@ fn safe_general_gemm_mir_reaches_kir_and_exact_semantic_mutations_are_diagnostic
     );
 
     clear_artifacts(&brokered_artifacts);
-    let positive = managed_build(
+    let worker_v2 = WorkerV2MissingEnvelope::new(&workspace);
+    let positive = managed_worker_v2_build(
         &workspace,
         &workspace.join("examples/tiled_gemm_general_v1/Cargo.toml"),
         &["--release", "-p", "fe2o3-tiled-gemm-general-v1", "--lib"],
         &brokered_artifacts,
+        &worker_v2.0,
     );
     let positive_stderr = assert_failed_without_artifact(&positive, &brokered_artifacts);
     assert!(
-        positive_stderr.contains(
-            "authenticated general GEMM positive structural analysis completed, but frontend correspondence is disabled until the optimized-MIR authority proof is closed"
-        ) && positive_stderr.contains(
-            "this source is non-executable and cannot issue frontend correspondence or artifact authority"
-        ) && !positive_stderr.contains("reached verified symbolic semantic template"),
-        "positive safe source crossed the fail-closed analysis boundary:\n{positive_stderr}"
+        !positive_stderr.contains("unsupported Assert terminator"),
+        "positive safe source retained a MIR Assert terminator:\n{positive_stderr}"
+    );
+    let imported_mir = positive_stderr
+        .find("=== fe2o3 MIR import scaffold")
+        .unwrap_or_else(|| {
+            panic!("positive safe source did not reach imported semantic MIR:\n{positive_stderr}")
+        });
+    let verified_kir = positive_stderr
+        .find("selected kernel-ir-worker-v2: verified compiler-module candidate with 1 kernel(s)")
+        .unwrap_or_else(|| {
+            panic!("positive safe source did not reach verified Kernel IR:\n{positive_stderr}")
+        });
+    let missing_envelope = positive_stderr
+        .find("Worker V2 producer failed: kernel-ir-worker-v2 requires a complete compiler FFI envelope")
+        .unwrap_or_else(|| {
+            panic!("positive safe source missed the deliberate post-KIR boundary:\n{positive_stderr}")
+        });
+    assert!(
+        positive_stderr.contains("mir.load")
+            && positive_stderr.contains("local1.deref")
+            && positive_stderr.contains("local2.deref")
+            && imported_mir < missing_envelope
+            && verified_kir < missing_envelope,
+        "checked A/B slice loads did not cross semantic MIR import and verified KIR construction:\n{positive_stderr}"
+    );
+    for unrelated in [
+        "general typed V3 requires kernel-ir-worker-v2 shared publication",
+        "publication state: NotStarted",
+        "compiler FFI MIR import failed",
+        "compiler-module MIR translation failed",
+        "reached verified symbolic semantic template",
+    ] {
+        assert!(
+            !positive_stderr.contains(unrelated),
+            "positive safe source stopped at unrelated earlier failure {unrelated:?}:\n{positive_stderr}"
+        );
+    }
+    assert!(
+        !positive_stderr.contains("published inert Worker V2 compiler-module handoff"),
+        "missing-envelope boundary unexpectedly published a Worker V2 handoff:\n{positive_stderr}"
     );
 
     prepare_committed_generation(

@@ -1070,6 +1070,7 @@ mod tests {
 
     impl TestDirectory {
         fn new() -> Self {
+            fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
             let path = std::env::temp_dir().join(format!(
                 "fe2o3-recovered-worker-v2-admission-{}-{}",
                 std::process::id(),
@@ -2809,7 +2810,8 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     fn spawn_descriptor_leak_probe(identities: &[(u64, u64)]) {
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
             .arg("--exact")
             .arg("recovered_worker_v2_admission::tests::inherited_handoff_scrubs_environment_and_descriptors_in_subprocesses")
             .arg("--nocapture")
@@ -2818,8 +2820,13 @@ mod tests {
                 "FE2O3_TEST_HANDOFF_DESCRIPTOR_IDENTITIES",
                 encoded_descriptor_identities(identities),
             )
-            .output()
-            .unwrap();
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let child =
+            fe2o3_artifact_transaction::with_test_artifact_fork_exec_barrier_v1(|| command.spawn())
+                .unwrap();
+        let output = child.wait_with_output().unwrap();
         assert!(
             output.status.success(),
             "descriptor leak probe failed:\nstdout:\n{}\nstderr:\n{}",
@@ -2965,7 +2972,16 @@ mod tests {
                     for name in handoff_environment_names() {
                         command.env_remove(name);
                     }
-                    let output = command.output().unwrap();
+                    command
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::piped());
+                    let child =
+                        fe2o3_artifact_transaction::with_test_artifact_fork_exec_barrier_v1(|| {
+                            command.spawn()
+                        })
+                        .unwrap();
+                    let output = child.wait_with_output().unwrap();
                     assert!(
                         output.status.success(),
                         "{mode} handoff subprocess failed:\nstdout:\n{}\nstderr:\n{}",

@@ -9,7 +9,9 @@ use fe2o3_artifacts::{
     AbiLayout, BlockSize, Capability, Dimensions, Endianness, IdentityText, LaunchContract,
     PointerWidth, TargetIdentity,
 };
-use fe2o3_kernel_ir::{Axis, IndexKind, IntrinsicKind, IntrinsicOperation, MatrixOperation};
+use fe2o3_kernel_ir::{
+    Axis, IndexKind, IntrinsicKind, IntrinsicOperation, MatrixOperation, TensorLayoutContractV1,
+};
 use fe2o3_rustc_front::{
     FrontendLaunchBoundsV1, FrontendWorkgroupDimensionsV1, KernelFrontendContractV1,
 };
@@ -68,6 +70,10 @@ fn exact_genuine_matrix_call_lowers_to_the_existing_gfx942_mfma_contract() {
             [ValueId(8), ValueId(9), ValueId(10), ValueId(11)],
         )
         .kind
+    );
+    assert_eq!(
+        matrix.tensor_layout,
+        Some(TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64())
     );
     let frontend = matrix.frontend_binding.as_ref().expect("rustc ABI binding");
 
@@ -334,6 +340,34 @@ fn matrix_frontend_rejects_missing_or_mutated_source_abi_and_projection() {
             .contains("rejects custom -Cllvm-args and -Cpasses"),
         "{errors}"
     );
+}
+
+#[test]
+fn internally_constructed_matrix_context_does_not_require_kernarg_abi() {
+    let mut function = matrix_frontend_function();
+    function.arg_count = 0;
+    function.local_count = 2;
+    function.locals.retain(|local| matches!(local.index, 0 | 4));
+    function.blocks.truncate(1);
+    function.blocks[0]
+        .terminator
+        .as_mut()
+        .expect("matrix current terminator")
+        .kind = call(TrustedDeviceItem::DeviceMatrixCurrent, Vec::new(), 4, 1);
+    function
+        .blocks
+        .push(block(1, Vec::new(), MirTerminatorKind::Return));
+    function.matrix_frontend_abi = None;
+
+    let module = translate_and_verify_for_target(
+        &MirModule {
+            functions: vec![function],
+        },
+        &AmdGpuTarget::new("gfx942:xnack-"),
+    )
+    .expect("internally constructed matrix context must not require a kernarg ABI projection");
+
+    assert_eq!(module.kernels.len(), 1);
 }
 
 #[test]
@@ -693,6 +727,133 @@ fn exact_alpha_and_zeta_bodies_lower_together() {
 }
 
 #[test]
+fn authenticated_general_v3_disjoint_slice_len_lowers_to_metadata_read() {
+    let mut function = MirFunction {
+        semantic_instance: None,
+        export_name: "alpha".to_owned(),
+        rust_path: "tests::alpha".to_owned(),
+        kind: MirFunctionKind::KernelEntry,
+        typed_profile: Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3),
+        arg_count: 3,
+        local_count: 5,
+        locals: vec![
+            local(0, MirLocalRole::Return, MirTypeShape::Unit),
+            local(1, MirLocalRole::Arg, MirTypeShape::F32),
+            local(2, MirLocalRole::Arg, slice_shape(false)),
+            local(3, MirLocalRole::Arg, disjoint_shape()),
+            local(4, MirLocalRole::Temp, MirTypeShape::USize),
+        ],
+        blocks: vec![
+            block(
+                0,
+                Vec::new(),
+                call(TrustedDeviceItem::DisjointSliceLen, vec![operand(3)], 4, 1),
+            ),
+            block(1, Vec::new(), MirTerminatorKind::Return),
+        ],
+        frontend_contract: None,
+        matrix_frontend_abi: None,
+    };
+
+    let module = lower_general_v3(&MirModule {
+        functions: vec![function.clone()],
+    })
+    .expect("authenticated General V3 slice length");
+    assert!(
+        operations(&module.functions[0])
+            .iter()
+            .any(|operation| { matches!(operation.kind, OperationKind::SliceLength { .. }) })
+    );
+
+    function.locals[4].ty = imported(MirTypeShape::Bool);
+    let errors = lower_general_v3(&MirModule {
+        functions: vec![function],
+    })
+    .expect_err("slice length must preserve its usize result");
+    assert!(
+        errors
+            .to_string()
+            .contains("must lower to Scalar(Index); found Scalar(Bool)"),
+        "{errors}"
+    );
+}
+
+#[test]
+fn ordinary_boolean_switch_is_distinct_from_option_payload_admission() {
+    let mut function = MirFunction {
+        semantic_instance: None,
+        export_name: "alpha".to_owned(),
+        rust_path: "tests::alpha".to_owned(),
+        kind: MirFunctionKind::KernelEntry,
+        typed_profile: Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3),
+        arg_count: 3,
+        local_count: 5,
+        locals: vec![
+            local(0, MirLocalRole::Return, MirTypeShape::Unit),
+            local(1, MirLocalRole::Arg, MirTypeShape::F32),
+            local(2, MirLocalRole::Arg, slice_shape(false)),
+            local(3, MirLocalRole::Arg, disjoint_shape()),
+            local(4, MirLocalRole::Temp, MirTypeShape::Bool),
+        ],
+        blocks: vec![
+            block(
+                0,
+                vec![assign(
+                    0,
+                    place(4),
+                    vec![u32_constant(0), u32_constant(1)],
+                    MirRvalueKind::Binary(MirBinaryOp::Eq),
+                )],
+                MirTerminatorKind::SwitchInt {
+                    discriminant: operand(4),
+                    targets: vec![MirSwitchTarget {
+                        value: 0,
+                        target: 2,
+                    }],
+                    otherwise: 1,
+                },
+            ),
+            block(1, Vec::new(), MirTerminatorKind::Return),
+            block(2, Vec::new(), MirTerminatorKind::Return),
+        ],
+        frontend_contract: None,
+        matrix_frontend_abi: None,
+    };
+
+    let module = lower_general_v3(&MirModule {
+        functions: vec![function.clone()],
+    })
+    .expect("ordinary boolean branch");
+    assert!(matches!(
+        module.functions[0].body.as_ref().expect("body").blocks[0].terminator,
+        Some(Terminator::ConditionalBranch {
+            then_target: BlockId(1),
+            else_target: BlockId(2),
+            ..
+        })
+    ));
+
+    let MirTerminatorKind::SwitchInt { targets, .. } = &mut function.blocks[0]
+        .terminator
+        .as_mut()
+        .expect("boolean switch")
+        .kind
+    else {
+        unreachable!()
+    };
+    targets[0].value = 2;
+    let errors = lower_general_v3(&MirModule {
+        functions: vec![function],
+    })
+    .expect_err("non-boolean case value");
+    assert!(
+        errors
+            .to_string()
+            .contains("ordinary boolean switch must have one explicit 0/1 case")
+    );
+}
+
+#[test]
 fn s09_alpha_requires_exact_guarded_cfg_and_dataflow() {
     let sealed_owner = s09_sealed_owner_path_fixture("current-build-observation");
     let exact = s09_alpha(&sealed_owner.rust_path);
@@ -872,8 +1033,8 @@ fn general_v3_multiply_claim_requires_imported_f32_operands() {
     assert!(errors.diagnostics().iter().any(|diagnostic| {
         diagnostic
             .message
-            .contains("f32 multiply requires an exact General V3 alpha/zeta kernel context")
-    }));
+            .contains("floating-point binary operation requires an authenticated semantic workload handler")
+    }), "{errors}");
 }
 
 #[test]
@@ -926,7 +1087,7 @@ fn general_v3_rejects_wrong_index_untrusted_callee_and_wrong_profile() {
     assert!(errors.diagnostics().iter().any(|diagnostic| {
         diagnostic
             .message
-            .contains("requires an exact General V3 alpha/zeta kernel context")
+            .contains("requires an authenticated semantic workload handler")
     }));
 
     let mut untyped = alpha_zeta_module();
@@ -938,8 +1099,8 @@ fn general_v3_rejects_wrong_index_untrusted_callee_and_wrong_profile() {
     assert!(errors.diagnostics().iter().any(|diagnostic| {
         diagnostic
             .message
-            .contains("requires an exact General V3 alpha/zeta kernel context")
-    }));
+            .contains("floating-point binary operation requires an authenticated semantic workload handler")
+    }), "{errors}");
 
     let errors =
         translate_and_verify_for_target(&alpha_zeta_module(), &AmdGpuTarget::new("gfx1100"))

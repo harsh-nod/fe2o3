@@ -21,29 +21,30 @@ mod semantic_lowering;
 
 use crate::AmdGpuTarget;
 use crate::mir_import::{
-    MirBinaryOp, MirBlock, MirCallee, MirConstant, MirFunction, MirFunctionKind, MirKernelProfile,
-    MirModule, MirOperandRef, MirPlaceRef, MirProjectionElem, MirReferenceSemantics, MirRvalueKind,
-    MirSemanticInstanceIdentity, MirSourceLocation, MirStatement, MirStatementKind, MirTerminator,
-    MirTerminatorKind, MirTypeShape, MirUnaryOp,
+    MirBinaryOp, MirBlock, MirCallee, MirCheckedTiled2dCallEvidenceV1, MirConstant, MirFunction,
+    MirFunctionKind, MirKernelProfile, MirModule, MirOperandRef, MirPlaceRef, MirProjectionElem,
+    MirReferenceSemantics, MirRvalueKind, MirSemanticInstanceIdentity, MirSourceLocation,
+    MirStatement, MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeShape, MirUnaryOp,
 };
 use crate::trusted_device_items::{TrustedDeviceItem, TrustedHalfOperation};
 use dialect_amdgcn::{DeviceMathDiagnosticItem, recognized_device_math_operation};
+use dialect_mir::MirCastKind;
 use fe2o3_amd_target::AmdTargetId;
 use fe2o3_kernel_analysis::{KernelCheckStatusV1, run_general_kernel_checks_from_verified_v1};
-#[cfg(test)]
-use fe2o3_kernel_ir::verify_module;
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, BasicBlock, BinaryOp, BlockId,
     ComparePredicate, Constant, ExplicitLaunchExtent1d, FloatConversionKind, FloatOperation,
     FormalIndexWidth, Function, FunctionId, Kernel, LaunchDomain, LaunchExtent,
     MATRIX_PROJECTED_KERNARG_POLICY_NAMESPACE_V1, MATRIX_SOURCE_ABI_OBSERVATION_NAMESPACE_V2,
     MatrixFrontendBindingV2, MemoryAccess, Module, Operation, OperationKind, ScalarType, Signature,
-    SwitchCase, TargetCapability, Terminator, Type, ValueDef, ValueId, WorkgroupSize,
-    gfx942_xnack_minus_target_capability, verify_module_ref,
+    SwitchCase, TargetCapability, Terminator, Type, UnaryOp, ValueDef, ValueId, WorkgroupSize,
+    gfx942_xnack_minus_target_capability, plan_integer_cast_v1, verify_module_ref,
 };
+#[cfg(test)]
+use fe2o3_kernel_ir::{CastKind, verify_module};
 use reserved_fe2o3_symbols::{
     DeviceFfiAddressSpaceV1, DeviceFfiPhysicalResultV1, DeviceFfiPhysicalTypeV1,
-    DeviceFfiPointerAccessV1, DeviceFfiScalarTypeV1,
+    DeviceFfiPointerAccessV1, DeviceFfiScalarTypeV1, KernelBindingIdV1,
 };
 use rustc_session::Session;
 use std::collections::{BTreeMap, BTreeSet};
@@ -260,6 +261,633 @@ enum StrictFloatPolicy {
 struct InternalDefinitionContract {
     export_name: String,
     signature: Signature,
+    elides_generated_result: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct InternalKernelContext<'mir> {
+    root: &'mir MirFunction,
+    source_abi: Option<&'mir MirFunction>,
+    elides_generated_result: bool,
+    sealed_generated_kernel_binding: Option<KernelBindingIdV1>,
+}
+
+const GENERATED_KERNEL_ENTRY_PREFIX_V1: &str = "__fe2o3_host_kernel_v1_";
+const GENERATED_KERNEL_BODY_PREFIX_V1: &str = "__fe2o3_kernel_body_v1_";
+
+fn internal_kernel_contexts_v1<'mir>(
+    mir: &'mir MirModule,
+) -> Result<
+    BTreeMap<MirSemanticInstanceIdentity, InternalKernelContext<'mir>>,
+    Vec<TranslationDiagnostic>,
+> {
+    let mut diagnostics = Vec::new();
+    let mut internal_functions = BTreeMap::new();
+    for function in mir.functions.iter().filter(|function| {
+        matches!(
+            function.kind,
+            MirFunctionKind::InternalHelper | MirFunctionKind::DeviceFfiExport
+        )
+    }) {
+        let identity = function.semantic_instance_v1();
+        if let Some(previous) = internal_functions.insert(identity, function) {
+            diagnostics.push(diagnostic(
+                TranslationDiagnosticCode::MalformedMir,
+                TranslationLocation::function(function),
+                format!(
+                    "internal semantic instance `{}` resolves to both `{}` and `{}`",
+                    function.rust_path, previous.export_name, function.export_name
+                ),
+            ));
+        }
+    }
+    if !diagnostics.is_empty() {
+        return Err(diagnostics);
+    }
+
+    let mut roots = mir
+        .functions
+        .iter()
+        .filter(|function| function.kind == MirFunctionKind::KernelEntry)
+        .collect::<Vec<_>>();
+    roots.sort_by(|lhs, rhs| {
+        (&lhs.export_name, &lhs.rust_path).cmp(&(&rhs.export_name, &rhs.rust_path))
+    });
+
+    let mut reachable_roots = BTreeMap::<MirSemanticInstanceIdentity, Vec<&MirFunction>>::new();
+    for root in &roots {
+        let mut pending = internal_callees(root, &internal_functions);
+        let mut visited = BTreeSet::new();
+        while let Some(identity) = pending.pop() {
+            if !visited.insert(identity.clone()) {
+                continue;
+            }
+            let Some(function) = internal_functions.get(&identity).copied() else {
+                continue;
+            };
+            if function.kind != MirFunctionKind::InternalHelper {
+                continue;
+            }
+            reachable_roots.entry(identity).or_default().push(*root);
+            pending.extend(internal_callees(function, &internal_functions));
+        }
+    }
+
+    let mut contexts = BTreeMap::new();
+    for (identity, owners) in reachable_roots {
+        if let [root] = owners.as_slice() {
+            contexts.insert(
+                identity,
+                InternalKernelContext {
+                    root,
+                    source_abi: None,
+                    elides_generated_result: false,
+                    sealed_generated_kernel_binding: None,
+                },
+            );
+        }
+    }
+
+    let mut sealed_bodies = BTreeSet::new();
+    for root in &roots {
+        for block in &root.blocks {
+            let Some(MirTerminator {
+                kind:
+                    MirTerminatorKind::Call {
+                        callee: Some(callee),
+                        ..
+                    },
+                ..
+            }) = block.terminator.as_ref()
+            else {
+                continue;
+            };
+            let Some(evidence) = callee.authenticated_kernel_body_bridge_v1() else {
+                continue;
+            };
+            let Some(Ok(callee_identity)) = callee.semantic_instance_identity() else {
+                diagnostics.push(generated_bridge_diagnostic(
+                    root,
+                    "compiler-sealed body edge has no resolved semantic callee identity",
+                ));
+                continue;
+            };
+            let root_identity = root.semantic_instance_v1();
+            if evidence.root() != &root_identity || evidence.body() != callee_identity {
+                diagnostics.push(generated_bridge_diagnostic(
+                    root,
+                    "compiler-sealed root/body semantic identities do not match the call edge",
+                ));
+                continue;
+            }
+            let Some(helper) = internal_functions.get(callee_identity).copied() else {
+                diagnostics.push(generated_bridge_diagnostic(
+                    root,
+                    "compiler-sealed generated body is absent from the imported closure",
+                ));
+                continue;
+            };
+            if helper.kind != MirFunctionKind::InternalHelper
+                || root.typed_profile != Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3)
+                || evidence.discarded_return_local() != 0
+                || !generated_item_matches_binding_v1(
+                    root,
+                    GENERATED_KERNEL_ENTRY_PREFIX_V1,
+                    evidence.kernel_binding(),
+                )
+                || !generated_item_matches_binding_v1(
+                    helper,
+                    GENERATED_KERNEL_BODY_PREFIX_V1,
+                    evidence.kernel_binding(),
+                )
+                || generated_item_module_v1(root) != generated_item_module_v1(helper)
+            {
+                diagnostics.push(generated_bridge_diagnostic(
+                    helper,
+                    "compiler-sealed binding, profile, role, module, or return-local invariant changed",
+                ));
+                continue;
+            }
+            if !sealed_bodies.insert(callee_identity.clone()) {
+                diagnostics.push(generated_bridge_diagnostic(
+                    helper,
+                    "generated body carries more than one compiler-sealed bridge edge",
+                ));
+                continue;
+            }
+            if let Err(error) = validate_generated_result_bridge_v1(mir, root, helper, evidence) {
+                diagnostics.push(error);
+                continue;
+            }
+            contexts.insert(
+                helper.semantic_instance_v1(),
+                InternalKernelContext {
+                    root,
+                    source_abi: Some(root),
+                    elides_generated_result: true,
+                    sealed_generated_kernel_binding: Some(evidence.kernel_binding()),
+                },
+            );
+        }
+    }
+
+    for helper in mir
+        .functions
+        .iter()
+        .filter(|function| function.kind == MirFunctionKind::InternalHelper)
+    {
+        if generated_item_suffix(helper, GENERATED_KERNEL_BODY_PREFIX_V1).is_some()
+            && !sealed_bodies.contains(&helper.semantic_instance_v1())
+        {
+            let helper_identity = helper.semantic_instance_v1();
+            let rejection = mir
+                .functions
+                .iter()
+                .flat_map(|function| &function.blocks)
+                .filter_map(|block| block.terminator.as_ref())
+                .filter_map(|terminator| match &terminator.kind {
+                    MirTerminatorKind::Call {
+                        callee: Some(callee),
+                        ..
+                    } if matches!(
+                        callee.semantic_instance_identity(),
+                        Some(Ok(identity)) if identity == &helper_identity
+                    ) =>
+                    {
+                        callee.kernel_body_bridge_rejection_v1()
+                    }
+                    _ => None,
+                })
+                .next();
+            diagnostics.push(generated_bridge_diagnostic(
+                helper,
+                rejection.map_or_else(
+                    || {
+                        "generated-looking kernel body has no valid compiler-sealed owner edge"
+                            .to_owned()
+                    },
+                    |detail| format!("compiler refused to seal the generated body edge: {detail}"),
+                ),
+            ));
+        }
+    }
+
+    if diagnostics.is_empty() {
+        Ok(contexts)
+    } else {
+        Err(diagnostics)
+    }
+}
+
+fn internal_callees(
+    function: &MirFunction,
+    internal_functions: &BTreeMap<MirSemanticInstanceIdentity, &MirFunction>,
+) -> Vec<MirSemanticInstanceIdentity> {
+    function
+        .blocks
+        .iter()
+        .filter_map(|block| block.terminator.as_ref())
+        .filter_map(|terminator| match &terminator.kind {
+            MirTerminatorKind::Call {
+                callee: Some(callee),
+                ..
+            } => callee.semantic_instance_identity()?.ok(),
+            _ => None,
+        })
+        .filter(|identity| internal_functions.contains_key(*identity))
+        .cloned()
+        .collect()
+}
+
+fn generated_item_suffix<'a>(function: &'a MirFunction, prefix: &str) -> Option<&'a str> {
+    let basename = function.rust_path.rsplit("::").next()?;
+    let suffix = basename.strip_prefix(prefix)?;
+    (suffix.len() == 64
+        && suffix
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+    .then_some(suffix)
+}
+
+fn generated_item_matches_binding_v1(
+    function: &MirFunction,
+    prefix: &str,
+    binding: reserved_fe2o3_symbols::KernelBindingIdV1,
+) -> bool {
+    let expected = binding.to_hex();
+    generated_item_suffix(function, prefix) == Some(expected.as_str())
+}
+
+fn generated_item_module_v1(function: &MirFunction) -> Option<&str> {
+    function
+        .rust_path
+        .rsplit_once("::")
+        .map(|(module, _)| module)
+}
+
+fn generated_bridge_diagnostic(
+    function: &MirFunction,
+    message: impl Into<String>,
+) -> TranslationDiagnostic {
+    diagnostic(
+        TranslationDiagnosticCode::MalformedMir,
+        TranslationLocation::function(function),
+        format!(
+            "authenticated generated kernel result bridge rejected: {}",
+            message.into()
+        ),
+    )
+}
+
+fn validate_generated_result_bridge_v1(
+    mir: &MirModule,
+    root: &MirFunction,
+    helper: &MirFunction,
+    evidence: &crate::mir_import::MirAuthenticatedKernelBodyBridgeV1,
+) -> Result<(), TranslationDiagnostic> {
+    let helper_identity = helper.semantic_instance_v1();
+    let call_count = mir
+        .functions
+        .iter()
+        .flat_map(|function| &function.blocks)
+        .filter_map(|block| block.terminator.as_ref())
+        .filter(|terminator| {
+            matches!(
+                &terminator.kind,
+                MirTerminatorKind::Call {
+                    callee: Some(callee),
+                    ..
+                } if matches!(
+                    callee.semantic_instance_identity(),
+                    Some(Ok(identity)) if identity == &helper_identity
+                )
+            )
+        })
+        .count();
+    if call_count != 1 {
+        return Err(generated_bridge_diagnostic(
+            helper,
+            format!("binding-matched body must have exactly one call site; found {call_count}"),
+        ));
+    }
+
+    let root_return = imported_local(root, 0).ok_or_else(|| {
+        generated_bridge_diagnostic(root, "generated kernel entry has no return local0")
+    })?;
+    if root_return.role != crate::mir_import::MirLocalRole::Return
+        || root_return.ty.shape != MirTypeShape::Unit
+    {
+        return Err(generated_bridge_diagnostic(
+            root,
+            "generated kernel entry does not have an exact unit return",
+        ));
+    }
+    let helper_return = imported_local(helper, 0).ok_or_else(|| {
+        generated_bridge_diagnostic(helper, "generated kernel body has no return local0")
+    })?;
+    if helper_return.role != crate::mir_import::MirLocalRole::Return
+        || !is_standard_result_shape(&helper_return.ty.shape)
+    {
+        return Err(generated_bridge_diagnostic(
+            helper,
+            "generated kernel body return is not the exact core::result::Result ADT",
+        ));
+    }
+
+    let root_args = imported_arguments(root);
+    let helper_args = imported_arguments(helper);
+    if root.arg_count != helper.arg_count
+        || root_args.len() != root.arg_count
+        || helper_args.len() != helper.arg_count
+        || !root_args
+            .iter()
+            .zip(&helper_args)
+            .all(|(root_arg, helper_arg)| root_arg.ty == helper_arg.ty)
+    {
+        return Err(generated_bridge_diagnostic(
+            root,
+            "generated entry and body argument lists are not semantically identical",
+        ));
+    }
+
+    let mut blocks = root.blocks.iter().collect::<Vec<_>>();
+    blocks.sort_by_key(|block| block.index);
+    let [entry, exit] = blocks.as_slice() else {
+        return Err(generated_bridge_diagnostic(
+            root,
+            "generated kernel entry must contain exactly two MIR blocks",
+        ));
+    };
+    if entry.index != 0 || exit.index != 1 {
+        return Err(generated_bridge_diagnostic(
+            root,
+            "generated kernel entry blocks must be exactly bb0 and bb1",
+        ));
+    }
+
+    let Some(MirTerminator {
+        kind:
+            MirTerminatorKind::Call {
+                callee: Some(callee),
+                target: Some(target),
+                destination: Some(destination),
+                operands,
+            },
+        ..
+    }) = entry.terminator.as_ref()
+    else {
+        return Err(generated_bridge_diagnostic(
+            root,
+            "bb0 is not the exact direct generated-body call",
+        ));
+    };
+    if *target != 1
+        || !matches!(
+            callee.semantic_instance_identity(),
+            Some(Ok(identity)) if identity == &helper_identity
+        )
+        || callee.authenticated_kernel_body_bridge_v1() != Some(evidence)
+        || !destination.projection.is_empty()
+    {
+        return Err(generated_bridge_diagnostic(
+            root,
+            "bb0 call target, callee identity, or result destination is not canonical",
+        ));
+    }
+    let result_local = imported_local(root, destination.local).ok_or_else(|| {
+        generated_bridge_diagnostic(root, "bb0 call destination has no imported local")
+    })?;
+    if result_local.role != crate::mir_import::MirLocalRole::Temp
+        || result_local.ty != helper_return.ty
+    {
+        return Err(generated_bridge_diagnostic(
+            root,
+            "bb0 call destination is not an exact temporary of the body Result type",
+        ));
+    }
+    if operands.len() != root_args.len()
+        || !operands.iter().zip(&root_args).all(|(operand, argument)| {
+            matches!(
+                operand,
+                MirOperandRef::Place(place)
+                    if place.local == argument.index && place.projection.is_empty()
+            )
+        })
+    {
+        return Err(generated_bridge_diagnostic(
+            root,
+            "bb0 does not forward each kernel argument exactly once and in order",
+        ));
+    }
+    if !matches!(entry.statements.as_slice(), [statement]
+        if is_exact_storage_statement(statement, MirStatementKind::StorageLive, destination.local))
+    {
+        return Err(generated_bridge_diagnostic(
+            root,
+            "bb0 must contain only StorageLive for the discarded Result temporary",
+        ));
+    }
+    if !matches!(exit.statements.as_slice(), [statement]
+        if is_exact_storage_statement(statement, MirStatementKind::StorageDead, destination.local))
+        || !matches!(
+            exit.terminator.as_ref().map(|terminator| &terminator.kind),
+            Some(MirTerminatorKind::Return)
+        )
+    {
+        return Err(generated_bridge_diagnostic(
+            root,
+            "bb1 must only retire the discarded Result temporary and return",
+        ));
+    }
+
+    validate_elided_generated_result_v1(helper, helper_return)
+}
+
+fn imported_local(function: &MirFunction, index: usize) -> Option<&crate::mir_import::MirLocal> {
+    function.locals.iter().find(|local| local.index == index)
+}
+
+fn is_standard_result_shape(shape: &MirTypeShape) -> bool {
+    matches!(
+        shape,
+        MirTypeShape::Adt { identity }
+            if matches!(identity.as_str(), "core::result::Result" | "std::result::Result")
+    )
+}
+
+fn is_standard_option_shape(shape: &MirTypeShape) -> bool {
+    matches!(
+        shape,
+        MirTypeShape::Adt { identity }
+            if matches!(identity.as_str(), "core::option::Option" | "std::option::Option")
+    )
+}
+
+fn is_standard_control_flow_shape(shape: &MirTypeShape) -> bool {
+    matches!(
+        shape,
+        MirTypeShape::Adt { identity }
+            if matches!(
+                identity.as_str(),
+                "core::ops::control_flow::ControlFlow" | "std::ops::ControlFlow"
+            )
+    )
+}
+
+fn imported_arguments(function: &MirFunction) -> Vec<&crate::mir_import::MirLocal> {
+    let mut arguments = function
+        .locals
+        .iter()
+        .filter(|local| local.role == crate::mir_import::MirLocalRole::Arg)
+        .collect::<Vec<_>>();
+    arguments.sort_by_key(|local| local.index);
+    arguments
+}
+
+fn is_exact_storage_statement(
+    statement: &MirStatement,
+    kind: MirStatementKind,
+    local: usize,
+) -> bool {
+    statement.kind == kind
+        && matches!(
+            statement.destination.as_ref(),
+            Some(destination) if destination.local == local && destination.projection.is_empty()
+        )
+        && statement.operands.is_empty()
+        && statement.rvalue.is_none()
+        && statement.semantic_rvalue_type.is_none()
+        && statement.operation.is_none()
+}
+
+fn validate_elided_generated_result_v1(
+    helper: &MirFunction,
+    return_local: &crate::mir_import::MirLocal,
+) -> Result<(), TranslationDiagnostic> {
+    let mut writes = 0usize;
+    for block in &helper.blocks {
+        for statement in &block.statements {
+            if statement
+                .operands
+                .iter()
+                .any(|operand| operand_mentions_local(operand, 0))
+            {
+                return Err(generated_bridge_diagnostic(
+                    helper,
+                    format!(
+                        "bb{} stmt{} reads return local0",
+                        block.index, statement.index
+                    ),
+                ));
+            }
+            let Some(destination) = statement.destination.as_ref() else {
+                continue;
+            };
+            if projection_mentions_index_local(destination, 0) {
+                return Err(generated_bridge_diagnostic(
+                    helper,
+                    format!(
+                        "bb{} stmt{} indexes through return local0",
+                        block.index, statement.index
+                    ),
+                ));
+            }
+            if destination.local != 0 {
+                continue;
+            }
+            if destination.projection.is_empty()
+                && statement.kind == MirStatementKind::Assign
+                && is_exact_discarded_result_rvalue(helper, statement, return_local)
+            {
+                writes = writes.saturating_add(1);
+                continue;
+            }
+            return Err(generated_bridge_diagnostic(
+                helper,
+                format!(
+                    "bb{} stmt{} writes return local0 with a non-canonical Result construction",
+                    block.index, statement.index
+                ),
+            ));
+        }
+
+        let Some(terminator) = block.terminator.as_ref() else {
+            return Err(generated_bridge_diagnostic(
+                helper,
+                format!("bb{} has no terminator", block.index),
+            ));
+        };
+        if terminator_operands(&terminator.kind)
+            .into_iter()
+            .any(|operand| operand_mentions_local(operand, 0))
+            || matches!(
+                &terminator.kind,
+                MirTerminatorKind::Call {
+                    destination: Some(destination),
+                    ..
+                } if destination.local == 0 || projection_mentions_index_local(destination, 0)
+            )
+        {
+            return Err(generated_bridge_diagnostic(
+                helper,
+                format!("bb{} observes or overwrites return local0", block.index),
+            ));
+        }
+    }
+    if writes == 0 {
+        return Err(generated_bridge_diagnostic(
+            helper,
+            "generated kernel body never constructs its discarded Result",
+        ));
+    }
+    Ok(())
+}
+
+fn is_exact_discarded_result_rvalue(
+    helper: &MirFunction,
+    statement: &MirStatement,
+    return_local: &crate::mir_import::MirLocal,
+) -> bool {
+    match statement.rvalue {
+        Some(MirRvalueKind::AdtAggregate { .. }) => {
+            statement.semantic_rvalue_type.as_ref() == Some(&return_local.ty.semantic_identity)
+        }
+        Some(MirRvalueKind::Use) => match statement.operands.as_slice() {
+            [MirOperandRef::Constant { ty, .. }] => ty == &return_local.ty,
+            [MirOperandRef::Place(place)] if place.projection.is_empty() => {
+                imported_local(helper, place.local).is_some_and(|local| local.ty == return_local.ty)
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn operand_mentions_local(operand: &MirOperandRef, local: usize) -> bool {
+    matches!(
+        operand,
+        MirOperandRef::Place(place)
+            if place.local == local || projection_mentions_index_local(place, local)
+    )
+}
+
+fn projection_mentions_index_local(place: &MirPlaceRef, local: usize) -> bool {
+    place.projection.iter().any(|projection| {
+        matches!(projection, MirProjectionElem::Index { local: index } if *index == local)
+    })
+}
+
+fn terminator_operands(terminator: &MirTerminatorKind) -> Vec<&MirOperandRef> {
+    match terminator {
+        MirTerminatorKind::SwitchInt { discriminant, .. } => vec![discriminant],
+        MirTerminatorKind::Call { operands, .. } => operands.iter().collect(),
+        MirTerminatorKind::Assert { condition, .. } => vec![condition],
+        MirTerminatorKind::Return
+        | MirTerminatorKind::Unreachable
+        | MirTerminatorKind::Goto { .. }
+        | MirTerminatorKind::Drop { .. }
+        | MirTerminatorKind::Other => Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -291,24 +919,37 @@ fn translate_and_verify_with_targets(
     let mut internal_definitions = BTreeMap::new();
     let mut internal_exports = BTreeMap::new();
 
+    let internal_contexts = match internal_kernel_contexts_v1(mir) {
+        Ok(contexts) => contexts,
+        Err(context_diagnostics) => return Err(errors(context_diagnostics)),
+    };
+
     for function in functions.iter().copied().filter(|function| {
         matches!(
             function.kind,
             MirFunctionKind::InternalHelper | MirFunctionKind::DeviceFfiExport
         )
     }) {
-        let signature = match declared_function_signature(function) {
-            Ok(signature) => signature,
-            Err(error) => {
-                diagnostics.push(error);
-                continue;
-            }
-        };
+        let context = internal_contexts.get(&function.semantic_instance_v1());
+        let source_abi = context
+            .and_then(|context| context.source_abi)
+            .unwrap_or(function);
+        let elides_generated_result =
+            context.is_some_and(|context| context.elides_generated_result);
+        let signature =
+            match declared_function_signature(function, source_abi, elides_generated_result) {
+                Ok(signature) => signature,
+                Err(error) => {
+                    diagnostics.push(error);
+                    continue;
+                }
+            };
         if let Some(previous) = internal_definitions.insert(
             function.semantic_instance_v1(),
             InternalDefinitionContract {
                 export_name: function.export_name.clone(),
                 signature,
+                elides_generated_result,
             },
         ) {
             diagnostics.push(diagnostic(
@@ -364,14 +1005,33 @@ fn translate_and_verify_with_targets(
             continue;
         }
 
+        let internal_context = internal_contexts.get(&function.semantic_instance_v1());
+        let kernel_context = if function.kind == MirFunctionKind::KernelEntry {
+            Some(function)
+        } else {
+            internal_context.map(|context| context.root)
+        };
+        let source_abi = internal_context
+            .and_then(|context| context.source_abi)
+            .unwrap_or(function);
+        let elides_generated_result =
+            internal_context.is_some_and(|context| context.elides_generated_result);
+        let sealed_generated_kernel_binding =
+            internal_context.and_then(|context| context.sealed_generated_kernel_binding);
+        let workgroup_size = kernel_context
+            .and_then(|root| launch_contracts.get(root.export_name.as_str()))
+            .copied()
+            .flatten();
+
         match FunctionLowerer::new(
             function,
+            kernel_context,
+            source_abi,
+            elides_generated_result,
+            sealed_generated_kernel_binding,
             &mut declarations,
             &internal_definitions,
-            launch_contracts
-                .get(function.export_name.as_str())
-                .copied()
-                .flatten(),
+            workgroup_size,
             float_target,
             collective_target,
             strict_float_policy,
@@ -475,21 +1135,84 @@ fn verify_and_check_module(module: Module) -> Result<Module, TranslationErrors> 
             let diagnostics = verification_errors
                 .diagnostics()
                 .iter()
-                .map(|verification| TranslationDiagnostic {
-                    location: TranslationLocation {
-                        function: verification
+                .map(|verification| {
+                    let operation = verification
+                        .location
+                        .function
+                        .as_ref()
+                        .and_then(|function| module.function(function))
+                        .and_then(|function| function.body.as_ref())
+                        .and_then(|body| {
+                            let block = verification.location.block?;
+                            body.blocks.iter().find(|candidate| candidate.id == block)
+                        })
+                        .and_then(|block| block.operations.get(verification.location.operation?));
+                    let operation = operation.map_or_else(String::new, |operation| {
+                        let function = verification
                             .location
                             .function
                             .as_ref()
-                            .map(|function| function.as_str().to_string()),
-                        block: verification.location.block.map(|block| block.0 as usize),
-                        statement: None,
-                        terminator: false,
-                        operation: verification.location.operation,
-                        source: None,
-                    },
-                    code: TranslationDiagnosticCode::VerificationFailed,
-                    message: format!("{:?}: {}", verification.code, verification.message),
+                            .and_then(|function| module.function(function));
+                        let definitions = operation
+                            .operands()
+                            .into_iter()
+                            .map(|operand| {
+                                let site = function
+                                    .and_then(|function| function.body.as_ref())
+                                    .and_then(|body| {
+                                        if body.parameters.contains(&operand) {
+                                            return Some("function parameter".to_owned());
+                                        }
+                                        for block in &body.blocks {
+                                            if block
+                                                .parameters
+                                                .iter()
+                                                .any(|parameter| parameter.id == operand)
+                                            {
+                                                return Some(format!("bb{} parameter", block.id.0));
+                                            }
+                                            if let Some(index) =
+                                                block.operations.iter().position(|operation| {
+                                                    operation
+                                                        .results
+                                                        .iter()
+                                                        .any(|result| result.id == operand)
+                                                })
+                                            {
+                                                return Some(format!("bb{} op{index}", block.id.0));
+                                            }
+                                        }
+                                        None
+                                    })
+                                    .unwrap_or_else(|| "undefined".to_owned());
+                                format!("{operand}={site}")
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!(
+                            "; operation {:?}; operand definitions [{definitions}]",
+                            operation.kind
+                        )
+                    });
+                    TranslationDiagnostic {
+                        location: TranslationLocation {
+                            function: verification
+                                .location
+                                .function
+                                .as_ref()
+                                .map(|function| function.as_str().to_string()),
+                            block: verification.location.block.map(|block| block.0 as usize),
+                            statement: None,
+                            terminator: false,
+                            operation: verification.location.operation,
+                            source: None,
+                        },
+                        code: TranslationDiagnosticCode::VerificationFailed,
+                        message: format!(
+                            "{:?}: {}{operation}",
+                            verification.code, verification.message
+                        ),
+                    }
                 })
                 .collect();
             return Err(errors(diagnostics));
@@ -540,11 +1263,11 @@ fn verify_and_check_module(module: Module) -> Result<Module, TranslationErrors> 
 fn kernel_ir_launch_contract(
     function: &MirFunction,
 ) -> Result<Option<WorkgroupSize>, TranslationDiagnostic> {
-    let typed_workgroup = function
-        .typed_profile
-        .map(|_| WorkgroupSize::new(256, 1, 1));
+    const DEFAULT_TYPED_WORKGROUP: WorkgroupSize = WorkgroupSize::new(256, 1, 1);
+    const GENERAL_WAVE64_WORKGROUP: WorkgroupSize = WorkgroupSize::new(64, 1, 1);
+    let typed_default = function.typed_profile.map(|_| DEFAULT_TYPED_WORKGROUP);
     let Some(authenticated) = &function.frontend_contract else {
-        return Ok(typed_workgroup);
+        return Ok(typed_default);
     };
     let contract = authenticated.contract();
     if contract.unsafe_assembly().is_some() {
@@ -558,7 +1281,7 @@ fn kernel_ir_launch_contract(
         ));
     }
     let Some(launch) = contract.launch() else {
-        return Ok(typed_workgroup);
+        return Ok(typed_default);
     };
     if launch.min_workgroups_per_compute_unit().is_some() {
         return Err(diagnostic(
@@ -585,22 +1308,25 @@ fn kernel_ir_launch_contract(
     }
     let [x, y, z] = required.as_array();
     let authenticated = WorkgroupSize::new(x, y, z);
-    let typed_launch_matches = match function.typed_profile {
-        None => true,
-        Some(MirKernelProfile::VecAddRustcLayoutV2) => {
-            authenticated == WorkgroupSize::new(256, 1, 1)
+    match function.typed_profile {
+        Some(MirKernelProfile::VecAddRustcLayoutV2) if authenticated != DEFAULT_TYPED_WORKGROUP => {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                TranslationLocation::function(function),
+                "authenticated launch contract disagrees with the VecAdd V2 profile's exact 256x1x1 workgroup",
+            ));
         }
-        Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3) => {
-            authenticated == WorkgroupSize::new(64, 1, 1)
-                || authenticated == WorkgroupSize::new(256, 1, 1)
+        Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3)
+            if authenticated != DEFAULT_TYPED_WORKGROUP
+                && authenticated != GENERAL_WAVE64_WORKGROUP =>
+        {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                TranslationLocation::function(function),
+                "General V3 kernel IR lowering requires an exact 64x1x1 or 256x1x1 authenticated workgroup",
+            ));
         }
-    };
-    if !typed_launch_matches {
-        return Err(diagnostic(
-            TranslationDiagnosticCode::UnsupportedType,
-            TranslationLocation::function(function),
-            "authenticated launch contract disagrees with the typed profile: VecAdd requires exact 256x1x1 and General V3 requires exact 64x1x1 or 256x1x1",
-        ));
+        _ => {}
     }
     Ok(Some(authenticated))
 }
@@ -635,22 +1361,934 @@ enum LocalBinding {
     DeviceMatrixReferenceCapability,
     Bf16MfmaFragment([ValueId; 4]),
     F32AccumulatorFragment([ValueId; 4]),
+    FixedArray4([ValueId; 4]),
     OptionPointer {
         discriminant: ValueId,
         payload: ValueId,
         some_entry: Option<usize>,
     },
+    OptionTiled2dWitness {
+        discriminant: ValueId,
+        raw: ValueId,
+        evidence: MirCheckedTiled2dCallEvidenceV1,
+        some_entry: Option<usize>,
+    },
+    Tiled2dWitness {
+        raw: ValueId,
+        evidence: MirCheckedTiled2dCallEvidenceV1,
+        some_entry: usize,
+    },
+}
+
+impl LocalBinding {
+    fn option_discriminant(self) -> Option<ValueId> {
+        match self {
+            Self::OptionPointer { discriminant, .. }
+            | Self::OptionTiled2dWitness { discriminant, .. } => Some(discriminant),
+            _ => None,
+        }
+    }
+
+    fn with_option_some_entry(self, some_entry: usize) -> Option<Self> {
+        match self {
+            Self::OptionPointer {
+                discriminant,
+                payload,
+                ..
+            } => Some(Self::OptionPointer {
+                discriminant,
+                payload,
+                some_entry: Some(some_entry),
+            }),
+            Self::OptionTiled2dWitness {
+                discriminant,
+                raw,
+                evidence,
+                ..
+            } => Some(Self::OptionTiled2dWitness {
+                discriminant,
+                raw,
+                evidence,
+                some_entry: Some(some_entry),
+            }),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TryCarrierKind {
+    Option,
+    Result,
+    ControlFlow,
+}
+
+impl TryCarrierKind {
+    const fn success_variant(self) -> usize {
+        match self {
+            Self::Option => 1,
+            Self::Result | Self::ControlFlow => 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TryCarrier {
+    origin_option: usize,
+    kind: TryCarrierKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CheckedPointerOrigin {
+    pointer_local: usize,
+    base_slice_local: usize,
+    index_local: usize,
+    length_local: usize,
+    bounds_local: usize,
+    bounds_block: usize,
+    some_block: usize,
+    none_block: usize,
+    join_block: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TryOrigin {
+    Tiled2d,
+    CheckedPointer(CheckedPointerOrigin),
+}
+
+#[derive(Clone, Debug, Default)]
+struct TryBridgePlan {
+    origins: BTreeMap<usize, TryOrigin>,
+    carriers: BTreeMap<usize, TryCarrier>,
+    payload_values: BTreeMap<usize, usize>,
+    success_entries: BTreeMap<usize, usize>,
+    payload_guard_entries: BTreeMap<usize, usize>,
+}
+
+impl TryBridgePlan {
+    fn analyze(function: &MirFunction) -> Result<Self, String> {
+        let mut plan = Self::default();
+        for block in &function.blocks {
+            let Some(MirTerminator {
+                kind:
+                    MirTerminatorKind::Call {
+                        callee: Some(callee),
+                        destination: Some(destination),
+                        ..
+                    },
+                ..
+            }) = block.terminator.as_ref()
+            else {
+                continue;
+            };
+            if callee.trusted_item() != Some(TrustedDeviceItem::ThreadIndexCheckedTiled2D)
+                || callee.checked_tiled_2d_evidence_v1().is_none()
+            {
+                continue;
+            }
+            if !destination.projection.is_empty()
+                || !imported_local(function, destination.local)
+                    .is_some_and(|local| is_standard_option_shape(&local.ty.shape))
+            {
+                return Err(
+                    "authenticated checked_tiled_2d result is not an unprojected standard Option"
+                        .to_owned(),
+                );
+            }
+            plan.insert_carrier(
+                destination.local,
+                TryCarrier {
+                    origin_option: destination.local,
+                    kind: TryCarrierKind::Option,
+                },
+            )?;
+            plan.insert_origin(destination.local, TryOrigin::Tiled2d)?;
+        }
+
+        plan.collect_checked_pointer_origins(function)?;
+
+        let max_rounds = function.local_count.saturating_add(1);
+        let mut converged = false;
+        for _ in 0..max_rounds {
+            let before = (plan.carriers.len(), plan.payload_values.len());
+            for block in &function.blocks {
+                for statement in &block.statements {
+                    if statement.kind != MirStatementKind::Assign {
+                        continue;
+                    }
+                    let Some(destination) = statement.destination.as_ref() else {
+                        continue;
+                    };
+                    if !destination.projection.is_empty() {
+                        continue;
+                    }
+                    match statement.rvalue {
+                        Some(MirRvalueKind::Use) => {
+                            let [MirOperandRef::Place(source)] = statement.operands.as_slice()
+                            else {
+                                continue;
+                            };
+                            if source.projection.is_empty()
+                                && let Some(carrier) = plan.carriers.get(&source.local).copied()
+                            {
+                                let destination_local = imported_local(function, destination.local)
+                                    .ok_or_else(|| {
+                                        format!(
+                                            "tiled try carrier destination local{} is not imported",
+                                            destination.local
+                                        )
+                                    })?;
+                                let exact_shape = match carrier.kind {
+                                    TryCarrierKind::Option => {
+                                        is_standard_option_shape(&destination_local.ty.shape)
+                                    }
+                                    TryCarrierKind::Result => {
+                                        is_standard_result_shape(&destination_local.ty.shape)
+                                    }
+                                    TryCarrierKind::ControlFlow => {
+                                        is_standard_control_flow_shape(&destination_local.ty.shape)
+                                    }
+                                };
+                                if !exact_shape
+                                    || destination.semantic_identity != source.semantic_identity
+                                {
+                                    return Err(format!(
+                                        "tiled try carrier copy local{} does not preserve its exact compiler type identity",
+                                        destination.local
+                                    ));
+                                }
+                                plan.insert_carrier(destination.local, carrier)?;
+                                continue;
+                            }
+                            let origin = match source.projection.as_slice() {
+                                [] => plan.payload_values.get(&source.local).copied(),
+                                [
+                                    MirProjectionElem::Downcast { variant },
+                                    MirProjectionElem::Field(0),
+                                ] => plan.carriers.get(&source.local).and_then(|carrier| {
+                                    (*variant == carrier.kind.success_variant())
+                                        .then_some(carrier.origin_option)
+                                }),
+                                _ => None,
+                            };
+                            let Some(origin) = origin else {
+                                continue;
+                            };
+                            imported_local(function, destination.local).ok_or_else(|| {
+                                format!(
+                                    "tiled try bridge destination local{} is not imported",
+                                    destination.local
+                                )
+                            })?;
+                            if destination.semantic_identity != source.semantic_identity {
+                                return Err(format!(
+                                    "tiled try bridge payload local{} does not preserve the exact compiler type identity",
+                                    destination.local
+                                ));
+                            }
+                            plan.insert_payload_value(destination.local, origin)?;
+                        }
+                        Some(MirRvalueKind::AdtAggregate {
+                            variant: 0,
+                            active_field,
+                        }) if active_field.is_none() || active_field == Some(0) => {
+                            let [MirOperandRef::Place(source)] = statement.operands.as_slice()
+                            else {
+                                continue;
+                            };
+                            if !source.projection.is_empty() {
+                                continue;
+                            }
+                            let Some(origin) = plan.payload_values.get(&source.local).copied()
+                            else {
+                                continue;
+                            };
+                            let shape = &imported_local(function, destination.local)
+                                .ok_or_else(|| {
+                                    format!(
+                                        "tiled try aggregate local{} is not imported",
+                                        destination.local
+                                    )
+                                })?
+                                .ty
+                                .shape;
+                            let kind = if is_standard_result_shape(shape) {
+                                Some(TryCarrierKind::Result)
+                            } else if is_standard_control_flow_shape(shape) {
+                                Some(TryCarrierKind::ControlFlow)
+                            } else {
+                                None
+                            };
+                            if let Some(kind) = kind {
+                                plan.insert_carrier(
+                                    destination.local,
+                                    TryCarrier {
+                                        origin_option: origin,
+                                        kind,
+                                    },
+                                )?;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if before == (plan.carriers.len(), plan.payload_values.len()) {
+                converged = true;
+                break;
+            }
+        }
+        if !converged {
+            return Err("tiled try bridge analysis did not reach a bounded fixed point".to_owned());
+        }
+
+        let mut discriminants = BTreeMap::new();
+        for block in &function.blocks {
+            for statement in &block.statements {
+                if statement.kind != MirStatementKind::Assign
+                    || statement.rvalue != Some(MirRvalueKind::Discriminant)
+                {
+                    continue;
+                }
+                let (Some(destination), [MirOperandRef::Place(source)]) = (
+                    statement.destination.as_ref(),
+                    statement.operands.as_slice(),
+                ) else {
+                    continue;
+                };
+                if !destination.projection.is_empty() || !source.projection.is_empty() {
+                    continue;
+                }
+                let Some(carrier) = plan.carriers.get(&source.local).copied() else {
+                    continue;
+                };
+                if let Some(previous) = discriminants.insert(destination.local, source.local)
+                    && previous != source.local
+                {
+                    return Err(format!(
+                        "tiled try discriminant local{} has conflicting carrier origins",
+                        destination.local
+                    ));
+                }
+                if carrier.origin_option == source.local && carrier.kind != TryCarrierKind::Option {
+                    return Err(format!(
+                        "tiled try carrier local{} has an invalid self origin",
+                        source.local
+                    ));
+                }
+            }
+        }
+        for block in &function.blocks {
+            let Some(MirTerminator {
+                kind:
+                    MirTerminatorKind::SwitchInt {
+                        discriminant: MirOperandRef::Place(discriminant),
+                        targets,
+                        otherwise,
+                    },
+                ..
+            }) = block.terminator.as_ref()
+            else {
+                continue;
+            };
+            if !discriminant.projection.is_empty() {
+                continue;
+            }
+            let Some(carrier_local) = discriminants.get(&discriminant.local).copied() else {
+                continue;
+            };
+            let carrier = plan.carriers[&carrier_local];
+            let zero = targets.iter().find(|target| target.value == 0);
+            let one = targets.iter().find(|target| target.value == 1);
+            let exhaustive = targets.len() == 2
+                && zero.is_some()
+                && one.is_some()
+                && zero.map(|target| target.target) != one.map(|target| target.target)
+                && function.blocks.iter().any(|candidate| {
+                    candidate.index == *otherwise
+                        && matches!(
+                            candidate
+                                .terminator
+                                .as_ref()
+                                .map(|terminator| &terminator.kind),
+                            Some(MirTerminatorKind::Unreachable)
+                        )
+                });
+            if !exhaustive {
+                return Err(format!(
+                    "tiled try carrier local{carrier_local} does not use an exact 0/1 switch with unreachable default"
+                ));
+            }
+            let success_entry = if carrier.kind.success_variant() == 0 {
+                zero.expect("checked above").target
+            } else {
+                one.expect("checked above").target
+            };
+            if let Some(previous) = plan.success_entries.insert(carrier_local, success_entry)
+                && previous != success_entry
+            {
+                return Err(format!(
+                    "tiled try carrier local{carrier_local} has conflicting success entries"
+                ));
+            }
+        }
+
+        let mut converged = false;
+        for _ in 0..max_rounds {
+            let before = plan.payload_guard_entries.len();
+            for block in &function.blocks {
+                let mut locally_successful_carriers = BTreeMap::new();
+                for statement in &block.statements {
+                    if statement.kind != MirStatementKind::Assign {
+                        continue;
+                    }
+                    let Some(destination) = statement.destination.as_ref() else {
+                        continue;
+                    };
+                    if !destination.projection.is_empty() {
+                        continue;
+                    }
+                    locally_successful_carriers.remove(&destination.local);
+                    match statement.rvalue {
+                        Some(MirRvalueKind::Use) => {
+                            let [MirOperandRef::Place(source)] = statement.operands.as_slice()
+                            else {
+                                continue;
+                            };
+                            let Some(origin) = plan.payload_values.get(&destination.local).copied()
+                            else {
+                                continue;
+                            };
+                            let guard = match source.projection.as_slice() {
+                                [] => plan.payload_guard_entries.get(&source.local).copied(),
+                                [
+                                    MirProjectionElem::Downcast { variant },
+                                    MirProjectionElem::Field(0),
+                                ] => {
+                                    let Some(carrier) = plan.carriers.get(&source.local).copied()
+                                    else {
+                                        continue;
+                                    };
+                                    if *variant != carrier.kind.success_variant()
+                                        || carrier.origin_option != origin
+                                    {
+                                        continue;
+                                    }
+                                    locally_successful_carriers
+                                        .get(&source.local)
+                                        .filter(|(local_origin, _)| *local_origin == origin)
+                                        .map(|(_, guard)| *guard)
+                                        .or_else(|| {
+                                            plan.success_entries.get(&source.local).copied().filter(
+                                                |guard| {
+                                                    mir_block_dominates(
+                                                        function,
+                                                        *guard,
+                                                        block.index,
+                                                    )
+                                                },
+                                            )
+                                        })
+                                }
+                                _ => None,
+                            };
+                            if let Some(guard) = guard {
+                                plan.insert_payload_guard(destination.local, guard)?;
+                            }
+                        }
+                        Some(MirRvalueKind::AdtAggregate {
+                            variant,
+                            active_field,
+                        }) if active_field.is_none() || active_field == Some(0) => {
+                            let Some(carrier) = plan.carriers.get(&destination.local).copied()
+                            else {
+                                continue;
+                            };
+                            let [MirOperandRef::Place(source)] = statement.operands.as_slice()
+                            else {
+                                continue;
+                            };
+                            if variant != carrier.kind.success_variant()
+                                || !source.projection.is_empty()
+                                || plan.payload_values.get(&source.local).copied()
+                                    != Some(carrier.origin_option)
+                            {
+                                continue;
+                            }
+                            if let Some(guard) =
+                                plan.payload_guard_entries.get(&source.local).copied()
+                            {
+                                locally_successful_carriers
+                                    .insert(destination.local, (carrier.origin_option, guard));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if before == plan.payload_guard_entries.len() {
+                converged = true;
+                break;
+            }
+        }
+        if !converged {
+            return Err(
+                "tiled witness guard analysis did not reach a bounded fixed point".to_owned(),
+            );
+        }
+        if let Some(local) = plan
+            .payload_values
+            .keys()
+            .find(|local| !plan.payload_guard_entries.contains_key(local))
+        {
+            return Err(format!(
+                "tiled witness local{local} has no compiler-authenticated success guard"
+            ));
+        }
+        Ok(plan)
+    }
+
+    fn collect_checked_pointer_origins(&mut self, function: &MirFunction) -> Result<(), String> {
+        let mut writes = BTreeMap::<usize, Vec<(usize, &MirStatement)>>::new();
+        for block in &function.blocks {
+            for statement in &block.statements {
+                if statement.kind == MirStatementKind::Assign
+                    && let Some(destination) = statement.destination.as_ref()
+                    && destination.projection.is_empty()
+                {
+                    writes
+                        .entry(destination.local)
+                        .or_default()
+                        .push((block.index, statement));
+                }
+            }
+        }
+        let blocks = function
+            .blocks
+            .iter()
+            .map(|block| (block.index, block))
+            .collect::<BTreeMap<_, _>>();
+
+        for bounds_block in &function.blocks {
+            let Some(MirTerminator {
+                kind:
+                    MirTerminatorKind::SwitchInt {
+                        discriminant: MirOperandRef::Place(discriminant),
+                        targets,
+                        otherwise,
+                    },
+                ..
+            }) = bounds_block.terminator.as_ref()
+            else {
+                continue;
+            };
+            if !discriminant.projection.is_empty()
+                || targets.len() != 1
+                || targets[0].value > 1
+                || targets[0].target == *otherwise
+                || !matches!(
+                    imported_local(function, discriminant.local).map(|local| &local.ty.shape),
+                    Some(MirTypeShape::Bool)
+                )
+            {
+                continue;
+            }
+            let Some([(definition_block, bounds_statement)]) =
+                writes.get(&discriminant.local).map(Vec::as_slice)
+            else {
+                continue;
+            };
+            if *definition_block != bounds_block.index
+                || bounds_statement.rvalue != Some(MirRvalueKind::Binary(MirBinaryOp::Lt))
+            {
+                continue;
+            }
+            let [MirOperandRef::Place(index), MirOperandRef::Place(length)] =
+                bounds_statement.operands.as_slice()
+            else {
+                continue;
+            };
+            if !index.projection.is_empty()
+                || !length.projection.is_empty()
+                || !matches!(
+                    imported_local(function, index.local).map(|local| &local.ty.shape),
+                    Some(MirTypeShape::USize)
+                )
+                || !matches!(
+                    imported_local(function, length.local).map(|local| &local.ty.shape),
+                    Some(MirTypeShape::USize)
+                )
+            {
+                continue;
+            }
+
+            let explicit = blocks.get(&targets[0].target).copied().ok_or_else(|| {
+                format!(
+                    "bounds switch bb{} references missing bb{}",
+                    bounds_block.index, targets[0].target
+                )
+            })?;
+            let fallback = blocks.get(otherwise).copied().ok_or_else(|| {
+                format!(
+                    "bounds switch bb{} references missing bb{}",
+                    bounds_block.index, otherwise
+                )
+            })?;
+            let (some_block, none_block) = if targets[0].value == 0 {
+                (fallback, explicit)
+            } else {
+                (explicit, fallback)
+            };
+
+            let some_candidates = some_block
+                .statements
+                .iter()
+                .filter_map(|statement| {
+                    let Some(MirRvalueKind::AdtAggregate {
+                        variant: 1,
+                        active_field,
+                    }) = statement.rvalue
+                    else {
+                        return None;
+                    };
+                    if active_field.is_some_and(|field| field != 0) {
+                        return None;
+                    }
+                    let destination = statement.destination.as_ref()?;
+                    let [MirOperandRef::Place(pointer)] = statement.operands.as_slice() else {
+                        return None;
+                    };
+                    (destination.projection.is_empty() && pointer.projection.is_empty())
+                        .then_some((statement, destination, pointer))
+                })
+                .collect::<Vec<_>>();
+            if some_candidates.is_empty() {
+                continue;
+            }
+            if some_candidates.len() != 1 {
+                return Err(format!(
+                    "checked pointer success bb{} has more than one one-field Some construction",
+                    some_block.index
+                ));
+            }
+            let (some_statement, some_destination, some_pointer) = some_candidates[0];
+            let option_local =
+                imported_local(function, some_destination.local).ok_or_else(|| {
+                    format!(
+                        "checked pointer Option local{} is not imported",
+                        some_destination.local
+                    )
+                })?;
+            if !is_standard_option_shape(&option_local.ty.shape) {
+                continue;
+            }
+
+            let none_candidates = none_block
+                .statements
+                .iter()
+                .filter(|statement| {
+                    statement.rvalue == Some(MirRvalueKind::FieldlessEnumVariant(0))
+                        && statement.operands.is_empty()
+                        && matches!(
+                            statement.destination.as_ref(),
+                            Some(destination)
+                                if destination.local == some_destination.local
+                                    && destination.projection.is_empty()
+                        )
+                })
+                .collect::<Vec<_>>();
+            if none_candidates.len() != 1 {
+                let observed = none_block
+                    .statements
+                    .iter()
+                    .filter(|statement| {
+                        matches!(
+                            statement.destination.as_ref(),
+                            Some(destination) if destination.local == some_destination.local
+                        )
+                    })
+                    .map(|statement| {
+                        format!(
+                            "rvalue={:?}, operands={:?}, semantic_type={:?}",
+                            statement.rvalue, statement.operands, statement.semantic_rvalue_type
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(format!(
+                    "checked pointer failure bb{} must construct the exact fieldless Option::None variant; observed {observed}",
+                    none_block.index,
+                ));
+            }
+            let none_statement = none_candidates[0];
+            if writes
+                .get(&some_destination.local)
+                .is_none_or(|assignments| assignments.len() != 2)
+            {
+                return Err(format!(
+                    "checked pointer Option local{} must have exactly its Some and None definitions",
+                    some_destination.local
+                ));
+            }
+
+            let Some(MirTerminatorKind::Goto { target: some_join }) = some_block
+                .terminator
+                .as_ref()
+                .map(|terminator| &terminator.kind)
+            else {
+                return Err(format!(
+                    "checked pointer success bb{} does not branch directly to its Option join",
+                    some_block.index
+                ));
+            };
+            let Some(MirTerminatorKind::Goto { target: none_join }) = none_block
+                .terminator
+                .as_ref()
+                .map(|terminator| &terminator.kind)
+            else {
+                return Err(format!(
+                    "checked pointer failure bb{} does not branch directly to its Option join",
+                    none_block.index
+                ));
+            };
+            if some_join != none_join {
+                return Err(format!(
+                    "checked pointer Option local{} has different Some and None joins",
+                    some_destination.local
+                ));
+            }
+
+            let pointer_definitions = writes
+                .get(&some_pointer.local)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let [(pointer_block, pointer_statement)] = pointer_definitions else {
+                return Err(format!(
+                    "checked pointer payload local{} must have exactly one definition",
+                    some_pointer.local
+                ));
+            };
+            let Some(MirRvalueKind::Reference(crate::mir_import::MirBorrowKind::Shared)) =
+                pointer_statement.rvalue
+            else {
+                return Err(format!(
+                    "checked pointer payload local{} is not an exact shared reference",
+                    some_pointer.local
+                ));
+            };
+            let (Some(pointer_destination), [MirOperandRef::Place(indexed)]) = (
+                pointer_statement.destination.as_ref(),
+                pointer_statement.operands.as_slice(),
+            ) else {
+                return Err(format!(
+                    "checked pointer payload local{} has malformed reference MIR",
+                    some_pointer.local
+                ));
+            };
+            let [
+                MirProjectionElem::Deref,
+                MirProjectionElem::Index {
+                    local: pointer_index,
+                },
+            ] = indexed.projection.as_slice()
+            else {
+                return Err(format!(
+                    "checked pointer payload local{} is not borrowed from one indexed slice element",
+                    some_pointer.local
+                ));
+            };
+            if *pointer_block != some_block.index
+                || pointer_destination.local != some_pointer.local
+                || !pointer_destination.projection.is_empty()
+                || indexed.local == some_pointer.local
+                || *pointer_index != index.local
+            {
+                return Err(format!(
+                    "checked pointer payload local{} does not preserve its guarded slice/index origin",
+                    some_pointer.local
+                ));
+            }
+
+            let Some([(length_block, length_statement)]) =
+                writes.get(&length.local).map(Vec::as_slice)
+            else {
+                return Err(format!(
+                    "checked pointer length local{} must have exactly one definition",
+                    length.local
+                ));
+            };
+            let (Some(length_destination), [MirOperandRef::Place(length_slice)]) = (
+                length_statement.destination.as_ref(),
+                length_statement.operands.as_slice(),
+            ) else {
+                return Err(format!(
+                    "checked pointer length local{} has malformed slice metadata MIR",
+                    length.local
+                ));
+            };
+            if length_statement.rvalue != Some(MirRvalueKind::Unary(MirUnaryOp::PtrMetadata))
+                || !length_destination.projection.is_empty()
+                || !length_slice.projection.is_empty()
+                || length_slice.local != indexed.local
+                || !mir_block_dominates(function, *length_block, bounds_block.index)
+            {
+                return Err(format!(
+                    "checked pointer length local{} is not the dominating metadata of its exact source slice",
+                    length.local
+                ));
+            }
+
+            let base = imported_local(function, indexed.local).ok_or_else(|| {
+                format!(
+                    "checked pointer base local{} is not imported",
+                    indexed.local
+                )
+            })?;
+            let pointer = imported_local(function, some_pointer.local).ok_or_else(|| {
+                format!(
+                    "checked pointer payload local{} is not imported",
+                    some_pointer.local
+                )
+            })?;
+            let exact_types = matches!(
+                (&base.ty.shape, &pointer.ty.shape),
+                (
+                    MirTypeShape::Slice { element, mutable: false },
+                    MirTypeShape::Reference { pointee, mutable: false }
+                ) if element == pointee
+            ) && base.role == crate::mir_import::MirLocalRole::Arg;
+            let exact_identities = some_destination.semantic_identity
+                == option_local.ty.semantic_identity
+                && some_statement.semantic_rvalue_type.as_ref()
+                    == Some(&option_local.ty.semantic_identity)
+                && none_statement
+                    .destination
+                    .as_ref()
+                    .is_some_and(|destination| {
+                        destination.semantic_identity == option_local.ty.semantic_identity
+                    })
+                && none_statement.semantic_rvalue_type.as_ref()
+                    == Some(&option_local.ty.semantic_identity)
+                && pointer_destination.semantic_identity == pointer.ty.semantic_identity
+                && some_pointer.semantic_identity == pointer.ty.semantic_identity
+                && length_destination.semantic_identity
+                    == imported_local(function, length.local)
+                        .expect("length local checked above")
+                        .ty
+                        .semantic_identity
+                && length_slice.semantic_identity == base.ty.semantic_identity
+                && index.semantic_identity
+                    == imported_local(function, index.local)
+                        .expect("index local checked above")
+                        .ty
+                        .semantic_identity
+                && length.semantic_identity
+                    == imported_local(function, length.local)
+                        .expect("length local checked above")
+                        .ty
+                        .semantic_identity;
+            if !exact_types || !exact_identities {
+                return Err(format!(
+                    "checked pointer Option local{} does not preserve exact slice, pointer, and compiler type identities",
+                    some_destination.local
+                ));
+            }
+
+            let origin = CheckedPointerOrigin {
+                pointer_local: some_pointer.local,
+                base_slice_local: indexed.local,
+                index_local: index.local,
+                length_local: length.local,
+                bounds_local: discriminant.local,
+                bounds_block: bounds_block.index,
+                some_block: some_block.index,
+                none_block: none_block.index,
+                join_block: *some_join,
+            };
+            self.insert_origin(some_destination.local, TryOrigin::CheckedPointer(origin))?;
+            self.insert_carrier(
+                some_destination.local,
+                TryCarrier {
+                    origin_option: some_destination.local,
+                    kind: TryCarrierKind::Option,
+                },
+            )?;
+            self.insert_payload_value(some_pointer.local, some_destination.local)?;
+            self.insert_payload_guard(some_pointer.local, some_block.index)?;
+        }
+        Ok(())
+    }
+
+    fn insert_carrier(&mut self, local: usize, carrier: TryCarrier) -> Result<(), String> {
+        if let Some(previous) = self.carriers.insert(local, carrier)
+            && previous != carrier
+        {
+            return Err(format!(
+                "tiled try bridge local{local} has conflicting authenticated carrier origins"
+            ));
+        }
+        Ok(())
+    }
+
+    fn insert_origin(&mut self, local: usize, origin: TryOrigin) -> Result<(), String> {
+        if let Some(previous) = self.origins.insert(local, origin)
+            && previous != origin
+        {
+            return Err(format!(
+                "try bridge local{local} has conflicting authenticated origin kinds"
+            ));
+        }
+        Ok(())
+    }
+
+    fn insert_payload_value(&mut self, local: usize, origin: usize) -> Result<(), String> {
+        if let Some(previous) = self.payload_values.insert(local, origin)
+            && previous != origin
+        {
+            return Err(format!(
+                "tiled witness local{local} has conflicting authenticated origins"
+            ));
+        }
+        Ok(())
+    }
+
+    fn insert_payload_guard(&mut self, local: usize, guard: usize) -> Result<(), String> {
+        if let Some(previous) = self.payload_guard_entries.insert(local, guard)
+            && previous != guard
+        {
+            return Err(format!(
+                "tiled witness local{local} has conflicting authenticated success guards"
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TryDiscriminant {
+    carrier_local: usize,
+    origin_option: usize,
+    success_variant: usize,
 }
 
 struct FunctionLowerer<'function, 'declarations> {
     function: &'function MirFunction,
+    kernel_context: Option<&'function MirFunction>,
+    source_abi: &'function MirFunction,
+    elides_generated_result: bool,
+    sealed_generated_kernel_binding: Option<KernelBindingIdV1>,
     declarations: &'declarations mut BTreeMap<String, Signature>,
     internal_definitions:
         &'declarations BTreeMap<MirSemanticInstanceIdentity, InternalDefinitionContract>,
     locals: BTreeMap<usize, LocalBinding>,
     value_types: BTreeMap<ValueId, Type>,
     trusted_thread_indices: BTreeSet<ValueId>,
+    trusted_disjoint_indices: BTreeSet<ValueId>,
     guarded_pointer_values: BTreeMap<ValueId, usize>,
+    checked_pointer_candidates: BTreeMap<usize, ValueId>,
+    tiled_error_origins: BTreeMap<usize, usize>,
+    elided_tiled_error_values: BTreeSet<ValueId>,
     return_type: Option<Type>,
     next_value: u32,
     trap_block: Option<BlockId>,
@@ -659,13 +2297,19 @@ struct FunctionLowerer<'function, 'declarations> {
     collective_target: Option<Gfx942WaveLdsTargetV2>,
     strict_float_policy: StrictFloatPolicy,
     control_flow_ssa: control_flow_ssa::ControlFlowSsaPlan,
-    block_parameters: BTreeMap<usize, BTreeMap<usize, ValueId>>,
+    block_parameters: BTreeMap<usize, BTreeMap<usize, Vec<ValueId>>>,
+    try_bridge: TryBridgePlan,
+    try_discriminants: BTreeMap<ValueId, TryDiscriminant>,
     required_capabilities: BTreeSet<TargetCapability>,
 }
 
 impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
     fn new(
         function: &'function MirFunction,
+        kernel_context: Option<&'function MirFunction>,
+        source_abi: &'function MirFunction,
+        elides_generated_result: bool,
+        sealed_generated_kernel_binding: Option<KernelBindingIdV1>,
         declarations: &'declarations mut BTreeMap<String, Signature>,
         internal_definitions: &'declarations BTreeMap<
             MirSemanticInstanceIdentity,
@@ -678,12 +2322,20 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
     ) -> Self {
         Self {
             function,
+            kernel_context,
+            source_abi,
+            elides_generated_result,
+            sealed_generated_kernel_binding,
             declarations,
             internal_definitions,
             locals: BTreeMap::new(),
             value_types: BTreeMap::new(),
             trusted_thread_indices: BTreeSet::new(),
+            trusted_disjoint_indices: BTreeSet::new(),
             guarded_pointer_values: BTreeMap::new(),
+            checked_pointer_candidates: BTreeMap::new(),
+            tiled_error_origins: BTreeMap::new(),
+            elided_tiled_error_values: BTreeSet::new(),
             return_type: None,
             next_value: 0,
             trap_block: None,
@@ -693,12 +2345,25 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             strict_float_policy,
             control_flow_ssa: control_flow_ssa::ControlFlowSsaPlan::default(),
             block_parameters: BTreeMap::new(),
+            try_bridge: TryBridgePlan::default(),
+            try_discriminants: BTreeMap::new(),
             required_capabilities: BTreeSet::new(),
         }
     }
 
     fn lower(mut self) -> Result<Function, TranslationDiagnostic> {
-        let signature = declared_function_signature(self.function)?;
+        self.try_bridge = TryBridgePlan::analyze(self.function).map_err(|reason| {
+            diagnostic(
+                TranslationDiagnosticCode::UnsupportedProjection,
+                TranslationLocation::function(self.function),
+                format!("authenticated tiled try bridge rejected: {reason}"),
+            )
+        })?;
+        let signature = declared_function_signature(
+            self.function,
+            self.source_abi,
+            self.elides_generated_result,
+        )?;
         let mut args = self
             .function
             .locals
@@ -828,14 +2493,22 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         {
             let mut parameters = BTreeMap::new();
             for local in self.control_flow_ssa.live_in(source_block.index).to_vec() {
-                let ty = self
+                let types = self
                     .control_flow_ssa
-                    .ty(local)
+                    .types(local)
                     .expect("live-in local is promoted")
-                    .clone();
-                let parameter =
-                    self.fresh_value(ty, &TranslationLocation::block(self.function, source_block))?;
-                parameters.insert(local, parameter.id);
+                    .to_vec();
+                let values = types
+                    .into_iter()
+                    .map(|ty| {
+                        self.fresh_value(
+                            ty,
+                            &TranslationLocation::block(self.function, source_block),
+                        )
+                        .map(|parameter| parameter.id)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                parameters.insert(local, values);
             }
             self.block_parameters.insert(source_block.index, parameters);
         }
@@ -862,10 +2535,39 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 Some(self.block_id(next, TranslationLocation::function(self.function))?);
         }
 
+        let lowering_order = mir_reverse_postorder(self.function)?;
+        let mut lowered = BTreeMap::new();
+        for source_block in lowering_order {
+            lowered.insert(source_block.index, self.lower_block(source_block)?);
+        }
+        if !self.checked_pointer_candidates.is_empty() {
+            let pointer_locals = self
+                .checked_pointer_candidates
+                .keys()
+                .map(|local| format!("local{local}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(diagnostic(
+                TranslationDiagnosticCode::MalformedMir,
+                TranslationLocation::function(self.function),
+                format!(
+                    "checked pointer candidates were not consumed by their authenticated success paths: {pointer_locals}"
+                ),
+            ));
+        }
         let mut blocks =
             Vec::with_capacity(source_blocks.len() + usize::from(self.trap_block.is_some()));
         for source_block in source_blocks {
-            blocks.push(self.lower_block(source_block)?);
+            blocks.push(lowered.remove(&source_block.index).ok_or_else(|| {
+                diagnostic(
+                    TranslationDiagnosticCode::MalformedMir,
+                    TranslationLocation::block(self.function, source_block),
+                    format!(
+                        "deterministic reverse-postorder lowering omitted bb{}",
+                        source_block.index
+                    ),
+                )
+            })?);
         }
         if let Some(trap) = self.trap_block {
             let mut block = BasicBlock::new(trap);
@@ -926,18 +2628,70 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         }
     }
 
-    fn is_general_v3_profile_context(&self) -> bool {
-        self.function.kind == MirFunctionKind::KernelEntry
-            && self.function.typed_profile
-                == Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3)
+    fn is_authenticated_general_v3_scalar_context(&self) -> bool {
+        self.is_exact_general_v3_alpha_zeta_context()
+            || (self.is_general_v3_profile_context()
+                && self.sealed_generated_kernel_binding.is_some())
     }
-    fn is_general_typed_kernel_context(&self) -> bool {
-        self.function.kind == MirFunctionKind::KernelEntry
-            && self.function.typed_profile
-                == Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3)
+
+    fn is_authenticated_vecadd_v2_scalar_context(&self) -> bool {
+        let Some(context) = self.kernel_context else {
+            return false;
+        };
+        if context.kind != MirFunctionKind::KernelEntry
+            || context.typed_profile != Some(MirKernelProfile::VecAddRustcLayoutV2)
+        {
+            return false;
+        }
+        let mut arguments = context
+            .locals
+            .iter()
+            .filter(|local| local.role == crate::mir_import::MirLocalRole::Arg)
+            .collect::<Vec<_>>();
+        arguments.sort_by_key(|local| local.index);
+        matches!(
+            arguments.as_slice(),
+            [a, b, output]
+                if is_readonly_f32_slice(&a.ty.shape)
+                    && is_readonly_f32_slice(&b.ty.shape)
+                    && is_disjoint_f32_slice(&output.ty.shape)
+        )
+    }
+
+    fn is_authenticated_f32_scalar_context(&self) -> bool {
+        self.is_authenticated_general_v3_scalar_context()
+            || self.is_authenticated_vecadd_v2_scalar_context()
+    }
+
+    fn is_general_v3_profile_context(&self) -> bool {
+        self.kernel_context.is_some_and(|context| {
+            context.kind == MirFunctionKind::KernelEntry
+                && context.typed_profile == Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3)
+        })
     }
     fn is_gfx942_memory_v1_context(&self) -> bool {
         self.is_general_v3_profile_context() && self.float_target.is_some()
+    }
+
+    fn is_memory_v1_source_context(&self) -> bool {
+        self.function.blocks.iter().any(|block| {
+            matches!(
+                block.terminator.as_ref().map(|terminator| &terminator.kind),
+                Some(MirTerminatorKind::Call {
+                    callee: Some(callee),
+                    ..
+                }) if matches!(
+                    callee.trusted_item(),
+                    Some(
+                        TrustedDeviceItem::MemoryOffsetFrom
+                            | TrustedDeviceItem::MemoryVolatileLoad
+                            | TrustedDeviceItem::MemoryVolatileStore
+                            | TrustedDeviceItem::MemoryCopyNonOverlapping
+                            | TrustedDeviceItem::MemoryCopyOneNonOverlapping
+                    )
+                )
+            )
+        })
     }
 
     fn gfx942_collective_workgroup_size(&self) -> Option<u32> {
@@ -963,7 +2717,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
     }
 
     fn is_exact_gfx942_wave64_matrix_context(&self) -> bool {
-        self.function.kind == MirFunctionKind::KernelEntry
+        self.kernel_context.is_some()
             && self.collective_target.is_some()
             && self.workgroup_size == Some(WorkgroupSize::new(64, 1, 1))
     }
@@ -990,23 +2744,31 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             for local in promoted {
                 self.locals.remove(&local);
             }
-            for (&local, &id) in self
+            for (&local, ids) in self
                 .block_parameters
                 .get(&source.index)
                 .expect("non-entry block parameter map")
             {
-                let ty = self
+                let types = self
                     .control_flow_ssa
-                    .ty(local)
-                    .expect("block parameter local is promoted")
-                    .clone();
-                block.parameters.push(ValueDef::new(id, ty));
-                let binding = match self.control_flow_ssa.kind(local) {
-                    Some(control_flow_ssa::PromotedLocalKind::Scalar) => LocalBinding::Value(id),
-                    Some(control_flow_ssa::PromotedLocalKind::FieldlessEnum) => {
-                        LocalBinding::FieldlessEnum { discriminant: id }
+                    .types(local)
+                    .expect("block parameter local is promoted");
+                for (&id, ty) in ids.iter().zip(types) {
+                    block.parameters.push(ValueDef::new(id, ty.clone()));
+                }
+                let binding = match (self.control_flow_ssa.kind(local), ids.as_slice()) {
+                    (Some(control_flow_ssa::PromotedLocalKind::Scalar), [id]) => {
+                        LocalBinding::Value(*id)
                     }
-                    None => unreachable!("block parameter local is promoted"),
+                    (Some(control_flow_ssa::PromotedLocalKind::FieldlessEnum), [id]) => {
+                        LocalBinding::FieldlessEnum { discriminant: *id }
+                    }
+                    (
+                        Some(control_flow_ssa::PromotedLocalKind::F32AccumulatorFragment),
+                        [v0, v1, v2, v3],
+                    ) => LocalBinding::F32AccumulatorFragment([*v0, *v1, *v2, *v3]),
+                    (None, _) => unreachable!("block parameter local is promoted"),
+                    _ => unreachable!("promoted local value arity matches its kind"),
                 };
                 self.locals.insert(local, binding);
             }
@@ -1032,6 +2794,34 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         block: &mut BasicBlock,
     ) -> Result<(), TranslationDiagnostic> {
         let location = TranslationLocation::statement(self.function, block_index, statement);
+        if self.elides_generated_result
+            && statement
+                .destination
+                .as_ref()
+                .is_some_and(|destination| destination.local == 0)
+        {
+            let return_local = imported_local(self.function, 0).ok_or_else(|| {
+                diagnostic(
+                    TranslationDiagnosticCode::MalformedMir,
+                    location.clone(),
+                    "generated kernel body has no return local0",
+                )
+            })?;
+            if statement.kind == MirStatementKind::Assign
+                && statement
+                    .destination
+                    .as_ref()
+                    .is_some_and(|destination| destination.projection.is_empty())
+                && is_exact_discarded_result_rvalue(self.function, statement, return_local)
+            {
+                return Ok(());
+            }
+            return Err(diagnostic(
+                TranslationDiagnosticCode::MalformedMir,
+                location,
+                "generated kernel body return write escaped its authenticated Result-elision contract",
+            ));
+        }
         match statement.kind {
             MirStatementKind::StorageLive
             | MirStatementKind::StorageDead
@@ -1045,6 +2835,17 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 ));
             }
             MirStatementKind::Assume => {
+                if self.elides_generated_result
+                    && statement.destination.is_none()
+                    && statement.rvalue.is_none()
+                    && statement.semantic_rvalue_type.is_none()
+                    && matches!(statement.operands.as_slice(), [MirOperandRef::Place(place)]
+                        if place.projection.is_empty()
+                            && matches!(self.locals.get(&place.local), Some(LocalBinding::Value(value))
+                                if self.elided_tiled_error_values.contains(value)))
+                {
+                    return Ok(());
+                }
                 return Err(diagnostic(
                     TranslationDiagnosticCode::UnsupportedStatement,
                     location,
@@ -1173,6 +2974,72 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                         location,
                     );
                 }
+                if let Some(binding) = self.tiled_witness_binding(place.local, &location)? {
+                    let exact_value = place.projection.is_empty()
+                        && self.try_bridge.payload_values.contains_key(&place.local);
+                    let exact_reference = destination.projection.is_empty()
+                        && matches!(
+                            self.imported_local_shape(destination.local),
+                            Some(MirTypeShape::Reference { mutable: false, .. })
+                        );
+                    if !exact_value || !exact_reference {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedType,
+                            location,
+                            "tiled witness autoref requires an exact unprojected DisjointTile2D source and shared reference destination",
+                        ));
+                    }
+                    return self.bind_local(destination.local, binding, location);
+                }
+                if let Some((origin_option, origin)) =
+                    self.try_bridge
+                        .origins
+                        .iter()
+                        .find_map(|(option, origin)| match origin {
+                            TryOrigin::CheckedPointer(origin)
+                                if origin.pointer_local == destination.local =>
+                            {
+                                Some((*option, *origin))
+                            }
+                            TryOrigin::Tiled2d | TryOrigin::CheckedPointer(_) => None,
+                        })
+                {
+                    let exact_place = matches!(
+                        place.projection.as_slice(),
+                        [MirProjectionElem::Deref, MirProjectionElem::Index { local }]
+                            if place.local == origin.base_slice_local
+                                && *local == origin.index_local
+                    );
+                    if !exact_place
+                        || !destination.projection.is_empty()
+                        || location.block != Some(origin.some_block)
+                        || self
+                            .try_bridge
+                            .payload_values
+                            .get(&destination.local)
+                            .copied()
+                            != Some(origin_option)
+                    {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedProjection,
+                            location,
+                            "checked pointer reference does not preserve its exact authenticated slice, index, and bounds-success block",
+                        ));
+                    }
+                    let pointer = self
+                        .checked_pointer_candidates
+                        .remove(&destination.local)
+                        .ok_or_else(|| {
+                            diagnostic(
+                                TranslationDiagnosticCode::MalformedMir,
+                                location.clone(),
+                                "checked pointer candidate was not materialized in its authenticated bounds block",
+                            )
+                        })?;
+                    self.guarded_pointer_values
+                        .insert(pointer, origin.some_block);
+                    return self.bind_plain_destination(destination, pointer, location);
+                }
                 if !place.projection.is_empty() {
                     return Err(diagnostic(
                         TranslationDiagnosticCode::UnsupportedProjection,
@@ -1191,6 +3058,21 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                         "use assignment must have one operand",
                     ));
                 };
+                if self.lower_try_failure_use(destination, operand, &location)? {
+                    return Ok(());
+                }
+                if self.lower_try_carrier_use(destination, operand, &location)? {
+                    return Ok(());
+                }
+                if self.lower_checked_pointer_use(destination, operand, &location)? {
+                    return Ok(());
+                }
+                if self.lower_tiled_witness_use(destination, operand, &location)? {
+                    return Ok(());
+                }
+                if self.lower_matrix_aggregate_use(destination, operand, &location)? {
+                    return Ok(());
+                }
                 let value = self.lower_operand(operand, block, &location)?;
                 self.assign_value(destination, value, block, location)
             }
@@ -1209,30 +3091,127 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                         "projected discriminants are not supported",
                     ));
                 }
+                if let Some(carrier) = self.try_bridge.carriers.get(&place.local).copied() {
+                    let present = self.try_option_binding(carrier.origin_option, &location)?.0;
+                    let discriminant = if carrier.kind == TryCarrierKind::Option {
+                        present
+                    } else {
+                        self.emit_result(
+                            block,
+                            Type::BOOL,
+                            OperationKind::Unary {
+                                op: UnaryOp::Not,
+                                operand: present,
+                            },
+                            &location,
+                        )?
+                    };
+                    self.try_discriminants.insert(
+                        discriminant,
+                        TryDiscriminant {
+                            carrier_local: place.local,
+                            origin_option: carrier.origin_option,
+                            success_variant: carrier.kind.success_variant(),
+                        },
+                    );
+                    return self.bind_plain_destination(destination, discriminant, location);
+                }
+                if self.elides_generated_result
+                    && self.tiled_error_origins.contains_key(&place.local)
+                    && is_standard_result_shape(self.local_shape(place.local, &location)?)
+                {
+                    let discriminant = self.emit_result(
+                        block,
+                        Type::Scalar(ScalarType::I64),
+                        OperationKind::Constant(Constant::I64(1)),
+                        &location,
+                    )?;
+                    self.elided_tiled_error_values.insert(discriminant);
+                    return self.bind_plain_destination(destination, discriminant, location);
+                }
                 let binding = self
                     .locals
                     .get(&place.local)
                     .copied()
                     .ok_or_else(|| self.undefined_local(place.local, location.clone()))?;
-                let discriminant = match binding {
-                    LocalBinding::OptionPointer { discriminant, .. }
-                    | LocalBinding::FieldlessEnum { discriminant } => discriminant,
-                    LocalBinding::Value(_)
-                    | LocalBinding::DeviceMathCapability
-                    | LocalBinding::Gfx942CollectiveCapability
-                    | LocalBinding::Gfx942StaticLdsU32x256(_)
-                    | LocalBinding::DeviceMatrixValueCapability
-                    | LocalBinding::DeviceMatrixReferenceCapability
-                    | LocalBinding::Bf16MfmaFragment(_)
-                    | LocalBinding::F32AccumulatorFragment(_) => {
+                let discriminant = match (binding.option_discriminant(), binding) {
+                    (Some(discriminant), _) => discriminant,
+                    (None, LocalBinding::FieldlessEnum { discriminant }) => discriminant,
+                    (
+                        None,
+                        LocalBinding::Value(_)
+                        | LocalBinding::OptionPointer { .. }
+                        | LocalBinding::OptionTiled2dWitness { .. }
+                        | LocalBinding::Tiled2dWitness { .. }
+                        | LocalBinding::DeviceMathCapability
+                        | LocalBinding::Gfx942CollectiveCapability
+                        | LocalBinding::Gfx942StaticLdsU32x256(_)
+                        | LocalBinding::DeviceMatrixValueCapability
+                        | LocalBinding::DeviceMatrixReferenceCapability
+                        | LocalBinding::Bf16MfmaFragment(_)
+                        | LocalBinding::F32AccumulatorFragment(_)
+                        | LocalBinding::FixedArray4(_),
+                    ) => {
                         return Err(diagnostic(
                             TranslationDiagnosticCode::UnsupportedType,
                             location,
-                            "discriminant operand is not a translated Option pointer or authenticated fieldless enum",
+                            "discriminant operand is not a translated Option result or authenticated fieldless enum",
                         ));
                     }
                 };
                 self.bind_plain_destination(destination, discriminant, location)
+            }
+            MirRvalueKind::AdtAggregate {
+                variant,
+                active_field,
+            } if self.try_bridge.carriers.contains_key(&destination.local) => self
+                .lower_try_aggregate(
+                    destination,
+                    variant,
+                    active_field,
+                    &statement.operands,
+                    &statement.semantic_rvalue_type,
+                    &location,
+                ),
+            MirRvalueKind::AdtAggregate {
+                variant,
+                active_field,
+            } => {
+                if self.lower_try_error_aggregate(
+                    destination,
+                    variant,
+                    active_field,
+                    &statement.operands,
+                    &statement.semantic_rvalue_type,
+                    &location,
+                )? {
+                    Ok(())
+                } else {
+                    Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedRvalue,
+                        location,
+                        format!(
+                            "unsupported structured MIR rvalue: {:?}",
+                            MirRvalueKind::AdtAggregate {
+                                variant,
+                                active_field,
+                            }
+                        ),
+                    ))
+                }
+            }
+            MirRvalueKind::FieldlessEnumVariant(0)
+                if matches!(
+                    self.try_bridge.origins.get(&destination.local),
+                    Some(TryOrigin::CheckedPointer(_))
+                ) =>
+            {
+                self.validate_checked_pointer_none(
+                    destination,
+                    &statement.operands,
+                    &statement.semantic_rvalue_type,
+                    &location,
+                )
             }
             MirRvalueKind::FieldlessEnumVariant(discriminant) => {
                 if self.float_target.is_none() {
@@ -1285,42 +3264,246 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 )?;
                 self.bind_plain_destination(destination, result, location)
             }
-            MirRvalueKind::Binary(MirBinaryOp::Add) => {
+            MirRvalueKind::Repeat { count } => {
+                let [operand] = statement.operands.as_slice() else {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::MalformedMir,
+                        location,
+                        "repeat rvalue must have exactly one element operand",
+                    ));
+                };
+                if !destination.projection.is_empty()
+                    || count != Some(4)
+                    || !matches!(
+                        self.local_shape(destination.local, &location)?,
+                        MirTypeShape::Array { element, length: Some(4) }
+                            if element.as_ref() == &MirTypeShape::F32
+                    )
+                    || !self.is_authenticated_general_v3_scalar_context()
+                    || !self.is_exact_gfx942_wave64_matrix_context()
+                {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedRvalue,
+                        location,
+                        "repeat lowering requires an exact authenticated `[f32; 4]` matrix-fragment initializer in a gfx942 one-wave General V3 kernel",
+                    ));
+                }
+                self.require_strict_float_policy(&location)?;
+                let value = self.lower_operand(operand, block, &location)?;
+                if self.value_type(value, &location)? != &Type::F32 {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedType,
+                        location,
+                        "`[f32; 4]` repeat initializer does not contain an exact f32 value",
+                    ));
+                }
+                self.bind_local(
+                    destination.local,
+                    LocalBinding::FixedArray4([value; 4]),
+                    location,
+                )
+            }
+            MirRvalueKind::ArrayAggregate { element_count } => {
+                if !destination.projection.is_empty()
+                    || element_count != 4
+                    || statement.operands.len() != element_count
+                    || !self.is_authenticated_general_v3_scalar_context()
+                    || !self.is_exact_gfx942_wave64_matrix_context()
+                {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedRvalue,
+                        location,
+                        "array aggregate lowering requires an exact authenticated four-element matrix-fragment array in a gfx942 one-wave General V3 kernel",
+                    ));
+                }
+                let element_shape = match self.local_shape(destination.local, &location)? {
+                    MirTypeShape::Array {
+                        element,
+                        length: Some(4),
+                    } if matches!(element.as_ref(), MirTypeShape::U16 | MirTypeShape::F32) => {
+                        element.as_ref().clone()
+                    }
+                    _ => {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedType,
+                            location,
+                            "matrix-fragment array aggregate must have exact `[u16; 4]` or `[f32; 4]` type",
+                        ));
+                    }
+                };
+                if element_shape == MirTypeShape::F32 {
+                    self.require_strict_float_policy(&location)?;
+                }
+                let expected_type =
+                    lower_scalar_type(&element_shape).expect("admitted scalar shape");
+                let mut values = Vec::with_capacity(4);
+                for operand in &statement.operands {
+                    let value = self.lower_operand(operand, block, &location)?;
+                    if self.value_type(value, &location)? != &expected_type {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedType,
+                            location.clone(),
+                            format!(
+                                "matrix-fragment array element has type {:?}, expected {expected_type:?}",
+                                self.value_type(value, &location)?
+                            ),
+                        ));
+                    }
+                    values.push(value);
+                }
+                let values: [ValueId; 4] = values.try_into().map_err(|_| {
+                    diagnostic(
+                        TranslationDiagnosticCode::MalformedMir,
+                        location.clone(),
+                        "authenticated four-element array did not lower to four values",
+                    )
+                })?;
+                self.bind_local(
+                    destination.local,
+                    LocalBinding::FixedArray4(values),
+                    location,
+                )
+            }
+            MirRvalueKind::SemanticCast(MirCastKind::IntToInt) => {
+                let [operand] = statement.operands.as_slice() else {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::MalformedMir,
+                        location,
+                        "integer cast must have one operand",
+                    ));
+                };
+                if !destination.projection.is_empty() {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedProjection,
+                        location,
+                        "integer cast destination must be an unprojected scalar local",
+                    ));
+                }
+                let value = self.lower_operand(operand, block, &location)?;
+                let from = self.value_type(value, &location)?.clone();
+                let to = lower_scalar_type(self.local_shape(destination.local, &location)?)
+                    .ok_or_else(|| {
+                        diagnostic(
+                            TranslationDiagnosticCode::UnsupportedType,
+                            location.clone(),
+                            format!(
+                                "integer cast destination local{} is not a supported scalar",
+                                destination.local
+                            ),
+                        )
+                    })?;
+                let (Some(from_scalar), Some(to_scalar)) = (from.as_scalar(), to.as_scalar())
+                else {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedType,
+                        location,
+                        format!("integer cast requires scalar types; found {from:?} to {to:?}"),
+                    ));
+                };
+                let from_is_integer = from_scalar.is_integer() || from_scalar == ScalarType::Bool;
+                if !from_is_integer || !to_scalar.is_integer() {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedType,
+                        location,
+                        format!("IntToInt cast does not accept {from:?} to {to:?}"),
+                    ));
+                }
+                if from == to {
+                    return self.assign_value(destination, value, block, location);
+                }
+                let path = plan_integer_cast_v1(from_scalar, to_scalar).ok_or_else(|| {
+                    diagnostic(
+                        TranslationDiagnosticCode::UnsupportedType,
+                        location.clone(),
+                        format!("IntToInt cast has no closed path from {from:?} to {to:?}"),
+                    )
+                })?;
+                let mut result = value;
+                for (kind, target) in path.into_iter().flatten() {
+                    let target = Type::Scalar(target);
+                    result = self.emit_result(
+                        block,
+                        target.clone(),
+                        OperationKind::Cast {
+                            kind,
+                            value: result,
+                            to: target,
+                        },
+                        &location,
+                    )?;
+                }
+                self.assign_value(destination, result, block, location)
+            }
+            MirRvalueKind::Binary(
+                arithmetic @ (MirBinaryOp::Add
+                | MirBinaryOp::Sub
+                | MirBinaryOp::Mul
+                | MirBinaryOp::Div
+                | MirBinaryOp::Rem
+                | MirBinaryOp::BitXor
+                | MirBinaryOp::BitAnd
+                | MirBinaryOp::BitOr
+                | MirBinaryOp::Shl
+                | MirBinaryOp::Shr),
+            ) => {
                 let [lhs, rhs] = statement.operands.as_slice() else {
                     return Err(diagnostic(
                         TranslationDiagnosticCode::MalformedMir,
                         location,
-                        "add must have two operands",
+                        "binary operation must have two operands",
                     ));
                 };
                 let lhs = self.lower_operand(lhs, block, &location)?;
                 let rhs = self.lower_operand(rhs, block, &location)?;
-                let ty = self.value_type(lhs, &location)?.clone();
-                if self.is_exact_general_v3_alpha_zeta_context() {
-                    let rhs_ty = self.value_type(rhs, &location)?;
-                    if ty != Type::F32 || rhs_ty != &Type::F32 {
-                        return Err(diagnostic(
-                            TranslationDiagnosticCode::UnsupportedType,
-                            location,
-                            format!(
-                                "exact General V3 alpha/zeta addition requires two f32 operands; found {ty:?} and {rhs_ty:?}"
-                            ),
-                        ));
+                let lhs_ty = self.value_type(lhs, &location)?.clone();
+                let rhs_ty = self.value_type(rhs, &location)?.clone();
+                let operation = match arithmetic {
+                    MirBinaryOp::Add => BinaryOp::Add,
+                    MirBinaryOp::Sub => BinaryOp::Subtract,
+                    MirBinaryOp::Mul => BinaryOp::Multiply,
+                    MirBinaryOp::Div => BinaryOp::Divide,
+                    MirBinaryOp::Rem => BinaryOp::Remainder,
+                    MirBinaryOp::BitXor => BinaryOp::BitXor,
+                    MirBinaryOp::BitAnd => BinaryOp::BitAnd,
+                    MirBinaryOp::BitOr => BinaryOp::BitOr,
+                    MirBinaryOp::Shl => BinaryOp::ShiftLeft,
+                    MirBinaryOp::Shr => BinaryOp::ShiftRight,
+                    _ => unreachable!("binary arm admits only ordinary operations"),
+                };
+                let lhs_scalar = lhs_ty.as_scalar();
+                let rhs_scalar = rhs_ty.as_scalar();
+                let valid = match operation {
+                    BinaryOp::ShiftLeft | BinaryOp::ShiftRight => {
+                        lhs_scalar.is_some_and(ScalarType::is_integer)
+                            && rhs_scalar.is_some_and(ScalarType::is_integer)
                     }
-                    if self.float_target.is_none() {
-                        return Err(diagnostic(
-                            TranslationDiagnosticCode::UnsupportedRvalue,
-                            location,
-                            "f32 addition requires the exact gfx942 floating-point profile",
-                        ));
+                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
+                        lhs_ty == rhs_ty
+                            && lhs_scalar.is_some_and(|scalar| {
+                                scalar == ScalarType::Bool || scalar.is_integer()
+                            })
                     }
-                    self.require_strict_float_policy(&location)?;
+                    _ => lhs_ty == rhs_ty && lhs_scalar.is_some_and(ScalarType::is_numeric),
+                };
+                if !valid {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedType,
+                        location,
+                        format!("binary {arithmetic:?} does not accept {lhs_ty:?} and {rhs_ty:?}"),
+                    ));
+                }
+                if lhs_scalar.is_some_and(ScalarType::is_float) {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedRvalue,
+                        location,
+                        "floating-point binary operation requires an authenticated semantic workload handler",
+                    ));
                 }
                 let result = self.emit_result(
                     block,
-                    ty,
+                    lhs_ty,
                     OperationKind::Binary {
-                        op: BinaryOp::Add,
+                        op: operation,
                         lhs,
                         rhs,
                     },
@@ -1328,46 +3511,163 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 )?;
                 self.assign_value(destination, result, block, location)
             }
-            MirRvalueKind::Binary(MirBinaryOp::Lt) => {
+            MirRvalueKind::Binary(
+                comparison @ (MirBinaryOp::Eq
+                | MirBinaryOp::Ne
+                | MirBinaryOp::Lt
+                | MirBinaryOp::Le
+                | MirBinaryOp::Gt
+                | MirBinaryOp::Ge),
+            ) => {
                 let [lhs, rhs] = statement.operands.as_slice() else {
                     return Err(diagnostic(
                         TranslationDiagnosticCode::MalformedMir,
                         location,
-                        "less-than comparison must have two operands",
+                        "comparison must have two operands",
                     ));
                 };
+                let checked_pointer_origin = if comparison == MirBinaryOp::Lt {
+                    let origins = self
+                        .try_bridge
+                        .origins
+                        .values()
+                        .filter_map(|origin| match origin {
+                            TryOrigin::CheckedPointer(origin)
+                                if origin.bounds_local == destination.local =>
+                            {
+                                Some(*origin)
+                            }
+                            TryOrigin::Tiled2d | TryOrigin::CheckedPointer(_) => None,
+                        })
+                        .collect::<Vec<_>>();
+                    match origins.as_slice() {
+                        [] => None,
+                        [origin]
+                            if location.block == Some(origin.bounds_block)
+                                && matches!(lhs, MirOperandRef::Place(place)
+                                    if place.projection.is_empty()
+                                        && place.local == origin.index_local)
+                                && matches!(rhs, MirOperandRef::Place(place)
+                                    if place.projection.is_empty()
+                                        && place.local == origin.length_local) =>
+                        {
+                            Some(*origin)
+                        }
+                        [_] => {
+                            return Err(diagnostic(
+                                TranslationDiagnosticCode::MalformedMir,
+                                location,
+                                "checked pointer bounds comparison changed after origin authentication",
+                            ));
+                        }
+                        _ => {
+                            return Err(diagnostic(
+                                TranslationDiagnosticCode::MalformedMir,
+                                location,
+                                "more than one checked pointer origin claims the same bounds local",
+                            ));
+                        }
+                    }
+                } else {
+                    None
+                };
+                let elided_error_operand =
+                    |operand: &MirOperandRef,
+                     locals: &BTreeMap<usize, LocalBinding>,
+                     values: &BTreeSet<ValueId>| {
+                        matches!(operand, MirOperandRef::Place(place)
+                        if place.projection.is_empty()
+                            && matches!(locals.get(&place.local), Some(LocalBinding::Value(value))
+                                if values.contains(value)))
+                    };
+                let lhs_elided =
+                    elided_error_operand(lhs, &self.locals, &self.elided_tiled_error_values);
+                let rhs_elided =
+                    elided_error_operand(rhs, &self.locals, &self.elided_tiled_error_values);
+                let is_err_discriminant = |operand: &MirOperandRef| {
+                    matches!(
+                        operand,
+                        MirOperandRef::Constant {
+                            literal: MirConstant::I64(1) | MirConstant::ISize(1),
+                            ..
+                        }
+                    )
+                };
+                let elided_error_comparison = comparison == MirBinaryOp::Eq
+                    && ((lhs_elided && !rhs_elided && is_err_discriminant(rhs))
+                        || (rhs_elided && !lhs_elided && is_err_discriminant(lhs)));
+                if (lhs_elided || rhs_elided) && !elided_error_comparison {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedRvalue,
+                        location,
+                        "elided tiled error discriminant escapes its exact rustc Err validity check",
+                    ));
+                }
                 let lhs = self.lower_operand(lhs, block, &location)?;
                 let rhs = self.lower_operand(rhs, block, &location)?;
+                let lhs_ty = self.value_type(lhs, &location)?.clone();
+                let rhs_ty = self.value_type(rhs, &location)?.clone();
+                let predicate = match comparison {
+                    MirBinaryOp::Eq => ComparePredicate::Equal,
+                    MirBinaryOp::Ne => ComparePredicate::NotEqual,
+                    MirBinaryOp::Lt => ComparePredicate::LessThan,
+                    MirBinaryOp::Le => ComparePredicate::LessThanOrEqual,
+                    MirBinaryOp::Gt => ComparePredicate::GreaterThan,
+                    MirBinaryOp::Ge => ComparePredicate::GreaterThanOrEqual,
+                    _ => unreachable!("comparison arm admits only six predicates"),
+                };
+                let comparable = lhs_ty == rhs_ty
+                    && lhs_ty.as_scalar().is_some_and(|scalar| {
+                        scalar.is_numeric()
+                            || (scalar == ScalarType::Bool
+                                && matches!(
+                                    predicate,
+                                    ComparePredicate::Equal | ComparePredicate::NotEqual
+                                ))
+                    });
+                if !comparable {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedType,
+                        location,
+                        format!(
+                            "comparison {comparison:?} does not accept {lhs_ty:?} and {rhs_ty:?}"
+                        ),
+                    ));
+                }
                 let result = self.emit_result(
                     block,
                     Type::BOOL,
                     OperationKind::Compare {
-                        predicate: ComparePredicate::LessThan,
+                        predicate,
                         lhs,
                         rhs,
                     },
                     &location,
                 )?;
+                if let Some(origin) = checked_pointer_origin {
+                    let pointer = self.indexed_pointer(
+                        origin.base_slice_local,
+                        origin.index_local,
+                        block,
+                        &location,
+                    )?;
+                    if let Some(previous) = self
+                        .checked_pointer_candidates
+                        .insert(origin.pointer_local, pointer)
+                        && previous != pointer
+                    {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::MalformedMir,
+                            location,
+                            "checked pointer candidate was materialized more than once",
+                        ));
+                    }
+                }
+                if elided_error_comparison {
+                    self.elided_tiled_error_values.insert(result);
+                }
                 self.bind_plain_destination(destination, result, location)
             }
-            MirRvalueKind::Binary(MirBinaryOp::Mul) => Err(diagnostic(
-                TranslationDiagnosticCode::UnsupportedRvalue,
-                location,
-                format!(
-                    "f32 multiply requires an exact General V3 alpha/zeta kernel context and supported assignment; found export {:?}, kind {:?}, profile {:?}, argument shapes {:?}, destination {:?}, operands {:?}",
-                    self.function.export_name,
-                    self.function.kind,
-                    self.function.typed_profile,
-                    self.function
-                        .locals
-                        .iter()
-                        .filter(|local| local.role == crate::mir_import::MirLocalRole::Arg)
-                        .map(|local| (local.index, &local.ty.shape))
-                        .collect::<Vec<_>>(),
-                    destination,
-                    statement.operands,
-                ),
-            )),
             unsupported => Err(diagnostic(
                 TranslationDiagnosticCode::UnsupportedRvalue,
                 location,
@@ -1417,16 +3717,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 otherwise,
             } => {
                 let selector = self.lower_operand(discriminant, block, &location)?;
-                if self.is_general_typed_kernel_context()
-                    && self.value_type(selector, &location)? == &Type::BOOL
-                    && self.locals.values().any(|binding| {
-                        matches!(
-                            binding,
-                            LocalBinding::OptionPointer { discriminant, .. }
-                                if *discriminant == selector
-                        )
-                    })
-                {
+                if let Some(tiled) = self.try_discriminants.get(&selector).copied() {
                     let zero = targets.iter().find(|target| target.value == 0);
                     let one = targets.iter().find(|target| target.value == 1);
                     let exhaustive = targets.len() == 2
@@ -1444,58 +3735,159 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                         return Err(diagnostic(
                             TranslationDiagnosticCode::UnsupportedStatement,
                             location,
-                            "boolean switch must have exact 0/1 cases and an unreachable default",
+                            "authenticated tiled try switch must have exact 0/1 cases and an unreachable default",
                         ));
                     }
-                    let some_entry = one.expect("checked above").target;
-                    if !mir_block_dominates(self.function, block_index, some_entry) {
-                        return Err(diagnostic(
-                            TranslationDiagnosticCode::UnsupportedStatement,
-                            location,
-                            "Option Some edge is not dominated by its bounds predicate",
-                        ));
-                    }
-                    let mut option_locals = self.locals.iter().filter_map(|(local, binding)| {
-                        matches!(
-                            binding,
-                            LocalBinding::OptionPointer { discriminant, .. }
-                                if *discriminant == selector
-                        )
-                        .then_some(*local)
-                    });
-                    let option_local = option_locals.next();
-                    if option_local.is_none() || option_locals.next().is_some() {
-                        return Err(diagnostic(
-                            TranslationDiagnosticCode::UnsupportedStatement,
-                            location,
-                            "boolean Option switch is not bound to exactly one translated get_mut result",
-                        ));
-                    }
-                    let option_local = option_local.expect("checked above");
-                    let LocalBinding::OptionPointer {
-                        discriminant,
-                        payload,
-                        ..
-                    } = self.locals[&option_local]
-                    else {
-                        unreachable!("selected an Option pointer above")
+                    let success_target = if tiled.success_variant == 0 {
+                        zero.expect("checked above").target
+                    } else {
+                        one.expect("checked above").target
                     };
-                    self.locals.insert(
-                        option_local,
-                        LocalBinding::OptionPointer {
-                            discriminant,
-                            payload,
-                            some_entry: Some(some_entry),
-                        },
-                    );
+                    let failure_target = if tiled.success_variant == 0 {
+                        one.expect("checked above").target
+                    } else {
+                        zero.expect("checked above").target
+                    };
+                    if self
+                        .try_bridge
+                        .success_entries
+                        .get(&tiled.carrier_local)
+                        .copied()
+                        != Some(success_target)
+                    {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedStatement,
+                            location,
+                            "tiled try switch disagrees with its compiler-authenticated carrier success entry",
+                        ));
+                    }
+                    let (present, some_entry) =
+                        self.try_option_binding(tiled.origin_option, &location)?;
+                    if tiled.success_variant == 1 {
+                        if !mir_block_dominates(self.function, block_index, success_target) {
+                            return Err(diagnostic(
+                                TranslationDiagnosticCode::UnsupportedStatement,
+                                location,
+                                "authenticated tiled Option Some edge is not dominated by its presence predicate",
+                            ));
+                        }
+                        let guarded = self.locals[&tiled.origin_option]
+                            .with_option_some_entry(success_target)
+                            .expect("tiled origin is an Option binding");
+                        self.locals.insert(tiled.origin_option, guarded);
+                    } else {
+                        let Some(some_entry) = some_entry else {
+                            return Err(diagnostic(
+                                TranslationDiagnosticCode::UnsupportedStatement,
+                                location,
+                                "tiled Result/ControlFlow switch precedes its authenticated Option Some guard",
+                            ));
+                        };
+                        if self
+                            .try_bridge
+                            .success_entries
+                            .get(&tiled.origin_option)
+                            .copied()
+                            != Some(some_entry)
+                        {
+                            return Err(diagnostic(
+                                TranslationDiagnosticCode::UnsupportedStatement,
+                                location,
+                                "tiled Result/ControlFlow switch is not linked to the authenticated Option success entry",
+                            ));
+                        }
+                    }
+                    return Ok(Terminator::ConditionalBranch {
+                        condition: present,
+                        then_target: self.block_id(success_target, location.clone())?,
+                        then_arguments: self.edge_arguments(success_target, &location)?,
+                        else_target: self.block_id(failure_target, location.clone())?,
+                        else_arguments: self.edge_arguments(failure_target, &location)?,
+                    });
+                }
+                if self.is_authenticated_general_v3_scalar_context()
+                    && self.value_type(selector, &location)? == &Type::BOOL
+                {
+                    let option_locals = self
+                        .locals
+                        .iter()
+                        .filter_map(|(local, binding)| {
+                            (binding.option_discriminant() == Some(selector)).then_some(*local)
+                        })
+                        .collect::<Vec<_>>();
+                    if option_locals.len() > 1 {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedStatement,
+                            location,
+                            "boolean Option switch is bound to more than one translated semantic result",
+                        ));
+                    }
+                    let (then_target, else_target) = if let Some(&option_local) =
+                        option_locals.first()
+                    {
+                        let zero = targets.iter().find(|target| target.value == 0);
+                        let one = targets.iter().find(|target| target.value == 1);
+                        let exhaustive = targets.len() == 2
+                            && zero.is_some()
+                            && one.is_some()
+                            && zero.map(|target| target.target) != one.map(|target| target.target)
+                            && self.function.blocks.iter().any(|block| {
+                                block.index == *otherwise
+                                    && matches!(
+                                        block
+                                            .terminator
+                                            .as_ref()
+                                            .map(|terminator| &terminator.kind),
+                                        Some(MirTerminatorKind::Unreachable)
+                                    )
+                            });
+                        if !exhaustive {
+                            return Err(diagnostic(
+                                TranslationDiagnosticCode::UnsupportedStatement,
+                                location,
+                                "boolean switch must have exact 0/1 cases and an unreachable default",
+                            ));
+                        }
+                        let some_entry = one.expect("checked above").target;
+                        if !mir_block_dominates(self.function, block_index, some_entry) {
+                            return Err(diagnostic(
+                                TranslationDiagnosticCode::UnsupportedStatement,
+                                location,
+                                "Option Some edge is not dominated by its bounds predicate",
+                            ));
+                        }
+                        let guarded = self.locals[&option_local]
+                            .with_option_some_entry(some_entry)
+                            .expect("selected an Option binding above");
+                        self.locals.insert(option_local, guarded);
+                        (some_entry, zero.expect("checked above").target)
+                    } else {
+                        let [explicit] = targets.as_slice() else {
+                            return Err(diagnostic(
+                                TranslationDiagnosticCode::UnsupportedStatement,
+                                location,
+                                "ordinary boolean switch must have one explicit 0/1 case and a distinct default",
+                            ));
+                        };
+                        if explicit.target == *otherwise || explicit.value > 1 {
+                            return Err(diagnostic(
+                                TranslationDiagnosticCode::UnsupportedStatement,
+                                location,
+                                "ordinary boolean switch must have one explicit 0/1 case and a distinct default",
+                            ));
+                        }
+                        if explicit.value == 0 {
+                            (*otherwise, explicit.target)
+                        } else {
+                            (explicit.target, *otherwise)
+                        }
+                    };
                     return Ok(Terminator::ConditionalBranch {
                         condition: selector,
-                        then_target: self.block_id(some_entry, location.clone())?,
-                        then_arguments: self.edge_arguments(some_entry, &location)?,
-                        else_target: self
-                            .block_id(zero.expect("checked above").target, location.clone())?,
-                        else_arguments: self
-                            .edge_arguments(zero.expect("checked above").target, &location)?,
+                        then_target: self.block_id(then_target, location.clone())?,
+                        then_arguments: self.edge_arguments(then_target, &location)?,
+                        else_target: self.block_id(else_target, location.clone())?,
+                        else_arguments: self.edge_arguments(else_target, &location)?,
                     });
                 }
                 if self.value_type(selector, &location)? == &Type::BOOL {
@@ -1879,7 +4271,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     ]
                 }
                 Some(
-                    TrustedDeviceItem::DisjointSlice
+                    TrustedDeviceItem::KernelError
+                    | TrustedDeviceItem::DisjointSlice
                     | TrustedDeviceItem::DeviceGlobalMutPtr
                     | TrustedDeviceItem::WorkgroupLdsScope
                     | TrustedDeviceItem::Invocation3D
@@ -2006,7 +4399,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     TrustedDeviceItem::MemoryOffsetFrom
                     | TrustedDeviceItem::MemoryVolatileLoad
                     | TrustedDeviceItem::MemoryVolatileStore
-                    | TrustedDeviceItem::MemoryCopyNonOverlapping,
+                    | TrustedDeviceItem::MemoryCopyNonOverlapping
+                    | TrustedDeviceItem::MemoryCopyOneNonOverlapping,
                 ) => {
                     unreachable!("memory operations are handled by semantic lowering")
                 }
@@ -2065,7 +4459,22 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         ));
 
         match results.as_slice() {
-            [] if external_import.is_some() || internal_definition.is_some() => {}
+            [] if external_import.is_some() || internal_definition.is_some() => {
+                if internal_definition
+                    .as_ref()
+                    .is_some_and(|definition| definition.elides_generated_result)
+                    && !matches!(
+                        self.imported_local_shape(destination.local),
+                        Some(shape) if is_standard_result_shape(shape)
+                    )
+                {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::MalformedMir,
+                        location,
+                        "generated zero-result call does not target its authenticated discarded Result temporary",
+                    ));
+                }
+            }
             [result] => {
                 if internal_definition.is_some() {
                     self.require_destination_type(destination, &result.ty, &location)?;
@@ -2341,15 +4750,11 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
     fn require_matrix_frontend_abi(
         &mut self,
         location: &TranslationLocation,
-    ) -> Result<MatrixFrontendBindingV2, TranslationDiagnostic> {
-        validate_matrix_frontend_function_abi(self.function)?;
-        let evidence = self.function.matrix_frontend_abi.as_ref().ok_or_else(|| {
-            diagnostic(
-                TranslationDiagnosticCode::UnsupportedType,
-                location.clone(),
-                "matrix fragment flattening requires a rustc-bound source ABI observation",
-            )
-        })?;
+    ) -> Result<Option<MatrixFrontendBindingV2>, TranslationDiagnostic> {
+        validate_matrix_frontend_function_abi(self.source_abi)?;
+        let Some(evidence) = self.source_abi.matrix_frontend_abi.as_ref() else {
+            return Ok(None);
+        };
         evidence.validate().map_err(|reason| {
             diagnostic(
                 TranslationDiagnosticCode::UnsupportedType,
@@ -2367,7 +4772,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         self.required_capabilities
             .insert(gfx942_xnack_minus_target_capability());
         self.required_capabilities.extend(binding.capabilities());
-        Ok(binding)
+        Ok(Some(binding))
     }
 
     fn require_float_argument_types(
@@ -2536,6 +4941,760 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         }
     }
 
+    fn lower_tiled_witness_use(
+        &mut self,
+        destination: &MirPlaceRef,
+        operand: &MirOperandRef,
+        location: &TranslationLocation,
+    ) -> Result<bool, TranslationDiagnostic> {
+        let MirOperandRef::Place(source) = operand else {
+            return Ok(false);
+        };
+        if destination.projection.is_empty()
+            && destination.semantic_identity == source.semantic_identity
+            && let Some(binding) = self.tiled_witness_binding(destination.local, location)?
+        {
+            self.bind_local(destination.local, binding, location.clone())?;
+            return Ok(true);
+        }
+        let binding = if source.projection.is_empty() {
+            match self.locals.get(&source.local).copied() {
+                Some(binding @ LocalBinding::Tiled2dWitness { .. }) => Some(binding),
+                _ => None,
+            }
+        } else if let [
+            MirProjectionElem::Downcast { variant },
+            MirProjectionElem::Field(0),
+        ] = source.projection.as_slice()
+        {
+            let Some(carrier) = self.try_bridge.carriers.get(&source.local).copied() else {
+                return Ok(false);
+            };
+            if *variant != carrier.kind.success_variant() {
+                return Ok(false);
+            }
+            let (_, raw, evidence, option_some_entry) =
+                self.tiled_option_binding(carrier.origin_option, location)?;
+            let Some(option_some_entry) = option_some_entry else {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedProjection,
+                    location.clone(),
+                    "tiled witness payload is used before an authenticated Some-edge guard",
+                ));
+            };
+            if self
+                .try_bridge
+                .success_entries
+                .get(&carrier.origin_option)
+                .copied()
+                != Some(option_some_entry)
+            {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedProjection,
+                    location.clone(),
+                    "tiled witness origin does not retain its compiler-authenticated Option success entry",
+                ));
+            }
+            let Some(guard_entry) = self.try_bridge.success_entries.get(&source.local).copied()
+            else {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedProjection,
+                    location.clone(),
+                    "tiled witness carrier has no authenticated success switch",
+                ));
+            };
+            let Some(use_block) = location.block else {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedProjection,
+                    location.clone(),
+                    "tiled witness payload use has no MIR block identity",
+                ));
+            };
+            if !mir_block_dominates(self.function, guard_entry, use_block) {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedProjection,
+                    location.clone(),
+                    "tiled witness payload use is not dominated by its authenticated carrier success edge",
+                ));
+            }
+            Some(LocalBinding::Tiled2dWitness {
+                raw,
+                evidence,
+                some_entry: guard_entry,
+            })
+        } else {
+            None
+        };
+        let Some(binding) = binding else {
+            return Ok(false);
+        };
+        if !destination.projection.is_empty()
+            || destination.semantic_identity != source.semantic_identity
+        {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location.clone(),
+                "tiled witness extraction must preserve the exact compiler-authenticated DisjointTile2D payload identity",
+            ));
+        }
+        self.bind_local(destination.local, binding, location.clone())?;
+        Ok(true)
+    }
+
+    fn lower_matrix_aggregate_use(
+        &mut self,
+        destination: &MirPlaceRef,
+        operand: &MirOperandRef,
+        location: &TranslationLocation,
+    ) -> Result<bool, TranslationDiagnostic> {
+        let MirOperandRef::Place(source) = operand else {
+            return Ok(false);
+        };
+        if !destination.projection.is_empty() || !source.projection.is_empty() {
+            return Ok(false);
+        }
+        let Some(binding) = self.locals.get(&source.local).copied() else {
+            return Ok(false);
+        };
+        if !matches!(
+            binding,
+            LocalBinding::Bf16MfmaFragment(_)
+                | LocalBinding::F32AccumulatorFragment(_)
+                | LocalBinding::FixedArray4(_)
+        ) {
+            return Ok(false);
+        }
+        if !self.is_authenticated_general_v3_scalar_context()
+            || !self.is_exact_gfx942_wave64_matrix_context()
+            || destination.semantic_identity != source.semantic_identity
+            || self.imported_local_shape(destination.local)
+                != self.imported_local_shape(source.local)
+        {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location.clone(),
+                "matrix aggregate copy does not preserve its exact authenticated source type and gfx942 one-wave context",
+            ));
+        }
+        let shape_matches_binding = match (binding, self.imported_local_shape(destination.local)) {
+            (LocalBinding::Bf16MfmaFragment(_), Some(MirTypeShape::Adt { identity })) => {
+                identity == TrustedDeviceItem::Bf16MfmaFragment.canonical_path()
+            }
+            (LocalBinding::F32AccumulatorFragment(_), Some(MirTypeShape::Adt { identity })) => {
+                identity == TrustedDeviceItem::F32AccumulatorFragment.canonical_path()
+            }
+            (
+                LocalBinding::FixedArray4(_),
+                Some(MirTypeShape::Array {
+                    element,
+                    length: Some(4),
+                }),
+            ) => matches!(element.as_ref(), MirTypeShape::U16 | MirTypeShape::F32),
+            _ => false,
+        };
+        if !shape_matches_binding {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location.clone(),
+                "matrix aggregate copy binding does not match its exact imported compiler type",
+            ));
+        }
+        self.bind_local(destination.local, binding, location.clone())?;
+        Ok(true)
+    }
+
+    fn lower_try_carrier_use(
+        &self,
+        destination: &MirPlaceRef,
+        operand: &MirOperandRef,
+        location: &TranslationLocation,
+    ) -> Result<bool, TranslationDiagnostic> {
+        let MirOperandRef::Place(source) = operand else {
+            return Ok(false);
+        };
+        if !destination.projection.is_empty() || !source.projection.is_empty() {
+            return Ok(false);
+        }
+        let Some(destination_carrier) = self.try_bridge.carriers.get(&destination.local).copied()
+        else {
+            return Ok(false);
+        };
+        let Some(source_carrier) = self.try_bridge.carriers.get(&source.local).copied() else {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedRvalue,
+                location.clone(),
+                "tiled try carrier copy has no compiler-authenticated source carrier",
+            ));
+        };
+        if destination_carrier != source_carrier
+            || destination.semantic_identity != source.semantic_identity
+        {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location.clone(),
+                "tiled try carrier copy does not preserve its authenticated origin and exact compiler type identity",
+            ));
+        }
+        Ok(true)
+    }
+
+    fn lower_checked_pointer_use(
+        &mut self,
+        destination: &MirPlaceRef,
+        operand: &MirOperandRef,
+        location: &TranslationLocation,
+    ) -> Result<bool, TranslationDiagnostic> {
+        let MirOperandRef::Place(source) = operand else {
+            return Ok(false);
+        };
+        if !destination.projection.is_empty() {
+            return Ok(false);
+        }
+        let Some(origin_option) = self
+            .try_bridge
+            .payload_values
+            .get(&destination.local)
+            .copied()
+        else {
+            return Ok(false);
+        };
+        let Some(TryOrigin::CheckedPointer(_)) =
+            self.try_bridge.origins.get(&origin_option).copied()
+        else {
+            return Ok(false);
+        };
+        let source_preserves_origin = match source.projection.as_slice() {
+            [] => self.try_bridge.payload_values.get(&source.local).copied() == Some(origin_option),
+            [
+                MirProjectionElem::Downcast { variant },
+                MirProjectionElem::Field(0),
+            ] => self
+                .try_bridge
+                .carriers
+                .get(&source.local)
+                .is_some_and(|carrier| {
+                    carrier.origin_option == origin_option
+                        && *variant == carrier.kind.success_variant()
+                }),
+            _ => false,
+        };
+        if !source_preserves_origin || destination.semantic_identity != source.semantic_identity {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location.clone(),
+                "checked pointer extraction does not preserve its exact authenticated carrier and compiler type identity",
+            ));
+        }
+        let Some(guard_entry) = self
+            .try_bridge
+            .payload_guard_entries
+            .get(&destination.local)
+            .copied()
+        else {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedProjection,
+                location.clone(),
+                "checked pointer payload has no compiler-authenticated success guard",
+            ));
+        };
+        let Some(use_block) = location.block else {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedProjection,
+                location.clone(),
+                "checked pointer payload use has no MIR block identity",
+            ));
+        };
+        if !mir_block_dominates(self.function, guard_entry, use_block) {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedProjection,
+                location.clone(),
+                "checked pointer payload escapes its authenticated carrier success region",
+            ));
+        }
+        let (_, payload, some_entry) = self.pointer_option_binding(origin_option, location)?;
+        let Some(some_entry) = some_entry else {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedProjection,
+                location.clone(),
+                "checked pointer payload is used before its originating Option success edge",
+            ));
+        };
+        if self.try_bridge.success_entries.get(&origin_option).copied() != Some(some_entry) {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedProjection,
+                location.clone(),
+                "checked pointer payload is not dominated by its exact bounds and Option success regions",
+            ));
+        }
+        self.guarded_pointer_values.insert(payload, guard_entry);
+        self.bind_local(
+            destination.local,
+            LocalBinding::Value(payload),
+            location.clone(),
+        )?;
+        Ok(true)
+    }
+
+    fn lower_try_failure_use(
+        &mut self,
+        destination: &MirPlaceRef,
+        operand: &MirOperandRef,
+        location: &TranslationLocation,
+    ) -> Result<bool, TranslationDiagnostic> {
+        if !self.elides_generated_result || !destination.projection.is_empty() {
+            return Ok(false);
+        }
+        let MirOperandRef::Place(source) = operand else {
+            return Ok(false);
+        };
+        let origin = match source.projection.as_slice() {
+            [] => self.tiled_error_origins.get(&source.local).copied(),
+            [
+                MirProjectionElem::Downcast { variant },
+                MirProjectionElem::Field(0),
+            ] => {
+                if let Some(carrier) = self.try_bridge.carriers.get(&source.local).copied() {
+                    if carrier.kind == TryCarrierKind::Option
+                        || *variant == carrier.kind.success_variant()
+                    {
+                        return Ok(false);
+                    }
+                    let destination_shape = self.local_shape(destination.local, location)?;
+                    let exact_payload = match carrier.kind {
+                        TryCarrierKind::ControlFlow => is_standard_result_shape(destination_shape),
+                        TryCarrierKind::Result => {
+                            matches!(destination_shape, MirTypeShape::Adt { .. })
+                        }
+                        TryCarrierKind::Option => false,
+                    };
+                    if !exact_payload || destination.semantic_identity != source.semantic_identity {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedType,
+                            location.clone(),
+                            "tiled try failure projection does not preserve its exact compiler payload identity",
+                        ));
+                    }
+                    Some(carrier.origin_option)
+                } else if let Some(origin) = self.tiled_error_origins.get(&source.local).copied() {
+                    if *variant != 1
+                        || !is_standard_result_shape(self.local_shape(source.local, location)?)
+                        || !matches!(
+                            self.local_shape(destination.local, location)?,
+                            MirTypeShape::Adt { .. }
+                        )
+                        || destination.semantic_identity != source.semantic_identity
+                    {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedType,
+                            location.clone(),
+                            "elided tiled Result error projection is not the exact KernelError payload",
+                        ));
+                    }
+                    Some(origin)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        let Some(origin) = origin else {
+            return Ok(false);
+        };
+        if let Some(previous) = self.tiled_error_origins.insert(destination.local, origin)
+            && previous != origin
+        {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::MalformedMir,
+                location.clone(),
+                format!(
+                    "elided tiled error local{} has conflicting authenticated origins",
+                    destination.local
+                ),
+            ));
+        }
+        Ok(true)
+    }
+
+    fn tiled_witness_binding(
+        &self,
+        local: usize,
+        location: &TranslationLocation,
+    ) -> Result<Option<LocalBinding>, TranslationDiagnostic> {
+        if let Some(binding @ LocalBinding::Tiled2dWitness { .. }) =
+            self.locals.get(&local).copied()
+        {
+            return Ok(Some(binding));
+        }
+        let Some(origin_option) = self.try_bridge.payload_values.get(&local).copied() else {
+            return Ok(None);
+        };
+        let Some(guard_entry) = self.try_bridge.payload_guard_entries.get(&local).copied() else {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedProjection,
+                location.clone(),
+                format!("tiled witness local{local} has no compiler-authenticated success guard"),
+            ));
+        };
+        let (_, raw, evidence, option_some_entry) =
+            self.tiled_option_binding(origin_option, location)?;
+        let Some(option_some_entry) = option_some_entry else {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedProjection,
+                location.clone(),
+                "tiled witness is used before its originating Option success edge is lowered",
+            ));
+        };
+        if self.try_bridge.success_entries.get(&origin_option).copied() != Some(option_some_entry) {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedProjection,
+                location.clone(),
+                "tiled witness origin does not retain its compiler-authenticated Option success entry",
+            ));
+        }
+        let Some(use_block) = location.block else {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedProjection,
+                location.clone(),
+                "tiled witness use has no MIR block identity",
+            ));
+        };
+        if !mir_block_dominates(self.function, guard_entry, use_block) {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedProjection,
+                location.clone(),
+                "tiled witness use escapes its compiler-authenticated success region",
+            ));
+        }
+        Ok(Some(LocalBinding::Tiled2dWitness {
+            raw,
+            evidence,
+            some_entry: guard_entry,
+        }))
+    }
+
+    fn try_option_binding(
+        &self,
+        option_local: usize,
+        location: &TranslationLocation,
+    ) -> Result<(ValueId, Option<usize>), TranslationDiagnostic> {
+        match self.try_bridge.origins.get(&option_local).copied() {
+            Some(TryOrigin::Tiled2d) => {
+                let (discriminant, _, _, some_entry) =
+                    self.tiled_option_binding(option_local, location)?;
+                Ok((discriminant, some_entry))
+            }
+            Some(TryOrigin::CheckedPointer(_)) => {
+                let (discriminant, _, some_entry) =
+                    self.pointer_option_binding(option_local, location)?;
+                Ok((discriminant, some_entry))
+            }
+            None => Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location.clone(),
+                format!(
+                    "try bridge origin local{option_local} has no authenticated semantic origin"
+                ),
+            )),
+        }
+    }
+
+    fn pointer_option_binding(
+        &self,
+        option_local: usize,
+        location: &TranslationLocation,
+    ) -> Result<(ValueId, ValueId, Option<usize>), TranslationDiagnostic> {
+        match self.locals.get(&option_local).copied() {
+            Some(LocalBinding::OptionPointer {
+                discriminant,
+                payload,
+                some_entry,
+            }) => Ok((discriminant, payload, some_entry)),
+            Some(_) => Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location.clone(),
+                format!(
+                    "try bridge origin local{option_local} is not an authenticated checked-pointer Option"
+                ),
+            )),
+            None => Err(self.undefined_local(option_local, location.clone())),
+        }
+    }
+
+    fn tiled_option_binding(
+        &self,
+        option_local: usize,
+        location: &TranslationLocation,
+    ) -> Result<
+        (
+            ValueId,
+            ValueId,
+            MirCheckedTiled2dCallEvidenceV1,
+            Option<usize>,
+        ),
+        TranslationDiagnostic,
+    > {
+        match self.locals.get(&option_local).copied() {
+            Some(LocalBinding::OptionTiled2dWitness {
+                discriminant,
+                raw,
+                evidence,
+                some_entry,
+            }) => Ok((discriminant, raw, evidence, some_entry)),
+            Some(_) => Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location.clone(),
+                format!(
+                    "tiled try bridge origin local{option_local} is not an authenticated checked_tiled_2d result"
+                ),
+            )),
+            None => Err(self.undefined_local(option_local, location.clone())),
+        }
+    }
+
+    fn lower_try_aggregate(
+        &mut self,
+        destination: &MirPlaceRef,
+        variant: usize,
+        active_field: Option<usize>,
+        operands: &[MirOperandRef],
+        semantic_rvalue_type: &Option<crate::mir_import::MirSemanticTypeEvidence>,
+        location: &TranslationLocation,
+    ) -> Result<(), TranslationDiagnostic> {
+        let carrier = self.try_bridge.carriers[&destination.local];
+        let local = imported_local(self.function, destination.local).ok_or_else(|| {
+            diagnostic(
+                TranslationDiagnosticCode::MalformedMir,
+                location.clone(),
+                format!(
+                    "tiled try carrier local{} is not imported",
+                    destination.local
+                ),
+            )
+        })?;
+        if !destination.projection.is_empty()
+            || active_field.is_some_and(|field| field != 0)
+            || semantic_rvalue_type.as_ref() != Some(&local.ty.semantic_identity)
+            || variant > 1
+            || operands.len() != 1
+        {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedRvalue,
+                location.clone(),
+                "tiled try carrier construction is not an exact one-field Result or ControlFlow variant",
+            ));
+        }
+        if variant == carrier.kind.success_variant() {
+            let [MirOperandRef::Place(source)] = operands else {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedRvalue,
+                    location.clone(),
+                    "tiled try success carrier requires one authenticated tile local",
+                ));
+            };
+            if !source.projection.is_empty()
+                || self.try_bridge.payload_values.get(&source.local).copied()
+                    != Some(carrier.origin_option)
+            {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedRvalue,
+                    location.clone(),
+                    "tiled try success carrier does not preserve its authenticated tile origin",
+                ));
+            }
+        } else {
+            match carrier.kind {
+                TryCarrierKind::Option => {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedRvalue,
+                        location.clone(),
+                        "checked Option failure must use the separately authenticated fieldless None construction",
+                    ));
+                }
+                TryCarrierKind::Result => {
+                    let [MirOperandRef::Constant { ty, literal, .. }] = operands else {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedRvalue,
+                            location.clone(),
+                            "try Result::Err must carry the exact constant KernelError::OutOfBounds payload",
+                        ));
+                    };
+                    if !is_trusted_adt_shape(&ty.shape, TrustedDeviceItem::KernelError)
+                        || literal != &MirConstant::FieldlessEnumVariant(2)
+                    {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedType,
+                            location.clone(),
+                            "try Result::Err payload is not the exact reviewed KernelError::OutOfBounds variant",
+                        ));
+                    }
+                }
+                TryCarrierKind::ControlFlow => {
+                    let [MirOperandRef::Place(source)] = operands else {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedRvalue,
+                            location.clone(),
+                            "try ControlFlow::Break must carry its exact generated residual Result",
+                        ));
+                    };
+                    if !source.projection.is_empty()
+                        || self.tiled_error_origins.get(&source.local).copied()
+                            != Some(carrier.origin_option)
+                        || !is_standard_result_shape(self.local_shape(source.local, location)?)
+                    {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedType,
+                            location.clone(),
+                            "try ControlFlow::Break does not preserve its authenticated residual Result origin",
+                        ));
+                    }
+                }
+            }
+        }
+        if carrier.kind == TryCarrierKind::Option {
+            let Some(TryOrigin::CheckedPointer(origin)) =
+                self.try_bridge.origins.get(&carrier.origin_option).copied()
+            else {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedRvalue,
+                    location.clone(),
+                    "only an authenticated checked-pointer Option may be reconstructed as an ADT aggregate",
+                ));
+            };
+            if variant != TryCarrierKind::Option.success_variant()
+                || location.block != Some(origin.some_block)
+            {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedRvalue,
+                    location.clone(),
+                    "checked-pointer Option::Some is not constructed in its exact bounds-success block",
+                ));
+            }
+            let [MirOperandRef::Place(source)] = operands else {
+                unreachable!("one place operand validated above");
+            };
+            if source.local != origin.pointer_local {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedRvalue,
+                    location.clone(),
+                    "checked-pointer Option::Some does not carry its exact indexed reference local",
+                ));
+            }
+            let payload = self.plain_local(source.local, location)?;
+            let discriminant = self.plain_local(origin.bounds_local, location)?;
+            if self.value_type(discriminant, location)? != &Type::BOOL {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedType,
+                    location.clone(),
+                    "checked-pointer bounds predicate did not lower to an exact boolean",
+                ));
+            }
+            return self.bind_local(
+                destination.local,
+                LocalBinding::OptionPointer {
+                    discriminant,
+                    payload,
+                    some_entry: None,
+                },
+                location.clone(),
+            );
+        }
+        Ok(())
+    }
+
+    fn lower_try_error_aggregate(
+        &mut self,
+        destination: &MirPlaceRef,
+        variant: usize,
+        active_field: Option<usize>,
+        operands: &[MirOperandRef],
+        semantic_rvalue_type: &Option<crate::mir_import::MirSemanticTypeEvidence>,
+        location: &TranslationLocation,
+    ) -> Result<bool, TranslationDiagnostic> {
+        if variant != 1
+            || active_field.is_some_and(|field| field != 0)
+            || !destination.projection.is_empty()
+            || !is_standard_result_shape(self.local_shape(destination.local, location)?)
+        {
+            return Ok(false);
+        }
+        let [MirOperandRef::Place(source)] = operands else {
+            return Ok(false);
+        };
+        if !source.projection.is_empty() {
+            return Ok(false);
+        }
+        let Some(origin) = self.tiled_error_origins.get(&source.local).copied() else {
+            return Ok(false);
+        };
+        let local = imported_local(self.function, destination.local).ok_or_else(|| {
+            diagnostic(
+                TranslationDiagnosticCode::MalformedMir,
+                location.clone(),
+                format!("try residual local{} is not imported", destination.local),
+            )
+        })?;
+        if semantic_rvalue_type.as_ref() != Some(&local.ty.semantic_identity) {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location.clone(),
+                "generated try residual Result does not preserve its exact compiler type identity",
+            ));
+        }
+        if let Some(previous) = self.tiled_error_origins.insert(destination.local, origin)
+            && previous != origin
+        {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::MalformedMir,
+                location.clone(),
+                format!(
+                    "generated try residual local{} has conflicting authenticated origins",
+                    destination.local
+                ),
+            ));
+        }
+        Ok(true)
+    }
+
+    fn validate_checked_pointer_none(
+        &self,
+        destination: &MirPlaceRef,
+        operands: &[MirOperandRef],
+        semantic_rvalue_type: &Option<crate::mir_import::MirSemanticTypeEvidence>,
+        location: &TranslationLocation,
+    ) -> Result<(), TranslationDiagnostic> {
+        let Some(TryOrigin::CheckedPointer(origin)) =
+            self.try_bridge.origins.get(&destination.local).copied()
+        else {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedRvalue,
+                location.clone(),
+                "fieldless Option::None is not linked to an authenticated checked pointer",
+            ));
+        };
+        let local = imported_local(self.function, destination.local).ok_or_else(|| {
+            diagnostic(
+                TranslationDiagnosticCode::MalformedMir,
+                location.clone(),
+                format!(
+                    "checked pointer Option local{} is not imported",
+                    destination.local
+                ),
+            )
+        })?;
+        if !destination.projection.is_empty()
+            || !operands.is_empty()
+            || semantic_rvalue_type.as_ref() != Some(&local.ty.semantic_identity)
+            || location.block != Some(origin.none_block)
+        {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedRvalue,
+                location.clone(),
+                "checked-pointer Option::None is not the exact fieldless failure construction",
+            ));
+        }
+        Ok(())
+    }
+
     fn lower_place_read(
         &mut self,
         place: &MirPlaceRef,
@@ -2550,6 +5709,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 }
                 Some(
                     LocalBinding::OptionPointer { .. }
+                    | LocalBinding::OptionTiled2dWitness { .. }
+                    | LocalBinding::Tiled2dWitness { .. }
                     | LocalBinding::FieldlessEnum { .. }
                     | LocalBinding::DeviceMathCapability
                     | LocalBinding::Gfx942CollectiveCapability
@@ -2557,7 +5718,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | LocalBinding::DeviceMatrixValueCapability
                     | LocalBinding::DeviceMatrixReferenceCapability
                     | LocalBinding::Bf16MfmaFragment(_)
-                    | LocalBinding::F32AccumulatorFragment(_),
+                    | LocalBinding::F32AccumulatorFragment(_)
+                    | LocalBinding::FixedArray4(_),
                 ) => Err(diagnostic(
                     TranslationDiagnosticCode::UnsupportedType,
                     location.clone(),
@@ -2577,7 +5739,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     some_entry,
                     ..
                 }) => {
-                    if self.is_exact_general_v3_alpha_zeta_context() {
+                    if self.is_authenticated_general_v3_scalar_context() {
                         let Some(some_entry) = some_entry else {
                             return Err(diagnostic(
                                 TranslationDiagnosticCode::UnsupportedProjection,
@@ -2605,6 +5767,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 }
                 Some(
                     LocalBinding::Value(_)
+                    | LocalBinding::OptionTiled2dWitness { .. }
+                    | LocalBinding::Tiled2dWitness { .. }
                     | LocalBinding::FieldlessEnum { .. }
                     | LocalBinding::DeviceMathCapability
                     | LocalBinding::Gfx942CollectiveCapability
@@ -2612,7 +5776,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | LocalBinding::DeviceMatrixValueCapability
                     | LocalBinding::DeviceMatrixReferenceCapability
                     | LocalBinding::Bf16MfmaFragment(_)
-                    | LocalBinding::F32AccumulatorFragment(_),
+                    | LocalBinding::F32AccumulatorFragment(_)
+                    | LocalBinding::FixedArray4(_),
                 ) => Err(diagnostic(
                     TranslationDiagnosticCode::UnsupportedType,
                     location.clone(),
@@ -2620,6 +5785,43 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 )),
                 None => Err(self.undefined_local(place.local, location.clone())),
             },
+            [
+                MirProjectionElem::ConstantIndex {
+                    offset,
+                    min_length,
+                    from_end: false,
+                },
+            ] if *offset < 4 && *min_length == *offset + 1 => {
+                if !matches!(
+                    self.imported_local_shape(place.local),
+                    Some(MirTypeShape::Array { element, length: Some(4) })
+                        if element.as_ref() == &MirTypeShape::F32
+                ) {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedType,
+                        location.clone(),
+                        "constant fragment projection requires an exact `[f32; 4]` source local",
+                    ));
+                }
+                let Some(LocalBinding::FixedArray4(values)) =
+                    self.locals.get(&place.local).copied()
+                else {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedProjection,
+                        location.clone(),
+                        "constant fragment projection requires an authenticated fixed-array binding",
+                    ));
+                };
+                let value = values[*offset as usize];
+                if self.value_type(value, location)? != &Type::F32 {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedType,
+                        location.clone(),
+                        "constant fragment projection selected a non-f32 value",
+                    ));
+                }
+                Ok(value)
+            }
             [MirProjectionElem::Deref, MirProjectionElem::Index { local }] => {
                 let pointer = self.indexed_pointer(place.local, *local, block, location)?;
                 let pointee =
@@ -2674,11 +5876,20 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     location,
                 )
             }
-            projection => Err(diagnostic(
-                TranslationDiagnosticCode::UnsupportedProjection,
-                location.clone(),
-                format!("unsupported place projection: {projection:?}"),
-            )),
+            projection => {
+                let imported_type = imported_local(self.function, place.local)
+                    .map(|local| local.ty.rust.as_str())
+                    .unwrap_or("<missing imported type>");
+                Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedProjection,
+                    location.clone(),
+                    format!(
+                        "unsupported place projection on local{} of type `{imported_type}` with binding {:?}: {projection:?}",
+                        place.local,
+                        self.locals.get(&place.local)
+                    ),
+                ))
+            }
         }
     }
 
@@ -2850,6 +6061,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             }
             Some(
                 LocalBinding::OptionPointer { .. }
+                | LocalBinding::OptionTiled2dWitness { .. }
+                | LocalBinding::Tiled2dWitness { .. }
                 | LocalBinding::FieldlessEnum { .. }
                 | LocalBinding::DeviceMathCapability
                 | LocalBinding::Gfx942CollectiveCapability
@@ -2857,7 +6070,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 | LocalBinding::DeviceMatrixValueCapability
                 | LocalBinding::DeviceMatrixReferenceCapability
                 | LocalBinding::Bf16MfmaFragment(_)
-                | LocalBinding::F32AccumulatorFragment(_),
+                | LocalBinding::F32AccumulatorFragment(_)
+                | LocalBinding::FixedArray4(_),
             ) => Err(diagnostic(
                 TranslationDiagnosticCode::UnsupportedType,
                 location.clone(),
@@ -2872,31 +6086,68 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         target: usize,
         location: &TranslationLocation,
     ) -> Result<Vec<ValueId>, TranslationDiagnostic> {
-        self.control_flow_ssa
-            .live_in(target)
-            .iter()
-            .map(|local| match self.locals.get(local).copied() {
-                Some(LocalBinding::Value(value))
-                | Some(LocalBinding::FieldlessEnum {
-                    discriminant: value,
-                }) => Ok(value),
-                Some(
-                    LocalBinding::OptionPointer { .. }
-                    | LocalBinding::DeviceMathCapability
-                    | LocalBinding::Gfx942CollectiveCapability
-                    | LocalBinding::Gfx942StaticLdsU32x256(_)
-                    | LocalBinding::DeviceMatrixValueCapability
-                    | LocalBinding::DeviceMatrixReferenceCapability
-                    | LocalBinding::Bf16MfmaFragment(_)
-                    | LocalBinding::F32AccumulatorFragment(_),
-                ) => Err(diagnostic(
+        let mut arguments = Vec::new();
+        for &local in self.control_flow_ssa.live_in(target) {
+            let values = match (
+                self.control_flow_ssa.kind(local),
+                self.locals.get(&local).copied(),
+            ) {
+                (
+                    Some(control_flow_ssa::PromotedLocalKind::Scalar),
+                    Some(LocalBinding::Value(value)),
+                )
+                | (
+                    Some(control_flow_ssa::PromotedLocalKind::FieldlessEnum),
+                    Some(LocalBinding::FieldlessEnum {
+                        discriminant: value,
+                    }),
+                ) => vec![value],
+                (
+                    Some(control_flow_ssa::PromotedLocalKind::F32AccumulatorFragment),
+                    Some(LocalBinding::F32AccumulatorFragment(values)),
+                ) => values.to_vec(),
+                (Some(_), Some(_)) => {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedType,
+                        location.clone(),
+                        format!(
+                            "local{local} binding does not match its authenticated control-flow promotion kind"
+                        ),
+                    ));
+                }
+                (Some(_), None) => {
+                    return Err(self.undefined_local(local, location.clone()));
+                }
+                (None, _) => {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::MalformedMir,
+                        location.clone(),
+                        format!("local{local} is live on an edge but has no promotion plan"),
+                    ));
+                }
+            };
+            let expected_types = self
+                .control_flow_ssa
+                .types(local)
+                .expect("live-in local is promoted");
+            if values.len() != expected_types.len()
+                || values.iter().zip(expected_types).any(|(value, expected)| {
+                    self.value_types
+                        .get(value)
+                        .is_none_or(|actual| actual != expected)
+                })
+            {
+                return Err(diagnostic(
                     TranslationDiagnosticCode::UnsupportedType,
                     location.clone(),
-                    format!("local{local} is not a promotable scalar control-flow value"),
-                )),
-                None => Err(self.undefined_local(*local, location.clone())),
-            })
-            .collect()
+                    format!(
+                        "local{local} control-flow values do not preserve their promoted compiler types"
+                    ),
+                ));
+            }
+            arguments.extend(values);
+        }
+        Ok(arguments)
     }
 
     fn validate_guarded_pointer_use(
@@ -2965,10 +6216,13 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         local: usize,
         location: TranslationLocation,
     ) -> TranslationDiagnostic {
+        let imported_type = imported_local(self.function, local)
+            .map(|local| local.ty.rust.as_str())
+            .unwrap_or("<missing imported type>");
         diagnostic(
             TranslationDiagnosticCode::MalformedMir,
             location,
-            format!("local{local} is used before it is defined"),
+            format!("local{local} is used before it is defined (imported type `{imported_type}`)"),
         )
     }
 
@@ -2987,8 +6241,12 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
     }
 }
 
-fn declared_function_signature(function: &MirFunction) -> Result<Signature, TranslationDiagnostic> {
-    validate_matrix_frontend_function_abi(function)?;
+fn declared_function_signature(
+    function: &MirFunction,
+    source_abi: &MirFunction,
+    elides_generated_result: bool,
+) -> Result<Signature, TranslationDiagnostic> {
+    validate_matrix_frontend_function_abi(source_abi)?;
     let mut args = function
         .locals
         .iter()
@@ -3043,32 +6301,36 @@ fn declared_function_signature(function: &MirFunction) -> Result<Signature, Tran
             "local0 is not marked as the function return local",
         ));
     }
-    let results = match (&function.kind, &return_local.ty.shape) {
-        (_, MirTypeShape::Unit) => Vec::new(),
-        (MirFunctionKind::InternalHelper | MirFunctionKind::DeviceFfiExport, shape) => {
-            lower_scalar_type(shape).map_or_else(
-                || {
-                    Err(diagnostic(
-                        TranslationDiagnosticCode::UnsupportedType,
-                        TranslationLocation::function(function),
-                        format!(
-                            "device definition return type `{}` is not supported",
-                            return_local.ty.rust
-                        ),
-                    ))
-                },
-                |ty| Ok(vec![ty]),
-            )?
-        }
-        (MirFunctionKind::KernelEntry, _) => {
-            return Err(diagnostic(
-                TranslationDiagnosticCode::UnsupportedType,
-                TranslationLocation::function(function),
-                format!(
-                    "kernel entry return type `{}` is not supported",
-                    return_local.ty.rust
-                ),
-            ));
+    let results = if elides_generated_result {
+        Vec::new()
+    } else {
+        match (&function.kind, &return_local.ty.shape) {
+            (_, MirTypeShape::Unit) => Vec::new(),
+            (MirFunctionKind::InternalHelper | MirFunctionKind::DeviceFfiExport, shape) => {
+                lower_scalar_type(shape).map_or_else(
+                    || {
+                        Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedType,
+                            TranslationLocation::function(function),
+                            format!(
+                                "device definition return type `{}` is not supported",
+                                return_local.ty.rust
+                            ),
+                        ))
+                    },
+                    |ty| Ok(vec![ty]),
+                )?
+            }
+            (MirFunctionKind::KernelEntry, _) => {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedType,
+                    TranslationLocation::function(function),
+                    format!(
+                        "kernel entry return type `{}` is not supported",
+                        return_local.ty.rust
+                    ),
+                ));
+            }
         }
     };
     Ok(Signature::new(parameters, results))
@@ -3179,6 +6441,77 @@ fn is_readonly_f32_slice(shape: &MirTypeShape) -> bool {
     )
 }
 
+fn mir_reverse_postorder(function: &MirFunction) -> Result<Vec<&MirBlock>, TranslationDiagnostic> {
+    let blocks = function
+        .blocks
+        .iter()
+        .map(|block| (block.index, block))
+        .collect::<BTreeMap<_, _>>();
+    if !blocks.contains_key(&0) {
+        return Err(diagnostic(
+            TranslationDiagnosticCode::MalformedMir,
+            TranslationLocation::function(function),
+            "kernel must contain entry block bb0",
+        ));
+    }
+
+    let mut seen = BTreeSet::new();
+    let mut postorder = Vec::with_capacity(blocks.len());
+    let mut stack = vec![(0usize, false)];
+    while let Some((index, expanded)) = stack.pop() {
+        if expanded {
+            postorder.push(index);
+            continue;
+        }
+        if !seen.insert(index) {
+            continue;
+        }
+        let block = blocks.get(&index).copied().ok_or_else(|| {
+            diagnostic(
+                TranslationDiagnosticCode::MalformedMir,
+                TranslationLocation::function(function),
+                format!("control-flow graph references missing bb{index}"),
+            )
+        })?;
+        let terminator = block.terminator.as_ref().ok_or_else(|| {
+            diagnostic(
+                TranslationDiagnosticCode::MalformedMir,
+                TranslationLocation::block(function, block),
+                "basic block has no terminator",
+            )
+        })?;
+        stack.push((index, true));
+        let mut successors = mir_successors(&terminator.kind);
+        successors.sort_unstable();
+        successors.dedup();
+        for successor in successors.into_iter().rev() {
+            if !blocks.contains_key(&successor) {
+                return Err(diagnostic(
+                    TranslationDiagnosticCode::MalformedMir,
+                    TranslationLocation::block(function, block),
+                    format!("control-flow graph references missing bb{successor}"),
+                ));
+            }
+            if !seen.contains(&successor) {
+                stack.push((successor, false));
+            }
+        }
+    }
+
+    postorder.reverse();
+    let mut result = postorder
+        .into_iter()
+        .map(|index| blocks[&index])
+        .collect::<Vec<_>>();
+    result.extend(
+        blocks
+            .iter()
+            .filter(|(index, _)| !seen.contains(index))
+            .map(|(_, block)| *block),
+    );
+    Ok(result)
+}
+
 fn mir_block_dominates(function: &MirFunction, dominator: usize, dominated: usize) -> bool {
     let blocks = function
         .blocks
@@ -3275,9 +6608,11 @@ fn is_disjoint_f32_slice(shape: &MirTypeShape) -> bool {
 fn lower_scalar_type(shape: &MirTypeShape) -> Option<Type> {
     match shape {
         MirTypeShape::Bool => Some(Type::BOOL),
+        MirTypeShape::U16 => Some(Type::Scalar(ScalarType::U16)),
         MirTypeShape::I32 => Some(Type::Scalar(ScalarType::I32)),
         MirTypeShape::U32 | MirTypeShape::Bf16x2 => Some(Type::Scalar(ScalarType::U32)),
         MirTypeShape::I64 | MirTypeShape::ISize => Some(Type::Scalar(ScalarType::I64)),
+        MirTypeShape::U64 => Some(Type::Scalar(ScalarType::U64)),
         MirTypeShape::USize => Some(Type::INDEX),
         MirTypeShape::F16 => Some(Type::Scalar(ScalarType::F16)),
         MirTypeShape::Bf16 => Some(Type::Scalar(ScalarType::Bf16)),
@@ -3340,6 +6675,7 @@ fn lower_element_type(shape: &MirTypeShape) -> Option<Type> {
 fn lower_constant(constant: &MirConstant) -> Option<Constant> {
     match constant {
         MirConstant::Bool(value) => Some(Constant::Bool(*value)),
+        MirConstant::U16(value) => Some(Constant::U16(*value)),
         MirConstant::I32(value) => Some(Constant::I32(*value)),
         MirConstant::U32(value) => Some(Constant::U32(*value)),
         MirConstant::I64(value) | MirConstant::ISize(value) => Some(Constant::I64(*value)),
@@ -3348,6 +6684,7 @@ fn lower_constant(constant: &MirConstant) -> Option<Constant> {
         MirConstant::F32Bits(value) => Some(Constant::F32Bits(*value)),
         MirConstant::F64Bits(value) => Some(Constant::F64Bits(*value)),
         MirConstant::ZeroSized
+        | MirConstant::FieldlessEnumVariant(_)
         | MirConstant::StructuredValue(_)
         | MirConstant::ImportFailed(_)
         | MirConstant::Unevaluated => None,
@@ -3440,6 +6777,7 @@ mod tests {
             MirTypeShape::I32,
             MirTypeShape::U32,
             MirTypeShape::I64,
+            MirTypeShape::U64,
             MirTypeShape::ISize,
             MirTypeShape::USize,
             MirTypeShape::F16,
@@ -3452,6 +6790,25 @@ mod tests {
             assert!(lower_element_type(&shape).is_some(), "{shape:?}");
         }
         assert_eq!(lower_element_type(&MirTypeShape::Unknown), None);
+    }
+
+    #[test]
+    fn exact_u16_slice_types_and_constants_lower_without_widening() {
+        assert_eq!(
+            lower_parameter_type(&MirTypeShape::Slice {
+                element: Box::new(MirTypeShape::U16),
+                mutable: false,
+            }),
+            Some(Type::slice(
+                Type::Scalar(ScalarType::U16),
+                AddressSpace::Global,
+                AccessMode::ReadOnly,
+            ))
+        );
+        assert_eq!(
+            lower_constant(&MirConstant::U16(0xa55a)),
+            Some(Constant::U16(0xa55a))
+        );
     }
 
     #[test]
@@ -3509,6 +6866,60 @@ mod tests {
             module.kernels[0].workgroup_size,
             Some(WorkgroupSize::new(128, 1, 1))
         );
+    }
+
+    #[test]
+    fn general_v3_launch_geometry_accepts_only_its_authenticated_64_or_256_profiles() {
+        for dimensions in [[64, 1, 1], [256, 1, 1]] {
+            let mut kernel = empty_kernel_with_contract(launch_contract(
+                Some(dimensions),
+                Some(dimensions),
+                None,
+            ));
+            kernel.typed_profile = Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3);
+            let module = translate_and_verify(&MirModule {
+                functions: vec![kernel],
+            })
+            .expect("authenticated General V3 workgroup");
+            assert_eq!(
+                module.kernels[0].workgroup_size,
+                Some(WorkgroupSize::new(
+                    dimensions[0],
+                    dimensions[1],
+                    dimensions[2]
+                ))
+            );
+        }
+
+        let mut invalid =
+            empty_kernel_with_contract(launch_contract(Some([128, 1, 1]), Some([128, 1, 1]), None));
+        invalid.typed_profile = Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3);
+        let error = translate_and_verify(&MirModule {
+            functions: vec![invalid],
+        })
+        .expect_err("non-profile General V3 workgroup must fail");
+        assert!(error.to_string().contains("exact 64x1x1 or 256x1x1"));
+    }
+
+    #[test]
+    fn control_flow_ssa_accepts_collector_bounded_graphs_above_the_legacy_128_cap() {
+        let mut function =
+            empty_kernel_with_contract(launch_contract(Some([256, 1, 1]), Some([256, 1, 1]), None));
+        function.blocks = (0..203)
+            .map(|index| MirBlock {
+                index,
+                statements: Vec::new(),
+                terminator: Some(terminator(if index == 202 {
+                    MirTerminatorKind::Return
+                } else {
+                    MirTerminatorKind::Goto { target: index + 1 }
+                })),
+            })
+            .collect();
+
+        let plan = control_flow_ssa::ControlFlowSsaPlan::analyze(&function, false)
+            .expect("collector-bounded 203-block graph");
+        assert_eq!(plan.promoted_locals().count(), 0);
     }
 
     #[test]
@@ -3882,6 +7293,247 @@ mod tests {
             body.blocks[0].terminator,
             Some(Terminator::ConditionalBranch { .. })
         ));
+    }
+
+    #[test]
+    fn scalar_comparison_family_lowers_with_exact_predicates() {
+        let mut fixture = scalar_fixture();
+        let function = &mut fixture.functions[0];
+        function.blocks.truncate(1);
+        function.locals.truncate(4);
+        function
+            .locals
+            .extend((4..10).map(|index| local(index, MirLocalRole::Temp, MirTypeShape::Bool)));
+        function.local_count = function.locals.len();
+        function.blocks[0].statements = [
+            MirBinaryOp::Eq,
+            MirBinaryOp::Ne,
+            MirBinaryOp::Lt,
+            MirBinaryOp::Le,
+            MirBinaryOp::Gt,
+            MirBinaryOp::Ge,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, operation)| {
+            assign(
+                index,
+                index + 4,
+                vec![operand(1), operand(2)],
+                MirRvalueKind::Binary(operation),
+            )
+        })
+        .collect();
+        function.blocks[0].terminator = Some(terminator(MirTerminatorKind::Return));
+
+        let module = translate_and_verify(&fixture).expect("comparison family");
+        let predicates = module.functions[0].body.as_ref().expect("body").blocks[0]
+            .operations
+            .iter()
+            .filter_map(|operation| match &operation.kind {
+                OperationKind::Compare { predicate, .. } => Some(*predicate),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            predicates,
+            [
+                ComparePredicate::Equal,
+                ComparePredicate::NotEqual,
+                ComparePredicate::LessThan,
+                ComparePredicate::LessThanOrEqual,
+                ComparePredicate::GreaterThan,
+                ComparePredicate::GreaterThanOrEqual,
+            ]
+        );
+    }
+
+    #[test]
+    fn integer_binary_family_lowers_without_bypassing_float_authority() {
+        let mut fixture = scalar_fixture();
+        let function = &mut fixture.functions[0];
+        let operations = [
+            MirBinaryOp::Add,
+            MirBinaryOp::Sub,
+            MirBinaryOp::Mul,
+            MirBinaryOp::Div,
+            MirBinaryOp::Rem,
+            MirBinaryOp::BitXor,
+            MirBinaryOp::BitAnd,
+            MirBinaryOp::BitOr,
+            MirBinaryOp::Shl,
+            MirBinaryOp::Shr,
+        ];
+        function.blocks.truncate(1);
+        function.locals = vec![
+            local(0, MirLocalRole::Return, MirTypeShape::Unit),
+            local(1, MirLocalRole::Arg, MirTypeShape::U32),
+            local(2, MirLocalRole::Arg, MirTypeShape::U32),
+        ];
+        function.locals.extend(
+            (0..operations.len())
+                .map(|index| local(index + 3, MirLocalRole::Temp, MirTypeShape::U32)),
+        );
+        function.local_count = function.locals.len();
+        function.blocks[0].statements = operations
+            .into_iter()
+            .enumerate()
+            .map(|(index, operation)| {
+                assign(
+                    index,
+                    index + 3,
+                    vec![operand(1), operand(2)],
+                    MirRvalueKind::Binary(operation),
+                )
+            })
+            .collect();
+        function.blocks[0].terminator = Some(terminator(MirTerminatorKind::Return));
+
+        let module = translate_and_verify(&fixture).expect("integer binary family");
+        let lowered = module.functions[0].body.as_ref().expect("body").blocks[0]
+            .operations
+            .iter()
+            .filter_map(|operation| match &operation.kind {
+                OperationKind::Binary { op, .. } => Some(*op),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            lowered,
+            [
+                BinaryOp::Add,
+                BinaryOp::Subtract,
+                BinaryOp::Multiply,
+                BinaryOp::Divide,
+                BinaryOp::Remainder,
+                BinaryOp::BitXor,
+                BinaryOp::BitAnd,
+                BinaryOp::BitOr,
+                BinaryOp::ShiftLeft,
+                BinaryOp::ShiftRight,
+            ]
+        );
+
+        let mut float_multiply = scalar_fixture();
+        for local in &mut float_multiply.functions[0].locals[1..=3] {
+            local.ty.kind = MirType::F32;
+            local.ty.rust = "f32".to_string();
+            local.ty.shape = MirTypeShape::F32;
+        }
+        float_multiply.functions[0].blocks[0].statements.truncate(1);
+        float_multiply.functions[0].blocks[0].statements[0].rvalue =
+            Some(MirRvalueKind::Binary(MirBinaryOp::Mul));
+        let error = translate_and_verify(&float_multiply)
+            .expect_err("unowned float multiply must remain rejected");
+        assert!(error.diagnostics().iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("authenticated semantic workload handler")
+        }));
+    }
+
+    #[test]
+    fn integer_cast_family_preserves_width_and_signedness() {
+        let mut fixture = scalar_fixture();
+        let function = &mut fixture.functions[0];
+        function.arg_count = 3;
+        function.locals = vec![
+            local(0, MirLocalRole::Return, MirTypeShape::Unit),
+            local(1, MirLocalRole::Arg, MirTypeShape::U32),
+            local(2, MirLocalRole::Arg, MirTypeShape::I32),
+            local(3, MirLocalRole::Arg, MirTypeShape::USize),
+            local(4, MirLocalRole::Temp, MirTypeShape::USize),
+            local(5, MirLocalRole::Temp, MirTypeShape::I64),
+            local(6, MirLocalRole::Temp, MirTypeShape::U32),
+            local(7, MirLocalRole::Temp, MirTypeShape::I32),
+            local(8, MirLocalRole::Temp, MirTypeShape::U32),
+        ];
+        function.local_count = function.locals.len();
+        function.blocks = vec![MirBlock {
+            index: 0,
+            statements: [(1, 4), (2, 5), (3, 6), (1, 7), (1, 8)]
+                .into_iter()
+                .enumerate()
+                .map(|(index, (source, destination))| {
+                    assign(
+                        index,
+                        destination,
+                        vec![operand(source)],
+                        MirRvalueKind::SemanticCast(MirCastKind::IntToInt),
+                    )
+                })
+                .collect(),
+            terminator: Some(terminator(MirTerminatorKind::Return)),
+        }];
+
+        let module = translate_and_verify(&fixture).expect("integer casts");
+        let casts = module.functions[0].body.as_ref().expect("body").blocks[0]
+            .operations
+            .iter()
+            .filter_map(|operation| match &operation.kind {
+                OperationKind::Cast { kind, to, .. } => Some((*kind, to.clone())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            casts,
+            [
+                (CastKind::ZeroExtend, Type::INDEX),
+                (CastKind::SignExtend, Type::Scalar(ScalarType::I64)),
+                (CastKind::Bitcast, Type::Scalar(ScalarType::U64)),
+                (CastKind::Truncate, Type::Scalar(ScalarType::U32)),
+                (CastKind::Bitcast, Type::Scalar(ScalarType::I32)),
+            ]
+        );
+    }
+
+    #[test]
+    fn integer_cast_lowering_covers_every_supported_rust_scalar_pair() {
+        let sources = [
+            MirTypeShape::Bool,
+            MirTypeShape::U16,
+            MirTypeShape::I32,
+            MirTypeShape::U32,
+            MirTypeShape::I64,
+            MirTypeShape::U64,
+            MirTypeShape::ISize,
+            MirTypeShape::USize,
+        ];
+        let destinations = [
+            MirTypeShape::U16,
+            MirTypeShape::I32,
+            MirTypeShape::U32,
+            MirTypeShape::I64,
+            MirTypeShape::U64,
+            MirTypeShape::ISize,
+            MirTypeShape::USize,
+        ];
+        for source in sources {
+            for destination in destinations.clone() {
+                let mut fixture = scalar_fixture();
+                let function = &mut fixture.functions[0];
+                function.arg_count = 1;
+                function.locals = vec![
+                    local(0, MirLocalRole::Return, MirTypeShape::Unit),
+                    local(1, MirLocalRole::Arg, source.clone()),
+                    local(2, MirLocalRole::Temp, destination.clone()),
+                ];
+                function.local_count = function.locals.len();
+                function.blocks = vec![MirBlock {
+                    index: 0,
+                    statements: vec![assign(
+                        0,
+                        2,
+                        vec![operand(1)],
+                        MirRvalueKind::SemanticCast(MirCastKind::IntToInt),
+                    )],
+                    terminator: Some(terminator(MirTerminatorKind::Return)),
+                }];
+                translate_and_verify(&fixture).unwrap_or_else(|error| {
+                    panic!("integer cast {source:?} -> {destination:?} failed: {error}")
+                });
+            }
+        }
     }
 
     #[test]
@@ -4302,6 +7954,220 @@ mod tests {
                 .iter()
                 .all(|function| function.id.as_str() != "tests::shared_helper")
         );
+    }
+
+    #[test]
+    fn generated_result_body_inherits_kernel_context_and_lowers_to_zero_results() {
+        let fixture = generated_result_bridge_fixture();
+        let helper = &fixture.functions[1];
+        let contexts = internal_kernel_contexts_v1(&fixture).expect("generated bridge context");
+        let context = contexts
+            .get(&helper.semantic_instance_v1())
+            .expect("generated body context");
+        assert_eq!(
+            context.root.typed_profile,
+            Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3)
+        );
+        assert_eq!(context.source_abi, Some(&fixture.functions[0]));
+        assert!(context.elides_generated_result);
+
+        let module = translate_and_verify(&fixture).expect("generated Result bridge");
+        let helper = module
+            .functions
+            .iter()
+            .find(|function| function.id.as_str() == "generated_body")
+            .expect("generated body definition");
+        assert!(helper.signature.results.is_empty());
+        assert!(
+            helper
+                .body
+                .as_ref()
+                .expect("generated body")
+                .blocks
+                .iter()
+                .flat_map(|block| &block.operations)
+                .any(|operation| matches!(operation.kind, OperationKind::Intrinsic(_)))
+        );
+        assert!(
+            helper
+                .body
+                .as_ref()
+                .expect("generated body")
+                .blocks
+                .iter()
+                .flat_map(|block| &block.operations)
+                .any(|operation| matches!(
+                    operation.kind,
+                    OperationKind::Binary {
+                        op: BinaryOp::Add,
+                        ..
+                    }
+                ))
+        );
+        assert!(matches!(
+            helper.body.as_ref().expect("generated body").blocks[2].terminator,
+            Some(Terminator::Return { ref values }) if values.is_empty()
+        ));
+        let entry = module
+            .functions
+            .iter()
+            .find(|function| function.role == fe2o3_kernel_ir::FunctionRole::KernelEntry)
+            .expect("generated entry definition");
+        assert!(
+            entry
+                .body
+                .as_ref()
+                .expect("generated entry")
+                .blocks
+                .iter()
+                .flat_map(|block| &block.operations)
+                .any(|operation| matches!(
+                    &operation.kind,
+                    OperationKind::Call { callee, .. } if callee.as_str() == "generated_body"
+                ) && operation.results.is_empty())
+        );
+    }
+
+    #[test]
+    fn checked_tiled_2d_requires_compiler_evidence_and_exact_geometry() {
+        let mutate_callee = |fixture: &mut MirModule, replacement: MirCallee| {
+            let MirTerminatorKind::Call { callee, .. } = &mut fixture.functions[1].blocks[1]
+                .terminator
+                .as_mut()
+                .expect("checked tiled call")
+                .kind
+            else {
+                panic!("checked tiled call")
+            };
+            *callee = Some(replacement);
+        };
+
+        let mut missing = generated_result_bridge_fixture();
+        mutate_callee(
+            &mut missing,
+            MirCallee::trusted_for_test(TrustedDeviceItem::ThreadIndexCheckedTiled2D),
+        );
+        let errors = translate_and_verify(&missing).expect_err("missing const-generic evidence");
+        assert!(errors.diagnostics().iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("lacks compiler-authenticated const-generic evidence")
+        }));
+
+        let mut malformed = generated_result_bridge_fixture();
+        mutate_callee(
+            &mut malformed,
+            MirCallee::checked_tiled_2d_for_test(64, 15, 16, 4),
+        );
+        let errors = translate_and_verify(&malformed).expect_err("malformed tiled geometry");
+        assert!(errors.diagnostics().iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("requires exact authenticated Index1D -> Tiled2D")
+        }));
+    }
+
+    #[test]
+    fn generated_result_bridge_rejects_every_observability_mutation() {
+        let replace_callee = |fixture: &mut MirModule, replacement: MirCallee| {
+            let Some(MirTerminator {
+                kind: MirTerminatorKind::Call { callee, .. },
+                ..
+            }) = fixture.functions[0].blocks[0].terminator.as_mut()
+            else {
+                panic!("generated call fixture")
+            };
+            *callee = Some(replacement);
+        };
+
+        let mut missing_seal = generated_result_bridge_fixture();
+        let helper_path = missing_seal.functions[1].rust_path.clone();
+        replace_callee(
+            &mut missing_seal,
+            MirCallee::untrusted_for_test(helper_path),
+        );
+
+        let mut wrong_binding = generated_result_bridge_fixture();
+        let root_path = wrong_binding.functions[0].rust_path.clone();
+        let helper_path = wrong_binding.functions[1].rust_path.clone();
+        replace_callee(
+            &mut wrong_binding,
+            MirCallee::authenticated_kernel_body_for_test(
+                root_path,
+                helper_path,
+                reserved_fe2o3_symbols::KernelBindingIdV1::from_bytes([0xee; 32]),
+            ),
+        );
+
+        let mut wrong_root = generated_result_bridge_fixture();
+        let helper_path = wrong_root.functions[1].rust_path.clone();
+        replace_callee(
+            &mut wrong_root,
+            MirCallee::authenticated_kernel_body_for_test(
+                "tests::not_the_authenticated_root",
+                helper_path,
+                reserved_fe2o3_symbols::KernelBindingIdV1::from_bytes([
+                    0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89,
+                    0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23,
+                    0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+                ]),
+            ),
+        );
+
+        let mut reused = generated_result_bridge_fixture();
+        reused.functions[0].blocks[1]
+            .statements
+            .insert(0, assign(1, 0, vec![operand(2)], MirRvalueKind::Use));
+
+        let mut projected_destination = generated_result_bridge_fixture();
+        let Some(MirTerminator {
+            kind:
+                MirTerminatorKind::Call {
+                    destination: Some(destination),
+                    ..
+                },
+            ..
+        }) = projected_destination.functions[0].blocks[0]
+            .terminator
+            .as_mut()
+        else {
+            panic!("generated call fixture")
+        };
+        destination.projection.push(MirProjectionElem::Deref);
+
+        let mut second_call_site = generated_result_bridge_fixture();
+        let mut caller = second_call_site.functions[0].clone();
+        caller.export_name = "second_kernel".to_owned();
+        caller.rust_path = "tests::second_kernel".to_owned();
+        caller.typed_profile = None;
+        second_call_site.functions.push(caller);
+
+        let mut reads_return = generated_result_bridge_fixture();
+        let helper = &mut reads_return.functions[1];
+        helper.blocks[0].terminator = Some(terminator(MirTerminatorKind::SwitchInt {
+            discriminant: operand(0),
+            targets: Vec::new(),
+            otherwise: 1,
+        }));
+
+        for (name, fixture) in [
+            ("missing compiler seal", missing_seal),
+            ("mismatched kernel binding", wrong_binding),
+            ("mismatched root identity", wrong_root),
+            ("reused result", reused),
+            ("projected destination", projected_destination),
+            ("second call site", second_call_site),
+            ("return read", reads_return),
+        ] {
+            let error = translate_and_verify(&fixture)
+                .expect_err("generated bridge observability mutation must fail");
+            assert!(
+                error
+                    .to_string()
+                    .contains("authenticated generated kernel result bridge rejected"),
+                "{name} escaped the generated bridge guard: {error}"
+            );
+        }
     }
 
     #[test]
@@ -4783,9 +8649,9 @@ mod tests {
                 local_count: 5,
                 locals: vec![
                     local(0, MirLocalRole::Return, MirTypeShape::Unit),
-                    local(1, MirLocalRole::Arg, MirTypeShape::F32),
-                    local(2, MirLocalRole::Arg, MirTypeShape::F32),
-                    local(3, MirLocalRole::Temp, MirTypeShape::F32),
+                    local(1, MirLocalRole::Arg, MirTypeShape::U32),
+                    local(2, MirLocalRole::Arg, MirTypeShape::U32),
+                    local(3, MirLocalRole::Temp, MirTypeShape::U32),
                     local(4, MirLocalRole::Temp, MirTypeShape::Bool),
                 ],
                 blocks: vec![
@@ -4994,6 +8860,148 @@ mod tests {
         }
     }
 
+    fn generated_result_bridge_fixture() -> MirModule {
+        const SUFFIX: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        const BINDING: reserved_fe2o3_symbols::KernelBindingIdV1 =
+            reserved_fe2o3_symbols::KernelBindingIdV1::from_bytes([
+                0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
+                0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67,
+                0x89, 0xab, 0xcd, 0xef,
+            ]);
+        let root_path = format!("tests::{GENERATED_KERNEL_ENTRY_PREFIX_V1}{SUFFIX}");
+        let helper_path = format!("tests::{GENERATED_KERNEL_BODY_PREFIX_V1}{SUFFIX}");
+        let helper_return = local(
+            0,
+            MirLocalRole::Return,
+            MirTypeShape::Adt {
+                identity: "core::result::Result".to_owned(),
+            },
+        );
+        let mut discarded_result = helper_return.clone();
+        discarded_result.index = 2;
+        discarded_result.role = MirLocalRole::Temp;
+        let helper_result_constant = MirOperandRef::Constant {
+            ty: helper_return.ty.clone(),
+            literal: MirConstant::StructuredValue(vec![0]),
+            value: "Result::Ok(())".to_owned(),
+        };
+
+        let root =
+            MirFunction {
+                semantic_instance: None,
+                export_name: "generated_kernel".to_owned(),
+                rust_path: root_path.clone(),
+                kind: MirFunctionKind::KernelEntry,
+                typed_profile: Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3),
+                frontend_contract: Some(
+                    crate::collector::AuthenticatedKernelFrontendContractV1::for_test(
+                        launch_contract(Some([64, 1, 1]), Some([64, 1, 1]), None),
+                    ),
+                ),
+                matrix_frontend_abi: None,
+                arg_count: 1,
+                local_count: 3,
+                locals: vec![
+                    local(0, MirLocalRole::Return, MirTypeShape::Unit),
+                    local(1, MirLocalRole::Arg, MirTypeShape::U32),
+                    discarded_result,
+                ],
+                blocks: vec![
+                    MirBlock {
+                        index: 0,
+                        statements: vec![storage_statement(0, MirStatementKind::StorageLive, 2)],
+                        terminator: Some(terminator(MirTerminatorKind::Call {
+                            callee: Some(MirCallee::authenticated_kernel_body_for_test(
+                                root_path,
+                                helper_path.clone(),
+                                BINDING,
+                            )),
+                            target: Some(1),
+                            destination: Some(place(2)),
+                            operands: vec![operand(1)],
+                        })),
+                    },
+                    MirBlock {
+                        index: 1,
+                        statements: vec![storage_statement(0, MirStatementKind::StorageDead, 2)],
+                        terminator: Some(terminator(MirTerminatorKind::Return)),
+                    },
+                ],
+            };
+        let helper = MirFunction {
+            semantic_instance: None,
+            export_name: "generated_body".to_owned(),
+            rust_path: helper_path,
+            kind: MirFunctionKind::InternalHelper,
+            typed_profile: None,
+            frontend_contract: None,
+            matrix_frontend_abi: None,
+            arg_count: 1,
+            local_count: 5,
+            locals: vec![
+                helper_return,
+                local(1, MirLocalRole::Arg, MirTypeShape::U32),
+                local(
+                    2,
+                    MirLocalRole::Temp,
+                    MirTypeShape::Adt {
+                        identity: TrustedDeviceItem::ThreadIndex.canonical_path().to_owned(),
+                    },
+                ),
+                local(3, MirLocalRole::Temp, MirTypeShape::U32),
+                local(
+                    4,
+                    MirLocalRole::Temp,
+                    MirTypeShape::Adt {
+                        identity: "core::option::Option".to_owned(),
+                    },
+                ),
+            ],
+            blocks: vec![
+                MirBlock {
+                    index: 0,
+                    statements: Vec::new(),
+                    terminator: Some(terminator(MirTerminatorKind::Call {
+                        callee: Some(MirCallee::trusted_for_test(
+                            TrustedDeviceItem::ThreadIndex1d,
+                        )),
+                        target: Some(1),
+                        destination: Some(place(2)),
+                        operands: Vec::new(),
+                    })),
+                },
+                MirBlock {
+                    index: 1,
+                    statements: vec![assign(
+                        0,
+                        3,
+                        vec![operand(1), operand(1)],
+                        MirRvalueKind::Binary(MirBinaryOp::Add),
+                    )],
+                    terminator: Some(terminator(MirTerminatorKind::Call {
+                        callee: Some(MirCallee::checked_tiled_2d_for_test(64, 16, 16, 4)),
+                        target: Some(2),
+                        destination: Some(place(4)),
+                        operands: vec![operand(2)],
+                    })),
+                },
+                MirBlock {
+                    index: 2,
+                    statements: vec![assign(
+                        0,
+                        0,
+                        vec![helper_result_constant],
+                        MirRvalueKind::Use,
+                    )],
+                    terminator: Some(terminator(MirTerminatorKind::Return)),
+                },
+            ],
+        };
+        MirModule {
+            functions: vec![root, helper],
+        }
+    }
+
     fn empty_kernel_with_contract(contract: KernelFrontendContractV1) -> MirFunction {
         MirFunction {
             semantic_instance: None,
@@ -5064,6 +9072,19 @@ mod tests {
             rvalue: Some(rvalue),
             semantic_rvalue_type: None,
             operation: Some("structured".to_string()),
+            source: Some(source()),
+        }
+    }
+
+    fn storage_statement(index: usize, kind: MirStatementKind, local: usize) -> MirStatement {
+        MirStatement {
+            index,
+            kind,
+            destination: Some(place(local)),
+            operands: Vec::new(),
+            rvalue: None,
+            semantic_rvalue_type: None,
+            operation: None,
             source: Some(source()),
         }
     }

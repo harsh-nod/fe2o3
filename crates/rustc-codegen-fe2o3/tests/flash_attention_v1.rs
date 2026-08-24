@@ -363,7 +363,7 @@ fn exact_phase_a_source_authenticates_complete_flash_attention_profile() {
     assert!(result.status.success(), "exact handoff failed:\n{stderr}");
     for marker in [
         "exact rustc FnAbi, location-independent V5 provider-semantic definitions and reviewed semantic-terminal manifest",
-        "complete reachable portable-MIR closure modulo those identity-bound terminals 36f26659b1d8e722ee5358d0b87be34b26ddd22a914376f3ec582843da9c0fc9",
+        "complete reachable portable-MIR closure modulo those identity-bound terminals ff6089e88638045482847285d4966924f31922d0c1cde5ca3087b9e29978b905",
         "closed causal FlashAttention B1/H1/N8/D16 semantic KIR with 10 ordered recurrence steps",
         "adjacent-pair output ownership",
         "published an inert Worker V2 compiler handoff",
@@ -512,7 +512,7 @@ fn hostile_source_mir_profile_and_ownership_mutations_fail_closed() {
             ),
         ),
         (
-            "output-witness",
+            "output-block-witness",
             mutation(
                 SOURCE,
                 "lane_index.checked_block::<1, 2>()",
@@ -630,6 +630,6 @@ fn authority_is_location_independent_and_provider_source_bound() {
         hostile_text.contains(
             "safe execution provider source closure does not match the reviewed V1 identity"
         ),
-        "provider substitution did not fail during trusted layout extraction:\n{hostile_text}"
+        "provider substitution did not fail at provider-source admission:\n{hostile_text}"
     );
 }

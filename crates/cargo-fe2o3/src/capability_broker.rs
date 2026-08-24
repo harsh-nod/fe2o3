@@ -2026,6 +2026,7 @@ mod platform {
 
         impl TestDirectory {
             fn new() -> Self {
+                fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
                 let path = std::env::temp_dir().join(format!(
                     "cargo-fe2o3-capability-broker-{}-{}",
                     std::process::id(),
@@ -2070,15 +2071,13 @@ mod platform {
                 readiness
                     .set_read_timeout(Some(MOCK_EXEC_READY_BOUND))
                     .unwrap();
-                let child = ReapedChild(
-                    Command::new(shell)
-                        .arg("-c")
-                        .arg("printf fe2o3-ready; read _")
-                        .stdin(Stdio::piped())
-                        .stdout(Stdio::from(OwnedFd::from(child_readiness)))
-                        .spawn()
-                        .unwrap(),
-                );
+                let mut command = Command::new(shell);
+                command
+                    .arg("-c")
+                    .arg("printf fe2o3-ready; read _")
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::from(OwnedFd::from(child_readiness)));
+                let child = ReapedChild(crate::process_execution::spawn(&mut command).unwrap());
                 let mut ready = [0_u8; READY.len()];
                 readiness.read_exact(&mut ready).unwrap();
                 assert_eq!(&ready, READY);
@@ -2406,7 +2405,11 @@ mod platform {
             capability
                 .inherit_for_child_at(&mut command, TEST_COMPILER_CLOSURE_CHILD_FD)
                 .unwrap();
-            assert!(command.status().unwrap().success());
+            assert!(
+                crate::process_execution::status(&mut command)
+                    .unwrap()
+                    .success()
+            );
         }
 
         #[test]
@@ -3150,15 +3153,15 @@ mod platform {
             if std::env::var_os("FE2O3_CAPABILITY_BROKER_FD_PRESSURE_CHILD").is_some() {
                 return;
             }
-            let output = Command::new(std::env::current_exe().unwrap())
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
                 .args([
                     "--exact",
                     "capability_broker::platform::tests::descriptor_pressure_child",
                     "--nocapture",
                 ])
-                .env("FE2O3_CAPABILITY_BROKER_FD_PRESSURE_CHILD", "1")
-                .output()
-                .unwrap();
+                .env("FE2O3_CAPABILITY_BROKER_FD_PRESSURE_CHILD", "1");
+            let output = crate::process_execution::capture_output(&mut command).unwrap();
             assert!(
                 output.status.success(),
                 "descriptor-pressure child failed:\nstdout:\n{}\nstderr:\n{}",

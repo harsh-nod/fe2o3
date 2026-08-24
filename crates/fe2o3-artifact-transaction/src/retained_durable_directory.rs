@@ -52,6 +52,14 @@ pub enum RetainedDurableRecoveryBoundaryV1 {
     SyncDirectory,
 }
 
+/// Recovery-only namespace mutation exposed to bounded crash-injection tests.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum RetainedDurableRecoveryMutationBoundaryV1 {
+    /// Moves a visible canonical record to its distinct recovery name.
+    RenameCanonicalToRecovery,
+}
+
 /// Private-artifact operation exposed to bounded crash-injection tests.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RetainedDurableArtifactBoundaryV1 {
@@ -64,10 +72,18 @@ pub enum RetainedDurableArtifactBoundaryV1 {
     SyncFinalMode,
     RenameStagedToFinal,
     SyncFinalName,
+    RenameFinalToStaged,
+    SyncRecoveredStagedName,
 }
 
 /// Test-only boundary callbacks. Production callers use [`NoRetainedDurableDirectoryHooksV1`].
 pub trait RetainedDurableDirectoryHooksV1 {
+    /// Performs one directory sync. Tests may override this method to model the sync syscall
+    /// itself returning an error; production hooks always execute the real `fsync`.
+    fn sync_directory(&mut self, directory: &OwnedFd) -> io::Result<()> {
+        fsync(directory).map_err(io::Error::from)
+    }
+
     fn record(
         &mut self,
         _boundary: RetainedDurableRecordBoundaryV1,
@@ -88,6 +104,15 @@ pub trait RetainedDurableDirectoryHooksV1 {
     fn recovery(
         &mut self,
         _boundary: RetainedDurableRecoveryBoundaryV1,
+        _timing: RetainedDurableFaultTimingV1,
+    ) -> io::Result<()> {
+        Ok(())
+    }
+
+    /// Observes a recovery-only namespace mutation without bypassing the operation.
+    fn recovery_mutation(
+        &mut self,
+        _boundary: RetainedDurableRecoveryMutationBoundaryV1,
         _timing: RetainedDurableFaultTimingV1,
     ) -> io::Result<()> {
         Ok(())
@@ -209,6 +234,7 @@ impl RetainedDurableDirectoryV1 {
                 display_path: PathBuf::from("<service-owned-root-fd>"),
                 device: stat.st_dev,
                 inode: stat.st_ino,
+                path_guard: None,
             },
             service_uid,
         })
@@ -320,6 +346,32 @@ impl RetainedDurableDirectoryV1 {
                 entry: canonical.to_owned(),
             });
         }
+        let expected_canonical = self.read_private(canonical, maximum_bytes)?;
+        self.stage_record_redo(redo, bytes, maximum_bytes, hooks)?;
+        self.promote_validated_redo(
+            canonical,
+            redo,
+            expected_canonical.as_deref(),
+            bytes,
+            maximum_bytes,
+            hooks,
+        )
+    }
+
+    /// Durably publishes exact record bytes under a private redo name without promoting it.
+    ///
+    /// Callers may inspect resource policy after this returns and before invoking
+    /// [`Self::promote_validated_redo`]. The redo is recoverable state and must either be promoted
+    /// or durably removed by the caller's serialized protocol.
+    pub fn stage_record_redo(
+        &self,
+        redo: &str,
+        bytes: &[u8],
+        maximum_bytes: usize,
+        hooks: &mut impl RetainedDurableDirectoryHooksV1,
+    ) -> Result<(), RetainedDurableDirectoryErrorV1> {
+        self.verify()?;
+        validate_name(redo)?;
         if bytes.is_empty() || bytes.len() > maximum_bytes {
             return Err(RetainedDurableDirectoryErrorV1::Size {
                 actual: bytes.len(),
@@ -374,35 +426,13 @@ impl RetainedDurableDirectoryV1 {
             RetainedDurableRecordBoundaryV1::SyncRedoName,
             RetainedDurableFaultTimingV1::Before,
         )?;
-        fsync(&self.output.fd).map_err(io::Error::from)?;
+        hooks.sync_directory(&self.output.fd)?;
         hit_record(
             hooks,
             RetainedDurableRecordBoundaryV1::SyncRedoName,
             RetainedDurableFaultTimingV1::After,
         )?;
         self.verify()?;
-        hit_record(
-            hooks,
-            RetainedDurableRecordBoundaryV1::RenameRedoToCanonical,
-            RetainedDurableFaultTimingV1::Before,
-        )?;
-        renameat(&self.output.fd, redo, &self.output.fd, canonical).map_err(io::Error::from)?;
-        hit_record(
-            hooks,
-            RetainedDurableRecordBoundaryV1::RenameRedoToCanonical,
-            RetainedDurableFaultTimingV1::After,
-        )?;
-        hit_record(
-            hooks,
-            RetainedDurableRecordBoundaryV1::SyncCanonicalName,
-            RetainedDurableFaultTimingV1::Before,
-        )?;
-        fsync(&self.output.fd).map_err(io::Error::from)?;
-        hit_record(
-            hooks,
-            RetainedDurableRecordBoundaryV1::SyncCanonicalName,
-            RetainedDurableFaultTimingV1::After,
-        )?;
         Ok(())
     }
 
@@ -441,7 +471,7 @@ impl RetainedDurableDirectoryV1 {
             RetainedDurableRecordBoundaryV1::SyncCanonicalName,
             RetainedDurableFaultTimingV1::Before,
         )?;
-        fsync(&self.output.fd).map_err(io::Error::from)?;
+        hooks.sync_directory(&self.output.fd)?;
         hit_record(
             hooks,
             RetainedDurableRecordBoundaryV1::SyncCanonicalName,
@@ -450,13 +480,15 @@ impl RetainedDurableDirectoryV1 {
         self.verify()
     }
 
-    /// Establishes durability for a recovered canonical record, then revalidates its bytes.
+    /// Recommits a recovered canonical record through a fresh durable redo transaction.
     ///
     /// A canonical name can be visible after a redo rename even when the directory sync from the
     /// original commit failed or had an ambiguous result. Recovery must not treat that visibility
-    /// as durability. This operation validates the exact visible record and redo absence, syncs
-    /// the retained directory, and only returns bytes obtained by repeating both checks after the
-    /// sync. Callers must perform their semantic validation on the returned bytes.
+    /// as durability. A later successful sync alone cannot repair a writeback error already
+    /// reported for the original transaction. This operation therefore validates the exact visible
+    /// record and redo absence, renames canonical to redo and syncs that mutation, promotes redo
+    /// back to canonical and syncs again, then repeats both byte checks. The rename cycle preserves
+    /// the managed-entry count, including at an exact persistent-entry quota.
     pub fn establish_recovered_record_durability(
         &self,
         canonical: &str,
@@ -481,18 +513,57 @@ impl RetainedDurableDirectoryV1 {
         }
         require_exact_private(self, canonical, expected_canonical, maximum_bytes)?;
         require_missing_private(self, redo, maximum_bytes)?;
+        hit_recovery_mutation(
+            hooks,
+            RetainedDurableRecoveryMutationBoundaryV1::RenameCanonicalToRecovery,
+            RetainedDurableFaultTimingV1::Before,
+        )?;
+        renameat_with(
+            &self.output.fd,
+            canonical,
+            &self.output.fd,
+            redo,
+            RenameFlags::NOREPLACE,
+        )
+        .map_err(io::Error::from)?;
+        hit_recovery_mutation(
+            hooks,
+            RetainedDurableRecoveryMutationBoundaryV1::RenameCanonicalToRecovery,
+            RetainedDurableFaultTimingV1::After,
+        )?;
+        hit_record(
+            hooks,
+            RetainedDurableRecordBoundaryV1::SyncRedoName,
+            RetainedDurableFaultTimingV1::Before,
+        )?;
+        hooks.sync_directory(&self.output.fd)?;
+        hit_record(
+            hooks,
+            RetainedDurableRecordBoundaryV1::SyncRedoName,
+            RetainedDurableFaultTimingV1::After,
+        )?;
+        self.verify()?;
+        require_missing_private(self, canonical, maximum_bytes)?;
+        require_exact_private(self, redo, expected_canonical, maximum_bytes)?;
+        self.promote_validated_redo(
+            canonical,
+            redo,
+            None,
+            expected_canonical,
+            maximum_bytes,
+            hooks,
+        )?;
         hit_recovery(
             hooks,
             RetainedDurableRecoveryBoundaryV1::SyncDirectory,
             RetainedDurableFaultTimingV1::Before,
         )?;
-        fsync(&self.output.fd).map_err(io::Error::from)?;
+        hooks.sync_directory(&self.output.fd)?;
         hit_recovery(
             hooks,
             RetainedDurableRecoveryBoundaryV1::SyncDirectory,
             RetainedDurableFaultTimingV1::After,
         )?;
-        self.verify()?;
         let canonical_after =
             require_exact_private(self, canonical, expected_canonical, maximum_bytes)?;
         require_missing_private(self, redo, maximum_bytes)?;
@@ -564,13 +635,113 @@ impl RetainedDurableDirectoryV1 {
             RetainedDurableArtifactBoundaryV1::SyncStagedName,
             RetainedDurableFaultTimingV1::Before,
         )?;
-        fsync(&self.output.fd).map_err(io::Error::from)?;
+        hooks.sync_directory(&self.output.fd)?;
         hit_artifact(
             hooks,
             RetainedDurableArtifactBoundaryV1::SyncStagedName,
             RetainedDurableFaultTimingV1::After,
         )?;
         self.verify_exact(staged, bytes)
+    }
+
+    /// Recommits an exact visible artifact through a fresh staged-to-final transaction.
+    ///
+    /// A final name may be visible even though the directory sync that followed its rename failed.
+    /// A later sync alone cannot establish that the original rename was durable after a writeback
+    /// error. This operation therefore moves the validated final object back to its distinct staged
+    /// name, syncs that namespace mutation, and publishes it again through a fresh final rename and
+    /// directory sync. If an earlier cycle already reached the staged name, this operation resumes
+    /// that exact staged object. The cycle preserves the managed-entry count at exact quotas.
+    pub fn establish_recovered_artifact_durability(
+        &self,
+        staged: &str,
+        final_entry: &str,
+        expected_bytes: &[u8],
+        final_mode: u32,
+        hooks: &mut impl RetainedDurableDirectoryHooksV1,
+    ) -> Result<(), RetainedDurableDirectoryErrorV1> {
+        self.verify()?;
+        validate_name(staged)?;
+        validate_name(final_entry)?;
+        validate_final_mode(final_mode)?;
+        if staged == final_entry {
+            return Err(RetainedDurableDirectoryErrorV1::InvalidName {
+                entry: staged.to_owned(),
+            });
+        }
+        let staged_exists = self.read_managed(
+            staged,
+            expected_bytes.len(),
+            ManagedMode::PrivateOrExact(final_mode),
+        )?;
+        let final_exists = self.read_published(final_entry, expected_bytes.len(), final_mode)?;
+        match (staged_exists, final_exists) {
+            (Some(staged_bytes), None) if staged_bytes == expected_bytes => {
+                return self.publish_validated_staged(
+                    staged,
+                    final_entry,
+                    expected_bytes,
+                    final_mode,
+                    hooks,
+                );
+            }
+            (None, Some(final_bytes)) if final_bytes == expected_bytes => {}
+            (None, None) => {
+                return Err(RetainedDurableDirectoryErrorV1::MissingEntry {
+                    entry: final_entry.to_owned(),
+                });
+            }
+            _ => {
+                return Err(RetainedDurableDirectoryErrorV1::ContentMismatch {
+                    entry: final_entry.to_owned(),
+                });
+            }
+        }
+        hit_artifact(
+            hooks,
+            RetainedDurableArtifactBoundaryV1::RenameFinalToStaged,
+            RetainedDurableFaultTimingV1::Before,
+        )?;
+        renameat_with(
+            &self.output.fd,
+            final_entry,
+            &self.output.fd,
+            staged,
+            RenameFlags::NOREPLACE,
+        )
+        .map_err(io::Error::from)?;
+        hit_artifact(
+            hooks,
+            RetainedDurableArtifactBoundaryV1::RenameFinalToStaged,
+            RetainedDurableFaultTimingV1::After,
+        )?;
+        hit_artifact(
+            hooks,
+            RetainedDurableArtifactBoundaryV1::SyncRecoveredStagedName,
+            RetainedDurableFaultTimingV1::Before,
+        )?;
+        hooks.sync_directory(&self.output.fd)?;
+        hit_artifact(
+            hooks,
+            RetainedDurableArtifactBoundaryV1::SyncRecoveredStagedName,
+            RetainedDurableFaultTimingV1::After,
+        )?;
+        self.verify()?;
+        let staged_after = self.read_managed(
+            staged,
+            expected_bytes.len(),
+            ManagedMode::PrivateOrExact(final_mode),
+        )?;
+        if self
+            .read_published(final_entry, expected_bytes.len(), final_mode)?
+            .is_some()
+            || staged_after.as_deref() != Some(expected_bytes)
+        {
+            return Err(RetainedDurableDirectoryErrorV1::ContentMismatch {
+                entry: staged.to_owned(),
+            });
+        }
+        self.publish_validated_staged(staged, final_entry, expected_bytes, final_mode, hooks)
     }
 
     /// Atomically makes one exact staged artifact visible at its bound final component.
@@ -600,18 +771,13 @@ impl RetainedDurableDirectoryV1 {
         match (staged_exists, final_exists) {
             (Some(staged_bytes), None) if staged_bytes == expected_bytes => {}
             (None, Some(final_bytes)) if final_bytes == expected_bytes => {
-                hit_artifact(
+                return self.establish_recovered_artifact_durability(
+                    staged,
+                    final_entry,
+                    &final_bytes,
+                    final_mode,
                     hooks,
-                    RetainedDurableArtifactBoundaryV1::SyncFinalName,
-                    RetainedDurableFaultTimingV1::Before,
-                )?;
-                fsync(&self.output.fd).map_err(io::Error::from)?;
-                hit_artifact(
-                    hooks,
-                    RetainedDurableArtifactBoundaryV1::SyncFinalName,
-                    RetainedDurableFaultTimingV1::After,
-                )?;
-                return Ok(());
+                );
             }
             (None, None) => {
                 return Err(RetainedDurableDirectoryErrorV1::MissingEntry {
@@ -624,6 +790,17 @@ impl RetainedDurableDirectoryV1 {
                 });
             }
         }
+        self.publish_validated_staged(staged, final_entry, expected_bytes, final_mode, hooks)
+    }
+
+    fn publish_validated_staged(
+        &self,
+        staged: &str,
+        final_entry: &str,
+        expected_bytes: &[u8],
+        final_mode: u32,
+        hooks: &mut impl RetainedDurableDirectoryHooksV1,
+    ) -> Result<(), RetainedDurableDirectoryErrorV1> {
         let staged_fd = openat(
             &self.output.fd,
             staged,
@@ -659,11 +836,26 @@ impl RetainedDurableDirectoryV1 {
             RetainedDurableArtifactBoundaryV1::SyncFinalMode,
             RetainedDurableFaultTimingV1::After,
         )?;
+        let prepared = validate_managed_file(
+            &staged_fd,
+            staged,
+            self.service_uid,
+            ManagedMode::Exact(final_mode),
+        )?;
         hit_artifact(
             hooks,
             RetainedDurableArtifactBoundaryV1::RenameStagedToFinal,
             RetainedDurableFaultTimingV1::Before,
         )?;
+        let prepared_after_hook = validate_managed_file(
+            &staged_fd,
+            staged,
+            self.service_uid,
+            ManagedMode::Exact(final_mode),
+        )?;
+        let named_after_hook =
+            statat(&self.output.fd, staged, AtFlags::SYMLINK_NOFOLLOW).map_err(io::Error::from)?;
+        require_unchanged_managed_name(&prepared, &prepared_after_hook, &named_after_hook, staged)?;
         renameat_with(
             &self.output.fd,
             staged,
@@ -682,7 +874,7 @@ impl RetainedDurableDirectoryV1 {
             RetainedDurableArtifactBoundaryV1::SyncFinalName,
             RetainedDurableFaultTimingV1::Before,
         )?;
-        fsync(&self.output.fd).map_err(io::Error::from)?;
+        hooks.sync_directory(&self.output.fd)?;
         hit_artifact(
             hooks,
             RetainedDurableArtifactBoundaryV1::SyncFinalName,
@@ -953,6 +1145,37 @@ fn validate_final_mode(mode: u32) -> Result<(), RetainedDurableDirectoryErrorV1>
     Ok(())
 }
 
+fn require_unchanged_managed_name(
+    before: &rustix::fs::Stat,
+    after: &rustix::fs::Stat,
+    named: &rustix::fs::Stat,
+    entry: &str,
+) -> Result<(), RetainedDurableDirectoryErrorV1> {
+    let unchanged = before.st_dev == after.st_dev
+        && before.st_ino == after.st_ino
+        && before.st_mode == after.st_mode
+        && before.st_uid == after.st_uid
+        && before.st_nlink == after.st_nlink
+        && before.st_size == after.st_size
+        && before.st_mtime == after.st_mtime
+        && before.st_mtime_nsec == after.st_mtime_nsec
+        && before.st_ctime == after.st_ctime
+        && before.st_ctime_nsec == after.st_ctime_nsec;
+    let still_named = after.st_dev == named.st_dev
+        && after.st_ino == named.st_ino
+        && after.st_mode == named.st_mode
+        && after.st_uid == named.st_uid
+        && after.st_nlink == named.st_nlink
+        && after.st_size == named.st_size;
+    if !unchanged || !still_named {
+        return Err(RetainedDurableDirectoryV1::unsafe_entry(
+            entry,
+            "prepared staged entry changed before its final rename",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_name(entry: &str) -> Result<(), RetainedDurableDirectoryErrorV1> {
     let valid = !entry.is_empty()
         && entry.len() <= 240
@@ -1036,9 +1259,20 @@ fn hit_recovery(
     hooks.recovery(boundary, timing).map_err(Into::into)
 }
 
+fn hit_recovery_mutation(
+    hooks: &mut impl RetainedDurableDirectoryHooksV1,
+    boundary: RetainedDurableRecoveryMutationBoundaryV1,
+    timing: RetainedDurableFaultTimingV1,
+) -> Result<(), RetainedDurableDirectoryErrorV1> {
+    hooks
+        .recovery_mutation(boundary, timing)
+        .map_err(Into::into)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error;
     use std::fs::File;
     use std::os::unix::fs::PermissionsExt;
 
@@ -1090,37 +1324,157 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct ArtifactRecoveryHook {
+        fail_at: Option<(
+            RetainedDurableArtifactBoundaryV1,
+            RetainedDurableFaultTimingV1,
+        )>,
+        fail_sync_call: Option<usize>,
+        sync_calls: usize,
+        events: Vec<(
+            RetainedDurableArtifactBoundaryV1,
+            RetainedDurableFaultTimingV1,
+        )>,
+    }
+
+    impl RetainedDurableDirectoryHooksV1 for ArtifactRecoveryHook {
+        fn sync_directory(&mut self, directory: &OwnedFd) -> io::Result<()> {
+            self.sync_calls += 1;
+            if self.fail_sync_call == Some(self.sync_calls) {
+                return Err(io::Error::from_raw_os_error(libc::EIO));
+            }
+            fsync(directory).map_err(io::Error::from)
+        }
+
+        fn artifact(
+            &mut self,
+            boundary: RetainedDurableArtifactBoundaryV1,
+            timing: RetainedDurableFaultTimingV1,
+        ) -> io::Result<()> {
+            self.events.push((boundary, timing));
+            if self.fail_at == Some((boundary, timing)) {
+                Err(io::Error::other("simulated artifact crash"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    struct StagedSubstitutionHook {
+        staged: PathBuf,
+        displaced: PathBuf,
+        replacement: Vec<u8>,
+    }
+
+    impl RetainedDurableDirectoryHooksV1 for StagedSubstitutionHook {
+        fn artifact(
+            &mut self,
+            boundary: RetainedDurableArtifactBoundaryV1,
+            timing: RetainedDurableFaultTimingV1,
+        ) -> io::Result<()> {
+            if boundary == RetainedDurableArtifactBoundaryV1::RenameStagedToFinal
+                && timing == RetainedDurableFaultTimingV1::Before
+            {
+                fs::rename(&self.staged, &self.displaced)?;
+                fs::write(&self.staged, &self.replacement)?;
+                fs::set_permissions(&self.staged, fs::Permissions::from_mode(0o444))?;
+            }
+            Ok(())
+        }
+    }
+
+    type RecoveryEvent = (
+        RetainedDurableRecordBoundaryV1,
+        RetainedDurableFaultTimingV1,
+    );
+    type RecoveryAfterEvent = (
+        RetainedDurableRecordBoundaryV1,
+        RetainedDurableFaultTimingV1,
+        Box<dyn FnMut() -> io::Result<()>>,
+    );
+
     struct RecoveryHook {
-        fail_at: Option<RetainedDurableFaultTimingV1>,
-        after_sync: Option<Box<dyn FnMut() -> io::Result<()>>>,
-        events: Vec<RetainedDurableFaultTimingV1>,
+        fail_at: Option<RecoveryEvent>,
+        fail_recovery_at: Option<RetainedDurableFaultTimingV1>,
+        fail_recovery_mutation_at: Option<RetainedDurableFaultTimingV1>,
+        after_event: Option<RecoveryAfterEvent>,
+        fail_sync_call: Option<usize>,
+        sync_calls: usize,
+        events: Vec<RecoveryEvent>,
+        recovery_events: Vec<RetainedDurableFaultTimingV1>,
+        recovery_mutation_events: Vec<RetainedDurableFaultTimingV1>,
     }
 
     impl RecoveryHook {
         fn tracing() -> Self {
             Self {
                 fail_at: None,
-                after_sync: None,
+                fail_recovery_at: None,
+                fail_recovery_mutation_at: None,
+                after_event: None,
+                fail_sync_call: None,
+                sync_calls: 0,
                 events: Vec::new(),
+                recovery_events: Vec::new(),
+                recovery_mutation_events: Vec::new(),
             }
         }
     }
 
     impl RetainedDurableDirectoryHooksV1 for RecoveryHook {
+        fn sync_directory(&mut self, directory: &OwnedFd) -> io::Result<()> {
+            self.sync_calls += 1;
+            if self.fail_sync_call == Some(self.sync_calls) {
+                return Err(io::Error::from_raw_os_error(libc::EIO));
+            }
+            fsync(directory).map_err(io::Error::from)
+        }
+
+        fn record(
+            &mut self,
+            boundary: RetainedDurableRecordBoundaryV1,
+            timing: RetainedDurableFaultTimingV1,
+        ) -> io::Result<()> {
+            self.events.push((boundary, timing));
+            if let Some((after_boundary, after_timing, callback)) = &mut self.after_event
+                && (*after_boundary, *after_timing) == (boundary, timing)
+            {
+                callback()?;
+            }
+            if self.fail_at == Some((boundary, timing)) {
+                Err(io::Error::other("injected recovery barrier failure"))
+            } else {
+                Ok(())
+            }
+        }
+
         fn recovery(
             &mut self,
             boundary: RetainedDurableRecoveryBoundaryV1,
             timing: RetainedDurableFaultTimingV1,
         ) -> io::Result<()> {
             assert_eq!(boundary, RetainedDurableRecoveryBoundaryV1::SyncDirectory);
-            self.events.push(timing);
-            if timing == RetainedDurableFaultTimingV1::After
-                && let Some(after_sync) = &mut self.after_sync
-            {
-                after_sync()?;
+            self.recovery_events.push(timing);
+            if self.fail_recovery_at == Some(timing) {
+                Err(io::Error::other("injected legacy recovery hook failure"))
+            } else {
+                Ok(())
             }
-            if self.fail_at == Some(timing) {
-                Err(io::Error::other("injected recovery barrier failure"))
+        }
+
+        fn recovery_mutation(
+            &mut self,
+            boundary: RetainedDurableRecoveryMutationBoundaryV1,
+            timing: RetainedDurableFaultTimingV1,
+        ) -> io::Result<()> {
+            assert_eq!(
+                boundary,
+                RetainedDurableRecoveryMutationBoundaryV1::RenameCanonicalToRecovery
+            );
+            self.recovery_mutation_events.push(timing);
+            if self.fail_recovery_mutation_at == Some(timing) {
+                Err(io::Error::other("injected recovery mutation failure"))
             } else {
                 Ok(())
             }
@@ -1148,7 +1502,222 @@ mod tests {
     }
 
     #[test]
-    fn recovery_barrier_syncs_and_rereads_an_ambiguous_canonical_name() {
+    fn visible_artifact_after_directory_fsync_eio_requires_a_fresh_rename_commit() {
+        const FINAL_MODE: u32 = 0o444;
+        let directory = TestDirectory::new();
+        let store = directory.store();
+        let expected = b"content-addressed compiler object";
+        let mut no_faults = NoRetainedDurableDirectoryHooksV1;
+        store
+            .stage_artifact("object.staged", expected, 1024, &mut no_faults)
+            .unwrap();
+
+        let mut failing = ArtifactRecoveryHook {
+            fail_sync_call: Some(1),
+            ..ArtifactRecoveryHook::default()
+        };
+        let error = store
+            .publish_staged(
+                "object.staged",
+                "object.final",
+                expected,
+                FINAL_MODE,
+                &mut failing,
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .source()
+                .unwrap()
+                .to_string()
+                .contains("Input/output error")
+        );
+        store
+            .verify_published_exact("object.final", expected, FINAL_MODE)
+            .unwrap();
+        assert!(store.read_private("object.staged", 1024).unwrap().is_none());
+
+        let mut recovery = ArtifactRecoveryHook::default();
+        store
+            .publish_staged(
+                "object.staged",
+                "object.final",
+                expected,
+                FINAL_MODE,
+                &mut recovery,
+            )
+            .unwrap();
+
+        assert_eq!(
+            recovery.events,
+            [
+                (
+                    RetainedDurableArtifactBoundaryV1::RenameFinalToStaged,
+                    RetainedDurableFaultTimingV1::Before,
+                ),
+                (
+                    RetainedDurableArtifactBoundaryV1::RenameFinalToStaged,
+                    RetainedDurableFaultTimingV1::After,
+                ),
+                (
+                    RetainedDurableArtifactBoundaryV1::SyncRecoveredStagedName,
+                    RetainedDurableFaultTimingV1::Before,
+                ),
+                (
+                    RetainedDurableArtifactBoundaryV1::SyncRecoveredStagedName,
+                    RetainedDurableFaultTimingV1::After,
+                ),
+                (
+                    RetainedDurableArtifactBoundaryV1::SetFinalMode,
+                    RetainedDurableFaultTimingV1::Before,
+                ),
+                (
+                    RetainedDurableArtifactBoundaryV1::SetFinalMode,
+                    RetainedDurableFaultTimingV1::After,
+                ),
+                (
+                    RetainedDurableArtifactBoundaryV1::SyncFinalMode,
+                    RetainedDurableFaultTimingV1::Before,
+                ),
+                (
+                    RetainedDurableArtifactBoundaryV1::SyncFinalMode,
+                    RetainedDurableFaultTimingV1::After,
+                ),
+                (
+                    RetainedDurableArtifactBoundaryV1::RenameStagedToFinal,
+                    RetainedDurableFaultTimingV1::Before,
+                ),
+                (
+                    RetainedDurableArtifactBoundaryV1::RenameStagedToFinal,
+                    RetainedDurableFaultTimingV1::After,
+                ),
+                (
+                    RetainedDurableArtifactBoundaryV1::SyncFinalName,
+                    RetainedDurableFaultTimingV1::Before,
+                ),
+                (
+                    RetainedDurableArtifactBoundaryV1::SyncFinalName,
+                    RetainedDurableFaultTimingV1::After,
+                ),
+            ]
+        );
+        assert_eq!(recovery.sync_calls, 2);
+        store
+            .verify_published_exact("object.final", expected, FINAL_MODE)
+            .unwrap();
+        assert!(store.read_private("object.staged", 1024).unwrap().is_none());
+    }
+
+    #[test]
+    fn recommit_resumes_after_final_is_renamed_or_staged_name_is_synced() {
+        const FINAL_MODE: u32 = 0o444;
+        for boundary in [
+            RetainedDurableArtifactBoundaryV1::RenameFinalToStaged,
+            RetainedDurableArtifactBoundaryV1::SyncRecoveredStagedName,
+        ] {
+            let directory = TestDirectory::new();
+            let store = directory.store();
+            let expected = b"restart-safe content-addressed object";
+            let mut no_faults = NoRetainedDurableDirectoryHooksV1;
+            store
+                .stage_artifact("object.staged", expected, 1024, &mut no_faults)
+                .unwrap();
+            store
+                .publish_staged(
+                    "object.staged",
+                    "object.final",
+                    expected,
+                    FINAL_MODE,
+                    &mut no_faults,
+                )
+                .unwrap();
+
+            let mut crash = ArtifactRecoveryHook {
+                fail_at: Some((boundary, RetainedDurableFaultTimingV1::After)),
+                ..ArtifactRecoveryHook::default()
+            };
+            assert!(
+                store
+                    .establish_recovered_artifact_durability(
+                        "object.staged",
+                        "object.final",
+                        expected,
+                        FINAL_MODE,
+                        &mut crash,
+                    )
+                    .is_err(),
+                "{boundary:?}"
+            );
+            assert!(
+                store
+                    .read_published("object.final", 1024, FINAL_MODE)
+                    .unwrap()
+                    .is_none(),
+                "{boundary:?}"
+            );
+            assert_eq!(
+                store
+                    .read_staged("object.staged", 1024, FINAL_MODE)
+                    .unwrap()
+                    .as_deref(),
+                Some(expected.as_slice()),
+                "{boundary:?}"
+            );
+
+            store
+                .establish_recovered_artifact_durability(
+                    "object.staged",
+                    "object.final",
+                    expected,
+                    FINAL_MODE,
+                    &mut no_faults,
+                )
+                .unwrap();
+            store
+                .verify_published_exact("object.final", expected, FINAL_MODE)
+                .unwrap();
+            assert!(store.read_private("object.staged", 1024).unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn staged_name_substitution_before_final_rename_is_rejected() {
+        const FINAL_MODE: u32 = 0o444;
+        let directory = TestDirectory::new();
+        let store = directory.store();
+        let expected = b"validated staged artifact";
+        let mut no_faults = NoRetainedDurableDirectoryHooksV1;
+        store
+            .stage_artifact("object.staged", expected, 1024, &mut no_faults)
+            .unwrap();
+        let mut substitution = StagedSubstitutionHook {
+            staged: directory.path.join("object.staged"),
+            displaced: directory.path.join("validated-staged-object"),
+            replacement: b"substitute staged artifact".to_vec(),
+        };
+
+        assert!(
+            store
+                .publish_staged(
+                    "object.staged",
+                    "object.final",
+                    expected,
+                    FINAL_MODE,
+                    &mut substitution,
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .read_published("object.final", 1024, FINAL_MODE)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(fs::read(substitution.displaced).unwrap(), expected);
+    }
+
+    #[test]
+    fn recovery_recommits_and_rereads_an_ambiguous_canonical_name() {
         let directory = TestDirectory::new();
         let store = directory.store();
         let expected = b"canonical prepared record";
@@ -1163,42 +1732,164 @@ mod tests {
         assert_eq!(
             hook.events,
             [
-                RetainedDurableFaultTimingV1::Before,
-                RetainedDurableFaultTimingV1::After
+                (
+                    RetainedDurableRecordBoundaryV1::SyncRedoName,
+                    RetainedDurableFaultTimingV1::Before,
+                ),
+                (
+                    RetainedDurableRecordBoundaryV1::SyncRedoName,
+                    RetainedDurableFaultTimingV1::After,
+                ),
+                (
+                    RetainedDurableRecordBoundaryV1::RenameRedoToCanonical,
+                    RetainedDurableFaultTimingV1::Before,
+                ),
+                (
+                    RetainedDurableRecordBoundaryV1::RenameRedoToCanonical,
+                    RetainedDurableFaultTimingV1::After,
+                ),
+                (
+                    RetainedDurableRecordBoundaryV1::SyncCanonicalName,
+                    RetainedDurableFaultTimingV1::Before,
+                ),
+                (
+                    RetainedDurableRecordBoundaryV1::SyncCanonicalName,
+                    RetainedDurableFaultTimingV1::After,
+                ),
             ]
         );
+        assert_eq!(
+            hook.recovery_mutation_events,
+            [
+                RetainedDurableFaultTimingV1::Before,
+                RetainedDurableFaultTimingV1::After,
+            ]
+        );
+        assert_eq!(
+            hook.recovery_events,
+            [
+                RetainedDurableFaultTimingV1::Before,
+                RetainedDurableFaultTimingV1::After,
+            ]
+        );
+        assert_eq!(hook.sync_calls, 3);
     }
 
     #[test]
     fn recovery_barrier_hook_failures_return_no_revalidated_bytes() {
+        for boundary in [
+            RetainedDurableRecordBoundaryV1::SyncRedoName,
+            RetainedDurableRecordBoundaryV1::RenameRedoToCanonical,
+            RetainedDurableRecordBoundaryV1::SyncCanonicalName,
+        ] {
+            for timing in [
+                RetainedDurableFaultTimingV1::Before,
+                RetainedDurableFaultTimingV1::After,
+            ] {
+                let directory = TestDirectory::new();
+                let store = directory.store();
+                let expected = b"canonical prepared record";
+                leave_ambiguous_canonical(&store, "record", "redo", expected);
+                let mut hook = RecoveryHook {
+                    fail_at: Some((boundary, timing)),
+                    ..RecoveryHook::tracing()
+                };
+
+                assert!(
+                    store
+                        .establish_recovered_record_durability(
+                            "record", "redo", expected, 1024, &mut hook,
+                        )
+                        .is_err()
+                );
+                assert_eq!(hook.events.last(), Some(&(boundary, timing)));
+            }
+        }
+    }
+
+    #[test]
+    fn recovery_specific_and_legacy_hook_failures_return_no_revalidated_bytes() {
         for timing in [
             RetainedDurableFaultTimingV1::Before,
             RetainedDurableFaultTimingV1::After,
         ] {
+            let mutation_directory = TestDirectory::new();
+            let mutation_store = mutation_directory.store();
+            let expected = b"canonical prepared record";
+            leave_ambiguous_canonical(&mutation_store, "record", "recovery", expected);
+            let mut mutation_hook = RecoveryHook {
+                fail_recovery_mutation_at: Some(timing),
+                ..RecoveryHook::tracing()
+            };
+            assert!(
+                mutation_store
+                    .establish_recovered_record_durability(
+                        "record",
+                        "recovery",
+                        expected,
+                        1024,
+                        &mut mutation_hook,
+                    )
+                    .is_err()
+            );
+
+            let legacy_directory = TestDirectory::new();
+            let legacy_store = legacy_directory.store();
+            leave_ambiguous_canonical(&legacy_store, "record", "recovery", expected);
+            let mut legacy_hook = RecoveryHook {
+                fail_recovery_at: Some(timing),
+                ..RecoveryHook::tracing()
+            };
+            assert!(
+                legacy_store
+                    .establish_recovered_record_durability(
+                        "record",
+                        "recovery",
+                        expected,
+                        1024,
+                        &mut legacy_hook,
+                    )
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_returns_no_bytes_when_any_directory_fsync_returns_eio() {
+        for fail_sync_call in [1, 2, 3] {
             let directory = TestDirectory::new();
             let store = directory.store();
             let expected = b"canonical prepared record";
             leave_ambiguous_canonical(&store, "record", "redo", expected);
             let mut hook = RecoveryHook {
-                fail_at: Some(timing),
+                fail_sync_call: Some(fail_sync_call),
                 ..RecoveryHook::tracing()
             };
 
-            assert!(
+            let error = store
+                .establish_recovered_record_durability("record", "redo", expected, 1024, &mut hook)
+                .unwrap_err();
+            let source = error.source().unwrap();
+            assert!(source.to_string().contains("Input/output error"));
+
+            let mut no_faults = NoRetainedDurableDirectoryHooksV1;
+            if store.read_private("redo", 1024).unwrap().is_some() {
+                store
+                    .promote_validated_redo("record", "redo", None, expected, 1024, &mut no_faults)
+                    .unwrap();
+            }
+            assert_eq!(
                 store
                     .establish_recovered_record_durability(
-                        "record", "redo", expected, 1024, &mut hook,
+                        "record",
+                        "redo",
+                        expected,
+                        1024,
+                        &mut no_faults,
                     )
-                    .is_err()
-            );
-            assert_eq!(
-                hook.events.first(),
-                Some(&RetainedDurableFaultTimingV1::Before)
-            );
-            assert_eq!(
-                hook.events.last(),
-                Some(&timing),
-                "the failure must occur at its requested sync side"
+                    .unwrap(),
+                expected,
+                "recovery after fsync call {fail_sync_call} must perform a fresh transaction",
             );
         }
     }
@@ -1214,9 +1905,11 @@ mod tests {
                 .path
                 .join(if replace_canonical { "record" } else { "redo" });
             let mut hook = RecoveryHook {
-                after_sync: Some(Box::new(move || {
-                    write_private(&target, b"hostile replacement")
-                })),
+                after_event: Some((
+                    RetainedDurableRecordBoundaryV1::SyncCanonicalName,
+                    RetainedDurableFaultTimingV1::After,
+                    Box::new(move || write_private(&target, b"hostile replacement")),
+                )),
                 ..RecoveryHook::tracing()
             };
 
@@ -1228,11 +1921,11 @@ mod tests {
                     .is_err()
             );
             assert_eq!(
-                hook.events,
-                [
-                    RetainedDurableFaultTimingV1::Before,
-                    RetainedDurableFaultTimingV1::After
-                ]
+                hook.events.last(),
+                Some(&(
+                    RetainedDurableRecordBoundaryV1::SyncCanonicalName,
+                    RetainedDurableFaultTimingV1::After,
+                ))
             );
         }
     }

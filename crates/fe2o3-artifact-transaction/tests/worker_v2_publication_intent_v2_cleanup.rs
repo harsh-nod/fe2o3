@@ -78,6 +78,7 @@ struct TestDirectory(PathBuf);
 
 impl TestDirectory {
     fn new() -> Self {
+        fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
         loop {
             let id = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(
@@ -545,6 +546,7 @@ fn cleanup_escrow_subprocess_crash_helper() {
     let Ok(operation) = std::env::var(ESCROW_CRASH_HELPER_OPERATION) else {
         return;
     };
+    fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
     let output = PathBuf::from(std::env::var_os(ESCROW_CRASH_HELPER_OUTPUT).unwrap());
     let source = std::env::var(ESCROW_CRASH_HELPER_SOURCE).unwrap();
     let owner = producer(&source);

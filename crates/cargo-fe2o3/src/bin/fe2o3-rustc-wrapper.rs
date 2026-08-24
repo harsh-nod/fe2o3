@@ -2,6 +2,9 @@
 #[path = "../pinned_executable_test_directory.rs"]
 mod pinned_executable_test_directory;
 
+#[path = "../process_execution.rs"]
+mod process_execution;
+
 #[path = "../rustc_wrapper.rs"]
 mod rustc_wrapper;
 

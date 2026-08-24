@@ -666,8 +666,10 @@ fn exact_profile_authority_is_location_independent_and_source_bound() {
         "mutated provider source authenticated"
     );
     assert!(
-        hostile_text.contains("trusted-definition/semantic-terminal identity drifted"),
-        "mutated provider source did not fail at trusted identity:\n{hostile_text}"
+        hostile_text.contains(
+            "safe execution provider source closure does not match the reviewed V1 identity"
+        ),
+        "mutated provider source did not fail at provider source identity:\n{hostile_text}"
     );
 }
 
@@ -785,8 +787,8 @@ fn hostile_atomic_source_and_compiler_mutations_fail_closed() {
             "atomic-ordering",
             mutation(
                 ATOMIC_SOURCE,
-                "target.fetch_add(values[lane], Ordering::Relaxed)",
-                "target.fetch_add(values[lane], Ordering::SeqCst)",
+                ".fetch_add(values[lane], Ordering::Relaxed)",
+                ".fetch_add(values[lane], Ordering::SeqCst)",
             ),
         ),
         (

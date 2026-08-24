@@ -1534,6 +1534,7 @@ mod tests {
 
     impl TestDirectory {
         fn new() -> Self {
+            fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
             let path = std::env::temp_dir().join(format!(
                 "cargo-fe2o3-artifact-container-{}-{}",
                 std::process::id(),
@@ -2988,13 +2989,13 @@ mod tests {
         .unwrap();
         drop(store);
 
-        let interrupted = std::process::Command::new(std::env::current_exe().unwrap())
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
             .arg("--exact")
             .arg("worker_v2_artifact_container::tests::required_envelope_publication_fault_helper")
             .env(ENVELOPE_FAULT_HELPER_DIR_ENV, &directory.0)
-            .env("FE2O3_TEST_WORKER_V2_FAULT_POINT_V1", "envelope-published")
-            .status()
-            .unwrap();
+            .env("FE2O3_TEST_WORKER_V2_FAULT_POINT_V1", "envelope-published");
+        let interrupted = crate::process_execution::status(&mut command).unwrap();
         assert_eq!(interrupted.code(), Some(86));
 
         let restarted = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
@@ -3022,7 +3023,8 @@ mod tests {
         drop(store);
 
         for cycle in 1..=3 {
-            let interrupted = std::process::Command::new(std::env::current_exe().unwrap())
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
                 .arg("--exact")
                 .arg(
                     "worker_v2_artifact_container::tests::required_envelope_publication_fault_helper",
@@ -3031,9 +3033,8 @@ mod tests {
                 .env(
                     "FE2O3_TEST_WORKER_V2_FAULT_POINT_V1",
                     "envelope-temp-synced",
-                )
-                .status()
-                .unwrap();
+                );
+            let interrupted = crate::process_execution::status(&mut command).unwrap();
             assert_eq!(interrupted.code(), Some(86), "crash cycle {cycle}");
             assert_eq!(
                 envelope_publication_temp_residue(&directory).len(),
@@ -3091,7 +3092,8 @@ mod tests {
         .unwrap();
         fs::write(directory.0.join("fault-capsule-input"), inputs.to_bytes()).unwrap();
 
-        let interrupted = std::process::Command::new(std::env::current_exe().unwrap())
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
             .arg("--exact")
             .arg("worker_v2_artifact_container::tests::capsule_temp_fault_helper")
             .env(ENVELOPE_FAULT_HELPER_DIR_ENV, &directory.0)
@@ -3099,9 +3101,8 @@ mod tests {
             .env(
                 "FE2O3_TEST_WORKER_V2_FAULT_POINT_V1",
                 "envelope-inputs-temp-synced",
-            )
-            .status()
-            .unwrap();
+            );
+        let interrupted = crate::process_execution::status(&mut command).unwrap();
         assert_eq!(interrupted.code(), Some(86));
         assert_eq!(envelope_input_residue(&directory).len(), 1);
 
@@ -3158,13 +3159,13 @@ mod tests {
             stage_required_ready(&store, &publisher, &envelope);
         drop(store);
 
-        let interrupted = std::process::Command::new(std::env::current_exe().unwrap())
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
             .arg("--exact")
             .arg("worker_v2_artifact_container::tests::required_published_fault_helper")
             .env(ENVELOPE_FAULT_HELPER_DIR_ENV, &directory.0)
-            .env("FE2O3_TEST_WORKER_V2_FAULT_POINT_V1", "published")
-            .status()
-            .unwrap();
+            .env("FE2O3_TEST_WORKER_V2_FAULT_POINT_V1", "published");
+        let interrupted = crate::process_execution::status(&mut command).unwrap();
         assert_eq!(interrupted.code(), Some(86));
 
         let restarted = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();

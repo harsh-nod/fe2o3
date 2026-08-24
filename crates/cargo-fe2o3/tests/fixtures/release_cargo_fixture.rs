@@ -148,6 +148,7 @@ fn build(args: &[OsString]) -> ExitCode {
             "-Cmetadata=protected-release-build",
         ])
         .arg(root.join("src/main.rs"))
+        .env("CARGO_PRIMARY_PACKAGE", "1")
         .env("CARGO_MANIFEST_DIR", &root)
         .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
         .status();

@@ -112,6 +112,7 @@ const BUILD_HELPER_ENV: &str = "FE2O3_SCALAR_CF_ISOLATED_BUILD_HELPER";
 const BUILD_HELPER_SOCKET_ENV: &str = "FE2O3_SCALAR_CF_BUILD_SOCKET_FD";
 const BUILD_HELPER_WORKSPACE_ENV: &str = "FE2O3_SCALAR_CF_BUILD_WORKSPACE";
 const BUILD_HELPER_MOUNT_ENV: &str = "FE2O3_SCALAR_CF_BUILD_MOUNT";
+const CONFIGURED_ARTIFACT_GUARD_CHILD_ENV: &str = "FE2O3_SCALAR_CF_CONFIGURED_ARTIFACT_GUARD_CHILD";
 const SCALAR_GEMM_HANDOFF_OUTPUT_ENV: &str = "FE2O3_SCALAR_GEMM_V1_HANDOFF_OUTPUT";
 const BACKEND_BUILD_TIMEOUT: Duration = Duration::from_secs(600);
 const COMPILER_TIMEOUT: Duration = Duration::from_secs(120);
@@ -537,6 +538,43 @@ fn is_known_namespace_policy_denial(stderr: &str) -> bool {
         || stderr.contains("unshare: Operation not permitted")
 }
 
+fn rerun_with_configured_artifact_path_guard(test_name: &str) -> bool {
+    if std::env::var_os(CONFIGURED_ARTIFACT_GUARD_CHILD_ENV).is_some() {
+        return false;
+    }
+
+    let guard_root = PrivateBuildRoot::new(&workspace());
+    let guard_directory = guard_root.0.join("artifact-path-guard");
+    let mut builder = std::fs::DirBuilder::new();
+    builder.mode(0o700);
+    builder
+        .create(&guard_directory)
+        .expect("create private configured artifact path guard");
+    let metadata = std::fs::metadata(&guard_directory)
+        .expect("inspect private configured artifact path guard");
+    let identity = format!("{:016x}:{:016x}", metadata.dev(), metadata.ino());
+
+    let mut command = Command::new(std::env::current_exe().expect("current integration test"));
+    command
+        .args(["--exact", test_name, "--nocapture"])
+        .env(CONFIGURED_ARTIFACT_GUARD_CHILD_ENV, "1")
+        .env("FE2O3_ARTIFACT_PATH_GUARD_DIR", &guard_directory)
+        .env("FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY", identity);
+    let output = run_bounded(
+        &mut command,
+        BACKEND_BUILD_TIMEOUT,
+        "configured artifact-path-guard test subprocess",
+    )
+    .expect("run configured artifact-path-guard test subprocess within deadline");
+    assert!(
+        output.status.success(),
+        "configured artifact-path-guard test subprocess failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    true
+}
+
 fn receive_backend_from_child(
     mut child: CapturedChild,
     socket: RawFd,
@@ -579,6 +617,7 @@ fn receive_backend_from_child(
 }
 
 fn build_backend(workspace: &Path) -> &'static PinnedBackend {
+    fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
     BACKEND.get_or_init(|| {
         let build_root = PrivateBuildRoot::new(workspace);
         let (parent_socket, child_socket) = UnixDatagram::pair().expect("create backend FD socket");
@@ -4031,9 +4070,18 @@ fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
     if isolated_backend_environment_is_unavailable() {
         return;
     }
+    if rerun_with_configured_artifact_path_guard(
+        "tiled_gemm_v1_source_authentication_and_adversaries_fail_closed",
+    ) {
+        return;
+    }
     let workspace = workspace();
     let backend = build_backend(&workspace);
     assert!(TILED_GEMM_FIXTURE.contains("launch(required = [64, 1, 1], max = [64, 1, 1])"));
+    assert!(TILED_GEMM_FIXTURE.contains("Tiled2D<Index1D, 64, 16, 16, 4>"));
+    assert!(TILED_GEMM_FIXTURE.contains("checked_tiled_2d::<64, 16, 16, 4>()"));
+    assert!(TILED_GEMM_FIXTURE.contains("get_tiled_2d_mut"));
+    assert!(!TILED_GEMM_FIXTURE.contains("unsafe"));
     assert!(
         !TILED_GEMM_FIXTURE.contains("static __fe2o3_kernel_frontend_contract_v1_tiled_gemm_v1")
     );
@@ -4052,7 +4100,7 @@ fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
         exact.status.success()
             && exact_stderr.contains("consumed its single-use frontend receipt")
             && exact_stderr
-                .contains("ac26009cf04bdefb1c95dbd2266ea8a23cf2679e90316576ec6fdd6aeefa21a6")
+                .contains("8fbc1de394eb46ff9103a1842ae248bc5bfcdbc6820bd60525153ec066bcc18a")
             && exact_stderr.contains("explicit kernarg 64 bytes, complete COV6 kernarg 320 bytes")
             && exact_stderr.contains("exact one-wave 64x1x1 one-tile launch with no LDS")
             && exact_stderr.contains("selected canonical fe2o3::tiled_gemm_v1")
@@ -4085,6 +4133,30 @@ fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
         "same-name source mutation minted tiled authority:\n{same_name_stderr}"
     );
     assert_tiled_gemm_published_no_handoff(&same_name_output);
+
+    let mapping_source = TILED_GEMM_FIXTURE.replacen(
+        "d.get_tiled_2d_mut(&output_tile, 0, 16, 16, 16)",
+        "d.get_tiled_2d_mut(&output_tile, 1, 16, 16, 16)",
+        1,
+    );
+    assert_ne!(mapping_source, TILED_GEMM_FIXTURE);
+    let mapping_output = TestOutputDir::new(&workspace);
+    let mapping = compile_tiled_gemm(
+        &workspace,
+        backend,
+        &mapping_output,
+        &mapping_source,
+        "gfx942:xnack-",
+        &[],
+    );
+    let mapping_stderr = stderr(&mapping);
+    assert!(
+        !mapping.status.success()
+            && mapping_stderr.contains("portable MIR identity mismatch")
+            && !mapping_stderr.contains("published tiled GEMM Worker V2 handoff"),
+        "output-component mapping mutation minted tiled authority:\n{mapping_stderr}"
+    );
+    assert_tiled_gemm_published_no_handoff(&mapping_output);
 
     let lookalike_source = TILED_GEMM_FIXTURE
         .replacen(

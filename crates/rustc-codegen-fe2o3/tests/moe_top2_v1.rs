@@ -1,3 +1,4 @@
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
@@ -23,7 +24,8 @@ const SOURCE_REMAP: &str = "/fe2o3-reviewed-workspace/moe-top2-v1.rs";
 const WORKSPACE_REMAP: &str = "/fe2o3-reviewed-workspace";
 const SOURCE: &str = include_str!("../../../examples/moe_top2_v1/src/kernel.rs");
 const STRUCTURAL_CORRESPONDENCE: &str =
-    "f6b6140e4a85c3317db58f70eae55a5b2300743dc60470d723f3b0c9624f67d8";
+    "0481e24ade21ae5b76e851bf95ad171c9b4f3d7858e7779e38f699453d067810";
+const CONFIGURED_ARTIFACT_GUARD_CHILD_ENV: &str = "FE2O3_MOE_TOP2_CONFIGURED_GUARD_CHILD";
 
 static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(0);
 static FRONTEND_DEPENDENCIES: OnceLock<Result<(), String>> = OnceLock::new();
@@ -361,6 +363,36 @@ fn command_text(output: &Output) -> String {
     )
 }
 
+fn rerun_with_configured_artifact_path_guard(test_name: &str) -> bool {
+    if std::env::var_os(CONFIGURED_ARTIFACT_GUARD_CHILD_ENV).is_some() {
+        return false;
+    }
+
+    let workspace = workspace();
+    let output = TestOutput::new(&workspace);
+    let guard_directory = output.path.join("artifact-path-guard");
+    std::fs::create_dir(&guard_directory).expect("create private MoE artifact path guard");
+    std::fs::set_permissions(&guard_directory, std::fs::Permissions::from_mode(0o700))
+        .expect("secure private MoE artifact path guard");
+    let metadata =
+        std::fs::metadata(&guard_directory).expect("inspect private MoE artifact path guard");
+    let identity = format!("{:016x}:{:016x}", metadata.dev(), metadata.ino());
+    let child = Command::new(std::env::current_exe().expect("current MoE integration test"))
+        .args(["--exact", test_name, "--nocapture"])
+        .env(CONFIGURED_ARTIFACT_GUARD_CHILD_ENV, "1")
+        .env("FE2O3_ARTIFACT_PATH_GUARD_DIR", &guard_directory)
+        .env("FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY", identity)
+        .output()
+        .expect("run MoE test with a configured artifact path guard");
+    assert!(
+        child.status.success(),
+        "configured artifact-path-guard MoE test failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr)
+    );
+    true
+}
+
 fn authenticated_authority(output: &Output) -> String {
     let text = command_text(output);
     let suffix = text
@@ -387,6 +419,11 @@ fn authenticated_structural_record(output: &Output) -> String {
 
 #[test]
 fn live_rustc_admission_emits_pinned_structural_record() {
+    if rerun_with_configured_artifact_path_guard(
+        "live_rustc_admission_emits_pinned_structural_record",
+    ) {
+        return;
+    }
     let workspace = workspace();
     let output = TestOutput::new(&workspace);
     let result = compile(
@@ -407,7 +444,7 @@ fn live_rustc_admission_emits_pinned_structural_record() {
     );
     for marker in [
         "opaque exact rustc FnAbi identity plus bounded structural projection, location-independent V5 provider-semantic definitions and reviewed semantic-terminal manifest",
-        "complete reachable portable-MIR closure modulo those identity-bound terminals edeffa59729df775ae94d5d5eb1110b8ffd6bf07e9659ba2a96fc37c975d9b86",
+        "complete reachable portable-MIR closure modulo those identity-bound terminals 6df90b02cee94c4e7c01f86f2bc3c735dcef0ab1d5e34ce6a8b0d8761c999611",
         "checked private same-session producer-derived structural source/FnAbi/MIR/KIR record",
         "explicitly not semantic refinement",
         "whole-module MIR diagnostics and ordered aggregate canonical KIR/profile entries collectively encoding all current fields do not prove semantic MIR-to-KIR correspondence",
@@ -492,6 +529,11 @@ fn live_rustc_admission_emits_pinned_structural_record() {
 
 #[test]
 fn hostile_source_mir_profile_and_ownership_mutations_fail_closed() {
+    if rerun_with_configured_artifact_path_guard(
+        "hostile_source_mir_profile_and_ownership_mutations_fail_closed",
+    ) {
+        return;
+    }
     let workspace = workspace();
     let output = TestOutput::new(&workspace);
     let baseline = compile(
@@ -663,8 +705,8 @@ fn hostile_source_mir_profile_and_ownership_mutations_fail_closed() {
             "ownership-leader",
             mutation(
                 SOURCE,
-                "} else {\n        return;\n    }\n    if logits.len()",
-                "} else {\n        fe2o3_device::trap();\n        return;\n    }\n    if logits.len()",
+                "if let Some(current_leader) = thread::grid_leader() {",
+                "if let Some(current_leader) = thread::grid_leader().filter(|_| false) {",
             ),
         ),
         (
@@ -679,8 +721,8 @@ fn hostile_source_mir_profile_and_ownership_mutations_fail_closed() {
             "terminal-call",
             mutation(
                 SOURCE,
-                "let Some(slot) = output.get_mut_exclusive(leader, index) else {\n        fe2o3_device::trap();",
-                "let Some(slot) = output.get_mut_exclusive(leader, index) else {\n        // trap removed",
+                "let Some(slot) = output.get_mut_exclusive(leader, index) else {\n        fe2o3_device::trap();\n        return;\n    };",
+                "let Some(slot) = output.get_mut_exclusive(leader, index) else {\n        return;\n    };",
             ),
         ),
     ];
@@ -768,6 +810,11 @@ fn hostile_source_mir_profile_and_ownership_mutations_fail_closed() {
 
 #[test]
 fn authority_is_location_independent_and_provider_source_bound() {
+    if rerun_with_configured_artifact_path_guard(
+        "authority_is_location_independent_and_provider_source_bound",
+    ) {
+        return;
+    }
     let workspace = workspace();
     let output = TestOutput::new(&workspace);
     let location_a = output.path.join("canonical-workspace-a");
@@ -814,7 +861,7 @@ fn authority_is_location_independent_and_provider_source_bound() {
         hostile_text.contains(
             "safe execution provider source closure does not match the reviewed V1 identity"
         ),
-        "provider substitution did not fail during trusted layout extraction:\n{hostile_text}"
+        "provider substitution did not fail at provider-source admission:\n{hostile_text}"
     );
     assert!(
         !hostile_text.contains(

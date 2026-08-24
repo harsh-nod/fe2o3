@@ -427,6 +427,7 @@ mod tests {
 
     impl TestDirectory {
         fn new(label: &str) -> Self {
+            fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
             let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(
                 "cargo-fe2o3-protected-v3-{label}-{}-{sequence}",
@@ -665,7 +666,11 @@ mod tests {
     #[test]
     fn parent_custody_survives_child_exit_and_managed_completion() {
         let (custody, _) = protected_parent_custody(0x10);
-        assert!(Command::new("/bin/true").status().unwrap().success());
+        assert!(
+            crate::process_execution::status(&mut Command::new("/bin/true"))
+                .unwrap()
+                .success()
+        );
         let completed = custody.retain_through(|custody| {
             custody.revalidate().unwrap();
             assert!(!custody.grants_compiler_authority());

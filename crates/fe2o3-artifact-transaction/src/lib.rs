@@ -36,8 +36,20 @@
 //!
 //! The output directory is a private protocol namespace for cooperating fe2o3 writers. Every
 //! writer that can create, rename, replace, or remove entries in that directory must use this
-//! crate's lock. POSIX record locks are advisory, and Linux has no unlink-by-file-descriptor
-//! operation. Consequently, these APIs detect substitutions observed before a destructive
+//! crate's composite Linux lock. Writers split across mount namespaces must explicitly configure
+//! one shared, pre-provisioned guard directory with `FE2O3_ARTIFACT_PATH_GUARD_DIR` and its exact
+//! inode identity. That guard object is locked as one namespace-independent domain, so different
+//! absolute aliases cannot split the critical section. Writers restricted to one mount namespace
+//! must explicitly select normalized-absolute-path byte-range coordination with
+//! [`enable_same_mount_namespace_artifact_path_guard_v1`]. A named-file OFD record lock preserves
+//! interoperability with existing cooperating writers, and a
+//! descriptor-owned lock on the root inode prevents replacement of the named lock from creating a
+//! second critical section. Closing unrelated descriptors cannot release these locks. Lock
+//! descriptors are `CLOEXEC`, but a forked child retains inherited locks until it closes those
+//! descriptors or successfully executes; pre-exec child code must not re-enter these APIs. Linux
+//! has no
+//! unlink-by-file-descriptor operation. Consequently, these APIs detect substitutions observed
+//! before a destructive
 //! operation and verify their results, but they cannot prevent arbitrary same-UID code that
 //! ignores the lock from replacing a pathname in the final check-to-unlink interval. Callers must
 //! not expose the directory to such writers. This is a coordination boundary, not a defense
@@ -45,6 +57,7 @@
 
 mod attempt;
 mod attempt_scoped_hsaco_publication;
+mod compiler_artifact_generation_v1;
 mod compiler_module_handoff;
 mod durable_link_publication;
 mod durable_published_claim;
@@ -94,6 +107,24 @@ pub use attempt_scoped_hsaco_publication::{
     recover_published_hsaco_claim_for_attempt_v1, recover_published_hsaco_claim_for_attempt_v2,
     recover_published_hsaco_claim_for_attempt_v3, validate_backend_publication_receipt_v1,
     validate_backend_publication_receipt_v2, validate_backend_publication_receipt_v3,
+};
+pub use compiler_artifact_generation_v1::{
+    CompilerArtifactGenerationErrorV1, CompilerArtifactGenerationFaultPointV1,
+    CompilerArtifactGenerationFaultTimingV1, CompilerArtifactGenerationLeaseV1,
+    CompilerArtifactGenerationManifestEntryV1, CompilerArtifactGenerationManifestIdentityV1,
+    CompilerArtifactGenerationManifestV1, CompilerArtifactGenerationObjectBoundaryV1,
+    CompilerArtifactGenerationObjectV1, CompilerArtifactGenerationObservationV1,
+    CompilerArtifactGenerationOptionsV1, CompilerArtifactGenerationPublishOutcomeV1,
+    CompilerArtifactGenerationQuotaV1, CompilerArtifactGenerationReclamationV1,
+    CompilerArtifactGenerationRecordBoundaryV1, CompilerArtifactGenerationRecordOperationV1,
+    CompilerArtifactGenerationRequestV1, CompilerArtifactGenerationScopeV1,
+    CompilerArtifactGenerationStoreV1, CompilerArtifactRoleV1,
+    DEFAULT_COMPILER_ARTIFACT_STORE_BYTES_V1, DEFAULT_COMPILER_ARTIFACT_STORE_ENTRIES_V1,
+    HARD_MAX_COMPILER_ARTIFACT_STORE_BYTES_V1, HARD_MAX_COMPILER_ARTIFACT_STORE_ENTRIES_V1,
+    MAX_COMPILER_ARTIFACT_GENERATION_BYTES_V1, MAX_COMPILER_ARTIFACT_GENERATION_MANIFEST_BYTES_V1,
+    MAX_COMPILER_ARTIFACT_GENERATION_SCOPE_RECORD_BYTES_V1, MAX_COMPILER_HSACO_BYTES_V1,
+    MAX_COMPILER_LINEAGE_BYTES_V1, MAX_COMPILER_NEUTRAL_KIR_BYTES_V1,
+    MAX_COMPILER_SEMANTIC_MIR_BYTES_V1, MAX_COMPILER_TARGET_KIR_BYTES_V1,
 };
 pub use compiler_module_handoff::{
     CompilerModuleHandoffConsumptionTokenV3, CompilerModuleHandoffCurrentnessLeaseV3,
@@ -162,13 +193,14 @@ pub use retained_durable_directory::{
     NoRetainedDurableDirectoryHooksV1, RetainedDurableArtifactBoundaryV1,
     RetainedDurableDirectoryErrorV1, RetainedDurableDirectoryHooksV1, RetainedDurableDirectoryV1,
     RetainedDurableFaultTimingV1, RetainedDurableRecordBoundaryV1,
-    RetainedDurableRecoveryBoundaryV1,
+    RetainedDurableRecoveryBoundaryV1, RetainedDurableRecoveryMutationBoundaryV1,
 };
 use rustix::fd::{AsRawFd, FromRawFd, OwnedFd};
 use rustix::fs::{
-    AtFlags, Dir, FileType, FlockOperation, Mode, OFlags, fcntl_lock, fstat, fsync, mkdirat, open,
-    openat, renameat, statat, unlinkat,
+    AtFlags, Dir, FileType, Mode, OFlags, fstat, fsync, mkdirat, open, openat, renameat, statat,
+    unlinkat,
 };
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::fs;
@@ -177,7 +209,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process;
 #[cfg(feature = "test-hooks")]
 use std::sync::Weak;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 pub use worker_v2_publication_intent::{
     MAX_WORKER_V2_PUBLICATION_INTENT_CLEANUP_ESCROW_CAPSULE_BYTES_V1,
@@ -608,6 +640,99 @@ pub fn install_begin_build_attempt_lock_probe_v1(
     BeginBuildAttemptLockProbeV1 { inner }
 }
 
+struct ArtifactProcessSpawnStateV1 {
+    pid: u32,
+    active_spawns: u64,
+}
+
+struct ArtifactProcessSpawnCoordinatorV1 {
+    state: Mutex<ArtifactProcessSpawnStateV1>,
+    idle: Condvar,
+}
+
+impl ArtifactProcessSpawnCoordinatorV1 {
+    fn global() -> &'static Self {
+        static COORDINATOR: OnceLock<ArtifactProcessSpawnCoordinatorV1> = OnceLock::new();
+        COORDINATOR.get_or_init(|| Self {
+            state: Mutex::new(ArtifactProcessSpawnStateV1 {
+                pid: process::id(),
+                active_spawns: 0,
+            }),
+            idle: Condvar::new(),
+        })
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, ArtifactProcessSpawnStateV1> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let pid = process::id();
+        if state.pid != pid {
+            state.pid = pid;
+            state.active_spawns = 0;
+        }
+        state
+    }
+
+    fn begin_spawn(&'static self) -> ArtifactProcessSpawnLeaseV1 {
+        let mut state = self.state();
+        state.active_spawns = state
+            .active_spawns
+            .checked_add(1)
+            .expect("concurrent artifact process spawn count overflowed");
+        ArtifactProcessSpawnLeaseV1 { coordinator: self }
+    }
+
+    fn release_lock_descriptors(&self, release: impl FnOnce()) {
+        let mut state = self.state();
+        while state.active_spawns != 0 {
+            state = self
+                .idle
+                .wait(state)
+                .unwrap_or_else(|error| error.into_inner());
+        }
+        // Keep the state lock held while descriptors close so a new child cannot inherit them.
+        release();
+    }
+}
+
+struct ArtifactProcessSpawnLeaseV1 {
+    coordinator: &'static ArtifactProcessSpawnCoordinatorV1,
+}
+
+impl Drop for ArtifactProcessSpawnLeaseV1 {
+    fn drop(&mut self) {
+        let mut state = self.coordinator.state();
+        state.active_spawns = state
+            .active_spawns
+            .checked_sub(1)
+            .expect("artifact process spawn lease underflowed");
+        if state.active_spawns == 0 {
+            self.coordinator.idle.notify_all();
+        }
+    }
+}
+
+/// Runs one process creation operation without exposing inherited artifact-lock aliases.
+///
+/// On Linux, a child temporarily retains the parent's `CLOEXEC` OFD and `flock` descriptors
+/// between `fork` and `exec`. Every process creation in a process that uses this crate's artifact
+/// transactions must pass its `Command::spawn` operation through this function. Artifact lock
+/// release then waits for all coordinated children to exec or fail, ensuring that a child can
+/// never become the sole owner of an inherited lock alias. Lock acquisition remains nonblocking
+/// and reports only genuine lock contention.
+pub fn with_artifact_process_spawn_v1<T, E>(spawn: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
+    let _spawn = ArtifactProcessSpawnCoordinatorV1::global().begin_spawn();
+    spawn()
+}
+
+/// Compatibility entry point for test fixtures that predate production spawn coordination.
+#[cfg(feature = "test-hooks")]
+#[doc(hidden)]
+pub fn with_test_artifact_fork_exec_barrier_v1<T, E>(
+    spawn: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    with_artifact_process_spawn_v1(spawn)
+}
+
 /// Starts or resumes the durable artifact generation for one rustc invocation.
 ///
 /// A new generation is recorded before this function invalidates the producer's prior owned
@@ -1032,9 +1157,58 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Barrier, mpsc};
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    fn spawn_test_process(command: &mut process::Command) -> io::Result<process::Child> {
+        with_artifact_process_spawn_v1(|| command.spawn())
+    }
+
+    fn run_test_process(command: &mut process::Command) -> io::Result<process::ExitStatus> {
+        let mut child = spawn_test_process(command)?;
+        child.wait()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn close_child_descriptor_range(first: u32, last: u32) -> bool {
+        if first > last {
+            return true;
+        }
+        // SAFETY: this helper is called only in a fork child that immediately exits or pauses.
+        unsafe { libc::syscall(libc::SYS_close_range, first, last, 0_u32) == 0 }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn close_unintended_child_descriptors(preserved: i32) -> bool {
+        let Ok(preserved) = u32::try_from(preserved) else {
+            return false;
+        };
+        if preserved < 3 {
+            return close_child_descriptor_range(3, u32::MAX);
+        }
+        close_child_descriptor_range(3, preserved - 1)
+            && close_child_descriptor_range(preserved + 1, u32::MAX)
+    }
+
+    #[cfg(target_os = "linux")]
+    struct RawChildGuard(libc::pid_t);
+
+    #[cfg(target_os = "linux")]
+    impl Drop for RawChildGuard {
+        fn drop(&mut self) {
+            // SAFETY: the guard owns one unreaped child that deliberately pauses forever.
+            unsafe {
+                libc::kill(self.0, libc::SIGKILL);
+                let mut status = 0;
+                while libc::waitpid(self.0, &mut status, 0) < 0 {
+                    if io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+                        break;
+                    }
+                }
+            }
+        }
+    }
 
     struct TestDirectory {
         path: PathBuf,
@@ -1042,6 +1216,7 @@ mod tests {
 
     impl TestDirectory {
         fn new() -> Self {
+            enable_same_mount_namespace_artifact_path_guard_v1();
             loop {
                 let id = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
                 let path = std::env::temp_dir().join(format!(
@@ -1590,6 +1765,569 @@ mod tests {
     }
 
     #[test]
+    fn relative_output_is_rejected_before_descriptor_or_path_guard_identity_can_diverge() {
+        let relative = PathBuf::from(format!(
+            "fe2o3-relative-output-must-not-exist-{}",
+            std::process::id()
+        ));
+        assert!(!relative.exists());
+
+        let Err(error) = PinnedOutput::open(&relative) else {
+            panic!("relative artifact output was admitted");
+        };
+
+        assert!(matches!(
+            error,
+            EmitError::InvalidArtifactDestination { reason, .. }
+                if reason.contains("must be absolute")
+        ));
+        assert!(!relative.exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn filesystem_path_guard_directory_is_private_and_service_owned() {
+        enable_same_mount_namespace_artifact_path_guard_v1();
+        let service_uid = rustix::process::geteuid().as_raw();
+        let (directory, path, whole_domain_lock) =
+            open_linux_filesystem_path_guard_directory(service_uid).unwrap();
+        let stat = fstat(&directory).unwrap();
+        assert!(!whole_domain_lock);
+        assert!(path.is_absolute());
+        assert_eq!(FileType::from_raw_mode(stat.st_mode), FileType::Directory);
+        assert_eq!(stat.st_uid, service_uid);
+        assert_eq!(stat.st_mode & 0o7777, 0o700);
+
+        let domain = FilesystemPathGuardDomain {
+            directory,
+            display_path: path.clone(),
+            identity: ProcessLockIdentity::from_stat(&stat),
+            lock_start: 0x5a,
+            lock_length: 1,
+            service_uid,
+        };
+        drop(acquire_linux_filesystem_path_guard(&domain, false).unwrap());
+        let lock = fs::metadata(path.join(FILESYSTEM_PATH_GUARD_FILE)).unwrap();
+        assert!(lock.file_type().is_file());
+        assert_eq!(lock.uid(), service_uid);
+        assert_eq!(lock.mode() & 0o7777, 0o600);
+        assert_eq!(lock.nlink(), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn filesystem_path_guard_configuration_subprocess_helper() {
+        let Some(action) = std::env::var_os("FE2O3_TEST_PATH_GUARD_ACTION") else {
+            return;
+        };
+        let output = PathBuf::from(std::env::var_os("FE2O3_TEST_PATH_GUARD_OUTPUT").unwrap());
+        let result = if action == "replace-after-admission" {
+            let output = PinnedOutput::open(&output).unwrap();
+            let configured =
+                PathBuf::from(std::env::var_os(FILESYSTEM_PATH_GUARD_DIRECTORY_ENV).unwrap());
+            let displaced = configured.with_extension(format!("displaced-{}", process::id()));
+            fs::rename(&configured, &displaced).unwrap();
+            fs::create_dir(&configured).unwrap();
+            fs::set_permissions(&configured, fs::Permissions::from_mode(0o700)).unwrap();
+            output.lock().map(drop)
+        } else if action == "replace-default-after-admission" {
+            enable_same_mount_namespace_artifact_path_guard_v1();
+            let output = PinnedOutput::open(&output).unwrap();
+            let runtime = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap());
+            let guard = runtime.join(FILESYSTEM_PATH_GUARD_RUNTIME_DIRECTORY);
+            let displaced = guard.with_extension(format!("displaced-{}", process::id()));
+            fs::rename(&guard, &displaced).unwrap();
+            fs::create_dir(&guard).unwrap();
+            fs::set_permissions(&guard, fs::Permissions::from_mode(0o700)).unwrap();
+            output.lock().map(drop)
+        } else if action == "configured-alias-contention" {
+            let alias =
+                PathBuf::from(std::env::var_os("FE2O3_TEST_PATH_GUARD_ALIAS_OUTPUT").unwrap());
+            let first = PinnedOutput::open(&output).unwrap();
+            let second = PinnedOutput::open(&alias).unwrap();
+            let held = first.lock().unwrap();
+            assert!(second.try_lock().unwrap().is_none());
+            drop(held);
+            second.try_lock().unwrap().unwrap();
+            Ok(())
+        } else if action == "configured-cross-process-holder" {
+            let output = PinnedOutput::open(&output).unwrap();
+            let held = output.lock().unwrap();
+            let ready = PathBuf::from(std::env::var_os("FE2O3_TEST_PATH_GUARD_READY").unwrap());
+            let release = PathBuf::from(std::env::var_os("FE2O3_TEST_PATH_GUARD_RELEASE").unwrap());
+            fs::write(ready, b"ready").unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !release.exists() {
+                assert!(
+                    Instant::now() < deadline,
+                    "configured path-guard holder was not released"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+            drop(held);
+            Ok(())
+        } else if action == "configured-cross-process-contender" {
+            let output = PinnedOutput::open(&output).unwrap();
+            assert!(output.try_lock().unwrap().is_none());
+            Ok(())
+        } else if action == "same-namespace-accept" {
+            enable_same_mount_namespace_artifact_path_guard_v1();
+            PinnedOutput::open(&output).and_then(|output| output.lock().map(drop))
+        } else {
+            PinnedOutput::open(&output).and_then(|output| output.lock().map(drop))
+        };
+        match action.to_str().unwrap() {
+            "accept"
+            | "configured-alias-contention"
+            | "configured-cross-process-holder"
+            | "configured-cross-process-contender"
+            | "same-namespace-accept" => result.unwrap(),
+            "reject" | "replace-after-admission" | "replace-default-after-admission" => {
+                assert!(matches!(
+                    result,
+                    Err(EmitError::InvalidArtifactDestination { .. })
+                ))
+            }
+            other => panic!("unknown path-guard helper action {other}"),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn configured_path_guard_requires_a_preprovisioned_private_directory() {
+        let temp = TestDirectory::new();
+        let configured = temp.path.join("shared-path-guard");
+        fs::create_dir(&configured).unwrap();
+        fs::set_permissions(&configured, fs::Permissions::from_mode(0o700)).unwrap();
+        let configured_metadata = fs::metadata(&configured).unwrap();
+        let configured_identity = format!(
+            "{:016x}:{:016x}",
+            configured_metadata.dev(),
+            configured_metadata.ino()
+        );
+        let tmp_metadata = fs::metadata("/tmp").unwrap();
+        let tmp_identity = format!("{:016x}:{:016x}", tmp_metadata.dev(), tmp_metadata.ino());
+        let helper = "tests::filesystem_path_guard_configuration_subprocess_helper";
+
+        for (action, directory, identity, suffix, output_created) in [
+            (
+                "accept",
+                Some(configured.as_path()),
+                Some(configured_identity.as_str()),
+                "accepted-output",
+                true,
+            ),
+            (
+                "reject",
+                Some(configured.as_path()),
+                Some("0000000000000000:0000000000000000"),
+                "wrong-identity-output",
+                false,
+            ),
+            (
+                "reject",
+                Some(Path::new("/tmp")),
+                Some(tmp_identity.as_str()),
+                "public-directory-output",
+                false,
+            ),
+            (
+                "reject",
+                Some(configured.as_path()),
+                None,
+                "directory-only-output",
+                false,
+            ),
+            (
+                "reject",
+                None,
+                Some(configured_identity.as_str()),
+                "identity-only-output",
+                false,
+            ),
+            (
+                "replace-after-admission",
+                Some(configured.as_path()),
+                Some(configured_identity.as_str()),
+                "replaced-domain-output",
+                true,
+            ),
+            ("reject", None, None, "unconfigured-output", false),
+            (
+                "same-namespace-accept",
+                None,
+                None,
+                "same-namespace-output",
+                true,
+            ),
+        ] {
+            let output = temp.path.join(suffix);
+            let mut command = process::Command::new(std::env::current_exe().unwrap());
+            command
+                .arg("--exact")
+                .arg(helper)
+                .arg("--nocapture")
+                .env("FE2O3_TEST_PATH_GUARD_ACTION", action)
+                .env("FE2O3_TEST_PATH_GUARD_OUTPUT", &output)
+                .env("FE2O3_TEST_REQUIRE_EXPLICIT_PATH_GUARD", "1")
+                .env_remove(FILESYSTEM_PATH_GUARD_DIRECTORY_ENV)
+                .env_remove(FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV);
+            if let Some(directory) = directory {
+                command.env(FILESYSTEM_PATH_GUARD_DIRECTORY_ENV, directory);
+            }
+            if let Some(identity) = identity {
+                command.env(FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV, identity);
+            }
+            let status = run_test_process(&mut command).unwrap();
+            assert!(status.success(), "configured path-guard helper failed");
+            assert_eq!(output.exists(), output_created);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn default_path_guard_replacement_after_admission_fails_closed() {
+        let temp = TestDirectory::new();
+        let runtime = temp.path.join("runtime");
+        fs::create_dir(&runtime).unwrap();
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+        let output = temp.path.join("default-replaced-domain-output");
+        let mut command = process::Command::new(std::env::current_exe().unwrap());
+        command
+            .arg("--exact")
+            .arg("tests::filesystem_path_guard_configuration_subprocess_helper")
+            .arg("--nocapture")
+            .env(
+                "FE2O3_TEST_PATH_GUARD_ACTION",
+                "replace-default-after-admission",
+            )
+            .env("FE2O3_TEST_PATH_GUARD_OUTPUT", &output)
+            .env("XDG_RUNTIME_DIR", &runtime)
+            .env_remove(FILESYSTEM_PATH_GUARD_DIRECTORY_ENV)
+            .env_remove(FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV);
+        let status = run_test_process(&mut command).unwrap();
+        assert!(status.success(), "default path-guard helper failed");
+        assert!(output.exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn configured_path_guard_serializes_distinct_absolute_aliases() {
+        let temp = TestDirectory::new();
+        let configured = temp.path.join("shared-path-guard-alias-domain");
+        fs::create_dir(&configured).unwrap();
+        fs::set_permissions(&configured, fs::Permissions::from_mode(0o700)).unwrap();
+        let metadata = fs::metadata(&configured).unwrap();
+        let identity = format!("{:016x}:{:016x}", metadata.dev(), metadata.ino());
+        let first = temp.path.join("first-output-alias");
+        let second = temp.path.join("second-output-alias");
+        let mut command = process::Command::new(std::env::current_exe().unwrap());
+        command
+            .arg("--exact")
+            .arg("tests::filesystem_path_guard_configuration_subprocess_helper")
+            .arg("--nocapture")
+            .env(
+                "FE2O3_TEST_PATH_GUARD_ACTION",
+                "configured-alias-contention",
+            )
+            .env("FE2O3_TEST_PATH_GUARD_OUTPUT", &first)
+            .env("FE2O3_TEST_PATH_GUARD_ALIAS_OUTPUT", &second)
+            .env(FILESYSTEM_PATH_GUARD_DIRECTORY_ENV, &configured)
+            .env(FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV, &identity);
+        let status = run_test_process(&mut command).unwrap();
+        assert!(
+            status.success(),
+            "configured alias contention helper failed"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn configured_path_guard_serializes_distinct_outputs_across_processes() {
+        let temp = TestDirectory::new();
+        let configured = temp.path.join("shared-cross-process-path-guard-domain");
+        fs::create_dir(&configured).unwrap();
+        fs::set_permissions(&configured, fs::Permissions::from_mode(0o700)).unwrap();
+        let metadata = fs::metadata(&configured).unwrap();
+        let identity = format!("{:016x}:{:016x}", metadata.dev(), metadata.ino());
+        let first = temp.path.join("first-cross-process-output");
+        let second = temp.path.join("second-cross-process-output");
+        let ready = temp.path.join("cross-process-holder-ready");
+        let release = temp.path.join("cross-process-holder-release");
+        let helper = "tests::filesystem_path_guard_configuration_subprocess_helper";
+
+        let mut holder_command = process::Command::new(std::env::current_exe().unwrap());
+        holder_command
+            .arg("--exact")
+            .arg(helper)
+            .arg("--nocapture")
+            .env(
+                "FE2O3_TEST_PATH_GUARD_ACTION",
+                "configured-cross-process-holder",
+            )
+            .env("FE2O3_TEST_PATH_GUARD_OUTPUT", &first)
+            .env("FE2O3_TEST_PATH_GUARD_READY", &ready)
+            .env("FE2O3_TEST_PATH_GUARD_RELEASE", &release)
+            .env(FILESYSTEM_PATH_GUARD_DIRECTORY_ENV, &configured)
+            .env(FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV, &identity);
+        let mut holder = spawn_test_process(&mut holder_command).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !ready.exists() {
+            if let Some(status) = holder.try_wait().unwrap() {
+                panic!("configured path-guard holder exited before readiness: {status}");
+            }
+            if Instant::now() >= deadline {
+                holder.kill().unwrap();
+                let _ = holder.wait();
+                panic!("configured path-guard holder did not become ready");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        let mut contender_command = process::Command::new(std::env::current_exe().unwrap());
+        contender_command
+            .arg("--exact")
+            .arg(helper)
+            .arg("--nocapture")
+            .env(
+                "FE2O3_TEST_PATH_GUARD_ACTION",
+                "configured-cross-process-contender",
+            )
+            .env("FE2O3_TEST_PATH_GUARD_OUTPUT", &second)
+            .env(FILESYSTEM_PATH_GUARD_DIRECTORY_ENV, &configured)
+            .env(FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV, &identity);
+        let contender = run_test_process(&mut contender_command).unwrap();
+        fs::write(&release, b"release").unwrap();
+        let holder = holder.wait().unwrap();
+        assert!(
+            contender.success(),
+            "configured path-guard contender failed"
+        );
+        assert!(holder.success(), "configured path-guard holder failed");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn coordinated_fork_exec_does_not_leak_inherited_lock_aliases() {
+        enable_same_mount_namespace_artifact_path_guard_v1();
+        let temp = TestDirectory::new();
+        let output = PinnedOutput::open(&temp.path.join("fork-exec-barrier-output")).unwrap();
+        let contender = output.try_clone().unwrap();
+        let held = output.lock().unwrap();
+        let unrelated = PinnedOutput::open(&temp.path.join("unrelated-output")).unwrap();
+        let (mut ready_parent, ready_child) = UnixStream::pair().unwrap();
+        let (mut release_parent, release_child) = UnixStream::pair().unwrap();
+        let spawn = thread::spawn(move || {
+            let mut command = process::Command::new("/bin/sleep");
+            command.arg("30");
+            let ready_fd = ready_child.as_raw_fd();
+            let release_fd = release_child.as_raw_fd();
+            // SAFETY: the callback performs only async-signal-safe single-byte descriptor I/O.
+            unsafe {
+                command.pre_exec(move || {
+                    let ready = [1_u8];
+                    if libc::write(ready_fd, ready.as_ptr().cast(), ready.len()) != 1 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    let mut release = [0_u8];
+                    loop {
+                        let read =
+                            libc::read(release_fd, release.as_mut_ptr().cast(), release.len());
+                        if read == 1 {
+                            return Ok(());
+                        }
+                        let error = io::Error::last_os_error();
+                        if error.kind() != io::ErrorKind::Interrupted {
+                            return Err(error);
+                        }
+                    }
+                });
+            }
+            with_artifact_process_spawn_v1(|| command.spawn()).unwrap()
+        });
+        let mut ready = [0_u8];
+        ready_parent.read_exact(&mut ready).unwrap();
+        assert_eq!(ready, [1]);
+
+        let started = Instant::now();
+        let unrelated_lock = unrelated
+            .try_lock()
+            .unwrap()
+            .expect("an in-flight spawn synthesized Busy for an unrelated artifact");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "unrelated nonblocking acquisition waited on process creation"
+        );
+
+        // The child has inherited the holder's OFD aliases and is paused before exec. Releasing
+        // the parent lock must wait, so the child never becomes the alias's sole owner.
+        let (dropped_tx, dropped_rx) = mpsc::channel();
+        let lock_release = thread::spawn(move || {
+            drop(held);
+            dropped_tx.send(()).unwrap();
+        });
+        assert!(
+            dropped_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "artifact lock descriptors closed before the fork/exec window ended"
+        );
+        let started = Instant::now();
+        assert!(
+            contender.try_lock().unwrap().is_none(),
+            "nonblocking acquisition crossed the active fork/exec boundary"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "nonblocking acquisition waited on the fork/exec boundary"
+        );
+        release_parent.write_all(&[1]).unwrap();
+        let mut child = spawn.join().unwrap();
+        dropped_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        lock_release.join().unwrap();
+        drop(
+            contender
+                .lock()
+                .expect("successful exec releases the child lock aliases"),
+        );
+        drop(unrelated_lock);
+        assert!(child.try_wait().unwrap().is_none());
+        child.kill().unwrap();
+        assert!(!child.wait().unwrap().success());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn nonblocking_lock_reports_immediate_busy_under_intentional_contention() {
+        enable_same_mount_namespace_artifact_path_guard_v1();
+        let temp = TestDirectory::new();
+        let output = PinnedOutput::open(&temp.path.join("immediate-busy-output")).unwrap();
+        let held = output.lock().unwrap();
+        let contender = output.try_clone().unwrap();
+        let (completed_tx, completed_rx) = mpsc::channel();
+        let acquisition = thread::spawn(move || {
+            completed_tx
+                .send(contender.try_lock().unwrap().is_none())
+                .unwrap();
+        });
+
+        let immediate_busy = completed_rx.recv_timeout(Duration::from_millis(40));
+        drop(held);
+        acquisition.join().unwrap();
+        assert!(immediate_busy.unwrap_or_else(|_| {
+            panic!("nonblocking lock acquisition waited instead of reporting Busy")
+        }));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn lock_release_waits_for_every_active_process_spawn() {
+        enable_same_mount_namespace_artifact_path_guard_v1();
+        let temp = TestDirectory::new();
+        let output = PinnedOutput::open(&temp.path.join("counted-spawn-output")).unwrap();
+        let contender = output.try_clone().unwrap();
+        let held = output.lock().unwrap();
+        let coordinator = ArtifactProcessSpawnCoordinatorV1::global();
+        let first = coordinator.begin_spawn();
+        let second = coordinator.begin_spawn();
+        let (dropped_tx, dropped_rx) = mpsc::channel();
+        let release = thread::spawn(move || {
+            drop(held);
+            dropped_tx.send(()).unwrap();
+        });
+
+        assert!(dropped_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        drop(first);
+        assert!(dropped_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        drop(second);
+        dropped_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        release.join().unwrap();
+        drop(contender.try_lock().unwrap().unwrap());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn paused_raw_child_cannot_retain_parent_lock_aliases() {
+        enable_same_mount_namespace_artifact_path_guard_v1();
+        let temp = TestDirectory::new();
+        let output = PinnedOutput::open(&temp.path.join("raw-fork-alias-output")).unwrap();
+        let contender = output.try_clone().unwrap();
+        let held = output.lock().unwrap();
+        let mut ready = [-1_i32; 2];
+        // SAFETY: `ready` points to two writable descriptor slots.
+        assert_eq!(
+            unsafe { libc::pipe2(ready.as_mut_ptr(), libc::O_CLOEXEC) },
+            0
+        );
+
+        let child = with_artifact_process_spawn_v1(|| {
+            // SAFETY: the child closes the exact inherited lock aliases, reports readiness, and
+            // pauses without returning to Rust. The parent reads readiness before releasing the
+            // fork barrier, and reaps the child only after the barrier has been released.
+            let child = unsafe { libc::fork() };
+            assert!(child >= 0, "fork: {}", io::Error::last_os_error());
+            if child == 0 {
+                unsafe {
+                    libc::close(ready[0]);
+                    let byte = [1_u8];
+                    if !close_unintended_child_descriptors(ready[1])
+                        || libc::write(ready[1], byte.as_ptr().cast(), byte.len()) != 1
+                    {
+                        libc::_exit(127);
+                    }
+                    libc::close(ready[1]);
+                    loop {
+                        libc::pause();
+                    }
+                }
+            }
+            // SAFETY: the parent owns both pipe descriptors after fork.
+            unsafe { libc::close(ready[1]) };
+            let mut byte = [0_u8];
+            loop {
+                // SAFETY: the read descriptor and one-byte destination are valid.
+                let read = unsafe { libc::read(ready[0], byte.as_mut_ptr().cast(), byte.len()) };
+                if read == 1 {
+                    break;
+                }
+                if read < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                panic!("raw child exited before releasing inherited lock aliases");
+            }
+            // SAFETY: readiness has been consumed and the parent no longer needs the pipe.
+            unsafe { libc::close(ready[0]) };
+            Ok::<_, io::Error>(child)
+        })
+        .unwrap();
+        let _child = RawChildGuard(child);
+
+        drop(held);
+        drop(
+            contender
+                .lock()
+                .expect("paused child retained an inherited artifact lock alias"),
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn retained_directory_clones_are_close_on_exec() {
+        enable_same_mount_namespace_artifact_path_guard_v1();
+        let temp = TestDirectory::new();
+        let output = PinnedOutput::open(&temp.path.join("cloexec-output")).unwrap();
+        let cloned = output.try_clone().unwrap();
+        let descriptor_flags = |fd: &OwnedFd| {
+            let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFD) };
+            assert_ne!(flags, -1);
+            flags
+        };
+        assert_ne!(descriptor_flags(&cloned.fd) & libc::FD_CLOEXEC, 0);
+        assert_ne!(
+            descriptor_flags(&cloned.path_guard.as_ref().unwrap().directory) & libc::FD_CLOEXEC,
+            0,
+        );
+    }
+
+    #[test]
     fn hardlinked_lock_is_rejected_without_mutating_the_other_inode() {
         let temp = TestDirectory::new();
         let output = temp.path.join("output");
@@ -2122,7 +2860,20 @@ mod tests {
     }
 
     #[test]
-    fn publication_lock_is_not_inherited_during_fork_to_exec_window() {
+    fn uncoordinated_fork_inherits_publication_lock_until_cloexec() {
+        const ISOLATED_HELPER_ENV: &str = "FE2O3_TEST_UNCOORDINATED_OFD_FORK_HELPER";
+        if std::env::var_os(ISOLATED_HELPER_ENV).is_none() {
+            let mut command = process::Command::new(std::env::current_exe().unwrap());
+            command
+                .arg("--exact")
+                .arg("tests::uncoordinated_fork_inherits_publication_lock_until_cloexec")
+                .arg("--nocapture")
+                .env(ISOLATED_HELPER_ENV, "1");
+            assert!(run_test_process(&mut command).unwrap().success());
+            return;
+        }
+
+        enable_same_mount_namespace_artifact_path_guard_v1();
         let temp = TestDirectory::new();
         let output = PinnedOutput::open(&temp.path.join("output")).unwrap();
         let lock = output.lock().unwrap();
@@ -2152,16 +2903,26 @@ mod tests {
                     Ok(())
                 });
             }
-            command.status().unwrap()
+            // This isolated helper intentionally bypasses production coordination to establish
+            // the Linux inheritance behavior that the production boundary must contain.
+            let mut child = command.spawn().unwrap();
+            child.wait().unwrap()
         });
 
         let mut ready = [0];
         parent_control.read_exact(&mut ready).unwrap();
         drop(lock);
-        let reacquired = output.try_lock().unwrap();
+        assert!(
+            output.try_lock().unwrap().is_none(),
+            "forked child must retain its inherited OFD lock before exec"
+        );
         parent_control.write_all(&[1]).unwrap();
         assert!(child.join().unwrap().success());
-        drop(reacquired.expect("forked child must not retain the parent's publication lock"));
+        drop(
+            output
+                .lock()
+                .expect("CLOEXEC must release the forked child's OFD lock alias"),
+        );
     }
 
     #[test]
@@ -2547,7 +3308,8 @@ mod tests {
                     fs::canonicalize(&relocated_stage)?
                 );
                 let object = hsaco.with_extension("o");
-                let status = process::Command::new("sh")
+                let mut command = process::Command::new("sh");
+                command
                     .args([
                         "-c",
                         "ir=$(cat \"$1\") || exit; printf 'object:%s' \"$ir\" > \"$2\"; printf 'hsaco:%s' \"$ir\" > \"$3\"",
@@ -2555,8 +3317,8 @@ mod tests {
                     ])
                     .arg(llvm_ir)
                     .arg(&object)
-                    .arg(hsaco)
-                    .status()?;
+                    .arg(hsaco);
+                let status = run_test_process(&mut command)?;
                 if status.success() {
                     Ok(())
                 } else {
@@ -2952,6 +3714,30 @@ struct PinnedOutput {
     display_path: PathBuf,
     device: u64,
     inode: u64,
+    path_guard: Option<FilesystemPathGuardDomain>,
+}
+
+struct FilesystemPathGuardDomain {
+    directory: OwnedFd,
+    display_path: PathBuf,
+    identity: ProcessLockIdentity,
+    lock_start: u64,
+    lock_length: u64,
+    service_uid: u32,
+}
+
+impl FilesystemPathGuardDomain {
+    fn try_clone(&self) -> Result<Self, EmitError> {
+        Ok(Self {
+            directory: rustix::io::fcntl_dupfd_cloexec(&self.directory, 0)
+                .map_err(std::io::Error::from)?,
+            display_path: self.display_path.clone(),
+            identity: self.identity,
+            lock_start: self.lock_start,
+            lock_length: self.lock_length,
+            service_uid: self.service_uid,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -2974,8 +3760,10 @@ struct ProcessLockState {
     held: HashSet<ProcessLockIdentity>,
 }
 
-// POSIX record locks do not distinguish threads. This registry restores same-process exclusion
-// without making lock ownership inheritable across fork like an open-file-description flock.
+// Linux OFD locks distinguish open file descriptions, not threads. This registry avoids blocking
+// one thread in the kernel behind another lock owned by this process and drives lock observations.
+// Its PID reset handles the copied userspace registry after fork; the kernel OFD lock itself stays
+// attached to an inherited descriptor until that descriptor is closed or CLOEXEC runs.
 struct ProcessLockRegistry {
     state: Mutex<ProcessLockState>,
     released: Condvar,
@@ -3037,7 +3825,26 @@ impl PinnedOutput {
     }
 
     fn open_with_create(path: &Path, create: bool) -> Result<Self, EmitError> {
-        let fd = open_directory_walk(path, create)?;
+        #[cfg(target_os = "linux")]
+        let path_guard_directory = if !is_proc_self_fd_path(path) {
+            let service_uid = rustix::process::geteuid().as_raw();
+            let (directory, display_path, whole_domain_lock) =
+                open_linux_filesystem_path_guard_directory(service_uid)?;
+            let stat = fstat(&directory).map_err(std::io::Error::from)?;
+            Some((
+                directory,
+                display_path,
+                ProcessLockIdentity::from_stat(&stat),
+                service_uid,
+                whole_domain_lock,
+            ))
+        } else {
+            None
+        };
+        let OpenedDirectoryWalk {
+            directory: fd,
+            path_guard_key,
+        } = open_directory_walk_with_guard_key(path, create)?;
         let stat = fstat(&fd).map_err(std::io::Error::from)?;
         if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
             return Err(EmitError::InvalidArtifactDestination {
@@ -3045,11 +3852,52 @@ impl PinnedOutput {
                 reason: "output path is not a directory".to_string(),
             });
         }
+        #[cfg(target_os = "linux")]
+        let path_guard = match (path_guard_key, path_guard_directory) {
+            (
+                Some(key),
+                Some((directory, display_path, identity, service_uid, whole_domain_lock)),
+            ) => {
+                let mut offset_bytes = [0_u8; 8];
+                offset_bytes.copy_from_slice(&key[..8]);
+                Some(FilesystemPathGuardDomain {
+                    directory,
+                    display_path,
+                    identity,
+                    lock_start: if whole_domain_lock {
+                        0
+                    } else {
+                        u64::from_le_bytes(offset_bytes) & (i64::MAX as u64)
+                    },
+                    lock_length: if whole_domain_lock { 0 } else { 1 },
+                    service_uid,
+                })
+            }
+            (None, None) => None,
+            _ => {
+                return Err(EmitError::InvalidArtifactDestination {
+                    path: path.to_path_buf(),
+                    reason: "path-guard admission did not retain one exact coordination domain"
+                        .to_owned(),
+                });
+            }
+        };
+        #[cfg(not(target_os = "linux"))]
+        let path_guard: Option<FilesystemPathGuardDomain> = match path_guard_key {
+            None => None,
+            Some(_) => {
+                return Err(EmitError::InvalidArtifactDestination {
+                    path: path.to_path_buf(),
+                    reason: "artifact path guarding requires Linux".to_owned(),
+                });
+            }
+        };
         Ok(Self {
             fd,
             display_path: path.to_path_buf(),
             device: stat.st_dev,
             inode: stat.st_ino,
+            path_guard,
         })
     }
 
@@ -3066,25 +3914,29 @@ impl PinnedOutput {
 
     fn try_clone(&self) -> Result<Self, EmitError> {
         Ok(Self {
-            fd: rustix::io::dup(&self.fd).map_err(std::io::Error::from)?,
+            fd: rustix::io::fcntl_dupfd_cloexec(&self.fd, 0).map_err(std::io::Error::from)?,
             display_path: self.display_path.clone(),
             device: self.device,
             inode: self.inode,
+            path_guard: self
+                .path_guard
+                .as_ref()
+                .map(FilesystemPathGuardDomain::try_clone)
+                .transpose()?,
         })
     }
 
     fn lock(&self) -> Result<OutputLock, EmitError> {
-        self.lock_with(FlockOperation::LockExclusive, None)
-            .and_then(|lock| {
-                lock.ok_or_else(|| EmitError::InvalidArtifactDestination {
-                    path: self.display_path.join(LOCK_FILE),
-                    reason: "blocking lock unexpectedly reported contention".to_string(),
-                })
+        self.lock_with(false, None).and_then(|lock| {
+            lock.ok_or_else(|| EmitError::InvalidArtifactDestination {
+                path: self.display_path.join(LOCK_FILE),
+                reason: "blocking lock unexpectedly reported contention".to_string(),
             })
+        })
     }
 
     fn try_lock(&self) -> Result<Option<OutputLock>, EmitError> {
-        self.lock_with(FlockOperation::NonBlockingLockExclusive, None)
+        self.lock_with(true, None)
     }
 
     #[cfg(feature = "test-hooks")]
@@ -3092,18 +3944,17 @@ impl PinnedOutput {
         &self,
         observation: &BeginBuildAttemptLockObservationV1,
     ) -> Result<OutputLock, EmitError> {
-        self.lock_with(FlockOperation::LockExclusive, Some(observation))
-            .and_then(|lock| {
-                lock.ok_or_else(|| EmitError::InvalidArtifactDestination {
-                    path: self.display_path.join(LOCK_FILE),
-                    reason: "blocking lock unexpectedly reported contention".to_string(),
-                })
+        self.lock_with(false, Some(observation)).and_then(|lock| {
+            lock.ok_or_else(|| EmitError::InvalidArtifactDestination {
+                path: self.display_path.join(LOCK_FILE),
+                reason: "blocking lock unexpectedly reported contention".to_string(),
             })
+        })
     }
 
     fn lock_with(
         &self,
-        operation: FlockOperation,
+        nonblocking: bool,
         #[cfg(feature = "test-hooks")] observation: Option<&BeginBuildAttemptLockObservationV1>,
         #[cfg(not(feature = "test-hooks"))] _observation: Option<&()>,
     ) -> Result<Option<OutputLock>, EmitError> {
@@ -3135,7 +3986,40 @@ impl PinnedOutput {
             Ok(())
         };
 
-        let nonblocking = operation == FlockOperation::NonBlockingLockExclusive;
+        // The path guard is acquired first. A fresh cooperating writer that opens a replacement
+        // at the same root name therefore cannot enter a disjoint root critical section while a
+        // transaction still owns the displaced root descriptor.
+        let path_guard = match &self.path_guard {
+            Some(domain) => {
+                #[cfg(feature = "test-hooks")]
+                let acquired = if !nonblocking {
+                    if let Some(observation) = observation {
+                        match acquire_linux_filesystem_path_guard(domain, true)? {
+                            Some(path_guard) => Some(path_guard),
+                            None => {
+                                observation
+                                    .advance_to(BeginBuildAttemptLockProbeStateV1::Contended);
+                                acquire_linux_filesystem_path_guard(domain, false)?
+                            }
+                        }
+                    } else {
+                        acquire_linux_filesystem_path_guard(domain, false)?
+                    }
+                } else {
+                    acquire_linux_filesystem_path_guard(domain, true)?
+                };
+                #[cfg(not(feature = "test-hooks"))]
+                let acquired = acquire_linux_filesystem_path_guard(domain, nonblocking)?;
+
+                match acquired {
+                    Some(path_guard) => Some(path_guard),
+                    None => return Ok(None),
+                }
+            }
+            None => None,
+        };
+        self.verify_path_identity()?;
+
         let registry = ProcessLockRegistry::global();
         let (fd, reservation) = loop {
             let mut state = registry.state();
@@ -3188,22 +4072,50 @@ impl PinnedOutput {
             break (fd, ProcessLockReservation { identity });
         };
 
-        if let Err(error) = fcntl_lock(&fd, operation) {
-            if operation == FlockOperation::NonBlockingLockExclusive
-                && (error == rustix::io::Errno::ACCESS
-                    || error == rustix::io::Errno::AGAIN
-                    || error == rustix::io::Errno::WOULDBLOCK)
-            {
+        match acquire_linux_ofd_exclusive_lock(&fd, nonblocking) {
+            Ok(true) => {}
+            Ok(false) => {
                 drop(fd);
                 drop(reservation);
                 return Ok(None);
             }
-            drop(fd);
-            drop(reservation);
-            return Err(std::io::Error::from(error).into());
+            Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+                drop(fd);
+                drop(reservation);
+                return Err(EmitError::InvalidArtifactDestination {
+                    path: self.display_path.join(LOCK_FILE),
+                    reason: error.to_string(),
+                });
+            }
+            Err(error) => {
+                drop(fd);
+                drop(reservation);
+                return Err(error.into());
+            }
         }
+        let root_guard = match self.acquire_directory_guard(
+            &self.fd,
+            self.device,
+            self.inode,
+            nonblocking,
+            "artifact output root",
+        ) {
+            Ok(Some(root_guard)) => root_guard,
+            Ok(None) => {
+                drop(fd);
+                drop(reservation);
+                return Ok(None);
+            }
+            Err(error) => {
+                drop(fd);
+                drop(reservation);
+                return Err(error);
+            }
+        };
         let lock = OutputLock {
             fd: Some(fd),
+            root_guard: Some(root_guard),
+            path_guard,
             reservation: Some(reservation),
         };
         let locked_stat = fstat(lock.fd.as_ref().expect("lock descriptor is present"))
@@ -3211,15 +4123,482 @@ impl PinnedOutput {
         validate_lock(&locked_stat).and_then(|()| validate_path_identity(&locked_stat))?;
         Ok(Some(lock))
     }
+
+    fn acquire_directory_guard(
+        &self,
+        directory: &OwnedFd,
+        device: u64,
+        inode: u64,
+        nonblocking: bool,
+        label: &'static str,
+    ) -> Result<Option<OwnedFd>, EmitError> {
+        let descriptor = openat(
+            directory,
+            ".",
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(std::io::Error::from)?;
+        let validate_identity = |stat: &rustix::fs::Stat| -> Result<(), EmitError> {
+            if FileType::from_raw_mode(stat.st_mode) != FileType::Directory
+                || stat.st_dev != device
+                || stat.st_ino != inode
+            {
+                return Err(EmitError::OutputDirectoryChanged {
+                    path: self.display_path.clone(),
+                });
+            }
+            Ok(())
+        };
+        validate_identity(&fstat(&descriptor).map_err(std::io::Error::from)?)?;
+        match acquire_linux_descriptor_flock(&descriptor, nonblocking) {
+            Ok(true) => {}
+            Ok(false) => return Ok(None),
+            Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+                return Err(EmitError::InvalidArtifactDestination {
+                    path: self.display_path.clone(),
+                    reason: format!("{label}: {error}"),
+                });
+            }
+            Err(error) => return Err(error.into()),
+        }
+        validate_identity(&fstat(&descriptor).map_err(std::io::Error::from)?)?;
+        Ok(Some(descriptor))
+    }
+}
+
+/// Acquires a whole-file Linux open-file-description write lock.
+///
+/// The returned lock is owned by this exact open file description. Closing unrelated descriptors
+/// for the same inode cannot release it. A `fork` inherits the description and therefore retains
+/// the lock until every inherited alias is closed; all lock descriptors are `CLOEXEC`, so a
+/// successful `exec` releases the child's alias. Pre-exec child code must close inherited lock
+/// descriptors or proceed directly to `exec`, and must not call this crate's lock APIs.
+#[cfg(target_os = "linux")]
+fn acquire_linux_ofd_exclusive_lock(fd: &OwnedFd, nonblocking: bool) -> io::Result<bool> {
+    acquire_linux_ofd_exclusive_range(fd, 0, 0, nonblocking)
+}
+
+#[cfg(target_os = "linux")]
+fn acquire_linux_ofd_exclusive_range(
+    fd: &OwnedFd,
+    start: u64,
+    length: u64,
+    nonblocking: bool,
+) -> io::Result<bool> {
+    let command = if nonblocking {
+        libc::F_OFD_SETLK
+    } else {
+        libc::F_OFD_SETLKW
+    };
+    let mut lock: libc::flock = unsafe { std::mem::zeroed() };
+    lock.l_type = libc::F_WRLCK as _;
+    lock.l_whence = libc::SEEK_SET as _;
+    lock.l_start = libc::off_t::try_from(start).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "OFD lock start is out of range",
+        )
+    })?;
+    lock.l_len = libc::off_t::try_from(length).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "OFD lock length is out of range",
+        )
+    })?;
+    lock.l_pid = 0;
+    loop {
+        // SAFETY: `fd` is live for the call and `lock` is a fully initialized `struct flock`.
+        let result = unsafe { libc::fcntl(fd.as_raw_fd(), command, &lock) };
+        if result == 0 {
+            return Ok(true);
+        }
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::EINTR) => continue,
+            Some(libc::EACCES) | Some(libc::EAGAIN) if nonblocking => return Ok(false),
+            Some(libc::EINVAL) | Some(libc::ENOSYS) | Some(libc::EOPNOTSUPP) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "artifact publication requires Linux F_OFD_SETLK/F_OFD_SETLKW support",
+                ));
+            }
+            _ => return Err(error),
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn acquire_linux_ofd_exclusive_lock(_fd: &OwnedFd, _nonblocking: bool) -> io::Result<bool> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "artifact publication requires Linux F_OFD_SETLK/F_OFD_SETLKW support",
+    ))
+}
+
+/// Locks the stable admitted directory inode with Linux descriptor-owned `flock` semantics.
+///
+/// This guard composes with the named OFD record lock. Even if arbitrary same-UID code replaces
+/// the named entry while a critical section is active, every cooperating caller for the same
+/// pinned root still contends on this inode and cannot enter a split-brain critical section.
+#[cfg(target_os = "linux")]
+fn acquire_linux_descriptor_flock(fd: &OwnedFd, nonblocking: bool) -> io::Result<bool> {
+    let operation = libc::LOCK_EX | if nonblocking { libc::LOCK_NB } else { 0 };
+    loop {
+        // SAFETY: `fd` is live for the call and `operation` is a valid Linux flock operation.
+        if unsafe { libc::flock(fd.as_raw_fd(), operation) } == 0 {
+            return Ok(true);
+        }
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::EINTR) => continue,
+            Some(libc::EACCES) | Some(libc::EAGAIN) if nonblocking => return Ok(false),
+            Some(libc::EINVAL) | Some(libc::ENOSYS) | Some(libc::EOPNOTSUPP) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "artifact publication requires Linux descriptor-owned directory flock support",
+                ));
+            }
+            _ => return Err(error),
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn acquire_linux_descriptor_flock(_fd: &OwnedFd, _nonblocking: bool) -> io::Result<bool> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "artifact publication requires Linux descriptor-owned directory flock support",
+    ))
+}
+
+const FILESYSTEM_PATH_GUARD_DIRECTORY_ENV: &str = "FE2O3_ARTIFACT_PATH_GUARD_DIR";
+const FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV: &str = "FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY";
+const FILESYSTEM_PATH_GUARD_RUNTIME_DIRECTORY: &str = "fe2o3-artifact-path-guards-v1";
+const FILESYSTEM_PATH_GUARD_HOME_DIRECTORY: &str = ".fe2o3-artifact-path-guards-v1";
+const FILESYSTEM_PATH_GUARD_FILE: &str = "domain.lock";
+static SAME_MOUNT_NAMESPACE_PATH_GUARD_V1: AtomicBool = AtomicBool::new(false);
+
+/// Explicitly selects normalized-path coordination for a process whose cooperating writers all
+/// observe the same mount namespace and the same normalized absolute artifact paths.
+///
+/// Production deployments spanning mount namespaces must instead configure
+/// `FE2O3_ARTIFACT_PATH_GUARD_DIR` and `FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY` to the same
+/// pre-provisioned directory inode in every namespace. Without either explicit selection,
+/// ordinary path-based artifact publication fails closed.
+pub fn enable_same_mount_namespace_artifact_path_guard_v1() {
+    SAME_MOUNT_NAMESPACE_PATH_GUARD_V1.store(true, Ordering::Release);
+}
+
+/// Acquires one filesystem-visible OFD guard for the admitted deployment domain.
+///
+/// The private service-owned coordination file is intentionally outside the output tree, so
+/// replacing the output or any ancestor cannot split the cooperative critical section. Writers in
+/// different mount namespaces must set `FE2O3_ARTIFACT_PATH_GUARD_DIR` to one pre-provisioned `0700`
+/// directory that is bind-mounted from the same inode into every namespace, and set
+/// `FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY` to that directory's exact lowercase
+/// `<16-hex-device>:<16-hex-inode>` identity. That configured guard file is locked as one whole
+/// namespace-independent domain, so aliases such as `/a/store` and `/b/store` cannot select
+/// different critical sections. Supplying only one configuration value fails closed. Processes
+/// explicitly restricted to one mount namespace may call
+/// [`enable_same_mount_namespace_artifact_path_guard_v1`] to use normalized-path byte ranges in a
+/// service-owned runtime or home directory. Admission pins the selected directory file description
+/// and identity for every later acquisition. The file is retained across acquisitions; only its
+/// kernel lock is transient, so process death cannot leave a stale owner.
+#[cfg(target_os = "linux")]
+fn acquire_linux_filesystem_path_guard(
+    domain: &FilesystemPathGuardDomain,
+    nonblocking: bool,
+) -> Result<Option<OwnedFd>, EmitError> {
+    validate_linux_path_guard_directory(
+        &domain.directory,
+        &domain.display_path,
+        domain.service_uid,
+        true,
+    )?;
+    let descriptor_stat = fstat(&domain.directory).map_err(std::io::Error::from)?;
+    if ProcessLockIdentity::from_stat(&descriptor_stat) != domain.identity {
+        return Err(EmitError::InvalidArtifactDestination {
+            path: domain.display_path.clone(),
+            reason: "pinned path-guard directory identity changed after admission".to_owned(),
+        });
+    }
+    let named_directory = open_directory_walk(&domain.display_path, false)?;
+    let named_stat = fstat(&named_directory).map_err(std::io::Error::from)?;
+    if ProcessLockIdentity::from_stat(&named_stat) != domain.identity {
+        return Err(EmitError::InvalidArtifactDestination {
+            path: domain.display_path.clone(),
+            reason: "path-guard directory path no longer names its admitted inode".to_owned(),
+        });
+    }
+    let descriptor = openat(
+        &domain.directory,
+        FILESYSTEM_PATH_GUARD_FILE,
+        OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::RUSR | Mode::WUSR,
+    )
+    .map_err(std::io::Error::from)?;
+    let validate_guard = |stat: &rustix::fs::Stat| -> Result<(), EmitError> {
+        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
+            || stat.st_uid != domain.service_uid
+            || stat.st_mode & 0o7777 != 0o600
+            || stat.st_nlink != 1
+        {
+            return Err(EmitError::InvalidArtifactDestination {
+                path: domain.display_path.join(FILESYSTEM_PATH_GUARD_FILE),
+                reason: "path-guard file must be private, service-owned, and single-link"
+                    .to_owned(),
+            });
+        }
+        Ok(())
+    };
+    let descriptor_stat = fstat(&descriptor).map_err(std::io::Error::from)?;
+    validate_guard(&descriptor_stat)?;
+    if !acquire_linux_ofd_exclusive_range(
+        &descriptor,
+        domain.lock_start,
+        domain.lock_length,
+        nonblocking,
+    )? {
+        return Ok(None);
+    }
+    let named_stat = statat(
+        &domain.directory,
+        FILESYSTEM_PATH_GUARD_FILE,
+        AtFlags::SYMLINK_NOFOLLOW,
+    )
+    .map_err(std::io::Error::from)?;
+    validate_guard(&named_stat)?;
+    if ProcessLockIdentity::from_stat(&descriptor_stat)
+        != ProcessLockIdentity::from_stat(&named_stat)
+    {
+        return Err(EmitError::InvalidArtifactDestination {
+            path: domain.display_path.join(FILESYSTEM_PATH_GUARD_FILE),
+            reason: "path-guard file changed while its byte range was being locked".to_owned(),
+        });
+    }
+    Ok(Some(descriptor))
+}
+
+#[cfg(target_os = "linux")]
+fn open_linux_filesystem_path_guard_directory(
+    service_uid: u32,
+) -> Result<(OwnedFd, PathBuf, bool), EmitError> {
+    let configured = std::env::var_os(FILESYSTEM_PATH_GUARD_DIRECTORY_ENV);
+    let configured_identity = std::env::var_os(FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV);
+    if configured.is_none() != configured_identity.is_none() {
+        return Err(EmitError::InvalidArtifactDestination {
+            path: configured
+                .as_ref()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("<path-guard-directory>")),
+            reason: format!(
+                "{FILESYSTEM_PATH_GUARD_DIRECTORY_ENV} and {FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV} must be configured together"
+            ),
+        });
+    }
+    if let Some(configured) = configured {
+        let path = PathBuf::from(configured);
+        let directory = open_directory_walk(&path, false)?;
+        validate_linux_path_guard_directory(&directory, &path, service_uid, true)?;
+        let expected = configured_identity
+            .and_then(|identity| parse_linux_path_guard_directory_identity(&identity))
+            .ok_or_else(|| EmitError::InvalidArtifactDestination {
+                path: path.clone(),
+                reason: format!(
+                    "{FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV} must contain the exact lowercase <16-hex-device>:<16-hex-inode> identity"
+                ),
+            })?;
+        let stat = fstat(&directory).map_err(std::io::Error::from)?;
+        if expected != (stat.st_dev, stat.st_ino) {
+            return Err(EmitError::InvalidArtifactDestination {
+                path,
+                reason:
+                    "configured path-guard directory identity does not match its provisioned inode"
+                        .to_owned(),
+            });
+        }
+        return Ok((directory, path, true));
+    }
+
+    let test_default_is_allowed =
+        cfg!(test) && std::env::var_os("FE2O3_TEST_REQUIRE_EXPLICIT_PATH_GUARD").is_none();
+    if !test_default_is_allowed && !SAME_MOUNT_NAMESPACE_PATH_GUARD_V1.load(Ordering::Acquire) {
+        return Err(EmitError::InvalidArtifactDestination {
+            path: PathBuf::from("<path-guard-directory>"),
+            reason: format!(
+                "ordinary artifact paths require either {FILESYSTEM_PATH_GUARD_DIRECTORY_ENV} with {FILESYSTEM_PATH_GUARD_DIRECTORY_IDENTITY_ENV}, or an explicit same-mount-namespace path-guard selection"
+            ),
+        });
+    }
+
+    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
+        let runtime = PathBuf::from(runtime);
+        let base = open_directory_walk(&runtime, false)?;
+        validate_linux_path_guard_directory(&base, &runtime, service_uid, true)?;
+        return create_linux_path_guard_directory(
+            &base,
+            &runtime,
+            FILESYSTEM_PATH_GUARD_RUNTIME_DIRECTORY,
+            service_uid,
+        )
+        .map(|(directory, path)| (directory, path, false));
+    }
+
+    let runtime = PathBuf::from(format!("/run/user/{service_uid}"));
+    if let Ok(base) = open_directory_walk(&runtime, false) {
+        validate_linux_path_guard_directory(&base, &runtime, service_uid, true)?;
+        return create_linux_path_guard_directory(
+            &base,
+            &runtime,
+            FILESYSTEM_PATH_GUARD_RUNTIME_DIRECTORY,
+            service_uid,
+        )
+        .map(|(directory, path)| (directory, path, false));
+    }
+
+    let home = std::env::var_os("HOME").ok_or_else(|| EmitError::InvalidArtifactDestination {
+        path: PathBuf::from("<path-guard-directory>"),
+        reason: format!(
+            "{FILESYSTEM_PATH_GUARD_DIRECTORY_ENV}, XDG_RUNTIME_DIR, and HOME are all unavailable"
+        ),
+    })?;
+    let home = PathBuf::from(home);
+    let base = open_directory_walk(&home, false)?;
+    validate_linux_path_guard_directory(&base, &home, service_uid, false)?;
+    create_linux_path_guard_directory(
+        &base,
+        &home,
+        FILESYSTEM_PATH_GUARD_HOME_DIRECTORY,
+        service_uid,
+    )
+    .map(|(directory, path)| (directory, path, false))
+}
+
+#[cfg(target_os = "linux")]
+fn parse_linux_path_guard_directory_identity(identity: &std::ffi::OsStr) -> Option<(u64, u64)> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let bytes = identity.as_bytes();
+    if bytes.len() != 33
+        || bytes[16] != b':'
+        || bytes
+            .iter()
+            .enumerate()
+            .any(|(index, byte)| index != 16 && !matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return None;
+    }
+    let device = std::str::from_utf8(&bytes[..16]).ok()?;
+    let inode = std::str::from_utf8(&bytes[17..]).ok()?;
+    Some((
+        u64::from_str_radix(device, 16).ok()?,
+        u64::from_str_radix(inode, 16).ok()?,
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn create_linux_path_guard_directory(
+    base: &OwnedFd,
+    base_path: &Path,
+    name: &str,
+    service_uid: u32,
+) -> Result<(OwnedFd, PathBuf), EmitError> {
+    match mkdirat(base, name, Mode::RUSR | Mode::WUSR | Mode::XUSR) {
+        Ok(()) => {}
+        Err(error) if error == rustix::io::Errno::EXIST => {}
+        Err(error) => return Err(std::io::Error::from(error).into()),
+    }
+    let path = base_path.join(name);
+    let directory = openat(
+        base,
+        name,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(std::io::Error::from)?;
+    validate_linux_path_guard_directory(&directory, &path, service_uid, true)?;
+    Ok((directory, path))
+}
+
+#[cfg(target_os = "linux")]
+fn validate_linux_path_guard_directory(
+    directory: &OwnedFd,
+    path: &Path,
+    service_uid: u32,
+    require_private: bool,
+) -> Result<(), EmitError> {
+    if !path.is_absolute() {
+        return Err(EmitError::InvalidArtifactDestination {
+            path: path.to_path_buf(),
+            reason: "path-guard directory must be absolute".to_owned(),
+        });
+    }
+    let stat = fstat(directory).map_err(std::io::Error::from)?;
+    let permissions = stat.st_mode & 0o7777;
+    let permitted = if require_private {
+        permissions == 0o700
+    } else {
+        permissions & 0o022 == 0
+    };
+    if FileType::from_raw_mode(stat.st_mode) != FileType::Directory
+        || stat.st_uid != service_uid
+        || stat.st_nlink == 0
+        || !permitted
+    {
+        return Err(EmitError::InvalidArtifactDestination {
+            path: path.to_path_buf(),
+            reason: if require_private {
+                "path-guard directory must be linked, service-owned, and mode 0700".to_owned()
+            } else {
+                "path-guard parent must be linked, service-owned, and not group/world writable"
+                    .to_owned()
+            },
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn acquire_linux_filesystem_path_guard(
+    _domain: &FilesystemPathGuardDomain,
+    _nonblocking: bool,
+) -> Result<Option<OwnedFd>, EmitError> {
+    Err(EmitError::InvalidArtifactDestination {
+        path: PathBuf::from("<filesystem-path-guard>"),
+        reason: "artifact publication requires Linux OFD byte-range locks".to_owned(),
+    })
+}
+
+struct OpenedDirectoryWalk {
+    directory: OwnedFd,
+    path_guard_key: Option<[u8; 32]>,
 }
 
 fn open_directory_walk(path: &Path, create: bool) -> Result<OwnedFd, EmitError> {
+    Ok(open_directory_walk_with_guard_key(path, create)?.directory)
+}
+
+fn open_directory_walk_with_guard_key(
+    path: &Path,
+    create: bool,
+) -> Result<OpenedDirectoryWalk, EmitError> {
     #[cfg(target_os = "linux")]
     if let Some(directory) = duplicate_proc_self_fd_directory(path) {
-        return directory;
+        let directory = directory?;
+        return Ok(OpenedDirectoryWalk {
+            directory,
+            path_guard_key: None,
+        });
     }
 
-    let absolute = path.is_absolute();
+    if !path.is_absolute() {
+        return Err(EmitError::InvalidArtifactDestination {
+            path: path.to_path_buf(),
+            reason: "artifact output paths must be absolute so path locking and descriptor traversal share one identity"
+                .to_owned(),
+        });
+    }
     let mut names = Vec::new();
     for component in path.components() {
         match component {
@@ -3241,11 +4620,7 @@ fn open_directory_walk(path: &Path, create: bool) -> Result<OwnedFd, EmitError> 
     }
 
     let mut current = open(
-        if absolute {
-            Path::new("/")
-        } else {
-            Path::new(".")
-        },
+        Path::new("/"),
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     )
@@ -3283,7 +4658,48 @@ fn open_directory_walk(path: &Path, create: bool) -> Result<OwnedFd, EmitError> 
             Err(error) => return Err(std::io::Error::from(error).into()),
         };
     }
-    Ok(current)
+    Ok(OpenedDirectoryWalk {
+        directory: current,
+        path_guard_key: Some(normalized_absolute_path_guard_key(path)?),
+    })
+}
+
+fn normalized_absolute_path_guard_key(path: &Path) -> Result<[u8; 32], EmitError> {
+    use std::os::unix::ffi::OsStrExt;
+
+    if !path.is_absolute() {
+        return Err(EmitError::InvalidArtifactDestination {
+            path: path.to_path_buf(),
+            reason: "path-guard key requires an absolute Unix path".to_owned(),
+        });
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"FE2O3/ARTIFACT-ABSOLUTE-PATH-GUARD/V1\0");
+    digest.update(rustix::process::geteuid().as_raw().to_le_bytes());
+    for component in path.components() {
+        match component {
+            Component::RootDir | Component::CurDir => {}
+            Component::Normal(name) => {
+                let bytes = name.as_bytes();
+                digest.update((bytes.len() as u64).to_le_bytes());
+                digest.update(bytes);
+            }
+            Component::ParentDir | Component::Prefix(_) => {
+                return Err(EmitError::InvalidArtifactDestination {
+                    path: path.to_path_buf(),
+                    reason: "path-guard key requires a normalized Unix path".to_owned(),
+                });
+            }
+        }
+    }
+    Ok(digest.finalize().into())
+}
+
+#[cfg(target_os = "linux")]
+fn is_proc_self_fd_path(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+
+    path.as_os_str().as_bytes().starts_with(b"/proc/self/fd/")
 }
 
 #[cfg(target_os = "linux")]
@@ -3337,13 +4753,19 @@ fn duplicate_proc_self_fd_directory(path: &Path) -> Option<Result<OwnedFd, EmitE
 
 struct OutputLock {
     fd: Option<OwnedFd>,
+    root_guard: Option<OwnedFd>,
+    path_guard: Option<OwnedFd>,
     reservation: Option<ProcessLockReservation>,
 }
 
 impl Drop for OutputLock {
     fn drop(&mut self) {
-        drop(self.fd.take());
-        drop(self.reservation.take());
+        ArtifactProcessSpawnCoordinatorV1::global().release_lock_descriptors(|| {
+            drop(self.fd.take());
+            drop(self.root_guard.take());
+            drop(self.path_guard.take());
+            drop(self.reservation.take());
+        });
     }
 }
 

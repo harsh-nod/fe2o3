@@ -7297,6 +7297,7 @@ mod tests {
 
     impl TestDirectory {
         fn new() -> Self {
+            fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
             let path = std::env::temp_dir().join(format!(
                 "cargo-fe2o3-worker-v2-resume-marker-{}-{}",
                 std::process::id(),
@@ -8055,16 +8056,16 @@ mod tests {
         seed: u8,
         fault: &str,
     ) -> std::process::Output {
-        std::process::Command::new(std::env::current_exe().unwrap())
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
             .arg("--exact")
             .arg("worker_v2_restart::tests::restart_marker_crash_subprocess_helper")
             .arg("--nocapture")
             .env(MARKER_CRASH_HELPER_DIRECTORY_ENV, directory)
             .env(MARKER_CRASH_HELPER_ATTEMPT_ENV, attempt.to_env_value())
             .env(MARKER_CRASH_HELPER_SEED_ENV, seed.to_string())
-            .env("FE2O3_TEST_WORKER_V2_FAULT_POINT_V1", fault)
-            .output()
-            .unwrap()
+            .env("FE2O3_TEST_WORKER_V2_FAULT_POINT_V1", fault);
+        crate::process_execution::capture_output(&mut command).unwrap()
     }
 
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
@@ -8075,7 +8076,8 @@ mod tests {
         action: &str,
         fault: &str,
     ) -> std::process::Output {
-        std::process::Command::new(std::env::current_exe().unwrap())
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
             .arg("--exact")
             .arg("worker_v2_restart::tests::protected_cleanup_crash_subprocess_helper")
             .arg("--nocapture")
@@ -8089,9 +8091,8 @@ mod tests {
                 closure_seed.to_string(),
             )
             .env(CLEANUP_CRASH_HELPER_ACTION_ENV, action)
-            .env("FE2O3_TEST_WORKER_V2_FAULT_POINT_V1", fault)
-            .output()
-            .unwrap()
+            .env("FE2O3_TEST_WORKER_V2_FAULT_POINT_V1", fault);
+        crate::process_execution::capture_output(&mut command).unwrap()
     }
 
     #[test]

@@ -13,20 +13,21 @@ use fe2o3_artifacts::{
     TargetIdentity,
 };
 use fe2o3_compiler_ffi::CodeObjectVersion;
+use fe2o3_mir_model::semantic_mir_v1::SemanticDisjointIndexSpaceV1;
 use fe2o3_rustc_front::FunctionIdentityV1;
 use reserved_fe2o3_symbols::{
     DEVICE_FFI_DIRECTION_IMPORT_V1, DeviceFfiContractFieldsV1, DeviceFfiContractIdV1,
-    DeviceFfiEffectsV1, DeviceFfiPhysicalAbiV1, derive_device_ffi_contract_id_v1,
-    parse_device_ffi_effects_v1, parse_device_ffi_physical_abi_v1,
-    validate_device_ffi_effect_abi_v1,
+    DeviceFfiEffectsV1, DeviceFfiPhysicalAbiV1, KernelBindingIdV1,
+    derive_device_ffi_contract_id_v1, host_kernel_symbol_v1, parse_device_ffi_effects_v1,
+    parse_device_ffi_physical_abi_v1, validate_device_ffi_effect_abi_v1,
 };
-use rustc_abi::{CanonAbi, Reg, RegKind, Size};
+use rustc_abi::{CanonAbi, Reg, RegKind, Size, Variants};
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::mir::interpret::GlobalAlloc;
 use rustc_middle::mir::{
     AggregateKind, BasicBlock, BinOp, Body, BorrowKind, CastKind, ConstOperand, ConstValue,
     FakeBorrowKind, Local, MutBorrowKind, NonDivergingIntrinsic, Operand, Place, ProjectionElem,
-    RawPtrKind, Rvalue, SourceInfo, StatementKind, TerminatorKind, UnOp,
+    RETURN_PLACE, RawPtrKind, Rvalue, SourceInfo, StatementKind, TerminatorKind, UnOp,
 };
 use rustc_middle::ty::layout::{LayoutCx, LayoutOf};
 use rustc_middle::ty::{
@@ -1066,6 +1067,7 @@ pub struct MirImportedType {
 pub enum MirTypeShape {
     Unit,
     Bool,
+    U16,
     I32,
     U32,
     I64,
@@ -1092,6 +1094,10 @@ pub enum MirTypeShape {
     RawPointer {
         pointee: Box<MirTypeShape>,
         mutable: bool,
+    },
+    Array {
+        element: Box<MirTypeShape>,
+        length: Option<u64>,
     },
     Adt {
         identity: String,
@@ -1190,6 +1196,7 @@ pub enum MirOperandRef {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MirConstant {
     Bool(bool),
+    U16(u16),
     I32(i32),
     U32(u32),
     I64(i64),
@@ -1199,6 +1206,7 @@ pub enum MirConstant {
     F32Bits(u32),
     F64Bits(u64),
     ZeroSized,
+    FieldlessEnumVariant(i64),
     StructuredValue(Vec<u8>),
     ImportFailed(String),
     Unevaluated,
@@ -1213,6 +1221,76 @@ pub struct MirTerminator {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MirCallee {
     identity: MirCalleeIdentity,
+    semantic_call_evidence: Option<MirSemanticCallEvidenceV1>,
+    semantic_call_evidence_rejection: Option<String>,
+    authenticated_kernel_body_bridge: Option<MirAuthenticatedKernelBodyBridgeV1>,
+    kernel_body_bridge_rejection: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MirCheckedTiled2dCallEvidenceV1 {
+    input_space: SemanticDisjointIndexSpaceV1,
+    output_space: SemanticDisjointIndexSpaceV1,
+    lanes_per_tile: u64,
+    tile_rows: u64,
+    tile_columns: u64,
+    elements_per_lane: u64,
+}
+
+impl MirCheckedTiled2dCallEvidenceV1 {
+    pub(crate) const fn input_space(self) -> SemanticDisjointIndexSpaceV1 {
+        self.input_space
+    }
+
+    pub(crate) const fn output_space(self) -> SemanticDisjointIndexSpaceV1 {
+        self.output_space
+    }
+
+    pub(crate) const fn geometry(self) -> (u64, u64, u64, u64) {
+        (
+            self.lanes_per_tile,
+            self.tile_rows,
+            self.tile_columns,
+            self.elements_per_lane,
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MirSemanticCallEvidenceV1 {
+    ThreadIndexCheckedTiled2d(MirCheckedTiled2dCallEvidenceV1),
+}
+
+/// Compiler-sealed evidence for the exact unit-ABI wrapper emitted around a
+/// `KernelResult<()>` kernel body.
+///
+/// The evidence is same-session authority and is deliberately excluded from
+/// portable MIR hashing. Lowering still revalidates the wrapper and body before
+/// removing the physical result.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MirAuthenticatedKernelBodyBridgeV1 {
+    root: MirSemanticInstanceIdentity,
+    body: MirSemanticInstanceIdentity,
+    kernel_binding: KernelBindingIdV1,
+    discarded_return_local: usize,
+}
+
+impl MirAuthenticatedKernelBodyBridgeV1 {
+    pub(crate) fn root(&self) -> &MirSemanticInstanceIdentity {
+        &self.root
+    }
+
+    pub(crate) fn body(&self) -> &MirSemanticInstanceIdentity {
+        &self.body
+    }
+
+    pub(crate) const fn kernel_binding(&self) -> KernelBindingIdV1 {
+        self.kernel_binding
+    }
+
+    pub(crate) const fn discarded_return_local(&self) -> usize {
+        self.discarded_return_local
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1263,6 +1341,10 @@ impl MirCallee {
     fn session_recognized(item: SessionRecognizedSemanticItem) -> Self {
         Self {
             identity: MirCalleeIdentity::SessionRecognized(item),
+            semantic_call_evidence: None,
+            semantic_call_evidence_rejection: None,
+            authenticated_kernel_body_bridge: None,
+            kernel_body_bridge_rejection: None,
         }
     }
 
@@ -1274,18 +1356,30 @@ impl MirCallee {
     fn untrusted(path: String, resolution: MirCalleeResolution) -> Self {
         Self {
             identity: MirCalleeIdentity::Untrusted { path, resolution },
+            semantic_call_evidence: None,
+            semantic_call_evidence_rejection: None,
+            authenticated_kernel_body_bridge: None,
+            kernel_body_bridge_rejection: None,
         }
     }
 
     fn external_import(import: MirExternalImport) -> Self {
         Self {
             identity: MirCalleeIdentity::ExternalImport(import),
+            semantic_call_evidence: None,
+            semantic_call_evidence_rejection: None,
+            authenticated_kernel_body_bridge: None,
+            kernel_body_bridge_rejection: None,
         }
     }
 
     fn rejected_trusted_provider(path: String, marker: &'static str) -> Self {
         Self {
             identity: MirCalleeIdentity::RejectedTrustedProvider { path, marker },
+            semantic_call_evidence: None,
+            semantic_call_evidence_rejection: None,
+            authenticated_kernel_body_bridge: None,
+            kernel_body_bridge_rejection: None,
         }
     }
 
@@ -1341,9 +1435,57 @@ impl MirCallee {
         }
     }
 
+    pub(crate) fn authenticated_kernel_body_bridge_v1(
+        &self,
+    ) -> Option<&MirAuthenticatedKernelBodyBridgeV1> {
+        self.authenticated_kernel_body_bridge.as_ref()
+    }
+
+    pub(crate) fn kernel_body_bridge_rejection_v1(&self) -> Option<&str> {
+        self.kernel_body_bridge_rejection.as_deref()
+    }
+
+    pub(crate) fn checked_tiled_2d_evidence_v1(&self) -> Option<MirCheckedTiled2dCallEvidenceV1> {
+        match self.semantic_call_evidence {
+            Some(MirSemanticCallEvidenceV1::ThreadIndexCheckedTiled2d(evidence)) => Some(evidence),
+            None => None,
+        }
+    }
+
+    pub(crate) fn semantic_call_evidence_rejection_v1(&self) -> Option<&str> {
+        self.semantic_call_evidence_rejection.as_deref()
+    }
+
     #[cfg(test)]
     pub(crate) fn trusted_for_test(item: TrustedDeviceItem) -> Self {
         Self::trusted(item)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn checked_tiled_2d_for_test(
+        lanes_per_tile: u64,
+        tile_rows: u64,
+        tile_columns: u64,
+        elements_per_lane: u64,
+    ) -> Self {
+        let output_space = SemanticDisjointIndexSpaceV1::Tiled2dIndex1d {
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+        };
+        let mut callee = Self::trusted(TrustedDeviceItem::ThreadIndexCheckedTiled2D);
+        callee.semantic_call_evidence = Some(MirSemanticCallEvidenceV1::ThreadIndexCheckedTiled2d(
+            MirCheckedTiled2dCallEvidenceV1 {
+                input_space: SemanticDisjointIndexSpaceV1::Index1d,
+                output_space,
+                lanes_per_tile,
+                tile_rows,
+                tile_columns,
+                elements_per_lane,
+            },
+        ));
+        callee
     }
 
     #[cfg(test)]
@@ -1353,6 +1495,25 @@ impl MirCallee {
             path.clone(),
             MirCalleeResolution::Resolved(MirSemanticInstanceIdentity::plain_item(path)),
         )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn authenticated_kernel_body_for_test(
+        root_path: impl Into<String>,
+        body_path: impl Into<String>,
+        kernel_binding: KernelBindingIdV1,
+    ) -> Self {
+        let root_path = root_path.into();
+        let body_path = body_path.into();
+        let body = MirSemanticInstanceIdentity::plain_item(body_path.clone());
+        let mut callee = Self::untrusted(body_path, MirCalleeResolution::Resolved(body.clone()));
+        callee.authenticated_kernel_body_bridge = Some(MirAuthenticatedKernelBodyBridgeV1 {
+            root: MirSemanticInstanceIdentity::plain_item(root_path),
+            body,
+            kernel_binding,
+            discarded_return_local: 0,
+        });
+        callee
     }
 
     #[cfg(test)]
@@ -1438,7 +1599,9 @@ pub enum MirTerminatorKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MirRvalueKind {
     Use,
-    Repeat,
+    Repeat {
+        count: Option<u64>,
+    },
     #[allow(dead_code)]
     Ref,
     Reference(MirBorrowKind),
@@ -1451,6 +1614,10 @@ pub enum MirRvalueKind {
     Unary(MirUnaryOp),
     Discriminant,
     Aggregate,
+    /// A rustc-authenticated array literal with its exact source element count.
+    ArrayAggregate {
+        element_count: usize,
+    },
     AdtAggregate {
         variant: usize,
         active_field: Option<usize>,
@@ -2498,6 +2665,12 @@ pub fn import_collection<'tcx>(
                     "cannot construct semantic instance identity for `{rust_path}`: {detail}"
                 ))
             })?;
+        let authenticated_kernel_root = authenticated_kernel_root_import_evidence_v1(
+            tcx,
+            collection,
+            function,
+            &semantic_instance,
+        )?;
         let matrix_frontend_abi =
             if function.role == crate::collector::CollectedFunctionRole::KernelEntry {
                 import_matrix_source_abi_v2(tcx, function.instance, body)?
@@ -2511,6 +2684,7 @@ pub fn import_collection<'tcx>(
                 body,
                 compiler_ffi_imports: &compiler_ffi_imports,
                 dead_branches,
+                authenticated_kernel_root,
             },
             function.export_name.clone(),
             rust_path,
@@ -2525,6 +2699,104 @@ pub fn import_collection<'tcx>(
     }
 
     MirModule::from_functions_v1(functions)
+}
+
+#[derive(Clone)]
+struct AuthenticatedKernelRootImportEvidenceV1<'tcx> {
+    root_instance: Instance<'tcx>,
+    root: MirSemanticInstanceIdentity,
+    kernel_binding: KernelBindingIdV1,
+    module_path: String,
+}
+
+fn authenticated_kernel_root_import_evidence_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    collection: &CollectionResult<'tcx>,
+    function: &crate::collector::CollectedFunction<'tcx>,
+    semantic_instance: &MirSemanticInstanceIdentity,
+) -> Result<Option<AuthenticatedKernelRootImportEvidenceV1<'tcx>>, MirImportError> {
+    if !matches!(
+        function.typed_profile,
+        Some(crate::collector::TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 { .. })
+    ) {
+        return Ok(None);
+    }
+    if function.role != crate::collector::CollectedFunctionRole::KernelEntry {
+        return Err(MirImportError::new(
+            "General V3 typed profile is attached to a non-kernel function",
+        ));
+    }
+
+    let owners = collection
+        .authenticated_kernel_owners()
+        .iter()
+        .filter(|owner| owner.target() == function.instance)
+        .collect::<Vec<_>>();
+    let [owner] = owners.as_slice() else {
+        return Err(MirImportError::new(format!(
+            "General V3 kernel `{}` has {} authenticated registration owners; expected exactly one",
+            function.export_name,
+            owners.len(),
+        )));
+    };
+    let binding = function.kernel_binding.ok_or_else(|| {
+        MirImportError::new(format!(
+            "General V3 kernel `{}` has no collector-sealed kernel binding",
+            function.export_name
+        ))
+    })?;
+    let def_path = tcx.def_path_str(function.instance.def_id());
+    let module_path = definition_module_path_v1(&def_path).ok_or_else(|| {
+        MirImportError::new(format!(
+            "General V3 kernel definition `{def_path}` has no enclosing module"
+        ))
+    })?;
+    let observed_symbol = tcx.symbol_name(function.instance).name.to_string();
+    let expected_symbol = host_kernel_symbol_v1(binding);
+    let logical_name = function.logical_name.as_deref().ok_or_else(|| {
+        MirImportError::new(format!(
+            "General V3 kernel `{}` has no logical registration name",
+            function.export_name
+        ))
+    })?;
+    if owner.export_name() != function.export_name
+        || owner.logical_name() != logical_name
+        || owner.typed_profile() != function.typed_profile.expect("profile matched above")
+        || owner.kernel_binding() != binding
+        || owner.target_def_path() != def_path
+        || owner.crate_name() != tcx.crate_name(function.instance.def_id().krate).as_str()
+        || owner.module_path() != module_path
+        || owner.observed_symbol() != observed_symbol
+        || observed_symbol != expected_symbol
+    {
+        return Err(MirImportError::new(format!(
+            "General V3 kernel `{}` disagrees with its authenticated registration owner",
+            function.export_name
+        )));
+    }
+
+    let expected_root_name = format!("__fe2o3_host_kernel_v1_{}", binding.to_hex());
+    if definition_basename_v1(&def_path) != Some(expected_root_name.as_str()) {
+        return Err(MirImportError::new(format!(
+            "General V3 kernel `{}` does not use its binding-derived generated entry identity",
+            function.export_name
+        )));
+    }
+
+    Ok(Some(AuthenticatedKernelRootImportEvidenceV1 {
+        root_instance: function.instance,
+        root: semantic_instance.clone(),
+        kernel_binding: binding,
+        module_path: module_path.to_owned(),
+    }))
+}
+
+fn definition_module_path_v1(path: &str) -> Option<&str> {
+    path.rsplit_once("::").map(|(module, _)| module)
+}
+
+fn definition_basename_v1(path: &str) -> Option<&str> {
+    path.rsplit("::").next().filter(|name| !name.is_empty())
 }
 
 fn imported_rust_path(tcx: TyCtxt<'_>, def_id: rustc_hir::def_id::DefId) -> String {
@@ -3590,6 +3862,15 @@ fn validate_portable_type_shape_v3(
         MirTypeShape::Reference { pointee, .. } | MirTypeShape::RawPointer { pointee, .. } => {
             validate_portable_type_shape_v3(function, pointee, depth + 1)
         }
+        MirTypeShape::Array { element, length } => {
+            if length.is_none() {
+                return Err(portable_v3_incomplete(
+                    function,
+                    "array type has an unevaluated length",
+                ));
+            }
+            validate_portable_type_shape_v3(function, element, depth + 1)
+        }
         MirTypeShape::Tuple(fields) => {
             for field in fields {
                 validate_portable_type_shape_v3(function, field, depth + 1)?;
@@ -3602,6 +3883,7 @@ fn validate_portable_type_shape_v3(
         )),
         MirTypeShape::Unit
         | MirTypeShape::Bool
+        | MirTypeShape::U16
         | MirTypeShape::I32
         | MirTypeShape::U32
         | MirTypeShape::I64
@@ -3665,6 +3947,17 @@ fn validate_portable_statement_v3(
         validate_portable_operand_v3(function, operand)?;
     }
     if let Some(rvalue) = statement.rvalue {
+        if let MirRvalueKind::ArrayAggregate { element_count } = rvalue
+            && element_count != statement.operands.len()
+        {
+            return Err(portable_v3_incomplete(
+                function,
+                format!(
+                    "array aggregate declares {element_count} elements but carries {} operands",
+                    statement.operands.len()
+                ),
+            ));
+        }
         validate_portable_rvalue_v3(function, rvalue, statement.semantic_rvalue_type.as_ref())?;
     }
     Ok(())
@@ -3748,7 +4041,9 @@ fn validate_portable_rvalue_v3(
     semantic_rvalue_type: Option<&MirSemanticTypeEvidence>,
 ) -> Result<(), MirImportError> {
     let detail = match rvalue {
-        MirRvalueKind::Repeat => Some("repeat rvalue omits its repeat length"),
+        MirRvalueKind::Repeat { count: None } => {
+            Some("repeat rvalue has an unevaluated repeat length")
+        }
         MirRvalueKind::Ref => Some("reference rvalue omits its borrow kind"),
         MirRvalueKind::RawPointer => Some("raw-pointer rvalue omits its pointer kind"),
         MirRvalueKind::Cast => Some("cast rvalue omits its cast kind and target type"),
@@ -3763,11 +4058,13 @@ fn validate_portable_rvalue_v3(
             ));
         }
         MirRvalueKind::Use
+        | MirRvalueKind::Repeat { count: Some(_) }
         | MirRvalueKind::Reference(_)
         | MirRvalueKind::SemanticRawPointer(_)
         | MirRvalueKind::Binary(_)
         | MirRvalueKind::Unary(_)
         | MirRvalueKind::Discriminant => None,
+        MirRvalueKind::ArrayAggregate { .. } => None,
         MirRvalueKind::SemanticCast(_)
         | MirRvalueKind::AdtAggregate { .. }
         | MirRvalueKind::FieldlessEnumVariant(_) => {
@@ -4304,6 +4601,14 @@ impl PortableMirSemanticEncoderV2 {
         match shape {
             MirTypeShape::Unit => self.tag(0),
             MirTypeShape::Bool => self.tag(1),
+            MirTypeShape::U16 => match self.version {
+                PortableMirSemanticVersion::V2 => {
+                    return Err(MirImportError::new(
+                        "portable MIR V2 cannot encode an exact u16 type",
+                    ));
+                }
+                PortableMirSemanticVersion::V3 => self.tag(21),
+            },
             MirTypeShape::I32 => self.tag(2),
             MirTypeShape::U32 => self.tag(3),
             MirTypeShape::I64 => self.tag(4),
@@ -4338,6 +4643,20 @@ impl PortableMirSemanticEncoderV2 {
                 self.boolean(*mutable);
                 self.type_shape(pointee, depth + 1)?;
             }
+            MirTypeShape::Array { element, length } => match self.version {
+                PortableMirSemanticVersion::V2 => self.tag(19),
+                PortableMirSemanticVersion::V3 => {
+                    self.tag(22);
+                    match length {
+                        Some(length) => {
+                            self.tag(1);
+                            self.u64(*length);
+                        }
+                        None => self.tag(0),
+                    }
+                    self.type_shape(element, depth + 1)?;
+                }
+            },
             MirTypeShape::Adt { identity } => {
                 self.tag(17);
                 self.text(identity)?;
@@ -4500,6 +4819,17 @@ impl PortableMirSemanticEncoderV2 {
                 self.tag(0);
                 self.boolean(*value);
             }
+            MirConstant::U16(value) => match self.version {
+                PortableMirSemanticVersion::V2 => {
+                    return Err(MirImportError::new(
+                        "portable MIR V2 cannot encode an exact u16 constant",
+                    ));
+                }
+                PortableMirSemanticVersion::V3 => {
+                    self.tag(12);
+                    self.u16(*value);
+                }
+            },
             MirConstant::I32(value) => {
                 self.tag(1);
                 self.i32(*value);
@@ -4539,6 +4869,13 @@ impl PortableMirSemanticEncoderV2 {
                 PortableMirSemanticVersion::V2 => 8,
                 PortableMirSemanticVersion::V3 => 9,
             }),
+            MirConstant::FieldlessEnumVariant(discriminant) => match self.version {
+                PortableMirSemanticVersion::V2 => self.tag(8),
+                PortableMirSemanticVersion::V3 => {
+                    self.tag(12);
+                    self.i64(*discriminant);
+                }
+            },
             MirConstant::StructuredValue(identity) => match self.version {
                 PortableMirSemanticVersion::V2 => self.tag(8),
                 PortableMirSemanticVersion::V3 => {
@@ -4562,7 +4899,19 @@ impl PortableMirSemanticEncoderV2 {
     fn rvalue(&mut self, rvalue: MirRvalueKind) -> Result<(), MirImportError> {
         match rvalue {
             MirRvalueKind::Use => self.tag(0),
-            MirRvalueKind::Repeat => self.tag(1),
+            MirRvalueKind::Repeat { count } => match self.version {
+                PortableMirSemanticVersion::V2 => self.tag(1),
+                PortableMirSemanticVersion::V3 => {
+                    self.tag(15);
+                    match count {
+                        Some(count) => {
+                            self.tag(1);
+                            self.u64(count);
+                        }
+                        None => self.tag(0),
+                    }
+                }
+            },
             MirRvalueKind::Ref => self.tag(2),
             MirRvalueKind::Reference(kind) => match self.version {
                 PortableMirSemanticVersion::V2 => self.tag(2),
@@ -4616,6 +4965,13 @@ impl PortableMirSemanticEncoderV2 {
             }
             MirRvalueKind::Discriminant => self.tag(7),
             MirRvalueKind::Aggregate => self.tag(8),
+            MirRvalueKind::ArrayAggregate { element_count } => match self.version {
+                PortableMirSemanticVersion::V2 => self.tag(8),
+                PortableMirSemanticVersion::V3 => {
+                    self.tag(16);
+                    self.usize(element_count)?;
+                }
+            },
             MirRvalueKind::Other => self.tag(9),
             MirRvalueKind::FieldlessEnumVariant(discriminant) => {
                 self.tag(10);
@@ -4786,6 +5142,18 @@ impl PortableMirSemanticEncoderV2 {
             MirCalleeIdentity::SessionRecognized(item) => {
                 self.tag(2);
                 self.text(item.canonical_path())?;
+                if item.trusted_device_item() == TrustedDeviceItem::ThreadIndexCheckedTiled2D {
+                    let evidence = callee.checked_tiled_2d_evidence_v1();
+                    self.boolean(evidence.is_some());
+                    if let Some(evidence) = evidence {
+                        let (lanes_per_tile, tile_rows, tile_columns, elements_per_lane) =
+                            evidence.geometry();
+                        self.u64(lanes_per_tile);
+                        self.u64(tile_rows);
+                        self.u64(tile_columns);
+                        self.u64(elements_per_lane);
+                    }
+                }
             }
             MirCalleeIdentity::ExternalImport(import) => {
                 self.tag(3);
@@ -5168,6 +5536,7 @@ struct MirBodyImportContext<'a, 'tcx> {
     body: &'a Body<'tcx>,
     compiler_ffi_imports: &'a CompilerFfiImports,
     dead_branches: &'a crate::monomorphization_dead::CompilerDeadBranchObservationV1,
+    authenticated_kernel_root: Option<AuthenticatedKernelRootImportEvidenceV1<'tcx>>,
 }
 
 fn import_body<'tcx>(
@@ -5184,6 +5553,7 @@ fn import_body<'tcx>(
         body,
         compiler_ffi_imports,
         dead_branches,
+        authenticated_kernel_root,
     } = context;
     let blocks = body
         .basic_blocks
@@ -5217,6 +5587,7 @@ fn import_body<'tcx>(
                                 body,
                                 &terminator.kind,
                                 compiler_ffi_imports,
+                                authenticated_kernel_root.as_ref(),
                             )
                         },
                         |target| MirTerminatorKind::Goto { target },
@@ -5303,6 +5674,7 @@ fn import_type<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>, ty: Ty<'tcx>) 
 fn import_type_shape<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> MirTypeShape {
     match ty.kind() {
         TyKind::Bool => MirTypeShape::Bool,
+        TyKind::Uint(UintTy::U16) => MirTypeShape::U16,
         TyKind::Int(IntTy::I32) => MirTypeShape::I32,
         TyKind::Uint(UintTy::U32) => MirTypeShape::U32,
         TyKind::Int(IntTy::I64) => MirTypeShape::I64,
@@ -5325,17 +5697,24 @@ fn import_type_shape<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> MirTypeShape {
             pointee: Box::new(import_type_shape(tcx, *pointee)),
             mutable: *mutability == Mutability::Mut,
         },
+        TyKind::Array(element, length) => MirTypeShape::Array {
+            element: Box::new(import_type_shape(tcx, *element)),
+            length: length.try_to_target_usize(tcx),
+        },
         TyKind::Adt(adt, args) => match semantic_features::classify(tcx, adt.did())
             .map(SessionRecognizedSemanticItem::trusted_device_item)
         {
             Some(TrustedDeviceItem::DisjointSlice) => MirTypeShape::DisjointSlice {
                 element: Box::new(import_type_shape(tcx, args.type_at(0))),
             },
-            Some(item @ TrustedDeviceItem::ThreadIndex) => MirTypeShape::Adt {
-                identity: item.canonical_path().to_owned(),
-            },
+            Some(item @ (TrustedDeviceItem::ThreadIndex | TrustedDeviceItem::DisjointTile2D)) => {
+                MirTypeShape::Adt {
+                    identity: item.canonical_path().to_owned(),
+                }
+            }
             Some(
-                item @ (TrustedDeviceItem::DeviceMatrix
+                item @ (TrustedDeviceItem::KernelError
+                | TrustedDeviceItem::DeviceMatrix
                 | TrustedDeviceItem::Bf16MfmaFragment
                 | TrustedDeviceItem::F32AccumulatorFragment),
             ) => MirTypeShape::Adt {
@@ -5491,6 +5870,11 @@ fn statement_rvalue_type<'tcx>(
     };
     let (_, rvalue) = &**assign;
     let ty = match rvalue {
+        Rvalue::Use(Operand::Constant(constant))
+            if fieldless_enum_constant_discriminant(tcx, constant).is_some() =>
+        {
+            constant.const_.ty()
+        }
         Rvalue::Cast(_, _, target) => *target,
         Rvalue::Aggregate(kind, _) => {
             let normalized = match instance.try_instantiate_mir_and_normalize_erasing_regions(
@@ -5522,6 +5906,11 @@ fn rvalue_operands<'tcx>(
     rvalue: &Rvalue<'tcx>,
 ) -> Vec<MirOperandRef> {
     match rvalue {
+        Rvalue::Use(Operand::Constant(constant))
+            if fieldless_enum_constant_discriminant(tcx, constant).is_some() =>
+        {
+            Vec::new()
+        }
         Rvalue::Use(operand)
         | Rvalue::Repeat(operand, _)
         | Rvalue::Cast(_, operand, _)
@@ -5560,8 +5949,14 @@ fn rvalue_operation(rvalue: &Rvalue<'_>) -> &'static str {
 
 fn import_rvalue_kind<'tcx>(tcx: TyCtxt<'tcx>, rvalue: &Rvalue<'tcx>) -> MirRvalueKind {
     match rvalue {
+        Rvalue::Use(Operand::Constant(constant)) => {
+            fieldless_enum_constant_discriminant(tcx, constant)
+                .map_or(MirRvalueKind::Use, MirRvalueKind::FieldlessEnumVariant)
+        }
         Rvalue::Use(_) => MirRvalueKind::Use,
-        Rvalue::Repeat(_, _) => MirRvalueKind::Repeat,
+        Rvalue::Repeat(_, count) => MirRvalueKind::Repeat {
+            count: count.try_to_target_usize(tcx),
+        },
         Rvalue::Ref(_, borrow_kind, _) => {
             MirRvalueKind::Reference(import_borrow_kind(*borrow_kind))
         }
@@ -5577,6 +5972,9 @@ fn import_rvalue_kind<'tcx>(tcx: TyCtxt<'tcx>, rvalue: &Rvalue<'tcx>) -> MirRval
         Rvalue::Aggregate(kind, operands) => {
             fieldless_enum_discriminant(tcx, kind, operands.is_empty()).map_or(
                 match &**kind {
+                    AggregateKind::Array(_) => MirRvalueKind::ArrayAggregate {
+                        element_count: operands.len(),
+                    },
                     AggregateKind::Adt(_, variant, _, _, active_field) => {
                         MirRvalueKind::AdtAggregate {
                             variant: variant.index(),
@@ -5652,6 +6050,56 @@ fn fieldless_enum_discriminant<'tcx>(
     i64::try_from(adt.discriminant_for_variant(tcx, *variant).val).ok()
 }
 
+fn fieldless_enum_constant_discriminant<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    constant: &ConstOperand<'tcx>,
+) -> Option<i64> {
+    let ty = constant.const_.ty();
+    let TyKind::Adt(adt, _) = ty.kind() else {
+        return None;
+    };
+    if !adt.is_enum() {
+        return None;
+    }
+    let variant = match constant.const_ {
+        rustc_middle::mir::Const::Ty(_, value) => {
+            let ConstKind::Value(value) = value.kind() else {
+                return None;
+            };
+            let branches = value.valtree.try_to_branch()?;
+            let variant = branches.first()?.try_to_leaf()?.to_u32();
+            rustc_abi::VariantIdx::from_u32(variant)
+        }
+        evaluated_constant => {
+            let typing_env = TypingEnv::fully_monomorphized();
+            let value = evaluated_constant
+                .eval(tcx, typing_env, constant.span)
+                .ok()?;
+            let layout = LayoutCx::new(tcx, typing_env).layout_of(ty).ok()?;
+            let Variants::Multiple { tag, tag_field, .. } = layout.variants else {
+                return None;
+            };
+            if layout.fields.offset(tag_field.index()) != Size::ZERO {
+                return None;
+            }
+            let ConstValue::Scalar(value) = value else {
+                return None;
+            };
+            let tag_size = tag.size(&tcx);
+            let tag_bits = value.try_to_scalar_int().ok()?.to_bits(tag_size);
+            adt.variants().iter_enumerated().find_map(|(variant, _)| {
+                tcx.tag_for_variant(typing_env.as_query_input((ty, variant)))
+                    .filter(|expected| expected.to_bits(tag_size) == tag_bits)
+                    .map(|_| variant)
+            })?
+        }
+    };
+    if !adt.variant(variant).fields.is_empty() {
+        return None;
+    }
+    i64::try_from(adt.discriminant_for_variant(tcx, variant).val).ok()
+}
+
 fn import_operand<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
@@ -5689,6 +6137,9 @@ fn import_constant<'tcx>(
     instance: Instance<'tcx>,
     constant: &ConstOperand<'tcx>,
 ) -> MirConstant {
+    if let Some(discriminant) = fieldless_enum_constant_discriminant(tcx, constant) {
+        return MirConstant::FieldlessEnumVariant(discriminant);
+    }
     if matches!(
         constant.const_,
         rustc_middle::mir::Const::Val(ConstValue::ZeroSized, _)
@@ -5710,6 +6161,10 @@ fn import_constant<'tcx>(
             .try_eval_scalar_int(tcx, typing_env)
             .and_then(|value| value.try_to_bool().ok())
             .map(MirConstant::Bool),
+        TyKind::Uint(UintTy::U16) => constant
+            .const_
+            .try_eval_scalar_int(tcx, typing_env)
+            .map(|value| MirConstant::U16(value.to_u16())),
         TyKind::Int(IntTy::I32) => constant
             .const_
             .try_eval_scalar_int(tcx, typing_env)
@@ -5970,6 +6425,7 @@ fn terminator_kind<'tcx>(
     body: &Body<'tcx>,
     kind: &TerminatorKind<'tcx>,
     compiler_ffi_imports: &CompilerFfiImports,
+    authenticated_kernel_root: Option<&AuthenticatedKernelRootImportEvidenceV1<'tcx>>,
 ) -> MirTerminatorKind {
     match kind {
         TerminatorKind::Return => MirTerminatorKind::Return,
@@ -5995,7 +6451,13 @@ fn terminator_kind<'tcx>(
             target,
             ..
         } => MirTerminatorKind::Call {
-            callee: call_identity(tcx, func, compiler_ffi_imports),
+            callee: call_identity(
+                tcx,
+                instance,
+                func,
+                compiler_ffi_imports,
+                authenticated_kernel_root,
+            ),
             target: target.map(BasicBlock::as_usize),
             destination: Some(import_place(tcx, instance, body, *destination)),
             operands: args
@@ -6022,8 +6484,10 @@ fn terminator_kind<'tcx>(
 
 fn call_identity<'tcx>(
     tcx: TyCtxt<'tcx>,
+    caller: Instance<'tcx>,
     func: &Operand<'tcx>,
     compiler_ffi_imports: &CompilerFfiImports,
+    authenticated_kernel_root: Option<&AuthenticatedKernelRootImportEvidenceV1<'tcx>>,
 ) -> Option<MirCallee> {
     let Operand::Constant(constant) = func else {
         return None;
@@ -6053,28 +6517,161 @@ fn call_identity<'tcx>(
         }
     };
     let resolved_def_id = resolved_instance.def_id();
-    Some(
-        if let Some(item) = semantic_features::classify(tcx, resolved_def_id) {
-            MirCallee::session_recognized(item)
-        } else if let Some(marker) =
-            crate::trusted_device_items::rejected_provider_marker(tcx, resolved_def_id)
-        {
-            MirCallee::rejected_trusted_provider(imported_rust_path(tcx, resolved_def_id), marker)
-        } else if let Some(import) = compiler_ffi_imports
-            .classify(tcx, resolved_def_id)
-            .or_else(|| compiler_ffi_imports.classify(tcx, *def_id))
-        {
-            MirCallee::external_import(import)
-        } else {
-            MirCallee::untrusted(
-                imported_rust_path(tcx, resolved_def_id),
-                match MirSemanticInstanceIdentity::from_rustc(tcx, resolved_instance) {
-                    Ok(identity) => MirCalleeResolution::Resolved(identity),
-                    Err(detail) => MirCalleeResolution::SemanticIdentityFailed(detail),
-                },
-            )
+    let mut callee = if let Some(item) = semantic_features::classify(tcx, resolved_def_id) {
+        let mut callee = MirCallee::session_recognized(item);
+        match semantic_call_evidence_v1(tcx, resolved_instance, item) {
+            Ok(evidence) => callee.semantic_call_evidence = evidence,
+            Err(detail) => callee.semantic_call_evidence_rejection = Some(detail),
+        }
+        callee
+    } else if let Some(marker) =
+        crate::trusted_device_items::rejected_provider_marker(tcx, resolved_def_id)
+    {
+        MirCallee::rejected_trusted_provider(imported_rust_path(tcx, resolved_def_id), marker)
+    } else if let Some(import) = compiler_ffi_imports
+        .classify(tcx, resolved_def_id)
+        .or_else(|| compiler_ffi_imports.classify(tcx, *def_id))
+    {
+        MirCallee::external_import(import)
+    } else {
+        MirCallee::untrusted(
+            imported_rust_path(tcx, resolved_def_id),
+            match MirSemanticInstanceIdentity::from_rustc(tcx, resolved_instance) {
+                Ok(identity) => MirCalleeResolution::Resolved(identity),
+                Err(detail) => MirCalleeResolution::SemanticIdentityFailed(detail),
+            },
+        )
+    };
+    if let Some(root) = authenticated_kernel_root {
+        match authenticate_generated_kernel_body_bridge_v1(tcx, caller, resolved_instance, root) {
+            Ok(Some(bridge)) => callee.authenticated_kernel_body_bridge = Some(bridge),
+            Ok(None) => {}
+            Err(detail) => callee.kernel_body_bridge_rejection = Some(detail),
+        }
+    }
+    Some(callee)
+}
+
+fn semantic_call_evidence_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    item: SessionRecognizedSemanticItem,
+) -> Result<Option<MirSemanticCallEvidenceV1>, String> {
+    if item.trusted_device_item() != TrustedDeviceItem::ThreadIndexCheckedTiled2D {
+        return Ok(None);
+    }
+    let signature = tcx.instantiate_bound_regions_with_erased(
+        tcx.fn_sig(instance.def_id())
+            .instantiate(tcx, instance.args),
+    );
+    let [input] = signature.inputs() else {
+        return Err(
+            "checked_tiled_2d compiler signature does not have exactly one receiver".to_owned(),
+        );
+    };
+    let input_space =
+        crate::collector::rust_index_witness_space_v1(tcx, *input, TrustedDeviceItem::ThreadIndex)
+            .ok_or_else(|| {
+                "checked_tiled_2d receiver is not an exact trusted ThreadIndex witness".to_owned()
+            })?;
+    let output_tile = crate::collector::rust_option_payload_v1(tcx, signature.output())
+        .ok_or_else(|| "checked_tiled_2d result is not an exact Option payload".to_owned())?;
+    let (output_space, lanes_per_tile, tile_rows, tile_columns, elements_per_lane) =
+        crate::collector::rust_disjoint_tile_2d_v1(tcx, output_tile).ok_or_else(|| {
+            "checked_tiled_2d result is not a valid trusted DisjointTile2D witness".to_owned()
+        })?;
+    if input_space != SemanticDisjointIndexSpaceV1::Index1d {
+        return Err("checked_tiled_2d receiver mapping is not exact Index1D".to_owned());
+    }
+    Ok(Some(MirSemanticCallEvidenceV1::ThreadIndexCheckedTiled2d(
+        MirCheckedTiled2dCallEvidenceV1 {
+            input_space,
+            output_space,
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
         },
-    )
+    )))
+}
+
+fn authenticate_generated_kernel_body_bridge_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    caller: Instance<'tcx>,
+    callee: Instance<'tcx>,
+    root: &AuthenticatedKernelRootImportEvidenceV1<'tcx>,
+) -> Result<Option<MirAuthenticatedKernelBodyBridgeV1>, String> {
+    if caller != root.root_instance || !tcx.is_mir_available(callee.def_id()) {
+        return Ok(None);
+    }
+    let callee_path = tcx.def_path_str(callee.def_id());
+    let expected_body_name = format!("__fe2o3_kernel_body_v1_{}", root.kernel_binding.to_hex());
+    if definition_basename_v1(&callee_path) != Some(expected_body_name.as_str()) {
+        return Ok(None);
+    }
+    if definition_module_path_v1(&callee_path) != Some(root.module_path.as_str()) {
+        return Err(format!(
+            "binding-derived generated body `{callee_path}` is outside authenticated module `{}`",
+            root.module_path
+        ));
+    }
+
+    let body = tcx.instance_mir(callee.def);
+    let return_ty = callee
+        .try_instantiate_mir_and_normalize_erasing_regions(
+            tcx,
+            TypingEnv::fully_monomorphized(),
+            ty::EarlyBinder::bind(body.local_decls[RETURN_PLACE].ty),
+        )
+        .map_err(|error| format!("generated body return type normalization failed: {error:?}"))?;
+    validate_exact_kernel_result_unit_v1(tcx, return_ty)?;
+    let body_identity = MirSemanticInstanceIdentity::from_rustc(tcx, callee)
+        .map_err(|detail| format!("generated body semantic identity failed: {detail}"))?;
+    Ok(Some(MirAuthenticatedKernelBodyBridgeV1 {
+        root: root.root.clone(),
+        body: body_identity,
+        kernel_binding: root.kernel_binding,
+        discarded_return_local: RETURN_PLACE.as_usize(),
+    }))
+}
+
+fn validate_exact_kernel_result_unit_v1(tcx: TyCtxt<'_>, ty: Ty<'_>) -> Result<(), String> {
+    let TyKind::Adt(result, arguments) = ty.kind() else {
+        return Err(format!(
+            "generated body return `{ty}` is not the standard Result ADT"
+        ));
+    };
+    let Some(result_definition) = tcx.get_diagnostic_item(rustc_span::sym::Result) else {
+        return Err("rustc session has no standard Result diagnostic item".to_owned());
+    };
+    if result.did() != result_definition {
+        return Err(format!(
+            "generated body return uses `{}` instead of the standard Result definition `{}`",
+            tcx.def_path_str(result.did()),
+            tcx.def_path_str(result_definition),
+        ));
+    }
+    if arguments.len() != 2 || !arguments.type_at(0).is_unit() {
+        return Err(format!("generated body return `{ty}` is not Result<(), E>"));
+    }
+    let TyKind::Adt(error, error_arguments) = arguments.type_at(1).kind() else {
+        return Err(format!(
+            "generated body Result error `{}` is not an ADT",
+            arguments.type_at(1)
+        ));
+    };
+    let Some(kernel_error) =
+        crate::trusted_device_items::definition(tcx, TrustedDeviceItem::KernelError)
+    else {
+        return Err("reviewed fe2o3-device KernelError identity is unavailable".to_owned());
+    };
+    if !error_arguments.is_empty() || error.did() != kernel_error {
+        return Err(format!(
+            "generated body Result error `{}` is not the exact reviewed fe2o3_device::KernelError definition",
+            tcx.def_path_str(error.did()),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -6763,7 +7360,7 @@ fn imported_flow(input: Wrapper<u32>) -> Wrapper<u64> {
         }
 
         for (rvalue, detail) in [
-            (MirRvalueKind::Repeat, "repeat rvalue"),
+            (MirRvalueKind::Repeat { count: None }, "repeat rvalue"),
             (MirRvalueKind::Ref, "reference rvalue"),
             (MirRvalueKind::RawPointer, "raw-pointer rvalue"),
             (MirRvalueKind::Cast, "cast rvalue"),
@@ -7034,6 +7631,29 @@ fn imported_flow(input: Wrapper<u32>) -> Wrapper<u64> {
             portable_digest_v3(&u64_two, &environment)
         );
 
+        let mut u16_one = portable_semantic_module();
+        let MirOperandRef::Constant { ty, literal, .. } =
+            &mut u16_one.functions[0].blocks[0].statements[0].operands[1]
+        else {
+            panic!("fixture constant operand");
+        };
+        ty.kind = MirType::Unknown;
+        ty.rust = "u16".to_owned();
+        ty.shape = MirTypeShape::U16;
+        *literal = MirConstant::U16(1);
+        let mut u16_two = u16_one.clone();
+        let MirOperandRef::Constant { literal, .. } =
+            &mut u16_two.functions[0].blocks[0].statements[0].operands[1]
+        else {
+            panic!("fixture constant operand");
+        };
+        *literal = MirConstant::U16(2);
+        assert_ne!(
+            portable_digest_v3(&u16_one, &environment),
+            portable_digest_v3(&u16_two, &environment),
+            "V3 must bind exact u16 type and constant values"
+        );
+
         for (first, second) in [
             (
                 MirRvalueKind::Reference(MirBorrowKind::Shared),
@@ -7128,6 +7748,38 @@ fn imported_flow(input: Wrapper<u32>) -> Wrapper<u64> {
             .clear();
         portable_digest_v3_result(&assume_false, &environment)
             .expect_err("V3 rejects an assume statement without its condition");
+    }
+
+    #[test]
+    fn portable_semantic_digest_v3_authenticates_exact_array_aggregates_without_changing_v2() {
+        let environment = portable_semantic_environment();
+        let mut exact = portable_semantic_module();
+        exact.functions[0].blocks[0].statements[0].rvalue =
+            Some(MirRvalueKind::ArrayAggregate { element_count: 2 });
+
+        let mut compatibility = exact.clone();
+        compatibility.functions[0].blocks[0].statements[0].rvalue = Some(MirRvalueKind::Aggregate);
+        assert_eq!(
+            portable_digest(&exact, &environment),
+            portable_digest(&compatibility, &environment),
+            "V2 retains its historical aggregate compatibility tag"
+        );
+        portable_digest_v3_result(&exact, &environment)
+            .expect("V3 accepts an exact array aggregate");
+        portable_digest_v3_result(&compatibility, &environment)
+            .expect_err("V3 rejects the lossy aggregate compatibility form");
+
+        let mut wrong_count = exact.clone();
+        wrong_count.functions[0].blocks[0].statements[0].rvalue =
+            Some(MirRvalueKind::ArrayAggregate { element_count: 3 });
+        assert_eq!(
+            portable_digest(&exact, &environment),
+            portable_digest(&wrong_count, &environment),
+            "V2 intentionally does not bind the V3 array count"
+        );
+        let error = portable_digest_v3_result(&wrong_count, &environment)
+            .expect_err("V3 rejects an array count that disagrees with its operands");
+        assert!(error.to_string().contains("declares 3 elements"), "{error}");
     }
 
     #[test]

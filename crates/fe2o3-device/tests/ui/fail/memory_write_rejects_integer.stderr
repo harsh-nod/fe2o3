@@ -1,0 +1,31 @@
+error[E0308]: mismatched types
+ --> tests/ui/fail/memory_write_rejects_integer.rs:4:41
+  |
+4 |     memory::volatile_store(&mut output, 0, 7);
+  |     ----------------------              ^ expected `&DisjointIndex`, found integer
+  |     |
+  |     arguments to this function are incorrect
+  |
+  = note: expected reference `&DisjointIndex`
+                  found type `{integer}`
+note: function defined here
+ --> src/memory.rs
+  |
+  | pub fn volatile_store<T: Copy, IndexSpace>(
+  |        ^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+ --> tests/ui/fail/memory_write_rejects_integer.rs:5:61
+  |
+5 |     memory::copy_one_nonoverlapping(source, 0, &mut output, 0);
+  |     -------------------------------                         ^ expected `&DisjointIndex`, found integer
+  |     |
+  |     arguments to this function are incorrect
+  |
+  = note: expected reference `&DisjointIndex`
+                  found type `{integer}`
+note: function defined here
+ --> src/memory.rs
+  |
+  | pub fn copy_one_nonoverlapping<T: Copy, IndexSpace>(
+  |        ^^^^^^^^^^^^^^^^^^^^^^^

@@ -2171,15 +2171,11 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
 }
 
 fn valid_scalar_cast(kind: CastKind, from: ScalarType, to: ScalarType) -> bool {
-    match (kind, from, to) {
-        // Hardware identifiers are u32, while pointer arithmetic uses Index.
-        (CastKind::ZeroExtend, ScalarType::U32, ScalarType::Index) => return true,
-        // Production AMDGPU kernels represent Rust usize as u64. Keeping this
-        // bridge explicit prevents target-sized Index from acquiring a guessed width.
-        (CastKind::Bitcast, ScalarType::U64, ScalarType::Index)
-        | (CastKind::Bitcast, ScalarType::Index, ScalarType::U64) => return true,
-        _ if from == ScalarType::Index || to == ScalarType::Index => return false,
-        _ => {}
+    if (from.is_integer() || from == ScalarType::Bool) && to.is_integer() {
+        return crate::plan_integer_cast_v1(from, to) == Some([Some((kind, to)), None]);
+    }
+    if from == ScalarType::Index || to == ScalarType::Index {
+        return false;
     }
 
     let Some(from_width) = from.bit_width() else {

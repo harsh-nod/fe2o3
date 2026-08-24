@@ -6,10 +6,10 @@ use super::{
     diagnostic, lower_scalar_type,
 };
 use crate::mir_import::MirLocalRole;
+use crate::trusted_device_items::TrustedDeviceItem;
 use fe2o3_kernel_ir::ScalarType;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-const MAX_CONTROL_FLOW_BLOCKS_V1: usize = 128;
 const MAX_PROMOTED_LOCALS_V1: usize = 64;
 const MAX_BLOCK_PARAMETERS_V1: usize = 4_096;
 
@@ -17,11 +17,12 @@ const MAX_BLOCK_PARAMETERS_V1: usize = 4_096;
 pub(super) enum PromotedLocalKind {
     Scalar,
     FieldlessEnum,
+    F32AccumulatorFragment,
 }
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct ControlFlowSsaPlan {
-    promoted: BTreeMap<usize, (PromotedLocalKind, Type)>,
+    promoted: BTreeMap<usize, (PromotedLocalKind, Vec<Type>)>,
     live_in: BTreeMap<usize, Vec<usize>>,
 }
 
@@ -30,11 +31,12 @@ impl ControlFlowSsaPlan {
         function: &MirFunction,
         gfx942: bool,
     ) -> Result<Self, TranslationDiagnostic> {
-        if function.blocks.len() > MAX_CONTROL_FLOW_BLOCKS_V1 {
+        if function.blocks.len() > fe2o3_rustc_front::MAX_BLOCKS_PER_FUNCTION_V1 {
             return Err(reject(
                 function,
                 format!(
-                    "bounded gfx942 control flow supports at most {MAX_CONTROL_FLOW_BLOCKS_V1} MIR blocks; found {}",
+                    "bounded gfx942 control flow supports at most {} MIR blocks; found {}",
+                    fe2o3_rustc_front::MAX_BLOCKS_PER_FUNCTION_V1,
                     function.blocks.len()
                 ),
             ));
@@ -46,6 +48,7 @@ impl ControlFlowSsaPlan {
             .map(|local| (local.index, (&local.ty.shape, local.role)))
             .collect::<BTreeMap<_, _>>();
         let mut assignments = BTreeMap::<usize, Vec<MirRvalueKind>>::new();
+        let mut call_assignments = BTreeMap::<usize, usize>::new();
         let mut projected = BTreeSet::new();
         for block in &function.blocks {
             for statement in &block.statements {
@@ -73,30 +76,61 @@ impl ControlFlowSsaPlan {
                 block.terminator.as_ref().map(|terminator| &terminator.kind),
                 &mut projected,
             );
+            if let Some(MirTerminatorKind::Call {
+                destination: Some(destination),
+                ..
+            }) = block.terminator.as_ref().map(|terminator| &terminator.kind)
+            {
+                if destination.projection.is_empty() {
+                    *call_assignments.entry(destination.local).or_default() += 1;
+                } else {
+                    projected.insert(destination.local);
+                }
+            }
         }
 
         let mut promoted = BTreeMap::new();
-        for (local, rvalues) in assignments {
+        let definition_locals = assignments
+            .keys()
+            .chain(call_assignments.keys())
+            .copied()
+            .collect::<BTreeSet<_>>();
+        for local in definition_locals {
+            let rvalues = assignments.get(&local).map_or(&[][..], Vec::as_slice);
+            let call_assignment_count = call_assignments.get(&local).copied().unwrap_or(0);
             let Some((shape, role)) = local_shapes.get(&local).copied() else {
                 return Err(reject(
                     function,
                     format!("local{local} has no imported type"),
                 ));
             };
-            let is_mutable = rvalues.len() > 1 || role == MirLocalRole::Arg;
+            let is_mutable = rvalues.len() + call_assignment_count > 1 || role == MirLocalRole::Arg;
             if !is_mutable || projected.contains(&local) {
                 continue;
             }
             let promoted_type = if let Some(ty) = lower_scalar_type(shape) {
-                Some((PromotedLocalKind::Scalar, ty))
+                Some((PromotedLocalKind::Scalar, vec![ty]))
             } else if matches!(shape, MirTypeShape::Adt { .. })
+                && call_assignment_count == 0
                 && rvalues
                     .iter()
                     .all(|rvalue| matches!(rvalue, MirRvalueKind::FieldlessEnumVariant(_)))
             {
                 Some((
                     PromotedLocalKind::FieldlessEnum,
-                    Type::Scalar(ScalarType::I64),
+                    vec![Type::Scalar(ScalarType::I64)],
+                ))
+            } else if matches!(
+                shape,
+                MirTypeShape::Adt { identity }
+                    if identity == TrustedDeviceItem::F32AccumulatorFragment.canonical_path()
+            ) && rvalues
+                .iter()
+                .all(|rvalue| matches!(rvalue, MirRvalueKind::Use))
+            {
+                Some((
+                    PromotedLocalKind::F32AccumulatorFragment,
+                    vec![Type::F32; 4],
                 ))
             } else {
                 None
@@ -133,6 +167,11 @@ impl ControlFlowSsaPlan {
         let mut use_sets = BTreeMap::<usize, BTreeSet<usize>>::new();
         let mut def_sets = BTreeMap::<usize, BTreeSet<usize>>::new();
         let mut successors = BTreeMap::<usize, Vec<usize>>::new();
+        let mut predecessors = function
+            .blocks
+            .iter()
+            .map(|block| (block.index, Vec::new()))
+            .collect::<BTreeMap<_, _>>();
         for block in &function.blocks {
             let mut uses = BTreeSet::new();
             let mut defs = BTreeSet::new();
@@ -155,6 +194,15 @@ impl ControlFlowSsaPlan {
                 ));
             };
             collect_terminator_uses(&terminator.kind, &promoted, &defs, &mut uses);
+            if let MirTerminatorKind::Call {
+                destination: Some(destination),
+                ..
+            } = &terminator.kind
+                && destination.projection.is_empty()
+                && promoted.contains_key(&destination.local)
+            {
+                defs.insert(destination.local);
+            }
             let targets = terminator_successors(&terminator.kind);
             for target in &targets {
                 if !block_ids.contains(target) {
@@ -163,6 +211,10 @@ impl ControlFlowSsaPlan {
                         format!("bb{} references missing bb{target}", block.index),
                     ));
                 }
+                predecessors
+                    .get_mut(target)
+                    .expect("target membership checked")
+                    .push(block.index);
             }
             successors.insert(block.index, targets);
             use_sets.insert(block.index, uses);
@@ -174,19 +226,27 @@ impl ControlFlowSsaPlan {
             .iter()
             .map(|block| (block.index, BTreeSet::new()))
             .collect::<BTreeMap<_, _>>();
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for block in function.blocks.iter().rev() {
-                let live_out = successors[&block.index]
-                    .iter()
-                    .flat_map(|target| live_in[target].iter().copied())
-                    .collect::<BTreeSet<_>>();
-                let mut next = use_sets[&block.index].clone();
-                next.extend(live_out.difference(&def_sets[&block.index]).copied());
-                if next != live_in[&block.index] {
-                    live_in.insert(block.index, next);
-                    changed = true;
+        let mut pending = function
+            .blocks
+            .iter()
+            .rev()
+            .map(|block| block.index)
+            .collect::<VecDeque<_>>();
+        let mut queued = block_ids.clone();
+        while let Some(block) = pending.pop_front() {
+            queued.remove(&block);
+            let live_out = successors[&block]
+                .iter()
+                .flat_map(|target| live_in[target].iter().copied())
+                .collect::<BTreeSet<_>>();
+            let mut next = use_sets[&block].clone();
+            next.extend(live_out.difference(&def_sets[&block]).copied());
+            if next != live_in[&block] {
+                live_in.insert(block, next);
+                for predecessor in &predecessors[&block] {
+                    if queued.insert(*predecessor) {
+                        pending.push_back(*predecessor);
+                    }
                 }
             }
         }
@@ -207,7 +267,8 @@ impl ControlFlowSsaPlan {
         let parameter_count = live_in
             .iter()
             .filter(|(block, _)| **block != 0)
-            .map(|(_, locals)| locals.len())
+            .flat_map(|(_, locals)| locals)
+            .map(|local| promoted[local].1.len())
             .sum::<usize>();
         if parameter_count > MAX_BLOCK_PARAMETERS_V1 {
             return Err(reject(
@@ -256,8 +317,8 @@ impl ControlFlowSsaPlan {
         self.promoted.get(&local).map(|(kind, _)| *kind)
     }
 
-    pub(super) fn ty(&self, local: usize) -> Option<&Type> {
-        self.promoted.get(&local).map(|(_, ty)| ty)
+    pub(super) fn types(&self, local: usize) -> Option<&[Type]> {
+        self.promoted.get(&local).map(|(_, types)| types.as_slice())
     }
 
     pub(super) fn live_in(&self, block: usize) -> &[usize] {
@@ -295,7 +356,7 @@ fn inspect_terminator_projections(
 
 fn collect_operand_uses(
     operand: &MirOperandRef,
-    promoted: &BTreeMap<usize, (PromotedLocalKind, Type)>,
+    promoted: &BTreeMap<usize, (PromotedLocalKind, Vec<Type>)>,
     defs: &BTreeSet<usize>,
     uses: &mut BTreeSet<usize>,
 ) {
@@ -309,7 +370,7 @@ fn collect_operand_uses(
 
 fn collect_terminator_uses(
     terminator: &MirTerminatorKind,
-    promoted: &BTreeMap<usize, (PromotedLocalKind, Type)>,
+    promoted: &BTreeMap<usize, (PromotedLocalKind, Vec<Type>)>,
     defs: &BTreeSet<usize>,
     uses: &mut BTreeSet<usize>,
 ) {

@@ -3,6 +3,22 @@
 This crate coordinates local compiler artifact publication through bounded canonical records,
 descriptor-relative filesystem operations, and one cooperative output-directory lock.
 
+## Filesystem coordination deployment
+
+Ordinary path-based publication requires an explicit path-guard deployment. Cross-mount-namespace
+writers must set `FE2O3_ARTIFACT_PATH_GUARD_DIR` to the same pre-provisioned, service-owned `0700`
+directory inode in every namespace and set `FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY` to its exact
+lowercase `<16-hex-device>:<16-hex-inode>` identity. The crate locks the complete `domain.lock`
+object for configured deployments, so different absolute aliases for the same artifact store cannot
+select different critical sections.
+
+Processes whose cooperating writers are formally restricted to one mount namespace and use the
+same normalized absolute paths must explicitly call
+`enable_same_mount_namespace_artifact_path_guard_v1`. This selects per-path byte-range locking in a
+private runtime or home coordination directory. If neither deployment is selected, ordinary path
+publication fails closed. Canonical `/proc/self/fd/<n>` roots remain descriptor-bound and do not use
+the path guard.
+
 ## Compiler provenance records
 
 The compiler-module handoff protocol exposes V1 compatibility records,

@@ -54,6 +54,7 @@ mod tests {
 
     #[test]
     fn empty_preflight_reconciles_without_invoking_the_rocm_compiler() {
+        fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
         let output = std::env::temp_dir().join(format!(
             "fe2o3-zero-kernel-reconciliation-{}-{}",
             std::process::id(),

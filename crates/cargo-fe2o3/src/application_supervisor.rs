@@ -52,8 +52,7 @@ pub(crate) fn run_frontend(args: &[std::ffi::OsString]) -> Result<ExitStatus, St
             Ok(())
         });
     }
-    let mut supervisor = command
-        .spawn()
+    let mut supervisor = crate::process_execution::spawn(&mut command)
         .map_err(|error| format!("start dedicated application supervisor: {error}"))?;
     drop(supervisor_channel);
     drop(admission);
@@ -859,11 +858,11 @@ mod tests {
     #[test]
     fn supervisor_admission_has_fixed_capacity_and_recovers() {
         if env::var_os(CAPACITY_HELPER_ENV).is_none() {
-            let output = Command::new(env::current_exe().unwrap())
+            let mut command = Command::new(env::current_exe().unwrap());
+            command
                 .args(["--exact", CAPACITY_HELPER_TEST, "--nocapture"])
-                .env(CAPACITY_HELPER_ENV, "1")
-                .output()
-                .unwrap();
+                .env(CAPACITY_HELPER_ENV, "1");
+            let output = crate::process_execution::capture_output(&mut command).unwrap();
             assert!(
                 output.status.success(),
                 "isolated capacity helper failed: {}",
@@ -943,7 +942,7 @@ mod tests {
                 Ok(())
             });
         }
-        let mut process = command.spawn().unwrap();
+        let mut process = crate::process_execution::spawn(&mut command).unwrap();
         drop(supervisor_channel);
         drop(inherited);
 

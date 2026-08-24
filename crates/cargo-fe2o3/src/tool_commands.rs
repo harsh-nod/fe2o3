@@ -941,8 +941,7 @@ fn execute(
 
     tool.validate_path("ROCgdb executable")?;
     target.validate_path("target program")?;
-    let mut child = command
-        .spawn()
+    let mut child = crate::process_execution::spawn(&mut command)
         .map_err(|error| format!("failed to spawn pinned ROCgdb executable: {error}"))?;
     let result = supervise(
         &mut child,

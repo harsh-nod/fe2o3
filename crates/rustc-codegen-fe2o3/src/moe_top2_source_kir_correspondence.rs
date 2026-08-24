@@ -40,8 +40,8 @@ const SOURCE_IDENTITY: [u8; 32] = [
     0xed, 0x0e, 0x43, 0x66, 0x65, 0x09, 0x77, 0x0f, 0x6e, 0x61, 0x86, 0xf5, 0x10, 0x0f, 0xee, 0x25,
 ];
 const PORTABLE_MIR_IDENTITY: [u8; 32] = [
-    0xed, 0xef, 0xfa, 0x59, 0x72, 0x9d, 0xf7, 0x75, 0xae, 0x94, 0xd5, 0xd5, 0xeb, 0x11, 0x10, 0xb8,
-    0xff, 0xd6, 0xbf, 0x07, 0xe9, 0x65, 0x9b, 0xa2, 0xa9, 0x6f, 0xc3, 0x7c, 0x97, 0x5d, 0x9b, 0x86,
+    0x6d, 0xf9, 0x0b, 0x02, 0xce, 0xe9, 0x4c, 0x4e, 0x7c, 0x01, 0xf8, 0x6f, 0x2b, 0xc3, 0xc7, 0x35,
+    0xdc, 0xef, 0x0a, 0xb1, 0xd5, 0xe3, 0x4c, 0xe6, 0xa8, 0xb0, 0xd8, 0x76, 0x1c, 0x99, 0x96, 0x11,
 ];
 const FN_ABI_IDENTITY: [u8; 32] = [
     0xdd, 0xc0, 0x17, 0x2c, 0xfc, 0x37, 0x01, 0x6c, 0x86, 0xbe, 0x2b, 0x57, 0x9c, 0x4c, 0x98, 0xb1,
@@ -58,7 +58,7 @@ pub(super) const MOE_TOP2_LIVE_STRUCTURAL_SNAPSHOT_V2: &str = concat!(
     "rust=1:variadic=0:fixed=8:unwind=1:ignored=1:result=0:",
     "args=[16:8:1:0:0,16:8:1:0:0,16:8:1:0:0,16:8:1:0:0,",
     "16:8:1:0:0,16:8:1:0:0,16:8:1:0:0,16:8:1:0:0];",
-    "mir=edeffa59729df775ae94d5d5eb1110b8ffd6bf07e9659ba2a96fc37c975d9b86:",
+    "mir=6df90b02cee94c4e7c01f86f2bc3c735dcef0ab1d5e34ce6a8b0d8761c999611:",
     "functions=6:roots=1:helpers=5:blocks=118:statements=228:terminators=118:",
     "edges=139:imports=0:root-args=8:root-locals=176:assignments=226:calls=25:",
     "indexed=36:repeats=8:binops=0x0000ac05;",
@@ -68,10 +68,10 @@ pub(super) const MOE_TOP2_LIVE_STRUCTURAL_SNAPSHOT_V2: &str = concat!(
     "effects=4f7a7d0996535ee75ff22216c776666526caa93106a49c2e8cfb4956cb0f7716;",
     "routing=dc93201e71d4ba820f52bb44833f4592383b2023f67089a4cc1b73aae14f051b;",
     "compiler=4950c225e0cdbdce4e1230166984949970290dedc19e8dc4cd31f865f1625a4a;",
-    "trusted=65f651d8b58e394cda64a9f250f2e42dae7b7d6cf9605754d811d772e715c8b4;",
+    "trusted=0ec988a9bbea88c35576369de5738af525eccb79f1cf9ae70fcdc3792b50a5eb;",
     "root=kernel::__fe2o3_host_kernel_v1_",
     "0d0504325353eb74b0c9ace47560290e2278a7cd7c20e3b1c6c70f4a7e37b1ab;",
-    "authority=7df529f41b020917c51eca57f9e0fa45a4f8b2546970d0074b19e50ff878929a",
+    "authority=d17b06ba762349e05dfa0927de5e52d9fb095bda200f783372d284a9959b2618",
 );
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -649,7 +649,7 @@ fn summarize_portable_mir(
                 if statement.kind == MirStatementKind::Assign {
                     add_count(&mut summary.assignment_count, 1, "assignment")?;
                 }
-                if statement.rvalue == Some(MirRvalueKind::Repeat) {
+                if matches!(statement.rvalue, Some(MirRvalueKind::Repeat { .. })) {
                     add_count(&mut summary.repeat_count, 1, "repeat")?;
                 }
                 if let Some(MirRvalueKind::Binary(operation)) = statement.rvalue {

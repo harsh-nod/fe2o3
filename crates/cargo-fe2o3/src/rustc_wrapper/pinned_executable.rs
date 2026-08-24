@@ -1013,15 +1013,15 @@ mod platform {
         }
 
         pub(crate) fn status(&mut self) -> io::Result<ExitStatus> {
-            self.command.status()
+            crate::process_execution::status(&mut self.command)
         }
 
         pub(crate) fn spawn(&mut self) -> io::Result<Child> {
-            self.command.spawn()
+            crate::process_execution::spawn(&mut self.command)
         }
 
         pub(crate) fn output(&mut self) -> io::Result<Output> {
-            self.command.output()
+            crate::process_execution::capture_output(&mut self.command)
         }
     }
 
@@ -1391,7 +1391,11 @@ mod platform {
                 .arg("-c")
                 .arg("test -r /proc/self/fd/511 && test \"$(stat -c %a /proc/self/fd/511)\" = 500");
             sealed.inherit_for_child_at(&mut command, CHILD_FD).unwrap();
-            assert!(command.status().unwrap().success());
+            assert!(
+                crate::process_execution::status(&mut command)
+                    .unwrap()
+                    .success()
+            );
         }
 
         #[test]

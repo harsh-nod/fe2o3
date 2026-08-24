@@ -553,6 +553,7 @@ pub(crate) mod tests {
 
     impl TestPublicationDirectory {
         fn new() -> Self {
+            fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
             let path = std::env::temp_dir().join(format!(
                 "fe2o3-host-current-publication-{}-{}",
                 std::process::id(),
@@ -2997,17 +2998,19 @@ pub(crate) mod tests {
 
     #[test]
     fn token_aware_revalidation_never_self_deadlocks() {
-        let child = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "published_direct_link::tests::token_aware_revalidation_child",
-            ])
-            .env("FE2O3_TOKEN_AWARE_REVALIDATION_CHILD", "1")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
+        let child = fe2o3_artifact_transaction::with_test_artifact_fork_exec_barrier_v1(|| {
+            Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "published_direct_link::tests::token_aware_revalidation_child",
+                ])
+                .env("FE2O3_TOKEN_AWARE_REVALIDATION_CHILD", "1")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+        })
+        .unwrap();
         assert!(wait_for_child(child, Duration::from_secs(5)).success());
     }
 

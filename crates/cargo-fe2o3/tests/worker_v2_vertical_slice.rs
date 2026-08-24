@@ -116,6 +116,7 @@ struct TestDirectory(
 
 impl TestDirectory {
     fn new() -> Self {
+        fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
         Self::with_permit(VerticalFixturePermit::acquire())
     }
 
@@ -1100,8 +1101,8 @@ fn application_rejection_diagnostic_classifier_is_exact() {
             [other_diagnostic, PARENT_TRUNCATED_ACK_DIAGNOSTIC].concat(),
             b"cargo-fe2o3 application runner: application handoff acknowledgment timed out".to_vec(),
             b"cargo-fe2o3 application runner: application containment failed".to_vec(),
-            b"cargo-fe2o3 application runner: invalid application handoff acknowledgment: application handoff acknowledgment is truncated (1 bytes)".to_vec(),
-            b"host consumer fixture: arbitrary child errorcargo-fe2o3 application runner: invalid application handoff acknowledgment: application handoff acknowledgment is truncated (0 bytes)".to_vec(),
+            b"cargo-fe2o3 application runner: invalid Worker V2 application acknowledgment: application handoff acknowledgment is truncated (1 bytes)".to_vec(),
+            b"host consumer fixture: arbitrary child errorcargo-fe2o3 application runner: invalid Worker V2 application acknowledgment: application handoff acknowledgment is truncated (0 bytes)".to_vec(),
         ] {
             assert_eq!(
                 classify_application_rejection_diagnostic(&invalid, child_diagnostic),

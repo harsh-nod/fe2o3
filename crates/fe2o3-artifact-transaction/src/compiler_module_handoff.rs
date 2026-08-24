@@ -4881,6 +4881,57 @@ mod semantic_v3 {
             .unwrap()
         }
 
+        fn acquire_currentness(
+            output_dir: &Path,
+            producer: &ProducerIdentity,
+            receipt: CompilerModuleHandoffReceiptV3,
+        ) -> CompilerModuleHandoffCurrentnessLeaseV3 {
+            acquire_compiler_module_handoff_currentness_lease_v3(output_dir, producer, receipt)
+                .expect("uncontended currentness acquisition failed")
+        }
+
+        fn publish_in_slot_with_currentness(
+            output_dir: &Path,
+            producer: &ProducerIdentity,
+            attempt: BuildAttempt,
+            slot: CompilerModuleHandoffSlotV3,
+            handoff: &InertSemanticCompilerModuleHandoffV3,
+        ) -> CompilerModuleHandoffPublicationV3 {
+            publish_compiler_module_handoff_in_slot_with_currentness_v3(
+                output_dir, producer, attempt, slot, handoff,
+            )
+            .expect("uncontended currentness publication failed")
+        }
+
+        fn publish_with_currentness(
+            output_dir: &Path,
+            producer: &ProducerIdentity,
+            attempt: BuildAttempt,
+            handoff: &InertSemanticCompilerModuleHandoffV3,
+        ) -> CompilerModuleHandoffPublicationV3 {
+            publish_in_slot_with_currentness(
+                output_dir,
+                producer,
+                attempt,
+                CompilerModuleHandoffSlotV3::Default,
+                handoff,
+            )
+        }
+
+        fn acquire_token(
+            lease: &CompilerModuleHandoffCurrentnessLeaseV3,
+        ) -> CompilerModuleHandoffConsumptionTokenV3 {
+            lease
+                .acquire_current_token()
+                .expect("uncontended current-token acquisition failed")
+        }
+
+        fn revalidate_currentness(lease: &CompilerModuleHandoffCurrentnessLeaseV3) {
+            lease
+                .revalidate()
+                .expect("uncontended currentness revalidation failed");
+        }
+
         fn target() -> DeviceTargetV1 {
             DeviceTargetV1::parse(TARGET).unwrap()
         }
@@ -5201,13 +5252,8 @@ mod semantic_v3 {
                 assert!(!path.join(CONSUMED_ENTRY).exists());
             }
 
-            let lease = acquire_compiler_module_handoff_currentness_lease_v3(
-                &temp.0,
-                &producer,
-                recovered_default,
-            )
-            .unwrap();
-            lease.revalidate().unwrap();
+            let lease = acquire_currentness(&temp.0, &producer, recovered_default);
+            revalidate_currentness(&lease);
         }
 
         #[test]
@@ -5606,10 +5652,8 @@ mod semantic_v3 {
                 recover_compiler_module_handoff_receipt_v3(&temp.0, &producer, attempt).unwrap();
             assert_eq!(recovered.handoff_identity(), handoff.identity());
             assert_eq!(recovered.length(), handoff.canonical_bytes().len());
-            let lease =
-                acquire_compiler_module_handoff_currentness_lease_v3(&temp.0, &producer, recovered)
-                    .unwrap();
-            lease.revalidate().unwrap();
+            let lease = acquire_currentness(&temp.0, &producer, recovered);
+            revalidate_currentness(&lease);
         }
 
         #[test]
@@ -5618,10 +5662,7 @@ mod semantic_v3 {
             let producer = producer("currentness_round_trip_v3");
             let attempt = begin(&temp.0, &producer, 13);
             let handoff = outer(111);
-            let publication = publish_compiler_module_handoff_with_currentness_v3(
-                &temp.0, &producer, attempt, &handoff,
-            )
-            .unwrap();
+            let publication = publish_with_currentness(&temp.0, &producer, attempt, &handoff);
             let receipt = publication.receipt();
             let lease = publication.into_current_lease();
             assert_eq!(lease.receipt(), receipt);
@@ -5629,9 +5670,9 @@ mod semantic_v3 {
             assert!(!lease.grants_link_authority());
             assert!(!lease.grants_load_authority());
             assert!(!lease.grants_launch_authority());
-            lease.revalidate().unwrap();
+            revalidate_currentness(&lease);
 
-            let token = lease.acquire_current_token().unwrap();
+            let token = acquire_token(&lease);
             lease.validate_current_token(&token).unwrap();
             token.revalidate_locked_currentness().unwrap();
             assert!(!token.grants_compiler_authority());
@@ -5665,14 +5706,8 @@ mod semantic_v3 {
             let producer = producer("stale_currentness_v3");
             let first_attempt = begin(&temp.0, &producer, 14);
             let handoff = outer(112);
-            let lease = publish_compiler_module_handoff_with_currentness_v3(
-                &temp.0,
-                &producer,
-                first_attempt,
-                &handoff,
-            )
-            .unwrap()
-            .into_current_lease();
+            let lease = publish_with_currentness(&temp.0, &producer, first_attempt, &handoff)
+                .into_current_lease();
 
             let second_attempt = begin(&temp.0, &producer, 15);
             assert!(second_attempt.generation() > first_attempt.generation());
@@ -5688,26 +5723,24 @@ mod semantic_v3 {
             let producer = producer("cross_publication_token_v3");
             let attempt = begin(&temp.0, &producer, 16);
             let handoff = outer(113);
-            let reference = publish_compiler_module_handoff_in_slot_with_currentness_v3(
+            let reference = publish_in_slot_with_currentness(
                 &temp.0,
                 &producer,
                 attempt,
                 CompilerModuleHandoffSlotV3::GeneralGemmReference,
                 &handoff,
             )
-            .unwrap()
             .into_current_lease();
-            let vectorized = publish_compiler_module_handoff_in_slot_with_currentness_v3(
+            let vectorized = publish_in_slot_with_currentness(
                 &temp.0,
                 &producer,
                 attempt,
                 CompilerModuleHandoffSlotV3::GeneralGemmVectorizedAOnly,
                 &handoff,
             )
-            .unwrap()
             .into_current_lease();
 
-            let wrong_token = reference.acquire_current_token().unwrap();
+            let wrong_token = acquire_token(&reference);
             assert!(matches!(
                 vectorized.validate_current_token(&wrong_token),
                 Err(CompilerModuleHandoffErrorV3::MismatchedCurrentnessToken)
@@ -5717,9 +5750,9 @@ mod semantic_v3 {
                 Err(CompilerModuleHandoffErrorV3::MismatchedCurrentnessToken)
             ));
 
-            let token = reference.acquire_current_token().unwrap();
+            let token = acquire_token(&reference);
             consume_compiler_module_handoff_with_currentness_v3(&reference, token).unwrap();
-            vectorized.revalidate().unwrap();
+            revalidate_currentness(&vectorized);
         }
 
         #[test]
@@ -5734,11 +5767,8 @@ mod semantic_v3 {
                 let producer = producer(&format!("currentness_replacement_{seed}"));
                 let attempt = begin(&temp.0, &producer, seed);
                 let handoff = outer(seed.wrapping_add(100));
-                let lease = publish_compiler_module_handoff_with_currentness_v3(
-                    &temp.0, &producer, attempt, &handoff,
-                )
-                .unwrap()
-                .into_current_lease();
+                let lease = publish_with_currentness(&temp.0, &producer, attempt, &handoff)
+                    .into_current_lease();
                 let slot = slot_path(
                     &temp.0,
                     &producer,
@@ -5791,13 +5821,10 @@ mod semantic_v3 {
             let attempt = begin(&temp.0, &producer, 21);
             let handoff = outer(121);
             let lease = Arc::new(
-                publish_compiler_module_handoff_with_currentness_v3(
-                    &temp.0, &producer, attempt, &handoff,
-                )
-                .unwrap()
-                .into_current_lease(),
+                publish_with_currentness(&temp.0, &producer, attempt, &handoff)
+                    .into_current_lease(),
             );
-            let winner = lease.acquire_current_token().unwrap();
+            let winner = acquire_token(&lease);
             let contender_lease = Arc::clone(&lease);
             let contender = std::thread::spawn(move || {
                 matches!(

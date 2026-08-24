@@ -1,10 +1,14 @@
 use super::*;
-use crate::mir_import::{MirImportedType, MirLocal, MirLocalRole, MirSwitchTarget};
+use crate::mir_import::{
+    MirImportedType, MirKernelProfile, MirLocal, MirLocalRole, MirSwitchTarget,
+};
 use dialect_mir::MirType;
 
 #[test]
 fn vecadd_fixture_translates_to_verified_typed_cfg() {
-    let translated = translate_and_verify(&vecadd_fixture()).expect("vecadd should translate");
+    let translated =
+        translate_and_verify_for_target(&vecadd_fixture(), &AmdGpuTarget::new("gfx942"))
+            .expect("vecadd should translate");
     verify_module(&translated).expect("translated vecadd should verify");
 
     assert_eq!(translated.kernels.len(), 1);
@@ -131,11 +135,26 @@ fn vecadd_fixture_translates_to_verified_typed_cfg() {
 #[test]
 fn vecadd_translation_is_deterministic() {
     let fixture = vecadd_fixture();
-    let first = translate_and_verify(&fixture).expect("first translation");
-    let second = translate_and_verify(&fixture).expect("second translation");
+    let target = AmdGpuTarget::new("gfx942");
+    let first = translate_and_verify_for_target(&fixture, &target).expect("first translation");
+    let second = translate_and_verify_for_target(&fixture, &target).expect("second translation");
 
     assert_eq!(first, second);
     assert_eq!(format!("{first:#?}"), format!("{second:#?}"));
+}
+
+#[test]
+fn vecadd_float_addition_requires_the_authenticated_v2_profile() {
+    let mut fixture = vecadd_fixture();
+    fixture.functions[0].typed_profile = None;
+
+    let error = translate_and_verify(&fixture).expect_err("unprofiled f32 addition must fail");
+    assert!(
+        error.to_string().contains(
+            "floating-point binary operation requires an authenticated semantic workload handler"
+        ),
+        "{error}"
+    );
 }
 
 #[test]
@@ -154,10 +173,12 @@ fn malformed_vecadd_fixture_reports_its_mir_block() {
 fn unsupported_rvalue_reports_source_location() {
     let mut fixture = vecadd_fixture();
     let statement = &mut fixture.functions[0].blocks[7].statements[1];
-    statement.rvalue = Some(MirRvalueKind::Repeat);
+    statement.rvalue = Some(MirRvalueKind::Repeat { count: None });
+    statement.operands = vec![operand(9)];
     statement.operation = Some("repeat".to_string());
 
-    let errors = translate_and_verify(&fixture).expect_err("repeat must be rejected");
+    let errors = translate_and_verify_for_target(&fixture, &AmdGpuTarget::new("gfx942"))
+        .expect_err("repeat must be rejected");
 
     assert!(errors.contains(TranslationDiagnosticCode::UnsupportedRvalue));
     let diagnostic = &errors.diagnostics()[0];
@@ -191,7 +212,7 @@ fn vecadd_fixture() -> MirModule {
             export_name: "vecadd".to_string(),
             rust_path: "fe2o3_vecadd::fe2o3_kernel_vecadd".to_string(),
             kind: MirFunctionKind::KernelEntry,
-            typed_profile: None,
+            typed_profile: Some(MirKernelProfile::VecAddRustcLayoutV2),
             frontend_contract: None,
             matrix_frontend_abi: None,
             arg_count: 3,

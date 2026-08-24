@@ -723,16 +723,19 @@ fn adapter_panic_and_unload_ambiguity_are_process_terminal() {
     }
 
     for mode in ["panic", "unload"] {
-        let status = Command::new(std::env::current_exe().unwrap())
-            .arg("--exact")
-            .arg(
-                "generated_lds_gemm_lifecycle_tests::\
-                 adapter_panic_and_unload_ambiguity_are_process_terminal",
-            )
-            .arg("--nocapture")
-            .env(CHILD, mode)
-            .status()
-            .unwrap();
+        let mut child = fe2o3_artifact_transaction::with_test_artifact_fork_exec_barrier_v1(|| {
+            Command::new(std::env::current_exe().unwrap())
+                .arg("--exact")
+                .arg(
+                    "generated_lds_gemm_lifecycle_tests::\
+                     adapter_panic_and_unload_ambiguity_are_process_terminal",
+                )
+                .arg("--nocapture")
+                .env(CHILD, mode)
+                .spawn()
+        })
+        .unwrap();
+        let status = child.wait().unwrap();
         assert!(
             !status.success(),
             "{mode} unexpectedly returned successfully"

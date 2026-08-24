@@ -8,6 +8,7 @@
 /// safety for every reachable path.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
+#[rustc_diagnostic_item = "fe2o3_device_kernel_error_v1"]
 pub enum KernelError {
     /// A runtime argument does not satisfy the kernel's source contract.
     InvalidArgument = 1,

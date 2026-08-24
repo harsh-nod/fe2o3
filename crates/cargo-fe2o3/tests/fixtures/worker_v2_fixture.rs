@@ -120,6 +120,7 @@ fn stage_restart() {
         persist_worker_v2_publication_intent_v1,
     };
 
+    fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
     let arguments = env::args_os().collect::<Vec<_>>();
     let output_dir = Path::new(&arguments[2]);
     let source = Path::new(&arguments[3]);
