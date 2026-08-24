@@ -916,10 +916,15 @@ fn authenticated_mir_reference_reaches_the_production_pipeline() {
             .semantic_report()
             .all_reference_obligations_are_proved()
     );
-    assert!(input.grants_authenticated_functional_refinement_evidence());
+    assert!(input.has_retained_functional_refinement_receipts());
+    assert!(
+        input.retained_functional_refinement_receipts()[0].is_retained_policy_verified_receipt()
+    );
     assert!(!input.grants_compiler_refinement_authority());
-    assert!(!input.authenticated_functional_refinement()[0].grants_source_to_isa_authority());
-    assert!(!input.authenticated_functional_refinement()[0].grants_artifact_or_launch_authority());
+    assert!(!input.retained_functional_refinement_receipts()[0].grants_source_to_isa_authority());
+    assert!(
+        !input.retained_functional_refinement_receipts()[0].grants_artifact_or_launch_authority()
+    );
 }
 
 #[test]

@@ -735,7 +735,7 @@ impl ProductionFunctionalRefinementEvidenceV2 {
     pub const fn boundary(&self) -> FunctionalRefinementBoundaryV2 {
         self.boundary
     }
-    pub const fn grants_functional_refinement_evidence(&self) -> bool {
+    pub const fn is_retained_policy_verified_receipt(&self) -> bool {
         true
     }
     pub const fn grants_source_to_isa_authority(&self) -> bool {
@@ -3530,8 +3530,8 @@ impl ProductionRankedKernelLoweringInputV1 {
         &self.production_pipeline_report
     }
 
-    /// Exact authenticated functional-refinement receipts consumed for this graph.
-    pub fn authenticated_functional_refinement(
+    /// Exact signature- and policy-verified receipts retained for this graph.
+    pub fn retained_functional_refinement_receipts(
         &self,
     ) -> &[ProductionFunctionalRefinementEvidenceV2] {
         &self.authenticated_functional_refinement
@@ -3581,7 +3581,7 @@ impl ProductionRankedKernelLoweringInputV1 {
         false
     }
 
-    pub const fn grants_authenticated_functional_refinement_evidence(&self) -> bool {
+    pub const fn has_retained_functional_refinement_receipts(&self) -> bool {
         !self.authenticated_functional_refinement.is_empty()
     }
 }
@@ -3758,7 +3758,7 @@ fn admit_functional_refinement_v2(
         if proof.toolchain() != policy.toolchain() {
             return Err(ProductionFunctionalRefinementAdmissionErrorV2::WrongToolchain(identity));
         }
-        if !proof.grants_functional_refinement_evidence() {
+        if !proof.signature_and_policy_verified() {
             return Err(
                 ProductionFunctionalRefinementAdmissionErrorV2::InertImportedEvidence(identity),
             );
