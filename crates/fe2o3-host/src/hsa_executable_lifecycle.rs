@@ -5341,7 +5341,7 @@ pub(crate) mod tests {
             "unload-panic",
             "unload-observation",
         ] {
-            let status =
+            let mut child =
                 fe2o3_artifact_transaction::with_test_artifact_fork_exec_barrier_v1(|| {
                     std::process::Command::new(std::env::current_exe().unwrap())
                         .arg("--exact")
@@ -5350,9 +5350,10 @@ pub(crate) mod tests {
                         )
                         .arg("--nocapture")
                         .env(CASE, case)
-                        .status()
+                        .spawn()
                 })
                 .unwrap();
+            let status = child.wait().unwrap();
             assert_eq!(status.signal(), Some(6), "terminal case {case}: {status}");
         }
     }

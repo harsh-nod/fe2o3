@@ -674,7 +674,7 @@ fn adapter_panic_and_unload_ambiguity_are_process_terminal() {
     }
 
     for mode in ["panic", "unload"] {
-        let status = fe2o3_artifact_transaction::with_test_artifact_fork_exec_barrier_v1(|| {
+        let mut child = fe2o3_artifact_transaction::with_test_artifact_fork_exec_barrier_v1(|| {
             Command::new(std::env::current_exe().unwrap())
                 .arg("--exact")
                 .arg(
@@ -683,9 +683,10 @@ fn adapter_panic_and_unload_ambiguity_are_process_terminal() {
                 )
                 .arg("--nocapture")
                 .env(CHILD, mode)
-                .status()
+                .spawn()
         })
         .unwrap();
+        let status = child.wait().unwrap();
         assert!(
             !status.success(),
             "{mode} unexpectedly returned successfully"
