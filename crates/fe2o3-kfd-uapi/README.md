@@ -219,8 +219,14 @@ USERPTR/SVM, doorbells, MMIO remaps, public allocation, extended coherency,
 contiguous allocation, and every unknown bit pattern. The separate gfx942
 device-memory admission accepts only writable VRAM (`0x80000001`) and is bound
 by `KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST`; it does not widen R2. The
-data-only map records can describe the kernel ABI's device array, but neither
-admission path authorizes peer mapping, allocation, or syscall execution.
+additive USERPTR admission accepts only the diagnostic executable, coherent,
+uncached, no-substitute profile (`0xd6000004`). Its constructor structurally
+uses one address for both `va_addr` and the input `mmap_offset`; KFD's returned
+`mmap_offset` is opaque and must not be treated as that CPU address. The schema
+grants no VMA, allocation, mapping, free, or queue authority and does not widen
+R2. The
+data-only map records can describe the kernel ABI's device array, but none of
+these admissions authorizes peer mapping, allocation, or syscall execution.
 
 Compile-time assertions, `tests/kfd_uapi_1_18.rs`, and
 `tests/kfd_aql_queue_uapi_1_18.rs` pin every admitted struct size, alignment,
@@ -229,7 +235,8 @@ values and hostile boundary cases.
 `KFD_UAPI_SCHEMA_MANIFEST` canonically binds only the frozen R1 facts.
 `KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST` separately binds the compositional R2
 memory facts and the exact R1 digest it requires. The additive gfx942 device
-memory manifest binds the exact R2 digest without changing it. The R4 queue
+memory and USERPTR manifests each bind the exact R2 digest without changing it.
+The R4 queue
 manifest binds its prerequisite digests independently. All SHA-256 values are
 recomputed in tests. These manifests identify reviewed userspace content;
 running kernel, module, boot, device, and process identities remain separate
@@ -337,7 +344,7 @@ separate reviewed schema.
 VM ownership, virtual-address reservation, CPU mmap, memory ownership and
 rollback, executable loading, queue or event syscalls, queue/event ownership
 and rollback, doorbell or event-page mmap and stores, AQL packet encoding,
-wait execution and restart policy, SVM/peer allocation and mapping,
+wait execution and restart policy, general SVM/peer allocation and mapping,
 device-memory lifecycle authority beyond the exact writable-VRAM flag profile,
 and all syscall execution remain outside this crate.
 SDMA, PM4 compute, XGMI, target-XCC selection, CU masks, GWS, queue priority

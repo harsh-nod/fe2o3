@@ -131,13 +131,17 @@ int main(void) {
            offsetof(struct kfd_ioctl_unmap_memory_from_gpu_args, n_success),
            (unsigned long)AMDKFD_IOC_UNMAP_MEMORY_FROM_GPU);
 
-    printf("alloc_flags:gtt=%#x writable=%#x public=%#x executable=%#x aql_queue=%#x "
-           "coherent=%#x uncached=%#x host_visible_coherent=%#x kernarg=%#x "
-           "aql_profile=%#x executable_profile=%#x public_vram_profile=%#x\n",
+    printf("alloc_flags:gtt=%#x userptr=%#x writable=%#x public=%#x executable=%#x "
+           "no_substitute=%#x aql_queue=%#x coherent=%#x uncached=%#x "
+           "host_visible_coherent=%#x kernarg=%#x aql_profile=%#x "
+           "executable_profile=%#x userptr_executable_profile=%#x "
+           "public_vram_profile=%#x\n",
            KFD_IOC_ALLOC_MEM_FLAGS_GTT,
+           KFD_IOC_ALLOC_MEM_FLAGS_USERPTR,
            KFD_IOC_ALLOC_MEM_FLAGS_WRITABLE,
            KFD_IOC_ALLOC_MEM_FLAGS_PUBLIC,
            KFD_IOC_ALLOC_MEM_FLAGS_EXECUTABLE,
+           KFD_IOC_ALLOC_MEM_FLAGS_NO_SUBSTITUTE,
            KFD_IOC_ALLOC_MEM_FLAGS_AQL_QUEUE_MEM,
            KFD_IOC_ALLOC_MEM_FLAGS_COHERENT,
            KFD_IOC_ALLOC_MEM_FLAGS_UNCACHED,
@@ -158,6 +162,12 @@ int main(void) {
                KFD_IOC_ALLOC_MEM_FLAGS_WRITABLE |
                KFD_IOC_ALLOC_MEM_FLAGS_COHERENT |
                KFD_IOC_ALLOC_MEM_FLAGS_EXECUTABLE,
+           KFD_IOC_ALLOC_MEM_FLAGS_USERPTR |
+               KFD_IOC_ALLOC_MEM_FLAGS_WRITABLE |
+               KFD_IOC_ALLOC_MEM_FLAGS_EXECUTABLE |
+               KFD_IOC_ALLOC_MEM_FLAGS_NO_SUBSTITUTE |
+               KFD_IOC_ALLOC_MEM_FLAGS_COHERENT |
+               KFD_IOC_ALLOC_MEM_FLAGS_UNCACHED,
            KFD_IOC_ALLOC_MEM_FLAGS_VRAM |
                KFD_IOC_ALLOC_MEM_FLAGS_WRITABLE |
                KFD_IOC_ALLOC_MEM_FLAGS_PUBLIC);

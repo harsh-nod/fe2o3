@@ -33,7 +33,8 @@ const RUNTIME_ENABLE_OPCODE: Opcode = AMDKFD_IOC_RUNTIME_ENABLE as Opcode;
 const QUEUE_EXCEPTION_PAYLOAD_OFFSET: usize = 64;
 const MAX_QUEUE_EXCEPTION_WAIT_MS: u32 = 1_000;
 static KFD_RUNTIME_GATE: Mutex<()> = Mutex::new(());
-static KFD_RUNTIME_GATE_POISONED: AtomicBool = AtomicBool::new(false);
+static KFD_RUNTIME_GATE_TEARDOWN_ARMED: AtomicBool = AtomicBool::new(false);
+static KFD_RUNTIME_GATE_PERMANENTLY_POISONED: AtomicBool = AtomicBool::new(false);
 #[allow(dead_code)]
 const UPDATE_QUEUE_OPCODE: Opcode = AMDKFD_IOC_UPDATE_QUEUE as Opcode;
 
@@ -83,8 +84,17 @@ impl ProcessGlobalKfdRuntimeTeardownArmV1 {
 pub(crate) fn arm_process_global_kfd_runtime_gate_for_teardown_v1()
 -> ProcessGlobalKfdRuntimeTeardownArmV1 {
     ProcessGlobalKfdRuntimeTeardownArmV1(arm_runtime_gate_for_terminal_teardown(
-        &KFD_RUNTIME_GATE_POISONED,
+        &KFD_RUNTIME_GATE_TEARDOWN_ARMED,
     ))
+}
+
+pub(crate) fn permanently_poison_process_global_kfd_runtime_gate_v1() {
+    KFD_RUNTIME_GATE_PERMANENTLY_POISONED.store(true, Ordering::Release);
+}
+
+fn process_global_kfd_runtime_gate_is_blocked_v1() -> bool {
+    KFD_RUNTIME_GATE_TEARDOWN_ARMED.load(Ordering::Acquire)
+        || KFD_RUNTIME_GATE_PERMANENTLY_POISONED.load(Ordering::Acquire)
 }
 
 #[derive(Debug)]
@@ -298,7 +308,7 @@ impl LinuxKfdRuntimeEnabledV1 {
         if opener_pid != std::process::id() || kfd.as_raw_fd() < 0 {
             return Err(LinuxDoorbellErrorV1::ProcessChanged);
         }
-        if KFD_RUNTIME_GATE_POISONED.load(Ordering::Acquire) {
+        if process_global_kfd_runtime_gate_is_blocked_v1() {
             return Err(LinuxDoorbellErrorV1::Runtime(
                 "process-global gate poisoned",
             ));
@@ -311,13 +321,13 @@ impl LinuxKfdRuntimeEnabledV1 {
                 ));
             }
             Err(TryLockError::Poisoned(_)) => {
-                KFD_RUNTIME_GATE_POISONED.store(true, Ordering::Release);
+                permanently_poison_process_global_kfd_runtime_gate_v1();
                 return Err(LinuxDoorbellErrorV1::Runtime(
                     "process-global mutex poisoned",
                 ));
             }
         };
-        if KFD_RUNTIME_GATE_POISONED.load(Ordering::Acquire) {
+        if process_global_kfd_runtime_gate_is_blocked_v1() {
             return Err(LinuxDoorbellErrorV1::Runtime(
                 "process-global gate poisoned",
             ));
@@ -331,14 +341,14 @@ impl LinuxKfdRuntimeEnabledV1 {
         // SAFETY: the retained process-bound fd and exact record satisfy the
         // reviewed request. Every error is treated as an ambiguous transition.
         if let Err(source) = unsafe { rustix::ioctl::ioctl(kfd, request) } {
-            KFD_RUNTIME_GATE_POISONED.store(true, Ordering::Release);
+            permanently_poison_process_global_kfd_runtime_gate_v1();
             return Err(LinuxDoorbellErrorV1::RuntimeSyscall {
                 operation: "AMDKFD_IOC_RUNTIME_ENABLE(enable)",
                 source,
             });
         }
         if args != expected || !args.is_exact_queue_exception_enable() {
-            KFD_RUNTIME_GATE_POISONED.store(true, Ordering::Release);
+            permanently_poison_process_global_kfd_runtime_gate_v1();
             return Err(LinuxDoorbellErrorV1::Runtime(
                 "RUNTIME_ENABLE enable output drift",
             ));
@@ -471,7 +481,7 @@ impl LinuxKfdRuntimeEnabledV1 {
 impl Drop for LinuxKfdRuntimeEnabledV1 {
     fn drop(&mut self) {
         if self.active || self.poisoned {
-            KFD_RUNTIME_GATE_POISONED.store(true, Ordering::Release);
+            permanently_poison_process_global_kfd_runtime_gate_v1();
         }
         // Deliberately no implicit ioctl.
     }
@@ -486,7 +496,7 @@ impl LinuxKfdRuntimeDisabledV1 {
 impl Drop for LinuxKfdRuntimeDisabledV1 {
     fn drop(&mut self) {
         if self.gate.is_some() {
-            KFD_RUNTIME_GATE_POISONED.store(true, Ordering::Release);
+            permanently_poison_process_global_kfd_runtime_gate_v1();
         }
         // Deliberately no implicit ioctl.
     }

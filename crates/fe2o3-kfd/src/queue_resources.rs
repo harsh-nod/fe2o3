@@ -32,7 +32,7 @@ const EXPECTED_COMPUTE_QUEUE_COUNT: u32 = 24;
 
 /// Canonical contract for read-only gfx942 queue-resource planning.
 pub const GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-spx-nps1-topology-queue-resources-r5-v1\n",
+    "profile=fe2o3-mi300x-gfx942-spx-nps1-topology-queue-resources-r6-v1\n",
     "device_profile_sha256=e12ea33b259666e7928612403109640b03b0d637b893a2c15b87d17a4211c8de\n",
     "device_profile_digest_role=compositional-prerequisite-identifier-only,no-device-token-or-xnack-evidence\n",
     "kfd_queue_output_schema_sha256=8ff2ac20f6001d6f5405423d78e8ad6cec109ac3370fe86d7691c5c4782c1803\n",
@@ -70,20 +70,21 @@ pub const GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1: &str = concat!(
     "eop=size:4096,alignment:4096,exact-mapping\n",
     "cwsr=ctl-per-xcc:12288,wg-per-xcc:23191552,ctx-per-xcc:23203840,debug-per-xcc:48640,xcc:8,mapping:186019840,kfd-min-align:4096,rocr-primary-svm-align:2097152,rocr-fallback-align:4096\n",
     "doorbell=width:8,process-slice:8192,exact-whole-slice-mmap-required,encoded-base-mask:8191-not-page-mask\n",
-    "rocr_backing=ring:userptr-writable-executable-coherent:0xc4000004,control:userptr-writable-coherent:0x84000004,eop:vram-writable-executable:0xc0000001,cwsr:host-svm-host-access-gpu-exec-or-userptr-0xc4000004\n",
-    "rocr_expression_scope=exact-reviewed-allocation-flags-and-svm-attribute-expressions,not-transitive-policy-implementation-closure,not-runtime-branch-attestation\n",
+    "rocr_backing=ring:final-kfd-alloc-userptr-writable-executable-no-substitute-coherent-uncached:0xd6000004,control:source-expression-userptr-writable-coherent:0x84000004,eop:source-expression-vram-writable-executable:0xc0000001,cwsr:source-expression-host-svm-host-access-gpu-exec-or-userptr-0xc4000004\n",
+    "rocr_ring_flag_derivation=userptr:0x00000004,writable:0x80000000,executable:0x40000000,no-substitute:0x10000000,coherent:0x04000000,uncached:0x02000000\n",
+    "rocr_expression_scope=ring-is-exact-final-reviewed-kfd-ioctl-wire-value,other-backing-values-are-reviewed-source-local-expressions,not-transitive-policy-implementation-closure,not-runtime-branch-attestation\n",
     "source_linkage=contracted,source-hashes-do-not-prove-loaded-binary\n",
     "authority=observation-and-planning-only,no-create,no-allocation,no-mmap,no-doorbell-store\n",
 );
 
 /// SHA-256 of GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1.
 pub const GFX942_QUEUE_RESOURCE_PROFILE_SHA256_V1: &str =
-    "150787f0092bc9edc0ecf3a4b7df06742485765aca693751a4416654665598e2";
+    "822d8b9c60a74bc9905a0e3d9a5518e657def0c40406c1d5978c485650477b9d";
 
 /// Typed digest bytes of GFX942_QUEUE_RESOURCE_PROFILE_MANIFEST_V1.
 pub const GFX942_QUEUE_RESOURCE_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
-    0x15, 0x07, 0x87, 0xf0, 0x09, 0x2b, 0xc9, 0xed, 0xc0, 0xec, 0xf3, 0xa4, 0xb7, 0xdf, 0x06, 0x74,
-    0x24, 0x85, 0x76, 0x5a, 0xca, 0x69, 0x37, 0x51, 0xa4, 0x41, 0x66, 0x54, 0x66, 0x55, 0x98, 0xe2,
+    0x82, 0x2d, 0x8b, 0x9c, 0x60, 0xa7, 0x4b, 0xc9, 0x90, 0x5a, 0x0e, 0x3d, 0x9a, 0x55, 0x18, 0xe6,
+    0x57, 0xde, 0xf0, 0xc4, 0x04, 0x06, 0xc1, 0xd5, 0x97, 0x8c, 0x48, 0x56, 0x50, 0x47, 0x7b, 0x9d,
 ];
 
 /// Resource role names shared with the abstract queue lifecycle model.
@@ -95,27 +96,34 @@ pub enum QueueResourceRoleV1 {
     ContextSave,
 }
 
-/// Exact reviewed ROCr policy expression, not an admitted allocation kind.
+/// Reviewed ROCr backing observation, not an admitted allocation kind.
 ///
-/// These variants summarize the pinned expressions on the reviewed paths. They
-/// are not a transitive implementation closure or evidence that a runtime
-/// invocation selected those paths.
+/// The system AQL ring variant records the exact final KFD ioctl wire value.
+/// The other variants summarize source-local expressions on their reviewed
+/// paths; they are not a transitive implementation closure or evidence that a
+/// runtime invocation selected those paths.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RocrQueueBackingPolicyV1 {
-    UserptrWritableExecutableCoherent,
+    SystemAqlRingFinalUserptrWritableExecutableNoSubstituteCoherentUncached,
+    UserptrWritableExecutableCoherentSourceExpression,
     UserptrWritableCoherent,
     VramWritableExecutable,
     HostSvmHostAccessGpuExecutable,
 }
 
 impl RocrQueueBackingPolicyV1 {
-    /// Raw KFD flags yielded by the reviewed ALLOC_MEMORY expressions.
+    /// Reviewed KFD flags or source-local flag expression.
     ///
-    /// None denotes the primary CWSR SVM-attribute path. These values are not
-    /// accepted by fe2o3's current memory authority and grant no authority.
+    /// The system AQL ring variant is the exact final ioctl value. Other `Some`
+    /// variants are source-local expressions and must not be presented as final
+    /// ioctl values. `None` denotes the primary CWSR SVM-attribute path. These
+    /// observations grant no allocation authority.
     pub const fn observed_kfd_alloc_flags(self) -> Option<u32> {
         match self {
-            Self::UserptrWritableExecutableCoherent => Some(0xc400_0004),
+            Self::SystemAqlRingFinalUserptrWritableExecutableNoSubstituteCoherentUncached => {
+                Some(0xd600_0004)
+            }
+            Self::UserptrWritableExecutableCoherentSourceExpression => Some(0xc400_0004),
             Self::UserptrWritableCoherent => Some(0x8400_0004),
             Self::VramWritableExecutable => Some(0xc000_0001),
             Self::HostSvmHostAccessGpuExecutable => None,
@@ -182,7 +190,7 @@ impl RingResourcePlanV1 {
     }
 
     pub const fn rocr_backing_policy(self) -> RocrQueueBackingPolicyV1 {
-        RocrQueueBackingPolicyV1::UserptrWritableExecutableCoherent
+        RocrQueueBackingPolicyV1::SystemAqlRingFinalUserptrWritableExecutableNoSubstituteCoherentUncached
     }
 }
 
@@ -278,7 +286,7 @@ impl ContextSaveResourcePlanV1 {
     }
 
     pub const fn fallback_rocr_backing_policy(self) -> RocrQueueBackingPolicyV1 {
-        RocrQueueBackingPolicyV1::UserptrWritableExecutableCoherent
+        RocrQueueBackingPolicyV1::UserptrWritableExecutableCoherentSourceExpression
     }
 }
 
@@ -611,7 +619,15 @@ mod tests {
         let plan = plan_from_facts(valid_facts(), 1 << 20).unwrap();
         assert_eq!(
             plan.ring().rocr_backing_policy().observed_kfd_alloc_flags(),
-            Some(0xc400_0004)
+            Some(0xd600_0004)
+        );
+        assert_eq!(
+            plan.ring().rocr_backing_policy(),
+            RocrQueueBackingPolicyV1::SystemAqlRingFinalUserptrWritableExecutableNoSubstituteCoherentUncached
+        );
+        assert_eq!(
+            0xd600_0004u32,
+            0x0000_0004u32 | 0x8000_0000 | 0x4000_0000 | 0x1000_0000 | 0x0400_0000 | 0x0200_0000
         );
         assert_eq!(
             plan.control()
@@ -631,7 +647,13 @@ mod tests {
                 .observed_kfd_alloc_flags(),
             None
         );
-        for flags in [0xc400_0004, 0x8400_0004, 0xc000_0001] {
+        assert_eq!(
+            plan.context_save()
+                .fallback_rocr_backing_policy()
+                .observed_kfd_alloc_flags(),
+            Some(0xc400_0004)
+        );
+        for flags in [0xd600_0004, 0xc400_0004, 0x8400_0004, 0xc000_0001] {
             assert!(fe2o3_kfd_uapi::admit_kfd_alloc_memory_flags(flags).is_err());
         }
     }

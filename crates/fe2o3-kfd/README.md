@@ -186,17 +186,24 @@ logical/CPU bytes and a checked doubled GPU-VA span. The CPU VMA covers only
 the physical copy. All four raw flag values are private constants supplied by
 the typed profile; callers cannot introduce other bits.
 
-The queue liveness diagnostic also has one crate-private ring profile using
+The queue liveness diagnostics have two crate-private ring profiles. One uses
 plain executable coherent GTT with a one-times GPU-VA span. It is selectable
-only by the consuming executable-ring barrier probe; reusable queues and every
-dispatch API continue to require the special doubled AQL profile. This isolates
-ring flags and mapping geometry without claiming ROCr USERPTR equivalence.
+only by the consuming executable-ring barrier probe. The other registers one
+anonymous DONTFORK `PRIVATE|NORESERVE` VMA at the same CPU/GPU address with the
+exact executable, coherent, uncached, no-substitute USERPTR flags
+(`0xd6000004`). It is selectable only by the USERPTR barrier probe. Reusable
+queues and every dispatch API continue to require the special doubled AQL
+profile. These probes isolate ring backing; the USERPTR path deliberately does
+not claim full ROCr allocator or visible-GPU mapping-order equivalence.
 
-Every live allocation retains its original anonymous `PROT_NONE` VMA as a GPU
-VA guard. CPU BO mappings are separately kernel-selected. Guards prevent the
+Every ordinary live allocation retains its original anonymous `PROT_NONE` VMA
+as a GPU VA guard. CPU BO mappings are separately kernel-selected. Guards prevent the
 host VMA allocator from recycling an address that KFD still owns, and the
 session independently checks half-open ranges for overlap. A guard is unmapped
-only after CPU munmap and successful `FREE_MEMORY_OF_GPU`.
+only after CPU munmap and successful `FREE_MEMORY_OF_GPU`. The diagnostic
+USERPTR profile instead makes the reserved pages accessible in place, unmaps
+them from the selected GPU, frees the KFD BO while the VMA is still live, then
+unmaps that same VMA without a second guard release.
 
 Every safe CPU view is closure-scoped and requires exclusive mutable access to
 the session. This prevents simultaneous safe aliases across allocations as
@@ -317,17 +324,19 @@ cwsr_enable=1; missing or changed values fail closed. Queue ID zero is
 explicitly valid: the pinned KFD process queue manager allocates the first zero
 bit from a zero-initialized 1024-slot bitmap.
 
-The plan also names the exact reviewed ROCr 7.2.4 backing-policy expressions.
-On the reviewed branches, ring and control produce fine-grained USERPTR
-profiles, EOP produces executable coarse VRAM, and CWSR requests anonymous host
+The plan also names the reviewed ROCr 7.2.4 backing-policy values. On the
+reviewed branches, the final ring ioctl is fine-grained USERPTR
+(`0xd6000004`), control produces a source-local fine-grained USERPTR profile,
+EOP produces executable coarse VRAM, and CWSR requests anonymous host
 SVM attributes with a USERPTR fallback. The manifest pins the queue call sites,
 runtime allocator dispatch, KFD driver flag translation, KMT allocation
 translation, the header definitions of page and huge-page alignment, and
-CWSR/EOP expressions needed to derive those values. This is an exact
-expression set, not a transitive ROCr policy implementation closure or
+CWSR/EOP expressions needed to derive those values. The ring value includes
+the FMM-added no-substitute bit; other values remain source-local expressions.
+This is not a transitive ROCr policy implementation closure or
 evidence that an invocation selected a particular branch. These queue-resource
-backing observations are not allocations accepted by the current fe2o3 queue
-authority. USERPTR, SVM, executable coarse-VRAM resource binding, queue
+backing observations do not grant allocation authority. General USERPTR/SVM,
+executable coarse-VRAM resource binding, queue
 creation through this planning API, doorbell mmap, and doorbell stores remain
 unsupported. The generic writable device-memory lease has no queue-resource
 binding or numeric-address export. The topology does not export CWSR sizes on
@@ -427,6 +436,15 @@ alternate probe therefore changes only the ring flags and mapping span.
 Every success, failure, and quarantined-custody observation records the selected
 backing, and the backing plus exact logical/GPU span is bound into queue plan
 and configuration identity.
+
+`run_compute_aql_userptr_ring_barrier_probe` performs the same operation with
+the exact `0xd6000004` one-times USERPTR diagnostic profile. The shared VMA is
+created with FE's DONTFORK and NORESERVE safety policy, initialized before its
+selected-GPU map, and freed with the USERPTR-specific BO-before-VMA order. This
+is the smallest backing-only discriminator, not full ROCr allocation or
+all-visible-GPU mapping parity. Any failure after entering inner USERPTR queue
+creation is `TerminalCreation` because a VMA or KFD registration may remain
+under process custody.
 
 The probe binds only queue and signal generations; it does not invent code,
 kernarg, or dispatch generations. Submission cancellation is permitted only
