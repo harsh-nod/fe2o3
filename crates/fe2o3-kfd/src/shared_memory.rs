@@ -1634,6 +1634,28 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         Ok(observation)
     }
 
+    /// Performs bounded acquire loads inside a currentness envelope owned by
+    /// the retained queue-completion backend.
+    fn observe_completion_signals_in_current_scope(
+        &mut self,
+        token: &mut SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+        slot_indices: &[u32],
+    ) -> Result<Vec<fe2o3_aql::AqlCompletionObservationV1>, MemorySessionError> {
+        if slot_indices.is_empty() {
+            return Err(MemorySessionError::InvalidAllocationAuthority);
+        }
+        let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
+        let requested = self.allocations[index].layout.requested_bytes;
+        let mapping = self.allocations[index]
+            .mapping
+            .as_mut()
+            .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+        slot_indices
+            .iter()
+            .map(|slot_index| B::observe_completion_signal_acquire(mapping, requested, *slot_index))
+            .collect()
+    }
+
     fn reset_completion_signal(
         &mut self,
         token: &mut SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
@@ -2849,6 +2871,19 @@ impl SharedGttMemorySessionV1 {
     ) -> Result<fe2o3_aql::AqlCompletionObservationV1, MemorySessionError> {
         self.engine
             .observe_completion_signal(&mut authority.token, slot_index)
+    }
+
+    pub(crate) fn observe_aql_completion_signals_in_current_scope(
+        &mut self,
+        authority: &mut SharedGttQueueResourceAuthorityV1<
+            AqlCompletionSignalResourceRoleV1,
+            HostVisibleCoherentGttV1,
+            GttGpuAccessibleMutableV1,
+        >,
+        slot_indices: &[u32],
+    ) -> Result<Vec<fe2o3_aql::AqlCompletionObservationV1>, MemorySessionError> {
+        self.engine
+            .observe_completion_signals_in_current_scope(&mut authority.token, slot_indices)
     }
 
     #[allow(dead_code)]

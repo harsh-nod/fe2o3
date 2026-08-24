@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use fe2o3_amdhsa_loader::ValidatedKernelEnvelope;
-use fe2o3_aql::AqlDispatchGeometryV1;
+use fe2o3_aql::{AqlDispatchGeometryV1, AqlDispatchOrderingV1};
 use fe2o3_kfd::{Gfx942DispatchBufferBindingV1, Gfx942FixedDispatchPacketV1};
 
 use crate::allocation::{
@@ -128,6 +128,7 @@ impl ServiceFixedDispatchBufferV1 {
 pub struct ServiceFixedDispatchPacketV1 {
     program_index: usize,
     geometry: AqlDispatchGeometryV1,
+    ordering: AqlDispatchOrderingV1,
     dynamic_group_segment_bytes: u32,
     kernarg_bytes: Box<[u8]>,
     buffers: Box<[ServiceFixedDispatchBufferV1]>,
@@ -142,9 +143,46 @@ impl ServiceFixedDispatchPacketV1 {
         kernarg_bytes: Box<[u8]>,
         buffers: Box<[ServiceFixedDispatchBufferV1]>,
     ) -> Self {
+        Self::with_ordering(
+            program_index,
+            geometry,
+            AqlDispatchOrderingV1::WaitForPrior,
+            dynamic_group_segment_bytes,
+            kernarg_bytes,
+            buffers,
+        )
+    }
+
+    /// Creates a packet that may execute independently of earlier queue packets.
+    pub fn new_independent(
+        program_index: usize,
+        geometry: AqlDispatchGeometryV1,
+        dynamic_group_segment_bytes: u32,
+        kernarg_bytes: Box<[u8]>,
+        buffers: Box<[ServiceFixedDispatchBufferV1]>,
+    ) -> Self {
+        Self::with_ordering(
+            program_index,
+            geometry,
+            AqlDispatchOrderingV1::Independent,
+            dynamic_group_segment_bytes,
+            kernarg_bytes,
+            buffers,
+        )
+    }
+
+    fn with_ordering(
+        program_index: usize,
+        geometry: AqlDispatchGeometryV1,
+        ordering: AqlDispatchOrderingV1,
+        dynamic_group_segment_bytes: u32,
+        kernarg_bytes: Box<[u8]>,
+        buffers: Box<[ServiceFixedDispatchBufferV1]>,
+    ) -> Self {
         Self {
             program_index,
             geometry,
+            ordering,
             dynamic_group_segment_bytes,
             kernarg_bytes,
             buffers,
@@ -159,6 +197,11 @@ impl ServiceFixedDispatchPacketV1 {
     /// Returns the checked AQL geometry description.
     pub const fn geometry(&self) -> AqlDispatchGeometryV1 {
         self.geometry
+    }
+
+    /// Returns the explicit AQL execution-order policy.
+    pub const fn ordering(&self) -> AqlDispatchOrderingV1 {
+        self.ordering
     }
 
     /// Returns the requested dynamic group-segment bytes.
@@ -198,9 +241,10 @@ impl ServiceFixedDispatchPacketV1 {
             .map(ServiceFixedDispatchBufferV1::into_kfd)
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        Gfx942FixedDispatchPacketV1::new(
+        Gfx942FixedDispatchPacketV1::new_with_ordering(
             self.program_index,
             self.geometry,
+            self.ordering,
             self.dynamic_group_segment_bytes,
             self.kernarg_bytes,
             buffers,
@@ -214,6 +258,7 @@ impl fmt::Debug for ServiceFixedDispatchPacketV1 {
             .debug_struct("ServiceFixedDispatchPacketV1")
             .field("program_index", &self.program_index)
             .field("geometry", &self.geometry)
+            .field("ordering", &self.ordering)
             .field(
                 "dynamic_group_segment_bytes",
                 &self.dynamic_group_segment_bytes,
@@ -311,5 +356,40 @@ impl<const N: usize> fmt::Debug for ServiceFixedBatchV1<'_, N> {
             .field("program_count", &self.programs.len())
             .field("packet_count", &N)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixed_packet_default_is_ordered_and_independent_is_explicit() {
+        let geometry = AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap();
+        let ordered = ServiceFixedDispatchPacketV1::new(
+            0,
+            geometry,
+            0,
+            Vec::new().into_boxed_slice(),
+            Vec::new().into_boxed_slice(),
+        );
+        assert_eq!(ordered.ordering(), AqlDispatchOrderingV1::WaitForPrior);
+        assert_eq!(
+            ordered.into_kfd().ordering(),
+            AqlDispatchOrderingV1::WaitForPrior
+        );
+
+        let independent = ServiceFixedDispatchPacketV1::new_independent(
+            0,
+            geometry,
+            0,
+            Vec::new().into_boxed_slice(),
+            Vec::new().into_boxed_slice(),
+        );
+        assert_eq!(independent.ordering(), AqlDispatchOrderingV1::Independent);
+        assert_eq!(
+            independent.into_kfd().ordering(),
+            AqlDispatchOrderingV1::Independent
+        );
     }
 }

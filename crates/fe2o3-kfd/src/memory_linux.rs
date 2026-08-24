@@ -7,8 +7,8 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 
 use fe2o3_aql::{
     AMD_SIGNAL_BYTES_V1, AMD_SIGNAL_VALUE_PENDING_V1, AQL_INVALID_PACKET_HEADER_V1,
-    AQL_KERNEL_DISPATCH_PACKET_BYTES_V1, AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1,
-    AqlCompletionObservationV1, classify_acquired_completion_value_v1,
+    AQL_KERNEL_DISPATCH_PACKET_BYTES_V1, AqlCompletionObservationV1, AqlDispatchOrderingV1,
+    classify_acquired_completion_value_v1,
 };
 use fe2o3_kfd_uapi::{
     AMDKFD_IOC_ACQUIRE_VM, AMDKFD_IOC_ALLOC_MEMORY_OF_GPU, AMDKFD_IOC_FREE_MEMORY_OF_GPU,
@@ -559,7 +559,7 @@ impl MemoryBackend for LinuxMemoryBackend {
         slot_index: u32,
         header: u16,
     ) -> Result<(), MemorySessionError> {
-        if header != AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1 {
+        if AqlDispatchOrderingV1::from_header(header).is_none() {
             return Err(malformed_aql_mapping("release header"));
         }
         let offset = usize::try_from(slot_index)
@@ -742,10 +742,55 @@ impl Drop for LinuxCpuMapping {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fe2o3_aql::{AmdBusyCompletionSignalV1, AqlCompletionObservationV1};
+    use fe2o3_aql::{
+        AQL_SYSTEM_SCOPED_WAIT_FOR_PRIOR_KERNEL_DISPATCH_HEADER_V1, AmdBusyCompletionSignalV1,
+        AqlCompletionObservationV1,
+    };
 
     #[repr(C, align(64))]
     struct TwoSignals([AmdBusyCompletionSignalV1; 2]);
+
+    #[repr(C, align(64))]
+    struct OnePacket([u8; AQL_KERNEL_DISPATCH_PACKET_BYTES_V1]);
+
+    #[test]
+    fn mapped_packet_accepts_exact_wait_for_prior_release_header() {
+        let mut packet = OnePacket([0; AQL_KERNEL_DISPATCH_PACKET_BYTES_V1]);
+        packet.0[..4].copy_from_slice(&0x0002_0001_u32.to_le_bytes());
+        let mut mapping = LinuxCpuMapping {
+            address: NonNull::from(&mut packet).cast(),
+            bytes: AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
+            active: true,
+            accessible: true,
+        };
+
+        LinuxMemoryBackend::publish_aql_header(
+            &mut mapping,
+            AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
+            0,
+            AQL_SYSTEM_SCOPED_WAIT_FOR_PRIOR_KERNEL_DISPATCH_HEADER_V1,
+        )
+        .unwrap();
+        assert_eq!(
+            u32::from_le_bytes(packet.0[..4].try_into().unwrap()),
+            0x0002_1502
+        );
+
+        packet.0[..4].copy_from_slice(&0x0002_0001_u32.to_le_bytes());
+        assert!(
+            LinuxMemoryBackend::publish_aql_header(
+                &mut mapping,
+                AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
+                0,
+                0x1503,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            u32::from_le_bytes(packet.0[..4].try_into().unwrap()),
+            0x0002_0001
+        );
+    }
 
     #[test]
     fn mapped_completion_slots_use_exact_acquire_and_release_atomics() {

@@ -75,7 +75,10 @@ The authenticated
 Verus model proves the corresponding bounded mathematical body-copy,
 release-word, frame, pending-signal byte-image, supplied-value classification,
 and single-producer counter relations, including concrete non-vacuity witnesses
-and five expected-negative mutations. It does not refine
+and five expected-negative mutations. Its release-word theorem is scoped to the
+independent `0x1402` header; the wait-for-prior `0x1502` header is admitted by
+the executable schema and tests but does not yet extend that Verus theorem. It
+does not refine
 this crate's executable Rust, establish that a publication target performs a
 CPU release atomic, authenticate a read pointer, or prove device visibility,
 firmware consumption, native slot ownership, completion, liveness, or

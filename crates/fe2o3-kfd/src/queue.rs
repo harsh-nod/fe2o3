@@ -41,7 +41,8 @@ pub(crate) mod device_content;
 pub use completion::{
     GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1, GFX942_AQL_COMPLETION_MANIFEST_V1,
     Gfx942CompletedBatchV1, Gfx942CompletionBatchV1, Gfx942CompletionErrorV1,
-    Gfx942CompletionPollV1, Gfx942CompletionRecycleObservationV1,
+    Gfx942CompletionPollV1, Gfx942CompletionPollWithProgressV1, Gfx942CompletionProgressV1,
+    Gfx942CompletionRecycleObservationV1,
 };
 
 pub use dispatch_binding::{
@@ -50,8 +51,9 @@ pub use dispatch_binding::{
     Gfx942CompletedDispatchBatchV1, Gfx942CompletedDispatchReadRequestV1,
     Gfx942CompletedDispatchReadbackV1, Gfx942CompletedDispatchSnapshotRequestV1,
     Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1, Gfx942DispatchBufferBindingV1,
-    Gfx942DispatchPollV1, Gfx942FixedDispatchDataKindV1, Gfx942FixedDispatchDataLayoutV1,
-    Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1,
+    Gfx942DispatchPollV1, Gfx942DispatchPollWithProgressV1, Gfx942DispatchProgressV1,
+    Gfx942FixedDispatchDataKindV1, Gfx942FixedDispatchDataLayoutV1, Gfx942FixedDispatchDataV1,
+    Gfx942FixedDispatchPacketV1,
 };
 
 pub use device_content::{

@@ -11,7 +11,8 @@ use core::fmt;
 
 use fe2o3_amdhsa_loader::{KernelIdentityInputsV1, ValidatedKernelEnvelope};
 use fe2o3_aql::{
-    AQL_MAX_FIXED_BATCH_PACKETS_V2, AqlDispatchGeometryV1, AqlRingCapacityV1, ObservedGpuAddressV1,
+    AQL_MAX_FIXED_BATCH_PACKETS_V2, AqlDispatchGeometryV1, AqlDispatchOrderingV1,
+    AqlRingCapacityV1, ObservedGpuAddressV1,
 };
 use fe2o3_hsaco::{
     ArgumentAccess, ArgumentAddressSpace, COV6_IMPLICIT_ARGUMENT_BYTES, ExplicitValueKind,
@@ -23,6 +24,7 @@ use sha2::{Digest, Sha256};
 use super::completion::{
     CompletionDispatchGenerationBindingV1, CompletionPacketTemplateV1, Gfx942CompletedBatchV1,
     Gfx942CompletionBatchV1, Gfx942CompletionErrorV1, Gfx942CompletionPollV1,
+    Gfx942CompletionPollWithProgressV1, Gfx942CompletionProgressV1,
 };
 use super::device_content::Gfx942DeviceContentDescriptorV1;
 use crate::HOST_VISIBLE_MEMORY_PAGE_BYTES_V1;
@@ -145,6 +147,7 @@ struct CompletedSnapshotRangeV1 {
 pub struct Gfx942FixedDispatchPacketV1 {
     program_index: usize,
     geometry: AqlDispatchGeometryV1,
+    ordering: AqlDispatchOrderingV1,
     dynamic_group_segment_bytes: u32,
     kernarg_bytes: Box<[u8]>,
     buffers: Box<[Gfx942DispatchBufferBindingV1]>,
@@ -158,9 +161,47 @@ impl Gfx942FixedDispatchPacketV1 {
         kernarg_bytes: Box<[u8]>,
         buffers: Box<[Gfx942DispatchBufferBindingV1]>,
     ) -> Self {
+        Self::new_with_ordering(
+            program_index,
+            geometry,
+            AqlDispatchOrderingV1::WaitForPrior,
+            dynamic_group_segment_bytes,
+            kernarg_bytes,
+            buffers,
+        )
+    }
+
+    /// Creates an explicitly independent packet that need not wait for prior work.
+    pub fn new_independent(
+        program_index: usize,
+        geometry: AqlDispatchGeometryV1,
+        dynamic_group_segment_bytes: u32,
+        kernarg_bytes: Box<[u8]>,
+        buffers: Box<[Gfx942DispatchBufferBindingV1]>,
+    ) -> Self {
+        Self::new_with_ordering(
+            program_index,
+            geometry,
+            AqlDispatchOrderingV1::Independent,
+            dynamic_group_segment_bytes,
+            kernarg_bytes,
+            buffers,
+        )
+    }
+
+    /// Creates a packet with an explicit reviewed AQL execution-order policy.
+    pub fn new_with_ordering(
+        program_index: usize,
+        geometry: AqlDispatchGeometryV1,
+        ordering: AqlDispatchOrderingV1,
+        dynamic_group_segment_bytes: u32,
+        kernarg_bytes: Box<[u8]>,
+        buffers: Box<[Gfx942DispatchBufferBindingV1]>,
+    ) -> Self {
         Self {
             program_index,
             geometry,
+            ordering,
             dynamic_group_segment_bytes,
             kernarg_bytes,
             buffers,
@@ -173,6 +214,10 @@ impl Gfx942FixedDispatchPacketV1 {
 
     pub const fn geometry(&self) -> AqlDispatchGeometryV1 {
         self.geometry
+    }
+
+    pub const fn ordering(&self) -> AqlDispatchOrderingV1 {
+        self.ordering
     }
 
     pub const fn dynamic_group_segment_bytes(&self) -> u32 {
@@ -190,6 +235,7 @@ impl fmt::Debug for Gfx942FixedDispatchPacketV1 {
             .debug_struct("Gfx942FixedDispatchPacketV1")
             .field("program_index", &self.program_index)
             .field("geometry", &self.geometry)
+            .field("ordering", &self.ordering)
             .field(
                 "dynamic_group_segment_bytes",
                 &self.dynamic_group_segment_bytes,
@@ -525,13 +571,13 @@ impl Gfx942CompletedDispatchReadbackV1 {
 
 /// Frozen claim boundary for the addressless fixed-dispatch binding slice.
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r10-v1\n",
+    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r11-v1\n",
     "target=gfx942:xnack-,COV6,one-selected-current-device-vm-and-queue-generation\n",
     "code=1-through-32-validated-amdhsa-kernel-envelopes,content-and-selected-descriptor-identity,exact-zero-then-copy-materialization-into-owned-gtt,read-only-seal-before-map,per-packet-program-selection,unused-inspected-programs-retained-without-publication,descriptor-resolution-with-checked-relative-arithmetic\n",
     "kernarg=public-inert-complete-byte-images,exact-inspected-size-and-power-of-two-alignment,optional-exact-trailing-256-byte-COV6-implicit-suffix-must-be-caller-zero,metadata-declared-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds-only,queue-pointer-and-runtime-service-or-address-fields-rejected,all-global-buffer-fields-zero,checked-nonoverlapping-8-byte-internal-device-pointer-patches,one-owned-kernarg-gtt-arena-with-N-distinct-checked-aligned-slices,private-initialization-before-map\n",
     "geometry=block-count-floor-grid-div-workgroup,remainder-grid-mod-workgroup,inactive-dimensions-count-and-group-one-remainder-zero,uniform-workgroup-rejects-any-nonzero-remainder\n",
     "data=1-through-16-actual-linear-mapped-device-local-or-host-visible-coherent-authorities,exact-device-vm-and-allocation-generation,complete-device-local-live-set,all-authorities-retained-even-when-no-packet-references-them,checked-bounded-referenced-subranges,inspected-actual-access-derived-internally-only-for-referenced-authorities,read-or-readwrite-requires-sealed-full-extent-initialization,write-only-admits-uninitialized-exclusive-storage,optional-enclosing-snapshot-requires-coherent-full-initialization\n",
-    "batch=1-through-8192,aql-fixed-batch-v2,minimum-ring-packet-capacity-checked,all-program-code-owners,N-distinct-kernarg-slices,one-generation-bound-template-per-packet,one-reservation-one-write-counter-fetch-add-one-final-doorbell-and-one-signal-per-packet-composition\n",
+    "batch=1-through-8192,aql-fixed-batch-v2,minimum-ring-packet-capacity-checked,all-program-code-owners,N-distinct-kernarg-slices,conservative-wait-for-prior-default-with-explicit-independent-opt-in,one-generation-bound-template-retaining-the-final-header-per-packet,one-reservation-one-write-counter-fetch-add-one-final-doorbell-and-one-signal-per-packet-composition\n",
     "retention=queue-owns-all-code-kernarg-and-data-authorities-through-exact-ready-and-recycle,unreferenced-data-has-no-inspected-effect-or-readback-authority,ordinary-destroy-releases-all,returning-destroy-requires-one-exact-recycled-generation-and-returns-actual-mapped-authorities-with-owning-memory-session,fully-initialized-state-preserved-without-stale-current-content-digest,initially-uninitialized-remains-uninitialized\n",
     "readback=owned-byte-copy-only-after-exact-completion-and-signal-recycle,exact-dispatch-generation-and-retained-host-visible-allocation-authority,ordinary-request-must-be-contained-in-exactly-one-metadata-inspected-write-or-readwrite-binding;optional-snapshot-request-must-exactly-match-one-retained-strictly-enclosing-initialized-range-with-one-isolated-inspected-writable-interior;device-local-readonly-unwritten-out-of-range-overlapping-subrange-and-stale-requests-rejected,no-initialization-promotion\n",
     "queue-transfer=ordinary-path-still-rejects-device-memory,dispatch-path-requires-exact-complete-distinct-set-of-every-live-mapped-c3-lease-before-model-mutation\n",
@@ -544,7 +590,7 @@ pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1`].
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1: &str =
-    "16c261456a2c2ab9d0f8ea7e6286b7c849338579d6b45dbbd78c455a2a70c3ab";
+    "4307f4e7aedd1a1b8582fd150966fb5d8b9a4c95955759abcf5d755faa113da4";
 
 type CodeAuthority = SharedGttQueueResourceAuthorityV1<
     AqlDispatchCodeResourceRoleV1,
@@ -960,6 +1006,7 @@ impl ReturnedDispatchDataV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PreparedDispatchPacketV1 {
     geometry: AqlDispatchGeometryV1,
+    ordering: AqlDispatchOrderingV1,
     private_segment_size: u32,
     group_segment_size: u32,
     kernarg_address: ObservedGpuAddressV1,
@@ -1042,6 +1089,7 @@ impl DispatchResourceOwnerV1 {
                 }
                 Ok(CompletionPacketTemplateV1::new(
                     packet.geometry,
+                    packet.ordering,
                     packet.private_segment_size,
                     packet.group_segment_size,
                     code.descriptor_address,
@@ -1439,6 +1487,60 @@ pub enum Gfx942DispatchPollV1<const N: usize> {
     Ready(Gfx942CompletedDispatchBatchV1<N>),
 }
 
+/// Addressless progress from one exact fixed-dispatch completion scan.
+///
+/// Signal loads occur sequentially, not as one atomic snapshot. Counts record
+/// what that scan observed, and the first pending index can already be stale by
+/// the time this value is returned.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942DispatchProgressV1 {
+    packet_count: u16,
+    completed_count: u16,
+    pending_count: u16,
+    first_pending_batch_index: Option<u16>,
+}
+
+impl Gfx942DispatchProgressV1 {
+    pub const fn packet_count(self) -> u16 {
+        self.packet_count
+    }
+
+    pub const fn completed_count(self) -> u16 {
+        self.completed_count
+    }
+
+    pub const fn pending_count(self) -> u16 {
+        self.pending_count
+    }
+
+    /// Returns the earliest batch-local index observed pending in this scan.
+    pub const fn first_pending_batch_index(self) -> Option<u16> {
+        self.first_pending_batch_index
+    }
+
+    fn from_completion(progress: Gfx942CompletionProgressV1) -> Self {
+        Self {
+            packet_count: progress.packet_count(),
+            completed_count: progress.completed_count(),
+            pending_count: progress.pending_count(),
+            first_pending_batch_index: progress.first_pending_batch_index(),
+        }
+    }
+}
+
+/// Linear dispatch custody paired with progress from the same completion scan.
+#[derive(Debug)]
+pub enum Gfx942DispatchPollWithProgressV1<const N: usize> {
+    Pending {
+        batch: Gfx942DispatchBatchV1<N>,
+        progress: Gfx942DispatchProgressV1,
+    },
+    Ready {
+        completed: Gfx942CompletedDispatchBatchV1<N>,
+        progress: Gfx942DispatchProgressV1,
+    },
+}
+
 pub(super) fn wrap_published<const N: usize>(
     completion: Gfx942CompletionBatchV1<N>,
     generation: u64,
@@ -1469,6 +1571,30 @@ pub(super) fn wrap_poll<const N: usize>(
                 generation,
             })
         }
+    }
+}
+
+pub(super) fn wrap_poll_with_progress<const N: usize>(
+    poll: Gfx942CompletionPollWithProgressV1<N>,
+    generation: u64,
+) -> Gfx942DispatchPollWithProgressV1<N> {
+    match poll {
+        Gfx942CompletionPollWithProgressV1::Pending { batch, progress } => {
+            Gfx942DispatchPollWithProgressV1::Pending {
+                batch: wrap_published(batch, generation),
+                progress: Gfx942DispatchProgressV1::from_completion(progress),
+            }
+        }
+        Gfx942CompletionPollWithProgressV1::Ready {
+            completed,
+            progress,
+        } => Gfx942DispatchPollWithProgressV1::Ready {
+            completed: Gfx942CompletedDispatchBatchV1 {
+                completion: completed,
+                generation,
+            },
+            progress: Gfx942DispatchProgressV1::from_completion(progress),
+        },
     }
 }
 
@@ -1679,6 +1805,7 @@ pub(super) fn prepare_dispatch_resources<const N: usize>(
             })?;
         packets.push(PreparedDispatchPacketV1 {
             geometry: dispatch_geometry.geometry,
+            ordering: AqlDispatchOrderingV1::WaitForPrior,
             private_segment_size,
             group_segment_size,
             kernarg_address,
@@ -2033,6 +2160,7 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
             })?;
         prepared_packets.push(PreparedDispatchPacketV1 {
             geometry: packet.input.geometry,
+            ordering: packet.input.ordering,
             private_segment_size: packet.private_segment_size,
             group_segment_size: packet.group_segment_size,
             kernarg_address,

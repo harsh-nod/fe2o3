@@ -10,7 +10,8 @@ use fe2o3_kfd::{
     ComputeAqlQueueSessionV1, Gfx942CompletedDispatchBatchV1, Gfx942CompletedDispatchReadRequestV1,
     Gfx942CompletedDispatchReadbackV1, Gfx942CompletedDispatchSnapshotRequestV1,
     Gfx942CompletionRecycleObservationV1, Gfx942DeviceContentDescriptorV1, Gfx942DispatchBatchV1,
-    Gfx942DispatchPollV1, Gfx942FixedDispatchDataV1, Gfx942RecycledDispatchResourcesV1,
+    Gfx942DispatchPollWithProgressV1, Gfx942DispatchProgressV1, Gfx942FixedDispatchDataV1,
+    Gfx942RecycledDispatchResourcesV1,
 };
 
 use crate::allocation::{
@@ -25,12 +26,12 @@ use crate::batch::ServiceFixedBatchV1;
 
 /// Frozen claim boundary for the reusable service queue composition layer.
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-service-addressless-fixed-queue-r8-v1\n",
+    "profile=fe2o3-service-addressless-fixed-queue-r9-v1\n",
     "queue=one-long-lived-kfd-compute-aql-owner,ring-event-doorbell-and-signal-resources-retained-across-rebind\n",
-    "batch=1-through-8192-fixed-packets,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges,optional-initialized-enclosing-host-snapshot-associated-with-one-strict-interior\n",
+    "batch=1-through-8192-fixed-packets,conservative-wait-for-prior-ordering-default-with-explicit-independent-opt-in,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges,optional-initialized-enclosing-host-snapshot-associated-with-one-strict-interior\n",
     "implicit-kernarg=exact-trailing-256-byte-COV6-caller-zero-suffix,lower-owner-privately-populates-metadata-derived-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds,queue-pointer-and-runtime-service-or-address-fields-rejected\n",
-    "publication=one-reservation-one-write-counter-fetch-add-one-final-doorbell-per-fixed-batch\n",
-    "custody=prepared-published-completed-recycled-unbound-linear-service-types,exact-completion-and-signal-recycle-before-detach-rebind-or-attached-or-unbound-returning-destroy\n",
+    "publication=one-reservation-one-write-counter-fetch-add,one-retained-final-ordering-header-per-packet,one-final-doorbell-per-fixed-batch\n",
+    "custody=prepared-published-completed-recycled-unbound-linear-service-types,consuming-poll-with-progress-returns-pending-or-completed-custody-plus-same-scan-redacted-counts-and-first-pending-index,exact-completion-and-signal-recycle-before-detach-rebind-or-attached-or-unbound-returning-destroy\n",
     "data=read-and-readwrite-require-sealed-full-initialization,write-only-may-consume-uninitialized-exclusive-storage,initialized-state-retained-after-generic-completion-without-stale-content-digest\n",
     "subleases=whole-native-allocation-owner-retained,partition-registry-transfers-with-ledger,partitioned-bindings-require-member-index-and-contained-offset-extent,detached-initialized-replacement-preflights-and-atomically-installs-an-exact-new-partition,replacement-denies-old-allocation-generation\n",
     "readback=caller-can-mint-only-from-current-recycled-owner,request-binds-exact-dispatch-generation-and-owner-checked-host-allocation-generation,lower-owner-allows-an-ordinary-range-within-one-inspected-write-or-readwrite-binding-or-one-exact-declared-initialized-enclosing-snapshot-with-an-isolated-writable-interior-and-returns-owned-bytes,no-address-or-initialization-promotion\n",
@@ -43,7 +44,7 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "de6c2d43ce7be0446d58bcc3577f0609cbad6d349067bb9c56f112480f255b29";
+    "cc5e0b136a86e2e51ba732a2951bc137017b93d24e99b464be54f9054c760cda";
 
 /// Queue composition, transition, or teardown error.
 #[derive(Debug)]
@@ -303,18 +304,46 @@ impl<const N: usize> fmt::Debug for ServicePublishedQueueSessionV1<N> {
 
 impl<const N: usize> ServicePublishedQueueSessionV1<N> {
     /// Polls every exact completion signal once while preserving linear custody.
-    pub fn poll(mut self) -> Result<ServiceQueuePollV1<N>, ServiceQueueOperationFailureV1> {
-        match self.owner.queue.poll_fixed_dispatch(self.batch) {
-            Ok(Gfx942DispatchPollV1::Pending(batch)) => Ok(ServiceQueuePollV1::Pending(Self {
-                owner: self.owner,
-                batch,
-            })),
-            Ok(Gfx942DispatchPollV1::Ready(completed)) => {
-                Ok(ServiceQueuePollV1::Ready(ServiceCompletedQueueSessionV1 {
+    pub fn poll(self) -> Result<ServiceQueuePollV1<N>, ServiceQueueOperationFailureV1> {
+        match self.poll_with_progress()? {
+            ServiceQueuePollWithProgressV1::Pending { session, .. } => {
+                Ok(ServiceQueuePollV1::Pending(session))
+            }
+            ServiceQueuePollWithProgressV1::Ready { session, .. } => {
+                Ok(ServiceQueuePollV1::Ready(session))
+            }
+        }
+    }
+
+    /// Polls once and returns custody with progress from the same sequential,
+    /// non-atomic signal scan.
+    pub fn poll_with_progress(
+        mut self,
+    ) -> Result<ServiceQueuePollWithProgressV1<N>, ServiceQueueOperationFailureV1> {
+        match self
+            .owner
+            .queue
+            .poll_fixed_dispatch_with_progress(self.batch)
+        {
+            Ok(Gfx942DispatchPollWithProgressV1::Pending { batch, progress }) => {
+                Ok(ServiceQueuePollWithProgressV1::Pending {
+                    session: Self {
+                        owner: self.owner,
+                        batch,
+                    },
+                    progress: ServiceQueueProgressV1::from_kfd(progress),
+                })
+            }
+            Ok(Gfx942DispatchPollWithProgressV1::Ready {
+                completed,
+                progress,
+            }) => Ok(ServiceQueuePollWithProgressV1::Ready {
+                session: ServiceCompletedQueueSessionV1 {
                     owner: self.owner,
                     completed,
-                }))
-            }
+                },
+                progress: ServiceQueueProgressV1::from_kfd(progress),
+            }),
             Err(error) => Err(quarantine(self.owner, error)),
         }
     }
@@ -341,6 +370,69 @@ pub enum ServiceQueuePollV1<const N: usize> {
     Pending(ServicePublishedQueueSessionV1<N>),
     /// Every signal was observed ready and completed custody is returned.
     Ready(ServiceCompletedQueueSessionV1<N>),
+}
+
+/// Addressless progress observed for one exact service queue batch.
+///
+/// Signal loads occur sequentially, not as one atomic snapshot. Counts record
+/// what that scan observed, and the first pending index can already be stale by
+/// the time this value is returned.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ServiceQueueProgressV1 {
+    packet_count: u16,
+    completed_count: u16,
+    pending_count: u16,
+    first_pending_batch_index: Option<u16>,
+}
+
+impl ServiceQueueProgressV1 {
+    fn from_kfd(progress: Gfx942DispatchProgressV1) -> Self {
+        Self {
+            packet_count: progress.packet_count(),
+            completed_count: progress.completed_count(),
+            pending_count: progress.pending_count(),
+            first_pending_batch_index: progress.first_pending_batch_index(),
+        }
+    }
+
+    /// Returns the exact fixed-batch packet count.
+    pub const fn packet_count(self) -> u16 {
+        self.packet_count
+    }
+
+    /// Returns the number of signals observed completed in this scan.
+    pub const fn completed_count(self) -> u16 {
+        self.completed_count
+    }
+
+    /// Returns the number of signals observed pending in this scan.
+    pub const fn pending_count(self) -> u16 {
+        self.pending_count
+    }
+
+    /// Returns the earliest batch-local index observed pending in this scan.
+    pub const fn first_pending_batch_index(self) -> Option<u16> {
+        self.first_pending_batch_index
+    }
+}
+
+/// Linear service custody paired with progress from the same completion scan.
+#[derive(Debug)]
+pub enum ServiceQueuePollWithProgressV1<const N: usize> {
+    /// Completion remains pending.
+    Pending {
+        /// Returned published custody.
+        session: ServicePublishedQueueSessionV1<N>,
+        /// Progress observed in the consuming poll.
+        progress: ServiceQueueProgressV1,
+    },
+    /// Every signal was observed completed.
+    Ready {
+        /// Returned completed custody.
+        session: ServiceCompletedQueueSessionV1<N>,
+        /// Progress observed in the consuming poll.
+        progress: ServiceQueueProgressV1,
+    },
 }
 
 /// Completed custody before exact signal recycle.
