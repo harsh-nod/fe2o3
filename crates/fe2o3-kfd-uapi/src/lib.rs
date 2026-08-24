@@ -24,6 +24,10 @@ pub const KFD_MEMORY_LIFECYCLE_SCHEMA_ID: &str = "linux-kfd-memory-lifecycle-1.1
 pub const KFD_USERPTR_MEMORY_SCHEMA_ID: &str =
     "linux-kfd-userptr-executable-memory-1.18-generic-ioc-v1";
 
+/// Additive exact USERPTR registration profile for AQL queue control.
+pub const KFD_USERPTR_QUEUE_CONTROL_SCHEMA_ID: &str =
+    "linux-kfd-userptr-queue-control-memory-1.18-generic-ioc-v1";
+
 /// Stable name of the reviewed gfx942 device-local memory extension.
 pub const KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_ID: &str =
     "linux-kfd-gfx942-device-memory-lifecycle-1.18-v2";
@@ -224,6 +228,39 @@ pub const KFD_USERPTR_MEMORY_SCHEMA_MANIFEST_SHA256: &str =
 pub const KFD_USERPTR_MEMORY_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
     0xc1, 0xce, 0xe0, 0x9b, 0xdf, 0x88, 0x4d, 0x2c, 0x14, 0xa5, 0xdb, 0xb8, 0x9c, 0x1f, 0x6f, 0x78,
     0x85, 0x96, 0x2c, 0x75, 0xb1, 0x45, 0x7c, 0xaf, 0x41, 0x28, 0x21, 0x49, 0x09, 0x19, 0xee, 0x9e,
+];
+
+/// Additive ABI contract for one coherent USERPTR queue-control page.
+///
+/// This is separate from the executable ring profile. It admits the exact
+/// writable coherent USERPTR source expression reviewed for ROCr queue control
+/// storage and the overloaded USERPTR input meaning of `mmap_offset`; it grants
+/// no allocation, mapping, queue, or address authority.
+pub const KFD_USERPTR_QUEUE_CONTROL_SCHEMA_MANIFEST: &str = concat!(
+    "schema_id=linux-kfd-userptr-queue-control-memory-1.18-generic-ioc-v1\n",
+    "memory_schema_id=linux-kfd-memory-lifecycle-1.18-generic-ioc-v2\n",
+    "memory_schema_manifest_sha256=5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8\n",
+    "target=linux-x86_64-generic-ioc\n",
+    "source_header=include/uapi/linux/kfd_ioctl.h\n",
+    "source_header_sha256=b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d\n",
+    "gpuvm_source=amd/amdgpu/amdgpu_amdkfd_gpuvm.c\n",
+    "gpuvm_source_sha256=c7cca2ee47a08c99bb73906662d82dd7d0b5738468fbef54848e5e6dd62ba50d\n",
+    "rocr_queues_source_sha256=b7ead541340ac996c2305b2e9660cb3176edcd61ee509d4880f02659fbb6f32b\n",
+    "rocr_fmm_source_sha256=a2addccabb82e0ca184eaaf722e976e254a898ccfc945d4d956c4e273e196aef\n",
+    "alloc_flags=userptr:00000004,writable:80000000,coherent:04000000\n",
+    "alloc_profile=userptr_queue_control_writable_coherent:84000004\n",
+    "alloc_memory=va_addr-and-mmap_offset-input-are-the-same-page-aligned-live-cpu-address,output-mmap_offset-is-opaque-and-never-used-as-the-cpu-address\n",
+    "authority=wire-profile-only,no-ioctl-vma-pointer-map-free-queue-counter-or-address-authority\n",
+);
+
+/// SHA-256 of [`KFD_USERPTR_QUEUE_CONTROL_SCHEMA_MANIFEST`].
+pub const KFD_USERPTR_QUEUE_CONTROL_SCHEMA_MANIFEST_SHA256: &str =
+    "f1d75410d6bfacff2ea15ecfff226eb8aed7912ee324a36b8ed8550fa52bce02";
+
+/// Typed SHA-256 bytes of [`KFD_USERPTR_QUEUE_CONTROL_SCHEMA_MANIFEST`].
+pub const KFD_USERPTR_QUEUE_CONTROL_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
+    0xf1, 0xd7, 0x54, 0x10, 0xd6, 0xbf, 0xac, 0xff, 0x2e, 0xa1, 0x5e, 0xcf, 0xff, 0x22, 0x6e, 0xb8,
+    0xae, 0xd7, 0x91, 0x2e, 0xe3, 0x24, 0xa3, 0x6b, 0x8e, 0xd8, 0x55, 0x0f, 0xa5, 0x2b, 0xce, 0x02,
 ];
 
 /// Canonical manifest for the additive gfx942 device-local allocation profile.
@@ -463,6 +500,11 @@ pub const KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE: u32 = KFD_IOC_ALLOC_MEM_FLA
     | KFD_IOC_ALLOC_MEM_FLAGS_COHERENT
     | KFD_IOC_ALLOC_MEM_FLAGS_UNCACHED;
 
+/// Exact writable coherent USERPTR profile for an AQL queue-control page.
+pub const KFD_ALLOC_MEMORY_FLAGS_USERPTR_QUEUE_CONTROL: u32 = KFD_IOC_ALLOC_MEM_FLAGS_USERPTR
+    | KFD_IOC_ALLOC_MEM_FLAGS_WRITABLE
+    | KFD_IOC_ALLOC_MEM_FLAGS_COHERENT;
+
 /// Exact gfx942 profile for writable device-local VRAM/HBM.
 pub const KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL: u32 =
     KFD_IOC_ALLOC_MEM_FLAGS_VRAM | KFD_IOC_ALLOC_MEM_FLAGS_WRITABLE;
@@ -640,6 +682,7 @@ impl KfdAllocMemoryFlags {
     pub const AQL_QUEUE: Self = Self(KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE);
     pub const EXECUTABLE: Self = Self(KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE);
     pub const USERPTR_EXECUTABLE: Self = Self(KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE);
+    pub const USERPTR_QUEUE_CONTROL: Self = Self(KFD_ALLOC_MEMORY_FLAGS_USERPTR_QUEUE_CONTROL);
     pub const DEVICE_LOCAL: Self = Self(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL);
     pub const DEVICE_LOCAL_PUBLIC: Self = Self(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC);
 
@@ -652,7 +695,7 @@ impl KfdAllocMemoryFlags {
 /// Why an allocation-flag bit pattern was not admitted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KfdAllocMemoryFlagsError {
-    /// The pattern is not one of the four exact reviewed profiles.
+    /// The pattern is not admitted by the selected exact profile family.
     Unsupported { flags: u32 },
 }
 
@@ -707,6 +750,18 @@ pub const fn admit_kfd_userptr_executable_memory_flags(
 ) -> Result<KfdAllocMemoryFlags, KfdAllocMemoryFlagsError> {
     match flags {
         KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE => Ok(KfdAllocMemoryFlags::USERPTR_EXECUTABLE),
+        flags => Err(KfdAllocMemoryFlagsError::Unsupported { flags }),
+    }
+}
+
+/// Admits only the additive writable coherent USERPTR queue-control profile.
+pub const fn admit_kfd_userptr_queue_control_memory_flags(
+    flags: u32,
+) -> Result<KfdAllocMemoryFlags, KfdAllocMemoryFlagsError> {
+    match flags {
+        KFD_ALLOC_MEMORY_FLAGS_USERPTR_QUEUE_CONTROL => {
+            Ok(KfdAllocMemoryFlags::USERPTR_QUEUE_CONTROL)
+        }
         flags => Err(KfdAllocMemoryFlagsError::Unsupported { flags }),
     }
 }
@@ -1174,6 +1229,22 @@ impl KfdIoctlAllocMemoryOfGpuArgs {
             mmap_offset: address,
             gpu_id,
             flags: KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE,
+        }
+    }
+
+    /// Constructs an exact writable coherent USERPTR queue-control request.
+    ///
+    /// The higher layer must retain the page-aligned CPU VMA at `address`
+    /// through GPU unmap and `FREE_MEMORY_OF_GPU`. Both input address fields are
+    /// deliberately identical; any returned `mmap_offset` is opaque.
+    pub const fn new_userptr_queue_control(address: u64, size: u64, gpu_id: u32) -> Self {
+        Self {
+            va_addr: address,
+            size,
+            handle: 0,
+            mmap_offset: address,
+            gpu_id,
+            flags: KFD_ALLOC_MEMORY_FLAGS_USERPTR_QUEUE_CONTROL,
         }
     }
 }

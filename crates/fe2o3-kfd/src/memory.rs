@@ -320,9 +320,17 @@ pub(super) trait MemoryBackend {
         &mut self,
         address: u64,
         bytes: u64,
+        flags: KfdAllocMemoryFlags,
     ) -> KernelOutcome<KfdIoctlAllocMemoryOfGpuArgs> {
+        let value = if flags == KfdAllocMemoryFlags::USERPTR_EXECUTABLE {
+            KfdIoctlAllocMemoryOfGpuArgs::new_userptr(address, bytes, self.gpu_id())
+        } else if flags == KfdAllocMemoryFlags::USERPTR_QUEUE_CONTROL {
+            KfdIoctlAllocMemoryOfGpuArgs::new_userptr_queue_control(address, bytes, self.gpu_id())
+        } else {
+            KfdIoctlAllocMemoryOfGpuArgs::new(address, bytes, self.gpu_id(), flags)
+        };
         KernelOutcome {
-            value: KfdIoctlAllocMemoryOfGpuArgs::new_userptr(address, bytes, self.gpu_id()),
+            value,
             result: Err(MemorySessionError::KernelResultMalformed(
                 "USERPTR allocation backend",
             )),
