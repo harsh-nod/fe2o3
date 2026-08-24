@@ -341,9 +341,9 @@ fn rejects_barrier_removal_extra_functions_and_generic_lowering_bypass() {
         &tiled_gemm_lds_grid_v1_module(),
         &TILED_GEMM_LDS_GRID_V1_KERNEL_ID.into(),
     )
-    .expect_err("generic exact-target lowering must reject the 2D grid");
+    .expect_err("generic exact-target lowering must reject unsupported grid indexing");
     assert!(
-        error.contains(fe2o3_amdgcn_model::LoweringDiagnosticCode::UnsupportedLaunchDomain),
+        error.contains(fe2o3_amdgcn_model::LoweringDiagnosticCode::UnsupportedOperation),
         "{error}"
     );
 }

@@ -89,6 +89,22 @@ fn gfx942_family_emits_exact_flat_workgroup_and_occupancy_metadata() {
 }
 
 #[test]
+fn launch_policy_admission_uses_the_flat_multidimensional_workgroup_size() {
+    let mut module = family_module();
+    module.kernels[0].domain = LaunchDomain::D2 {
+        x: LaunchExtent::Static(1),
+        y: LaunchExtent::Static(1),
+    };
+    module.kernels[0].workgroup_size = Some(WorkgroupSize::new(32, 2, 1));
+
+    let llvm =
+        lower_compiler_module_to_gfx942_llvm_ir_with_launch_policies(&module, &exact_policies())
+            .unwrap();
+    assert!(llvm.contains("\"amdgpu-flat-work-group-size\"=\"64,64\""));
+    assert!(llvm.contains("!1 = !{i32 32, i32 2, i32 1}"));
+}
+
+#[test]
 fn missing_duplicate_unknown_and_incompatible_policies_fail_closed() {
     let module = family_module();
     let cases = [

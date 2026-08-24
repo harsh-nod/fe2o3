@@ -1747,7 +1747,7 @@ fn kernel_selection_requires_an_exact_identity() {
 }
 
 #[test]
-fn only_rank_is_restricted_while_workgroup_size_is_mandatory() {
+fn dynamic_higher_rank_domains_are_rejected_and_workgroup_size_is_mandatory() {
     let mut missing_size = fill_module();
     missing_size.kernels[0].workgroup_size = None;
     assert_eq!(
@@ -1800,6 +1800,22 @@ fn invalid_or_unbounded_workgroup_geometry_is_rejected() {
         LoweringDiagnosticCode::UnsupportedWorkgroupSize
     );
 
+    let mut overflow = fill_module();
+    overflow.kernels[0].domain = LaunchDomain::D2 {
+        x: LaunchExtent::Static(1),
+        y: LaunchExtent::Static(1),
+    };
+    overflow.kernels[0].workgroup_size = Some(WorkgroupSize::new(u32::MAX, 2, 1));
+    let error = lower_kernel_to_llvm_ir(&overflow, &KernelId::new("fill")).unwrap_err();
+    assert_eq!(
+        error.diagnostics()[0].code,
+        LoweringDiagnosticCode::UnsupportedWorkgroupSize
+    );
+    assert_eq!(
+        error.diagnostics()[0].message,
+        "workgroup dimensions overflow the flat workgroup size"
+    );
+
     for size in [WorkgroupSize::new(64, 2, 1), WorkgroupSize::new(64, 1, 2)] {
         let mut inactive_axis = fill_module();
         inactive_axis.kernels[0].workgroup_size = Some(size);
@@ -1808,6 +1824,36 @@ fn invalid_or_unbounded_workgroup_geometry_is_rejected() {
             LoweringDiagnosticCode::InputVerification(DiagnosticCode::InvalidWorkgroupSize)
         );
     }
+}
+
+#[test]
+fn static_multidimensional_workgroups_preserve_exact_and_flat_geometry() {
+    let mut module = fill_module();
+    module.kernels[0].domain = LaunchDomain::D2 {
+        x: LaunchExtent::Static(8),
+        y: LaunchExtent::Static(4),
+    };
+    module.kernels[0].workgroup_size = Some(WorkgroupSize::new(32, 2, 1));
+
+    let llvm = lower_kernel_to_llvm_ir(&module, &KernelId::new("fill")).unwrap();
+    assert!(llvm.contains("\"amdgpu-flat-work-group-size\"=\"64,64\""));
+    assert!(llvm.contains("!0 = !{i32 32, i32 2, i32 1}"));
+    assert!(llvm.contains(".base = mul i64 %v2.group, 32"));
+
+    let mut unsupported_axis = module;
+    let OperationKind::Intrinsic(intrinsic) =
+        &mut unsupported_axis.functions[0].body.as_mut().unwrap().blocks[0].operations[0].kind
+    else {
+        panic!("global invocation index expected")
+    };
+    intrinsic.kind = IntrinsicKind::InvocationIndex {
+        kind: IndexKind::Global,
+        axis: Axis::Y,
+    };
+    assert_eq!(
+        first_code(&unsupported_axis, "fill"),
+        LoweringDiagnosticCode::UnsupportedOperation
+    );
 }
 
 #[test]
@@ -1961,8 +2007,22 @@ fn rejects_missing_mismatched_and_partial_wave_execution() {
         LoweringDiagnosticCode::UnsupportedWaveOperation
     );
 
+    let mut multidimensional = wave_module(WaveWidth::Wave64);
+    multidimensional.kernels[0].domain = LaunchDomain::D2 {
+        x: LaunchExtent::Static(1),
+        y: LaunchExtent::Static(1),
+    };
+    multidimensional.kernels[0].workgroup_size = Some(WorkgroupSize::new(32, 2, 1));
+    let llvm = lower_kernel_to_llvm_ir(&multidimensional, &KernelId::new("wave_kernel")).unwrap();
+    assert!(llvm.contains("\"amdgpu-flat-work-group-size\"=\"64,64\""));
+    assert!(llvm.contains("!0 = !{i32 32, i32 2, i32 1}"));
+
     let mut partial = wave_module(WaveWidth::Wave64);
-    partial.kernels[0].workgroup_size = Some(WorkgroupSize::new(96, 1, 1));
+    partial.kernels[0].domain = LaunchDomain::D2 {
+        x: LaunchExtent::Static(1),
+        y: LaunchExtent::Static(1),
+    };
+    partial.kernels[0].workgroup_size = Some(WorkgroupSize::new(32, 3, 1));
     let error = lower_kernel_to_llvm_ir(&partial, &KernelId::new("wave_kernel")).unwrap_err();
     assert_eq!(
         error.diagnostics()[0].code,
@@ -1970,7 +2030,7 @@ fn rejects_missing_mismatched_and_partial_wave_execution() {
     );
     assert_eq!(
         error.diagnostics()[0].message,
-        "full-wave execution requires workgroup size 96 to be a multiple of 64"
+        "full-wave execution requires flat workgroup size 96 to be a multiple of 64"
     );
 }
 

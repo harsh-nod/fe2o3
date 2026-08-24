@@ -73,11 +73,16 @@ fn matrix_module() -> Module {
 
     let load_a = matrix_operation(MatrixOperation::lds_load(ValueId(4), MatrixElement::Bf16));
     let load_b = matrix_operation(MatrixOperation::lds_load(ValueId(5), MatrixElement::Bf16));
-    let mma = matrix_operation(MatrixOperation::multiply_accumulate(
-        [ValueId(7), ValueId(8), ValueId(9), ValueId(10)],
-        [ValueId(11), ValueId(12), ValueId(13), ValueId(14)],
-        [ValueId(0), ValueId(1), ValueId(2), ValueId(3)],
-    ));
+    let mma = matrix_operation(
+        MatrixOperation::multiply_accumulate(
+            [ValueId(7), ValueId(8), ValueId(9), ValueId(10)],
+            [ValueId(11), ValueId(12), ValueId(13), ValueId(14)],
+            [ValueId(0), ValueId(1), ValueId(2), ValueId(3)],
+        )
+        .with_declared_tensor_layout(
+            TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64_lds_xor4(),
+        ),
+    );
     let store = matrix_operation(MatrixOperation::lds_store(
         ValueId(6),
         [ValueId(15), ValueId(16), ValueId(17), ValueId(18)],
@@ -161,6 +166,7 @@ fn hand_built_frontend_claim_module() -> Module {
         [ValueId(4), ValueId(5), ValueId(6), ValueId(7)],
         [ValueId(8), ValueId(9), ValueId(10), ValueId(11)],
     )
+    .with_declared_tensor_layout(TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64())
     .with_frontend_binding(binding.clone());
     let operation = Operation::new(
         (12..16)
@@ -305,16 +311,43 @@ fn public_capability_or_hand_built_record_never_becomes_observed_abi_evidence() 
 }
 
 #[test]
-fn baseline_and_multi_wave_workgroups_fail_closed() {
+fn matrix_lowering_accepts_full_wave_workgroups_and_rejects_partial_waves() {
     let module = matrix_module();
     let baseline = lower_kernel_to_llvm_ir(&module, &"matrix_kernel".into()).unwrap_err();
     assert!(baseline.contains(LoweringDiagnosticCode::UnsupportedCapability));
 
-    let mut multi_wave = module;
+    let mut multi_wave = module.clone();
     multi_wave.kernels[0].workgroup_size = Some(WorkgroupSize::new(128, 1, 1));
-    let errors = lower_kernel_to_gfx942_llvm_ir(&multi_wave, &"matrix_kernel".into()).unwrap_err();
+    let llvm = lower_kernel_to_gfx942_llvm_ir(&multi_wave, &"matrix_kernel".into()).unwrap();
+    assert!(llvm.contains("\"amdgpu-flat-work-group-size\"=\"128,128\""));
+    assert!(llvm.contains("!0 = !{i32 128, i32 1, i32 1}"));
+    let compiler_llvm = lower_compiler_module_to_gfx942_llvm_ir(&multi_wave).unwrap();
+    assert!(compiler_llvm.contains("\"amdgpu-flat-work-group-size\"=\"128,128\""));
+    assert!(compiler_llvm.contains("!0 = !{i32 128, i32 1, i32 1}"));
+
+    let mut two_dimensional = module.clone();
+    two_dimensional.kernels[0].domain = LaunchDomain::D2 {
+        x: LaunchExtent::Static(1),
+        y: LaunchExtent::Static(1),
+    };
+    two_dimensional.kernels[0].workgroup_size = Some(WorkgroupSize::new(32, 2, 1));
+    let llvm = lower_kernel_to_gfx942_llvm_ir(&two_dimensional, &"matrix_kernel".into()).unwrap();
+    assert!(llvm.contains("\"amdgpu-flat-work-group-size\"=\"64,64\""));
+    assert!(llvm.contains("!0 = !{i32 32, i32 2, i32 1}"));
+    let compiler_llvm = lower_compiler_module_to_gfx942_llvm_ir(&two_dimensional).unwrap();
+    assert!(compiler_llvm.contains("\"amdgpu-flat-work-group-size\"=\"64,64\""));
+    assert!(compiler_llvm.contains("!0 = !{i32 32, i32 2, i32 1}"));
+
+    let mut partial_wave = module;
+    partial_wave.kernels[0].domain = LaunchDomain::D2 {
+        x: LaunchExtent::Static(1),
+        y: LaunchExtent::Static(1),
+    };
+    partial_wave.kernels[0].workgroup_size = Some(WorkgroupSize::new(32, 3, 1));
+    let errors =
+        lower_kernel_to_gfx942_llvm_ir(&partial_wave, &"matrix_kernel".into()).unwrap_err();
     assert!(errors.contains(LoweringDiagnosticCode::UnsupportedMatrixOperation));
-    assert!(errors.to_string().contains("exactly one full wave64"));
+    assert!(errors.to_string().contains("multiple of 64, found 96"));
 }
 
 #[test]
@@ -374,50 +407,80 @@ fn divergent_matrix_placement_is_rejected() {
 
 #[test]
 #[ignore = "requires ROCm LLVM tools with gfx942 support"]
-fn rocm_compiles_and_inspects_gfx942_matrix_object() {
+fn rocm_compiles_and_inspects_gfx942_matrix_workgroup_shapes() {
     let directory = TemporaryDirectory::new();
-    let input = directory.join("matrix.ll");
-    let object = directory.join("matrix.o");
-    fs::write(
-        &input,
-        lower_kernel_to_gfx942_llvm_ir(&matrix_module(), &"matrix_kernel".into()).unwrap(),
-    )
-    .unwrap();
-
-    let compile = Command::new("/opt/rocm/llvm/bin/clang")
-        .args([
-            "-x",
-            "ir",
-            "--target=amdgcn-amd-amdhsa",
-            "-mcpu=gfx942",
-            "-mcode-object-version=6",
-            "-nogpulib",
-            "-c",
-        ])
-        .arg(&input)
-        .arg("-o")
-        .arg(&object)
-        .output()
+    for (name, domain, workgroup_size) in [
+        (
+            "single_wave",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Dynamic,
+            },
+            WorkgroupSize::new(64, 1, 1),
+        ),
+        (
+            "multi_wave",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Dynamic,
+            },
+            WorkgroupSize::new(128, 1, 1),
+        ),
+        (
+            "two_dimensional",
+            LaunchDomain::D2 {
+                x: LaunchExtent::Static(1),
+                y: LaunchExtent::Static(1),
+            },
+            WorkgroupSize::new(32, 2, 1),
+        ),
+    ] {
+        let input_name = format!("matrix-{name}.ll");
+        let object_name = format!("matrix-{name}.o");
+        let input = directory.join(&input_name);
+        let object = directory.join(&object_name);
+        let mut module = matrix_module();
+        module.kernels[0].domain = domain;
+        module.kernels[0].workgroup_size = Some(workgroup_size);
+        fs::write(
+            &input,
+            lower_kernel_to_gfx942_llvm_ir(&module, &"matrix_kernel".into()).unwrap(),
+        )
         .unwrap();
-    assert!(
-        compile.status.success(),
-        "clang failed:\n{}",
-        String::from_utf8_lossy(&compile.stderr)
-    );
 
-    let disassembly = Command::new("/opt/rocm/llvm/bin/llvm-objdump")
-        .args(["-d", "--mcpu=gfx942"])
-        .arg(&object)
-        .output()
-        .unwrap();
-    assert!(
-        disassembly.status.success(),
-        "llvm-objdump failed:\n{}",
-        String::from_utf8_lossy(&disassembly.stderr)
-    );
-    let disassembly = String::from_utf8_lossy(&disassembly.stdout);
-    assert!(
-        disassembly.contains("v_mfma_f32_16x16x16_bf16"),
-        "missing gfx942 MFMA instruction:\n{disassembly}"
-    );
+        let compile = Command::new("/opt/rocm/llvm/bin/clang")
+            .args([
+                "-x",
+                "ir",
+                "--target=amdgcn-amd-amdhsa",
+                "-mcpu=gfx942",
+                "-mcode-object-version=6",
+                "-nogpulib",
+                "-c",
+            ])
+            .arg(&input)
+            .arg("-o")
+            .arg(&object)
+            .output()
+            .unwrap();
+        assert!(
+            compile.status.success(),
+            "clang failed for {name}:\n{}",
+            String::from_utf8_lossy(&compile.stderr)
+        );
+
+        let disassembly = Command::new("/opt/rocm/llvm/bin/llvm-objdump")
+            .args(["-d", "--mcpu=gfx942"])
+            .arg(&object)
+            .output()
+            .unwrap();
+        assert!(
+            disassembly.status.success(),
+            "llvm-objdump failed for {name}:\n{}",
+            String::from_utf8_lossy(&disassembly.stderr)
+        );
+        let disassembly = String::from_utf8_lossy(&disassembly.stdout);
+        assert!(
+            disassembly.contains("v_mfma_f32_16x16x16_bf16"),
+            "missing gfx942 MFMA instruction for {name}:\n{disassembly}"
+        );
+    }
 }

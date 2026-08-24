@@ -378,9 +378,9 @@ fn generic_lowering_cannot_bypass_exact_edge_authentication() {
         &tiled_gemm_lds_edges_v1_module(),
         &TILED_GEMM_LDS_EDGES_V1_KERNEL_ID.into(),
     )
-    .expect_err("generic exact-target lowering must reject the 2D edge grid");
+    .expect_err("generic exact-target lowering must reject unsupported grid indexing");
     assert!(
-        error.contains(fe2o3_amdgcn_model::LoweringDiagnosticCode::UnsupportedLaunchDomain),
+        error.contains(fe2o3_amdgcn_model::LoweringDiagnosticCode::UnsupportedOperation),
         "{error}"
     );
 }

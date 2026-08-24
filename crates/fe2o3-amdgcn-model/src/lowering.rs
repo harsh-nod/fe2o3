@@ -37,7 +37,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::{AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim};
 
-const MAX_G1_WORKGROUP_SIZE: u32 = 1024;
+const MAX_G1_FLAT_WORKGROUP_SIZE: u32 = 1024;
 const MAX_COMPILER_MODULE_GRAPH_FUNCTIONS: usize = 1_024;
 const MAX_COMPILER_MODULE_GRAPH_KERNELS: usize = 256;
 const MAX_COMPILER_MODULE_CALL_EDGES: usize = 131_072;
@@ -572,7 +572,7 @@ fn lower_kernel_to_llvm_ir_for_target(
     }
 
     let mut lowerer =
-        FunctionLowerer::new(module, kernel, entry, workgroup_size.x, wave_width, target);
+        FunctionLowerer::new(module, kernel, entry, workgroup_size, wave_width, target);
     preflight_function(&mut lowerer)?;
     lowerer.emit()
 }
@@ -2468,14 +2468,17 @@ fn lower_compiler_module_to_llvm_ir_for_target(
         let launch_bounds = launch_policy_map
             .as_ref()
             .map(|policies| policies[&kernel.id]);
-        if launch_bounds.is_some_and(|bounds| !bounds.admits_flat_workgroup_size(workgroup_size.x))
+        let flat_workgroup_size = checked_flat_workgroup_size(workgroup_size)
+            .expect("validate_launch established a bounded flat workgroup size");
+        if launch_bounds
+            .is_some_and(|bounds| !bounds.admits_flat_workgroup_size(flat_workgroup_size))
         {
             return Err(LoweringErrors::one(
                 LoweringLocation::kernel(module, kernel),
                 LoweringDiagnosticCode::InvalidLaunchPolicy,
                 format!(
                     "exact workgroup size {} is outside the admitted flat workgroup range",
-                    workgroup_size.x
+                    flat_workgroup_size
                 ),
             ));
         }
@@ -2487,7 +2490,7 @@ fn lower_compiler_module_to_llvm_ir_for_target(
             module,
             kernel,
             entry,
-            workgroup_size.x,
+            workgroup_size,
             wave_width,
             &call_symbols,
             target,
@@ -3765,8 +3768,8 @@ fn emit_compiler_module(
         let wave_attribute = lowerer
             .wave_width
             .map_or("", |width| target.wave_target_feature(width));
-        let workgroup_x = lowerer
-            .workgroup_x
+        let flat_workgroup_size = lowerer
+            .flat_workgroup_size()
             .expect("compiler-module kernel requires a workgroup size");
         match lowerer.launch_bounds {
             Some(bounds) => {
@@ -3784,7 +3787,7 @@ fn emit_compiler_module(
             None => {
                 writeln!(
                     output,
-                    "attributes #{index} = {{ nounwind \"amdgpu-flat-work-group-size\"=\"{workgroup_x},{workgroup_x}\"{wave_attribute}{} }}",
+                    "attributes #{index} = {{ nounwind \"amdgpu-flat-work-group-size\"=\"{flat_workgroup_size},{flat_workgroup_size}\"{wave_attribute}{} }}",
                     target.llvm_function_attributes()
                 )
                 .unwrap();
@@ -3803,10 +3806,15 @@ fn emit_compiler_module(
     }
     writeln!(output).unwrap();
     for (index, lowerer) in kernels.iter().enumerate() {
-        let workgroup_x = lowerer
-            .workgroup_x
+        let workgroup_size = lowerer
+            .workgroup_size
             .expect("compiler-module kernel requires a workgroup size");
-        writeln!(output, "!{index} = !{{i32 {workgroup_x}, i32 1, i32 1}}").unwrap();
+        writeln!(
+            output,
+            "!{index} = !{{i32 {}, i32 {}, i32 {}}}",
+            workgroup_size.x, workgroup_size.y, workgroup_size.z
+        )
+        .unwrap();
     }
     if target == LoweringTarget::Gfx942TiledGemmLdsV1 {
         debug_assert_eq!(kernels.len(), 1, "the exact Slice1 profile has one kernel");
@@ -4347,11 +4355,26 @@ fn validate_launch(
         } if target == LoweringTarget::Gfx942TiledGemmLdsEdgesV1
             && x == TILED_GEMM_LDS_EDGES_V1_LAUNCH_EXTENT_X
             && y == TILED_GEMM_LDS_EDGES_V1_LAUNCH_EXTENT_Y => {}
+        LaunchDomain::D2 {
+            x: LaunchExtent::Static(_),
+            y: LaunchExtent::Static(_),
+        } if !matches!(
+            target,
+            LoweringTarget::Gfx942TiledGemmLdsGridV1 | LoweringTarget::Gfx942TiledGemmLdsEdgesV1
+        ) => {}
+        LaunchDomain::D3 {
+            x: LaunchExtent::Static(_),
+            y: LaunchExtent::Static(_),
+            z: LaunchExtent::Static(_),
+        } if !matches!(
+            target,
+            LoweringTarget::Gfx942TiledGemmLdsGridV1 | LoweringTarget::Gfx942TiledGemmLdsEdgesV1
+        ) => {}
         LaunchDomain::D2 { .. } | LaunchDomain::D3 { .. } => {
             return Err(LoweringErrors::one(
                 LoweringLocation::kernel(module, kernel),
                 LoweringDiagnosticCode::UnsupportedLaunchDomain,
-                "G1 supports only a 1D launch domain outside the authenticated tiled GEMM LDS grid V1 target",
+                "higher-rank launch domains require fully static extents outside the authenticated tiled GEMM LDS grid profiles",
             ));
         }
     }
@@ -4363,16 +4386,27 @@ fn validate_launch(
             "G1 requires a statically declared workgroup size",
         ));
     };
-    if size.x > MAX_G1_WORKGROUP_SIZE || size.y != 1 || size.z != 1 {
+    let Some(flat_size) = checked_flat_workgroup_size(size) else {
+        return Err(LoweringErrors::one(
+            LoweringLocation::kernel(module, kernel),
+            LoweringDiagnosticCode::UnsupportedWorkgroupSize,
+            "workgroup dimensions overflow the flat workgroup size",
+        ));
+    };
+    if flat_size == 0 || flat_size > MAX_G1_FLAT_WORKGROUP_SIZE {
         return Err(LoweringErrors::one(
             LoweringLocation::kernel(module, kernel),
             LoweringDiagnosticCode::UnsupportedWorkgroupSize,
             format!(
-                "G1 requires workgroup dimensions (x, 1, 1) with x at most {MAX_G1_WORKGROUP_SIZE}"
+                "flat workgroup size {flat_size} exceeds the G1 limit of {MAX_G1_FLAT_WORKGROUP_SIZE}"
             ),
         ));
     }
     Ok(size)
+}
+
+fn checked_flat_workgroup_size(size: WorkgroupSize) -> Option<u32> {
+    size.x.checked_mul(size.y)?.checked_mul(size.z)
 }
 
 #[derive(Clone)]
@@ -4448,7 +4482,7 @@ struct FunctionLowerer<'a> {
     kernel: Option<&'a Kernel>,
     function: &'a Function,
     symbol: &'a str,
-    workgroup_x: Option<u32>,
+    workgroup_size: Option<WorkgroupSize>,
     wave_width: Option<WaveWidth>,
     target: LoweringTarget,
     launch_bounds: Option<Gfx942LaunchBoundsV1>,
@@ -4516,11 +4550,15 @@ fn lower_hex(bytes: &[u8]) -> String {
 }
 
 impl<'a> FunctionLowerer<'a> {
+    fn flat_workgroup_size(&self) -> Option<u32> {
+        self.workgroup_size.and_then(checked_flat_workgroup_size)
+    }
+
     fn new(
         module: &'a Module,
         kernel: &'a Kernel,
         function: &'a Function,
-        workgroup_x: u32,
+        workgroup_size: WorkgroupSize,
         wave_width: Option<WaveWidth>,
         target: LoweringTarget,
     ) -> Self {
@@ -4530,7 +4568,7 @@ impl<'a> FunctionLowerer<'a> {
             kernel: Some(kernel),
             function,
             symbol: kernel.id.as_str(),
-            workgroup_x: Some(workgroup_x),
+            workgroup_size: Some(workgroup_size),
             wave_width,
             target,
             launch_bounds: None,
@@ -4546,7 +4584,7 @@ impl<'a> FunctionLowerer<'a> {
         module: &'a Module,
         kernel: &'a Kernel,
         function: &'a Function,
-        workgroup_x: u32,
+        workgroup_size: WorkgroupSize,
         wave_width: Option<WaveWidth>,
         call_symbols: &'a BTreeMap<FunctionId, String>,
         target: LoweringTarget,
@@ -4558,7 +4596,7 @@ impl<'a> FunctionLowerer<'a> {
             kernel: Some(kernel),
             function,
             symbol: kernel.id.as_str(),
-            workgroup_x: Some(workgroup_x),
+            workgroup_size: Some(workgroup_size),
             wave_width,
             target,
             launch_bounds,
@@ -4582,7 +4620,7 @@ impl<'a> FunctionLowerer<'a> {
             kernel: None,
             function,
             symbol: function.id.as_str(),
-            workgroup_x: None,
+            workgroup_size: None,
             wave_width,
             target,
             launch_bounds: None,
@@ -5248,11 +5286,25 @@ impl<'a> FunctionLowerer<'a> {
                 "compiler-module helpers cannot contain kernel-context matrix operations",
             ));
         }
-        if self.wave_width != Some(WaveWidth::Wave64) || self.workgroup_x != Some(64) {
+        if self.wave_width != Some(WaveWidth::Wave64) {
             return Err(LoweringErrors::one(
                 location.clone(),
                 LoweringDiagnosticCode::UnsupportedMatrixOperation,
-                "matrix V1 requires exactly one full wave64 workgroup",
+                "matrix V1 requires an exact wave64 capability",
+            ));
+        }
+        let flat_workgroup_size = self
+            .flat_workgroup_size()
+            .expect("kernel matrix operations have a validated workgroup size");
+        if flat_workgroup_size == 0
+            || !flat_workgroup_size.is_multiple_of(WaveWidth::Wave64.lanes())
+        {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedMatrixOperation,
+                format!(
+                    "matrix V1 requires a nonzero flat workgroup size that is a multiple of 64, found {flat_workgroup_size}"
+                ),
             ));
         }
         let supported = match &matrix.kind {
@@ -5672,7 +5724,7 @@ impl<'a> FunctionLowerer<'a> {
         wave: &WaveOperation,
         location: &LoweringLocation,
     ) -> Result<(), LoweringErrors> {
-        let Some(workgroup_x) = self.workgroup_x else {
+        let Some(flat_workgroup_size) = self.flat_workgroup_size() else {
             return Err(LoweringErrors::one(
                 location.clone(),
                 LoweringDiagnosticCode::UnsupportedWaveOperation,
@@ -5689,13 +5741,13 @@ impl<'a> FunctionLowerer<'a> {
                 ),
             ));
         }
-        if !workgroup_x.is_multiple_of(wave.width.lanes()) {
+        if flat_workgroup_size == 0 || !flat_workgroup_size.is_multiple_of(wave.width.lanes()) {
             return Err(LoweringErrors::one(
                 location.clone(),
                 LoweringDiagnosticCode::UnsupportedWaveOperation,
                 format!(
-                    "full-wave execution requires workgroup size {} to be a multiple of {}",
-                    workgroup_x,
+                    "full-wave execution requires flat workgroup size {} to be a multiple of {}",
+                    flat_workgroup_size,
                     wave.width.lanes()
                 ),
             ));
@@ -5851,7 +5903,7 @@ impl<'a> FunctionLowerer<'a> {
         writeln!(
             output,
             "attributes #0 = {{ nounwind \"amdgpu-flat-work-group-size\"=\"{0},{0}\"{wave_attribute}{target_attributes} }}",
-            self.workgroup_x
+            self.flat_workgroup_size()
                 .expect("single-kernel emission requires a workgroup size"),
             target_attributes = self.target.llvm_function_attributes()
         )
@@ -5865,11 +5917,13 @@ impl<'a> FunctionLowerer<'a> {
             writeln!(output, "attributes #2 = {{ convergent nounwind }}").unwrap();
         }
         writeln!(output).unwrap();
+        let workgroup_size = self
+            .workgroup_size
+            .expect("single-kernel emission requires a workgroup size");
         writeln!(
             output,
-            "!0 = !{{i32 {}, i32 1, i32 1}}",
-            self.workgroup_x
-                .expect("single-kernel emission requires a workgroup size")
+            "!0 = !{{i32 {}, i32 {}, i32 {}}}",
+            workgroup_size.x, workgroup_size.y, workgroup_size.z
         )
         .unwrap();
         Ok(output)
@@ -6245,8 +6299,9 @@ impl<'a> FunctionLowerer<'a> {
                         writeln!(
                             output,
                             "  {result}.base = mul i64 {result}.group, {}",
-                            self.workgroup_x
+                            self.workgroup_size
                                 .expect("global invocation index requires a kernel workgroup size")
+                                .x
                         )
                         .unwrap();
                         writeln!(output, "  {result} = add i64 {result}.base, {result}.local")
