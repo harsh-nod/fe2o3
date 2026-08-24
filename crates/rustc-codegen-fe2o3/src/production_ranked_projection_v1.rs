@@ -56,9 +56,9 @@ const ROOT_NAME_V1: &str = "semantic_safety_module";
 const MAX_PROJECTED_OPERATIONS_V1: usize = MAX_RANKED_BOUNDS_OPERATIONS - 1;
 // Diagnostics are retained only until this bounded projection is consumed.
 const MAX_PROJECTED_RANKED_IR_BYTES_V1: usize = MAX_RANKED_BOUNDS_OPERATIONS * 256;
-const MAX_PROJECTED_TENSOR_STATE_ENTRIES_V1: usize = MAX_RANKED_BOUNDS_OPERATIONS * 4;
-const MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1: usize = MAX_RANKED_BOUNDS_OPERATIONS * 16;
-const MAX_PROJECTED_TENSOR_ENUM_DEPTH_V1: usize = 8;
+const MAX_PROJECTED_CAPABILITY_STATE_ENTRIES_V1: usize = MAX_RANKED_BOUNDS_OPERATIONS * 4;
+const MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1: usize = MAX_RANKED_BOUNDS_OPERATIONS * 16;
+const MAX_PROJECTED_CAPABILITY_ENUM_DEPTH_V1: usize = 8;
 const MAX_PROJECTED_LOOP_GRAPH_WORK_V1: usize =
     MAX_RANKED_BOUNDS_BLOCKS * (MAX_RANKED_BOUNDS_BLOCKS + MAX_RANKED_BOUNDS_EDGES);
 const PRIVATE_ALLOCATION_ORIGIN_TAG_V1: u64 = 1_u64 << 63;
@@ -198,7 +198,7 @@ struct IntrinsicProjectionV1 {
     deterministic_switches: Vec<Option<ProjectedDeterministicSwitchV1>>,
     uniform_inductions: Vec<ProjectedUniformInductionV1>,
     tensor_layouts: Vec<Option<ProductionRankedOperationV1>>,
-    tensor_read_effects: Vec<Option<ProjectedTensorReadEffectV1>>,
+    capability_read_effects: Vec<Option<ProjectedCapabilityReadEffectV1>>,
     read_view_effects: Vec<Option<GuardedRankedAccessV1>>,
     extent_argument_count: usize,
 }
@@ -258,19 +258,19 @@ struct ProjectedMfmaOperandV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ProjectedTensorReadEffectV1 {
+struct ProjectedCapabilityReadEffectV1 {
     allocation: AllocationContractV1,
     source: SemanticSourceProvenanceV1,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-struct ProjectedTensorTerminatorEffectsV1 {
+struct ProjectedCapabilityTerminatorEffectsV1 {
     layout: Option<ProductionRankedOperationV1>,
     global_read: Option<AllocationContractV1>,
     read_view: Option<ProjectedReadViewAccessV1>,
 }
 
-struct ProjectedTensorEffectsV1 {
+struct ProjectedCapabilityEffectsV1 {
     layouts: Vec<Option<ProductionRankedOperationV1>>,
     global_reads: Vec<Option<AllocationContractV1>>,
     read_views: Vec<Option<ProjectedReadViewAccessV1>>,
@@ -305,7 +305,7 @@ struct ProjectedMfmaAccumulatorV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ProjectedTensorOriginV1 {
+enum ProjectedCapabilityOriginV1 {
     MatrixContext { root: u64 },
     Lane { root: u64, wave_width: u32 },
     ViewResult(ProjectedMfmaViewV1),
@@ -317,21 +317,21 @@ enum ProjectedTensorOriginV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ProjectedTensorValueV1 {
-    Known(ProjectedTensorOriginV1),
-    ConstructedEnum(ProjectedTensorEnumEnvelopeV1),
+enum ProjectedCapabilityValueV1 {
+    Known(ProjectedCapabilityOriginV1),
+    ConstructedEnum(ProjectedCapabilityEnumEnvelopeV1),
     Invalid,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ProjectedTensorEnumEnvelopeV1 {
-    origin: ProjectedTensorOriginV1,
+struct ProjectedCapabilityEnumEnvelopeV1 {
+    origin: ProjectedCapabilityOriginV1,
     // Innermost to outermost. The fixed bound keeps every dataflow state Copy-sized.
-    variants: [u32; MAX_PROJECTED_TENSOR_ENUM_DEPTH_V1],
+    variants: [u32; MAX_PROJECTED_CAPABILITY_ENUM_DEPTH_V1],
     depth: u8,
 }
 
-type ProjectedTensorStateV1 = HashMap<usize, ProjectedTensorValueV1>;
+type ProjectedCapabilityStateV1 = HashMap<usize, ProjectedCapabilityValueV1>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct AllocationContractV1 {
@@ -747,7 +747,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
             operations.push(tensor_layout);
         }
         if let Some(effect) = intrinsic
-            .tensor_read_effects
+            .capability_read_effects
             .get(block_index)
             .copied()
             .flatten()
@@ -1151,21 +1151,21 @@ fn project_rust_bounds_checks(
     })
 }
 
-fn project_authenticated_tensor_layouts_v1(
+fn project_authenticated_capabilities_v1(
     callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
     enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
     local_allocations: &[Option<AllocationContractV1>],
     constants: &[Option<u64>],
-) -> Result<ProjectedTensorEffectsV1, ProductionRankedProjectionErrorV1> {
+) -> Result<ProjectedCapabilityEffectsV1, ProductionRankedProjectionErrorV1> {
     let block_count = function.blocks().len();
     let entry = function.entry().index() as usize;
     if entry >= block_count {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "a tensor projection entry outside the semantic CFG",
+            "a capability projection entry outside the semantic CFG",
         ));
     }
-    let mut entries: Vec<Option<ProjectedTensorStateV1>> = vec![None; block_count];
+    let mut entries: Vec<Option<ProjectedCapabilityStateV1>> = vec![None; block_count];
     entries[entry] = Some(HashMap::new());
     let mut worklist = VecDeque::from([entry]);
     let mut stored_entries = 0_usize;
@@ -1173,20 +1173,23 @@ fn project_authenticated_tensor_layouts_v1(
     while let Some(block_index) = worklist.pop_front() {
         let entry_state = entries.get(block_index).and_then(Option::as_ref).ok_or(
             ProductionRankedProjectionErrorV1::Unsupported(
-                "a queued tensor producer block without an entry state",
+                "a queued capability dataflow block has no entry state",
             ),
         )?;
-        charge_tensor_dataflow_work_v1(
+        charge_capability_dataflow_work_v1(
             &mut work,
             entry_state.len().checked_add(1).ok_or(
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "tensor producer clone work overflow",
-                ),
+                ProductionRankedProjectionErrorV1::Unsupported("capability clone work overflow"),
             )?,
         )?;
-        let mut state = entry_state.clone();
-        transfer_tensor_statements_v1(function, block_index, &mut state, enum_payload_dominance)?;
-        transfer_tensor_terminator_v1(
+        let mut state = try_clone_capability_state_v1(entry_state)?;
+        transfer_capability_statements_v1(
+            function,
+            block_index,
+            &mut state,
+            enum_payload_dominance,
+        )?;
+        transfer_capability_terminator_v1(
             callables,
             function,
             block_index,
@@ -1195,22 +1198,22 @@ fn project_authenticated_tensor_layouts_v1(
             constants,
             false,
         )?;
-        charge_tensor_dataflow_work_v1(
+        charge_capability_dataflow_work_v1(
             &mut work,
             function.blocks()[block_index]
                 .statements()
                 .len()
                 .checked_add(state.len())
                 .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                    "tensor producer dataflow work overflow",
+                    "capability dataflow work overflow",
                 ))?,
         )?;
-        if state.len() > MAX_PROJECTED_TENSOR_STATE_ENTRIES_V1 {
+        if state.len() > MAX_PROJECTED_CAPABILITY_STATE_ENTRIES_V1 {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "tensor producer dataflow exceeds the charged projection limit",
+                "capability dataflow exceeds the charged projection limit",
             ));
         }
-        let successors = charged_unique_tensor_successors_v1(
+        let successors = charged_unique_capability_successors_v1(
             function.blocks()[block_index].terminator().kind(),
             state.len(),
             &mut work,
@@ -1220,42 +1223,29 @@ fn project_authenticated_tensor_layouts_v1(
                 entries
                     .get_mut(target)
                     .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                        "a tensor producer CFG edge outside the semantic function",
+                        "a capability CFG edge outside the semantic function",
                     ))?;
             let changed = match target_entry {
                 None => {
-                    stored_entries = stored_entries.checked_add(state.len()).ok_or(
-                        ProductionRankedProjectionErrorV1::Unsupported(
-                            "tensor producer stored-state accounting overflow",
-                        ),
-                    )?;
-                    *target_entry = Some(state.clone());
+                    let next_stored_entries =
+                        checked_capability_stored_entries_v1(stored_entries, state.len())?;
+                    let successor_state = try_clone_capability_state_v1(&state)?;
+                    stored_entries = next_stored_entries;
+                    *target_entry = Some(successor_state);
                     true
                 }
                 Some(existing) => {
-                    let before = existing.len();
-                    charge_tensor_dataflow_work_v1(
-                        &mut work,
-                        before.checked_add(1).ok_or(
-                            ProductionRankedProjectionErrorV1::Unsupported(
-                                "tensor producer merge work overflow",
-                            ),
-                        )?,
-                    )?;
-                    let changed = merge_tensor_states_v1(existing, &state)?;
-                    stored_entries = stored_entries
-                        .checked_add(existing.len().saturating_sub(before))
-                        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                            "tensor producer stored-state accounting overflow",
-                        ))?;
+                    let additional = state
+                        .keys()
+                        .filter(|key| !existing.contains_key(key))
+                        .count();
+                    let next_stored_entries =
+                        checked_capability_stored_entries_v1(stored_entries, additional)?;
+                    let changed = merge_capability_states_v1(existing, &state)?;
+                    stored_entries = next_stored_entries;
                     changed
                 }
             };
-            if stored_entries > MAX_PROJECTED_TENSOR_STATE_ENTRIES_V1 {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "tensor producer states exceed the charged storage limit",
-                ));
-            }
             if changed {
                 worklist.push_back(target);
             }
@@ -1269,18 +1259,23 @@ fn project_authenticated_tensor_layouts_v1(
         let Some(mut state) = entry_state else {
             continue;
         };
-        charge_tensor_dataflow_work_v1(
+        charge_capability_dataflow_work_v1(
             &mut work,
             state
                 .len()
                 .checked_add(function.blocks()[block_index].statements().len())
                 .and_then(|work| work.checked_add(1))
                 .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                    "tensor producer replay work overflow",
+                    "capability replay work overflow",
                 ))?,
         )?;
-        transfer_tensor_statements_v1(function, block_index, &mut state, enum_payload_dominance)?;
-        let effects = transfer_tensor_terminator_v1(
+        transfer_capability_statements_v1(
+            function,
+            block_index,
+            &mut state,
+            enum_payload_dominance,
+        )?;
+        let effects = transfer_capability_terminator_v1(
             callables,
             function,
             block_index,
@@ -1293,33 +1288,35 @@ fn project_authenticated_tensor_layouts_v1(
         global_reads[block_index] = effects.global_read;
         read_views[block_index] = effects.read_view;
     }
-    Ok(ProjectedTensorEffectsV1 {
+    Ok(ProjectedCapabilityEffectsV1 {
         layouts,
         global_reads,
         read_views,
     })
 }
 
-fn bind_tensor_read_effects_to_call_blocks_v1(
+fn bind_capability_read_effects_to_call_blocks_v1(
     function: &SemanticFunctionDeclV1,
     global_reads: &[Option<AllocationContractV1>],
-) -> Result<Vec<Option<ProjectedTensorReadEffectV1>>, ProductionRankedProjectionErrorV1> {
+) -> Result<Vec<Option<ProjectedCapabilityReadEffectV1>>, ProductionRankedProjectionErrorV1> {
     if global_reads.len() != function.blocks().len() {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "tensor read effects do not correspond one-to-one with semantic MIR blocks",
+            "capability read effects do not correspond one-to-one with semantic MIR blocks",
         ));
     }
     let mut effects = Vec::new();
     effects.try_reserve_exact(global_reads.len()).map_err(|_| {
         ProductionRankedProjectionErrorV1::Unsupported(
-            "tensor read effect storage cannot be reserved",
+            "capability read effect storage cannot be reserved",
         )
     })?;
     for (block, allocation) in function.blocks().iter().zip(global_reads.iter().copied()) {
-        effects.push(allocation.map(|allocation| ProjectedTensorReadEffectV1 {
-            allocation,
-            source: block.terminator().source(),
-        }));
+        effects.push(
+            allocation.map(|allocation| ProjectedCapabilityReadEffectV1 {
+                allocation,
+                source: block.terminator().source(),
+            }),
+        );
     }
     Ok(effects)
 }
@@ -1490,36 +1487,36 @@ fn project_strided_read_effects_v1(
     Ok(projected)
 }
 
-fn charge_tensor_dataflow_work_v1(
+fn charge_capability_dataflow_work_v1(
     work: &mut usize,
     additional: usize,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     *work = work
         .checked_add(additional)
         .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-            "tensor producer dataflow work overflow",
+            "capability dataflow work overflow",
         ))?;
-    if *work > MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1 {
+    if *work > MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1 {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "tensor producer dataflow exceeds the charged projection limit",
+            "capability dataflow exceeds the charged projection limit",
         ));
     }
     Ok(())
 }
 
-fn charged_unique_tensor_successors_v1(
+fn charged_unique_capability_successors_v1(
     terminator: &SemanticTerminatorKindV1,
     state_entries: usize,
     work: &mut usize,
 ) -> Result<Vec<usize>, ProductionRankedProjectionErrorV1> {
     let mut unique = HashSet::new();
     terminator.try_for_each_edge::<ProductionRankedProjectionErrorV1>(|edge| {
-        charge_tensor_dataflow_work_v1(work, 1)?;
+        charge_capability_dataflow_work_v1(work, 1)?;
         let target = edge.target().index() as usize;
         if !unique.contains(&target) {
             unique.try_reserve(1).map_err(|_| {
                 ProductionRankedProjectionErrorV1::Unsupported(
-                    "tensor producer successor storage cannot be reserved",
+                    "capability successor storage cannot be reserved",
                 )
             })?;
             unique.insert(target);
@@ -1532,18 +1529,18 @@ fn charged_unique_tensor_successors_v1(
         state_entries
             .checked_add(1)
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                "tensor producer dataflow work overflow",
+                "capability dataflow work overflow",
             ))?;
     for _ in &successors {
-        charge_tensor_dataflow_work_v1(work, merge_work)?;
+        charge_capability_dataflow_work_v1(work, merge_work)?;
     }
     Ok(successors)
 }
 
-fn transfer_tensor_statements_v1(
+fn transfer_capability_statements_v1(
     function: &SemanticFunctionDeclV1,
     block_index: usize,
-    state: &mut ProjectedTensorStateV1,
+    state: &mut ProjectedCapabilityStateV1,
     enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     let block = &function.blocks()[block_index];
@@ -1555,7 +1552,7 @@ fn transfer_tensor_statements_v1(
                 let origin = if assignment.destination().projections().is_empty() {
                     match assignment.value().kind() {
                         SemanticRvalueKindV1::Use(operand) => {
-                            tensor_origin_from_assignment_operand_v1(
+                            capability_origin_from_assignment_operand_v1(
                                 operand,
                                 state,
                                 enum_payload_dominance,
@@ -1569,7 +1566,7 @@ fn transfer_tensor_statements_v1(
                             state.get(&(place.local().index() as usize)).copied()
                         }
                         SemanticRvalueKindV1::Aggregate(aggregate) => {
-                            tensor_origin_from_enum_aggregate_v1(
+                            capability_origin_from_enum_aggregate_v1(
                                 aggregate,
                                 state,
                                 enum_payload_dominance,
@@ -1581,9 +1578,9 @@ fn transfer_tensor_statements_v1(
                 } else {
                     None
                 };
-                consume_tensor_rvalue_operands_v1(assignment.value().kind(), state);
+                consume_capability_rvalue_operands_v1(assignment.value().kind(), state);
                 if !assignment.destination().projections().is_empty() {
-                    invalidate_tensor_local_v1(state, destination);
+                    invalidate_capability_local_v1(state, destination);
                     continue;
                 }
                 match origin {
@@ -1596,27 +1593,27 @@ fn transfer_tensor_statements_v1(
                 }
             }
             SemanticStatementKindV1::Store(store) => {
-                consume_tensor_operand_v1(state, store.value());
+                consume_capability_operand_v1(state, store.value());
             }
             SemanticStatementKindV1::AtomicRmw(atomic) => {
-                consume_tensor_operand_v1(state, atomic.value());
-                invalidate_tensor_place_v1(state, atomic.destination());
+                consume_capability_operand_v1(state, atomic.value());
+                invalidate_capability_place_v1(state, atomic.destination());
             }
             SemanticStatementKindV1::AtomicCompareExchange(atomic) => {
-                consume_tensor_operand_v1(state, atomic.expected());
-                consume_tensor_operand_v1(state, atomic.replacement());
-                invalidate_tensor_place_v1(state, atomic.destination());
+                consume_capability_operand_v1(state, atomic.expected());
+                consume_capability_operand_v1(state, atomic.replacement());
+                invalidate_capability_place_v1(state, atomic.destination());
             }
             SemanticStatementKindV1::SetDiscriminant { place, .. }
             | SemanticStatementKindV1::Deinitialize(place) => {
-                invalidate_tensor_place_v1(state, place);
+                invalidate_capability_place_v1(state, place);
             }
             SemanticStatementKindV1::StorageLive(local)
             | SemanticStatementKindV1::StorageDead(local) => {
                 state.remove(&(local.index() as usize));
             }
             SemanticStatementKindV1::Assume(operand) => {
-                consume_tensor_operand_v1(state, operand);
+                consume_capability_operand_v1(state, operand);
             }
             SemanticStatementKindV1::Nop => {}
         }
@@ -1624,17 +1621,20 @@ fn transfer_tensor_statements_v1(
     Ok(())
 }
 
-fn consume_tensor_rvalue_operands_v1(
+fn consume_capability_rvalue_operands_v1(
     rvalue: &SemanticRvalueKindV1,
-    state: &mut ProjectedTensorStateV1,
+    state: &mut ProjectedCapabilityStateV1,
 ) {
     let _: Result<(), std::convert::Infallible> = rvalue.try_visit_operands(|operand| {
-        consume_tensor_operand_v1(state, operand);
+        consume_capability_operand_v1(state, operand);
         Ok(())
     });
 }
 
-fn consume_tensor_operand_v1(state: &mut ProjectedTensorStateV1, operand: &SemanticOperandV1) {
+fn consume_capability_operand_v1(
+    state: &mut ProjectedCapabilityStateV1,
+    operand: &SemanticOperandV1,
+) {
     let place = match operand {
         SemanticOperandV1::Copy(place)
             if place.projections().is_empty()
@@ -1647,70 +1647,74 @@ fn consume_tensor_operand_v1(state: &mut ProjectedTensorStateV1, operand: &Seman
         SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => place,
         SemanticOperandV1::Constant(_) => return,
     };
-    invalidate_tensor_place_v1(state, place);
+    invalidate_capability_place_v1(state, place);
 }
 
-fn projected_value_is_shared_read_v1(value: &ProjectedTensorValueV1) -> bool {
+fn projected_value_is_shared_read_v1(value: &ProjectedCapabilityValueV1) -> bool {
     matches!(
         value,
-        ProjectedTensorValueV1::Known(
-            ProjectedTensorOriginV1::ReadViewResult(_) | ProjectedTensorOriginV1::ReadView(_)
-        ) | ProjectedTensorValueV1::ConstructedEnum(ProjectedTensorEnumEnvelopeV1 {
-            origin: ProjectedTensorOriginV1::ReadViewResult(_)
-                | ProjectedTensorOriginV1::ReadView(_),
+        ProjectedCapabilityValueV1::Known(
+            ProjectedCapabilityOriginV1::ReadViewResult(_)
+                | ProjectedCapabilityOriginV1::ReadView(_)
+        ) | ProjectedCapabilityValueV1::ConstructedEnum(ProjectedCapabilityEnumEnvelopeV1 {
+            origin: ProjectedCapabilityOriginV1::ReadViewResult(_)
+                | ProjectedCapabilityOriginV1::ReadView(_),
             ..
         })
     )
 }
 
-fn consume_tensor_operands_v1(state: &mut ProjectedTensorStateV1, operands: &[SemanticOperandV1]) {
+fn consume_capability_operands_v1(
+    state: &mut ProjectedCapabilityStateV1,
+    operands: &[SemanticOperandV1],
+) {
     for operand in operands {
-        consume_tensor_operand_v1(state, operand);
+        consume_capability_operand_v1(state, operand);
     }
 }
 
-fn invalidate_tensor_place_v1(state: &mut ProjectedTensorStateV1, place: &SemanticPlaceV1) {
-    invalidate_tensor_local_v1(state, place.local().index() as usize);
+fn invalidate_capability_place_v1(state: &mut ProjectedCapabilityStateV1, place: &SemanticPlaceV1) {
+    invalidate_capability_local_v1(state, place.local().index() as usize);
 }
 
-fn invalidate_tensor_local_v1(state: &mut ProjectedTensorStateV1, local: usize) {
+fn invalidate_capability_local_v1(state: &mut ProjectedCapabilityStateV1, local: usize) {
     if state.contains_key(&local) {
-        state.insert(local, ProjectedTensorValueV1::Invalid);
+        state.insert(local, ProjectedCapabilityValueV1::Invalid);
     }
 }
 
-fn tensor_origin_from_enum_aggregate_v1(
+fn capability_origin_from_enum_aggregate_v1(
     aggregate: &fe2o3_mir_model::semantic_mir_v1::SemanticAggregateRvalueV1,
-    state: &ProjectedTensorStateV1,
+    state: &ProjectedCapabilityStateV1,
     enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
     use_block: SemanticBlockIdV1,
-) -> Result<Option<ProjectedTensorValueV1>, ProductionRankedProjectionErrorV1> {
+) -> Result<Option<ProjectedCapabilityValueV1>, ProductionRankedProjectionErrorV1> {
     let (SemanticAggregateKindV1::EnumVariant(variant), [payload]) =
         (aggregate.kind(), aggregate.operands())
     else {
         return Ok(None);
     };
-    tensor_origin_from_assignment_operand_v1(payload, state, enum_payload_dominance, use_block)
-        .map(|payload| wrap_tensor_enum_value_v1(payload, *variant))
+    capability_origin_from_assignment_operand_v1(payload, state, enum_payload_dominance, use_block)
+        .map(|payload| wrap_capability_enum_value_v1(payload, *variant))
         .transpose()
 }
 
-fn tensor_origin_from_assignment_operand_v1(
+fn capability_origin_from_assignment_operand_v1(
     operand: &SemanticOperandV1,
-    state: &ProjectedTensorStateV1,
+    state: &ProjectedCapabilityStateV1,
     enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
     use_block: SemanticBlockIdV1,
-) -> Option<ProjectedTensorValueV1> {
+) -> Option<ProjectedCapabilityValueV1> {
     let place = raw_operand_place(operand)?;
     if place.projections().is_empty() {
         return state.get(&(place.local().index() as usize)).copied();
     }
     let (carrier, variant) = enum_payload_projection(place)?;
     match state.get(&carrier).copied()? {
-        ProjectedTensorValueV1::ConstructedEnum(envelope) => {
-            unwrap_tensor_enum_value_v1(envelope, variant)
+        ProjectedCapabilityValueV1::ConstructedEnum(envelope) => {
+            unwrap_capability_enum_value_v1(envelope, variant)
         }
-        ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::ViewResult(view))
+        ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::ViewResult(view))
             if variant == 0
                 && enum_payload_dominance
                     .availability(SemanticLocalIdV1::from_index(carrier as u32), variant)
@@ -1718,11 +1722,11 @@ fn tensor_origin_from_assignment_operand_v1(
                         enum_payload_dominance.allows(availability, use_block)
                     }) =>
         {
-            Some(ProjectedTensorValueV1::Known(
-                ProjectedTensorOriginV1::View(view),
+            Some(ProjectedCapabilityValueV1::Known(
+                ProjectedCapabilityOriginV1::View(view),
             ))
         }
-        ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::ReadViewResult(view))
+        ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::ReadViewResult(view))
             if variant == 0
                 && enum_payload_dominance
                     .availability(SemanticLocalIdV1::from_index(carrier as u32), variant)
@@ -1730,32 +1734,32 @@ fn tensor_origin_from_assignment_operand_v1(
                         enum_payload_dominance.allows(availability, use_block)
                     }) =>
         {
-            Some(ProjectedTensorValueV1::Known(
-                ProjectedTensorOriginV1::ReadView(view),
+            Some(ProjectedCapabilityValueV1::Known(
+                ProjectedCapabilityOriginV1::ReadView(view),
             ))
         }
-        ProjectedTensorValueV1::Invalid => Some(ProjectedTensorValueV1::Invalid),
+        ProjectedCapabilityValueV1::Invalid => Some(ProjectedCapabilityValueV1::Invalid),
         _ => None,
     }
 }
 
-fn wrap_tensor_enum_value_v1(
-    payload: ProjectedTensorValueV1,
+fn wrap_capability_enum_value_v1(
+    payload: ProjectedCapabilityValueV1,
     variant: u32,
-) -> Result<ProjectedTensorValueV1, ProductionRankedProjectionErrorV1> {
+) -> Result<ProjectedCapabilityValueV1, ProductionRankedProjectionErrorV1> {
     let mut envelope = match payload {
-        ProjectedTensorValueV1::Known(origin) => ProjectedTensorEnumEnvelopeV1 {
+        ProjectedCapabilityValueV1::Known(origin) => ProjectedCapabilityEnumEnvelopeV1 {
             origin,
-            variants: [0; MAX_PROJECTED_TENSOR_ENUM_DEPTH_V1],
+            variants: [0; MAX_PROJECTED_CAPABILITY_ENUM_DEPTH_V1],
             depth: 0,
         },
-        ProjectedTensorValueV1::ConstructedEnum(envelope) => envelope,
-        ProjectedTensorValueV1::Invalid => return Ok(ProjectedTensorValueV1::Invalid),
+        ProjectedCapabilityValueV1::ConstructedEnum(envelope) => envelope,
+        ProjectedCapabilityValueV1::Invalid => return Ok(ProjectedCapabilityValueV1::Invalid),
     };
     let depth = usize::from(envelope.depth);
-    if depth == MAX_PROJECTED_TENSOR_ENUM_DEPTH_V1 {
+    if depth == MAX_PROJECTED_CAPABILITY_ENUM_DEPTH_V1 {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "tensor enum transport exceeds the charged nesting limit",
+            "capability enum transport exceeds the charged nesting limit",
         ));
     }
     envelope.variants[depth] = variant;
@@ -1764,15 +1768,15 @@ fn wrap_tensor_enum_value_v1(
             .depth
             .checked_add(1)
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                "tensor enum transport depth overflow",
+                "capability enum transport depth overflow",
             ))?;
-    Ok(ProjectedTensorValueV1::ConstructedEnum(envelope))
+    Ok(ProjectedCapabilityValueV1::ConstructedEnum(envelope))
 }
 
-fn unwrap_tensor_enum_value_v1(
-    mut envelope: ProjectedTensorEnumEnvelopeV1,
+fn unwrap_capability_enum_value_v1(
+    mut envelope: ProjectedCapabilityEnumEnvelopeV1,
     variant: u32,
-) -> Option<ProjectedTensorValueV1> {
+) -> Option<ProjectedCapabilityValueV1> {
     let outer = usize::from(envelope.depth).checked_sub(1)?;
     if envelope.variants[outer] != variant {
         return None;
@@ -1780,9 +1784,9 @@ fn unwrap_tensor_enum_value_v1(
     envelope.variants[outer] = 0;
     envelope.depth -= 1;
     if envelope.depth == 0 {
-        Some(ProjectedTensorValueV1::Known(envelope.origin))
+        Some(ProjectedCapabilityValueV1::Known(envelope.origin))
     } else {
-        Some(ProjectedTensorValueV1::ConstructedEnum(envelope))
+        Some(ProjectedCapabilityValueV1::ConstructedEnum(envelope))
     }
 }
 
@@ -1797,15 +1801,15 @@ fn projected_read_value_v1(
 
 fn authenticate_strided_read_v1(
     call: &SemanticDirectCallV1,
-    state: &ProjectedTensorStateV1,
+    state: &ProjectedCapabilityStateV1,
     element: SemanticTypeIdV1,
     constants: &[Option<u64>],
 ) -> Option<ProjectedReadViewAccessV1> {
     if call.arguments().len() != 4 {
         return None;
     }
-    let ProjectedTensorOriginV1::ReadView(view) =
-        tensor_known_origin_v1(state, &call.arguments()[0])?
+    let ProjectedCapabilityOriginV1::ReadView(view) =
+        capability_known_origin_v1(state, &call.arguments()[0])?
     else {
         return None;
     };
@@ -1819,29 +1823,29 @@ fn authenticate_strided_read_v1(
     })
 }
 
-fn transfer_tensor_terminator_v1(
+fn transfer_capability_terminator_v1(
     callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
     block_index: usize,
-    state: &mut ProjectedTensorStateV1,
+    state: &mut ProjectedCapabilityStateV1,
     local_allocations: &[Option<AllocationContractV1>],
     constants: &[Option<u64>],
     require_authenticated_site: bool,
-) -> Result<ProjectedTensorTerminatorEffectsV1, ProductionRankedProjectionErrorV1> {
+) -> Result<ProjectedCapabilityTerminatorEffectsV1, ProductionRankedProjectionErrorV1> {
     let terminator = function.blocks()[block_index].terminator().kind();
     let SemanticTerminatorKindV1::Call(call) = terminator else {
         match terminator {
             SemanticTerminatorKindV1::SwitchInt { discriminant, .. } => {
-                consume_tensor_operand_v1(state, discriminant);
+                consume_capability_operand_v1(state, discriminant);
             }
             SemanticTerminatorKindV1::TailCall(call) => {
-                consume_tensor_operands_v1(state, call.arguments());
+                consume_capability_operands_v1(state, call.arguments());
             }
             SemanticTerminatorKindV1::Drop { place, .. } => {
-                invalidate_tensor_place_v1(state, place);
+                invalidate_capability_place_v1(state, place);
             }
             SemanticTerminatorKindV1::Assert { condition, .. } => {
-                consume_tensor_operand_v1(state, condition);
+                consume_capability_operand_v1(state, condition);
             }
             SemanticTerminatorKindV1::Goto(_)
             | SemanticTerminatorKindV1::FalseEdge { .. }
@@ -1852,7 +1856,7 @@ fn transfer_tensor_terminator_v1(
             | SemanticTerminatorKindV1::Unreachable => {}
             SemanticTerminatorKindV1::Call(_) => unreachable!("matched call terminator"),
         }
-        return Ok(ProjectedTensorTerminatorEffectsV1::default());
+        return Ok(ProjectedCapabilityTerminatorEffectsV1::default());
     };
     let intrinsic_operation = match callables.get(call.callee().index() as usize) {
         Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) => Some(operation),
@@ -1874,9 +1878,9 @@ fn transfer_tensor_terminator_v1(
         intrinsic_operation
     {
         let read_view = authenticate_strided_read_v1(call, state, *element, constants);
-        consume_tensor_operands_v1(state, call.arguments());
+        consume_capability_operands_v1(state, call.arguments());
         if let Some(destination) = call.destination() {
-            invalidate_tensor_place_v1(state, destination.place());
+            invalidate_capability_place_v1(state, destination.place());
             if destination.place().projections().is_empty() {
                 state.remove(&(destination.place().local().index() as usize));
             }
@@ -1886,39 +1890,39 @@ fn transfer_tensor_terminator_v1(
                 "a strided read without one dominating checked view payload and exact scalar operands",
             ));
         }
-        return Ok(ProjectedTensorTerminatorEffectsV1 {
+        return Ok(ProjectedCapabilityTerminatorEffectsV1 {
             read_view,
-            ..ProjectedTensorTerminatorEffectsV1::default()
+            ..ProjectedCapabilityTerminatorEffectsV1::default()
         });
     }
     let Some(destination) = call.destination() else {
-        consume_tensor_operands_v1(state, call.arguments());
+        consume_capability_operands_v1(state, call.arguments());
         if is_global_fragment_load {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a typed global fragment load without one direct local result",
             ));
         }
-        return Ok(ProjectedTensorTerminatorEffectsV1::default());
+        return Ok(ProjectedCapabilityTerminatorEffectsV1::default());
     };
     if !destination.place().projections().is_empty() {
-        consume_tensor_operands_v1(state, call.arguments());
-        invalidate_tensor_place_v1(state, destination.place());
+        consume_capability_operands_v1(state, call.arguments());
+        invalidate_capability_place_v1(state, destination.place());
         if is_global_fragment_load {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a typed global fragment load into a projected destination",
             ));
         }
-        return Ok(ProjectedTensorTerminatorEffectsV1::default());
+        return Ok(ProjectedCapabilityTerminatorEffectsV1::default());
     }
     let destination_local = destination.place().local().index() as usize;
     let Some(operation) = intrinsic_operation else {
-        consume_tensor_operands_v1(state, call.arguments());
+        consume_capability_operands_v1(state, call.arguments());
         state.remove(&destination_local);
-        return Ok(ProjectedTensorTerminatorEffectsV1::default());
+        return Ok(ProjectedCapabilityTerminatorEffectsV1::default());
     };
     if matches!(call.unwind(), SemanticUnwindActionV1::Cleanup(_)) {
         return Err(ProductionRankedProjectionErrorV1::Incomplete(
-            "a typed tensor producer with cleanup control flow",
+            "a typed capability with cleanup control flow",
         ));
     }
     let root = ((block_index as u64) << 32) | destination_local as u64;
@@ -1949,7 +1953,7 @@ fn transfer_tensor_terminator_v1(
                         && destination.place().ty() == *result
                         && !allocation.writable =>
                 {
-                    ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::ReadViewResult(
+                    ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::ReadViewResult(
                         ProjectedReadViewV1 {
                             root,
                             element: *element,
@@ -1959,26 +1963,28 @@ fn transfer_tensor_terminator_v1(
                         },
                     ))
                 }
-                _ => ProjectedTensorValueV1::Invalid,
+                _ => ProjectedCapabilityValueV1::Invalid,
             };
             (origin, None)
         }
         SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { context } => {
             if !call.arguments().is_empty() || destination.place().ty() != *context {
-                (ProjectedTensorValueV1::Invalid, None)
+                (ProjectedCapabilityValueV1::Invalid, None)
             } else {
                 (
-                    ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::MatrixContext { root }),
+                    ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::MatrixContext {
+                        root,
+                    }),
                     None,
                 )
             }
         }
         SemanticCompilerIntrinsicOperationV1::WaveLaneCurrent { lane, wave_width } => {
             if !call.arguments().is_empty() || destination.place().ty() != *lane {
-                (ProjectedTensorValueV1::Invalid, None)
+                (ProjectedCapabilityValueV1::Invalid, None)
             } else {
                 (
-                    ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Lane {
+                    ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Lane {
                         root,
                         wave_width: *wave_width,
                     }),
@@ -2003,7 +2009,7 @@ fn transfer_tensor_terminator_v1(
                 Some(allocation)
                     if call.arguments().len() == 5 && destination.place().ty() == *result =>
                 {
-                    ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::ViewResult(
+                    ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::ViewResult(
                         ProjectedMfmaViewV1 {
                             role: *role,
                             storage_layout: *storage_layout,
@@ -2011,7 +2017,7 @@ fn transfer_tensor_terminator_v1(
                         },
                     ))
                 }
-                _ => ProjectedTensorValueV1::Invalid,
+                _ => ProjectedCapabilityValueV1::Invalid,
             };
             (origin, None)
         }
@@ -2039,23 +2045,23 @@ fn transfer_tensor_terminator_v1(
             let lane = call
                 .arguments()
                 .first()
-                .and_then(|operand| tensor_known_origin_v1(state, operand));
+                .and_then(|operand| capability_known_origin_v1(state, operand));
             let origin = match lane {
-                Some(ProjectedTensorOriginV1::Lane {
+                Some(ProjectedCapabilityOriginV1::Lane {
                     root: lane_root,
                     wave_width,
                 }) if call.arguments().len() == 1
                     && destination.place().ty() == *fragment
                     && wave_width == contract.wave_width =>
                 {
-                    ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Accumulator(
+                    ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Accumulator(
                         ProjectedMfmaAccumulatorV1 {
                             contract: *contract,
                             lane_root,
                         },
                     ))
                 }
-                _ => ProjectedTensorValueV1::Invalid,
+                _ => ProjectedCapabilityValueV1::Invalid,
             };
             (origin, None)
         }
@@ -2070,7 +2076,7 @@ fn transfer_tensor_terminator_v1(
                 if destination.place().ty() == *accumulator_fragment =>
             {
                 (
-                    ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Accumulator(
+                    ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Accumulator(
                         accumulator_origin,
                     )),
                     Some(ProductionRankedOperationV1::TensorLayout {
@@ -2080,19 +2086,19 @@ fn transfer_tensor_terminator_v1(
                     }),
                 )
             }
-            Ok(_) => (ProjectedTensorValueV1::Invalid, None),
+            Ok(_) => (ProjectedCapabilityValueV1::Invalid, None),
             Err(detail) if require_authenticated_site => {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(detail));
             }
-            Err(_) => (ProjectedTensorValueV1::Invalid, None),
+            Err(_) => (ProjectedCapabilityValueV1::Invalid, None),
         },
         _ => {
-            consume_tensor_operands_v1(state, call.arguments());
+            consume_capability_operands_v1(state, call.arguments());
             state.remove(&destination_local);
-            return Ok(ProjectedTensorTerminatorEffectsV1::default());
+            return Ok(ProjectedCapabilityTerminatorEffectsV1::default());
         }
     };
-    consume_tensor_operands_v1(state, call.arguments());
+    consume_capability_operands_v1(state, call.arguments());
     state.insert(destination_local, origin);
     if require_authenticated_site
         && matches!(
@@ -2106,9 +2112,10 @@ fn transfer_tensor_terminator_v1(
         ));
     }
     let global_read = match (is_global_fragment_load, origin) {
-        (true, ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Operand(fragment))) => {
-            Some(fragment.allocation)
-        }
+        (
+            true,
+            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(fragment)),
+        ) => Some(fragment.allocation),
         (true, _) => {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a typed global fragment load without exact authenticated view, lane, allocation, and result provenance",
@@ -2116,7 +2123,7 @@ fn transfer_tensor_terminator_v1(
         }
         (false, _) => None,
     };
-    Ok(ProjectedTensorTerminatorEffectsV1 {
+    Ok(ProjectedCapabilityTerminatorEffectsV1 {
         layout,
         global_read,
         read_view: None,
@@ -2125,19 +2132,19 @@ fn transfer_tensor_terminator_v1(
 
 fn authenticate_tensor_load_v1(
     call: &SemanticDirectCallV1,
-    state: &ProjectedTensorStateV1,
+    state: &ProjectedCapabilityStateV1,
     contract: SemanticMfmaOperandContractV1,
     storage_layout: SemanticMfmaStorageLayoutV1,
 ) -> Option<ProjectedMfmaOperandV1> {
     if call.arguments().len() != 4 {
         return None;
     }
-    let view = tensor_known_origin_v1(state, &call.arguments()[0])?;
-    let lane = tensor_known_origin_v1(state, &call.arguments()[1])?;
-    let ProjectedTensorOriginV1::View(view) = view else {
+    let view = capability_known_origin_v1(state, &call.arguments()[0])?;
+    let lane = capability_known_origin_v1(state, &call.arguments()[1])?;
+    let ProjectedCapabilityOriginV1::View(view) = view else {
         return None;
     };
-    let ProjectedTensorOriginV1::Lane {
+    let ProjectedCapabilityOriginV1::Lane {
         root: lane_root,
         wave_width,
     } = lane
@@ -2158,24 +2165,24 @@ fn authenticate_tensor_load_v1(
 #[allow(clippy::too_many_arguments)]
 fn project_tensor_load_origin_v1(
     call: &SemanticDirectCallV1,
-    state: &ProjectedTensorStateV1,
+    state: &ProjectedCapabilityStateV1,
     destination_type: SemanticTypeIdV1,
     expected_output_type: SemanticTypeIdV1,
     contract: SemanticMfmaOperandContractV1,
     storage_layout: SemanticMfmaStorageLayoutV1,
-) -> ProjectedTensorValueV1 {
+) -> ProjectedCapabilityValueV1 {
     if destination_type != expected_output_type {
-        return ProjectedTensorValueV1::Invalid;
+        return ProjectedCapabilityValueV1::Invalid;
     }
     let Some(fragment) = authenticate_tensor_load_v1(call, state, contract, storage_layout) else {
-        return ProjectedTensorValueV1::Invalid;
+        return ProjectedCapabilityValueV1::Invalid;
     };
-    ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Operand(fragment))
+    ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(fragment))
 }
 
 fn authenticate_tensor_instruction_v1(
     call: &SemanticDirectCallV1,
-    state: &ProjectedTensorStateV1,
+    state: &ProjectedCapabilityStateV1,
     lhs_contract: SemanticMfmaOperandContractV1,
     rhs_contract: SemanticMfmaOperandContractV1,
     accumulator_contract: SemanticMfmaAccumulatorContractV1,
@@ -2190,23 +2197,23 @@ fn authenticate_tensor_instruction_v1(
         return Err("an MFMA call without its exact context and three typed operands");
     }
     if !matches!(
-        tensor_known_origin_v1(state, &call.arguments()[0]),
-        Some(ProjectedTensorOriginV1::MatrixContext { .. })
+        capability_known_origin_v1(state, &call.arguments()[0]),
+        Some(ProjectedCapabilityOriginV1::MatrixContext { .. })
     ) {
         return Err("an MFMA call without dominating compiler-issued matrix context");
     }
-    let Some(ProjectedTensorOriginV1::Operand(lhs)) =
-        tensor_known_origin_v1(state, &call.arguments()[1])
+    let Some(ProjectedCapabilityOriginV1::Operand(lhs)) =
+        capability_known_origin_v1(state, &call.arguments()[1])
     else {
         return Err("an MFMA lhs without one dominating checked typed-load payload");
     };
-    let Some(ProjectedTensorOriginV1::Operand(rhs)) =
-        tensor_known_origin_v1(state, &call.arguments()[2])
+    let Some(ProjectedCapabilityOriginV1::Operand(rhs)) =
+        capability_known_origin_v1(state, &call.arguments()[2])
     else {
         return Err("an MFMA rhs without one dominating checked typed-load payload");
     };
-    let Some(ProjectedTensorOriginV1::Accumulator(accumulator)) =
-        tensor_known_origin_v1(state, &call.arguments()[3])
+    let Some(ProjectedCapabilityOriginV1::Accumulator(accumulator)) =
+        capability_known_origin_v1(state, &call.arguments()[3])
     else {
         return Err("an MFMA accumulator without dominating zero or compatible prior MFMA");
     };
@@ -2253,28 +2260,38 @@ fn authenticate_tensor_instruction_v1(
     Ok((accumulator, contract))
 }
 
-fn tensor_known_origin_v1(
-    state: &ProjectedTensorStateV1,
+fn capability_known_origin_v1(
+    state: &ProjectedCapabilityStateV1,
     operand: &SemanticOperandV1,
-) -> Option<ProjectedTensorOriginV1> {
+) -> Option<ProjectedCapabilityOriginV1> {
     let local = simple_operand_local(operand)?.index() as usize;
     match state.get(&local) {
-        Some(ProjectedTensorValueV1::Known(origin)) => Some(*origin),
-        Some(ProjectedTensorValueV1::ConstructedEnum(_))
-        | Some(ProjectedTensorValueV1::Invalid)
+        Some(ProjectedCapabilityValueV1::Known(origin)) => Some(*origin),
+        Some(ProjectedCapabilityValueV1::ConstructedEnum(_))
+        | Some(ProjectedCapabilityValueV1::Invalid)
         | None => None,
     }
 }
 
-fn merge_tensor_states_v1(
-    current: &mut ProjectedTensorStateV1,
-    incoming: &ProjectedTensorStateV1,
+fn merge_capability_states_v1(
+    current: &mut ProjectedCapabilityStateV1,
+    incoming: &ProjectedCapabilityStateV1,
 ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    let additional = incoming
+        .keys()
+        .filter(|key| !current.contains_key(key))
+        .count();
+    checked_capability_stored_entries_v1(current.len(), additional)?;
+    current.try_reserve(additional).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "capability state merge storage cannot be reserved",
+        )
+    })?;
     let mut changed = false;
     for (&key, existing) in current.iter_mut() {
         let merged = match incoming.get(&key).copied() {
             Some(candidate) if *existing == candidate => *existing,
-            Some(_) | None => ProjectedTensorValueV1::Invalid,
+            Some(_) | None => ProjectedCapabilityValueV1::Invalid,
         };
         if *existing != merged {
             *existing = merged;
@@ -2284,14 +2301,46 @@ fn merge_tensor_states_v1(
     for (&key, &candidate) in incoming {
         if let std::collections::hash_map::Entry::Vacant(entry) = current.entry(key) {
             entry.insert(match candidate {
-                ProjectedTensorValueV1::Known(_)
-                | ProjectedTensorValueV1::ConstructedEnum(_)
-                | ProjectedTensorValueV1::Invalid => ProjectedTensorValueV1::Invalid,
+                ProjectedCapabilityValueV1::Known(_)
+                | ProjectedCapabilityValueV1::ConstructedEnum(_)
+                | ProjectedCapabilityValueV1::Invalid => ProjectedCapabilityValueV1::Invalid,
             });
             changed = true;
         }
     }
     Ok(changed)
+}
+
+fn try_clone_capability_state_v1(
+    state: &ProjectedCapabilityStateV1,
+) -> Result<ProjectedCapabilityStateV1, ProductionRankedProjectionErrorV1> {
+    checked_capability_stored_entries_v1(0, state.len())?;
+    let mut cloned = HashMap::new();
+    cloned.try_reserve(state.len()).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "capability state clone storage cannot be reserved",
+        )
+    })?;
+    cloned.extend(state.iter().map(|(&local, &value)| (local, value)));
+    Ok(cloned)
+}
+
+fn checked_capability_stored_entries_v1(
+    current: usize,
+    additional: usize,
+) -> Result<usize, ProductionRankedProjectionErrorV1> {
+    let total =
+        current
+            .checked_add(additional)
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "capability stored-state accounting overflow",
+            ))?;
+    if total > MAX_PROJECTED_CAPABILITY_STATE_ENTRIES_V1 {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "capability states exceed the charged storage limit",
+        ));
+    }
+    Ok(total)
 }
 
 fn project_intrinsic_contracts(
@@ -2322,17 +2371,17 @@ fn project_intrinsic_contracts(
         allocation_origins,
     } = local_provenance_v1(function)?;
     let local_allocations = local_allocation_contracts(types, function, &allocation_origins)?;
-    let tensor_effects = project_authenticated_tensor_layouts_v1(
+    let capability_effects = project_authenticated_capabilities_v1(
         callables,
         function,
         &enum_payload_dominance,
         &local_allocations,
         constants,
     )?;
-    let tensor_read_effects =
-        bind_tensor_read_effects_to_call_blocks_v1(function, &tensor_effects.global_reads)?;
-    let tensor_layouts = tensor_effects.layouts;
-    let read_view_sources = tensor_effects.read_views;
+    let capability_read_effects =
+        bind_capability_read_effects_to_call_blocks_v1(function, &capability_effects.global_reads)?;
+    let tensor_layouts = capability_effects.layouts;
+    let read_view_sources = capability_effects.read_views;
     let mut edge_count = 0_usize;
     let mut borrowed_locals = Vec::new();
     let mut runtime_index_arguments = vec![None; local_count];
@@ -3514,7 +3563,7 @@ fn project_intrinsic_contracts(
         deterministic_switches,
         uniform_inductions,
         tensor_layouts,
-        tensor_read_effects,
+        capability_read_effects,
         read_view_effects,
     })
 }
@@ -4036,7 +4085,7 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
                         "deterministic scalar reachability work accounting overflowed",
                     ),
                 )?;
-                if self.reachability_work > MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1 {
+                if self.reachability_work > MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1 {
                     return Err(ProductionRankedProjectionErrorV1::Unsupported(
                         "deterministic scalar reachability exceeded its explicit work limit",
                     ));
@@ -5861,7 +5910,7 @@ fn push_local_provenance_edge_v1(
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                 "local provenance edge accounting overflowed",
             ))?;
-    if *edge_count > MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1 {
+    if *edge_count > MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1 {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "local provenance edges exceed the charged projection limit",
         ));
@@ -5896,7 +5945,7 @@ fn propagate_exact_local_origins_v1<T: Copy + Eq>(
                 .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                     "local provenance dataflow work accounting overflowed",
                 ))?;
-            if work > MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1 {
+            if work > MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1 {
                 return Err(ProductionRankedProjectionErrorV1::Unsupported(
                     "local provenance dataflow exceeds the charged projection limit",
                 ));
@@ -11847,19 +11896,21 @@ mod tests {
         )
     }
 
-    fn authenticated_tensor_load_state() -> ProjectedTensorStateV1 {
+    fn authenticated_tensor_load_state() -> ProjectedCapabilityStateV1 {
         HashMap::from([
             (
                 0,
-                ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::View(ProjectedMfmaViewV1 {
-                    role: SemanticMfmaOperandRoleV1::A,
-                    storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
-                    allocation: tensor_test_allocation(),
-                })),
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::View(
+                    ProjectedMfmaViewV1 {
+                        role: SemanticMfmaOperandRoleV1::A,
+                        storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                        allocation: tensor_test_allocation(),
+                    },
+                )),
             ),
             (
                 1,
-                ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Lane {
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Lane {
                     root: 20,
                     wave_width: 64,
                 }),
@@ -11923,9 +11974,9 @@ mod tests {
         let view = strided_read_view();
         let mut state = HashMap::from([(
             0,
-            ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::ReadView(view)),
+            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::ReadView(view)),
         )]);
-        let effects = transfer_tensor_terminator_v1(
+        let effects = transfer_capability_terminator_v1(
             &[strided_read_callable()],
             &function,
             0,
@@ -11945,14 +11996,14 @@ mod tests {
         );
         assert_eq!(
             state.get(&0),
-            Some(&ProjectedTensorValueV1::Known(
-                ProjectedTensorOriginV1::ReadView(view)
+            Some(&ProjectedCapabilityValueV1::Known(
+                ProjectedCapabilityOriginV1::ReadView(view)
             ))
         );
 
-        let mut invalid = HashMap::from([(0, ProjectedTensorValueV1::Invalid)]);
+        let mut invalid = HashMap::from([(0, ProjectedCapabilityValueV1::Invalid)]);
         assert!(matches!(
-            transfer_tensor_terminator_v1(
+            transfer_capability_terminator_v1(
                 &[strided_read_callable()],
                 &function,
                 0,
@@ -12017,7 +12068,7 @@ mod tests {
             SemanticPlaceV1::new(SemanticLocalIdV1::from_index(4), vec![], SCALAR_TYPE).unwrap(),
         ));
         let mut state = authenticated_tensor_load_state();
-        let effects = transfer_tensor_terminator_v1(
+        let effects = transfer_capability_terminator_v1(
             &[zero_filled_tensor_load_callable()],
             &function,
             0,
@@ -12032,8 +12083,8 @@ mod tests {
         assert!(effects.layout.is_none());
         assert!(matches!(
             state.get(&4),
-            Some(ProjectedTensorValueV1::Known(
-                ProjectedTensorOriginV1::Operand(_)
+            Some(ProjectedCapabilityValueV1::Known(
+                ProjectedCapabilityOriginV1::Operand(_)
             ))
         ));
     }
@@ -12051,7 +12102,7 @@ mod tests {
             noalias_class: 1,
             writable: false,
         };
-        let effects = bind_tensor_read_effects_to_call_blocks_v1(
+        let effects = bind_capability_read_effects_to_call_blocks_v1(
             &function,
             &[Some(operand_a), None, Some(operand_b)],
         )
@@ -12065,7 +12116,9 @@ mod tests {
             effects[0].unwrap().allocation.allocation_origin,
             effects[2].unwrap().allocation.allocation_origin
         );
-        assert!(bind_tensor_read_effects_to_call_blocks_v1(&function, &[Some(operand_a)]).is_err());
+        assert!(
+            bind_capability_read_effects_to_call_blocks_v1(&function, &[Some(operand_a)]).is_err()
+        );
     }
 
     #[test]
@@ -12074,8 +12127,8 @@ mod tests {
             SemanticPlaceV1::new(SemanticLocalIdV1::from_index(4), vec![], SCALAR_TYPE).unwrap();
         let function = tensor_load_function(Some(direct_destination));
         let mut merged_state = authenticated_tensor_load_state();
-        assert!(merge_tensor_states_v1(&mut merged_state, &HashMap::new()).unwrap());
-        let error = transfer_tensor_terminator_v1(
+        assert!(merge_capability_states_v1(&mut merged_state, &HashMap::new()).unwrap());
+        let error = transfer_capability_terminator_v1(
             &[zero_filled_tensor_load_callable()],
             &function,
             0,
@@ -12093,9 +12146,9 @@ mod tests {
         ));
 
         let mut invalid_lane = authenticated_tensor_load_state();
-        invalid_lane.insert(1, ProjectedTensorValueV1::Invalid);
+        invalid_lane.insert(1, ProjectedCapabilityValueV1::Invalid);
         assert!(matches!(
-            transfer_tensor_terminator_v1(
+            transfer_capability_terminator_v1(
                 &[zero_filled_tensor_load_callable()],
                 &function,
                 0,
@@ -12114,7 +12167,7 @@ mod tests {
     fn global_fragment_loads_cannot_discard_or_project_their_result() {
         let function = tensor_load_function(None);
         assert!(matches!(
-            transfer_tensor_terminator_v1(
+            transfer_capability_terminator_v1(
                 &[zero_filled_tensor_load_callable()],
                 &function,
                 0,
@@ -12138,7 +12191,7 @@ mod tests {
         .unwrap();
         let function = tensor_load_function(Some(projected));
         assert!(matches!(
-            transfer_tensor_terminator_v1(
+            transfer_capability_terminator_v1(
                 &[zero_filled_tensor_load_callable()],
                 &function,
                 0,
@@ -12160,15 +12213,17 @@ mod tests {
         let state = HashMap::from([
             (
                 0,
-                ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::View(ProjectedMfmaViewV1 {
-                    role: SemanticMfmaOperandRoleV1::A,
-                    storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
-                    allocation: tensor_test_allocation(),
-                })),
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::View(
+                    ProjectedMfmaViewV1 {
+                        role: SemanticMfmaOperandRoleV1::A,
+                        storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                        allocation: tensor_test_allocation(),
+                    },
+                )),
             ),
             (
                 1,
-                ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Lane {
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Lane {
                     root: 20,
                     wave_width: 64,
                 }),
@@ -12184,7 +12239,7 @@ mod tests {
                 contract,
                 SemanticMfmaStorageLayoutV1::RowMajor,
             ),
-            ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Operand(_))
+            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(_))
         ));
         assert_eq!(
             project_tensor_load_origin_v1(
@@ -12195,7 +12250,7 @@ mod tests {
                 contract,
                 SemanticMfmaStorageLayoutV1::RowMajor,
             ),
-            ProjectedTensorValueV1::Invalid
+            ProjectedCapabilityValueV1::Invalid
         );
         assert_eq!(
             project_tensor_load_origin_v1(
@@ -12206,7 +12261,7 @@ mod tests {
                 mfma_operand_contract(SemanticMfmaOperandRoleV1::B),
                 SemanticMfmaStorageLayoutV1::RowMajor,
             ),
-            ProjectedTensorValueV1::Invalid
+            ProjectedCapabilityValueV1::Invalid
         );
     }
 
@@ -12224,7 +12279,7 @@ mod tests {
 
         let function = tensor_load_function(None);
         assert!(matches!(
-            transfer_tensor_terminator_v1(
+            transfer_capability_terminator_v1(
                 &[legacy_tensor_load_callable()],
                 &function,
                 0,
@@ -12242,15 +12297,17 @@ mod tests {
     fn authenticated_tensor_state(
         lhs_storage: SemanticMfmaStorageLayoutV1,
         rhs_storage: SemanticMfmaStorageLayoutV1,
-    ) -> ProjectedTensorStateV1 {
+    ) -> ProjectedCapabilityStateV1 {
         HashMap::from([
             (
                 0,
-                ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::MatrixContext { root: 10 }),
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::MatrixContext {
+                    root: 10,
+                }),
             ),
             (
                 1,
-                ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Operand(
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(
                     ProjectedMfmaOperandV1 {
                         contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
                         storage_layout: lhs_storage,
@@ -12261,7 +12318,7 @@ mod tests {
             ),
             (
                 2,
-                ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Operand(
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(
                     ProjectedMfmaOperandV1 {
                         contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::B),
                         storage_layout: rhs_storage,
@@ -12272,7 +12329,7 @@ mod tests {
             ),
             (
                 3,
-                ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Accumulator(
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Accumulator(
                     ProjectedMfmaAccumulatorV1 {
                         contract: mfma_accumulator_contract(),
                         lane_root: 20,
@@ -12348,12 +12405,14 @@ mod tests {
             SemanticMfmaStorageLayoutV1::RowMajor,
             SemanticMfmaStorageLayoutV1::RowMajor,
         );
-        let ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Operand(rhs)) = state[&2] else {
+        let ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(rhs)) =
+            state[&2]
+        else {
             unreachable!()
         };
         state.insert(
             2,
-            ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Operand(
+            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(
                 ProjectedMfmaOperandV1 {
                     lane_root: 21,
                     ..rhs
@@ -12414,7 +12473,7 @@ mod tests {
         .unwrap();
         let result_state = HashMap::from([(
             1,
-            ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::ViewResult(
+            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::ViewResult(
                 ProjectedMfmaViewV1 {
                     role: SemanticMfmaOperandRoleV1::A,
                     storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
@@ -12423,18 +12482,18 @@ mod tests {
             )),
         )]);
         assert!(matches!(
-            tensor_origin_from_assignment_operand_v1(
+            capability_origin_from_assignment_operand_v1(
                 &tensor_payload(1, 0),
                 &result_state,
                 &result_dominance,
                 SemanticBlockIdV1::from_index(1),
             ),
-            Some(ProjectedTensorValueV1::Known(
-                ProjectedTensorOriginV1::View(_)
+            Some(ProjectedCapabilityValueV1::Known(
+                ProjectedCapabilityOriginV1::View(_)
             ))
         ));
         assert!(
-            tensor_origin_from_assignment_operand_v1(
+            capability_origin_from_assignment_operand_v1(
                 &tensor_payload(1, 0),
                 &result_state,
                 &result_dominance,
@@ -12445,24 +12504,24 @@ mod tests {
     }
 
     #[test]
-    fn exact_enum_transport_preserves_tensor_origin_through_nested_wrappers() {
+    fn exact_enum_transport_preserves_capability_through_nested_wrappers() {
         let function =
             projection_function(vec![block(96, vec![], SemanticTerminatorKindV1::Return)]);
         let enum_dominance =
             SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types()).unwrap();
-        let origin = ProjectedTensorOriginV1::Operand(ProjectedMfmaOperandV1 {
+        let origin = ProjectedCapabilityOriginV1::Operand(ProjectedMfmaOperandV1 {
             contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
             storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
             lane_root: 20,
             allocation: tensor_test_allocation(),
         });
-        let mut state = HashMap::from([(0, ProjectedTensorValueV1::Known(origin))]);
+        let mut state = HashMap::from([(0, ProjectedCapabilityValueV1::Known(origin))]);
         let first = SemanticAggregateRvalueV1::new(
             SemanticAggregateKindV1::EnumVariant(0),
             vec![tensor_operand(0)],
         )
         .unwrap();
-        let first = tensor_origin_from_enum_aggregate_v1(
+        let first = capability_origin_from_enum_aggregate_v1(
             &first,
             &state,
             &enum_dominance,
@@ -12476,7 +12535,7 @@ mod tests {
             vec![tensor_operand(1)],
         )
         .unwrap();
-        let second = tensor_origin_from_enum_aggregate_v1(
+        let second = capability_origin_from_enum_aggregate_v1(
             &second,
             &state,
             &enum_dominance,
@@ -12486,7 +12545,7 @@ mod tests {
         .unwrap();
         state.insert(2, second);
 
-        let first_again = tensor_origin_from_assignment_operand_v1(
+        let first_again = capability_origin_from_assignment_operand_v1(
             &tensor_payload(2, 1),
             &state,
             &enum_dominance,
@@ -12496,13 +12555,13 @@ mod tests {
         assert_eq!(first_again, first);
         state.insert(3, first_again);
         assert_eq!(
-            tensor_origin_from_assignment_operand_v1(
+            capability_origin_from_assignment_operand_v1(
                 &tensor_payload(3, 0),
                 &state,
                 &enum_dominance,
                 SemanticBlockIdV1::from_index(0),
             ),
-            Some(ProjectedTensorValueV1::Known(origin))
+            Some(ProjectedCapabilityValueV1::Known(origin))
         );
     }
 
@@ -12512,19 +12571,19 @@ mod tests {
             projection_function(vec![block(97, vec![], SemanticTerminatorKindV1::Return)]);
         let enum_dominance =
             SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types()).unwrap();
-        let origin = ProjectedTensorOriginV1::Operand(ProjectedMfmaOperandV1 {
+        let origin = ProjectedCapabilityOriginV1::Operand(ProjectedMfmaOperandV1 {
             contract: mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
             storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
             lane_root: 20,
             allocation: tensor_test_allocation(),
         });
-        let state = HashMap::from([(0, ProjectedTensorValueV1::Known(origin))]);
+        let state = HashMap::from([(0, ProjectedCapabilityValueV1::Known(origin))]);
         let aggregate = SemanticAggregateRvalueV1::new(
             SemanticAggregateKindV1::EnumVariant(4),
             vec![tensor_operand(0)],
         )
         .unwrap();
-        let wrapped = tensor_origin_from_enum_aggregate_v1(
+        let wrapped = capability_origin_from_enum_aggregate_v1(
             &aggregate,
             &state,
             &enum_dominance,
@@ -12534,7 +12593,7 @@ mod tests {
         .unwrap();
         let wrapped_state = HashMap::from([(1, wrapped)]);
         assert!(
-            tensor_origin_from_assignment_operand_v1(
+            capability_origin_from_assignment_operand_v1(
                 &tensor_payload(1, 3),
                 &wrapped_state,
                 &enum_dominance,
@@ -12549,7 +12608,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            tensor_origin_from_enum_aggregate_v1(
+            capability_origin_from_enum_aggregate_v1(
                 &extra_fields,
                 &state,
                 &enum_dominance,
@@ -12560,44 +12619,44 @@ mod tests {
         );
 
         let mut joined = wrapped_state;
-        assert!(merge_tensor_states_v1(&mut joined, &HashMap::new()).unwrap());
-        assert_eq!(joined[&1], ProjectedTensorValueV1::Invalid);
+        assert!(merge_capability_states_v1(&mut joined, &HashMap::new()).unwrap());
+        assert_eq!(joined[&1], ProjectedCapabilityValueV1::Invalid);
     }
 
     #[test]
     fn enum_transport_nesting_has_an_explicit_resource_bound() {
-        let origin = ProjectedTensorOriginV1::Lane {
+        let origin = ProjectedCapabilityOriginV1::Lane {
             root: 1,
             wave_width: 64,
         };
-        let mut value = ProjectedTensorValueV1::Known(origin);
-        for variant in 0..MAX_PROJECTED_TENSOR_ENUM_DEPTH_V1 {
-            value = wrap_tensor_enum_value_v1(value, variant as u32).unwrap();
+        let mut value = ProjectedCapabilityValueV1::Known(origin);
+        for variant in 0..MAX_PROJECTED_CAPABILITY_ENUM_DEPTH_V1 {
+            value = wrap_capability_enum_value_v1(value, variant as u32).unwrap();
         }
         assert!(matches!(
-            wrap_tensor_enum_value_v1(value, 99),
+            wrap_capability_enum_value_v1(value, 99),
             Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "tensor enum transport exceeds the charged nesting limit"
+                "capability enum transport exceeds the charged nesting limit"
             ))
         ));
     }
 
-    fn tensor_move_operand(local: u32) -> SemanticOperandV1 {
+    fn move_local_operand(local: u32) -> SemanticOperandV1 {
         SemanticOperandV1::Move(
             SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], SCALAR_TYPE)
                 .unwrap(),
         )
     }
 
-    fn tensor_state_origin() -> ProjectedTensorValueV1 {
-        ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Lane {
+    fn capability_state_origin() -> ProjectedCapabilityValueV1 {
+        ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Lane {
             root: 31,
             wave_width: 64,
         })
     }
 
     #[test]
-    fn copy_and_move_transfer_tensor_origin_exactly_once() {
+    fn copy_and_move_transfer_capability_exactly_once() {
         let place = |local| SemanticPlaceV1::new(local, vec![], SCALAR_TYPE).unwrap();
         let assignment = |destination, operand| {
             statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
@@ -12605,7 +12664,7 @@ mod tests {
                 SemanticRvalueV1::new(SCALAR_TYPE, SemanticRvalueKindV1::Use(operand)),
             )))
         };
-        for first in [tensor_operand(1), tensor_move_operand(1)] {
+        for first in [tensor_operand(1), move_local_operand(1)] {
             let function = projection_function_with_locals(
                 vec![block(
                     102,
@@ -12624,11 +12683,11 @@ mod tests {
             );
             let payload =
                 SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types()).unwrap();
-            let mut state = HashMap::from([(1, tensor_state_origin())]);
-            transfer_tensor_statements_v1(&function, 0, &mut state, &payload).unwrap();
-            assert_eq!(state[&1], ProjectedTensorValueV1::Invalid);
-            assert_eq!(state[&2], tensor_state_origin());
-            assert_eq!(state[&3], ProjectedTensorValueV1::Invalid);
+            let mut state = HashMap::from([(1, capability_state_origin())]);
+            transfer_capability_statements_v1(&function, 0, &mut state, &payload).unwrap();
+            assert_eq!(state[&1], ProjectedCapabilityValueV1::Invalid);
+            assert_eq!(state[&2], capability_state_origin());
+            assert_eq!(state[&3], ProjectedCapabilityValueV1::Invalid);
         }
     }
 
@@ -12665,27 +12724,27 @@ mod tests {
             let payload =
                 SemanticEnumPayloadDominanceV1::analyze(&function, &projection_types_with_enum())
                     .unwrap();
-            let wrapped = wrap_tensor_enum_value_v1(tensor_state_origin(), 4).unwrap();
+            let wrapped = wrap_capability_enum_value_v1(capability_state_origin(), 4).unwrap();
             let mut state = HashMap::from([(1, wrapped)]);
-            transfer_tensor_statements_v1(&function, 0, &mut state, &payload).unwrap();
-            assert_eq!(state[&1], ProjectedTensorValueV1::Invalid);
+            transfer_capability_statements_v1(&function, 0, &mut state, &payload).unwrap();
+            assert_eq!(state[&1], ProjectedCapabilityValueV1::Invalid);
             assert_eq!(
-                tensor_origin_from_assignment_operand_v1(
+                capability_origin_from_assignment_operand_v1(
                     &tensor_payload(1, 4),
                     &state,
                     &payload,
                     SemanticBlockIdV1::from_index(0),
                 ),
-                Some(ProjectedTensorValueV1::Invalid)
+                Some(ProjectedCapabilityValueV1::Invalid)
             );
         }
     }
 
     #[test]
-    fn call_operands_consume_tensor_origins_even_without_a_known_producer() {
+    fn call_operands_consume_capabilities_even_without_a_known_producer() {
         let call = SemanticDirectCallV1::new_callable(
             SemanticCallableIdV1::from_index(0),
-            vec![tensor_move_operand(1)],
+            vec![move_local_operand(1)],
             None,
             SemanticUnwindActionV1::Unreachable,
         )
@@ -12697,30 +12756,62 @@ mod tests {
                 local(109, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
             ],
         );
-        let mut state = HashMap::from([(1, tensor_state_origin())]);
+        let mut state = HashMap::from([(1, capability_state_origin())]);
         assert_eq!(
-            transfer_tensor_terminator_v1(&[], &function, 0, &mut state, &[None; 4], &[], false)
-                .unwrap(),
-            ProjectedTensorTerminatorEffectsV1::default()
+            transfer_capability_terminator_v1(
+                &[],
+                &function,
+                0,
+                &mut state,
+                &[None; 4],
+                &[],
+                false
+            )
+            .unwrap(),
+            ProjectedCapabilityTerminatorEffectsV1::default()
         );
-        assert_eq!(state[&1], ProjectedTensorValueV1::Invalid);
+        assert_eq!(state[&1], ProjectedCapabilityValueV1::Invalid);
     }
 
     #[test]
-    fn tensor_origin_on_only_one_predecessor_becomes_invalid_at_the_join() {
+    fn capability_on_only_one_predecessor_becomes_invalid_at_the_join() {
         let mut current = HashMap::from([(
             7,
-            ProjectedTensorValueV1::Known(ProjectedTensorOriginV1::Lane {
+            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Lane {
                 root: 1,
                 wave_width: 64,
             }),
         )]);
-        assert!(merge_tensor_states_v1(&mut current, &HashMap::new()).unwrap());
-        assert_eq!(current[&7], ProjectedTensorValueV1::Invalid);
+        assert!(merge_capability_states_v1(&mut current, &HashMap::new()).unwrap());
+        assert_eq!(current[&7], ProjectedCapabilityValueV1::Invalid);
     }
 
     #[test]
-    fn duplicate_tensor_cfg_successors_are_charged_once_and_merged_once() {
+    fn capability_state_storage_accepts_the_exact_bound_before_fallible_clone() {
+        assert_eq!(
+            checked_capability_stored_entries_v1(MAX_PROJECTED_CAPABILITY_STATE_ENTRIES_V1 - 1, 1,)
+                .unwrap(),
+            MAX_PROJECTED_CAPABILITY_STATE_ENTRIES_V1,
+        );
+        assert!(matches!(
+            checked_capability_stored_entries_v1(MAX_PROJECTED_CAPABILITY_STATE_ENTRIES_V1, 1,),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "capability states exceed the charged storage limit"
+            ))
+        ));
+        assert!(matches!(
+            checked_capability_stored_entries_v1(usize::MAX, 1),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "capability stored-state accounting overflow"
+            ))
+        ));
+
+        let state = HashMap::from([(1, capability_state_origin())]);
+        assert_eq!(try_clone_capability_state_v1(&state).unwrap(), state);
+    }
+
+    #[test]
+    fn duplicate_capability_cfg_successors_are_charged_once_and_merged_once() {
         let targets = (0..65_536_u128)
             .map(|value| {
                 SemanticSwitchTargetV1::new(value, cfg_edge(SemanticEdgeRoleV1::SwitchValue, 1))
@@ -12736,14 +12827,14 @@ mod tests {
         };
         let mut work = 0;
         assert_eq!(
-            charged_unique_tensor_successors_v1(&terminator, 7, &mut work).unwrap(),
+            charged_unique_capability_successors_v1(&terminator, 7, &mut work).unwrap(),
             vec![1, 2]
         );
         assert_eq!(work, 65_537 + 2 * (7 + 1));
     }
 
     #[test]
-    fn tensor_cfg_successor_deduplication_is_deterministic_and_resource_bounded() {
+    fn capability_cfg_successor_deduplication_is_deterministic_and_resource_bounded() {
         let terminator = SemanticTerminatorKindV1::SwitchInt {
             discriminant: constant(0),
             targets: SemanticSwitchTargetsV1::new(
@@ -12760,17 +12851,17 @@ mod tests {
         for _ in 0..4 {
             let mut work = 0;
             assert_eq!(
-                charged_unique_tensor_successors_v1(&terminator, 0, &mut work).unwrap(),
+                charged_unique_capability_successors_v1(&terminator, 0, &mut work).unwrap(),
                 vec![1, 2, 3]
             );
             assert_eq!(work, 8);
         }
 
-        let mut exhausted_work = MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1 - 1;
+        let mut exhausted_work = MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1 - 1;
         assert!(matches!(
-            charged_unique_tensor_successors_v1(&terminator, 0, &mut exhausted_work),
+            charged_unique_capability_successors_v1(&terminator, 0, &mut exhausted_work),
             Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "tensor producer dataflow exceeds the charged projection limit"
+                "capability dataflow exceeds the charged projection limit"
             ))
         ));
     }
@@ -15286,18 +15377,18 @@ mod tests {
     }
 
     #[test]
-    fn adversarial_tensor_state_growth_has_explicit_budgets() {
-        assert!(MAX_PROJECTED_TENSOR_STATE_ENTRIES_V1 < HARD_MAX_LOCALS_V1 as usize * 2);
-        assert!(MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1 < HARD_MAX_VALIDATION_WORK_V1 as usize);
+    fn adversarial_capability_state_growth_has_explicit_budgets() {
+        assert!(MAX_PROJECTED_CAPABILITY_STATE_ENTRIES_V1 < HARD_MAX_LOCALS_V1 as usize * 2);
+        assert!(MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1 < HARD_MAX_VALIDATION_WORK_V1 as usize);
         assert!(
-            MAX_PROJECTED_TENSOR_STATE_ENTRIES_V1
+            MAX_PROJECTED_CAPABILITY_STATE_ENTRIES_V1
                 .checked_add(1)
-                .is_some_and(|entries| entries > MAX_PROJECTED_TENSOR_STATE_ENTRIES_V1)
+                .is_some_and(|entries| entries > MAX_PROJECTED_CAPABILITY_STATE_ENTRIES_V1)
         );
         assert!(
-            MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1
+            MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1
                 .checked_add(1)
-                .is_some_and(|work| work > MAX_PROJECTED_TENSOR_DATAFLOW_WORK_V1)
+                .is_some_and(|work| work > MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1)
         );
     }
 }
