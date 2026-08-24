@@ -84,6 +84,7 @@ pub struct Bf16MfmaFragment<'wave, Role, Profile, Distribution, Width: WaveWidth
     _contract: PhantomData<
         fn(&'wave WaveLane<Width>, Role, Profile, Distribution) -> &'wave WaveLane<Width>,
     >,
+    _not_send_sync: PhantomData<*mut ()>,
 }
 
 impl<'wave, Role, Profile, Distribution, Width: WaveWidth>
@@ -93,6 +94,7 @@ impl<'wave, Role, Profile, Distribution, Width: WaveWidth>
         Self {
             values,
             _contract: PhantomData,
+            _not_send_sync: PhantomData,
         }
     }
 
@@ -121,6 +123,7 @@ pub struct F32AccumulatorFragment<
     values: [f32; 4],
     _contract:
         PhantomData<fn(&'wave WaveLane<Width>, Profile, Distribution) -> &'wave WaveLane<Width>>,
+    _not_send_sync: PhantomData<*mut ()>,
 }
 
 impl<'wave> F32AccumulatorFragment<'wave> {
@@ -139,6 +142,7 @@ impl<'wave, Profile, Distribution, Width: WaveWidth>
         Self {
             values,
             _contract: PhantomData,
+            _not_send_sync: PhantomData,
         }
     }
 
