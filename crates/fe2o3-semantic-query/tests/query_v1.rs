@@ -2,10 +2,14 @@ mod common;
 
 use common::*;
 use fe2o3_semantic_query::*;
-use fe2o3_semantic_trace::{MAX_TRACE_BYTES_V1, TraceDecodeErrorV1};
+use fe2o3_semantic_trace::{MAX_TRACE_BYTES_V1, TraceDecodeErrorV1, TraceValidationErrorV1};
 
 fn session(seed: u8) -> TraceQuerySessionV1 {
     TraceQuerySessionV1::open(&encoded_trace(seed), QueryLimitsV1::default()).unwrap()
+}
+
+fn trace_session(trace: fe2o3_semantic_trace::TraceV1) -> TraceQuerySessionV1 {
+    TraceQuerySessionV1::from_trace(trace, QueryLimitsV1::default()).unwrap()
 }
 
 fn page_request(kind: PageKindV1, limit: u16, filter: QueryFilterV1) -> QueryRequestV1 {
@@ -39,6 +43,284 @@ fn capability_discovery_is_explicit_about_absent_and_forbidden_state() {
         capability.name == CapabilityNameV1::PerformancePrediction
             && capability.reason == Some(CapabilityUnavailableReasonV1::OutsideCurrentScope)
     }));
+    assert!(capabilities.iter().any(|capability| {
+        capability.name == CapabilityNameV1::NextCapturePlanning
+            && capability.availability == CapabilityAvailabilityV1::Available
+    }));
+    for unavailable in [
+        CapabilityNameV1::HardwareCounterValues,
+        CapabilityNameV1::PcSamples,
+        CapabilityNameV1::DecodedAttWaveTimeline,
+    ] {
+        assert!(capabilities.iter().any(|capability| {
+            capability.name == unavailable
+                && capability.reason == Some(CapabilityUnavailableReasonV1::NotRepresentedByTraceV1)
+        }));
+    }
+    assert!(capabilities.iter().any(|capability| {
+        capability.name == CapabilityNameV1::DirectKfdDispatchObservation
+            && capability.reason == Some(CapabilityUnavailableReasonV1::OutsideCurrentScope)
+    }));
+}
+
+#[test]
+fn simulator_memory_plan_contains_only_missing_facts_in_stable_order() {
+    let session = session(8);
+    let request = QueryRequestV1::PlanNextCapture {
+        goal: CaptureGoalV1::MemoryFault,
+    };
+    let first = session.query(request).unwrap();
+    assert_eq!(first, session.query(request).unwrap());
+    let QueryResponseV1::PlanNextCapture { plan, .. } = first else {
+        panic!("expected capture plan")
+    };
+
+    assert_eq!(plan.goal(), CaptureGoalV1::MemoryFault);
+    assert_eq!(
+        plan.disposition(),
+        CapturePlanDispositionV1::AdditionalCaptureRequiredWithUnsupportedFacts
+    );
+    assert_eq!(plan.steps().len(), 2);
+    assert_eq!(plan.steps()[0].tool(), CaptureToolFamilyV1::SimulatorTrace);
+    assert_eq!(
+        plan.steps()[0].required_facts(),
+        &[
+            CaptureFactV1::MemoryAccessOutcomes,
+            CaptureFactV1::FaultAllocationLayout,
+        ]
+    );
+    assert_eq!(
+        plan.steps()[1].tool(),
+        CaptureToolFamilyV1::NormalizedRocgdb
+    );
+    assert!(
+        plan.steps()[1]
+            .required_facts()
+            .contains(&CaptureFactV1::NormalizedDebuggerTranscript)
+    );
+    assert!(plan.unsupported().iter().any(|unsupported| {
+        unsupported.tool == CaptureToolFamilyV1::FutureDirectKfd
+            && unsupported.fact == CaptureFactV1::AuthenticatedDirectKfdDispatch
+    }));
+    assert!(plan.existing_evidence_refs().len() <= MAX_CAPTURE_EXISTING_EVIDENCE_REFS_V1);
+}
+
+#[test]
+fn observed_memory_fault_needs_no_duplicate_capture_and_is_not_a_diagnosis() {
+    let session = trace_session(memory_fault_trace(8));
+    let QueryResponseV1::PlanNextCapture { plan, .. } = session
+        .query(QueryRequestV1::PlanNextCapture {
+            goal: CaptureGoalV1::MemoryFault,
+        })
+        .unwrap()
+    else {
+        panic!("expected capture plan")
+    };
+    assert_eq!(
+        plan.disposition(),
+        CapturePlanDispositionV1::ExistingEvidenceObserved
+    );
+    assert!(plan.steps().is_empty());
+
+    let QueryResponseV1::DiagnosisStatus { status, .. } = session
+        .query(QueryRequestV1::DiagnosisStatus {
+            goal: CaptureGoalV1::MemoryFault,
+        })
+        .unwrap()
+    else {
+        panic!("expected diagnosis status")
+    };
+    assert_eq!(
+        status.observation_status(),
+        DiagnosisObservationStatusV1::ObservedFaultsPresent
+    );
+    assert_eq!(status.observed_fault_count(), 3);
+    assert!(status.missing_facts().is_empty());
+    assert!(!status.diagnosis_reached());
+}
+
+#[test]
+fn inferred_fault_is_not_promoted_to_observed_runtime_evidence() {
+    let session = trace_session(inferred_memory_fault_trace(8));
+    let QueryResponseV1::DiagnosisStatus { status, .. } = session
+        .query(QueryRequestV1::DiagnosisStatus {
+            goal: CaptureGoalV1::MemoryFault,
+        })
+        .unwrap()
+    else {
+        panic!("expected diagnosis status")
+    };
+    assert_eq!(status.observed_fault_count(), 1);
+    assert!(
+        status
+            .missing_facts()
+            .contains(&CaptureFactV1::ObservedMemoryFault)
+    );
+    assert!(
+        status
+            .missing_facts()
+            .contains(&CaptureFactV1::FaultAllocationLayout)
+    );
+}
+
+#[test]
+fn truncated_and_sparse_traces_request_coverage_without_inventing_att_facts() {
+    let QueryResponseV1::PlanNextCapture {
+        plan: truncated, ..
+    } = trace_session(truncated_trace(8))
+        .query(QueryRequestV1::PlanNextCapture {
+            goal: CaptureGoalV1::BarrierDivergence,
+        })
+        .unwrap()
+    else {
+        panic!("expected truncated plan")
+    };
+    assert_eq!(truncated.steps().len(), 1);
+    assert_eq!(
+        truncated.steps()[0].required_facts(),
+        &[CaptureFactV1::FullInvocationCoverage]
+    );
+
+    let QueryResponseV1::PlanNextCapture { plan: sparse, .. } = trace_session(sparse_att_trace(8))
+        .query(QueryRequestV1::PlanNextCapture {
+            goal: CaptureGoalV1::BarrierDivergence,
+        })
+        .unwrap()
+    else {
+        panic!("expected sparse plan")
+    };
+    assert_eq!(
+        sparse.steps()[0].tool(),
+        CaptureToolFamilyV1::SimulatorTrace
+    );
+    assert!(sparse.unsupported().iter().any(|unsupported| {
+        unsupported.fact == CaptureFactV1::SelectedWaveAttTimeline
+            && unsupported.reason == UnsupportedCaptureReasonV1::ImporterRetainsManifestOnly
+    }));
+    assert!(
+        sparse
+            .unsupported()
+            .iter()
+            .any(|unsupported| { unsupported.fact == CaptureFactV1::FullGridAttCoverage })
+    );
+}
+
+#[test]
+fn full_invocation_coverage_requires_complete_observed_begin_end_pairs() {
+    let QueryResponseV1::PlanNextCapture { plan, .. } =
+        trace_session(fully_paired_barrier_trace(8))
+            .query(QueryRequestV1::PlanNextCapture {
+                goal: CaptureGoalV1::BarrierDivergence,
+            })
+            .unwrap()
+    else {
+        panic!("expected barrier plan")
+    };
+    assert_eq!(
+        plan.disposition(),
+        CapturePlanDispositionV1::ExistingEvidenceObserved
+    );
+    assert!(plan.steps().is_empty());
+    assert!(plan.existing_evidence_refs().iter().any(|evidence| {
+        evidence.kind == ExistingEvidenceKindV1::AggregateInvariant
+            && evidence.fact == CaptureFactV1::FullInvocationCoverage
+            && evidence.event_sequence.is_none()
+    }));
+    assert!(!plan.existing_evidence_refs().iter().any(|evidence| {
+        evidence.kind == ExistingEvidenceKindV1::TraceEvent
+            && evidence.fact == CaptureFactV1::FullInvocationCoverage
+    }));
+}
+
+#[test]
+fn hostile_invocation_lifecycles_are_rejected_before_planning() {
+    assert_eq!(
+        duplicate_invocation_scope_error(8),
+        TraceValidationErrorV1::DuplicateInvocationBegin
+    );
+    assert_eq!(
+        mismatched_invocation_scope_error(8),
+        TraceValidationErrorV1::InvocationEndWithoutBegin
+    );
+}
+
+#[test]
+fn missing_or_non_observed_invocation_scopes_never_establish_full_coverage() {
+    for trace in [sample_trace(8), mixed_provenance_barrier_trace(8)] {
+        let QueryResponseV1::PlanNextCapture { plan, .. } = trace_session(trace)
+            .query(QueryRequestV1::PlanNextCapture {
+                goal: CaptureGoalV1::BarrierDivergence,
+            })
+            .unwrap()
+        else {
+            panic!("expected barrier plan")
+        };
+        assert!(plan.steps().iter().any(|step| {
+            step.required_facts()
+                .contains(&CaptureFactV1::FullInvocationCoverage)
+        }));
+        assert!(
+            !plan
+                .existing_evidence_refs()
+                .iter()
+                .any(|evidence| { evidence.fact == CaptureFactV1::FullInvocationCoverage })
+        );
+    }
+}
+
+#[test]
+fn performance_plan_reuses_dispatch_timing_and_separates_instrumentation_modes() {
+    let session = trace_session(rocprof_dispatch_trace(8));
+    let QueryResponseV1::PlanNextCapture { plan, .. } = session
+        .query(QueryRequestV1::PlanNextCapture {
+            goal: CaptureGoalV1::PerformanceHotspot,
+        })
+        .unwrap()
+    else {
+        panic!("expected performance plan")
+    };
+    assert_eq!(plan.steps().len(), 3);
+    assert_eq!(
+        plan.steps()
+            .iter()
+            .map(CapturePlanStepV1::tool)
+            .collect::<Vec<_>>(),
+        vec![
+            CaptureToolFamilyV1::Rocprofv3PcSampling,
+            CaptureToolFamilyV1::Rocprofv3Counters,
+            CaptureToolFamilyV1::Rocprofv3Att,
+        ]
+    );
+    assert!(plan.steps().iter().all(|step| {
+        !step
+            .required_facts()
+            .contains(&CaptureFactV1::DispatchTiming)
+    }));
+    assert!(plan.unsupported().iter().any(|unsupported| {
+        unsupported.fact == CaptureFactV1::HardwareCounterMeasurements
+            && unsupported.reason == UnsupportedCaptureReasonV1::NotRepresentedByTraceV1
+    }));
+}
+
+#[test]
+fn planner_and_diagnosis_json_remain_bounded_on_hostile_sparse_evidence() {
+    let trace = fe2o3_semantic_trace::encode_trace_v1(&sparse_att_trace(8)).unwrap();
+    let limits = QueryLimitsV1::new(MAX_TRACE_BYTES_V1, 8, MIN_QUERY_RESPONSE_BYTES_V1).unwrap();
+    let session = TraceQuerySessionV1::open(&trace, limits).unwrap();
+    for request in [
+        QueryRequestV1::PlanNextCapture {
+            goal: CaptureGoalV1::PerformanceHotspot,
+        },
+        QueryRequestV1::DiagnosisStatus {
+            goal: CaptureGoalV1::CorrectnessMismatch,
+        },
+    ] {
+        let first = session.query_json(request).unwrap();
+        let second = session.query_json(request).unwrap();
+        assert_eq!(first, second);
+        assert!(first.len() as u64 <= MIN_QUERY_RESPONSE_BYTES_V1);
+        assert_eq!(first.last(), Some(&b'\n'));
+    }
 }
 
 #[test]

@@ -3,6 +3,9 @@
 //!
 //! This crate is an observation surface. It grants no compiler, debugger,
 //! runtime, KFD, address, handle, or execution-control authority.
+//! Capture plans describe minimum missing evidence and qualitative collection
+//! cost; they neither execute tools nor claim a diagnosis or performance
+//! prediction.
 
 use std::error::Error;
 use std::fmt;
@@ -11,6 +14,10 @@ use std::io::{self, Write};
 use fe2o3_semantic_trace::*;
 use serde::{Serialize, Serializer};
 use sha2::{Digest, Sha256};
+
+mod capture_plan;
+
+pub use capture_plan::*;
 
 pub const QUERY_SCHEMA_V1: &str = "fe2o3-semantic-query-v1";
 pub const MAX_QUERY_PAGE_ITEMS_V1: u16 = 4_096;
@@ -172,6 +179,12 @@ pub enum PageKindV1 {
 pub enum QueryRequestV1 {
     Capabilities,
     DispatchSummary,
+    PlanNextCapture {
+        goal: CaptureGoalV1,
+    },
+    DiagnosisStatus {
+        goal: CaptureGoalV1,
+    },
     Page {
         kind: PageKindV1,
         page: PageRequestV1,
@@ -189,6 +202,14 @@ pub enum QueryResponseV1 {
     DispatchSummary {
         context: TraceContextViewV1,
         summary: DispatchSummaryV1,
+    },
+    PlanNextCapture {
+        context: TraceContextViewV1,
+        plan: NextCapturePlanV1,
+    },
+    DiagnosisStatus {
+        context: TraceContextViewV1,
+        status: DiagnosisStatusV1,
     },
     Page {
         page: QueryPageV1,
@@ -252,6 +273,14 @@ impl TraceQuerySessionV1 {
             QueryRequestV1::DispatchSummary => Ok(QueryResponseV1::DispatchSummary {
                 context: self.context()?,
                 summary: self.dispatch_summary(),
+            }),
+            QueryRequestV1::PlanNextCapture { goal } => Ok(QueryResponseV1::PlanNextCapture {
+                context: self.context()?,
+                plan: capture_plan::plan_next_capture(&self.trace, self.trace_binding, goal)?,
+            }),
+            QueryRequestV1::DiagnosisStatus { goal } => Ok(QueryResponseV1::DiagnosisStatus {
+                context: self.context()?,
+                status: capture_plan::diagnosis_status(&self.trace, goal)?,
             }),
             QueryRequestV1::Page { kind, page, filter } => {
                 self.validate_page_request(page)?;
@@ -447,6 +476,16 @@ impl TraceQuerySessionV1 {
                 None,
             ),
             (
+                CapabilityNameV1::NextCapturePlanning,
+                CapabilityAvailabilityV1::Available,
+                None,
+            ),
+            (
+                CapabilityNameV1::DiagnosisStatus,
+                CapabilityAvailabilityV1::Available,
+                None,
+            ),
+            (
                 CapabilityNameV1::SourceLocations,
                 CapabilityAvailabilityV1::Unavailable,
                 Some(CapabilityUnavailableReasonV1::RequiresAuthenticatedCatalog),
@@ -483,6 +522,26 @@ impl TraceQuerySessionV1 {
             ),
             (
                 CapabilityNameV1::PerformancePrediction,
+                CapabilityAvailabilityV1::Unavailable,
+                Some(CapabilityUnavailableReasonV1::OutsideCurrentScope),
+            ),
+            (
+                CapabilityNameV1::HardwareCounterValues,
+                CapabilityAvailabilityV1::Unavailable,
+                Some(CapabilityUnavailableReasonV1::NotRepresentedByTraceV1),
+            ),
+            (
+                CapabilityNameV1::PcSamples,
+                CapabilityAvailabilityV1::Unavailable,
+                Some(CapabilityUnavailableReasonV1::NotRepresentedByTraceV1),
+            ),
+            (
+                CapabilityNameV1::DecodedAttWaveTimeline,
+                CapabilityAvailabilityV1::Unavailable,
+                Some(CapabilityUnavailableReasonV1::NotRepresentedByTraceV1),
+            ),
+            (
+                CapabilityNameV1::DirectKfdDispatchObservation,
                 CapabilityAvailabilityV1::Unavailable,
                 Some(CapabilityUnavailableReasonV1::OutsideCurrentScope),
             ),
@@ -707,6 +766,8 @@ pub enum CapabilityNameV1 {
     DiagnosticsAndFaults,
     ProvenanceAndEvidence,
     CaptureLoss,
+    NextCapturePlanning,
+    DiagnosisStatus,
     SourceLocations,
     RegisterValues,
     SourceVariableValues,
@@ -715,6 +776,10 @@ pub enum CapabilityNameV1 {
     BreakpointsAndStepping,
     ExecutionMutation,
     PerformancePrediction,
+    HardwareCounterValues,
+    PcSamples,
+    DecodedAttWaveTimeline,
+    DirectKfdDispatchObservation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -1825,6 +1890,10 @@ pub enum QueryErrorV1 {
     SizeOverflow,
     AllocationFailure {
         requested: usize,
+    },
+    PlanLimitExceeded {
+        field: &'static str,
+        max: usize,
     },
     TraceDecode(TraceDecodeErrorV1),
     TraceEncode(TraceEncodeErrorV1),

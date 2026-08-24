@@ -142,6 +142,26 @@ fn parse_arguments() -> Result<QueryRequestV1, CliErrorV1> {
             QueryRequestV1::DispatchSummary
         });
     }
+    if command == "plan-next-capture" || command == "diagnosis-status" {
+        if arguments.len() != 3
+            || arguments.get(1).and_then(|value| value.to_str()) != Some("--goal")
+        {
+            return Err(CliErrorV1::new(
+                "arguments",
+                "this command requires exactly --goal GOAL",
+            ));
+        }
+        let goal = parse_capture_goal(
+            arguments[2]
+                .to_str()
+                .ok_or_else(|| CliErrorV1::new("arguments", "goal must be valid UTF-8"))?,
+        )?;
+        return Ok(if command == "plan-next-capture" {
+            QueryRequestV1::PlanNextCapture { goal }
+        } else {
+            QueryRequestV1::DiagnosisStatus { goal }
+        });
+    }
     let kind = parse_page_kind(command)?;
     let mut page = PageRequestV1::default();
     let mut filter = QueryFilterV1::default();
@@ -236,6 +256,19 @@ fn parse_page_kind(value: &str) -> Result<PageKindV1, CliErrorV1> {
         "faults" => Ok(PageKindV1::Faults),
         "evidence" => Ok(PageKindV1::ProvenanceAndEvidence),
         _ => Err(CliErrorV1::new("arguments", usage())),
+    }
+}
+
+fn parse_capture_goal(value: &str) -> Result<CaptureGoalV1, CliErrorV1> {
+    match value {
+        "memory_fault" => Ok(CaptureGoalV1::MemoryFault),
+        "barrier_divergence" => Ok(CaptureGoalV1::BarrierDivergence),
+        "performance_hotspot" => Ok(CaptureGoalV1::PerformanceHotspot),
+        "correctness_mismatch" => Ok(CaptureGoalV1::CorrectnessMismatch),
+        _ => Err(CliErrorV1::new(
+            "arguments",
+            "goal must be memory_fault, barrier_divergence, performance_hotspot, or correctness_mismatch",
+        )),
     }
 }
 
@@ -361,7 +394,7 @@ fn parse_evidence_kind(value: &str) -> Result<EvidenceKindFilterV1, CliErrorV1> 
 }
 
 const fn usage() -> &'static str {
-    "usage: fe2o3-trace-query COMMAND [FILTER VALUE ...] < canonical-trace-v1"
+    "usage: fe2o3-trace-query COMMAND [--goal GOAL|FILTER VALUE ...] < canonical-trace-v1"
 }
 
 #[derive(Debug)]
