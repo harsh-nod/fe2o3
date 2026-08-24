@@ -2940,6 +2940,7 @@ fn collect_place_use_v1(
 #[derive(Clone, Debug)]
 enum SemanticValueBindingV1 {
     Unit,
+    Unmaterialized,
     Aggregate(Vec<SemanticValueBindingV1>),
     Enum {
         discriminant: ValueId,
@@ -3015,7 +3016,7 @@ fn project_enum_payload_field(
     field: u32,
 ) -> Result<SemanticValueBindingV1, &'static str> {
     if payload_variant != Some(selected_variant) {
-        return Err("enum variant has no authenticated payload storage");
+        return Ok(SemanticValueBindingV1::Unmaterialized);
     }
     fields
         .get(field as usize)
@@ -3029,6 +3030,9 @@ impl SemanticValueBindingV1 {
             Self::Value { id, ty } => Ok((*id, ty.clone())),
             Self::IndexWitness { id, .. } => Ok((*id, Type::INDEX)),
             Self::WaveLane { value, .. } => Ok((*value, Type::Scalar(ScalarType::U32))),
+            Self::Unmaterialized => {
+                Err("unmaterialized enum payload has no ordinary SSA representation")
+            }
             Self::Unit
             | Self::Aggregate(_)
             | Self::Enum { .. }
@@ -3080,6 +3084,9 @@ impl SemanticValueBindingV1 {
                 ..
             } => values.push((*discriminant, discriminant_ty.clone())),
             Self::Unit => {}
+            Self::Unmaterialized => {
+                return Err("unmaterialized enum payload has no ordinary SSA representation");
+            }
             Self::MathContext
             | Self::CollectiveContext
             | Self::MatrixContext
@@ -3466,6 +3473,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         }
                     }
                     SemanticValueBindingV1::Unit
+                    | SemanticValueBindingV1::Unmaterialized
                     | SemanticValueBindingV1::Aggregate(_)
                     | SemanticValueBindingV1::MathContext
                     | SemanticValueBindingV1::CollectiveContext
@@ -3545,54 +3553,39 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 left,
                 right,
             } => {
+                let (semantic_left, semantic_right) = (left, right);
                 let semantic_left_type = semantic_operand_type(left);
                 let semantic_right_type = semantic_operand_type(right);
                 let semantic_operands_match = semantic_left_type == semantic_right_type;
-                let (left, left_ty) = self
+                let (mut left, mut left_ty) = self
                     .lower_operand(block, statement, left, operations)?
                     .value()
                     .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
-                let (right, right_ty) = self
+                let (mut right, mut right_ty) = self
                     .lower_operand(block, statement, right, operations)?
                     .value()
                     .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
-                let (left, left_ty, right, right_ty) = match (&left_ty, &right_ty) {
-                    (Type::Scalar(ScalarType::Index), Type::Scalar(ScalarType::U64))
-                        if semantic_operands_match =>
-                    {
-                        let converted = self.emit(
-                            operations,
-                            Type::INDEX,
-                            OperationKind::Cast {
-                                kind: CastKind::Bitcast,
-                                value: right,
-                                to: Type::INDEX,
-                            },
-                        )?;
-                        let (right, right_ty) = converted.value().map_err(|detail| {
-                            unsupported(0, Some(block.index()), statement, detail)
-                        })?;
-                        (left, left_ty, right, right_ty)
+                if let Some((convert_left, coercion)) = index_binary_coercion_v1(
+                    semantic_left,
+                    semantic_right,
+                    semantic_operands_match,
+                    left,
+                    &left_ty,
+                    right,
+                    &right_ty,
+                ) {
+                    let converted = self.emit(operations, Type::INDEX, coercion)?;
+                    let (converted, converted_ty) = converted
+                        .value()
+                        .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+                    if convert_left {
+                        left = converted;
+                        left_ty = converted_ty;
+                    } else {
+                        right = converted;
+                        right_ty = converted_ty;
                     }
-                    (Type::Scalar(ScalarType::U64), Type::Scalar(ScalarType::Index))
-                        if semantic_operands_match =>
-                    {
-                        let converted = self.emit(
-                            operations,
-                            Type::INDEX,
-                            OperationKind::Cast {
-                                kind: CastKind::Bitcast,
-                                value: left,
-                                to: Type::INDEX,
-                            },
-                        )?;
-                        let (left, left_ty) = converted.value().map_err(|detail| {
-                            unsupported(0, Some(block.index()), statement, detail)
-                        })?;
-                        (left, left_ty, right, right_ty)
-                    }
-                    _ => (left, left_ty, right, right_ty),
-                };
+                }
                 if left_ty != right_ty {
                     return Err(unsupported(
                         0,
@@ -7219,6 +7212,14 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         "unit capability result cannot be projected",
                     ));
                 }
+                (SemanticValueBindingV1::Unmaterialized, _) => {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "unmaterialized enum payload cannot be observed",
+                    ));
+                }
                 (SemanticValueBindingV1::MatrixContext, SemanticProjectionKindV1::Dereference)
                 | (
                     SemanticValueBindingV1::MatrixContext,
@@ -7449,6 +7450,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             SemanticValueBindingV1::GridLeader { availability } => Some(*availability),
             SemanticValueBindingV1::ComponentWitness { availability, .. } => Some(*availability),
             SemanticValueBindingV1::Unit
+            | SemanticValueBindingV1::Unmaterialized
             | SemanticValueBindingV1::Aggregate(_)
             | SemanticValueBindingV1::Enum { .. }
             | SemanticValueBindingV1::MathContext
@@ -8547,6 +8549,56 @@ fn lower_cast(kind: SemanticCastKindV1, from: &Type, to: &Type) -> Option<CastKi
     }
 }
 
+fn canonical_index_constant_v1(
+    operand: &SemanticOperandV1,
+    lowered_type: &Type,
+) -> Option<Constant> {
+    if *lowered_type != Type::Scalar(ScalarType::U64) {
+        return None;
+    }
+    let SemanticOperandV1::Constant(constant) = operand else {
+        return None;
+    };
+    let SemanticConstantValueV1::Scalar(value) = constant.value() else {
+        return None;
+    };
+    (value.size_bytes() == 8)
+        .then(|| u64::try_from(value.bits()).ok().map(Constant::Index))
+        .flatten()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn index_binary_coercion_v1(
+    semantic_left: &SemanticOperandV1,
+    semantic_right: &SemanticOperandV1,
+    semantic_operands_match: bool,
+    left: ValueId,
+    left_type: &Type,
+    right: ValueId,
+    right_type: &Type,
+) -> Option<(bool, OperationKind)> {
+    if !semantic_operands_match {
+        return None;
+    }
+    let (convert_left, semantic_operand, value, source_type) = match (left_type, right_type) {
+        (Type::Scalar(ScalarType::Index), Type::Scalar(ScalarType::U64)) => {
+            (false, semantic_right, right, right_type)
+        }
+        (Type::Scalar(ScalarType::U64), Type::Scalar(ScalarType::Index)) => {
+            (true, semantic_left, left, left_type)
+        }
+        _ => return None,
+    };
+    let operation = canonical_index_constant_v1(semantic_operand, source_type)
+        .map(OperationKind::Constant)
+        .unwrap_or(OperationKind::Cast {
+            kind: CastKind::Bitcast,
+            value,
+            to: Type::INDEX,
+        });
+    Some((convert_left, operation))
+}
+
 fn semantic_enum_shape(
     types: &[SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,
@@ -8741,9 +8793,16 @@ mod resource_tests {
     use super::*;
     use dialect_kernel::AccessKindAttr;
     use fe2o3_mir_model::semantic_mir_v1::{
-        SemanticBackendReprV1, SemanticFieldsShapeV1, SemanticLayoutIdentityV1,
-        SemanticMfmaAccumulatorDistributionV1, SemanticMfmaOperandRoleV1,
-        SemanticMfmaRegisterDistributionV1, SemanticRustcVariantsV1, SemanticTypeIdentityV1,
+        SemanticAbiIdentityV1, SemanticAbiPassModeV1, SemanticAbiValueV1, SemanticBackendReprV1,
+        SemanticBasicBlockV1, SemanticBlockIdentityV1, SemanticCanonAbiV1,
+        SemanticConstGenericArgumentsIdentityV1, SemanticConstantV1, SemanticExternAbiV1,
+        SemanticFieldsShapeV1, SemanticFunctionAbiV1, SemanticFunctionIdentityV1,
+        SemanticFunctionRoleV1, SemanticGenericTypeArgumentsIdentityV1,
+        SemanticItemDefinitionIdentityV1, SemanticLayoutIdentityV1, SemanticLocalDeclV1,
+        SemanticLocalIdV1, SemanticLocalIdentityV1, SemanticMfmaAccumulatorDistributionV1,
+        SemanticMfmaOperandRoleV1, SemanticMfmaRegisterDistributionV1,
+        SemanticMonomorphizationIdentityV1, SemanticProjectionV1, SemanticRustcVariantsV1,
+        SemanticSourceProvenanceV1, SemanticTerminatorV1, SemanticTypeIdentityV1,
         SemanticTypeLayoutDetailsV1, SemanticTypeLayoutV1,
     };
     use fe2o3_pliron::{
@@ -8768,6 +8827,96 @@ mod resource_tests {
             );
         }
         assert_eq!(strided_read_scalar_alignment_v1(&Type::INDEX), None);
+    }
+
+    #[test]
+    fn matched_usize_constants_canonicalize_to_index_in_both_operand_orders() {
+        let semantic_type = SemanticTypeIdV1::from_index(0);
+        let constant = SemanticOperandV1::Constant(SemanticConstantV1::new(
+            semantic_type,
+            SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(64, 8).unwrap()),
+        ));
+        let dynamic = SemanticOperandV1::Copy(
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(0), vec![], semantic_type).unwrap(),
+        );
+        let u64_type = Type::Scalar(ScalarType::U64);
+
+        let left = index_binary_coercion_v1(
+            &constant,
+            &dynamic,
+            true,
+            ValueId(1),
+            &u64_type,
+            ValueId(2),
+            &Type::INDEX,
+        )
+        .unwrap();
+        assert!(left.0);
+        assert!(matches!(
+            left.1,
+            OperationKind::Constant(Constant::Index(64))
+        ));
+
+        let right = index_binary_coercion_v1(
+            &dynamic,
+            &constant,
+            true,
+            ValueId(2),
+            &Type::INDEX,
+            ValueId(1),
+            &u64_type,
+        )
+        .unwrap();
+        assert!(!right.0);
+        assert!(matches!(
+            right.1,
+            OperationKind::Constant(Constant::Index(64))
+        ));
+    }
+
+    #[test]
+    fn index_binary_coercion_keeps_dynamic_values_and_mismatches_fail_closed() {
+        let semantic_type = SemanticTypeIdV1::from_index(0);
+        let dynamic = |local| {
+            SemanticOperandV1::Copy(
+                SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], semantic_type)
+                    .unwrap(),
+            )
+        };
+        let u64_type = Type::Scalar(ScalarType::U64);
+        let dynamic_coercion = index_binary_coercion_v1(
+            &dynamic(0),
+            &dynamic(1),
+            true,
+            ValueId(1),
+            &Type::INDEX,
+            ValueId(2),
+            &u64_type,
+        )
+        .unwrap();
+        assert!(matches!(
+            dynamic_coercion,
+            (
+                false,
+                OperationKind::Cast {
+                    kind: CastKind::Bitcast,
+                    value: ValueId(2),
+                    to: Type::Scalar(ScalarType::Index),
+                }
+            )
+        ));
+        assert!(
+            index_binary_coercion_v1(
+                &dynamic(0),
+                &dynamic(1),
+                false,
+                ValueId(1),
+                &Type::INDEX,
+                ValueId(2),
+                &u64_type,
+            )
+            .is_none()
+        );
     }
 
     fn unit_type() -> SemanticTypeDeclV1 {
@@ -9393,10 +9542,88 @@ mod resource_tests {
                 ..
             })
         ));
+        let unavailable = project_enum_payload_field(1, Some(0), &[ok_view], 0).unwrap();
+        assert!(matches!(
+            unavailable,
+            SemanticValueBindingV1::Unmaterialized
+        ));
         assert_eq!(
-            project_enum_payload_field(1, Some(0), &[ok_view], 0).unwrap_err(),
-            "enum variant has no authenticated payload storage"
+            unavailable.value().unwrap_err(),
+            "unmaterialized enum payload has no ordinary SSA representation"
         );
+    }
+
+    #[test]
+    fn unmaterialized_wrong_variant_rejects_at_the_lowerer_observation_boundary() {
+        let unit = SemanticTypeIdV1::from_index(0);
+        let types = [unit_type()];
+        let source = SemanticSourceProvenanceV1::unavailable();
+        let abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256([3; 32]),
+            SemanticLayoutIdentityV1::from_sha256([4; 32]),
+            SemanticCanonAbiV1::GpuKernel,
+            SemanticExternAbiV1::GpuKernel,
+            false,
+            false,
+            0,
+            vec![],
+            SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        let block = SemanticBasicBlockV1::new(
+            SemanticBlockIdentityV1::from_sha256([5; 32]),
+            source,
+            vec![],
+            SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Return),
+        )
+        .unwrap();
+        let function = SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256([6; 32]),
+            SemanticFunctionRoleV1::InternalHelper,
+            SemanticItemDefinitionIdentityV1::from_sha256([7; 32]),
+            SemanticMonomorphizationIdentityV1::from_sha256([8; 32]),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256([9; 32]),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256([10; 32]),
+            source,
+            abi,
+            vec![SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256([11; 32]),
+                unit,
+                SemanticLocalRoleV1::Return,
+                source,
+            )],
+            SemanticBlockIdV1::from_index(0),
+            vec![block],
+        )
+        .unwrap();
+        let mut lowering = SemanticFunctionLoweringV1::new(
+            &types,
+            &[],
+            &function,
+            SemanticParameterBindingsV1 {
+                declarations: &[],
+                values: &[],
+                types: &[],
+            },
+            None,
+            16,
+        )
+        .unwrap();
+        lowering.locals[0] = Some(SemanticValueBindingV1::Unmaterialized);
+        let projected = SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(0),
+            vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), unit).unwrap()],
+            unit,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            lowering.resolve_place(SemanticBlockIdV1::from_index(0), Some(0), &projected),
+            Err(ProductionSemanticKirErrorV1::Unsupported {
+                detail: "unmaterialized enum payload cannot be observed",
+                ..
+            })
+        ));
     }
 
     struct GuardedAddressFixture {

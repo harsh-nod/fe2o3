@@ -1,0 +1,26 @@
+error[E0277]: `?` couldn't convert the error to `KernelError`
+  --> tests/ui/fail/lookalike_view_error_has_no_kernel_conversion.rs:10:28
+   |
+ 9 | fn kernel_path() -> KernelResult {
+   |                     ------------ expected `KernelError` because of this
+10 |     lookalike_constructor()?;
+   |     -----------------------^ the trait `From<LookalikeViewError>` is not implemented for `KernelError`
+   |     |
+   |     this can't be annotated with `?` because it has type `Result<_, LookalikeViewError>`
+   |
+note: `LookalikeViewError` needs to implement `Into<KernelError>`
+  --> tests/ui/fail/lookalike_view_error_has_no_kernel_conversion.rs:3:1
+   |
+ 3 | struct LookalikeViewError;
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: `KernelError` implements trait `From<T>`
+  --> src/views.rs
+   |
+   | impl From<StridedReadView2DError> for crate::KernelError {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<StridedReadView2DError>`
+   |
+  ::: src/tensor.rs
+   |
+   | impl From<Bf16MatrixViewError> for crate::KernelError {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<Bf16MatrixViewError>`

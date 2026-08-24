@@ -3,11 +3,12 @@ use fe2o3_kernel_analysis::{
 };
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, Axis, Barrier, BarrierSemantics,
-    BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant, Convergence, F32MathFunction,
-    FloatOperation, Function, FunctionId, IndexKind, IntrinsicKind, IntrinsicOperation,
-    MemoryAccess, MemoryOrdering, Module, Operation, OperationKind, Signature,
-    SynchronizationScope, Terminator, Type, ValueDef, ValueId, WaveOperation, WaveOperationKind,
-    WaveWidth, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent,
+    BasicBlock, BinaryOp, BlockId, CastKind, ComparePredicate, Constant, Convergence,
+    F32MathFunction, FloatOperation, Function, FunctionId, IndexKind, IntrinsicKind,
+    IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering, Module,
+    Operation, OperationKind, ScalarType, Signature, SynchronizationScope, Terminator, Type,
+    ValueDef, ValueId, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
+    WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
 };
 
 fn function(parameters: Vec<ValueId>, blocks: Vec<BasicBlock>) -> Function {
@@ -51,6 +52,28 @@ fn add(id: u32, lhs: u32, rhs: u32) -> Operation {
             op: BinaryOp::Add,
             lhs: ValueId(lhs),
             rhs: ValueId(rhs),
+        },
+    )
+}
+
+fn binary(id: u32, op: BinaryOp, lhs: u32, rhs: u32) -> Operation {
+    Operation::effect_free(
+        ValueDef::new(ValueId(id), Type::INDEX),
+        OperationKind::Binary {
+            op,
+            lhs: ValueId(lhs),
+            rhs: ValueId(rhs),
+        },
+    )
+}
+
+fn cast(id: u32, kind: CastKind, value: u32, to: Type) -> Operation {
+    Operation::effect_free(
+        ValueDef::new(ValueId(id), to.clone()),
+        OperationKind::Cast {
+            kind,
+            value: ValueId(value),
+            to,
         },
     )
 }
@@ -147,6 +170,237 @@ fn intrinsic_rules_cover_launch_hierarchy() {
     assert_eq!(report.value(ValueId(4)), Variation::GridUniform);
     assert_eq!(report.value(ValueId(5)), Variation::GridUniform);
     assert!(report.diagnostics().is_empty());
+}
+
+#[test]
+fn exact_global_index_workgroup_quotient_is_uniform_but_lane_remainder_is_not() {
+    let mut entry = returning(0);
+    entry.operations = vec![
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::X,
+            },
+        ),
+        constant(1, Constant::U32(64)),
+        cast(2, CastKind::ZeroExtend, 1, Type::INDEX),
+        binary(3, BinaryOp::Divide, 0, 2),
+        binary(4, BinaryOp::Remainder, 0, 2),
+    ];
+    let function = function(vec![], vec![entry]);
+    let mut kernel = Kernel::new(
+        "test_kernel",
+        function.id.clone(),
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    let mut module = Module::new("uniformity_workgroup_quotient");
+    module.functions.push(function.clone());
+    module.kernels.push(kernel);
+
+    let report = analyze_kernel_entry(&module, &function);
+    assert_eq!(report.value(ValueId(3)), Variation::WorkgroupUniform);
+    assert_eq!(report.value(ValueId(4)), Variation::Varying);
+    assert!(report.diagnostics().is_empty());
+}
+
+#[test]
+fn workgroup_quotient_uniformity_is_axis_exact_and_requires_launch_contract() {
+    let mut entry = returning(0);
+    entry.operations = vec![
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::X,
+            },
+        ),
+        intrinsic(
+            1,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::Y,
+            },
+        ),
+        intrinsic(
+            2,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::Z,
+            },
+        ),
+        constant(3, Constant::Index(8)),
+        constant(4, Constant::Index(4)),
+        constant(5, Constant::Index(2)),
+        constant(6, Constant::Index(3)),
+        binary(10, BinaryOp::Divide, 0, 3),
+        binary(11, BinaryOp::Divide, 1, 4),
+        binary(12, BinaryOp::Divide, 2, 5),
+        binary(13, BinaryOp::Divide, 0, 6),
+        binary(14, BinaryOp::Divide, 1, 3),
+        binary(15, BinaryOp::Divide, 2, 4),
+        binary(16, BinaryOp::Remainder, 0, 3),
+    ];
+    let function = function(vec![], vec![entry]);
+    let mut kernel = Kernel::new(
+        "test_kernel",
+        function.id.clone(),
+        LaunchDomain::D3 {
+            x: LaunchExtent::Dynamic,
+            y: LaunchExtent::Dynamic,
+            z: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(8, 4, 2));
+    let mut module = Module::new("uniformity_workgroup_quotient_axes");
+    module.functions.push(function.clone());
+    module.kernels.push(kernel);
+
+    let report = analyze_kernel_entry(&module, &function);
+    for value in 10..=12 {
+        assert_eq!(report.value(ValueId(value)), Variation::WorkgroupUniform);
+    }
+    for value in 13..=16 {
+        assert_eq!(report.value(ValueId(value)), Variation::Varying);
+    }
+
+    module.kernels.clear();
+    let without_contract = analyze_kernel_entry(&module, &function);
+    for value in 10..=12 {
+        assert_eq!(without_contract.value(ValueId(value)), Variation::Varying);
+    }
+}
+
+#[test]
+fn workgroup_quotient_rejects_non_value_preserving_constant_casts() {
+    let mut entry = returning(0);
+    entry.operations = vec![
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::X,
+            },
+        ),
+        constant(1, Constant::U64(300)),
+        cast(2, CastKind::Truncate, 1, Type::Scalar(ScalarType::U8)),
+        cast(3, CastKind::ZeroExtend, 2, Type::INDEX),
+        binary(4, BinaryOp::Divide, 0, 3),
+        constant(5, Constant::U64(256)),
+        cast(6, CastKind::Truncate, 5, Type::Scalar(ScalarType::U8)),
+        cast(7, CastKind::ZeroExtend, 6, Type::INDEX),
+        binary(8, BinaryOp::Divide, 0, 7),
+        constant(9, Constant::I32(64)),
+        cast(10, CastKind::SignExtend, 9, Type::INDEX),
+        binary(11, BinaryOp::Divide, 0, 10),
+        constant(12, Constant::U64(64)),
+        cast(13, CastKind::Bitcast, 12, Type::INDEX),
+        binary(14, BinaryOp::Divide, 0, 13),
+    ];
+    let function = function(vec![], vec![entry]);
+    let mut kernel = Kernel::new(
+        "test_kernel",
+        function.id.clone(),
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    let mut module = Module::new("uniformity_hostile_constant_casts");
+    module.functions.push(function.clone());
+    module.kernels.push(kernel);
+
+    let report = analyze_kernel_entry(&module, &function);
+    for value in [4, 8, 11, 14] {
+        assert_eq!(report.value(ValueId(value)), Variation::Varying);
+    }
+}
+
+#[test]
+fn workgroup_quotient_accepts_only_value_preserving_unsigned_cast_chains() {
+    let mut entry = returning(0);
+    entry.operations = vec![
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::X,
+            },
+        ),
+        constant(1, Constant::U8(64)),
+        cast(2, CastKind::ZeroExtend, 1, Type::Scalar(ScalarType::U16)),
+        cast(3, CastKind::ZeroExtend, 2, Type::Scalar(ScalarType::U32)),
+        cast(4, CastKind::ZeroExtend, 3, Type::INDEX),
+        binary(5, BinaryOp::Divide, 0, 4),
+    ];
+    let function = function(vec![], vec![entry]);
+    let mut kernel = Kernel::new(
+        "test_kernel",
+        function.id.clone(),
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    let mut module = Module::new("uniformity_value_preserving_constant_casts");
+    module.functions.push(function.clone());
+    module.kernels.push(kernel);
+
+    assert_eq!(
+        analyze_kernel_entry(&module, &function).value(ValueId(5)),
+        Variation::WorkgroupUniform,
+    );
+}
+
+#[test]
+fn workgroup_contract_selection_rejects_conflicting_duplicate_entries() {
+    let mut entry = returning(0);
+    entry.operations = vec![
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::X,
+            },
+        ),
+        constant(1, Constant::Index(64)),
+        binary(2, BinaryOp::Divide, 0, 1),
+    ];
+    let function = function(vec![], vec![entry]);
+    let kernel = |name: &str, width| {
+        let mut kernel = Kernel::new(
+            name,
+            function.id.clone(),
+            LaunchDomain::D1 {
+                x: LaunchExtent::Dynamic,
+            },
+        );
+        kernel.workgroup_size = Some(WorkgroupSize::new(width, 1, 1));
+        kernel
+    };
+
+    for widths in [[32, 64], [64, 32]] {
+        let mut module = Module::new("uniformity_conflicting_duplicate_entries");
+        module.functions.push(function.clone());
+        module.kernels.push(kernel("first", widths[0]));
+        module.kernels.push(kernel("second", widths[1]));
+        assert_eq!(
+            analyze_kernel_entry(&module, &function).value(ValueId(2)),
+            Variation::Varying,
+        );
+    }
+
+    let mut identical = Module::new("uniformity_identical_duplicate_entries");
+    identical.functions.push(function.clone());
+    identical.kernels.push(kernel("first", 64));
+    identical.kernels.push(kernel("second", 64));
+    assert_eq!(
+        analyze_kernel_entry(&identical, &function).value(ValueId(2)),
+        Variation::WorkgroupUniform,
+    );
 }
 
 #[test]

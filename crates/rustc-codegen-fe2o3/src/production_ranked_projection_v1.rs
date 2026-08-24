@@ -35,8 +35,8 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticMfmaStorageLayoutV1, SemanticOperandV1, SemanticPlaceV1, SemanticProjectionKindV1,
     SemanticRvalueKindV1, SemanticScalarTypeV1, SemanticSourceArgumentOwnershipV1,
     SemanticSourceProvenanceV1, SemanticStatementKindV1, SemanticTargetArchitectureV1,
-    SemanticTerminatorKindV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
-    SemanticUnwindActionV1,
+    SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1,
+    SemanticUnaryOpV1, SemanticUnwindActionV1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
@@ -512,6 +512,13 @@ impl ProductionRankedSemanticProgramV1 {
 pub(crate) enum ProductionRankedProjectionErrorV1 {
     SemanticOwner(ProductionSemanticMirErrorV1),
     Incomplete(&'static str),
+    UnprovenAssert {
+        block: usize,
+        kind: &'static str,
+        expected: bool,
+        condition_local: Option<u32>,
+        source: SemanticSourceProvenanceV1,
+    },
     Unsupported(&'static str),
     Recipe(ProductionRankedKernelErrorV1),
     Custody(ProductionSemanticKirErrorV1),
@@ -539,6 +546,21 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
                     "semantic-to-ranked projection incomplete: {detail}"
                 )
             }
+            Self::UnprovenAssert {
+                block,
+                kind,
+                expected,
+                condition_local,
+                source,
+            } => write!(
+                formatter,
+                "semantic-to-ranked projection incomplete: Rust {kind} assert terminator in semantic block bb{block} at {} expected condition{} to be {}; no exact dominating proof establishes it on every incoming path",
+                source_label(*source),
+                condition_local
+                    .map(|local| format!(" local {local}"))
+                    .unwrap_or_default(),
+                expected,
+            ),
             Self::Recipe(error) => write!(formatter, "semantic-to-ranked recipe failed: {error}"),
             Self::Construction(error) => write!(
                 formatter,
@@ -594,7 +616,10 @@ impl std::error::Error for ProductionRankedProjectionErrorV1 {
             Self::SemanticOwner(error) => Some(error),
             Self::Recipe(error) => Some(error),
             Self::Compile { error, .. } => Some(error),
-            Self::Incomplete(_) | Self::Unsupported(_) | Self::Construction(_) => None,
+            Self::Incomplete(_)
+            | Self::UnprovenAssert { .. }
+            | Self::Unsupported(_)
+            | Self::Construction(_) => None,
             Self::Custody(error) => Some(error),
         }
     }
@@ -831,6 +856,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         );
     }
     let (blocks, sources) = build_ranked_cfg(
+        semantic.types(),
         function,
         &switch_predicates,
         &intrinsic.deterministic_switches,
@@ -1153,16 +1179,20 @@ fn project_authenticated_tensor_layouts_v1(
     let mut stored_entries = 0_usize;
     let mut work = 0_usize;
     while let Some(block_index) = worklist.pop_front() {
+        let entry_state = entries.get(block_index).and_then(Option::as_ref).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "a queued tensor producer block without an entry state",
+            ),
+        )?;
         charge_tensor_dataflow_work_v1(
             &mut work,
-            entries[block_index]
-                .as_ref()
-                .map_or(1, |state| state.len().saturating_add(1)),
+            entry_state.len().checked_add(1).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "tensor producer clone work overflow",
+                ),
+            )?,
         )?;
-        let mut state = entries[block_index]
-            .as_ref()
-            .expect("queued tensor dataflow block has an entry state")
-            .clone();
+        let mut state = entry_state.clone();
         transfer_tensor_statements_v1(
             function,
             block_index,
@@ -1218,6 +1248,14 @@ fn project_authenticated_tensor_layouts_v1(
                 }
                 Some(existing) => {
                     let before = existing.len();
+                    charge_tensor_dataflow_work_v1(
+                        &mut work,
+                        before.checked_add(1).ok_or(
+                            ProductionRankedProjectionErrorV1::Unsupported(
+                                "tensor producer merge work overflow",
+                            ),
+                        )?,
+                    )?;
                     let changed = merge_tensor_states_v1(existing, &state)?;
                     stored_entries = stored_entries
                         .checked_add(existing.len().saturating_sub(before))
@@ -1245,6 +1283,16 @@ fn project_authenticated_tensor_layouts_v1(
         let Some(mut state) = entry_state else {
             continue;
         };
+        charge_tensor_dataflow_work_v1(
+            &mut work,
+            state
+                .len()
+                .checked_add(function.blocks()[block_index].statements().len())
+                .and_then(|work| work.checked_add(1))
+                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                    "tensor producer replay work overflow",
+                ))?,
+        )?;
         transfer_tensor_statements_v1(
             function,
             block_index,
@@ -1379,13 +1427,18 @@ fn project_strided_read_effects_v1(
                 "a checked shared read view rooted in writable allocation authority",
             ));
         }
-        let view = if let Some((source, view)) = views.get(&effect.view.root) {
+        let (view, rows, columns) = if let Some((source, view)) = views.get(&effect.view.root) {
             if *source != effect.view {
                 return Err(ProductionRankedProjectionErrorV1::Unsupported(
                     "one checked read-view origin changed its element, extent, or allocation contract",
                 ));
             }
-            view.result
+            let [rows, columns] = view.dynamic_extents.as_slice() else {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a checked read view without exactly two dynamic extents",
+                ));
+            };
+            (view.result, *rows, *columns)
         } else {
             let rows = project_read_value_to_ranked_v1(
                 effect.view.rows,
@@ -1426,19 +1479,8 @@ fn project_strided_read_effects_v1(
                 noalias_class: view.noalias_class,
             });
             views.insert(effect.view.root, (effect.view, view));
-            result
+            (result, rows, columns)
         };
-        let Some((_, checked_view)) = views.get(&effect.view.root) else {
-            return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "checked read-view projection lost its authenticated capability",
-            ));
-        };
-        let [rows, columns] = checked_view.dynamic_extents.as_slice() else {
-            return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "checked read-view projection does not retain exactly two extents",
-            ));
-        };
-        let (rows, columns) = (*rows, *columns);
         let row = project_read_value_to_ranked_v1(
             effect.row,
             stable_argument_origins,
@@ -2291,15 +2333,13 @@ fn merge_tensor_states_v1(
     incoming: &ProjectedTensorStateV1,
 ) -> Result<bool, ProductionRankedProjectionErrorV1> {
     let mut changed = false;
-    let current_keys = current.keys().copied().collect::<Vec<_>>();
-    for key in current_keys {
-        let merged = match (current.get(&key).copied(), incoming.get(&key).copied()) {
-            (Some(existing), Some(candidate)) if existing == candidate => existing,
-            (Some(_), Some(_)) | (Some(_), None) => ProjectedTensorValueV1::Invalid,
-            (None, _) => unreachable!("collected current tensor-state key disappeared"),
+    for (&key, existing) in current.iter_mut() {
+        let merged = match incoming.get(&key).copied() {
+            Some(candidate) if *existing == candidate => *existing,
+            Some(_) | None => ProjectedTensorValueV1::Invalid,
         };
-        if current.get(&key).copied() != Some(merged) {
-            current.insert(key, merged);
+        if *existing != merged {
+            *existing = merged;
             changed = true;
         }
     }
@@ -4363,6 +4403,7 @@ fn compiler_intrinsic_is_pure_total_scalar_dependency_v1(
         SemanticCompilerIntrinsicOperationV1::FabsF32
             | SemanticCompilerIntrinsicOperationV1::MathF32 { .. }
             | SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor { .. }
+            | SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice { .. }
             | SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint { .. }
             | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift { .. }
             | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedBlock { .. }
@@ -4907,6 +4948,485 @@ fn projected_loop_cfg_graph_v1(
     })
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct UnsignedRangeProofV1 {
+    minimum: u128,
+    maximum: u128,
+}
+
+impl UnsignedRangeProofV1 {
+    const fn exact(value: u128) -> Self {
+        Self {
+            minimum: value,
+            maximum: value,
+        }
+    }
+
+    const fn is_exact(self, value: u128) -> bool {
+        self.minimum == value && self.maximum == value
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ScalarAssignmentSiteV1 {
+    block: usize,
+    statement: usize,
+}
+
+struct SemanticAssertProofsV1<'a> {
+    types: &'a [SemanticTypeDeclV1],
+    function: &'a SemanticFunctionDeclV1,
+    graph: ProjectedLoopCfgV1,
+    definition_counts: Vec<u8>,
+    assignments: Vec<Option<ScalarAssignmentSiteV1>>,
+    dominance: HashMap<(usize, usize), bool>,
+    zero_exclusion: HashMap<(usize, usize), bool>,
+    work: usize,
+}
+
+impl<'a> SemanticAssertProofsV1<'a> {
+    fn analyze(
+        types: &'a [SemanticTypeDeclV1],
+        function: &'a SemanticFunctionDeclV1,
+    ) -> Result<Vec<bool>, ProductionRankedProjectionErrorV1> {
+        let graph = projected_loop_cfg_graph_v1(function)?;
+        let definition_counts = local_definition_counts(function);
+        let mut assignments = vec![None; function.locals().len()];
+        for (block_index, block) in function.blocks().iter().enumerate() {
+            for (statement_index, statement) in block.statements().iter().enumerate() {
+                let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                    continue;
+                };
+                if !assignment.destination().projections().is_empty() {
+                    continue;
+                }
+                let local = assignment.destination().local().index() as usize;
+                if definition_counts.get(local).copied() == Some(1) {
+                    let Some(slot) = assignments.get_mut(local) else {
+                        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                            "an assertion proof assignment is outside the semantic local table",
+                        ));
+                    };
+                    *slot = Some(ScalarAssignmentSiteV1 {
+                        block: block_index,
+                        statement: statement_index,
+                    });
+                }
+            }
+        }
+        let mut proof = Self {
+            types,
+            function,
+            graph,
+            definition_counts,
+            assignments,
+            dominance: HashMap::new(),
+            zero_exclusion: HashMap::new(),
+            work: 0,
+        };
+        let mut proved = vec![false; function.blocks().len()];
+        for (block_index, block) in function.blocks().iter().enumerate() {
+            let SemanticTerminatorKindV1::Assert {
+                condition,
+                expected,
+                message,
+                ..
+            } = block.terminator().kind()
+            else {
+                continue;
+            };
+            if matches!(message, SemanticAssertMessageV1::BoundsCheck { .. }) {
+                proved[block_index] = true;
+                continue;
+            }
+            let mut visiting = HashSet::new();
+            proved[block_index] = proof
+                .range_of_operand(
+                    condition,
+                    block_index,
+                    block.statements().len(),
+                    &mut visiting,
+                )?
+                .is_some_and(|range| range.is_exact(u128::from(*expected)));
+        }
+        Ok(proved)
+    }
+
+    fn charge(&mut self, amount: usize) -> Result<(), ProductionRankedProjectionErrorV1> {
+        project_loop_graph_charge_v1(&mut self.work, amount)
+    }
+
+    fn scalar_unsigned_maximum(&self, ty: SemanticTypeIdV1) -> Option<u128> {
+        match self.types.get(ty.index() as usize)?.shape() {
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool) => Some(1),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits,
+            }) => match *bits {
+                1..=127 => Some((1_u128 << bits) - 1),
+                128 => Some(u128::MAX),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn unsigned_integer_bits(&self, ty: SemanticTypeIdV1) -> Option<u16> {
+        match self.types.get(ty.index() as usize)?.shape() {
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits,
+            }) => Some(*bits),
+            _ => None,
+        }
+    }
+
+    fn range_of_operand(
+        &mut self,
+        operand: &SemanticOperandV1,
+        use_block: usize,
+        use_statement: usize,
+        visiting: &mut HashSet<usize>,
+    ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
+        self.charge(1)?;
+        match operand {
+            SemanticOperandV1::Constant(constant) => {
+                let Some(maximum) = self.scalar_unsigned_maximum(constant.ty()) else {
+                    return Ok(None);
+                };
+                let SemanticConstantValueV1::Scalar(value) = constant.value() else {
+                    return Ok(None);
+                };
+                (value.bits() <= maximum)
+                    .then_some(UnsignedRangeProofV1::exact(value.bits()))
+                    .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                        "an unsigned scalar constant exceeds its semantic type",
+                    ))
+                    .map(Some)
+            }
+            SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
+                if !place.projections().is_empty() {
+                    return Ok(None);
+                }
+                self.range_of_local(
+                    place.local().index() as usize,
+                    use_block,
+                    use_statement,
+                    visiting,
+                )
+            }
+        }
+    }
+
+    fn range_of_local(
+        &mut self,
+        local: usize,
+        use_block: usize,
+        use_statement: usize,
+        visiting: &mut HashSet<usize>,
+    ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
+        self.charge(1)?;
+        let Some(declaration) = self.function.locals().get(local) else {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "an assertion proof local is outside the semantic local table",
+            ));
+        };
+        let Some(maximum) = self.scalar_unsigned_maximum(declaration.ty()) else {
+            return Ok(None);
+        };
+        if !visiting.insert(local) {
+            return Ok(None);
+        }
+        let result = match self.definition_counts.get(local).copied() {
+            Some(0) if matches!(declaration.role(), SemanticLocalRoleV1::Argument(_)) => {
+                let minimum = if self.zero_excluding_edge_dominates(local, use_block)? {
+                    1
+                } else {
+                    0
+                };
+                Some(UnsignedRangeProofV1 { minimum, maximum })
+            }
+            Some(1) => {
+                let Some(site) = self.assignments.get(local).copied().flatten() else {
+                    visiting.remove(&local);
+                    return Ok(None);
+                };
+                if !self.assignment_dominates_use(site, use_block, use_statement)? {
+                    visiting.remove(&local);
+                    return Ok(None);
+                }
+                let SemanticStatementKindV1::Assign(assignment) =
+                    self.function.blocks()[site.block].statements()[site.statement].kind()
+                else {
+                    visiting.remove(&local);
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "an indexed assertion proof assignment changed semantic kind",
+                    ));
+                };
+                self.range_of_rvalue(assignment.value(), site, visiting)?
+            }
+            Some(_) | None => None,
+        };
+        let result = if let Some(mut range) = result
+            && self.zero_excluding_edge_dominates(local, use_block)?
+        {
+            range.minimum = range.minimum.max(1);
+            Some(range)
+        } else {
+            result
+        };
+        visiting.remove(&local);
+        Ok(result)
+    }
+
+    fn range_of_rvalue(
+        &mut self,
+        value: &fe2o3_mir_model::semantic_mir_v1::SemanticRvalueV1,
+        site: ScalarAssignmentSiteV1,
+        visiting: &mut HashSet<usize>,
+    ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
+        let destination_maximum = self.scalar_unsigned_maximum(value.result_type());
+        match value.kind() {
+            SemanticRvalueKindV1::Use(operand) => {
+                self.range_of_operand(operand, site.block, site.statement, visiting)
+            }
+            SemanticRvalueKindV1::Cast {
+                kind: SemanticCastKindV1::Integer,
+                operand,
+            } => {
+                let Some(source_bits) = self.unsigned_integer_bits(operand.ty()) else {
+                    return Ok(None);
+                };
+                let Some(destination_bits) = self.unsigned_integer_bits(value.result_type()) else {
+                    return Ok(None);
+                };
+                if destination_bits < source_bits {
+                    return Ok(None);
+                }
+                self.range_of_operand(operand, site.block, site.statement, visiting)
+            }
+            SemanticRvalueKindV1::Binary {
+                operation,
+                left,
+                right,
+            } => {
+                let left = self.range_of_operand(left, site.block, site.statement, visiting)?;
+                let right = self.range_of_operand(right, site.block, site.statement, visiting)?;
+                self.range_of_binary(*operation, left, right, destination_maximum)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn range_of_binary(
+        &self,
+        operation: SemanticBinaryOpV1,
+        left: Option<UnsignedRangeProofV1>,
+        right: Option<UnsignedRangeProofV1>,
+        destination_maximum: Option<u128>,
+    ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
+        let (Some(left), Some(right)) = (left, right) else {
+            return Ok(None);
+        };
+        let range = match operation {
+            SemanticBinaryOpV1::Add => {
+                let (Some(minimum), Some(maximum), Some(destination_maximum)) = (
+                    left.minimum.checked_add(right.minimum),
+                    left.maximum.checked_add(right.maximum),
+                    destination_maximum,
+                ) else {
+                    return Ok(None);
+                };
+                (maximum <= destination_maximum)
+                    .then_some(UnsignedRangeProofV1 { minimum, maximum })
+            }
+            SemanticBinaryOpV1::Divide if right.minimum != 0 => Some(UnsignedRangeProofV1 {
+                minimum: left.minimum / right.maximum,
+                maximum: left.maximum / right.minimum,
+            }),
+            SemanticBinaryOpV1::Remainder
+                if right.is_exact(right.minimum) && right.minimum != 0 =>
+            {
+                Some(UnsignedRangeProofV1 {
+                    minimum: 0,
+                    maximum: left.maximum.min(right.minimum - 1),
+                })
+            }
+            SemanticBinaryOpV1::Equal => Some(
+                if left.maximum < right.minimum || right.maximum < left.minimum {
+                    UnsignedRangeProofV1::exact(0)
+                } else if left.minimum == left.maximum && left == right {
+                    UnsignedRangeProofV1::exact(1)
+                } else {
+                    UnsignedRangeProofV1 {
+                        minimum: 0,
+                        maximum: 1,
+                    }
+                },
+            ),
+            SemanticBinaryOpV1::NotEqual => Some(
+                if left.maximum < right.minimum || right.maximum < left.minimum {
+                    UnsignedRangeProofV1::exact(1)
+                } else if left.minimum == left.maximum && left == right {
+                    UnsignedRangeProofV1::exact(0)
+                } else {
+                    UnsignedRangeProofV1 {
+                        minimum: 0,
+                        maximum: 1,
+                    }
+                },
+            ),
+            _ => None,
+        };
+        Ok(range)
+    }
+
+    fn assignment_dominates_use(
+        &mut self,
+        definition: ScalarAssignmentSiteV1,
+        use_block: usize,
+        use_statement: usize,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        if definition.block == use_block {
+            return Ok(definition.statement < use_statement);
+        }
+        self.block_dominates(definition.block, use_block)
+    }
+
+    fn zero_excluding_edge_dominates(
+        &mut self,
+        local: usize,
+        use_block: usize,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        if let Some(result) = self.zero_exclusion.get(&(local, use_block)).copied() {
+            return Ok(result);
+        }
+        let mut excluding_edges = HashSet::new();
+        for (switch_block, block) in self.function.blocks().iter().enumerate() {
+            self.charge(1)?;
+            let SemanticTerminatorKindV1::SwitchInt {
+                discriminant,
+                targets,
+            } = block.terminator().kind()
+            else {
+                continue;
+            };
+            if simple_operand_local(discriminant).map(|value| value.index() as usize) != Some(local)
+                || targets.values().len() != 1
+                || targets.values()[0].value() != 0
+            {
+                continue;
+            }
+            let definition_available = match self.definition_counts.get(local).copied() {
+                Some(0) => true,
+                Some(1) => {
+                    let Some(site) = self.assignments.get(local).copied().flatten() else {
+                        continue;
+                    };
+                    self.assignment_dominates_use(site, switch_block, block.statements().len())?
+                }
+                Some(_) | None => false,
+            };
+            if !definition_available {
+                continue;
+            }
+            let zero_target = targets.values()[0].edge().target().index() as usize;
+            let nonzero_target = targets.otherwise().target().index() as usize;
+            if zero_target == nonzero_target {
+                continue;
+            }
+            excluding_edges.try_reserve(1).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "assertion proof zero-excluding edge storage cannot be reserved",
+                )
+            })?;
+            excluding_edges.insert((switch_block, nonzero_target));
+        }
+        let result = self.edge_set_dominates(&excluding_edges, use_block)?;
+        self.zero_exclusion.insert((local, use_block), result);
+        Ok(result)
+    }
+
+    fn block_dominates(
+        &mut self,
+        dominator: usize,
+        block: usize,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        if dominator >= self.graph.successors.len() || block >= self.graph.successors.len() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "an assertion proof dominance query is outside the semantic CFG",
+            ));
+        }
+        if let Some(result) = self.dominance.get(&(dominator, block)).copied() {
+            return Ok(result);
+        }
+        if dominator == block {
+            let result = self.graph.reachable[block];
+            self.dominance.insert((dominator, block), result);
+            return Ok(result);
+        }
+        if !self.graph.reachable[dominator] || !self.graph.reachable[block] {
+            self.dominance.insert((dominator, block), false);
+            return Ok(false);
+        }
+        let mut visited = vec![false; self.graph.successors.len()];
+        let mut pending = Vec::new();
+        if self.graph.entry != dominator {
+            pending.push(self.graph.entry);
+        }
+        while let Some(current) = pending.pop() {
+            self.charge(1)?;
+            if current == dominator || visited[current] {
+                continue;
+            }
+            if current == block {
+                self.dominance.insert((dominator, block), false);
+                return Ok(false);
+            }
+            visited[current] = true;
+            self.charge(self.graph.successors[current].len())?;
+            pending.extend(self.graph.successors[current].iter().copied());
+        }
+        self.dominance.insert((dominator, block), true);
+        Ok(true)
+    }
+
+    fn edge_set_dominates(
+        &mut self,
+        excluding_edges: &HashSet<(usize, usize)>,
+        block: usize,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        if block >= self.graph.successors.len() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "an assertion proof edge-set dominance query is outside the semantic CFG",
+            ));
+        }
+        if excluding_edges.is_empty() || !self.graph.reachable[block] {
+            return Ok(false);
+        }
+        let mut visited = vec![false; self.graph.successors.len()];
+        let mut pending = vec![self.graph.entry];
+        while let Some(current) = pending.pop() {
+            self.charge(1)?;
+            if visited[current] {
+                continue;
+            }
+            if current == block {
+                return Ok(false);
+            }
+            visited[current] = true;
+            let successors = self.graph.successors[current].clone();
+            self.charge(successors.len())?;
+            for successor in successors {
+                if !excluding_edges.contains(&(current, successor)) {
+                    pending.push(successor);
+                }
+            }
+        }
+        Ok(true)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn project_natural_loop_topology_v1(
     graph: &ProjectedLoopCfgV1,
@@ -5331,8 +5851,10 @@ fn local_provenance_v1(
                     kind: SemanticCastKindV1::Pointer,
                     operand,
                 } => simple_operand_local(operand),
-                SemanticRvalueKindV1::Borrow { place, .. }
-                | SemanticRvalueKindV1::AddressOf { place, .. } => {
+                SemanticRvalueKindV1::Borrow { place, .. } => {
+                    borrowed_allocation_local_v1(function, place)
+                }
+                SemanticRvalueKindV1::AddressOf { place, .. } => {
                     reborrowed_allocation_local_v1(place)
                 }
                 _ => None,
@@ -5456,6 +5978,30 @@ fn reborrowed_allocation_local_v1(place: &SemanticPlaceV1) -> Option<SemanticLoc
             .then_some(place.local())
     })
     .flatten()
+}
+
+fn borrowed_allocation_local_v1(
+    function: &SemanticFunctionDeclV1,
+    place: &SemanticPlaceV1,
+) -> Option<SemanticLocalIdV1> {
+    if let Some(local) = reborrowed_allocation_local_v1(place) {
+        return Some(local);
+    }
+    if !place.projections().is_empty() {
+        return None;
+    }
+    let local = function.locals().get(place.local().index() as usize)?;
+    let SemanticLocalRoleV1::Argument(argument) = local.role() else {
+        return None;
+    };
+    matches!(
+        function
+            .abi()
+            .source_argument_ownership()
+            .get(argument as usize),
+        Some(SemanticSourceArgumentOwnershipV1::ExclusiveOwner)
+    )
+    .then_some(place.local())
 }
 
 #[cfg(test)]
@@ -5842,6 +6388,7 @@ enum ProjectedCfgTerminatorV1 {
 fn projected_cfg_terminator(
     function: &SemanticFunctionDeclV1,
     block_index: usize,
+    non_bounds_assert_proved: bool,
     constants: &[Option<u64>],
     switch_predicates: &[Option<GuardPredicateV1>],
     deterministic_switches: &[Option<ProjectedDeterministicSwitchV1>],
@@ -5960,11 +6507,16 @@ fn projected_cfg_terminator(
             ..
         } => {
             if !matches!(message, SemanticAssertMessageV1::BoundsCheck { .. })
+                && !non_bounds_assert_proved
                 && constant_operand_value(condition, constants) != Some(u64::from(*expected))
             {
-                return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "a non-bounds Rust assertion is not statically proven to succeed",
-                ));
+                return Err(ProductionRankedProjectionErrorV1::UnprovenAssert {
+                    block: block_index,
+                    kind: semantic_assert_kind_v1(message),
+                    expected: *expected,
+                    condition_local: simple_operand_local(condition).map(SemanticLocalIdV1::index),
+                    source: block.terminator().source(),
+                });
             }
             Ok(ProjectedCfgTerminatorV1::Branch(target(edge.target())?))
         }
@@ -5982,6 +6534,21 @@ fn projected_cfg_terminator(
         | SemanticTerminatorKindV1::UnwindTerminate
         | SemanticTerminatorKindV1::Abort
         | SemanticTerminatorKindV1::Unreachable => Ok(ProjectedCfgTerminatorV1::Return),
+    }
+}
+
+const fn semantic_assert_kind_v1(message: &SemanticAssertMessageV1) -> &'static str {
+    match message {
+        SemanticAssertMessageV1::BoundsCheck { .. } => "bounds-check",
+        SemanticAssertMessageV1::Overflow { .. } => "arithmetic-overflow",
+        SemanticAssertMessageV1::DivisionByZero(_) => "division-by-zero",
+        SemanticAssertMessageV1::RemainderByZero(_) => "remainder-by-zero",
+        SemanticAssertMessageV1::MisalignedPointerDereference { .. } => {
+            "misaligned-pointer-dereference"
+        }
+        SemanticAssertMessageV1::NullPointerDereference => "null-pointer-dereference",
+        SemanticAssertMessageV1::ResumedAfterReturn => "resumed-after-return",
+        SemanticAssertMessageV1::ResumedAfterPanic => "resumed-after-panic",
     }
 }
 
@@ -6075,6 +6642,7 @@ fn forward_live_inductions(
 }
 
 fn build_ranked_cfg(
+    types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     switch_predicates: &[Option<GuardPredicateV1>],
     deterministic_switches: &[Option<ProjectedDeterministicSwitchV1>],
@@ -6091,11 +6659,13 @@ fn build_ranked_cfg(
         ));
     }
     let constants = constant_locals(function);
+    let proved_assertions = SemanticAssertProofsV1::analyze(types, function)?;
     let terminators = (0..function.blocks().len())
         .map(|index| {
             projected_cfg_terminator(
                 function,
                 index,
+                proved_assertions[index],
                 &constants,
                 switch_predicates,
                 deterministic_switches,
@@ -9025,6 +9595,10 @@ mod tests {
     const ARRAY_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);
     const POINTER_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(2);
     const ENUM_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(3);
+    const BOOL_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(4);
+    const U64_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(5);
+    const U8_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(6);
+    const I32_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(7);
 
     fn bytes(tag: u8) -> [u8; 32] {
         [tag; 32]
@@ -9083,6 +9657,45 @@ mod tests {
             )
             .unwrap(),
         ));
+        types
+    }
+
+    fn assertion_proof_types() -> Vec<SemanticTypeDeclV1> {
+        let mut types = projection_types_with_enum();
+        for (tag, bytes, scalar) in [
+            (40, 1, SemanticScalarTypeV1::Bool),
+            (
+                41,
+                8,
+                SemanticScalarTypeV1::Integer {
+                    signed: false,
+                    bits: 64,
+                },
+            ),
+            (
+                42,
+                1,
+                SemanticScalarTypeV1::Integer {
+                    signed: false,
+                    bits: 8,
+                },
+            ),
+            (
+                43,
+                4,
+                SemanticScalarTypeV1::Integer {
+                    signed: true,
+                    bits: 32,
+                },
+            ),
+        ] {
+            types.push(SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256(self::bytes(tag)),
+                SemanticLayoutIdentityV1::from_sha256(self::bytes(tag)),
+                SemanticTypeLayoutV1::new(Some(bytes), bytes).unwrap(),
+                SemanticTypeShapeV1::Scalar(scalar),
+            ));
+        }
         types
     }
 
@@ -9178,6 +9791,42 @@ mod tests {
             SemanticMonomorphizationIdentityV1::from_sha256(bytes(13)),
             SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(14)),
             SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(15)),
+            SemanticSourceProvenanceV1::unavailable(),
+            abi,
+            locals,
+            SemanticBlockIdV1::from_index(0),
+            blocks,
+        )
+        .unwrap()
+    }
+
+    fn projection_function_with_owned_argument(
+        blocks: Vec<SemanticBasicBlockV1>,
+        locals: Vec<SemanticLocalDeclV1>,
+        ownership: SemanticSourceArgumentOwnershipV1,
+    ) -> SemanticFunctionDeclV1 {
+        let abi = SemanticFunctionAbiV1::new(
+            SemanticAbiIdentityV1::from_sha256(bytes(110)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(110)),
+            SemanticCanonAbiV1::GpuKernel,
+            false,
+            false,
+            vec![SemanticAbiValueV1::new(
+                POINTER_TYPE,
+                SemanticAbiPassModeV1::Direct(SemanticAbiValueAttributesV1::plain()),
+            )],
+            SemanticAbiValueV1::new(SCALAR_TYPE, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap()
+        .with_source_argument_ownership(vec![ownership])
+        .unwrap();
+        SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256(bytes(111)),
+            SemanticFunctionRoleV1::KernelRoot,
+            SemanticItemDefinitionIdentityV1::from_sha256(bytes(112)),
+            SemanticMonomorphizationIdentityV1::from_sha256(bytes(113)),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(114)),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(115)),
             SemanticSourceProvenanceV1::unavailable(),
             abi,
             locals,
@@ -9557,6 +10206,7 @@ mod tests {
         let function =
             projection_function(vec![block(29, vec![], SemanticTerminatorKindV1::Return)]);
         let (blocks, sources) = build_ranked_cfg(
+            &projection_types(),
             &function,
             &vec![None; function.locals().len()],
             &vec![None; function.blocks().len()],
@@ -9885,6 +10535,7 @@ mod tests {
         ]);
 
         let (after_blocks, _) = build_ranked_cfg(
+            &projection_types(),
             &function,
             &vec![None; function.locals().len()],
             &vec![None; function.blocks().len()],
@@ -9908,6 +10559,7 @@ mod tests {
         ));
 
         let (before_blocks, _) = build_ranked_cfg(
+            &projection_types(),
             &function,
             &vec![None; function.locals().len()],
             &vec![None; function.blocks().len()],
@@ -12380,6 +13032,61 @@ mod tests {
     }
 
     #[test]
+    fn direct_borrow_preserves_only_an_authenticated_exclusive_owner() {
+        let direct_place =
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], POINTER_TYPE).unwrap();
+        let direct_borrow = |place| {
+            statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                SemanticPlaceV1::new(SemanticLocalIdV1::from_index(2), vec![], POINTER_TYPE)
+                    .unwrap(),
+                SemanticRvalueV1::new(
+                    POINTER_TYPE,
+                    SemanticRvalueKindV1::Borrow {
+                        kind: SemanticBorrowKindV1::Mutable,
+                        place,
+                    },
+                ),
+            )))
+        };
+        let build = |ownership| {
+            projection_function_with_owned_argument(
+                vec![block(
+                    116,
+                    vec![direct_borrow(direct_place.clone())],
+                    SemanticTerminatorKindV1::Return,
+                )],
+                vec![
+                    local(116, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                    local(117, POINTER_TYPE, SemanticLocalRoleV1::Argument(0)),
+                    local(118, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+                ],
+                ownership,
+            )
+        };
+
+        assert_eq!(
+            local_provenance_v1(&build(SemanticSourceArgumentOwnershipV1::ExclusiveOwner))
+                .unwrap()
+                .allocation_origins,
+            vec![None, Some(0), Some(0)]
+        );
+        for ownership in [
+            SemanticSourceArgumentOwnershipV1::RawPointer,
+            SemanticSourceArgumentOwnershipV1::SharedBorrow,
+            SemanticSourceArgumentOwnershipV1::UniqueBorrow,
+            SemanticSourceArgumentOwnershipV1::ByValue,
+            SemanticSourceArgumentOwnershipV1::Unspecified,
+        ] {
+            assert_eq!(
+                local_provenance_v1(&build(ownership))
+                    .unwrap()
+                    .allocation_origins,
+                vec![None, Some(0), None]
+            );
+        }
+    }
+
+    #[test]
     fn local_provenance_merge_conflicts_fail_closed() {
         let mut origins = vec![Some(0), Some(1), None];
         let edges = vec![vec![2], vec![2], vec![]];
@@ -12478,7 +13185,7 @@ mod tests {
             SemanticTerminatorKindV1::Unreachable,
         );
         assert_eq!(
-            projected_cfg_terminator(&function, 0, &[], &[const { None }; 2], &[]).unwrap(),
+            projected_cfg_terminator(&function, 0, false, &[], &[const { None }; 2], &[]).unwrap(),
             ProjectedCfgTerminatorV1::AnalysisSplit {
                 first_block: 1,
                 second_block: 2,
@@ -12514,17 +13221,291 @@ mod tests {
     fn non_bounds_asserts_are_elided_only_after_exact_constant_success() {
         let unresolved = non_bounds_assert_function(tensor_operand(1));
         assert!(matches!(
-            projected_cfg_terminator(&unresolved, 0, &[], &[const { None }; 3], &[]),
-            Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "a non-bounds Rust assertion is not statically proven to succeed"
-            ))
+            projected_cfg_terminator(&unresolved, 0, false, &[], &[const { None }; 3], &[]),
+            Err(ProductionRankedProjectionErrorV1::UnprovenAssert {
+                block: 0,
+                kind: "division-by-zero",
+                ..
+            })
         ));
 
         let proven = non_bounds_assert_function(constant(1));
         assert_eq!(
-            projected_cfg_terminator(&proven, 0, &[], &[const { None }; 3], &[]).unwrap(),
+            projected_cfg_terminator(&proven, 0, false, &[], &[const { None }; 3], &[]).unwrap(),
             ProjectedCfgTerminatorV1::Branch(1)
         );
+    }
+
+    #[derive(Clone, Copy)]
+    enum AssertionProofShape {
+        Complete,
+        MissingPath,
+        SameSuccessor,
+        Reassignment,
+        CallDestination,
+        Unresolved,
+        NarrowCast,
+        SignedSource,
+        Overflow,
+    }
+
+    fn typed_place(local: u32, ty: SemanticTypeIdV1) -> SemanticPlaceV1 {
+        SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], ty).unwrap()
+    }
+
+    fn typed_operand(local: u32, ty: SemanticTypeIdV1) -> SemanticOperandV1 {
+        SemanticOperandV1::Copy(typed_place(local, ty))
+    }
+
+    fn typed_constant(ty: SemanticTypeIdV1, value: u128, bytes: u8) -> SemanticOperandV1 {
+        SemanticOperandV1::Constant(SemanticConstantV1::new(
+            ty,
+            SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(value, bytes).unwrap()),
+        ))
+    }
+
+    fn typed_assignment(
+        local: u32,
+        ty: SemanticTypeIdV1,
+        value: SemanticRvalueKindV1,
+    ) -> SemanticStatementV1 {
+        statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            typed_place(local, ty),
+            SemanticRvalueV1::new(ty, value),
+        )))
+    }
+
+    fn zero_switch(
+        local: u32,
+        ty: SemanticTypeIdV1,
+        zero: u32,
+        nonzero: u32,
+    ) -> SemanticTerminatorKindV1 {
+        SemanticTerminatorKindV1::SwitchInt {
+            discriminant: typed_operand(local, ty),
+            targets: SemanticSwitchTargetsV1::new(
+                vec![SemanticSwitchTargetV1::new(
+                    0,
+                    cfg_edge(SemanticEdgeRoleV1::SwitchValue, zero),
+                )],
+                cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, nonzero),
+            )
+            .unwrap(),
+        }
+    }
+
+    fn assertion_proof_function(shape: AssertionProofShape) -> SemanticFunctionDeclV1 {
+        let source_ty = if matches!(shape, AssertionProofShape::SignedSource) {
+            I32_TYPE
+        } else {
+            SCALAR_TYPE
+        };
+        let first_check = zero_switch(
+            1,
+            source_ty,
+            if matches!(shape, AssertionProofShape::SameSuccessor) {
+                4
+            } else {
+                3
+            },
+            4,
+        );
+        let second_check = if matches!(
+            shape,
+            AssertionProofShape::MissingPath | AssertionProofShape::Unresolved
+        ) {
+            SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 5))
+        } else {
+            zero_switch(
+                1,
+                source_ty,
+                if matches!(shape, AssertionProofShape::SameSuccessor) {
+                    5
+                } else {
+                    3
+                },
+                5,
+            )
+        };
+        let first_result = match shape {
+            AssertionProofShape::Reassignment => {
+                SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 6))
+            }
+            AssertionProofShape::CallDestination => SemanticTerminatorKindV1::Call(
+                SemanticDirectCallV1::new_callable(
+                    SemanticCallableIdV1::from_index(0),
+                    vec![],
+                    Some(SemanticCallDestinationV1::new(
+                        typed_place(1, source_ty),
+                        cfg_edge(SemanticEdgeRoleV1::CallReturn, 6),
+                    )),
+                    SemanticUnwindActionV1::Unreachable,
+                )
+                .unwrap(),
+            ),
+            _ => zero_switch(3, BOOL_TYPE, 3, 6),
+        };
+        let first_statements = matches!(shape, AssertionProofShape::Reassignment)
+            .then(|| {
+                vec![typed_assignment(
+                    1,
+                    source_ty,
+                    SemanticRvalueKindV1::Use(typed_constant(source_ty, 0, 4)),
+                )]
+            })
+            .unwrap_or_default();
+
+        let mut proof_statements = vec![typed_assignment(
+            4,
+            if matches!(shape, AssertionProofShape::NarrowCast) {
+                U8_TYPE
+            } else {
+                U64_TYPE
+            },
+            SemanticRvalueKindV1::Cast {
+                kind: SemanticCastKindV1::Integer,
+                operand: typed_operand(1, source_ty),
+            },
+        )];
+        let asserted_value = if matches!(shape, AssertionProofShape::NarrowCast) {
+            4
+        } else {
+            proof_statements.extend([
+                typed_assignment(
+                    5,
+                    U64_TYPE,
+                    SemanticRvalueKindV1::Binary {
+                        operation: SemanticBinaryOpV1::Add,
+                        left: typed_operand(4, U64_TYPE),
+                        right: typed_constant(
+                            U64_TYPE,
+                            if matches!(shape, AssertionProofShape::Overflow) {
+                                u128::from(u64::MAX)
+                            } else {
+                                15
+                            },
+                            8,
+                        ),
+                    },
+                ),
+                typed_assignment(
+                    6,
+                    U64_TYPE,
+                    SemanticRvalueKindV1::Binary {
+                        operation: SemanticBinaryOpV1::Divide,
+                        left: typed_operand(5, U64_TYPE),
+                        right: typed_constant(U64_TYPE, 16, 8),
+                    },
+                ),
+            ]);
+            6
+        };
+        proof_statements.push(typed_assignment(
+            7,
+            BOOL_TYPE,
+            SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::Equal,
+                left: typed_operand(
+                    asserted_value,
+                    if asserted_value == 4 && matches!(shape, AssertionProofShape::NarrowCast) {
+                        U8_TYPE
+                    } else {
+                        U64_TYPE
+                    },
+                ),
+                right: typed_constant(
+                    if asserted_value == 4 && matches!(shape, AssertionProofShape::NarrowCast) {
+                        U8_TYPE
+                    } else {
+                        U64_TYPE
+                    },
+                    0,
+                    if asserted_value == 4 && matches!(shape, AssertionProofShape::NarrowCast) {
+                        1
+                    } else {
+                        8
+                    },
+                ),
+            },
+        ));
+        let assert_message_operand = typed_operand(
+            asserted_value,
+            if asserted_value == 4 && matches!(shape, AssertionProofShape::NarrowCast) {
+                U8_TYPE
+            } else {
+                U64_TYPE
+            },
+        );
+
+        projection_function_with_locals(
+            vec![
+                block(150, vec![], zero_switch(2, BOOL_TYPE, 1, 2)),
+                block(
+                    151,
+                    vec![],
+                    if matches!(shape, AssertionProofShape::Unresolved) {
+                        SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 4))
+                    } else {
+                        first_check
+                    },
+                ),
+                block(152, vec![], second_check),
+                block(153, vec![], SemanticTerminatorKindV1::Return),
+                block(154, first_statements, first_result),
+                block(155, vec![], zero_switch(3, BOOL_TYPE, 3, 6)),
+                block(
+                    156,
+                    proof_statements,
+                    SemanticTerminatorKindV1::Assert {
+                        condition: typed_operand(7, BOOL_TYPE),
+                        expected: false,
+                        message: SemanticAssertMessageV1::DivisionByZero(assert_message_operand),
+                        target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 7),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
+                block(157, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(150, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(151, source_ty, SemanticLocalRoleV1::Argument(0)),
+                local(152, BOOL_TYPE, SemanticLocalRoleV1::Argument(1)),
+                local(153, BOOL_TYPE, SemanticLocalRoleV1::Argument(2)),
+                local(
+                    154,
+                    if matches!(shape, AssertionProofShape::NarrowCast) {
+                        U8_TYPE
+                    } else {
+                        U64_TYPE
+                    },
+                    SemanticLocalRoleV1::Temporary,
+                ),
+                local(155, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(156, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(157, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
+    #[test]
+    fn nonzero_assert_proof_requires_every_path_and_value_preserving_arithmetic() {
+        let types = assertion_proof_types();
+        let complete = assertion_proof_function(AssertionProofShape::Complete);
+        assert!(SemanticAssertProofsV1::analyze(&types, &complete).unwrap()[6]);
+
+        for shape in [
+            AssertionProofShape::MissingPath,
+            AssertionProofShape::SameSuccessor,
+            AssertionProofShape::Reassignment,
+            AssertionProofShape::CallDestination,
+            AssertionProofShape::Unresolved,
+            AssertionProofShape::NarrowCast,
+            AssertionProofShape::SignedSource,
+            AssertionProofShape::Overflow,
+        ] {
+            let function = assertion_proof_function(shape);
+            assert!(!SemanticAssertProofsV1::analyze(&types, &function).unwrap()[6]);
+        }
     }
 
     #[test]
@@ -12543,7 +13524,7 @@ mod tests {
             ),
         ] {
             assert!(matches!(
-                projected_cfg_terminator(&function, 0, &[], &[const { None }; 2], &[]),
+                projected_cfg_terminator(&function, 0, false, &[], &[const { None }; 2], &[]),
                 Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "a general switch whose only extra successor is not one empty unreachable fallback"
                 ))
@@ -12566,8 +13547,15 @@ mod tests {
             )],
         };
         assert_eq!(
-            projected_cfg_terminator(&function, 0, &[], &[None, Some(predicate.clone())], &[],)
-                .unwrap(),
+            projected_cfg_terminator(
+                &function,
+                0,
+                false,
+                &[],
+                &[None, Some(predicate.clone())],
+                &[],
+            )
+            .unwrap(),
             ProjectedCfgTerminatorV1::Predicate {
                 predicate,
                 true_block: 1,
@@ -12805,6 +13793,7 @@ mod tests {
         assert!(constant_values.contains(&16));
 
         let (blocks, _) = build_ranked_cfg(
+            &projection_types(),
             &function,
             &vec![None; function.locals().len()],
             &switches,
@@ -13201,6 +14190,91 @@ mod tests {
             operation,
             ProductionRankedOperationV1::DeterministicJoin { .. }
         )));
+
+        let strided_callable = compiler_intrinsic_callable(
+            SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice {
+                result: ENUM_TYPE,
+                view: POINTER_TYPE,
+                error: SCALAR_TYPE,
+                element: SCALAR_TYPE,
+            },
+        );
+        let strided = call_discriminant_switch(
+            0,
+            vec![
+                tensor_operand(1),
+                constant(0),
+                constant(4),
+                constant(8),
+                constant(8),
+            ],
+        );
+        let (switches, operations, _) = deterministic_scalar_switch_projection(
+            &[strided_callable.clone()],
+            &strided,
+            &vec![None; strided.locals().len()],
+            vec![],
+            0,
+        )
+        .unwrap();
+        assert!(switches[1].is_some());
+        assert!(operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::DeterministicJoin { dependencies, .. }
+                if dependencies.contains(&ProductionRankedValueV1::Argument(1))
+                    && dependencies.len() == 4
+        )));
+
+        let varying_strided = call_discriminant_switch(
+            0,
+            vec![
+                tensor_operand(1),
+                constant(0),
+                tensor_operand(2),
+                constant(8),
+                constant(8),
+            ],
+        );
+        let (switches, operations, _) = deterministic_scalar_switch_projection(
+            &[strided_callable.clone()],
+            &varying_strided,
+            &vec![None; varying_strided.locals().len()],
+            vec![],
+            0,
+        )
+        .unwrap();
+        assert!(switches[1].is_none());
+        assert!(!operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::DeterministicJoin { .. }
+        )));
+
+        let invocation = ProductionRankedValueIdV1::new(0);
+        let mut lane_values = vec![None; varying_strided.locals().len()];
+        lane_values[2] = Some(ProjectedDisjointIndexV1 {
+            value: ProductionRankedValueV1::Local(invocation),
+            mapping: SemanticDisjointIndexSpaceV1::Index1d,
+            precondition: None,
+            availability: None,
+        });
+        let (switches, operations, _) = deterministic_scalar_switch_projection(
+            &[strided_callable],
+            &varying_strided,
+            &lane_values,
+            vec![ProductionRankedOperationV1::InvocationIndex {
+                result: invocation,
+                dimension: 0,
+                launch_extent: 0,
+            }],
+            1,
+        )
+        .unwrap();
+        assert!(switches[1].is_some());
+        assert!(operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::DeterministicJoin { dependencies, .. }
+                if dependencies.contains(&ProductionRankedValueV1::Local(invocation))
+        )));
     }
 
     #[test]
@@ -13318,8 +14392,15 @@ mod tests {
             single_explicit_boolean_switch(1, 1, 2),
         ] {
             assert_eq!(
-                projected_cfg_terminator(&function, 0, &[], &[None, Some(predicate.clone())], &[],)
-                    .unwrap(),
+                projected_cfg_terminator(
+                    &function,
+                    0,
+                    false,
+                    &[],
+                    &[None, Some(predicate.clone())],
+                    &[],
+                )
+                .unwrap(),
                 ProjectedCfgTerminatorV1::Predicate {
                     predicate: predicate.clone(),
                     true_block: 1,
@@ -13331,6 +14412,7 @@ mod tests {
             projected_cfg_terminator(
                 &single_explicit_boolean_switch(2, 1, 2),
                 0,
+                false,
                 &[],
                 &[None, Some(predicate)],
                 &[],
@@ -13817,6 +14899,7 @@ mod tests {
         assert_eq!(inductions.len(), 1);
 
         let (blocks, _) = build_ranked_cfg(
+            &projection_types(),
             &function,
             &vec![None; function.locals().len()],
             &vec![None; function.blocks().len()],
@@ -13864,6 +14947,7 @@ mod tests {
             source: None,
         });
         let (blocks, _) = build_ranked_cfg(
+            &projection_types(),
             &function,
             &vec![None; function.locals().len()],
             &vec![None; function.blocks().len()],
@@ -13906,6 +14990,7 @@ mod tests {
         assert_eq!(inductions[0].loop_blocks, vec![1, 2, 3, 4]);
 
         let (blocks, _) = build_ranked_cfg(
+            &projection_types(),
             &function,
             &vec![None; function.locals().len()],
             &vec![None; function.blocks().len()],
@@ -13937,6 +15022,7 @@ mod tests {
         let mut predicates = vec![None; function.locals().len()];
         predicates[4] = Some(predicate);
         let (blocks, _) = build_ranked_cfg(
+            &projection_types(),
             &function,
             &predicates,
             &vec![None; function.blocks().len()],
@@ -13983,6 +15069,7 @@ mod tests {
             otherwise: 4,
         });
         let (blocks, _) = build_ranked_cfg(
+            &projection_types(),
             &function,
             &vec![None; function.locals().len()],
             &deterministic_switches,
@@ -14157,6 +15244,7 @@ mod tests {
         );
         let (inductions, entry_operations, _) = project_test_inductions(&function).unwrap();
         let (blocks, _) = build_ranked_cfg(
+            &projection_types(),
             &function,
             &vec![None; function.locals().len()],
             &vec![None; function.blocks().len()],
@@ -14203,6 +15291,7 @@ mod tests {
                 semantic_site: None,
             }));
         let (blocks, _) = build_ranked_cfg(
+            &projection_types(),
             &function,
             &vec![None; function.locals().len()],
             &vec![None; function.blocks().len()],

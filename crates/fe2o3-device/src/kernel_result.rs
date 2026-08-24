@@ -22,6 +22,8 @@ pub type KernelResult<T = ()> = Result<T, KernelError>;
 
 #[cfg(test)]
 mod tests {
+    use crate::{Bf16MfmaAMatrix, StridedReadView2D};
+
     use super::{KernelError, KernelResult};
 
     fn checked_index(index: usize, len: usize) -> KernelResult<usize> {
@@ -35,10 +37,34 @@ mod tests {
         Ok(())
     }
 
+    fn checked_matrix(bits: &[u16], rows: usize, columns: usize) -> KernelResult {
+        let _ = Bf16MfmaAMatrix::row_major(bits, 0, rows, columns, columns)?;
+        Ok(())
+    }
+
+    fn checked_read_view(values: &[f32], rows: usize, columns: usize) -> KernelResult {
+        let _ = StridedReadView2D::from_shared_slice(values, 0, rows, columns, columns)?;
+        Ok(())
+    }
+
     #[test]
     fn native_question_mark_propagates_kernel_errors() {
         assert_eq!(checked_kernel_path(1, 2), Ok(()));
         assert_eq!(checked_kernel_path(2, 2), Err(KernelError::OutOfBounds));
+    }
+
+    #[test]
+    fn native_question_mark_converts_checked_view_errors() {
+        assert_eq!(checked_matrix(&[0; 4], 2, 2), Ok(()));
+        assert_eq!(
+            checked_matrix(&[0; 3], 2, 2),
+            Err(KernelError::InvalidArgument)
+        );
+        assert_eq!(checked_read_view(&[0.0; 4], 2, 2), Ok(()));
+        assert_eq!(
+            checked_read_view(&[0.0; 3], 2, 2),
+            Err(KernelError::InvalidArgument)
+        );
     }
 
     #[test]

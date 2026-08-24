@@ -46,15 +46,13 @@ pub fn row_softmax_general_v1(
     {
         return Err(KernelError::InvalidArgument);
     }
-    let Ok(input) = StridedReadView2D::from_shared_slice(
+    let input = StridedReadView2D::from_shared_slice(
         input,
         0,
         rows as usize,
         columns as usize,
         input_stride as usize,
-    ) else {
-        return Err(KernelError::InvalidArgument);
-    };
+    )?;
 
     let thread_index = thread::index_1d();
     let raw = thread_index.get();

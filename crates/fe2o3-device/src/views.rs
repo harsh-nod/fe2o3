@@ -566,6 +566,12 @@ fn checked_start<T, const N: usize>(
     Ok(start_element)
 }
 
+impl From<StridedReadView2DError> for crate::KernelError {
+    fn from(_error: StridedReadView2DError) -> Self {
+        Self::InvalidArgument
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

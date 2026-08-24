@@ -1,8 +1,8 @@
 use crate::{AnalysisReport, Diagnostic, UnsupportedReason, Variation};
 use fe2o3_kernel_ir::{
-    AddressSpace, AmdGpuDiagnosticOperation, BasicBlock, BlockId, FloatOperation, Function,
-    FunctionBody, IndexKind, IntrinsicKind, Module, Operation, OperationKind, Terminator, ValueId,
-    WaveOperationKind,
+    AddressSpace, AmdGpuDiagnosticOperation, Axis, BasicBlock, BinaryOp, BlockId, CastKind,
+    Constant, FloatOperation, Function, FunctionBody, IndexKind, IntrinsicKind, Module, Operation,
+    OperationKind, ScalarType, Terminator, Type, ValueId, WaveOperationKind, WorkgroupSize,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -23,7 +23,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 ///
 /// The returned report is analysis evidence only and grants no assurance.
 pub fn analyze_function(function: &Function) -> AnalysisReport {
-    analyze_function_with_contract(function, &[], &BTreeSet::new())
+    analyze_function_with_contract(function, &[], &BTreeSet::new(), None)
 }
 
 /// Classifies one kernel entry using uniform ABI parameters and conservative
@@ -43,13 +43,23 @@ pub fn analyze_kernel_entry(module: &Module, function: &Function) -> AnalysisRep
         }
     }
     let parameters = vec![Variation::GridUniform; function.signature.parameters.len()];
-    analyze_function_with_contract(function, &parameters, &summarized_calls)
+    let mut matching_contracts = module
+        .kernels
+        .iter()
+        .filter(|kernel| kernel.entry == function.id)
+        .map(|kernel| kernel.workgroup_size);
+    let workgroup_size = matching_contracts
+        .next()
+        .filter(|first| matching_contracts.all(|contract| contract == *first))
+        .flatten();
+    analyze_function_with_contract(function, &parameters, &summarized_calls, workgroup_size)
 }
 
 fn analyze_function_with_contract(
     function: &Function,
     parameter_variations: &[Variation],
     summarized_calls: &BTreeSet<fe2o3_kernel_ir::FunctionId>,
+    workgroup_size: Option<WorkgroupSize>,
 ) -> AnalysisReport {
     let mut report = AnalysisReport {
         function: function.id.clone(),
@@ -72,6 +82,7 @@ fn analyze_function_with_contract(
         report,
         parameter_variations,
         summarized_calls,
+        workgroup_size,
     )
     .run()
 }
@@ -136,6 +147,8 @@ struct Analyzer<'a> {
     trivial_phi_representatives: BTreeMap<ValueId, ValueId>,
     parameter_variations: &'a [Variation],
     summarized_calls: &'a BTreeSet<fe2o3_kernel_ir::FunctionId>,
+    workgroup_size: Option<WorkgroupSize>,
+    value_definitions: BTreeMap<ValueId, &'a Operation>,
     report: AnalysisReport,
 }
 
@@ -153,6 +166,7 @@ impl<'a> Analyzer<'a> {
         mut report: AnalysisReport,
         parameter_variations: &'a [Variation],
         summarized_calls: &'a BTreeSet<fe2o3_kernel_ir::FunctionId>,
+        workgroup_size: Option<WorkgroupSize>,
     ) -> Self {
         let mut blocks = BTreeMap::new();
         let mut malformed = false;
@@ -225,6 +239,17 @@ impl<'a> Analyzer<'a> {
             &natural_loop_nests,
         );
         let trivial_phi_representatives = trivial_phi_representatives(body, &incoming);
+        let value_definitions = body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .flat_map(|operation| {
+                operation
+                    .results
+                    .iter()
+                    .map(move |result| (result.id, operation))
+            })
+            .collect();
 
         Self {
             body,
@@ -235,6 +260,8 @@ impl<'a> Analyzer<'a> {
             trivial_phi_representatives,
             parameter_variations,
             summarized_calls,
+            workgroup_size,
+            value_definitions,
             report,
         }
     }
@@ -512,6 +539,11 @@ impl<'a> Analyzer<'a> {
             | OperationKind::Barrier(_)
             | OperationKind::Fence(_)
             | OperationKind::WorkgroupBarrier(_) => Variation::Varying,
+            OperationKind::Binary {
+                op: BinaryOp::Divide,
+                lhs,
+                rhs,
+            } if self.is_workgroup_index_quotient(*lhs, *rhs) => Variation::WorkgroupUniform,
             OperationKind::Unary { .. }
             | OperationKind::Binary { .. }
             | OperationKind::Compare { .. }
@@ -522,6 +554,114 @@ impl<'a> Analyzer<'a> {
             | OperationKind::GetElementPointer { .. } => {
                 join_values(operation.kind.operands(), &self.report.values)
             }
+        }
+    }
+
+    fn is_workgroup_index_quotient(&self, lhs: ValueId, rhs: ValueId) -> bool {
+        let Some(workgroup_size) = self.workgroup_size else {
+            return false;
+        };
+        let Some(Operation {
+            kind:
+                OperationKind::Intrinsic(fe2o3_kernel_ir::IntrinsicOperation {
+                    kind:
+                        IntrinsicKind::InvocationIndex {
+                            kind: IndexKind::Global,
+                            axis,
+                        },
+                    ..
+                }),
+            ..
+        }) = self.value_definitions.get(&lhs).copied()
+        else {
+            return false;
+        };
+        let extent = match axis {
+            Axis::X => workgroup_size.x,
+            Axis::Y => workgroup_size.y,
+            Axis::Z => workgroup_size.z,
+        };
+        extent != 0 && self.unsigned_constant(rhs) == Some(u64::from(extent))
+    }
+
+    fn unsigned_constant(&self, value: ValueId) -> Option<u64> {
+        let operation = self.value_definitions.get(&value).copied()?;
+        match &operation.kind {
+            OperationKind::Constant(constant) => match constant {
+                Constant::U8(value) => Some(u64::from(*value)),
+                Constant::U16(value) => Some(u64::from(*value)),
+                Constant::U32(value) => Some(u64::from(*value)),
+                Constant::U64(value) | Constant::Index(value) => Some(*value),
+                Constant::I8(value) => u64::try_from(*value).ok(),
+                Constant::I16(value) => u64::try_from(*value).ok(),
+                Constant::I32(value) => u64::try_from(*value).ok(),
+                Constant::I64(value) => u64::try_from(*value).ok(),
+                Constant::Bool(_)
+                | Constant::F16Bits(_)
+                | Constant::Bf16Bits(_)
+                | Constant::F32Bits(_)
+                | Constant::F64Bits(_) => None,
+            },
+            OperationKind::Cast {
+                kind: CastKind::ZeroExtend,
+                value,
+                to,
+            } if self.zero_extend_preserves_unsigned_value(*value, to) => {
+                self.unsigned_constant(*value)
+            }
+            _ => None,
+        }
+    }
+
+    fn zero_extend_preserves_unsigned_value(&self, value: ValueId, to: &Type) -> bool {
+        let Some(source) = self
+            .value_definitions
+            .get(&value)
+            .and_then(|operation| operation.results.first())
+            .map(|result| &result.ty)
+        else {
+            return false;
+        };
+        let (Type::Scalar(source), Type::Scalar(destination)) = (source, to) else {
+            return false;
+        };
+        let source_width = match source {
+            ScalarType::U8 => 8,
+            ScalarType::U16 => 16,
+            ScalarType::U32 => 32,
+            ScalarType::U64 => 64,
+            ScalarType::U128
+            | ScalarType::Index
+            | ScalarType::Bool
+            | ScalarType::I8
+            | ScalarType::I16
+            | ScalarType::I32
+            | ScalarType::I64
+            | ScalarType::I128
+            | ScalarType::F16
+            | ScalarType::Bf16
+            | ScalarType::F32
+            | ScalarType::F64 => return false,
+        };
+        match destination {
+            ScalarType::U16 => source_width < 16,
+            ScalarType::U32 => source_width < 32,
+            ScalarType::U64 => source_width < 64,
+            ScalarType::U128 => source_width < 128,
+            // KIR's verified ZeroExtend-to-Index contract is the only
+            // target-neutral value-preserving Index conversion admitted here.
+            ScalarType::Index => source_width <= 32,
+            ScalarType::Bool
+            | ScalarType::I8
+            | ScalarType::I16
+            | ScalarType::I32
+            | ScalarType::I64
+            | ScalarType::I128
+            | ScalarType::U8
+            | ScalarType::F16
+            | ScalarType::Bf16
+            | ScalarType::F32
+            | ScalarType::F64 => false,
         }
     }
 

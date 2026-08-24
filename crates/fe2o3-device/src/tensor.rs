@@ -583,6 +583,12 @@ impl LdsTile16x16<'_, f32, LdsInitialized> {
     }
 }
 
+impl From<Bf16MatrixViewError> for crate::KernelError {
+    fn from(_error: Bf16MatrixViewError) -> Self {
+        Self::InvalidArgument
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

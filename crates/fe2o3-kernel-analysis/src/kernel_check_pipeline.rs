@@ -21,7 +21,7 @@ use fe2o3_kernel_ir::{
 
 use crate::{
     ControlFlowDiagnosticV2, ControlFlowErrors, Diagnostic as UniformityDiagnostic,
-    UnsupportedReason, Variation, analyze_control_flow, analyze_function,
+    UnsupportedReason, Variation, analyze_control_flow, analyze_kernel_entry,
 };
 
 /// Exact order of the mandatory target-neutral kernel checks.
@@ -786,7 +786,7 @@ pub fn run_general_kernel_checks_from_verified_v1(
         .function(&kernel.entry)
         .expect("verified kernel entry exists");
     let control_flow = analyze_control_flow(entry);
-    let uniformity = analyze_function(entry);
+    let uniformity = analyze_kernel_entry(module, entry);
     passes.push(control_flow_report(&control_flow));
     passes.push(tensor_layout_report(entry, &uniformity));
 
@@ -1185,7 +1185,11 @@ fn transfer_workgroup_memory(
 mod tests {
     use super::*;
     use fe2o3_kernel_ir::{
-        TILED_GEMM_LDS_V1_KERNEL_ID, TILED_GEMM_LDS_V1_LANES, tiled_gemm_lds_v1_module,
+        Axis, Barrier, BarrierSemantics, BasicBlock, BinaryOp, BlockId, CheckedBinaryOperator,
+        Constant, IndexKind, IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
+        MemoryOrdering, Operation, Signature, SynchronizationScope, TILED_GEMM_LDS_V1_KERNEL_ID,
+        TILED_GEMM_LDS_V1_LANES, Terminator, Type, ValueDef, WorkgroupSize,
+        tiled_gemm_lds_v1_module,
     };
 
     fn request(module: &Module) -> KernelCheckRequestV1<'_> {
@@ -1227,6 +1231,117 @@ mod tests {
         assert!(!report.proves_source_correspondence());
         assert!(!report.grants_compiler_refinement_authority());
         assert!(!report.grants_artifact_or_launch_authority());
+    }
+
+    #[test]
+    fn production_pipeline_uses_the_authenticated_workgroup_quotient_contract() {
+        let mut entry = BasicBlock::new(BlockId(0));
+        entry.operations = vec![
+            Operation::effect_free(
+                ValueDef::new(ValueId(0), Type::INDEX),
+                OperationKind::Intrinsic(IntrinsicOperation::new(
+                    IntrinsicKind::InvocationIndex {
+                        kind: IndexKind::Global,
+                        axis: Axis::X,
+                    },
+                    Type::INDEX,
+                )),
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(1), Type::INDEX),
+                OperationKind::Constant(Constant::Index(64)),
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(2), Type::INDEX),
+                OperationKind::Binary {
+                    op: BinaryOp::Divide,
+                    lhs: ValueId(0),
+                    rhs: ValueId(1),
+                },
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(3), Type::INDEX),
+                OperationKind::Binary {
+                    op: BinaryOp::Divide,
+                    lhs: ValueId(2),
+                    rhs: ValueId(100),
+                },
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(4), Type::INDEX),
+                OperationKind::Binary {
+                    op: BinaryOp::Multiply,
+                    lhs: ValueId(3),
+                    rhs: ValueId(100),
+                },
+            ),
+            Operation::new(
+                vec![
+                    ValueDef::new(ValueId(5), Type::INDEX),
+                    ValueDef::new(ValueId(6), Type::BOOL),
+                ],
+                OperationKind::Binary {
+                    op: BinaryOp::Checked(CheckedBinaryOperator::Add),
+                    lhs: ValueId(4),
+                    rhs: ValueId(100),
+                },
+            ),
+        ];
+        entry.terminator = Some(Terminator::ConditionalBranch {
+            condition: ValueId(6),
+            then_target: BlockId(1),
+            then_arguments: vec![],
+            else_target: BlockId(2),
+            else_arguments: vec![],
+        });
+        let mut barrier = BasicBlock::new(BlockId(1));
+        barrier.operations.push(Operation::new(
+            vec![],
+            OperationKind::Barrier(Barrier {
+                execution_scope: SynchronizationScope::Workgroup,
+                memory_scope: SynchronizationScope::Workgroup,
+                semantics: BarrierSemantics::new(
+                    MemoryOrdering::AcquireRelease,
+                    [AddressSpace::Workgroup],
+                ),
+            }),
+        ));
+        barrier.terminator = Some(Terminator::Return { values: vec![] });
+        let mut exit = BasicBlock::new(BlockId(2));
+        exit.terminator = Some(Terminator::Return { values: vec![] });
+        let function = Function::kernel_entry(
+            "pipeline_uniform_quotient",
+            Signature::new(vec![Type::INDEX], vec![]),
+            vec![ValueId(100)],
+            vec![entry, barrier, exit],
+        );
+        let mut kernel = Kernel::new(
+            "pipeline_uniform_quotient_kernel",
+            function.id.clone(),
+            LaunchDomain::D1 {
+                x: LaunchExtent::Dynamic,
+            },
+        );
+        kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+        let mut module = Module::new("pipeline_uniform_quotient_module");
+        module.functions.push(function);
+        module.kernels.push(kernel);
+
+        let report = run_general_kernel_checks_v1(KernelCheckRequestV1 {
+            module: &module,
+            kernel: &module.kernels[0].id,
+            launch_extent: ExplicitLaunchExtent1d::Exact(64),
+            index_width: FormalIndexWidth::Bits64,
+        })
+        .unwrap();
+        assert_eq!(report.passes().len(), 7, "{report:#?}");
+        assert_eq!(
+            report
+                .pass(KernelCheckPassKindV1::BarrierConvergence)
+                .unwrap()
+                .status(),
+            KernelCheckStatusV1::Clean,
+        );
     }
 
     #[test]

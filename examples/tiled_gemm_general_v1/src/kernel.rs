@@ -68,24 +68,20 @@ pub fn tiled_gemm_general_v1(
     let output_tile = thread_index
         .checked_tiled_2d::<64, 16, 16, 4>()
         .ok_or(KernelError::OutOfBounds)?;
-    let Ok(a_matrix) = Bf16MfmaAMatrix::row_major(
+    let a_matrix = Bf16MfmaAMatrix::row_major(
         a,
         0,
         m as usize,
         k as usize,
         lda as usize,
-    ) else {
-        return Err(KernelError::InvalidArgument);
-    };
-    let Ok(b_matrix) = Bf16MfmaBMatrix::row_major(
+    )?;
+    let b_matrix = Bf16MfmaBMatrix::row_major(
         b,
         0,
         k as usize,
         n as usize,
         ldb as usize,
-    ) else {
-        return Err(KernelError::InvalidArgument);
-    };
+    )?;
     let wave_lane = WaveLane::<Wave64>::current();
     let matrix = Matrix::current();
     let mut accumulator = F32AccumulatorFragment::zero(&wave_lane);
