@@ -9,7 +9,7 @@ use fe2o3_kfd_uapi::{
     KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE, KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL,
     KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC, KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE,
     KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT, KFD_ALLOC_MEMORY_FLAGS_KERNARG,
-    KfdAllocMemoryFlags,
+    KFD_IOC_ALLOC_MEM_FLAGS_AQL_QUEUE_MEM, KfdAllocMemoryFlags,
 };
 use fe2o3_runtime_model::{
     AllocationGenerationV1, AllocationIdV1, DeviceIdentityStateV1, DeviceKeyV1, GpuVaRangeV1,
@@ -87,20 +87,21 @@ pub const GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_SHA256_V1: &str =
 
 /// Canonical contract for the bounded multi-allocation R2 adapter.
 pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-shared-gtt-memory-r7-v1\n",
+    "profile=fe2o3-mi300x-shared-gtt-memory-r8-v1\n",
     "base_memory_profile_sha256=9623a22bfb2686afa9e4d99dcec0a352c7fd7c6514b84ff714c40cfb9095d2b8\n",
     "kfd_memory_schema_sha256=5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8\n",
-    "profiles=host-visible-coherent:0x84000002,kernarg:0x86000002,aql-queue:0xce000002,executable:0xc4000002\n",
+    "profiles=host-visible-coherent:0x84000002,kernarg:0x86000002,aql-queue:0xce000002,executable:0xc4000002,executable-aql-probe:0xc4000002\n",
     "bounds=allocations:64,single-cpu-bytes:2147483648,total-gpu-va-bytes:8589934592,page:4096\n",
     "aql=logical-ring:power-of-two-4096..2147483648,gpu-va:checked-double,cpu-vma:single-physical-copy\n",
+    "aql-executable-probe=crate-private-ring-profile,logical-ring:power-of-two-4096..2147483648,gpu-va-and-cpu-vma:exact-logical-size,no-aql-queue-mem-or-uncached-flags,one-shot-barrier-probe-only\n",
     "va_allocator=kernel-selected-prot-none-guards-retained-until-successful-free,checked-nonoverlap\n",
     "authority=one-retained-kfd-render-vm,multiple-linear-redacted-tokens,no-fd-handle-va-or-pointer-export\n",
     "queue-bridge=crate-private-role-marked-linear-mapped-capabilities,ring-control-eop-cwsr-completion-signal-dispatch-code-dispatch-kernarg-and-dispatch-host-data-roles,private-va-mapping-publication-facts,no-public-mint\n",
     "device-dispatch-bridge=exact-complete-distinct-set-of-every-live-mapped-c3-lease-required-before-model-transfer,actual-linear-lease-retained,private-address-facts\n",
-    "queue-gtt-policy=ring:aql-special,control-and-completion-signals:host-visible-coherent,eop-and-cwsr:executable,not-rocr-equivalence\n",
+    "queue-gtt-policy=reusable-and-dispatch-ring:aql-special,diagnostic-barrier-ring:plain-executable-gtt,control-and-completion-signals:host-visible-coherent,eop-and-cwsr:executable,neither-ring-claims-rocr-userptr-equivalence\n",
     "cpu_views=closure-scoped-before-map;mapped-queue-diagnostic-access-only-through-private-packet-id-and-signal-slot-bounded-acquire-or-volatile-observation;mapped-completion-access-only-through-slot-bounded-acquire-observe-and-release-reset;mapped-dispatch-data-copy-is-crate-private-bounded-owned-and-generation-gated-by-the-retaining-queue,no-safe-mapped-borrow-escape\n",
     "completion-bridge=exact-retained-ring-and-host-coherent-mappings,private-packet-id-and-64-byte-signal-slot-index,backend-atomic-u32-header-and-atomic-i64-value-acquire-observe,immutable-kind-volatile-observe,and-release-reset,currentness-sandwiched\n",
-    "executable=cpu-construction-rw-to-vma-read-only-before-gpu-map,gpu-writable-flag-remains-contracted\n",
+    "executable=ordinary-ExecutableGttV1-only:cpu-construction-rw-to-vma-read-only-before-gpu-map,gpu-writable-flag-remains-contracted;diagnostic-ExecutableAqlQueueProbeGttV1-remains-cpu-mutable-after-gpu-map-for-aql-publication\n",
     "failure=global-quarantine-after-started-or-ambiguous-native-transaction,no-drop-cleanup-or-retry\n",
     "fork=current-base-contract,prot-none-dontfork-before-rw,no-raw-fork-clone-during-setup\n",
     "model=completion-only-append-journal,profile-kind-and-gpu-va-span,no-cpu-vma-or-seal-transition\n",
@@ -109,11 +110,11 @@ pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
 );
 
 pub const SHARED_GTT_MEMORY_PROFILE_SHA256_V1: &str =
-    "b5bef892fcaceb19c2e5b75c158b3ef75acefbe6c70109aa8ba83585dd2ef307";
+    "2b5f5d7a992b4af88797b56f5c2ef959d2fee5d03ff4a96d65450f8169002d96";
 
 pub const SHARED_GTT_MEMORY_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
-    0xb5, 0xbe, 0xf8, 0x92, 0xfc, 0xac, 0xeb, 0x19, 0xc2, 0xe5, 0xb7, 0x5c, 0x15, 0x8b, 0x3e, 0xf7,
-    0x5a, 0xce, 0xfb, 0xe6, 0xc7, 0x01, 0x09, 0xaa, 0x8b, 0xa8, 0x35, 0x85, 0xdd, 0x2e, 0xf3, 0x07,
+    0x2b, 0x5f, 0x5d, 0x7a, 0x99, 0x2b, 0x4a, 0xf8, 0x87, 0x97, 0xb5, 0x6f, 0x5c, 0x2e, 0xf9, 0x59,
+    0xd2, 0xfe, 0xe5, 0xd0, 0x3f, 0xf4, 0xa9, 0x6d, 0x65, 0x45, 0x0f, 0x81, 0x69, 0x00, 0x2d, 0x96,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -374,6 +375,7 @@ pub enum HostVisibleCoherentGttV1 {}
 pub enum KernargGttV1 {}
 pub enum AqlQueueGttV1 {}
 pub enum ExecutableGttV1 {}
+pub(crate) enum ExecutableAqlQueueProbeGttV1 {}
 
 macro_rules! define_profile {
     ($type:ty, $profile:expr, $flags:expr, $kind:expr, $name:expr) => {
@@ -415,13 +417,22 @@ define_profile!(
     MemoryKindV1::Executable,
     "host-visible executable GTT"
 );
+define_profile!(
+    ExecutableAqlQueueProbeGttV1,
+    SharedGttProfileV1::AqlQueue,
+    KfdAllocMemoryFlags::EXECUTABLE,
+    MemoryKindV1::QueueStorage,
+    "executable AQL queue probe GTT"
+);
 
 impl sealed::MutableProfile for HostVisibleCoherentGttV1 {}
 impl sealed::MutableProfile for KernargGttV1 {}
 impl sealed::MutableProfile for AqlQueueGttV1 {}
+impl sealed::MutableProfile for ExecutableAqlQueueProbeGttV1 {}
 impl MutableGpuGttProfileV1 for HostVisibleCoherentGttV1 {}
 impl MutableGpuGttProfileV1 for KernargGttV1 {}
 impl MutableGpuGttProfileV1 for AqlQueueGttV1 {}
+impl MutableGpuGttProfileV1 for ExecutableAqlQueueProbeGttV1 {}
 
 pub trait GttAllocationStateV1: sealed::State + 'static {}
 pub trait CpuReadableGttStateV1: GttAllocationStateV1 {}
@@ -2067,7 +2078,7 @@ fn profile_layout<P: GttProfileV1>(
         return Err(MemorySessionError::InvalidRequestedSize);
     }
     let requested = u64::try_from(requested_bytes).map_err(|_| MemorySessionError::SizeOverflow)?;
-    let cpu_mapping_bytes = if P::PROFILE == SharedGttProfileV1::AqlQueue {
+    let cpu_mapping_bytes = if P::KIND == MemoryKindV1::QueueStorage {
         if !(MIN_AQL_QUEUE_BYTES_V1..=MAX_AQL_QUEUE_BYTES_V1).contains(&requested)
             || !requested.is_power_of_two()
         {
@@ -2083,7 +2094,7 @@ fn profile_layout<P: GttProfileV1>(
     if cpu_mapping_bytes > MAX_SHARED_GTT_SINGLE_CPU_BYTES_V1 {
         return Err(MemorySessionError::InvalidProfileSize(P::NAME));
     }
-    let gpu_va_bytes = if P::PROFILE == SharedGttProfileV1::AqlQueue {
+    let gpu_va_bytes = if P::FLAGS.bits() & KFD_IOC_ALLOC_MEM_FLAGS_AQL_QUEUE_MEM != 0 {
         cpu_mapping_bytes
             .checked_mul(2)
             .ok_or(MemorySessionError::SizeOverflow)?
@@ -2535,6 +2546,20 @@ impl SharedGttMemorySessionV1 {
         self.retain_queue_resource(token)
     }
 
+    pub(crate) fn retain_executable_aql_probe_ring_resource(
+        &self,
+        token: SharedGttAllocationV1<ExecutableAqlQueueProbeGttV1, GttGpuAccessibleMutableV1>,
+    ) -> Result<
+        SharedGttQueueResourceAuthorityV1<
+            AqlRingResourceRoleV1,
+            ExecutableAqlQueueProbeGttV1,
+            GttGpuAccessibleMutableV1,
+        >,
+        MemorySessionError,
+    > {
+        self.retain_queue_resource(token)
+    }
+
     #[allow(dead_code)]
     pub(crate) fn retain_aql_control_resource(
         &self,
@@ -2779,6 +2804,16 @@ impl SharedGttMemorySessionV1 {
         self.allocate_profile(ring_bytes)
     }
 
+    pub(crate) fn allocate_executable_aql_queue_probe(
+        &mut self,
+        ring_bytes: usize,
+    ) -> Result<
+        SharedGttAllocationV1<ExecutableAqlQueueProbeGttV1, GttCpuWritableV1>,
+        MemorySessionError,
+    > {
+        self.allocate_profile(ring_bytes)
+    }
+
     pub fn allocate_executable(
         &mut self,
         requested_bytes: usize,
@@ -2865,11 +2900,11 @@ impl SharedGttMemorySessionV1 {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn write_aql_ring_slot(
+    pub(crate) fn write_aql_ring_slot<P: MutableGpuGttProfileV1>(
         &mut self,
         authority: &mut SharedGttQueueResourceAuthorityV1<
             AqlRingResourceRoleV1,
-            AqlQueueGttV1,
+            P,
             GttGpuAccessibleMutableV1,
         >,
         slot_index: u32,
@@ -2880,11 +2915,11 @@ impl SharedGttMemorySessionV1 {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn publish_aql_ring_header(
+    pub(crate) fn publish_aql_ring_header<P: MutableGpuGttProfileV1>(
         &mut self,
         authority: &mut SharedGttQueueResourceAuthorityV1<
             AqlRingResourceRoleV1,
-            AqlQueueGttV1,
+            P,
             GttGpuAccessibleMutableV1,
         >,
         slot_index: u32,
@@ -2894,11 +2929,11 @@ impl SharedGttMemorySessionV1 {
             .publish_aql_header(&mut authority.token, slot_index, header)
     }
 
-    pub(crate) fn observe_aql_ring_packet_header(
+    pub(crate) fn observe_aql_ring_packet_header<P: MutableGpuGttProfileV1>(
         &mut self,
         authority: &mut SharedGttQueueResourceAuthorityV1<
             AqlRingResourceRoleV1,
-            AqlQueueGttV1,
+            P,
             GttGpuAccessibleMutableV1,
         >,
         packet_id: u64,
@@ -3652,6 +3687,58 @@ mod tests {
         assert_eq!(engine.retained_gpu_va_bytes, 0);
         assert_eq!(engine.backend.free_calls, 4);
         assert_eq!(engine.backend.release_va_calls, 4);
+    }
+
+    #[test]
+    fn executable_probe_ring_is_one_x_and_aql_special_remains_doubled() {
+        let special = profile_layout::<AqlQueueGttV1>(4096).unwrap();
+        let probe = profile_layout::<ExecutableAqlQueueProbeGttV1>(4096).unwrap();
+
+        assert_eq!(special.requested_bytes(), 4096);
+        assert_eq!(special.cpu_mapping_bytes(), 4096);
+        assert_eq!(special.gpu_va_bytes(), 8192);
+        assert_eq!(special.uapi_flags(), KfdAllocMemoryFlags::AQL_QUEUE.bits());
+        assert_eq!(probe.profile(), SharedGttProfileV1::AqlQueue);
+        assert_eq!(probe.requested_bytes(), 4096);
+        assert_eq!(probe.cpu_mapping_bytes(), 4096);
+        assert_eq!(probe.gpu_va_bytes(), 4096);
+        assert_eq!(probe.uapi_flags(), KfdAllocMemoryFlags::EXECUTABLE.bits());
+        assert_eq!(
+            probe.uapi_flags() & fe2o3_kfd_uapi::KFD_IOC_ALLOC_MEM_FLAGS_AQL_QUEUE_MEM,
+            0
+        );
+        assert_eq!(
+            probe.uapi_flags() & fe2o3_kfd_uapi::KFD_IOC_ALLOC_MEM_FLAGS_UNCACHED,
+            0
+        );
+
+        for invalid in [0, 1024, 4095, 4097, 8193] {
+            assert!(profile_layout::<ExecutableAqlQueueProbeGttV1>(invalid).is_err());
+        }
+        let oversized = usize::try_from(MAX_AQL_QUEUE_BYTES_V1 + 1).unwrap();
+        assert!(profile_layout::<ExecutableAqlQueueProbeGttV1>(oversized).is_err());
+    }
+
+    #[test]
+    fn executable_probe_ring_uses_exact_allocation_and_release_span() {
+        let mut engine = acquired();
+        let mut ring = engine
+            .allocate::<ExecutableAqlQueueProbeGttV1>(4096)
+            .unwrap();
+        assert_eq!(engine.backend.flags, vec![0xc400_0002]);
+        assert_eq!(engine.allocations[0].reservation, Some((0x2_0000, 4096)));
+        engine
+            .with_bytes_mut(&mut ring, |bytes| bytes.fill(0xa5))
+            .unwrap();
+        let ring = engine.map_mutable(ring).unwrap();
+        let ring = engine.unmap_mutable(ring).unwrap();
+        engine
+            .release(ring, SharedAllocationPhaseV1::CpuWritable)
+            .unwrap();
+        assert_eq!(engine.retained_gpu_va_bytes, 0);
+        assert_eq!(engine.backend.unmap_gpu_calls, 1);
+        assert_eq!(engine.backend.free_calls, 1);
+        assert_eq!(engine.backend.release_va_calls, 1);
     }
 
     #[test]

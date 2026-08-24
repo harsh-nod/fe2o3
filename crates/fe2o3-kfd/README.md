@@ -186,6 +186,12 @@ logical/CPU bytes and a checked doubled GPU-VA span. The CPU VMA covers only
 the physical copy. All four raw flag values are private constants supplied by
 the typed profile; callers cannot introduce other bits.
 
+The queue liveness diagnostic also has one crate-private ring profile using
+plain executable coherent GTT with a one-times GPU-VA span. It is selectable
+only by the consuming executable-ring barrier probe; reusable queues and every
+dispatch API continue to require the special doubled AQL profile. This isolates
+ring flags and mapping geometry without claiming ROCr USERPTR equivalence.
+
 Every live allocation retains its original anonymous `PROT_NONE` VMA as a GPU
 VA guard. CPU BO mappings are separately kernel-selected. Guards prevent the
 host VMA allocator from recycling an address that KFD still owns, and the
@@ -413,6 +419,15 @@ signal, publishes one zero-dependency system-scoped BARRIER_AND packet, and
 returns redacted success evidence only after exact completion validation,
 release-reset of that signal, and confirmed queue destruction.
 
+`run_compute_aql_executable_ring_barrier_probe` performs the same consuming
+operation with a crate-private plain executable GTT ring whose CPU and GPU spans
+both equal the logical ring size. The ordinary probe, reusable queue creation,
+and all dispatch entry points retain the doubled special-AQL backing. The
+alternate probe therefore changes only the ring flags and mapping span.
+Every success, failure, and quarantined-custody observation records the selected
+backing, and the backing plus exact logical/GPU span is bound into queue plan
+and configuration identity.
+
 The probe binds only queue and signal generations; it does not invent code,
 kernarg, or dispatch generations. Submission cancellation is permitted only
 for a stage-classified full or insufficient-space result before any native
@@ -420,6 +435,9 @@ side effect. Execution failures return opaque quarantined queue custody that
 must remain until process teardown. A `TerminalTeardown` failure recovers no
 authority: native resource disposition is indeterminate, process termination
 is required, and retry, reopen, or confirmed-cleanup claims are prohibited.
+Any `CREATE_QUEUE` result not explicitly reported as failed with no effect, and
+every fallible boundary after successful creation, is `TerminalCreation`: no
+authority is recovered and process termination is required.
 The operation arms a process-global KFD runtime-gate poison before beginning
 destroy and clears it only after end-to-end confirmed success. An error or
 panic retains the poison, including failures after the native mutex owner

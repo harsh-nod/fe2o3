@@ -48,8 +48,9 @@ use crate::queue_linux::{
 };
 use crate::shared_memory::{
     AqlCompletionSignalResourceRoleV1, AqlContextSaveResourceRoleV1, AqlControlResourceRoleV1,
-    AqlEndOfPipeResourceRoleV1, AqlQueueGttV1, AqlRingResourceRoleV1, ExecutableGttV1,
-    GttGpuAccessibleExecutableV1, GttGpuAccessibleMutableV1, HostVisibleCoherentGttV1,
+    AqlEndOfPipeResourceRoleV1, AqlQueueGttV1, AqlRingResourceRoleV1, ExecutableAqlQueueProbeGttV1,
+    ExecutableGttV1, GttCpuWritableV1, GttGpuAccessibleExecutableV1, GttGpuAccessibleMutableV1,
+    HostVisibleCoherentGttV1, SharedGttAllocationV1, SharedGttMappedResourceFactsV1,
     SharedGttMemorySessionV1, SharedGttQueueResourceAuthorityV1,
 };
 use crate::{
@@ -67,9 +68,9 @@ static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and fixed-batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r23-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r24-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
-    "memory_profile_sha256=b5bef892fcaceb19c2e5b75c158b3ef75acefbe6c70109aa8ba83585dd2ef307\n",
+    "memory_profile_sha256=2b5f5d7a992b4af88797b56f5c2ef959d2fee5d03ff4a96d65450f8169002d96\n",
     "queue_resource_profile_sha256=150787f0092bc9edc0ecf3a4b7df06742485765aca693751a4416654665598e2\n",
     "aql_dispatch_schema_sha256=82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0\n",
     "aql_barrier_and_schema_sha256=bdca900cd5c6eaccbddfc5a854e956382a08ce87bec4ccd5284baacf932cdfb5\n",
@@ -85,12 +86,12 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "source.kfd_chardev.c=f9a8805c5d479faee25e457051aa428e4bb523ecf1c7b1618a6a5f79ca5d7bba\n",
     "source.kfd_process.c=d76db8cbb546aa23dffb33b1d04244037e12246b49b752303194c68dd685e409\n",
     "resources=linear-private-ring-control-eop-cwsr-completion-code-kernarg-and-exact-device-local-or-coherent-host-data-authorities,exact-one-existing-shared-vm-session,transferred-model-ownership\n",
-    "gtt_policy=ring:aql-queue,control-and-completion-signals:host-visible-coherent,eop-and-cwsr:executable;fe2o3-policy-not-rocr-equivalence\n",
+    "gtt_policy=reusable-and-dispatch-ring:aql-queue-doubled,one-shot-executable-ring-probe:plain-executable-gtt-one-x,control-and-completion-signals:host-visible-coherent,eop-and-cwsr:executable;no-rocr-userptr-equivalence-claim\n",
     "runtime=one-process-global-fe2o3-owner;exact-enable-r_debug0-mode1-capabilities0-before-event-and-any-queue;ttmp-save-excluded;foreign-kfd-clients-excluded\n",
     "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-explicit-two-atomic-u64-zero;completion-arena-exact-8192-typed-64-byte-user-signals-pending-1-before-gpu-map;one-first-internal-auto-reset-signal-event-id-1-through-255-before-create;8-cwsr-bo-and-shadow-headers-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,one-first-shadow-aligned-error-reason-zero,exact-event-id\n",
     "submission=crate-private-non-clone-single-producer,aql-fixed-batch-v2-count-1-through-8192-and-ring-capacity-bounded,heap-owned-fixed-cardinality-state,no-mapped-slice-or-raw-pointer-escape,rptr-wptr-acquire,one-actual-wptr-acq-rel-fetch-add-by-count,all-invalid-bodies-before-per-packet-independent-0x1402-or-wait-for-prior-0x1502-ordered-u32-release-headers,exact-one-zero-setup-barrier-and-0x1403,conservative-service-default-wait-for-prior,release-fence-x86-sfence,one-final-volatile-u64-doorbell-store-of-last-packet-id\n",
     "completion=crate-private-non-clone-generation-bound-fixed-batches-and-one-signal-barrier-probe,fixed-batch-signal-code-kernarg-dispatch-and-queue-generations-retained,barrier-probe-queue-and-signal-generations-only,bounded-atomic-acquire-poll-with-one-pre-post-currentness-envelope-and-same-scan-redacted-progress,pending-ready-fault-timeout-distinct,timeout-retains-private-linear-operation-through-sequential-pre-post-currentness-enveloped-addressless-write-read-counter-first-retained-packet-header-setup-first-retained-signal-kind-value-and-CWSR-reason-observation-before-poison,release-reset-only-after-all-retained-signals-zero\n",
-    "liveness-probe=public-consuming-checked-device-entry,typed-nonzero-bounded-polls-validated-before-device-consumption,exact-fresh-zero-history-no-dispatch-queue,one-zero-dependency-system-scope-barrier,queue-and-signal-generation-only,submission-retryable-only-by-explicit-before-side-effect-stage-classification,success-requires-currentness-packet-count1-write1-read0or1-timing-sensitive-header0x1403-setup0-user-signal-completed-zero-exception-then-signal-reset-and-confirmed-explicit-queue-destroy,Creation-has-no-live-queue,QuarantinedExecution-retains-opaque-custody-until-process-teardown,process-global-runtime-gate-poison-armed-before-destroy-and-cleared-only-after-confirmed-success,TerminalTeardown-and-panic-retain-permanent-gate-poison-and-recover-no-authority-native-resource-disposition-indeterminate-process-termination-required-no-retry-reopen-or-confirmed-cleanup\n",
+    "liveness-probe=two-public-consuming-checked-device-entries-select-either-production-aql-special-or-diagnostic-plain-executable-one-x-ring,selected-backing-and-exact-ring-span-bound-into-plan-and-configuration,selected-backing-bound-into-every-redacted-outcome,typed-nonzero-bounded-polls-validated-before-device-consumption,diagnostic-backing-not-selectable-by-reusable-or-dispatch-queue-APIs,exact-fresh-zero-history-no-dispatch-queue,one-zero-dependency-system-scope-barrier,queue-and-signal-generation-only,submission-retryable-only-by-explicit-before-side-effect-stage-classification,success-requires-currentness-packet-count1-write1-read0or1-timing-sensitive-header0x1403-setup0-user-signal-completed-zero-exception-then-signal-reset-and-confirmed-explicit-queue-destroy,Creation-has-no-live-queue,TerminalCreation-covers-every-create-result-not-explicitly-failed-no-effect-and-every-post-create-failure-recovers-no-authority-and-requires-process-termination,QuarantinedExecution-retains-opaque-custody-until-process-teardown,process-global-runtime-gate-poison-armed-before-destroy-and-cleared-only-after-confirmed-success,TerminalTeardown-and-panic-retain-permanent-gate-poison-and-recover-no-authority-native-resource-disposition-indeterminate-process-termination-required-no-retry-reopen-or-confirmed-cleanup\n",
     "dispatch=public-addressless-linear-fixed-batch,1-through-32-inspected-programs,1-through-8192-packets,validated-code-materialization,zero-pointer-kernarg-internal-injection,metadata-derived-COV6-geometry-and-dynamic-lds-implicit-subset-with-caller-zero-suffix,queue-pointer-and-runtime-address-fields-rejected,exact-mapped-data-set-retained-even-when-unreferenced-by-current-batch,referenced-subset-only-inspected-access-and-sealed-initialization-gates,ordinary-release-or-exact-recycle-gated-attached-or-detached-return-after-destroy\n",
     "readback=coherent-host-data-only,owned-bounded-copy-after-exact-acquire-observed-completion-and-signal-recycle,exact-dispatch-generation,ordinary-range-within-one-inspected-write-or-readwrite-binding-or-exact-admitted-initialized-enclosing-snapshot,no-native-address-or-mapped-borrow,no-whole-allocation-initialization-promotion\n",
     "rebinding=exact-completion-and-signal-recycle-before-detach,code-and-kernarg-released,queue-ring-signal-event-doorbell-and-runtime-remain-live,exact-complete-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,all-mapped-data-retained-with-inspected-effects-only-for-currently-referenced-subset,new-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest\n",
@@ -107,13 +108,186 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "5e2aec3d7727414a6a5bbb4f26e9d41efdb6ec13b403e86b790faf591b3ad6ca";
+    "6960b875a18b4c378ea8f5e625ae90bdc586bc5688e2938c4915d790b30a28c4";
 
-type RingAuthority = SharedGttQueueResourceAuthorityV1<
+type AqlSpecialRingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
     AqlQueueGttV1,
     GttGpuAccessibleMutableV1,
 >;
+type ExecutableProbeRingAuthority = SharedGttQueueResourceAuthorityV1<
+    AqlRingResourceRoleV1,
+    ExecutableAqlQueueProbeGttV1,
+    GttGpuAccessibleMutableV1,
+>;
+type AqlSpecialCpuRing = SharedGttAllocationV1<AqlQueueGttV1, GttCpuWritableV1>;
+type ExecutableProbeCpuRing = SharedGttAllocationV1<ExecutableAqlQueueProbeGttV1, GttCpuWritableV1>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum QueueRingBackingV1 {
+    AqlSpecial,
+    ExecutableProbe,
+}
+
+impl QueueRingBackingV1 {
+    const fn observation(self) -> Gfx942BarrierProbeRingBackingV1 {
+        match self {
+            Self::AqlSpecial => Gfx942BarrierProbeRingBackingV1::AqlSpecialDoubled,
+            Self::ExecutableProbe => Gfx942BarrierProbeRingBackingV1::ExecutableGttOneX,
+        }
+    }
+
+    const fn digest_tag(self) -> u8 {
+        match self {
+            Self::AqlSpecial => 1,
+            Self::ExecutableProbe => 2,
+        }
+    }
+
+    const fn gpu_va_bytes(self, logical_bytes: u32) -> u64 {
+        match self {
+            Self::AqlSpecial => logical_bytes as u64 * 2,
+            Self::ExecutableProbe => logical_bytes as u64,
+        }
+    }
+}
+
+enum CpuRingAuthorityV1 {
+    AqlSpecial(AqlSpecialCpuRing),
+    ExecutableProbe(ExecutableProbeCpuRing),
+}
+
+enum RingAuthority {
+    AqlSpecial(AqlSpecialRingAuthority),
+    ExecutableProbe(ExecutableProbeRingAuthority),
+}
+
+impl RingAuthority {
+    const fn backing(&self) -> QueueRingBackingV1 {
+        match self {
+            Self::AqlSpecial(_) => QueueRingBackingV1::AqlSpecial,
+            Self::ExecutableProbe(_) => QueueRingBackingV1::ExecutableProbe,
+        }
+    }
+
+    const fn facts(&self) -> &SharedGttMappedResourceFactsV1 {
+        match self {
+            Self::AqlSpecial(authority) => authority.facts(),
+            Self::ExecutableProbe(authority) => authority.facts(),
+        }
+    }
+
+    fn write_slot(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        slot: u32,
+        packet: &[u8; fe2o3_aql::AQL_KERNEL_DISPATCH_PACKET_BYTES_V1],
+    ) -> Result<(), MemorySessionError> {
+        match self {
+            Self::AqlSpecial(authority) => memory.write_aql_ring_slot(authority, slot, packet),
+            Self::ExecutableProbe(authority) => memory.write_aql_ring_slot(authority, slot, packet),
+        }
+    }
+
+    fn publish_header(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        slot: u32,
+        header: u16,
+    ) -> Result<(), MemorySessionError> {
+        match self {
+            Self::AqlSpecial(authority) => memory.publish_aql_ring_header(authority, slot, header),
+            Self::ExecutableProbe(authority) => {
+                memory.publish_aql_ring_header(authority, slot, header)
+            }
+        }
+    }
+
+    fn observe_packet_header(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        packet_id: u64,
+    ) -> Result<(u32, u16, u16), MemorySessionError> {
+        match self {
+            Self::AqlSpecial(authority) => {
+                memory.observe_aql_ring_packet_header(authority, packet_id)
+            }
+            Self::ExecutableProbe(authority) => {
+                memory.observe_aql_ring_packet_header(authority, packet_id)
+            }
+        }
+    }
+
+    fn unmap(
+        self,
+        memory: &mut SharedGttMemorySessionV1,
+    ) -> Result<CpuRingAuthorityV1, MemorySessionError> {
+        match self {
+            Self::AqlSpecial(authority) => {
+                let ring = memory.unmap_from_gpu(authority.into_token())?;
+                Ok(CpuRingAuthorityV1::AqlSpecial(ring))
+            }
+            Self::ExecutableProbe(authority) => {
+                let ring = memory.unmap_from_gpu(authority.into_token())?;
+                Ok(CpuRingAuthorityV1::ExecutableProbe(ring))
+            }
+        }
+    }
+}
+
+impl CpuRingAuthorityV1 {
+    fn allocate(
+        memory: &mut SharedGttMemorySessionV1,
+        backing: QueueRingBackingV1,
+        ring_bytes: usize,
+    ) -> Result<Self, MemorySessionError> {
+        match backing {
+            QueueRingBackingV1::AqlSpecial => {
+                memory.allocate_aql_queue(ring_bytes).map(Self::AqlSpecial)
+            }
+            QueueRingBackingV1::ExecutableProbe => memory
+                .allocate_executable_aql_queue_probe(ring_bytes)
+                .map(Self::ExecutableProbe),
+        }
+    }
+
+    fn initialize_invalid(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+    ) -> Result<Result<(), NativeAqlSubmissionErrorV1>, MemorySessionError> {
+        match self {
+            Self::AqlSpecial(ring) => memory.with_bytes_mut(ring, initialize_invalid_ring),
+            Self::ExecutableProbe(ring) => memory.with_bytes_mut(ring, initialize_invalid_ring),
+        }
+    }
+
+    fn map_and_retain(
+        self,
+        memory: &mut SharedGttMemorySessionV1,
+    ) -> Result<RingAuthority, MemorySessionError> {
+        match self {
+            Self::AqlSpecial(ring) => {
+                let ring = memory.map_to_gpu(ring)?;
+                memory
+                    .retain_aql_ring_resource(ring)
+                    .map(RingAuthority::AqlSpecial)
+            }
+            Self::ExecutableProbe(ring) => {
+                let ring = memory.map_to_gpu(ring)?;
+                memory
+                    .retain_executable_aql_probe_ring_resource(ring)
+                    .map(RingAuthority::ExecutableProbe)
+            }
+        }
+    }
+
+    fn release(self, memory: &mut SharedGttMemorySessionV1) -> Result<(), MemorySessionError> {
+        match self {
+            Self::AqlSpecial(ring) => memory.release(ring),
+            Self::ExecutableProbe(ring) => memory.release(ring),
+        }
+    }
+}
 type ControlAuthority = SharedGttQueueResourceAuthorityV1<
     AqlControlResourceRoleV1,
     HostVisibleCoherentGttV1,
@@ -231,8 +405,8 @@ impl NativeAqlSubmissionBackendV1 for LinuxAqlSubmissionBackendV1<'_> {
         slot: u32,
         packet: &[u8; fe2o3_aql::AQL_KERNEL_DISPATCH_PACKET_BYTES_V1],
     ) -> Result<(), NativeAqlSubmissionErrorV1> {
-        self.memory
-            .write_aql_ring_slot(self.ring, slot, packet)
+        self.ring
+            .write_slot(self.memory, slot, packet)
             .map_err(|_| NativeAqlSubmissionErrorV1::PacketBody)
     }
 
@@ -241,8 +415,8 @@ impl NativeAqlSubmissionBackendV1 for LinuxAqlSubmissionBackendV1<'_> {
         slot: u32,
         header: u16,
     ) -> Result<(), NativeAqlSubmissionErrorV1> {
-        self.memory
-            .publish_aql_ring_header(self.ring, slot, header)
+        self.ring
+            .publish_header(self.memory, slot, header)
             .map_err(|_| NativeAqlSubmissionErrorV1::PacketHeader)
     }
 
@@ -425,10 +599,20 @@ impl Gfx942BarrierProbeExecutionObservationV1 {
 /// Redacted success evidence returned only after signal recycle and queue destruction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Gfx942BarrierProbeSuccessV1 {
+    backing: Gfx942BarrierProbeRingBackingV1,
     poll_bound: u32,
     execution: Gfx942BarrierProbeExecutionObservationV1,
     recycled_signal_count: u16,
     destroyed: ComputeAqlQueueDestroyedV1,
+}
+
+/// Addressless identity of the ring allocation profile selected by a probe.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Gfx942BarrierProbeRingBackingV1 {
+    /// KFD AQL-queue flags with a logical ring backed by a doubled GPU VA span.
+    AqlSpecialDoubled,
+    /// Plain executable GTT flags with a one-times GPU VA span.
+    ExecutableGttOneX,
 }
 
 /// Pre-consumption bounded poll count for the one-shot barrier probe.
@@ -468,6 +652,10 @@ pub enum Gfx942BarrierProbePollBoundErrorV1 {
 }
 
 impl Gfx942BarrierProbeSuccessV1 {
+    pub const fn backing(self) -> Gfx942BarrierProbeRingBackingV1 {
+        self.backing
+    }
+
     pub const fn poll_bound(self) -> u32 {
         self.poll_bound
     }
@@ -491,13 +679,21 @@ impl Gfx942BarrierProbeSuccessV1 {
 /// process resources remain quarantined until process teardown.
 #[must_use = "the terminal probe queue remains quarantined until process teardown"]
 pub struct QuarantinedGfx942BarrierProbeV1 {
+    backing: Gfx942BarrierProbeRingBackingV1,
     queue: ComputeAqlQueueSessionV1,
+}
+
+impl QuarantinedGfx942BarrierProbeV1 {
+    pub const fn backing(&self) -> Gfx942BarrierProbeRingBackingV1 {
+        self.backing
+    }
 }
 
 impl fmt::Debug for QuarantinedGfx942BarrierProbeV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("QuarantinedGfx942BarrierProbeV1")
+            .field("backing", &self.backing)
             .field("queue", &self.queue.observation())
             .finish_non_exhaustive()
     }
@@ -509,10 +705,20 @@ pub enum Gfx942BarrierProbeFailureV1 {
     /// Fresh queue creation failed before a live queue was returned.
     Creation {
         error: ComputeAqlQueueSessionErrorV1,
+        backing: Gfx942BarrierProbeRingBackingV1,
+    },
+    /// Queue creation may have taken effect; no authority is recovered.
+    ///
+    /// The process-global runtime gate remains poisoned and process
+    /// termination is required. Retry, reopen, and cleanup claims are invalid.
+    TerminalCreation {
+        error: ComputeAqlQueueSessionErrorV1,
+        backing: Gfx942BarrierProbeRingBackingV1,
     },
     /// Execution failed and exact queue custody is quarantined.
     QuarantinedExecution {
         error: ComputeAqlQueueSessionErrorV1,
+        backing: Gfx942BarrierProbeRingBackingV1,
         retained: Box<QuarantinedGfx942BarrierProbeV1>,
     },
     /// Native teardown failed after probe completion and signal recycle.
@@ -522,15 +728,26 @@ pub enum Gfx942BarrierProbeFailureV1 {
     /// does not permit retry, reopen, or any confirmed-cleanup claim.
     TerminalTeardown {
         error: ComputeAqlQueueSessionErrorV1,
+        backing: Gfx942BarrierProbeRingBackingV1,
     },
 }
 
 impl Gfx942BarrierProbeFailureV1 {
     pub const fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
         match self {
-            Self::Creation { error }
+            Self::Creation { error, .. }
+            | Self::TerminalCreation { error, .. }
             | Self::QuarantinedExecution { error, .. }
-            | Self::TerminalTeardown { error } => error,
+            | Self::TerminalTeardown { error, .. } => error,
+        }
+    }
+
+    pub const fn backing(&self) -> Gfx942BarrierProbeRingBackingV1 {
+        match self {
+            Self::Creation { backing, .. }
+            | Self::TerminalCreation { backing, .. }
+            | Self::QuarantinedExecution { backing, .. }
+            | Self::TerminalTeardown { backing, .. } => *backing,
         }
     }
 
@@ -549,7 +766,9 @@ impl Gfx942BarrierProbeFailureV1 {
     pub fn into_quarantined(self) -> Option<QuarantinedGfx942BarrierProbeV1> {
         match self {
             Self::QuarantinedExecution { retained, .. } => Some(*retained),
-            Self::Creation { .. } | Self::TerminalTeardown { .. } => None,
+            Self::Creation { .. }
+            | Self::TerminalCreation { .. }
+            | Self::TerminalTeardown { .. } => None,
         }
     }
 }
@@ -559,10 +778,12 @@ impl fmt::Debug for Gfx942BarrierProbeFailureV1 {
         formatter
             .debug_struct("Gfx942BarrierProbeFailureV1")
             .field("error", self.error())
+            .field("backing", &self.backing())
             .field(
                 "phase",
                 &match self {
                     Self::Creation { .. } => "creation",
+                    Self::TerminalCreation { .. } => "terminal-creation",
                     Self::QuarantinedExecution { .. } => "quarantined-execution",
                     Self::TerminalTeardown { .. } => "terminal-teardown",
                 },
@@ -696,6 +917,18 @@ pub enum ComputeAqlQueueSessionErrorV1 {
     Contract(&'static str),
     Native(&'static str),
     Doorbell(String),
+    /// `CREATE_QUEUE` may have taken effect and exact native custody cannot be
+    /// returned. The process-global runtime gate is poisoned permanently.
+    TerminalCreation {
+        stage: &'static str,
+        source: Box<ComputeAqlQueueSessionErrorV1>,
+    },
+}
+
+impl ComputeAqlQueueSessionErrorV1 {
+    pub const fn is_terminal_creation(&self) -> bool {
+        matches!(self, Self::TerminalCreation { .. })
+    }
 }
 
 impl fmt::Display for ComputeAqlQueueSessionErrorV1 {
@@ -849,6 +1082,7 @@ impl CheckedGfx942XnackMinusDevice {
             memory,
             geometry,
             ring_bytes,
+            QueueRingBackingV1::AqlSpecial,
             |_| Ok(None),
         )
     }
@@ -860,40 +1094,121 @@ impl CheckedGfx942XnackMinusDevice {
     /// were explicitly destroyed and released. The typed poll bound is
     /// constructed before this consuming operation. An execution failure
     /// retains opaque queue custody until process teardown. A terminal
-    /// teardown failure recovers no authority because the native resource
-    /// disposition is indeterminate and also requires process termination.
+    /// creation or teardown failure recovers no authority because native
+    /// resource disposition may be indeterminate and requires process
+    /// termination.
     pub fn run_compute_aql_barrier_probe(
         self,
         ring_bytes: u32,
         poll_bound: Gfx942BarrierProbePollBoundV1,
     ) -> Result<Gfx942BarrierProbeSuccessV1, Gfx942BarrierProbeFailureV1> {
+        self.run_compute_aql_barrier_probe_with_backing(
+            ring_bytes,
+            poll_bound,
+            QueueRingBackingV1::AqlSpecial,
+        )
+    }
+
+    /// Runs the one-shot barrier probe with a plain executable 1x GTT ring.
+    ///
+    /// This diagnostic backing changes only the ring allocation flags and GPU
+    /// VA span. Reusable queues and every dispatch API retain the special AQL
+    /// ring profile. Failure and teardown guarantees match the ordinary probe.
+    pub fn run_compute_aql_executable_ring_barrier_probe(
+        self,
+        ring_bytes: u32,
+        poll_bound: Gfx942BarrierProbePollBoundV1,
+    ) -> Result<Gfx942BarrierProbeSuccessV1, Gfx942BarrierProbeFailureV1> {
+        self.run_compute_aql_barrier_probe_with_backing(
+            ring_bytes,
+            poll_bound,
+            QueueRingBackingV1::ExecutableProbe,
+        )
+    }
+
+    fn run_compute_aql_barrier_probe_with_backing(
+        self,
+        ring_bytes: u32,
+        poll_bound: Gfx942BarrierProbePollBoundV1,
+        backing: QueueRingBackingV1,
+    ) -> Result<Gfx942BarrierProbeSuccessV1, Gfx942BarrierProbeFailureV1> {
         let polls = poll_bound.get();
-        let mut queue = self
-            .create_compute_aql_queue(ring_bytes)
-            .map_err(|error| Gfx942BarrierProbeFailureV1::Creation { error })?;
+        let backing_observation = backing.observation();
+        let geometry = plan_gfx942_aql_queue_resources(
+            self.topology_snapshot(),
+            self.observation().unique_id(),
+            ring_bytes,
+        )
+        .map_err(|error| Gfx942BarrierProbeFailureV1::Creation {
+            error: error.into(),
+            backing: backing_observation,
+        })?;
+        let memory = self.acquire_shared_gtt_memory_session().map_err(|error| {
+            Gfx942BarrierProbeFailureV1::Creation {
+                error: error.into(),
+                backing: backing_observation,
+            }
+        })?;
+        let mut queue = ComputeAqlQueueSessionV1::create_compute_aql_queue_inner(
+            memory,
+            geometry,
+            ring_bytes,
+            backing,
+            |_| Ok(None),
+        )
+        .map_err(|error| barrier_probe_creation_failure(error, backing_observation))?;
         let probe = match queue.submit_barrier_probe() {
             Ok(probe) => probe,
-            Err(error) => return Err(quarantine_barrier_probe_failure(queue, error)),
+            Err(error) => {
+                return Err(quarantine_barrier_probe_failure(
+                    queue,
+                    error,
+                    backing_observation,
+                ));
+            }
         };
         let completed = match queue.wait_barrier_probe(probe, polls) {
             Ok(completed) => completed,
-            Err(error) => return Err(quarantine_barrier_probe_failure(queue, error)),
+            Err(error) => {
+                return Err(quarantine_barrier_probe_failure(
+                    queue,
+                    error,
+                    backing_observation,
+                ));
+            }
         };
         let execution = match queue.observe_completed_barrier_probe(&completed) {
             Ok(execution) => execution,
-            Err(error) => return Err(quarantine_barrier_probe_failure(queue, error.into())),
+            Err(error) => {
+                return Err(quarantine_barrier_probe_failure(
+                    queue,
+                    error.into(),
+                    backing_observation,
+                ));
+            }
         };
         let recycle = match queue.recycle_barrier_probe(completed) {
             Ok(recycle) => recycle,
-            Err(error) => return Err(quarantine_barrier_probe_failure(queue, error)),
+            Err(error) => {
+                return Err(quarantine_barrier_probe_failure(
+                    queue,
+                    error,
+                    backing_observation,
+                ));
+            }
         };
         let recycled_signal_count = recycle.packet_count();
         let teardown_arm = arm_process_global_kfd_runtime_gate_for_teardown_v1();
-        let destroyed = queue
-            .destroy()
-            .map_err(|error| Gfx942BarrierProbeFailureV1::TerminalTeardown { error })?;
+        let destroyed =
+            queue
+                .destroy()
+                .map_err(|error| Gfx942BarrierProbeFailureV1::TerminalTeardown {
+                    error,
+                    backing: backing_observation,
+                })?;
         teardown_arm.confirm_destroyed();
         Ok(Gfx942BarrierProbeSuccessV1 {
+            backing: backing_observation,
             poll_bound: polls,
             execution: Gfx942BarrierProbeExecutionObservationV1 { inner: execution },
             recycled_signal_count,
@@ -923,6 +1238,7 @@ impl CheckedGfx942XnackMinusDevice {
             memory,
             geometry_plan,
             ring_bytes,
+            QueueRingBackingV1::AqlSpecial,
             move |memory| {
                 prepare_dispatch_resources(memory, kernel, geometry, kernargs, data)
                     .map(Some)
@@ -935,10 +1251,23 @@ impl CheckedGfx942XnackMinusDevice {
 fn quarantine_barrier_probe_failure(
     queue: ComputeAqlQueueSessionV1,
     error: ComputeAqlQueueSessionErrorV1,
+    backing: Gfx942BarrierProbeRingBackingV1,
 ) -> Gfx942BarrierProbeFailureV1 {
     Gfx942BarrierProbeFailureV1::QuarantinedExecution {
         error,
-        retained: Box::new(QuarantinedGfx942BarrierProbeV1 { queue }),
+        backing,
+        retained: Box::new(QuarantinedGfx942BarrierProbeV1 { backing, queue }),
+    }
+}
+
+fn barrier_probe_creation_failure(
+    error: ComputeAqlQueueSessionErrorV1,
+    backing: Gfx942BarrierProbeRingBackingV1,
+) -> Gfx942BarrierProbeFailureV1 {
+    if error.is_terminal_creation() {
+        Gfx942BarrierProbeFailureV1::TerminalCreation { error, backing }
+    } else {
+        Gfx942BarrierProbeFailureV1::Creation { error, backing }
     }
 }
 
@@ -967,6 +1296,7 @@ impl SharedGttMemorySessionV1 {
             self,
             geometry,
             ring_bytes,
+            QueueRingBackingV1::AqlSpecial,
             move |memory| {
                 prepare_public_fixed_dispatch_resources(memory, programs, packets, data)
                     .map(Some)
@@ -981,6 +1311,7 @@ impl ComputeAqlQueueSessionV1 {
         mut memory: SharedGttMemorySessionV1,
         geometry: Gfx942AqlQueueResourcePlanV1,
         ring_bytes: u32,
+        ring_backing: QueueRingBackingV1,
         prepare_dispatch: impl FnOnce(
             &mut SharedGttMemorySessionV1,
         ) -> Result<
@@ -990,11 +1321,12 @@ impl ComputeAqlQueueSessionV1 {
     ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
         let dispatch = prepare_dispatch(&mut memory)?;
 
-        let mut ring =
-            memory
-                .allocate_aql_queue(usize::try_from(ring_bytes).map_err(|_| {
-                    ComputeAqlQueueSessionErrorV1::Contract("ring size conversion")
-                })?)?;
+        let mut ring = CpuRingAuthorityV1::allocate(
+            &mut memory,
+            ring_backing,
+            usize::try_from(ring_bytes)
+                .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("ring size conversion"))?,
+        )?;
         let mut control = memory.allocate_host_visible_coherent(CONTROL_BYTES)?;
         let mut completion_signals =
             memory.allocate_host_visible_coherent(COMPLETION_SIGNAL_ARENA_BYTES_V1)?;
@@ -1007,7 +1339,7 @@ impl ComputeAqlQueueSessionV1 {
                 ComputeAqlQueueSessionErrorV1::Contract("context-save size conversion")
             })?,
         )?;
-        let ring_initialization = memory.with_bytes_mut(&mut ring, initialize_invalid_ring)?;
+        let ring_initialization = ring.initialize_invalid(&mut memory)?;
         ring_initialization
             .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("INVALID ring initialization"))?;
         let control_initialization =
@@ -1070,12 +1402,11 @@ impl ComputeAqlQueueSessionV1 {
         memory.check_queue_currentness()?;
         let eop = memory.seal_executable(eop)?;
         let context_save = memory.seal_executable(context_save)?;
-        let ring = memory.map_to_gpu(ring)?;
+        let ring = ring.map_and_retain(&mut memory)?;
         let control = memory.map_to_gpu(control)?;
         let completion_signals = memory.map_to_gpu(completion_signals)?;
         let eop = memory.map_executable_to_gpu(eop)?;
         let context_save = memory.map_executable_to_gpu(context_save)?;
-        let ring = memory.retain_aql_ring_resource(ring)?;
         let control = memory.retain_aql_control_resource(control)?;
         let completion_signals =
             memory.retain_aql_completion_signal_resource(completion_signals)?;
@@ -1093,6 +1424,8 @@ impl ComputeAqlQueueSessionV1 {
             authority.view.plan.queue,
             completion_signals.facts(),
         )?;
+        let submission = NativeAqlSubmissionOwnerV1::new(ring_bytes)
+            .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("AQL ring submission model"))?;
         let (identity, model) = match dispatch.as_ref() {
             Some(dispatch) => {
                 let device_authorities = dispatch.device_authorities();
@@ -1110,23 +1443,27 @@ impl ComputeAqlQueueSessionV1 {
         };
         let mut engine = NativeQueueEngineV1::new(backend).map_err(map_native)?;
         let key = engine.admit(authority).map_err(map_native)?;
-        engine.create(key).map_err(map_native)?;
-        runtime.mark_queue_created()?;
-        let outputs = engine
-            .create_outputs(key)
-            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
-                "missing CREATE outputs",
-            ))?;
-        let queue_id = engine
-            .native_queue_id(key)
-            .ok_or(ComputeAqlQueueSessionErrorV1::Contract("missing queue id"))?;
+        engine.create(key).map_err(map_create)?;
+        runtime
+            .mark_queue_created()
+            .map_err(|error| terminal_creation("runtime queue-live transition", error.into()))?;
+        let outputs = engine.create_outputs(key).ok_or_else(|| {
+            terminal_creation(
+                "CREATE_QUEUE output recovery",
+                ComputeAqlQueueSessionErrorV1::Contract("missing CREATE outputs"),
+            )
+        })?;
+        let queue_id = engine.native_queue_id(key).ok_or_else(|| {
+            terminal_creation(
+                "CREATE_QUEUE identity recovery",
+                ComputeAqlQueueSessionErrorV1::Contract("missing queue id"),
+            )
+        })?;
         let mut session = ComputeAqlQueueSessionV1 {
             engine: Some(engine),
             key,
             doorbell: None,
-            submission: Some(NativeAqlSubmissionOwnerV1::new(ring_bytes).map_err(|_| {
-                ComputeAqlQueueSessionErrorV1::Contract("AQL ring submission model")
-            })?),
+            submission: Some(submission),
             completion_signals: Some(completion_signals),
             completion_owner,
             dispatch,
@@ -1152,15 +1489,20 @@ impl ComputeAqlQueueSessionV1 {
         let exception = session.exception.as_ref().expect("queue exception state");
         session.observation.event_id = exception.event.event_id_observation();
         session.observation.cwsr_shadow_pages = 8;
-        session.check_currentness()?;
+        session
+            .check_currentness()
+            .map_err(|error| terminal_creation("post-create currentness before doorbell", error))?;
         let doorbell = {
             let engine = session.engine.as_ref().expect("session engine");
-            LinuxDoorbellSliceV1::map(engine.backend.session.kfd_fd(), outputs, engine.opener_pid)?
-        };
+            LinuxDoorbellSliceV1::map(engine.backend.session.kfd_fd(), outputs, engine.opener_pid)
+        }
+        .map_err(|error| terminal_creation("doorbell mapping", error.into()))?;
         session.observation.doorbell_slice_bytes = doorbell.slice_bytes();
         session.observation.doorbell_byte_offset = doorbell.queue_byte_offset();
         session.doorbell = Some(doorbell);
-        session.check_currentness()?;
+        session
+            .check_currentness()
+            .map_err(|error| terminal_creation("post-doorbell currentness", error))?;
         Ok(session)
     }
 
@@ -2237,8 +2579,9 @@ impl ComputeAqlQueueSessionV1 {
             let counters = memory
                 .observe_aql_control_counters(&mut authority.control)
                 .map_err(map_timeout_memory_observation_error)?;
-            let packet = memory
-                .observe_aql_ring_packet_header(&mut authority.ring, first_packet_id)
+            let packet = authority
+                .ring
+                .observe_packet_header(memory, first_packet_id)
                 .map_err(map_timeout_memory_observation_error)?;
             let signals = self
                 .completion_signals
@@ -2737,6 +3080,7 @@ fn build_resource_authority(
     let cf = control.facts();
     let ef = eop.facts();
     let sf = context_save.facts();
+    let ring_backing = ring.backing();
     let vm = rf.mapping().allocation.vm;
     if [
         cf.mapping().allocation.vm,
@@ -2750,11 +3094,12 @@ fn build_resource_authority(
             "queue resource VM substitution",
         ));
     }
+    let expected_ring_gpu_va_bytes = ring_backing.gpu_va_bytes(geometry.ring().mapping_bytes());
     let ring_base = rf
-        .checked_gpu_subrange(0, u64::from(geometry.ring().mapping_bytes()) * 2, 4096)
+        .checked_gpu_subrange(0, expected_ring_gpu_va_bytes, 4096)
         .ok_or(ComputeAqlQueueSessionErrorV1::Contract("ring geometry"))?;
     if rf.logical_bytes() != geometry.ring().mapping_bytes() as usize
-        || rf.gpu_va_bytes() != u64::from(geometry.ring().mapping_bytes()) * 2
+        || rf.gpu_va_bytes() != expected_ring_gpu_va_bytes
     {
         return Err(ComputeAqlQueueSessionErrorV1::Contract("ring size/profile"));
     }
@@ -2806,11 +3151,17 @@ fn build_resource_authority(
         b"plan",
         queue,
         &[rf.mapping(), cf.mapping(), ef.mapping(), sf.mapping()],
+        ring_backing,
+        rf.logical_bytes(),
+        rf.gpu_va_bytes(),
     ));
     let configuration = QueueConfigurationIdV1::from_untrusted_digest(digest_id(
         b"configuration",
         queue,
         &[rf.mapping(), cf.mapping(), ef.mapping(), sf.mapping()],
+        ring_backing,
+        rf.logical_bytes(),
+        rf.gpu_va_bytes(),
     ));
     let binding = |facts: &crate::shared_memory::SharedGttMappedResourceFactsV1, kind| {
         ComputeAqlResourceBindingV1 {
@@ -2899,11 +3250,11 @@ fn release_resource_authority(
     shadow_release: LinuxCwsrShadowsReadyForReleaseV1,
 ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
     shadow_release.validate_for_release()?;
-    let ring = memory.unmap_from_gpu(authority.ring.into_token())?;
+    let ring = authority.ring.unmap(memory)?;
     let control = memory.unmap_from_gpu(authority.control.into_token())?;
     let eop = memory.unmap_executable_from_gpu(authority.eop.into_token())?;
     let context_save = memory.unmap_executable_from_gpu(authority.context_save.into_token())?;
-    memory.release(ring)?;
+    ring.release(memory)?;
     memory.release(control)?;
     memory.release_executable(eop)?;
     memory.release_executable(context_save)?;
@@ -2915,11 +3266,17 @@ fn digest_id(
     tag: &[u8],
     queue: QueueKeyV1,
     mappings: &[fe2o3_runtime_model::MemoryMappingKeyV1; 4],
+    ring_backing: QueueRingBackingV1,
+    ring_logical_bytes: usize,
+    ring_gpu_va_bytes: u64,
 ) -> IdentityDigestV1 {
     let mut hasher = Sha256::new();
     hasher.update(GFX942_QUEUE_RESOURCE_PROFILE_SHA256_V1.as_bytes());
     hasher.update(SHARED_GTT_MEMORY_PROFILE_SHA256_V1.as_bytes());
     hasher.update(tag);
+    hasher.update([ring_backing.digest_tag()]);
+    hasher.update((ring_logical_bytes as u64).to_le_bytes());
+    hasher.update(ring_gpu_va_bytes.to_le_bytes());
     hasher.update(queue.id.0.to_le_bytes());
     hasher.update(queue.generation.0.to_le_bytes());
     for mapping in mappings {
@@ -2949,6 +3306,27 @@ fn observe_then_poison<S, T, E>(
     let observation = observe(state);
     poison(state);
     observation
+}
+
+fn terminal_creation(
+    stage: &'static str,
+    source: ComputeAqlQueueSessionErrorV1,
+) -> ComputeAqlQueueSessionErrorV1 {
+    ComputeAqlQueueSessionErrorV1::TerminalCreation {
+        stage,
+        source: Box::new(source),
+    }
+}
+
+fn map_create(error: NativeQueueAdapterErrorV1) -> ComputeAqlQueueSessionErrorV1 {
+    if matches!(
+        error,
+        NativeQueueAdapterErrorV1::BackendFailedNoEffect(NativeQueueOperationV1::Create)
+    ) {
+        map_native(error)
+    } else {
+        terminal_creation("CREATE_QUEUE result", map_native(error))
+    }
 }
 
 fn map_native(error: NativeQueueAdapterErrorV1) -> ComputeAqlQueueSessionErrorV1 {
@@ -2990,6 +3368,130 @@ fn map_submission(error: NativeAqlSubmissionErrorV1) -> ComputeAqlQueueSessionEr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn barrier_probe_backings_have_stable_distinct_contracts() {
+        let logical_bytes = 64 * 1024;
+        assert_eq!(
+            QueueRingBackingV1::AqlSpecial.observation(),
+            Gfx942BarrierProbeRingBackingV1::AqlSpecialDoubled
+        );
+        assert_eq!(
+            QueueRingBackingV1::ExecutableProbe.observation(),
+            Gfx942BarrierProbeRingBackingV1::ExecutableGttOneX
+        );
+        assert_eq!(QueueRingBackingV1::AqlSpecial.digest_tag(), 1);
+        assert_eq!(QueueRingBackingV1::ExecutableProbe.digest_tag(), 2);
+        assert_eq!(
+            QueueRingBackingV1::AqlSpecial.gpu_va_bytes(logical_bytes),
+            u64::from(logical_bytes) * 2
+        );
+        assert_eq!(
+            QueueRingBackingV1::ExecutableProbe.gpu_va_bytes(logical_bytes),
+            u64::from(logical_bytes)
+        );
+    }
+
+    #[test]
+    fn queue_identity_digest_binds_backing_and_exact_ring_span() {
+        let vm = fe2o3_runtime_model::VmKeyV1 {
+            device: fe2o3_runtime_model::DeviceKeyV1 {
+                physical: fe2o3_runtime_model::PhysicalDeviceIdV1(7),
+                generation: fe2o3_runtime_model::DeviceGenerationV1(11),
+            },
+            id: fe2o3_runtime_model::VmIdV1(13),
+        };
+        let queue = QueueKeyV1 {
+            vm,
+            id: QueueInstanceIdV1(17),
+            generation: QueueGenerationV1(19),
+        };
+        let mappings = core::array::from_fn(|index| fe2o3_runtime_model::MemoryMappingKeyV1 {
+            allocation: fe2o3_runtime_model::MemoryAllocationKeyV1 {
+                vm,
+                id: fe2o3_runtime_model::AllocationIdV1(index as u64 + 1),
+                generation: fe2o3_runtime_model::AllocationGenerationV1(1),
+            },
+            id: fe2o3_runtime_model::MappingIdV1(index as u64 + 21),
+        });
+        let special = digest_id(
+            b"plan",
+            queue,
+            &mappings,
+            QueueRingBackingV1::AqlSpecial,
+            65_536,
+            131_072,
+        );
+        let executable = digest_id(
+            b"plan",
+            queue,
+            &mappings,
+            QueueRingBackingV1::ExecutableProbe,
+            65_536,
+            65_536,
+        );
+        let hostile_span = digest_id(
+            b"plan",
+            queue,
+            &mappings,
+            QueueRingBackingV1::ExecutableProbe,
+            65_536,
+            131_072,
+        );
+        assert_ne!(special, executable);
+        assert_ne!(executable, hostile_span);
+    }
+
+    #[test]
+    fn create_result_is_nonterminal_only_when_no_effect_is_explicit() {
+        let no_effect = map_create(NativeQueueAdapterErrorV1::BackendFailedNoEffect(
+            NativeQueueOperationV1::Create,
+        ));
+        assert!(!no_effect.is_terminal_creation());
+
+        for error in [
+            NativeQueueAdapterErrorV1::ProcessChanged,
+            NativeQueueAdapterErrorV1::BackendIndeterminate(NativeQueueOperationV1::Create),
+            NativeQueueAdapterErrorV1::MalformedKernelResult(
+                NativeQueueOperationV1::Create,
+                "hostile output",
+            ),
+            NativeQueueAdapterErrorV1::ModelProjection,
+        ] {
+            assert!(map_create(error).is_terminal_creation());
+        }
+    }
+
+    #[test]
+    fn probe_creation_phase_preserves_backing_and_terminal_classification() {
+        for backing in [
+            Gfx942BarrierProbeRingBackingV1::AqlSpecialDoubled,
+            Gfx942BarrierProbeRingBackingV1::ExecutableGttOneX,
+        ] {
+            let ordinary = barrier_probe_creation_failure(
+                ComputeAqlQueueSessionErrorV1::Contract("pre-create"),
+                backing,
+            );
+            assert!(matches!(
+                ordinary,
+                Gfx942BarrierProbeFailureV1::Creation { .. }
+            ));
+            assert_eq!(ordinary.backing(), backing);
+
+            let terminal = barrier_probe_creation_failure(
+                terminal_creation(
+                    "post-create",
+                    ComputeAqlQueueSessionErrorV1::Contract("fault injection"),
+                ),
+                backing,
+            );
+            assert!(matches!(
+                terminal,
+                Gfx942BarrierProbeFailureV1::TerminalCreation { .. }
+            ));
+            assert_eq!(terminal.backing(), backing);
+        }
+    }
 
     #[test]
     fn barrier_probe_poll_bound_rejects_before_device_consumption() {
@@ -3294,7 +3796,7 @@ mod tests {
         );
         assert_eq!(
             SHARED_GTT_MEMORY_PROFILE_SHA256_V1,
-            "b5bef892fcaceb19c2e5b75c158b3ef75acefbe6c70109aa8ba83585dd2ef307"
+            "2b5f5d7a992b4af88797b56f5c2ef959d2fee5d03ff4a96d65450f8169002d96"
         );
         assert_eq!(
             fe2o3_kfd_uapi::KFD_RUNTIME_ENABLE_SCHEMA_SHA256,
