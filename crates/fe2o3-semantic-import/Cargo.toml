@@ -1,0 +1,18 @@
+[package]
+name = "fe2o3-semantic-import"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Bounded import adapters from debugger and profiler evidence to Semantic Trace V1."
+
+[dependencies]
+fe2o3-semantic-trace.workspace = true
+serde.workspace = true
+serde_json = "1"
+sha2.workspace = true
+
+[[bin]]
+name = "fe2o3-trace-import"
+path = "src/main.rs"

@@ -9,7 +9,7 @@
 
 use super::{
     AttemptPhase, BuildAttempt, BuildSession, EmitError, PinnedOutput, ProducerIdentity,
-    read_attempt_registry,
+    SimulationObservationReceiptV1, commit_attempt_registry_direct, read_attempt_registry,
 };
 use rustix::fd::OwnedFd;
 use rustix::fs::{
@@ -42,6 +42,16 @@ const MAX_SLOT_ENTRIES: usize = 16;
 const MAX_STALE_SLOTS: usize = 1024;
 const MAX_TEMP_ATTEMPTS: u64 = 64;
 const RECORD_BYTES: usize = RECORD_MAGIC.len() + 2 + 32 + 8 + 16 + 32 + 32 + 32 + 8 + (7 * 8) + 32;
+const SIMULATION_PARENT_PREFIX: &str = ".fe2o3-simulation-kir-handoff-v1-";
+const SIMULATION_SLOT_PREFIX: &str = "attempt-";
+const SIMULATION_RECORD_MAGIC: &[u8] = b"FE2O3-SIMULATION-KIR-HANDOFF-V1\0";
+const SIMULATION_RECORD_VERSION: u16 = 1;
+const SIMULATION_PRODUCER_DOMAIN: &[u8] = b"fe2o3.simulation-kir-handoff.producer.v1\0";
+const SIMULATION_SLOT_DOMAIN: &[u8] = b"fe2o3.simulation-kir-handoff.slot.v1\0";
+const SIMULATION_NAMED_SLOT_DOMAIN: &[u8] = b"fe2o3.simulation-kir-handoff.named-slot.v1\0";
+const SIMULATION_RECORD_DOMAIN: &[u8] = b"fe2o3.simulation-kir-handoff.record.v1\0";
+const SIMULATION_RECORD_BYTES: usize =
+    SIMULATION_RECORD_MAGIC.len() + 2 + 32 + 8 + 16 + 32 + 32 + 32 + 8 + (7 * 8) + 32;
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -140,6 +150,86 @@ pub struct ConsumedCompilerModuleHandoffV1 {
     bytes: Arc<[u8]>,
 }
 
+/// Closed attempt-local slot for exact canonical KIR captured for CPU simulation.
+///
+/// This is deliberately a different protocol domain from compiler-module handoffs used by
+/// protected production pipelines.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[repr(u8)]
+pub enum SimulationKernelIrHandoffSlotV1 {
+    CanonicalKirV6 = 0,
+}
+
+/// SHA-256 identity of canonical KIR bytes in the simulation-only custody slot.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SimulationKernelIrHandoffIdentityV1([u8; 32]);
+
+impl SimulationKernelIrHandoffIdentityV1 {
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// Inert receipt for a simulation-only canonical KIR capture.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SimulationKernelIrHandoffReceiptV1 {
+    attempt: BuildAttempt,
+    identity: SimulationKernelIrHandoffIdentityV1,
+    length: usize,
+}
+
+impl SimulationKernelIrHandoffReceiptV1 {
+    pub const fn attempt(self) -> BuildAttempt {
+        self.attempt
+    }
+
+    pub const fn identity(self) -> SimulationKernelIrHandoffIdentityV1 {
+        self.identity
+    }
+
+    pub const fn length(self) -> usize {
+        self.length
+    }
+
+    pub const fn grants_publication_authority(self) -> bool {
+        false
+    }
+
+    pub const fn grants_hardware_authority(self) -> bool {
+        false
+    }
+}
+
+/// Non-forgeable result of consuming one exact simulation KIR capture.
+#[derive(Clone, Debug)]
+pub struct ConsumedSimulationKernelIrHandoffV1 {
+    attempt: BuildAttempt,
+    identity: SimulationKernelIrHandoffIdentityV1,
+    bytes: Arc<[u8]>,
+}
+
+impl ConsumedSimulationKernelIrHandoffV1 {
+    pub const fn attempt(&self) -> BuildAttempt {
+        self.attempt
+    }
+
+    pub const fn identity(&self) -> SimulationKernelIrHandoffIdentityV1 {
+        self.identity
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_hardware_authority(&self) -> bool {
+        false
+    }
+}
+
 impl ConsumedCompilerModuleHandoffV1 {
     pub const fn attempt(&self) -> BuildAttempt {
         self.attempt
@@ -189,6 +279,7 @@ impl ConsumedCompilerModuleHandoffV1 {
 pub enum CompilerModuleHandoffErrorV1 {
     Io(std::io::Error),
     Attempt { reason: String },
+    AttemptNotClaimable,
     InvalidSlot { path: PathBuf, reason: String },
     InvalidHandoffSize { actual: usize, maximum: usize },
     AlreadyPublished,
@@ -205,6 +296,9 @@ impl fmt::Display for CompilerModuleHandoffErrorV1 {
             Self::Attempt { reason } => {
                 write!(formatter, "invalid build-attempt handoff: {reason}")
             }
+            Self::AttemptNotClaimable => formatter.write_str(
+                "invalid build-attempt handoff: build attempt is not in the required claimable phase",
+            ),
             Self::InvalidSlot { path, reason } => {
                 write!(
                     formatter,
@@ -319,6 +413,88 @@ pub fn consume_compiler_module_handoff_in_slot_v1(
     consume_in_slot_with_hooks(output_dir, producer, attempt, slot, &mut NoFaults)
 }
 
+/// Publishes exact canonical KIR into the simulation-only backend custody slot.
+///
+/// On first publication this atomically claims a current managed Building attempt for the
+/// backend. The domain-separated slot then authorizes only an exact BackendClaimed attempt with
+/// no backend receipt. It grants no artifact, hardware, load, or launch authority.
+pub fn publish_simulation_kernel_ir_handoff_v1(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    canonical_kir: &[u8],
+) -> Result<SimulationKernelIrHandoffReceiptV1, CompilerModuleHandoffErrorV1> {
+    publish_in_slot_engine::<SimulationKernelIrHandoffSchemaV1>(
+        output_dir,
+        producer,
+        attempt,
+        SimulationKernelIrHandoffSlotV1::CanonicalKirV6,
+        (),
+        canonical_kir,
+        &mut NoFaults,
+    )
+    .map(|published| SimulationKernelIrHandoffReceiptV1 {
+        attempt: published.attempt,
+        identity: SimulationKernelIrHandoffIdentityV1(published.identity),
+        length: published.length,
+    })
+    .map_err(HandoffEngineError::into_v1)
+}
+
+/// Consumes one exact canonical KIR capture from the simulation-only custody slot.
+pub fn consume_simulation_kernel_ir_handoff_v1(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+) -> Result<ConsumedSimulationKernelIrHandoffV1, CompilerModuleHandoffErrorV1> {
+    consume_in_slot_engine::<SimulationKernelIrHandoffSchemaV1>(
+        output_dir,
+        producer,
+        attempt,
+        SimulationKernelIrHandoffSlotV1::CanonicalKirV6,
+        (),
+        &mut NoFaults,
+    )
+    .map(|consumed| ConsumedSimulationKernelIrHandoffV1 {
+        attempt: consumed.attempt,
+        identity: SimulationKernelIrHandoffIdentityV1(consumed.identity),
+        bytes: consumed.payload,
+    })
+    .map_err(HandoffEngineError::into_v1)
+}
+
+/// Completes a simulation attempt after its exact canonical KIR was consumed.
+///
+/// Records a distinct, authority-free simulation observation receipt solely to
+/// retire the managed attempt. Artifact and publication schemas reject it.
+/// It is not hardware observation or artifact authority. The private fields of the consumed value
+/// prevent completion without first consuming the domain-separated simulation slot.
+pub fn complete_simulation_kernel_ir_attempt_v1(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    consumed: &ConsumedSimulationKernelIrHandoffV1,
+) -> Result<SimulationObservationReceiptV1, CompilerModuleHandoffErrorV1> {
+    let output = PinnedOutput::open_existing(output_dir)?;
+    let _lock = output.lock()?;
+    output.verify_path_identity()?;
+    authorize_for_custody(
+        &output,
+        producer,
+        consumed.attempt,
+        HandoffAttemptCustodyV1::SimulationBackendClaimed,
+    )?;
+    let mut attempts = read_attempt_registry(&output)?;
+    let receipt = SimulationObservationReceiptV1::new(*consumed.identity.as_bytes());
+    attempts
+        .record_simulation_observation_receipt(&producer.stable_source, consumed.attempt, receipt)
+        .map_err(|error| attempt_error(error.to_string()))?;
+    attempts
+        .mark_completed(&producer.stable_source, consumed.attempt)
+        .map_err(|error| attempt_error(error.to_string()))?;
+    commit_attempt_registry_direct(&output, &attempts)?;
+    Ok(receipt)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FileIdentity {
     device: u64,
@@ -356,7 +532,7 @@ impl FileIdentity {
 }
 
 trait HandoffSchema: Sized {
-    type Slot: Copy + Eq;
+    type Slot: Copy + Eq + 'static;
     type Binding: Copy + Eq;
     type Payload;
 
@@ -374,7 +550,8 @@ trait HandoffSchema: Sized {
     const DECODE_WORKING_SET_FIXED_BYTES: usize;
     const MAX_DECODE_WORKING_SET_BYTES: usize;
     const VALIDATE_RECORD_DURING_RECOVERY: bool;
-    const ALL_SLOTS: [Self::Slot; 3];
+    const ALL_SLOTS: &'static [Self::Slot];
+    const ATTEMPT_CUSTODY: HandoffAttemptCustodyV1 = HandoffAttemptCustodyV1::FrontendBuilding;
 
     fn default_slot() -> Self::Slot;
     fn slot_tag(slot: Self::Slot) -> u8;
@@ -392,6 +569,12 @@ trait HandoffSchema: Sized {
         binding: Self::Binding,
         handoff_bytes: &[u8],
     ) -> [u8; 32];
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HandoffAttemptCustodyV1 {
+    FrontendBuilding,
+    SimulationBackendClaimed,
 }
 
 struct HandoffV1Schema;
@@ -415,7 +598,7 @@ impl HandoffSchema for HandoffV1Schema {
     const DECODE_WORKING_SET_FIXED_BYTES: usize = 0;
     const MAX_DECODE_WORKING_SET_BYTES: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES;
     const VALIDATE_RECORD_DURING_RECOVERY: bool = false;
-    const ALL_SLOTS: [Self::Slot; 3] = [
+    const ALL_SLOTS: &'static [Self::Slot] = &[
         CompilerModuleHandoffSlotV1::Default,
         CompilerModuleHandoffSlotV1::GeneralGemmReference,
         CompilerModuleHandoffSlotV1::GeneralGemmVectorizedAOnly,
@@ -454,6 +637,67 @@ impl HandoffSchema for HandoffV1Schema {
         handoff_bytes: &[u8],
     ) -> [u8; 32] {
         sha256(handoff_bytes)
+    }
+}
+
+struct SimulationKernelIrHandoffSchemaV1;
+
+impl HandoffSchema for SimulationKernelIrHandoffSchemaV1 {
+    type Slot = SimulationKernelIrHandoffSlotV1;
+    type Binding = ();
+    type Payload = Arc<[u8]>;
+
+    const PARENT_PREFIX: &'static str = SIMULATION_PARENT_PREFIX;
+    const SLOT_PREFIX: &'static str = SIMULATION_SLOT_PREFIX;
+    const RECORD_MAGIC: &'static [u8] = SIMULATION_RECORD_MAGIC;
+    const RECORD_VERSION: u16 = SIMULATION_RECORD_VERSION;
+    const PRODUCER_DOMAIN: &'static [u8] = SIMULATION_PRODUCER_DOMAIN;
+    const SLOT_DOMAIN: &'static [u8] = SIMULATION_SLOT_DOMAIN;
+    const NAMED_SLOT_DOMAIN: &'static [u8] = SIMULATION_NAMED_SLOT_DOMAIN;
+    const RECORD_DOMAIN: &'static [u8] = SIMULATION_RECORD_DOMAIN;
+    const RECORD_BYTES: usize = SIMULATION_RECORD_BYTES;
+    const MAX_HANDOFF_BYTES: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES;
+    const DECODE_WORKING_SET_MULTIPLIER: usize = 1;
+    const DECODE_WORKING_SET_FIXED_BYTES: usize = 0;
+    const MAX_DECODE_WORKING_SET_BYTES: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES;
+    const VALIDATE_RECORD_DURING_RECOVERY: bool = false;
+    const ALL_SLOTS: &'static [Self::Slot] = &[SimulationKernelIrHandoffSlotV1::CanonicalKirV6];
+    const ATTEMPT_CUSTODY: HandoffAttemptCustodyV1 =
+        HandoffAttemptCustodyV1::SimulationBackendClaimed;
+
+    fn default_slot() -> Self::Slot {
+        SimulationKernelIrHandoffSlotV1::CanonicalKirV6
+    }
+
+    fn slot_tag(slot: Self::Slot) -> u8 {
+        slot as u8
+    }
+
+    fn encode_binding(_binding: Self::Binding, _bytes: &mut Vec<u8>) {}
+
+    fn decode_binding(_decoder: &mut Decoder<'_>) -> Result<Self::Binding, &'static str> {
+        Ok(())
+    }
+
+    fn binding_matches_length(_binding: Self::Binding, _length: usize) -> bool {
+        true
+    }
+
+    fn decode_payload(
+        _binding: Self::Binding,
+        bytes: Vec<u8>,
+    ) -> Result<Self::Payload, HandoffEngineError> {
+        Ok(Arc::from(bytes))
+    }
+
+    fn derive_identity(
+        _producer: [u8; 32],
+        _slot: [u8; 32],
+        _attempt: BuildAttempt,
+        _binding: Self::Binding,
+        canonical_kir: &[u8],
+    ) -> [u8; 32] {
+        sha256(canonical_kir)
     }
 }
 
@@ -746,7 +990,8 @@ fn publish_in_slot_engine<S: HandoffSchema>(
     let output = PinnedOutput::open(output_dir)?;
     let _lock = output.lock()?;
     output.verify_path_identity()?;
-    authorize(&output, producer, attempt)?;
+    prepare_publication_attempt::<S>(&output, producer, attempt)?;
+    authorize_for_custody(&output, producer, attempt, S::ATTEMPT_CUSTODY)?;
     let producer_id = producer_identity_for::<S>(producer);
     let slot_id = slot_identity_for::<S>(producer_id, attempt, handoff_slot);
     let parent = open_or_create_private_directory(
@@ -942,7 +1187,7 @@ fn consume_in_slot_engine_locked<S: HandoffSchema>(
     hooks: &mut impl HandoffHooks,
 ) -> Result<ConsumedHandoff<S>, HandoffEngineError> {
     output.verify_path_identity()?;
-    authorize(output, producer, attempt)?;
+    authorize_for_custody(output, producer, attempt, S::ATTEMPT_CUSTODY)?;
     let producer_id = producer_identity_for::<S>(producer);
     let slot_id = slot_identity_for::<S>(producer_id, attempt, handoff_slot);
     let parent = open_private_directory(
@@ -1004,6 +1249,55 @@ fn authorize(
     producer: &ProducerIdentity,
     attempt: BuildAttempt,
 ) -> Result<(), CompilerModuleHandoffErrorV1> {
+    authorize_for_custody(
+        output,
+        producer,
+        attempt,
+        HandoffAttemptCustodyV1::FrontendBuilding,
+    )
+}
+
+fn prepare_publication_attempt<S: HandoffSchema>(
+    output: &PinnedOutput,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+) -> Result<(), CompilerModuleHandoffErrorV1> {
+    if S::ATTEMPT_CUSTODY != HandoffAttemptCustodyV1::SimulationBackendClaimed {
+        return Ok(());
+    }
+    if attempt.session() == BuildSession::DIRECT {
+        return Err(attempt_error(
+            "direct compiler attempts cannot own a simulation KIR handoff slot",
+        ));
+    }
+    let mut attempts = read_attempt_registry(output)?;
+    let record = attempts
+        .record_exact(&producer.stable_source, attempt)
+        .map_err(|error| attempt_error(error.to_string()))?;
+    if record.crate_name != producer.crate_name {
+        return Err(attempt_error(
+            "build attempt crate name does not match the simulation KIR producer",
+        ));
+    }
+    match (record.phase, record.backend_receipt) {
+        (AttemptPhase::Building, None) => {
+            attempts
+                .claim_backend(&producer.stable_source, attempt)
+                .map_err(|error| attempt_error(error.to_string()))?;
+            commit_attempt_registry_direct(output, &attempts)?;
+            Ok(())
+        }
+        (AttemptPhase::BackendClaimed, None) => Ok(()),
+        _ => Err(CompilerModuleHandoffErrorV1::AttemptNotClaimable),
+    }
+}
+
+fn authorize_for_custody(
+    output: &PinnedOutput,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    custody: HandoffAttemptCustodyV1,
+) -> Result<(), CompilerModuleHandoffErrorV1> {
     if attempt.session() == BuildSession::DIRECT {
         return Err(attempt_error(
             "direct compiler attempts cannot own a handoff slot",
@@ -1018,10 +1312,16 @@ fn authorize(
             "build attempt crate name does not match the producer",
         ));
     }
-    if record.phase != AttemptPhase::Building || record.backend_receipt.is_some() {
-        return Err(attempt_error(
-            "build attempt is not in the claimable building phase",
-        ));
+    let claimable = match custody {
+        HandoffAttemptCustodyV1::FrontendBuilding => {
+            record.phase == AttemptPhase::Building && record.backend_receipt.is_none()
+        }
+        HandoffAttemptCustodyV1::SimulationBackendClaimed => {
+            record.phase == AttemptPhase::BackendClaimed && record.backend_receipt.is_none()
+        }
+    };
+    if !claimable {
+        return Err(CompilerModuleHandoffErrorV1::AttemptNotClaimable);
     }
     Ok(())
 }
@@ -1142,13 +1442,17 @@ fn cleanup_stale_slots<S: HandoffSchema>(
     producer: [u8; 32],
     attempt: BuildAttempt,
 ) -> Result<(), HandoffEngineError> {
-    let current = S::ALL_SLOTS.map(|slot| {
-        format!(
-            "{}{}",
-            S::SLOT_PREFIX,
-            hex(&slot_identity_for::<S>(producer, attempt, slot))
-        )
-    });
+    let current = S::ALL_SLOTS
+        .iter()
+        .copied()
+        .map(|slot| {
+            format!(
+                "{}{}",
+                S::SLOT_PREFIX,
+                hex(&slot_identity_for::<S>(producer, attempt, slot))
+            )
+        })
+        .collect::<Vec<_>>();
     let scan = rustix::io::fcntl_dupfd_cloexec(&parent.fd, 0).map_err(std::io::Error::from)?;
     let mut entries = Dir::read_from(&scan).map_err(std::io::Error::from)?;
     let mut stale = Vec::new();
@@ -1936,6 +2240,9 @@ mod protected_v2 {
             match error {
                 CompilerModuleHandoffErrorV1::Io(error) => Self::Io(error),
                 CompilerModuleHandoffErrorV1::Attempt { reason } => Self::Attempt { reason },
+                CompilerModuleHandoffErrorV1::AttemptNotClaimable => Self::Attempt {
+                    reason: "build attempt is not in the claimable building phase".to_owned(),
+                },
                 CompilerModuleHandoffErrorV1::InvalidSlot { path, reason } => {
                     Self::InvalidSlot { path, reason }
                 }
@@ -2049,7 +2356,7 @@ mod protected_v2 {
         const DECODE_WORKING_SET_FIXED_BYTES: usize = 0;
         const MAX_DECODE_WORKING_SET_BYTES: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES;
         const VALIDATE_RECORD_DURING_RECOVERY: bool = true;
-        const ALL_SLOTS: [Self::Slot; 3] = [
+        const ALL_SLOTS: &'static [Self::Slot] = &[
             CompilerModuleHandoffSlotV2::Default,
             CompilerModuleHandoffSlotV2::GeneralGemmReference,
             CompilerModuleHandoffSlotV2::GeneralGemmVectorizedAOnly,
@@ -2325,6 +2632,11 @@ mod protected_v2 {
         use std::os::unix::fs::PermissionsExt;
         use std::sync::{Arc, Barrier};
         use std::thread;
+
+        #[test]
+        fn v2_schema_has_exactly_three_slots() {
+            assert_eq!(HandoffV2Schema::ALL_SLOTS.len(), 3);
+        }
 
         struct TestDirectory(PathBuf);
 
@@ -3538,6 +3850,9 @@ mod semantic_v3 {
             match error {
                 CompilerModuleHandoffErrorV1::Io(error) => Self::Io(error),
                 CompilerModuleHandoffErrorV1::Attempt { reason } => Self::Attempt { reason },
+                CompilerModuleHandoffErrorV1::AttemptNotClaimable => Self::Attempt {
+                    reason: "build attempt is not in the claimable building phase".to_owned(),
+                },
                 CompilerModuleHandoffErrorV1::InvalidSlot { path, reason } => {
                     Self::InvalidSlot { path, reason }
                 }
@@ -3830,7 +4145,7 @@ mod semantic_v3 {
         const DECODE_WORKING_SET_FIXED_BYTES: usize = V3_DECODE_FIXED_BYTES;
         const MAX_DECODE_WORKING_SET_BYTES: usize = MAX_V3_DECODE_WORKING_SET_BYTES;
         const VALIDATE_RECORD_DURING_RECOVERY: bool = true;
-        const ALL_SLOTS: [Self::Slot; 3] = [
+        const ALL_SLOTS: &'static [Self::Slot] = &[
             CompilerModuleHandoffSlotV3::Default,
             CompilerModuleHandoffSlotV3::GeneralGemmReference,
             CompilerModuleHandoffSlotV3::GeneralGemmVectorizedAOnly,
@@ -4516,6 +4831,11 @@ mod semantic_v3 {
             InertSemanticToLlvmReceiptV3, InertTargetBindingReceiptV3,
             OrderedInertSemanticLineageReceiptsV3,
         };
+
+        #[test]
+        fn v3_schema_has_exactly_three_slots() {
+            assert_eq!(HandoffV3Schema::ALL_SLOTS.len(), 3);
+        }
         use fe2o3_rustc_invocation::{
             CompileEnvironmentV2, RustcInvocationDescriptorV2, RustcInvocationDescriptorV3,
             RustcUnitV2,
@@ -6292,6 +6612,115 @@ mod tests {
         assert!(matches!(
             publish_compiler_module_handoff_v1(&temp.0, &other, current, b"mismatch"),
             Err(CompilerModuleHandoffErrorV1::Attempt { .. })
+        ));
+    }
+
+    #[test]
+    fn completed_attempt_has_a_typed_not_claimable_error() {
+        let temp = TestDirectory::new();
+        let producer = producer("host_only");
+        let attempt = begin(&temp.0, &producer, 29);
+        let output = PinnedOutput::open_existing(&temp.0).unwrap();
+        let lock = output.lock().unwrap();
+        let mut attempts = read_attempt_registry(&output).unwrap();
+        attempts
+            .claim_backend(&producer.stable_source, attempt)
+            .unwrap();
+        attempts
+            .record_legacy_backend_receipt(&producer.stable_source, attempt)
+            .unwrap();
+        crate::commit_attempt_registry_direct(&output, &attempts).unwrap();
+        drop(lock);
+        drop(output);
+        assert!(matches!(
+            consume_compiler_module_handoff_v1(&temp.0, &producer, attempt),
+            Err(CompilerModuleHandoffErrorV1::AttemptNotClaimable)
+        ));
+    }
+
+    #[test]
+    fn simulation_kir_uses_backend_claimed_custody_and_authority_free_completion() {
+        let temp = TestDirectory::new();
+        let producer = producer("simulation_kernel");
+        let attempt = begin(&temp.0, &producer, 30);
+        let receipt =
+            publish_simulation_kernel_ir_handoff_v1(&temp.0, &producer, attempt, b"canonical-kir")
+                .unwrap();
+        assert_eq!(receipt.attempt(), attempt);
+        assert_eq!(receipt.length(), b"canonical-kir".len());
+        assert!(!receipt.grants_publication_authority());
+        assert!(!receipt.grants_hardware_authority());
+
+        assert!(matches!(
+            publish_compiler_module_handoff_v1(&temp.0, &producer, attempt, b"protected-protocol"),
+            Err(CompilerModuleHandoffErrorV1::AttemptNotClaimable)
+        ));
+
+        let consumed =
+            consume_simulation_kernel_ir_handoff_v1(&temp.0, &producer, attempt).unwrap();
+        assert_eq!(consumed.bytes(), b"canonical-kir");
+        assert!(!consumed.grants_publication_authority());
+        assert!(!consumed.grants_hardware_authority());
+        let observation =
+            complete_simulation_kernel_ir_attempt_v1(&temp.0, &producer, &consumed).unwrap();
+        assert_eq!(
+            observation.canonical_kir_sha256(),
+            *consumed.identity().as_bytes()
+        );
+        assert!(!observation.grants_artifact_authority());
+        assert!(!observation.proves_hardware_execution());
+        let duplicate =
+            complete_simulation_kernel_ir_attempt_v1(&temp.0, &producer, &consumed).unwrap_err();
+        assert!(matches!(
+            duplicate,
+            CompilerModuleHandoffErrorV1::AttemptNotClaimable
+        ));
+        let generic_completion =
+            crate::finish_build_attempt(&temp.0, &producer, attempt).unwrap_err();
+        assert!(
+            generic_completion
+                .to_string()
+                .contains("observation-only attempt"),
+            "{generic_completion}"
+        );
+        assert!(crate::read_backend_publication_receipt_v1(&temp.0, &producer, attempt).is_err());
+        assert!(matches!(
+            crate::read_backend_publication_receipt_v2(&temp.0, &producer, attempt),
+            Err(crate::AttemptScopedHsacoPublicationErrorV2::IncompatibleReceiptVersion)
+        ));
+        assert!(matches!(
+            crate::read_backend_publication_receipt_v3(&temp.0, &producer, attempt),
+            Err(crate::AttemptScopedHsacoPublicationErrorV3::IncompatibleReceiptVersion)
+        ));
+    }
+
+    #[test]
+    fn handoff_schema_slot_cardinality_is_exact() {
+        assert_eq!(HandoffV1Schema::ALL_SLOTS.len(), 3);
+        assert_eq!(SimulationKernelIrHandoffSchemaV1::ALL_SLOTS.len(), 1);
+    }
+
+    #[test]
+    fn host_backend_receipt_cannot_enter_simulation_kir_custody() {
+        let temp = TestDirectory::new();
+        let producer = producer("host_only_simulation");
+        let attempt = begin(&temp.0, &producer, 31);
+        let output = PinnedOutput::open_existing(&temp.0).unwrap();
+        let lock = output.lock().unwrap();
+        let mut attempts = read_attempt_registry(&output).unwrap();
+        attempts
+            .claim_backend(&producer.stable_source, attempt)
+            .unwrap();
+        attempts
+            .record_legacy_backend_receipt(&producer.stable_source, attempt)
+            .unwrap();
+        crate::commit_attempt_registry_direct(&output, &attempts).unwrap();
+        drop(lock);
+        drop(output);
+
+        assert!(matches!(
+            consume_simulation_kernel_ir_handoff_v1(&temp.0, &producer, attempt),
+            Err(CompilerModuleHandoffErrorV1::AttemptNotClaimable)
         ));
     }
 

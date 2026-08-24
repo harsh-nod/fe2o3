@@ -1156,6 +1156,58 @@ fn general_v3_thread_index_spelling_does_not_cross_the_extension_boundary() {
 }
 
 #[test]
+fn typed_kernel_primitives_are_workload_neutral_and_fail_closed() {
+    let fill = || MirModule {
+        functions: vec![kernel(
+            "fill",
+            vec![local(1, MirLocalRole::Arg, disjoint_shape())],
+            2,
+            Vec::new(),
+            Vec::new(),
+        )],
+    };
+
+    lower_general_v3(&fill()).expect("non-alpha typed kernel primitives");
+
+    let mut spoof = fill();
+    let MirTerminatorKind::Call { callee, .. } = &mut spoof.functions[0].blocks[0]
+        .terminator
+        .as_mut()
+        .expect("index call")
+        .kind
+    else {
+        panic!("index call")
+    };
+    *callee = Some(MirCallee::untrusted_for_test(
+        TrustedDeviceItem::ThreadIndex1d.canonical_path(),
+    ));
+    let errors = lower_general_v3(&spoof).expect_err("callee spelling is not authority");
+    assert!(errors.diagnostics().iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("has no classified trusted device identity")
+    }));
+
+    let mut wrong_signature = fill();
+    let MirTerminatorKind::Call { operands, .. } = &mut wrong_signature.functions[0].blocks[0]
+        .terminator
+        .as_mut()
+        .expect("index call")
+        .kind
+    else {
+        panic!("index call")
+    };
+    operands.push(usize_constant(0));
+    let errors = lower_general_v3(&wrong_signature).expect_err("wrong primitive signature");
+    assert!(
+        errors
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("expects 0 operand(s), found 1") })
+    );
+}
+
+#[test]
 fn option_payload_cannot_escape_the_bounds_checked_some_region() {
     let mut false_to_store = MirModule {
         functions: vec![alpha()],

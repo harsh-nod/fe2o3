@@ -121,15 +121,24 @@ fn validate(
 fn absent_and_present_selection_is_exact_and_ordinary_compatible() {
     for pipeline in CodegenPipeline::ALL {
         assert_eq!(
-            requires_v3_capability(pipeline, true),
-            pipeline == CodegenPipeline::ProductionV1
+            pipeline.rustc_invocation_policy(true),
+            if pipeline == CodegenPipeline::ProductionV1 {
+                RustcInvocationPolicyV1::ProtectedV3
+            } else {
+                RustcInvocationPolicyV1::QualificationObserved
+            }
         );
         assert_eq!(
-            requires_v3_capability(pipeline, false),
-            matches!(
-                pipeline,
-                CodegenPipeline::ProductionV1 | CodegenPipeline::CollectedRowSoftmaxV1
-            )
+            pipeline.rustc_invocation_policy(false),
+            match pipeline {
+                CodegenPipeline::ProductionV1 | CodegenPipeline::CollectedRowSoftmaxV1 => {
+                    RustcInvocationPolicyV1::ProtectedV3
+                }
+                CodegenPipeline::SimulationV1 => {
+                    RustcInvocationPolicyV1::QualificationObserved
+                }
+                _ => RustcInvocationPolicyV1::Unmanaged,
+            }
         );
     }
 
@@ -147,18 +156,19 @@ fn unprotected_routes_reject_protected_signals_without_consuming_unknown_fds() {
         fe2o3_rustc_invocation::encode_descriptor_v3(&baseline_descriptor()).unwrap();
 
     for pipeline in CodegenPipeline::ALL {
-        if requires_v3_capability(pipeline, false) {
+        if pipeline.rustc_invocation_policy(false) != RustcInvocationPolicyV1::Unmanaged {
             continue;
         }
         let descriptor = sealed_image(&descriptor_bytes);
         install_inherited(&descriptor, TEST_CHILD_FD);
         assert!(matches!(
-            admit_for_codegen_at(pipeline, false, TEST_CHILD_FD, false, false),
+            admit_for_codegen_at(pipeline, false, TEST_CHILD_FD, false, false, false, false),
             Err(
                 ProtectedRustcInvocationErrorV1::UnexpectedProtectedSignals {
                     descriptor_present: true,
                     compiler_closure_marker_present: false,
                     backend_marker_present: false,
+                    qualification_backend_marker_present: false,
                 }
             )
         ));
@@ -166,9 +176,16 @@ fn unprotected_routes_reject_protected_signals_without_consuming_unknown_fds() {
         assert_eq!(unsafe { libc::close(TEST_CHILD_FD) }, 0);
     }
 
-    for (compiler_closure_marker_present, backend_marker_present) in
-        [(true, false), (false, true), (true, true)]
-    {
+    for (
+        compiler_closure_marker_present,
+        backend_marker_present,
+        qualification_backend_marker_present,
+    ) in [
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+        (true, true, true),
+    ] {
         assert!(matches!(
             admit_for_codegen_at(
                 CodegenPipeline::LegacyV1,
@@ -176,13 +193,17 @@ fn unprotected_routes_reject_protected_signals_without_consuming_unknown_fds() {
                 TEST_CHILD_FD,
                 compiler_closure_marker_present,
                 backend_marker_present,
+                qualification_backend_marker_present,
+                false,
             ),
             Err(ProtectedRustcInvocationErrorV1::UnexpectedProtectedSignals {
                 descriptor_present: false,
                 compiler_closure_marker_present: observed_closure_marker,
                 backend_marker_present: observed_backend_marker,
+                qualification_backend_marker_present: observed_qualification_marker,
             }) if observed_closure_marker == compiler_closure_marker_present
                 && observed_backend_marker == backend_marker_present
+                && observed_qualification_marker == qualification_backend_marker_present
         ));
     }
 
@@ -193,30 +214,80 @@ fn unprotected_routes_reject_protected_signals_without_consuming_unknown_fds() {
             TEST_CHILD_FD,
             false,
             false,
-        )
-        .unwrap()
-        .is_none()
-    );
-    let descriptor = sealed_image(&descriptor_bytes);
-    install_inherited(&descriptor, TEST_CHILD_FD);
-    assert!(
-        admit_for_codegen_at(
-            CodegenPipeline::CollectedRowSoftmaxV1,
-            true,
-            TEST_CHILD_FD,
-            true,
+            false,
             false,
         )
         .unwrap()
         .is_none()
     );
-    assert_ne!(unsafe { libc::fcntl(TEST_CHILD_FD, libc::F_GETFD) }, -1);
-    assert_eq!(unsafe { libc::close(TEST_CHILD_FD) }, 0);
+}
+
+#[test]
+fn qualification_routes_require_paired_authenticated_observations_and_no_authority() {
+    let _guard = FD_TEST_LOCK.lock().unwrap();
+    let descriptor_bytes =
+        fe2o3_rustc_invocation::encode_descriptor_v3(&baseline_descriptor()).unwrap();
+
+    for pipeline in CodegenPipeline::ALL {
+        if pipeline.rustc_invocation_policy(true) != RustcInvocationPolicyV1::QualificationObserved
+        {
+            continue;
+        }
+        assert!(
+            admit_for_codegen_at(pipeline, true, TEST_CHILD_FD, true, false, true, true,)
+                .unwrap()
+                .is_none()
+        );
+    }
+    assert!(
+        admit_for_codegen_at(
+            CodegenPipeline::SimulationV1,
+            false,
+            TEST_CHILD_FD,
+            true,
+            false,
+            true,
+            true,
+        )
+        .unwrap()
+        .is_none()
+    );
+
+    for (compiler_closure_marker_present, qualification_backend_marker_present) in
+        [(false, false), (true, false), (false, true)]
+    {
+        assert!(matches!(
+            admit_for_codegen_at(
+                CodegenPipeline::LegacyV1,
+                true,
+                TEST_CHILD_FD,
+                compiler_closure_marker_present,
+                false,
+                qualification_backend_marker_present,
+                false,
+            ),
+            Err(ProtectedRustcInvocationErrorV1::QualificationObservationsMissing)
+        ));
+    }
     assert!(matches!(
         admit_for_codegen_at(
-            CodegenPipeline::CollectedRowSoftmaxV1,
+            CodegenPipeline::LegacyV1,
             true,
             TEST_CHILD_FD,
+            true,
+            false,
+            true,
+            false,
+        ),
+        Err(ProtectedRustcInvocationErrorV1::QualificationCodegenBackendObservationMismatch)
+    ));
+    assert!(matches!(
+        admit_for_codegen_at(
+            CodegenPipeline::LegacyV1,
+            true,
+            TEST_CHILD_FD,
+            true,
+            true,
             true,
             true,
         ),
@@ -225,6 +296,51 @@ fn unprotected_routes_reject_protected_signals_without_consuming_unknown_fds() {
                 descriptor_present: false,
                 compiler_closure_marker_present: false,
                 backend_marker_present: true,
+                qualification_backend_marker_present: false,
+            }
+        )
+    ));
+
+    let descriptor = sealed_image(&descriptor_bytes);
+    install_inherited(&descriptor, TEST_CHILD_FD);
+    assert!(matches!(
+        admit_for_codegen_at(
+            CodegenPipeline::LegacyV1,
+            true,
+            TEST_CHILD_FD,
+            true,
+            false,
+            true,
+            true,
+        ),
+        Err(
+            ProtectedRustcInvocationErrorV1::UnexpectedProtectedSignals {
+                descriptor_present: true,
+                compiler_closure_marker_present: false,
+                backend_marker_present: false,
+                qualification_backend_marker_present: false,
+            }
+        )
+    ));
+    assert_ne!(unsafe { libc::fcntl(TEST_CHILD_FD, libc::F_GETFD) }, -1);
+    assert_eq!(unsafe { libc::close(TEST_CHILD_FD) }, 0);
+
+    assert!(matches!(
+        admit_for_codegen_at(
+            CodegenPipeline::ProductionV1,
+            false,
+            TEST_CHILD_FD,
+            true,
+            true,
+            true,
+            false,
+        ),
+        Err(
+            ProtectedRustcInvocationErrorV1::UnexpectedProtectedSignals {
+                descriptor_present: false,
+                compiler_closure_marker_present: false,
+                backend_marker_present: false,
+                qualification_backend_marker_present: true,
             }
         )
     ));
@@ -233,11 +349,14 @@ fn unprotected_routes_reject_protected_signals_without_consuming_unknown_fds() {
 #[test]
 fn zero_kernel_protected_selection_cannot_downgrade_or_leave_an_inherited_fd() {
     let _guard = FD_TEST_LOCK.lock().unwrap();
-    assert!(requires_v3_capability(CodegenPipeline::ProductionV1, false));
-    assert!(requires_v3_capability(
-        CodegenPipeline::CollectedRowSoftmaxV1,
-        false
-    ));
+    assert_eq!(
+        CodegenPipeline::ProductionV1.rustc_invocation_policy(false),
+        RustcInvocationPolicyV1::ProtectedV3,
+    );
+    assert_eq!(
+        CodegenPipeline::CollectedRowSoftmaxV1.rustc_invocation_policy(false),
+        RustcInvocationPolicyV1::ProtectedV3,
+    );
 
     let valid = RustcInvocationCapabilityV1::create(baseline_descriptor())
         .unwrap()

@@ -102,7 +102,7 @@ pub fn copy_one_nonoverlapping<T: Copy, IndexSpace>(
 /// the provider performs the copy. These checks cannot prove GPU ownership or
 /// synchronization across concurrently executing invocations.
 ///
-/// # Safety
+/// # Panics
 ///
 /// The caller must prove that every destination element in
 /// `destination_index..destination_index + count` belongs to this invocation,

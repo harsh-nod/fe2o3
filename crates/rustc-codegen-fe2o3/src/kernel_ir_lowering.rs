@@ -2669,6 +2669,11 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 && context.typed_profile == Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3)
         })
     }
+    fn is_general_typed_kernel_context(&self) -> bool {
+        self.function.kind == MirFunctionKind::KernelEntry
+            && self.function.typed_profile
+                == Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3)
+    }
     fn is_gfx942_memory_v1_context(&self) -> bool {
         self.is_general_v3_profile_context() && self.float_target.is_some()
     }
@@ -3886,6 +3891,70 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                         then_arguments: self.edge_arguments(then_target, &location)?,
                         else_target: self.block_id(else_target, location.clone())?,
                         else_arguments: self.edge_arguments(else_target, &location)?,
+                    });
+                }
+                if self.value_type(selector, &location)? == &Type::BOOL {
+                    let mut false_target = None;
+                    let mut true_target = None;
+                    for target in targets {
+                        let selected = match target.value {
+                            0 => &mut false_target,
+                            1 => &mut true_target,
+                            value => {
+                                return Err(diagnostic(
+                                    TranslationDiagnosticCode::UnsupportedStatement,
+                                    location,
+                                    format!(
+                                        "boolean switch contains non-boolean case value {value}"
+                                    ),
+                                ));
+                            }
+                        };
+                        if selected.replace(target.target).is_some() {
+                            return Err(diagnostic(
+                                TranslationDiagnosticCode::MalformedMir,
+                                location,
+                                format!(
+                                    "boolean switch contains duplicate case value {}",
+                                    target.value
+                                ),
+                            ));
+                        }
+                    }
+                    let default_is_unreachable = self.function.blocks.iter().any(|block| {
+                        block.index == *otherwise
+                            && matches!(
+                                block.terminator.as_ref().map(|terminator| &terminator.kind),
+                                Some(MirTerminatorKind::Unreachable)
+                            )
+                    });
+                    let (false_target, true_target) = match (false_target, true_target) {
+                        (Some(false_target), None) => (false_target, *otherwise),
+                        (None, Some(true_target)) => (*otherwise, true_target),
+                        (Some(false_target), Some(true_target)) if default_is_unreachable => {
+                            (false_target, true_target)
+                        }
+                        _ => {
+                            return Err(diagnostic(
+                                TranslationDiagnosticCode::UnsupportedStatement,
+                                location,
+                                "boolean switch must contain one explicit 0/1 case, or exact 0/1 cases with an unreachable default",
+                            ));
+                        }
+                    };
+                    if false_target == true_target {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::MalformedMir,
+                            location,
+                            "boolean switch true and false edges must be distinct",
+                        ));
+                    }
+                    return Ok(Terminator::ConditionalBranch {
+                        condition: selector,
+                        then_target: self.block_id(true_target, location.clone())?,
+                        then_arguments: self.edge_arguments(true_target, &location)?,
+                        else_target: self.block_id(false_target, location.clone())?,
+                        else_arguments: self.edge_arguments(false_target, &location)?,
                     });
                 }
                 let mut cases = targets
@@ -6657,6 +6726,57 @@ mod tests {
         FrontendLaunchBoundsV1, FrontendWorkgroupDimensionsV1, KernelFrontendContractV1,
     };
 
+    fn exact_frontend_launch_for_test(
+        x: u32,
+    ) -> crate::collector::AuthenticatedKernelFrontendContractV1 {
+        let dimensions = FrontendWorkgroupDimensionsV1::new([x, 1, 1]).unwrap();
+        let launch = FrontendLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None).unwrap();
+        crate::collector::AuthenticatedKernelFrontendContractV1::for_test(
+            KernelFrontendContractV1::new(Some(launch), None).unwrap(),
+        )
+    }
+
+    #[test]
+    fn typed_launch_contract_matches_the_profile_specific_macro_domain() {
+        let mut function = scalar_fixture().functions.remove(0);
+        function.typed_profile = Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3);
+        for x in [64, 256] {
+            function.frontend_contract = Some(exact_frontend_launch_for_test(x));
+            assert_eq!(
+                kernel_ir_launch_contract(&function).unwrap(),
+                Some(WorkgroupSize::new(x, 1, 1))
+            );
+        }
+
+        function.frontend_contract = Some(exact_frontend_launch_for_test(32));
+        assert!(kernel_ir_launch_contract(&function).is_err());
+
+        function.typed_profile = Some(MirKernelProfile::VecAddRustcLayoutV2);
+        function.frontend_contract = Some(exact_frontend_launch_for_test(64));
+        assert!(kernel_ir_launch_contract(&function).is_err());
+    }
+
+    #[test]
+    fn slice_elements_accept_every_admitted_scalar_shape() {
+        for shape in [
+            MirTypeShape::Bool,
+            MirTypeShape::I32,
+            MirTypeShape::U32,
+            MirTypeShape::I64,
+            MirTypeShape::ISize,
+            MirTypeShape::USize,
+            MirTypeShape::F16,
+            MirTypeShape::Bf16,
+            MirTypeShape::Bf16x2,
+            MirTypeShape::F32,
+            MirTypeShape::F64,
+        ] {
+            assert_eq!(lower_element_type(&shape), lower_scalar_type(&shape));
+            assert!(lower_element_type(&shape).is_some(), "{shape:?}");
+        }
+        assert_eq!(lower_element_type(&MirTypeShape::Unknown), None);
+    }
+
     #[test]
     fn exact_u16_slice_types_and_constants_lower_without_widening() {
         assert_eq!(
@@ -7698,7 +7818,7 @@ mod tests {
     }
 
     #[test]
-    fn session_recognized_call_rejects_unsupported_context_without_fallback() {
+    fn session_recognized_primitive_rejects_a_wrong_typed_destination() {
         let mut fixture = helper_call_fixture(
             MirCallee::trusted_for_test(TrustedDeviceItem::ThreadIndex1d),
             &[],
@@ -7707,9 +7827,9 @@ mod tests {
             Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3);
 
         let errors = translate_and_verify(&fixture)
-            .expect_err("recognized General V3 call outside its context must fail closed");
+            .expect_err("recognized General V3 primitive with the wrong destination must fail");
 
-        assert!(errors.contains(TranslationDiagnosticCode::UnsupportedCall));
+        assert!(errors.contains(TranslationDiagnosticCode::UnsupportedType));
         assert!(errors.diagnostics().iter().any(|diagnostic| {
             diagnostic
                 .message

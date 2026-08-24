@@ -32,6 +32,7 @@
         "fe2o3-protected-publisher",
         "fe2o3-rustc-invocation",
         "fe2o3-runtime-model",
+        "fe2o3-semantic-trace",
         "fe2o3-service-model",
         "reserved-fe2o3-symbols"
       ]
@@ -91,6 +92,8 @@
         "fe2o3-host",
         "fe2o3-hsa-runtime",
         "fe2o3-kfd",
+        "fe2o3-kir-sim",
+        "fe2o3-kir-sim-trace",
         "fe2o3-service-host",
         "fe2o3-worker-v2-bundle",
         "fe2o3-worker-v3-authority"
@@ -105,17 +108,23 @@
         "fe2o3-differential",
         "fe2o3-general-gemm-compiler",
         "fe2o3-legacy-compiler",
+        "fe2o3-kir-sim-cli",
+        "fe2o3-semantic-import",
+        "fe2o3-semantic-query",
         "fe2o3-llvm-route-conformance",
         "fe2o3-pliron-conformance",
         "fe2o3-pliron-llvm-smoke",
         "fe2o3-pliron-scalar-add-v1",
         "fe2o3-pliron-worker-v2",
+        "fe2o3-worker-v3-authority",
         "rustc-codegen-fe2o3"
       ]
     },
     {
       "name": "fixture",
-      "packages": []
+      "packages": [
+        "fe2o3-scalar-gemm-v1"
+      ]
     }
   ],
   "path_layers": [
@@ -134,8 +143,22 @@
   ],
   "allowed_dependency_edges": [
     {
+      "from": "cargo-fe2o3",
+      "to": "fe2o3-scalar-gemm-v1",
+      "kinds": [
+        "dev"
+      ]
+    },
+    {
       "from": "fe2o3-hsaco-finalize",
       "to": "fe2o3-general-gemm-compiler",
+      "kinds": [
+        "normal"
+      ]
+    },
+    {
+      "from": "cargo-fe2o3",
+      "to": "fe2o3-scalar-gemm-v1",
       "kinds": [
         "normal"
       ]

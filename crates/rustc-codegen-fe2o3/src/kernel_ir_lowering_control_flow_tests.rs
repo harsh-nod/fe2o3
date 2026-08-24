@@ -42,6 +42,37 @@ fn gfx942_loop_break_and_continue_lower_to_verified_block_arguments() {
 }
 
 #[test]
+fn boolean_switch_with_complement_default_lowers_to_conditional_branch() {
+    let module = translate_and_verify(&boolean_branch_fixture())
+        .expect("canonical rustc boolean branch must lower");
+    let body = module.functions[0]
+        .body
+        .as_ref()
+        .expect("boolean branch body");
+    assert!(matches!(
+        body.blocks[0].terminator,
+        Some(Terminator::ConditionalBranch { .. })
+    ));
+}
+
+#[test]
+fn boolean_switch_rejects_non_boolean_cases() {
+    let mut fixture = boolean_branch_fixture();
+    let MirTerminatorKind::SwitchInt { targets, .. } = &mut fixture.functions[0].blocks[0]
+        .terminator
+        .as_mut()
+        .expect("boolean switch")
+        .kind
+    else {
+        panic!("boolean switch")
+    };
+    targets[0].value = 2;
+
+    let error = translate_and_verify(&fixture).expect_err("non-boolean case must fail closed");
+    assert!(error.to_string().contains("non-boolean case value 2"));
+}
+
+#[test]
 fn mutable_control_flow_rejects_every_non_gfx942_profile() {
     for target in ["gfx90a", "gfx950"] {
         let error = translate_and_verify_for_target(&loop_fixture(), &AmdGpuTarget::new(target))
@@ -435,6 +466,19 @@ fn u32_constant(value: u32) -> MirOperandRef {
             semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
         },
         literal: MirConstant::U32(value),
+        value: value.to_string(),
+    }
+}
+
+fn bool_constant(value: bool) -> MirOperandRef {
+    MirOperandRef::Constant {
+        ty: MirImportedType {
+            kind: MirType::I1,
+            rust: "bool".to_owned(),
+            shape: MirTypeShape::Bool,
+            semantic_identity: crate::mir_import::MirSemanticTypeEvidence::OmittedV2Fixture,
+        },
+        literal: MirConstant::Bool(value),
         value: value.to_string(),
     }
 }

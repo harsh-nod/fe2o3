@@ -11,8 +11,14 @@ description = "Cargo subcommand for fe2o3."
 [features]
 compiler-handoff-observation-test-only = []
 worker-v2-fault-injection-test-only = []
-host-consumer-fixture = ["fe2o3-host/hardware-test-hooks"]
-worker-v3-envelope-integration-test-only = ["fe2o3-host/hardware-test-hooks"]
+legacy-hsa-runtime = ["dep:fe2o3-core", "dep:fe2o3-hsa-runtime", "dep:fe2o3-host"]
+host-consumer-fixture = ["legacy-hsa-runtime", "fe2o3-host/hardware-test-hooks"]
+worker-v3-envelope-integration-test-only = [
+    "legacy-hsa-runtime",
+    "dep:fe2o3-scalar-gemm-v1",
+    "fe2o3-host/hardware-test-hooks",
+    "dep:fe2o3-worker-v3-authority",
+]
 
 [dependencies]
 cap-primitives = "=4.0.2"
@@ -21,16 +27,20 @@ fe2o3-artifact-transaction.workspace = true
 fe2o3-build-authority.workspace = true
 fe2o3-compiler-ffi.workspace = true
 fe2o3-compiler-closure-capability.workspace = true
-fe2o3-core.workspace = true
-fe2o3-hsa-runtime.workspace = true
+fe2o3-core = { workspace = true, optional = true }
+fe2o3-hsa-runtime = { workspace = true, optional = true }
 fe2o3-hsaco.workspace = true
 fe2o3-hsaco-finalize.workspace = true
-fe2o3-host.workspace = true
+fe2o3-host = { workspace = true, optional = true }
 fe2o3-kernel-descriptor.workspace = true
+fe2o3-kernel-ir.workspace = true
+fe2o3-kir-sim-cli.workspace = true
 fe2o3-process-identity.workspace = true
 fe2o3-rustc-invocation.workspace = true
+fe2o3-scalar-gemm-v1 = { path = "../../examples/scalar_gemm_v1", optional = true }
 fe2o3-verifier.workspace = true
 fe2o3-worker-v2-bundle.workspace = true
+fe2o3-worker-v3-authority = { workspace = true, optional = true }
 libc.workspace = true
 reserved-fe2o3-symbols.workspace = true
 rustix = { workspace = true, features = ["process"] }

@@ -293,6 +293,25 @@ impl ComputeAqlQueueObservationV1 {
     pub const fn cwsr_shadow_pages(self) -> u8 {
         self.cwsr_shadow_pages
     }
+
+    #[cfg(test)]
+    pub(crate) const fn from_parts_for_semantic_observation_tests(
+        queue_id: u32,
+        ring_bytes: u32,
+        doorbell_slice_bytes: usize,
+        doorbell_byte_offset: u64,
+        event_id: u32,
+        cwsr_shadow_pages: u8,
+    ) -> Self {
+        Self {
+            queue_id,
+            ring_bytes,
+            doorbell_slice_bytes,
+            doorbell_byte_offset,
+            event_id,
+            cwsr_shadow_pages,
+        }
+    }
 }
 
 /// Evidence returned only after confirmed DESTROY and explicit resource return.
@@ -308,6 +327,17 @@ impl ComputeAqlQueueDestroyedV1 {
     }
     pub const fn released_resources(self) -> u8 {
         self.released_resources
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn from_parts_for_semantic_observation_tests(
+        queue_id: u32,
+        released_resources: u8,
+    ) -> Self {
+        Self {
+            queue_id,
+            released_resources,
+        }
     }
 }
 

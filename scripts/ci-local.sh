@@ -60,6 +60,9 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-kernel-analysis
   fe2o3-kernel-descriptor
   fe2o3-kernel-ir
+  fe2o3-kir-sim
+  fe2o3-kir-sim-cli
+  fe2o3-kir-sim-trace
   fe2o3-kir-pliron-bridge
   fe2o3-legacy-compiler
   fe2o3-lower-kernel-gpu
@@ -73,6 +76,9 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-rustc-invocation
   fe2o3-service-host
   fe2o3-service-model
+  fe2o3-semantic-import
+  fe2o3-semantic-query
+  fe2o3-semantic-trace
   fe2o3-runtime-model
   fe2o3-verifier
   fe2o3-worker-v2-bundle
