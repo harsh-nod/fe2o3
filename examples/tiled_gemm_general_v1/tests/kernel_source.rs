@@ -5,30 +5,26 @@ use fe2o3_tiled_gemm_general_v1::{
     GENERAL_TILED_GEMM_QUALIFICATION_EXECUTION_SUPPORTED_V1,
     GENERAL_TILED_GEMM_SAFE_SOURCE_PRESENT_V1, GENERAL_TILED_GEMM_SOURCE_LOWERING_SUPPORTED_V1,
     GENERAL_TILED_GEMM_SOURCE_TO_IR_SUPPORTED_V1,
-    kernel::{
-        __fe2o3_kernel_marker_tiled_gemm_general_v1, GENERAL_TILED_GEMM_MAX_PHASES_V1,
-        GENERAL_TILED_GEMM_WORKGROUP_V1,
-    },
+    kernel::{__fe2o3_kernel_marker_tiled_gemm_general_v1, GENERAL_TILED_GEMM_WORKGROUP_V1},
 };
 use syn::visit::Visit;
 
 const LIB_SOURCE: &str = include_str!("../src/lib.rs");
 const KERNEL_SOURCE: &str = include_str!("../src/kernel.rs");
 
-type GeneralKernelFn =
-    fn(
-        &[u16],
-        &[u16],
-        DisjointSlice<f32, Tiled2D<Index1D, 64, 16, 16, 4>>,
-        u32,
-        u32,
-        u32,
-        u32,
-        u32,
-        u32,
-        f32,
-        f32,
-    );
+type GeneralKernelFn = fn(
+    &[u16],
+    &[u16],
+    DisjointSlice<f32, Tiled2D<Index1D, 64, 16, 16, 4>>,
+    u32,
+    u32,
+    u32,
+    u32,
+    u32,
+    u32,
+    f32,
+    f32,
+);
 
 #[derive(Default)]
 struct SourceFacts {
@@ -149,7 +145,6 @@ fn ordinary_host_execution_panics_before_output_mutation() {
 #[test]
 fn status_records_end_to_end_qualification_and_protected_boundary() {
     assert_eq!(GENERAL_TILED_GEMM_WORKGROUP_V1, [64, 1, 1]);
-    assert_eq!(GENERAL_TILED_GEMM_MAX_PHASES_V1, u32::MAX);
     assert!(std::hint::black_box(
         GENERAL_TILED_GEMM_SAFE_SOURCE_PRESENT_V1
     ));

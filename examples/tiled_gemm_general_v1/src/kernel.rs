@@ -9,16 +9,13 @@ use fe2o3_device::{
 
 /// Exact workgroup dimensions required by the wave64 matrix profile.
 pub const GENERAL_TILED_GEMM_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
-/// Maximum K-loop trip count admitted by the source contract.
-pub const GENERAL_TILED_GEMM_MAX_PHASES_V1: u32 = u32::MAX;
 
-const _: [(); 64] = [(); usize::BITS as usize];
-
-fn accessed_extent(rows: u32, columns: u32, stride: u32) -> usize {
+fn accessed_extent(rows: u32, columns: u32, stride: u32) -> Option<usize> {
     if rows == 0 || columns == 0 {
-        return 0;
+        return Some(0);
     }
-    (rows - 1) as usize * stride as usize + columns as usize
+    let row_offset = ((rows - 1) as usize).checked_mul(stride as usize)?;
+    row_offset.checked_add(columns as usize)
 }
 
 /// Computes `C = alpha * A * B + beta * C` for dynamic row-major matrices.
@@ -48,9 +45,9 @@ pub fn tiled_gemm_general_v1(
     let invalid_stride = (m != 0 && k != 0 && lda < k)
         || (k != 0 && n != 0 && ldb < n)
         || (m != 0 && n != 0 && ldc < n);
-    let a_extent = accessed_extent(m, k, lda);
-    let b_extent = accessed_extent(k, n, ldb);
-    let c_extent = accessed_extent(m, n, ldc);
+    let a_extent = accessed_extent(m, k, lda).ok_or(KernelError::InvalidArgument)?;
+    let b_extent = accessed_extent(k, n, ldb).ok_or(KernelError::InvalidArgument)?;
+    let c_extent = accessed_extent(m, n, ldc).ok_or(KernelError::InvalidArgument)?;
     if invalid_stride || a.len() < a_extent || b.len() < b_extent || c.len() < c_extent {
         return Err(KernelError::InvalidArgument);
     }
@@ -68,20 +65,8 @@ pub fn tiled_gemm_general_v1(
     let output_tile = thread_index
         .checked_tiled_2d::<64, 16, 16, 4>()
         .ok_or(KernelError::OutOfBounds)?;
-    let a_matrix = Bf16MfmaAMatrix::row_major(
-        a,
-        0,
-        m as usize,
-        k as usize,
-        lda as usize,
-    )?;
-    let b_matrix = Bf16MfmaBMatrix::row_major(
-        b,
-        0,
-        k as usize,
-        n as usize,
-        ldb as usize,
-    )?;
+    let a_matrix = Bf16MfmaAMatrix::row_major(a, 0, m as usize, k as usize, lda as usize)?;
+    let b_matrix = Bf16MfmaBMatrix::row_major(b, 0, k as usize, n as usize, ldb as usize)?;
     let wave_lane = WaveLane::<Wave64>::current();
     let matrix = Matrix::current();
     let mut accumulator = F32AccumulatorFragment::zero(&wave_lane);
@@ -94,23 +79,19 @@ pub fn tiled_gemm_general_v1(
     }
 
     let values = accumulator.into_values();
-    if let Some(output) =
-        c.get_tiled_2d_mut(&output_tile, 0, m as usize, n as usize, ldc as usize)
+    if let Some(output) = c.get_tiled_2d_mut(&output_tile, 0, m as usize, n as usize, ldc as usize)
     {
         *output = alpha * values[0] + beta * *output;
     }
-    if let Some(output) =
-        c.get_tiled_2d_mut(&output_tile, 1, m as usize, n as usize, ldc as usize)
+    if let Some(output) = c.get_tiled_2d_mut(&output_tile, 1, m as usize, n as usize, ldc as usize)
     {
         *output = alpha * values[1] + beta * *output;
     }
-    if let Some(output) =
-        c.get_tiled_2d_mut(&output_tile, 2, m as usize, n as usize, ldc as usize)
+    if let Some(output) = c.get_tiled_2d_mut(&output_tile, 2, m as usize, n as usize, ldc as usize)
     {
         *output = alpha * values[2] + beta * *output;
     }
-    if let Some(output) =
-        c.get_tiled_2d_mut(&output_tile, 3, m as usize, n as usize, ldc as usize)
+    if let Some(output) = c.get_tiled_2d_mut(&output_tile, 3, m as usize, n as usize, ldc as usize)
     {
         *output = alpha * values[3] + beta * *output;
     }
@@ -123,8 +104,8 @@ mod tests {
 
     #[test]
     fn strided_extents_include_only_accessed_elements() {
-        assert_eq!(accessed_extent(3, 2, 5), 12);
-        assert_eq!(accessed_extent(0, 2, 5), 0);
-        assert_eq!(accessed_extent(3, 0, 5), 0);
+        assert_eq!(accessed_extent(3, 2, 5), Some(12));
+        assert_eq!(accessed_extent(0, 2, 5), Some(0));
+        assert_eq!(accessed_extent(3, 0, 5), Some(0));
     }
 }

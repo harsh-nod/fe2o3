@@ -1,6 +1,7 @@
 use fe2o3_core::{DeviceBuffer, Event, GpuContext, GpuModule, LaunchConfig, Stream};
 use fe2o3_device::Bf16;
 use fe2o3_host::launch;
+use fe2o3_tiled_gemm_general_v1::kernel::GENERAL_TILED_GEMM_WORKGROUP_V1;
 use std::path::PathBuf;
 
 #[derive(Clone, Copy)]
@@ -90,8 +91,9 @@ fn launch_case(
         .expect("tile grid fits u32");
     // SAFETY: the symbol has exactly two u16 slice pairs, one f32 slice pair,
     // six u32 scalars, and two f32 scalars. Rust borrows keep the allocations
-    // alive and distinct for the asynchronous launch, and each slice length is
-    // passed from its owning DeviceBuffer.
+    // alive and mutually non-aliasing through readback, each slice length is
+    // passed from its owning DeviceBuffer, and the grid covers each logical
+    // output tile exactly once.
     unsafe {
         launch! {
             kernel: tiled_gemm_general_v1,
@@ -99,7 +101,11 @@ fn launch_case(
             module: module,
             config: LaunchConfig {
                 grid_dim: (workgroups, 1, 1),
-                block_dim: (64, 1, 1),
+                block_dim: (
+                    GENERAL_TILED_GEMM_WORKGROUP_V1[0],
+                    GENERAL_TILED_GEMM_WORKGROUP_V1[1],
+                    GENERAL_TILED_GEMM_WORKGROUP_V1[2],
+                ),
                 shared_mem_bytes: 0,
             },
             args: [
@@ -134,24 +140,14 @@ fn run_case(
 
     for row in 0..case.m {
         for depth in 0..case.k {
-            a[row as usize * case.lda as usize + depth as usize] = Bf16::from_f32(input_value(
-                row * 7 + depth * 3,
-                17,
-                8,
-                0.125,
-            ))
-            .to_bits();
+            a[row as usize * case.lda as usize + depth as usize] =
+                Bf16::from_f32(input_value(row * 7 + depth * 3, 17, 8, 0.125)).to_bits();
         }
     }
     for depth in 0..case.k {
         for column in 0..case.n {
-            b[depth as usize * case.ldb as usize + column as usize] = Bf16::from_f32(input_value(
-                depth * 5 + column * 11,
-                19,
-                9,
-                0.0625,
-            ))
-            .to_bits();
+            b[depth as usize * case.ldb as usize + column as usize] =
+                Bf16::from_f32(input_value(depth * 5 + column * 11, 19, 9, 0.0625)).to_bits();
         }
     }
     for row in 0..case.m {
@@ -167,14 +163,10 @@ fn run_case(
         for column in 0..case.n {
             let mut sum = 0.0_f32;
             for depth in 0..case.k {
-                sum += Bf16::from_bits(
-                    a[row as usize * case.lda as usize + depth as usize],
-                )
-                .to_f32()
-                    * Bf16::from_bits(
-                        b[depth as usize * case.ldb as usize + column as usize],
-                    )
-                    .to_f32();
+                sum += Bf16::from_bits(a[row as usize * case.lda as usize + depth as usize])
+                    .to_f32()
+                    * Bf16::from_bits(b[depth as usize * case.ldb as usize + column as usize])
+                        .to_f32();
             }
             let index = row as usize * case.ldc as usize + column as usize;
             expected[index] = case.alpha * sum + case.beta * expected[index];
@@ -247,9 +239,8 @@ fn benchmark_case(
         }
         stop.record(&stream)?;
         stop.synchronize()?;
-        microseconds.push(
-            stop.elapsed_time_ms_since(&start)? * 1_000.0 / launches_per_sample as f32,
-        );
+        microseconds
+            .push(stop.elapsed_time_ms_since(&start)? * 1_000.0 / launches_per_sample as f32);
     }
     microseconds.sort_by(f32::total_cmp);
     let median_us = percentile(&microseconds, 50);
