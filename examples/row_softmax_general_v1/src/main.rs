@@ -2,14 +2,13 @@ use fe2o3_core::{DeviceBuffer, GpuContext, GpuModule, LaunchConfig, Stream};
 use fe2o3_host::launch;
 use std::path::PathBuf;
 
-const OUTPUT_STRIDE: usize = 4096;
-
 #[derive(Clone, Copy)]
 struct Case {
     name: &'static str,
     rows: u32,
     columns: u32,
     input_stride: u32,
+    output_stride: u32,
 }
 
 const CASES: [Case; 4] = [
@@ -18,24 +17,28 @@ const CASES: [Case; 4] = [
         rows: 3,
         columns: 1,
         input_stride: 4099,
+        output_stride: 7,
     },
     Case {
         name: "wave-tail",
         rows: 5,
         columns: 63,
         input_stride: 4101,
+        output_stride: 71,
     },
     Case {
         name: "multi-iteration",
         rows: 7,
         columns: 257,
         input_stride: 4103,
+        output_stride: 269,
     },
     Case {
         name: "maximum-width",
         rows: 2,
         columns: 4096,
         input_stride: 4103,
+        output_stride: 4103,
     },
 ];
 
@@ -64,7 +67,7 @@ fn launch_case(
                 scalar(case.rows),
                 scalar(case.columns),
                 scalar(case.input_stride),
-                scalar(case.rows * 64),
+                scalar(case.output_stride),
             ]
         }
     }
@@ -84,7 +87,7 @@ fn run_case(
         }
     }
     let sentinel = -91.0_f32;
-    let output = vec![sentinel; case.rows as usize * OUTPUT_STRIDE];
+    let output = vec![sentinel; case.rows as usize * case.output_stride as usize];
     let input_device = DeviceBuffer::from_host(&stream, &input)?;
     let output_device = DeviceBuffer::from_host(&stream, &output)?;
     launch_case(&stream, module, &input_device, &output_device, case)?;
@@ -101,7 +104,7 @@ fn run_case(
             .sum::<f32>();
         for column in 0..case.columns as usize {
             let expected = (values[column] - maximum).exp() / denominator;
-            let observed = actual[row * OUTPUT_STRIDE + column];
+            let observed = actual[row * case.output_stride as usize + column];
             maximum_error = maximum_error.max((observed - expected).abs());
             assert!(
                 (observed - expected).abs() <= 3.0e-5,
@@ -110,7 +113,8 @@ fn run_case(
             );
         }
         assert!(
-            actual[row * OUTPUT_STRIDE + case.columns as usize..(row + 1) * OUTPUT_STRIDE]
+            actual[row * case.output_stride as usize + case.columns as usize
+                ..(row + 1) * case.output_stride as usize]
                 .iter()
                 .all(|value| *value == sentinel),
             "{} wrote output padding",
@@ -119,7 +123,7 @@ fn run_case(
     }
     println!(
         "PASS {:<18} rows={} columns={} stride={} max_error={maximum_error}",
-        case.name, case.rows, case.columns, case.input_stride
+        case.name, case.rows, case.columns, case.output_stride
     );
     Ok(())
 }

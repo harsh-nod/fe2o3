@@ -3,8 +3,8 @@
 #![allow(missing_docs)]
 
 use fe2o3_device::{
-    DisjointSlice, Index1D, KernelError, KernelResult, Math, Subgroup, Tiled2D, kernel, thread,
-    StridedReadView2D,
+    DisjointSlice, Index1D, KernelError, KernelResult, Math, RowStriped2D, StridedReadView2D,
+    Subgroup, kernel, thread,
 };
 
 pub const ROW_SOFTMAX_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
@@ -17,12 +17,11 @@ fn accessed_extent(rows: u32, columns: u32, stride: u32) -> usize {
     (rows - 1) as usize * stride as usize + columns as usize
 }
 
-/// Computes independent softmax rows with dynamic dimensions and input stride.
+/// Computes independent softmax rows with dynamic dimensions and strides.
 ///
 /// One wave owns each row. Lane `l` processes columns `l + 64 * iteration`.
-/// Each input row has 4,096 readable elements; columns at or above `columns`
-/// must be negative infinity. The output uses the same padded row width, which
-/// lets `Tiled2D` prove every store disjoint without unsafe source code.
+/// Logical edges are zero-work lanes. The row-striped output capability proves
+/// disjoint compact stores for arbitrary checked row padding.
 #[kernel(
     typed,
     launch(required = [64, 1, 1], max = [64, 1, 1]),
@@ -30,19 +29,19 @@ fn accessed_extent(rows: u32, columns: u32, stride: u32) -> usize {
 )]
 pub fn row_softmax_general_v1(
     input: &[f32],
-    mut output: DisjointSlice<f32, Tiled2D<Index1D, 64, 64, 64, 64>>,
+    mut output: DisjointSlice<f32, RowStriped2D<Index1D, 64, 64>>,
     rows: u32,
     columns: u32,
     input_stride: u32,
-    output_rows: u32,
+    output_stride: u32,
 ) -> KernelResult {
     if columns == 0
         || columns as usize > ROW_SOFTMAX_MAX_COLUMNS_V1
         || input_stride < columns
+        || output_stride < columns
         || rows > u32::MAX / 64
-        || output_rows != rows * 64
         || input.len() < accessed_extent(rows, columns, input_stride)
-        || output.len() < output_rows as usize * 64
+        || output.len() < accessed_extent(rows, columns, output_stride)
     {
         return Err(KernelError::InvalidArgument);
     }
@@ -58,8 +57,8 @@ pub fn row_softmax_general_v1(
     let raw = thread_index.get();
     let row = raw / 64;
     let lane = raw % 64;
-    let output_tile = thread_index
-        .checked_tiled_2d::<64, 64, 64, 64>()
+    let output_stripe = thread_index
+        .checked_row_striped_2d::<64, 64>()
         .ok_or(KernelError::OutOfBounds)?;
 
     let subgroup = Subgroup::current();
@@ -90,8 +89,13 @@ pub fn row_softmax_general_v1(
     while component < 64 {
         let column = lane + component * 64;
         if column < columns as usize
-            && let Some(element) =
-                output.get_tiled_2d_mut(&output_tile, component, output_rows as usize, 64, 64)
+            && let Some(element) = output.get_row_striped_2d_mut(
+                    &output_stripe,
+                    component,
+                    rows as usize,
+                    columns as usize,
+                    output_stride as usize,
+                )
         {
             *element = math.exp_f32(input.load_or(row, column, f32::NEG_INFINITY) - maximum)
                 / denominator;
