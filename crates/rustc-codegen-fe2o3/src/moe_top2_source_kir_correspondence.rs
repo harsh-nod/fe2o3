@@ -40,8 +40,8 @@ const SOURCE_IDENTITY: [u8; 32] = [
     0xed, 0x0e, 0x43, 0x66, 0x65, 0x09, 0x77, 0x0f, 0x6e, 0x61, 0x86, 0xf5, 0x10, 0x0f, 0xee, 0x25,
 ];
 const PORTABLE_MIR_IDENTITY: [u8; 32] = [
-    0x93, 0x4c, 0x22, 0x05, 0x97, 0x3e, 0x24, 0x21, 0x6d, 0x53, 0x7c, 0x5f, 0x89, 0xbc, 0x65, 0xd8,
-    0xe1, 0x5d, 0xd6, 0x83, 0x76, 0xdc, 0xe4, 0x77, 0xd1, 0x76, 0x8e, 0x29, 0x36, 0xb4, 0xfc, 0x13,
+    0x6d, 0xf9, 0x0b, 0x02, 0xce, 0xe9, 0x4c, 0x4e, 0x7c, 0x01, 0xf8, 0x6f, 0x2b, 0xc3, 0xc7, 0x35,
+    0xdc, 0xef, 0x0a, 0xb1, 0xd5, 0xe3, 0x4c, 0xe6, 0xa8, 0xb0, 0xd8, 0x76, 0x1c, 0x99, 0x96, 0x11,
 ];
 const FN_ABI_IDENTITY: [u8; 32] = [
     0xdd, 0xc0, 0x17, 0x2c, 0xfc, 0x37, 0x01, 0x6c, 0x86, 0xbe, 0x2b, 0x57, 0x9c, 0x4c, 0x98, 0xb1,
@@ -58,20 +58,20 @@ pub(super) const MOE_TOP2_LIVE_STRUCTURAL_SNAPSHOT_V2: &str = concat!(
     "rust=1:variadic=0:fixed=8:unwind=1:ignored=1:result=0:",
     "args=[16:8:1:0:0,16:8:1:0:0,16:8:1:0:0,16:8:1:0:0,",
     "16:8:1:0:0,16:8:1:0:0,16:8:1:0:0,16:8:1:0:0];",
-    "mir=934c2205973e24216d537c5f89bc65d8e15dd68376dce477d1768e2936b4fc13:",
-    "functions=6:roots=1:helpers=5:blocks=120:statements=222:terminators=120:",
-    "edges=142:imports=0:root-args=8:root-locals=171:assignments=221:calls=27:",
-    "indexed=36:repeats=8:binops=0x0000ec05;",
+    "mir=6df90b02cee94c4e7c01f86f2bc3c735dcef0ab1d5e34ce6a8b0d8761c999611:",
+    "functions=6:roots=1:helpers=5:blocks=118:statements=228:terminators=118:",
+    "edges=139:imports=0:root-args=8:root-locals=176:assignments=226:calls=25:",
+    "indexed=36:repeats=8:binops=0x0000ac05;",
     "kir=bdf19330357f898eb0267372e4115b33e4b60902c94b5b3b6e358f5703ee7eb0;",
     "profile=0b705d56abdaf76a3c36fa3894e50ee8fc70524a75410473590ea67feab7d25c;",
     "abi=f0abdc459360d1760e22c62f77830472ae9a3e151b5ec7323d56c5298dc87365;",
     "effects=4f7a7d0996535ee75ff22216c776666526caa93106a49c2e8cfb4956cb0f7716;",
     "routing=dc93201e71d4ba820f52bb44833f4592383b2023f67089a4cc1b73aae14f051b;",
     "compiler=4950c225e0cdbdce4e1230166984949970290dedc19e8dc4cd31f865f1625a4a;",
-    "trusted=d4b3798966bc3f91ce41d968ebdf8b1e4e774052781091767b831e9264026e04;",
+    "trusted=08ee45f6657f4a3db180cf6cbef29bea6098e4416c7d7c65bca0559b4d19d423;",
     "root=kernel::__fe2o3_host_kernel_v1_",
     "0d0504325353eb74b0c9ace47560290e2278a7cd7c20e3b1c6c70f4a7e37b1ab;",
-    "authority=118ab50d69b5b80ff0e9c29934f06c8aa142c7e16115de5a275390fcbaf16d39",
+    "authority=ecbefa9e3cb800078caa649c553ebd1967d6dd5e8db527dbf5901e1e4fddc54b",
 );
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
