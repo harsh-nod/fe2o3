@@ -4495,7 +4495,7 @@ fn source_execution_layout_v1(
         })?;
     Ok(ProductionRankedOperationV1::ExecutionLayout {
         grid_identity: identity,
-        global_extents: [0; 3],
+        global_extents: [0, 1, 1],
         workgroup_extents,
         subgroup_size,
         full_physical_workgroups: true,
@@ -9411,7 +9411,7 @@ mod tests {
     }
 
     #[test]
-    fn source_execution_layout_keeps_grid_extents_dynamic() {
+    fn source_execution_layout_keeps_only_the_d1_grid_extent_dynamic() {
         let dimensions = SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap();
         let launch =
             SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None).unwrap();
@@ -9430,7 +9430,7 @@ mod tests {
                 .unwrap(),
             ProductionRankedOperationV1::ExecutionLayout {
                 grid_identity: u64::from_le_bytes([42; 8]),
-                global_extents: [0; 3],
+                global_extents: [0, 1, 1],
                 workgroup_extents: [64, 1, 1],
                 subgroup_size: 64,
                 full_physical_workgroups: true,

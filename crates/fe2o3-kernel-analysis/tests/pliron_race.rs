@@ -704,7 +704,7 @@ fn checked_tiled_overflowing_invocation_is_not_proved_injective() {
 }
 
 #[test]
-fn dynamic_launch_identity_remains_unresolved_after_a_bounds_guard() {
+fn dynamic_launch_identity_is_total_and_injective_after_a_bounds_guard() {
     let context = &mut setup();
     let function = function(context, "dynamic_identity");
     let entry = function.get_entry_block(context);
@@ -737,12 +737,7 @@ fn dynamic_launch_identity_remains_unresolved_after_a_bounds_guard() {
     append(context, access_block, &to_exit);
     append(context, exit, &ret);
 
-    let report = run_pliron_ranked_race_check_v1(context, &function);
-    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
-    assert!(report.findings().iter().any(|finding| matches!(
-        finding,
-        RankedRaceFindingV1::DynamicLaunchExtent { dimension: 0 }
-    )));
+    assert!(run_pliron_ranked_race_check_v1(context, &function).is_clean());
 }
 
 #[test]
