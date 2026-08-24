@@ -83,7 +83,7 @@ fn canonical(signing: &SigningKey) -> Vec<u8> {
 }
 
 #[test]
-fn exact_signed_receipt_imports_once_with_narrow_authority() {
+fn exact_signed_receipt_imports_once_under_the_supplied_policy() {
     let signing = signer(90);
     let mut importer = FunctionalRefinementReceiptImporterV2::new(policy(&signing), 1).unwrap();
     let wire = canonical(&signing);
@@ -93,9 +93,7 @@ fn exact_signed_receipt_imports_once_with_narrow_authority() {
             &wire,
         )
         .unwrap();
-    assert!(proof.grants_functional_refinement_evidence());
-    assert!(!proof.grants_source_to_isa_authority());
-    assert!(!proof.grants_artifact_or_launch_authority());
+    assert!(proof.signature_and_policy_verified());
     assert_eq!(proof.binding(), binding());
     assert_eq!(importer.imported_count(), 1);
 

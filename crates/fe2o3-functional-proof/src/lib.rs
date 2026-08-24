@@ -2,14 +2,18 @@
 
 //! Strict import boundary for workload-neutral functional-refinement proof receipts.
 //!
-//! A receipt becomes [`ImportedFunctionalRefinementProofV2`] only after a compiler-supplied policy
-//! pins the signer, complete Verus/solver toolchain, and covered boundary; Ed25519 authenticates the
-//! canonical fixed-width message; and the message matches the current reference, kernel MIR, and
-//! normalized obligation/effect identities. Kernel source is not a trust-root input.
+//! A receipt becomes [`ImportedFunctionalRefinementProofV2`] only after an import policy pins the
+//! signer, complete Verus/solver toolchain, and covered boundary; Ed25519 authenticates the
+//! canonical fixed-width message; and the message matches the supplied reference, kernel MIR, and
+//! normalized obligation/effect identities. Import proves those checks passed under that policy.
+//! It does not establish that the policy or expected identities came from compiler custody.
 //!
-//! Imported evidence is authoritative only for its exact `FunctionalRefinement` boundary. It does
-//! not prove lowering, LLVM/ISA correspondence, artifact integrity, loading, launch, runtime
-//! behavior, or hardware execution.
+//! Compiler authority therefore requires a separate, private join to compiler-retained rustc MIR
+//! and compiler configuration. In that join, Verus proves compiler-derived effect formulas only
+//! conditional on the trusted MIR-to-effect extractor and the exact numeric model encoded by the
+//! generator. No receipt in this crate proves a full MIR operational-semantics theorem, lowering,
+//! LLVM/ISA correspondence, artifact integrity, loading, launch, runtime behavior, or hardware
+//! execution.
 
 use std::{collections::BTreeSet, error::Error, fmt};
 
@@ -30,7 +34,7 @@ const SIGNED_MESSAGE_BYTES_V2: usize = HEADER_BYTES_V2 + DIGEST_FIELD_COUNT_V2 *
 pub const FUNCTIONAL_REFINEMENT_RECEIPT_WIRE_BYTES_V2: usize =
     SIGNED_MESSAGE_BYTES_V2 + FUNCTIONAL_REFINEMENT_SIGNATURE_BYTES_V2;
 
-/// Which exact safe-reference inputs were selected by the authenticated frontend.
+/// Which safe-reference inputs the receipt claims were selected.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum SafeReferenceKindV2 {
@@ -68,7 +72,7 @@ impl FunctionalRefinementBoundaryV2 {
     }
 }
 
-/// Result produced by the authenticated Verus execution adapter.
+/// Verus execution result claimed by the signed receipt.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[repr(u8)]
 pub enum FunctionalRefinementResultV2 {
@@ -88,7 +92,7 @@ impl FunctionalRefinementResultV2 {
     }
 }
 
-/// Complete authority-relevant identity of the Verus and solver execution closure.
+/// Complete receipt-bound identity of the Verus and solver execution closure.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct VerusToolchainIdentityV2 {
     verus_executable: DigestV1,
@@ -147,7 +151,7 @@ impl VerusToolchainIdentityV2 {
     }
 }
 
-/// Exact workload-neutral statement authenticated by a V2 receipt.
+/// Exact workload-neutral statement encoded in a V2 receipt.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FunctionalRefinementBindingV2 {
     safe_reference_kind: SafeReferenceKindV2,
@@ -320,7 +324,10 @@ impl FunctionalRefinementBindingV2 {
     }
 }
 
-/// Signer and proof-environment trust root supplied by compiler configuration.
+/// Caller-supplied signer, proof-environment, and boundary import policy.
+///
+/// Constructing this policy does not make it a compiler trust root. Compiler production must
+/// obtain its policy from private compiler configuration and retain that custody separately.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FunctionalRefinementImportPolicyV2 {
     verifying_key: VerifyingKey,
@@ -361,11 +368,12 @@ impl FunctionalRefinementImportPolicyV2 {
     }
 }
 
-/// Canonical message prepared for a signer by the verifier-owned successful-execution join.
+/// Canonical unsigned message builder for a functional-refinement receipt.
 ///
-/// The low-level constructor is public only so `fe2o3-verifier` can own that join across the crate
-/// boundary. Constructing or attaching bytes grants no authority; production signers must accept
-/// messages only from the verifier-owned builder.
+/// This low-level constructor is public and non-authoritative: any caller can choose every field,
+/// construct a message, and attach bytes. A production signer must accept messages only from its
+/// private verifier-owned successful-execution join, and a compiler must independently retain
+/// rustc custody before admitting the resulting receipt.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UnsignedFunctionalRefinementReceiptV2 {
     message: [u8; SIGNED_MESSAGE_BYTES_V2],
@@ -431,7 +439,7 @@ impl UnsignedFunctionalRefinementReceiptV2 {
     }
 }
 
-/// Exact current compiler inputs against which one signed receipt is imported.
+/// Caller-supplied expected inputs against which one signed receipt is imported.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FunctionalRefinementImportExpectationV2 {
     binding: FunctionalRefinementBindingV2,
@@ -456,7 +464,11 @@ impl FunctionalRefinementReceiptIdentityV2 {
     }
 }
 
-/// Move-only authenticated functional-refinement evidence for one exact boundary.
+/// Move-only receipt that passed one exact import policy and binding expectation.
+///
+/// This value authenticates the receipt bytes relative to caller-supplied policy and expectation.
+/// It is not a compiler-authenticated MIR-refinement capability. Only a private compiler join may
+/// combine it with retained rustc custody and decide whether it is admissible for production.
 ///
 /// ```compile_fail
 /// use fe2o3_functional_proof::ImportedFunctionalRefinementProofV2;
@@ -464,7 +476,16 @@ impl FunctionalRefinementReceiptIdentityV2 {
 ///     let _copy = proof.clone();
 /// }
 /// ```
-#[must_use = "authenticated functional-refinement evidence must be consumed by the compiler boundary"]
+///
+/// A caller-verified receipt exposes no compiler-authority capability:
+///
+/// ```compile_fail
+/// use fe2o3_functional_proof::ImportedFunctionalRefinementProofV2;
+/// fn claim_compiler_authority(proof: &ImportedFunctionalRefinementProofV2) {
+///     assert!(proof.grants_functional_refinement_evidence());
+/// }
+/// ```
+#[must_use = "a policy-verified functional-refinement receipt must be consumed or discarded"]
 #[derive(Debug, Eq, PartialEq)]
 pub struct ImportedFunctionalRefinementProofV2 {
     receipt_identity: FunctionalRefinementReceiptIdentityV2,
@@ -494,14 +515,11 @@ impl ImportedFunctionalRefinementProofV2 {
     pub const fn boundary(&self) -> FunctionalRefinementBoundaryV2 {
         self.boundary
     }
-    pub const fn grants_functional_refinement_evidence(&self) -> bool {
+    /// Reports that signature, result, policy, boundary, and expected binding checks succeeded.
+    ///
+    /// This is deliberately a policy-verification fact, not compiler refinement authority.
+    pub const fn signature_and_policy_verified(&self) -> bool {
         true
-    }
-    pub const fn grants_source_to_isa_authority(&self) -> bool {
-        false
-    }
-    pub const fn grants_artifact_or_launch_authority(&self) -> bool {
-        false
     }
 }
 
