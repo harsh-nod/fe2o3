@@ -1,7 +1,9 @@
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, BasicBlock, BlockId, Constant, Function, Kernel, LaunchDomain,
-    LaunchExtent, Module, Operation, OperationKind, ScalarType, Signature, Terminator, Type,
-    ValueDef, ValueId, VerifiedCanonicalKernelIrV6,
+    AccessMode, AddressSpace, Axis, BarrierSemantics, BasicBlock, BlockId, Constant, Convergence,
+    Function, IndexKind, IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
+    MemoryAccess, MemoryOrdering, Module, Operation, OperationKind, ScalarType, Signature,
+    SynchronizationScope, TargetCapability, Terminator, Type, ValueDef, ValueId,
+    VerifiedCanonicalKernelIrV6, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent,
 };
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, BufferArgumentV1, IndexWidthV1, ScalarBitsV1, SimulationArgumentV1,
@@ -11,9 +13,10 @@ use fe2o3_kir_sim_trace::{
     KirSiteCatalogV1, SimulationTraceProfileV1, simulate_with_semantic_trace_v1,
 };
 use fe2o3_semantic_trace::{
-    AddressSpaceV1, AllocationEventV1, CaptureEndBoundaryV1, DiagnosticKindV1, DispatchEventV1,
-    DispatchOutcomeV1, ExecutionLevelV1, KirSitePointV1, OperationEventV1, TraceBoundsV1,
-    TraceCompletenessV1, TraceEventKindV1, WaveWidthV1, decode_trace_v1, encode_trace_v1,
+    AddressSpaceV1, AllocationEventV1, BarrierActionV1, CaptureEndBoundaryV1, DiagnosticKindV1,
+    DispatchEventV1, DispatchOutcomeV1, ExecutionLevelV1, KirSitePointV1, OperationEventV1,
+    TraceBoundsV1, TraceCompletenessV1, TraceEventKindV1, WaveWidthV1, decode_trace_v1,
+    encode_trace_v1,
 };
 
 fn op(result: u32, value: u32) -> Operation {
@@ -56,6 +59,123 @@ fn simple_module(rank: u8) -> Module {
     block.operations.push(op(0, 7));
     block.terminator = Some(Terminator::Return { values: vec![] });
     module_with_blocks(rank, vec![block])
+}
+
+fn traced_lds_module() -> Module {
+    let scalar = Type::Scalar(ScalarType::U32);
+    let global = Type::pointer(scalar.clone(), AddressSpace::Global, AccessMode::ReadWrite);
+    let workgroup = Type::pointer(
+        scalar.clone(),
+        AddressSpace::Workgroup,
+        AccessMode::ReadWrite,
+    );
+    let value = |id, ty, kind| Operation::effect_free(ValueDef::new(ValueId(id), ty), kind);
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations = vec![
+        value(
+            1,
+            workgroup.clone(),
+            OperationKind::WorkgroupMemory(WorkgroupMemory {
+                element: scalar.clone(),
+                extent: WorkgroupMemoryExtent::Static(2),
+                alignment: 4,
+            }),
+        ),
+        value(
+            2,
+            Type::INDEX,
+            OperationKind::Intrinsic(IntrinsicOperation::new(
+                IntrinsicKind::InvocationIndex {
+                    kind: IndexKind::Local,
+                    axis: Axis::X,
+                },
+                Type::INDEX,
+            )),
+        ),
+        value(
+            3,
+            workgroup,
+            OperationKind::GetElementPointer {
+                base: ValueId(1),
+                offset: ValueId(2),
+            },
+        ),
+        value(4, scalar.clone(), OperationKind::Constant(Constant::U32(9))),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(3),
+                value: ValueId(4),
+                access: MemoryAccess::new(AddressSpace::Workgroup, 4),
+            },
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+                memory_scope: SynchronizationScope::Workgroup,
+                semantics: BarrierSemantics::new(
+                    MemoryOrdering::AcquireRelease,
+                    [AddressSpace::Workgroup],
+                ),
+                convergence: Convergence::uniform(SynchronizationScope::Workgroup),
+            }),
+        ),
+        value(
+            5,
+            scalar.clone(),
+            OperationKind::Load {
+                pointer: ValueId(1),
+                access: MemoryAccess::new(AddressSpace::Workgroup, 4),
+            },
+        ),
+        value(
+            6,
+            Type::INDEX,
+            OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
+        ),
+        value(
+            7,
+            global,
+            OperationKind::GetElementPointer {
+                base: ValueId(0),
+                offset: ValueId(6),
+            },
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(7),
+                value: ValueId(5),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ),
+    ];
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let capabilities = std::collections::BTreeSet::from([
+        TargetCapability::WorkgroupMemory,
+        TargetCapability::WorkgroupBarrier,
+    ]);
+    let mut entry = Function::kernel_entry(
+        "entry",
+        Signature::new(
+            vec![Type::pointer(
+                scalar,
+                AddressSpace::Global,
+                AccessMode::ReadWrite,
+            )],
+            vec![],
+        ),
+        vec![ValueId(0)],
+        vec![block],
+    );
+    entry.required_capabilities = capabilities.clone();
+    let mut kernel = Kernel::new("kernel", "entry", domain(1));
+    kernel.required_capabilities = capabilities.clone();
+    let mut module = Module::new("trace-lds");
+    module.required_capabilities = capabilities;
+    module.functions.push(entry);
+    module.kernels.push(kernel);
+    module
 }
 
 fn empty_buffer_module() -> Module {
@@ -683,5 +803,196 @@ fn configuration_digest_binds_target_and_values_but_not_wave_visualization() {
     assert_eq!(
         baseline.trace.header().dispatch(),
         wave64.trace.header().dispatch()
+    );
+}
+
+#[test]
+fn lds_and_barriers_preserve_lane_and_workgroup_scope_for_partial_groups() {
+    let module = admitted(traced_lds_module());
+    let output = BufferArgumentV1::from_scalars(
+        AccessMode::ReadWrite,
+        4,
+        &[ScalarBitsV1::u32(0); 3],
+        SimulationTargetV1::amdgpu_64(),
+    )
+    .unwrap();
+    let request = SimulationRequestV1::new(
+        "kernel",
+        [3, 1, 1],
+        [2, 1, 1],
+        vec![SimulationArgumentV1::Buffer(output)],
+    );
+    let run = || {
+        simulate_with_semantic_trace_v1(
+            &module,
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            profile(WaveWidthV1::Wave32, 10_000),
+        )
+        .unwrap()
+    };
+    let first = run();
+    let second = run();
+    assert_eq!(
+        encode_trace_v1(&first.trace).unwrap(),
+        encode_trace_v1(&second.trace).unwrap(),
+        "cooperative event order is deterministic"
+    );
+    assert_eq!(
+        first.trace.header().completeness(),
+        TraceCompletenessV1::Complete
+    );
+
+    let mut arrivals = 0;
+    let mut releases = Vec::new();
+    let mut workgroup_allocations = 0;
+    let mut lane_lds_accesses = 0;
+    for event in first.trace.events() {
+        match event.kind() {
+            TraceEventKindV1::Barrier(barrier) => match barrier.action() {
+                BarrierActionV1::Arrive => {
+                    arrivals += 1;
+                    assert!(matches!(
+                        event.scope().level(),
+                        ExecutionLevelV1::Lane { .. }
+                    ));
+                }
+                BarrierActionV1::Release => {
+                    let ExecutionLevelV1::Workgroup { workgroup } = event.scope().level() else {
+                        panic!("barrier release must have workgroup scope")
+                    };
+                    releases.push(workgroup);
+                }
+            },
+            TraceEventKindV1::Allocation(AllocationEventV1::Create {
+                address_space: AddressSpaceV1::Workgroup,
+                ..
+            }) => {
+                workgroup_allocations += 1;
+                assert!(matches!(
+                    event.scope().level(),
+                    ExecutionLevelV1::Workgroup { .. }
+                ));
+            }
+            TraceEventKindV1::Memory(memory)
+                if memory.address_space() == AddressSpaceV1::Workgroup =>
+            {
+                lane_lds_accesses += 1;
+                assert!(matches!(
+                    event.scope().level(),
+                    ExecutionLevelV1::Lane { .. }
+                ));
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(arrivals, 3);
+    assert_eq!(releases, vec![[0, 0, 0], [1, 0, 0]]);
+    assert_eq!(workgroup_allocations, 2);
+    assert_eq!(lane_lds_accesses, 6);
+}
+
+#[test]
+fn truncation_rolls_back_the_entire_active_workgroup() {
+    let module = admitted(traced_lds_module());
+    let make_request = || {
+        let output = BufferArgumentV1::from_scalars(
+            AccessMode::ReadWrite,
+            4,
+            &[ScalarBitsV1::u32(0); 3],
+            SimulationTargetV1::amdgpu_64(),
+        )
+        .unwrap();
+        SimulationRequestV1::new(
+            "kernel",
+            [3, 1, 1],
+            [2, 1, 1],
+            vec![SimulationArgumentV1::Buffer(output)],
+        )
+    };
+    let full = simulate_with_semantic_trace_v1(
+        &module,
+        &make_request(),
+        SimulationTargetV1::amdgpu_64(),
+        SimulationLimitsV1::default(),
+        profile(WaveWidthV1::Wave32, 10_000),
+    )
+    .unwrap();
+    let truncated = (3..full.trace.events().len() as u64)
+        .find_map(|max_events| {
+            let outcome = simulate_with_semantic_trace_v1(
+                &module,
+                &make_request(),
+                SimulationTargetV1::amdgpu_64(),
+                SimulationLimitsV1::default(),
+                profile(WaveWidthV1::Wave32, max_events),
+            )
+            .ok()?;
+            (matches!(
+                outcome.trace.header().completeness(),
+                TraceCompletenessV1::Truncated { .. }
+            ) && outcome.trace.events().iter().any(|event| {
+                matches!(
+                    event.kind(),
+                    TraceEventKindV1::Invocation(fe2o3_semantic_trace::InvocationEventV1::Begin)
+                )
+            }))
+            .then_some(outcome)
+        })
+        .expect("a prefix retaining one complete workgroup exists");
+
+    let mut invocations = std::collections::BTreeMap::new();
+    let mut workgroup_allocations = std::collections::BTreeMap::new();
+    let mut arrivals = std::collections::BTreeMap::new();
+    let mut releases = std::collections::BTreeMap::new();
+    for event in truncated.trace.events() {
+        match event.kind() {
+            TraceEventKindV1::Invocation(kind) => {
+                let counts = invocations.entry(event.scope()).or_insert((0, 0));
+                match kind {
+                    fe2o3_semantic_trace::InvocationEventV1::Begin => counts.0 += 1,
+                    fe2o3_semantic_trace::InvocationEventV1::End => counts.1 += 1,
+                }
+            }
+            TraceEventKindV1::Allocation(allocation)
+                if matches!(
+                    allocation,
+                    AllocationEventV1::Create {
+                        address_space: AddressSpaceV1::Workgroup,
+                        ..
+                    } | AllocationEventV1::Release { .. }
+                ) =>
+            {
+                let counts = workgroup_allocations
+                    .entry(allocation.allocation())
+                    .or_insert((0, 0));
+                match allocation {
+                    AllocationEventV1::Create { .. } => counts.0 += 1,
+                    AllocationEventV1::Release { .. } => counts.1 += 1,
+                    _ => {}
+                }
+            }
+            TraceEventKindV1::Barrier(barrier) => {
+                let workgroup = event.scope().workgroup_coordinate().unwrap();
+                let key = (workgroup, barrier.barrier_id(), barrier.phase());
+                match barrier.action() {
+                    BarrierActionV1::Arrive => *arrivals.entry(key).or_insert(0) += 1,
+                    BarrierActionV1::Release => *releases.entry(key).or_insert(0) += 1,
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(invocations.values().all(|counts| *counts == (1, 1)));
+    assert!(
+        workgroup_allocations
+            .values()
+            .all(|counts| *counts == (1, 1))
+    );
+    assert!(
+        releases
+            .iter()
+            .all(|(key, count)| { *count == 1 && arrivals.get(key).copied() == Some(2) })
     );
 }

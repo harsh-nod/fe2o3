@@ -57,6 +57,7 @@ pub enum UnsupportedFeatureV1 {
     Fence,
     WorkgroupBarrier,
     WorkgroupMemory,
+    DynamicWorkgroupMemory,
     Matrix,
     Wave,
     InlineAssembly,
@@ -177,6 +178,7 @@ pub struct SimulationPlanV1 {
     pub(crate) reachable_function_indices: Vec<usize>,
     pub(crate) reachable_operations: usize,
     pub(crate) execution_index_resident_bytes: usize,
+    pub(crate) workgroup_allocation_sites: usize,
     pub(crate) resident_bytes: usize,
 }
 
@@ -457,6 +459,15 @@ pub(crate) fn preflight(
     }
     validate_acyclic_call_depth(module, entry, limits)?;
     validate_arguments(entry, request, target, limits)?;
+    let workgroup_resources = validate_workgroup_resources(
+        module,
+        &reachable_function_indices,
+        request,
+        target,
+        workgroup,
+        workgroups,
+        limits,
+    )?;
     let execution_index_resident_bytes =
         crate::execute::preflight_execution_indices_resident_bytes(
             module,
@@ -492,6 +503,9 @@ pub(crate) fn preflight(
         reachable_function_indices.capacity(),
         execution_index_resident_bytes,
         maximum_reachable_identifier_bytes,
+        workgroup_resources.participants,
+        workgroup_resources.allocation_sites,
+        workgroup_resources.static_bytes,
     )
     .ok_or(SimulationPreflightErrorV1::ResourceLimit {
         resource: "resident bytes",
@@ -520,7 +534,162 @@ pub(crate) fn preflight(
         reachable_function_indices,
         reachable_operations,
         execution_index_resident_bytes,
+        workgroup_allocation_sites: workgroup_resources.allocation_sites,
         resident_bytes,
+    })
+}
+
+#[derive(Clone, Copy)]
+struct WorkgroupResourcePlan {
+    participants: usize,
+    allocation_sites: usize,
+    static_bytes: usize,
+}
+
+fn validate_workgroup_resources(
+    module: &Module,
+    reachable: &[usize],
+    request: &SimulationRequestV1,
+    target: SimulationTargetV1,
+    workgroup: [u32; 3],
+    workgroups: u64,
+    limits: SimulationLimitsV1,
+) -> Result<WorkgroupResourcePlan, SimulationPreflightErrorV1> {
+    let participants = workgroup
+        .into_iter()
+        .try_fold(1_u64, |product, dimension| {
+            product.checked_mul(u64::from(dimension))
+        })
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or(SimulationPreflightErrorV1::ResourceLimit {
+            resource: "workgroup participants",
+            actual: u64::MAX,
+            limit: limits.max_scheduled_slots,
+        })?;
+    let mut allocation_sites = 0usize;
+    let mut static_bytes = 0usize;
+    for function_index in reachable {
+        let Some(body) = module
+            .functions
+            .get(*function_index)
+            .and_then(|function| function.body.as_ref())
+        else {
+            continue;
+        };
+        for memory in body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .filter_map(|operation| match &operation.kind {
+                OperationKind::WorkgroupMemory(memory) => Some(memory),
+                _ => None,
+            })
+        {
+            let (Type::Scalar(element), fe2o3_kernel_ir::WorkgroupMemoryExtent::Static(elements)) =
+                (&memory.element, memory.extent)
+            else {
+                continue;
+            };
+            let bytes = usize::try_from(elements)
+                .ok()
+                .and_then(|elements| {
+                    target
+                        .scalar_bytes(*element)
+                        .and_then(|width| elements.checked_mul(width))
+                })
+                .ok_or(SimulationPreflightErrorV1::ResourceLimit {
+                    resource: "static workgroup allocation bytes",
+                    actual: u64::MAX,
+                    limit: limits.max_allocation_bytes as u64,
+                })?;
+            check_limit(
+                "static workgroup allocation bytes",
+                bytes as u64,
+                limits.max_allocation_bytes as u64,
+            )?;
+            allocation_sites = allocation_sites.checked_add(1).ok_or(
+                SimulationPreflightErrorV1::ResourceLimit {
+                    resource: "workgroup allocation sites",
+                    actual: u64::MAX,
+                    limit: limits.max_allocations as u64,
+                },
+            )?;
+            static_bytes = static_bytes.checked_add(bytes).ok_or(
+                SimulationPreflightErrorV1::ResourceLimit {
+                    resource: "static workgroup bytes",
+                    actual: u64::MAX,
+                    limit: limits.max_total_bytes as u64,
+                },
+            )?;
+        }
+    }
+    let argument_bytes = request
+        .arguments
+        .iter()
+        .filter_map(|argument| match argument {
+            SimulationArgumentV1::Buffer(buffer) => Some(buffer.bytes().len()),
+            _ => None,
+        })
+        .chain(
+            request
+                .shared_buffers
+                .iter()
+                .map(|shared| shared.buffer.bytes().len()),
+        )
+        .try_fold(0usize, |total, bytes| total.checked_add(bytes))
+        .ok_or(SimulationPreflightErrorV1::ResourceLimit {
+            resource: "live bytes with static workgroup memory",
+            actual: u64::MAX,
+            limit: limits.max_total_bytes as u64,
+        })?;
+    let live_bytes = argument_bytes.checked_add(static_bytes).ok_or(
+        SimulationPreflightErrorV1::ResourceLimit {
+            resource: "live bytes with static workgroup memory",
+            actual: u64::MAX,
+            limit: limits.max_total_bytes as u64,
+        },
+    )?;
+    check_limit(
+        "live bytes with static workgroup memory",
+        live_bytes as u64,
+        limits.max_total_bytes as u64,
+    )?;
+    let workgroup_allocations = u64::try_from(allocation_sites)
+        .ok()
+        .and_then(|sites| sites.checked_mul(workgroups))
+        .ok_or(SimulationPreflightErrorV1::ResourceLimit {
+            resource: "workgroup allocations",
+            actual: u64::MAX,
+            limit: limits.max_allocations as u64,
+        })?;
+    let argument_allocations = request
+        .arguments
+        .iter()
+        .filter(|argument| matches!(argument, SimulationArgumentV1::Buffer(_)))
+        .count()
+        .checked_add(request.shared_buffers.len())
+        .and_then(|count| u64::try_from(count).ok())
+        .ok_or(SimulationPreflightErrorV1::ResourceLimit {
+            resource: "allocations including workgroup memory",
+            actual: u64::MAX,
+            limit: limits.max_allocations as u64,
+        })?;
+    let total_allocations = argument_allocations
+        .checked_add(workgroup_allocations)
+        .ok_or(SimulationPreflightErrorV1::ResourceLimit {
+            resource: "allocations including workgroup memory",
+            actual: u64::MAX,
+            limit: limits.max_allocations as u64,
+        })?;
+    check_limit(
+        "allocations including workgroup memory",
+        total_allocations,
+        limits.max_allocations as u64,
+    )?;
+    Ok(WorkgroupResourcePlan {
+        participants,
+        allocation_sites,
+        static_bytes,
     })
 }
 
@@ -1397,8 +1566,16 @@ fn scan_operation(
         OperationKind::Barrier(_) => reject!(UnsupportedFeatureV1::Barrier),
         OperationKind::Atomic(_) => reject!(UnsupportedFeatureV1::Atomic),
         OperationKind::Fence(_) => reject!(UnsupportedFeatureV1::Fence),
-        OperationKind::WorkgroupBarrier(_) => reject!(UnsupportedFeatureV1::WorkgroupBarrier),
-        OperationKind::WorkgroupMemory(_) => reject!(UnsupportedFeatureV1::WorkgroupMemory),
+        OperationKind::WorkgroupBarrier(_) => {}
+        OperationKind::WorkgroupMemory(memory) => {
+            if memory.extent.is_dynamic() {
+                reject!(UnsupportedFeatureV1::DynamicWorkgroupMemory);
+            }
+            if !matches!(&memory.element, Type::Scalar(scalar) if target.scalar_bits(*scalar).is_some())
+            {
+                reject!(UnsupportedFeatureV1::NonScalarMemory);
+            }
+        }
         OperationKind::Matrix(_) => reject!(UnsupportedFeatureV1::Matrix),
         OperationKind::Wave(_) => reject!(UnsupportedFeatureV1::Wave),
         OperationKind::InlineAssembly(_) => reject!(UnsupportedFeatureV1::InlineAssembly),
@@ -1414,7 +1591,10 @@ fn scan_memory_type(
 ) {
     if !matches!(
         address_space,
-        AddressSpace::Global | AddressSpace::Private | AddressSpace::Constant
+        AddressSpace::Global
+            | AddressSpace::Private
+            | AddressSpace::Workgroup
+            | AddressSpace::Constant
     ) {
         reject(UnsupportedFeatureV1::UnsupportedAddressSpace(address_space));
     }
@@ -1477,7 +1657,10 @@ fn unsupported_type(ty: &Type, target: SimulationTargetV1) -> Option<Unsupported
         Type::Pointer(pointer) => {
             if !matches!(
                 pointer.address_space,
-                AddressSpace::Global | AddressSpace::Private | AddressSpace::Constant
+                AddressSpace::Global
+                    | AddressSpace::Private
+                    | AddressSpace::Workgroup
+                    | AddressSpace::Constant
             ) {
                 Some(UnsupportedFeatureV1::UnsupportedAddressSpace(
                     pointer.address_space,

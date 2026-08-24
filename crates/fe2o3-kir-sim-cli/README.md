@@ -100,8 +100,9 @@ wire/count/depth caps.
 
 Success contains status ok, authority observation_only, the exact V6 SHA-256
 and canonical byte length, all execution counters including padded scheduled
-slots, the deterministic schedule identity, bounded cross-invocation conflict
-assessment, copied argument values, and copied shared backing buffers and views.
+slots, the deterministic cooperative workgroup schedule identity, bounded
+cross-invocation conflict assessment, copied argument values, and copied shared
+backing buffers and views.
 Scalar bits, buffer bytes, and initialization bitsets retain their exact typed
 lowercase hexadecimal encodings. Result bytes are measured exactly and capped
 at 64 MiB before output publication begins, then emitted directly through a

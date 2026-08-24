@@ -70,6 +70,7 @@ enum UnsupportedFeatureCode {
     Fence,
     WorkgroupBarrier,
     WorkgroupMemory,
+    DynamicWorkgroupMemory,
     Matrix,
     Wave,
     InlineAssembly,
@@ -1566,6 +1567,18 @@ fn execution_kind(error: &SimulationExecutionErrorKindV1) -> ErrorKind {
         SimulationExecutionErrorKindV1::UninitializedRead { .. } => {
             ErrorKind::ExecutionUninitializedRead
         }
+        SimulationExecutionErrorKindV1::WorkgroupUseBeforePublish { .. } => {
+            ErrorKind::ExecutionWorkgroupUseBeforePublish
+        }
+        SimulationExecutionErrorKindV1::DivergentWorkgroupBarrier(_) => {
+            ErrorKind::ExecutionDivergentWorkgroupBarrier
+        }
+        SimulationExecutionErrorKindV1::MismatchedWorkgroupBarrier(_) => {
+            ErrorKind::ExecutionMismatchedWorkgroupBarrier
+        }
+        SimulationExecutionErrorKindV1::WorkgroupSchedulerNoProgress { .. } => {
+            ErrorKind::ExecutionWorkgroupSchedulerNoProgress
+        }
         SimulationExecutionErrorKindV1::ReachedUnreachable => {
             ErrorKind::ExecutionReachedUnreachable
         }
@@ -1598,6 +1611,9 @@ fn unsupported_code(feature: &UnsupportedFeatureV1) -> UnsupportedFeatureCode {
         UnsupportedFeatureV1::Fence => UnsupportedFeatureCode::Fence,
         UnsupportedFeatureV1::WorkgroupBarrier => UnsupportedFeatureCode::WorkgroupBarrier,
         UnsupportedFeatureV1::WorkgroupMemory => UnsupportedFeatureCode::WorkgroupMemory,
+        UnsupportedFeatureV1::DynamicWorkgroupMemory => {
+            UnsupportedFeatureCode::DynamicWorkgroupMemory
+        }
         UnsupportedFeatureV1::Matrix => UnsupportedFeatureCode::Matrix,
         UnsupportedFeatureV1::Wave => UnsupportedFeatureCode::Wave,
         UnsupportedFeatureV1::InlineAssembly => UnsupportedFeatureCode::InlineAssembly,
@@ -1757,6 +1773,9 @@ const fn schedule_name(schedule: SimulationScheduleIdentityV1) -> &'static str {
     match schedule {
         SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxSerialV1 => {
             "workgroup_major_local_zyx_serial_v1"
+        }
+        SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxCooperativeV1 => {
+            "workgroup_major_local_zyx_cooperative_v1"
         }
     }
 }
@@ -2929,6 +2948,51 @@ mod tests {
         assert_eq!(
             serde_json::to_value(UnsupportedFeatureCode::InlineAssembly).unwrap(),
             "inline_assembly"
+        );
+        assert_eq!(
+            serde_json::to_value(unsupported_code(
+                &UnsupportedFeatureV1::DynamicWorkgroupMemory
+            ))
+            .unwrap(),
+            "dynamic_workgroup_memory"
+        );
+        assert_eq!(
+            execution_kind(&SimulationExecutionErrorKindV1::WorkgroupUseBeforePublish {
+                allocation: 1,
+                offset: 2,
+                bytes: 3,
+            }),
+            ErrorKind::ExecutionWorkgroupUseBeforePublish
+        );
+        assert_eq!(
+            execution_kind(
+                &SimulationExecutionErrorKindV1::WorkgroupSchedulerNoProgress { phase: 4 }
+            ),
+            ErrorKind::ExecutionWorkgroupSchedulerNoProgress
+        );
+        for (kind, expected) in [
+            (
+                ErrorKind::ExecutionWorkgroupUseBeforePublish,
+                "execution_workgroup_use_before_publish",
+            ),
+            (
+                ErrorKind::ExecutionDivergentWorkgroupBarrier,
+                "execution_divergent_workgroup_barrier",
+            ),
+            (
+                ErrorKind::ExecutionMismatchedWorkgroupBarrier,
+                "execution_mismatched_workgroup_barrier",
+            ),
+            (
+                ErrorKind::ExecutionWorkgroupSchedulerNoProgress,
+                "execution_workgroup_scheduler_no_progress",
+            ),
+        ] {
+            assert_eq!(serde_json::to_value(kind).unwrap(), expected);
+        }
+        assert_eq!(
+            schedule_name(SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxCooperativeV1),
+            "workgroup_major_local_zyx_cooperative_v1"
         );
         assert_eq!(
             preflight_kind(&SimulationPreflightErrorV1::TargetValueOutOfRange { argument: 7 }),
