@@ -75,40 +75,23 @@ fn run_feature(target: &Path, feature: &str) -> String {
     stderr
 }
 
-fn effect_identity(stderr: &str) -> &str {
-    let marker = "first canonical effect IR identity ";
-    let start = stderr
-        .find(marker)
-        .map(|index| index + marker.len())
-        .expect("pending-join diagnostic carries effect identity");
-    stderr
-        .get(start..start + 64)
-        .expect("effect identity is 64 lowercase hexadecimal bytes")
-}
-
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
-fn annotated_reference_reaches_production_with_an_observable_write_and_exact_identity() {
+fn annotated_reference_reaches_the_proof_runtime_boundary_and_mutation_is_rejected() {
     let target = ScratchTarget::new();
     let positive = run_feature(&target.0, "reference-positive");
     assert!(
-        positive.contains("authenticated 1 safe Rust reference/effect binding(s)")
-            && positive.contains("1 observable output write(s)")
-            && positive.contains("proof.require_effect_refinement")
-            && positive.contains("artifact emission is denied"),
-        "positive reference did not reach the fail-closed production handoff:\n{positive}",
+        positive.contains("functional-refinement proof runtime unavailable at /opt/fe2o3/verus-runtime-v2/0.2026.08.02-b677dd5")
+            && positive.contains("compilation stopped before proof admission or artifact emission"),
+        "positive reference did not pass the strict effect bijection and reach the proof boundary:\n{positive}",
     );
 
     let mutated = run_feature(&target.0, "reference-mutated");
     assert!(
-        mutated.contains("authenticated 1 safe Rust reference/effect binding(s)")
-            && mutated.contains("1 observable output write(s)"),
-        "mutated reference did not reach exact identity capture:\n{mutated}",
-    );
-    assert_ne!(
-        effect_identity(&positive),
-        effect_identity(&mutated),
-        "changing one reference output value must change the canonical effect identity",
+        mutated.contains("source-to-proof V2 effect mismatch")
+            && mutated.contains("RHS mismatch")
+            && !mutated.contains("functional-refinement proof runtime unavailable"),
+        "mutated reference was not rejected by the independently extracted effect bijection:\n{mutated}",
     );
 }
 

@@ -2,20 +2,28 @@
 
 use std::fmt;
 
-use dialect_kernel::{OwnershipCoverageAttr, OwnershipPartitionAttr};
+use dialect_kernel::{
+    DYNAMIC_EXTENT, IndexBinaryKindAttr, OwnershipCoverageAttr, OwnershipPartitionAttr,
+};
 use fe2o3_functional_proof::{FunctionalRefinementSubjectsV2, SafeReferenceKindV2};
 use fe2o3_pliron::{
     ProductionConstructionV1, ProductionEffectRefinementContractV2, ProductionGpuWriteSiteV2,
     ProductionRankedBlockV1, ProductionRankedCompileErrorV2, ProductionRankedKernelErrorV1,
     ProductionRankedKernelLoweringInputV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
-    ProductionRankedValueIdV1, ProductionRankedValueV1, ProductionReferenceOutputSiteV2,
-    ProductionReferenceProofV2, ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v2,
+    ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
+    ProductionReferenceOutputSiteV2, ProductionReferenceProofV2, ProductionSessionLimitsV1,
+    compile_ranked_kernel_for_lowering_v2,
 };
 use fe2o3_proof_contracts::DigestV1;
 
+use crate::reference_effect_bijection_v1::{
+    CompilerExtractedGpuOutputEffectV1, ReferenceEffectBijectionErrorV1,
+    establish_reference_effect_bijection_v1,
+};
 use crate::reference_effect_v1::{
-    AuthenticatedReferenceEffectBindingsV1, ReferenceArgumentRelationV1, ReferenceConstantV1,
-    ReferenceOperandV1, ReferenceOutputCoordinateV1, ReferenceScalarTypeV1, ReferenceValueV1,
+    AuthenticatedReferenceEffectBindingsV1, ReferenceArgumentRelationV1, ReferenceBinaryOpV1,
+    ReferenceConstantV1, ReferenceEffectExpressionV1, ReferenceOutputCoordinateV1,
+    ReferencePathPredicateV1, ReferenceScalarTypeV1,
 };
 
 const ROOT_NAME_V2: &str = "semantic_safety_module";
@@ -105,10 +113,10 @@ pub(crate) fn prepare_reference_effect_request_v2(
     };
     if !matches!(
         reference_write.coordinate,
-        ReferenceOutputCoordinateV1::SingleCoordinate
+        ReferenceOutputCoordinateV1::LogicalPoint(_)
     ) {
         return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
-            "V2 source join currently accepts one per-coordinate mutable output; indexed slice normalization is pending",
+            "V2 source join currently accepts one independently indexed logical point output",
         ));
     }
     let relation = binding
@@ -128,26 +136,26 @@ pub(crate) fn prepare_reference_effect_request_v2(
     else {
         unreachable!()
     };
-    let reference_value = reference_constant_value(reference_write.value.clone(), *element)?;
-    let allocation_origin = u64::from(*argument)
-        .checked_add(1)
-        .ok_or(ProductionReferenceEffectJoinErrorV2::InvalidAllocationOrigin)?;
-    let mut candidates = writes
+    let gpu_effects = writes
         .iter()
-        .filter(|write| write.allocation_origin == allocation_origin);
-    let write =
-        candidates
-            .next()
-            .ok_or(ProductionReferenceEffectJoinErrorV2::UnmodeledGpuWrite {
-                argument: *argument,
-                allocation_origin,
-            })?;
-    if candidates.next().is_some() {
-        return Err(ProductionReferenceEffectJoinErrorV2::AmbiguousGpuWrite {
-            argument: *argument,
-            allocation_origin,
-        });
-    }
+        .map(|write| compiler_extracted_gpu_effect_v1(&kernel, binding, write))
+        .collect::<Result<Vec<_>, _>>()?;
+    let pairs = establish_reference_effect_bijection_v1(
+        binding.observable_output_writes.as_ref(),
+        &gpu_effects,
+    )
+    .map_err(ProductionReferenceEffectJoinErrorV2::EffectBijection)?;
+    let [pair] = pairs.as_ref() else {
+        return Err(ProductionReferenceEffectJoinErrorV2::ReferenceWriteCount(
+            pairs.len(),
+        ));
+    };
+    let write = writes
+        .iter()
+        .find(|write| {
+            write.block == pair.gpu_block as usize && write.operation == pair.gpu_operation as usize
+        })
+        .ok_or(ProductionReferenceEffectJoinErrorV2::WriteLocation)?;
     let gpu_scalar =
         write
             .value
@@ -155,20 +163,9 @@ pub(crate) fn prepare_reference_effect_request_v2(
                 block: write.block,
                 operation: write.operation,
             })?;
-    if gpu_scalar != reference_value {
-        return Err(ProductionReferenceEffectJoinErrorV2::ValueMismatch {
-            gpu: gpu_scalar,
-            reference: reference_value,
-        });
-    }
-    if binding.effect_ir.relations.iter().any(|relation| {
-        matches!(
-            relation,
-            ReferenceArgumentRelationV1::DisjointOutputCoordinate { .. }
-        )
-    }) {
-        return Err(ProductionReferenceEffectJoinErrorV2::IndependentReferenceSemanticsUnavailable);
-    }
+    let reference_value =
+        reference_constant_expression_value(reference_write.rhs.clone(), *element)?;
+    let reference_indices = reference_ranked_indices_v2(&kernel, &reference_write.coordinate)?;
     let subjects = FunctionalRefinementSubjectsV2::new(
         SafeReferenceKindV2::Mir,
         DigestV1::from_untrusted_bytes(binding.reference.function_sha256),
@@ -221,6 +218,32 @@ pub(crate) fn prepare_reference_effect_request_v2(
     let terminator = target.terminator().clone();
     let index_arguments = target.index_argument_count();
 
+    let projected_write = operations
+        .get(write.operation)
+        .cloned()
+        .ok_or(ProductionReferenceEffectJoinErrorV2::WriteLocation)?;
+    match projected_write {
+        ProductionRankedOperationV1::Access {
+            kind,
+            view,
+            indices,
+        } if kind.writes_memory() && view == write.view && indices == write.indices => {
+            operations[write.operation] = ProductionRankedOperationV1::ValueAccess {
+                kind,
+                view,
+                indices,
+                value: ProductionRankedValueV1::Local(gpu_value_id),
+            };
+        }
+        _ => {
+            return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedGpuEffect {
+                block: write.block,
+                operation: write.operation,
+                detail: "functional refinement requires the exact projected non-atomic write with matching view and indices",
+            });
+        }
+    }
+
     let request_operation = operations.len();
     let contract_identity = contract_identity(binding.effect_ir_sha256, write);
     let contract = ProductionEffectRefinementContractV2::new(
@@ -239,7 +262,7 @@ pub(crate) fn prepare_reference_effect_request_v2(
         write.view,
         write.indices.clone(),
         write.indices.clone(),
-        write.indices.clone(),
+        reference_indices,
         ProductionRankedValueV1::Local(true_value),
         ProductionRankedValueV1::Local(true_value),
         ProductionRankedValueV1::Local(true_value),
@@ -262,30 +285,22 @@ pub(crate) fn prepare_reference_effect_request_v2(
     })
 }
 
-fn reference_constant_value(
-    value: ReferenceValueV1,
+fn reference_constant_expression_value(
+    value: ReferenceEffectExpressionV1,
     scalar: ReferenceScalarTypeV1,
 ) -> Result<u64, ProductionReferenceEffectJoinErrorV2> {
-    if !matches!(
-        scalar,
-        ReferenceScalarTypeV1::Bool
-            | ReferenceScalarTypeV1::U8
-            | ReferenceScalarTypeV1::U16
-            | ReferenceScalarTypeV1::U32
-            | ReferenceScalarTypeV1::U64
-            | ReferenceScalarTypeV1::Usize
-    ) {
+    if !supported_ranked_scalar_v2(scalar) {
         return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
             "per-coordinate source join currently accepts unsigned integer or bool output constants",
         ));
     }
-    let ReferenceValueV1::Use(ReferenceOperandV1::Constant(ReferenceConstantV1::Scalar {
+    let ReferenceEffectExpressionV1::Constant(ReferenceConstantV1::Scalar {
         scalar: actual,
         bits,
-    })) = value
+    }) = value
     else {
         return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
-            "reference output value is not one direct scalar constant",
+            "reference output RHS is not one normalized scalar constant",
         ));
     };
     if actual != scalar {
@@ -298,6 +313,446 @@ fn reference_constant_value(
             "reference output constant does not fit the ranked semantic scalar domain",
         )
     })
+}
+
+fn supported_ranked_scalar_v2(scalar: ReferenceScalarTypeV1) -> bool {
+    matches!(
+        scalar,
+        ReferenceScalarTypeV1::Bool
+            | ReferenceScalarTypeV1::U8
+            | ReferenceScalarTypeV1::U16
+            | ReferenceScalarTypeV1::U32
+            | ReferenceScalarTypeV1::U64
+            | ReferenceScalarTypeV1::Usize
+    )
+}
+
+fn compiler_extracted_gpu_effect_v1(
+    kernel: &ProductionRankedKernelV1,
+    binding: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1,
+    write: &RankedGpuWriteV2,
+) -> Result<CompilerExtractedGpuOutputEffectV1, ProductionReferenceEffectJoinErrorV2> {
+    let output_argument = write
+        .allocation_origin
+        .checked_sub(1)
+        .and_then(|argument| u32::try_from(argument).ok())
+        .ok_or(ProductionReferenceEffectJoinErrorV2::UnmodeledGlobalWrite {
+            allocation_origin: write.allocation_origin,
+        })?;
+    let scalar = binding
+        .effect_ir
+        .relations
+        .iter()
+        .find_map(|relation| match relation {
+            ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, element }
+                if *argument == output_argument =>
+            {
+                Some(*element)
+            }
+            _ => None,
+        })
+        .ok_or(ProductionReferenceEffectJoinErrorV2::UnmodeledGlobalWrite {
+            allocation_origin: write.allocation_origin,
+        })?;
+    if !supported_ranked_scalar_v2(scalar) {
+        return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedGpuEffect {
+            block: write.block,
+            operation: write.operation,
+            detail: "GPU output scalar is outside the bounded reference-join subset",
+        });
+    }
+    validate_bounds_only_gpu_guard_v2(kernel, write)?;
+    let coordinate = ReferenceOutputCoordinateV1::LogicalPoint(
+        write
+            .indices
+            .iter()
+            .copied()
+            .map(|value| gpu_index_expression_v2(kernel, value, 0))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_boxed_slice(),
+    );
+    let value = write
+        .value
+        .ok_or(ProductionReferenceEffectJoinErrorV2::UnmodeledGpuValue {
+            block: write.block,
+            operation: write.operation,
+        })?;
+    Ok(CompilerExtractedGpuOutputEffectV1 {
+        output_argument,
+        block: u32::try_from(write.block).map_err(|_| {
+            ProductionReferenceEffectJoinErrorV2::UnsupportedGpuEffect {
+                block: write.block,
+                operation: write.operation,
+                detail: "GPU write block does not fit the canonical effect identity",
+            }
+        })?,
+        operation: u32::try_from(write.operation).map_err(|_| {
+            ProductionReferenceEffectJoinErrorV2::UnsupportedGpuEffect {
+                block: write.block,
+                operation: write.operation,
+                detail: "GPU write operation does not fit the canonical effect identity",
+            }
+        })?,
+        coordinate,
+        guard: ReferencePathPredicateV1::unconditional_v1(),
+        rhs: ReferenceEffectExpressionV1::Constant(ReferenceConstantV1::Scalar {
+            scalar,
+            bits: u128::from(value),
+        }),
+    })
+}
+
+fn gpu_index_expression_v2(
+    kernel: &ProductionRankedKernelV1,
+    value: ProductionRankedValueV1,
+    depth: usize,
+) -> Result<ReferenceEffectExpressionV1, ProductionReferenceEffectJoinErrorV2> {
+    if depth >= 64 {
+        return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedGpuIndex(
+            "GPU index expression exceeds the bounded normalization depth",
+        ));
+    }
+    match value {
+        ProductionRankedValueV1::Argument(argument) => {
+            Ok(ReferenceEffectExpressionV1::KernelScalarArgument { argument })
+        }
+        ProductionRankedValueV1::BlockArgument { .. } => {
+            Err(ProductionReferenceEffectJoinErrorV2::UnsupportedGpuIndex(
+                "GPU output coordinate depends on a block argument",
+            ))
+        }
+        ProductionRankedValueV1::Local(identity) => {
+            let mut definitions = kernel
+                .blocks()
+                .iter()
+                .flat_map(|block| block.operations())
+                .filter(|operation| operation_result_v2(operation) == Some(identity));
+            let definition = definitions.next().ok_or(
+                ProductionReferenceEffectJoinErrorV2::UnsupportedGpuIndex(
+                    "GPU output coordinate has no ranked definition",
+                ),
+            )?;
+            if definitions.next().is_some() {
+                return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedGpuIndex(
+                    "GPU output coordinate has multiple ranked definitions",
+                ));
+            }
+            match definition {
+                ProductionRankedOperationV1::InvocationIndex { dimension, .. } => {
+                    Ok(ReferenceEffectExpressionV1::PointCoordinate { axis: *dimension })
+                }
+                ProductionRankedOperationV1::IndexConstant { value, .. } => Ok(
+                    ReferenceEffectExpressionV1::Constant(ReferenceConstantV1::Scalar {
+                        scalar: ReferenceScalarTypeV1::Usize,
+                        bits: u128::from(*value),
+                    }),
+                ),
+                ProductionRankedOperationV1::IndexBinary { kind, lhs, rhs, .. } => {
+                    let operation = match kind {
+                        IndexBinaryKindAttr::Add => ReferenceBinaryOpV1::Add,
+                        IndexBinaryKindAttr::Multiply => ReferenceBinaryOpV1::Multiply,
+                        IndexBinaryKindAttr::Remainder => ReferenceBinaryOpV1::Remainder,
+                        IndexBinaryKindAttr::Divide => ReferenceBinaryOpV1::Divide,
+                    };
+                    Ok(ReferenceEffectExpressionV1::Binary {
+                        operation,
+                        lhs: Box::new(gpu_index_expression_v2(kernel, *lhs, depth + 1)?),
+                        rhs: Box::new(gpu_index_expression_v2(kernel, *rhs, depth + 1)?),
+                        checked: false,
+                    })
+                }
+                _ => Err(ProductionReferenceEffectJoinErrorV2::UnsupportedGpuIndex(
+                    "GPU output coordinate uses an unsupported ranked definition",
+                )),
+            }
+        }
+    }
+}
+
+fn operation_result_v2(
+    operation: &ProductionRankedOperationV1,
+) -> Option<ProductionRankedValueIdV1> {
+    match operation {
+        ProductionRankedOperationV1::IndexConstant { result, .. }
+        | ProductionRankedOperationV1::IndexUnknown { result }
+        | ProductionRankedOperationV1::InvocationIndex { result, .. }
+        | ProductionRankedOperationV1::IndexBinary { result, .. }
+        | ProductionRankedOperationV1::DeterministicJoin { result, .. }
+        | ProductionRankedOperationV1::CheckedTiledIndex2D { result, .. }
+        | ProductionRankedOperationV1::CheckedRowStripedIndex2D { result, .. }
+        | ProductionRankedOperationV1::Dimension { result, .. }
+        | ProductionRankedOperationV1::SemanticConstant { result, .. }
+        | ProductionRankedOperationV1::SemanticSymbol { result, .. } => Some(*result),
+        _ => None,
+    }
+}
+
+fn reference_ranked_indices_v2(
+    kernel: &ProductionRankedKernelV1,
+    coordinate: &ReferenceOutputCoordinateV1,
+) -> Result<Vec<ProductionRankedValueV1>, ProductionReferenceEffectJoinErrorV2> {
+    let ReferenceOutputCoordinateV1::LogicalPoint(axes) = coordinate else {
+        return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+            "reference output coordinate is not a logical point",
+        ));
+    };
+    axes.iter()
+        .map(|axis| {
+            let ReferenceEffectExpressionV1::PointCoordinate { axis } = axis else {
+                return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+                    "reference logical point is not a direct coordinate argument",
+                ));
+            };
+            unique_invocation_index_v2(kernel, *axis)
+        })
+        .collect()
+}
+
+fn unique_invocation_index_v2(
+    kernel: &ProductionRankedKernelV1,
+    axis: u32,
+) -> Result<ProductionRankedValueV1, ProductionReferenceEffectJoinErrorV2> {
+    let mut values = kernel
+        .blocks()
+        .iter()
+        .flat_map(|block| block.operations())
+        .filter_map(|operation| match operation {
+            ProductionRankedOperationV1::InvocationIndex {
+                result, dimension, ..
+            } if *dimension == axis => Some(ProductionRankedValueV1::Local(*result)),
+            _ => None,
+        });
+    let value = values
+        .next()
+        .ok_or(ProductionReferenceEffectJoinErrorV2::UnsupportedGpuIndex(
+            "reference point axis has no compiler-derived GPU invocation coordinate",
+        ))?;
+    if values.next().is_some() {
+        return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedGpuIndex(
+            "reference point axis has multiple GPU invocation coordinates",
+        ));
+    }
+    Ok(value)
+}
+
+fn validate_bounds_only_gpu_guard_v2(
+    kernel: &ProductionRankedKernelV1,
+    write: &RankedGpuWriteV2,
+) -> Result<(), ProductionReferenceEffectJoinErrorV2> {
+    let blocks = kernel.blocks();
+    if write.block >= blocks.len() || !can_reach_block_v2(blocks, 0, write.block) {
+        return Err(ProductionReferenceEffectJoinErrorV2::WriteLocation);
+    }
+    if terminator_successors_v2(blocks[write.block].terminator())
+        .into_iter()
+        .any(|successor| can_reach_block_v2(blocks, successor, write.block))
+    {
+        return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedGpuEffect {
+            block: write.block,
+            operation: write.operation,
+            detail: "GPU output write lies on a CFG cycle",
+        });
+    }
+    for (block_index, block) in blocks.iter().enumerate() {
+        if block_index == write.block
+            || !can_reach_block_v2(blocks, 0, block_index)
+            || !can_reach_block_v2(blocks, block_index, write.block)
+        {
+            continue;
+        }
+        let controlled_successors = match block.terminator() {
+            ProductionRankedTerminatorV1::IndexLessThan {
+                lhs,
+                rhs,
+                true_block,
+                false_block,
+            }
+            | ProductionRankedTerminatorV1::IndexLessThanArgs {
+                lhs,
+                rhs,
+                true_block,
+                false_block,
+                ..
+            } => Some((*lhs, *rhs, *true_block as usize, *false_block as usize)),
+            ProductionRankedTerminatorV1::IndexEqual {
+                true_block,
+                false_block,
+                ..
+            }
+            | ProductionRankedTerminatorV1::IndexEqualArgs {
+                true_block,
+                false_block,
+                ..
+            }
+            | ProductionRankedTerminatorV1::AnalysisSplit {
+                first_block: true_block,
+                second_block: false_block,
+                ..
+            }
+            | ProductionRankedTerminatorV1::AnalysisSplitArgs {
+                first_block: true_block,
+                second_block: false_block,
+                ..
+            } => {
+                let true_reaches = can_reach_block_v2(blocks, *true_block as usize, write.block);
+                let false_reaches = can_reach_block_v2(blocks, *false_block as usize, write.block);
+                if true_reaches != false_reaches {
+                    return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedGpuEffect {
+                        block: write.block,
+                        operation: write.operation,
+                        detail: "GPU write has a logical path guard outside the exact memory-bounds selection",
+                    });
+                }
+                None
+            }
+            _ => None,
+        };
+        let Some((lhs, rhs, true_block, false_block)) = controlled_successors else {
+            continue;
+        };
+        let true_reaches = can_reach_block_v2(blocks, true_block, write.block);
+        let false_reaches = can_reach_block_v2(blocks, false_block, write.block);
+        if true_reaches == false_reaches {
+            continue;
+        }
+        if !true_reaches || !exact_bounds_pair_v2(kernel, write, lhs, rhs) {
+            return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedGpuEffect {
+                block: write.block,
+                operation: write.operation,
+                detail: "GPU write has a logical path guard outside the exact memory-bounds selection",
+            });
+        }
+    }
+    Ok(())
+}
+
+fn exact_bounds_pair_v2(
+    kernel: &ProductionRankedKernelV1,
+    write: &RankedGpuWriteV2,
+    lhs: ProductionRankedValueV1,
+    rhs: ProductionRankedValueV1,
+) -> bool {
+    let view = kernel
+        .blocks()
+        .iter()
+        .flat_map(|block| block.operations())
+        .find_map(|operation| match operation {
+            ProductionRankedOperationV1::View {
+                result,
+                shape,
+                dynamic_extents,
+                ..
+            }
+            | ProductionRankedOperationV1::ViewInSpace {
+                result,
+                shape,
+                dynamic_extents,
+                ..
+            } if write.view == ProductionRankedValueV1::Local(*result) => {
+                Some((shape.as_slice(), dynamic_extents.as_slice()))
+            }
+            _ => None,
+        });
+    let Some((shape, dynamic_extents)) = view else {
+        return false;
+    };
+    write.indices.iter().enumerate().any(|(axis, index)| {
+        if *index != lhs || axis >= shape.len() {
+            return false;
+        }
+        if shape[axis] != DYNAMIC_EXTENT {
+            return ranked_constant_v2(kernel, rhs) == Some(shape[axis]);
+        }
+        let dynamic_index = shape[..axis]
+            .iter()
+            .filter(|extent| **extent == DYNAMIC_EXTENT)
+            .count();
+        dynamic_extents.get(dynamic_index).copied() == Some(rhs)
+    })
+}
+
+fn ranked_constant_v2(
+    kernel: &ProductionRankedKernelV1,
+    value: ProductionRankedValueV1,
+) -> Option<u64> {
+    let ProductionRankedValueV1::Local(identity) = value else {
+        return None;
+    };
+    kernel
+        .blocks()
+        .iter()
+        .flat_map(|block| block.operations())
+        .find_map(|operation| match operation {
+            ProductionRankedOperationV1::IndexConstant { result, value } if *result == identity => {
+                Some(*value)
+            }
+            _ => None,
+        })
+}
+
+fn can_reach_block_v2(blocks: &[ProductionRankedBlockV1], start: usize, target: usize) -> bool {
+    if start >= blocks.len() || target >= blocks.len() {
+        return false;
+    }
+    let mut visited = vec![false; blocks.len()];
+    let mut pending = vec![start];
+    while let Some(block) = pending.pop() {
+        if block == target {
+            return true;
+        }
+        if visited[block] {
+            continue;
+        }
+        visited[block] = true;
+        pending.extend(
+            terminator_successors_v2(blocks[block].terminator())
+                .into_iter()
+                .filter(|successor| *successor < blocks.len()),
+        );
+    }
+    false
+}
+
+fn terminator_successors_v2(terminator: &ProductionRankedTerminatorV1) -> Vec<usize> {
+    match terminator {
+        ProductionRankedTerminatorV1::IndexLessThan {
+            true_block,
+            false_block,
+            ..
+        }
+        | ProductionRankedTerminatorV1::IndexLessThanArgs {
+            true_block,
+            false_block,
+            ..
+        }
+        | ProductionRankedTerminatorV1::IndexEqual {
+            true_block,
+            false_block,
+            ..
+        }
+        | ProductionRankedTerminatorV1::IndexEqualArgs {
+            true_block,
+            false_block,
+            ..
+        } => vec![*true_block as usize, *false_block as usize],
+        ProductionRankedTerminatorV1::AnalysisSplit {
+            first_block,
+            second_block,
+            ..
+        }
+        | ProductionRankedTerminatorV1::AnalysisSplitArgs {
+            first_block,
+            second_block,
+            ..
+        } => vec![*first_block as usize, *second_block as usize],
+        ProductionRankedTerminatorV1::Branch { target }
+        | ProductionRankedTerminatorV1::BranchArgs { target, .. }
+        | ProductionRankedTerminatorV1::BranchArgsAdd { target, .. }
+        | ProductionRankedTerminatorV1::BranchArgsAddAt { target, .. } => {
+            vec![*target as usize]
+        }
+        ProductionRankedTerminatorV1::Return | ProductionRankedTerminatorV1::Trap => Vec::new(),
+    }
 }
 
 fn allocate_value(
@@ -324,24 +779,20 @@ pub(crate) enum ProductionReferenceEffectJoinErrorV2 {
     BindingCount(usize),
     ReferenceWriteCount(usize),
     UnsupportedReference(&'static str),
-    InvalidAllocationOrigin,
-    UnmodeledGpuWrite {
-        argument: u32,
+    EffectBijection(ReferenceEffectBijectionErrorV1),
+    UnmodeledGlobalWrite {
         allocation_origin: u64,
     },
-    AmbiguousGpuWrite {
-        argument: u32,
-        allocation_origin: u64,
+    UnsupportedGpuEffect {
+        block: usize,
+        operation: usize,
+        detail: &'static str,
     },
+    UnsupportedGpuIndex(&'static str),
     UnmodeledGpuValue {
         block: usize,
         operation: usize,
     },
-    ValueMismatch {
-        gpu: u64,
-        reference: u64,
-    },
-    IndependentReferenceSemanticsUnavailable,
     AmbiguousOwnership,
     WriteLocation,
     ValueIdentityOverflow,
@@ -370,33 +821,27 @@ impl fmt::Display for ProductionReferenceEffectJoinErrorV2 {
             Self::UnsupportedReference(detail) => {
                 write!(formatter, "source-to-proof V2 reference is unsupported: {detail}")
             }
-            Self::InvalidAllocationOrigin => {
-                formatter.write_str("source-to-proof V2 output allocation origin overflowed")
+            Self::EffectBijection(error) => {
+                write!(formatter, "source-to-proof V2 effect mismatch: {error}")
             }
-            Self::UnmodeledGpuWrite {
-                argument,
-                allocation_origin,
+            Self::UnmodeledGlobalWrite { allocation_origin } => write!(
+                formatter,
+                "source-to-proof V2 found a global GPU write at allocation origin {allocation_origin} with no logical output ABI relation"
+            ),
+            Self::UnsupportedGpuEffect {
+                block,
+                operation,
+                detail,
             } => write!(
                 formatter,
-                "source-to-proof V2 found no GPU write for reference output argument {argument} (allocation origin {allocation_origin})"
+                "source-to-proof V2 cannot normalize the GPU effect at ranked block {block} op {operation}: {detail}"
             ),
-            Self::AmbiguousGpuWrite {
-                argument,
-                allocation_origin,
-            } => write!(
-                formatter,
-                "source-to-proof V2 found multiple GPU writes for reference output argument {argument} (allocation origin {allocation_origin}); one exact write is required"
-            ),
+            Self::UnsupportedGpuIndex(detail) => {
+                write!(formatter, "source-to-proof V2 cannot normalize the GPU coordinate: {detail}")
+            }
             Self::UnmodeledGpuValue { block, operation } => write!(
                 formatter,
                 "source-to-proof V2 cannot normalize the GPU store value at ranked block {block} op {operation}; only a compiler-derived exact scalar expression is accepted"
-            ),
-            Self::ValueMismatch { gpu, reference } => write!(
-                formatter,
-                "source-to-proof V2 exact value mismatch: GPU store is {gpu}, safe Rust reference output is {reference}"
-            ),
-            Self::IndependentReferenceSemanticsUnavailable => formatter.write_str(
-                "source-to-proof V2 stopped before proof admission: the current reference-effect IR retains only an implicit point coordinate and does not independently normalize the safe Rust reference coordinate and path guard",
             ),
             Self::AmbiguousOwnership => formatter.write_str(
                 "source-to-proof V2 output view already has an ownership contract; one compiler-owned contract is required",
@@ -431,3 +876,110 @@ impl fmt::Display for ProductionReferenceEffectJoinErrorV2 {
 }
 
 impl std::error::Error for ProductionReferenceEffectJoinErrorV2 {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dialect_kernel::{AccessKindAttr, MemorySpaceAttr};
+
+    fn dynamic_point_kernel(logical_guard: bool) -> (ProductionRankedKernelV1, RankedGpuWriteV2) {
+        let invocation = ProductionRankedValueIdV1::new(0);
+        let view = ProductionRankedValueIdV1::new(1);
+        let zero = ProductionRankedValueIdV1::new(2);
+        let mut entry_operations = vec![
+            ProductionRankedOperationV1::InvocationIndex {
+                result: invocation,
+                dimension: 0,
+                launch_extent: 64,
+            },
+            ProductionRankedOperationV1::ViewInSpace {
+                result: view,
+                element_width: 32,
+                writable: true,
+                shape: vec![DYNAMIC_EXTENT],
+                dynamic_extents: vec![ProductionRankedValueV1::Argument(0)],
+                memory_space: MemorySpaceAttr::Global,
+                allocation_origin: 1,
+                noalias_class: 1,
+            },
+        ];
+        if logical_guard {
+            entry_operations.push(ProductionRankedOperationV1::IndexConstant {
+                result: zero,
+                value: 0,
+            });
+        }
+        let entry_terminator = if logical_guard {
+            ProductionRankedTerminatorV1::IndexEqual {
+                lhs: ProductionRankedValueV1::Local(invocation),
+                rhs: ProductionRankedValueV1::Local(zero),
+                true_block: 1,
+                false_block: 4,
+            }
+        } else {
+            ProductionRankedTerminatorV1::Branch { target: 1 }
+        };
+        let blocks = vec![
+            ProductionRankedBlockV1::new(entry_operations, entry_terminator),
+            ProductionRankedBlockV1::new(
+                Vec::new(),
+                ProductionRankedTerminatorV1::IndexLessThan {
+                    lhs: ProductionRankedValueV1::Local(invocation),
+                    rhs: ProductionRankedValueV1::Argument(0),
+                    true_block: 2,
+                    false_block: 3,
+                },
+            ),
+            ProductionRankedBlockV1::new(
+                vec![ProductionRankedOperationV1::Access {
+                    kind: AccessKindAttr::Write,
+                    view: ProductionRankedValueV1::Local(view),
+                    indices: vec![ProductionRankedValueV1::Local(invocation)],
+                }],
+                ProductionRankedTerminatorV1::Return,
+            ),
+            ProductionRankedBlockV1::new(Vec::new(), ProductionRankedTerminatorV1::Trap),
+            ProductionRankedBlockV1::new(Vec::new(), ProductionRankedTerminatorV1::Return),
+        ];
+        let kernel = ProductionRankedKernelV1::new("dynamic_point", 1, blocks).unwrap();
+        let write = RankedGpuWriteV2 {
+            block: 2,
+            operation: 0,
+            allocation_origin: 1,
+            view: ProductionRankedValueV1::Local(view),
+            indices: vec![ProductionRankedValueV1::Local(invocation)],
+            value: Some(17),
+        };
+        (kernel, write)
+    }
+
+    #[test]
+    fn dynamic_point_coordinate_excludes_only_the_exact_bounds_selection() {
+        let (kernel, write) = dynamic_point_kernel(false);
+        validate_bounds_only_gpu_guard_v2(&kernel, &write).unwrap();
+        assert_eq!(
+            gpu_index_expression_v2(&kernel, write.indices[0], 0).unwrap(),
+            ReferenceEffectExpressionV1::PointCoordinate { axis: 0 },
+        );
+        assert_eq!(
+            reference_ranked_indices_v2(
+                &kernel,
+                &ReferenceOutputCoordinateV1::LogicalPoint(
+                    vec![ReferenceEffectExpressionV1::PointCoordinate { axis: 0 }]
+                        .into_boxed_slice(),
+                ),
+            )
+            .unwrap(),
+            write.indices,
+        );
+    }
+
+    #[test]
+    fn non_bounds_logical_guard_is_not_erased() {
+        let (kernel, write) = dynamic_point_kernel(true);
+        assert!(matches!(
+            validate_bounds_only_gpu_guard_v2(&kernel, &write),
+            Err(ProductionReferenceEffectJoinErrorV2::UnsupportedGpuEffect { .. })
+        ));
+    }
+}
