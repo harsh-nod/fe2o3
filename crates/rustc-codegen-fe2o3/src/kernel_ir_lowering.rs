@@ -2669,11 +2669,6 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 && context.typed_profile == Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3)
         })
     }
-    fn is_general_typed_kernel_context(&self) -> bool {
-        self.function.kind == MirFunctionKind::KernelEntry
-            && self.function.typed_profile
-                == Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3)
-    }
     fn is_gfx942_memory_v1_context(&self) -> bool {
         self.is_general_v3_profile_context() && self.float_target.is_some()
     }
@@ -6650,12 +6645,7 @@ fn lower_device_ffi_type(physical: DeviceFfiPhysicalTypeV1) -> Type {
 }
 
 fn lower_element_type(shape: &MirTypeShape) -> Option<Type> {
-    match shape {
-        MirTypeShape::U16 => Some(Type::Scalar(ScalarType::U16)),
-        MirTypeShape::F32 => Some(Type::F32),
-        MirTypeShape::F64 => Some(Type::F64),
-        _ => None,
-    }
+    lower_scalar_type(shape)
 }
 
 fn lower_constant(constant: &MirConstant) -> Option<Constant> {
@@ -7833,7 +7823,7 @@ mod tests {
         assert!(errors.diagnostics().iter().any(|diagnostic| {
             diagnostic
                 .message
-                .contains("requires an exact alpha/zeta contract or a compiler-sealed generated General V3 kernel context")
+                .contains("destination is not the trusted ThreadIndex type")
         }));
         assert!(errors.diagnostics().iter().all(|diagnostic| {
             !diagnostic

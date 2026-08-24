@@ -1081,7 +1081,7 @@ fn general_v3_rejects_wrong_index_untrusted_callee_and_wrong_profile() {
     assert!(errors.diagnostics().iter().any(|diagnostic| {
         diagnostic
             .message
-            .contains("requires an exact alpha/zeta contract")
+            .contains("requires an authenticated semantic workload handler")
     }));
 
     let mut untyped = alpha_zeta_module();

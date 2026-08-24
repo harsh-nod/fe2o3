@@ -38,9 +38,6 @@ pub(super) fn lower_call(
     block: &mut BasicBlock,
 ) -> Result<Terminator, TranslationDiagnostic> {
     match call.item {
-        SessionRecognizedSemanticItem::TrustedDevice(TrustedDeviceItem::ThreadIndex1d) => {
-            super::general_v3::lower_call(lowerer, call, block)
-        }
         SessionRecognizedSemanticItem::TrustedDevice(
             TrustedDeviceItem::ThreadIndexIntoDisjoint,
         ) => lower_thread_index_into_disjoint(lowerer, call, block),
@@ -67,8 +64,7 @@ fn is_memory_profile_item(item: SessionRecognizedSemanticItem) -> bool {
     matches!(
         item,
         SessionRecognizedSemanticItem::TrustedDevice(
-            TrustedDeviceItem::ThreadIndex1d
-                | TrustedDeviceItem::ThreadIndexIntoDisjoint
+            TrustedDeviceItem::ThreadIndexIntoDisjoint
                 | TrustedDeviceItem::MemoryOffsetFrom
                 | TrustedDeviceItem::MemoryVolatileLoad
                 | TrustedDeviceItem::MemoryVolatileStore

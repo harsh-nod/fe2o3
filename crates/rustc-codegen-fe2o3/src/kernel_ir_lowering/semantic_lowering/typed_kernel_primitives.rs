@@ -19,11 +19,12 @@ pub(super) fn claim_call(
             TrustedDeviceItem::ThreadIndex1d
                 | TrustedDeviceItem::ThreadIndexGet
                 | TrustedDeviceItem::DisjointSliceGetMut
+                | TrustedDeviceItem::DisjointSliceLen
         )
     ) {
         return HandlerClaim::NotOwned;
     }
-    if lowerer.is_general_typed_kernel_context() {
+    if lowerer.is_general_v3_profile_context() {
         HandlerClaim::Owned
     } else {
         HandlerClaim::NotOwned
@@ -45,8 +46,45 @@ pub(super) fn lower_call(
         SessionRecognizedSemanticItem::TrustedDevice(TrustedDeviceItem::DisjointSliceGetMut) => {
             lower_disjoint_slice_get_mut(lowerer, call, block)
         }
+        SessionRecognizedSemanticItem::TrustedDevice(TrustedDeviceItem::DisjointSliceLen) => {
+            lower_disjoint_slice_len(lowerer, call, block)
+        }
         _ => unreachable!("only claimed typed-kernel primitive calls may be lowered"),
     }
+}
+
+fn lower_disjoint_slice_len(
+    lowerer: &mut FunctionLowerer<'_, '_>,
+    call: SessionRecognizedSemanticCall<'_>,
+    block: &mut BasicBlock,
+) -> Result<Terminator, TranslationDiagnostic> {
+    let [receiver] = call.operands else {
+        return Err(lowerer.call_arity(call.callee, 1, call.operands.len(), call.location.clone()));
+    };
+    let receiver = lowerer.lower_operand(receiver, block, call.location)?;
+    if !matches!(lowerer.value_type(receiver, call.location)?, Type::Slice(_)) {
+        return Err(diagnostic(
+            TranslationDiagnosticCode::UnsupportedType,
+            call.location.clone(),
+            "trusted DisjointSlice::len receiver is not a translated slice",
+        ));
+    }
+    lowerer.require_destination_type(call.destination, &Type::INDEX, call.location)?;
+    let length = lowerer.emit_result(
+        block,
+        Type::INDEX,
+        OperationKind::SliceLength { slice: receiver },
+        call.location,
+    )?;
+    lowerer.bind_local(
+        call.destination.local,
+        LocalBinding::Value(length),
+        call.location.clone(),
+    )?;
+    Ok(Terminator::Branch {
+        target: lowerer.block_id(call.target, call.location.clone())?,
+        arguments: lowerer.edge_arguments(call.target, call.location)?,
+    })
 }
 
 fn lower_thread_index_1d(
