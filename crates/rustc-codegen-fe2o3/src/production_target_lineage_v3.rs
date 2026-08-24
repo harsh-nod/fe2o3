@@ -6,10 +6,11 @@
 //! semantic MIR or Kernel IR, or grant publication, link, load, or launch
 //! authority. Those properties require a private join over live, move-only
 //! compiler owners.
+//!
+//! ABI descriptors and export manifests already have canonical codecs and are
+//! retained directly by their typed `fe2o3-compiler-lineage` receipts.
 
 use std::{error::Error, fmt, str};
-
-use fe2o3_compiler_ffi::{CompilerDescriptorSourceV1, CompilerModuleSymbolManifestV1};
 
 const TRANSCRIPT_MAGIC_V3: [u8; 8] = *b"F2O3TLV3";
 const TRANSCRIPT_VERSION_V3: u16 = 3;
@@ -26,15 +27,10 @@ pub(crate) const MAX_PRE_DESCRIPTOR_LLVM_BYTES_V3: usize =
 const MAX_TARGET_TEXT_BYTES_V3: usize = 256;
 const MAX_TARGET_FEATURES_BYTES_V3: usize = 4 * 1024;
 const MAX_DATA_LAYOUT_BYTES_V3: usize = 16 * 1024;
-const MAX_COMPILER_FFI_ENVELOPE_BYTES_V3: usize = 512 * 1024;
-const MAX_COMPILER_DESCRIPTOR_SOURCE_BYTES_V3: usize = 256 * 1024;
-
 const TARGET_BINDING_KIND_V3: u16 = 1;
 const DATA_LAYOUT_KIND_V3: u16 = 2;
-const ABI_KIND_V3: u16 = 3;
 const AMDGPU_LOWERING_KIND_V3: u16 = 4;
 const SEMANTIC_TO_LLVM_KIND_V3: u16 = 5;
-const EXPORT_MANIFEST_KIND_V3: u16 = 7;
 
 /// Exact-input association policy. It intentionally makes no refinement claim.
 pub(crate) const ASSOCIATION_ONLY_NO_REFINEMENT_PROOF_POLICY_V3: u16 = 1;
@@ -42,10 +38,8 @@ pub(crate) const ASSOCIATION_ONLY_NO_REFINEMENT_PROOF_POLICY_V3: u16 = 1;
 const ASSOCIATION_ONLY_CLAIM_V3: &[u8] = b"association-only/no-refinement-proof";
 const TARGET_BINDING_DOMAIN_V3: &[u8] = b"FE2O3/PRODUCTION-TARGET-BINDING-TRANSCRIPT/V3\0";
 const DATA_LAYOUT_DOMAIN_V3: &[u8] = b"FE2O3/PRODUCTION-DATA-LAYOUT-TRANSCRIPT/V3\0";
-const ABI_DOMAIN_V3: &[u8] = b"FE2O3/PRODUCTION-ABI-TRANSCRIPT/V3\0";
 const AMDGPU_LOWERING_DOMAIN_V3: &[u8] = b"FE2O3/PRODUCTION-AMDGPU-LOWERING-TRANSCRIPT/V3\0";
 const SEMANTIC_TO_LLVM_DOMAIN_V3: &[u8] = b"FE2O3/PRODUCTION-SEMANTIC-TO-LLVM-ASSOCIATION/V3\0";
-const EXPORT_MANIFEST_DOMAIN_V3: &[u8] = b"FE2O3/PRODUCTION-EXPORT-MANIFEST-ASSOCIATION/V3\0";
 
 const EXACT_GFX942_TARGET_V3: &str = "gfx942:xnack-";
 const EXACT_RUSTC_LLVM_TARGET_V3: &str = "amdgcn-amd-amdhsa";
@@ -69,10 +63,12 @@ impl TargetLineageIdentityV3 {
         Ok(Self { sha256, byte_len })
     }
 
+    #[cfg(test)]
     pub(crate) const fn sha256(self) -> [u8; 32] {
         self.sha256
     }
 
+    #[cfg(test)]
     pub(crate) const fn byte_len(self) -> u64 {
         self.byte_len
     }
@@ -84,6 +80,7 @@ impl TargetLineageIdentityV3 {
         encoded
     }
 
+    #[cfg(test)]
     fn decode(field: &'static str, encoded: &[u8]) -> Result<Self, ProductionTargetLineageErrorV3> {
         if encoded.len() != IDENTITY_BYTES_V3 {
             return Err(ProductionTargetLineageErrorV3::InvalidFieldLength {
@@ -103,6 +100,7 @@ impl TargetLineageIdentityV3 {
 }
 
 /// The strongest semantic statement made by records in this module.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TargetLineageClaimV3 {
     AssociationOnlyNoRefinementProof,
@@ -170,19 +168,6 @@ const DATA_LAYOUT_FIELDS_V3: &[FieldSchemaV3] = &[
     FieldSchemaV3::exact("default pointer width", 2),
 ];
 
-const ABI_FIELDS_V3: &[FieldSchemaV3] = &[
-    FieldSchemaV3::exact("domain", ABI_DOMAIN_V3.len()),
-    FieldSchemaV3::exact("claim", ASSOCIATION_ONLY_CLAIM_V3.len()),
-    FieldSchemaV3::exact("semantic MIR identity", IDENTITY_BYTES_V3),
-    FieldSchemaV3::exact("target-bound Kernel IR identity", IDENTITY_BYTES_V3),
-    FieldSchemaV3::exact("formal memory identity", IDENTITY_BYTES_V3),
-    FieldSchemaV3::bounded("compiler FFI envelope", MAX_COMPILER_FFI_ENVELOPE_BYTES_V3),
-    FieldSchemaV3::bounded(
-        "compiler descriptor source",
-        MAX_COMPILER_DESCRIPTOR_SOURCE_BYTES_V3,
-    ),
-];
-
 const AMDGPU_LOWERING_FIELDS_V3: &[FieldSchemaV3] = &[
     FieldSchemaV3::exact("domain", AMDGPU_LOWERING_DOMAIN_V3.len()),
     FieldSchemaV3::exact("claim", ASSOCIATION_ONLY_CLAIM_V3.len()),
@@ -217,22 +202,6 @@ const SEMANTIC_TO_LLVM_FIELDS_V3: &[FieldSchemaV3] = &[
     ),
 ];
 
-const EXPORT_MANIFEST_FIELDS_V3: &[FieldSchemaV3] = &[
-    FieldSchemaV3::exact("domain", EXPORT_MANIFEST_DOMAIN_V3.len()),
-    FieldSchemaV3::exact("claim", ASSOCIATION_ONLY_CLAIM_V3.len()),
-    FieldSchemaV3::exact("semantic MIR identity", IDENTITY_BYTES_V3),
-    FieldSchemaV3::exact("target-bound Kernel IR identity", IDENTITY_BYTES_V3),
-    FieldSchemaV3::exact("ABI identity", IDENTITY_BYTES_V3),
-    FieldSchemaV3::bounded(
-        "compiler descriptor source",
-        MAX_COMPILER_DESCRIPTOR_SOURCE_BYTES_V3,
-    ),
-    FieldSchemaV3::bounded(
-        "final compiler symbol manifest",
-        MAX_PRODUCTION_TARGET_LINEAGE_TRANSCRIPT_BYTES_V3,
-    ),
-];
-
 const TARGET_BINDING_SCHEMA_V3: RecordSchemaV3 = RecordSchemaV3 {
     name: "target binding transcript",
     kind: TARGET_BINDING_KIND_V3,
@@ -246,13 +215,6 @@ const DATA_LAYOUT_SCHEMA_V3: RecordSchemaV3 = RecordSchemaV3 {
     policy: ASSOCIATION_ONLY_NO_REFINEMENT_PROOF_POLICY_V3,
     domain: DATA_LAYOUT_DOMAIN_V3,
     fields: DATA_LAYOUT_FIELDS_V3,
-};
-const ABI_SCHEMA_V3: RecordSchemaV3 = RecordSchemaV3 {
-    name: "ABI transcript",
-    kind: ABI_KIND_V3,
-    policy: ASSOCIATION_ONLY_NO_REFINEMENT_PROOF_POLICY_V3,
-    domain: ABI_DOMAIN_V3,
-    fields: ABI_FIELDS_V3,
 };
 const AMDGPU_LOWERING_SCHEMA_V3: RecordSchemaV3 = RecordSchemaV3 {
     name: "AMDGPU lowering transcript",
@@ -268,14 +230,8 @@ const SEMANTIC_TO_LLVM_SCHEMA_V3: RecordSchemaV3 = RecordSchemaV3 {
     domain: SEMANTIC_TO_LLVM_DOMAIN_V3,
     fields: SEMANTIC_TO_LLVM_FIELDS_V3,
 };
-const EXPORT_MANIFEST_SCHEMA_V3: RecordSchemaV3 = RecordSchemaV3 {
-    name: "export manifest association",
-    kind: EXPORT_MANIFEST_KIND_V3,
-    policy: ASSOCIATION_ONLY_NO_REFINEMENT_PROOF_POLICY_V3,
-    domain: EXPORT_MANIFEST_DOMAIN_V3,
-    fields: EXPORT_MANIFEST_FIELDS_V3,
-};
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FieldRangeV3 {
     start: u32,
@@ -285,6 +241,7 @@ struct FieldRangeV3 {
 #[derive(Eq, PartialEq)]
 struct CanonicalRecordV3 {
     canonical_bytes: Box<[u8]>,
+    #[cfg(test)]
     fields: Box<[FieldRangeV3]>,
 }
 
@@ -293,7 +250,6 @@ impl fmt::Debug for CanonicalRecordV3 {
         formatter
             .debug_struct("CanonicalRecordV3")
             .field("byte_len", &self.canonical_bytes.len())
-            .field("field_count", &self.fields.len())
             .finish()
     }
 }
@@ -323,7 +279,9 @@ impl CanonicalRecordV3 {
         canonical_bytes.extend_from_slice(&total_len_u32.to_le_bytes());
         canonical_bytes.extend_from_slice(&0_u32.to_le_bytes());
 
+        #[cfg(test)]
         let mut ranges = Vec::new();
+        #[cfg(test)]
         ranges
             .try_reserve_exact(fields.len())
             .map_err(|_| ProductionTargetLineageErrorV3::AllocationFailed)?;
@@ -335,20 +293,26 @@ impl CanonicalRecordV3 {
             canonical_bytes.extend_from_slice(&tag.to_le_bytes());
             canonical_bytes.extend_from_slice(&0_u16.to_le_bytes());
             canonical_bytes.extend_from_slice(&field_len.to_le_bytes());
+            #[cfg(test)]
             let start = u32::try_from(canonical_bytes.len())
                 .map_err(|_| ProductionTargetLineageErrorV3::LengthOverflow)?;
             canonical_bytes.extend_from_slice(field);
-            let end = u32::try_from(canonical_bytes.len())
-                .map_err(|_| ProductionTargetLineageErrorV3::LengthOverflow)?;
-            ranges.push(FieldRangeV3 { start, end });
+            #[cfg(test)]
+            {
+                let end = u32::try_from(canonical_bytes.len())
+                    .map_err(|_| ProductionTargetLineageErrorV3::LengthOverflow)?;
+                ranges.push(FieldRangeV3 { start, end });
+            }
         }
         debug_assert_eq!(canonical_bytes.len(), total_len);
         Ok(Self {
             canonical_bytes: canonical_bytes.into_boxed_slice(),
+            #[cfg(test)]
             fields: ranges.into_boxed_slice(),
         })
     }
 
+    #[cfg(test)]
     fn decode(
         schema: &'static RecordSchemaV3,
         bytes: &[u8],
@@ -362,17 +326,20 @@ impl CanonicalRecordV3 {
         &self.canonical_bytes
     }
 
+    #[cfg(test)]
     fn field(&self, index: usize) -> &[u8] {
         let range = self.fields[index];
         &self.canonical_bytes[range.start as usize..range.end as usize]
     }
 }
 
+#[cfg(test)]
 struct ParsedRecordV3<'a> {
     bytes: &'a [u8],
     ranges: Vec<FieldRangeV3>,
 }
 
+#[cfg(test)]
 impl<'a> ParsedRecordV3<'a> {
     fn parse(
         schema: &'static RecordSchemaV3,
@@ -588,6 +555,7 @@ fn preflight_encoded_len(
     Ok(total)
 }
 
+#[cfg(test)]
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, ProductionTargetLineageErrorV3> {
     let end = offset
         .checked_add(2)
@@ -598,6 +566,7 @@ fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, ProductionTargetLineageE
     Ok(u16::from_le_bytes([encoded[0], encoded[1]]))
 }
 
+#[cfg(test)]
 fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, ProductionTargetLineageErrorV3> {
     let end = offset
         .checked_add(4)
@@ -610,6 +579,7 @@ fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, ProductionTargetLineageE
     ]))
 }
 
+#[cfg(test)]
 fn decode_u16(field: &'static str, bytes: &[u8]) -> Result<u16, ProductionTargetLineageErrorV3> {
     if bytes.len() != 2 {
         return Err(ProductionTargetLineageErrorV3::InvalidFieldLength {
@@ -733,6 +703,7 @@ impl TargetBindingTranscriptV3 {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self, ProductionTargetLineageErrorV3> {
         let record = CanonicalRecordV3::decode(&TARGET_BINDING_SCHEMA_V3, bytes)?;
         let value = Self { record };
@@ -744,14 +715,17 @@ impl TargetBindingTranscriptV3 {
         self.record.canonical_bytes()
     }
 
+    #[cfg(test)]
     pub(crate) const fn claim(&self) -> TargetLineageClaimV3 {
         TargetLineageClaimV3::AssociationOnlyNoRefinementProof
     }
 
+    #[cfg(test)]
     pub(crate) const fn establishes_refinement_proof(&self) -> bool {
         false
     }
 
+    #[cfg(test)]
     pub(crate) fn inputs(
         &self,
     ) -> Result<TargetBindingTranscriptInputsV3<'_>, ProductionTargetLineageErrorV3> {
@@ -882,6 +856,7 @@ impl DataLayoutTranscriptV3 {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self, ProductionTargetLineageErrorV3> {
         let record = CanonicalRecordV3::decode(&DATA_LAYOUT_SCHEMA_V3, bytes)?;
         let value = Self { record };
@@ -893,14 +868,17 @@ impl DataLayoutTranscriptV3 {
         self.record.canonical_bytes()
     }
 
+    #[cfg(test)]
     pub(crate) const fn claim(&self) -> TargetLineageClaimV3 {
         TargetLineageClaimV3::AssociationOnlyNoRefinementProof
     }
 
+    #[cfg(test)]
     pub(crate) const fn establishes_refinement_proof(&self) -> bool {
         false
     }
 
+    #[cfg(test)]
     pub(crate) fn inputs(
         &self,
     ) -> Result<DataLayoutTranscriptInputsV3<'_>, ProductionTargetLineageErrorV3> {
@@ -972,84 +950,6 @@ fn validate_data_layout_inputs_v3(
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct AbiTranscriptInputsV3<'a> {
-    pub(crate) semantic_mir: TargetLineageIdentityV3,
-    pub(crate) target_bound_kir: TargetLineageIdentityV3,
-    pub(crate) formal_memory: TargetLineageIdentityV3,
-    /// Exact bytes from `CompilerFfiEnvelopeV1::canonical_bytes()`.
-    pub(crate) compiler_ffi_envelope: &'a [u8],
-    /// Exact bytes from `CompilerDescriptorSourceV1::canonical_bytes()`.
-    pub(crate) compiler_descriptor_source: &'a [u8],
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct AbiTranscriptV3 {
-    record: CanonicalRecordV3,
-}
-
-impl AbiTranscriptV3 {
-    pub(crate) fn new(
-        inputs: AbiTranscriptInputsV3<'_>,
-    ) -> Result<Self, ProductionTargetLineageErrorV3> {
-        let semantic_mir = inputs.semantic_mir.encode();
-        let target_bound_kir = inputs.target_bound_kir.encode();
-        let formal_memory = inputs.formal_memory.encode();
-        let fields: [&[u8]; 7] = [
-            ABI_DOMAIN_V3,
-            ASSOCIATION_ONLY_CLAIM_V3,
-            &semantic_mir,
-            &target_bound_kir,
-            &formal_memory,
-            inputs.compiler_ffi_envelope,
-            inputs.compiler_descriptor_source,
-        ];
-        Ok(Self {
-            record: CanonicalRecordV3::build(&ABI_SCHEMA_V3, &fields)?,
-        })
-    }
-
-    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, ProductionTargetLineageErrorV3> {
-        let record = CanonicalRecordV3::decode(&ABI_SCHEMA_V3, bytes)?;
-        let value = Self { record };
-        let _ = value.inputs()?;
-        Ok(value)
-    }
-
-    pub(crate) fn canonical_bytes(&self) -> &[u8] {
-        self.record.canonical_bytes()
-    }
-
-    pub(crate) const fn claim(&self) -> TargetLineageClaimV3 {
-        TargetLineageClaimV3::AssociationOnlyNoRefinementProof
-    }
-
-    pub(crate) const fn establishes_refinement_proof(&self) -> bool {
-        false
-    }
-
-    pub(crate) fn inputs(
-        &self,
-    ) -> Result<AbiTranscriptInputsV3<'_>, ProductionTargetLineageErrorV3> {
-        Ok(AbiTranscriptInputsV3 {
-            semantic_mir: TargetLineageIdentityV3::decode(
-                "semantic MIR identity",
-                self.record.field(2),
-            )?,
-            target_bound_kir: TargetLineageIdentityV3::decode(
-                "target-bound Kernel IR identity",
-                self.record.field(3),
-            )?,
-            formal_memory: TargetLineageIdentityV3::decode(
-                "formal memory identity",
-                self.record.field(4),
-            )?,
-            compiler_ffi_envelope: self.record.field(5),
-            compiler_descriptor_source: self.record.field(6),
-        })
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
 pub(crate) struct AmdgpuLoweringTranscriptInputsV3<'a> {
     pub(crate) target_binding: TargetLineageIdentityV3,
     pub(crate) data_layout: TargetLineageIdentityV3,
@@ -1086,6 +986,7 @@ impl AmdgpuLoweringTranscriptV3 {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self, ProductionTargetLineageErrorV3> {
         let record = CanonicalRecordV3::decode(&AMDGPU_LOWERING_SCHEMA_V3, bytes)?;
         let value = Self { record };
@@ -1097,14 +998,17 @@ impl AmdgpuLoweringTranscriptV3 {
         self.record.canonical_bytes()
     }
 
+    #[cfg(test)]
     pub(crate) const fn claim(&self) -> TargetLineageClaimV3 {
         TargetLineageClaimV3::AssociationOnlyNoRefinementProof
     }
 
+    #[cfg(test)]
     pub(crate) const fn establishes_refinement_proof(&self) -> bool {
         false
     }
 
+    #[cfg(test)]
     pub(crate) fn inputs(
         &self,
     ) -> Result<AmdgpuLoweringTranscriptInputsV3<'_>, ProductionTargetLineageErrorV3> {
@@ -1136,102 +1040,6 @@ fn validate_amdgpu_lowering_inputs_v3(
         EXACT_GFX942_TARGET_V3,
     )?;
     validate_llvm_text(inputs.pre_descriptor_llvm)?;
-    Ok(())
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ExportManifestTranscriptInputsV3<'a> {
-    pub(crate) semantic_mir: TargetLineageIdentityV3,
-    pub(crate) target_bound_kir: TargetLineageIdentityV3,
-    pub(crate) abi: TargetLineageIdentityV3,
-    /// Exact bytes from `CompilerDescriptorSourceV1::canonical_bytes()`.
-    pub(crate) compiler_descriptor_source: &'a [u8],
-    /// Exact bytes from `CompilerModuleSymbolManifestV1::canonical_bytes()`.
-    pub(crate) final_symbol_manifest: &'a [u8],
-}
-
-/// Exact association of source semantics and target-bound ABI with the
-/// descriptor and symbol-role manifest handed to the Worker.
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct ExportManifestTranscriptV3 {
-    record: CanonicalRecordV3,
-}
-
-impl ExportManifestTranscriptV3 {
-    pub(crate) fn new(
-        inputs: ExportManifestTranscriptInputsV3<'_>,
-    ) -> Result<Self, ProductionTargetLineageErrorV3> {
-        validate_export_manifest_inputs_v3(&inputs)?;
-        let semantic_mir = inputs.semantic_mir.encode();
-        let target_bound_kir = inputs.target_bound_kir.encode();
-        let abi = inputs.abi.encode();
-        let fields: [&[u8]; 7] = [
-            EXPORT_MANIFEST_DOMAIN_V3,
-            ASSOCIATION_ONLY_CLAIM_V3,
-            &semantic_mir,
-            &target_bound_kir,
-            &abi,
-            inputs.compiler_descriptor_source,
-            inputs.final_symbol_manifest,
-        ];
-        Ok(Self {
-            record: CanonicalRecordV3::build(&EXPORT_MANIFEST_SCHEMA_V3, &fields)?,
-        })
-    }
-
-    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, ProductionTargetLineageErrorV3> {
-        let record = CanonicalRecordV3::decode(&EXPORT_MANIFEST_SCHEMA_V3, bytes)?;
-        let value = Self { record };
-        validate_export_manifest_inputs_v3(&value.inputs()?)?;
-        Ok(value)
-    }
-
-    pub(crate) fn canonical_bytes(&self) -> &[u8] {
-        self.record.canonical_bytes()
-    }
-
-    pub(crate) const fn claim(&self) -> TargetLineageClaimV3 {
-        TargetLineageClaimV3::AssociationOnlyNoRefinementProof
-    }
-
-    pub(crate) const fn establishes_refinement_proof(&self) -> bool {
-        false
-    }
-
-    pub(crate) fn inputs(
-        &self,
-    ) -> Result<ExportManifestTranscriptInputsV3<'_>, ProductionTargetLineageErrorV3> {
-        Ok(ExportManifestTranscriptInputsV3 {
-            semantic_mir: self.identity_field(2, "semantic MIR identity")?,
-            target_bound_kir: self.identity_field(3, "target-bound Kernel IR identity")?,
-            abi: self.identity_field(4, "ABI identity")?,
-            compiler_descriptor_source: self.record.field(5),
-            final_symbol_manifest: self.record.field(6),
-        })
-    }
-
-    fn identity_field(
-        &self,
-        index: usize,
-        field: &'static str,
-    ) -> Result<TargetLineageIdentityV3, ProductionTargetLineageErrorV3> {
-        TargetLineageIdentityV3::decode(field, self.record.field(index))
-    }
-}
-
-fn validate_export_manifest_inputs_v3(
-    inputs: &ExportManifestTranscriptInputsV3<'_>,
-) -> Result<(), ProductionTargetLineageErrorV3> {
-    CompilerDescriptorSourceV1::decode(inputs.compiler_descriptor_source).map_err(|_| {
-        ProductionTargetLineageErrorV3::InvalidNestedEncoding {
-            field: "compiler descriptor source",
-        }
-    })?;
-    CompilerModuleSymbolManifestV1::decode(inputs.final_symbol_manifest).map_err(|_| {
-        ProductionTargetLineageErrorV3::InvalidNestedEncoding {
-            field: "final compiler symbol manifest",
-        }
-    })?;
     Ok(())
 }
 
@@ -1298,6 +1106,7 @@ impl SemanticToLlvmAssociationTranscriptV3 {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self, ProductionTargetLineageErrorV3> {
         let record = CanonicalRecordV3::decode(&SEMANTIC_TO_LLVM_SCHEMA_V3, bytes)?;
         let value = Self { record };
@@ -1309,22 +1118,27 @@ impl SemanticToLlvmAssociationTranscriptV3 {
         self.record.canonical_bytes()
     }
 
+    #[cfg(test)]
     pub(crate) const fn claim(&self) -> TargetLineageClaimV3 {
         TargetLineageClaimV3::AssociationOnlyNoRefinementProof
     }
 
+    #[cfg(test)]
     pub(crate) const fn establishes_refinement_proof(&self) -> bool {
         false
     }
 
+    #[cfg(test)]
     pub(crate) const fn authenticates_producer(&self) -> bool {
         false
     }
 
+    #[cfg(test)]
     pub(crate) const fn grants_publication_authority(&self) -> bool {
         false
     }
 
+    #[cfg(test)]
     pub(crate) fn inputs(
         &self,
     ) -> Result<SemanticToLlvmAssociationInputsV3, ProductionTargetLineageErrorV3> {
@@ -1347,6 +1161,7 @@ impl SemanticToLlvmAssociationTranscriptV3 {
         })
     }
 
+    #[cfg(test)]
     fn identity_field(
         &self,
         index: usize,
@@ -1363,6 +1178,7 @@ pub(crate) enum ProductionTargetLineageErrorV3 {
     AssociationInvariant {
         detail: &'static str,
     },
+    #[cfg(test)]
     DeclaredLengthMismatch {
         declared: usize,
         actual: usize,
@@ -1387,18 +1203,19 @@ pub(crate) enum ProductionTargetLineageErrorV3 {
         field: &'static str,
         observed: u64,
     },
-    InvalidNestedEncoding {
-        field: &'static str,
-    },
+    #[cfg(test)]
     InvalidMagic,
     InvalidText {
         field: &'static str,
     },
     LengthOverflow,
+    #[cfg(test)]
     NonZeroFieldFlags {
         field: &'static str,
     },
+    #[cfg(test)]
     NonZeroReserved,
+    #[cfg(test)]
     TrailingBytes {
         trailing: usize,
     },
@@ -1406,7 +1223,9 @@ pub(crate) enum ProductionTargetLineageErrorV3 {
         actual: usize,
         max: usize,
     },
+    #[cfg(test)]
     Truncated,
+    #[cfg(test)]
     UnsupportedVersion {
         observed: u16,
     },
@@ -1421,15 +1240,18 @@ pub(crate) enum ProductionTargetLineageErrorV3 {
         expected: usize,
         observed: usize,
     },
+    #[cfg(test)]
     WrongFieldTag {
         field: &'static str,
         expected: u16,
         observed: u16,
     },
+    #[cfg(test)]
     WrongPolicy {
         expected: u16,
         observed: u16,
     },
+    #[cfg(test)]
     WrongRecordKind {
         expected: u16,
         observed: u16,
@@ -1449,6 +1271,7 @@ impl fmt::Display for ProductionTargetLineageErrorV3 {
             Self::AssociationInvariant { detail } => {
                 write!(formatter, "target lineage association failed: {detail}")
             }
+            #[cfg(test)]
             Self::DeclaredLengthMismatch { declared, actual } => write!(
                 formatter,
                 "target lineage declared {declared} bytes but received {actual}"
@@ -1478,20 +1301,21 @@ impl fmt::Display for ProductionTargetLineageErrorV3 {
                     "target lineage {field} has invalid value {observed}"
                 )
             }
-            Self::InvalidNestedEncoding { field } => {
-                write!(formatter, "target lineage {field} is not canonical")
-            }
+            #[cfg(test)]
             Self::InvalidMagic => formatter.write_str("invalid target lineage magic"),
             Self::InvalidText { field } => {
                 write!(formatter, "target lineage {field} is not canonical text")
             }
             Self::LengthOverflow => formatter.write_str("target lineage length overflow"),
+            #[cfg(test)]
             Self::NonZeroFieldFlags { field } => {
                 write!(formatter, "target lineage {field} has nonzero field flags")
             }
+            #[cfg(test)]
             Self::NonZeroReserved => {
                 formatter.write_str("target lineage header has nonzero reserved bytes")
             }
+            #[cfg(test)]
             Self::TrailingBytes { trailing } => {
                 write!(formatter, "target lineage has {trailing} trailing bytes")
             }
@@ -1499,7 +1323,9 @@ impl fmt::Display for ProductionTargetLineageErrorV3 {
                 formatter,
                 "target lineage transcript has {actual} bytes; maximum is {max}"
             ),
+            #[cfg(test)]
             Self::Truncated => formatter.write_str("truncated target lineage transcript"),
+            #[cfg(test)]
             Self::UnsupportedVersion { observed } => {
                 write!(formatter, "unsupported target lineage version {observed}")
             }
@@ -1518,6 +1344,7 @@ impl fmt::Display for ProductionTargetLineageErrorV3 {
                 formatter,
                 "{record} has {observed} fields; expected {expected}"
             ),
+            #[cfg(test)]
             Self::WrongFieldTag {
                 field,
                 expected,
@@ -1526,10 +1353,12 @@ impl fmt::Display for ProductionTargetLineageErrorV3 {
                 formatter,
                 "target lineage {field} has tag {observed}; expected {expected}"
             ),
+            #[cfg(test)]
             Self::WrongPolicy { expected, observed } => write!(
                 formatter,
                 "target lineage policy {observed} is unsupported; expected {expected}"
             ),
+            #[cfg(test)]
             Self::WrongRecordKind { expected, observed } => write!(
                 formatter,
                 "target lineage kind {observed} does not match expected kind {expected}"
@@ -1549,15 +1378,6 @@ impl Error for ProductionTargetLineageErrorV3 {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fe2o3_compiler_ffi::CompilerModuleSymbolRoleV1;
-    use fe2o3_kernel_descriptor::{
-        BlockSizeV1, BuildEvidenceV1, CanonicalCodeObjectDigest, CodeObjectVersion,
-        CompilerIdentityV1, DeviceDescriptorTableV1, DeviceLayoutDescriptorV1,
-        DeviceLayoutRecordV1, DeviceTargetV1, DimensionsV1, EvidenceDigest, EvidenceIdentity,
-        KernelAbiLayoutV1, KernelDescriptorV1, KernelId, LaunchConstraintsV1, LogicalArgumentV1,
-        ProducerIdentityV1, ScalarTypeV1, SourceTypeDescriptorV1, SourceTypeRecordV1, Text,
-        ValidName,
-    };
 
     type DecoderV3 = fn(&[u8]) -> bool;
 
@@ -1568,76 +1388,6 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
 
     fn identity(seed: u8) -> TargetLineageIdentityV3 {
         TargetLineageIdentityV3::new([seed; 32], u64::from(seed) + 1).unwrap()
-    }
-
-    fn descriptor_source() -> CompilerDescriptorSourceV1 {
-        let source_type =
-            SourceTypeRecordV1::new(SourceTypeDescriptorV1::scalar(ScalarTypeV1::F32));
-        let layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::scalar(ScalarTypeV1::F32));
-        let argument = LogicalArgumentV1::scalar(
-            0,
-            ValidName::new("value").unwrap(),
-            &source_type,
-            &layout,
-            0,
-        )
-        .unwrap();
-        let evidence = |byte| {
-            BuildEvidenceV1::new(
-                EvidenceIdentity::from_opaque_bytes([byte; 32]),
-                EvidenceDigest::from_sha256_bytes([byte.wrapping_add(1); 32]),
-            )
-        };
-        let kernel = KernelDescriptorV1::new(
-            KernelId::from_bytes([0x11; 32]),
-            ValidName::new("scale").unwrap(),
-            ValidName::new("scale").unwrap(),
-            ValidName::new("scale.kd").unwrap(),
-            evidence(0x21),
-            evidence(0x31),
-            vec![],
-            KernelAbiLayoutV1::new(4, 4, 4).unwrap(),
-            LaunchConstraintsV1::new(
-                1,
-                BlockSizeV1::Exact(DimensionsV1::new(256, 1, 1).unwrap()),
-                DimensionsV1::new(u32::MAX, 1, 1).unwrap(),
-                256,
-                0,
-                0,
-            )
-            .unwrap(),
-            vec![argument],
-        )
-        .unwrap();
-        CompilerDescriptorSourceV1::new(
-            DeviceDescriptorTableV1::new(
-                CanonicalCodeObjectDigest::from_bytes([0; 32]),
-                CodeObjectVersion::V6,
-                CompilerIdentityV1::new(
-                    Text::new("rustc-codegen-fe2o3").unwrap(),
-                    Text::new("test").unwrap(),
-                    [0x41; 20],
-                ),
-                ProducerIdentityV1::new(
-                    Text::new("rustc-codegen-fe2o3").unwrap(),
-                    Text::new("test").unwrap(),
-                ),
-                DeviceTargetV1::parse(EXACT_GFX942_TARGET_V3).unwrap(),
-                vec![source_type],
-                vec![layout],
-                vec![kernel],
-            )
-            .unwrap(),
-        )
-        .unwrap()
-    }
-
-    fn symbol_manifest() -> CompilerModuleSymbolManifestV1 {
-        CompilerModuleSymbolManifestV1::new([
-            (CompilerModuleSymbolRoleV1::KernelEntry, "scale"),
-            (CompilerModuleSymbolRoleV1::KernelDescriptor, "scale.kd"),
-        ])
-        .unwrap()
     }
 
     fn target_binding() -> TargetBindingTranscriptV3 {
@@ -1671,17 +1421,6 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
         .unwrap()
     }
 
-    fn abi() -> AbiTranscriptV3 {
-        AbiTranscriptV3::new(AbiTranscriptInputsV3 {
-            semantic_mir: identity(2),
-            target_bound_kir: identity(4),
-            formal_memory: identity(7),
-            compiler_ffi_envelope: b"\0ffi\xffcanonical",
-            compiler_descriptor_source: b"\0descriptor\xffcanonical",
-        })
-        .unwrap()
-    }
-
     fn lowering() -> AmdgpuLoweringTranscriptV3 {
         AmdgpuLoweringTranscriptV3::new(AmdgpuLoweringTranscriptInputsV3 {
             target_binding: identity(5),
@@ -1689,19 +1428,6 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
             target_bound_kir: identity(4),
             configured_target: EXACT_GFX942_TARGET_V3,
             pre_descriptor_llvm: LLVM,
-        })
-        .unwrap()
-    }
-
-    fn export_manifest() -> ExportManifestTranscriptV3 {
-        let descriptor = descriptor_source();
-        let manifest = symbol_manifest();
-        ExportManifestTranscriptV3::new(ExportManifestTranscriptInputsV3 {
-            semantic_mir: identity(2),
-            target_bound_kir: identity(4),
-            abi: identity(10),
-            compiler_descriptor_source: descriptor.canonical_bytes(),
-            final_symbol_manifest: manifest.canonical_bytes(),
         })
         .unwrap()
     }
@@ -1752,20 +1478,6 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
             layout.canonical_bytes()
         );
 
-        let abi = abi();
-        let decoded = AbiTranscriptV3::decode(abi.canonical_bytes()).unwrap();
-        assert_eq!(decoded.canonical_bytes(), abi.canonical_bytes());
-        assert_eq!(
-            decoded.inputs().unwrap().compiler_ffi_envelope,
-            b"\0ffi\xffcanonical"
-        );
-        assert_eq!(
-            AbiTranscriptV3::new(decoded.inputs().unwrap())
-                .unwrap()
-                .canonical_bytes(),
-            abi.canonical_bytes()
-        );
-
         let lowering = lowering();
         let decoded = AmdgpuLoweringTranscriptV3::decode(lowering.canonical_bytes()).unwrap();
         assert_eq!(decoded.canonical_bytes(), lowering.canonical_bytes());
@@ -1775,18 +1487,6 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
                 .unwrap()
                 .canonical_bytes(),
             lowering.canonical_bytes()
-        );
-
-        let export_manifest = export_manifest();
-        let decoded =
-            ExportManifestTranscriptV3::decode(export_manifest.canonical_bytes()).unwrap();
-        assert_eq!(decoded.canonical_bytes(), export_manifest.canonical_bytes());
-        assert_eq!(decoded.inputs().unwrap().abi, identity(10));
-        assert_eq!(
-            ExportManifestTranscriptV3::new(decoded.inputs().unwrap())
-                .unwrap()
-                .canonical_bytes(),
-            export_manifest.canonical_bytes()
         );
 
         let association = association();
@@ -1822,24 +1522,12 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
             TargetLineageClaimV3::AssociationOnlyNoRefinementProof
         );
         assert!(!layout.establishes_refinement_proof());
-        let abi = abi();
-        assert_eq!(
-            abi.claim(),
-            TargetLineageClaimV3::AssociationOnlyNoRefinementProof
-        );
-        assert!(!abi.establishes_refinement_proof());
         let lowering = lowering();
         assert_eq!(
             lowering.claim(),
             TargetLineageClaimV3::AssociationOnlyNoRefinementProof
         );
         assert!(!lowering.establishes_refinement_proof());
-        let export_manifest = export_manifest();
-        assert_eq!(
-            export_manifest.claim(),
-            TargetLineageClaimV3::AssociationOnlyNoRefinementProof
-        );
-        assert!(!export_manifest.establishes_refinement_proof());
         let association = association();
         assert_eq!(
             association.claim(),
@@ -1854,9 +1542,7 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
     fn every_prefix_and_trailing_byte_is_rejected() {
         let target = target_binding();
         let layout = data_layout();
-        let abi = abi();
         let lowering = lowering();
-        let export_manifest = export_manifest();
         let association = association();
         let records: Vec<(&[u8], DecoderV3)> = vec![
             (target.canonical_bytes(), |bytes| {
@@ -1865,14 +1551,8 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
             (layout.canonical_bytes(), |bytes| {
                 DataLayoutTranscriptV3::decode(bytes).is_ok()
             }),
-            (abi.canonical_bytes(), |bytes| {
-                AbiTranscriptV3::decode(bytes).is_ok()
-            }),
             (lowering.canonical_bytes(), |bytes| {
                 AmdgpuLoweringTranscriptV3::decode(bytes).is_ok()
-            }),
-            (export_manifest.canonical_bytes(), |bytes| {
-                ExportManifestTranscriptV3::decode(bytes).is_ok()
             }),
             (association.canonical_bytes(), |bytes| {
                 SemanticToLlvmAssociationTranscriptV3::decode(bytes).is_ok()
@@ -1981,21 +1661,6 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
 
     #[test]
     fn bounds_are_checked_before_record_allocation() {
-        let oversized_envelope = vec![0_u8; MAX_COMPILER_FFI_ENVELOPE_BYTES_V3 + 1];
-        assert!(matches!(
-            AbiTranscriptV3::new(AbiTranscriptInputsV3 {
-                semantic_mir: identity(2),
-                target_bound_kir: identity(4),
-                formal_memory: identity(7),
-                compiler_ffi_envelope: &oversized_envelope,
-                compiler_descriptor_source: b"descriptor",
-            }),
-            Err(ProductionTargetLineageErrorV3::FieldTooLarge {
-                field: "compiler FFI envelope",
-                ..
-            })
-        ));
-
         let oversized_llvm = vec![b'x'; MAX_PRE_DESCRIPTOR_LLVM_BYTES_V3 + 1];
         assert!(matches!(
             AmdgpuLoweringTranscriptV3::new(AmdgpuLoweringTranscriptInputsV3 {
@@ -2008,33 +1673,6 @@ define amdgpu_kernel void @kernel() {\nentry:\n  ret void\n}\n";
             Err(ProductionTargetLineageErrorV3::FieldTooLarge {
                 field: "exact pre-descriptor LLVM",
                 ..
-            })
-        ));
-
-        let descriptor = descriptor_source();
-        let manifest = symbol_manifest();
-        assert!(matches!(
-            ExportManifestTranscriptV3::new(ExportManifestTranscriptInputsV3 {
-                semantic_mir: identity(2),
-                target_bound_kir: identity(4),
-                abi: identity(10),
-                compiler_descriptor_source: &descriptor.canonical_bytes()[..1],
-                final_symbol_manifest: manifest.canonical_bytes(),
-            }),
-            Err(ProductionTargetLineageErrorV3::InvalidNestedEncoding {
-                field: "compiler descriptor source"
-            })
-        ));
-        assert!(matches!(
-            ExportManifestTranscriptV3::new(ExportManifestTranscriptInputsV3 {
-                semantic_mir: identity(2),
-                target_bound_kir: identity(4),
-                abi: identity(10),
-                compiler_descriptor_source: descriptor.canonical_bytes(),
-                final_symbol_manifest: &manifest.canonical_bytes()[..1],
-            }),
-            Err(ProductionTargetLineageErrorV3::InvalidNestedEncoding {
-                field: "final compiler symbol manifest"
             })
         ));
     }

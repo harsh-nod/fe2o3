@@ -264,24 +264,6 @@ pub(crate) fn publish_prepared_production_v1_worker_handoff(
         .map_err(WorkerV2ProducerError::Publication)
 }
 
-pub(crate) fn publish_prepared_production_v1_worker_handoff_v2(
-    output_dir: &Path,
-    producer: &ProducerIdentity,
-    attempt: BuildAttempt,
-    compiler_closure: CompilerClosureV2,
-    prepared: PreparedProductionV1WorkerHandoffV1,
-) -> Result<CompilerModuleHandoffReceiptV2, WorkerV2ProducerError> {
-    let handoff = validate_prepared_production_v1_worker_handoff(prepared)?;
-    publish_compiler_module_handoff_v2(
-        output_dir,
-        producer,
-        attempt,
-        compiler_closure,
-        handoff.canonical_bytes(),
-    )
-    .map_err(WorkerV2ProducerError::ProtectedPublication)
-}
-
 fn validate_prepared_production_v1_worker_handoff(
     prepared: PreparedProductionV1WorkerHandoffV1,
 ) -> Result<CompilerModuleHandoffV2, WorkerV2ProducerError> {
@@ -2670,40 +2652,6 @@ mod tests {
             consume_compiler_module_handoff_v2(&directory.0, &producer, attempt, expected_closure)
                 .unwrap();
         assert_eq!(consumed.compiler_closure(), expected_closure);
-        assert_eq!(consumed.bytes(), expected_bytes);
-    }
-
-    #[test]
-    fn protected_production_publication_returns_the_native_v2_receipt() {
-        let directory = TestDirectory::new();
-        let producer = producer();
-        let attempt = begin_attempt(&directory.0, &producer);
-        let closure = compiler_closure(compiler_closure_pins());
-        let mut frontend_receipt = exact_row_frontend_receipt_for_test();
-        let row =
-            prepare_row_softmax_v1_worker_handoff(frontend_receipt.consume().unwrap()).unwrap();
-        let PreparedRowSoftmaxV1WorkerHandoffV1 { handoff, .. } = row;
-        let expected_bytes = handoff.canonical_bytes().to_vec();
-        let production = PreparedProductionV1WorkerHandoffV1 {
-            llvm_ir_sha256: Sha256::digest(handoff.module_bytes()).into(),
-            handoff,
-        };
-
-        let receipt = publish_prepared_production_v1_worker_handoff_v2(
-            &directory.0,
-            &producer,
-            attempt,
-            closure,
-            production,
-        )
-        .unwrap();
-        let _identity: fe2o3_artifact_transaction::CompilerModuleHandoffIdentityV2 =
-            receipt.identity();
-        assert_eq!(receipt.compiler_closure(), closure);
-        assert_eq!(receipt.length(), expected_bytes.len());
-        let consumed =
-            consume_compiler_module_handoff_v2(&directory.0, &producer, attempt, closure).unwrap();
-        assert_eq!(consumed.compiler_closure(), closure);
         assert_eq!(consumed.bytes(), expected_bytes);
     }
 

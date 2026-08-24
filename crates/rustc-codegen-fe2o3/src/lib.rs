@@ -2476,6 +2476,7 @@ mod tests {
     fn admitted_protected_modules_route_only_through_strict_v3_publication() {
         let backend = include_str!("lib.rs");
         let production_pipeline = include_str!("production_pipeline_v1.rs");
+        let worker_producer = include_str!("worker_v2_producer.rs");
         let production = backend
             .split("match protected_rustc_invocation.take()")
             .nth(1)
@@ -2489,9 +2490,7 @@ mod tests {
         assert!(production_v3.contains("publish_worker_handoff_v3"));
         assert!(!production_v3.contains("publish_worker_handoff()"));
         assert!(production_pipeline.contains("publish_compiler_module_handoff_v3"));
-        assert!(!production_pipeline.contains(
-            "publish_prepared_production_v1_worker_handoff_v2(\n            &publication.output_dir"
-        ));
+        assert!(!worker_producer.contains("publish_prepared_production_v1_worker_handoff_v2"));
         assert!(production_v1.contains("from_collected_device_closure("));
         assert!(production_v1.contains("publish_worker_handoff()"));
 
