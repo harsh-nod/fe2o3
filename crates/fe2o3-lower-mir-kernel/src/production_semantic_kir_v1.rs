@@ -738,7 +738,11 @@ impl ProductionSemanticKirOwnerV1 {
         self.generic_checks
             .as_ref()
             .is_some_and(|checks| mandatory_generic_checks_are_clean(&checks.lowering))
-            && guarded_accesses_match_authenticated_load_spans(self, guarded_locations)
+            && guarded_accesses_have_structural_bounds(
+                &self.module,
+                guarded_locations,
+                self.limits.max_operations,
+            )
     }
     /// Exact target-neutral lowering evidence is not artifact or launch authority.
     pub const fn grants_artifact_or_launch_authority(&self) -> bool {
@@ -746,108 +750,236 @@ impl ProductionSemanticKirOwnerV1 {
     }
 }
 
-fn guarded_accesses_match_authenticated_load_spans(
-    owner: &ProductionSemanticKirOwnerV1,
-    guarded_locations: &[FunctionOperationLocation],
-) -> bool {
-    let semantic = owner.semantic.semantic();
-    let mut expected = BTreeSet::new();
-    for span in owner.correspondence.terminator_operation_spans() {
-        let Some(function) = semantic
-            .functions()
-            .get(span.semantic_function().index() as usize)
-        else {
-            return false;
-        };
-        let Some(block) = function
-            .blocks()
-            .get(span.semantic_block().index() as usize)
-        else {
-            return false;
-        };
-        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
-            continue;
-        };
-        let Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) =
-            semantic.callables().get(call.callee().index() as usize)
-        else {
-            continue;
-        };
-        let contract = match operation {
-            SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { contract, .. }
-            | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
-                contract, ..
-            } => contract,
-            _ => continue,
-        };
-        let expected_guarded_count = contract.profile.operand_components_per_lane();
-        let Some(target) = owner
-            .module
-            .functions
-            .first()
-            .and_then(|function| function.body.as_ref())
-            .and_then(|body| {
-                body.blocks
-                    .iter()
-                    .find(|target| target.id == span.kernel_ir_block())
-            })
-        else {
-            return false;
-        };
-        let Ok(first) = usize::try_from(span.first_operation_ordinal()) else {
-            return false;
-        };
-        let Ok(count) = usize::try_from(span.operation_count()) else {
-            return false;
-        };
-        let Some(end) = first.checked_add(count) else {
-            return false;
-        };
-        let Some(operations) = target.operations.get(first..end) else {
-            return false;
-        };
-        let guarded = operations
-            .iter()
-            .enumerate()
-            .filter(|(_, operation)| matches!(operation.kind, OperationKind::GuardedLoad { .. }))
-            .map(|(relative, _)| FunctionOperationLocation::new(target.id, first + relative))
-            .collect::<Vec<_>>();
-        if guarded.len() != expected_guarded_count {
-            return false;
-        }
-        expected.extend(guarded);
-    }
+// Keep hostile shared predicate graphs bounded independently of the lowering budget.
+const GUARDED_ADDRESS_PROOF_STEPS_PER_OPERATION_V1: usize = 32;
 
-    let actual = owner
-        .module
-        .functions
-        .first()
-        .and_then(|function| function.body.as_ref())
-        .into_iter()
-        .flat_map(|body| &body.blocks)
-        .flat_map(|block| {
-            block
-                .operations
-                .iter()
-                .enumerate()
-                .filter(|(_, operation)| {
-                    matches!(operation.kind, OperationKind::GuardedLoad { .. })
-                })
-                .map(|(ordinal, _)| FunctionOperationLocation::new(block.id, ordinal))
-        })
-        .collect::<BTreeSet<_>>();
-    let provided = guarded_locations.iter().copied().collect::<BTreeSet<_>>();
-    exact_guarded_access_join(&expected, &actual, &provided)
+#[derive(Clone, Copy)]
+enum GuardedAddressDefinitionV1<'module> {
+    Parameter,
+    Operation(&'module Operation),
 }
 
-fn exact_guarded_access_join(
-    authenticated_terminal_accesses: &BTreeSet<FunctionOperationLocation>,
-    kernel_ir_accesses: &BTreeSet<FunctionOperationLocation>,
-    formal_incomplete_accesses: &BTreeSet<FunctionOperationLocation>,
+struct GuardedAddressProofBudgetV1 {
+    remaining: usize,
+}
+
+impl GuardedAddressProofBudgetV1 {
+    fn charge(&mut self) -> Result<(), ()> {
+        self.remaining = self.remaining.checked_sub(1).ok_or(())?;
+        Ok(())
+    }
+}
+
+fn guarded_accesses_have_structural_bounds(
+    module: &Module,
+    guarded_locations: &[FunctionOperationLocation],
+    max_operations: usize,
 ) -> bool {
-    !authenticated_terminal_accesses.is_empty()
-        && authenticated_terminal_accesses == kernel_ir_accesses
-        && kernel_ir_accesses == formal_incomplete_accesses
+    let [kernel] = module.kernels.as_slice() else {
+        return false;
+    };
+    let Some(function) = module.function(&kernel.entry) else {
+        return false;
+    };
+    let Some(body) = function.body.as_ref() else {
+        return false;
+    };
+
+    let mut definitions = BTreeMap::new();
+    for parameter in &body.parameters {
+        if definitions
+            .insert(*parameter, GuardedAddressDefinitionV1::Parameter)
+            .is_some()
+        {
+            return false;
+        }
+    }
+
+    let mut actual = BTreeMap::new();
+    let mut operation_count = 0_usize;
+    for block in &body.blocks {
+        for parameter in &block.parameters {
+            if definitions
+                .insert(parameter.id, GuardedAddressDefinitionV1::Parameter)
+                .is_some()
+            {
+                return false;
+            }
+        }
+        for (ordinal, operation) in block.operations.iter().enumerate() {
+            operation_count = match operation_count.checked_add(1) {
+                Some(count) if count <= max_operations => count,
+                _ => return false,
+            };
+            for result in &operation.results {
+                if definitions
+                    .insert(result.id, GuardedAddressDefinitionV1::Operation(operation))
+                    .is_some()
+                {
+                    return false;
+                }
+            }
+            if matches!(
+                &operation.kind,
+                OperationKind::GuardedLoad { access, .. }
+                    if access.address_space != AddressSpace::Private
+            ) {
+                let location = FunctionOperationLocation::new(block.id, ordinal);
+                if actual.insert(location, operation).is_some() {
+                    return false;
+                }
+            }
+        }
+    }
+
+    let provided = guarded_locations.iter().copied().collect::<BTreeSet<_>>();
+    if actual.is_empty()
+        || provided.len() != guarded_locations.len()
+        || actual.keys().copied().collect::<BTreeSet<_>>() != provided
+    {
+        return false;
+    }
+
+    let Some(proof_steps) =
+        max_operations.checked_mul(GUARDED_ADDRESS_PROOF_STEPS_PER_OPERATION_V1)
+    else {
+        return false;
+    };
+    let mut budget = GuardedAddressProofBudgetV1 {
+        remaining: proof_steps,
+    };
+    actual
+        .values()
+        .all(|operation| guarded_load_has_structural_bound(operation, &definitions, &mut budget))
+}
+
+fn guarded_load_has_structural_bound(
+    operation: &Operation,
+    definitions: &BTreeMap<ValueId, GuardedAddressDefinitionV1<'_>>,
+    budget: &mut GuardedAddressProofBudgetV1,
+) -> bool {
+    let OperationKind::GuardedLoad {
+        pointer, predicate, ..
+    } = &operation.kind
+    else {
+        return false;
+    };
+    let Some(OperationKind::GetElementPointer { base, offset }) =
+        operation_definition(definitions, *pointer).map(|operation| &operation.kind)
+    else {
+        return false;
+    };
+    let Some(OperationKind::SliceData { slice }) =
+        operation_definition(definitions, *base).map(|operation| &operation.kind)
+    else {
+        return false;
+    };
+    let Some(OperationKind::Select {
+        condition,
+        true_value: index,
+        false_value,
+    }) = operation_definition(definitions, *offset).map(|operation| &operation.kind)
+    else {
+        return false;
+    };
+    if *condition != *predicate
+        || !matches!(
+            operation_definition(definitions, *false_value).map(|operation| &operation.kind),
+            Some(OperationKind::Constant(Constant::Index(0)))
+        )
+    {
+        return false;
+    }
+
+    let mut visiting = BTreeSet::new();
+    let mut memo = BTreeMap::new();
+    predicate_implies_slice_bound(
+        *predicate,
+        *index,
+        *slice,
+        definitions,
+        budget,
+        &mut visiting,
+        &mut memo,
+    )
+    .unwrap_or(false)
+}
+
+fn operation_definition<'module>(
+    definitions: &BTreeMap<ValueId, GuardedAddressDefinitionV1<'module>>,
+    value: ValueId,
+) -> Option<&'module Operation> {
+    match definitions.get(&value) {
+        Some(GuardedAddressDefinitionV1::Operation(operation)) => Some(*operation),
+        Some(GuardedAddressDefinitionV1::Parameter) | None => None,
+    }
+}
+
+fn predicate_implies_slice_bound(
+    predicate: ValueId,
+    index: ValueId,
+    slice: ValueId,
+    definitions: &BTreeMap<ValueId, GuardedAddressDefinitionV1<'_>>,
+    budget: &mut GuardedAddressProofBudgetV1,
+    visiting: &mut BTreeSet<ValueId>,
+    memo: &mut BTreeMap<ValueId, bool>,
+) -> Result<bool, ()> {
+    if let Some(proved) = memo.get(&predicate) {
+        return Ok(*proved);
+    }
+    budget.charge()?;
+    if !visiting.insert(predicate) {
+        return Err(());
+    }
+    let result = match definitions.get(&predicate) {
+        Some(GuardedAddressDefinitionV1::Parameter) => Ok(false),
+        Some(GuardedAddressDefinitionV1::Operation(operation)) => match &operation.kind {
+            OperationKind::Compare {
+                predicate: ComparePredicate::LessThan,
+                lhs,
+                rhs,
+            } if *lhs == index => match definitions.get(rhs) {
+                Some(GuardedAddressDefinitionV1::Operation(operation)) if matches!(operation.kind, OperationKind::SliceLength { slice: bound_slice } if bound_slice == slice) => {
+                    Ok(true)
+                }
+                Some(_) => Ok(false),
+                None => Err(()),
+            },
+            OperationKind::Binary {
+                op: BinaryOp::BitAnd,
+                lhs,
+                rhs,
+            } => {
+                // A true conjunction inherits a bound implied by either conjunct.
+                let lhs = predicate_implies_slice_bound(
+                    *lhs,
+                    index,
+                    slice,
+                    definitions,
+                    budget,
+                    visiting,
+                    memo,
+                )?;
+                let rhs = predicate_implies_slice_bound(
+                    *rhs,
+                    index,
+                    slice,
+                    definitions,
+                    budget,
+                    visiting,
+                    memo,
+                )?;
+                Ok(lhs || rhs)
+            }
+            _ => Ok(false),
+        },
+        None => Err(()),
+    };
+    visiting.remove(&predicate);
+    if let Ok(proved) = result {
+        memo.insert(predicate, proved);
+    }
+    result
 }
 
 fn mandatory_generic_checks_are_clean(lowering: &ProductionRankedKernelLoweringInputV1) -> bool {
@@ -4703,6 +4835,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         )?;
         let component_count = contract.profile.operand_components_per_lane();
         let mut values = Vec::with_capacity(component_count);
+        let mut availability = legacy_option.map(|_| present);
         for component in 0..u64::try_from(component_count).expect("MFMA component count fits u64") {
             let component_value = self.emit_index_constant(operations, component)?;
             let (reduction, component_safe) = self.emit_checked_index(
@@ -4741,6 +4874,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             guard = self.emit_bool_and(operations, guard, offset_safe)?;
             guard = self.emit_bool_and(operations, guard, column_safe)?;
             guard = self.emit_bool_and(operations, guard, index_in_bounds)?;
+            if let Some(previous) = availability {
+                availability = Some(self.emit_bool_and(operations, previous, guard)?);
+            }
             let safe_index = self.emit_select_index(operations, guard, index, zero_index)?;
             let pointer = self.emit_id(
                 operations,
@@ -4823,7 +4959,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             operations,
             discriminant_ty.clone(),
             OperationKind::Select {
-                condition: present,
+                condition: availability.expect("legacy matrix load records availability"),
                 true_value: some_discriminant,
                 false_value: none_discriminant,
             },
@@ -7731,35 +7867,305 @@ mod resource_tests {
         );
     }
 
+    struct GuardedAddressFixture {
+        module: Module,
+        locations: Vec<FunctionOperationLocation>,
+    }
+
+    fn generated_matrix_tail_fixture(component_count: usize) -> GuardedAddressFixture {
+        fn emit(
+            block: &mut BasicBlock,
+            next_value: &mut u32,
+            ty: Type,
+            kind: OperationKind,
+        ) -> ValueId {
+            let id = ValueId(*next_value);
+            *next_value += 1;
+            block
+                .operations
+                .push(Operation::effect_free(ValueDef::new(id, ty), kind));
+            id
+        }
+
+        let slice_type = Type::slice(
+            Type::Scalar(ScalarType::U16),
+            AddressSpace::Global,
+            AccessMode::ReadOnly,
+        );
+        let pointer_type = Type::pointer(
+            Type::Scalar(ScalarType::U16),
+            AddressSpace::Global,
+            AccessMode::ReadOnly,
+        );
+        let protected_slice = ValueId(0);
+        let other_slice = ValueId(1);
+        let base_index = ValueId(2);
+        let mut next_value = 3;
+        let mut block = BasicBlock::new(BlockId(0));
+        let data = emit(
+            &mut block,
+            &mut next_value,
+            pointer_type.clone(),
+            OperationKind::SliceData {
+                slice: protected_slice,
+            },
+        );
+        let length = emit(
+            &mut block,
+            &mut next_value,
+            Type::INDEX,
+            OperationKind::SliceLength {
+                slice: protected_slice,
+            },
+        );
+        let zero = emit(
+            &mut block,
+            &mut next_value,
+            Type::INDEX,
+            OperationKind::Constant(Constant::Index(0)),
+        );
+        let valid = emit(
+            &mut block,
+            &mut next_value,
+            Type::BOOL,
+            OperationKind::Constant(Constant::Bool(true)),
+        );
+        let fallback = emit(
+            &mut block,
+            &mut next_value,
+            Type::Scalar(ScalarType::U16),
+            OperationKind::Constant(Constant::U16(0)),
+        );
+
+        let mut locations = Vec::new();
+        for component in 0..component_count {
+            let component = emit(
+                &mut block,
+                &mut next_value,
+                Type::INDEX,
+                OperationKind::Constant(Constant::Index(component as u64)),
+            );
+            let index = emit(
+                &mut block,
+                &mut next_value,
+                Type::INDEX,
+                OperationKind::Binary {
+                    op: BinaryOp::Add,
+                    lhs: base_index,
+                    rhs: component,
+                },
+            );
+            let in_bounds = emit(
+                &mut block,
+                &mut next_value,
+                Type::BOOL,
+                OperationKind::Compare {
+                    predicate: ComparePredicate::LessThan,
+                    lhs: index,
+                    rhs: length,
+                },
+            );
+            let guard = emit(
+                &mut block,
+                &mut next_value,
+                Type::BOOL,
+                OperationKind::Binary {
+                    op: BinaryOp::BitAnd,
+                    lhs: valid,
+                    rhs: in_bounds,
+                },
+            );
+            let safe_index = emit(
+                &mut block,
+                &mut next_value,
+                Type::INDEX,
+                OperationKind::Select {
+                    condition: guard,
+                    true_value: index,
+                    false_value: zero,
+                },
+            );
+            let pointer = emit(
+                &mut block,
+                &mut next_value,
+                pointer_type.clone(),
+                OperationKind::GetElementPointer {
+                    base: data,
+                    offset: safe_index,
+                },
+            );
+            locations.push(FunctionOperationLocation::new(
+                block.id,
+                block.operations.len(),
+            ));
+            emit(
+                &mut block,
+                &mut next_value,
+                Type::Scalar(ScalarType::U16),
+                OperationKind::GuardedLoad {
+                    pointer,
+                    predicate: guard,
+                    fallback,
+                    access: MemoryAccess::new(AddressSpace::Global, 2),
+                },
+            );
+        }
+        block.terminator = Some(Terminator::Return { values: vec![] });
+
+        let mut module = Module::new("generated-matrix-tail");
+        module.functions.push(Function::kernel_entry(
+            "generated_matrix_tail",
+            Signature::new(vec![slice_type.clone(), slice_type, Type::INDEX], vec![]),
+            vec![protected_slice, other_slice, base_index],
+            vec![block],
+        ));
+        module.kernels.push(Kernel::new(
+            "generated-matrix-tail",
+            "generated_matrix_tail",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Static(64),
+            },
+        ));
+        verify_module(&module).expect("generated guarded-tail fixture must be valid Kernel IR");
+        GuardedAddressFixture { module, locations }
+    }
+
+    fn guarded_fixture_operations_mut(fixture: &mut GuardedAddressFixture) -> &mut Vec<Operation> {
+        &mut fixture.module.functions[0]
+            .body
+            .as_mut()
+            .expect("fixture function is defined")
+            .blocks[0]
+            .operations
+    }
+
     #[test]
-    fn guarded_access_authority_requires_an_exact_authenticated_terminal_join() {
-        let first = FunctionOperationLocation::new(BlockId(4), 7);
-        let second = FunctionOperationLocation::new(BlockId(4), 8);
-        let authenticated = BTreeSet::from([first, second]);
-        let kernel_ir = authenticated.clone();
-        let formal = authenticated.clone();
-        assert!(exact_guarded_access_join(
-            &authenticated,
-            &kernel_ir,
-            &formal
+    fn generated_matrix_tail_guarded_loads_have_structural_address_proofs() {
+        let fixture = generated_matrix_tail_fixture(4);
+        let operation_count = fixture.module.functions[0].body.as_ref().unwrap().blocks[0]
+            .operations
+            .len();
+        assert!(guarded_accesses_have_structural_bounds(
+            &fixture.module,
+            &fixture.locations,
+            operation_count,
+        ));
+    }
+
+    #[test]
+    fn guarded_address_proof_rejects_true_predicate_with_unsafe_index() {
+        let mut fixture = generated_matrix_tail_fixture(1);
+        let operations = guarded_fixture_operations_mut(&mut fixture);
+        let always_true = operations[3].results[0].id;
+        let OperationKind::Select { condition, .. } = &mut operations[9].kind else {
+            panic!("fixture select changed");
+        };
+        *condition = always_true;
+        let OperationKind::GuardedLoad { predicate, .. } = &mut operations[11].kind else {
+            panic!("fixture guarded load changed");
+        };
+        *predicate = always_true;
+        verify_module(&fixture.module).expect("hostile true predicate remains structurally valid");
+        assert!(!guarded_accesses_have_structural_bounds(
+            &fixture.module,
+            &fixture.locations,
+            12,
+        ));
+    }
+
+    #[test]
+    fn guarded_address_proof_rejects_wrong_bound_slice_and_select() {
+        let mut wrong_bound = generated_matrix_tail_fixture(1);
+        let OperationKind::Compare { predicate, .. } =
+            &mut guarded_fixture_operations_mut(&mut wrong_bound)[7].kind
+        else {
+            panic!("fixture comparison changed");
+        };
+        *predicate = ComparePredicate::Equal;
+        verify_module(&wrong_bound.module).expect("hostile comparison remains valid Kernel IR");
+        assert!(!guarded_accesses_have_structural_bounds(
+            &wrong_bound.module,
+            &wrong_bound.locations,
+            12,
         ));
 
-        let mut extra_kernel_ir = kernel_ir.clone();
-        extra_kernel_ir.insert(FunctionOperationLocation::new(BlockId(9), 0));
-        assert!(!exact_guarded_access_join(
-            &authenticated,
-            &extra_kernel_ir,
-            &formal
+        let mut wrong_slice = generated_matrix_tail_fixture(1);
+        let OperationKind::SliceLength { slice } =
+            &mut guarded_fixture_operations_mut(&mut wrong_slice)[1].kind
+        else {
+            panic!("fixture slice length changed");
+        };
+        *slice = ValueId(1);
+        verify_module(&wrong_slice.module).expect("other slice has the same valid type");
+        assert!(!guarded_accesses_have_structural_bounds(
+            &wrong_slice.module,
+            &wrong_slice.locations,
+            12,
         ));
-        assert!(!exact_guarded_access_join(
-            &authenticated,
-            &kernel_ir,
-            &BTreeSet::from([first])
+
+        let mut wrong_select = generated_matrix_tail_fixture(1);
+        let OperationKind::Select { false_value, .. } =
+            &mut guarded_fixture_operations_mut(&mut wrong_select)[9].kind
+        else {
+            panic!("fixture select changed");
+        };
+        *false_value = ValueId(2);
+        verify_module(&wrong_select.module).expect("hostile fallback index remains well typed");
+        assert!(!guarded_accesses_have_structural_bounds(
+            &wrong_select.module,
+            &wrong_select.locations,
+            12,
         ));
-        assert!(!exact_guarded_access_join(
-            &BTreeSet::new(),
-            &BTreeSet::new(),
-            &BTreeSet::new()
+    }
+
+    #[test]
+    fn guarded_address_proof_fails_closed_for_locations_defs_cycles_and_budget() {
+        let fixture = generated_matrix_tail_fixture(1);
+        assert!(!guarded_accesses_have_structural_bounds(
+            &fixture.module,
+            &[],
+            12,
+        ));
+        assert!(!guarded_accesses_have_structural_bounds(
+            &fixture.module,
+            &[fixture.locations[0], fixture.locations[0]],
+            12,
+        ));
+        assert!(!guarded_accesses_have_structural_bounds(
+            &fixture.module,
+            &fixture.locations,
+            0,
+        ));
+
+        let mut missing = generated_matrix_tail_fixture(1);
+        guarded_fixture_operations_mut(&mut missing).remove(7);
+        assert!(!guarded_accesses_have_structural_bounds(
+            &missing.module,
+            &[FunctionOperationLocation::new(BlockId(0), 10)],
+            11,
+        ));
+
+        let mut ambiguous = generated_matrix_tail_fixture(1);
+        let duplicate = guarded_fixture_operations_mut(&mut ambiguous)[7].clone();
+        guarded_fixture_operations_mut(&mut ambiguous).push(duplicate);
+        assert!(!guarded_accesses_have_structural_bounds(
+            &ambiguous.module,
+            &ambiguous.locations,
+            13,
+        ));
+
+        let mut cyclic = generated_matrix_tail_fixture(1);
+        let guard = guarded_fixture_operations_mut(&mut cyclic)[8].results[0].id;
+        let OperationKind::Binary { lhs, .. } =
+            &mut guarded_fixture_operations_mut(&mut cyclic)[8].kind
+        else {
+            panic!("fixture guard changed");
+        };
+        *lhs = guard;
+        assert!(!guarded_accesses_have_structural_bounds(
+            &cyclic.module,
+            &cyclic.locations,
+            12,
         ));
     }
 }
