@@ -12,7 +12,7 @@ use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, Axis, BasicBlock, BinaryOp, BlockId, CastKind, CheckedBinaryOperator,
     ComparePredicate, Constant, Function, FunctionId, FunctionRole, IndexKind, IntrinsicKind,
     MemoryAccess, Module, Operation, OperationKind, ScalarType, Terminator, Type, UnaryOp,
-    ValueDef, ValueId, VerifiedCanonicalKernelIrIdentityV6,
+    ValueDef, ValueId, VerifiedCanonicalKernelIrIdentityV7,
 };
 
 use crate::model::mask;
@@ -199,7 +199,7 @@ impl SimulationEventSinkV1 for NoopSimulationEventSinkV1 {
 /// Completed deterministic execution and copied-back arguments.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SimulationExecutionV1 {
-    identity: VerifiedCanonicalKernelIrIdentityV6,
+    identity: VerifiedCanonicalKernelIrIdentityV7,
     arguments: Vec<SimulationArgumentV1>,
     shared_buffers: Vec<SharedBufferV1>,
     invocations_executed: u64,
@@ -213,7 +213,7 @@ pub struct SimulationExecutionV1 {
 
 impl SimulationExecutionV1 {
     /// Returns the exact canonical KIR identity that was simulated.
-    pub const fn identity(&self) -> &VerifiedCanonicalKernelIrIdentityV6 {
+    pub const fn identity(&self) -> &VerifiedCanonicalKernelIrIdentityV7 {
         &self.identity
     }
 
@@ -2970,50 +2970,31 @@ fn execute_operation(
                 ..pointer.clone()
             }))
         }
-        OperationKind::Load { pointer, access } => {
-            let RuntimeValue::Pointer(pointer_value) =
-                runtime_value(engine, values, *pointer, &site)?
-            else {
-                return Err(engine.at(
-                    site,
-                    SimulationExecutionErrorKindV1::RuntimeType {
-                        value: Some(*pointer),
-                        expected: "pointer",
-                    },
-                ));
-            };
-            let value = engine
-                .memory
-                .load(pointer_value, *access, engine.target)
-                .map_err(|kind| engine.at(site, kind))?;
-            let bytes = engine
-                .target
-                .scalar_bytes(pointer_value.element)
+        OperationKind::Load { pointer, access } => one(RuntimeValue::Scalar(execute_scalar_load(
+            engine, values, *pointer, *access, &site,
+        )?)),
+        OperationKind::GuardedLoad {
+            pointer,
+            predicate,
+            fallback,
+            access,
+        } => {
+            let predicate = scalar_value(engine, values, *predicate, &site)?
+                .as_bool()
                 .ok_or_else(|| {
                     engine.at(
                         site,
-                        SimulationExecutionErrorKindV1::InternalInvariant(
-                            "preflighted load element",
-                        ),
+                        SimulationExecutionErrorKindV1::RuntimeType {
+                            value: Some(*predicate),
+                            expected: "boolean guarded-load predicate",
+                        },
                     )
                 })?;
-            if pointer_value.address_space == AddressSpace::Global {
-                engine.record_access(
-                    &site,
-                    pointer_value.allocation,
-                    pointer_value.byte_offset,
-                    bytes,
-                    false,
-                )?;
-            }
-            engine.event(
-                &site,
-                SimulationEventKindV1::MemoryRead {
-                    allocation: pointer_value.allocation,
-                    offset: pointer_value.byte_offset,
-                    bytes,
-                },
-            )?;
+            let value = if predicate {
+                execute_scalar_load(engine, values, *pointer, *access, &site)?
+            } else {
+                scalar_value(engine, values, *fallback, &site)?
+            };
             one(RuntimeValue::Scalar(value))
         }
         OperationKind::Store {
@@ -3050,7 +3031,6 @@ fn execute_operation(
             Ok(SmallResults::None)
         }
         OperationKind::MemoryIntrinsic(_)
-        | OperationKind::GuardedLoad { .. }
         | OperationKind::Barrier(_)
         | OperationKind::Atomic(_)
         | OperationKind::Fence(_)
@@ -3065,6 +3045,55 @@ fn execute_operation(
             ),
         )),
     }
+}
+
+fn execute_scalar_load(
+    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    values: &HashMap<ValueId, RuntimeValue>,
+    pointer: ValueId,
+    access: MemoryAccess,
+    site: &CompactSite,
+) -> Result<ScalarBitsV1, SimulationExecutionErrorV1> {
+    let RuntimeValue::Pointer(pointer_value) = runtime_value(engine, values, pointer, site)? else {
+        return Err(engine.at(
+            *site,
+            SimulationExecutionErrorKindV1::RuntimeType {
+                value: Some(pointer),
+                expected: "pointer",
+            },
+        ));
+    };
+    let value = engine
+        .memory
+        .load(pointer_value, access, engine.target)
+        .map_err(|kind| engine.at(*site, kind))?;
+    let bytes = engine
+        .target
+        .scalar_bytes(pointer_value.element)
+        .ok_or_else(|| {
+            engine.at(
+                *site,
+                SimulationExecutionErrorKindV1::InternalInvariant("preflighted load element"),
+            )
+        })?;
+    if pointer_value.address_space == AddressSpace::Global {
+        engine.record_access(
+            site,
+            pointer_value.allocation,
+            pointer_value.byte_offset,
+            bytes,
+            false,
+        )?;
+    }
+    engine.event(
+        site,
+        SimulationEventKindV1::MemoryRead {
+            allocation: pointer_value.allocation,
+            offset: pointer_value.byte_offset,
+            bytes,
+        },
+    )?;
+    Ok(value)
 }
 
 fn operation_site(function: usize, block: &BasicBlock, ordinal: usize) -> CompactSite {

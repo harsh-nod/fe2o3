@@ -96,7 +96,7 @@ fn header_with_bounds(bounds: TraceBoundsV1) -> TraceHeaderV1 {
 fn kir_digest_and_sites_remain_unresolved_claims() {
     let trace = sample_trace();
     let claim = trace.header().kernel_ir_claim();
-    assert_eq!(claim.wire_version(), KERNEL_IR_WIRE_VERSION_V6);
+    assert_eq!(claim.wire_version(), KERNEL_IR_WIRE_VERSION_V7);
     assert_eq!(claim.identity_policy(), KERNEL_IR_IDENTITY_POLICY_V1);
 
     // Large ordinals are syntactically representable claims. This crate has no

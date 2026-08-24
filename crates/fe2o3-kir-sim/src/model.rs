@@ -3,8 +3,8 @@ use std::fmt;
 
 use fe2o3_kernel_ir::{
     AccessMode, KernelId, KernelIrDecodeError, KernelIrEncodeError, Module, ScalarType,
-    VerifiedCanonicalKernelIrIdentityV6, VerifiedCanonicalKernelIrV6, decode_module_v6,
-    encode_module_v6,
+    VerifiedCanonicalKernelIrIdentityV7, VerifiedCanonicalKernelIrV7, decode_module_v7,
+    encode_module_v7,
 };
 
 const HARD_MAX_CANONICAL_BYTES_V1: usize = 16 * 1024 * 1024;
@@ -693,23 +693,23 @@ pub struct SimulationSiteV1 {
     pub operation: Option<u32>,
 }
 
-/// Exact V6 owner admitted for simulation. This owner is intentionally not `Clone`.
+/// Exact V7 owner admitted for simulation. This owner is intentionally not `Clone`.
 #[derive(Debug)]
 pub struct AdmittedSimulationModuleV1 {
-    pub(crate) identity: VerifiedCanonicalKernelIrIdentityV6,
+    pub(crate) identity: VerifiedCanonicalKernelIrIdentityV7,
     pub(crate) module: Module,
     pub(crate) admitted_resident_bytes: usize,
 }
 
 impl AdmittedSimulationModuleV1 {
-    /// Consumes exact verified V6 custody and retains a bounded decoded execution view.
+    /// Consumes exact verified V7 custody and retains a bounded decoded execution view.
     ///
     /// `max_resident_bytes` is evaluated after canonical decode/re-encode, when
     /// retained container capacities are known. A rejected attempt may therefore
     /// transiently exceed that setting, but remains bounded by the canonical-byte
     /// limit and frozen KIR wire/count/depth caps.
     pub fn admit(
-        canonical: VerifiedCanonicalKernelIrV6,
+        canonical: VerifiedCanonicalKernelIrV7,
         limits: SimulationLimitsV1,
     ) -> Result<Self, SimulationAdmissionErrorV1> {
         let limits = limits
@@ -724,9 +724,9 @@ impl AdmittedSimulationModuleV1 {
         let identity = *canonical.identity();
         let bytes = canonical.into_canonical_bytes();
         let module =
-            decode_module_v6(&bytes).map_err(SimulationAdmissionErrorV1::DecodeAfterAdmission)?;
+            decode_module_v7(&bytes).map_err(SimulationAdmissionErrorV1::DecodeAfterAdmission)?;
         let reencoded =
-            encode_module_v6(&module).map_err(SimulationAdmissionErrorV1::EncodeAfterAdmission)?;
+            encode_module_v7(&module).map_err(SimulationAdmissionErrorV1::EncodeAfterAdmission)?;
         let admitted_resident_bytes = std::mem::size_of::<Self>()
             .checked_add(
                 crate::resident::module_retained_heap_bytes(&module)
@@ -753,7 +753,7 @@ impl AdmittedSimulationModuleV1 {
     }
 
     /// Returns the exact verified canonical KIR identity.
-    pub const fn identity(&self) -> &VerifiedCanonicalKernelIrIdentityV6 {
+    pub const fn identity(&self) -> &VerifiedCanonicalKernelIrIdentityV7 {
         &self.identity
     }
 
@@ -777,7 +777,7 @@ impl AdmittedSimulationModuleV1 {
     }
 }
 
-/// Failure to admit exact canonical KIR V6 for simulation.
+/// Failure to admit exact canonical KIR V7 for simulation.
 #[derive(Debug)]
 pub enum SimulationAdmissionErrorV1 {
     InvalidLimits(SimulationLimitsErrorV1),

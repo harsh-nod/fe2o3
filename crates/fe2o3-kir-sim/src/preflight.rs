@@ -37,7 +37,6 @@ pub enum UnsupportedFeatureV1 {
     FloatType(ScalarType),
     UnsupportedType,
     MemoryIntrinsic,
-    GuardedLoad,
     FloatConstant,
     FloatOperation,
     InvalidIntegerCast {
@@ -1269,7 +1268,6 @@ fn scan_operation(
         }
         OperationKind::Intrinsic(_) => {}
         OperationKind::MemoryIntrinsic(_) => reject!(UnsupportedFeatureV1::MemoryIntrinsic),
-        OperationKind::GuardedLoad { .. } => reject!(UnsupportedFeatureV1::GuardedLoad),
         OperationKind::Unary { op, operand } => {
             if !matches!(value_types.get(operand), Some(Type::Scalar(ty)) if supports_unary(*op, *ty))
             {
@@ -1376,7 +1374,8 @@ fn scan_operation(
             }
         }
         OperationKind::GetElementPointer { base, .. }
-        | OperationKind::Load { pointer: base, .. } => {
+        | OperationKind::Load { pointer: base, .. }
+        | OperationKind::GuardedLoad { pointer: base, .. } => {
             if let Some(Type::Pointer(pointer)) = value_types.get(base) {
                 scan_memory_type(
                     &pointer.pointee,
@@ -1782,7 +1781,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn guarded_load_is_explicitly_outside_the_v6_simulation_profile() {
+    fn guarded_load_scans_its_pointer_memory_type() {
         let function = Function::kernel_entry(
             "guarded",
             fe2o3_kernel_ir::Signature::new(vec![], vec![]),
@@ -1795,9 +1794,15 @@ mod tests {
                 pointer: ValueId(0),
                 predicate: ValueId(1),
                 fallback: ValueId(2),
-                access: fe2o3_kernel_ir::MemoryAccess::new(AddressSpace::Global, 4),
+                access: fe2o3_kernel_ir::MemoryAccess::new(AddressSpace::Workgroup, 4),
             },
         );
+        let pointer = Type::pointer(
+            Type::Scalar(ScalarType::U32),
+            AddressSpace::Workgroup,
+            AccessMode::ReadWrite,
+        );
+        let value_types = HashMap::from([(ValueId(0), &pointer)]);
         let mut findings = UnsupportedCollectorV1::new().unwrap();
         let mut pending = Vec::new();
         let mut discovered = vec![true];
@@ -1808,7 +1813,7 @@ mod tests {
             BlockId(0),
             0,
             &operation,
-            &HashMap::new(),
+            &value_types,
             &Module::new("guarded"),
             &HashMap::new(),
             &mut pending,
@@ -1824,7 +1829,7 @@ mod tests {
         assert_eq!(report.total_findings(), 1);
         assert_eq!(
             report.findings()[0].feature,
-            UnsupportedFeatureV1::GuardedLoad
+            UnsupportedFeatureV1::UnsupportedAddressSpace(AddressSpace::Workgroup)
         );
     }
 

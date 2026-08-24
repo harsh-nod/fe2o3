@@ -3,7 +3,7 @@ use fe2o3_kernel_ir::{
     ComparePredicate, Constant, Function, IndexKind, IntegerSwitchCase, IntrinsicKind,
     IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, MemoryAccess, Module, Operation,
     OperationKind, ScalarType, Signature, SwitchCase, TargetCapability, Terminator, Type, UnaryOp,
-    ValueDef, ValueId, VerifiedCanonicalKernelIrV6, WaveOperation, WaveOperationKind, WaveWidth,
+    ValueDef, ValueId, VerifiedCanonicalKernelIrV7, WaveOperation, WaveOperationKind, WaveWidth,
     WorkgroupSize,
 };
 use fe2o3_kir_sim::{
@@ -22,7 +22,7 @@ fn op(result: u32, ty: Type, kind: OperationKind) -> Operation {
 }
 
 fn admitted(module: Module) -> AdmittedSimulationModuleV1 {
-    let canonical = VerifiedCanonicalKernelIrV6::from_module(module).expect("verified fixture");
+    let canonical = VerifiedCanonicalKernelIrV7::from_module(module).expect("verified fixture");
     AdmittedSimulationModuleV1::admit(canonical, SimulationLimitsV1::default())
         .expect("admitted fixture")
 }
@@ -1622,7 +1622,7 @@ fn resident_memory_budget_is_checked_before_execution() {
 fn admission_decode_peak_has_an_exact_resident_boundary() {
     let module = empty_kernel_module("admission_resident", Signature::new(vec![], vec![]), vec![]);
     let too_small = AdmittedSimulationModuleV1::admit(
-        VerifiedCanonicalKernelIrV6::from_module(module.clone()).unwrap(),
+        VerifiedCanonicalKernelIrV7::from_module(module.clone()).unwrap(),
         SimulationLimitsV1 {
             max_resident_bytes: 1,
             ..SimulationLimitsV1::default()
@@ -1643,7 +1643,7 @@ fn admission_decode_peak_has_an_exact_resident_boundary() {
     assert_eq!(phase, "post-decode canonical admission");
     assert_eq!(limit, 1);
     AdmittedSimulationModuleV1::admit(
-        VerifiedCanonicalKernelIrV6::from_module(module.clone()).unwrap(),
+        VerifiedCanonicalKernelIrV7::from_module(module.clone()).unwrap(),
         SimulationLimitsV1 {
             max_resident_bytes: actual,
             ..SimulationLimitsV1::default()
@@ -1652,7 +1652,7 @@ fn admission_decode_peak_has_an_exact_resident_boundary() {
     .expect("exact admission resident boundary");
     assert!(matches!(
         AdmittedSimulationModuleV1::admit(
-            VerifiedCanonicalKernelIrV6::from_module(module).unwrap(),
+            VerifiedCanonicalKernelIrV7::from_module(module).unwrap(),
             SimulationLimitsV1 {
                 max_resident_bytes: actual - 1,
                 ..SimulationLimitsV1::default()
@@ -3130,4 +3130,204 @@ fn repeated_nonempty_helper_calls_reuse_frame_and_value_scratch() {
             ..
         })
     ));
+}
+
+fn conditional_load_module(guarded: bool) -> Module {
+    let element = Type::Scalar(ScalarType::U8);
+    let slice = Type::slice(element.clone(), AddressSpace::Global, AccessMode::ReadWrite);
+    let pointer = Type::pointer(element.clone(), AddressSpace::Global, AccessMode::ReadWrite);
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations = vec![
+        op(
+            4,
+            pointer.clone(),
+            OperationKind::SliceData { slice: ValueId(0) },
+        ),
+        op(5, pointer, OperationKind::SliceData { slice: ValueId(1) }),
+        op(
+            6,
+            element,
+            if guarded {
+                OperationKind::GuardedLoad {
+                    pointer: ValueId(4),
+                    predicate: ValueId(2),
+                    fallback: ValueId(3),
+                    access: MemoryAccess::new(AddressSpace::Global, 1),
+                }
+            } else {
+                OperationKind::Load {
+                    pointer: ValueId(4),
+                    access: MemoryAccess::new(AddressSpace::Global, 1),
+                }
+            },
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(5),
+                value: ValueId(6),
+                access: MemoryAccess::new(AddressSpace::Global, 1),
+            },
+        ),
+    ];
+    block.terminator = Some(Terminator::Return { values: vec![] });
+
+    let entry = Function::kernel_entry(
+        "conditional_load_impl",
+        Signature::new(
+            vec![
+                slice.clone(),
+                slice,
+                Type::BOOL,
+                Type::Scalar(ScalarType::U8),
+            ],
+            vec![],
+        ),
+        vec![ValueId(0), ValueId(1), ValueId(2), ValueId(3)],
+        vec![block],
+    );
+    let mut module = Module::new("sim-tests::conditional-load");
+    module.functions.push(entry);
+    module.kernels.push(Kernel::new(
+        "conditional_load",
+        "conditional_load_impl",
+        dynamic_domain_1d(),
+    ));
+    module
+}
+
+fn empty_u8_buffer() -> BufferArgumentV1 {
+    byte_buffer(&[])
+}
+
+fn conditional_load_request(predicate: bool, input: BufferArgumentV1) -> SimulationRequestV1 {
+    SimulationRequestV1::new(
+        "conditional_load",
+        [1, 1, 1],
+        [1, 1, 1],
+        vec![
+            SimulationArgumentV1::Buffer(input),
+            SimulationArgumentV1::Buffer(byte_buffer(&[0])),
+            SimulationArgumentV1::Scalar(ScalarBitsV1::boolean(predicate)),
+            SimulationArgumentV1::Scalar(
+                ScalarBitsV1::new(ScalarType::U8, 99, SimulationTargetV1::amdgpu_64()).unwrap(),
+            ),
+        ],
+    )
+}
+
+#[test]
+fn guarded_load_false_uses_fallback_without_reading_or_emitting_a_read() {
+    let admitted = admitted(conditional_load_module(true));
+    let mut request = conditional_load_request(false, empty_u8_buffer());
+    request.events = EventPolicyV1::Enabled;
+    let mut events = Collector::default();
+    let execution = admitted
+        .simulate_with_sink(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            &mut events,
+        )
+        .expect("false guarded load is non-speculative");
+
+    assert_eq!(execution.buffer(1).unwrap().bytes(), &[99]);
+    assert_eq!(
+        events
+            .0
+            .iter()
+            .filter(|event| matches!(event.kind, SimulationEventKindV1::MemoryRead { .. }))
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn guarded_load_true_reads_through_the_shared_load_path() {
+    let admitted = admitted(conditional_load_module(true));
+    let mut request = conditional_load_request(true, byte_buffer(&[7]));
+    request.events = EventPolicyV1::Enabled;
+    let mut events = Collector::default();
+    let execution = admitted
+        .simulate_with_sink(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            &mut events,
+        )
+        .expect("true guarded load reads memory");
+
+    assert_eq!(execution.buffer(1).unwrap().bytes(), &[7]);
+    assert_eq!(
+        events
+            .0
+            .iter()
+            .filter(|event| matches!(event.kind, SimulationEventKindV1::MemoryRead { .. }))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn guarded_load_true_reports_the_guarded_operation_site_for_an_invalid_read() {
+    let error = admitted(conditional_load_module(true))
+        .simulate(
+            &conditional_load_request(true, empty_u8_buffer()),
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        )
+        .expect_err("true guarded load validates its pointer");
+    let SimulationErrorV1::Execution(error) = error else {
+        panic!("expected execution failure");
+    };
+    assert_eq!(error.site.unwrap().operation, Some(2));
+    assert!(matches!(
+        error.kind,
+        SimulationExecutionErrorKindV1::OutOfBounds { .. }
+    ));
+}
+
+#[test]
+fn false_guarded_load_does_not_consume_a_memory_access_record() {
+    let limits = SimulationLimitsV1 {
+        max_memory_access_records: 1,
+        ..SimulationLimitsV1::default()
+    };
+    let admitted = admitted(conditional_load_module(true));
+    let false_execution = admitted
+        .simulate(
+            &conditional_load_request(false, empty_u8_buffer()),
+            SimulationTargetV1::amdgpu_64(),
+            limits,
+        )
+        .unwrap();
+    assert_eq!(
+        false_execution.conflict_assessment(),
+        &SimulationConflictAssessmentV1::NoConflictsObserved
+    );
+
+    let true_execution = admitted
+        .simulate(
+            &conditional_load_request(true, byte_buffer(&[7])),
+            SimulationTargetV1::amdgpu_64(),
+            limits,
+        )
+        .unwrap();
+    assert!(matches!(
+        true_execution.conflict_assessment(),
+        SimulationConflictAssessmentV1::Incomplete {
+            record_limit: 1,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn guarded_load_has_the_same_inline_resident_cost_as_load() {
+    let guarded = admitted(conditional_load_module(true));
+    let ordinary = admitted(conditional_load_module(false));
+    assert_eq!(
+        guarded.admitted_resident_bytes(),
+        ordinary.admitted_resident_bytes()
+    );
 }

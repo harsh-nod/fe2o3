@@ -1,10 +1,10 @@
 # fe2o3-kir-sim
 
 fe2o3-kir-sim is the standalone, Linux-only command-line boundary for bounded
-deterministic CPU execution of exact verified canonical Kernel IR V6:
+deterministic CPU execution of exact verified canonical Kernel IR V7:
 
-    fe2o3-kir-sim --kir-v6 kernel.kir --request request.json
-    fe2o3-kir-sim --kir-v6 kernel.kir --request request.json --output result.json
+    fe2o3-kir-sim --kir-v7 kernel.kir --request request.json
+    fe2o3-kir-sim --kir-v7 kernel.kir --request request.json --output result.json
 
 It does not link or initialize HSA, HIP, KFD, ROCm, or a GPU. Simulation is an
 observation only. It grants no source-refinement, proof, compiler, artifact,
@@ -77,7 +77,7 @@ fe2o3-simulation-result-v1 JSON. Every failure is stable
 fe2o3-simulation-error-v1 JSON on stderr. Parsing failures use closed application
 codes selected from private structural markers, while other malformed JSON is
 classified by serde's closed syntax/data categories. Input failures identify
-kir_v6 or request. Dynamic failures include exact invocation hierarchy and Kernel IR
+kir_v7 or request. Dynamic failures include exact invocation hierarchy and Kernel IR
 site coordinates; overlong function identities carry an explicit bounded
 prefix, original byte count, and truncation flag. Unsupported preflight failures
 report exact total/emitted/truncated counts and a deterministic
@@ -98,7 +98,7 @@ wire/count/depth caps.
 
 ## Result V1
 
-Success contains status ok, authority observation_only, the exact V6 SHA-256
+Success contains status ok, authority observation_only, the exact V7 SHA-256
 and canonical byte length, all execution counters including padded scheduled
 slots, the deterministic schedule identity, bounded cross-invocation conflict
 assessment, copied argument values, and copied shared backing buffers and views.

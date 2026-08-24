@@ -10,8 +10,8 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use fe2o3_kernel_ir::{
-    AccessMode, FunctionId, ScalarType, VerifiedCanonicalKernelIrErrorV6,
-    VerifiedCanonicalKernelIrV6,
+    AccessMode, FunctionId, ScalarType, VerifiedCanonicalKernelIrErrorV7,
+    VerifiedCanonicalKernelIrV7,
 };
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, BufferViewArgumentV1,
@@ -32,7 +32,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::schema::{ErrorKind, Stage};
 
-const USAGE: &str = "usage: fe2o3-kir-sim --kir-v6 PATH --request PATH [--output PATH]";
+const USAGE: &str = "usage: fe2o3-kir-sim --kir-v7 PATH --request PATH [--output PATH]";
 const REQUEST_SCHEMA: &str = "fe2o3-simulation-request-v1";
 const RESULT_SCHEMA: &str = "fe2o3-simulation-result-v1";
 const ERROR_SCHEMA: &str = "fe2o3-simulation-error-v1";
@@ -57,7 +57,6 @@ enum UnsupportedFeatureCode {
     FloatType,
     UnsupportedType,
     MemoryIntrinsic,
-    GuardedLoad,
     FloatConstant,
     FloatOperation,
     InvalidIntegerCast,
@@ -81,7 +80,7 @@ enum UnsupportedFeatureCode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum InputCode {
-    KirV6,
+    KirV7,
     Request,
 }
 
@@ -359,7 +358,7 @@ fn bounded_error_message(mut message: String) -> String {
 
 #[derive(Debug, Eq, PartialEq)]
 struct Options {
-    kir_v6: OsString,
+    kir_v7: OsString,
     request: OsString,
     output: Option<OsString>,
 }
@@ -832,12 +831,12 @@ fn run(arguments: impl Iterator<Item = OsString>) -> Result<(), Failure> {
     let options = parse_options(arguments)?;
     let limits = cli_simulation_limits();
     let kir = secure_read(
-        Path::new(&options.kir_v6),
+        Path::new(&options.kir_v7),
         MAX_KIR_BYTES,
-        InputCode::KirV6,
-        "canonical KIR V6",
+        InputCode::KirV7,
+        "canonical KIR V7",
     )?;
-    let canonical = VerifiedCanonicalKernelIrV6::from_canonical_bytes(kir).map_err(|error| {
+    let canonical = VerifiedCanonicalKernelIrV7::from_canonical_bytes(kir).map_err(|error| {
         Failure::new(
             Stage::KirAdmission,
             kir_error_kind(&error),
@@ -906,13 +905,13 @@ const fn cli_simulation_limits() -> SimulationLimitsV1 {
 }
 
 fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, Failure> {
-    let mut kir_v6 = None;
+    let mut kir_v7 = None;
     let mut request = None;
     let mut output = None;
     let mut arguments = arguments.peekable();
     while let Some(argument) = arguments.next() {
-        let (slot, name) = if argument == OsStr::new("--kir-v6") {
-            (&mut kir_v6, "--kir-v6")
+        let (slot, name) = if argument == OsStr::new("--kir-v7") {
+            (&mut kir_v7, "--kir-v7")
         } else if argument == OsStr::new("--request") {
             (&mut request, "--request")
         } else if argument == OsStr::new("--output") {
@@ -940,11 +939,11 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
         }
     }
     Ok(Options {
-        kir_v6: kir_v6.ok_or_else(|| {
+        kir_v7: kir_v7.ok_or_else(|| {
             Failure::new(
                 Stage::Arguments,
                 ErrorKind::InvalidCommandLine,
-                format!("--kir-v6 is required; {USAGE}"),
+                format!("--kir-v7 is required; {USAGE}"),
             )
         })?,
         request: request.ok_or_else(|| {
@@ -1457,14 +1456,14 @@ fn hex_nibble(byte: u8) -> u8 {
     }
 }
 
-fn kir_error_kind(error: &VerifiedCanonicalKernelIrErrorV6) -> ErrorKind {
+fn kir_error_kind(error: &VerifiedCanonicalKernelIrErrorV7) -> ErrorKind {
     match error {
-        VerifiedCanonicalKernelIrErrorV6::Encode(_) => ErrorKind::KirV6EncodeFailed,
-        VerifiedCanonicalKernelIrErrorV6::Decode(_) => ErrorKind::KirV6DecodeFailed,
-        VerifiedCanonicalKernelIrErrorV6::Verification(_) => ErrorKind::KirV6VerificationFailed,
-        VerifiedCanonicalKernelIrErrorV6::NotExactV6 { .. } => ErrorKind::KirV6WrongVersion,
-        VerifiedCanonicalKernelIrErrorV6::RoundTripMismatch => ErrorKind::KirV6RoundTripMismatch,
-        VerifiedCanonicalKernelIrErrorV6::IdentityMismatch => ErrorKind::KirV6IdentityMismatch,
+        VerifiedCanonicalKernelIrErrorV7::Encode(_) => ErrorKind::KirV7EncodeFailed,
+        VerifiedCanonicalKernelIrErrorV7::Decode(_) => ErrorKind::KirV7DecodeFailed,
+        VerifiedCanonicalKernelIrErrorV7::Verification(_) => ErrorKind::KirV7VerificationFailed,
+        VerifiedCanonicalKernelIrErrorV7::NotExactV7 { .. } => ErrorKind::KirV7WrongVersion,
+        VerifiedCanonicalKernelIrErrorV7::RoundTripMismatch => ErrorKind::KirV7RoundTripMismatch,
+        VerifiedCanonicalKernelIrErrorV7::IdentityMismatch => ErrorKind::KirV7IdentityMismatch,
     }
 }
 
@@ -1582,7 +1581,6 @@ fn unsupported_code(feature: &UnsupportedFeatureV1) -> UnsupportedFeatureCode {
         UnsupportedFeatureV1::FloatType(_) => UnsupportedFeatureCode::FloatType,
         UnsupportedFeatureV1::UnsupportedType => UnsupportedFeatureCode::UnsupportedType,
         UnsupportedFeatureV1::MemoryIntrinsic => UnsupportedFeatureCode::MemoryIntrinsic,
-        UnsupportedFeatureV1::GuardedLoad => UnsupportedFeatureCode::GuardedLoad,
         UnsupportedFeatureV1::FloatConstant => UnsupportedFeatureCode::FloatConstant,
         UnsupportedFeatureV1::FloatOperation => UnsupportedFeatureCode::FloatOperation,
         UnsupportedFeatureV1::InvalidIntegerCast { .. } => {
@@ -2419,7 +2417,7 @@ mod tests {
     use super::*;
     use fe2o3_kernel_ir::{
         AddressSpace, BasicBlock, BlockId, Function, FunctionId, Kernel, LaunchDomain,
-        LaunchExtent, Module, Signature, Terminator, Type, VerifiedCanonicalKernelIrV6,
+        LaunchExtent, Module, Signature, Terminator, Type, VerifiedCanonicalKernelIrV7,
     };
 
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -2462,7 +2460,7 @@ mod tests {
     fn command_line_paths_remain_os_strings() {
         let options = parse_options(
             [
-                OsString::from("--kir-v6"),
+                OsString::from("--kir-v7"),
                 OsString::from("kernel"),
                 OsString::from("--request"),
                 OsString::from("request"),
@@ -2472,7 +2470,7 @@ mod tests {
             .into_iter(),
         )
         .unwrap();
-        assert_eq!(options.kir_v6, OsString::from("kernel"));
+        assert_eq!(options.kir_v7, OsString::from("kernel"));
         assert_eq!(options.request, OsString::from("request"));
         assert_eq!(options.output, Some(OsString::from("output")));
     }
@@ -2625,7 +2623,7 @@ mod tests {
             },
         ));
         let admitted = AdmittedSimulationModuleV1::admit(
-            VerifiedCanonicalKernelIrV6::from_module(module).unwrap(),
+            VerifiedCanonicalKernelIrV7::from_module(module).unwrap(),
             cli_simulation_limits(),
         )
         .unwrap();
@@ -2933,10 +2931,6 @@ mod tests {
             "inline_assembly"
         );
         assert_eq!(
-            serde_json::to_value(UnsupportedFeatureCode::GuardedLoad).unwrap(),
-            "guarded_load"
-        );
-        assert_eq!(
             preflight_kind(&SimulationPreflightErrorV1::TargetValueOutOfRange { argument: 7 }),
             ErrorKind::PreflightTargetValueOutOfRange
         );
@@ -3198,7 +3192,7 @@ mod tests {
                     x: LaunchExtent::Dynamic,
                 },
             ));
-            let canonical = VerifiedCanonicalKernelIrV6::from_module(module).unwrap();
+            let canonical = VerifiedCanonicalKernelIrV7::from_module(module).unwrap();
             AdmittedSimulationModuleV1::admit(canonical, cli_simulation_limits()).unwrap()
         }
 

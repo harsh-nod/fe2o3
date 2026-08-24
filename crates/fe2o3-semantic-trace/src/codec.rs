@@ -230,14 +230,14 @@ fn decode_kernel_ir_claim(
 ) -> Result<KernelIrIdentityClaimV1, TraceDecodeErrorV1> {
     let wire_version = decoder.u16()?;
     let identity_policy = decoder.u16()?;
-    if wire_version != KERNEL_IR_WIRE_VERSION_V6 || identity_policy != KERNEL_IR_IDENTITY_POLICY_V1
+    if wire_version != KERNEL_IR_WIRE_VERSION_V7 || identity_policy != KERNEL_IR_IDENTITY_POLICY_V1
     {
         return Err(TraceDecodeErrorV1::UnsupportedKernelIrClaim {
             wire_version,
             identity_policy,
         });
     }
-    KernelIrIdentityClaimV1::canonical_v6_claim(decode_identity(decoder)?, decoder.u64()?)
+    KernelIrIdentityClaimV1::canonical_v7_claim(decode_identity(decoder)?, decoder.u64()?)
         .map_err(TraceDecodeErrorV1::Validation)
 }
 

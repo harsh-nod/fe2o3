@@ -7,9 +7,9 @@ GPU-equivalence authority.
 
 ## Truth boundary
 
-- The KIR digest and length come from the admitted canonical V6 owner, but are
+- The KIR digest and length come from the admitted canonical V7 owner, but are
   copied into an inert trace claim. A consumer must bind the claim back to an
-  independently owned canonical V6 module before resolving site ordinals.
+  independently owned canonical V7 module before resolving site ordinals.
 - Site claims are vector ordinals in a catalog built from that admitted module.
   Function names, block IDs, and source names never become occurrence identity.
 - All emitted facts are Observed by CpuKirSimulator during CpuKirSimulation.

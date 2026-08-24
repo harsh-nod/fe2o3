@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt;
 
 pub const TRACE_SCHEMA_VERSION_V1: u16 = 1;
-pub const KERNEL_IR_WIRE_VERSION_V6: u16 = 6;
+pub const KERNEL_IR_WIRE_VERSION_V7: u16 = 7;
 pub const KERNEL_IR_IDENTITY_POLICY_V1: u16 = 1;
 
 pub const MAX_TRACE_BYTES_V1: u64 = 64 * 1024 * 1024;
@@ -167,9 +167,9 @@ impl ContentIdentityV1 {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 /// Untrusted content-identity claim carried by a trace producer.
 ///
-/// This type does not authenticate the digest, establish canonical V6 bytes,
+/// This type does not authenticate the digest, establish canonical V7 bytes,
 /// or grant any compiler/runtime authority. An owning adapter must compare it
-/// against an independently validated canonical V6 owner before resolving any
+/// against an independently validated canonical V7 owner before resolving any
 /// site claim.
 pub struct KernelIrIdentityClaimV1 {
     wire_version: u16,
@@ -179,7 +179,7 @@ pub struct KernelIrIdentityClaimV1 {
 }
 
 impl KernelIrIdentityClaimV1 {
-    pub fn canonical_v6_claim(
+    pub fn canonical_v7_claim(
         digest: OpaqueIdentityV1,
         canonical_len: u64,
     ) -> Result<Self, TraceValidationErrorV1> {
@@ -187,7 +187,7 @@ impl KernelIrIdentityClaimV1 {
             return Err(TraceValidationErrorV1::ZeroCanonicalLength);
         }
         Ok(Self {
-            wire_version: KERNEL_IR_WIRE_VERSION_V6,
+            wire_version: KERNEL_IR_WIRE_VERSION_V7,
             identity_policy: KERNEL_IR_IDENTITY_POLICY_V1,
             digest,
             canonical_len,

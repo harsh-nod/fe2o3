@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BlockId, Function, Kernel, LaunchDomain, LaunchExtent,
-    Module, ScalarType, Signature, Terminator, Type, ValueId, VerifiedCanonicalKernelIrV6,
+    Module, ScalarType, Signature, Terminator, Type, ValueId, VerifiedCanonicalKernelIrV7,
 };
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -61,7 +61,7 @@ fn canonical_noop_with_buffer() -> Vec<u8> {
             x: LaunchExtent::Dynamic,
         },
     ));
-    VerifiedCanonicalKernelIrV6::from_module(module)
+    VerifiedCanonicalKernelIrV7::from_module(module)
         .unwrap()
         .into_canonical_bytes()
 }
@@ -85,10 +85,22 @@ fn help_is_a_successful_input_free_command() {
         assert!(output.status.success());
         assert_eq!(
             String::from_utf8(output.stdout).unwrap(),
-            "usage: fe2o3-kir-sim --kir-v6 PATH --request PATH [--output PATH]\n"
+            "usage: fe2o3-kir-sim --kir-v7 PATH --request PATH [--output PATH]\n"
         );
         assert!(output.stderr.is_empty());
     }
+}
+
+#[test]
+fn legacy_kir_flag_is_not_a_second_simulator_route() {
+    let output = binary()
+        .args(["--kir-v6", "kernel.kir", "--request", "request.json"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(value["stage"], "arguments");
+    assert_eq!(value["kind"], "invalid_command_line");
 }
 
 #[test]
@@ -96,7 +108,7 @@ fn successful_stdout_is_complete_machine_readable_json() {
     let directory = TestDirectory::new();
     let (kir, request) = write_success_fixture(&directory);
     let output = binary()
-        .arg("--kir-v6")
+        .arg("--kir-v7")
         .arg(kir)
         .arg("--request")
         .arg(request)
@@ -124,7 +136,7 @@ fn successful_output_is_private_durable_no_replace_json() {
     let (kir, request) = write_success_fixture(&directory);
     let result = directory.path().join("result.json");
     let output = binary()
-        .arg("--kir-v6")
+        .arg("--kir-v7")
         .arg(&kir)
         .arg("--request")
         .arg(&request)
@@ -148,7 +160,7 @@ fn successful_output_is_private_durable_no_replace_json() {
     );
 
     let second = binary()
-        .arg("--kir-v6")
+        .arg("--kir-v7")
         .arg(kir)
         .arg("--request")
         .arg(request)
@@ -172,14 +184,14 @@ fn failures_are_stable_json_with_input_identity() {
     assert_eq!(value["kind"], "invalid_command_line");
 
     let output = binary()
-        .args(["--kir-v6", "/dev/null", "--request", "/dev/null"])
+        .args(["--kir-v7", "/dev/null", "--request", "/dev/null"])
         .output()
         .unwrap();
     assert!(!output.status.success());
     let value: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(value["stage"], "input");
     assert_eq!(value["kind"], "input_not_regular");
-    assert_eq!(value["input"], "kir_v6");
+    assert_eq!(value["input"], "kir_v7");
 
     let directory = TestDirectory::new();
     let oversized = directory.path().join("oversized.kir");
@@ -188,7 +200,7 @@ fn failures_are_stable_json_with_input_identity() {
         .set_len(16 * 1024 * 1024 + 1)
         .unwrap();
     let output = binary()
-        .arg("--kir-v6")
+        .arg("--kir-v7")
         .arg(&oversized)
         .args(["--request", "/dev/null"])
         .output()
@@ -196,7 +208,7 @@ fn failures_are_stable_json_with_input_identity() {
     assert!(!output.status.success());
     let value: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(value["kind"], "input_too_large");
-    assert_eq!(value["input"], "kir_v6");
+    assert_eq!(value["input"], "kir_v7");
 }
 
 #[test]
@@ -215,7 +227,7 @@ fn closed_stdout_reports_real_epipe_without_gpu_runtime() {
     .unwrap();
 
     let mut child = binary()
-        .arg("--kir-v6")
+        .arg("--kir-v7")
         .arg(&kir)
         .arg("--request")
         .arg(&request)

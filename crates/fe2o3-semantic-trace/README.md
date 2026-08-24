@@ -9,7 +9,7 @@ adapters without changing the trace envelope or truth model.
 
 - The Kernel-IR digest and length in a trace are untrusted producer claims. This
   crate never upgrades them into verified-canonical identity. An external
-  adapter must compare the claim with an independently owned and validated V6
+  adapter must compare the claim with an independently owned and validated V7
   artifact.
 - Function, block, and operation ordinals are unresolved site claims. This
   crate checks only their syntactic event role. An external catalog/CFG adapter

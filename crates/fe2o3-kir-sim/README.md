@@ -1,12 +1,12 @@
 # fe2o3-kir-sim
 
 `fe2o3-kir-sim` is a bounded, deterministic CPU execution engine for an
-explicit subset of verified canonical Kernel IR V6. Admission consumes a
-`VerifiedCanonicalKernelIrV6`; raw in-memory modules and older wire formats are
+explicit subset of verified canonical Kernel IR V7. Admission consumes a
+`VerifiedCanonicalKernelIrV7`; raw in-memory modules and older wire formats are
 not execution inputs.
 
 Admission relies on that consumed owner's private immutable bytes and identity:
-the owner cannot be constructed without exact V6 canonical decoding and full
+the owner cannot be constructed without exact V7 canonical decoding and full
 semantic verification. The simulator therefore does not rerun the semantic
 verifier. It independently enforces `max_canonical_bytes`, canonical-decodes and
 re-encodes the consumed bytes, and then accounts the resulting decode-phase
@@ -15,8 +15,11 @@ after that decode; it is not a pre-decode allocator cap.
 
 The first execution profile supports integer and boolean scalar operations,
 structured control flow, internal helper calls, private allocations, global
-buffer arguments, and one-, two-, or three-dimensional launch hierarchy
-intrinsics. Workgroups and local slots are visited in canonical Z/Y/X
+buffer arguments, ordinary and guarded scalar loads, and one-, two-, or
+three-dimensional launch hierarchy intrinsics. A false guarded load evaluates
+only its predicate and fallback; it does not validate the pointer, record a
+memory access, or emit a memory-read event. Workgroups and local slots are
+visited in canonical Z/Y/X
 lexicographic order, with every invocation run to completion. Padded local slots
 are included in admission and execution accounting. The target profile enforces
 its legal workgroup volume before scheduling begins.
@@ -37,10 +40,10 @@ occurrences and at most 1 MiB of owned identifier bytes, and separately report
 the exact total, so hostile identifiers cannot amplify diagnostics into
 unbounded storage.
 Floating-point operations, external calls, atomics, synchronization,
-workgroup memory, wave operations, matrix operations, memory intrinsics, KIR V7
-guarded loads, and inline assembly are rejected by this V6 profile.
+workgroup memory, wave operations, matrix operations, memory intrinsics, and
+inline assembly are rejected by this V7 profile.
 
-Callers consume an exact V6 owner with `AdmittedSimulationModuleV1::admit`, then
+Callers consume an exact V7 owner with `AdmittedSimulationModuleV1::admit`, then
 provide an explicit target, resource limits, launch shape, and typed scalar or
 byte-addressed buffer arguments in `SimulationRequestV1`. Index scalars,
 buffers, and views are bound to the 32- or 64-bit layout used to construct them;

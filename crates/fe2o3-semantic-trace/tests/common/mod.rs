@@ -31,7 +31,7 @@ pub fn header(completeness: TraceCompletenessV1) -> TraceHeaderV1 {
             Some(identity(6)),
         ),
         ExecutionKindV1::CpuKirSimulation,
-        KernelIrIdentityClaimV1::canonical_v6_claim(identity(9), 4_096).unwrap(),
+        KernelIrIdentityClaimV1::canonical_v7_claim(identity(9), 4_096).unwrap(),
         Some(
             ContentIdentityV1::new(
                 ContentIdentitySchemeV1::RawCanonicalSha256,

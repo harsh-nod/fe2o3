@@ -1,7 +1,7 @@
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BlockId, Constant, Function, Kernel, LaunchDomain,
     LaunchExtent, Module, Operation, OperationKind, ScalarType, Signature, Terminator, Type,
-    ValueDef, ValueId, VerifiedCanonicalKernelIrV6,
+    ValueDef, ValueId, VerifiedCanonicalKernelIrV7,
 };
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, BufferArgumentV1, IndexWidthV1, ScalarBitsV1, SimulationArgumentV1,
@@ -107,7 +107,7 @@ fn zero_count_alloca_module() -> Module {
 }
 
 fn admitted(module: Module) -> AdmittedSimulationModuleV1 {
-    let canonical = VerifiedCanonicalKernelIrV6::from_module(module).unwrap();
+    let canonical = VerifiedCanonicalKernelIrV7::from_module(module).unwrap();
     AdmittedSimulationModuleV1::admit(canonical, SimulationLimitsV1::default()).unwrap()
 }
 

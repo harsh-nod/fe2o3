@@ -399,7 +399,7 @@ pub fn simulate_with_semantic_trace_v1(
         profile.dispatch_occurrence,
     );
     let configuration_identity = configuration_identity(module, request, target)?;
-    let claim = KernelIrIdentityClaimV1::canonical_v6_claim(
+    let claim = KernelIrIdentityClaimV1::canonical_v7_claim(
         OpaqueIdentityV1::new(*module.identity().digest())?,
         module.identity().canonical_length(),
     )?;
