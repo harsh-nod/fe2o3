@@ -364,8 +364,20 @@ impl MemoryBackend for LinuxMemoryBackend {
         &mut self,
         address: u64,
         bytes: u64,
+        flags: KfdAllocMemoryFlags,
     ) -> KernelOutcome<KfdIoctlAllocMemoryOfGpuArgs> {
-        let mut args = KfdIoctlAllocMemoryOfGpuArgs::new_userptr(address, bytes, self.gpu_id());
+        let mut args = if flags == KfdAllocMemoryFlags::USERPTR_EXECUTABLE {
+            KfdIoctlAllocMemoryOfGpuArgs::new_userptr(address, bytes, self.gpu_id())
+        } else if flags == KfdAllocMemoryFlags::USERPTR_QUEUE_CONTROL {
+            KfdIoctlAllocMemoryOfGpuArgs::new_userptr_queue_control(address, bytes, self.gpu_id())
+        } else {
+            return KernelOutcome {
+                value: KfdIoctlAllocMemoryOfGpuArgs::new(address, bytes, self.gpu_id(), flags),
+                result: Err(MemorySessionError::KernelResultMalformed(
+                    "unsupported USERPTR allocation profile",
+                )),
+            };
+        };
         // SAFETY: the exact USERPTR input VMA is page-aligned, DONTFORK,
         // read/write, and retained by the safe engine through explicit FREE.
         let request = unsafe { Updater::<ALLOC_MEMORY_OPCODE, _>::new(&mut args) };

@@ -52,7 +52,8 @@ use crate::shared_memory::{
     AqlEndOfPipeResourceRoleV1, AqlQueueGttV1, AqlRingResourceRoleV1, ExecutableAqlQueueProbeGttV1,
     ExecutableGttV1, GttCpuWritableV1, GttGpuAccessibleExecutableV1, GttGpuAccessibleMutableV1,
     HostVisibleCoherentGttV1, SharedGttAllocationV1, SharedGttMappedResourceFactsV1,
-    SharedGttMemorySessionV1, SharedGttQueueResourceAuthorityV1, UserptrAqlQueueProbeGttV1,
+    SharedGttMemorySessionV1, SharedGttQueueResourceAuthorityV1, UserptrAqlControlGttV1,
+    UserptrAqlQueueProbeGttV1,
 };
 use crate::{
     CheckedGfx942XnackMinusDevice, GFX942_QUEUE_RESOURCE_PROFILE_SHA256_V1,
@@ -69,10 +70,11 @@ static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and fixed-batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r25-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r26-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
-    "memory_profile_sha256=b872d5ae807e1686a23b2c806773adda7023f6077a5f7e9e5616181c88ac13ea\n",
+    "memory_profile_sha256=51bf22abe635f62619ef1c87e6328720861d3d0c1fdd3613229e9e6e3cea3cd5\n",
     "kfd_userptr_memory_schema_sha256=c1cee09bdf884d2c14a5dbb89c1f6f7885962c75b1457caf412821490919ee9e\n",
+    "kfd_userptr_queue_control_schema_sha256=f1d75410d6bfacff2ea15ecfff226eb8aed7912ee324a36b8ed8550fa52bce02\n",
     "queue_resource_profile_sha256=822d8b9c60a74bc9905a0e3d9a5518e657def0c40406c1d5978c485650477b9d\n",
     "aql_dispatch_schema_sha256=82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0\n",
     "aql_barrier_and_schema_sha256=bdca900cd5c6eaccbddfc5a854e956382a08ce87bec4ccd5284baacf932cdfb5\n",
@@ -88,13 +90,14 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "source.kfd_chardev.c=f9a8805c5d479faee25e457051aa428e4bb523ecf1c7b1618a6a5f79ca5d7bba\n",
     "source.kfd_process.c=d76db8cbb546aa23dffb33b1d04244037e12246b49b752303194c68dd685e409\n",
     "resources=linear-private-ring-control-eop-cwsr-completion-code-kernarg-and-exact-device-local-or-coherent-host-data-authorities,exact-one-existing-shared-vm-session,transferred-model-ownership\n",
-    "gtt_policy=reusable-and-dispatch-ring:aql-queue-doubled,one-shot-diagnostic-rings:plain-executable-gtt-one-x-or-userptr-writable-executable-coherent-uncached-no-substitute-one-x,control-and-completion-signals:host-visible-coherent,eop-and-cwsr:executable;userptr-never-selectable-by-reusable-or-dispatch-queue-APIs\n",
+    "gtt_policy=reusable-and-dispatch-ring:aql-queue-doubled,one-shot-diagnostic-rings:plain-executable-gtt-one-x-or-userptr-writable-executable-coherent-uncached-no-substitute-one-x,control:exact-one-page-same-va-userptr-writable-coherent,completion-signals:host-visible-coherent-gtt,eop-and-cwsr:executable;ring-userptr-never-selectable-by-reusable-or-dispatch-queue-APIs\n",
     "userptr-diagnostic=smallest-selected-gpu-ring-backing-discriminator,no-full-rocr-allocation-or-map-order-parity-claim\n",
+    "creation-boundary=planning-session-dispatch-and-ring-errors-before-userptr-control-registration-entry-retain-existing-classification,every-error-from-the-control-allocation-attempt-through-live-session-return-is-terminal-recovers-no-authority-permanently-poisons-the-process-global-runtime-gate-and-requires-process-termination\n",
     "runtime=one-process-global-fe2o3-owner;exact-enable-r_debug0-mode1-capabilities0-before-event-and-any-queue;ttmp-save-excluded;foreign-kfd-clients-excluded\n",
     "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-explicit-two-atomic-u64-zero;completion-arena-exact-8192-typed-64-byte-user-signals-pending-1-before-gpu-map;one-first-internal-auto-reset-signal-event-id-1-through-255-before-create;8-cwsr-bo-and-shadow-headers-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,one-first-shadow-aligned-error-reason-zero,exact-event-id\n",
     "submission=crate-private-non-clone-single-producer,aql-fixed-batch-v2-count-1-through-8192-and-ring-capacity-bounded,heap-owned-fixed-cardinality-state,no-mapped-slice-or-raw-pointer-escape,rptr-wptr-acquire,one-actual-wptr-acq-rel-fetch-add-by-count,all-invalid-bodies-before-per-packet-independent-0x1402-or-wait-for-prior-0x1502-ordered-u32-release-headers,exact-one-zero-setup-barrier-and-0x1403,conservative-service-default-wait-for-prior,release-fence-x86-sfence,one-final-volatile-u64-doorbell-store-of-last-packet-id\n",
     "completion=crate-private-non-clone-generation-bound-fixed-batches-and-one-signal-barrier-probe,fixed-batch-signal-code-kernarg-dispatch-and-queue-generations-retained,barrier-probe-queue-and-signal-generations-only,bounded-atomic-acquire-poll-with-one-pre-post-currentness-envelope-and-same-scan-redacted-progress,pending-ready-fault-timeout-distinct,timeout-retains-private-linear-operation-through-sequential-pre-post-currentness-enveloped-addressless-write-read-counter-first-retained-packet-header-setup-first-retained-signal-kind-value-and-CWSR-reason-observation-before-poison,release-reset-only-after-all-retained-signals-zero\n",
-    "liveness-probe=three-public-consuming-checked-device-entries-select-production-aql-special-doubled-diagnostic-plain-executable-one-x-or-diagnostic-userptr-writable-executable-coherent-uncached-no-substitute-one-x-ring,selected-backing-and-exact-ring-span-bound-into-plan-and-configuration,selected-backing-bound-into-every-redacted-outcome,typed-nonzero-bounded-polls-validated-before-device-consumption,diagnostic-backings-not-selectable-by-reusable-or-dispatch-queue-APIs,exact-fresh-zero-history-no-dispatch-queue,one-zero-dependency-system-scope-barrier,queue-and-signal-generation-only,submission-retryable-only-by-explicit-before-side-effect-stage-classification,success-requires-currentness-packet-count1-write1-read0or1-timing-sensitive-header0x1403-setup0-user-signal-completed-zero-exception-then-signal-reset-and-confirmed-explicit-queue-destroy,Creation-has-no-live-queue-and-precedes-inner-userptr-resource-creation,TerminalCreation-covers-every-create-result-not-explicitly-failed-no-effect-every-post-create-failure-and-every-userptr-inner-creation-failure-recovers-no-authority-permanently-poisons-process-global-runtime-gate-and-requires-process-termination,QuarantinedExecution-retains-opaque-custody-until-process-teardown,process-global-runtime-gate-poison-armed-before-destroy-and-cleared-only-after-confirmed-success,TerminalTeardown-and-panic-retain-permanent-gate-poison-and-recover-no-authority-native-resource-disposition-indeterminate-process-termination-required-no-retry-reopen-or-confirmed-cleanup\n",
+    "liveness-probe=three-public-consuming-checked-device-entries-select-production-aql-special-doubled-diagnostic-plain-executable-one-x-or-diagnostic-userptr-writable-executable-coherent-uncached-no-substitute-one-x-ring,selected-backing-and-exact-ring-span-bound-into-plan-and-configuration,selected-backing-bound-into-every-redacted-outcome,typed-nonzero-bounded-polls-validated-before-device-consumption,diagnostic-backings-not-selectable-by-reusable-or-dispatch-queue-APIs,exact-fresh-zero-history-no-dispatch-queue,one-zero-dependency-system-scope-barrier,queue-and-signal-generation-only,submission-retryable-only-by-explicit-before-side-effect-stage-classification,success-requires-currentness-packet-count1-write1-read0or1-timing-sensitive-header0x1403-or-device-consumed-invalid1-setup0-user-signal-completed-zero-exception-then-signal-reset-and-confirmed-explicit-queue-destroy,Creation-has-no-live-queue-and-precedes-userptr-control-registration-entry,TerminalCreation-covers-every-error-at-or-after-userptr-control-registration-entry-every-create-result-not-explicitly-failed-no-effect-and-every-post-create-failure-recovers-no-authority-permanently-poisons-process-global-runtime-gate-and-requires-process-termination,QuarantinedExecution-retains-opaque-custody-until-process-teardown,process-global-runtime-gate-poison-armed-before-destroy-and-cleared-only-after-confirmed-success,TerminalTeardown-and-panic-retain-permanent-gate-poison-and-recover-no-authority-native-resource-disposition-indeterminate-process-termination-required-no-retry-reopen-or-confirmed-cleanup\n",
     "dispatch=public-addressless-linear-fixed-batch,1-through-32-inspected-programs,1-through-8192-packets,validated-code-materialization,zero-pointer-kernarg-internal-injection,metadata-derived-COV6-geometry-and-dynamic-lds-implicit-subset-with-caller-zero-suffix,queue-pointer-and-runtime-address-fields-rejected,exact-mapped-data-set-retained-even-when-unreferenced-by-current-batch,referenced-subset-only-inspected-access-and-sealed-initialization-gates,ordinary-release-or-exact-recycle-gated-attached-or-detached-return-after-destroy\n",
     "readback=coherent-host-data-only,owned-bounded-copy-after-exact-acquire-observed-completion-and-signal-recycle,exact-dispatch-generation,ordinary-range-within-one-inspected-write-or-readwrite-binding-or-exact-admitted-initialized-enclosing-snapshot,no-native-address-or-mapped-borrow,no-whole-allocation-initialization-promotion\n",
     "rebinding=exact-completion-and-signal-recycle-before-detach,code-and-kernarg-released,queue-ring-signal-event-doorbell-and-runtime-remain-live,exact-complete-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,all-mapped-data-retained-with-inspected-effects-only-for-currently-referenced-subset,new-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest\n",
@@ -111,7 +114,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "4bed1e3a722efff5eaf59dcf698cc26e5f4f28088a2fabd6f70441a458a319f6";
+    "394618a23ca31cacbd9ef757e9ad4c0977dd0b5ee83cf66bcd9a6fafdefe6ce3";
 
 type AqlSpecialRingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -328,7 +331,7 @@ impl CpuRingAuthorityV1 {
 }
 type ControlAuthority = SharedGttQueueResourceAuthorityV1<
     AqlControlResourceRoleV1,
-    HostVisibleCoherentGttV1,
+    UserptrAqlControlGttV1,
     GttGpuAccessibleMutableV1,
 >;
 type EopAuthority = SharedGttQueueResourceAuthorityV1<
@@ -987,8 +990,9 @@ pub enum ComputeAqlQueueSessionErrorV1 {
     Contract(&'static str),
     Native(&'static str),
     Doorbell(String),
-    /// `CREATE_QUEUE` may have taken effect and exact native custody cannot be
-    /// returned. The process-global runtime gate is poisoned permanently.
+    /// USERPTR registration or `CREATE_QUEUE` may have taken effect and exact
+    /// native custody cannot be returned. The process-global runtime gate is
+    /// poisoned permanently.
     TerminalCreation {
         stage: &'static str,
         source: Box<ComputeAqlQueueSessionErrorV1>,
@@ -1420,13 +1424,26 @@ impl ComputeAqlQueueSessionV1 {
     ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
         let dispatch = prepare_dispatch(&mut memory)?;
 
-        let mut ring = CpuRingAuthorityV1::allocate(
+        let ring = CpuRingAuthorityV1::allocate(
             &mut memory,
             ring_backing,
             usize::try_from(ring_bytes)
                 .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("ring size conversion"))?,
         )?;
-        let mut control = memory.allocate_host_visible_coherent(CONTROL_BYTES)?;
+        Self::create_compute_aql_queue_after_userptr_control_entry(
+            memory, geometry, ring_bytes, ring, dispatch,
+        )
+        .map_err(terminal_userptr_control_creation)
+    }
+
+    fn create_compute_aql_queue_after_userptr_control_entry(
+        mut memory: SharedGttMemorySessionV1,
+        geometry: Gfx942AqlQueueResourcePlanV1,
+        ring_bytes: u32,
+        mut ring: CpuRingAuthorityV1,
+        dispatch: Option<DispatchResourceOwnerV1>,
+    ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
+        let mut control = memory.allocate_userptr_aql_control()?;
         let mut completion_signals =
             memory.allocate_host_visible_coherent(COMPLETION_SIGNAL_ARENA_BYTES_V1)?;
         let mut eop = memory.allocate_executable(
@@ -3143,11 +3160,14 @@ fn validate_barrier_probe_success_snapshot(
     observation: Gfx942TimeoutExecutionObservationV1,
 ) -> Result<Gfx942TimeoutExecutionObservationV1, Gfx942CompletionErrorV1> {
     // The device may advance the read counter before or after this sequential
-    // host snapshot. Both zero and one are valid for the single published packet.
+    // host snapshot and may invalidate a consumed packet before the host reads
+    // its header. Both header states are valid only after signal completion.
+    let packet_header = observation.first_packet_header();
     if observation.packet_count() != 1
         || observation.write_counter() != 1
         || observation.read_counter() > 1
-        || observation.first_packet_header() != fe2o3_aql::AQL_SYSTEM_SCOPED_BARRIER_AND_HEADER_V1
+        || (packet_header != fe2o3_aql::AQL_SYSTEM_SCOPED_BARRIER_AND_HEADER_V1
+            && packet_header != fe2o3_aql::AQL_INVALID_PACKET_HEADER_V1)
         || observation.first_packet_setup() != 0
         || observation.first_signal_kind() != fe2o3_aql::AMD_SIGNAL_KIND_USER_V1
         || observation.first_signal() != Gfx942TimeoutSignalObservationV1::Completed
@@ -3417,6 +3437,17 @@ fn terminal_creation(
     }
 }
 
+fn terminal_userptr_control_creation(
+    error: ComputeAqlQueueSessionErrorV1,
+) -> ComputeAqlQueueSessionErrorV1 {
+    permanently_poison_process_global_kfd_runtime_gate_v1();
+    if error.is_terminal_creation() {
+        error
+    } else {
+        terminal_creation("USERPTR queue-control creation", error)
+    }
+}
+
 fn map_create(error: NativeQueueAdapterErrorV1) -> ComputeAqlQueueSessionErrorV1 {
     if matches!(
         error,
@@ -3656,6 +3687,54 @@ mod tests {
     }
 
     #[test]
+    fn userptr_control_entry_failure_is_terminal_for_every_queue_backing() {
+        const CHILD_ENV: &str = "FE2O3_TEST_USERPTR_CONTROL_GATE_POISON";
+        if std::env::var_os(CHILD_ENV).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("userptr_control_entry_failure_is_terminal_for_every_queue_backing")
+                .arg("--nocapture")
+                .env(CHILD_ENV, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "child failed:\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let teardown_arm = arm_process_global_kfd_runtime_gate_for_teardown_v1();
+        for backing in [
+            Gfx942BarrierProbeRingBackingV1::AqlSpecialDoubled,
+            Gfx942BarrierProbeRingBackingV1::ExecutableGttOneX,
+            Gfx942BarrierProbeRingBackingV1::UserptrOneX,
+        ] {
+            let error = terminal_userptr_control_creation(ComputeAqlQueueSessionErrorV1::Contract(
+                "control fault injection",
+            ));
+            assert!(error.is_terminal_creation());
+            let failure = barrier_probe_creation_failure(error, backing);
+            assert!(matches!(
+                failure,
+                Gfx942BarrierProbeFailureV1::TerminalCreation { .. }
+            ));
+            assert_eq!(failure.backing(), backing);
+        }
+        teardown_arm.confirm_destroyed();
+
+        use std::os::fd::AsFd;
+        let file = std::fs::File::open("/dev/null").unwrap();
+        assert!(matches!(
+            LinuxKfdRuntimeEnabledV1::enable(file.as_fd(), std::process::id()),
+            Err(LinuxDoorbellErrorV1::Runtime(
+                "process-global gate poisoned"
+            ))
+        ));
+    }
+
+    #[test]
     fn barrier_probe_poll_bound_rejects_before_device_consumption() {
         assert_eq!(
             Gfx942BarrierProbePollBoundV1::new(0),
@@ -3762,11 +3841,20 @@ mod tests {
     #[test]
     fn barrier_success_snapshot_accepts_only_the_exact_redacted_contract() {
         for read in [0, 1] {
-            let observation = BarrierSnapshotInput::valid(read).observation();
-            assert_eq!(
-                validate_barrier_probe_success_snapshot(observation),
-                Ok(observation)
-            );
+            for header in [
+                fe2o3_aql::AQL_SYSTEM_SCOPED_BARRIER_AND_HEADER_V1,
+                fe2o3_aql::AQL_INVALID_PACKET_HEADER_V1,
+            ] {
+                let observation = BarrierSnapshotInput {
+                    header,
+                    ..BarrierSnapshotInput::valid(read)
+                }
+                .observation();
+                assert_eq!(
+                    validate_barrier_probe_success_snapshot(observation),
+                    Ok(observation)
+                );
+            }
         }
 
         let valid = BarrierSnapshotInput::valid(1);
@@ -3958,7 +4046,7 @@ mod tests {
         );
         assert_eq!(
             SHARED_GTT_MEMORY_PROFILE_SHA256_V1,
-            "b872d5ae807e1686a23b2c806773adda7023f6077a5f7e9e5616181c88ac13ea"
+            "51bf22abe635f62619ef1c87e6328720861d3d0c1fdd3613229e9e6e3cea3cd5"
         );
         assert_eq!(
             GFX942_QUEUE_RESOURCE_PROFILE_SHA256_V1,
@@ -3967,6 +4055,10 @@ mod tests {
         assert_eq!(
             fe2o3_kfd_uapi::KFD_USERPTR_MEMORY_SCHEMA_MANIFEST_SHA256,
             "c1cee09bdf884d2c14a5dbb89c1f6f7885962c75b1457caf412821490919ee9e"
+        );
+        assert_eq!(
+            fe2o3_kfd_uapi::KFD_USERPTR_QUEUE_CONTROL_SCHEMA_MANIFEST_SHA256,
+            "f1d75410d6bfacff2ea15ecfff226eb8aed7912ee324a36b8ed8550fa52bce02"
         );
         assert_eq!(
             fe2o3_kfd_uapi::KFD_RUNTIME_ENABLE_SCHEMA_SHA256,
