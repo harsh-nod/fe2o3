@@ -8546,7 +8546,7 @@ mod tests {
             ProductionRankedOperationV1::InvocationIndex {
                 result: invocation,
                 dimension: 0,
-                launch_extent: 0,
+                launch_extent: 64,
             },
             ProductionRankedOperationV1::ViewInSpace {
                 result: view,
@@ -8791,7 +8791,7 @@ mod tests {
             ProductionRankedOperationV1::InvocationIndex {
                 result: invocation,
                 dimension: 0,
-                launch_extent: 0,
+                launch_extent: 64,
             },
             ProductionRankedOperationV1::IndexConstant {
                 result: offset,

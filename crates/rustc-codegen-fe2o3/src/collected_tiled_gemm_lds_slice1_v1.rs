@@ -935,9 +935,9 @@ fn canonical_ir_identity(module: &Module) -> Result<[u8; 32], CollectedLdsSlice1
             "structural identity requested for a noncanonical module".to_owned(),
         ));
     }
-    let canonical = fe2o3_kernel_ir::encode_module_v5(module).map_err(|error| {
+    let canonical = fe2o3_kernel_ir::encode_module_v7(module).map_err(|error| {
         CollectedLdsSlice1ErrorV1::CanonicalIr(format!(
-            "canonical V5 Kernel IR encoding failed: {error}"
+            "canonical V7 Kernel IR encoding failed: {error}"
         ))
     })?;
     let mut digest = Sha256::new();

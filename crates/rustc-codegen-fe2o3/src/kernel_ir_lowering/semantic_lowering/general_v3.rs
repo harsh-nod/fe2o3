@@ -10,7 +10,7 @@ use crate::semantic_features::SessionRecognizedSemanticItem;
 use crate::trusted_device_items::TrustedDeviceItem;
 use fe2o3_kernel_ir::{
     AccessMode, BasicBlock, ComparePredicate, IntrinsicOperation, MatrixOperation, Operation,
-    OperationKind, Terminator, Type,
+    OperationKind, TensorLayoutContractV1, Terminator, Type,
 };
 
 pub(super) fn claim_call(
@@ -147,8 +147,11 @@ fn lower_device_matrix_multiply_accumulate(
         call.location,
     )?;
 
-    let matrix =
-        MatrixOperation::multiply_accumulate(lhs, rhs, accumulator).with_frontend_binding(binding);
+    let matrix = MatrixOperation::multiply_accumulate(lhs, rhs, accumulator)
+        .with_frontend_binding(binding)
+        .with_declared_tensor_layout(
+            TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64(),
+        );
     let results = matrix
         .result_types()
         .into_iter()

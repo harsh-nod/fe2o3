@@ -2555,9 +2555,6 @@ mod tests {
     use std::thread;
     use std::time::Instant;
 
-    const INVOCATION_PEER_HELPER_ENV: &str = "FE2O3_ROW_INVOCATION_PEER_HELPER_SOCKET";
-    const INVOCATION_PEER_HELPER_TEST: &str =
-        "collected_row_softmax_v1::tests::invocation_peer_process_helper";
     static NEXT_INVOCATION_PEER_TEST: AtomicU64 = AtomicU64::new(1);
 
     struct InvocationPeerFixture {
@@ -2582,11 +2579,41 @@ mod tests {
                 .create(&directory)
                 .expect("create private invocation peer test directory");
             let executable = directory.join("cargo-fe2o3-peer");
-            fs::copy(
-                std::env::current_exe().expect("locate invocation peer test executable"),
-                &executable,
+            let source = directory.join("peer.rs");
+            fs::write(
+                &source,
+                r#"use std::io::{Read, Write};
+use std::os::unix::net::UnixStream;
+
+fn main() {
+    let socket = std::env::args_os().nth(1).expect("missing peer socket");
+    let mut stream = UnixStream::connect(socket).expect("connect invocation peer helper");
+    stream.write_all(&[1]).expect("publish invocation peer helper ready byte");
+    let mut release = [0_u8; 1];
+    stream.read_exact(&mut release).expect("read invocation peer helper release byte");
+    assert_eq!(release, [1]);
+}
+"#,
             )
-            .expect("copy invocation peer test executable");
+            .expect("write invocation peer helper source");
+            let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
+            let output = Command::new(rustc)
+                .arg("--crate-name=fe2o3_invocation_peer_fixture")
+                .arg("--edition=2024")
+                .arg("-Copt-level=s")
+                .arg("-Cdebuginfo=0")
+                .arg("-Cstrip=symbols")
+                .arg(&source)
+                .arg("-o")
+                .arg(&executable)
+                .output()
+                .expect("compile invocation peer helper");
+            assert!(
+                output.status.success(),
+                "compile invocation peer helper: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            fs::remove_file(source).expect("remove invocation peer helper source");
             fs::set_permissions(&executable, fs::Permissions::from_mode(0o500))
                 .expect("make invocation peer test executable owner-only");
             let expected_sha256 = fe2o3_process_identity::measure_executable_sha256_v3(&executable)
@@ -2597,8 +2624,7 @@ mod tests {
                 .set_nonblocking(true)
                 .expect("make invocation peer listener nonblocking");
             let mut child = Command::new(&executable)
-                .args(["--exact", INVOCATION_PEER_HELPER_TEST, "--nocapture"])
-                .env(INVOCATION_PEER_HELPER_ENV, &socket)
+                .arg(&socket)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -2694,22 +2720,6 @@ mod tests {
             }
             let _ = fs::remove_dir_all(&self.directory);
         }
-    }
-
-    #[test]
-    fn invocation_peer_process_helper() {
-        let Some(socket) = std::env::var_os(INVOCATION_PEER_HELPER_ENV) else {
-            return;
-        };
-        let mut stream = UnixStream::connect(socket).expect("connect invocation peer helper");
-        stream
-            .write_all(&[1])
-            .expect("publish invocation peer helper ready byte");
-        let mut release = [0_u8; 1];
-        stream
-            .read_exact(&mut release)
-            .expect("read invocation peer helper release byte");
-        assert_eq!(release, [1]);
     }
 
     #[test]
