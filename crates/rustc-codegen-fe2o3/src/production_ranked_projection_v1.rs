@@ -3769,15 +3769,20 @@ fn project_uniform_inductions_v1(
         if targets.values().len() != 1 || targets.values()[0].value() != 0 {
             continue;
         }
-        let mut discriminant_definitions = block.statements().iter().filter_map(|statement| {
-            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
-                return None;
-            };
-            (assignment.destination().projections().is_empty()
-                && assignment.destination().local() == discriminant)
-                .then_some(assignment)
-        });
-        let Some(comparison) = discriminant_definitions.next() else {
+        let mut discriminant_definitions =
+            block
+                .statements()
+                .iter()
+                .enumerate()
+                .filter_map(|(statement_index, statement)| {
+                    let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                        return None;
+                    };
+                    (assignment.destination().projections().is_empty()
+                        && assignment.destination().local() == discriminant)
+                        .then_some((statement_index, assignment))
+                });
+        let Some((comparison_index, comparison)) = discriminant_definitions.next() else {
             continue;
         };
         if discriminant_definitions.next().is_some() {
@@ -3793,7 +3798,9 @@ fn project_uniform_inductions_v1(
         else {
             continue;
         };
-        let Some(induction) = simple_operand_local(left) else {
+        let Some(induction) =
+            resolve_loop_header_copy_alias_v1(block, comparison_index, left, local_definitions)?
+        else {
             continue;
         };
         if local_definitions.get(induction.index() as usize).copied() != Some(2) {
@@ -3949,6 +3956,50 @@ fn project_uniform_inductions_v1(
         });
     }
     Ok(inductions)
+}
+
+fn resolve_loop_header_copy_alias_v1(
+    header: &fe2o3_mir_model::semantic_mir_v1::SemanticBasicBlockV1,
+    comparison_index: usize,
+    operand: &SemanticOperandV1,
+    local_definitions: &[u8],
+) -> Result<Option<SemanticLocalIdV1>, ProductionRankedProjectionErrorV1> {
+    let Some(mut current) = simple_operand_local(operand) else {
+        return Ok(None);
+    };
+    for _ in 0..=comparison_index {
+        let current_index = current.index() as usize;
+        if local_definitions.get(current_index).copied() != Some(1) {
+            return Ok(Some(current));
+        }
+        let alias = header.statements()[..comparison_index]
+            .iter()
+            .rev()
+            .find_map(|statement| {
+                let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                    return None;
+                };
+                (assignment.destination().projections().is_empty()
+                    && assignment.destination().local() == current)
+                    .then_some(assignment)
+            });
+        let Some(alias) = alias else {
+            return Ok(Some(current));
+        };
+        let SemanticRvalueKindV1::Use(source) = alias.value().kind() else {
+            return Ok(Some(current));
+        };
+        if alias.destination().ty() != source.ty() {
+            return Ok(Some(current));
+        }
+        let Some(source) = simple_operand_local(source) else {
+            return Ok(Some(current));
+        };
+        current = source;
+    }
+    Err(ProductionRankedProjectionErrorV1::Incomplete(
+        "a uniform induction comparison has a cyclic copy alias",
+    ))
 }
 
 #[derive(Debug)]
@@ -11488,6 +11539,7 @@ mod tests {
     #[derive(Clone, Copy)]
     enum InductionCfgShape {
         Chain,
+        HeaderCopyAlias,
         Branched,
         TwoLatches,
         ExtraExit,
@@ -11587,6 +11639,47 @@ mod tests {
                     SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
                 ),
                 block(115, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            InductionCfgShape::HeaderCopyAlias => vec![
+                block(
+                    116,
+                    vec![initialize()],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(
+                    117,
+                    vec![
+                        assign(
+                            SemanticLocalIdV1::from_index(5),
+                            SemanticRvalueKindV1::Use(operand(induction)),
+                        ),
+                        assign(
+                            predicate,
+                            SemanticRvalueKindV1::Binary {
+                                operation: SemanticBinaryOpV1::LessThan,
+                                left: operand(SemanticLocalIdV1::from_index(5)),
+                                right: operand(bound),
+                            },
+                        ),
+                    ],
+                    switch(operand(predicate), 5, 2),
+                ),
+                block(
+                    118,
+                    vec![],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3)),
+                ),
+                block(
+                    119,
+                    vec![],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 4)),
+                ),
+                block(
+                    120,
+                    vec![increment()],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(121, vec![], SemanticTerminatorKindV1::Return),
             ],
             InductionCfgShape::Branched => vec![
                 block(
@@ -11929,6 +12022,32 @@ mod tests {
             ProductionRankedTerminatorV1::BranchArgsAdd { .. }
         ));
         ProductionRankedKernelV1::new("multi_block_uniform_loop", next_argument, blocks).unwrap();
+    }
+
+    #[test]
+    fn uniform_induction_resolves_an_exact_header_copy_alias() {
+        let function = multi_block_induction_function(
+            InductionCfgShape::HeaderCopyAlias,
+            SemanticLocalRoleV1::Argument(0),
+            16,
+        );
+        let (inductions, entry_operations, next_argument) =
+            project_test_inductions(&function).unwrap();
+        assert_eq!(inductions.len(), 1);
+        assert_eq!(inductions[0].loop_blocks, vec![1, 2, 3, 4]);
+
+        let (blocks, _) = build_ranked_cfg(
+            &function,
+            &vec![None; function.locals().len()],
+            &vec![None; function.blocks().len()],
+            &inductions,
+            entry_operations,
+            (0..function.blocks().len())
+                .map(|_| ProjectedSemanticBlockV1 { items: vec![] })
+                .collect(),
+        )
+        .unwrap();
+        ProductionRankedKernelV1::new("header_copy_alias_loop", next_argument, blocks).unwrap();
     }
 
     #[test]
