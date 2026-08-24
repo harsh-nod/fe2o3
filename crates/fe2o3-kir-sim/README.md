@@ -37,8 +37,8 @@ occurrences and at most 1 MiB of owned identifier bytes, and separately report
 the exact total, so hostile identifiers cannot amplify diagnostics into
 unbounded storage.
 Floating-point operations, external calls, atomics, synchronization,
-workgroup memory, wave operations, matrix operations, memory intrinsics, and
-inline assembly are rejected by this profile.
+workgroup memory, wave operations, matrix operations, memory intrinsics, KIR V7
+guarded loads, and inline assembly are rejected by this V6 profile.
 
 Callers consume an exact V6 owner with `AdmittedSimulationModuleV1::admit`, then
 provide an explicit target, resource limits, launch shape, and typed scalar or

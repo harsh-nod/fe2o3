@@ -57,6 +57,7 @@ enum UnsupportedFeatureCode {
     FloatType,
     UnsupportedType,
     MemoryIntrinsic,
+    GuardedLoad,
     FloatConstant,
     FloatOperation,
     InvalidIntegerCast,
@@ -1581,6 +1582,7 @@ fn unsupported_code(feature: &UnsupportedFeatureV1) -> UnsupportedFeatureCode {
         UnsupportedFeatureV1::FloatType(_) => UnsupportedFeatureCode::FloatType,
         UnsupportedFeatureV1::UnsupportedType => UnsupportedFeatureCode::UnsupportedType,
         UnsupportedFeatureV1::MemoryIntrinsic => UnsupportedFeatureCode::MemoryIntrinsic,
+        UnsupportedFeatureV1::GuardedLoad => UnsupportedFeatureCode::GuardedLoad,
         UnsupportedFeatureV1::FloatConstant => UnsupportedFeatureCode::FloatConstant,
         UnsupportedFeatureV1::FloatOperation => UnsupportedFeatureCode::FloatOperation,
         UnsupportedFeatureV1::InvalidIntegerCast { .. } => {
@@ -2929,6 +2931,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(UnsupportedFeatureCode::InlineAssembly).unwrap(),
             "inline_assembly"
+        );
+        assert_eq!(
+            serde_json::to_value(UnsupportedFeatureCode::GuardedLoad).unwrap(),
+            "guarded_load"
         );
         assert_eq!(
             preflight_kind(&SimulationPreflightErrorV1::TargetValueOutOfRange { argument: 7 }),

@@ -37,6 +37,7 @@ pub enum UnsupportedFeatureV1 {
     FloatType(ScalarType),
     UnsupportedType,
     MemoryIntrinsic,
+    GuardedLoad,
     FloatConstant,
     FloatOperation,
     InvalidIntegerCast {
@@ -1268,6 +1269,7 @@ fn scan_operation(
         }
         OperationKind::Intrinsic(_) => {}
         OperationKind::MemoryIntrinsic(_) => reject!(UnsupportedFeatureV1::MemoryIntrinsic),
+        OperationKind::GuardedLoad { .. } => reject!(UnsupportedFeatureV1::GuardedLoad),
         OperationKind::Unary { op, operand } => {
             if !matches!(value_types.get(operand), Some(Type::Scalar(ty)) if supports_unary(*op, *ty))
             {
@@ -1778,6 +1780,53 @@ fn validate_buffer_access(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guarded_load_is_explicitly_outside_the_v6_simulation_profile() {
+        let function = Function::kernel_entry(
+            "guarded",
+            fe2o3_kernel_ir::Signature::new(vec![], vec![]),
+            vec![],
+            vec![],
+        );
+        let operation = Operation::effect_free(
+            fe2o3_kernel_ir::ValueDef::new(ValueId(3), Type::Scalar(ScalarType::U32)),
+            OperationKind::GuardedLoad {
+                pointer: ValueId(0),
+                predicate: ValueId(1),
+                fallback: ValueId(2),
+                access: fe2o3_kernel_ir::MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        );
+        let mut findings = UnsupportedCollectorV1::new().unwrap();
+        let mut pending = Vec::new();
+        let mut discovered = vec![true];
+        let mut discovered_count = 1;
+
+        scan_operation(
+            &function,
+            BlockId(0),
+            0,
+            &operation,
+            &HashMap::new(),
+            &Module::new("guarded"),
+            &HashMap::new(),
+            &mut pending,
+            &mut discovered,
+            &mut discovered_count,
+            1,
+            &mut findings,
+            SimulationTargetV1::amdgpu_64(),
+        )
+        .unwrap();
+
+        let report = findings.finish().unwrap();
+        assert_eq!(report.total_findings(), 1);
+        assert_eq!(
+            report.findings()[0].feature,
+            UnsupportedFeatureV1::GuardedLoad
+        );
+    }
 
     #[test]
     fn unsupported_report_retains_a_bounded_prefix_and_exact_total() {

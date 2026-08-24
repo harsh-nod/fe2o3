@@ -3050,6 +3050,7 @@ fn execute_operation(
             Ok(SmallResults::None)
         }
         OperationKind::MemoryIntrinsic(_)
+        | OperationKind::GuardedLoad { .. }
         | OperationKind::Barrier(_)
         | OperationKind::Atomic(_)
         | OperationKind::Fence(_)

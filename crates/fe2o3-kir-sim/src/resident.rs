@@ -261,6 +261,7 @@ fn add_operation(resident: &mut ResidentLedger, operation: &Operation) -> Option
         | OperationKind::SliceData { .. }
         | OperationKind::GetElementPointer { .. }
         | OperationKind::Load { .. }
+        | OperationKind::GuardedLoad { .. }
         | OperationKind::Store { .. }
         | OperationKind::Atomic(_)
         | OperationKind::Wave(_) => Some(()),
