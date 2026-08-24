@@ -14,6 +14,18 @@ pub(crate) enum PipelinePurposeV1 {
     QualificationOracle,
 }
 
+/// Rustc-process evidence required independently of a pipeline's product role.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RustcInvocationPolicyV1 {
+    /// Publication-capable compilation requires the sealed V3 descriptor.
+    ProtectedV3,
+    /// Qualification-only compilation retains authenticated backend
+    /// observations but grants no publication authority.
+    QualificationObserved,
+    /// Ambient rustc invocation with no fe2o3 authority or observations.
+    Unmanaged,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CodegenPipeline {
     ProductionV1,
@@ -66,6 +78,40 @@ impl CodegenPipeline {
             | Self::CollectedWave64CollectivesV1
             | Self::CollectedLdsReductionV1
             | Self::CollectedScopedAtomicV1 => PipelinePurposeV1::QualificationOracle,
+        }
+    }
+
+    pub(crate) const fn rustc_invocation_policy(
+        self,
+        explicit_unprotected_qualification: bool,
+    ) -> RustcInvocationPolicyV1 {
+        match self {
+            Self::ProductionV1 => RustcInvocationPolicyV1::ProtectedV3,
+            Self::CollectedRowSoftmaxV1 => {
+                if explicit_unprotected_qualification {
+                    RustcInvocationPolicyV1::QualificationObserved
+                } else {
+                    RustcInvocationPolicyV1::ProtectedV3
+                }
+            }
+            Self::LegacyV1
+            | Self::KernelIrV1
+            | Self::KernelIrWorkerV2
+            | Self::CollectedExecutableScalarControlFlowV2
+            | Self::CollectedFlashAttentionV1
+            | Self::CollectedGeneralGemmV1
+            | Self::CollectedMoeTop2V1
+            | Self::CollectedScalarGemmV1
+            | Self::CollectedTiledGemmV1
+            | Self::CollectedWave64CollectivesV1
+            | Self::CollectedLdsReductionV1
+            | Self::CollectedScopedAtomicV1 => {
+                if explicit_unprotected_qualification {
+                    RustcInvocationPolicyV1::QualificationObserved
+                } else {
+                    RustcInvocationPolicyV1::Unmanaged
+                }
+            }
         }
     }
 
@@ -162,7 +208,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::ffi::OsStr;
 
-    use super::{CodegenPipeline, PipelinePurposeV1, PipelineSelection};
+    use super::{CodegenPipeline, PipelinePurposeV1, PipelineSelection, RustcInvocationPolicyV1};
 
     #[test]
     fn exactly_one_selectable_route_is_a_production_pipeline() {
@@ -184,6 +230,34 @@ mod tests {
             assert_eq!(
                 PipelineSelection::from_value(Some(OsStr::new(pipeline.selector_name()))),
                 PipelineSelection::Valid(pipeline),
+            );
+        }
+    }
+
+    #[test]
+    fn invocation_authority_is_independent_of_pipeline_purpose() {
+        assert_eq!(
+            CodegenPipeline::ProductionV1.rustc_invocation_policy(true),
+            RustcInvocationPolicyV1::ProtectedV3,
+        );
+        assert_eq!(
+            CodegenPipeline::CollectedRowSoftmaxV1.rustc_invocation_policy(false),
+            RustcInvocationPolicyV1::ProtectedV3,
+        );
+        for pipeline in CodegenPipeline::ALL {
+            if matches!(
+                pipeline,
+                CodegenPipeline::ProductionV1 | CodegenPipeline::CollectedRowSoftmaxV1
+            ) {
+                continue;
+            }
+            assert_eq!(
+                pipeline.rustc_invocation_policy(false),
+                RustcInvocationPolicyV1::Unmanaged,
+            );
+            assert_eq!(
+                pipeline.rustc_invocation_policy(true),
+                RustcInvocationPolicyV1::QualificationObserved,
             );
         }
     }
