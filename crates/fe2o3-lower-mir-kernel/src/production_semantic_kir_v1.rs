@@ -3362,6 +3362,19 @@ fn require_single_u32_component(
         .0)
 }
 
+fn index_and_u64_are_transport_equivalent(actual: &Type, expected: &Type) -> bool {
+    matches!(
+        (actual, expected),
+        (
+            Type::Scalar(ScalarType::Index),
+            Type::Scalar(ScalarType::U64)
+        ) | (
+            Type::Scalar(ScalarType::U64),
+            Type::Scalar(ScalarType::Index)
+        )
+    )
+}
+
 fn require_current_wave_lane(
     block: SemanticBlockIdV1,
     binding: SemanticValueBindingV1,
@@ -3529,34 +3542,34 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
     }
 
     fn edge_arguments(
-        &self,
+        &mut self,
         block: SemanticBlockIdV1,
         target: SemanticBlockIdV1,
+        operations: &mut Vec<Operation>,
     ) -> Result<Vec<ValueId>, ProductionSemanticKirErrorV1> {
         let mut arguments = Vec::new();
-        for local in self.control_flow_ssa.live_in(target.index()) {
-            let binding = self
-                .locals
-                .get(*local as usize)
-                .and_then(Option::as_ref)
-                .ok_or(ProductionSemanticKirErrorV1::MissingLocalDefinition {
-                    function: 0,
-                    block: block.index(),
-                    statement: None,
-                    local: *local,
-                })?;
-            let promoted = &self.control_flow_ssa.promoted[local];
-            let values = promoted
-                .binding
-                .transport_values(binding)
-                .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-            let expected = &promoted.kernel_types;
-            if values.len() != expected.len()
-                || values
-                    .iter()
-                    .zip(expected.iter())
-                    .any(|((_, actual), expected)| actual != expected)
-            {
+        let live_in_count = self.control_flow_ssa.live_in(target.index()).len();
+        for live_in_ordinal in 0..live_in_count {
+            let local = self.control_flow_ssa.live_in(target.index())[live_in_ordinal];
+            let (values, expected_count) = {
+                let binding = self
+                    .locals
+                    .get(local as usize)
+                    .and_then(Option::as_ref)
+                    .ok_or(ProductionSemanticKirErrorV1::MissingLocalDefinition {
+                        function: 0,
+                        block: block.index(),
+                        statement: None,
+                        local,
+                    })?;
+                let promoted = &self.control_flow_ssa.promoted[&local];
+                let values = promoted
+                    .binding
+                    .transport_values(binding)
+                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                (values, promoted.kernel_types.len())
+            };
+            if values.len() != expected_count {
                 return Err(unsupported(
                     0,
                     Some(block.index()),
@@ -3564,7 +3577,31 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     "promoted aggregate changed its SSA component types",
                 ));
             }
-            arguments.extend(values.into_iter().map(|(value, _)| value));
+            for (component, (value, actual)) in values.into_iter().enumerate() {
+                let expected =
+                    self.control_flow_ssa.promoted[&local].kernel_types[component].clone();
+                let value = if actual == expected {
+                    value
+                } else if index_and_u64_are_transport_equivalent(&actual, &expected) {
+                    self.emit_id(
+                        operations,
+                        expected.clone(),
+                        OperationKind::Cast {
+                            kind: CastKind::Bitcast,
+                            value,
+                            to: expected.clone(),
+                        },
+                    )?
+                } else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "promoted aggregate changed its SSA component types",
+                    ));
+                };
+                arguments.push(value);
+            }
         }
         Ok(arguments)
     }
@@ -4643,7 +4680,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         match terminator {
             SemanticTerminatorKindV1::Goto(edge) => Ok(Terminator::Branch {
                 target: BlockId(edge.target().index()),
-                arguments: self.edge_arguments(block, edge.target())?,
+                arguments: self.edge_arguments(block, edge.target(), operations)?,
             }),
             SemanticTerminatorKindV1::SwitchInt {
                 discriminant,
@@ -4680,9 +4717,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     return Ok(Terminator::ConditionalBranch {
                         condition: selector,
                         then_target: BlockId(then_target.index()),
-                        then_arguments: self.edge_arguments(block, then_target)?,
+                        then_arguments: self.edge_arguments(block, then_target, operations)?,
                         else_target: BlockId(else_target.index()),
-                        else_arguments: self.edge_arguments(block, else_target)?,
+                        else_arguments: self.edge_arguments(block, else_target, operations)?,
                     });
                 }
                 let cases = targets
@@ -4699,7 +4736,11 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                                 )
                             })?,
                             target: BlockId(target.edge().target().index()),
-                            arguments: self.edge_arguments(block, target.edge().target())?,
+                            arguments: self.edge_arguments(
+                                block,
+                                target.edge().target(),
+                                operations,
+                            )?,
                         })
                     })
                     .collect::<Result<Vec<_>, ProductionSemanticKirErrorV1>>()?;
@@ -4707,7 +4748,11 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     selector,
                     cases,
                     default_target: BlockId(targets.otherwise().target().index()),
-                    default_arguments: self.edge_arguments(block, targets.otherwise().target())?,
+                    default_arguments: self.edge_arguments(
+                        block,
+                        targets.otherwise().target(),
+                        operations,
+                    )?,
                 })
             }
             SemanticTerminatorKindV1::Call(call) => self.lower_call(block, call, operations),
@@ -4747,7 +4792,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     ));
                 }
                 let success = BlockId(target.target().index());
-                let success_arguments = self.edge_arguments(block, target.target())?;
+                let success_arguments = self.edge_arguments(block, target.target(), operations)?;
                 let (then_target, then_arguments, else_target, else_arguments) = if *expected {
                     (success, success_arguments, failure, vec![])
                 } else {
@@ -5720,7 +5765,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         self.bind_destination(block, None, destination.place(), binding)?;
         Ok(Terminator::Branch {
             target: BlockId(destination.edge().target().index()),
-            arguments: self.edge_arguments(block, destination.edge().target())?,
+            arguments: self.edge_arguments(block, destination.edge().target(), operations)?,
         })
     }
 
@@ -11002,5 +11047,21 @@ mod resource_tests {
                 16,
             ));
         }
+    }
+
+    #[test]
+    fn rust_usize_and_kernel_index_are_edge_transport_equivalent() {
+        let index = Type::INDEX;
+        let u64_type = Type::Scalar(ScalarType::U64);
+        assert!(index_and_u64_are_transport_equivalent(&index, &u64_type));
+        assert!(index_and_u64_are_transport_equivalent(&u64_type, &index));
+        assert!(!index_and_u64_are_transport_equivalent(
+            &index,
+            &Type::Scalar(ScalarType::U32),
+        ));
+        assert!(!index_and_u64_are_transport_equivalent(
+            &Type::Scalar(ScalarType::U64),
+            &Type::Scalar(ScalarType::I64),
+        ));
     }
 }
