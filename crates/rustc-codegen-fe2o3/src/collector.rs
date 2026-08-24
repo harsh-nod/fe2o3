@@ -316,51 +316,43 @@ impl<'tcx> CollectionResult<'tcx> {
     }
 }
 
+/// Consumer boundary for the shared rustc graph collector.
+///
+/// Qualification retains its historical dead-branch projection, three
+/// oracle-only terminal classifiers, and eager layout evidence because the
+/// explicitly selected oracle routes still consume those records. Production
+/// never receives that variant and instead traverses every block through the
+/// workload-neutral semantic-terminal registry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CollectorTraversalPolicyV1 {
-    Legacy { extended_helper_edges: bool },
-    ProductionV1,
+enum CollectorPurposeV1 {
+    QualificationOracle { extended_helper_edges: bool },
+    Production,
 }
 
-impl CollectorTraversalPolicyV1 {
-    const fn inspect_block(self, legacy_includes_block: bool) -> bool {
+impl CollectorPurposeV1 {
+    const fn inspect_block(self, qualification_includes_block: bool) -> bool {
         match self {
-            Self::Legacy { .. } => legacy_includes_block,
-            Self::ProductionV1 => true,
+            Self::QualificationOracle { .. } => qualification_includes_block,
+            Self::Production => true,
         }
     }
 
-    const fn accepts_helper_asserts(self) -> bool {
+    const fn accepts_extended_edges(self) -> bool {
         match self {
-            Self::Legacy {
+            Self::QualificationOracle {
                 extended_helper_edges,
             } => extended_helper_edges,
-            Self::ProductionV1 => true,
+            Self::Production => true,
         }
     }
 
-    const fn accepts_copy_drop_edges(self) -> bool {
-        match self {
-            Self::Legacy {
-                extended_helper_edges,
-            } => extended_helper_edges,
-            Self::ProductionV1 => true,
-        }
+    const fn is_qualification_oracle(self) -> bool {
+        matches!(self, Self::QualificationOracle { .. })
     }
 
-    const fn uses_legacy_terminal_classifiers(self) -> bool {
-        matches!(self, Self::Legacy { .. })
+    const fn is_production(self) -> bool {
+        matches!(self, Self::Production)
     }
-
-    const fn uses_session_semantic_terminal_registry(self) -> bool {
-        matches!(self, Self::ProductionV1)
-    }
-}
-
-#[derive(Clone, Debug)]
-struct CollectorConfigurationV1 {
-    target: String,
-    traversal: CollectorTraversalPolicyV1,
 }
 
 #[derive(Debug)]
@@ -446,16 +438,25 @@ pub(crate) fn count_production_roots_before_monomorphization_v1(tcx: TyCtxt<'_>)
         .saturating_add(crate::device_ffi::count_local_registration_candidates(tcx))
 }
 
-pub fn collect_device_functions<'tcx>(
+/// Collects compatibility evidence for an explicitly selected qualification
+/// oracle. The caller must supply both the resolved target and its explicit
+/// route token; process environment cannot silently alter collection.
+pub(crate) fn collect_qualification_device_functions<'tcx>(
     tcx: TyCtxt<'tcx>,
     cgus: &[CodegenUnit<'tcx>],
     verbose: bool,
+    target: &crate::AmdGpuTarget,
+    pipeline: crate::pipeline_selection::QualificationPipelineV1,
 ) -> Result<CollectionResult<'tcx>, CollectError> {
-    collect_device_functions_with_configuration(
+    let extended_helper_edges = pipeline.requires_extended_collector_edges();
+    collect_device_functions_for_purpose(
         tcx,
         cgus,
         verbose,
-        legacy_collector_configuration_v1(),
+        target.as_str().to_owned(),
+        CollectorPurposeV1::QualificationOracle {
+            extended_helper_edges,
+        },
     )
 }
 
@@ -465,14 +466,12 @@ pub(crate) fn collect_authenticated_kernel_closure_v1<'tcx>(
     verbose: bool,
     target: crate::production_target_v1::RetainedProductionTargetV1,
 ) -> Result<AuthenticatedCollectedKernelClosureV1<'tcx>, CollectError> {
-    let collection = collect_device_functions_with_configuration(
+    let collection = collect_device_functions_for_purpose(
         tcx,
         cgus,
         verbose,
-        CollectorConfigurationV1 {
-            target: target.canonical_name().to_owned(),
-            traversal: CollectorTraversalPolicyV1::ProductionV1,
-        },
+        target.canonical_name().to_owned(),
+        CollectorPurposeV1::Production,
     )?;
     let roots = collection
         .functions
@@ -501,32 +500,12 @@ pub(crate) fn collect_authenticated_kernel_closure_v1<'tcx>(
     })
 }
 
-fn legacy_collector_configuration_v1() -> CollectorConfigurationV1 {
-    let extended_helper_edges = matches!(
-        std::env::var_os(crate::CODEGEN_PIPELINE_ENV).as_deref(),
-        Some(value)
-            if value == std::ffi::OsStr::new(
-                crate::collected_flash_attention_v1::COLLECTED_FLASH_ATTENTION_PIPELINE_V1,
-            ) || value == std::ffi::OsStr::new(
-                crate::collected_moe_top2_v1::COLLECTED_MOE_TOP2_PIPELINE_V1,
-            )
-    );
-    CollectorConfigurationV1 {
-        target: std::env::var("FE2O3_TARGET")
-            .ok()
-            .filter(|target| !target.trim().is_empty())
-            .unwrap_or_else(|| "gfx1100".to_owned()),
-        traversal: CollectorTraversalPolicyV1::Legacy {
-            extended_helper_edges,
-        },
-    }
-}
-
-fn collect_device_functions_with_configuration<'tcx>(
+fn collect_device_functions_for_purpose<'tcx>(
     tcx: TyCtxt<'tcx>,
     cgus: &[CodegenUnit<'tcx>],
     verbose: bool,
-    configuration: CollectorConfigurationV1,
+    target: String,
+    purpose: CollectorPurposeV1,
 ) -> Result<CollectionResult<'tcx>, CollectError> {
     let ffi_declarations =
         crate::device_ffi::collect_declarations(tcx, cgus).map_err(|error| CollectError {
@@ -539,7 +518,9 @@ fn collect_device_functions_with_configuration<'tcx>(
         })
         .cloned()
         .collect::<Vec<_>>();
-    let mut collector = DeviceCollector::new(tcx, verbose, ffi_declarations, configuration.clone());
+    let gfx942_xnack_minus = target == "gfx942:xnack-";
+    let retain_qualification_layout_evidence = purpose.is_qualification_oracle();
+    let mut collector = DeviceCollector::new(tcx, verbose, ffi_declarations, target, purpose);
 
     for declaration in ffi_exports {
         if declaration.contract.direction == crate::device_ffi::DeviceFfiDirection::Export {
@@ -558,8 +539,8 @@ fn collect_device_functions_with_configuration<'tcx>(
     for root in kernel_roots(
         tcx,
         cgus,
-        configuration.target == "gfx942:xnack-",
-        configuration.traversal,
+        gfx942_xnack_minus,
+        retain_qualification_layout_evidence,
     )
     .map_err(CollectError::from)?
     {
@@ -723,7 +704,7 @@ fn kernel_roots<'tcx>(
     tcx: TyCtxt<'tcx>,
     cgus: &[CodegenUnit<'tcx>],
     gfx942_xnack_minus: bool,
-    traversal: CollectorTraversalPolicyV1,
+    retain_qualification_layout_evidence: bool,
 ) -> Result<Vec<KernelRoot<Instance<'tcx>>>, RegistrationError> {
     let mut functions_by_symbol = BTreeMap::new();
 
@@ -796,7 +777,7 @@ fn kernel_roots<'tcx>(
     )?;
     let frontend_records = decode_frontend_contract_registrations(tcx, &functions_by_symbol)?;
     bind_frontend_contract_registrations(tcx, &mut roots, frontend_records)?;
-    if traversal == CollectorTraversalPolicyV1::ProductionV1 {
+    if !retain_qualification_layout_evidence {
         for root in &mut roots {
             root.typed_layout_identities = None;
             root.general_typed_contract = None;
@@ -2339,7 +2320,7 @@ struct DeviceCollector<'tcx> {
     ffi_declarations: Vec<crate::device_ffi::CollectedDeviceFfi<'tcx>>,
     reachable_ffi_imports: BTreeSet<reserved_fe2o3_symbols::DeviceFfiContractIdV1>,
     expected_target: String,
-    traversal: CollectorTraversalPolicyV1,
+    purpose: CollectorPurposeV1,
     inspected_blocks: usize,
     verbose: bool,
 }
@@ -2449,7 +2430,8 @@ impl<'tcx> DeviceCollector<'tcx> {
         tcx: TyCtxt<'tcx>,
         verbose: bool,
         ffi_declarations: Vec<crate::device_ffi::CollectedDeviceFfi<'tcx>>,
-        configuration: CollectorConfigurationV1,
+        target: String,
+        purpose: CollectorPurposeV1,
     ) -> Self {
         Self {
             tcx,
@@ -2464,8 +2446,8 @@ impl<'tcx> DeviceCollector<'tcx> {
             authenticated_kernel_owners: AuthenticatedKernelOwners::default(),
             ffi_declarations,
             reachable_ffi_imports: BTreeSet::new(),
-            expected_target: configuration.target,
-            traversal: configuration.traversal,
+            expected_target: target,
+            purpose,
             inspected_blocks: 0,
             verbose,
         }
@@ -2685,7 +2667,7 @@ impl<'tcx> DeviceCollector<'tcx> {
 
             for (block_id, block) in mir.basic_blocks.iter_enumerated() {
                 if !self
-                    .traversal
+                    .purpose
                     .inspect_block(dead_branches.includes_block(block_id.as_usize()))
                 {
                     continue;
@@ -2784,13 +2766,13 @@ impl<'tcx> DeviceCollector<'tcx> {
                 caller,
             ),
             TerminatorKind::Assert { unwind, .. }
-                if (is_kernel_root || self.traversal.accepts_helper_asserts())
+                if (is_kernel_root || self.purpose.accepts_extended_edges())
                     && matches!(unwind, UnwindAction::Continue | UnwindAction::Unreachable) =>
             {
                 Ok(())
             }
             TerminatorKind::Drop { place, unwind, .. }
-                if self.traversal.accepts_copy_drop_edges()
+                if self.purpose.accepts_extended_edges()
                     && !self
                         .tcx
                         .instantiate_and_normalize_erasing_regions(
@@ -2987,7 +2969,7 @@ impl<'tcx> DeviceCollector<'tcx> {
     }
 
     fn authenticate_production_kernel_source_safety(&self) -> Result<(), CollectError> {
-        if self.traversal != CollectorTraversalPolicyV1::ProductionV1 {
+        if !self.purpose.is_production() {
             return Ok(());
         }
 
@@ -3169,7 +3151,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             TypingEnv::fully_monomorphized(),
             EarlyBinder::bind(*args),
         );
-        if self.traversal == CollectorTraversalPolicyV1::ProductionV1
+        if self.purpose.is_production()
             && self.tcx.fn_sig(*def_id).skip_binder().safety() == Safety::Unsafe
         {
             let caller_identity = self.instance_identity(*caller);
@@ -3318,7 +3300,7 @@ impl<'tcx> DeviceCollector<'tcx> {
         // Production stops only at the workload-neutral reviewed device
         // registry. The sole importer must apply that item's explicit
         // expand-or-reject rule; workload/profile classifiers remain oracles.
-        if self.traversal.uses_session_semantic_terminal_registry()
+        if self.purpose.is_production()
             && crate::production_semantic_terminal_v1::classify(self.tcx, resolved.def_id())
                 .is_some()
         {
@@ -3331,7 +3313,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             return Ok(());
         }
 
-        if self.traversal.uses_legacy_terminal_classifiers()
+        if self.purpose.is_qualification_oracle()
             && crate::collected_workgroup_sync_v1::is_exact_workgroup_sync_rustc_intrinsic(
                 self.tcx,
                 resolved.def_id(),
@@ -3339,7 +3321,7 @@ impl<'tcx> DeviceCollector<'tcx> {
         {
             return Ok(());
         }
-        if self.traversal.uses_legacy_terminal_classifiers()
+        if self.purpose.is_qualification_oracle()
             && crate::collected_flash_attention_v1::classify_exact_flash_attention_compiler_intrinsic(
                 self.tcx,
                 resolved.def_id(),
@@ -3348,7 +3330,7 @@ impl<'tcx> DeviceCollector<'tcx> {
         {
             return Ok(());
         }
-        if self.traversal.uses_legacy_terminal_classifiers()
+        if self.purpose.is_qualification_oracle()
             && crate::collected_moe_top2_v1::classify_exact_moe_top2_compiler_intrinsic(
                 self.tcx,
                 resolved.def_id(),
@@ -3373,7 +3355,7 @@ impl<'tcx> DeviceCollector<'tcx> {
         // repeated against the exact concrete implementation selected by
         // rustc. The classifier authenticates the implementation through the
         // diagnostic-item-marked device type and the exact lang-item trait.
-        if self.traversal.uses_legacy_terminal_classifiers()
+        if self.purpose.is_qualification_oracle()
             && crate::trusted_device_items::classify(self.tcx, resolved.def_id()).is_some()
         {
             if self.verbose {
@@ -3384,7 +3366,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             }
             return Ok(());
         }
-        if self.traversal.uses_legacy_terminal_classifiers()
+        if self.purpose.is_qualification_oracle()
             && crate::collected_workgroup_sync_v1::is_exact_workgroup_sync_compiler_intrinsic(
                 self.tcx,
                 resolved.def_id(),
@@ -3711,9 +3693,9 @@ fn sanitize_symbol_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AuthenticatedKernelFrontendContractV1, CallChainLink, CollectorTraversalPolicyV1,
-        KernelRoot, ObservedInlineAssemblyV1, RegistrationError, RegistrationRecord,
-        TypedArgumentListError, TypedArgumentListV1, TypedKernelProfile, general_typed_launch_v3,
+        AuthenticatedKernelFrontendContractV1, CallChainLink, CollectorPurposeV1, KernelRoot,
+        ObservedInlineAssemblyV1, RegistrationError, RegistrationRecord, TypedArgumentListError,
+        TypedArgumentListV1, TypedKernelProfile, general_typed_launch_v3,
         reconcile_frontend_contract, reconstruct_call_chain, root_scoped_call_chains,
         validate_registration_records as validate_records,
     };
@@ -4612,23 +4594,26 @@ mod tests {
     }
 
     #[test]
-    fn production_collection_policy_is_complete_and_selector_independent() {
-        let production = CollectorTraversalPolicyV1::ProductionV1;
+    fn collector_purposes_keep_output_and_terminal_authority_explicit() {
+        let production = CollectorPurposeV1::Production;
         assert!(production.inspect_block(false));
         assert!(production.inspect_block(true));
-        assert!(production.accepts_helper_asserts());
-        assert!(production.accepts_copy_drop_edges());
-        assert!(!production.uses_legacy_terminal_classifiers());
-        assert!(production.uses_session_semantic_terminal_registry());
+        assert!(production.accepts_extended_edges());
+        assert!(!production.is_qualification_oracle());
+        assert!(production.is_production());
 
-        let narrow_legacy = CollectorTraversalPolicyV1::Legacy {
+        let qualification = CollectorPurposeV1::QualificationOracle {
             extended_helper_edges: false,
         };
-        assert!(!narrow_legacy.inspect_block(false));
-        assert!(!narrow_legacy.accepts_helper_asserts());
-        assert!(!narrow_legacy.accepts_copy_drop_edges());
-        assert!(narrow_legacy.uses_legacy_terminal_classifiers());
-        assert!(!narrow_legacy.uses_session_semantic_terminal_registry());
+        assert!(!qualification.inspect_block(false));
+        assert!(!qualification.accepts_extended_edges());
+        assert!(qualification.is_qualification_oracle());
+        assert!(!qualification.is_production());
+
+        let extended_qualification = CollectorPurposeV1::QualificationOracle {
+            extended_helper_edges: true,
+        };
+        assert!(extended_qualification.accepts_extended_edges());
     }
 
     #[test]
@@ -4667,13 +4652,33 @@ mod tests {
     }
 
     #[test]
+    fn qualification_entry_requires_resolved_target_and_explicit_route_token() {
+        let source = include_str!("collector.rs");
+        let qualification = source
+            .split_once("pub(crate) fn collect_qualification_device_functions")
+            .unwrap()
+            .1
+            .split_once("pub(crate) fn collect_authenticated_kernel_closure_v1")
+            .unwrap()
+            .0;
+        for forbidden in ["std::env", "CODEGEN_PIPELINE_ENV", "FE2O3_TARGET"] {
+            assert!(
+                !qualification.contains(forbidden),
+                "qualification collection entry contains hidden input {forbidden:?}"
+            );
+        }
+        assert!(qualification.contains("target: &crate::AmdGpuTarget"));
+        assert!(qualification.contains("QualificationPipelineV1"));
+    }
+
+    #[test]
     fn production_entry_receives_target_without_reading_process_state() {
         let source = include_str!("collector.rs");
         let production = source
             .split_once("pub(crate) fn collect_authenticated_kernel_closure_v1")
             .unwrap()
             .1
-            .split_once("fn legacy_collector_configuration_v1")
+            .split_once("fn collect_device_functions_for_purpose")
             .unwrap()
             .0;
         for forbidden in ["std::env", "CODEGEN_PIPELINE_ENV", "FE2O3_TARGET"] {

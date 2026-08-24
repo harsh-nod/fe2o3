@@ -119,6 +119,13 @@ impl QualificationPipelineV1 {
     pub(crate) const fn pipeline(self) -> CodegenPipeline {
         self.pipeline
     }
+
+    pub(crate) const fn requires_extended_collector_edges(self) -> bool {
+        matches!(
+            self.pipeline,
+            CodegenPipeline::CollectedFlashAttentionV1 | CodegenPipeline::CollectedMoeTop2V1
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -299,6 +306,14 @@ mod tests {
                 panic!("qualification selector became production")
             };
             assert_eq!(qualification.pipeline(), pipeline);
+            assert_eq!(
+                qualification.requires_extended_collector_edges(),
+                matches!(
+                    pipeline,
+                    CodegenPipeline::CollectedFlashAttentionV1
+                        | CodegenPipeline::CollectedMoeTop2V1
+                )
+            );
             assert!(
                 explicit
                     .device_route(true)

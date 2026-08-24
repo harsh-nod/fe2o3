@@ -1762,7 +1762,7 @@ fn legalize_fill_body(body: &mut FunctionBody, parameters: &[Type]) -> Result<()
             }
 
             return Err(reject(format!(
-                "fill legalization does not support call `{callee}`; no legacy fallback was attempted"
+                "fill legalization does not support call `{callee}`; no alternate codegen route was attempted"
             )));
         }
         block.operations = legalized;
@@ -1914,7 +1914,7 @@ fn legalize_vecadd_body(body: &mut FunctionBody, parameters: &[Type]) -> Result<
             }
 
             return Err(reject(format!(
-                "vecadd legalization does not support call `{callee}`; no legacy fallback was attempted"
+                "vecadd legalization does not support call `{callee}`; no alternate codegen route was attempted"
             )));
         }
         block.operations = legalized;
@@ -2090,7 +2090,7 @@ fn require_exact_vecadd_shape(
                 }
                 other => {
                     return Err(reject(format!(
-                        "vecadd contains unsupported operation {other:?}; no legacy fallback was attempted"
+                        "vecadd contains unsupported operation {other:?}; no alternate codegen route was attempted"
                     )));
                 }
             }
@@ -2242,7 +2242,7 @@ fn require_exact_vecadd_shape(
             }
             terminator => {
                 return Err(reject(format!(
-                    "vecadd contains unsupported terminator {terminator:?}; no legacy fallback was attempted"
+                    "vecadd contains unsupported terminator {terminator:?}; no alternate codegen route was attempted"
                 )));
             }
         }
@@ -3130,7 +3130,7 @@ mod tests {
             .expect_err("vecadd must not silently broaden to other arithmetic");
         let text = error.to_string();
         assert!(text.contains("unsupported operation"));
-        assert!(text.contains("no legacy fallback"));
+        assert!(text.contains("no alternate codegen route"));
     }
 
     #[test]
@@ -3173,7 +3173,7 @@ mod tests {
             .expect_err("unknown helper must fail closed");
         let text = error.to_string();
         assert!(text.contains("does not support call"));
-        assert!(text.contains("no legacy fallback"));
+        assert!(text.contains("no alternate codegen route"));
     }
 
     #[test]
@@ -3194,7 +3194,7 @@ mod tests {
         let error = prepare_fill_collection(module, &[FILL_KERNEL.to_string()])
             .expect_err("get_mut_at is outside the production fill subset");
         assert!(error.to_string().contains("does not support call"));
-        assert!(error.to_string().contains("no legacy fallback"));
+        assert!(error.to_string().contains("no alternate codegen route"));
     }
 
     #[test]

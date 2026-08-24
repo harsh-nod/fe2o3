@@ -336,11 +336,13 @@ fn collect_qualification_oracle_input<'tcx>(
     tcx: TyCtxt<'tcx>,
     cgus: &[rustc_middle::mir::mono::CodegenUnit<'tcx>],
     verbose: bool,
+    target: &AmdGpuTarget,
     pipeline: QualificationPipelineV1,
 ) -> Result<collector::CollectionResult<'tcx>, String> {
+    let collection =
+        collector::collect_qualification_device_functions(tcx, cgus, verbose, target, pipeline)
+            .map_err(|error| error.to_string())?;
     let pipeline = pipeline.pipeline();
-    let collection = collector::collect_device_functions(tcx, cgus, verbose)
-        .map_err(|error| error.to_string())?;
     let frontend_record = frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
         .map_err(|error| format!("frontend record extraction failed: {error}"))?;
     if verbose {
@@ -574,6 +576,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
+                            &self.config.target,
                             qualification_pipeline,
                         )?;
                         let imported = collected_general_gemm_v1::try_import_general_gemm_v1(
@@ -609,7 +612,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     })();
                     match qualification {
                         Ok(qualification) => tcx.dcx().fatal(format!(
-                            "[rustc-codegen-fe2o3] {} retained the exact authenticated source owner, ordered reference/vectorized symbolic requests, verifier closures, managed handoff bindings, and post-link observations in private pair qualification {} under managed configuration {} ({} transaction bindings); durable artifact publication remains disabled and no legacy fallback was entered",
+                            "[rustc-codegen-fe2o3] {} retained the exact authenticated source owner, ordered reference/vectorized symbolic requests, verifier closures, managed handoff bindings, and post-link observations in private pair qualification {} under managed configuration {} ({} transaction bindings); durable artifact publication remains disabled and no alternate device route was entered",
                             general_gemm_pipeline_v1::GENERAL_GEMM_PIPELINE_V1,
                             encode_hex(qualification.pair().identity()),
                             encode_hex(&qualification.configuration_identity().as_bytes()),
@@ -628,6 +631,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
+                            &self.config.target,
                             qualification_pipeline,
                         )?;
                         let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
@@ -641,7 +645,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     })();
                     match lowering {
                         Ok(admission) => tcx.dcx().fatal(format!(
-                            "[rustc-codegen-fe2o3] {} authenticated collected KernelEntry `{}` export `{}` with exact reviewed root MIR {} and exact reachable InternalHelper `{}` MIR {}; path-independent portable MIR semantics {}; compiler semantics {}; sealed collected authority {}; {}; no executable authority, Kernel IR, LLVM, LLD, HSACO, or legacy fallback was entered",
+                            "[rustc-codegen-fe2o3] {} authenticated collected KernelEntry `{}` export `{}` with exact reviewed root MIR {} and exact reachable InternalHelper `{}` MIR {}; path-independent portable MIR semantics {}; compiler semantics {}; sealed collected authority {}; {}; no executable authority, Kernel IR, LLVM, LLD, HSACO, or alternate device route was entered",
                             collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2,
                             admission.root_instance_identity(),
                             admission.kernel_export(),
@@ -670,6 +674,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
+                            &self.config.target,
                             qualification_pipeline,
                         )?;
                         let typed_roots =
@@ -761,6 +766,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
+                            &self.config.target,
                             qualification_pipeline,
                         )?;
                         let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
@@ -857,6 +863,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
+                            &self.config.target,
                             qualification_pipeline,
                         )?;
                         let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
@@ -898,6 +905,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
+                            &self.config.target,
                             qualification_pipeline,
                         )?;
                         let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
@@ -953,6 +961,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
+                            &self.config.target,
                             qualification_pipeline,
                         )?;
                         let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
@@ -1070,6 +1079,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
+                            &self.config.target,
                             qualification_pipeline,
                         )?;
                         let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
@@ -1229,6 +1239,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
+                            &self.config.target,
                             qualification_pipeline,
                         )?;
                         let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
@@ -1319,6 +1330,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
+                            &self.config.target,
                             qualification_pipeline,
                         )?;
                         let descriptor_roots =
@@ -1428,6 +1440,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 tcx,
                                 mono_partitions.codegen_units,
                                 self.config.verbose,
+                                &self.config.target,
                                 qualification_pipeline,
                             )
                             .map_err(|reason| amdgpu_llvm::EmitError::Preflight { reason })?;
