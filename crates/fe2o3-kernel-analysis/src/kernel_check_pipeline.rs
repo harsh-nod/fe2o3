@@ -77,7 +77,8 @@ pub enum KernelCheckStatusV1 {
 }
 
 impl KernelCheckStatusV1 {
-    const fn join(self, other: Self) -> Self {
+    /// Combines pass evidence conservatively, with rejection taking precedence.
+    pub const fn join(self, other: Self) -> Self {
         match (self, other) {
             (Self::Rejected, _) | (_, Self::Rejected) => Self::Rejected,
             (Self::Incomplete, _) | (_, Self::Incomplete) => Self::Incomplete,

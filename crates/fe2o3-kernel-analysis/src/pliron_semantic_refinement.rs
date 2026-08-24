@@ -14,9 +14,9 @@ use pliron::{
     operation::Operation,
 };
 
-use crate::KernelCheckPassKindV1;
 use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
+use crate::{KernelCheckPassKindV1, KernelCheckStatusV1};
 
 pub const MAX_PLIRON_SEMANTIC_NODES_V1: usize = 65_536;
 pub const MAX_PLIRON_SEMANTIC_FINDINGS_V1: usize = 4_096;
@@ -43,6 +43,17 @@ pub enum PlironSemanticRefinementFindingV1 {
         expected: String,
     },
     ResourceLimitExceeded,
+}
+
+impl PlironSemanticRefinementFindingV1 {
+    pub const fn status(&self) -> KernelCheckStatusV1 {
+        match self {
+            Self::ExpressionMismatch { .. } => KernelCheckStatusV1::Rejected,
+            Self::BoundsPrerequisiteRejected
+            | Self::UnresolvedExpression { .. }
+            | Self::ResourceLimitExceeded => KernelCheckStatusV1::Incomplete,
+        }
+    }
 }
 
 impl fmt::Display for PlironSemanticRefinementFindingV1 {
@@ -85,12 +96,20 @@ impl PlironSemanticRefinementReportV1 {
         KernelCheckPassKindV1::SemanticRefinement
     }
 
+    pub fn status(&self) -> KernelCheckStatusV1 {
+        self.findings
+            .iter()
+            .fold(KernelCheckStatusV1::Clean, |status, finding| {
+                status.join(finding.status())
+            })
+    }
+
     pub fn findings(&self) -> &[PlironSemanticRefinementFindingV1] {
         &self.findings
     }
 
     pub fn is_clean(&self) -> bool {
-        self.findings.is_empty()
+        self.status() == KernelCheckStatusV1::Clean
     }
 
     pub const fn grants_compiler_refinement_authority(&self) -> bool {
@@ -320,5 +339,56 @@ fn push(
 fn one(finding: PlironSemanticRefinementFindingV1) -> PlironSemanticRefinementReportV1 {
     PlironSemanticRefinementReportV1 {
         findings: vec![finding],
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    fn mismatch() -> PlironSemanticRefinementFindingV1 {
+        PlironSemanticRefinementFindingV1::ExpressionMismatch {
+            block: 0,
+            operation: 0,
+            actual: "s0".to_owned(),
+            expected: "s1".to_owned(),
+        }
+    }
+
+    #[test]
+    fn every_semantic_finding_has_the_shared_status() {
+        let incomplete = [
+            PlironSemanticRefinementFindingV1::BoundsPrerequisiteRejected,
+            PlironSemanticRefinementFindingV1::UnresolvedExpression {
+                block: 0,
+                operation: 0,
+                value: "v0".to_owned(),
+            },
+            PlironSemanticRefinementFindingV1::ResourceLimitExceeded,
+        ];
+        for finding in incomplete {
+            assert_eq!(finding.status(), KernelCheckStatusV1::Incomplete);
+        }
+        assert_eq!(mismatch().status(), KernelCheckStatusV1::Rejected);
+    }
+
+    #[test]
+    fn rejected_semantic_finding_dominates_an_incomplete_finding() {
+        let report = PlironSemanticRefinementReportV1 {
+            findings: vec![
+                PlironSemanticRefinementFindingV1::UnresolvedExpression {
+                    block: 0,
+                    operation: 0,
+                    value: "v0".to_owned(),
+                },
+                mismatch(),
+            ],
+        };
+        assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
+        assert!(!report.is_clean());
+        assert_eq!(
+            PlironSemanticRefinementReportV1 { findings: vec![] }.status(),
+            KernelCheckStatusV1::Clean
+        );
     }
 }

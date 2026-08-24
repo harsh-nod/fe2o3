@@ -29,7 +29,9 @@ use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::pliron_invocation_trace::PlironTraceFailureV1;
 use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
 use crate::pliron_sparse_index::SparseAffineIndexV1;
-use crate::{KernelCheckPassKindV1, SparseIndexAnalysisV1, SparseIndexFailureV1};
+use crate::{
+    KernelCheckPassKindV1, KernelCheckStatusV1, SparseIndexAnalysisV1, SparseIndexFailureV1,
+};
 
 pub const MAX_PLIRON_RACE_INVOCATIONS_V1: u64 = 65_536;
 pub const MAX_PLIRON_RACE_EFFECT_INSTANCES_V1: usize = 1_048_576;
@@ -222,11 +224,24 @@ impl fmt::Display for RankedRaceFindingV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RankedRaceStatusV1 {
-    Clean,
-    Incomplete,
-    Rejected,
+impl RankedRaceFindingV1 {
+    pub const fn status(&self) -> KernelCheckStatusV1 {
+        match self {
+            Self::ConflictingEffects { .. } | Self::InsufficientAtomicScope { .. } => {
+                KernelCheckStatusV1::Rejected
+            }
+            Self::BoundsPrerequisiteRejected
+            | Self::SparseIndexAnalysisFailed { .. }
+            | Self::DynamicLaunchExtent { .. }
+            | Self::LaunchDomainTooLarge { .. }
+            | Self::UnresolvedIndex { .. }
+            | Self::EffectInstanceLimitExceeded { .. }
+            | Self::FindingLimitExceeded { .. }
+            | Self::ExecutionLayoutUnavailable { .. }
+            | Self::AllocationContractUnavailable { .. }
+            | Self::HappensBeforeIncomplete { .. } => KernelCheckStatusV1::Incomplete,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -239,14 +254,12 @@ impl RankedRaceReportV1 {
         KernelCheckPassKindV1::RaceFreedom
     }
 
-    pub fn status(&self) -> RankedRaceStatusV1 {
-        if self.findings.is_empty() {
-            RankedRaceStatusV1::Clean
-        } else if self.findings.iter().all(RankedRaceFindingV1::is_incomplete) {
-            RankedRaceStatusV1::Incomplete
-        } else {
-            RankedRaceStatusV1::Rejected
-        }
+    pub fn status(&self) -> KernelCheckStatusV1 {
+        self.findings
+            .iter()
+            .fold(KernelCheckStatusV1::Clean, |status, finding| {
+                status.join(finding.status())
+            })
     }
 
     pub fn findings(&self) -> &[RankedRaceFindingV1] {
@@ -254,7 +267,7 @@ impl RankedRaceReportV1 {
     }
 
     pub fn is_clean(&self) -> bool {
-        self.findings.is_empty()
+        self.status() == KernelCheckStatusV1::Clean
     }
 
     pub const fn grants_compiler_refinement_authority(&self) -> bool {
@@ -311,23 +324,6 @@ enum EffectIdentityV1 {
     View(Value),
     Allocation(u64),
     AllocationSite(RankedRaceLocationV1),
-}
-
-impl RankedRaceFindingV1 {
-    const fn is_incomplete(&self) -> bool {
-        matches!(
-            self,
-            Self::SparseIndexAnalysisFailed { .. }
-                | Self::DynamicLaunchExtent { .. }
-                | Self::LaunchDomainTooLarge { .. }
-                | Self::UnresolvedIndex { .. }
-                | Self::EffectInstanceLimitExceeded { .. }
-                | Self::FindingLimitExceeded { .. }
-                | Self::ExecutionLayoutUnavailable { .. }
-                | Self::AllocationContractUnavailable { .. }
-                | Self::HappensBeforeIncomplete { .. }
-        )
-    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -1295,5 +1291,106 @@ fn one(finding: RankedRaceFindingV1) -> RankedRaceReportV1 {
 fn clean() -> RankedRaceReportV1 {
     RankedRaceReportV1 {
         findings: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    fn witness(
+        access: AccessKindAttr,
+        atomic_scope: Option<AtomicScopeAttr>,
+    ) -> RankedRaceWitnessV1 {
+        RankedRaceWitnessV1 {
+            location: RankedRaceLocationV1 {
+                block: 0,
+                operation: 0,
+            },
+            access,
+            invocation: vec![0],
+            grid: 0,
+            workgroup: Some(0),
+            subgroup: Some(0),
+            lane: Some(0),
+            atomic_scope,
+        }
+    }
+
+    fn conflict() -> RankedRaceFindingV1 {
+        RankedRaceFindingV1::ConflictingEffects {
+            view: "v0".to_owned(),
+            indices: vec![0],
+            first: witness(AccessKindAttr::Write, None),
+            second: witness(AccessKindAttr::Read, None),
+        }
+    }
+
+    #[test]
+    fn every_race_finding_has_the_shared_status() {
+        let incomplete = [
+            RankedRaceFindingV1::BoundsPrerequisiteRejected,
+            RankedRaceFindingV1::SparseIndexAnalysisFailed {
+                detail: "unresolved".to_owned(),
+            },
+            RankedRaceFindingV1::DynamicLaunchExtent { dimension: 0 },
+            RankedRaceFindingV1::LaunchDomainTooLarge {
+                invocations: 2,
+                limit: 1,
+            },
+            RankedRaceFindingV1::UnresolvedIndex {
+                block: 0,
+                operation: 0,
+                dimension: 0,
+                value: "i".to_owned(),
+            },
+            RankedRaceFindingV1::EffectInstanceLimitExceeded {
+                actual: 2,
+                limit: 1,
+            },
+            RankedRaceFindingV1::FindingLimitExceeded {
+                actual: 2,
+                limit: 1,
+            },
+            RankedRaceFindingV1::ExecutionLayoutUnavailable {
+                detail: "missing".to_owned(),
+            },
+            RankedRaceFindingV1::AllocationContractUnavailable {
+                detail: "missing".to_owned(),
+            },
+            RankedRaceFindingV1::HappensBeforeIncomplete {
+                view: "v0".to_owned(),
+                detail: "missing".to_owned(),
+            },
+        ];
+        for finding in incomplete {
+            assert_eq!(finding.status(), KernelCheckStatusV1::Incomplete);
+        }
+
+        let rejected = [
+            conflict(),
+            RankedRaceFindingV1::InsufficientAtomicScope {
+                view: "v0".to_owned(),
+                indices: vec![0],
+                first: witness(
+                    AccessKindAttr::AtomicWrite,
+                    Some(AtomicScopeAttr::Workgroup),
+                ),
+                second: witness(AccessKindAttr::AtomicRead, Some(AtomicScopeAttr::Workgroup)),
+            },
+        ];
+        for finding in rejected {
+            assert_eq!(finding.status(), KernelCheckStatusV1::Rejected);
+        }
+    }
+
+    #[test]
+    fn rejected_race_finding_dominates_an_incomplete_finding() {
+        let report = RankedRaceReportV1 {
+            findings: vec![RankedRaceFindingV1::BoundsPrerequisiteRejected, conflict()],
+        };
+        assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
+        assert!(!report.is_clean());
+        assert_eq!(clean().status(), KernelCheckStatusV1::Clean);
     }
 }

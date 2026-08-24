@@ -3,7 +3,9 @@ use dialect_kernel::{
     AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, MemorySpaceAttr, SemanticBinaryKindAttr,
     TensorConvergenceAttr,
 };
-use fe2o3_kernel_analysis::{KernelCheckPassKindV1, PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V1};
+use fe2o3_kernel_analysis::{
+    KernelCheckPassKindV1, KernelCheckStatusV1, PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V1,
+};
 use fe2o3_kernel_ir::{TensorInstructionProfileV1, TensorLayoutContractV1, TensorSymbolicMapV1};
 use fe2o3_pliron::{
     DialectRegistration, HARD_MAX_SESSION_OPERATION_TREE_ITEMS, ProductionConstructionV1,
@@ -222,6 +224,10 @@ fn static_non_gemm_kernel_reaches_safety_verified_lowering_input() {
     assert_eq!(
         input.production_pipeline_report().pass_order()[0],
         KernelCheckPassKindV1::TensorLayout
+    );
+    assert_eq!(
+        input.production_pipeline_report().status(),
+        KernelCheckStatusV1::Clean
     );
     assert!(
         !input
@@ -992,10 +998,12 @@ fn static_oob_is_a_terminal_compile_time_diagnostic_before_lowering() {
     )
     .unwrap_err();
 
-    assert!(matches!(
-        error,
-        ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedBounds(_))
-    ));
+    let ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedBounds(bounds)) =
+        &error
+    else {
+        panic!("static out-of-bounds access must stop in ranked bounds");
+    };
+    assert_eq!(bounds.report().status(), KernelCheckStatusV1::Rejected);
     assert_eq!(
         error.to_string(),
         "error[FE2O3-BOUNDS-001]: statically out-of-bounds Read at block 0 op 3; access: v0 dimension 0; required: 64 < 64",
@@ -1009,6 +1017,12 @@ fn dynamic_access_requires_a_dominating_exact_bound() {
         ProductionSessionLimitsV1::default(),
     )
     .unwrap_err();
+    let ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedBounds(bounds)) =
+        &error
+    else {
+        panic!("unproved dynamic access must stop in ranked bounds");
+    };
+    assert_eq!(bounds.report().status(), KernelCheckStatusV1::Incomplete);
     assert!(error.to_string().contains("error[FE2O3-BOUNDS-002]"));
     assert!(error.to_string().contains("dimension 0"));
     assert!(error.to_string().contains("unproven bound:"));

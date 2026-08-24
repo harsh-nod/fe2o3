@@ -6,7 +6,7 @@ use dialect_kernel::{
     RankedViewType, ReturnOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
-    KernelCheckPassKindV1, RankedRaceFindingV1, RankedRaceStatusV1,
+    KernelCheckPassKindV1, KernelCheckStatusV1, RankedRaceFindingV1,
     require_pliron_ranked_race_freedom_before_lowering_v1, run_pliron_ranked_race_check_v1,
 };
 use pliron::{
@@ -125,7 +125,7 @@ fn identity_write_is_injective_for_every_static_invocation() {
 
     let report = run_pliron_ranked_race_check_v1(context, &function);
     assert_eq!(report.pass(), KernelCheckPassKindV1::RaceFreedom);
-    assert_eq!(report.status(), RankedRaceStatusV1::Clean);
+    assert_eq!(report.status(), KernelCheckStatusV1::Clean);
     assert!(report.findings().is_empty());
     assert!(!report.grants_compiler_refinement_authority());
     assert!(!report.grants_artifact_or_launch_authority());
@@ -154,7 +154,7 @@ fn constant_output_coordinate_reports_two_exact_invocations() {
     append(context, entry, &ret);
 
     let report = run_pliron_ranked_race_check_v1(context, &function);
-    assert_eq!(report.status(), RankedRaceStatusV1::Rejected);
+    assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
     let [
         RankedRaceFindingV1::ConflictingEffects {
             indices,
@@ -217,7 +217,7 @@ fn read_read_sharing_is_clean_but_read_write_and_write_write_are_rejected() {
         append(context, entry, &ret);
         assert_eq!(
             run_pliron_ranked_race_check_v1(context, &function).status()
-                == RankedRaceStatusV1::Rejected,
+                == KernelCheckStatusV1::Rejected,
             rejected,
             "unexpected result for {first_kind:?}/{second_kind:?}",
         );
@@ -256,7 +256,7 @@ fn atomics_order_with_atomics_but_not_with_plain_reads_or_writes() {
         append(context, entry, &ret);
         assert_eq!(
             run_pliron_ranked_race_check_v1(context, &function).status()
-                == RankedRaceStatusV1::Rejected,
+                == KernelCheckStatusV1::Rejected,
             rejected,
         );
     }
@@ -295,7 +295,7 @@ fn atomic_reads_share_with_plain_reads_and_all_atomic_effects() {
         append(context, entry, &ret);
         assert_eq!(
             run_pliron_ranked_race_check_v1(context, &function).status(),
-            RankedRaceStatusV1::Clean,
+            KernelCheckStatusV1::Clean,
         );
     }
 }
@@ -303,9 +303,9 @@ fn atomic_reads_share_with_plain_reads_and_all_atomic_effects() {
 #[test]
 fn cross_workgroup_atomic_overlap_requires_agent_or_wider_scope() {
     for (scope, expected) in [
-        (AtomicScopeAttr::Workgroup, RankedRaceStatusV1::Rejected),
-        (AtomicScopeAttr::Agent, RankedRaceStatusV1::Clean),
-        (AtomicScopeAttr::Device, RankedRaceStatusV1::Clean),
+        (AtomicScopeAttr::Workgroup, KernelCheckStatusV1::Rejected),
+        (AtomicScopeAttr::Agent, KernelCheckStatusV1::Clean),
+        (AtomicScopeAttr::Device, KernelCheckStatusV1::Clean),
     ] {
         let context = &mut setup();
         let function = function(context, "cross_workgroup_atomic");
@@ -366,7 +366,7 @@ fn narrow_atomic_overlap_without_layout_is_incomplete() {
     append(context, entry, &atomic);
     append(context, entry, &ret);
     let report = run_pliron_ranked_race_check_v1(context, &function);
-    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     assert!(matches!(
         report.findings(),
         [RankedRaceFindingV1::ExecutionLayoutUnavailable { .. }]
@@ -413,7 +413,7 @@ fn fence_only_publication_is_incomplete_without_synchronizes_with() {
     append(context, entry, &ret);
     assert_eq!(
         run_pliron_ranked_race_check_v1(context, &function).status(),
-        RankedRaceStatusV1::Incomplete
+        KernelCheckStatusV1::Incomplete
     );
     assert!(
         run_pliron_ranked_race_check_v1(context, &function)
@@ -481,7 +481,7 @@ fn release_store_acquire_load_signaling_needs_a_read_from_proof() {
     append(context, entry, &data_read);
     append(context, entry, &ret);
     let report = run_pliron_ranked_race_check_v1(context, &function);
-    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     assert!(report.findings().iter().any(|finding| matches!(
         finding,
         RankedRaceFindingV1::HappensBeforeIncomplete { detail, .. }
@@ -572,7 +572,7 @@ fn guarded_overflowing_affine_multiply_is_not_proved_injective() {
     append(context, exit, &ret);
 
     let report = run_pliron_ranked_race_check_v1(context, &function);
-    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     assert!(
         report
             .findings()
@@ -624,7 +624,7 @@ fn guarded_overflowing_affine_add_is_not_proved_injective() {
     append(context, exit, &ret);
 
     let report = run_pliron_ranked_race_check_v1(context, &function);
-    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     assert!(
         report
             .findings()
@@ -694,7 +694,7 @@ fn checked_tiled_overflowing_invocation_is_not_proved_injective() {
     append(context, exit, &ret);
 
     let report = run_pliron_ranked_race_check_v1(context, &function);
-    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     assert!(
         report
             .findings()
@@ -792,7 +792,7 @@ fn dynamic_launch_identity_remains_unresolved_after_a_bounds_guard() {
     append(context, exit, &ret);
 
     let report = run_pliron_ranked_race_check_v1(context, &function);
-    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     assert!(report.findings().iter().any(|finding| matches!(
         finding,
         RankedRaceFindingV1::DynamicLaunchExtent { dimension: 0 }
@@ -875,9 +875,9 @@ fn multidimensional_identity_is_clean_and_dropped_dimension_collides() {
         assert_eq!(
             run_pliron_ranked_race_check_v1(context, &function).status(),
             if drop_y {
-                RankedRaceStatusV1::Rejected
+                KernelCheckStatusV1::Rejected
             } else {
-                RankedRaceStatusV1::Clean
+                KernelCheckStatusV1::Clean
             },
         );
     }
@@ -943,7 +943,7 @@ fn dynamic_global_launch_needs_symbolic_disjointness_and_workgroup_effects_defer
         .get_operation()
         .insert_before(context, ret.get_operation());
     let report = run_pliron_ranked_race_check_v1(context, &global_function);
-    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     assert!(
         report.findings()[0]
             .to_string()
@@ -1024,7 +1024,7 @@ fn declared_layout_checks_constant_effect_without_invocation_index() {
     append(context, entry, &ret);
 
     let report = run_pliron_ranked_race_check_v1(context, &function);
-    assert_eq!(report.status(), RankedRaceStatusV1::Rejected);
+    assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
     assert!(matches!(
         report.findings(),
         [RankedRaceFindingV1::ConflictingEffects { first, second, .. }]
@@ -1067,7 +1067,7 @@ fn overlapping_atomics_require_both_scopes_to_cover_the_pair() {
     append(context, entry, &ret);
 
     let report = run_pliron_ranked_race_check_v1(context, &function);
-    assert_eq!(report.status(), RankedRaceStatusV1::Rejected);
+    assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
     assert!(report.findings().iter().any(|finding| matches!(
         finding,
         RankedRaceFindingV1::InsufficientAtomicScope { first, second, .. }
@@ -1135,7 +1135,7 @@ fn cross_view_alias_report(
 #[test]
 fn same_noalias_class_without_relative_offsets_fails_closed() {
     let report = cross_view_alias_report(521, 53, 522, 53);
-    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     assert!(report.findings().iter().any(|finding| matches!(
         finding,
         RankedRaceFindingV1::AllocationContractUnavailable { detail }
@@ -1146,7 +1146,7 @@ fn same_noalias_class_without_relative_offsets_fails_closed() {
 #[test]
 fn unknown_alias_views_without_relative_offsets_fail_closed() {
     let report = cross_view_alias_report(0, 0, 0, 0);
-    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     assert!(report.findings().iter().any(|finding| matches!(
         finding,
         RankedRaceFindingV1::AllocationContractUnavailable { detail }
@@ -1158,7 +1158,7 @@ fn unknown_alias_views_without_relative_offsets_fail_closed() {
 fn distinct_authenticated_noalias_classes_are_disjoint() {
     assert_eq!(
         cross_view_alias_report(521, 54, 522, 55).status(),
-        RankedRaceStatusV1::Clean
+        KernelCheckStatusV1::Clean
     );
 }
 
@@ -1215,7 +1215,7 @@ fn allocation_read_and_write_report(
 fn whole_allocation_read_is_safe_with_a_distinct_exclusive_output() {
     assert_eq!(
         allocation_read_and_write_report(64, 581, 58, 582, 59).status(),
-        RankedRaceStatusV1::Clean
+        KernelCheckStatusV1::Clean
     );
 }
 
@@ -1223,14 +1223,14 @@ fn whole_allocation_read_is_safe_with_a_distinct_exclusive_output() {
 fn whole_allocation_read_and_same_class_write_are_safe_for_one_invocation() {
     assert_eq!(
         allocation_read_and_write_report(1, 581, 58, 581, 58).status(),
-        RankedRaceStatusV1::Clean
+        KernelCheckStatusV1::Clean
     );
 }
 
 #[test]
 fn whole_allocation_read_and_same_class_write_fail_closed_when_concurrent() {
     let report = allocation_read_and_write_report(64, 581, 58, 581, 58);
-    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     assert!(matches!(
         report.findings(),
         [RankedRaceFindingV1::AllocationContractUnavailable { detail }]
@@ -1244,7 +1244,7 @@ fn whole_allocation_read_and_same_class_write_fail_closed_when_concurrent() {
 #[test]
 fn whole_allocation_unknown_alias_read_fails_closed_against_an_output() {
     let report = allocation_read_and_write_report(64, 0, 0, 582, 59);
-    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     assert!(matches!(
         report.findings(),
         [RankedRaceFindingV1::AllocationContractUnavailable { detail }]
@@ -1271,7 +1271,7 @@ fn malformed_non_global_allocation_effect_cannot_fail_open() {
     append(context, entry, &ret);
 
     let report = run_pliron_ranked_race_check_v1(context, &function);
-    assert_eq!(report.status(), RankedRaceStatusV1::Rejected);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     assert!(matches!(
         report.findings(),
         [RankedRaceFindingV1::BoundsPrerequisiteRejected]
@@ -1309,7 +1309,7 @@ fn incompatible_potentially_aliasing_view_signatures_fail_closed() {
     append(context, entry, &ret);
 
     let report = run_pliron_ranked_race_check_v1(context, &function);
-    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     assert!(matches!(
         report.findings(),
         [RankedRaceFindingV1::AllocationContractUnavailable { .. }]
@@ -1396,7 +1396,7 @@ fn multidimensional_workgroup_identity_is_componentwise() {
     append(context, entry, &ret);
 
     let report = run_pliron_ranked_race_check_v1(context, &function);
-    assert_eq!(report.status(), RankedRaceStatusV1::Rejected);
+    assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
     assert!(matches!(
         report.findings(),
         [RankedRaceFindingV1::InsufficientAtomicScope { first, second, .. }]
@@ -1431,7 +1431,7 @@ fn invocation_axis_outside_retained_layout_fails_closed() {
     append(context, entry, &ret);
 
     let report = run_pliron_ranked_race_check_v1(context, &function);
-    assert_eq!(report.status(), RankedRaceStatusV1::Incomplete);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     assert!(matches!(
         report.findings(),
         [RankedRaceFindingV1::ExecutionLayoutUnavailable { detail }]

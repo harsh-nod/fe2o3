@@ -4,8 +4,8 @@ use dialect_kernel::{
     RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp, TrapOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
-    KernelCheckPassKindV1, MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_EDGES,
-    MAX_RANKED_BOUNDS_FINDINGS, RankedBoundsFindingV1, RankedBoundsStatusV1,
+    KernelCheckPassKindV1, KernelCheckStatusV1, MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_EDGES,
+    MAX_RANKED_BOUNDS_FINDINGS, RankedBoundsFindingV1,
     require_pliron_ranked_bounds_before_lowering_v1, run_pliron_ranked_bounds_check_v1,
 };
 use pliron::{
@@ -151,7 +151,7 @@ fn effecting_general_gemm_operation_is_rejected_by_the_closed_allowlist() {
     append(context, entry, &ret);
 
     let report = run_pliron_ranked_bounds_check_v1(context, &function);
-    assert_eq!(report.status(), RankedBoundsStatusV1::Rejected);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     assert_eq!(
         report.findings(),
         &[RankedBoundsFindingV1::UnsupportedOperation {
@@ -267,7 +267,7 @@ fn static_ranked_accesses_are_proved_without_explicit_guards() {
 
     let report = run_pliron_ranked_bounds_check_v1(context, &function);
     assert_eq!(report.pass(), KernelCheckPassKindV1::MemoryBounds);
-    assert_eq!(report.status(), RankedBoundsStatusV1::Clean);
+    assert_eq!(report.status(), KernelCheckStatusV1::Clean);
     assert!(report.findings().is_empty());
     assert!(!report.grants_compiler_refinement_authority());
     assert!(!report.grants_artifact_or_launch_authority());
@@ -297,7 +297,7 @@ fn statically_out_of_bounds_dimension_has_exact_diagnostic() {
     append(context, entry, &ret);
 
     let report = run_pliron_ranked_bounds_check_v1(context, &function);
-    assert_eq!(report.status(), RankedBoundsStatusV1::Rejected);
+    assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
     assert_eq!(report.findings().len(), 1);
     assert!(matches!(
         &report.findings()[0],
@@ -339,7 +339,7 @@ fn unguarded_dynamic_access_reports_each_unproved_dimension() {
     append(context, entry, &ret);
 
     let report = run_pliron_ranked_bounds_check_v1(context, &function);
-    assert_eq!(report.status(), RankedBoundsStatusV1::Rejected);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     assert_eq!(report.findings().len(), 2);
     assert!(matches!(
         report.findings()[0],
@@ -406,7 +406,7 @@ fn equality_control_does_not_establish_a_dynamic_range_bound() {
     append(context, exit, &ret);
 
     let report = run_pliron_ranked_bounds_check_v1(context, &function);
-    assert_eq!(report.status(), RankedBoundsStatusV1::Rejected);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     assert!(matches!(
         report.findings(),
         [RankedBoundsFindingV1::UnprovedBound { dimension: 0, .. }]
@@ -449,7 +449,7 @@ fn nested_dynamic_guards_prove_a_two_dimensional_access() {
     append(context, exit, &ret);
 
     let report = run_pliron_ranked_bounds_check_v1(context, &function);
-    assert_eq!(report.status(), RankedBoundsStatusV1::Clean);
+    assert_eq!(report.status(), KernelCheckStatusV1::Clean);
 }
 
 #[test]
@@ -730,7 +730,7 @@ fn dominating_guard_remains_valid_across_a_loop_backedge() {
     append(context, exit, &ret);
 
     let report = run_pliron_ranked_bounds_check_v1(context, &function);
-    assert_eq!(report.status(), RankedBoundsStatusV1::Clean);
+    assert_eq!(report.status(), KernelCheckStatusV1::Clean);
 }
 
 #[test]

@@ -489,15 +489,7 @@ fn report(findings: Vec<PlironAtomicLegalityFindingV1>) -> PlironAtomicLegalityR
     let status = findings
         .iter()
         .fold(KernelCheckStatusV1::Clean, |status, finding| {
-            match (status, finding.status()) {
-                (KernelCheckStatusV1::Rejected, _) | (_, KernelCheckStatusV1::Rejected) => {
-                    KernelCheckStatusV1::Rejected
-                }
-                (KernelCheckStatusV1::Incomplete, _) | (_, KernelCheckStatusV1::Incomplete) => {
-                    KernelCheckStatusV1::Incomplete
-                }
-                _ => KernelCheckStatusV1::Clean,
-            }
+            status.join(finding.status())
         });
     PlironAtomicLegalityReportV1 { status, findings }
 }
@@ -531,5 +523,84 @@ const fn scope_is_valid(memory_space: MemorySpaceAttr, scope: AtomicScopeAttr) -
             )
         }
         MemorySpaceAttr::Global => true,
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    fn invalid_ordering() -> PlironAtomicLegalityFindingV1 {
+        PlironAtomicLegalityFindingV1::InvalidOrdering {
+            block: 0,
+            operation: 0,
+            kind: AccessKindAttr::AtomicRead,
+            ordering: AtomicOrderingAttr::Release,
+        }
+    }
+
+    #[test]
+    fn every_atomic_finding_has_the_shared_status() {
+        let rejected = [
+            PlironAtomicLegalityFindingV1::MissingAccessKind {
+                block: 0,
+                operation: 0,
+            },
+            PlironAtomicLegalityFindingV1::MissingContract {
+                block: 0,
+                operation: 0,
+                kind: AccessKindAttr::AtomicRead,
+                ordering_missing: true,
+                scope_missing: true,
+            },
+            PlironAtomicLegalityFindingV1::UnexpectedContract {
+                block: 0,
+                operation: 0,
+                kind: AccessKindAttr::Read,
+            },
+            invalid_ordering(),
+            PlironAtomicLegalityFindingV1::InvalidScope {
+                block: 0,
+                operation: 0,
+                memory_space: MemorySpaceAttr::Private,
+                scope: AtomicScopeAttr::SingleThread,
+            },
+        ];
+        for finding in rejected {
+            assert_eq!(finding.status(), KernelCheckStatusV1::Rejected);
+        }
+
+        let incomplete = [
+            PlironAtomicLegalityFindingV1::ViewProvenanceUnavailable {
+                block: 0,
+                operation: 0,
+            },
+            PlironAtomicLegalityFindingV1::TargetCapabilityUnavailable {
+                block: 0,
+                operation: 0,
+                element_width: 32,
+                memory_space: MemorySpaceAttr::Global,
+                scope: AtomicScopeAttr::Device,
+            },
+            PlironAtomicLegalityFindingV1::SystemCoherenceUnproven {
+                block: 0,
+                operation: 0,
+            },
+            PlironAtomicLegalityFindingV1::ResourceLimitExceeded,
+        ];
+        for finding in incomplete {
+            assert_eq!(finding.status(), KernelCheckStatusV1::Incomplete);
+        }
+    }
+
+    #[test]
+    fn rejected_atomic_finding_dominates_an_incomplete_finding() {
+        let mixed = report(vec![
+            PlironAtomicLegalityFindingV1::ResourceLimitExceeded,
+            invalid_ordering(),
+        ]);
+        assert_eq!(mixed.status(), KernelCheckStatusV1::Rejected);
+        assert!(!mixed.is_clean());
+        assert_eq!(report(vec![]).status(), KernelCheckStatusV1::Clean);
     }
 }

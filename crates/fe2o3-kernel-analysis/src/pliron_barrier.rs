@@ -15,12 +15,12 @@ use pliron::{
     operation::Operation,
 };
 
-use crate::KernelCheckPassKindV1;
 use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::pliron_invocation_trace::{
     PlironInvocationTraceV1, PlironTraceEventV1, PlironTraceFailureV1, PlironTraceLocationV1,
 };
 use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
+use crate::{KernelCheckPassKindV1, KernelCheckStatusV1};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PlironBarrierFindingV1 {
@@ -38,6 +38,19 @@ pub enum PlironBarrierFindingV1 {
         first_trace: Vec<(usize, usize)>,
         second_trace: Vec<(usize, usize)>,
     },
+}
+
+impl PlironBarrierFindingV1 {
+    pub const fn status(&self) -> KernelCheckStatusV1 {
+        match self {
+            Self::DivergentBarrierTrace { .. } | Self::DivergentBarrierPaths { .. } => {
+                KernelCheckStatusV1::Rejected
+            }
+            Self::BoundsPrerequisiteRejected | Self::AnalysisIncomplete { .. } => {
+                KernelCheckStatusV1::Incomplete
+            }
+        }
+    }
 }
 
 impl fmt::Display for PlironBarrierFindingV1 {
@@ -84,12 +97,20 @@ impl PlironBarrierReportV1 {
         KernelCheckPassKindV1::BarrierConvergence
     }
 
+    pub fn status(&self) -> KernelCheckStatusV1 {
+        self.findings
+            .iter()
+            .fold(KernelCheckStatusV1::Clean, |status, finding| {
+                status.join(finding.status())
+            })
+    }
+
     pub fn findings(&self) -> &[PlironBarrierFindingV1] {
         &self.findings
     }
 
     pub fn is_clean(&self) -> bool {
-        self.findings.is_empty()
+        self.status() == KernelCheckStatusV1::Clean
     }
 
     pub const fn grants_compiler_refinement_authority(&self) -> bool {
@@ -523,5 +544,60 @@ pub(crate) fn trace_failure_detail(failure: PlironTraceFailureV1) -> String {
             "{scope:?} barrier has global extent {global_extent} on axis {dimension}, which is not a multiple of workgroup extent {workgroup_extent}; rounded physical lanes and their activity paths are not represented"
         ),
         PlironTraceFailureV1::ResourceLimit => "trace resource limit exceeded".to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    #[test]
+    fn every_barrier_finding_has_the_shared_status() {
+        let incomplete = [
+            PlironBarrierFindingV1::BoundsPrerequisiteRejected,
+            PlironBarrierFindingV1::AnalysisIncomplete {
+                detail: "unresolved".to_owned(),
+            },
+        ];
+        for finding in incomplete {
+            assert_eq!(finding.status(), KernelCheckStatusV1::Incomplete);
+        }
+
+        let rejected = [
+            PlironBarrierFindingV1::DivergentBarrierTrace {
+                first_invocation: vec![0],
+                first_trace: vec![(0, 0)],
+                second_invocation: vec![1],
+                second_trace: vec![],
+            },
+            PlironBarrierFindingV1::DivergentBarrierPaths {
+                first_trace: vec![(0, 0)],
+                second_trace: vec![],
+            },
+        ];
+        for finding in rejected {
+            assert_eq!(finding.status(), KernelCheckStatusV1::Rejected);
+        }
+    }
+
+    #[test]
+    fn rejected_barrier_finding_dominates_an_incomplete_finding() {
+        let report = PlironBarrierReportV1 {
+            findings: vec![
+                PlironBarrierFindingV1::AnalysisIncomplete {
+                    detail: "unresolved".to_owned(),
+                },
+                PlironBarrierFindingV1::DivergentBarrierPaths {
+                    first_trace: vec![(0, 0)],
+                    second_trace: vec![],
+                },
+            ],
+        };
+        assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
+        assert!(!report.is_clean());
+        assert_eq!(
+            PlironBarrierReportV1 { findings: vec![] }.status(),
+            KernelCheckStatusV1::Clean
+        );
     }
 }

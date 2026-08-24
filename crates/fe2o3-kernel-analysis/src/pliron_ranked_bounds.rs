@@ -31,7 +31,9 @@ use pliron::{
 };
 
 use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
-use crate::{KernelCheckPassKindV1, SparseIndexAnalysisV1, SparseIndexFailureV1};
+use crate::{
+    KernelCheckPassKindV1, KernelCheckStatusV1, SparseIndexAnalysisV1, SparseIndexFailureV1,
+};
 
 pub const MAX_RANKED_BOUNDS_BLOCKS: usize = 1_024;
 pub const MAX_RANKED_BOUNDS_OPERATIONS: usize = 65_536;
@@ -42,12 +44,6 @@ pub const MAX_RANKED_BOUNDS_OPERATION_ITEMS: usize =
 pub const MAX_RANKED_BOUNDS_FINDINGS: usize = 4_096;
 pub const MAX_RANKED_BOUNDS_STORAGE_ITEMS: usize = 131_072;
 pub const MAX_RANKED_BOUNDS_WORK_UNITS: usize = MAX_RANKED_BOUNDS_OPERATIONS * 128;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RankedBoundsStatusV1 {
-    Clean,
-    Rejected,
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RankedBoundsFindingV1 {
@@ -90,6 +86,21 @@ pub enum RankedBoundsFindingV1 {
         index: String,
         extent: String,
     },
+}
+
+impl RankedBoundsFindingV1 {
+    pub const fn status(&self) -> KernelCheckStatusV1 {
+        match self {
+            Self::StaticOutOfBounds { .. } => KernelCheckStatusV1::Rejected,
+            Self::StructuralVerificationFailed
+            | Self::ResourceLimitExceeded { .. }
+            | Self::UnreachableBlock { .. }
+            | Self::UnsupportedTerminator { .. }
+            | Self::UnsupportedOperation { .. }
+            | Self::SparseIndexAnalysisFailed { .. }
+            | Self::UnprovedBound { .. } => KernelCheckStatusV1::Incomplete,
+        }
+    }
 }
 
 impl fmt::Display for RankedBoundsFindingV1 {
@@ -164,12 +175,12 @@ impl RankedBoundsReportV1 {
         KernelCheckPassKindV1::MemoryBounds
     }
 
-    pub fn status(&self) -> RankedBoundsStatusV1 {
-        if self.findings.is_empty() {
-            RankedBoundsStatusV1::Clean
-        } else {
-            RankedBoundsStatusV1::Rejected
-        }
+    pub fn status(&self) -> KernelCheckStatusV1 {
+        self.findings
+            .iter()
+            .fold(KernelCheckStatusV1::Clean, |status, finding| {
+                status.join(finding.status())
+            })
     }
 
     pub fn findings(&self) -> &[RankedBoundsFindingV1] {
@@ -177,7 +188,7 @@ impl RankedBoundsReportV1 {
     }
 
     pub fn is_clean(&self) -> bool {
-        self.findings.is_empty()
+        self.status() == KernelCheckStatusV1::Clean
     }
 
     pub const fn grants_compiler_refinement_authority(&self) -> bool {
@@ -855,6 +866,81 @@ fn structural_failure() -> RankedBoundsReportV1 {
 fn finding_failure(finding: RankedBoundsFindingV1) -> RankedBoundsReportV1 {
     RankedBoundsReportV1 {
         findings: vec![finding],
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    fn unproved_bound() -> RankedBoundsFindingV1 {
+        RankedBoundsFindingV1::UnprovedBound {
+            block: 0,
+            operation: 0,
+            access: AccessKindAttr::Read,
+            view: "v0".to_owned(),
+            dimension: 0,
+            index: "i".to_owned(),
+            extent: "n".to_owned(),
+        }
+    }
+
+    fn static_out_of_bounds() -> RankedBoundsFindingV1 {
+        RankedBoundsFindingV1::StaticOutOfBounds {
+            block: 0,
+            operation: 0,
+            access: AccessKindAttr::Write,
+            view: "v0".to_owned(),
+            dimension: 0,
+            index: 4,
+            extent: 4,
+        }
+    }
+
+    #[test]
+    fn every_bounds_finding_has_the_shared_status() {
+        let incomplete = [
+            RankedBoundsFindingV1::StructuralVerificationFailed,
+            RankedBoundsFindingV1::ResourceLimitExceeded {
+                resource: "operation",
+                limit: 1,
+                actual: 2,
+            },
+            RankedBoundsFindingV1::UnreachableBlock { block: 1 },
+            RankedBoundsFindingV1::UnsupportedTerminator {
+                block: 0,
+                operation: "test.terminator".to_owned(),
+            },
+            RankedBoundsFindingV1::UnsupportedOperation {
+                block: 0,
+                operation: 1,
+                kind: "test.operation".to_owned(),
+            },
+            RankedBoundsFindingV1::SparseIndexAnalysisFailed {
+                detail: "unresolved".to_owned(),
+            },
+            unproved_bound(),
+        ];
+        for finding in incomplete {
+            assert_eq!(finding.status(), KernelCheckStatusV1::Incomplete);
+        }
+        assert_eq!(
+            static_out_of_bounds().status(),
+            KernelCheckStatusV1::Rejected
+        );
+    }
+
+    #[test]
+    fn rejected_bounds_finding_dominates_an_incomplete_finding() {
+        let report = RankedBoundsReportV1 {
+            findings: vec![unproved_bound(), static_out_of_bounds()],
+        };
+        assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
+        assert!(!report.is_clean());
+        assert_eq!(
+            RankedBoundsReportV1 { findings: vec![] }.status(),
+            KernelCheckStatusV1::Clean
+        );
     }
 }
 

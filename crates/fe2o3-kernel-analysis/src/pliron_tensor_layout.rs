@@ -1736,15 +1736,95 @@ fn report(findings: Vec<PlironTensorLayoutFindingV1>) -> PlironTensorLayoutRepor
     let status = findings
         .iter()
         .fold(KernelCheckStatusV1::Clean, |status, finding| {
-            match (status, finding.status()) {
-                (KernelCheckStatusV1::Rejected, _) | (_, KernelCheckStatusV1::Rejected) => {
-                    KernelCheckStatusV1::Rejected
-                }
-                (KernelCheckStatusV1::Incomplete, _) | (_, KernelCheckStatusV1::Incomplete) => {
-                    KernelCheckStatusV1::Incomplete
-                }
-                _ => KernelCheckStatusV1::Clean,
-            }
+            status.join(finding.status())
         });
     PlironTensorLayoutReportV1 { status, findings }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    fn rejected_contract() -> PlironTensorLayoutFindingV1 {
+        PlironTensorLayoutFindingV1::Contract {
+            block: 0,
+            operation: 0,
+            finding: TensorLayoutFindingV1::TailMaskMismatch,
+        }
+    }
+
+    #[test]
+    fn every_tensor_layout_finding_has_the_shared_status() {
+        let incomplete = [
+            PlironTensorLayoutFindingV1::Contract {
+                block: 0,
+                operation: 0,
+                finding: TensorLayoutFindingV1::UnsupportedProfile,
+            },
+            PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                detail: "unresolved".to_owned(),
+            },
+            PlironTensorLayoutFindingV1::ResourceLimitExceeded,
+        ];
+        for finding in incomplete {
+            assert_eq!(finding.status(), KernelCheckStatusV1::Incomplete);
+        }
+
+        let rejected = [
+            rejected_contract(),
+            PlironTensorLayoutFindingV1::ActiveLaneMismatch {
+                block: 0,
+                operation: 0,
+                expected: 64,
+                actual: 32,
+            },
+            PlironTensorLayoutFindingV1::ExecutionLayoutMismatch {
+                block: 0,
+                operation: 0,
+                declared: 32,
+                required: 64,
+            },
+            PlironTensorLayoutFindingV1::ConvergenceMismatch {
+                block: 0,
+                operation: 0,
+                actual: TensorConvergenceAttr::Divergent,
+            },
+            PlironTensorLayoutFindingV1::MalformedContract {
+                block: 0,
+                operation: 0,
+            },
+            PlironTensorLayoutFindingV1::DivergentInstructionTrace {
+                first_invocation: vec![0],
+                first_trace: vec![(0, 0)],
+                second_invocation: vec![1],
+                second_trace: vec![],
+            },
+            PlironTensorLayoutFindingV1::PartialSubgroupParticipation {
+                grid: 0,
+                workgroup: 0,
+                subgroup: 0,
+                expected: 64,
+                actual: 63,
+            },
+            PlironTensorLayoutFindingV1::DivergentSubgroupControl {
+                block: 0,
+                operation: 0,
+                controller: 1,
+            },
+        ];
+        for finding in rejected {
+            assert_eq!(finding.status(), KernelCheckStatusV1::Rejected);
+        }
+    }
+
+    #[test]
+    fn rejected_tensor_finding_dominates_an_incomplete_finding() {
+        let mixed = report(vec![
+            PlironTensorLayoutFindingV1::ResourceLimitExceeded,
+            rejected_contract(),
+        ]);
+        assert_eq!(mixed.status(), KernelCheckStatusV1::Rejected);
+        assert!(!mixed.is_clean());
+        assert_eq!(report(vec![]).status(), KernelCheckStatusV1::Clean);
+    }
 }

@@ -21,7 +21,7 @@ use crate::pliron_invocation_trace::{
     PlironInvocationTraceV1, PlironTraceEventV1, PlironTraceLocationV1,
 };
 use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
-use crate::{KernelCheckPassKindV1, trace_failure_detail};
+use crate::{KernelCheckPassKindV1, KernelCheckStatusV1, trace_failure_detail};
 
 pub const MAX_PLIRON_WORKGROUP_FINDINGS_V1: usize = 4_096;
 
@@ -50,6 +50,20 @@ pub enum PlironWorkgroupMemoryFindingV1 {
         second_access: AccessKindAttr,
     },
     FindingLimitExceeded,
+}
+
+impl PlironWorkgroupMemoryFindingV1 {
+    pub const fn status(&self) -> KernelCheckStatusV1 {
+        match self {
+            Self::ReadBeforeInitialization { .. } | Self::ConflictingEffects { .. } => {
+                KernelCheckStatusV1::Rejected
+            }
+            Self::BoundsPrerequisiteRejected
+            | Self::BarrierPrerequisiteRejected
+            | Self::AnalysisIncomplete { .. }
+            | Self::FindingLimitExceeded => KernelCheckStatusV1::Incomplete,
+        }
+    }
 }
 
 impl fmt::Display for PlironWorkgroupMemoryFindingV1 {
@@ -105,12 +119,20 @@ impl PlironWorkgroupMemoryReportV1 {
         KernelCheckPassKindV1::WorkgroupMemory
     }
 
+    pub fn status(&self) -> KernelCheckStatusV1 {
+        self.findings
+            .iter()
+            .fold(KernelCheckStatusV1::Clean, |status, finding| {
+                status.join(finding.status())
+            })
+    }
+
     pub fn findings(&self) -> &[PlironWorkgroupMemoryFindingV1] {
         &self.findings
     }
 
     pub fn is_clean(&self) -> bool {
-        self.findings.is_empty()
+        self.status() == KernelCheckStatusV1::Clean
     }
 
     pub const fn grants_compiler_refinement_authority(&self) -> bool {
@@ -645,5 +667,70 @@ fn push_finding(
 fn one(finding: PlironWorkgroupMemoryFindingV1) -> PlironWorkgroupMemoryReportV1 {
     PlironWorkgroupMemoryReportV1 {
         findings: vec![finding],
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    fn conflict() -> PlironWorkgroupMemoryFindingV1 {
+        PlironWorkgroupMemoryFindingV1::ConflictingEffects {
+            indices: vec![0],
+            first_invocation: vec![0],
+            first_block: 0,
+            first_operation: 0,
+            first_access: AccessKindAttr::Write,
+            second_invocation: vec![1],
+            second_block: 0,
+            second_operation: 0,
+            second_access: AccessKindAttr::Read,
+        }
+    }
+
+    #[test]
+    fn every_workgroup_memory_finding_has_the_shared_status() {
+        let incomplete = [
+            PlironWorkgroupMemoryFindingV1::BoundsPrerequisiteRejected,
+            PlironWorkgroupMemoryFindingV1::BarrierPrerequisiteRejected,
+            PlironWorkgroupMemoryFindingV1::AnalysisIncomplete {
+                detail: "unresolved".to_owned(),
+            },
+            PlironWorkgroupMemoryFindingV1::FindingLimitExceeded,
+        ];
+        for finding in incomplete {
+            assert_eq!(finding.status(), KernelCheckStatusV1::Incomplete);
+        }
+
+        let rejected = [
+            PlironWorkgroupMemoryFindingV1::ReadBeforeInitialization {
+                invocation: vec![0],
+                block: 0,
+                operation: 0,
+                indices: vec![0],
+            },
+            conflict(),
+        ];
+        for finding in rejected {
+            assert_eq!(finding.status(), KernelCheckStatusV1::Rejected);
+        }
+    }
+
+    #[test]
+    fn rejected_workgroup_finding_dominates_an_incomplete_finding() {
+        let report = PlironWorkgroupMemoryReportV1 {
+            findings: vec![
+                PlironWorkgroupMemoryFindingV1::AnalysisIncomplete {
+                    detail: "unresolved".to_owned(),
+                },
+                conflict(),
+            ],
+        };
+        assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
+        assert!(!report.is_clean());
+        assert_eq!(
+            PlironWorkgroupMemoryReportV1 { findings: vec![] }.status(),
+            KernelCheckStatusV1::Clean
+        );
     }
 }

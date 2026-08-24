@@ -12,9 +12,9 @@ use crate::pliron_semantic_refinement::require_pliron_semantic_refinement_with_a
 use crate::pliron_tensor_layout::require_pliron_tensor_layout_with_analyses_v1;
 use crate::pliron_workgroup_memory::require_pliron_workgroup_memory_with_analyses_v1;
 use crate::{
-    KernelCheckPassKindV1, PlironAtomicLegalityCheckErrorV1, PlironAtomicLegalityReportV1,
-    PlironAtomicTargetContextV1, PlironBarrierCheckErrorV1, PlironBarrierReportV1,
-    PlironSemanticRefinementCheckErrorV1, PlironSemanticRefinementReportV1,
+    KernelCheckPassKindV1, KernelCheckStatusV1, PlironAtomicLegalityCheckErrorV1,
+    PlironAtomicLegalityReportV1, PlironAtomicTargetContextV1, PlironBarrierCheckErrorV1,
+    PlironBarrierReportV1, PlironSemanticRefinementCheckErrorV1, PlironSemanticRefinementReportV1,
     PlironTensorLayoutCheckErrorV1, PlironTensorLayoutReportV1, PlironWorkgroupMemoryCheckErrorV1,
     PlironWorkgroupMemoryReportV1, RankedBoundsCheckErrorV1, RankedBoundsReportV1,
     RankedRaceCheckErrorV1, RankedRaceReportV1, require_pliron_atomic_legality_before_lowering_v1,
@@ -82,14 +82,19 @@ impl ProductionPlironPreloweringReportV1 {
         &self.semantics
     }
 
+    pub fn status(&self) -> KernelCheckStatusV1 {
+        self.tensor_layout
+            .status()
+            .join(self.bounds.status())
+            .join(self.atomics.status())
+            .join(self.race.status())
+            .join(self.barriers.status())
+            .join(self.workgroup.status())
+            .join(self.semantics.status())
+    }
+
     pub fn is_clean(&self) -> bool {
-        self.tensor_layout.is_clean()
-            && self.bounds.is_clean()
-            && self.atomics.is_clean()
-            && self.race.is_clean()
-            && self.barriers.is_clean()
-            && self.workgroup.is_clean()
-            && self.semantics.is_clean()
+        self.status() == KernelCheckStatusV1::Clean
     }
 
     pub const fn grants_compiler_refinement_authority(&self) -> bool {
@@ -275,6 +280,7 @@ mod tests {
                 .expect("valid tensor function passes the production pipeline");
 
         assert!(report.is_clean());
+        assert_eq!(report.status(), KernelCheckStatusV1::Clean);
         assert_eq!(
             analyses.computation_counts(),
             PlironAnalysisComputationCountsV1 {
