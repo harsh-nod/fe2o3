@@ -423,19 +423,7 @@ impl AuthorizedKernelClosureV1 {
             .iter()
             .map(|node| {
                 let id = required_string(node, "id")?.to_owned();
-                let values = node
-                    .get("dependencies")
-                    .and_then(Value::as_array)
-                    .ok_or_else(|| format!("resolved package {id:?} has no dependency array"))?;
-                let values = values
-                    .iter()
-                    .map(|value| {
-                        value.as_str().map(str::to_owned).ok_or_else(|| {
-                            format!("resolved package {id:?} has a non-string dependency")
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok((id, values))
+                Ok((id, build_dependency_ids(node)?))
             })
             .collect::<Result<BTreeMap<_, _>, String>>()?;
         let roots = selected_roots(metadata, resolve, args, &package_by_id)?;
@@ -524,6 +512,53 @@ impl AuthorizedKernelClosureV1 {
             mutation_journal,
         })
     }
+}
+
+fn build_dependency_ids(node: &Value) -> Result<Vec<String>, String> {
+    let id = required_string(node, "id")?;
+    let deps = node
+        .get("deps")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("resolved package {id:?} has no structured dependency array"))?;
+    let mut included = Vec::new();
+    for dependency in deps {
+        let package = required_string(dependency, "pkg")?;
+        let kinds = dependency
+            .get("dep_kinds")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                format!("resolved dependency {package:?} of package {id:?} has no kind array")
+            })?;
+        if kinds.is_empty() {
+            return Err(format!(
+                "resolved dependency {package:?} of package {id:?} has no dependency kind"
+            ));
+        }
+        let mut used_by_build = false;
+        for kind in kinds {
+            match kind.get("kind") {
+                Some(Value::Null) => used_by_build = true,
+                Some(Value::String(value)) if value == "build" => used_by_build = true,
+                Some(Value::String(value)) if value == "dev" => {}
+                Some(Value::String(value)) => {
+                    return Err(format!(
+                        "resolved dependency {package:?} of package {id:?} has unknown kind {value:?}"
+                    ));
+                }
+                _ => {
+                    return Err(format!(
+                        "resolved dependency {package:?} of package {id:?} has a malformed kind"
+                    ));
+                }
+            }
+        }
+        if used_by_build {
+            included.push(package.to_owned());
+        }
+    }
+    included.sort();
+    included.dedup();
+    Ok(included)
 }
 
 fn selected_roots(
@@ -1032,12 +1067,52 @@ mod tests {
             }],
             "resolve": {
                 "root": "path+file:///fixture#0.1.0",
-                "nodes": [{"id": "path+file:///fixture#0.1.0", "dependencies": []}]
+                "nodes": [{
+                    "id": "path+file:///fixture#0.1.0",
+                    "dependencies": [],
+                    "deps": []
+                }]
             },
             "workspace_members": ["path+file:///fixture#0.1.0"],
             "workspace_default_members": ["path+file:///fixture#0.1.0"],
             "workspace_root": "/fixture"
         })
+    }
+
+    #[test]
+    fn build_closure_excludes_dev_only_dependencies() {
+        let node = serde_json::json!({
+            "id": "root",
+            "dependencies": ["normal", "build", "dev", "mixed"],
+            "deps": [
+                {"pkg": "dev", "dep_kinds": [{"kind": "dev", "target": null}]},
+                {"pkg": "normal", "dep_kinds": [{"kind": null, "target": null}]},
+                {"pkg": "build", "dep_kinds": [{"kind": "build", "target": null}]},
+                {"pkg": "mixed", "dep_kinds": [
+                    {"kind": "dev", "target": null},
+                    {"kind": null, "target": null}
+                ]}
+            ]
+        });
+        assert_eq!(
+            build_dependency_ids(&node).unwrap(),
+            vec!["build".to_owned(), "mixed".to_owned(), "normal".to_owned()]
+        );
+    }
+
+    #[test]
+    fn build_closure_rejects_unknown_or_malformed_dependency_kinds() {
+        for dep_kinds in [
+            serde_json::json!([]),
+            serde_json::json!([{}]),
+            serde_json::json!([{"kind": "future-kind", "target": null}]),
+        ] {
+            let node = serde_json::json!({
+                "id": "root",
+                "deps": [{"pkg": "dependency", "dep_kinds": dep_kinds}]
+            });
+            assert!(build_dependency_ids(&node).is_err());
+        }
     }
 
     #[test]

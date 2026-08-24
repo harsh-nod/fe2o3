@@ -166,7 +166,7 @@ fn metadata(args: &[OsString]) -> ExitCode {
                 "version": "0.1.0",
             }],
             "resolve": {
-                "nodes": [{"dependencies": [], "id": package_id}],
+                "nodes": [{"dependencies": [], "deps": [], "id": package_id}],
                 "root": package_id,
             },
             "target_directory": target_directory,

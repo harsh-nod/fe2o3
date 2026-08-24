@@ -34,6 +34,20 @@ pub use resolved_target_v2::{
     ResolvedAmdTargetIdentityV2, ResolvedAmdTargetSourceV2, resolve_amd_target_v2,
 };
 
+/// Exact Cargo/rustc target triple admitted by the first gfx942 production profile.
+pub const PRODUCTION_GFX942_RUSTC_TARGET_V1: &str = "amdgcn-amd-amdhsa";
+/// Exact configured processor admitted by the first gfx942 production profile.
+pub const PRODUCTION_GFX942_DEVICE_CPU_V1: &str = "gfx942";
+/// Exact code-object target ID emitted by the first gfx942 production profile.
+pub const PRODUCTION_GFX942_DEVICE_TARGET_V1: &str = "gfx942:xnack-";
+/// Canonical active rustc feature set required by the first gfx942 production profile.
+pub const PRODUCTION_GFX942_RUSTC_FEATURES_V1: &str = "-wavefrontsize32,+wavefrontsize64,-xnack";
+/// Cargo's target-scoped rustflags channel for the exact production rustc target.
+pub const PRODUCTION_GFX942_CARGO_RUSTFLAGS_ENV_V1: &str =
+    "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS";
+/// Parent-owned rustc arguments for production target crates.
+pub const PRODUCTION_GFX942_CARGO_RUSTFLAGS_V1: &str = "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-wavefrontsize32,+wavefrontsize64,-xnack";
+
 /// Concrete canonical AMDGPU processor names understood by this crate.
 ///
 /// Membership establishes only that a spelling is recognized. It does not
@@ -516,6 +530,23 @@ mod tests {
                 "unexpectedly parsed invalid target {invalid}"
             );
         }
+    }
+
+    #[test]
+    fn production_gfx942_profile_is_internally_consistent() {
+        let target = AmdTargetId::parse(PRODUCTION_GFX942_DEVICE_TARGET_V1).unwrap();
+        assert_eq!(target.processor(), PRODUCTION_GFX942_DEVICE_CPU_V1);
+        assert_eq!(target.xnack(), Some(FeatureState::Disabled));
+        assert!(PRODUCTION_GFX942_CARGO_RUSTFLAGS_V1.contains(&std::format!(
+            "-Ctarget-cpu={PRODUCTION_GFX942_DEVICE_CPU_V1}"
+        )));
+        assert!(PRODUCTION_GFX942_CARGO_RUSTFLAGS_V1.contains(&std::format!(
+            "-Ctarget-feature={PRODUCTION_GFX942_RUSTC_FEATURES_V1}"
+        )));
+        assert_eq!(
+            PRODUCTION_GFX942_CARGO_RUSTFLAGS_ENV_V1,
+            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS"
+        );
     }
 
     #[test]

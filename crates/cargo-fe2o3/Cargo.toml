@@ -22,6 +22,7 @@ worker-v3-envelope-integration-test-only = [
 
 [dependencies]
 cap-primitives = "=4.0.2"
+fe2o3-amd-target.workspace = true
 fe2o3-artifacts.workspace = true
 fe2o3-artifact-transaction.workspace = true
 fe2o3-build-authority.workspace = true
@@ -49,7 +50,6 @@ sha2.workspace = true
 syn = { workspace = true, features = ["visit"] }
 
 [dev-dependencies]
-fe2o3-amd-target.workspace = true
 fe2o3-artifact-transaction = { workspace = true, features = ["test-hooks"] }
 fe2o3-device.workspace = true
 fe2o3-kernel-ir.workspace = true

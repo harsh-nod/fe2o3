@@ -68,6 +68,7 @@ const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
 pub(crate) const SIMULATION_MODE_ENV: &str = "FE2O3_SIMULATION_MODE_V1";
 pub(crate) const SIMULATION_ATTEMPT_ENV: &str = "FE2O3_SIMULATION_ATTEMPT_V1";
 const SIMULATION_PIPELINE: &str = "simulation-v1";
+const PRODUCTION_V1_PIPELINE: &str = "production-v1";
 const SIMULATION_FAILURE_ALREADY_REPORTED: &str =
     "cargo fe2o3 simulate emitted a structured simulation error";
 const EXPECTED_RUSTC_SHA256_ENV: &str = "FE2O3_EXPECTED_RUSTC_SHA256_V1";
@@ -513,6 +514,12 @@ fn cargo_with_backend_result(
                 format!("Worker V2 setup failed: {error}")
             }
         })?;
+    let production_target_profile = production_v1_selected();
+    validate_production_cargo_selection(
+        args,
+        production_target_profile,
+        env::var_os(TARGET_ENV).as_deref(),
+    )?;
     if matches!(
         protected_release_action,
         Some(ProtectedReleaseAction::RowSoftmaxRun)
@@ -644,6 +651,7 @@ fn cargo_with_backend_result(
             protected_compiler_closure,
             authorized_closure,
             protected_release_action,
+            production_target_profile,
         },
         args,
         simulation.is_some(),
@@ -662,6 +670,42 @@ fn authority_sensitive_request_selected(protected_release: bool) -> bool {
         // unparsed selection as authority-sensitive so mutable manifest contents cannot
         // downgrade the loader check that precedes manifest authentication.
         || env::var_os(worker_v2::WORKER_V2_CONFIG_ENV).is_some()
+}
+
+fn production_v1_selected() -> bool {
+    env::var_os(worker_v2::CODEGEN_PIPELINE_ENV).as_deref()
+        == Some(OsStr::new(PRODUCTION_V1_PIPELINE))
+}
+
+fn validate_production_cargo_selection(
+    args: &[OsString],
+    production_target_profile: bool,
+    device_target: Option<&OsStr>,
+) -> Result<(), String> {
+    if !production_target_profile {
+        return Ok(());
+    }
+    if device_target
+        != Some(OsStr::new(
+            fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_CPU_V1,
+        ))
+    {
+        return Err(format!(
+            "production-v1 requires exact {TARGET_ENV}={}",
+            fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_CPU_V1
+        ));
+    }
+    match selected_run_target(args)? {
+        Some(target) if target == fe2o3_amd_target::PRODUCTION_GFX942_RUSTC_TARGET_V1 => Ok(()),
+        Some(target) => Err(format!(
+            "production-v1 requires Cargo target {:?}; found {target:?}",
+            fe2o3_amd_target::PRODUCTION_GFX942_RUSTC_TARGET_V1
+        )),
+        None => Err(format!(
+            "production-v1 requires explicit --target {}",
+            fe2o3_amd_target::PRODUCTION_GFX942_RUSTC_TARGET_V1
+        )),
+    }
 }
 
 fn preflight_declared_authority_backend(
@@ -738,6 +782,7 @@ struct BackendRunContext {
     requires_locked_closure: bool,
     authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
     protected_release_action: Option<ProtectedReleaseAction>,
+    production_target_profile: bool,
 }
 
 struct BackendRunPreparation {
@@ -751,6 +796,7 @@ struct BackendRunPreparation {
     protected_compiler_closure: Option<fe2o3_build_authority::CompilerClosureV2>,
     authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
     protected_release_action: Option<ProtectedReleaseAction>,
+    production_target_profile: bool,
 }
 
 impl BackendRunContext {
@@ -770,6 +816,7 @@ impl BackendRunContext {
             protected_compiler_closure,
             authorized_closure,
             protected_release_action,
+            production_target_profile,
         } = preparation;
         let target = amd_gpu_target(simulation);
         let target_dir = project.open_or_create_target()?;
@@ -860,6 +907,16 @@ impl BackendRunContext {
             cargo_configuration.extend_from_slice(b"fe2o3-simulation-attempt-v1\0");
             cargo_configuration.extend_from_slice(build_session.as_bytes());
         }
+        if production_target_profile {
+            cargo_configuration.extend_from_slice(b"fe2o3-production-target-profile-v1\0");
+            cargo_configuration
+                .extend_from_slice(fe2o3_amd_target::PRODUCTION_GFX942_RUSTC_TARGET_V1.as_bytes());
+            cargo_configuration.push(0);
+            cargo_configuration.extend_from_slice(
+                fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_V1.as_bytes(),
+            );
+            cargo_configuration.push(0);
+        }
         let backend_reference = pinned_backend
             .fixed_child_descriptor_path(BACKEND_CHILD_FD)
             .map_err(|error| format!("failed to retain pinned codegen backend: {error}"))?;
@@ -908,6 +965,7 @@ impl BackendRunContext {
             requires_locked_closure: authorized_closure.is_some(),
             authorized_closure,
             protected_release_action,
+            production_target_profile,
         })
     }
 }
@@ -1094,6 +1152,10 @@ fn run_cargo_with_backend_inner(
         cargo.as_command_mut(),
         simulation.map(|_| context.build_session),
     );
+    configure_production_target_build_environment(
+        cargo.as_command_mut(),
+        context.production_target_profile,
+    );
     if let Some(action) = context.protected_release_action {
         cargo
             .as_command_mut()
@@ -1227,6 +1289,18 @@ fn configure_simulation_build_environment(
             .env_remove(SIMULATION_MODE_ENV)
             .env_remove(SIMULATION_ATTEMPT_ENV)
             .env_remove("FE2O3_HIP_SYS_DISABLE");
+    }
+}
+
+fn configure_production_target_build_environment(command: &mut Command, enabled: bool) {
+    if enabled {
+        command
+            .env_remove("RUSTFLAGS")
+            .env_remove("CARGO_ENCODED_RUSTFLAGS")
+            .env(
+                fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_ENV_V1,
+                fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_V1,
+            );
     }
 }
 
@@ -2738,8 +2812,9 @@ fn print_help() {
 mod tests {
     use super::{
         SIMULATION_ATTEMPT_ENV, SIMULATION_MODE_ENV, aggregate_post_spawn_results,
-        configure_simulation_build_environment, inject_application_runner_config,
-        normalize_invocation, parse_rocminfo_target, resolve_amd_gpu_target, selected_run_target,
+        configure_production_target_build_environment, configure_simulation_build_environment,
+        inject_application_runner_config, normalize_invocation, parse_rocminfo_target,
+        resolve_amd_gpu_target, selected_run_target, validate_production_cargo_selection,
     };
     use crate::project::PinnedDirectory;
     use std::ffi::{OsStr, OsString};
@@ -2811,6 +2886,75 @@ mod tests {
         assert_eq!(
             command_environment(&command, "FE2O3_HIP_SYS_DISABLE"),
             Some(OsStr::new("1"))
+        );
+    }
+
+    #[test]
+    fn production_target_profile_is_exact_and_parent_owned() {
+        let mut command = Command::new("cargo");
+        command
+            .env("RUSTFLAGS", "-Ctarget-cpu=attacker")
+            .env("CARGO_ENCODED_RUSTFLAGS", "-Ctarget-feature=+attacker")
+            .env(
+                fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_ENV_V1,
+                "attacker",
+            );
+        configure_production_target_build_environment(&mut command, true);
+        assert_eq!(command_environment(&command, "RUSTFLAGS"), None);
+        assert_eq!(
+            command_environment(&command, "CARGO_ENCODED_RUSTFLAGS"),
+            None
+        );
+        assert_eq!(
+            command_environment(
+                &command,
+                fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_ENV_V1,
+            ),
+            Some(OsStr::new(
+                fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_V1,
+            ))
+        );
+    }
+
+    #[test]
+    fn production_target_selection_requires_exact_device_and_cargo_targets() {
+        assert!(
+            validate_production_cargo_selection(
+                &[
+                    "--target".into(),
+                    fe2o3_amd_target::PRODUCTION_GFX942_RUSTC_TARGET_V1.into(),
+                    "--lib".into(),
+                ],
+                true,
+                Some(OsStr::new(
+                    fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_CPU_V1,
+                )),
+            )
+            .is_ok()
+        );
+        for args in [Vec::new(), vec!["--target=x86_64-unknown-linux-gnu".into()]] {
+            assert!(
+                validate_production_cargo_selection(
+                    &args,
+                    true,
+                    Some(OsStr::new(
+                        fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_CPU_V1,
+                    )),
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            validate_production_cargo_selection(
+                &[format!(
+                    "--target={}",
+                    fe2o3_amd_target::PRODUCTION_GFX942_RUSTC_TARGET_V1
+                )
+                .into()],
+                true,
+                Some(OsStr::new("gfx942:xnack-")),
+            )
+            .is_err()
         );
     }
 
