@@ -19,13 +19,15 @@ legacy-hsa-runtime = [
     "dep:fe2o3-host",
     "fe2o3-host/qualification-oracles-test-only",
 ]
-host-consumer-fixture = ["legacy-hsa-runtime", "fe2o3-host/hardware-test-hooks"]
+worker-v2-host-consumer-fixture = ["legacy-hsa-runtime", "fe2o3-host/hardware-test-hooks"]
+worker-v3-host-consumer-fixture = ["dep:fe2o3-host", "fe2o3-host/hardware-test-hooks"]
 worker-v3-envelope-integration-test-only = [
     "qualification-oracles-test-only",
-    "legacy-hsa-runtime",
+    "dep:fe2o3-core",
+    "dep:fe2o3-hsa-runtime",
     "dep:fe2o3-scalar-gemm-v1",
-    "fe2o3-host/hardware-test-hooks",
     "dep:fe2o3-worker-v3-authority",
+    "worker-v3-host-consumer-fixture",
 ]
 
 [dependencies]
@@ -140,8 +142,15 @@ test = false
 bench = false
 
 [[bin]]
-name = "cargo-fe2o3-host-consumer-app-fixture"
-path = "tests/fixtures/host_consumer_app_fixture.rs"
-required-features = ["host-consumer-fixture"]
+name = "cargo-fe2o3-worker-v2-host-consumer-app-fixture"
+path = "tests/fixtures/worker_v2_host_consumer_app_fixture.rs"
+required-features = ["worker-v2-host-consumer-fixture"]
+test = false
+bench = false
+
+[[bin]]
+name = "cargo-fe2o3-worker-v3-host-consumer-app-fixture"
+path = "tests/fixtures/worker_v3_host_consumer_app_fixture.rs"
+required-features = ["worker-v3-host-consumer-fixture"]
 test = false
 bench = false

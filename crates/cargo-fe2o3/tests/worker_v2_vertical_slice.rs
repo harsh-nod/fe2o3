@@ -683,11 +683,11 @@ fn static_application_fixtures() -> &'static StaticApplicationFixtures {
                 "-p",
                 "cargo-fe2o3",
                 "--features",
-                "host-consumer-fixture",
+                "worker-v2-host-consumer-fixture",
                 "--bin",
                 "cargo-fe2o3-runner-app-fixture",
                 "--bin",
-                "cargo-fe2o3-host-consumer-app-fixture",
+                "cargo-fe2o3-worker-v2-host-consumer-app-fixture",
                 "--bin",
                 "cargo-fe2o3-runner-chain-fixture",
             ])
@@ -697,7 +697,7 @@ fn static_application_fixtures() -> &'static StaticApplicationFixtures {
         let directory = target.join("x86_64-unknown-linux-gnu/debug");
         StaticApplicationFixtures {
             protocol: directory.join("cargo-fe2o3-runner-app-fixture"),
-            host_consumer: directory.join("cargo-fe2o3-host-consumer-app-fixture"),
+            host_consumer: directory.join("cargo-fe2o3-worker-v2-host-consumer-app-fixture"),
             no_protocol: directory.join("cargo-fe2o3-runner-chain-fixture"),
         }
     })

@@ -63,6 +63,11 @@ The `cargo fe2o3 simulate` command is also oracle-only and is absent from
 feature-free command dispatch and help. Production `build` and `run` cannot
 select it implicitly.
 
+V2 and V3 host-consumer fixtures are separate binaries with separate features.
+The V3 fixture accepts only V3 inputs and does not enable the host qualification
+feature; the V2 fixture remains available only through the explicit legacy
+qualification feature graph.
+
 Version suffixes remain on serialized records, identity domains, receipts, and
 external protocol types. Private production methods and states are unversioned
 because there is only one implementation. A new production schema must be an

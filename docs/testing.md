@@ -634,6 +634,17 @@ Worker V3 application entrypoint, while
 fixtures. `production_application_handoff_ui` is the compile-fail guard for
 that public API boundary.
 
+The Cargo V3 vertical suite builds a dedicated V3-only static consumer. Its
+dependency graph contains `fe2o3-host/default` and
+`fe2o3-host/hardware-test-hooks`, but not
+`fe2o3-host/qualification-oracles-test-only`:
+
+```text
+cargo test --locked -p cargo-fe2o3 \
+  --features worker-v3-envelope-integration-test-only \
+  --test worker_v3_load_envelope_vertical
+```
+
 ## Guard tests
 
 The native-Linux and WSL device-node selection logic has a host-only test:

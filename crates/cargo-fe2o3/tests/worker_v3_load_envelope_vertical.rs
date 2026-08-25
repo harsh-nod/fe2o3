@@ -168,9 +168,9 @@ fn static_host_consumer_application_fixture() -> &'static Path {
                 "-p",
                 "cargo-fe2o3",
                 "--features",
-                "host-consumer-fixture",
+                "worker-v3-host-consumer-fixture",
                 "--bin",
-                "cargo-fe2o3-host-consumer-app-fixture",
+                "cargo-fe2o3-worker-v3-host-consumer-app-fixture",
             ])
             .output()
             .unwrap();
@@ -179,7 +179,8 @@ fn static_host_consumer_application_fixture() -> &'static Path {
             "failed to build static V3 host consumer: {}",
             String::from_utf8_lossy(&built.stderr)
         );
-        target.join("x86_64-unknown-linux-gnu/debug/cargo-fe2o3-host-consumer-app-fixture")
+        target
+            .join("x86_64-unknown-linux-gnu/debug/cargo-fe2o3-worker-v3-host-consumer-app-fixture")
     })
 }
 
@@ -798,7 +799,6 @@ fn cargo_supervisor_and_static_host_consumer_complete_strict_v3_handoff() {
         .arg("required")
         .arg("0")
         .arg(static_host_consumer_application_fixture())
-        .arg("--worker-v3")
         .arg(&kernel)
         .arg("gfx942:xnack-")
         .arg(&report)

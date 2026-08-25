@@ -321,6 +321,12 @@ the Worker V3 application consumer. Cargo's legacy HSA fixture enables the
 host-local `qualification-oracles-test-only` feature explicitly when it needs
 the V2 consumer as a differential oracle.
 
+The application integration fixtures are protocol-specific. The V3 fixture
+has no runtime selector and its feature graph enables `fe2o3-host` only with
+`hardware-test-hooks`; it does not enable the host qualification feature. The
+separate V2 fixture requires `worker-v2-host-consumer-fixture` and cannot be
+built through the V3 integration feature.
+
 Legacy protected V2 and ordinary V1 state machines are qualification paths.
 Their work state, restart modules, workload parsers, and V2 intake compile only
 with `qualification-oracles-test-only`; they are absent from the normal binary
