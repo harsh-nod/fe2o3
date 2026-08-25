@@ -94,9 +94,11 @@ The current formula generator is intentionally bounded and acyclic. Each proved
 effect establishes partial correctness for that one effect. Total output
 refinement additionally requires a non-vacuous clean total-view ownership
 result, an effect proof for every observable output write, and a serialized
-record that retains those exact pass summaries. Loops, reads, reductions,
-recurrences, permutations, MFMA semantics, and multiple output effects require
-their dedicated generic contracts before complete workload semantics can be
-claimed. Later compiler stages must preserve the imported evidence lineage
-without treating it as source-to-ISA, artifact, load, launch, runtime, or
-hardware proof.
+record that retains those exact pass summaries. Finite folds, bounded
+recurrences, and permutation gathers now have dedicated generic PLIRON
+contracts, but the rustc frontend does not yet synthesize them from arbitrary
+source loops, reads, reductions, MFMA sequences, or multiple output effects.
+Those frontend and lowering refinements remain required before complete
+workload semantics can be claimed. Later compiler stages must preserve the
+imported evidence lineage without treating it as source-to-ISA, artifact,
+load, launch, runtime, or hardware proof.

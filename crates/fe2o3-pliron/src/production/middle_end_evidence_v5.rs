@@ -10,11 +10,14 @@ use std::{error::Error, fmt, ops::Range};
 use fe2o3_kernel_analysis::{KernelCheckPassKindV1, PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2};
 use sha2::{Digest, Sha256};
 
+use super::middle_end_evidence_v4::{
+    derive_ranked_kernel_identity, revalidated_source_semantic_identity,
+};
 use super::{
-    ProductionMiddleEndEvidenceCodecErrorV4, ProductionMiddleEndEvidenceV4,
-    ProductionRankedKernelErrorV1, ProductionRankedKernelLoweringInputV1,
-    ProductionSemanticMirOwnerV1, ProductionTypedSemanticObligationSummaryV2,
-    typed_semantic_commitment_reconciliation_v2, typed_semantic_obligation_summary_v2,
+    ProductionMiddleEndEvidenceCodecErrorV4, ProductionRankedKernelErrorV1,
+    ProductionRankedKernelLoweringInputV1, ProductionSemanticMirOwnerV1,
+    ProductionTypedSemanticObligationSummaryV2, typed_semantic_commitment_reconciliation_v2,
+    typed_semantic_obligation_summary_v2,
 };
 
 const MAGIC_V5: [u8; 8] = *b"F2MEV5\0\0";
@@ -27,6 +30,7 @@ const PASS_COUNT_V5: usize = 8;
 const PASS_RECORD_BYTES_V5: usize = 10;
 const SHA256_BYTES: usize = 32;
 const COVERAGE_COUNTERS_V5: usize = 4;
+const SEMANTIC_COUNTERS_V5: usize = 6;
 const TYPED_SUMMARY_COUNTERS_V5: usize = 10;
 const RECONCILIATION_COUNTERS_V5: usize = 2;
 const IDENTITY_DOMAIN_V5: &[u8] = b"FE2O3/PRODUCTION-MIDDLE-END-EVIDENCE-IDENTITY/V5\0";
@@ -60,6 +64,7 @@ const FIXED_RECORD_BYTES_V5: usize = MAGIC_V5.len()
     + 1
     + PASS_COUNT_V5 * PASS_RECORD_BYTES_V5
     + COVERAGE_COUNTERS_V5 * 8
+    + SEMANTIC_COUNTERS_V5 * 8
     + TYPED_SUMMARY_COUNTERS_V5 * 8
     + RECONCILIATION_COUNTERS_V5 * 8
     + SHA256_BYTES
@@ -214,6 +219,62 @@ impl ProductionMiddleEndCoverageSummaryV5 {
     }
 }
 
+/// Exact non-vacuous obligation counts from the semantic pass.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ProductionMiddleEndSemanticSummaryV5 {
+    reference_obligations_declared: u64,
+    reference_obligations_proved: u64,
+    effect_contracts_declared: u64,
+    effect_contracts_proved: u64,
+    collective_contracts_declared: u64,
+    collective_contracts_proved: u64,
+}
+
+impl ProductionMiddleEndSemanticSummaryV5 {
+    pub const fn reference_obligations_declared(self) -> u64 {
+        self.reference_obligations_declared
+    }
+
+    pub const fn reference_obligations_proved(self) -> u64 {
+        self.reference_obligations_proved
+    }
+
+    pub const fn effect_contracts_declared(self) -> u64 {
+        self.effect_contracts_declared
+    }
+
+    pub const fn effect_contracts_proved(self) -> u64 {
+        self.effect_contracts_proved
+    }
+
+    pub const fn collective_contracts_declared(self) -> u64 {
+        self.collective_contracts_declared
+    }
+
+    pub const fn collective_contracts_proved(self) -> u64 {
+        self.collective_contracts_proved
+    }
+
+    pub const fn has_non_vacuous_reference_proof(self) -> bool {
+        self.reference_obligations_declared != 0
+            && self.reference_obligations_declared == self.reference_obligations_proved
+    }
+
+    pub const fn has_non_vacuous_effect_proof(self) -> bool {
+        self.effect_contracts_declared != 0
+            && self.effect_contracts_declared == self.effect_contracts_proved
+    }
+
+    pub const fn has_non_vacuous_collective_value_proof(self) -> bool {
+        self.collective_contracts_declared != 0
+            && self.collective_contracts_declared == self.collective_contracts_proved
+    }
+
+    pub const fn grants_target_or_hardware_value_authority(self) -> bool {
+        false
+    }
+}
+
 /// Exact typed-recipe/live-PLIRON commitment reconciliation retained by V5.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ProductionMiddleEndTypedSemanticReconciliationV5 {
@@ -280,6 +341,7 @@ pub struct InertProductionMiddleEndEvidenceV5 {
     ranked_kernel_identity: [u8; SHA256_BYTES],
     ranked_ir_range: Range<usize>,
     coverage: ProductionMiddleEndCoverageSummaryV5,
+    semantics: ProductionMiddleEndSemanticSummaryV5,
     typed_summary: ProductionTypedSemanticObligationSummaryV2,
     reconciliation: ProductionMiddleEndTypedSemanticReconciliationV5,
     identity: ProductionMiddleEndEvidenceIdentityV5,
@@ -423,6 +485,15 @@ impl InertProductionMiddleEndEvidenceV5 {
             collective_contributions_proved: reader.u64()?,
         };
         validate_coverage_v5(coverage)?;
+        let semantics = ProductionMiddleEndSemanticSummaryV5 {
+            reference_obligations_declared: reader.u64()?,
+            reference_obligations_proved: reader.u64()?,
+            effect_contracts_declared: reader.u64()?,
+            effect_contracts_proved: reader.u64()?,
+            collective_contracts_declared: reader.u64()?,
+            collective_contracts_proved: reader.u64()?,
+        };
+        validate_semantics_v5(semantics)?;
         let typed_summary = ProductionTypedSemanticObligationSummaryV2 {
             expression_roots: u64_to_usize(reader.u64()?)?,
             expression_nodes: u64_to_usize(reader.u64()?)?,
@@ -461,6 +532,7 @@ impl InertProductionMiddleEndEvidenceV5 {
             ranked_kernel_identity,
             ranked_ir,
             coverage,
+            semantics,
             typed_summary,
             reconciliation,
         )?;
@@ -472,6 +544,7 @@ impl InertProductionMiddleEndEvidenceV5 {
             ranked_kernel_identity,
             ranked_ir_range: ranked_ir_start..ranked_ir_end,
             coverage,
+            semantics,
             typed_summary,
             reconciliation,
             identity: reconstructed.identity,
@@ -508,6 +581,10 @@ impl InertProductionMiddleEndEvidenceV5 {
 
     pub const fn coverage_summary(&self) -> ProductionMiddleEndCoverageSummaryV5 {
         self.coverage
+    }
+
+    pub const fn semantic_summary(&self) -> ProductionMiddleEndSemanticSummaryV5 {
+        self.semantics
     }
 
     pub const fn typed_semantic_summary(&self) -> ProductionTypedSemanticObligationSummaryV2 {
@@ -567,6 +644,7 @@ impl fmt::Debug for InertProductionMiddleEndEvidenceV5 {
             .debug_struct("InertProductionMiddleEndEvidenceV5")
             .field("identity", &self.identity)
             .field("coverage", &self.coverage)
+            .field("semantics", &self.semantics)
             .field("typed_summary", &self.typed_summary)
             .field("reconciliation", &self.reconciliation)
             .finish_non_exhaustive()
@@ -591,9 +669,12 @@ impl ProductionMiddleEndEvidenceV5 {
         ranked: &ProductionRankedKernelLoweringInputV1,
         deterministic_ranked_ir: &str,
     ) -> Result<Self, ProductionMiddleEndEvidenceCodecErrorV5> {
-        // V4 remains the frozen validator for its historical seven-pass boundary.
-        let v4 = ProductionMiddleEndEvidenceV4::try_new(semantic, ranked, deterministic_ranked_ir)
+        validate_ranked_ir_v5(deterministic_ranked_ir.as_bytes())?;
+        let source_semantic_identity = revalidated_source_semantic_identity(semantic)
             .map_err(ProductionMiddleEndEvidenceCodecErrorV5::HistoricalV4)?;
+        ranked
+            .revalidate_structure()
+            .map_err(ProductionMiddleEndEvidenceCodecErrorV5::RankedKernel)?;
         validate_v5_live_reports(ranked)?;
         let observed = ranked.ownership_report().coverage_summary();
         let coverage = ProductionMiddleEndCoverageSummaryV5 {
@@ -607,6 +688,25 @@ impl ProductionMiddleEndEvidenceV5 {
             )?,
         };
         validate_coverage_v5(coverage)?;
+        let semantic_report = ranked.semantic_report();
+        let effect_report = semantic_report.effect_refinement();
+        let semantics = ProductionMiddleEndSemanticSummaryV5 {
+            reference_obligations_declared: usize_to_u64(
+                semantic_report.reference_obligation_count(),
+            )?,
+            reference_obligations_proved: usize_to_u64(
+                semantic_report.proved_reference_obligation_count(),
+            )?,
+            effect_contracts_declared: usize_to_u64(effect_report.contract_count())?,
+            effect_contracts_proved: usize_to_u64(effect_report.proved_contract_count())?,
+            collective_contracts_declared: usize_to_u64(
+                semantic_report.collective_contract_count(),
+            )?,
+            collective_contracts_proved: usize_to_u64(
+                semantic_report.proved_collective_contract_count(),
+            )?,
+        };
+        validate_semantics_v5(semantics)?;
         let typed_summary = typed_semantic_obligation_summary_v2(ranked.kernel())
             .map_err(ProductionMiddleEndEvidenceCodecErrorV5::RankedKernel)?;
         validate_typed_summary_v5(typed_summary)?;
@@ -622,13 +722,16 @@ impl ProductionMiddleEndEvidenceV5 {
             ordered_commitments_sha256: *observed_reconciliation.ordered_commitments_sha256(),
         };
         validate_reconciliation_v5(typed_summary, reconciliation)?;
-        let source_semantic_identity = *v4.source_semantic_identity();
-        let ranked_kernel_identity = *v4.ranked_kernel_identity();
+        let ranked_kernel_identity = derive_ranked_kernel_identity(ranked);
+        if ranked_kernel_identity == [0; SHA256_BYTES] {
+            return Err(ProductionMiddleEndEvidenceCodecErrorV5::ZeroRankedKernelIdentity);
+        }
         let encoded = encode_record_v5(
             source_semantic_identity,
             ranked_kernel_identity,
             deterministic_ranked_ir,
             coverage,
+            semantics,
             typed_summary,
             reconciliation,
         )?;
@@ -638,6 +741,7 @@ impl ProductionMiddleEndEvidenceV5 {
                 ranked_kernel_identity,
                 ranked_ir_range: encoded.ranked_ir_range,
                 coverage,
+                semantics,
                 typed_summary,
                 reconciliation,
                 identity: encoded.identity,
@@ -682,6 +786,10 @@ impl ProductionMiddleEndEvidenceV5 {
 
     pub const fn coverage_summary(&self) -> ProductionMiddleEndCoverageSummaryV5 {
         self.inert.coverage_summary()
+    }
+
+    pub const fn semantic_summary(&self) -> ProductionMiddleEndSemanticSummaryV5 {
+        self.inert.semantic_summary()
     }
 
     pub const fn typed_semantic_summary(&self) -> ProductionTypedSemanticObligationSummaryV2 {
@@ -756,6 +864,7 @@ pub enum ProductionMiddleEndEvidenceCodecErrorV5 {
     ReportAuthorityClaim(ProductionMiddleEndEvidencePassV5),
     CounterOverflow,
     InvalidCoverageSummary,
+    InvalidSemanticSummary,
     InvalidTypedSemanticSummary,
     InvalidTypedSemanticReconciliation,
     EmptyRankedIr,
@@ -824,6 +933,9 @@ impl fmt::Display for ProductionMiddleEndEvidenceCodecErrorV5 {
             Self::CounterOverflow => formatter.write_str("V5 evidence counter overflow"),
             Self::InvalidCoverageSummary => {
                 formatter.write_str("V5 coverage summary is inconsistent")
+            }
+            Self::InvalidSemanticSummary => {
+                formatter.write_str("V5 semantic obligation summary is inconsistent")
             }
             Self::InvalidTypedSemanticSummary => {
                 formatter.write_str("V5 typed semantic summary is inconsistent")
@@ -984,6 +1096,18 @@ fn validate_coverage_v5(
     Ok(())
 }
 
+fn validate_semantics_v5(
+    summary: ProductionMiddleEndSemanticSummaryV5,
+) -> Result<(), ProductionMiddleEndEvidenceCodecErrorV5> {
+    if summary.reference_obligations_declared != summary.reference_obligations_proved
+        || summary.effect_contracts_declared != summary.effect_contracts_proved
+        || summary.collective_contracts_declared != summary.collective_contracts_proved
+    {
+        return Err(ProductionMiddleEndEvidenceCodecErrorV5::InvalidSemanticSummary);
+    }
+    Ok(())
+}
+
 fn validate_typed_summary_v5(
     summary: ProductionTypedSemanticObligationSummaryV2,
 ) -> Result<(), ProductionMiddleEndEvidenceCodecErrorV5> {
@@ -1056,11 +1180,13 @@ fn encode_record_v5(
     ranked_kernel_identity: [u8; SHA256_BYTES],
     ranked_ir: &str,
     coverage: ProductionMiddleEndCoverageSummaryV5,
+    semantics: ProductionMiddleEndSemanticSummaryV5,
     typed_summary: ProductionTypedSemanticObligationSummaryV2,
     reconciliation: ProductionMiddleEndTypedSemanticReconciliationV5,
 ) -> Result<EncodedRecordV5, ProductionMiddleEndEvidenceCodecErrorV5> {
     validate_ranked_ir_v5(ranked_ir.as_bytes())?;
     validate_coverage_v5(coverage)?;
+    validate_semantics_v5(semantics)?;
     validate_typed_summary_v5(typed_summary)?;
     validate_reconciliation_v5(typed_summary, reconciliation)?;
     if source_semantic_identity == [0; SHA256_BYTES] {
@@ -1119,6 +1245,16 @@ fn encode_record_v5(
         coverage.total_view_proved,
         coverage.collective_contributions_declared,
         coverage.collective_contributions_proved,
+    ] {
+        canonical.extend_from_slice(&counter.to_le_bytes());
+    }
+    for counter in [
+        semantics.reference_obligations_declared,
+        semantics.reference_obligations_proved,
+        semantics.effect_contracts_declared,
+        semantics.effect_contracts_proved,
+        semantics.collective_contracts_declared,
+        semantics.collective_contracts_proved,
     ] {
         canonical.extend_from_slice(&counter.to_le_bytes());
     }
@@ -1247,6 +1383,7 @@ mod tests {
         pass_count: usize,
         passes: usize,
         coverage: usize,
+        semantics: usize,
         typed: usize,
         reconciliation: usize,
         identity: usize,
@@ -1273,6 +1410,14 @@ mod tests {
             [2; SHA256_BYTES],
             IR,
             coverage,
+            ProductionMiddleEndSemanticSummaryV5 {
+                reference_obligations_declared: 1,
+                reference_obligations_proved: 1,
+                effect_contracts_declared: 1,
+                effect_contracts_proved: 1,
+                collective_contracts_declared: 2,
+                collective_contracts_proved: 2,
+            },
             summary(),
             ProductionMiddleEndTypedSemanticReconciliationV5 {
                 recipe_expression_roots: 1,
@@ -1320,6 +1465,8 @@ mod tests {
         offset += PASS_COUNT_V5 * PASS_RECORD_BYTES_V5;
         let coverage = offset;
         offset += COVERAGE_COUNTERS_V5 * 8;
+        let semantics = offset;
+        offset += SEMANTIC_COUNTERS_V5 * 8;
         let typed = offset;
         offset += TYPED_SUMMARY_COUNTERS_V5 * 8;
         let reconciliation = offset;
@@ -1332,6 +1479,7 @@ mod tests {
             pass_count,
             passes,
             coverage,
+            semantics,
             typed,
             reconciliation,
             identity,
@@ -1366,6 +1514,13 @@ mod tests {
         );
         assert_eq!(decoded.typed_semantic_summary(), summary());
         assert!(decoded.typed_semantic_reconciliation().is_exact());
+        assert!(decoded.semantic_summary().has_non_vacuous_reference_proof());
+        assert!(decoded.semantic_summary().has_non_vacuous_effect_proof());
+        assert!(
+            decoded
+                .semantic_summary()
+                .has_non_vacuous_collective_value_proof()
+        );
         assert_eq!(
             decoded
                 .typed_semantic_reconciliation()
@@ -1380,8 +1535,8 @@ mod tests {
         assert_eq!(
             *decoded.identity().sha256(),
             [
-                233, 153, 235, 71, 62, 195, 150, 201, 2, 155, 52, 175, 3, 178, 11, 226, 100, 12,
-                88, 179, 133, 155, 209, 119, 217, 244, 50, 92, 236, 74, 185, 16,
+                255, 192, 5, 110, 140, 193, 119, 236, 249, 72, 104, 148, 57, 153, 181, 97, 27, 202,
+                29, 242, 235, 152, 238, 202, 198, 37, 125, 56, 137, 41, 211, 38,
             ]
         );
         assert!(!decoded.authenticates_producer());
@@ -1451,6 +1606,14 @@ mod tests {
         assert!(matches!(
             InertProductionMiddleEndEvidenceV5::decode(&coverage),
             Err(ProductionMiddleEndEvidenceCodecErrorV5::InvalidCoverageSummary)
+        ));
+
+        let mut semantics = encoded.canonical_bytes.to_vec();
+        semantics[wire.semantics + 5 * 8..wire.semantics + 6 * 8]
+            .copy_from_slice(&0_u64.to_le_bytes());
+        assert!(matches!(
+            InertProductionMiddleEndEvidenceV5::decode(&semantics),
+            Err(ProductionMiddleEndEvidenceCodecErrorV5::InvalidSemanticSummary)
         ));
 
         let mut typed = encoded.canonical_bytes.to_vec();
@@ -1543,6 +1706,7 @@ mod tests {
             [2; SHA256_BYTES],
             &maximum_ir,
             ProductionMiddleEndCoverageSummaryV5::default(),
+            ProductionMiddleEndSemanticSummaryV5::default(),
             summary(),
             ProductionMiddleEndTypedSemanticReconciliationV5 {
                 recipe_expression_roots: 1,
@@ -1564,6 +1728,7 @@ mod tests {
                 [2; SHA256_BYTES],
                 &maximum_ir,
                 ProductionMiddleEndCoverageSummaryV5::default(),
+                ProductionMiddleEndSemanticSummaryV5::default(),
                 summary(),
                 ProductionMiddleEndTypedSemanticReconciliationV5 {
                     recipe_expression_roots: 1,

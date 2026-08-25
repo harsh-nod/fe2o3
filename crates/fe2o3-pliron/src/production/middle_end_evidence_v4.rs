@@ -507,20 +507,7 @@ impl ProductionMiddleEndEvidenceV4 {
         deterministic_ranked_ir: &str,
     ) -> Result<Self, ProductionMiddleEndEvidenceCodecErrorV4> {
         validate_ranked_ir(deterministic_ranked_ir.as_bytes())?;
-        semantic
-            .verify_equivalence()
-            .map_err(ProductionMiddleEndEvidenceCodecErrorV4::SemanticOwner)?;
-        let source_semantic_identity = *semantic.semantic().semantic_sha256().as_bytes();
-        if source_semantic_identity == [0; SHA256_BYTES] {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV4::ZeroSemanticIdentity);
-        }
-        let actual_semantic_identity: [u8; SHA256_BYTES] =
-            Sha256::digest(semantic.semantic().canonical_encoding()).into();
-        if actual_semantic_identity != source_semantic_identity
-            || semantic.locator().semantic_sha256().as_bytes() != &source_semantic_identity
-        {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV4::SemanticSourceIdentityMismatch);
-        }
+        let source_semantic_identity = revalidated_source_semantic_identity(semantic)?;
 
         ranked
             .revalidate_structure()
@@ -1049,7 +1036,27 @@ fn derive_evidence_identity(preimage: &[u8]) -> Option<[u8; SHA256_BYTES]> {
     (identity != [0; SHA256_BYTES]).then_some(identity)
 }
 
-fn derive_ranked_kernel_identity(
+pub(super) fn revalidated_source_semantic_identity(
+    semantic: &ProductionSemanticMirOwnerV1,
+) -> Result<[u8; SHA256_BYTES], ProductionMiddleEndEvidenceCodecErrorV4> {
+    semantic
+        .verify_equivalence()
+        .map_err(ProductionMiddleEndEvidenceCodecErrorV4::SemanticOwner)?;
+    let source_semantic_identity = *semantic.semantic().semantic_sha256().as_bytes();
+    if source_semantic_identity == [0; SHA256_BYTES] {
+        return Err(ProductionMiddleEndEvidenceCodecErrorV4::ZeroSemanticIdentity);
+    }
+    let actual_semantic_identity: [u8; SHA256_BYTES] =
+        Sha256::digest(semantic.semantic().canonical_encoding()).into();
+    if actual_semantic_identity != source_semantic_identity
+        || semantic.locator().semantic_sha256().as_bytes() != &source_semantic_identity
+    {
+        return Err(ProductionMiddleEndEvidenceCodecErrorV4::SemanticSourceIdentityMismatch);
+    }
+    Ok(source_semantic_identity)
+}
+
+pub(super) fn derive_ranked_kernel_identity(
     ranked: &ProductionRankedKernelLoweringInputV1,
 ) -> [u8; SHA256_BYTES] {
     let kernel = ranked.kernel();

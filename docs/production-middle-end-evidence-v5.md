@@ -24,6 +24,13 @@ of a coverage proof, never as vacuous success. A collective contribution proof
 establishes participation accounting only; it does not establish the operator,
 identity, ordering, final value, or termination of a collective.
 
+Six additional counters bind the semantic pass: declared and proved reference
+equalities, output-effect refinements, and finite collective-value contracts.
+The collective contracts describe target-neutral finite folds, bounded
+recurrences, and permutation gathers with explicit domains, step bounds,
+evaluation order, numerical policy, and coverage binding. Zero declarations
+remain absence of evidence. V5 rejects any declared/proved mismatch.
+
 V5 also binds every counter in `ProductionTypedSemanticObligationSummaryV2`.
 While the owner-held PLIRON graph is live, construction independently walks the
 retained typed ranked recipe and the actual
@@ -43,6 +50,6 @@ inert V5 evidence remains false.
 
 Strict decoding validates aggregate limits before allocation, all fixed fields,
 pass order and clean status, authority bits, coverage equality, typed-summary
-invariants, commitment reconciliation, canonical ranked IR, terminal identity,
-and byte-for-byte canonical re-encoding. Decoding yields an inert value and
-does not recreate live producer custody.
+invariants, semantic obligation equality, commitment reconciliation, canonical
+ranked IR, terminal identity, and byte-for-byte canonical re-encoding. Decoding
+yields an inert value and does not recreate live producer custody.
