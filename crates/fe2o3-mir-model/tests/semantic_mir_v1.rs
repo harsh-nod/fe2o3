@@ -1,4 +1,5 @@
 use fe2o3_mir_model::semantic_mir_v1::*;
+use fe2o3_mir_model::semantic_option_producers_v1;
 use sha2::{Digest, Sha256};
 
 fn bytes(tag: u8) -> [u8; 32] {
@@ -2332,6 +2333,11 @@ fn production_fill_intrinsics_preserve_typed_safety_relationships_and_pinned_enc
     assert_eq!(decoded.functions(), admitted.functions());
     assert_eq!(decoded.callables(), admitted.callables());
     assert_eq!(decoded.roots(), admitted.roots());
+    let option_producers =
+        semantic_option_producers_v1(&admitted.functions()[0], admitted.callables()).unwrap();
+    assert_eq!(option_producers.len(), 1);
+    assert_eq!(option_producers[0].option_local().index(), 5);
+    assert_eq!(option_producers[0].continuation().index(), 3);
     assert_eq!(
         admitted.semantic_sha256().as_bytes(),
         &[

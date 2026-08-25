@@ -98,6 +98,12 @@ impl SemanticOptionProducerV1 {
                 | SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift { .. }
                 | SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { .. }
                 | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { .. }
+                | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { .. }
+                | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut { .. }
+                | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive { .. }
+                | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut { .. }
+                | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut { .. }
+                | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut { .. }
         ) {
             return Ok(None);
         }
