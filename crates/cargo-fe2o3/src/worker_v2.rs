@@ -390,8 +390,14 @@ impl PreparedWorkerV2Config {
         Self::from_selection(qualification_oracle, config_path)
     }
 
-    pub(crate) fn from_environment_for_cargo_setup() -> Result<Option<Self>, WorkerV2ConfigError> {
-        let mut prepared = Self::from_environment()?;
+    pub(crate) fn from_environment_for_cargo_setup(
+        qualification_oracle: Option<&OsStr>,
+    ) -> Result<Option<Self>, WorkerV2ConfigError> {
+        let mut prepared = Self::from_environment_values(
+            std::env::var_os(OBSOLETE_CODEGEN_PIPELINE_ENV).as_deref(),
+            qualification_oracle,
+            std::env::var_os(WORKER_V2_CONFIG_ENV).as_deref(),
+        )?;
         if let Some(config) = prepared.as_mut() {
             config.pin_envelope_inputs()?;
         }
@@ -1965,6 +1971,14 @@ mod tests {
             ),
             Err(WorkerV2ConfigError::MissingConfiguration)
         ));
+        assert!(
+            PreparedWorkerV2Config::from_selection(
+                Some(OsStr::new(crate::SIMULATION_PIPELINE)),
+                None
+            )
+            .unwrap()
+            .is_none()
+        );
         assert!(
             PreparedWorkerV2Config::from_selection(Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE)), None)
                 .unwrap()

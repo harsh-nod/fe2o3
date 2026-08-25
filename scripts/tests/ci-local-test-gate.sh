@@ -7,7 +7,11 @@ source "${TEST_SCRIPT_DIR}/../ci-local.sh"
 
 TIMEOUT_TEST_ROOT="$(mktemp -d)"
 readonly TIMEOUT_TEST_ROOT
-trap 'rm -rf "${TIMEOUT_TEST_ROOT}"' EXIT
+cleanup_timeout_test_root() {
+  chmod -R u+w -- "${TIMEOUT_TEST_ROOT}" 2>/dev/null || true
+  rm -rf -- "${TIMEOUT_TEST_ROOT}"
+}
+trap cleanup_timeout_test_root EXIT
 
 bash "${TEST_SCRIPT_DIR}/rustc-codegen-shards.sh"
 python3 "${TEST_SCRIPT_DIR}/bounded-moe-ci-dispatch.py"
@@ -428,16 +432,6 @@ for core_step in \
   assert_step_count "${core_step}" 1 \
     "generic core did not run ${core_step} exactly once"
 done
-workspace_check_command="$(step_command workspace-check)"
-for wrapper_only_fixture in \
-  fe2o3-production-extraction-fixture \
-  fe2o3-production-ranked-bounds-fixture; do
-  if [[ "${workspace_check_command}" != *"--exclude ${wrapper_only_fixture}"* ]]; then
-    printf 'generic workspace check compiled wrapper-only fixture: %s\n' \
-      "${wrapper_only_fixture}" >&2
-    exit 1
-  fi
-done
 assert_equals \
   "python3 ${WORKSPACE_DEPENDENCY_POLICY_TESTS}" \
   "$(step_command workspace-dependency-policy-tests)" \
@@ -449,7 +443,7 @@ assert_equals \
 assert_step_count workspace-check 0 \
   'generic check retained the unsound raw/wrapper split'
 assert_equals \
-  "env ${TIMEOUT_TEST_ROOT}/generic-check-driver/cargo-fe2o3 check --workspace --all-targets --locked --exclude fe2o3-disabled-fixture" \
+  "env ${TIMEOUT_TEST_ROOT}/generic-check-driver/cargo-fe2o3 check --workspace --all-targets --locked --exclude fe2o3-production-extraction-fixture --exclude fe2o3-production-ranked-bounds-fixture --exclude fe2o3-disabled-fixture" \
   "$(step_command workspace-binding-check)" \
   'managed check did not cover the whole supported workspace graph'
 assert_equals \

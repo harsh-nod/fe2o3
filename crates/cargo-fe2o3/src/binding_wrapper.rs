@@ -835,6 +835,7 @@ fn qualification_requires_compiler_closure_observation(
     qualification_oracle: Option<&OsStr>,
 ) -> bool {
     qualification_oracle == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
+        || qualification_oracle == Some(OsStr::new(crate::SIMULATION_PIPELINE))
 }
 
 fn selected_kernel_root(
@@ -6388,6 +6389,57 @@ mod tests {
         assert!(qualification_requires_compiler_closure_observation(Some(
             OsStr::new(ROW_SOFTMAX_V1_PIPELINE)
         )));
+        assert!(qualification_requires_compiler_closure_observation(Some(
+            OsStr::new(crate::SIMULATION_PIPELINE)
+        )));
+    }
+
+    #[test]
+    fn observation_only_qualification_replaces_substituted_compiler_authority() {
+        let directory = test_artifact_directory("qualification-compiler-closure");
+        let capabilities = protected_compiler_capabilities_for_test(
+            &directory,
+            WorkerV2ConfigIdentity::for_test([0x61; 32]),
+        );
+        let expected_backend = hex(&capabilities.backend.sha256()[..]);
+        let expected_closure = hex(&capabilities.compiler_closure_sha256());
+        for pipeline in [ROW_SOFTMAX_V1_PIPELINE, crate::SIMULATION_PIPELINE] {
+            let substituted_closure = "01".repeat(32);
+            let mut command = Command::new("/proc/self/fd/194");
+            command
+                .env(
+                    crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV,
+                    &substituted_closure,
+                )
+                .env(CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2, "02".repeat(32));
+
+            capabilities
+                .prepare_qualification_command(
+                    &mut command,
+                    qualification_requires_compiler_closure_observation(Some(OsStr::new(pipeline))),
+                )
+                .unwrap();
+
+            let environment = command
+                .get_envs()
+                .collect::<std::collections::BTreeMap<_, _>>();
+            assert_eq!(
+                environment.get(OsStr::new(QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1)),
+                Some(&Some(OsStr::new(&expected_backend)))
+            );
+            assert_eq!(
+                environment.get(OsStr::new(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV)),
+                Some(&Some(OsStr::new(&expected_closure)))
+            );
+            assert_eq!(
+                environment.get(OsStr::new(CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2)),
+                Some(&None),
+                "qualification route {pipeline} retained a publication-capable backend marker"
+            );
+            assert_ne!(expected_closure, substituted_closure);
+            drop(command);
+        }
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

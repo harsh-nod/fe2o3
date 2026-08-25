@@ -1,5 +1,5 @@
 use reserved_fe2o3_symbols::CrateBindingIdV1;
-use rustix::fs::{FileType, Mode, OFlags, fstat, open, openat};
+use rustix::fs::{FileType, Mode, OFlags, fstat, openat};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -7,7 +7,6 @@ use std::fs;
 use std::fs::File;
 use std::io::Read as _;
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
-use std::os::unix::fs::MetadataExt as _;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitCode, Output, Stdio};
 use syn::parse::Parser;
@@ -17,7 +16,6 @@ use syn::{Attribute, Expr, ExprMethodCall, ItemFn, Lit, Meta, Token, punctuated:
 const MANIFEST_PATH: &str = "examples/regression-manifest-v1.txt";
 const MANIFEST_VERSION: &str = "fe2o3-example-regressions-v1";
 const MANIFEST_COLUMNS: &str = "package|rustc_check|rocm_compile|gpu_smoke|artifacts";
-const KERNEL_IR_QUALIFICATION_PACKAGES: [&str; 2] = ["fe2o3-fill", "fe2o3-vecadd"];
 const MAX_PACKAGE_SOURCE_DEPTH: usize = 64;
 const MAX_PACKAGE_SOURCE_ENTRIES: usize = 65_536;
 const MAX_PACKAGE_SOURCE_FILES: usize = 16_384;
@@ -115,12 +113,7 @@ pub(crate) fn gpu_smoke_packages(workspace_root: &Path) -> Result<Vec<String>, S
 }
 
 fn command_result(args: &[String]) -> Result<Vec<String>, String> {
-    let artifact_inspection = matches!(args, [command, _, _] if command == "check-artifacts");
-    let workspace_root = if artifact_inspection {
-        find_manifest_root_without_cargo()?
-    } else {
-        crate::find_workspace_root()?
-    };
+    let workspace_root = crate::find_workspace_root()?;
     if let [command, packages @ ..] = args
         && command == "check-wrapper-namespaces"
         && !packages.is_empty()
@@ -158,15 +151,7 @@ fn command_result(args: &[String]) -> Result<Vec<String>, String> {
             observed.len()
         )]);
     }
-    // Artifact inspection consumes the exact root admitted by its caller. It must not
-    // re-resolve Cargo or PATH after the build and accidentally inspect another target.
-    let manifest = if artifact_inspection {
-        let manifest = load_manifest_file(&workspace_root)?;
-        validate_kernel_ir_qualification_lanes(&manifest)?;
-        manifest
-    } else {
-        load(&workspace_root)?
-    };
+    let manifest = load(&workspace_root)?;
 
     match args {
         [command] if command == "check" => {
@@ -189,7 +174,7 @@ fn command_result(args: &[String]) -> Result<Vec<String>, String> {
                 .map(|entry| entry.package.clone())
                 .collect())
         }
-        [command, package, artifact_directory] if command == "check-artifacts" => {
+        [command, package] if command == "check-artifacts" => {
             let entry = manifest
                 .entries
                 .iter()
@@ -201,91 +186,12 @@ fn command_result(args: &[String]) -> Result<Vec<String>, String> {
                 ));
             }
 
-            let artifact_dir = PathBuf::from(artifact_directory);
-            if !artifact_dir.is_absolute() {
-                return Err(format!(
-                    "artifact directory must be absolute: {}",
-                    artifact_dir.display()
-                ));
-            }
-            let metadata = artifact_dir.symlink_metadata().map_err(|error| {
-                format!(
-                    "failed to inspect artifact directory {}: {error}",
-                    artifact_dir.display()
-                )
-            })?;
-            if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
-                return Err(format!(
-                    "artifact directory must be a non-symlink directory: {}",
-                    artifact_dir.display()
-                ));
-            }
-            let canonical = artifact_dir.canonicalize().map_err(|error| {
-                format!(
-                    "failed to canonicalize artifact directory {}: {error}",
-                    artifact_dir.display()
-                )
-            })?;
-            if canonical != artifact_dir {
-                return Err(format!(
-                    "artifact directory must already be canonical: {}",
-                    artifact_dir.display()
-                ));
-            }
-            let directory = open(
-                &artifact_dir,
-                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                Mode::empty(),
-            )
-            .map_err(|error| {
-                format!(
-                    "failed to open artifact directory {}: {error}",
-                    artifact_dir.display()
-                )
-            })?;
-            let descriptor_stat = fstat(&directory).map_err(|error| {
-                format!(
-                    "failed to inspect opened artifact directory {}: {error}",
-                    artifact_dir.display()
-                )
-            })?;
-            let final_metadata = artifact_dir.symlink_metadata().map_err(|error| {
-                format!(
-                    "failed to re-inspect artifact directory {}: {error}",
-                    artifact_dir.display()
-                )
-            })?;
-            if FileType::from_raw_mode(descriptor_stat.st_mode) != FileType::Directory
-                || descriptor_stat.st_dev != metadata.dev()
-                || descriptor_stat.st_ino != metadata.ino()
-                || descriptor_stat.st_dev != final_metadata.dev()
-                || descriptor_stat.st_ino != final_metadata.ino()
-            {
-                return Err(format!(
-                    "artifact directory changed while it was admitted: {}",
-                    artifact_dir.display()
-                ));
-            }
+            let artifact_dir = workspace_root.join("target/fe2o3");
             for artifact in &entry.artifacts {
                 let path = artifact_dir.join(artifact);
-                let artifact_file = openat(
-                    &directory,
-                    artifact,
-                    OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-                    Mode::empty(),
-                )
-                .map_err(|_| {
-                    format!(
-                        "expected artifact for package `{package}` was not produced as a regular non-symlink file: {}",
-                        path.display()
-                    )
-                })?;
-                let artifact_stat = fstat(&artifact_file).map_err(|error| {
-                    format!("failed to inspect artifact {}: {error}", path.display())
-                })?;
-                if FileType::from_raw_mode(artifact_stat.st_mode) != FileType::RegularFile {
+                if !path.is_file() {
                     return Err(format!(
-                        "expected artifact for package `{package}` was not produced as a regular non-symlink file: {}",
+                        "expected artifact for package `{package}` was not produced: {}",
                         path.display()
                     ));
                 }
@@ -296,27 +202,10 @@ fn command_result(args: &[String]) -> Result<Vec<String>, String> {
             )])
         }
         _ => Err(
-            "usage: cargo fe2o3 examples <check|list <all|rustc-check|rocm-compile|gpu-smoke|wrapper-managed>|check-artifacts <package> <absolute-artifact-directory>|check-wrapper-managed <package>...|check-wrapper-namespaces <package>...>"
+            "usage: cargo fe2o3 examples <check|list <all|rustc-check|rocm-compile|gpu-smoke|wrapper-managed>|check-artifacts <package>|check-wrapper-managed <package>...|check-wrapper-namespaces <package>...>"
                 .to_string(),
         ),
     }
-}
-
-fn find_manifest_root_without_cargo() -> Result<PathBuf, String> {
-    let current = env::current_dir()
-        .map_err(|error| format!("failed to resolve current directory: {error}"))?
-        .canonicalize()
-        .map_err(|error| format!("failed to canonicalize current directory: {error}"))?;
-    current
-        .ancestors()
-        .find(|candidate| candidate.join(MANIFEST_PATH).is_file())
-        .map(Path::to_path_buf)
-        .ok_or_else(|| {
-            format!(
-                "could not find {MANIFEST_PATH} from invocation directory {}",
-                current.display()
-            )
-        })
 }
 
 fn load(workspace_root: &Path) -> Result<Manifest, String> {
@@ -325,35 +214,7 @@ fn load(workspace_root: &Path) -> Result<Manifest, String> {
     let workspace_examples = workspace_projection(workspace_root)?;
     validate_projection(&manifest, &workspace_examples)
         .map_err(|error| format!("invalid {}: {error}", path.display()))?;
-    validate_kernel_ir_qualification_lanes(&manifest)
-        .map_err(|error| format!("invalid {}: {error}", path.display()))?;
     Ok(manifest)
-}
-
-fn validate_kernel_ir_qualification_lanes(manifest: &Manifest) -> Result<(), String> {
-    let expected = KERNEL_IR_QUALIFICATION_PACKAGES
-        .into_iter()
-        .collect::<BTreeSet<_>>();
-    let lanes: [(&str, fn(&Entry) -> bool); 2] = [
-        ("rocm_compile", |entry: &Entry| entry.rocm_compile),
-        ("gpu_smoke", |entry: &Entry| entry.gpu_smoke),
-    ];
-    for (lane, enabled) in lanes {
-        let actual = manifest
-            .entries
-            .iter()
-            .filter(|entry| enabled(entry))
-            .map(|entry| entry.package.as_str())
-            .collect::<BTreeSet<_>>();
-        if actual != expected {
-            return Err(format!(
-                "{lane} must select exactly the reviewed kernel-ir-v1 profiles [{}], found [{}]",
-                expected.iter().copied().collect::<Vec<_>>().join(","),
-                actual.iter().copied().collect::<Vec<_>>().join(",")
-            ));
-        }
-    }
-    Ok(())
 }
 
 fn load_manifest_file(workspace_root: &Path) -> Result<Manifest, String> {
@@ -2400,7 +2261,7 @@ fn validate_projection(
     }
     for (package, declared_entry) in declared {
         let current_entry = current[package];
-        if declared_entry.rocm_compile && declared_entry.artifacts != current_entry.artifacts {
+        if declared_entry.artifacts != current_entry.artifacts {
             return Err(format!(
                 "package `{package}` artifact drift: declared [{}], current [{}]",
                 declared_entry.artifacts.join(","),
@@ -2415,8 +2276,8 @@ fn validate_projection(
 #[cfg(test)]
 mod tests {
     use super::{
-        KERNEL_IR_QUALIFICATION_PACKAGES, Lane, MANIFEST_COLUMNS, MANIFEST_VERSION,
-        MAX_PACKAGE_SOURCE_DEPTH, MAX_PACKAGE_SOURCE_FILE_BYTES, MAX_PACKAGE_SOURCE_MODULE_EDGES,
+        Lane, MANIFEST_COLUMNS, MANIFEST_VERSION, MAX_PACKAGE_SOURCE_DEPTH,
+        MAX_PACKAGE_SOURCE_FILE_BYTES, MAX_PACKAGE_SOURCE_MODULE_EDGES,
         MAX_PACKAGE_SOURCE_TOKEN_DEPTH, PackageSourceScanState, SourceObjectSnapshot,
         WorkspaceExample, canonical_contained_path, collect_rust_sources, load,
         package_source_tree_requires_binding, package_source_tree_requires_binding_with_hook,
@@ -3492,6 +3353,11 @@ fn inspect(root: &std::path::Path, dynamic: &str) {
             .canonicalize()
             .expect("canonical workspace root");
         let manifest = load(&workspace_root).expect("checked manifest validates");
+        let pipeline = manifest
+            .entries
+            .iter()
+            .find(|entry| entry.package == "fe2o3-pipeline")
+            .expect("pipeline entry");
         let scalar_gemm = manifest
             .entries
             .iter()
@@ -3504,20 +3370,10 @@ fn inspect(root: &std::path::Path, dynamic: &str) {
             .expect("verus entry");
 
         assert_eq!(manifest.entries.len(), 26);
-        let rocm = manifest
-            .entries
-            .iter()
-            .filter(|entry| entry.rocm_compile)
-            .map(|entry| entry.package.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(rocm, KERNEL_IR_QUALIFICATION_PACKAGES);
-        let gpu = manifest
-            .entries
-            .iter()
-            .filter(|entry| entry.gpu_smoke)
-            .map(|entry| entry.package.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(gpu, KERNEL_IR_QUALIFICATION_PACKAGES);
+        assert_eq!(
+            pipeline.artifacts,
+            ["bias_stage.hsaco", "scale_stage.hsaco"]
+        );
         assert!(verus.rustc_check);
         assert!(!verus.rocm_compile);
         assert!(!verus.gpu_smoke);

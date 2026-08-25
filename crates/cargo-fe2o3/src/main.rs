@@ -644,26 +644,30 @@ fn cargo_with_backend_result(
     simulation: Option<&SimulationCommand>,
 ) -> Result<(), String> {
     reject_obsolete_codegen_pipeline(env::var_os(OBSOLETE_CODEGEN_PIPELINE_ENV).as_deref())?;
-    let production_target_profile = production_compilation_selected(
-        protected_release.is_some(),
-        simulation.is_some(),
-        env::var_os(worker_v2::QUALIFICATION_ORACLE_ENV).as_deref(),
-    )?;
-    if authority_sensitive_request_selected(production_target_profile) {
+    let inherited_qualification = env::var_os(worker_v2::QUALIFICATION_ORACLE_ENV);
+    let selected_qualification =
+        effective_qualification_oracle(inherited_qualification.as_deref(), simulation.is_some());
+    let production_target_profile =
+        production_compilation_selected(protected_release.is_some(), selected_qualification)?;
+    if authority_sensitive_request_selected(
+        production_target_profile,
+        selected_qualification,
+        env::var_os(worker_v2::WORKER_V2_CONFIG_ENV).is_some(),
+    ) {
         reject_dynamic_loader_environment()?;
     }
     scrub_process_dynamic_loader_environment();
     reject_preexisting_compiler_environment()?;
-    let worker_v2 = worker_v2::PreparedWorkerV2Config::from_environment_for_cargo_setup()
-        .map_err(|error| format!("Worker V2 setup failed: {error}"))?;
+    let worker_v2 =
+        worker_v2::PreparedWorkerV2Config::from_environment_for_cargo_setup(selected_qualification)
+            .map_err(|error| format!("Worker V2 setup failed: {error}"))?;
     validate_production_cargo_selection(
         args,
         production_target_profile,
         env::var_os(TARGET_ENV).as_deref(),
     )?;
     let requires_authorized_closure = production_target_profile
-        || env::var("FE2O3_QUALIFICATION_ORACLE_V1").as_deref()
-            == Ok(AUTHORITY_BEARING_ROW_PIPELINE)
+        || selected_qualification == Some(OsStr::new(AUTHORITY_BEARING_ROW_PIPELINE))
         || worker_v2
             .as_ref()
             .and_then(worker_v2::PreparedWorkerV2Config::source_debug_profile)
@@ -784,19 +788,32 @@ fn cargo_with_backend_result(
     run_cargo_with_backend(&mut context, command, args, protected_release, simulation)
 }
 
-fn authority_sensitive_request_selected(production_compilation: bool) -> bool {
+fn effective_qualification_oracle(
+    inherited_qualification: Option<&OsStr>,
+    simulation: bool,
+) -> Option<&OsStr> {
+    if simulation {
+        Some(OsStr::new(SIMULATION_PIPELINE))
+    } else {
+        inherited_qualification
+    }
+}
+
+fn authority_sensitive_request_selected(
+    production_compilation: bool,
+    qualification_oracle: Option<&OsStr>,
+    worker_v2_config_present: bool,
+) -> bool {
     production_compilation
-        || env::var_os(worker_v2::QUALIFICATION_ORACLE_ENV).as_deref()
-        == Some(OsStr::new(AUTHORITY_BEARING_ROW_PIPELINE))
+        || qualification_oracle == Some(OsStr::new(AUTHORITY_BEARING_ROW_PIPELINE))
         // A Worker V2 manifest can select the source-debug authority profile. Treat the
         // unparsed selection as authority-sensitive so mutable manifest contents cannot
         // downgrade the loader check that precedes manifest authentication.
-        || env::var_os(worker_v2::WORKER_V2_CONFIG_ENV).is_some()
+        || worker_v2_config_present
 }
 
 fn production_compilation_selected(
     protected_release: bool,
-    simulation: bool,
     selector: Option<&OsStr>,
 ) -> Result<bool, String> {
     if selector == Some(OsStr::new("production-v1")) {
@@ -805,7 +822,7 @@ fn production_compilation_selected(
             worker_v2::QUALIFICATION_ORACLE_ENV,
         ));
     }
-    Ok(protected_release || (!simulation && selector.is_none()))
+    Ok(protected_release || selector.is_none())
 }
 
 fn reject_obsolete_codegen_pipeline(value: Option<&OsStr>) -> Result<(), String> {
@@ -3083,13 +3100,12 @@ const fn qualification_help_lines() -> &'static str {
 mod tests {
     use super::{
         SIMULATION_ATTEMPT_ENV, SIMULATION_MODE_ENV, TARGET_ENV, aggregate_post_spawn_results,
-        clear_cargo_unit_identity_names,
+        authority_sensitive_request_selected, clear_cargo_unit_identity_names,
         configure_production_target_build_environment, configure_simulation_build_environment,
-        inject_application_runner_config, normalize_invocation, parse_rocminfo_target,
-        parse_rustup_tool_path, production_compilation_selected, qualification_help_lines,
-        reject_authority_rustup_proxy,
-        reject_obsolete_codegen_pipeline, resolve_amd_gpu_target, selected_run_target,
-        validate_production_cargo_selection,
+        effective_qualification_oracle, inject_application_runner_config, normalize_invocation,
+        parse_rocminfo_target, parse_rustup_tool_path, production_compilation_selected,
+        qualification_help_lines, reject_authority_rustup_proxy, reject_obsolete_codegen_pipeline,
+        resolve_amd_gpu_target, selected_run_target, validate_production_cargo_selection,
     };
     use crate::pinned_executable_test_directory::TestDirectory;
     use crate::project::PinnedDirectory;
@@ -3252,18 +3268,44 @@ mod tests {
 
     #[test]
     fn production_is_the_unselected_route_and_has_no_selector() {
-        assert!(production_compilation_selected(false, false, None).unwrap());
-        assert!(production_compilation_selected(true, false, None).unwrap());
-        assert!(!production_compilation_selected(false, true, None).unwrap());
+        assert!(production_compilation_selected(false, None).unwrap());
+        assert!(production_compilation_selected(true, None).unwrap());
+        assert!(!production_compilation_selected(false, Some(OsStr::new("kernel-ir-v1"))).unwrap());
         assert!(
-            !production_compilation_selected(false, false, Some(OsStr::new("kernel-ir-v1")))
-                .unwrap()
-        );
-        assert!(
-            production_compilation_selected(false, false, Some(OsStr::new("production-v1")))
+            production_compilation_selected(false, Some(OsStr::new("production-v1")))
                 .expect_err("obsolete production selector must fail")
                 .contains("must be unset for production compilation")
         );
+    }
+
+    #[test]
+    fn simulation_intent_precedes_production_and_worker_selection() {
+        let simulation = Some(OsStr::new(super::SIMULATION_PIPELINE));
+        assert_eq!(effective_qualification_oracle(None, true), simulation);
+        assert_eq!(
+            effective_qualification_oracle(Some(OsStr::new("production-v1")), true),
+            simulation
+        );
+        assert_eq!(
+            effective_qualification_oracle(Some(OsStr::new("kernel-ir-v1")), false),
+            Some(OsStr::new("kernel-ir-v1"))
+        );
+
+        assert!(!production_compilation_selected(false, simulation).unwrap());
+        assert!(!authority_sensitive_request_selected(
+            false, simulation, false
+        ));
+        assert!(authority_sensitive_request_selected(
+            true, simulation, false
+        ));
+        assert!(authority_sensitive_request_selected(
+            false,
+            Some(OsStr::new(super::AUTHORITY_BEARING_ROW_PIPELINE)),
+            false,
+        ));
+        assert!(authority_sensitive_request_selected(
+            false, simulation, true
+        ));
     }
 
     #[test]

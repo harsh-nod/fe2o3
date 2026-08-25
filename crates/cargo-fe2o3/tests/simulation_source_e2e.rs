@@ -92,9 +92,20 @@ fn run_simulation(
 ) -> std::process::Output {
     let manifest =
         workspace.join("crates/cargo-fe2o3/tests/fixtures/simulation-source-fill/Cargo.toml");
-    Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+    let cargo_fe2o3 = Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    let dispatch_path = env::join_paths(
+        std::iter::once(
+            cargo_fe2o3
+                .parent()
+                .expect("cargo-fe2o3 binary directory")
+                .to_path_buf(),
+        )
+        .chain(env::split_paths(path)),
+    )
+    .expect("Cargo dispatch PATH");
+    Command::new(env!("CARGO"))
         .current_dir(workspace)
-        .args(["simulate", "--request"])
+        .args(["fe2o3", "simulate", "--request"])
         .arg(request)
         .arg("--output")
         .arg(result)
@@ -104,17 +115,69 @@ fn run_simulation(
         .arg(target)
         .env("CARGO", env!("CARGO"))
         .env("FE2O3_BACKEND", backend)
-        .env("PATH", path)
+        .env("PATH", dispatch_path)
         .env_remove("FE2O3_TARGET")
+        .env_remove("FE2O3_QUALIFICATION_ORACLE_V1")
+        .env_remove("FE2O3_WORKER_V2_CONFIG_V2")
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTC")
         .env_remove("RUSTC_WRAPPER")
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .env_remove("LD_PRELOAD")
+        .env_remove("LD_AUDIT")
+        .env_remove("LD_LIBRARY_PATH")
+        .env_remove("GLIBC_TUNABLES")
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env_remove("CARGO_PROFILE_DEV_DEBUG")
         .output()
         .expect("run source simulation")
+}
+
+#[test]
+fn cargo_dispatch_keeps_default_production_loader_environment_fail_closed() {
+    let workspace = workspace();
+    let directory = TestDirectory::new();
+    let cargo_fe2o3 = Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    let dispatch_path = env::join_paths(
+        std::iter::once(
+            cargo_fe2o3
+                .parent()
+                .expect("cargo-fe2o3 binary directory")
+                .to_path_buf(),
+        )
+        .chain(env::split_paths(&env::var_os("PATH").unwrap_or_default())),
+    )
+    .expect("Cargo dispatch PATH");
+    let manifest =
+        workspace.join("crates/cargo-fe2o3/tests/fixtures/simulation-source-fill/Cargo.toml");
+    let output = Command::new(env!("CARGO"))
+        .current_dir(&workspace)
+        .args(["fe2o3", "build", "--locked", "--manifest-path"])
+        .arg(manifest)
+        .args(["--target-dir"])
+        .arg(directory.0.join("hostile-target"))
+        .env("CARGO", env!("CARGO"))
+        .env("PATH", dispatch_path)
+        .env("LD_LIBRARY_PATH", "/attacker/library")
+        .env_remove("FE2O3_QUALIFICATION_ORACLE_V1")
+        .env_remove("FE2O3_WORKER_V2_CONFIG_V2")
+        .env_remove("LD_PRELOAD")
+        .env_remove("LD_AUDIT")
+        .env_remove("GLIBC_TUNABLES")
+        .env_remove("RUSTC")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .output()
+        .expect("run hostile Cargo dispatch");
+    assert!(!output.status.success(), "hostile loader unexpectedly ran");
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cargo fe2o3 rejects dynamic-loader injection variable")
+            && stderr.contains("/attacker/library"),
+        "hostile Cargo loader path was not rejected before production setup:\n{stderr}"
+    );
 }
 
 fn assert_hostile_simulation_value_does_not_supply_a_managed_binding(

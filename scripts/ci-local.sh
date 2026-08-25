@@ -1,13 +1,25 @@
 #!/usr/bin/env bash
 
 set -Eeuo pipefail
+umask 077
 export PYTHONDONTWRITEBYTECODE=1
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 readonly REPO_ROOT
-readonly LOG_DIR="${CI_LOG_DIR:-${REPO_ROOT}/target/ci-logs}"
+DEFAULT_CARGO_TARGET_ROOT="${CARGO_TARGET_DIR:-${REPO_ROOT}/target}"
+if [[ "${DEFAULT_CARGO_TARGET_ROOT}" != /* ]]; then
+  DEFAULT_CARGO_TARGET_ROOT="${REPO_ROOT}/${DEFAULT_CARGO_TARGET_ROOT}"
+fi
+DEFAULT_CARGO_TARGET_ROOT="$(realpath --canonicalize-missing -- "${DEFAULT_CARGO_TARGET_ROOT}")"
+readonly DEFAULT_CARGO_TARGET_ROOT
+LOG_DIR="${CI_LOG_DIR:-${DEFAULT_CARGO_TARGET_ROOT}/ci-logs}"
+if [[ "${LOG_DIR}" != /* ]]; then
+  LOG_DIR="${REPO_ROOT}/${LOG_DIR}"
+fi
+LOG_DIR="$(realpath --canonicalize-missing -- "${LOG_DIR}")"
+readonly LOG_DIR
 readonly RUSTC_CODEGEN_TEST_PACKAGE="rustc-codegen-fe2o3"
 readonly RUSTC_CODEGEN_TEST_DRIVER_PACKAGE="cargo-fe2o3"
 readonly RUSTC_CODEGEN_QUALIFICATION_FEATURE="qualification-oracles-test-only"
@@ -24,10 +36,15 @@ readonly RUNTIME_PURE_RUST_POLICY="${REPO_ROOT}/scripts/runtime-pure-rust-policy
 readonly RUNTIME_PURE_RUST_AUDIT_TESTS="${REPO_ROOT}/scripts/tests/runtime_pure_rust_audit.py"
 readonly RUNTIME_IDENTITY_ORACLE_TESTS="${REPO_ROOT}/scripts/tests/runtime_identity_oracle.py"
 readonly RUNTIME_IDENTITY_ORACLE="${REPO_ROOT}/scripts/runtime-identity-oracle.sh"
-readonly RUNTIME_PURE_RUST_TARGET_DIR="${REPO_ROOT}/target/runtime-pure-rust-policy"
+readonly RUNTIME_PURE_RUST_TARGET_DIR="${DEFAULT_CARGO_TARGET_ROOT}/runtime-pure-rust-policy"
 readonly CI_STEP_TIMEOUT_SECONDS="${FE2O3_CI_STEP_TIMEOUT_SECONDS:-3000}"
 readonly GENERAL_GEMM_SEMANTIC_FRONTEND_TIMEOUT_SECONDS=4200
 readonly CI_STEP_KILL_AFTER_SECONDS="${FE2O3_CI_STEP_KILL_AFTER_SECONDS:-15}"
+CARGO_FE2O3_BINARY=
+CARGO_FE2O3_SHA256=
+CARGO_FE2O3_DRIVER_ROOT=
+CARGO_TARGET_DIRECTORY=
+CI_PRIVATE_TMP_ROOT=
 
 readonly CPU_TEST_PACKAGES=(
   dialect-amdgcn
@@ -182,15 +199,280 @@ run_step() {
   run_step_with_timeout "${CI_STEP_TIMEOUT_SECONDS}" "$@"
 }
 
+validate_private_directory() {
+  local label="$1"
+  local directory="$2"
+  local canonical mode owner
+
+  [[ "${directory}" == /* && -d "${directory}" && ! -L "${directory}" ]] || {
+    printf '%s must be an absolute non-symlink directory: %s\n' \
+      "${label}" "${directory}" >&2
+    return 2
+  }
+  canonical="$(realpath --canonicalize-existing -- "${directory}")"
+  mode="$(stat -c '%a' -- "${directory}")"
+  owner="$(stat -c '%u' -- "${directory}")"
+  if [[ "${canonical}" != "${directory}" ]] ||
+    ((8#${mode} & 8#077)) || [[ "${owner}" != "$(id -u)" ]]; then
+    printf '%s must be canonical, owner-held, and private: %s\n' \
+      "${label}" "${directory}" >&2
+    return 2
+  fi
+}
+
+resolve_cargo_target_directory() {
+  local target_directory canonical
+  target_directory="$(
+    cargo metadata --locked --no-deps --format-version 1 |
+      python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])'
+  )"
+  if [[ "${target_directory}" != /* ]] ||
+    [[ "${target_directory}" == *$'\n'* ]]; then
+    printf 'Cargo reported an invalid target directory: %q\n' \
+      "${target_directory}" >&2
+    return 2
+  fi
+  [[ -d "${target_directory}" && ! -L "${target_directory}" ]] || {
+    printf 'Cargo target directory is not a real directory: %s\n' \
+      "${target_directory}" >&2
+    return 2
+  }
+  canonical="$(realpath --canonicalize-existing -- "${target_directory}")"
+  if [[ "${canonical}" != "${target_directory}" ]]; then
+    printf 'Cargo target directory must already be canonical: %s\n' \
+      "${target_directory}" >&2
+    return 2
+  fi
+  validate_private_directory 'Cargo target directory' "${canonical}"
+  printf '%s\n' "${canonical}"
+}
+
+validate_cargo_fe2o3_driver() {
+  local canonical mode owner digest parent parent_mode parent_owner
+
+  [[ -n "${CARGO_FE2O3_BINARY}" && -n "${CARGO_FE2O3_SHA256}" ]] || {
+    printf '%s\n' 'cargo-fe2o3 qualification driver is not prepared' >&2
+    return 2
+  }
+  [[ "${CARGO_FE2O3_BINARY}" == /* && -f "${CARGO_FE2O3_BINARY}" &&
+    ! -L "${CARGO_FE2O3_BINARY}" && -x "${CARGO_FE2O3_BINARY}" ]] || {
+    printf 'cargo-fe2o3 qualification driver is not an absolute executable file: %s\n' \
+      "${CARGO_FE2O3_BINARY}" >&2
+    return 2
+  }
+  canonical="$(realpath --canonicalize-existing -- "${CARGO_FE2O3_BINARY}")"
+  mode="$(stat -c '%a' -- "${CARGO_FE2O3_BINARY}")"
+  owner="$(stat -c '%u' -- "${CARGO_FE2O3_BINARY}")"
+  parent="$(dirname -- "${CARGO_FE2O3_BINARY}")"
+  parent_mode="$(stat -c '%a' -- "${parent}")"
+  parent_owner="$(stat -c '%u' -- "${parent}")"
+  digest="$(sha256sum -- "${CARGO_FE2O3_BINARY}")"
+  digest="${digest%% *}"
+  if [[ "${canonical}" != "${CARGO_FE2O3_BINARY}" ]] ||
+    [[ "${mode}" != 500 ]] || [[ "${owner}" != "$(id -u)" ]] ||
+    [[ "${parent_mode}" != 500 ]] || [[ "${parent_owner}" != "$(id -u)" ]] ||
+    [[ "${digest}" != "${CARGO_FE2O3_SHA256}" ]]; then
+    printf '%s\n' \
+      'cargo-fe2o3 qualification driver identity or private custody changed' >&2
+    return 2
+  fi
+}
+
+resolve_cargo_fe2o3_artifact() {
+  python3 - "$@" <<'PY'
+import json
+import os
+import sys
+
+receipt, expected_package, expected_source, expected_target = sys.argv[1:]
+paths = []
+with open(receipt, "rb") as records:
+    for line in records:
+        record = json.loads(line)
+        if record.get("reason") != "compiler-artifact" or record.get("target", {}).get("name") != "cargo-fe2o3":
+            continue
+        target = record.get("target", {})
+        profile = record.get("profile", {})
+        if (
+            record.get("package_id") != expected_package
+            or target.get("kind") != ["bin"]
+            or target.get("crate_types") != ["bin"]
+            or target.get("src_path") != expected_source
+            or profile.get("test") is not False
+            or profile.get("opt_level") != "0"
+        ):
+            raise SystemExit("Cargo reported a cargo-fe2o3 artifact with mismatched package, source, target, or profile identity")
+        executable = record.get("executable")
+        if not executable or not os.path.isabs(executable):
+            raise SystemExit("Cargo reported cargo-fe2o3 without an absolute executable")
+        canonical = os.path.realpath(executable)
+        if canonical != executable or os.path.commonpath([expected_target, canonical]) != expected_target:
+            raise SystemExit("Cargo reported cargo-fe2o3 outside the admitted target")
+        paths.append(canonical)
+if len(paths) != 1:
+    raise SystemExit(
+        f"expected exactly one cargo-fe2o3 executable artifact; found {len(paths)}"
+    )
+print(paths[0])
+PY
+}
+
+prepare_private_tmp_root() {
+  if [[ -n "${TMPDIR:-}" ]]; then
+    validate_private_directory TMPDIR "${TMPDIR}"
+    return
+  fi
+  validate_private_directory 'Cargo target directory' "${CARGO_TARGET_DIRECTORY}"
+  CI_PRIVATE_TMP_ROOT="${CARGO_TARGET_DIRECTORY}/fe2o3-ci-tmp-${BASHPID}"
+  [[ ! -e "${CI_PRIVATE_TMP_ROOT}" && ! -L "${CI_PRIVATE_TMP_ROOT}" ]] || {
+    printf 'private CI temporary root already exists: %s\n' \
+      "${CI_PRIVATE_TMP_ROOT}" >&2
+    return 2
+  }
+  mkdir -m 700 -- "${CI_PRIVATE_TMP_ROOT}"
+  [[ "$(realpath --canonicalize-existing -- "${CI_PRIVATE_TMP_ROOT}")" == \
+    "${CI_PRIVATE_TMP_ROOT}" ]] || {
+    printf 'private CI temporary root is not canonical: %s\n' \
+      "${CI_PRIVATE_TMP_ROOT}" >&2
+    return 2
+  }
+  TMPDIR="${CI_PRIVATE_TMP_ROOT}"
+  export TMPDIR
+  validate_private_directory TMPDIR "${TMPDIR}"
+}
+
+prepare_cargo_fe2o3_driver() {
+  local step_prefix="$1"
+  local metadata_receipt receipt built_binary built_sha256
+  local -a driver_identity
+
+  CARGO_TARGET_DIRECTORY="$(resolve_cargo_target_directory)"
+  prepare_private_tmp_root
+  metadata_receipt="$(mktemp -- "${TMPDIR}/cargo-fe2o3-metadata.XXXXXX.json")"
+  cargo metadata --locked --no-deps --format-version 1 >"${metadata_receipt}"
+  mapfile -t driver_identity < <(
+    python3 - "${metadata_receipt}" "${REPO_ROOT}" "${CARGO_TARGET_DIRECTORY}" <<'PY'
+import json
+import os
+import sys
+
+workspace = os.path.realpath(sys.argv[2])
+expected_target = sys.argv[3]
+with open(sys.argv[1], "rb") as source:
+    metadata = json.load(source)
+if metadata.get("target_directory") != expected_target:
+    raise SystemExit("Cargo metadata target_directory changed during driver bootstrap")
+packages = [package for package in metadata.get("packages", []) if package.get("name") == "cargo-fe2o3"]
+if len(packages) != 1:
+    raise SystemExit(f"expected exactly one cargo-fe2o3 package; found {len(packages)}")
+package = packages[0]
+expected_manifest = os.path.join(workspace, "crates/cargo-fe2o3/Cargo.toml")
+if os.path.realpath(package.get("manifest_path", "")) != expected_manifest:
+    raise SystemExit("cargo-fe2o3 package resolved outside the admitted workspace")
+targets = [
+    target
+    for target in package.get("targets", [])
+    if target.get("name") == "cargo-fe2o3" and target.get("kind") == ["bin"]
+]
+if len(targets) != 1:
+    raise SystemExit(f"expected exactly one cargo-fe2o3 binary target; found {len(targets)}")
+source = os.path.realpath(targets[0].get("src_path", ""))
+if source != os.path.join(workspace, "crates/cargo-fe2o3/src/main.rs"):
+    raise SystemExit("cargo-fe2o3 binary resolved to an unexpected source")
+print(package["id"])
+print(source)
+PY
+  )
+  rm -f -- "${metadata_receipt}"
+  ((${#driver_identity[@]} == 2)) || {
+    printf '%s\n' 'failed to bind cargo-fe2o3 package identity' >&2
+    return 2
+  }
+  receipt="$(mktemp -- "${TMPDIR}/cargo-fe2o3-artifacts.XXXXXX.json")"
+  run_step "${step_prefix}-cargo-fe2o3-bootstrap" \
+    bash -c 'set -Eeuo pipefail
+      exec env CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=1 \
+        cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 \
+        --message-format=json-render-diagnostics >"$1"' \
+    cargo-fe2o3-bootstrap "${receipt}"
+  built_binary="$(resolve_cargo_fe2o3_artifact "${receipt}" \
+    "${driver_identity[0]}" "${driver_identity[1]}" \
+    "${CARGO_TARGET_DIRECTORY}")"
+  rm -f -- "${receipt}"
+  [[ "${built_binary}" == /* && -f "${built_binary}" &&
+    ! -L "${built_binary}" && -x "${built_binary}" ]] || {
+    printf 'Cargo reported an invalid cargo-fe2o3 executable: %s\n' \
+      "${built_binary}" >&2
+    return 2
+  }
+  built_sha256="$(sha256sum -- "${built_binary}")"
+  built_sha256="${built_sha256%% *}"
+  CARGO_FE2O3_DRIVER_ROOT="${TMPDIR}/fe2o3-ci-driver-${built_sha256}"
+  [[ ! -e "${CARGO_FE2O3_DRIVER_ROOT}" && ! -L "${CARGO_FE2O3_DRIVER_ROOT}" ]] || {
+    printf 'private qualification driver root already exists: %s\n' \
+      "${CARGO_FE2O3_DRIVER_ROOT}" >&2
+    return 2
+  }
+  mkdir -m 700 -- "${CARGO_FE2O3_DRIVER_ROOT}"
+  install -m 0500 -- "${built_binary}" \
+    "${CARGO_FE2O3_DRIVER_ROOT}/cargo-fe2o3"
+  CARGO_FE2O3_BINARY="${CARGO_FE2O3_DRIVER_ROOT}/cargo-fe2o3"
+  CARGO_FE2O3_SHA256="${built_sha256}"
+  chmod 500 -- "${CARGO_FE2O3_DRIVER_ROOT}"
+  validate_cargo_fe2o3_driver
+}
+
+cleanup_cargo_fe2o3_driver() {
+  if [[ -n "${CARGO_FE2O3_DRIVER_ROOT}" && -d "${CARGO_FE2O3_DRIVER_ROOT}" &&
+    ! -L "${CARGO_FE2O3_DRIVER_ROOT}" ]]; then
+    chmod 700 -- "${CARGO_FE2O3_DRIVER_ROOT}" || true
+    rm -rf -- "${CARGO_FE2O3_DRIVER_ROOT}"
+  fi
+  if [[ -n "${CI_PRIVATE_TMP_ROOT}" && -n "${CARGO_TARGET_DIRECTORY}" &&
+    -d "${CI_PRIVATE_TMP_ROOT}" && ! -L "${CI_PRIVATE_TMP_ROOT}" &&
+    "$(dirname -- "${CI_PRIVATE_TMP_ROOT}")" == "${CARGO_TARGET_DIRECTORY}" &&
+    "$(basename -- "${CI_PRIVATE_TMP_ROOT}")" == "fe2o3-ci-tmp-${BASHPID}" &&
+    "$(stat -c '%u' -- "${CI_PRIVATE_TMP_ROOT}")" == "$(id -u)" ]]; then
+    rm -rf -- "${CI_PRIVATE_TMP_ROOT}"
+  fi
+}
+
+trap cleanup_cargo_fe2o3_driver EXIT
+
+load_dynamic_loader_environment_removals() {
+  local destination_name="$1"
+  local name
+  local -n destination="${destination_name}"
+
+  destination=()
+  while IFS= read -r name; do
+    case "${name}" in
+      LD_* | DYLD_* | GLIBC_TUNABLES)
+        destination+=(-u "${name}")
+        ;;
+    esac
+  done < <(compgen -e)
+}
+
 load_example_packages() {
   local lane="$1"
   local destination_name="$2"
+  local cargo_fe2o3_binary="${3:-}"
   local output
   local -n destination="${destination_name}"
 
-  output="$(
-    cargo run --quiet --locked -p cargo-fe2o3 -- examples list "${lane}"
-  )"
+  if [[ -n "${cargo_fe2o3_binary}" ]]; then
+    local -a loader_environment_removals
+    load_dynamic_loader_environment_removals loader_environment_removals
+    output="$(
+      env "${loader_environment_removals[@]}" \
+        "${cargo_fe2o3_binary}" examples list "${lane}"
+    )"
+  else
+    output="$(
+      cargo run --quiet --locked -p cargo-fe2o3 -- examples list "${lane}"
+    )"
+  fi
   destination=()
   if [[ -n "${output}" ]]; then
     # shellcheck disable=SC2034  # The destination is written through a nameref.

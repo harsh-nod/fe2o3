@@ -482,7 +482,7 @@ pub(crate) fn run_child(args: &[OsString]) -> ExitCode {
 }
 
 fn launch(args: &[OsString]) -> Result<ExitStatus, String> {
-    if !crate::authority_sensitive_request_selected(true) {
+    if !crate::authority_sensitive_request_selected(true, None, false) {
         return Err(
             "authority release requires an authority-bearing pipeline selection".to_owned(),
         );
