@@ -386,6 +386,16 @@ for core_step in \
   assert_step_count "${core_step}" 1 \
     "generic core did not run ${core_step} exactly once"
 done
+workspace_check_command="$(step_command workspace-check)"
+for wrapper_only_fixture in \
+  fe2o3-production-extraction-fixture \
+  fe2o3-production-ranked-bounds-fixture; do
+  if [[ "${workspace_check_command}" != *"--exclude ${wrapper_only_fixture}"* ]]; then
+    printf 'generic workspace check compiled wrapper-only fixture: %s\n' \
+      "${wrapper_only_fixture}" >&2
+    exit 1
+  fi
+done
 assert_equals \
   "python3 ${WORKSPACE_DEPENDENCY_POLICY_TESTS}" \
   "$(step_command workspace-dependency-policy-tests)" \

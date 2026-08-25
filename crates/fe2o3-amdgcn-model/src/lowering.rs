@@ -5396,6 +5396,31 @@ impl<'a> FunctionLowerer<'a> {
                     "workgroup Alloca is ambiguous; use explicit WorkgroupMemory",
                 ));
             }
+            OperationKind::Alloca {
+                element,
+                count: None,
+                address_space: KernelAddressSpace::Private,
+                alignment,
+            } => {
+                if !supported_private_memory_type(element, self.target) {
+                    return Err(LoweringErrors::one(
+                        location,
+                        LoweringDiagnosticCode::UnsupportedType,
+                        format!("unsupported private allocation element type {element:?}"),
+                    ));
+                }
+                let natural_alignment = amdgpu_private_element_alignment(element)
+                    .expect("supported private allocation types have a fixed alignment");
+                if u64::from(*alignment) < natural_alignment {
+                    return Err(LoweringErrors::one(
+                        location,
+                        LoweringDiagnosticCode::UnsupportedOperation,
+                        format!(
+                            "private allocation element {element:?} requires alignment {natural_alignment}, found {alignment}"
+                        ),
+                    ));
+                }
+            }
             OperationKind::Call { callee, arguments } => {
                 if let Some(diagnostic) =
                     AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments)
@@ -6658,6 +6683,21 @@ impl<'a> FunctionLowerer<'a> {
                 )
                 .unwrap();
             }
+            OperationKind::Alloca {
+                element,
+                count: None,
+                address_space: KernelAddressSpace::Private,
+                alignment,
+            } => {
+                writeln!(
+                    output,
+                    "  {} = alloca {}, align {}, addrspace(5)",
+                    result_name.expect("validated private allocation result"),
+                    llvm_type(element),
+                    alignment
+                )
+                .unwrap();
+            }
             OperationKind::Call { callee, arguments } => {
                 if let Some(diagnostic) =
                     AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments)
@@ -7802,6 +7842,33 @@ fn supported_memory_type(ty: &Type, target: LoweringTarget) -> bool {
             && matches!(scalar, ScalarType::F16 | ScalarType::Bf16)))
 }
 
+fn supported_private_memory_type(ty: &Type, target: LoweringTarget) -> bool {
+    supported_memory_type(ty, target)
+        || matches!(
+            ty,
+            Type::Pointer(pointer)
+                if matches!(
+                    pointer.address_space,
+                    KernelAddressSpace::Global | KernelAddressSpace::Workgroup
+                ) && (pointer.pointee.as_ref() == &Type::Unit
+                    || supported_memory_type(&pointer.pointee, target))
+        )
+}
+
+fn amdgpu_private_element_alignment(ty: &Type) -> Option<u64> {
+    match ty {
+        Type::Scalar(ScalarType::Bool | ScalarType::I8 | ScalarType::U8) => Some(1),
+        Type::Scalar(ScalarType::I16 | ScalarType::U16 | ScalarType::F16 | ScalarType::Bf16) => {
+            Some(2)
+        }
+        Type::Scalar(ScalarType::I32 | ScalarType::U32 | ScalarType::F32) => Some(4),
+        Type::Scalar(ScalarType::I64 | ScalarType::U64 | ScalarType::Index) | Type::Pointer(_) => {
+            Some(8)
+        }
+        _ => None,
+    }
+}
+
 fn amdgpu_lds_element_bytes(ty: &Type) -> Option<u64> {
     match ty {
         Type::Scalar(ScalarType::I8 | ScalarType::U8) => Some(1),
@@ -7895,18 +7962,23 @@ fn validate_pointer(
     };
     if !matches!(
         pointer.address_space,
-        KernelAddressSpace::Global | KernelAddressSpace::Workgroup
+        KernelAddressSpace::Private | KernelAddressSpace::Global | KernelAddressSpace::Workgroup
     ) {
         return Err(LoweringErrors::one(
             location.clone(),
             LoweringDiagnosticCode::UnsupportedAddressSpace,
             format!(
-                "G1 supports only global or workgroup pointers, found {:?}",
+                "G1 supports only private, global, or workgroup pointers, found {:?}",
                 pointer.address_space
             ),
         ));
     }
-    if !supported_memory_type(&pointer.pointee, target) {
+    let supported = if pointer.address_space == KernelAddressSpace::Private {
+        supported_private_memory_type(&pointer.pointee, target)
+    } else {
+        supported_memory_type(&pointer.pointee, target)
+    };
+    if !supported {
         return Err(LoweringErrors::one(
             location.clone(),
             LoweringDiagnosticCode::UnsupportedType,
@@ -8205,6 +8277,9 @@ fn llvm_type(ty: &Type) -> &'static str {
         Type::Pointer(pointer) if pointer.address_space == KernelAddressSpace::Workgroup => {
             "ptr addrspace(3)"
         }
+        Type::Pointer(pointer) if pointer.address_space == KernelAddressSpace::Private => {
+            "ptr addrspace(5)"
+        }
         Type::Pointer(_) => unreachable!("preflight rejected unsupported address space"),
         Type::Unit | Type::Slice(_) => unreachable!("type is not a first-class G1 LLVM value"),
     }
@@ -8214,6 +8289,7 @@ fn llvm_address_space(address_space: KernelAddressSpace) -> u32 {
     match address_space {
         KernelAddressSpace::Global => 1,
         KernelAddressSpace::Workgroup => 3,
+        KernelAddressSpace::Private => 5,
         _ => unreachable!("preflight rejected unsupported address space"),
     }
 }

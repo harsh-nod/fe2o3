@@ -28,14 +28,14 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1, SemanticDirectCallV1,
     SemanticDisjointIndexSpaceV1, SemanticEnumEncodingV1, SemanticEnumVariantV1,
     SemanticF32MathFunctionV1, SemanticFieldsShapeV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
-    SemanticLocalRoleV1, SemanticMfmaAccumulatorContractV1, SemanticMfmaOperandContractV1,
-    SemanticMfmaProfileV1, SemanticMfmaStorageLayoutV1, SemanticMutabilityV1, SemanticOperandV1,
-    SemanticPlaceV1, SemanticPointerMetadataV1, SemanticProjectionKindV1, SemanticRustcVariantsV1,
-    SemanticRvalueKindV1, SemanticScalarTypeV1, SemanticScalarValueV1, SemanticStatementKindV1,
-    SemanticSubgroupReductionKindV1, SemanticTerminatorKindV1, SemanticTypeDeclV1,
-    SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
-    SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticVolatilityV1,
-    semantic_direct_enum_variant_v1, semantic_scalar_enum_variant_v1,
+    SemanticLocalIdV1, SemanticLocalRoleV1, SemanticMfmaAccumulatorContractV1,
+    SemanticMfmaOperandContractV1, SemanticMfmaProfileV1, SemanticMfmaStorageLayoutV1,
+    SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1, SemanticPointerMetadataV1,
+    SemanticProjectionKindV1, SemanticRustcVariantsV1, SemanticRvalueKindV1, SemanticScalarTypeV1,
+    SemanticScalarValueV1, SemanticStatementKindV1, SemanticSubgroupReductionKindV1,
+    SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeLayoutDetailsV1,
+    SemanticTypeShapeV1, SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1,
+    SemanticVolatilityV1, semantic_direct_enum_variant_v1, semantic_scalar_enum_variant_v1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadDominanceV1, SemanticOptionAvailabilityV1, SemanticOptionDominanceV1,
@@ -225,6 +225,8 @@ impl SemanticKirTerminatorOperationSpanV1 {
 /// Closed lowering rule responsible for operations without a semantic MIR source construct.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SemanticKirSyntheticOperationRuleV1 {
+    /// Private per-invocation slots that preserve enum payloads across discriminant SSA joins.
+    EnumPayloadStorage,
     /// The canonical trap operation in the shared runtime-assert failure block.
     RuntimeAssertFailureTrap,
 }
@@ -365,6 +367,64 @@ pub enum ProductionSemanticKirErrorV1 {
         /// Missing semantic local index.
         local: u32,
     },
+    /// A variant-refined enum reached a payload projection without retained fields.
+    EnumPayloadUnavailable {
+        /// Source semantic function index.
+        function: u32,
+        /// Source semantic block index.
+        block: u32,
+        /// Source semantic statement ordinal when available.
+        statement: Option<u32>,
+        /// Enum carrier local.
+        local: u32,
+        /// Variant selected by the preceding downcast.
+        variant: u32,
+        /// Requested payload field.
+        field: u32,
+        /// Payload fields retained by the current SSA binding.
+        available_fields: usize,
+        /// Bounded semantic definitions and discriminator uses for the carrier.
+        evidence: Vec<String>,
+    },
+    /// A compiler-issued capability reached a trusted intrinsic as ordinary data.
+    CapabilityUnavailable {
+        /// Source semantic function index.
+        function: u32,
+        /// Source semantic block index.
+        block: u32,
+        /// Trusted operation that requires the capability.
+        operation: &'static str,
+        /// Binding class observed by the lowerer.
+        actual: &'static str,
+        /// Source operand local when it is an exact place.
+        local: Option<u32>,
+        /// Bounded semantic definitions for the operand carrier.
+        evidence: Vec<String>,
+    },
+    /// A semantic place projection cannot be applied to its path binding.
+    PlaceProjectionUnavailable {
+        /// Source semantic function index.
+        function: u32,
+        /// Source semantic block index.
+        block: u32,
+        /// Source semantic statement ordinal when available.
+        statement: Option<u32>,
+        /// Root place local.
+        local: u32,
+        /// Binding class before the rejected projection.
+        binding: &'static str,
+        /// Rejected typed projection.
+        projection: String,
+        /// Bounded semantic definitions for the root carrier.
+        evidence: Vec<String>,
+    },
+    /// A semantic type requested scalar lowering without a scalar shape.
+    ScalarTypeUnavailable {
+        /// Requested semantic type index.
+        semantic_type: u32,
+        /// Exact retained semantic type shape.
+        shape: String,
+    },
     /// The constructed Kernel IR failed structural or semantic verification.
     InvalidKernelIr(VerificationErrors),
     /// The lowered module could not become exact verified canonical Kernel IR V7.
@@ -407,6 +467,49 @@ impl fmt::Display for ProductionSemanticKirErrorV1 {
                 formatter,
                 "semantic-to-Kernel-IR lowering rejected function {function}, block {block}, statement {statement:?}: local {local} has no path-available SSA definition",
             ),
+            Self::EnumPayloadUnavailable {
+                function,
+                block,
+                statement,
+                local,
+                variant,
+                field,
+                available_fields,
+                evidence,
+            } => write!(
+                formatter,
+                "semantic-to-Kernel-IR lowering rejected function {function}, block {block}, statement {statement:?}: enum local {local} variant {variant} requests payload field {field}, but its control-flow SSA binding retains {available_fields} field(s); carrier evidence: {evidence:?}",
+            ),
+            Self::CapabilityUnavailable {
+                function,
+                block,
+                operation,
+                actual,
+                local,
+                evidence,
+            } => write!(
+                formatter,
+                "semantic-to-Kernel-IR lowering rejected function {function}, block {block}: {operation} requires compiler-issued capability authority, but operand local {local:?} reached KIR as {actual}; carrier evidence: {evidence:?}",
+            ),
+            Self::PlaceProjectionUnavailable {
+                function,
+                block,
+                statement,
+                local,
+                binding,
+                projection,
+                evidence,
+            } => write!(
+                formatter,
+                "semantic-to-Kernel-IR lowering rejected function {function}, block {block}, statement {statement:?}: local {local} binding {binding} does not admit projection {projection}; carrier evidence: {evidence:?}",
+            ),
+            Self::ScalarTypeUnavailable {
+                semantic_type,
+                shape,
+            } => write!(
+                formatter,
+                "semantic-to-Kernel-IR scalar lowering rejected semantic type {semantic_type} with shape {shape}",
+            ),
             Self::InvalidKernelIr(error) => error.fmt(formatter),
             Self::CanonicalKernelIrV7(error) => {
                 write!(
@@ -431,6 +534,10 @@ impl Error for ProductionSemanticKirErrorV1 {
             | Self::AllocationFailure { .. }
             | Self::Unsupported { .. }
             | Self::MissingLocalDefinition { .. }
+            | Self::EnumPayloadUnavailable { .. }
+            | Self::CapabilityUnavailable { .. }
+            | Self::PlaceProjectionUnavailable { .. }
+            | Self::ScalarTypeUnavailable { .. }
             | Self::CorrespondenceMismatch => None,
         }
     }
@@ -1913,9 +2020,9 @@ fn validate_semantic_kir_correspondence(
         .functions()
         .get(selection.body().index() as usize)
         .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-    let synthetic_rule = semantic_requires_runtime_assert_failure(function)
+    let runtime_assert_rule = semantic_requires_runtime_assert_failure(function)
         .then_some(SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap);
-    let order = semantic_cfg_preorder(function)
+    let order = semantic_cfg_reverse_postorder(function)
         .map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
     let expected = order
         .into_iter()
@@ -1953,7 +2060,7 @@ fn validate_semantic_kir_correspondence(
         &correspondence.statement_operation_spans,
         &correspondence.terminator_operation_spans,
         &correspondence.synthetic_operation_spans,
-        synthetic_rule,
+        runtime_assert_rule,
     ) {
         Ok(())
     } else {
@@ -1968,21 +2075,22 @@ fn validate_operation_correspondence_layout(
     statements: &[SemanticKirStatementOperationSpanV1],
     terminators: &[SemanticKirTerminatorOperationSpanV1],
     synthetic: &[SemanticKirSyntheticOperationSpanV1],
-    synthetic_rule: Option<SemanticKirSyntheticOperationRuleV1>,
+    runtime_assert_rule: Option<SemanticKirSyntheticOperationRuleV1>,
 ) -> bool {
-    let expected_synthetic_count = usize::from(synthetic_rule.is_some());
-    let Some(expected_target_blocks) = expected.len().checked_add(expected_synthetic_count) else {
+    let runtime_assert_block_count = usize::from(runtime_assert_rule.is_some());
+    let Some(expected_target_blocks) = expected.len().checked_add(runtime_assert_block_count)
+    else {
         return false;
     };
     if blocks.len() != expected.len()
         || terminators.len() != expected.len()
-        || synthetic.len() != expected_synthetic_count
         || target_blocks.len() != expected_target_blocks
     {
         return false;
     }
 
     let mut statement_index = 0_usize;
+    let mut synthetic_index = 0_usize;
     for (block_index, expected_block) in expected.iter().enumerate() {
         let Some(target) = target_blocks.get(block_index) else {
             return false;
@@ -2001,6 +2109,40 @@ fn validate_operation_correspondence_layout(
         }
 
         let mut next_operation = 0_usize;
+        if let Some(span) = synthetic.get(synthetic_index)
+            && span.rule == SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage
+            && span.kernel_ir_block == expected_block.kernel_ir_block
+        {
+            if span.first_operation_ordinal != 0 || span.operation_count == 0 {
+                return false;
+            }
+            let Some(end) = checked_operation_span_end(
+                span.first_operation_ordinal,
+                span.operation_count,
+                target.operations.len(),
+            ) else {
+                return false;
+            };
+            if !target.operations[..end].iter().all(|operation| {
+                matches!(
+                    operation.kind,
+                    OperationKind::Alloca {
+                        address_space: AddressSpace::Private,
+                        ..
+                    } | OperationKind::Load {
+                        access: MemoryAccess {
+                            address_space: AddressSpace::Private,
+                            ..
+                        },
+                        ..
+                    }
+                )
+            }) {
+                return false;
+            }
+            next_operation = end;
+            synthetic_index += 1;
+        }
         for statement_ordinal in 0..expected_block.source_statement_count {
             let Some(span) = statements.get(statement_index) else {
                 return false;
@@ -2049,12 +2191,15 @@ fn validate_operation_correspondence_layout(
         return false;
     }
 
-    let canonical_trap = AmdGpuDiagnosticOperation::Trap.operation(None);
-    for (synthetic_index, span) in synthetic.iter().enumerate() {
-        let Some(target) = target_blocks.get(expected.len() + synthetic_index) else {
+    if let Some(runtime_assert_rule) = runtime_assert_rule {
+        let Some(span) = synthetic.get(synthetic_index) else {
             return false;
         };
-        if Some(span.rule) != synthetic_rule
+        let Some(target) = target_blocks.get(expected.len()) else {
+            return false;
+        };
+        let canonical_trap = AmdGpuDiagnosticOperation::Trap.operation(None);
+        if span.rule != runtime_assert_rule
             || span.kernel_ir_block != target.id
             || span.first_operation_ordinal != 0
             || span.operation_count != 1
@@ -2063,8 +2208,9 @@ fn validate_operation_correspondence_layout(
         {
             return false;
         }
+        synthetic_index += 1;
     }
-    true
+    synthetic_index == synthetic.len()
 }
 
 fn checked_operation_span_end(first: u32, count: u32, operation_len: usize) -> Option<usize> {
@@ -2242,7 +2388,7 @@ fn lower_module(
         limits.max_operations,
     )?;
 
-    let order = semantic_cfg_preorder(function)?;
+    let order = semantic_cfg_reverse_postorder(function)?;
     let mut blocks = Vec::with_capacity(order.len());
     let mut correspondence = Vec::with_capacity(order.len());
     let mut statement_operation_spans = Vec::with_capacity(statement_count);
@@ -2255,7 +2401,18 @@ fn lower_module(
             unsupported(0, Some(semantic_block.index()), None, "block is missing")
         })?;
         let mut target = BasicBlock::new(BlockId(semantic_block.index()));
+        let prologue_first = target.operations.len();
         lowering.begin_block(semantic_block, &mut target)?;
+        let (first_operation_ordinal, operation_count) =
+            measured_operation_span(prologue_first, target.operations.len(), target.id, None)?;
+        if operation_count != 0 {
+            synthetic_operation_spans.push(SemanticKirSyntheticOperationSpanV1 {
+                rule: SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage,
+                kernel_ir_block: target.id,
+                first_operation_ordinal,
+                operation_count,
+            });
+        }
         for (statement, operation) in source.statements().iter().enumerate() {
             let statement = u32::try_from(statement).map_err(|_| {
                 unsupported(
@@ -2440,13 +2597,13 @@ fn lower_module(
     Ok((module, correspondence))
 }
 
-fn semantic_cfg_preorder(
+fn semantic_cfg_reverse_postorder(
     function: &SemanticFunctionDeclV1,
 ) -> Result<Vec<SemanticBlockIdV1>, ProductionSemanticKirErrorV1> {
-    let mut order = Vec::with_capacity(function.blocks().len());
+    let mut postorder = Vec::with_capacity(function.blocks().len());
     let mut visited = vec![false; function.blocks().len()];
-    let mut stack = vec![function.entry()];
-    while let Some(block) = stack.pop() {
+    let mut stack = vec![(function.entry(), false)];
+    while let Some((block, expanded)) = stack.pop() {
         let index = usize::try_from(block.index())
             .map_err(|_| unsupported(0, None, None, "block identity does not fit this host"))?;
         let Some(source) = function.blocks().get(index) else {
@@ -2457,11 +2614,15 @@ fn semantic_cfg_preorder(
                 "CFG traversal references a missing block",
             ));
         };
+        if expanded {
+            postorder.push(block);
+            continue;
+        }
         if visited[index] {
             continue;
         }
         visited[index] = true;
-        order.push(block);
+        stack.push((block, true));
         let mut successors = Vec::with_capacity(source.terminator().kind().edge_count());
         source
             .terminator()
@@ -2487,8 +2648,15 @@ fn semantic_cfg_preorder(
                 successors.push(target);
                 Ok(())
             })?;
-        stack.extend(successors.into_iter().rev());
+        stack.extend(
+            successors
+                .into_iter()
+                .rev()
+                .map(|successor| (successor, false)),
+        );
     }
+    postorder.reverse();
+    let mut order = postorder;
     order.extend(
         visited
             .iter()
@@ -3025,6 +3193,214 @@ impl SemanticControlFlowSsaPlanV1 {
     }
 }
 
+fn analyze_promoted_enum_variants_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    control_flow_ssa: &SemanticControlFlowSsaPlanV1,
+) -> Result<BTreeMap<(u32, u32), u32>, ProductionSemanticKirErrorV1> {
+    type ExactVariantsV1 = BTreeMap<u32, u32>;
+
+    fn whole_local(operand: &SemanticOperandV1) -> Option<u32> {
+        match operand {
+            SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)
+                if place.projections().is_empty() =>
+            {
+                Some(place.local().index())
+            }
+            SemanticOperandV1::Copy(_)
+            | SemanticOperandV1::Move(_)
+            | SemanticOperandV1::Constant(_) => None,
+        }
+    }
+
+    fn meet(existing: &ExactVariantsV1, incoming: &ExactVariantsV1) -> ExactVariantsV1 {
+        existing
+            .iter()
+            .filter_map(|(local, variant)| {
+                (incoming.get(local) == Some(variant)).then_some((*local, *variant))
+            })
+            .collect()
+    }
+
+    let promoted_enums = control_flow_ssa
+        .promoted
+        .iter()
+        .filter_map(|(local, promoted)| {
+            types
+                .get(promoted.semantic_type.index() as usize)
+                .is_some_and(|declaration| {
+                    matches!(declaration.shape(), SemanticTypeShapeV1::Enum { .. })
+                })
+                .then_some(*local)
+        })
+        .collect::<BTreeSet<_>>();
+    if promoted_enums.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let block_count = function.blocks().len();
+    let entry = function.entry().index() as usize;
+    let mut incoming = vec![None::<ExactVariantsV1>; block_count];
+    let mut queued = BTreeSet::from([function.entry().index()]);
+    let mut worklist = VecDeque::from([function.entry().index()]);
+    incoming[entry] = Some(BTreeMap::new());
+
+    while let Some(block_index) = worklist.pop_front() {
+        queued.remove(&block_index);
+        let Some(block) = function.blocks().get(block_index as usize) else {
+            return Err(unsupported(
+                0,
+                Some(block_index),
+                None,
+                "promoted enum analysis references a missing block",
+            ));
+        };
+        let Some(mut facts) = incoming[block_index as usize].clone() else {
+            continue;
+        };
+        let mut discriminants = BTreeMap::<u32, u32>::new();
+        for statement in block.statements() {
+            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                continue;
+            };
+            let destination = assignment.destination();
+            if !destination.projections().is_empty() {
+                continue;
+            }
+            let destination = destination.local().index();
+            discriminants.remove(&destination);
+            discriminants.retain(|_, source| *source != destination);
+            if promoted_enums.contains(&destination) {
+                match assignment.value().kind() {
+                    SemanticRvalueKindV1::Aggregate(aggregate) => match aggregate.kind() {
+                        SemanticAggregateKindV1::EnumVariant(variant) => {
+                            facts.insert(destination, *variant);
+                        }
+                        _ => {
+                            facts.remove(&destination);
+                        }
+                    },
+                    _ => {
+                        facts.remove(&destination);
+                    }
+                }
+            }
+            if let SemanticRvalueKindV1::Discriminant(place) = assignment.value().kind()
+                && place.projections().is_empty()
+                && promoted_enums.contains(&place.local().index())
+            {
+                discriminants.insert(destination, place.local().index());
+            }
+        }
+
+        if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
+            && let Some(destination) = call.destination()
+            && destination.place().projections().is_empty()
+            && promoted_enums.contains(&destination.place().local().index())
+        {
+            facts.remove(&destination.place().local().index());
+        }
+
+        let mut outgoing = Vec::new();
+        if let SemanticTerminatorKindV1::SwitchInt {
+            discriminant,
+            targets,
+        } = block.terminator().kind()
+            && let Some(enum_local) =
+                whole_local(discriminant).and_then(|local| discriminants.get(&local).copied())
+        {
+            let promoted = &control_flow_ssa.promoted[&enum_local];
+            let declaration = types
+                .get(promoted.semantic_type.index() as usize)
+                .ok_or_else(|| {
+                    unsupported(
+                        0,
+                        Some(block_index),
+                        None,
+                        "promoted enum switch type is missing",
+                    )
+                })?;
+            let SemanticTypeShapeV1::Enum { variants, .. } = declaration.shape() else {
+                return Err(unsupported(
+                    0,
+                    Some(block_index),
+                    None,
+                    "promoted enum switch source is not an enum",
+                ));
+            };
+            for target in targets.values() {
+                let mut edge_facts = facts.clone();
+                if let Some((variant, _)) = variants
+                    .iter()
+                    .enumerate()
+                    .find(|(_, variant)| variant.discriminant() == target.value())
+                {
+                    edge_facts.insert(enum_local, variant as u32);
+                } else {
+                    edge_facts.remove(&enum_local);
+                }
+                outgoing.push((target.edge().target().index(), edge_facts));
+            }
+            let mut otherwise = variants.iter().enumerate().filter(|(_, variant)| {
+                !variant.is_uninhabited()
+                    && !targets
+                        .values()
+                        .iter()
+                        .any(|target| target.value() == variant.discriminant())
+            });
+            let exact_otherwise = otherwise.next().map(|(variant, _)| variant as u32);
+            if otherwise.next().is_some() {
+                facts.remove(&enum_local);
+            } else if let Some(variant) = exact_otherwise {
+                facts.insert(enum_local, variant);
+            } else {
+                facts.remove(&enum_local);
+            }
+            outgoing.push((targets.otherwise().target().index(), facts));
+        } else {
+            block
+                .terminator()
+                .kind()
+                .try_for_each_edge::<ProductionSemanticKirErrorV1>(|edge| {
+                    outgoing.push((edge.target().index(), facts.clone()));
+                    Ok(())
+                })?;
+        }
+
+        for (target, edge_facts) in outgoing {
+            let Some(target_incoming) = incoming.get_mut(target as usize) else {
+                return Err(unsupported(
+                    0,
+                    Some(block_index),
+                    None,
+                    "promoted enum analysis references a missing successor",
+                ));
+            };
+            let next = target_incoming
+                .as_ref()
+                .map_or_else(|| edge_facts.clone(), |current| meet(current, &edge_facts));
+            if target_incoming.as_ref() != Some(&next) {
+                *target_incoming = Some(next);
+                if queued.insert(target) {
+                    worklist.push_back(target);
+                }
+            }
+        }
+    }
+
+    Ok(incoming
+        .into_iter()
+        .enumerate()
+        .flat_map(|(block, facts)| {
+            facts.into_iter().flat_map(move |facts| {
+                facts
+                    .into_iter()
+                    .map(move |(local, variant)| ((block as u32, local), variant))
+            })
+        })
+        .collect())
+}
+
 fn collect_statement_uses_v1(
     statement: &SemanticStatementKindV1,
     promoted: &BTreeMap<u32, SemanticPromotedLocalV1>,
@@ -3168,6 +3544,40 @@ fn collect_place_use_v1(
 }
 
 #[derive(Clone, Debug)]
+struct SemanticEnumPayloadComponentStorageV1 {
+    pointer: ValueId,
+    kernel_type: Type,
+    alignment: u32,
+}
+
+#[derive(Clone, Debug)]
+struct SemanticEnumPayloadFieldStorageV1 {
+    semantic_type: SemanticTypeIdV1,
+    exact_enum_variant: Option<u32>,
+    components: Box<[SemanticEnumPayloadComponentStorageV1]>,
+}
+
+#[derive(Clone, Debug)]
+struct SemanticEnumPayloadSourceV1 {
+    place: SemanticPlaceV1,
+}
+
+#[derive(Clone, Debug)]
+enum SemanticEnumPayloadRestoreV1 {
+    PrivateStorage(SemanticEnumPayloadFieldStorageV1),
+    UniqueSource(SemanticValueBindingV1),
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SemanticCapabilityAvailabilityV1 {
+    Option(SemanticOptionAvailabilityV1),
+    EnumPayload {
+        local: SemanticLocalIdV1,
+        variant: u32,
+    },
+}
+
+#[derive(Clone, Debug)]
 enum SemanticValueBindingV1 {
     Unit,
     Unmaterialized,
@@ -3211,7 +3621,7 @@ enum SemanticValueBindingV1 {
         id: ValueId,
         index_space: SemanticDisjointIndexSpaceV1,
         disjoint: bool,
-        availability: Option<SemanticOptionAvailabilityV1>,
+        availability: Option<SemanticCapabilityAvailabilityV1>,
     },
     OptionIndexWitness {
         present: ValueId,
@@ -3220,12 +3630,12 @@ enum SemanticValueBindingV1 {
         availability: SemanticOptionAvailabilityV1,
     },
     GridLeader {
-        availability: SemanticOptionAvailabilityV1,
+        availability: SemanticCapabilityAvailabilityV1,
     },
     ComponentWitness {
         raw: ValueId,
         index_space: SemanticDisjointIndexSpaceV1,
-        availability: SemanticOptionAvailabilityV1,
+        availability: SemanticCapabilityAvailabilityV1,
     },
     OptionComponentWitness {
         present: ValueId,
@@ -3252,6 +3662,102 @@ fn project_enum_payload_field(
         .get(field as usize)
         .cloned()
         .ok_or("enum payload field is unavailable in this block")
+}
+
+fn semantic_binding_kind_v1(binding: &SemanticValueBindingV1) -> &'static str {
+    match binding {
+        SemanticValueBindingV1::Unit => "unit",
+        SemanticValueBindingV1::Unmaterialized => "unmaterialized enum payload",
+        SemanticValueBindingV1::Aggregate(_) => "aggregate",
+        SemanticValueBindingV1::Enum {
+            variant: Some(_), ..
+        } => "variant-refined enum",
+        SemanticValueBindingV1::Enum { variant: None, .. } => "unrefined enum",
+        SemanticValueBindingV1::MathContext => "math context",
+        SemanticValueBindingV1::CollectiveContext => "collective context",
+        SemanticValueBindingV1::MatrixContext => "matrix context",
+        SemanticValueBindingV1::WaveLane { .. } => "wave lane",
+        SemanticValueBindingV1::MatrixFragment { .. } => "matrix fragment",
+        SemanticValueBindingV1::AccumulatorFragment { .. } => "accumulator fragment",
+        SemanticValueBindingV1::Value { .. } => "ordinary value",
+        SemanticValueBindingV1::OptionPointer { .. } => "optional pointer",
+        SemanticValueBindingV1::IndexWitness { .. } => "index witness",
+        SemanticValueBindingV1::OptionIndexWitness { .. } => "optional index witness",
+        SemanticValueBindingV1::GridLeader { .. } => "grid leader",
+        SemanticValueBindingV1::ComponentWitness { .. } => "component witness",
+        SemanticValueBindingV1::OptionComponentWitness { .. } => "optional component witness",
+        SemanticValueBindingV1::OptionGridLeader { .. } => "optional grid leader",
+    }
+}
+
+fn semantic_binding_can_restore_from_unique_source_v1(binding: &SemanticValueBindingV1) -> bool {
+    match binding {
+        SemanticValueBindingV1::Unit
+        | SemanticValueBindingV1::MathContext
+        | SemanticValueBindingV1::CollectiveContext
+        | SemanticValueBindingV1::MatrixContext
+        | SemanticValueBindingV1::WaveLane { .. }
+        | SemanticValueBindingV1::MatrixFragment { .. }
+        | SemanticValueBindingV1::AccumulatorFragment { .. }
+        | SemanticValueBindingV1::IndexWitness { .. }
+        | SemanticValueBindingV1::GridLeader { .. }
+        | SemanticValueBindingV1::ComponentWitness { .. } => true,
+        SemanticValueBindingV1::Aggregate(_) => binding
+            .values()
+            .is_ok_and(|components| components.is_empty()),
+        SemanticValueBindingV1::Unmaterialized
+        | SemanticValueBindingV1::Enum { .. }
+        | SemanticValueBindingV1::Value { .. }
+        | SemanticValueBindingV1::OptionPointer { .. }
+        | SemanticValueBindingV1::OptionIndexWitness { .. }
+        | SemanticValueBindingV1::OptionComponentWitness { .. }
+        | SemanticValueBindingV1::OptionGridLeader { .. } => false,
+    }
+}
+
+fn reauthenticate_capabilities_from_enum_payload_v1(
+    binding: &mut SemanticValueBindingV1,
+    local: SemanticLocalIdV1,
+    variant: u32,
+) {
+    let availability = SemanticCapabilityAvailabilityV1::EnumPayload { local, variant };
+    match binding {
+        SemanticValueBindingV1::Aggregate(fields)
+        | SemanticValueBindingV1::Enum {
+            variant: Some(_),
+            fields,
+            ..
+        } => {
+            for field in fields {
+                reauthenticate_capabilities_from_enum_payload_v1(field, local, variant);
+            }
+        }
+        SemanticValueBindingV1::IndexWitness {
+            availability: slot @ Some(_),
+            ..
+        } => *slot = Some(availability),
+        SemanticValueBindingV1::GridLeader { availability: slot }
+        | SemanticValueBindingV1::ComponentWitness {
+            availability: slot, ..
+        } => *slot = availability,
+        SemanticValueBindingV1::Unit
+        | SemanticValueBindingV1::Unmaterialized
+        | SemanticValueBindingV1::Enum { .. }
+        | SemanticValueBindingV1::MathContext
+        | SemanticValueBindingV1::CollectiveContext
+        | SemanticValueBindingV1::MatrixContext
+        | SemanticValueBindingV1::WaveLane { .. }
+        | SemanticValueBindingV1::MatrixFragment { .. }
+        | SemanticValueBindingV1::AccumulatorFragment { .. }
+        | SemanticValueBindingV1::Value { .. }
+        | SemanticValueBindingV1::OptionPointer { .. }
+        | SemanticValueBindingV1::IndexWitness {
+            availability: None, ..
+        }
+        | SemanticValueBindingV1::OptionIndexWitness { .. }
+        | SemanticValueBindingV1::OptionComponentWitness { .. }
+        | SemanticValueBindingV1::OptionGridLeader { .. } => {}
+    }
 }
 
 impl SemanticValueBindingV1 {
@@ -3423,7 +3929,12 @@ struct SemanticFunctionLoweringV1<'a> {
     locals: Vec<Option<SemanticValueBindingV1>>,
     option_dominance: SemanticOptionDominanceV1,
     enum_payload_dominance: SemanticEnumPayloadDominanceV1,
+    enum_payload_storage: BTreeMap<(u32, u32, u32), SemanticEnumPayloadFieldStorageV1>,
+    enum_payload_sources: BTreeMap<(u32, u32, u32), SemanticEnumPayloadSourceV1>,
+    enum_payload_compile_time_custody: BTreeMap<(u32, u32, u32), SemanticValueBindingV1>,
+    enum_payload_allocas_emitted: bool,
     control_flow_ssa: SemanticControlFlowSsaPlanV1,
+    promoted_enum_variant_by_block: BTreeMap<(u32, u32), u32>,
     block_parameters: BTreeMap<u32, BTreeMap<u32, Vec<ValueDef>>>,
     next_value: u32,
     assert_failure_block: Option<BlockId>,
@@ -3466,6 +3977,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         let mut next_value = u32::try_from(function.locals().len())
             .map_err(|_| unsupported(0, None, None, "local count does not fit Kernel IR"))?;
         let control_flow_ssa = SemanticControlFlowSsaPlanV1::analyze(types, callables, function)?;
+        let promoted_enum_variant_by_block =
+            analyze_promoted_enum_variants_v1(types, function, &control_flow_ssa)?;
         let mut block_parameters = BTreeMap::new();
         for block in 0..function.blocks().len() as u32 {
             if block == function.entry().index() {
@@ -3488,6 +4001,14 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             block_parameters.insert(block, parameters);
         }
+        let enum_payload_sources = plan_unique_enum_payload_sources_v1(function, &control_flow_ssa);
+        let enum_payload_storage = plan_enum_payload_storage_v1(
+            types,
+            function,
+            &control_flow_ssa,
+            &enum_payload_sources,
+            &mut next_value,
+        )?;
         Ok(Self {
             types,
             callables,
@@ -3495,7 +4016,12 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             locals,
             option_dominance,
             enum_payload_dominance,
+            enum_payload_storage,
+            enum_payload_sources,
+            enum_payload_compile_time_custody: BTreeMap::new(),
+            enum_payload_allocas_emitted: false,
             control_flow_ssa,
+            promoted_enum_variant_by_block,
             block_parameters,
             next_value,
             assert_failure_block,
@@ -3521,6 +4047,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             self.locals[*local as usize] = None;
         }
         if block == self.function.entry() {
+            self.emit_enum_payload_allocas_v1(target)?;
             return Ok(());
         }
         let parameters = self
@@ -3530,6 +4057,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             .ok_or_else(|| {
                 unsupported(0, Some(block.index()), None, "block parameters are missing")
             })?;
+        let parameter_locals = parameters.keys().copied().collect::<Vec<_>>();
         for (local, parameters) in parameters {
             let promoted = &self.control_flow_ssa.promoted[&local];
             self.locals[local as usize] = Some(promoted.binding.binding_from_transport(
@@ -3539,7 +4067,230 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             )?);
             target.parameters.extend(parameters);
         }
+        for local in parameter_locals {
+            self.refine_enum_payload_at_block_v1(block, local, target)?;
+        }
         Ok(())
+    }
+
+    fn emit_enum_payload_allocas_v1(
+        &mut self,
+        target: &mut BasicBlock,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if self.enum_payload_allocas_emitted {
+            return Err(unsupported(
+                0,
+                Some(target.id.0),
+                None,
+                "enum payload storage allocas were emitted more than once",
+            ));
+        }
+        let components = self
+            .enum_payload_storage
+            .values()
+            .flat_map(|field| field.components.iter().cloned())
+            .collect::<Vec<_>>();
+        for component in components {
+            let pointer_type = Type::pointer(
+                component.kernel_type.clone(),
+                AddressSpace::Private,
+                AccessMode::ReadWrite,
+            );
+            self.push_operation(&mut target.operations, || {
+                Operation::effect_free(
+                    ValueDef::new(component.pointer, pointer_type),
+                    OperationKind::Alloca {
+                        element: component.kernel_type,
+                        count: None,
+                        address_space: AddressSpace::Private,
+                        alignment: component.alignment,
+                    },
+                )
+            })?;
+        }
+        self.enum_payload_allocas_emitted = true;
+        Ok(())
+    }
+
+    fn refine_enum_payload_at_block_v1(
+        &mut self,
+        block: SemanticBlockIdV1,
+        local: u32,
+        target: &mut BasicBlock,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        let Some(promoted) = self.control_flow_ssa.promoted.get(&local) else {
+            return Ok(());
+        };
+        let Some(declaration) = self.types.get(promoted.semantic_type.index() as usize) else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "promoted enum type is missing",
+            ));
+        };
+        let SemanticTypeShapeV1::Enum { variants, .. } = declaration.shape() else {
+            return Ok(());
+        };
+        let mut selected = variants.iter().enumerate().filter_map(|(variant, _)| {
+            let variant = variant as u32;
+            self.enum_variant_is_available_v1(SemanticLocalIdV1::from_index(local), variant, block)
+                .then_some(variant)
+        });
+        let Some(variant) = selected.next() else {
+            return Ok(());
+        };
+        if selected.next().is_some() {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "multiple enum variants are available in one block",
+            ));
+        }
+        let binding = self
+            .locals
+            .get_mut(local as usize)
+            .and_then(Option::take)
+            .ok_or(ProductionSemanticKirErrorV1::MissingLocalDefinition {
+                function: 0,
+                block: block.index(),
+                statement: None,
+                local,
+            })?;
+        let SemanticValueBindingV1::Enum {
+            discriminant,
+            discriminant_ty,
+            semantic_type,
+            ..
+        } = binding
+        else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "variant-refined local is not an enum SSA binding",
+            ));
+        };
+        let variant_definition = variants.get(variant as usize).ok_or_else(|| {
+            unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "refined enum variant is missing",
+            )
+        })?;
+        let mut restorations = Vec::with_capacity(variant_definition.fields().fields().len());
+        for (field, _field_type) in variant_definition
+            .fields()
+            .fields()
+            .iter()
+            .copied()
+            .enumerate()
+        {
+            let key = (local, variant, field as u32);
+            let storage = self.enum_payload_storage.get(&key).cloned();
+            let compile_time_custody = self
+                .enum_payload_compile_time_custody
+                .get(&key)
+                .cloned()
+                .filter(semantic_binding_can_restore_from_unique_source_v1);
+            if let Some(source) = compile_time_custody {
+                restorations.push(SemanticEnumPayloadRestoreV1::UniqueSource(source));
+            } else if let Some(storage) = storage {
+                restorations.push(SemanticEnumPayloadRestoreV1::PrivateStorage(storage));
+            } else {
+                self.locals[local as usize] = Some(SemanticValueBindingV1::Enum {
+                    discriminant,
+                    discriminant_ty,
+                    semantic_type,
+                    variant: None,
+                    payload_variant: None,
+                    fields: Vec::new(),
+                });
+                return Ok(());
+            }
+        }
+        let mut fields = Vec::with_capacity(variant_definition.fields().fields().len());
+        for (field_type, restoration) in variant_definition
+            .fields()
+            .fields()
+            .iter()
+            .copied()
+            .zip(restorations)
+        {
+            match restoration {
+                SemanticEnumPayloadRestoreV1::UniqueSource(source) => fields.push(source),
+                SemanticEnumPayloadRestoreV1::PrivateStorage(storage) => {
+                    if storage.semantic_type != field_type {
+                        return Err(unsupported(
+                            0,
+                            Some(block.index()),
+                            None,
+                            "refined enum payload storage type changed",
+                        ));
+                    }
+                    let mut values = Vec::with_capacity(storage.components.len());
+                    for component in storage.components.iter() {
+                        let value = self
+                            .emit(
+                                &mut target.operations,
+                                component.kernel_type.clone(),
+                                OperationKind::Load {
+                                    pointer: component.pointer,
+                                    access: MemoryAccess::new(
+                                        AddressSpace::Private,
+                                        component.alignment,
+                                    ),
+                                },
+                            )?
+                            .value()
+                            .expect("enum payload component load returns one value");
+                        values.push(ValueDef::new(value.0, value.1));
+                    }
+                    fields.push(match storage.exact_enum_variant {
+                        Some(exact_variant) => binding_from_exact_enum_value_defs_v1(
+                            self.types,
+                            field_type,
+                            exact_variant,
+                            &values,
+                        )?,
+                        None => binding_from_value_defs(self.types, field_type, &values)?,
+                    });
+                }
+            }
+        }
+        for field in &mut fields {
+            reauthenticate_capabilities_from_enum_payload_v1(
+                field,
+                SemanticLocalIdV1::from_index(local),
+                variant,
+            );
+        }
+        self.locals[local as usize] = Some(SemanticValueBindingV1::Enum {
+            discriminant,
+            discriminant_ty,
+            semantic_type,
+            variant: Some(variant),
+            payload_variant: Some(variant),
+            fields,
+        });
+        Ok(())
+    }
+
+    fn enum_variant_is_available_v1(
+        &self,
+        local: SemanticLocalIdV1,
+        variant: u32,
+        block: SemanticBlockIdV1,
+    ) -> bool {
+        self.promoted_enum_variant_by_block
+            .get(&(block.index(), local.index()))
+            .is_some_and(|available| *available == variant)
+            || self
+                .enum_payload_dominance
+                .availability(local, variant)
+                .is_some_and(|availability| self.enum_payload_dominance.allows(availability, block))
     }
 
     fn edge_arguments(
@@ -3698,7 +4449,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticRvalueKindV1::Borrow { place, .. }
             | SemanticRvalueKindV1::AddressOf { place, .. } => {
-                self.resolve_place(block, statement, place)
+                if place.projections().iter().any(|projection| {
+                    matches!(projection.kind(), SemanticProjectionKindV1::Index(_))
+                }) {
+                    self.lower_indexed_place_address(block, statement, place, operations)
+                } else {
+                    self.resolve_place(block, statement, place)
+                }
             }
             SemanticRvalueKindV1::Discriminant(place) => {
                 match self.resolve_place(block, statement, place)? {
@@ -5828,6 +6585,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 ));
             }
         };
+        self.store_enum_payload_v1(
+            block,
+            None,
+            destination.place().local(),
+            &binding,
+            operations,
+        )?;
         self.bind_destination(block, None, destination.place(), binding)?;
         Ok(Terminator::Branch {
             target: BlockId(destination.edge().target().index()),
@@ -7542,6 +8306,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         operations: &mut Vec<Operation>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         if destination.projections().is_empty() {
+            self.store_enum_payload_v1(block, statement, destination.local(), &value, operations)?;
             return self.bind_destination(block, statement, destination, value);
         }
         if !destination
@@ -7592,6 +8357,86 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 },
             )
         })?;
+        Ok(())
+    }
+
+    fn store_enum_payload_v1(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        local: SemanticLocalIdV1,
+        value: &SemanticValueBindingV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        let SemanticValueBindingV1::Enum {
+            variant: Some(variant),
+            fields,
+            ..
+        } = value
+        else {
+            return Ok(());
+        };
+        for (field, binding) in fields.iter().enumerate() {
+            let Some(storage) = self
+                .enum_payload_storage
+                .get(&(local.index(), *variant, field as u32))
+                .cloned()
+            else {
+                continue;
+            };
+            let key = (local.index(), *variant, field as u32);
+            if self.enum_payload_sources.contains_key(&key)
+                && semantic_binding_can_restore_from_unique_source_v1(binding)
+            {
+                if self
+                    .enum_payload_compile_time_custody
+                    .insert(key, binding.clone())
+                    .is_some()
+                {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "enum payload compile-time custody was assigned more than once",
+                    ));
+                }
+                continue;
+            }
+            let values = match storage.exact_enum_variant {
+                Some(expected_variant) => {
+                    exact_enum_binding_values_v1(binding, expected_variant)
+                        .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?
+                }
+                None => binding
+                    .values()
+                    .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?,
+            };
+            if values.len() != storage.components.len()
+                || values
+                    .iter()
+                    .zip(storage.components.iter())
+                    .any(|((_, actual), expected)| actual != &expected.kernel_type)
+            {
+                return Err(unsupported(
+                    0,
+                    Some(block.index()),
+                    statement,
+                    "enum payload changed its private-storage component types",
+                ));
+            }
+            for ((value, _), component) in values.into_iter().zip(storage.components.iter()) {
+                self.push_operation(operations, || {
+                    Operation::new(
+                        vec![],
+                        OperationKind::Store {
+                            pointer: component.pointer,
+                            value,
+                            access: MemoryAccess::new(AddressSpace::Private, component.alignment),
+                        },
+                    )
+                })?;
+            }
+        }
         Ok(())
     }
 
@@ -7804,21 +8649,6 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                             "enum downcast does not match its known variant",
                         ));
                     }
-                    if variant.is_none()
-                        && self
-                            .enum_payload_dominance
-                            .availability(place.local(), expected)
-                            .is_none_or(|availability| {
-                                !self.enum_payload_dominance.allows(availability, block)
-                            })
-                    {
-                        return Err(unsupported(
-                            0,
-                            Some(block.index()),
-                            statement,
-                            "enum payload is used outside its exact discriminant edge",
-                        ));
-                    }
                     SemanticValueBindingV1::Enum {
                         discriminant,
                         discriminant_ty,
@@ -7836,8 +8666,26 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         ..
                     },
                     SemanticProjectionKindV1::Field(field),
-                ) => project_enum_payload_field(variant, payload_variant, &fields, field)
-                    .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?,
+                ) => {
+                    let projected =
+                        project_enum_payload_field(variant, payload_variant, &fields, field);
+                    if matches!(
+                        projected,
+                        Ok(SemanticValueBindingV1::Unmaterialized) | Err(_)
+                    ) {
+                        return Err(ProductionSemanticKirErrorV1::EnumPayloadUnavailable {
+                            function: 0,
+                            block: block.index(),
+                            statement,
+                            local: place.local().index(),
+                            variant,
+                            field,
+                            available_fields: fields.len(),
+                            evidence: self.enum_carrier_evidence_v1(place.local()),
+                        });
+                    }
+                    projected.expect("available enum field was checked")
+                }
                 (
                     binding @ SemanticValueBindingV1::Enum { .. },
                     SemanticProjectionKindV1::OpaqueCast | SemanticProjectionKindV1::Subtype,
@@ -7900,7 +8748,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     SemanticProjectionKindV1::Field(_),
                 ) => SemanticValueBindingV1::IndexWitness {
                     id,
-                    availability: Some(availability),
+                    availability: Some(SemanticCapabilityAvailabilityV1::Option(availability)),
                     index_space,
                     disjoint: true,
                 },
@@ -7915,12 +8763,14 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 ) => SemanticValueBindingV1::ComponentWitness {
                     raw,
                     index_space,
-                    availability,
+                    availability: SemanticCapabilityAvailabilityV1::Option(availability),
                 },
                 (
                     SemanticValueBindingV1::OptionGridLeader { availability, .. },
                     SemanticProjectionKindV1::Field(_),
-                ) => SemanticValueBindingV1::GridLeader { availability },
+                ) => SemanticValueBindingV1::GridLeader {
+                    availability: SemanticCapabilityAvailabilityV1::Option(availability),
+                },
                 (
                     binding @ SemanticValueBindingV1::OptionPointer { .. },
                     SemanticProjectionKindV1::Downcast(_),
@@ -7969,13 +8819,25 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     | SemanticProjectionKindV1::OpaqueCast
                     | SemanticProjectionKindV1::Subtype,
                 ) => binding,
-                _ => {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
+                (binding, projection) => {
+                    let mut evidence = self.enum_carrier_evidence_v1(place.local());
+                    if let SemanticProjectionKindV1::Index(index) = projection {
+                        evidence.extend(
+                            self.enum_carrier_evidence_v1(index)
+                                .into_iter()
+                                .map(|record| format!("index {record}")),
+                        );
+                        evidence.truncate(16);
+                    }
+                    return Err(ProductionSemanticKirErrorV1::PlaceProjectionUnavailable {
+                        function: 0,
+                        block: block.index(),
                         statement,
-                        "semantic place projection has no exact fill-profile representation",
-                    ));
+                        local: place.local().index(),
+                        binding: semantic_binding_kind_v1(&binding),
+                        projection: format!("{projection:?}"),
+                        evidence,
+                    });
                 }
             };
         }
@@ -8005,17 +8867,110 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             | SemanticValueBindingV1::OptionComponentWitness { .. }
             | SemanticValueBindingV1::OptionGridLeader { .. } => None,
         };
-        if availability
-            .is_some_and(|availability| !self.option_dominance.allows(availability, block))
-        {
+        if availability.is_some_and(|availability| match availability {
+            SemanticCapabilityAvailabilityV1::Option(availability) => {
+                !self.option_dominance.allows(availability, block)
+            }
+            SemanticCapabilityAvailabilityV1::EnumPayload { local, variant } => {
+                !self.enum_variant_is_available_v1(local, variant, block)
+            }
+        }) {
             return Err(unsupported(
                 0,
                 Some(block.index()),
                 statement,
-                "capability payload is used outside its authenticated Some edge",
+                "capability payload is used outside its authenticated enum edge",
             ));
         }
         Ok(binding)
+    }
+
+    fn enum_carrier_evidence_v1(&self, local: SemanticLocalIdV1) -> Vec<String> {
+        const MAX_EVIDENCE_V1: usize = 16;
+
+        let mut evidence = Vec::new();
+        let mut pending = VecDeque::from([local]);
+        let mut visited = BTreeSet::new();
+        while let Some(local) = pending.pop_front() {
+            if !visited.insert(local.index()) {
+                continue;
+            }
+            if let Some(declaration) = self.function.locals().get(local.index() as usize) {
+                let shape = self
+                    .types
+                    .get(declaration.ty().index() as usize)
+                    .map(|declaration| format!("{:?}", declaration.shape()))
+                    .unwrap_or_else(|| "<missing type declaration>".to_owned());
+                evidence.push(format!(
+                    "local {} declaration: role {:?}, type {}, shape {shape}",
+                    local.index(),
+                    declaration.role(),
+                    declaration.ty().index(),
+                ));
+                if evidence.len() == MAX_EVIDENCE_V1 {
+                    return evidence;
+                }
+            }
+            for (block_index, block) in self.function.blocks().iter().enumerate() {
+                for (statement_index, statement) in block.statements().iter().enumerate() {
+                    let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                        continue;
+                    };
+                    if assignment.destination().projections().is_empty()
+                        && assignment.destination().local() == local
+                    {
+                        evidence.push(format!(
+                            "local {} definition block {block_index} statement {statement_index}: {:?}",
+                            local.index(),
+                            assignment.value().kind(),
+                        ));
+                        let _: Result<(), ()> =
+                            assignment.value().kind().try_visit_operands(|operand| {
+                                if let SemanticOperandV1::Copy(place)
+                                | SemanticOperandV1::Move(place) = operand
+                                {
+                                    pending.push_back(place.local());
+                                }
+                                Ok(())
+                            });
+                        match assignment.value().kind() {
+                            SemanticRvalueKindV1::Borrow { place, .. }
+                            | SemanticRvalueKindV1::AddressOf { place, .. }
+                            | SemanticRvalueKindV1::Length(place)
+                            | SemanticRvalueKindV1::Discriminant(place) => {
+                                pending.push_back(place.local());
+                            }
+                            SemanticRvalueKindV1::Load(load) => {
+                                pending.push_back(load.source().local());
+                            }
+                            SemanticRvalueKindV1::Use(_)
+                            | SemanticRvalueKindV1::Unary { .. }
+                            | SemanticRvalueKindV1::Binary { .. }
+                            | SemanticRvalueKindV1::CheckedBinary(_)
+                            | SemanticRvalueKindV1::UncheckedBinary(_)
+                            | SemanticRvalueKindV1::Cast { .. }
+                            | SemanticRvalueKindV1::Aggregate(_) => {}
+                        }
+                    }
+                    if matches!(
+                        assignment.value().kind(),
+                        SemanticRvalueKindV1::Discriminant(place)
+                            if place.projections().is_empty() && place.local() == local
+                    ) {
+                        evidence.push(format!(
+                            "local {} discriminant block {block_index} statement {statement_index}: destination local {}; terminator {:?}",
+                            local.index(),
+                            assignment.destination().local().index(),
+                            block.terminator().kind(),
+                        ));
+                    }
+                    if evidence.len() == MAX_EVIDENCE_V1 {
+                        return evidence;
+                    }
+                }
+            }
+        }
+        evidence
     }
 
     fn emit(
@@ -8504,15 +9459,16 @@ fn lower_parameter_type(
 }
 
 const MAX_SSA_VALUE_COMPONENTS_V1: usize = 256;
+const MAX_ENUM_PAYLOAD_STORAGE_COMPONENTS_V1: usize = 4_096;
 
-fn lower_ssa_value_types(
+fn lower_ssa_value_components_v1(
     types: &[SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,
-) -> Result<Vec<Type>, ProductionSemanticKirErrorV1> {
+) -> Result<Vec<(SemanticTypeIdV1, Type)>, ProductionSemanticKirErrorV1> {
     fn append(
         types: &[SemanticTypeDeclV1],
         ty: SemanticTypeIdV1,
-        output: &mut Vec<Type>,
+        output: &mut Vec<(SemanticTypeIdV1, Type)>,
         structural_nodes: &mut usize,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         *structural_nodes = structural_nodes.checked_add(1).ok_or_else(|| {
@@ -8540,11 +9496,15 @@ fn lower_ssa_value_types(
         match shape {
             SemanticTypeShapeV1::Unit => Ok(()),
             SemanticTypeShapeV1::Enum { discriminant, .. } => {
-                output.push(lower_scalar_type(types, *discriminant)?);
+                output.push((*discriminant, lower_scalar_type(types, *discriminant)?));
                 Ok(())
             }
             SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_) => {
-                output.push(lower_scalar_type(types, ty)?);
+                output.push((ty, lower_scalar_type(types, ty)?));
+                Ok(())
+            }
+            SemanticTypeShapeV1::Pointer(_) => {
+                output.push((ty, lower_parameter_type(types, &[], ty)?));
                 Ok(())
             }
             SemanticTypeShapeV1::Array { element, length } => {
@@ -8591,6 +9551,320 @@ fn lower_ssa_value_types(
         ));
     }
     Ok(output)
+}
+
+fn lower_ssa_value_types(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+) -> Result<Vec<Type>, ProductionSemanticKirErrorV1> {
+    Ok(lower_ssa_value_components_v1(types, ty)?
+        .into_iter()
+        .map(|(_, ty)| ty)
+        .collect())
+}
+
+fn plan_enum_payload_storage_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    control_flow_ssa: &SemanticControlFlowSsaPlanV1,
+    sources: &BTreeMap<(u32, u32, u32), SemanticEnumPayloadSourceV1>,
+    next_value: &mut u32,
+) -> Result<
+    BTreeMap<(u32, u32, u32), SemanticEnumPayloadFieldStorageV1>,
+    ProductionSemanticKirErrorV1,
+> {
+    let mut storage = BTreeMap::new();
+    let mut component_count = 0_usize;
+    for (local, promoted) in &control_flow_ssa.promoted {
+        let declaration = types
+            .get(promoted.semantic_type.index() as usize)
+            .ok_or_else(|| unsupported(0, None, None, "promoted enum type is missing"))?;
+        let SemanticTypeShapeV1::Enum { variants, .. } = declaration.shape() else {
+            continue;
+        };
+        if function.locals().get(*local as usize).is_none() {
+            return Err(unsupported(0, None, None, "promoted enum local is missing"));
+        }
+        for (variant, definition) in variants.iter().enumerate() {
+            for (field, semantic_type) in definition.fields().fields().iter().copied().enumerate() {
+                let mut components = Vec::new();
+                let key = (*local, variant as u32, field as u32);
+                let exact_enum_variant = sources.get(&key).and_then(|source| {
+                    exact_enum_variant_for_source_v1(function, source, semantic_type)
+                });
+                let component_types = match exact_enum_variant {
+                    Some(exact_variant) => {
+                        lower_exact_enum_components_v1(types, semantic_type, exact_variant)
+                    }
+                    None => lower_ssa_value_components_v1(types, semantic_type),
+                };
+                let component_types = match component_types {
+                    Ok(components) => components,
+                    Err(ProductionSemanticKirErrorV1::Unsupported {
+                        detail: "type has no bounded aggregate SSA representation",
+                        ..
+                    }) => continue,
+                    Err(error) => return Err(error),
+                };
+                for (component_type, kernel_type) in component_types {
+                    component_count = component_count.checked_add(1).ok_or_else(|| {
+                        unsupported(0, None, None, "enum payload storage count overflow")
+                    })?;
+                    if component_count > MAX_ENUM_PAYLOAD_STORAGE_COMPONENTS_V1 {
+                        return Err(unsupported(
+                            0,
+                            None,
+                            None,
+                            "enum payload storage exceeds the component limit",
+                        ));
+                    }
+                    if !kernel_type.is_storable() {
+                        return Err(unsupported(
+                            0,
+                            None,
+                            None,
+                            "enum payload component is not storable in private memory",
+                        ));
+                    }
+                    let alignment = types
+                        .get(component_type.index() as usize)
+                        .and_then(|ty| u32::try_from(ty.layout().alignment_bytes()).ok())
+                        .filter(|alignment| *alignment != 0)
+                        .ok_or_else(|| {
+                            unsupported(
+                                0,
+                                None,
+                                None,
+                                "enum payload component alignment is unsupported",
+                            )
+                        })?;
+                    let pointer = ValueId(*next_value);
+                    *next_value = next_value.checked_add(1).ok_or_else(|| {
+                        unsupported(0, None, None, "enum payload SSA identity overflow")
+                    })?;
+                    components.push(SemanticEnumPayloadComponentStorageV1 {
+                        pointer,
+                        kernel_type,
+                        alignment,
+                    });
+                }
+                storage.insert(
+                    key,
+                    SemanticEnumPayloadFieldStorageV1 {
+                        semantic_type,
+                        exact_enum_variant,
+                        components: components.into_boxed_slice(),
+                    },
+                );
+            }
+        }
+    }
+    Ok(storage)
+}
+
+fn plan_unique_enum_payload_sources_v1(
+    function: &SemanticFunctionDeclV1,
+    control_flow_ssa: &SemanticControlFlowSsaPlanV1,
+) -> BTreeMap<(u32, u32, u32), SemanticEnumPayloadSourceV1> {
+    let mut candidates = BTreeMap::<(u32, u32, u32), Option<SemanticEnumPayloadSourceV1>>::new();
+    for block in function.blocks() {
+        for statement in block.statements() {
+            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                continue;
+            };
+            let destination = assignment.destination();
+            if !destination.projections().is_empty()
+                || !control_flow_ssa
+                    .promoted
+                    .contains_key(&destination.local().index())
+            {
+                continue;
+            }
+            let SemanticRvalueKindV1::Aggregate(aggregate) = assignment.value().kind() else {
+                continue;
+            };
+            let SemanticAggregateKindV1::EnumVariant(variant) = aggregate.kind() else {
+                continue;
+            };
+            for (field, operand) in aggregate.operands().iter().enumerate() {
+                let key = (destination.local().index(), *variant, field as u32);
+                let source = match operand {
+                    SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
+                        Some(SemanticEnumPayloadSourceV1 {
+                            place: place.clone(),
+                        })
+                    }
+                    SemanticOperandV1::Constant(_) => None,
+                };
+                match candidates.entry(key) {
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        entry.insert(source);
+                    }
+                    std::collections::btree_map::Entry::Occupied(mut entry) => {
+                        entry.insert(None);
+                    }
+                }
+            }
+        }
+    }
+    candidates
+        .into_iter()
+        .filter_map(|(key, source)| source.map(|source| (key, source)))
+        .collect()
+}
+
+fn exact_enum_variant_for_source_v1(
+    function: &SemanticFunctionDeclV1,
+    source: &SemanticEnumPayloadSourceV1,
+    semantic_type: SemanticTypeIdV1,
+) -> Option<u32> {
+    if !source.place.projections().is_empty() || source.place.ty() != semantic_type {
+        return None;
+    }
+    let local = source.place.local();
+    let mut definitions = 0_u32;
+    let mut variant = None;
+    for block in function.blocks() {
+        for statement in block.statements() {
+            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                continue;
+            };
+            if !assignment.destination().projections().is_empty()
+                || assignment.destination().local() != local
+            {
+                continue;
+            }
+            definitions = definitions.saturating_add(1);
+            variant = match assignment.value().kind() {
+                SemanticRvalueKindV1::Aggregate(aggregate)
+                    if assignment.value().result_type() == semantic_type =>
+                {
+                    match aggregate.kind() {
+                        SemanticAggregateKindV1::EnumVariant(variant) => Some(*variant),
+                        SemanticAggregateKindV1::Array
+                        | SemanticAggregateKindV1::Tuple
+                        | SemanticAggregateKindV1::Aggregate => None,
+                    }
+                }
+                _ => None,
+            };
+        }
+        if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
+            && call.destination().is_some_and(|destination| {
+                destination.place().projections().is_empty() && destination.place().local() == local
+            })
+        {
+            definitions = definitions.saturating_add(1);
+            variant = None;
+        }
+    }
+    (definitions == 1).then_some(variant).flatten()
+}
+
+fn lower_exact_enum_components_v1(
+    types: &[SemanticTypeDeclV1],
+    semantic_type: SemanticTypeIdV1,
+    variant: u32,
+) -> Result<Vec<(SemanticTypeIdV1, Type)>, ProductionSemanticKirErrorV1> {
+    let (discriminant, variants) = semantic_enum_shape(types, semantic_type)?;
+    let selected = variants.get(variant as usize).ok_or_else(|| {
+        unsupported(
+            0,
+            None,
+            None,
+            "exact enum payload source variant is out of range",
+        )
+    })?;
+    let mut components = vec![(discriminant, lower_scalar_type(types, discriminant)?)];
+    for field in selected.fields().fields() {
+        components.extend(lower_ssa_value_components_v1(types, *field)?);
+        if components.len() > MAX_SSA_VALUE_COMPONENTS_V1 {
+            return Err(unsupported(
+                0,
+                None,
+                None,
+                "exact enum payload source exceeds the component limit",
+            ));
+        }
+    }
+    Ok(components)
+}
+
+fn exact_enum_binding_values_v1(
+    binding: &SemanticValueBindingV1,
+    expected_variant: u32,
+) -> Result<Vec<(ValueId, Type)>, &'static str> {
+    let SemanticValueBindingV1::Enum {
+        discriminant,
+        discriminant_ty,
+        variant: Some(actual_variant),
+        fields,
+        ..
+    } = binding
+    else {
+        return Err("exact enum payload source is not a variant-refined enum");
+    };
+    if *actual_variant != expected_variant {
+        return Err("exact enum payload source variant changed");
+    }
+    let mut values = vec![(*discriminant, discriminant_ty.clone())];
+    for field in fields {
+        field.append_values(&mut values)?;
+    }
+    Ok(values)
+}
+
+fn binding_from_exact_enum_value_defs_v1(
+    types: &[SemanticTypeDeclV1],
+    semantic_type: SemanticTypeIdV1,
+    variant: u32,
+    values: &[ValueDef],
+) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+    let (discriminant_type, variants) = semantic_enum_shape(types, semantic_type)?;
+    let definition = variants
+        .get(variant as usize)
+        .ok_or_else(|| unsupported(0, None, None, "exact enum storage variant is out of range"))?;
+    let discriminant = values
+        .first()
+        .ok_or_else(|| unsupported(0, None, None, "exact enum storage is truncated"))?;
+    let expected_discriminant = lower_scalar_type(types, discriminant_type)?;
+    if discriminant.ty != expected_discriminant {
+        return Err(unsupported(
+            0,
+            None,
+            None,
+            "exact enum storage discriminant type changed",
+        ));
+    }
+    let mut cursor = 1_usize;
+    let mut fields = Vec::with_capacity(definition.fields().fields().len());
+    for field_type in definition.fields().fields() {
+        let component_count = lower_ssa_value_components_v1(types, *field_type)?.len();
+        let end = cursor.checked_add(component_count).ok_or_else(|| {
+            unsupported(0, None, None, "exact enum storage component count overflow")
+        })?;
+        let components = values
+            .get(cursor..end)
+            .ok_or_else(|| unsupported(0, None, None, "exact enum storage is truncated"))?;
+        fields.push(binding_from_value_defs(types, *field_type, components)?);
+        cursor = end;
+    }
+    if cursor != values.len() {
+        return Err(unsupported(
+            0,
+            None,
+            None,
+            "exact enum storage has trailing components",
+        ));
+    }
+    Ok(SemanticValueBindingV1::Enum {
+        discriminant: discriminant.id,
+        discriminant_ty: discriminant.ty.clone(),
+        semantic_type,
+        variant: Some(variant),
+        payload_variant: Some(variant),
+        fields,
+    })
 }
 
 fn binding_from_value_defs(
@@ -8671,6 +9945,25 @@ fn binding_from_value_defs_with_validation(
                         None,
                         None,
                         "aggregate SSA component type changed",
+                    ));
+                }
+                *cursor += 1;
+                Ok(SemanticValueBindingV1::Value {
+                    id: value.id,
+                    ty: value.ty.clone(),
+                })
+            }
+            SemanticTypeShapeV1::Pointer(_) => {
+                let value = values.get(*cursor).ok_or_else(|| {
+                    unsupported(0, None, None, "aggregate SSA pointer is truncated")
+                })?;
+                let expected = lower_parameter_type(types, &[], ty)?;
+                if validate_scalar_types && value.ty != expected {
+                    return Err(unsupported(
+                        0,
+                        None,
+                        None,
+                        "aggregate SSA pointer component type changed",
                     ));
                 }
                 *cursor += 1;

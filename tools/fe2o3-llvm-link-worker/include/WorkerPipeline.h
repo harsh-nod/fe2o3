@@ -34,6 +34,12 @@ validateExactRowSoftmaxV1CompilerInputForTesting(llvm::ArrayRef<uint8_t> Bytes);
 llvm::Error
 validateExactRowSoftmaxV1MetadataForTesting(llvm::StringRef MetadataBlob);
 
+llvm::Error validateProductionGeneralGemmV1CompilerInputForTesting(
+    llvm::ArrayRef<uint8_t> Bytes);
+
+llvm::Error validateProductionGeneralGemmV1MetadataForTesting(
+    llvm::StringRef MetadataBlob);
+
 llvm::Expected<std::vector<uint8_t>>
 makeExactWorkgroupSyncCompilerInputForTesting(
     llvm::StringRef CanonicalBody, llvm::ArrayRef<uint8_t> Descriptor,
