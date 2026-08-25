@@ -125,6 +125,16 @@ pub use queue::{
     ServiceQueueReleaseObservationV1, ServiceQueueSessionV1, ServiceQueueUnboundSessionV1,
     ServiceRecycledQueueSessionV1,
 };
+#[cfg(all(
+    target_os = "linux",
+    target_arch = "x86_64",
+    feature = "qualification-fault-injection"
+))]
+pub use queue::{
+    SERVICE_QUALIFICATION_QUEUE_FAULT_CONTRACT_SHA256_V1,
+    SERVICE_QUALIFICATION_QUEUE_FAULT_CONTRACT_V1, ServiceQualificationFaultedQueueSessionV1,
+    ServiceQualificationQueueFaultPointV1,
+};
 
 pub use binding::{QueueSlotBindingV1, ServiceContractV1, ServiceKeyV1};
 pub use error::{BindingFieldV1, ServiceHostErrorV1};

@@ -27,7 +27,7 @@ use crate::batch::ServiceFixedBatchV1;
 
 /// Frozen claim boundary for the reusable service queue composition layer.
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-service-addressless-fixed-queue-r10-v1\n",
+    "profile=fe2o3-service-addressless-fixed-queue-r11-v1\n",
     "queue=one-long-lived-kfd-compute-aql-owner,ring-event-doorbell-and-signal-resources-retained-across-rebind\n",
     "batch=1-through-8192-fixed-packets,conservative-wait-for-prior-ordering-default-with-explicit-independent-opt-in,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges,optional-initialized-enclosing-host-snapshot-associated-with-one-strict-interior\n",
     "implicit-kernarg=exact-trailing-256-byte-COV6-caller-zero-suffix,lower-owner-privately-populates-metadata-derived-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds,queue-pointer-and-runtime-service-or-address-fields-rejected\n",
@@ -38,6 +38,7 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
     "readback=caller-can-mint-only-from-current-recycled-owner,request-binds-exact-dispatch-generation-and-owner-checked-host-allocation-generation,lower-owner-allows-an-ordinary-range-within-one-inspected-write-or-readwrite-binding-or-one-exact-declared-initialized-enclosing-snapshot-with-an-isolated-writable-interior-and-returns-owned-bytes,no-address-or-initialization-promotion\n",
     "rebind=same-native-queue-may-consume-a-different-fixed-cardinality-program-geometry-kernarg-and-addressless-data-binding-after-exact-recycle\n",
     "release=return-attached-or-exact-ordered-detached-data-custody-after-exact-recycle,destroy-native-queue,restore-service-ledger,reverse-order-unmap-and-free\n",
+    "qualification-fault-injection=feature-gated-post-recycle-before-completed-read-attempt-terminal-typestate,prior-attempt-rejects-and-returns-recycled-owner,ordinary-native-teardown-only,no-synthetic-kfd-error-or-hardware-fault-claim\n",
     "failure=pure-rejection-recovers-input-owners,ambiguous-native-side-effect-is-terminal-and-denies-retry,opaque-quarantine-retains-available-owner-state,timeout-observation-grants-no-live-introspection-or-authority\n",
     "authority=no-native-address-handle-pointer-fd-mmio-signal-or-packet-template-export,no-caller-initialization-or-effect-assertion\n",
     "excluded=executable-correctness,effect-correctness-beyond-inspected-metadata,full-write-coverage,content-interpretation,numerical-correctness,hardware-execution,performance\n",
@@ -45,7 +46,22 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "a11e0245fab4f1959a0ab54e9b64f3aadb68831e391f7c9bce64f77bbce10036";
+    "5737f2957299c1313a17120e5eda68725ff3ee9ae730d1d168650db9f8f3a007";
+
+/// Feature-bound contract for deliberate service queue-transition faults.
+#[cfg(feature = "qualification-fault-injection")]
+pub const SERVICE_QUALIFICATION_QUEUE_FAULT_CONTRACT_V1: &str = concat!(
+    "profile=fe2o3-service-qualification-queue-fault-r1-v1\n",
+    "availability=cargo-feature:qualification-fault-injection\n",
+    "injection=post-recycle-before-any-completed-read-attempt,consumes-recycled-owner\n",
+    "terminal=readback-reuse-detach-denied-by-type,ordinary-returning-teardown-only\n",
+    "authority=no-synthetic-kfd-error-native-fault-device-fault-or-reset-claim\n",
+);
+
+/// SHA-256 of [`SERVICE_QUALIFICATION_QUEUE_FAULT_CONTRACT_V1`].
+#[cfg(feature = "qualification-fault-injection")]
+pub const SERVICE_QUALIFICATION_QUEUE_FAULT_CONTRACT_SHA256_V1: &str =
+    "8a83bbdef6745b1eb13090e2c2e3e933734e02ee7755ab35764d9b59700c90fa";
 
 /// Queue composition, transition, or teardown error.
 #[derive(Debug)]
@@ -480,6 +496,7 @@ impl<const N: usize> ServiceCompletedQueueSessionV1<N> {
                     owner: self.owner,
                     recycle: observation,
                     dispatch_generation,
+                    completed_read_attempted: false,
                 }),
                 Err(error) => Err(quarantine(self.owner, error)),
             },
@@ -536,6 +553,102 @@ pub struct ServiceRecycledQueueSessionV1<const N: usize> {
     owner: ServiceQueueOwnerV1,
     recycle: Gfx942CompletionRecycleObservationV1,
     dispatch_generation: u64,
+    completed_read_attempted: bool,
+}
+
+/// Exact qualification-only transition at which a deliberate service fault is injected.
+///
+/// This is a service-host typestate boundary, not evidence that KFD or the GPU
+/// produced a native fault. The API exists only with the
+/// `qualification-fault-injection` feature.
+#[cfg(feature = "qualification-fault-injection")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServiceQualificationQueueFaultPointV1 {
+    /// Completion signals were recycled before any completed-read attempt.
+    PostRecycleBeforeCompletedReadAttempt,
+}
+
+/// Terminal custody after a deliberate qualification queue-transition fault.
+///
+/// The ordinary recycled owner is consumed. This state exposes no readback,
+/// reuse, or detach transition; the only native operation is exact queue and
+/// allocation teardown. It does not claim that KFD or hardware faulted.
+///
+/// ```compile_fail
+/// use fe2o3_service_host::ServiceQualificationFaultedQueueSessionV1;
+/// fn read<const N: usize>(mut queue: ServiceQualificationFaultedQueueSessionV1<N>) {
+///     let _ = queue.read_completed(todo!());
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_service_host::ServiceQualificationFaultedQueueSessionV1;
+/// fn reuse<const N: usize>(queue: ServiceQualificationFaultedQueueSessionV1<N>) {
+///     let _ = queue.reuse();
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_service_host::ServiceQualificationFaultedQueueSessionV1;
+/// fn detach<const N: usize>(queue: ServiceQualificationFaultedQueueSessionV1<N>) {
+///     let _ = queue.detach();
+/// }
+/// ```
+#[cfg(feature = "qualification-fault-injection")]
+#[must_use = "the deliberately faulted queue must be destroyed or retained"]
+pub struct ServiceQualificationFaultedQueueSessionV1<const N: usize> {
+    owner: ServiceQueueOwnerV1,
+    recycle: Gfx942CompletionRecycleObservationV1,
+    dispatch_generation: u64,
+    point: ServiceQualificationQueueFaultPointV1,
+}
+
+#[cfg(feature = "qualification-fault-injection")]
+impl<const N: usize> fmt::Debug for ServiceQualificationFaultedQueueSessionV1<N> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ServiceQualificationFaultedQueueSessionV1")
+            .field("packet_count", &N)
+            .field("queue", &self.owner.observation())
+            .field("recycle", &self.recycle)
+            .field("dispatch_generation", &self.dispatch_generation)
+            .field("point", &self.point)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "qualification-fault-injection")]
+impl<const N: usize> ServiceQualificationFaultedQueueSessionV1<N> {
+    /// Returns the deliberate service transition that consumed recycled custody.
+    pub const fn point(&self) -> ServiceQualificationQueueFaultPointV1 {
+        self.point
+    }
+
+    /// Returns the exact recycled dispatch generation retained by the faulted state.
+    pub const fn dispatch_generation(&self) -> u64 {
+        self.dispatch_generation
+    }
+
+    /// Returns the exact lower-layer recycle observation preceding injection.
+    pub const fn recycle_observation(&self) -> Gfx942CompletionRecycleObservationV1 {
+        self.recycle
+    }
+
+    /// Destroys the real native queue and releases its exact allocation roster.
+    ///
+    /// This is ordinary returning teardown after a deliberate service-layer
+    /// transition fault. It does not synthesize a KFD failure result.
+    pub fn destroy_and_release(
+        self,
+    ) -> Result<ServiceQueueReleaseObservationV1, ServiceQueueReleaseFailureV1> {
+        let ServiceQueueOwnerV1 { queue, ledger } = self.owner;
+        let resources = queue
+            .destroy_returning_fixed_dispatch_resources()
+            .map_err(|error| {
+                ServiceQueueReleaseFailureV1::Queue(ServiceQueueErrorV1::Kfd(error))
+            })?;
+        restore_and_release_queue_resources(ledger, resources)
+    }
 }
 
 impl<const N: usize> fmt::Debug for ServiceRecycledQueueSessionV1<N> {
@@ -546,6 +659,7 @@ impl<const N: usize> fmt::Debug for ServiceRecycledQueueSessionV1<N> {
             .field("queue", &self.owner.observation())
             .field("recycle", &self.recycle)
             .field("dispatch_generation", &self.dispatch_generation)
+            .field("completed_read_attempted", &self.completed_read_attempted)
             .finish_non_exhaustive()
     }
 }
@@ -554,6 +668,40 @@ impl<const N: usize> ServiceRecycledQueueSessionV1<N> {
     /// Returns the exact lower-layer recycle observation.
     pub const fn recycle_observation(&self) -> Gfx942CompletionRecycleObservationV1 {
         self.recycle
+    }
+
+    /// Consumes recycled custody into a qualification-only terminal fault state.
+    ///
+    /// No KFD operation is performed and no native or hardware fault is claimed.
+    /// The returned state denies readback, reuse, and detach by construction and
+    /// permits only exact returning teardown. A prior completed-read attempt
+    /// rejects injection and returns the unchanged recycled owner.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_service_host::{
+    ///     ServiceQualificationQueueFaultPointV1, ServiceRecycledQueueSessionV1,
+    /// };
+    /// fn inject_twice<const N: usize>(queue: ServiceRecycledQueueSessionV1<N>) {
+    ///     let _faulted = queue.inject_qualification_fault(
+    ///         ServiceQualificationQueueFaultPointV1::PostRecycleBeforeCompletedReadAttempt,
+    ///     );
+    ///     let _again = queue.reuse();
+    /// }
+    /// ```
+    #[cfg(feature = "qualification-fault-injection")]
+    pub fn inject_qualification_fault(
+        self,
+        point: ServiceQualificationQueueFaultPointV1,
+    ) -> Result<ServiceQualificationFaultedQueueSessionV1<N>, Box<Self>> {
+        if self.completed_read_attempted {
+            return Err(Box::new(self));
+        }
+        Ok(ServiceQualificationFaultedQueueSessionV1 {
+            owner: self.owner,
+            recycle: self.recycle,
+            dispatch_generation: self.dispatch_generation,
+            point,
+        })
     }
 
     /// Creates a generation-bound inert request for one coherent allocation range.
@@ -583,6 +731,7 @@ impl<const N: usize> ServiceRecycledQueueSessionV1<N> {
         &mut self,
         request: ServiceCompletedReadRequestV1,
     ) -> Result<ServiceCompletedReadbackV1, ServiceQueueErrorV1> {
+        self.completed_read_attempted = true;
         if request.dispatch_generation != self.dispatch_generation {
             return Err(ServiceQueueErrorV1::Kfd(
                 fe2o3_kfd::Gfx942DispatchBindingErrorV1::StaleDispatchGeneration.into(),
@@ -610,6 +759,7 @@ impl<const N: usize> ServiceRecycledQueueSessionV1<N> {
         &mut self,
         request: ServiceCompletedSnapshotRequestV1,
     ) -> Result<ServiceCompletedReadbackV1, ServiceQueueErrorV1> {
+        self.completed_read_attempted = true;
         if request.dispatch_generation != self.dispatch_generation {
             return Err(ServiceQueueErrorV1::Kfd(
                 fe2o3_kfd::Gfx942DispatchBindingErrorV1::StaleDispatchGeneration.into(),
@@ -1389,6 +1539,16 @@ mod tests {
             write!(&mut actual, "{byte:02x}").unwrap();
         }
         assert_eq!(actual, SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1);
+    }
+
+    #[cfg(feature = "qualification-fault-injection")]
+    #[test]
+    fn qualification_fault_contract_hash_is_frozen() {
+        let mut actual = String::new();
+        for byte in Sha256::digest(SERVICE_QUALIFICATION_QUEUE_FAULT_CONTRACT_V1) {
+            write!(&mut actual, "{byte:02x}").unwrap();
+        }
+        assert_eq!(actual, SERVICE_QUALIFICATION_QUEUE_FAULT_CONTRACT_SHA256_V1);
     }
 
     #[test]
