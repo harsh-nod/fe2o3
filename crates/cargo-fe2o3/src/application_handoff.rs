@@ -59,6 +59,7 @@ pub(crate) const RUNNER_EXPECTS_ENVELOPE: &str = "required";
 const MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1: usize = 4_096;
 const RETIRED_WORKER_V2_ENVELOPE_PREFIX_V1: &[u8] = b".fe2o3-worker-v2-load-envelope-v1-";
 const RETIRED_WORKER_V2_ENVELOPE_SUFFIX_V1: &[u8] = b".envelope";
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) const RUNNER_EXPECTS_NO_ENVELOPE: &str = "none";
 
 const RETIRED_WORKER_V2_ENVELOPE_NAME_BYTES_V1: usize =

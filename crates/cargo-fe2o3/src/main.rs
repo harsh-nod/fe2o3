@@ -70,7 +70,7 @@ use std::os::fd::{AsRawFd, BorrowedFd, IntoRawFd};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, ExitStatus};
 
 const TARGET_ENV: &str = "FE2O3_TARGET";
 const BACKEND_ENV: &str = "FE2O3_BACKEND";
@@ -1095,21 +1095,34 @@ fn run_cargo_with_backend_inner(
     }
     if command == "run" {
         #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-        let expects_envelope = context
-            ._build_config
-            .as_ref()
-            .is_some_and(|config| config.envelope_mode().is_required());
-        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
-        let expects_envelope = false;
-        inject_application_runner(
+        inject_qualification_application_runner(
             &context.project,
             &context.pinned_cargo,
             &context.pinned_rustc,
             context.generation.artifact_dir(),
             &mut forwarded_args,
-            expects_envelope,
+            context
+                ._build_config
+                .as_ref()
+                .is_some_and(|config| config.envelope_mode().is_required()),
             context.requires_locked_closure,
         )?;
+        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+        {
+            if !context.requires_locked_closure {
+                return Err(
+                    "production Worker V3 run requires an authorized locked compiler closure"
+                        .to_owned(),
+                );
+            }
+            inject_production_application_runner(
+                &context.project,
+                &context.pinned_cargo,
+                &context.pinned_rustc,
+                context.generation.artifact_dir(),
+                &mut forwarded_args,
+            )?;
+        }
     }
     let artifact_dir = context.generation.artifact_dir();
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
@@ -1414,15 +1427,13 @@ fn aggregate_post_spawn_results<const N: usize>(
     failure.map_or(Ok(()), Err)
 }
 
-fn inject_application_runner(
+fn resolve_application_runner(
     project: &project::CargoProject,
     pinned_cargo: &pinned_executable::PinnedExecutable,
     pinned_rustc: &PinnedRustc,
-    artifact_dir: &project::PinnedDirectory,
-    args: &mut Vec<OsString>,
-    expects_envelope: bool,
+    args: &[OsString],
     authority: bool,
-) -> Result<(), String> {
+) -> Result<(String, Vec<OsString>), String> {
     let target = match selected_run_target(args)? {
         Some(target) => target,
         None => match configured_run_target(
@@ -1457,6 +1468,55 @@ fn inject_application_runner(
         &target,
     )?;
     reject_recursive_runner(&original_runner)?;
+    Ok((target, original_runner))
+}
+
+#[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+fn inject_production_application_runner(
+    project: &project::CargoProject,
+    pinned_cargo: &pinned_executable::PinnedExecutable,
+    pinned_rustc: &PinnedRustc,
+    artifact_dir: &project::PinnedDirectory,
+    args: &mut Vec<OsString>,
+) -> Result<(), String> {
+    let (target, original_runner) =
+        resolve_application_runner(project, pinned_cargo, pinned_rustc, args, true)?;
+    if !original_runner.is_empty() {
+        return Err(
+            "production Worker V3 application handoff does not permit an intermediate Cargo runner"
+                .to_owned(),
+        );
+    }
+    let executable = application_runner_executable()?;
+    let (artifact_device, artifact_inode) = artifact_dir.identity_parts();
+    inject_serialized_application_runner_config(
+        args,
+        &target,
+        vec![
+            executable,
+            INTERNAL_RUNNER_ARG.to_string(),
+            application_handoff::RUNNER_CONTEXT_VERSION.to_string(),
+            hex_encode(os_bytes(artifact_dir.display_path().as_os_str())),
+            artifact_device.to_string(),
+            artifact_inode.to_string(),
+            application_handoff::RUNNER_EXPECTS_ENVELOPE.to_string(),
+            "0".to_owned(),
+        ],
+    )
+}
+
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+fn inject_qualification_application_runner(
+    project: &project::CargoProject,
+    pinned_cargo: &pinned_executable::PinnedExecutable,
+    pinned_rustc: &PinnedRustc,
+    artifact_dir: &project::PinnedDirectory,
+    args: &mut Vec<OsString>,
+    expects_envelope: bool,
+    authority: bool,
+) -> Result<(), String> {
+    let (target, original_runner) =
+        resolve_application_runner(project, pinned_cargo, pinned_rustc, args, authority)?;
     inject_application_runner_config(
         args,
         &target,
@@ -1466,6 +1526,7 @@ fn inject_application_runner(
     )
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn inject_application_runner_config(
     args: &mut Vec<OsString>,
     target: &str,
@@ -1473,15 +1534,10 @@ fn inject_application_runner_config(
     original_runner: &[OsString],
     expects_envelope: bool,
 ) -> Result<(), String> {
-    let executable = env::current_exe()
-        .map_err(|error| format!("failed to locate cargo-fe2o3 runner executable: {error}"))?;
-    let executable = executable.to_str().ok_or_else(|| {
-        "cargo fe2o3 run requires a UTF-8 cargo-fe2o3 executable path for Cargo runner configuration"
-            .to_string()
-    })?;
+    let executable = application_runner_executable()?;
     let (artifact_device, artifact_inode) = artifact_dir.identity_parts();
     let mut runner = vec![
-        executable.to_string(),
+        executable,
         INTERNAL_RUNNER_ARG.to_string(),
         application_handoff::RUNNER_CONTEXT_VERSION.to_string(),
         hex_encode(os_bytes(artifact_dir.display_path().as_os_str())),
@@ -1499,6 +1555,23 @@ fn inject_application_runner_config(
             .iter()
             .map(|argument| hex_encode(os_bytes(argument))),
     );
+    inject_serialized_application_runner_config(args, target, runner)
+}
+
+fn application_runner_executable() -> Result<String, String> {
+    let executable = env::current_exe()
+        .map_err(|error| format!("failed to locate cargo-fe2o3 runner executable: {error}"))?;
+    executable.to_str().map(str::to_owned).ok_or_else(|| {
+        "cargo fe2o3 run requires a UTF-8 cargo-fe2o3 executable path for Cargo runner configuration"
+            .to_string()
+    })
+}
+
+fn inject_serialized_application_runner_config(
+    args: &mut Vec<OsString>,
+    target: &str,
+    runner: Vec<String>,
+) -> Result<(), String> {
     let runner = serde_json::to_string(&runner)
         .map_err(|error| format!("failed to encode Cargo runner configuration: {error}"))?;
     let config = OsString::from(format!("target.{target}.runner={runner}"));
@@ -1810,6 +1883,7 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
         artifact_device,
         artifact_inode,
     )?;
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     let expects_envelope = match args[4].to_str() {
         Some(application_handoff::RUNNER_EXPECTS_ENVELOPE) => true,
         Some(application_handoff::RUNNER_EXPECTS_NO_ENVELOPE) => false,
@@ -1820,6 +1894,13 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
             ));
         }
     };
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    if args[4].to_str() != Some(application_handoff::RUNNER_EXPECTS_ENVELOPE) {
+        return Err(format!(
+            "production application runner requires the Worker V3 envelope marker, got {:?}",
+            args[4]
+        ));
+    }
     let runner_count = args[5]
         .to_str()
         .and_then(|value| value.parse::<usize>().ok())
@@ -1842,116 +1923,162 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
     }
     reject_recursive_runner(&original_runner)?;
 
-    let handoff = application_handoff::PinnedApplicationEnvelope::discover(&artifact_dir)?;
-    if expects_envelope && handoff.is_none() {
-        return Err(
-            "Cargo runner expected a canonical production envelope, but none exists".into(),
-        );
-    }
-    if !expects_envelope && handoff.is_some() {
-        return Err(
-            "Cargo runner did not expect a production envelope for this application build".into(),
-        );
-    }
-    if let Some(mut handoff) = handoff {
-        if !original_runner.is_empty() {
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    {
+        if runner_count != 0 || !original_runner.is_empty() {
             return Err(
-                "production application descriptor handoff does not permit an intermediate Cargo runner"
-                    .to_string(),
+                "production Worker V3 runner does not admit an intermediate Cargo runner"
+                    .to_owned(),
             );
         }
-        let current_dir = env::current_dir()
-            .map_err(|error| format!("failed to resolve application runner directory: {error}"))?;
-        let application_path =
-            binding_wrapper::resolve_command_executable(application, &current_dir)
-                .map_err(|error| format!("failed to resolve application executable: {error}"))?;
-        let pinned_application = pinned_executable::PinnedExecutable::open(&application_path)
-            .map_err(|error| format!("failed to pin application executable: {error}"))?;
-        let sealed_application = pinned_application
-            .seal_static_application()
-            .map_err(|error| format!("failed to seal application runtime image: {error}"))?;
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-        let application_identity_v2 = sealed_application.identity();
-        let mut child = sealed_application
-            .command()
-            .map_err(|error| format!("failed to prepare sealed application: {error}"))?;
-        child.args(&args[application_index + 1..]);
-        scrub_application_environment(child.as_command_mut());
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-        let pending_ack = handoff.configure_child_with_timeouts(
-            child.as_command_mut(),
-            application_identity_v2,
-            sealed_application.identity_v3(),
+        let handoff = application_handoff::PinnedApplicationEnvelope::discover(&artifact_dir)?
+            .ok_or_else(|| {
+                "production Worker V3 runner requires a canonical load envelope".to_owned()
+            })?;
+        run_application_with_handoff(
+            handoff,
+            application,
+            &args[application_index + 1..],
             application_timeouts,
-        )?;
-        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
-        let pending_ack = handoff.configure_child_with_timeouts(
-            child.as_command_mut(),
-            sealed_application.identity_v3(),
-            application_timeouts,
-        )?;
-        let mut process = process_execution::spawn(child.as_command_mut())
-            .map_err(|error| format!("failed to launch pinned Cargo application: {error}"))?;
-        let active_handoff = match pending_ack.await_after_spawn(&mut process) {
-            Ok(active_handoff) => active_handoff,
-            Err(failure) => {
-                let (error, cleanup) = failure.into_parts();
-                drop(handoff);
-                drop(artifact_dir);
-                return match application_handoff::terminate_application_group(process, cleanup) {
-                    Ok(_) => Err(error),
-                    Err(containment) => Err(format!(
-                        "{error}; application containment failed: {containment}"
-                    )),
-                };
-            }
-        };
-        if let Err(error) = application_handoff::wait_for_application_exit_without_reaping(&process)
-        {
-            drop(handoff);
-            drop(artifact_dir);
-            return match application_handoff::terminate_application_group(
-                process,
-                active_handoff.into_cleanup(),
-            ) {
-                Ok(_) => Err(error),
-                Err(containment) => Err(format!(
-                    "{error}; application containment failed: {containment}"
-                )),
-            };
-        }
-        // The application retains its currentness token through all descriptor-dependent work.
-        // Observe its exit without reaping before reacquiring the runner's token, avoiding a
-        // scheduler race while preserving the leader identity for process-group containment.
-        if let Err(error) = handoff.validate_retained_currentness() {
-            drop(handoff);
-            drop(artifact_dir);
-            return match application_handoff::terminate_application_group(
-                process,
-                active_handoff.into_cleanup(),
-            ) {
-                Ok(_) => Err(error),
-                Err(containment) => Err(format!(
-                    "{error}; application containment failed: {containment}"
-                )),
-            };
-        }
-        let cleanup = active_handoff.into_cleanup();
-        drop(handoff);
-        drop(artifact_dir);
-        let status = application_handoff::wait_and_contain_application_group(process, cleanup)?;
-        return Ok(status);
+        )
     }
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    {
+        let handoff = application_handoff::PinnedApplicationEnvelope::discover(&artifact_dir)?;
+        if expects_envelope && handoff.is_none() {
+            return Err(
+                "Cargo runner expected a canonical production envelope, but none exists".into(),
+            );
+        }
+        if !expects_envelope && handoff.is_some() {
+            return Err(
+                "Cargo runner did not expect a production envelope for this application build"
+                    .into(),
+            );
+        }
+        if let Some(handoff) = handoff {
+            if !original_runner.is_empty() {
+                return Err(
+                    "production application descriptor handoff does not permit an intermediate Cargo runner"
+                        .to_string(),
+                );
+            }
+            run_application_with_handoff(
+                handoff,
+                application,
+                &args[application_index + 1..],
+                application_timeouts,
+            )
+        } else {
+            run_qualification_application_without_handoff(
+                artifact_dir,
+                &original_runner,
+                application,
+                &args[application_index + 1..],
+            )
+        }
+    }
+}
 
+fn run_application_with_handoff(
+    mut handoff: application_handoff::PinnedApplicationEnvelope,
+    application: &OsStr,
+    application_args: &[OsString],
+    application_timeouts: application_handoff::ApplicationTimeouts,
+) -> Result<ExitStatus, String> {
+    let current_dir = env::current_dir()
+        .map_err(|error| format!("failed to resolve application runner directory: {error}"))?;
+    let application_path =
+        binding_wrapper::resolve_command_executable(application, &current_dir)
+            .map_err(|error| format!("failed to resolve application executable: {error}"))?;
+    let pinned_application = pinned_executable::PinnedExecutable::open(&application_path)
+        .map_err(|error| format!("failed to pin application executable: {error}"))?;
+    let sealed_application = pinned_application
+        .seal_static_application()
+        .map_err(|error| format!("failed to seal application runtime image: {error}"))?;
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    let application_identity_v2 = sealed_application.identity();
+    let mut child = sealed_application
+        .command()
+        .map_err(|error| format!("failed to prepare sealed application: {error}"))?;
+    child.args(application_args);
+    scrub_application_environment(child.as_command_mut());
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    let pending_ack = handoff.configure_child_with_timeouts(
+        child.as_command_mut(),
+        application_identity_v2,
+        sealed_application.identity_v3(),
+        application_timeouts,
+    )?;
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    let pending_ack = handoff.configure_child_with_timeouts(
+        child.as_command_mut(),
+        sealed_application.identity_v3(),
+        application_timeouts,
+    )?;
+    let mut process = process_execution::spawn(child.as_command_mut())
+        .map_err(|error| format!("failed to launch pinned Cargo application: {error}"))?;
+    let active_handoff = match pending_ack.await_after_spawn(&mut process) {
+        Ok(active_handoff) => active_handoff,
+        Err(failure) => {
+            let (error, cleanup) = failure.into_parts();
+            drop(handoff);
+            return match application_handoff::terminate_application_group(process, cleanup) {
+                Ok(_) => Err(error),
+                Err(containment) => Err(format!(
+                    "{error}; application containment failed: {containment}"
+                )),
+            };
+        }
+    };
+    if let Err(error) = application_handoff::wait_for_application_exit_without_reaping(&process) {
+        drop(handoff);
+        return match application_handoff::terminate_application_group(
+            process,
+            active_handoff.into_cleanup(),
+        ) {
+            Ok(_) => Err(error),
+            Err(containment) => Err(format!(
+                "{error}; application containment failed: {containment}"
+            )),
+        };
+    }
+    // The application retains its currentness token through all descriptor-dependent work.
+    // Observe its exit without reaping before reacquiring the runner's token, avoiding a
+    // scheduler race while preserving the leader identity for process-group containment.
+    if let Err(error) = handoff.validate_retained_currentness() {
+        drop(handoff);
+        return match application_handoff::terminate_application_group(
+            process,
+            active_handoff.into_cleanup(),
+        ) {
+            Ok(_) => Err(error),
+            Err(containment) => Err(format!(
+                "{error}; application containment failed: {containment}"
+            )),
+        };
+    }
+    let cleanup = active_handoff.into_cleanup();
+    drop(handoff);
+    application_handoff::wait_and_contain_application_group(process, cleanup)
+}
+
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+fn run_qualification_application_without_handoff(
+    artifact_dir: project::PinnedDirectory,
+    original_runner: &[OsString],
+    application: &OsStr,
+    application_args: &[OsString],
+) -> Result<ExitStatus, String> {
     let mut child = if let Some(program) = original_runner.first() {
         let mut command = Command::new(program);
         command.args(&original_runner[1..]);
         command.arg(application);
-        command.args(&args[application_index + 1..]);
+        command.args(application_args);
         command
     } else {
         let mut command = Command::new(application);
-        command.args(&args[application_index + 1..]);
+        command.args(application_args);
         command
     };
     scrub_application_environment(&mut child);
