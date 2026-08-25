@@ -4,7 +4,7 @@ use dialect_gpu::{
 };
 use dialect_kernel::{
     BranchOp, DIALECT_NAME, IndexConstantOp, IndexLessThanBranchOp, InvocationIndexOp, ReturnOp,
-    register_dialect,
+    TrapOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckPassKindV1, PlironBarrierFindingV1,
@@ -188,6 +188,38 @@ fn unresolved_branch_that_reconverges_before_barrier_is_clean() {
     append(context, right, &right_join);
     append(context, join, &sync);
     append(context, join, &ret);
+    assert!(run_pliron_barrier_convergence_check_v1(context, &function).is_clean());
+}
+
+#[test]
+fn terminal_trap_may_end_before_a_reconverged_barrier() {
+    let context = &mut setup();
+    let function = function_with_full_physical_workgroups(context, "guarded_barrier", 0, 4, 4);
+    let entry = function.get_entry_block(context);
+    let access = block(context, &function, "access");
+    let trap = block(context, &function, "trap");
+    let join = block(context, &function, "join");
+    let invocation = InvocationIndexOp::new(context, 0, 0);
+    let one = IndexConstantOp::new(context, 1);
+    let guard = IndexLessThanBranchOp::new(
+        context,
+        invocation.result(context),
+        one.result(context),
+        access,
+        trap,
+    );
+    let to_join = BranchOp::new(context, join);
+    let abort = TrapOp::new(context);
+    let sync = barrier(context);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &invocation);
+    append(context, entry, &one);
+    append(context, entry, &guard);
+    append(context, access, &to_join);
+    append(context, trap, &abort);
+    append(context, join, &sync);
+    append(context, join, &ret);
+
     assert!(run_pliron_barrier_convergence_check_v1(context, &function).is_clean());
 }
 

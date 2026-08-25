@@ -291,14 +291,77 @@ enum BarrierPathFailureV1 {
     Incomplete(String),
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct BarrierPathBlockSummaryV1 {
+    normal: Option<Vec<(usize, usize)>>,
+    trapped_prefix: Option<Vec<(usize, usize)>>,
+}
+
+fn prepend_barrier_path_v1(
+    local: &[(usize, usize)],
+    summary: BarrierPathBlockSummaryV1,
+) -> BarrierPathBlockSummaryV1 {
+    let prepend = |mut suffix: Vec<(usize, usize)>| {
+        let mut trace = Vec::with_capacity(local.len().saturating_add(suffix.len()));
+        trace.extend_from_slice(local);
+        trace.append(&mut suffix);
+        trace
+    };
+    BarrierPathBlockSummaryV1 {
+        normal: summary.normal.map(&prepend),
+        trapped_prefix: summary.trapped_prefix.map(prepend),
+    }
+}
+
+fn merge_barrier_path_summary_v1(
+    complete: &mut BarrierPathBlockSummaryV1,
+    candidate: BarrierPathBlockSummaryV1,
+) -> Result<(), BarrierPathFailureV1> {
+    if let Some(candidate_normal) = candidate.normal {
+        if let Some(first_normal) = &complete.normal
+            && first_normal != &candidate_normal
+        {
+            return Err(BarrierPathFailureV1::Divergent {
+                first_trace: first_normal.clone(),
+                second_trace: candidate_normal,
+            });
+        }
+        complete.normal = Some(candidate_normal);
+    }
+    if let Some(candidate_trap) = candidate.trapped_prefix {
+        match &complete.trapped_prefix {
+            Some(first_trap) if first_trap.starts_with(&candidate_trap) => {}
+            Some(first_trap) if candidate_trap.starts_with(first_trap) => {
+                complete.trapped_prefix = Some(candidate_trap);
+            }
+            Some(first_trap) => {
+                return Err(BarrierPathFailureV1::Divergent {
+                    first_trace: first_trap.clone(),
+                    second_trace: candidate_trap,
+                });
+            }
+            None => complete.trapped_prefix = Some(candidate_trap),
+        }
+    }
+    if let (Some(normal), Some(trapped_prefix)) = (&complete.normal, &complete.trapped_prefix)
+        && !normal.starts_with(trapped_prefix)
+    {
+        return Err(BarrierPathFailureV1::Divergent {
+            first_trace: normal.clone(),
+            second_trace: trapped_prefix.clone(),
+        });
+    }
+    Ok(())
+}
+
 fn summarize_barrier_paths_from(
     context: &Context,
     blocks: &[Ptr<BasicBlock>],
     block_indices: &HashMap<Ptr<BasicBlock>, usize>,
     block_index: usize,
     states: &mut [u8],
-    summaries: &mut [Option<Vec<(usize, usize)>>],
-) -> Result<Vec<(usize, usize)>, BarrierPathFailureV1> {
+    summaries: &mut [Option<BarrierPathBlockSummaryV1>],
+) -> Result<BarrierPathBlockSummaryV1, BarrierPathFailureV1> {
     match states.get(block_index).copied() {
         Some(2) => {
             return Ok(summaries[block_index]
@@ -340,9 +403,9 @@ fn summarize_barrier_paths_from(
     }
     let terminator = Operation::get_op_dyn(terminator, context);
     let raw = terminator.get_operation().deref(context);
-    let successors = if terminator.downcast_ref::<ReturnOp>().is_some()
-        || terminator.downcast_ref::<TrapOp>().is_some()
-    {
+    let is_return = terminator.downcast_ref::<ReturnOp>().is_some();
+    let is_trap = terminator.downcast_ref::<TrapOp>().is_some();
+    let successors = if is_return || is_trap {
         Vec::new()
     } else if terminator.downcast_ref::<BranchOp>().is_some()
         || terminator.downcast_ref::<BranchArgsOp>().is_some()
@@ -370,7 +433,7 @@ fn summarize_barrier_paths_from(
             "block {block_index} has an unsupported terminator"
         )));
     };
-    let mut complete: Option<Vec<(usize, usize)>> = None;
+    let mut complete = BarrierPathBlockSummaryV1::default();
     for successor in successors {
         let suffix = summarize_barrier_paths_from(
             context,
@@ -380,20 +443,13 @@ fn summarize_barrier_paths_from(
             states,
             summaries,
         )?;
-        let mut candidate = local.clone();
-        candidate.extend(suffix);
-        if let Some(first) = &complete {
-            if first != &candidate {
-                return Err(BarrierPathFailureV1::Divergent {
-                    first_trace: first.clone(),
-                    second_trace: candidate,
-                });
-            }
-        } else {
-            complete = Some(candidate);
-        }
+        merge_barrier_path_summary_v1(&mut complete, prepend_barrier_path_v1(&local, suffix))?;
     }
-    let complete = complete.unwrap_or(local);
+    if is_return {
+        complete.normal = Some(local);
+    } else if is_trap {
+        complete.trapped_prefix = Some(local);
+    }
     states[block_index] = 2;
     summaries[block_index] = Some(complete.clone());
     Ok(complete)
