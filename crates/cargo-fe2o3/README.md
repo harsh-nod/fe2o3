@@ -289,21 +289,18 @@ device kernel, the backend rejects it because the required managed attempt is
 absent. A selected compilation must publish exactly one attempt-scoped handoff;
 a missing handoff is an error and invalidates the attempt.
 
-The protected producer, consumer, completion, cleanup, and restart route now
-uses the closure-bound compiler-handoff V2 and publication-intent V2 protocols
-end to end. It rejects V1 and obsolete protected state instead of probing or
-downgrading to it. Required-envelope restart joins the exact compiler closure,
-attempt, admission, intent, output, receipt, envelope inputs, and durable load
-envelope before resuming. Cleanup uses a durable escrow and exact successor
-lease; a crash after publishing a newer `Ready` marker resumes predecessor
-retirement idempotently. Directory scans are bounded, and authoritative path
+Production uses one protected V3 compiler handoff, strict worker preflight,
+one-shot consumption, durable HSACO publication, and load-readiness recovery.
+Its Cargo state machine has only `Fresh`, `Recovered`, and `Ready`; it cannot
+select V1 or V2 transport. Required-envelope recovery joins the exact compiler
+closure, attempt, handoff receipt, output, publication intent, and durable load
+envelope before resuming. Directory scans are bounded, and authoritative path
 and argument bytes are never compared through lossy UTF-8 conversion.
 
-The ordinary non-protected route retains its separate V1 compatibility state
-machine. Schema separation prevents ordinary V1 records from entering or
-clearing protected V2 state. This closes the protected transport and restart
-provenance chain, but it does not authenticate compiler or proof claims and
-does not grant HSA load or launch authority.
+Legacy protected V2 and ordinary V1 state machines are qualification paths.
+They are named explicitly in code and cannot enter the production intake or
+production recovery state machine. They remain coordination evidence only and
+grant no compiler, proof, HSA load, or launch authority.
 
 For a selected unit, the wrapper pins and validates all configured inputs,
 binds a domain-separated identity of the exact manifest, sealed worker image,

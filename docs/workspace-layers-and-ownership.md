@@ -40,7 +40,7 @@ unclassified member fails generic CI. New nested fixtures and examples MUST
 remain explicit root members and use a declared fixture path prefix.
 
 The root `Cargo.toml`, `Cargo.lock`, layer policy, shared dependency versions,
-dialect registration, production pipeline selector, and release composition
+dialect registration, production-route boundary, qualification feature, and release composition
 are integration-owned files. Feature agents SHOULD NOT edit them. A dependency
 addition that changes `Cargo.lock` is a separate, integration-reviewed commit.
 
