@@ -25,6 +25,7 @@ use fe2o3_core::{DeviceBuffer, GpuContext};
 use fe2o3_device::KernelMarkerV1;
 use fe2o3_host::__generated::{
     GeneratedScalarGemmV1ReadDeviceSlice, GeneratedScalarGemmV1ReadWriteDeviceSlice,
+    load_admitted_worker_v3_application_v1,
 };
 use fe2o3_host::{
     __hardware_test::{
@@ -41,13 +42,14 @@ use fe2o3_host::{
     HsaImplicitKernargInitializationObservationV1, HsaKernelObjectIdentityV1,
     HsaKernelResolutionObservationV1, HsaLaunchGeometryV1, HsaPhysicalDeviceIdentityV1,
     HsaRuntimeIdentityV1, HsaUnloadObservationV1, ObservedContext,
-    RecoveredWorkerV3AdmissionErrorV1, ReviewedHsaExecutableLifecycleAdapterV1,
-    ReviewedHsaImplicitKernargAdapterV1, ValidatedCompilerGeneratedSemanticWitnessV1,
-    WorkerV3AuditorV1, WorkerV3GeneratedDispatchErrorV1, WorkerV3SafetyPropertiesV1,
-    WorkerV3VerificationAuditErrorV1, WorkerV3VerificationAuthenticationErrorV1,
-    WorkerV3VerificationDecisionErrorV1, WorkerV3VerificationDecisionV1,
-    WorkerV3VerificationRequestV1, WorkerV3VerifierV1, admit_recovered_worker_v3_descriptor_v1,
-    audit_recovered_worker_v3_verification_v1, semantic_witness_from_backend_v1,
+    ProductionWorkerV3ApplicationLoadErrorV1, RecoveredWorkerV3AdmissionErrorV1,
+    ReviewedHsaExecutableLifecycleAdapterV1, ReviewedHsaImplicitKernargAdapterV1,
+    ValidatedCompilerGeneratedSemanticWitnessV1, WorkerV3AuditorV1,
+    WorkerV3GeneratedDispatchErrorV1, WorkerV3SafetyPropertiesV1, WorkerV3VerificationAuditErrorV1,
+    WorkerV3VerificationAuthenticationErrorV1, WorkerV3VerificationDecisionErrorV1,
+    WorkerV3VerificationDecisionV1, WorkerV3VerificationRequestV1, WorkerV3VerifierV1,
+    admit_recovered_worker_v3_descriptor_v1, audit_recovered_worker_v3_verification_v1,
+    semantic_witness_from_backend_v1,
 };
 use fe2o3_hsa_runtime::ReviewedHsaRuntimeAdapterV1;
 use fe2o3_kernel_descriptor::KernelId;
@@ -901,28 +903,15 @@ fn completed_v3_publication_becomes_restartable_inert_envelope_custody() {
     assert!(!admitted.grants_launch_authority());
     admitted.revalidate_currentness().unwrap();
 
-    let authenticated = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+    let (adapter, adapter_state) = ReviewedTestHsaAdapter::new();
+    let mut loaded = load_admitted_worker_v3_application_v1::<WorkerV3VecAddMarker, _, _>(
         admitted,
         &mut ReviewedTestWorkerV3Verifier {
             substitute_finalized: false,
         },
+        adapter,
     )
     .unwrap();
-    assert_eq!(
-        authenticated.descriptor().kernel_id().as_bytes(),
-        &[0xa1; 32]
-    );
-    assert_eq!(authenticated.target().to_string(), "gfx942:xnack-");
-    assert!(authenticated.authenticates_verification_authority());
-    assert!(!authenticated.grants_load_authority());
-    assert!(!authenticated.grants_launch_authority());
-    authenticated.revalidate_currentness().unwrap();
-
-    let (adapter, adapter_state) = ReviewedTestHsaAdapter::new();
-    let authorized = authenticated.authorize_hsa_load(adapter).unwrap();
-    assert!(authorized.grants_load_authority());
-    assert!(!authorized.grants_launch_authority());
-    let mut loaded = authorized.load().unwrap();
     assert!(!loaded.grants_load_authority());
     assert!(!loaded.grants_launch_authority());
     assert_eq!(loaded.kernel_observation().export_symbol(), "vecadd");
@@ -1482,14 +1471,17 @@ fn v3_verification_rejects_a_substituted_finalized_hsaco_identity() {
     )
     .unwrap();
     assert!(matches!(
-        AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+        load_admitted_worker_v3_application_v1::<WorkerV3VecAddMarker, _, _>(
             admitted,
             &mut ReviewedTestWorkerV3Verifier {
                 substitute_finalized: true,
             },
+            ReviewedTestHsaAdapter::new().0,
         ),
-        Err(WorkerV3VerificationAuthenticationErrorV1::Decision(
-            WorkerV3VerificationDecisionErrorV1::IdentityMismatch("finalized HSACO")
+        Err(ProductionWorkerV3ApplicationLoadErrorV1::Verification(
+            WorkerV3VerificationAuthenticationErrorV1::Decision(
+                WorkerV3VerificationDecisionErrorV1::IdentityMismatch("finalized HSACO")
+            )
         ))
     ));
 }
@@ -1504,21 +1496,20 @@ fn v3_hsa_load_rejects_and_cleans_up_a_substituted_adapter_digest() {
         &observed,
     )
     .unwrap();
-    let authenticated = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
-        admitted,
-        &mut ReviewedTestWorkerV3Verifier {
-            substitute_finalized: false,
-        },
-    )
-    .unwrap();
     let (adapter, adapter_state) = ReviewedTestHsaAdapter::with_substituted_load_digest();
     assert!(matches!(
-        authenticated.authorize_hsa_load(adapter).unwrap().load(),
-        Err(
+        load_admitted_worker_v3_application_v1::<WorkerV3VecAddMarker, _, _>(
+            admitted,
+            &mut ReviewedTestWorkerV3Verifier {
+                substitute_finalized: false,
+            },
+            adapter,
+        ),
+        Err(ProductionWorkerV3ApplicationLoadErrorV1::ExecutableLoad(
             fe2o3_host::WorkerV3HsaExecutableLoadErrorV1::LoadObservationMismatch {
                 field: "finalized digest"
             }
-        )
+        ))
     ));
     assert_eq!(adapter_state.unloads.load(Ordering::SeqCst), 1);
 }

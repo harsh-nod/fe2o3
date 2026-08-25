@@ -27,6 +27,7 @@ use fe2o3_artifacts::{DigestAlgorithm, DigestBytes, PayloadDigest};
 use fe2o3_hsaco::CodeObjectVersion;
 use fe2o3_hsaco::InspectedKernel;
 use fe2o3_kernel_descriptor::{BlockSizeV1, KernelDescriptorV1, KernelId};
+use std::error::Error;
 use std::fmt;
 use std::marker::PhantomData;
 
@@ -1439,6 +1440,73 @@ pub enum WorkerV3HsaExecutableLoadErrorV1<E> {
     KernelObservationMismatch { field: &'static str },
 }
 
+impl<E: fmt::Display> fmt::Display for WorkerV3HsaLoadAuthorizationErrorV1<E> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CurrentPublication(error) => {
+                write!(
+                    formatter,
+                    "Worker V3 publication revalidation failed: {error}"
+                )
+            }
+            Self::Adapter(error) => write!(formatter, "reviewed HSA adapter failed: {error}"),
+            Self::Environment(error) => write!(formatter, "HSA environment mismatch: {error}"),
+        }
+    }
+}
+
+impl<E> Error for WorkerV3HsaLoadAuthorizationErrorV1<E>
+where
+    E: Error + 'static,
+{
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::CurrentPublication(error) => Some(error),
+            Self::Adapter(error) => Some(error),
+            Self::Environment(error) => Some(error),
+        }
+    }
+}
+
+impl<E: fmt::Display> fmt::Display for WorkerV3HsaExecutableLoadErrorV1<E> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CurrentPublication(error) => {
+                write!(
+                    formatter,
+                    "Worker V3 publication revalidation failed: {error}"
+                )
+            }
+            Self::ExactBytesChanged => formatter.write_str("verified HSACO bytes changed"),
+            Self::AdapterLoad(error) => write!(formatter, "reviewed HSA load failed: {error}"),
+            Self::LoadObservationMismatch { field } => {
+                write!(formatter, "HSA load observation {field} mismatch")
+            }
+            Self::KernelResolution(error) => {
+                write!(formatter, "reviewed HSA kernel resolution failed: {error}")
+            }
+            Self::KernelObservationMismatch { field } => {
+                write!(formatter, "HSA kernel observation {field} mismatch")
+            }
+        }
+    }
+}
+
+impl<E> Error for WorkerV3HsaExecutableLoadErrorV1<E>
+where
+    E: Error + 'static,
+{
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::CurrentPublication(error) => Some(error),
+            Self::AdapterLoad(error) | Self::KernelResolution(error) => Some(error),
+            Self::ExactBytesChanged
+            | Self::LoadObservationMismatch { .. }
+            | Self::KernelObservationMismatch { .. } => None,
+        }
+    }
+}
+
 /// Failure while synchronously dispatching one compiler-generated Worker V3 invocation.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -1750,6 +1818,22 @@ pub enum HsaEnvironmentMismatch {
     RuntimeInstance,
     PhysicalDevice,
 }
+
+impl fmt::Display for HsaEnvironmentMismatch {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Target { actual } => write!(formatter, "target {actual} is not authorized"),
+            Self::DeviceOrdinal { expected, actual } => write!(
+                formatter,
+                "HIP device ordinal {actual} does not match admitted ordinal {expected}"
+            ),
+            Self::RuntimeInstance => formatter.write_str("HSA runtime instance changed"),
+            Self::PhysicalDevice => formatter.write_str("HSA physical device changed"),
+        }
+    }
+}
+
+impl Error for HsaEnvironmentMismatch {}
 
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn validate_environment(

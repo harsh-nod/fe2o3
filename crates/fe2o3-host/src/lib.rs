@@ -41,6 +41,8 @@ mod moe_routing_expert_bridge_v1;
 mod moe_routing_expert_bridge_v2;
 mod moe_top2_v1_lifecycle;
 mod prepared_launch;
+#[cfg(target_os = "linux")]
+mod production_application;
 mod protected_row_softmax_v1_lifecycle;
 mod published_direct_link;
 mod published_hsaco_inspection;
@@ -146,15 +148,16 @@ pub mod __hardware_test {
     any(test, feature = "qualification-oracles-test-only")
 ))]
 pub use application_descriptor_handoff::WorkerV2ApplicationDescriptorHandoffErrorV1;
+#[cfg(target_os = "linux")]
+pub use application_descriptor_handoff::WorkerV3ApplicationDescriptorHandoffErrorV1;
 #[cfg(all(
     target_os = "linux",
     any(test, feature = "qualification-oracles-test-only")
 ))]
 pub use application_descriptor_handoff::consume_inherited_worker_v2_application_handoff_v1;
 #[cfg(target_os = "linux")]
-pub use application_descriptor_handoff::{
-    WorkerV3ApplicationDescriptorHandoffErrorV1, consume_inherited_worker_v3_application_handoff_v1,
-};
+#[doc(hidden)]
+pub use application_descriptor_handoff::consume_inherited_worker_v3_application_handoff_v1;
 pub use argument_alias::{
     AliasAdmissionError, AllocationIdentity, AllocationProvenance, ArgumentAccess,
     ArgumentAccessMode, ArgumentAliasAdmission, ArgumentAliasValidator, AtomicAccess,
@@ -379,6 +382,10 @@ pub use prepared_launch::{
     LaunchDimension, ObservedContext, PrepareLaunchError, PreparedGeometry, PreparedLaunch,
     PreparedResources, UntrustedKernelDeclaration, UntrustedLaunchRequest,
 };
+#[cfg(target_os = "linux")]
+pub use production_application::{
+    ProductionWorkerV3ApplicationLoadErrorV1, load_inherited_worker_v3_application_v1,
+};
 pub use protected_row_softmax_v1_lifecycle::{
     CompletedProtectedRowSoftmaxV1, JoinedProtectedRowSoftmaxV1, LoadedProtectedRowSoftmaxV1,
     ProtectedRowSoftmaxV1DispatchErrorV1, ProtectedRowSoftmaxV1JoinErrorV1,
@@ -444,6 +451,9 @@ pub use worker_v3_verification_admission::{
 /// not an application extension point.
 #[doc(hidden)]
 pub mod __generated {
+    #[cfg(target_os = "linux")]
+    pub use crate::production_application::load_admitted_worker_v3_application_v1;
+
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub use crate::{
         AlphaZetaCov6DispatchIdentityV1, AlphaZetaCov6KernelRoleV1, AlphaZetaCov6ProfileError,
