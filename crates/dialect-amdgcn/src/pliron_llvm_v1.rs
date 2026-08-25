@@ -340,6 +340,12 @@ fn validate_function_attribute(
         | FunctionAttributeV2::NoSignedZerosFpMathDisabled
         | FunctionAttributeV2::ApproxFuncFpMathDisabled
         | FunctionAttributeV2::FpContractOff
+        | FunctionAttributeV2::NoCompletionAction
+        | FunctionAttributeV2::NoDefaultQueue
+        | FunctionAttributeV2::NoHeapPointer
+        | FunctionAttributeV2::NoHostcallPointer
+        | FunctionAttributeV2::NoMultigridSyncArgument
+        | FunctionAttributeV2::NoQueuePointer
         | FunctionAttributeV2::RequiredWorkgroupSize(_) => Ok(()),
         FunctionAttributeV2::AlwaysInline
         | FunctionAttributeV2::NoInline

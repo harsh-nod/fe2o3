@@ -2230,7 +2230,7 @@ fn excluded_operations_constants_casts_and_comparisons_have_located_errors() {
     );
     assert_eq!(
         first_code(&bad_cast, "fill"),
-        LoweringDiagnosticCode::UnsupportedCast
+        LoweringDiagnosticCode::InputVerification(DiagnosticCode::InvalidCast)
     );
 
     let mut float_compare = fill_module();

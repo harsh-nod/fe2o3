@@ -1,6 +1,10 @@
+use alloc::boxed::Box;
+use alloc::vec;
+
 use fe2o3_hsaco::{
-    AmdhsaKernelDescriptor, CodeObjectVersion, InspectedKernel, InspectedKernelBindings,
-    KernelBindingError, KernelDescriptorBinding, KernelKind, MetadataDescriptorRange,
+    AmdhsaKernelDescriptor, ArgumentAccess, ArgumentAddressSpace, CodeObjectVersion,
+    ExplicitValueKind, InspectedKernel, InspectedKernelBindings, KernelBindingError,
+    KernelDescriptorBinding, KernelKind, MetadataDescriptorRange,
     inspect_and_bind_kernel_descriptors,
 };
 use sha2::{Digest, Sha256};
@@ -12,6 +16,7 @@ use super::{
 
 const KERNEL_DESCRIPTOR_BYTES: u64 = 64;
 const IDENTITY_DOMAIN: &[u8] = b"fe2o3.amdhsa.loaded-kernel-identity-inputs.v1";
+const DISPATCH_ABI_IDENTITY_DOMAIN: &[u8] = b"fe2o3.amdhsa.reconciled-kernel-dispatch-abi.v1";
 
 /// Exact closed relocation policy enforced before a kernel closure is built.
 pub const CLOSED_RELOCATION_POLICY_ID: &str = "fe2o3.amdhsa.no-relocations.v1";
@@ -241,6 +246,84 @@ pub struct ValidatedKernelEnvelope<'a> {
     resources: SelectedKernelResourceBindingV1,
     relocation: ClosedRelocationEvidenceV1,
     identity: KernelIdentityInputsV1,
+    reconciled_global_buffers: Option<Box<[Option<ReconciledGlobalBufferAbiV1>]>>,
+    dispatch_abi_identity: Option<[u8; 32]>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReconciledGlobalBufferAbiV1 {
+    pointee_alignment: u64,
+    access: ArgumentAccess,
+}
+
+/// One source-contract row for an explicit global-buffer kernel argument.
+///
+/// This value is descriptive. [`ValidatedKernelEnvelope::reconcile_dispatch_abi`]
+/// binds a complete roster to an already validated machine-code closure,
+/// rejects physical contradictions, and derives the retained identity used by
+/// fixed-dispatch preparation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelGlobalBufferAbiV1<'a> {
+    explicit_argument_index: usize,
+    name: &'a str,
+    offset: u64,
+    pointee_alignment: u64,
+    access: ArgumentAccess,
+}
+
+impl<'a> KernelGlobalBufferAbiV1<'a> {
+    pub const fn new(
+        explicit_argument_index: usize,
+        name: &'a str,
+        offset: u64,
+        pointee_alignment: u64,
+        access: ArgumentAccess,
+    ) -> Self {
+        Self {
+            explicit_argument_index,
+            name,
+            offset,
+            pointee_alignment,
+            access,
+        }
+    }
+
+    pub const fn explicit_argument_index(self) -> usize {
+        self.explicit_argument_index
+    }
+
+    pub const fn name(self) -> &'a str {
+        self.name
+    }
+
+    pub const fn offset(self) -> u64 {
+        self.offset
+    }
+
+    pub const fn pointee_alignment(self) -> u64 {
+        self.pointee_alignment
+    }
+
+    pub const fn access(self) -> ArgumentAccess {
+        self.access
+    }
+}
+
+/// Why source/physical dispatch-ABI reconciliation failed closed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KernelDispatchAbiErrorV1 {
+    AlreadyReconciled,
+    MissingSourceContractIdentity,
+    GlobalBufferCardinality,
+    ExplicitArgumentIndex,
+    DuplicateExplicitArgument,
+    NotGlobalBuffer,
+    InvalidArgumentName,
+    ArgumentNameMismatch,
+    ArgumentOffsetMismatch,
+    ArgumentAccessMismatch,
+    InvalidPointeeAlignment,
+    PhysicalPointeeAlignmentContradiction,
 }
 
 impl<'a> ValidatedKernelEnvelope<'a> {
@@ -289,6 +372,162 @@ impl<'a> ValidatedKernelEnvelope<'a> {
 
     pub const fn identity_inputs(&self) -> KernelIdentityInputsV1 {
         self.identity
+    }
+
+    /// Reconciles a complete source ABI roster with this physical kernel.
+    ///
+    /// Upstream LLVM does not emit AMDHSA `.pointee_align` for ordinary global
+    /// pointer arguments. The caller must therefore provide a nonzero identity
+    /// for the exact source contract and one row for every physical global
+    /// buffer. Reconciliation validates all physical fields that remain
+    /// observable, rejects any present alignment contradiction, and binds the
+    /// effective roster to the physical closure and source-contract identity.
+    /// # Provenance
+    ///
+    /// The caller must retain custody that establishes `expected` as the exact
+    /// compiler ABI contract that produced this selected kernel.
+    /// `source_contract_identity` identifies that contract but does not prove
+    /// provenance by itself. This loader validates completeness and physical
+    /// consistency; deployment policy remains outside this generic join.
+    pub fn reconcile_dispatch_abi(
+        mut self,
+        source_contract_identity: [u8; 32],
+        expected: &[KernelGlobalBufferAbiV1<'_>],
+    ) -> Result<Self, KernelDispatchAbiErrorV1> {
+        if self.reconciled_global_buffers.is_some() {
+            return Err(KernelDispatchAbiErrorV1::AlreadyReconciled);
+        }
+        if source_contract_identity == [0; 32] {
+            return Err(KernelDispatchAbiErrorV1::MissingSourceContractIdentity);
+        }
+
+        let arguments = self.selected_kernel().explicit_arguments();
+        let global_count = arguments
+            .iter()
+            .filter(|argument| argument.value_kind() == ExplicitValueKind::GlobalBuffer)
+            .count();
+        if expected.len() != global_count {
+            return Err(KernelDispatchAbiErrorV1::GlobalBufferCardinality);
+        }
+
+        let mut reconciled = vec![None; arguments.len()].into_boxed_slice();
+        for row in expected {
+            let argument = arguments
+                .get(row.explicit_argument_index)
+                .ok_or(KernelDispatchAbiErrorV1::ExplicitArgumentIndex)?;
+            if reconciled[row.explicit_argument_index].is_some() {
+                return Err(KernelDispatchAbiErrorV1::DuplicateExplicitArgument);
+            }
+            if argument.value_kind() != ExplicitValueKind::GlobalBuffer
+                || argument.size() != 8
+                || argument.address_space() != Some(ArgumentAddressSpace::Global)
+            {
+                return Err(KernelDispatchAbiErrorV1::NotGlobalBuffer);
+            }
+            if row.name.is_empty() || row.name.len() > fe2o3_hsaco::MAX_MESSAGEPACK_STRING_BYTES {
+                return Err(KernelDispatchAbiErrorV1::InvalidArgumentName);
+            }
+            if argument.name() != Some(row.name) {
+                return Err(KernelDispatchAbiErrorV1::ArgumentNameMismatch);
+            }
+            if argument.offset() != row.offset {
+                return Err(KernelDispatchAbiErrorV1::ArgumentOffsetMismatch);
+            }
+            if argument
+                .access()
+                .is_some_and(|declared| declared != row.access)
+                || argument
+                    .actual_access()
+                    .is_some_and(|actual| actual != row.access)
+            {
+                return Err(KernelDispatchAbiErrorV1::ArgumentAccessMismatch);
+            }
+            if row.pointee_alignment == 0 || !row.pointee_alignment.is_power_of_two() {
+                return Err(KernelDispatchAbiErrorV1::InvalidPointeeAlignment);
+            }
+            if argument
+                .pointee_alignment()
+                .is_some_and(|physical| physical != row.pointee_alignment)
+            {
+                return Err(KernelDispatchAbiErrorV1::PhysicalPointeeAlignmentContradiction);
+            }
+            reconciled[row.explicit_argument_index] = Some(ReconciledGlobalBufferAbiV1 {
+                pointee_alignment: row.pointee_alignment,
+                access: row.access,
+            });
+        }
+        let mut hasher = Sha256::new();
+        hasher.update((DISPATCH_ABI_IDENTITY_DOMAIN.len() as u64).to_le_bytes());
+        hasher.update(DISPATCH_ABI_IDENTITY_DOMAIN);
+        hasher.update(self.identity.closure_sha256());
+        hasher.update(source_contract_identity);
+        hasher.update((global_count as u64).to_le_bytes());
+        for (index, (argument, effective)) in arguments.iter().zip(&reconciled).enumerate() {
+            let Some(effective) = effective else {
+                continue;
+            };
+            let name = argument
+                .name()
+                .expect("reconciled global-buffer arguments have names");
+            hasher.update((index as u64).to_le_bytes());
+            hasher.update((name.len() as u64).to_le_bytes());
+            hasher.update(name.as_bytes());
+            hasher.update(argument.offset().to_le_bytes());
+            hasher.update(effective.pointee_alignment.to_le_bytes());
+            hasher.update([argument_access_tag(effective.access)]);
+        }
+        self.dispatch_abi_identity = Some(hasher.finalize().into());
+        self.reconciled_global_buffers = Some(reconciled);
+        Ok(self)
+    }
+
+    /// Effective pointee alignment for fixed-dispatch validation.
+    ///
+    /// A reconciled source fact takes effect only after the complete roster has
+    /// passed [`Self::reconcile_dispatch_abi`]. Otherwise this returns the
+    /// physical AMDHSA metadata value unchanged.
+    pub fn dispatch_pointee_alignment(&self, explicit_argument_index: usize) -> Option<u64> {
+        self.reconciled_global_buffers
+            .as_deref()
+            .and_then(|buffers| buffers.get(explicit_argument_index).copied().flatten())
+            .map(|buffer| buffer.pointee_alignment)
+            .or_else(|| {
+                self.selected_kernel()
+                    .explicit_arguments()
+                    .get(explicit_argument_index)
+                    .and_then(|argument| argument.pointee_alignment())
+            })
+    }
+
+    /// Effective access for fixed-dispatch effect and readback validation.
+    ///
+    /// A reconciled source fact fills an omitted `.actual_access` only after the
+    /// complete roster has passed [`Self::reconcile_dispatch_abi`]. Otherwise
+    /// this returns the physical AMDHSA metadata value unchanged.
+    pub fn dispatch_actual_access(&self, explicit_argument_index: usize) -> Option<ArgumentAccess> {
+        self.reconciled_global_buffers
+            .as_deref()
+            .and_then(|buffers| buffers.get(explicit_argument_index).copied().flatten())
+            .map(|buffer| buffer.access)
+            .or_else(|| {
+                self.selected_kernel()
+                    .explicit_arguments()
+                    .get(explicit_argument_index)
+                    .and_then(|argument| argument.actual_access())
+            })
+    }
+
+    /// Identity binding the physical closure, source contract, and full roster.
+    pub const fn dispatch_abi_identity(&self) -> Option<[u8; 32]> {
+        self.dispatch_abi_identity
+    }
+}
+
+const fn argument_access_tag(access: ArgumentAccess) -> u8 {
+    match access {
+        ArgumentAccess::ReadOnly => 1,
+        ArgumentAccess::WriteOnly => 2,
+        ArgumentAccess::ReadWrite => 3,
     }
 }
 
@@ -416,6 +655,8 @@ impl<'a> ValidatedEnvelope<'a> {
             resources,
             relocation,
             identity,
+            reconciled_global_buffers: None,
+            dispatch_abi_identity: None,
         })
     }
 }

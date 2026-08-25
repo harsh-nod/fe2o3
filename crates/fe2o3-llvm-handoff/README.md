@@ -19,6 +19,12 @@ AMDHSA code-object V6 kernel entries. It carries:
 - a versioned canonical binary encoding and domain-separated SHA-256 handoff
   identity.
 
+The sealed V1 and V2 function-attribute families also preserve the standard
+opt-in AMDGPU ABI exclusions `amdgpu-no-completion-action`,
+`amdgpu-no-default-queue`, `amdgpu-no-heap-ptr`, `amdgpu-no-hostcall-ptr`,
+`amdgpu-no-multigrid-sync-arg`, and `amdgpu-no-queue-ptr`. Target defaults do
+not add these attributes; callers select them explicitly.
+
 Order-insensitive collections are sorted during checked construction. Parameter
 order remains significant. Duplicate, conflicting, oversized, dangling,
 unknown, and noncanonical values fail closed.

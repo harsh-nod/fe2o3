@@ -2,12 +2,13 @@
 
 use core::ffi::c_void;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 
 use fe2o3_aql::{
-    AQL_INVALID_PACKET_HEADER_V1, AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
-    AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1,
+    AMD_SIGNAL_BYTES_V1, AMD_SIGNAL_VALUE_PENDING_V1, AQL_INVALID_PACKET_HEADER_V1,
+    AQL_KERNEL_DISPATCH_PACKET_BYTES_V1, AqlCompletionObservationV1, AqlRingCapacityV1,
+    classify_acquired_completion_value_v1, is_reviewed_aql_publication_v1,
 };
 use fe2o3_kfd_uapi::{
     AMDKFD_IOC_ACQUIRE_VM, AMDKFD_IOC_ALLOC_MEMORY_OF_GPU, AMDKFD_IOC_FREE_MEMORY_OF_GPU,
@@ -78,6 +79,17 @@ impl LinuxMemoryBackend {
 
     pub(super) fn model_aperture(&self) -> InclusiveAperture {
         self.device.observation().aperture().gpuvm()
+    }
+
+    pub(super) fn plan_aql_queue_resources(
+        &self,
+        ring_bytes: u32,
+    ) -> Result<crate::Gfx942AqlQueueResourcePlanV1, crate::Gfx942QueueResourcePlanningError> {
+        crate::plan_gfx942_aql_queue_resources(
+            self.device.topology_snapshot(),
+            self.device.observation().unique_id(),
+            ring_bytes,
+        )
     }
 
     fn discard_unprepared_mapping_or_abort(mapping: &mut LinuxCpuMapping) {
@@ -320,6 +332,65 @@ impl MemoryBackend for LinuxMemoryBackend {
         }
     }
 
+    fn prepare_userptr(
+        &mut self,
+        reservation: &mut Self::Reservation,
+        bytes: usize,
+    ) -> Result<Self::Mapping, MemorySessionError> {
+        if reservation.replaced || bytes == 0 || bytes != reservation.bytes {
+            return Err(MemorySessionError::KernelResultMalformed(
+                "USERPTR reservation geometry",
+            ));
+        }
+        let mut mapping = LinuxCpuMapping {
+            address: reservation.address,
+            bytes,
+            active: true,
+            accessible: false,
+        };
+        // FE reuses its kernel-selected PRIVATE|ANONYMOUS|NORESERVE guard and
+        // makes those exact pages accessible in place. ROCr instead replaces a
+        // reserved range with MAP_FIXED pages; DONTFORK and NORESERVE are FE
+        // safety differences and do not claim syscall-identical allocation.
+        if let Err(error) = self.prepare_cpu_mapping(&mut mapping) {
+            reservation.replaced = true;
+            return Err(error);
+        }
+        reservation.replaced = true;
+        Ok(mapping)
+    }
+
+    fn alloc_userptr(
+        &mut self,
+        address: u64,
+        bytes: u64,
+        flags: KfdAllocMemoryFlags,
+    ) -> KernelOutcome<KfdIoctlAllocMemoryOfGpuArgs> {
+        let mut args = if flags == KfdAllocMemoryFlags::USERPTR_EXECUTABLE {
+            KfdIoctlAllocMemoryOfGpuArgs::new_userptr(address, bytes, self.gpu_id())
+        } else if flags == KfdAllocMemoryFlags::USERPTR_QUEUE_CONTROL {
+            KfdIoctlAllocMemoryOfGpuArgs::new_userptr_queue_control(address, bytes, self.gpu_id())
+        } else {
+            return KernelOutcome {
+                value: KfdIoctlAllocMemoryOfGpuArgs::new(address, bytes, self.gpu_id(), flags),
+                result: Err(MemorySessionError::KernelResultMalformed(
+                    "unsupported USERPTR allocation profile",
+                )),
+            };
+        };
+        // SAFETY: the exact USERPTR input VMA is page-aligned, DONTFORK,
+        // read/write, and retained by the safe engine through explicit FREE.
+        let request = unsafe { Updater::<ALLOC_MEMORY_OPCODE, _>::new(&mut args) };
+        // SAFETY: the reviewed in/out record and live VMA remain exclusively
+        // owned for the call; all kernel-written fields remain untrusted.
+        let result = unsafe { rustix::ioctl::ioctl(&self.device.kfd.opened.fd, request) }
+            .map_err(|source| Self::syscall("AMDKFD_IOC_ALLOC_MEMORY_OF_GPU(USERPTR)", source));
+        KernelOutcome {
+            value: args,
+            result,
+        }
+    }
+
     fn map_cpu(
         &mut self,
         reservation: &mut Self::Reservation,
@@ -510,9 +581,7 @@ impl MemoryBackend for LinuxMemoryBackend {
                 .map_err(|_| malformed_aql_mapping("packet header"))?,
         );
         let setup = unpublished >> 16;
-        if unpublished & 0xffff != u32::from(AQL_INVALID_PACKET_HEADER_V1)
-            || !(1..=3).contains(&setup)
-        {
+        if unpublished & 0xffff != u32::from(AQL_INVALID_PACKET_HEADER_V1) || setup > 3 {
             return Err(malformed_aql_mapping("unpublished packet header"));
         }
         let offset = usize::try_from(slot_index)
@@ -547,9 +616,6 @@ impl MemoryBackend for LinuxMemoryBackend {
         slot_index: u32,
         header: u16,
     ) -> Result<(), MemorySessionError> {
-        if header != AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1 {
-            return Err(malformed_aql_mapping("release header"));
-        }
         let offset = usize::try_from(slot_index)
             .ok()
             .and_then(|index| index.checked_mul(AQL_KERNEL_DISPATCH_PACKET_BYTES_V1))
@@ -566,7 +632,7 @@ impl MemoryBackend for LinuxMemoryBackend {
         let unpublished = u32::from_le(atomic.load(Ordering::Relaxed));
         let setup = unpublished >> 16;
         if unpublished & 0xffff != u32::from(AQL_INVALID_PACKET_HEADER_V1)
-            || !(1..=3).contains(&setup)
+            || !is_reviewed_aql_publication_v1(header, setup as u16)
         {
             return Err(malformed_aql_mapping("packet no longer unpublished"));
         }
@@ -577,6 +643,78 @@ impl MemoryBackend for LinuxMemoryBackend {
         Ok(())
     }
 
+    fn observe_aql_packet_header_acquire(
+        mapping: &mut Self::Mapping,
+        requested_bytes: usize,
+        packet_id: u64,
+    ) -> Result<(u32, u16, u16), MemorySessionError> {
+        let ring_bytes = u32::try_from(requested_bytes)
+            .map_err(|_| malformed_aql_mapping("packet observation ring length"))?;
+        let capacity = AqlRingCapacityV1::from_ring_bytes(ring_bytes)
+            .map_err(|_| malformed_aql_mapping("packet observation ring capacity"))?;
+        let slot_index = u32::try_from(packet_id & capacity.mask())
+            .map_err(|_| malformed_aql_mapping("packet observation slot index"))?;
+        let offset = usize::try_from(slot_index)
+            .ok()
+            .and_then(|index| index.checked_mul(AQL_KERNEL_DISPATCH_PACKET_BYTES_V1))
+            .ok_or_else(|| malformed_aql_mapping("packet observation slot offset"))?;
+        let pointer = checked_mapping_pointer(
+            mapping,
+            requested_bytes,
+            offset,
+            core::mem::size_of::<AtomicU32>(),
+            core::mem::align_of::<AtomicU32>(),
+        )?;
+        // SAFETY: every admitted ring slot header is an initialized AtomicU32.
+        let full_header =
+            u32::from_le(unsafe { &*pointer.cast::<AtomicU32>() }.load(Ordering::Acquire));
+        Ok((slot_index, full_header as u16, (full_header >> 16) as u16))
+    }
+
+    fn observe_completion_signal_acquire(
+        mapping: &mut Self::Mapping,
+        requested_bytes: usize,
+        slot_index: u32,
+    ) -> Result<AqlCompletionObservationV1, MemorySessionError> {
+        let value =
+            checked_completion_value(mapping, requested_bytes, slot_index)?.load(Ordering::Acquire);
+        Ok(classify_acquired_completion_value_v1(value))
+    }
+
+    fn observe_completion_signal_state_acquire(
+        mapping: &mut Self::Mapping,
+        requested_bytes: usize,
+        slot_index: u32,
+    ) -> Result<(i64, i64), MemorySessionError> {
+        let offset = usize::try_from(slot_index)
+            .ok()
+            .and_then(|index| index.checked_mul(AMD_SIGNAL_BYTES_V1))
+            .ok_or_else(|| malformed_aql_mapping("completion state slot offset"))?;
+        let kind_pointer = checked_mapping_pointer(
+            mapping,
+            requested_bytes,
+            offset,
+            core::mem::size_of::<i64>(),
+            core::mem::align_of::<i64>(),
+        )?;
+        // SAFETY: the exact admitted signal kind word remains inside the live
+        // mapping and immutable after initialization.
+        let kind = i64::from_le(unsafe { core::ptr::read_volatile(kind_pointer.cast::<i64>()) });
+        let value =
+            checked_completion_value(mapping, requested_bytes, slot_index)?.load(Ordering::Acquire);
+        Ok((kind, value))
+    }
+
+    fn reset_completion_signal_release(
+        mapping: &mut Self::Mapping,
+        requested_bytes: usize,
+        slot_index: u32,
+    ) -> Result<(), MemorySessionError> {
+        checked_completion_value(mapping, requested_bytes, slot_index)?
+            .store(AMD_SIGNAL_VALUE_PENDING_V1, Ordering::Release);
+        Ok(())
+    }
+
     fn unmap_cpu(&mut self, mapping: &mut Self::Mapping) -> Result<(), MemorySessionError> {
         if !mapping.active || !mapping.accessible {
             return Err(MemorySessionError::KernelResultMalformed(
@@ -584,7 +722,8 @@ impl MemoryBackend for LinuxMemoryBackend {
             ));
         }
         // SAFETY: the mapping is exclusively borrowed and no safe slice can
-        // survive a closure call. Explicit munmap must precede FREE.
+        // survive a closure call. The engine establishes the backing-specific
+        // ordering relative to FREE before invoking this primitive.
         unsafe { rustix::mm::munmap(mapping.address.as_ptr(), mapping.bytes) }
             .map_err(|source| Self::syscall("munmap AMDGPU BO", source))?;
         mapping.active = false;
@@ -670,6 +809,31 @@ fn checked_atomic_u64(
     Ok(unsafe { &*pointer.cast::<AtomicU64>() })
 }
 
+fn checked_completion_value(
+    mapping: &mut LinuxCpuMapping,
+    requested_bytes: usize,
+    slot_index: u32,
+) -> Result<&AtomicI64, MemorySessionError> {
+    let signal_offset = usize::try_from(slot_index)
+        .ok()
+        .and_then(|index| index.checked_mul(AMD_SIGNAL_BYTES_V1))
+        .ok_or_else(|| malformed_aql_mapping("completion signal offset"))?;
+    let signal = checked_mapping_pointer(
+        mapping,
+        requested_bytes,
+        signal_offset,
+        AMD_SIGNAL_BYTES_V1,
+        AMD_SIGNAL_BYTES_V1,
+    )?;
+    // SAFETY: the checked signal range contains 64 bytes, and the frozen ABI
+    // places the AtomicI64 value at byte offset eight.
+    let pointer = unsafe { signal.add(8) };
+    // SAFETY: the completion arena initializer created one exact signal
+    // object in every 64-byte slot before GPU mapping. Its AtomicI64 value
+    // remains alive and mapped until explicit queue teardown.
+    Ok(unsafe { &*pointer.cast::<AtomicI64>() })
+}
+
 impl Drop for LinuxVaReservation {
     fn drop(&mut self) {
         // Deliberately no implicit munmap after an ambiguous operation.
@@ -679,5 +843,212 @@ impl Drop for LinuxVaReservation {
 impl Drop for LinuxCpuMapping {
     fn drop(&mut self) {
         // Deliberately no implicit munmap or FREE retry.
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fe2o3_aql::{
+        AQL_SYSTEM_SCOPED_BARRIER_AND_HEADER_V1,
+        AQL_SYSTEM_SCOPED_WAIT_FOR_PRIOR_KERNEL_DISPATCH_HEADER_V1, AmdBusyCompletionSignalV1,
+        AqlCompletionObservationV1,
+    };
+
+    #[repr(C, align(64))]
+    struct TwoSignals([AmdBusyCompletionSignalV1; 2]);
+
+    #[repr(C, align(64))]
+    struct OnePacket([u8; AQL_KERNEL_DISPATCH_PACKET_BYTES_V1]);
+
+    #[repr(C, align(64))]
+    struct MinimumRing([u8; 4096]);
+
+    #[test]
+    fn mapped_packet_accepts_exact_wait_for_prior_release_header() {
+        let mut packet = OnePacket([0; AQL_KERNEL_DISPATCH_PACKET_BYTES_V1]);
+        packet.0[..4].copy_from_slice(&0x0002_0001_u32.to_le_bytes());
+        let mut mapping = LinuxCpuMapping {
+            address: NonNull::from(&mut packet).cast(),
+            bytes: AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
+            active: true,
+            accessible: true,
+        };
+
+        LinuxMemoryBackend::publish_aql_header(
+            &mut mapping,
+            AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
+            0,
+            AQL_SYSTEM_SCOPED_WAIT_FOR_PRIOR_KERNEL_DISPATCH_HEADER_V1,
+        )
+        .unwrap();
+        assert_eq!(
+            u32::from_le_bytes(packet.0[..4].try_into().unwrap()),
+            0x0002_1502
+        );
+
+        packet.0[..4].copy_from_slice(&0x0002_0001_u32.to_le_bytes());
+        assert!(
+            LinuxMemoryBackend::publish_aql_header(
+                &mut mapping,
+                AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
+                0,
+                0x1503,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            u32::from_le_bytes(packet.0[..4].try_into().unwrap()),
+            0x0002_0001
+        );
+    }
+
+    #[test]
+    fn mapped_packet_accepts_only_zero_setup_for_barrier_and_header() {
+        let mut packet = OnePacket([0; AQL_KERNEL_DISPATCH_PACKET_BYTES_V1]);
+        packet.0[..4].copy_from_slice(&1_u32.to_le_bytes());
+        let mut mapping = LinuxCpuMapping {
+            address: NonNull::from(&mut packet).cast(),
+            bytes: AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
+            active: true,
+            accessible: true,
+        };
+
+        LinuxMemoryBackend::publish_aql_header(
+            &mut mapping,
+            AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
+            0,
+            AQL_SYSTEM_SCOPED_BARRIER_AND_HEADER_V1,
+        )
+        .unwrap();
+        assert_eq!(
+            u32::from_le_bytes(packet.0[..4].try_into().unwrap()),
+            0x0000_1403
+        );
+
+        packet.0[..4].copy_from_slice(&0x0001_0001_u32.to_le_bytes());
+        assert!(
+            LinuxMemoryBackend::publish_aql_header(
+                &mut mapping,
+                AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
+                0,
+                AQL_SYSTEM_SCOPED_BARRIER_AND_HEADER_V1,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn mapped_packet_observation_is_acquiring_and_wraps_private_slot() {
+        let mut ring = MinimumRing([0; 4096]);
+        let wrapped_slot = 3_usize;
+        let offset = wrapped_slot * AQL_KERNEL_DISPATCH_PACKET_BYTES_V1;
+        ring.0[offset..offset + 4].copy_from_slice(&0x0003_1502_u32.to_le_bytes());
+        let mut mapping = LinuxCpuMapping {
+            address: NonNull::from(&mut ring).cast(),
+            bytes: ring.0.len(),
+            active: true,
+            accessible: true,
+        };
+
+        assert_eq!(
+            LinuxMemoryBackend::observe_aql_packet_header_acquire(
+                &mut mapping,
+                4096,
+                64 + wrapped_slot as u64,
+            )
+            .unwrap(),
+            (wrapped_slot as u32, 0x1502, 3)
+        );
+        assert!(
+            LinuxMemoryBackend::observe_aql_packet_header_acquire(&mut mapping, 63, 0).is_err()
+        );
+    }
+
+    #[test]
+    fn mapped_completion_slots_use_exact_acquire_and_release_atomics() {
+        let mut signals = TwoSignals([
+            AmdBusyCompletionSignalV1::new_pending(),
+            AmdBusyCompletionSignalV1::new_pending(),
+        ]);
+        let mut mapping = LinuxCpuMapping {
+            address: NonNull::from(&mut signals).cast(),
+            bytes: 2 * AMD_SIGNAL_BYTES_V1,
+            active: true,
+            accessible: true,
+        };
+        assert_eq!(
+            LinuxMemoryBackend::observe_completion_signal_acquire(
+                &mut mapping,
+                2 * AMD_SIGNAL_BYTES_V1,
+                1,
+            )
+            .unwrap(),
+            AqlCompletionObservationV1::Pending
+        );
+        assert_eq!(
+            LinuxMemoryBackend::observe_completion_signal_state_acquire(
+                &mut mapping,
+                2 * AMD_SIGNAL_BYTES_V1,
+                1,
+            )
+            .unwrap(),
+            (
+                fe2o3_aql::AMD_SIGNAL_KIND_USER_V1,
+                AMD_SIGNAL_VALUE_PENDING_V1
+            )
+        );
+        checked_completion_value(&mut mapping, 2 * AMD_SIGNAL_BYTES_V1, 1)
+            .unwrap()
+            .store(0, Ordering::Release);
+        assert_eq!(
+            LinuxMemoryBackend::observe_completion_signal_acquire(
+                &mut mapping,
+                2 * AMD_SIGNAL_BYTES_V1,
+                1,
+            )
+            .unwrap(),
+            AqlCompletionObservationV1::Completed
+        );
+        assert_eq!(
+            LinuxMemoryBackend::observe_completion_signal_state_acquire(
+                &mut mapping,
+                2 * AMD_SIGNAL_BYTES_V1,
+                1,
+            )
+            .unwrap(),
+            (fe2o3_aql::AMD_SIGNAL_KIND_USER_V1, 0)
+        );
+        LinuxMemoryBackend::reset_completion_signal_release(
+            &mut mapping,
+            2 * AMD_SIGNAL_BYTES_V1,
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            LinuxMemoryBackend::observe_completion_signal_acquire(
+                &mut mapping,
+                2 * AMD_SIGNAL_BYTES_V1,
+                1,
+            )
+            .unwrap(),
+            AqlCompletionObservationV1::Pending
+        );
+        assert!(
+            LinuxMemoryBackend::observe_completion_signal_acquire(
+                &mut mapping,
+                2 * AMD_SIGNAL_BYTES_V1,
+                2,
+            )
+            .is_err()
+        );
+        assert!(
+            LinuxMemoryBackend::observe_completion_signal_state_acquire(
+                &mut mapping,
+                2 * AMD_SIGNAL_BYTES_V1,
+                2,
+            )
+            .is_err()
+        );
     }
 }

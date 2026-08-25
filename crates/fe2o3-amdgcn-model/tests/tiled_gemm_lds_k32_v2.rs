@@ -279,7 +279,8 @@ fn generic_exact_target_lowering_uses_workload_neutral_proofs() {
     .expect("generic lowering admits verified uniform loops independently of workload identity");
     assert!(llvm.contains("llvm.amdgcn.mfma.f32.16x16x16bf16.1k"));
     assert_eq!(
-        llvm.matches("call void @llvm.amdgcn.s.barrier()").count(),
+        llvm.matches("call void asm sideeffect \"s_barrier\", \"\"()")
+            .count(),
         2
     );
 }

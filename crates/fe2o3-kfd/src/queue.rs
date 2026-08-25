@@ -28,15 +28,54 @@ mod live;
 #[path = "queue_submit.rs"]
 pub(crate) mod submit;
 
+#[allow(unsafe_code)]
+#[path = "queue_completion.rs"]
+pub(crate) mod completion;
+
+#[path = "queue_dispatch_binding.rs"]
+pub(crate) mod dispatch_binding;
+
+#[path = "queue_device_content.rs"]
+pub(crate) mod device_content;
+
+pub use completion::{
+    GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1, GFX942_AQL_COMPLETION_MANIFEST_V1,
+    Gfx942CompletedBatchV1, Gfx942CompletionBatchV1, Gfx942CompletionErrorV1,
+    Gfx942CompletionPollV1, Gfx942CompletionPollWithProgressV1, Gfx942CompletionProgressV1,
+    Gfx942CompletionRecycleObservationV1, Gfx942TimeoutExecutionObservationV1,
+    Gfx942TimeoutSignalObservationV1,
+};
+
+pub use dispatch_binding::{
+    GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1, GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1,
+    GFX942_MAX_FIXED_DISPATCH_PACKETS_V1, GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1,
+    Gfx942CompletedDispatchBatchV1, Gfx942CompletedDispatchReadRequestV1,
+    Gfx942CompletedDispatchReadbackV1, Gfx942CompletedDispatchSnapshotRequestV1,
+    Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1, Gfx942DispatchBufferBindingV1,
+    Gfx942DispatchPollV1, Gfx942DispatchPollWithProgressV1, Gfx942DispatchProgressV1,
+    Gfx942FixedDispatchDataKindV1, Gfx942FixedDispatchDataLayoutV1, Gfx942FixedDispatchDataV1,
+    Gfx942FixedDispatchPacketV1,
+};
+
+pub use device_content::{
+    GFX942_DEVICE_CONTENT_COPY_FOUNDATION_MANIFEST_SHA256_V1,
+    GFX942_DEVICE_CONTENT_COPY_FOUNDATION_MANIFEST_V1, Gfx942DeviceContentDescriptorErrorV1,
+    Gfx942DeviceContentDescriptorV1, Gfx942DeviceContentRoleV1, Gfx942RepeatedByteContentV1,
+};
+
 pub use live::{
     ComputeAqlQueueDestroyedV1, ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1,
     ComputeAqlQueueSessionV1, GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1,
-    GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1,
+    GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1, Gfx942BarrierProbeExecutionObservationV1,
+    Gfx942BarrierProbeFailureV1, Gfx942BarrierProbePollBoundErrorV1, Gfx942BarrierProbePollBoundV1,
+    Gfx942BarrierProbeRingBackingV1, Gfx942BarrierProbeSuccessV1, Gfx942DetachedFixedDispatchV1,
+    Gfx942RecycledDispatchResourcesV1, QuarantinedGfx942BarrierProbeV1,
 };
 
 /// Canonical claim boundary for the executable native-queue foundation.
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r4-v1\n",
+    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r15-v1\n",
+    "compute_session_sha256=394618a23ca31cacbd9ef757e9ad4c0977dd0b5ee83cf66bcd9a6fafdefe6ce3\n",
     "operations=create,update,disable,destroy\n",
     "projection=existing-bounded-queue-lifecycle-model,pending-before-ioctl,append-only-history\n",
     "resources=backend-specific-private-capability,linearly-retained,exact-ring-control-eop-cwsr-mappings-required\n",
@@ -44,16 +83,20 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
     "failure=linux-errno-must-map-indeterminate,malformed-output-global-poison,post-call-projection-failure-global-poison\n",
     "release=explicit-only-after-confirmed-destroy,no-drop-ioctl\n",
     "linux-boundary=private-create-update-destroy-ioctl-shims,production-create-destroy-composition\n",
-    "composition=shared-gtt-linear-role-authorities,transferred-model-foundation,whole-slice-doorbell-mmap\n",
-    "submission=crate-private-single-producer-bounded-batch-reservation,one-actual-write-counter-fetch-add-by-count,all-invalid-bodies-before-release-headers,one-final-doorbell-store\n",
-    "missing=public-dispatch,kernel-launch,code-kernarg-allocation-generation-signal-binding,completion-and-exception-observation,live-batch-evidence\n",
+    "composition=shared-memory-linear-role-authorities,exact-one-page-same-va-userptr-writable-coherent-control,exact-set-device-memory-dispatch-transfer,transferred-model-foundation,whole-slice-doorbell-mmap\n",
+    "creation=every-error-from-userptr-control-allocation-attempt-through-live-session-return-recovers-no-authority-permanently-poisons-process-global-runtime-gate-and-requires-process-termination\n",
+    "submission=crate-private-single-producer-aql-fixed-batch-v2-through-8192,ring-capacity-checked,one-actual-write-counter-fetch-add-by-count,all-invalid-bodies-before-release-headers,one-final-doorbell-store\n",
+    "completion=separate-linear-8192-signal-host-coherent-arena,heap-owned-fixed-cardinality-retention,unique-signal-per-packet,crate-private-generation-binding,bounded-acquire-poll,addressless-timeout-execution-observation-before-terminal-poison,release-reset-after-exact-batch-completion\n",
+    "barrier-probe=three-consuming-fresh-queue-entries,aql-special-doubled-or-plain-executable-one-x-or-selected-gpu-userptr-final-rocr-derived-flags-one-x-ring-with-no-full-rocr-order-parity,typed-poll-bound-before-device-consumption,zero-dependency-system-scope-packet,isolated-one-signal-lease,no-code-kernarg-or-dispatch-generation,success-after-completion-reset-and-confirmed-destroy-release-only,every-error-at-or-after-userptr-control-registration-entry-permanently-poisons-process-global-runtime-gate-and-is-terminal,execution-failure-opaque-quarantine-until-process-teardown,process-global-runtime-gate-poison-armed-before-destroy-and-cleared-only-after-confirmed-success,terminal-teardown-or-panic-retains-permanent-gate-poison-recovers-no-authority-native-resource-disposition-indeterminate-process-termination-required-no-retry-reopen-or-confirmed-cleanup\n",
+    "dispatch-binding=public-addressless-inspected-code-zero-pointer-and-caller-zero-implicit-kernarg-private-substitution,mapped-device-lease-fixed-batch-completion-generation-composition,metadata-derived-COV6-geometry-and-dynamic-lds-only,queue-pointer-and-runtime-address-fields-rejected,real-resource-retention-through-recycle,recycled-only-detach-and-rebind-on-one-live-queue,actual-mapped-authority-return-only-after-exact-recycle\n",
+    "missing=kernel-dispatch-hardware-completion-and-exception-refinement,live-kernel-batch-evidence,kernel-memory-effect-refinement,kernel-numerical-correctness,machine-proof\n",
     "proof=model-projection-and-hostile-tests-only,cpu-gpu-atomic-coherence-and-mmio-refinement-contracted\n",
     "authority=redacted-live-session,queue-id-observation-only,no-fd-gpu-address-mmio-pointer-or-dispatch-export\n",
 );
 
 /// SHA-256 of [`NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1`].
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1: &str =
-    "6c5b7d7687934e57dc1b80c44e8f9ac21a345823447b4f4c6ce3f23d30165e3e";
+    "7ad48909659fc9df130472419dcbc96bba76868be3e1766b8d4e6a701cb8b2b6";
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -596,12 +639,23 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
             .find(|resource| resource.key == key && resource.authority.is_some())
             .ok_or(NativeQueueAdapterErrorV1::InvalidPhase)
     }
-}
 
-impl<B: NativeQueueBackendV1> Drop for NativeQueueEngineV1<B> {
-    fn drop(&mut self) {
-        // Deliberately no CREATE/UPDATE/DESTROY retry or resource release.
-        // Ambiguous native state must remain owned until process teardown.
+    /// Returns the private backend after an exact consuming teardown path.
+    ///
+    /// This method performs no native operation. Every contained capability
+    /// type also has a no-effect `Drop`; callers must complete the explicit
+    /// queue and resource transitions before consuming the engine here.
+    fn into_backend(self) -> Result<B, NativeQueueAdapterErrorV1> {
+        if self.authority_poisoned
+            || self.resources.is_empty()
+            || self.resources.iter().any(|resource| {
+                resource.authority.is_some()
+                    || self.phase(resource.key) != Some(ComputeAqlQueuePhaseV1::Destroyed)
+            })
+        {
+            return Err(NativeQueueAdapterErrorV1::InvalidPhase);
+        }
+        Ok(self.backend)
     }
 }
 

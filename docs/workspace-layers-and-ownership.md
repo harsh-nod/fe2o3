@@ -152,11 +152,13 @@ may consume canonical, frontend, backend, and verification contracts. It MUST
 NOT depend on Pliron implementation objects, compiler drivers, or fixtures.
 
 `fe2o3-service-host` is classified here because it owns the host-side service
-typestate boundary, but its current P1 implementation is deliberately
-authority-free. It consumes only canonical `fe2o3-service-model` and
-`fe2o3-host-api` records, retains caller storage borrows, and performs no
-allocation, load, launch, queue publication, execution, runtime wait,
-authentication, proof, or storage release.
+typestate boundary. Its target-neutral lifecycle path consumes canonical
+`fe2o3-service-model` and `fe2o3-host-api` records and retains caller storage
+borrows. On Linux x86_64, a separate generic runtime path owns checked KFD
+allocations and one addressless fixed-batch queue through linear publication,
+completion, recycle, detach, rebind, destruction, and storage release. It does
+not establish executable memory effects, current output content, numerical
+correctness, or hardware qualification.
 
 ### Integration
 
@@ -246,7 +248,7 @@ not execute a persistent service.
 |---|---|---|
 | Service model | `fe2o3-service-model` | P0 identities, transitions, invariants, and independent property classifications landed |
 | Scheduler proofs | `fe2o3-service-verus` | Package boundary reserved; proof implementation remains open |
-| Host typestates | `fe2o3-service-host` | Authority-free P1 lifecycle/ticket/borrow adapter landed; runtime binding remains open |
+| Host typestates | `fe2o3-service-host` | Lifecycle/ticket/borrow adapter plus generic addressless KFD allocation and fixed-batch queue ownership landed; hardware qualification remains open |
 | Host operation contracts | `fe2o3-host-api` | Inert compile/admit/load/dispatch/wait records landed; executors remain open |
 | GPU operations | scheduler/service dialect crates | Required general service operations and compilation remain open |
 | AMD synchronization | AMD lowering family | Persistent-service memory/order lowering remains open |

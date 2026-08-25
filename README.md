@@ -352,10 +352,12 @@ target lowering, and host execution into explicit ownership boundaries:
   by re-exporting that model and is not yet an `amdgcn.*` Pliron dialect.
 - Host and service boundaries: `fe2o3-core`, `fe2o3-host`,
   `fe2o3-hsa-runtime`, and `fe2o3-hip-sys` own the existing executable runtime.
-  In contrast, `fe2o3-service-host` is an authority-free, `no_std` typestate
-  adapter over `fe2o3-service-model` and `fe2o3-host-api`; it retains storage
-  borrows and checks lifecycle descriptions but allocates, loads, launches,
-  waits for, and executes nothing.
+  `fe2o3-service-host` is a `no_std` typestate adapter over
+  `fe2o3-service-model` and `fe2o3-host-api`; it retains storage borrows and
+  checks lifecycle descriptions. On Linux x86_64 it also owns a generic,
+  addressless composition of checked KFD allocations and one long-lived fixed
+  dispatch queue through linear publish, completion, recycle, detach, rebind,
+  destruction, and release transitions.
 - Pure-Rust runtime foundation: `fe2o3-kfd-uapi`, `fe2o3-kfd`, and
   `fe2o3-runtime-model` provide reviewed KFD 1.18 encodings, fail-closed device
   observation, and Verus-backed lifecycle modeling. They do not yet replace
