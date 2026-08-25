@@ -56,7 +56,8 @@ pub(crate) const GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV: &str =
 pub(crate) const WORKER_V2_SOURCE_DEBUG_PROFILE_ENV: &str =
     "FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1";
 const WORKER_V2_PIPELINE: &str = "kernel-ir-worker-v2";
-pub(crate) const PRODUCTION_V1_PIPELINE: &str = "production-v1";
+const PRODUCTION_CONFIG_PROFILE_ID_V1: &str = "production-v1";
+pub(crate) const OBSOLETE_PRODUCTION_SELECTOR: &str = PRODUCTION_CONFIG_PROFILE_ID_V1;
 const SCALAR_GEMM_V1_PIPELINE: &str = "collected-scalar-gemm-v1";
 const ROW_SOFTMAX_V1_PIPELINE: &str = "collected-row-softmax-v1";
 pub(crate) const GENERAL_GEMM_V1_PIPELINE: &str = "collected-general-gemm-v1";
@@ -262,8 +263,6 @@ impl WorkerV2PipelineV1 {
     fn from_environment_value(value: &OsStr) -> Option<Self> {
         if value == WORKER_V2_PIPELINE {
             Some(Self::General)
-        } else if value == PRODUCTION_V1_PIPELINE {
-            Some(Self::ProductionV1)
         } else if value == SCALAR_GEMM_V1_PIPELINE {
             Some(Self::ScalarGemmV1)
         } else if value == ROW_SOFTMAX_V1_PIPELINE {
@@ -278,7 +277,7 @@ impl WorkerV2PipelineV1 {
     const fn environment_value(self) -> &'static str {
         match self {
             Self::General => WORKER_V2_PIPELINE,
-            Self::ProductionV1 => PRODUCTION_V1_PIPELINE,
+            Self::ProductionV1 => PRODUCTION_CONFIG_PROFILE_ID_V1,
             Self::ScalarGemmV1 => SCALAR_GEMM_V1_PIPELINE,
             Self::RowSoftmaxV1 => ROW_SOFTMAX_V1_PIPELINE,
             Self::GeneralGemmV1 => GENERAL_GEMM_V1_PIPELINE,
@@ -286,9 +285,9 @@ impl WorkerV2PipelineV1 {
     }
 }
 
-/// Matches the backend's closed selector rule: unset means production V1.
-pub(crate) fn production_pipeline_selected(pipeline: Option<&OsStr>) -> bool {
-    pipeline.is_none() || pipeline == Some(OsStr::new(PRODUCTION_V1_PIPELINE))
+/// Matches the backend's closed route rule: only unset means production.
+pub(crate) fn production_compilation_selected(pipeline: Option<&OsStr>) -> bool {
+    pipeline.is_none()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -335,7 +334,12 @@ impl PreparedWorkerV2Config {
         pipeline: Option<&OsStr>,
         config_path: Option<&OsStr>,
     ) -> Result<Option<Self>, WorkerV2ConfigError> {
-        let selected = if production_pipeline_selected(pipeline) {
+        if pipeline == Some(OsStr::new(OBSOLETE_PRODUCTION_SELECTOR)) {
+            return Err(WorkerV2ConfigError::Invalid(format!(
+                "{CODEGEN_PIPELINE_ENV} must be unset for production compilation; explicit `{OBSOLETE_PRODUCTION_SELECTOR}` selection has been removed"
+            )));
+        }
+        let selected = if production_compilation_selected(pipeline) {
             Some(WorkerV2PipelineV1::ProductionV1)
         } else {
             pipeline.and_then(WorkerV2PipelineV1::from_environment_value)
@@ -1057,7 +1061,7 @@ impl fmt::Display for WorkerV2ConfigError {
             ),
             Self::UnexpectedConfiguration => write!(
                 formatter,
-                "{WORKER_V2_CONFIG_ENV} is valid only when {CODEGEN_PIPELINE_ENV} is unset (selecting {PRODUCTION_V1_PIPELINE}) or exactly {PRODUCTION_V1_PIPELINE}, {WORKER_V2_PIPELINE}, {SCALAR_GEMM_V1_PIPELINE}, {ROW_SOFTMAX_V1_PIPELINE}, or {GENERAL_GEMM_V1_PIPELINE}"
+                "{WORKER_V2_CONFIG_ENV} is valid only when {CODEGEN_PIPELINE_ENV} is unset for production compilation or exactly {WORKER_V2_PIPELINE}, {SCALAR_GEMM_V1_PIPELINE}, {ROW_SOFTMAX_V1_PIPELINE}, or {GENERAL_GEMM_V1_PIPELINE}"
             ),
             Self::Io { kind, path, error } => {
                 write!(
@@ -1802,8 +1806,12 @@ mod tests {
             Err(WorkerV2ConfigError::MissingConfiguration)
         ));
         assert!(matches!(
-            PreparedWorkerV2Config::from_selection(Some(OsStr::new(PRODUCTION_V1_PIPELINE)), None),
-            Err(WorkerV2ConfigError::MissingConfiguration)
+            PreparedWorkerV2Config::from_selection(
+                Some(OsStr::new(OBSOLETE_PRODUCTION_SELECTOR)),
+                None
+            ),
+            Err(WorkerV2ConfigError::Invalid(reason))
+                if reason.contains("must be unset for production compilation")
         ));
         assert!(matches!(
             PreparedWorkerV2Config::from_selection(Some(OsStr::new(SCALAR_GEMM_V1_PIPELINE)), None),
@@ -2092,16 +2100,9 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        let production = PreparedWorkerV2Config::from_selection(
-            Some(OsStr::new(PRODUCTION_V1_PIPELINE)),
-            Some(path.as_os_str()),
-        )
-        .unwrap()
-        .unwrap();
-        let default_production =
-            PreparedWorkerV2Config::from_selection(None, Some(path.as_os_str()))
-                .unwrap()
-                .unwrap();
+        let production = PreparedWorkerV2Config::from_selection(None, Some(path.as_os_str()))
+            .unwrap()
+            .unwrap();
         let scalar = PreparedWorkerV2Config::from_selection(
             Some(OsStr::new(SCALAR_GEMM_V1_PIPELINE)),
             Some(path.as_os_str()),
@@ -2112,11 +2113,7 @@ mod tests {
         assert_ne!(general.identity(), scalar.identity());
         assert_ne!(general.identity(), production.identity());
         assert_ne!(production.identity(), scalar.identity());
-        assert_eq!(default_production.identity(), production.identity());
-        assert_eq!(
-            default_production.pipeline,
-            WorkerV2PipelineV1::ProductionV1
-        );
+        assert_eq!(production.pipeline, WorkerV2PipelineV1::ProductionV1);
         assert!(!general.requires_expected_identity());
         assert!(!production.requires_expected_identity());
         assert!(scalar.requires_expected_identity());

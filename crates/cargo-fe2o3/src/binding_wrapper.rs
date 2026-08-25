@@ -81,14 +81,12 @@ use crate::project::PinnedDirectory;
 use crate::protected_compiler_handoff_v3::{
     ParentRustcInvocationCustody, ProtectedCompilerModuleHandoffIntake,
 };
-#[cfg(test)]
-use crate::worker_v2::PRODUCTION_V1_PIPELINE;
 use crate::worker_v2::{
     GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV, GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV,
-    PreparedWorkerV2Config, WORKER_V2_CONFIG_ENV, WORKER_V2_EXPECTED_ID_ENV,
-    WORKER_V2_SOURCE_DEBUG_PROFILE_ENV, WorkerV2BuildObservation,
+    OBSOLETE_PRODUCTION_SELECTOR, PreparedWorkerV2Config, WORKER_V2_CONFIG_ENV,
+    WORKER_V2_EXPECTED_ID_ENV, WORKER_V2_SOURCE_DEBUG_PROFILE_ENV, WorkerV2BuildObservation,
     WorkerV2CompileEnvironmentProfileV1, WorkerV2ConfigError, WorkerV2ConfigIdentity,
-    WorkerV2SourceDebugProfileV1, production_pipeline_selected,
+    WorkerV2SourceDebugProfileV1, production_compilation_selected,
 };
 use crate::worker_v2_artifact_container::{
     assemble_recovered_worker_v2_load_envelope_v1, assemble_recovered_worker_v2_load_envelope_v2,
@@ -792,7 +790,8 @@ fn pipeline_requires_protected_invocation(
     pipeline: Option<&OsStr>,
     explicit_unprotected_qualification: bool,
 ) -> bool {
-    production_pipeline_selected(pipeline)
+    production_compilation_selected(pipeline)
+        || pipeline == Some(OsStr::new(OBSOLETE_PRODUCTION_SELECTOR))
         || (pipeline == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
             && !explicit_unprotected_qualification)
 }
@@ -5107,17 +5106,16 @@ mod tests {
         GeneralGemmChildPinsV1, LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2, LinuxObjectIdentityV3,
         ManagedAttempt, ManagedAttemptRevocationGuard,
         OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2,
-        OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2,
-        PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2, PRODUCTION_V1_PIPELINE,
-        PreparedRustcConsistencyExpectation, ProtectedWorkerV2TransitionBlocker,
-        QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1, QUALIFICATION_RELEASE_ACTION_ENV,
-        ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1, ROW_SOFTMAX_V1_PIPELINE,
-        ROW_SOFTMAX_V1_RUN_VALUE, RustcCodegenMetadataErrorV1, RustcInvocationV2,
-        WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2, WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2,
-        WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, WorkerV2BindingSchema,
-        append_prepared_rustc_arguments, canonicalize_rustc_metadata, classify_rustc_invocation_v2,
-        complete_recovered_protected_worker_v2, complete_recovered_worker_v2,
-        configure_build_observation_environment,
+        OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2, OBSOLETE_PRODUCTION_SELECTOR,
+        PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2, PreparedRustcConsistencyExpectation,
+        ProtectedWorkerV2TransitionBlocker, QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1,
+        QUALIFICATION_RELEASE_ACTION_ENV, ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1,
+        ROW_SOFTMAX_V1_PIPELINE, ROW_SOFTMAX_V1_RUN_VALUE, RustcCodegenMetadataErrorV1,
+        RustcInvocationV2, WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2,
+        WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2, WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
+        WorkerV2BindingSchema, append_prepared_rustc_arguments, canonicalize_rustc_metadata,
+        classify_rustc_invocation_v2, complete_recovered_protected_worker_v2,
+        complete_recovered_worker_v2, configure_build_observation_environment,
         configure_build_observation_environment_with_test_mutation,
         configure_qualification_route_marker, configure_worker_build_observation_environment,
         decode_managed_rustc_args, derive_build_attempt_input_with_config_identity, hex,
@@ -6113,7 +6111,7 @@ mod tests {
     #[test]
     fn protected_invocation_authority_is_scoped_to_production_routes() {
         assert!(pipeline_requires_protected_invocation(
-            Some(OsStr::new(PRODUCTION_V1_PIPELINE)),
+            Some(OsStr::new(OBSOLETE_PRODUCTION_SELECTOR)),
             false,
         ));
         assert!(pipeline_requires_protected_invocation(None, false));
