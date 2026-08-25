@@ -65,7 +65,9 @@ to `PreparedProductionBuildConfig`. It parses only
 envelope controls, source-debug controls, and workload fields are not compiled.
 Qualification-enabled tests retain their multi-profile parser, but production
 manifest cases call the same dedicated production parser used by the release
-binary.
+binary. The release path always uses the production expected-identity namespace
+and ordinary compiler-capability profile; route-dependent identity and S09
+selection logic is compiled only into the qualification harness.
 
 The `cargo fe2o3 simulate` command is also oracle-only and is absent from
 feature-free command dispatch and help. Production `build` and `run` cannot

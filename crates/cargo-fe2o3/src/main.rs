@@ -504,12 +504,15 @@ fn cargo_with_backend_result(
         production_target_profile,
         env::var_os(TARGET_ENV).as_deref(),
     )?;
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     let requires_authorized_closure = production_target_profile
         || env::var("FE2O3_QUALIFICATION_ORACLE_V1").as_deref()
             == Ok(AUTHORITY_BEARING_ROW_PIPELINE)
         || build_config
             .as_ref()
             .is_some_and(build_config::PreparedBuildConfig::requires_source_debug_profile);
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    let requires_authorized_closure = production_target_profile;
     if requires_authorized_closure {
         require_protected_authority_launch(protected_release)?;
         reject_authority_environment_overrides(args)?;
@@ -1039,6 +1042,7 @@ fn run_cargo_with_backend_inner(
         )?;
     }
     let artifact_dir = context.generation.artifact_dir();
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     let capability_profile = if context
         ._build_config
         .as_ref()
@@ -1048,6 +1052,8 @@ fn run_cargo_with_backend_inner(
     } else {
         capability_broker::CapabilityProfileV1::Ordinary
     };
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    let capability_profile = capability_broker::CapabilityProfileV1::Ordinary;
     let rustc_lib_tree_stat = rustix::fs::fstat(context.pinned_rustc.lib_tree_directory().file())
         .map_err(|error| {
         format!("failed to inspect retained rustc lib-tree directory: {error}")
@@ -1160,6 +1166,7 @@ fn run_cargo_with_backend_inner(
         .as_command_mut()
         .env_remove(build_config::PRODUCTION_BUILD_EXPECTED_ID_ENV)
         .env_remove(build_config::WORKER_V2_EXPECTED_ID_ENV);
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     match (
         context.build_config_identity,
         context._build_config.as_ref(),
@@ -1171,6 +1178,20 @@ fn run_cargo_with_backend_inner(
         }
         (None, None) => {}
         _ => unreachable!("build configuration and identity have matching presence"),
+    }
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    match (
+        context.build_config_identity,
+        context._build_config.as_ref(),
+    ) {
+        (Some(identity), Some(_)) => {
+            cargo.as_command_mut().env(
+                build_config::PRODUCTION_BUILD_EXPECTED_ID_ENV,
+                identity.to_hex(),
+            );
+        }
+        (None, None) => {}
+        _ => unreachable!("production build configuration and identity have matching presence"),
     }
     if let Some(admission) = protected_release {
         admission.configure_descendant(cargo.as_command_mut());

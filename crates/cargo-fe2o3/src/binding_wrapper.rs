@@ -238,6 +238,7 @@ pub(crate) enum BindingWrapperError {
     PreexistingCodegenBackend {
         argument_index: usize,
     },
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     AuthorityLinkerOverride {
         argument_index: usize,
     },
@@ -304,6 +305,7 @@ impl fmt::Display for BindingWrapperError {
                 formatter,
                 "managed rustc argv[{argument_index}] contains a preexisting codegen-backend selector"
             ),
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::AuthorityLinkerOverride { argument_index } => write!(
                 formatter,
                 "authority rustc argv[{argument_index}] contains an unmanaged linker option"
@@ -379,9 +381,10 @@ impl Error for BindingWrapperError {
             | Self::ChildCapability(_)
             | Self::UninspectableRustcResponseFile { .. }
             | Self::PreexistingCodegenBackend { .. }
-            | Self::AuthorityLinkerOverride { .. }
             | Self::OptionTerminatorBeforeManagedArguments { .. }
             | Self::UnsupportedInvocation => None,
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+            Self::AuthorityLinkerOverride { .. } => None,
             Self::BuildObservation(_) => None,
         }
     }
@@ -441,6 +444,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             let build_config = PreparedBuildConfig::from_environment()
                 .map_err(BindingWrapperError::BuildConfiguration)?;
             validate_expected_build_config_identity(build_config.as_ref())?;
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             let capability_profile = if build_config
                 .as_ref()
                 .is_some_and(PreparedBuildConfig::requires_source_debug_profile)
@@ -449,6 +453,9 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             } else {
                 capability_broker::CapabilityProfileV1::Ordinary
             };
+            #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+            let capability_profile = capability_broker::CapabilityProfileV1::Ordinary;
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             if capability_profile == capability_broker::CapabilityProfileV1::S09
                 || std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").as_deref()
                     == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
@@ -2443,6 +2450,7 @@ fn reject_uninspectable_rustc_args(argv: &[OsString]) -> Result<(), BindingWrapp
     Ok(())
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn reject_authority_linker_arguments(argv: &[OsString]) -> Result<(), BindingWrapperError> {
     let mut index = 0;
     while index < argv.len() {
@@ -2496,6 +2504,7 @@ fn os_string(value: Vec<u8>) -> Result<OsString, ()> {
     String::from_utf8(value).map(OsString::from).map_err(|_| ())
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn validate_expected_build_config_identity(
     config: Option<&PreparedBuildConfig>,
 ) -> Result<(), BindingWrapperError> {
@@ -2557,6 +2566,50 @@ fn validate_expected_build_config_identity(
         ));
     }
     Ok(())
+}
+
+#[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+fn validate_expected_build_config_identity(
+    config: Option<&PreparedBuildConfig>,
+) -> Result<(), BindingWrapperError> {
+    if std::env::var_os(WORKER_V2_EXPECTED_ID_ENV).is_some() {
+        return Err(BindingWrapperError::BuildConfiguration(
+            BuildConfigError::Invalid(format!(
+                "{WORKER_V2_EXPECTED_ID_ENV} is unavailable in a production cargo-fe2o3 build"
+            )),
+        ));
+    }
+    let expected = std::env::var_os(PRODUCTION_BUILD_EXPECTED_ID_ENV);
+    match (config, expected) {
+        (None, None) => Ok(()),
+        (None, Some(_)) => Err(BindingWrapperError::BuildConfiguration(
+            BuildConfigError::Invalid(
+                "production build configuration identity is present without a production build configuration"
+                    .to_owned(),
+            ),
+        )),
+        (Some(_), None) => Err(BindingWrapperError::BuildConfiguration(
+            BuildConfigError::Invalid(format!(
+                "production build configuration requires {PRODUCTION_BUILD_EXPECTED_ID_ENV}"
+            )),
+        )),
+        (Some(config), Some(expected)) => {
+            let expected = expected.to_str().ok_or_else(|| {
+                BindingWrapperError::BuildConfiguration(BuildConfigError::Invalid(format!(
+                    "{PRODUCTION_BUILD_EXPECTED_ID_ENV} must be lowercase hexadecimal"
+                )))
+            })?;
+            if config.identity().to_hex() != expected {
+                return Err(BindingWrapperError::BuildConfiguration(
+                    BuildConfigError::Invalid(
+                        "production build configuration inputs changed after Cargo generation preparation"
+                            .to_owned(),
+                    ),
+                ));
+            }
+            Ok(())
+        }
+    }
 }
 
 struct CompilerCapabilities {
@@ -3300,9 +3353,12 @@ fn prepare_managed_attempt(
         compiler_capabilities.compiler_closure_sha256(),
     );
     let protected_compiler_closure = compiler_capabilities.protected_compiler_closure()?;
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     let production_build = build_config
         .as_ref()
         .is_some_and(PreparedBuildConfig::is_production_compilation);
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    let production_build = build_config.is_some();
     let production_compiler_closure =
         require_production_compiler_closure(protected_compiler_closure, production_build)
             .map_err(|error| BindingWrapperError::BuildObservation(error.to_owned()))?;

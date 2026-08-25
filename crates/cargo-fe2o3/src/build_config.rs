@@ -864,24 +864,8 @@ impl PreparedProductionBuildConfig {
         self.link.identity
     }
 
-    pub(crate) const fn requires_source_debug_profile(&self) -> bool {
-        false
-    }
-
-    pub(crate) const fn requires_expected_identity(&self) -> bool {
-        true
-    }
-
-    pub(crate) const fn expected_identity_environment(&self) -> &'static str {
-        PRODUCTION_BUILD_EXPECTED_ID_ENV
-    }
-
     pub(crate) const fn executes_worker_in_rustc(&self) -> bool {
         false
-    }
-
-    pub(crate) const fn is_production_compilation(&self) -> bool {
-        true
     }
 
     pub(crate) fn into_production(self) -> Result<Self, BuildConfigError> {
