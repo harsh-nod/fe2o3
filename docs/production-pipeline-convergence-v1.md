@@ -276,7 +276,9 @@ Migration follows these rules:
 Production became the sole unselected route after the first scalar slice
 completed its compile, host-interface, artifact, and hardware gates. It has no
 selector. An incomplete general route now fails closed instead of silently
-entering legacy codegen; every retained oracle requires an explicit
+entering legacy codegen. Retained oracles are absent from the production
+backend; each requires a backend built with
+`qualification-oracles-test-only` and an explicit
 `FE2O3_QUALIFICATION_ORACLE_V1` value.
 
 The 2026-08-20 compiler review made this distinction structural. Qualification

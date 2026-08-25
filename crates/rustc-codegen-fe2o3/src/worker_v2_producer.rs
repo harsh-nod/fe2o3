@@ -1,42 +1,66 @@
 //! Preparation and attempt-scoped publication of inert Worker V2 compiler modules.
 
+#[cfg(feature = "qualification-oracles-test-only")]
 use crate::collected_flash_attention_v1::FlashAttentionFinalizationInputsV1;
+#[cfg(feature = "qualification-oracles-test-only")]
 use crate::collected_moe_top2_v1::AuthenticatedMoeTop2V1;
+#[cfg(feature = "qualification-oracles-test-only")]
 use crate::collected_row_softmax_v1::AuthenticatedRowSoftmaxModuleV1;
+#[cfg(feature = "qualification-oracles-test-only")]
 use crate::collected_scalar_gemm_v1::AuthenticatedScalarGemmModuleV1;
+#[cfg(feature = "qualification-oracles-test-only")]
 use crate::collected_tiled_gemm_lds_slice1_v1::AuthenticatedLdsSlice1ModuleV1;
+#[cfg(feature = "qualification-oracles-test-only")]
 use crate::collected_tiled_gemm_v1::AuthenticatedTiledGemmModuleV1;
 use crate::compiler_descriptor::{
-    CompilerDescriptorError, TypedDescriptorRootV1, construct_compiler_descriptor_source_v1,
+    CompilerDescriptorError, construct_production_v1_compiler_descriptor_source_v1,
+};
+#[cfg(feature = "qualification-oracles-test-only")]
+use crate::compiler_descriptor::{
+    TypedDescriptorRootV1, construct_compiler_descriptor_source_v1,
     construct_flash_attention_v1_compiler_descriptor_source_v1,
-    construct_production_v1_compiler_descriptor_source_v1,
     validate_tiled_gemm_lds_slice1_compiler_module_evidence_v1,
 };
 use crate::kernel_ir_codegen::{
     CompilerModuleConstructionError, InertCompilerModuleTextV1, bind_compiler_descriptor_source_v1,
-    bind_source_debug_metadata_v1, construct_inert_compiler_module_text_for_target_v1,
     retain_production_gfx942_compiler_module_text_v1,
 };
+#[cfg(feature = "qualification-oracles-test-only")]
+use crate::kernel_ir_codegen::{
+    bind_source_debug_metadata_v1, construct_inert_compiler_module_text_for_target_v1,
+};
+#[cfg(feature = "qualification-oracles-test-only")]
 use fe2o3_amd_target::{CapabilityDerivationError, WavefrontWidth};
 use fe2o3_artifact_transaction::{
     BuildAttempt, CompilerModuleHandoffErrorV1 as HandoffPublicationErrorV1,
-    CompilerModuleHandoffErrorV2 as HandoffPublicationErrorV2, CompilerModuleHandoffReceiptV1,
-    CompilerModuleHandoffReceiptV2, ProducerIdentity, publish_compiler_module_handoff_v1,
+    CompilerModuleHandoffReceiptV1, ProducerIdentity, publish_compiler_module_handoff_v1,
+};
+#[cfg(feature = "qualification-oracles-test-only")]
+use fe2o3_artifact_transaction::{
+    CompilerModuleHandoffErrorV2 as HandoffPublicationErrorV2, CompilerModuleHandoffReceiptV2,
     publish_compiler_module_handoff_v2,
 };
+#[cfg(feature = "qualification-oracles-test-only")]
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::{
-    CodeObjectVersion, CompilerDescriptorSourceV1, CompilerFfiContractV1,
-    CompilerFfiEnvelopeBuilderV1, CompilerFfiEnvelopeError, CompilerFfiEnvelopeV1,
-    CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1, CompilerModuleHandoffErrorV2,
-    CompilerModuleHandoffIdentityV2, CompilerModuleHandoffV2, CompilerModuleKindV1,
+    CodeObjectVersion, CompilerDescriptorSourceV1, CompilerFfiEnvelopeError, CompilerFfiEnvelopeV1,
+    CompilerModuleHandoffErrorV2, CompilerModuleHandoffV2, CompilerModuleKindV1,
     CompilerModuleSymbolManifestErrorV1, CompilerModuleSymbolManifestV1,
-    CompilerModuleSymbolRoleV1, DeviceTargetV1, decode_row_softmax_compiler_sections_v1,
+    CompilerModuleSymbolRoleV1, DeviceTargetV1,
+};
+#[cfg(feature = "qualification-oracles-test-only")]
+use fe2o3_compiler_ffi::{
+    CompilerFfiContractV1, CompilerFfiEnvelopeBuilderV1, CompilerFfiLinkRoleV1,
+    CompilerFfiSourceOwnerV1, CompilerModuleHandoffIdentityV2,
+    decode_row_softmax_compiler_sections_v1,
 };
 use fe2o3_kernel_ir::{
     AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
-    Module, SCALAR_GEMM_V1_KERNEL_ID, TargetCapability, WaveWidth, WorkgroupSize,
+    Module, TargetCapability,
 };
+#[cfg(feature = "qualification-oracles-test-only")]
+use fe2o3_kernel_ir::{SCALAR_GEMM_V1_KERNEL_ID, WaveWidth, WorkgroupSize};
+#[cfg(feature = "qualification-oracles-test-only")]
 use reserved_fe2o3_symbols::{
     DEVICE_FFI_DIRECTION_IMPORT_V1, DeviceFfiContractFieldsV1, DeviceFfiDirectionV1,
     derive_device_ffi_contract_id_v1,
@@ -47,19 +71,33 @@ use std::error::Error;
 use std::fmt;
 use std::path::Path;
 
+#[cfg(feature = "qualification-oracles-test-only")]
 const G1_WORKGROUP_X: u32 = 256;
+#[cfg(feature = "qualification-oracles-test-only")]
 const SCALAR_GEMM_V1_DESCRIPTOR: &str = "scalar_gemm_v1.kd";
+#[cfg(feature = "qualification-oracles-test-only")]
 const TILED_GEMM_V1_DESCRIPTOR: &str = "tiled_gemm_v1.kd";
+#[cfg(feature = "qualification-oracles-test-only")]
 const TILED_GEMM_LDS_SLICE1_DESCRIPTOR: &str = "tiled_gemm_lds_v1.kd";
+#[cfg(feature = "qualification-oracles-test-only")]
 const ROW_SOFTMAX_V1_DESCRIPTOR: &str = "row_softmax_v1.kd";
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) const ROW_SOFTMAX_OCML_EXP_SYMBOL_V1: &str = "__ocml_exp_f32";
+#[cfg(feature = "qualification-oracles-test-only")]
 const ROW_SOFTMAX_OCML_EXP_ABI_V1: &str = "C(f32[size=4,align=4])->f32[size=4,align=4]";
+#[cfg(feature = "qualification-oracles-test-only")]
 const ROW_SOFTMAX_OCML_EXP_EFFECTS_V1: &str = "none";
+#[cfg(feature = "qualification-oracles-test-only")]
 const FLASH_ATTENTION_V1_DESCRIPTOR: &str = fe2o3_kernel_ir::FLASH_ATTENTION_V1_DESCRIPTOR_SYMBOL;
+#[cfg(feature = "qualification-oracles-test-only")]
 const MOE_TOP2_V1_DESCRIPTOR: &str = fe2o3_kernel_ir::MOE_TOP2_V1_DESCRIPTOR_SYMBOL;
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) const FLASH_ATTENTION_OCML_EXP_SYMBOL_V1: &str = "__ocml_exp_f32";
+#[cfg(feature = "qualification-oracles-test-only")]
 const FLASH_ATTENTION_OCML_EXP_ABI_V1: &str = "C(f32[size=4,align=4])->f32[size=4,align=4]";
+#[cfg(feature = "qualification-oracles-test-only")]
 const FLASH_ATTENTION_OCML_EXP_EFFECTS_V1: &str = "none";
+#[cfg(feature = "qualification-oracles-test-only")]
 const FLASH_ATTENTION_OCML_BOUNDARY_V1: &[u8] = b"fe2o3.flash-attention.ocml-exp-boundary.v1;provider-identity-and-closed-link-structure-only;no-exponential-law,approximation-error,IEEE-fp32,or-source-refinement-proof";
 
 /// Inert Worker V2 compiler-module handoff retained with the frontend authority
@@ -68,6 +106,7 @@ const FLASH_ATTENTION_OCML_BOUNDARY_V1: &[u8] = b"fe2o3.flash-attention.ocml-exp
 /// This value grants no publication, worker, link, artifact, load, or launch
 /// authority. Its fields are private and it is consumed by later stages.
 #[derive(Debug, Eq, PartialEq)]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) struct PreparedScalarGemmV1WorkerHandoffV1 {
     frontend_authority_commitment: [u8; 32],
     handoff: CompilerModuleHandoffV2,
@@ -106,6 +145,7 @@ impl PreparedProductionLineageWorkerHandoffV3 {
     }
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 impl PreparedScalarGemmV1WorkerHandoffV1 {
     pub(crate) const fn frontend_authority_commitment(&self) -> &[u8; 32] {
         &self.frontend_authority_commitment
@@ -119,11 +159,13 @@ impl PreparedScalarGemmV1WorkerHandoffV1 {
 /// Typed, inert Worker V2 handoff for the source-authenticated canonical tiled
 /// GEMM. It is distinct from the 32/288-byte fragment-level frontend probe.
 #[derive(Debug, Eq, PartialEq)]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) struct PreparedTiledGemmV1WorkerHandoffV1 {
     frontend_authority_commitment: [u8; 32],
     handoff: CompilerModuleHandoffV2,
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 impl PreparedTiledGemmV1WorkerHandoffV1 {
     pub(crate) const fn frontend_authority_commitment(&self) -> &[u8; 32] {
         &self.frontend_authority_commitment
@@ -137,6 +179,7 @@ impl PreparedTiledGemmV1WorkerHandoffV1 {
 /// Protected, inert Worker V2 handoff for the exact attributed LDS Slice 1
 /// source, canonical Kernel IR, descriptor, and compiler-derived resources.
 #[derive(Debug, Eq, PartialEq)]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) struct PreparedTiledGemmLdsSlice1WorkerHandoffV1 {
     source_authority_commitment: [u8; 32],
     canonical_ir_identity: [u8; 32],
@@ -147,6 +190,7 @@ pub(crate) struct PreparedTiledGemmLdsSlice1WorkerHandoffV1 {
     handoff: CompilerModuleHandoffV2,
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 impl PreparedTiledGemmLdsSlice1WorkerHandoffV1 {
     pub(crate) const fn source_authority_commitment(&self) -> &[u8; 32] {
         &self.source_authority_commitment
@@ -173,6 +217,7 @@ impl PreparedTiledGemmLdsSlice1WorkerHandoffV1 {
 /// closure. This value grants no worker, provider, link, artifact, or runtime
 /// authority.
 #[derive(Debug, Eq, PartialEq)]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) struct PreparedRowSoftmaxV1WorkerHandoffV1 {
     authority_transcript: Vec<u8>,
     frontend_authority_commitment: [u8; 32],
@@ -183,6 +228,7 @@ pub(crate) struct PreparedRowSoftmaxV1WorkerHandoffV1 {
 /// Inert, exact Flash compiler handoff. Construction consumes the authenticated
 /// source/KIR value and grants no worker, link, artifact, load, or launch authority.
 #[derive(Debug, Eq, PartialEq)]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) struct PreparedFlashAttentionV1WorkerHandoffV1 {
     authority_transcript: Vec<u8>,
     frontend_authority_commitment: [u8; 32],
@@ -192,6 +238,7 @@ pub(crate) struct PreparedFlashAttentionV1WorkerHandoffV1 {
     handoff: CompilerModuleHandoffV2,
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 impl PreparedFlashAttentionV1WorkerHandoffV1 {
     pub(crate) const fn frontend_authority_commitment(&self) -> &[u8; 32] {
         &self.frontend_authority_commitment
@@ -208,6 +255,7 @@ impl PreparedFlashAttentionV1WorkerHandoffV1 {
 
 /// Linear inert handoff derived only from the consumed exact MoE receipt.
 #[derive(Debug, Eq, PartialEq)]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) struct PreparedMoeTop2V1WorkerHandoffV1 {
     source_authority_identity: [u8; 32],
     canonical_ir_identity: [u8; 32],
@@ -216,6 +264,7 @@ pub(crate) struct PreparedMoeTop2V1WorkerHandoffV1 {
     handoff: CompilerModuleHandoffV2,
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 impl PreparedMoeTop2V1WorkerHandoffV1 {
     pub(crate) const fn source_authority_identity(&self) -> &[u8; 32] {
         &self.source_authority_identity
@@ -234,6 +283,7 @@ impl PreparedMoeTop2V1WorkerHandoffV1 {
     }
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 impl PreparedRowSoftmaxV1WorkerHandoffV1 {
     #[cfg(test)]
     pub(crate) fn authority_transcript(&self) -> &[u8] {
@@ -279,6 +329,7 @@ fn validate_prepared_production_v1_worker_handoff(
 /// The frontend commitment remains embedded in the compiler module itself;
 /// the returned receipt is coordination evidence and grants no worker, link,
 /// publication, load, or launch authority.
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn publish_prepared_scalar_gemm_v1_worker_handoff(
     output_dir: &Path,
     producer: &ProducerIdentity,
@@ -312,6 +363,7 @@ pub(crate) fn publish_prepared_scalar_gemm_v1_worker_handoff(
     Ok(receipt)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn publish_prepared_tiled_gemm_v1_worker_handoff(
     output_dir: &Path,
     producer: &ProducerIdentity,
@@ -345,6 +397,7 @@ pub(crate) fn publish_prepared_tiled_gemm_v1_worker_handoff(
     Ok(receipt)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn publish_prepared_tiled_gemm_lds_slice1_worker_handoff(
     output_dir: &Path,
     producer: &ProducerIdentity,
@@ -386,6 +439,7 @@ pub(crate) fn publish_prepared_tiled_gemm_lds_slice1_worker_handoff(
     Ok(receipt)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn decode_tiled_gemm_lds_slice1_sections_v1(module: &str) -> Option<[Vec<u8>; 3]> {
     decode_exact_compiler_sections_v1(
         module,
@@ -397,6 +451,7 @@ fn decode_tiled_gemm_lds_slice1_sections_v1(module: &str) -> Option<[Vec<u8>; 3]
     )
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn decode_exact_compiler_sections_v1<const N: usize>(
     module: &str,
     expected: &[&str; N],
@@ -453,6 +508,7 @@ fn decode_exact_compiler_sections_v1<const N: usize>(
     Some(decoded)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn canonical_module_assembly_section_name(line: &str) -> Option<&str> {
     let suffix = line.strip_prefix("module asm \".section ")?;
     let name = suffix.strip_suffix(",\\22\\22,@progbits\"")?;
@@ -463,6 +519,7 @@ fn canonical_module_assembly_section_name(line: &str) -> Option<&str> {
     .then_some(name)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn transcript_contains_field(transcript: &[u8], field: &[u8]) -> bool {
     let mut framed = Vec::with_capacity(8 + field.len());
     framed.extend_from_slice(&(field.len() as u64).to_le_bytes());
@@ -474,6 +531,7 @@ fn transcript_contains_field(transcript: &[u8], field: &[u8]) -> bool {
         == 1
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn publish_prepared_row_softmax_v1_worker_handoff(
     output_dir: &Path,
     producer: &ProducerIdentity,
@@ -492,6 +550,7 @@ pub(crate) fn publish_prepared_row_softmax_v1_worker_handoff(
     Ok(receipt)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn publish_prepared_row_softmax_v1_worker_handoff_v2(
     output_dir: &Path,
     producer: &ProducerIdentity,
@@ -512,12 +571,14 @@ pub(crate) fn publish_prepared_row_softmax_v1_worker_handoff_v2(
     Ok(receipt)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 struct ValidatedRowSoftmaxWorkerHandoffV1 {
     frontend_authority_commitment: [u8; 32],
     exponential_boundary_commitment: [u8; 32],
     handoff: CompilerModuleHandoffV2,
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 impl ValidatedRowSoftmaxWorkerHandoffV1 {
     fn report_publication(&self) {
         eprintln!(
@@ -528,6 +589,7 @@ impl ValidatedRowSoftmaxWorkerHandoffV1 {
     }
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn validate_prepared_row_softmax_v1_worker_handoff(
     prepared: PreparedRowSoftmaxV1WorkerHandoffV1,
 ) -> Result<ValidatedRowSoftmaxWorkerHandoffV1, WorkerV2ProducerError> {
@@ -546,6 +608,7 @@ fn validate_prepared_row_softmax_v1_worker_handoff(
     })
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn publish_prepared_flash_attention_v1_worker_handoff(
     output_dir: &Path,
     producer: &ProducerIdentity,
@@ -591,6 +654,7 @@ pub(crate) fn publish_prepared_flash_attention_v1_worker_handoff(
     Ok(receipt)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn publish_prepared_moe_top2_v1_worker_handoff(
     output_dir: &Path,
     producer: &ProducerIdentity,
@@ -625,6 +689,7 @@ pub(crate) fn publish_prepared_moe_top2_v1_worker_handoff(
     Ok(receipt)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn decode_moe_top2_v1_sections(module: &[u8]) -> Option<Vec<Vec<u8>>> {
     let module = std::str::from_utf8(module).ok()?;
     let suffixes = [
@@ -701,6 +766,7 @@ fn decode_moe_top2_v1_sections(module: &[u8]) -> Option<Vec<Vec<u8>>> {
     Some(decoded)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn module_asm_byte_line(bytes: &[u8]) -> String {
     let mut line = String::from("module asm \".byte ");
     for (index, byte) in bytes.iter().copied().enumerate() {
@@ -713,7 +779,7 @@ fn module_asm_byte_line(bytes: &[u8]) -> String {
     line
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 fn module_asm_commitment_section(section: &str, bytes: &[u8]) -> String {
     let mut text = format!(
         "\nmodule asm \".section {section},\\22\\22,@progbits\"\nmodule asm \".balign 8\"\n"
@@ -783,6 +849,7 @@ pub(crate) fn prepare_production_v1_worker_handoff(
 /// Canonical Kernel IR is selected before this function and cannot be supplied
 /// by a caller. This path uses no COMGR, subprocess compiler, or command-line
 /// linker and performs no publication or worker execution.
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn prepare_scalar_gemm_v1_worker_handoff(
     authenticated: AuthenticatedScalarGemmModuleV1,
 ) -> Result<PreparedScalarGemmV1WorkerHandoffV1, WorkerV2ProducerError> {
@@ -832,6 +899,7 @@ pub(crate) fn prepare_scalar_gemm_v1_worker_handoff(
 /// Consumes exact source authority and prepares only the canonical WG64 tiled
 /// GEMM LLVM handoff. Lowering uses upstream LLVM-facing text and the Worker V2
 /// protocol; neither this path nor its publication invokes COMGR.
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn prepare_tiled_gemm_v1_worker_handoff(
     authenticated: AuthenticatedTiledGemmModuleV1,
 ) -> Result<PreparedTiledGemmV1WorkerHandoffV1, WorkerV2ProducerError> {
@@ -881,6 +949,7 @@ pub(crate) fn prepare_tiled_gemm_v1_worker_handoff(
 /// Consumes exact attributed-source authority and prepares the dedicated
 /// upstream-LLVM LDS Slice 1 Worker V2 handoff. No worker, linker, code-object
 /// builder, runtime, hardware, or COMGR path is entered.
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn prepare_tiled_gemm_lds_slice1_worker_handoff(
     authenticated: AuthenticatedLdsSlice1ModuleV1,
 ) -> Result<PreparedTiledGemmLdsSlice1WorkerHandoffV1, WorkerV2ProducerError> {
@@ -957,6 +1026,7 @@ pub(crate) fn prepare_tiled_gemm_lds_slice1_worker_handoff(
 
 /// Constructs the exact compiler-owned OCML import observation retained by
 /// both descriptor evidence and the Worker V2 handoff.
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn construct_row_softmax_v1_compiler_envelope(
     exponential_boundary_commitment: [u8; 32],
 ) -> Result<CompilerFfiEnvelopeV1, CompilerFfiEnvelopeError> {
@@ -997,6 +1067,7 @@ pub(crate) fn construct_row_softmax_v1_compiler_envelope(
 
 /// Consumes exact source authority and prepares the canonical row-softmax LLVM
 /// handoff. No OCML provider bytes are selected and no worker is executed.
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn prepare_row_softmax_v1_worker_handoff(
     authenticated: AuthenticatedRowSoftmaxModuleV1,
 ) -> Result<PreparedRowSoftmaxV1WorkerHandoffV1, WorkerV2ProducerError> {
@@ -1053,6 +1124,7 @@ pub(crate) fn prepare_row_softmax_v1_worker_handoff(
     })
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn validate_exact_row_softmax_module_closure(
     module: &InertCompilerModuleTextV1,
 ) -> Result<(), WorkerV2ProducerError> {
@@ -1069,6 +1141,7 @@ pub(crate) fn validate_exact_row_softmax_module_closure(
     Ok(())
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn construct_flash_attention_v1_compiler_envelope(
     ocml_boundary_commitment: [u8; 32],
 ) -> Result<CompilerFfiEnvelopeV1, CompilerFfiEnvelopeError> {
@@ -1109,6 +1182,7 @@ pub(crate) fn construct_flash_attention_v1_compiler_envelope(
 
 /// Consumes exact Flash source/KIR authority into one closed compiler handoff.
 /// This performs no provider lookup, LLVM execution, linking, or artifact work.
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn prepare_flash_attention_v1_worker_handoff(
     inputs: FlashAttentionFinalizationInputsV1,
     typed_roots: Vec<TypedDescriptorRootV1>,
@@ -1204,6 +1278,7 @@ pub(crate) fn prepare_flash_attention_v1_worker_handoff(
 
 /// Consumes the authenticated exact MoE source/KIR receipt and prepares its
 /// one-kernel, provider-free upstream-LLVM Worker V2 handoff.
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn prepare_moe_top2_v1_worker_handoff(
     authenticated: AuthenticatedMoeTop2V1,
 ) -> Result<PreparedMoeTop2V1WorkerHandoffV1, WorkerV2ProducerError> {
@@ -1272,6 +1347,7 @@ pub(crate) fn prepare_moe_top2_v1_worker_handoff(
     })
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn validate_exact_flash_attention_module_closure(
     module: &InertCompilerModuleTextV1,
 ) -> Result<(), WorkerV2ProducerError> {
@@ -1291,7 +1367,7 @@ fn validate_exact_flash_attention_module_closure(
 ///
 /// The handoff remains coordination data. Publication proves possession of the cooperative build
 /// attempt and exact byte identity; it does not grant artifact, link, load, or launch authority.
-#[cfg(test)]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn publish_worker_v2_compiler_module(
     output_dir: &Path,
     producer: &ProducerIdentity,
@@ -1310,6 +1386,7 @@ pub(crate) fn publish_worker_v2_compiler_module(
     )
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn publish_worker_v2_compiler_module_with_descriptors(
     output_dir: &Path,
     producer: &ProducerIdentity,
@@ -1421,6 +1498,7 @@ fn construct_symbol_manifest(
     CompilerModuleSymbolManifestV1::new(entries).map_err(WorkerV2ProducerError::SymbolManifest)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn bind_g1_launch_contract(module: &Module) -> Result<Module, WorkerV2ProducerError> {
     let required = WorkgroupSize::new(G1_WORKGROUP_X, 1, 1);
     let mut bound = module.clone();
@@ -1440,6 +1518,7 @@ fn bind_g1_launch_contract(module: &Module) -> Result<Module, WorkerV2ProducerEr
     Ok(bound)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn bind_exact_target_wave_mode(
     envelope: &CompilerFfiEnvelopeV1,
     module: &Module,
@@ -1580,20 +1659,32 @@ fn validate_envelope_module_roles(
 #[derive(Debug)]
 pub(crate) enum WorkerV2ProducerError {
     MissingBuildAttempt,
+    #[cfg(feature = "qualification-oracles-test-only")]
     MissingCompilerFfiEnvelope,
     MissingProductionBindings,
+    #[cfg(feature = "qualification-oracles-test-only")]
     MissingScalarFrontendAuthority,
+    #[cfg(feature = "qualification-oracles-test-only")]
     MissingTiledFrontendAuthority,
+    #[cfg(feature = "qualification-oracles-test-only")]
     MissingTiledGemmLdsSlice1Bindings,
+    #[cfg(feature = "qualification-oracles-test-only")]
     MissingRowSoftmaxBindings,
+    #[cfg(feature = "qualification-oracles-test-only")]
     RowSoftmaxClosureMismatch,
+    #[cfg(feature = "qualification-oracles-test-only")]
     MissingFlashAttentionBindings,
+    #[cfg(feature = "qualification-oracles-test-only")]
     FlashAttentionClosureMismatch,
+    #[cfg(feature = "qualification-oracles-test-only")]
     MissingMoeTop2Bindings,
+    #[cfg(feature = "qualification-oracles-test-only")]
     MoeTop2ClosureMismatch,
     MissingExternalDeclaration(String),
     MissingCompilerDefinition(String),
+    #[cfg(feature = "qualification-oracles-test-only")]
     TargetCapabilities(CapabilityDerivationError),
+    #[cfg(feature = "qualification-oracles-test-only")]
     UnsupportedWaveMode {
         target: String,
         width: WaveWidth,
@@ -1602,6 +1693,7 @@ pub(crate) enum WorkerV2ProducerError {
         module: Vec<String>,
         envelope: String,
     },
+    #[cfg(feature = "qualification-oracles-test-only")]
     ConflictingWorkgroupSize {
         kernel: String,
         declared: WorkgroupSize,
@@ -1613,6 +1705,7 @@ pub(crate) enum WorkerV2ProducerError {
     SymbolManifest(CompilerModuleSymbolManifestErrorV1),
     Handoff(CompilerModuleHandoffErrorV2),
     Publication(HandoffPublicationErrorV1),
+    #[cfg(feature = "qualification-oracles-test-only")]
     ProtectedPublication(HandoffPublicationErrorV2),
 }
 
@@ -1622,36 +1715,46 @@ impl fmt::Display for WorkerV2ProducerError {
             Self::MissingBuildAttempt => {
                 formatter.write_str("kernel-ir-worker-v2 requires a managed FE2O3_BUILD_ATTEMPT_V1")
             }
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::MissingCompilerFfiEnvelope => {
                 formatter.write_str("kernel-ir-worker-v2 requires a complete compiler FFI envelope")
             }
             Self::MissingProductionBindings => formatter.write_str(
                 "production-v1 Worker V2 handoff lost its exact LLVM identity binding",
             ),
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::MissingScalarFrontendAuthority => formatter.write_str(
                 "scalar GEMM compiler-module handoff lost its embedded frontend authority",
             ),
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::MissingTiledFrontendAuthority => formatter.write_str(
                 "tiled GEMM compiler-module handoff lost its embedded frontend authority",
             ),
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::MissingTiledGemmLdsSlice1Bindings => formatter.write_str(
                 "LDS Slice 1 compiler-module handoff lost its source, IR, descriptor, target, or resource binding",
             ),
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::MissingRowSoftmaxBindings => formatter.write_str(
                 "row-softmax compiler-module handoff lost its frontend or exponential-boundary binding",
             ),
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::RowSoftmaxClosureMismatch => formatter.write_str(
                 "row-softmax compiler-module symbol closure is not exactly one kernel, one descriptor, and the OCML exp import",
             ),
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::MissingFlashAttentionBindings => formatter.write_str(
                 "FlashAttention compiler-module handoff lost its exact source, KIR, descriptor, target, or OCML-boundary binding",
             ),
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::FlashAttentionClosureMismatch => formatter.write_str(
                 "FlashAttention compiler-module symbol closure is not exactly one kernel, one descriptor, and the OCML exp import",
             ),
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::MissingMoeTop2Bindings => formatter.write_str(
                 "MoE compiler-module handoff lost an authenticated source/KIR/compiler/profile/provider/layout binding",
             ),
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::MoeTop2ClosureMismatch => formatter.write_str(
                 "MoE compiler-module closure is not exactly one kernel, five private helpers, one descriptor, and no providers",
             ),
@@ -1663,12 +1766,14 @@ impl fmt::Display for WorkerV2ProducerError {
                 formatter,
                 "compiler FFI export {symbol:?} is absent from the whole kernel IR module's device FFI definitions"
             ),
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::TargetCapabilities(error) => {
                 write!(
                     formatter,
                     "cannot derive exact target capabilities: {error}"
                 )
             }
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::UnsupportedWaveMode { target, width } => write!(
                 formatter,
                 "compiler module requires {width:?}, which target {target} does not support"
@@ -1677,6 +1782,7 @@ impl fmt::Display for WorkerV2ProducerError {
                 formatter,
                 "compiler-module exact target bindings {module:?} do not match Worker V2 envelope target {envelope:?}"
             ),
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::ConflictingWorkgroupSize {
                 kernel,
                 declared,
@@ -1722,6 +1828,7 @@ impl fmt::Display for WorkerV2ProducerError {
                     "compiler-module handoff publication failed: {error}"
                 )
             }
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::ProtectedPublication(error) => write!(
                 formatter,
                 "protected compiler-module V2 handoff publication failed: {error}"
@@ -1737,13 +1844,15 @@ impl Error for WorkerV2ProducerError {
             Self::CompilerEnvelope(error) => Some(error),
             Self::CompilerDescriptor(error) => Some(error),
             Self::SymbolManifest(error) => Some(error),
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::TargetCapabilities(error) => Some(error),
             Self::Handoff(error) => Some(error),
             Self::Publication(error) => Some(error),
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::ProtectedPublication(error) => Some(error),
-            Self::MissingBuildAttempt
-            | Self::MissingCompilerFfiEnvelope
-            | Self::MissingProductionBindings
+            Self::MissingBuildAttempt => None,
+            #[cfg(feature = "qualification-oracles-test-only")]
+            Self::MissingCompilerFfiEnvelope
             | Self::MissingScalarFrontendAuthority
             | Self::MissingTiledFrontendAuthority
             | Self::MissingTiledGemmLdsSlice1Bindings
@@ -1753,16 +1862,17 @@ impl Error for WorkerV2ProducerError {
             | Self::FlashAttentionClosureMismatch
             | Self::MissingMoeTop2Bindings
             | Self::MoeTop2ClosureMismatch
+            | Self::UnsupportedWaveMode { .. }
+            | Self::ConflictingWorkgroupSize { .. } => None,
+            Self::MissingProductionBindings
             | Self::MissingExternalDeclaration(_)
             | Self::MissingCompilerDefinition(_)
-            | Self::UnsupportedWaveMode { .. }
-            | Self::TargetBindingMismatch { .. }
-            | Self::ConflictingWorkgroupSize { .. } => None,
+            | Self::TargetBindingMismatch { .. } => None,
         }
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod tests {
     use super::*;
     use crate::collected_moe_top2_v1::exact_frontend_receipt_for_test as exact_moe_frontend_receipt_for_test;

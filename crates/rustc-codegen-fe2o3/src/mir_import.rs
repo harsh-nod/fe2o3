@@ -6974,6 +6974,7 @@ fn imported_flow(input: Wrapper<u32>) -> Wrapper<u64> {
     }
 
     #[test]
+    #[cfg(feature = "qualification-oracles-test-only")]
     fn portable_semantic_digest_v2_retains_compiler_only_terminal_identity() {
         let mut module = portable_semantic_module();
         let MirTerminatorKind::Call { callee, .. } = &mut module.functions[0].blocks[0]

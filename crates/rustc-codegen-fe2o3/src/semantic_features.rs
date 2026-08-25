@@ -17,14 +17,18 @@ use rustc_middle::ty::TyCtxt;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SessionRecognizedSemanticItem {
     TrustedDevice(TrustedDeviceItem),
+    #[cfg(feature = "qualification-oracles-test-only")]
     FlashAttentionCompilerIntrinsic(
         crate::collected_flash_attention_v1::FlashAttentionCompilerIntrinsicV1,
     ),
+    #[cfg(feature = "qualification-oracles-test-only")]
     MoeTop2CompilerIntrinsic(crate::collected_moe_top2_v1::MoeTop2CompilerIntrinsicV1),
+    #[cfg(feature = "qualification-oracles-test-only")]
     WorkgroupSyncCompilerIntrinsic(WorkgroupSyncCompilerIntrinsicV1),
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) enum WorkgroupSyncCompilerIntrinsicV1 {
     ThreadIdxX,
     ThreadIdxY,
@@ -41,6 +45,7 @@ pub(crate) enum WorkgroupSyncCompilerIntrinsicV1 {
     AtomicXadd,
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 impl WorkgroupSyncCompilerIntrinsicV1 {
     pub(crate) const fn canonical_path(self) -> &'static str {
         match self {
@@ -71,8 +76,11 @@ impl SessionRecognizedSemanticItem {
     pub(crate) fn canonical_path(self) -> &'static str {
         match self {
             Self::TrustedDevice(item) => item.canonical_path(),
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::FlashAttentionCompilerIntrinsic(item) => item.canonical_path(),
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::MoeTop2CompilerIntrinsic(item) => item.canonical_path(),
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::WorkgroupSyncCompilerIntrinsic(item) => item.canonical_path(),
         }
     }
@@ -80,6 +88,7 @@ impl SessionRecognizedSemanticItem {
     pub(crate) const fn trusted_device_item(self) -> Option<TrustedDeviceItem> {
         match self {
             Self::TrustedDevice(item) => Some(item),
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::FlashAttentionCompilerIntrinsic(_)
             | Self::MoeTop2CompilerIntrinsic(_)
             | Self::WorkgroupSyncCompilerIntrinsic(_) => None,
@@ -93,9 +102,11 @@ impl SessionRecognizedSemanticItem {
 }
 
 pub(crate) fn classify(tcx: TyCtxt<'_>, def_id: DefId) -> Option<SessionRecognizedSemanticItem> {
-    trusted_device_items::classify(tcx, def_id)
-        .map(SessionRecognizedSemanticItem::TrustedDevice)
-        .or_else(|| {
+    let trusted = trusted_device_items::classify(tcx, def_id)
+        .map(SessionRecognizedSemanticItem::TrustedDevice);
+    #[cfg(feature = "qualification-oracles-test-only")]
+    {
+        return trusted.or_else(|| {
             crate::collected_flash_attention_v1::classify_exact_flash_attention_compiler_intrinsic(
                 tcx, def_id,
             )
@@ -110,7 +121,10 @@ pub(crate) fn classify(tcx: TyCtxt<'_>, def_id: DefId) -> Option<SessionRecogniz
                 tcx, def_id,
             )
             .map(SessionRecognizedSemanticItem::WorkgroupSyncCompilerIntrinsic)
-        })
+        });
+    }
+    #[cfg(not(feature = "qualification-oracles-test-only"))]
+    trusted
 }
 
 #[cfg(test)]
@@ -137,6 +151,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "qualification-oracles-test-only")]
     fn compiler_only_terminals_do_not_claim_device_lowering_authority() {
         let compiler_only = [
             (

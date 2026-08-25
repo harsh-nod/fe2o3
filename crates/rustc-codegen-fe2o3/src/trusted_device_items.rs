@@ -82,7 +82,7 @@ const REVIEWED_GENERAL_GEMM_DISJOINT_SLICE_DEPENDENCY_V1: [u8; 32] = [
     0xdb, 0xbb, 0xdd, 0x37, 0x27, 0x0f, 0xd9, 0x4f, 0xad, 0x10, 0xc5, 0xe3, 0xdf, 0xe6, 0x04, 0x72,
 ];
 
-#[cfg(test)]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn reviewed_general_gemm_provider_semantics_identity_v1() -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"FE2O3/GENERAL-GEMM-PROVIDER-SEMANTICS/V1\0");
@@ -94,6 +94,7 @@ pub(crate) fn reviewed_general_gemm_provider_semantics_identity_v1() -> [u8; 32]
 }
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
     b"FE2O3/PROVIDER-SEMANTIC-DEFINITION-TRANSCRIPT/V1\0";
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const PINNED_CORE_SEMANTIC_TERMINAL_TRANSCRIPT_DOMAIN_V1: &[u8] =
     b"FE2O3/PINNED-CORE-SEMANTIC-TERMINAL-TRANSCRIPT/V1\0";
 const STRUCTURAL_LOCAL_DEFINITION_COMPONENT_DOMAIN_V1: &[u8] =
@@ -121,6 +122,7 @@ static MATRIX_PROVIDER_SOURCE_CLOSURE_V3: OnceLock<Result<[u8; 32], String>> = O
 static GENERAL_GEMM_PROVIDER_SOURCE_TREE_V1: OnceLock<Result<[u8; 32], String>> = OnceLock::new();
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) struct ReviewedMatrixProviderObservationV2 {
     pub(crate) crate_name: String,
     pub(crate) stable_crate_id: u64,
@@ -130,6 +132,7 @@ pub(crate) struct ReviewedMatrixProviderObservationV2 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) struct ReviewedRowSoftmaxProviderDefinitionV1 {
     pub(crate) crate_name: String,
     pub(crate) stable_crate_id: u64,
@@ -1497,6 +1500,7 @@ pub(crate) fn classify(tcx: TyCtxt<'_>, def_id: DefId) -> Option<TrustedDeviceIt
     classify_half_operation(tcx, def_id).map(TrustedDeviceItem::HalfOperation)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn rejected_provider_marker(tcx: TyCtxt<'_>, def_id: DefId) -> Option<&'static str> {
     rejected_provider(tcx, def_id).map(|rejection| rejection.marker)
 }
@@ -2091,6 +2095,7 @@ fn validate_reviewed_general_gemm_dependency_identity_v1(
     Ok(())
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn reviewed_matrix_provider_observation(
     tcx: TyCtxt<'_>,
     provider_definition: DefId,
@@ -2110,6 +2115,7 @@ pub(crate) fn reviewed_matrix_provider_observation(
     })
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn reviewed_row_softmax_provider_definition(
     tcx: TyCtxt<'_>,
     provider_definition: DefId,
@@ -2268,6 +2274,7 @@ pub(crate) fn structural_local_definition_component_v1(
     Ok(hasher.finalize().into())
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn pinned_core_semantic_terminal_identity_v1(
     provider: &CompilerProviderObservationV1,
     canonical_role: &str,
@@ -2464,10 +2471,12 @@ fn hash_source_identity_field(hasher: &mut Sha256, bytes: &[u8]) {
     hasher.update(bytes);
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn reviewed_matrix_source_identity(tcx: TyCtxt<'_>, def_id: DefId) -> Result<[u8; 32], String> {
     reviewed_provider_source_identity(tcx, def_id, MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn reviewed_provider_source_identity(
     tcx: TyCtxt<'_>,
     def_id: DefId,
@@ -2481,6 +2490,7 @@ fn reviewed_provider_source_identity(
     )
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn reviewed_provider_source_identity_at_root(
     tcx: TyCtxt<'_>,
     def_id: DefId,

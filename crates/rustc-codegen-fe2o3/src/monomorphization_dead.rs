@@ -123,6 +123,7 @@ impl CompilerDeadBranchObservationV1 {
         })
     }
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn validate_against<'tcx>(
         &self,
         tcx: TyCtxt<'tcx>,
@@ -142,10 +143,12 @@ impl CompilerDeadBranchObservationV1 {
         !self.excluded_blocks.contains(&block)
     }
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn selected_successor(&self, block: usize) -> Option<usize> {
         self.selected_successors.get(&block).copied()
     }
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn imports_block(&self, block: usize) -> bool {
         self.policy_reachable_blocks.contains(&block)
     }

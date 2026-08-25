@@ -279,7 +279,11 @@ assert_equals \
   "$(step_command rustc-codegen-lib-tests)" \
   'generic backend library test command changed'
 assert_equals \
-  "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test g2_layout" \
+  "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --lib qualification_selection::tests" \
+  "$(step_command rustc-codegen-qualification-route-tests)" \
+  'generic backend qualification route test command changed'
+assert_equals \
+  "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --test g2_layout" \
   "$(step_command rustc-codegen-test-g2_layout)" \
   'generic backend integration tests are not target-isolated'
 assert_all_codegen_targets_once
@@ -298,7 +302,7 @@ for backend_command in "${STEP_COMMANDS[@]}"; do
     exit 1
   fi
 done
-codegen_integration_prefix="env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test "
+codegen_integration_prefix="env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --test "
 for index in "${!STEP_NAMES[@]}"; do
   if [[ "${STEP_NAMES[index]}" == rustc-codegen-test-* ]] &&
     [[ "${STEP_COMMANDS[index]}" != "${codegen_integration_prefix}"* ]]; then
@@ -321,7 +325,11 @@ assert_equals \
   "$(step_command rustc-codegen-lib-tests)" \
   'full workspace backend library test command changed'
 assert_equals \
-  "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test g2_layout" \
+  "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --lib qualification_selection::tests" \
+  "$(step_command rustc-codegen-qualification-route-tests)" \
+  'full workspace backend qualification route test command changed'
+assert_equals \
+  "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --test g2_layout" \
   "$(step_command rustc-codegen-test-g2_layout)" \
   'full workspace backend integration tests are not target-isolated'
 assert_all_codegen_targets_once
@@ -335,7 +343,7 @@ assert_equals \
   "$(step_command rustc-codegen-shard-policy)" \
   'codegen shard did not validate the checked-in assignment'
 assert_equals \
-  "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test collected_executable_scalar_control_flow_v2" \
+  "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --test collected_executable_scalar_control_flow_v2" \
   "$(step_command rustc-codegen-test-collected_executable_scalar_control_flow_v2)" \
   'codegen shard did not keep its target isolated'
 assert_step_count rustc-codegen-lib-tests 0 \

@@ -9,6 +9,7 @@ use std::os::fd::RawFd;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::Path;
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_closure_capability::{
     RUSTC_INVOCATION_CHILD_FD_V1, RustcInvocationCapabilityV1,
@@ -34,6 +35,7 @@ pub(crate) struct AdmittedProtectedRustcInvocationV1 {
 
 impl AdmittedProtectedRustcInvocationV1 {
     /// Revalidates the retained image and returns its complete canonical closure.
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) fn compiler_closure(&self) -> Result<CompilerClosureV2, String> {
         self.capability.revalidate()?;
         Ok(*self.capability.descriptor().compiler_closure())
@@ -101,7 +103,9 @@ pub(crate) enum ProtectedRustcInvocationErrorV1 {
         backend_marker_present: bool,
         qualification_backend_marker_present: bool,
     },
+    #[cfg(feature = "qualification-oracles-test-only")]
     QualificationObservationsMissing,
+    #[cfg(feature = "qualification-oracles-test-only")]
     QualificationCodegenBackendObservationMismatch,
     Observation(String),
     ArgumentsMismatch,
@@ -141,9 +145,11 @@ impl fmt::Display for ProtectedRustcInvocationErrorV1 {
                 formatter,
                 "rustc invocation signals are forbidden on this pipeline route (descriptor: {descriptor_present}, compiler-closure marker: {compiler_closure_marker_present}, protected-backend marker: {backend_marker_present}, qualification-backend marker: {qualification_backend_marker_present})"
             ),
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::QualificationObservationsMissing => formatter.write_str(
                 "qualification-observed rustc requires paired compiler-closure and qualification-backend observations",
             ),
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::QualificationCodegenBackendObservationMismatch => formatter.write_str(
                 "qualification backend observation differs from the retained loaded backend image",
             ),
@@ -213,6 +219,7 @@ pub(crate) fn admit_for_codegen(
     let backend_marker_present = env::var_os(CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2).is_some();
     let qualification_backend_marker_present =
         env::var_os(QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1).is_some();
+    #[cfg(feature = "qualification-oracles-test-only")]
     let qualification_observations_authenticated = if route
         .rustc_invocation_policy(explicit_unprotected_qualification)
         == RustcInvocationPolicy::QualificationObserved
@@ -223,6 +230,8 @@ pub(crate) fn admit_for_codegen(
     } else {
         false
     };
+    #[cfg(not(feature = "qualification-oracles-test-only"))]
+    let qualification_observations_authenticated = false;
     admit_for_codegen_at(
         route,
         explicit_unprotected_qualification,
@@ -238,27 +247,29 @@ fn admit_for_codegen_at(
     route: CompilationRoute,
     explicit_unprotected_qualification: bool,
     child_fd: RawFd,
-    compiler_closure_marker_present: bool,
-    backend_marker_present: bool,
+    _compiler_closure_marker_present: bool,
+    _backend_marker_present: bool,
     qualification_backend_marker_present: bool,
-    qualification_observations_authenticated: bool,
+    _qualification_observations_authenticated: bool,
 ) -> Result<Option<AdmittedProtectedRustcInvocationV1>, ProtectedRustcInvocationErrorV1> {
     match route.rustc_invocation_policy(explicit_unprotected_qualification) {
+        #[cfg(feature = "qualification-oracles-test-only")]
         RustcInvocationPolicy::Unmanaged => {
             reject_unexpected_rustc_signals_at(
                 child_fd,
-                compiler_closure_marker_present,
-                backend_marker_present,
+                _compiler_closure_marker_present,
+                _backend_marker_present,
                 qualification_backend_marker_present,
             )?;
             return Ok(None);
         }
+        #[cfg(feature = "qualification-oracles-test-only")]
         RustcInvocationPolicy::QualificationObserved => {
-            reject_unexpected_rustc_signals_at(child_fd, false, backend_marker_present, false)?;
-            if !compiler_closure_marker_present || !qualification_backend_marker_present {
+            reject_unexpected_rustc_signals_at(child_fd, false, _backend_marker_present, false)?;
+            if !_compiler_closure_marker_present || !qualification_backend_marker_present {
                 return Err(ProtectedRustcInvocationErrorV1::QualificationObservationsMissing);
             }
-            if !qualification_observations_authenticated {
+            if !_qualification_observations_authenticated {
                 return Err(
                     ProtectedRustcInvocationErrorV1::QualificationCodegenBackendObservationMismatch,
                 );
@@ -284,6 +295,7 @@ fn admit_for_codegen_at(
     validate_capability(capability, observation).map(Some)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn reject_unexpected_rustc_signals_at(
     child_fd: RawFd,
     compiler_closure_marker_present: bool,
@@ -330,6 +342,7 @@ fn explicit_unprotected_qualification_enabled() -> bool {
             == Some(OsStr::new("1"))
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn authenticate_qualification_observations() -> Result<bool, ProtectedRustcInvocationErrorV1> {
     let _compiler_closure = sha256_environment(EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1)?;
     let backend_observation = sha256_environment(QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1)?;
@@ -346,6 +359,7 @@ fn authenticate_qualification_observations() -> Result<bool, ProtectedRustcInvoc
     Ok(true)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn sha256_environment(name: &'static str) -> Result<[u8; 32], ProtectedRustcInvocationErrorV1> {
     let encoded = env::var(name)
         .map_err(|_| ProtectedRustcInvocationErrorV1::InvalidClosedObservation { name })?;

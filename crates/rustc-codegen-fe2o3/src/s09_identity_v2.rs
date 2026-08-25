@@ -88,6 +88,7 @@ impl fmt::Display for IdentityCodecErrorV2 {
 
 impl Error for IdentityCodecErrorV2 {}
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) struct SemanticIdentityClaimFieldsV2<'a> {
     pub(crate) crate_name: &'a str,
     pub(crate) module: &'a str,
@@ -132,6 +133,7 @@ pub struct SemanticIdentityClaimV2 {
 }
 
 impl SemanticIdentityClaimV2 {
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) fn from_fields(
         fields: SemanticIdentityClaimFieldsV2<'_>,
     ) -> Result<Self, IdentityCodecErrorV2> {
@@ -274,6 +276,7 @@ impl SemanticIdentityClaimV2 {
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) struct BuildIdentityClaimFieldsV2<'a> {
     pub(crate) semantic_claim_sha256: [u8; 32],
     pub(crate) cargo_metadata_sha256: [u8; 32],
@@ -322,6 +325,7 @@ pub struct BuildIdentityClaimV2 {
 }
 
 impl BuildIdentityClaimV2 {
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) fn from_fields(
         fields: BuildIdentityClaimFieldsV2<'_>,
     ) -> Result<Self, IdentityCodecErrorV2> {
@@ -529,6 +533,7 @@ pub struct DecodedIdentityHandoffV2 {
 }
 
 impl DecodedIdentityHandoffV2 {
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) fn from_claims(
         semantic_claim: SemanticIdentityClaimV2,
         build_claim: BuildIdentityClaimV2,
@@ -768,6 +773,7 @@ pub fn decode_hsaco_identity_claims_v2(
     Ok(decoded)
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn encode_fields(fields: &[(&str, String)]) -> Result<Vec<u8>, IdentityCodecErrorV2> {
     let mut bytes = Vec::new();
     for (name, value) in fields {
@@ -1035,6 +1041,7 @@ fn usize_from_u64(value: u64) -> Result<usize, IdentityCodecErrorV2> {
     usize::try_from(value).map_err(|_| IdentityCodecErrorV2::new("ELF offset exceeds usize"))
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut encoded = String::with_capacity(bytes.len() * 2);

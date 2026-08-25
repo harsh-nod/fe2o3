@@ -314,8 +314,9 @@ target lowering, and host execution into explicit ownership boundaries:
   `PlironShadow` or `PlironV1` request to one configured backend and never
   falls back to a second route. Shadow is inspect-only and `PlironV1` is the
   only candidate-producing compiler API route. The production rustc backend
-  has no selector. Temporary non-publishing migration oracles are isolated
-  behind `FE2O3_QUALIFICATION_ORACLE_V1` in the integration crate.
+  has no selector. Temporary non-publishing migration oracles are compiled
+  only by the `qualification-oracles-test-only` backend feature and selected
+  by `FE2O3_QUALIFICATION_ORACLE_V1` in isolated integration tests.
 - General kernel checks: `fe2o3-kernel-analysis` owns the fixed pre-lowering
   Kernel IR sequence for structure, control flow, bounds obligations, race
   freedom, barrier convergence, and workgroup-memory initialization/reuse.
@@ -444,7 +445,8 @@ Safe ownership of resources used by asynchronous copies is documented in
   falls back to a workload-specific implementation. Historical emitters and
   exact workload paths remain only as migration evidence until equivalent
   production coverage permits their deletion.
-- Setting `FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-v1` exercises the exact `fill` or
+- A backend built with `qualification-oracles-test-only` and
+  `FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-v1` exercises the exact `fill` or
   three-slice `vecadd` kernel through imported MIR, canonical target-neutral
   kernel IR, verification, exact-shape legalization, G1 AMDGPU lowering, and
   the qualification artifact transaction. The oracle,
@@ -1030,13 +1032,16 @@ To build or run one package directly:
 ```bash
 cargo run --locked -p cargo-fe2o3 -- build -p fe2o3-vecadd
 cargo run --locked -p cargo-fe2o3 -- run -p fe2o3-vecadd
-FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-v1 \
-  cargo run --locked -p cargo-fe2o3 -- run -p fe2o3-vecadd
+cargo test --locked -p rustc-codegen-fe2o3 \
+  --features qualification-oracles-test-only \
+  --test kernel_ir_codegen opt_in_vecadd_publishes_exact_g1_without_gpu \
+  -- --ignored --exact
 ```
 
 The first two commands enter the sole production route. The third is an
-explicit non-production qualification run. `FE2O3_CODEGEN_PIPELINE` is no
-longer accepted.
+isolated non-production qualification test. `FE2O3_CODEGEN_PIPELINE` is no
+longer accepted, and a production backend rejects
+`FE2O3_QUALIFICATION_ORACLE_V1`.
 
 The smoke command reads the same manifest and runs every GPU-selected example:
 

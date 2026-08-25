@@ -10,8 +10,10 @@ pub(crate) enum RustcInvocationPolicy {
     ProtectedV3,
     /// Qualification-only compilation retains authenticated backend
     /// observations but grants no publication authority.
+    #[cfg(feature = "qualification-oracles-test-only")]
     QualificationObserved,
     /// Ambient rustc invocation with no fe2o3 authority or observations.
+    #[cfg(feature = "qualification-oracles-test-only")]
     Unmanaged,
 }
 
@@ -20,6 +22,7 @@ pub(crate) enum RustcInvocationPolicy {
 /// These are deliberately not compilation routes. Production has no enum
 /// variant or selector that can be confused with one of these oracles.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) enum QualificationOracle {
     SimulationV1,
     KernelIrV1,
@@ -36,6 +39,7 @@ pub(crate) enum QualificationOracle {
     CollectedScopedAtomicV1,
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 impl QualificationOracle {
     pub(crate) const ALL: [Self; 13] = [
         Self::SimulationV1,
@@ -131,10 +135,12 @@ impl QualificationOracle {
 /// it into qualification collection keeps compatibility oracles out of the
 /// production transaction by construction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) struct SelectedQualificationOracle {
     oracle: QualificationOracle,
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 impl SelectedQualificationOracle {
     pub(crate) const fn oracle(self) -> QualificationOracle {
         self.oracle
@@ -156,6 +162,7 @@ impl SelectedQualificationOracle {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CompilationRoute {
     Production,
+    #[cfg(feature = "qualification-oracles-test-only")]
     Qualification(SelectedQualificationOracle),
 }
 
@@ -164,6 +171,7 @@ impl CompilationRoute {
         matches!(self, Self::Production)
     }
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) const fn qualification(self) -> Option<SelectedQualificationOracle> {
         match self {
             Self::Production => None,
@@ -171,6 +179,7 @@ impl CompilationRoute {
         }
     }
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) const fn qualification_oracle(self) -> Option<QualificationOracle> {
         match self.qualification() {
             Some(qualification) => Some(qualification.oracle()),
@@ -180,29 +189,30 @@ impl CompilationRoute {
 
     pub(crate) const fn rustc_invocation_policy(
         self,
-        explicit_unprotected_qualification: bool,
+        _explicit_unprotected_qualification: bool,
     ) -> RustcInvocationPolicy {
         match self {
             Self::Production => RustcInvocationPolicy::ProtectedV3,
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::Qualification(qualification) => qualification
                 .oracle()
-                .rustc_invocation_policy(explicit_unprotected_qualification),
+                .rustc_invocation_policy(_explicit_unprotected_qualification),
         }
     }
 
-    pub(crate) fn device_route(
+    pub(crate) fn validate_device_transaction(
         self,
         production_transaction_complete: bool,
-    ) -> Result<DeviceCompilationRoute, String> {
+    ) -> Result<(), String> {
         match (self, production_transaction_complete) {
-            (Self::Production, true) => Ok(DeviceCompilationRoute::ProductionComplete),
+            (Self::Production, true) => Ok(()),
             (Self::Production, false) => Err(
                 "production compilation did not complete its device transaction; qualification fallback is forbidden"
                     .to_owned(),
             ),
-            (Self::Qualification(qualification), false) => {
-                Ok(DeviceCompilationRoute::QualificationOracle(qualification))
-            }
+            #[cfg(feature = "qualification-oracles-test-only")]
+            (Self::Qualification(_), false) => Ok(()),
+            #[cfg(feature = "qualification-oracles-test-only")]
             (Self::Qualification(qualification), true) => Err(format!(
                 "qualification oracle `{}` cannot complete or publish as the production device transaction",
                 qualification.oracle().oracle_name(),
@@ -211,16 +221,11 @@ impl CompilationRoute {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DeviceCompilationRoute {
-    ProductionComplete,
-    QualificationOracle(SelectedQualificationOracle),
-}
-
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) enum QualificationSelection {
     #[default]
     NoOracle,
+    #[cfg(feature = "qualification-oracles-test-only")]
     ExplicitQualification(QualificationOracle),
     Invalid(String),
 }
@@ -247,6 +252,7 @@ impl QualificationSelection {
         Self::from_value(qualification_oracle)
     }
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn from_value(value: Option<&OsStr>) -> Self {
         let Some(value) = value else {
             return Self::NoOracle;
@@ -268,9 +274,21 @@ impl QualificationSelection {
         ))
     }
 
+    #[cfg(not(feature = "qualification-oracles-test-only"))]
+    pub(crate) fn from_value(value: Option<&OsStr>) -> Self {
+        match value {
+            None => Self::NoOracle,
+            Some(value) => Self::Invalid(format!(
+                "{} is unavailable in the production backend; temporary qualification oracles require backend feature `qualification-oracles-test-only`; found {value:?}",
+                crate::QUALIFICATION_ORACLE_ENV,
+            )),
+        }
+    }
+
     pub(crate) fn resolve(&self) -> Result<CompilationRoute, amdgpu_llvm::EmitError> {
         match self {
             Self::NoOracle => Ok(CompilationRoute::Production),
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::ExplicitQualification(oracle) => Ok(CompilationRoute::Qualification(
                 SelectedQualificationOracle { oracle: *oracle },
             )),
@@ -283,13 +301,13 @@ impl QualificationSelection {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "qualification-oracles-test-only")]
     use std::collections::BTreeSet;
     use std::ffi::OsStr;
 
-    use super::{
-        CompilationRoute, DeviceCompilationRoute, QualificationOracle, QualificationSelection,
-        RustcInvocationPolicy,
-    };
+    #[cfg(feature = "qualification-oracles-test-only")]
+    use super::QualificationOracle;
+    use super::{CompilationRoute, QualificationSelection, RustcInvocationPolicy};
 
     #[test]
     fn production_has_no_selector_or_alternate_variant() {
@@ -298,15 +316,18 @@ mod tests {
             .expect("unset selection must resolve");
         assert_eq!(route, CompilationRoute::Production);
         assert!(route.is_production());
-        assert_eq!(route.qualification(), None);
-        assert_eq!(route.qualification_oracle(), None);
+        #[cfg(feature = "qualification-oracles-test-only")]
+        {
+            assert_eq!(route.qualification(), None);
+            assert_eq!(route.qualification_oracle(), None);
+        }
 
         let QualificationSelection::Invalid(reason) =
             QualificationSelection::from_value(Some(OsStr::new("production-v1")))
         else {
             panic!("production must not have an explicit selector")
         };
-        assert!(reason.contains("must be unset for production compilation"));
+        assert!(reason.contains("FE2O3_QUALIFICATION_ORACLE_V1"));
     }
 
     #[test]
@@ -324,6 +345,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "qualification-oracles-test-only")]
     fn qualification_oracle_names_are_unique_and_round_trip() {
         let names = QualificationOracle::ALL
             .into_iter()
@@ -343,21 +365,19 @@ mod tests {
         let route = QualificationSelection::default()
             .resolve()
             .expect("default must resolve");
-        assert_eq!(
-            route
-                .device_route(true)
-                .expect("completed production transaction"),
-            DeviceCompilationRoute::ProductionComplete,
-        );
+        route
+            .validate_device_transaction(true)
+            .expect("completed production transaction");
         assert!(
             route
-                .device_route(false)
+                .validate_device_transaction(false)
                 .expect_err("production must never fall back")
                 .contains("qualification fallback is forbidden")
         );
     }
 
     #[test]
+    #[cfg(feature = "qualification-oracles-test-only")]
     fn every_qualification_oracle_is_explicit_and_non_publishing() {
         for oracle in QualificationOracle::ALL {
             let route = QualificationSelection::from_value(Some(OsStr::new(oracle.oracle_name())))
@@ -365,12 +385,10 @@ mod tests {
                 .expect("explicit qualification oracle must resolve");
             assert!(!route.is_production());
             assert_eq!(route.qualification_oracle(), Some(oracle));
-            let DeviceCompilationRoute::QualificationOracle(qualification) = route
-                .device_route(false)
-                .expect("explicit qualification route")
-            else {
-                panic!("qualification oracle became production")
-            };
+            route
+                .validate_device_transaction(false)
+                .expect("explicit qualification route");
+            let qualification = route.qualification().expect("qualification token");
             assert_eq!(qualification.oracle(), oracle);
             assert_eq!(
                 qualification.requires_extended_collector_edges(),
@@ -382,7 +400,7 @@ mod tests {
             );
             assert!(
                 route
-                    .device_route(true)
+                    .validate_device_transaction(true)
                     .expect_err("qualification cannot publish as production")
                     .contains("cannot complete or publish as the production")
             );
@@ -390,11 +408,16 @@ mod tests {
     }
 
     #[test]
-    fn invocation_authority_is_independent_of_route_role() {
+    fn production_invocation_requires_protected_v3() {
         assert_eq!(
             CompilationRoute::Production.rustc_invocation_policy(true),
             RustcInvocationPolicy::ProtectedV3,
         );
+    }
+
+    #[test]
+    #[cfg(feature = "qualification-oracles-test-only")]
+    fn invocation_authority_is_independent_of_route_role() {
         for oracle in QualificationOracle::ALL {
             let route = QualificationSelection::ExplicitQualification(oracle)
                 .resolve()

@@ -9,6 +9,7 @@ description = "Compiler backend support code for fe2o3."
 build = "build.rs"
 
 [features]
+qualification-oracles-test-only = []
 row-softmax-metadata-mutation-test-only = []
 
 [dependencies]

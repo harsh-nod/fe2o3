@@ -99,7 +99,8 @@ driver route or persistent-service model.
   optimizes, emits relocatable ELF through pinned upstream LLVM target-machine
   APIs, and links HSACO through in-process LLD library APIs. It does not use
   COMGR or a command-line compiler or linker.
-- `FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-v1` selects the first integrated G1 qualification oracle:
+- In a backend built with `qualification-oracles-test-only`,
+  `FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-v1` selects the first integrated G1 qualification oracle:
   imported device MIR is translated to canonical kernel IR, verified, strictly
   legalized for the exact 1D `fill` shape, lowered by `fe2o3-amdgcn-model`
   through the `dialect-amdgcn` compatibility facade, and published through the

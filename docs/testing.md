@@ -118,7 +118,7 @@ landed through `1281f97487adfd4af32687b7705ba46e5c11152b`:
 ```text
 python3 scripts/test-bounded-moe-docs.py
 cargo test --locked --manifest-path examples/moe_expert_v1/Cargo.toml
-cargo test --locked -p rustc-codegen-fe2o3 --test moe_top2_v1
+cargo test --locked -p rustc-codegen-fe2o3 --features qualification-oracles-test-only --test moe_top2_v1
 cargo test --locked -p fe2o3-verifier --test moe_expert_compact_plan_v1
 VERUS=/absolute/path/to/pinned/verus \
   ./scripts/test-moe-expert-compact-plan-verus.sh
@@ -312,7 +312,7 @@ cargo test --locked -p fe2o3-host --all-targets --all-features
 cargo test --locked -p fe2o3-host --test generated_spi_ui
 cargo test --locked -p fe2o3-host generated_alpha_zeta_cov6::tests
 cargo test --locked -p rustc-codegen-fe2o3 --lib
-cargo test --locked -p rustc-codegen-fe2o3 --test general_two_kernel_import
+cargo test --locked -p rustc-codegen-fe2o3 --features qualification-oracles-test-only --test general_two_kernel_import
 cargo test --locked -p fe2o3-hsa-runtime --test gfx942_two_kernel_hardware
 cargo test --locked -p fe2o3-hsa-runtime --features hardware-test-hooks \
   --test gfx942_two_kernel_hardware --no-run
@@ -617,7 +617,8 @@ scripts/ci-local.sh hardware-smoke
 
 The smoke suite builds and runs all supported examples. Each example copies its
 result back to the host and checks it against a CPU-computed expected value. It
-also runs both `fe2o3-fill` and `fe2o3-vecadd` through
+also runs both `fe2o3-fill` and `fe2o3-vecadd` through a backend built with
+`qualification-oracles-test-only` and selected by
 `FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-v1`, so the integrated verified-IR paths are
 exercised as explicit qualification routes independently of the sole
 production transaction. Generated HSACO inspection uses a strict
