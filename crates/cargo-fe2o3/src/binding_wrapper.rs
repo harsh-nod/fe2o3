@@ -79,7 +79,8 @@ use crate::pinned_codegen_backend::PinnedCodegenBackend;
 use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
 use crate::project::PinnedDirectory;
 use crate::protected_compiler_handoff_v3::{
-    ParentRustcInvocationCustody, ProtectedCompilerModuleHandoffIntake,
+    ParentRustcInvocationCustody, ProductionCompilerModuleHandoffIntake,
+    consume_qualification_compiler_module_handoff_v2,
 };
 use crate::worker_v2::{
     GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV, GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV,
@@ -3753,9 +3754,9 @@ fn complete_fresh_production_worker_v3(
                 .to_owned(),
         ));
     }
-    let intake = ProtectedCompilerModuleHandoffIntake::protected_v3();
+    let intake = ProductionCompilerModuleHandoffIntake::new();
     let (consumed, preflight) = intake
-        .consume_v3_after_preflight(
+        .consume_after_preflight(
             &managed.output_dir,
             &managed.producer,
             managed.attempt,
@@ -3917,14 +3918,17 @@ fn complete_fresh_protected_worker_v2(
         ));
     }
 
-    let intake = ProtectedCompilerModuleHandoffIntake::protected_v2(compiler_closure);
-    let consumed = intake
-        .consume_v2(&managed.output_dir, &managed.producer, managed.attempt)
-        .map_err(|error| {
-            CompletionFailure::Uncommitted(format!(
-                "protected compiler-module V2 handoff consumption failed: {error}"
-            ))
-        })?;
+    let consumed = consume_qualification_compiler_module_handoff_v2(
+        &managed.output_dir,
+        &managed.producer,
+        managed.attempt,
+        compiler_closure,
+    )
+    .map_err(|error| {
+        CompletionFailure::Uncommitted(format!(
+            "protected compiler-module V2 handoff consumption failed: {error}"
+        ))
+    })?;
     let evidence = worker_v2.execute_protected(consumed).map_err(|error| {
         CompletionFailure::Uncommitted(format!(
             "closure-bound reproducible Worker V2 execution failed: {error}"

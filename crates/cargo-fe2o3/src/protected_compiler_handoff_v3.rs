@@ -178,62 +178,34 @@ impl ParentConsumedCompilerModuleHandoffV3 {
     }
 }
 
-/// Explicit selection of the protected compiler-module transport schema.
+/// Production-only intake for the current protected compiler-module wire.
 ///
-/// Production preselects `ProtectedV3`; legacy protected qualification routes remain on
-/// `ProtectedV2`. V3 derives the expected terminal identity from the exact durable receipt under
-/// the cooperative lock. Neither variant authenticates compiler authorship.
-pub(crate) enum ProtectedCompilerModuleHandoffIntake {
-    ProtectedV2 {
-        compiler_closure: Box<CompilerClosureV2>,
-    },
-    ProtectedV3,
-}
+/// It derives the expected terminal identity from the exact durable V3 receipt
+/// under the cooperative lock and authenticates no compiler authorship.
+pub(crate) struct ProductionCompilerModuleHandoffIntake;
 
-impl ProtectedCompilerModuleHandoffIntake {
-    pub(crate) fn protected_v2(compiler_closure: CompilerClosureV2) -> Self {
-        Self::ProtectedV2 {
-            compiler_closure: Box::new(compiler_closure),
-        }
-    }
-
-    pub(crate) const fn protected_v3() -> Self {
-        Self::ProtectedV3
-    }
-
-    pub(crate) fn consume_v2(
-        &self,
-        output_dir: &Path,
-        producer: &ProducerIdentity,
-        attempt: BuildAttempt,
-    ) -> Result<ConsumedCompilerModuleHandoffV2, ProtectedCompilerModuleHandoffIntakeError> {
-        let Self::ProtectedV2 { compiler_closure } = self else {
-            return Err(ProtectedCompilerModuleHandoffIntakeError::WrongSchema {
-                requested: "V2",
-                selected: "V3",
-            });
-        };
-        consume_compiler_module_handoff_v2(output_dir, producer, attempt, **compiler_closure)
-            .map_err(ProtectedCompilerModuleHandoffIntakeError::V2)
+impl ProductionCompilerModuleHandoffIntake {
+    pub(crate) const fn new() -> Self {
+        Self
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn consume_v3(
+    pub(crate) fn consume(
         &self,
         output_dir: &Path,
         producer: &ProducerIdentity,
         attempt: BuildAttempt,
         parent_custody: &ParentRustcInvocationCustody,
-    ) -> Result<ParentConsumedCompilerModuleHandoffV3, ProtectedCompilerModuleHandoffIntakeError>
+    ) -> Result<ParentConsumedCompilerModuleHandoffV3, ProductionCompilerModuleHandoffIntakeError>
     {
-        self.consume_v3_after_preflight(output_dir, producer, attempt, parent_custody, |_, _, _| {
+        self.consume_after_preflight(output_dir, producer, attempt, parent_custody, |_, _, _| {
             Ok(())
         })
         .map(|(consumed, ())| consumed)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn consume_v3_after_preflight<T>(
+    pub(crate) fn consume_after_preflight<T>(
         &self,
         output_dir: &Path,
         producer: &ProducerIdentity,
@@ -244,54 +216,50 @@ impl ProtectedCompilerModuleHandoffIntake {
             CompilerModuleHandoffReceiptV3,
             CompilerClosureV2,
         ) -> Result<T, ProtectedFirstBuildWorkerV3Error>,
-    ) -> Result<(ParentConsumedCompilerModuleHandoffV3, T), ProtectedCompilerModuleHandoffIntakeError>
-    {
-        let Self::ProtectedV3 = self else {
-            return Err(ProtectedCompilerModuleHandoffIntakeError::WrongSchema {
-                requested: "V3",
-                selected: "V2",
-            });
-        };
+    ) -> Result<
+        (ParentConsumedCompilerModuleHandoffV3, T),
+        ProductionCompilerModuleHandoffIntakeError,
+    > {
         parent_custody
             .revalidate()
-            .map_err(ProtectedCompilerModuleHandoffIntakeError::ParentCustody)?;
+            .map_err(ProductionCompilerModuleHandoffIntakeError::ParentCustody)?;
         let protected_custody = parent_custody
             .protected_v3()
-            .ok_or(ProtectedCompilerModuleHandoffIntakeError::UnprotectedParentCustody)?;
+            .ok_or(ProductionCompilerModuleHandoffIntakeError::UnprotectedParentCustody)?;
         let receipt = recover_compiler_module_handoff_receipt_v3(output_dir, producer, attempt)
-            .map_err(ProtectedCompilerModuleHandoffIntakeError::V3)?;
+            .map_err(ProductionCompilerModuleHandoffIntakeError::Transport)?;
         if receipt.attempt() != attempt || receipt.grants_compiler_authority() {
-            return Err(ProtectedCompilerModuleHandoffIntakeError::TransportBindingMismatch);
+            return Err(ProductionCompilerModuleHandoffIntakeError::TransportBindingMismatch);
         }
         let lease =
             acquire_compiler_module_handoff_currentness_lease_v3(output_dir, producer, receipt)
-                .map_err(ProtectedCompilerModuleHandoffIntakeError::V3)?;
+                .map_err(ProductionCompilerModuleHandoffIntakeError::Transport)?;
         if lease.receipt() != receipt {
-            return Err(ProtectedCompilerModuleHandoffIntakeError::TransportBindingMismatch);
+            return Err(ProductionCompilerModuleHandoffIntakeError::TransportBindingMismatch);
         }
         parent_custody
             .revalidate()
-            .map_err(ProtectedCompilerModuleHandoffIntakeError::ParentCustody)?;
+            .map_err(ProductionCompilerModuleHandoffIntakeError::ParentCustody)?;
         let token = lease
             .acquire_current_token()
-            .map_err(ProtectedCompilerModuleHandoffIntakeError::V3)?;
+            .map_err(ProductionCompilerModuleHandoffIntakeError::Transport)?;
         if token.handoff().capsule().invocation() != protected_custody.descriptor() {
-            return Err(ProtectedCompilerModuleHandoffIntakeError::InvocationMismatch);
+            return Err(ProductionCompilerModuleHandoffIntakeError::InvocationMismatch);
         }
         let compiler_closure = *protected_custody.descriptor().compiler_closure();
         let prepared = preflight(token.handoff(), receipt, compiler_closure)
-            .map_err(ProtectedCompilerModuleHandoffIntakeError::WorkerPreflight)?;
+            .map_err(ProductionCompilerModuleHandoffIntakeError::WorkerPreflight)?;
         parent_custody
             .revalidate()
-            .map_err(ProtectedCompilerModuleHandoffIntakeError::ParentCustody)?;
+            .map_err(ProductionCompilerModuleHandoffIntakeError::ParentCustody)?;
         let consumed = consume_compiler_module_handoff_with_currentness_v3(&lease, token)
-            .map_err(ProtectedCompilerModuleHandoffIntakeError::V3)?;
+            .map_err(ProductionCompilerModuleHandoffIntakeError::Transport)?;
         if consumed.attempt() != receipt.attempt()
             || consumed.slot() != receipt.slot()
             || consumed.transaction_identity() != receipt.transaction_identity()
             || consumed.handoff_identity() != receipt.handoff_identity()
         {
-            return Err(ProtectedCompilerModuleHandoffIntakeError::TransportBindingMismatch);
+            return Err(ProductionCompilerModuleHandoffIntakeError::TransportBindingMismatch);
         }
         debug_assert!(!consumed.grants_compiler_authority());
         let consumed = ParentConsumedCompilerModuleHandoffV3 {
@@ -303,34 +271,32 @@ impl ProtectedCompilerModuleHandoffIntake {
     }
 }
 
+/// Legacy protected V2 transport retained only for explicit qualification
+/// routes. It is not selectable from the production intake.
+pub(crate) fn consume_qualification_compiler_module_handoff_v2(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    compiler_closure: CompilerClosureV2,
+) -> Result<ConsumedCompilerModuleHandoffV2, CompilerModuleHandoffErrorV2> {
+    consume_compiler_module_handoff_v2(output_dir, producer, attempt, compiler_closure)
+}
+
 #[derive(Debug)]
-pub(crate) enum ProtectedCompilerModuleHandoffIntakeError {
-    WrongSchema {
-        requested: &'static str,
-        selected: &'static str,
-    },
+pub(crate) enum ProductionCompilerModuleHandoffIntakeError {
     ParentCustody(ParentProtectedRustcInvocationCustodyErrorV3),
-    V2(CompilerModuleHandoffErrorV2),
-    V3(CompilerModuleHandoffErrorV3),
+    Transport(CompilerModuleHandoffErrorV3),
     WorkerPreflight(ProtectedFirstBuildWorkerV3Error),
     TransportBindingMismatch,
     InvocationMismatch,
     UnprotectedParentCustody,
 }
 
-impl fmt::Display for ProtectedCompilerModuleHandoffIntakeError {
+impl fmt::Display for ProductionCompilerModuleHandoffIntakeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::WrongSchema {
-                requested,
-                selected,
-            } => write!(
-                formatter,
-                "protected compiler-module {requested} intake requested from selected {selected} schema",
-            ),
             Self::ParentCustody(error) => error.fmt(formatter),
-            Self::V2(error) => error.fmt(formatter),
-            Self::V3(error) => error.fmt(formatter),
+            Self::Transport(error) => error.fmt(formatter),
             Self::WorkerPreflight(error) => write!(formatter, "protected V3 worker preflight failed before handoff consumption: {error}"),
             Self::TransportBindingMismatch => formatter.write_str(
                 "consumed V3 compiler-module handoff changed its exact transaction binding",
@@ -345,15 +311,13 @@ impl fmt::Display for ProtectedCompilerModuleHandoffIntakeError {
     }
 }
 
-impl Error for ProtectedCompilerModuleHandoffIntakeError {
+impl Error for ProductionCompilerModuleHandoffIntakeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::ParentCustody(error) => Some(error),
-            Self::V2(error) => Some(error),
-            Self::V3(error) => Some(error),
+            Self::Transport(error) => Some(error),
             Self::WorkerPreflight(error) => Some(error),
-            Self::WrongSchema { .. }
-            | Self::TransportBindingMismatch
+            Self::TransportBindingMismatch
             | Self::InvocationMismatch
             | Self::UnprotectedParentCustody => None,
         }
@@ -391,8 +355,9 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        ParentRustcInvocationCustody, ProtectedCompilerModuleHandoffIntake,
-        ProtectedCompilerModuleHandoffIntakeError, ProtectedFirstBuildWorkerV3Error,
+        ParentRustcInvocationCustody, ProductionCompilerModuleHandoffIntake,
+        ProductionCompilerModuleHandoffIntakeError, ProtectedFirstBuildWorkerV3Error,
+        consume_qualification_compiler_module_handoff_v2,
     };
     use crate::inert_rustc_invocation_capture::{
         InertPreparedRustcInvocationCapture, InertRustcInvocationCaptureV2,
@@ -443,6 +408,21 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn production_intake_has_no_runtime_schema_selector() {
+        let source = include_str!("protected_compiler_handoff_v3.rs");
+        let production = source
+            .split("pub(crate) struct ProductionCompilerModuleHandoffIntake")
+            .nth(1)
+            .expect("production intake")
+            .split("pub(crate) fn consume_qualification_compiler_module_handoff_v2")
+            .next()
+            .expect("production intake boundary");
+        assert!(!production.contains("ProtectedV2"));
+        assert!(!production.contains("WrongSchema"));
+        assert!(production.contains("consume_after_preflight"));
     }
 
     fn compiler_closure(seed: u8) -> CompilerClosureV2 {
@@ -694,16 +674,16 @@ mod tests {
         let (custody, _) = protected_parent_custody(0x22);
         let handoff = outer(&custody, 0x23);
         publish_compiler_module_handoff_v3(&directory.0, &producer, attempt, &handoff).unwrap();
-        let intake = ProtectedCompilerModuleHandoffIntake::protected_v3();
+        let intake = ProductionCompilerModuleHandoffIntake::new();
 
         assert!(matches!(
-            intake.consume_v3(&directory.0, &producer, wrong_attempt, &custody),
-            Err(ProtectedCompilerModuleHandoffIntakeError::V3(
+            intake.consume(&directory.0, &producer, wrong_attempt, &custody),
+            Err(ProductionCompilerModuleHandoffIntakeError::Transport(
                 CompilerModuleHandoffErrorV3::Attempt { .. }
             ))
         ));
         let consumed = intake
-            .consume_v3(&directory.0, &producer, attempt, &custody)
+            .consume(&directory.0, &producer, attempt, &custody)
             .unwrap();
         assert_eq!(consumed.receipt().attempt(), attempt);
         assert_eq!(consumed.consumed().attempt(), attempt);
@@ -729,10 +709,10 @@ mod tests {
         let handoff = outer(&custody, 0x27);
         let receipt =
             publish_compiler_module_handoff_v3(&directory.0, &producer, attempt, &handoff).unwrap();
-        let intake = ProtectedCompilerModuleHandoffIntake::protected_v3();
+        let intake = ProductionCompilerModuleHandoffIntake::new();
 
         let (consumed, marker) = intake
-            .consume_v3_after_preflight(
+            .consume_after_preflight(
                 &directory.0,
                 &producer,
                 attempt,
@@ -748,8 +728,8 @@ mod tests {
         assert_eq!(marker, "preflight-complete");
         assert_eq!(consumed.receipt(), receipt);
         assert!(matches!(
-            intake.consume_v3(&directory.0, &producer, attempt, &custody),
-            Err(ProtectedCompilerModuleHandoffIntakeError::V3(
+            intake.consume(&directory.0, &producer, attempt, &custody),
+            Err(ProductionCompilerModuleHandoffIntakeError::Transport(
                 CompilerModuleHandoffErrorV3::AlreadyConsumed
             ))
         ));
@@ -763,10 +743,10 @@ mod tests {
         let (custody, _) = protected_parent_custody(0x2a);
         let handoff = outer(&custody, 0x2b);
         publish_compiler_module_handoff_v3(&directory.0, &producer, attempt, &handoff).unwrap();
-        let intake = ProtectedCompilerModuleHandoffIntake::protected_v3();
+        let intake = ProductionCompilerModuleHandoffIntake::new();
 
         assert!(matches!(
-            intake.consume_v3_after_preflight(
+            intake.consume_after_preflight(
                 &directory.0,
                 &producer,
                 attempt,
@@ -775,13 +755,13 @@ mod tests {
                     field: "fixture deterministic rejection",
                 }),
             ),
-            Err(ProtectedCompilerModuleHandoffIntakeError::WorkerPreflight(
+            Err(ProductionCompilerModuleHandoffIntakeError::WorkerPreflight(
                 _
             ))
         ));
         assert!(
             intake
-                .consume_v3(&directory.0, &producer, attempt, &custody)
+                .consume(&directory.0, &producer, attempt, &custody)
                 .is_ok()
         );
     }
@@ -795,17 +775,17 @@ mod tests {
         let (custody, _) = protected_parent_custody(0x33);
         let handoff = outer(&custody, 0x34);
         publish_compiler_module_handoff_v3(&directory.0, &owner, attempt, &handoff).unwrap();
-        let intake = ProtectedCompilerModuleHandoffIntake::protected_v3();
+        let intake = ProductionCompilerModuleHandoffIntake::new();
 
         assert!(matches!(
-            intake.consume_v3(&directory.0, &intruder, attempt, &custody),
-            Err(ProtectedCompilerModuleHandoffIntakeError::V3(
+            intake.consume(&directory.0, &intruder, attempt, &custody),
+            Err(ProductionCompilerModuleHandoffIntakeError::Transport(
                 CompilerModuleHandoffErrorV3::Attempt { .. }
             ))
         ));
         assert!(
             intake
-                .consume_v3(&directory.0, &owner, attempt, &custody)
+                .consume(&directory.0, &owner, attempt, &custody)
                 .is_ok()
         );
     }
@@ -825,10 +805,10 @@ mod tests {
             unrelated_receipt,
             Err(CompilerModuleHandoffErrorV3::WrongHandoffIdentity)
         ));
-        let exact = ProtectedCompilerModuleHandoffIntake::protected_v3();
+        let exact = ProductionCompilerModuleHandoffIntake::new();
         assert!(
             exact
-                .consume_v3(&directory.0, &producer, attempt, &custody)
+                .consume(&directory.0, &producer, attempt, &custody)
                 .is_ok()
         );
     }
@@ -842,15 +822,15 @@ mod tests {
         let (wrong_custody, _) = protected_parent_custody(0x4b);
         let handoff = outer(&exact_custody, 0x4c);
         publish_compiler_module_handoff_v3(&directory.0, &producer, attempt, &handoff).unwrap();
-        let intake = ProtectedCompilerModuleHandoffIntake::protected_v3();
+        let intake = ProductionCompilerModuleHandoffIntake::new();
 
         assert!(matches!(
-            intake.consume_v3(&directory.0, &producer, attempt, &wrong_custody),
-            Err(ProtectedCompilerModuleHandoffIntakeError::InvocationMismatch)
+            intake.consume(&directory.0, &producer, attempt, &wrong_custody),
+            Err(ProductionCompilerModuleHandoffIntakeError::InvocationMismatch)
         ));
         assert!(
             intake
-                .consume_v3(&directory.0, &producer, attempt, &exact_custody)
+                .consume(&directory.0, &producer, attempt, &exact_custody)
                 .is_ok()
         );
     }
@@ -863,16 +843,16 @@ mod tests {
         let (custody, _) = protected_parent_custody(0x52);
         let handoff = outer(&custody, 0x53);
         publish_compiler_module_handoff_v3(&directory.0, &producer, attempt, &handoff).unwrap();
-        let intake = ProtectedCompilerModuleHandoffIntake::protected_v3();
+        let intake = ProductionCompilerModuleHandoffIntake::new();
 
         assert!(
             intake
-                .consume_v3(&directory.0, &producer, attempt, &custody)
+                .consume(&directory.0, &producer, attempt, &custody)
                 .is_ok()
         );
         assert!(matches!(
-            intake.consume_v3(&directory.0, &producer, attempt, &custody),
-            Err(ProtectedCompilerModuleHandoffIntakeError::V3(
+            intake.consume(&directory.0, &producer, attempt, &custody),
+            Err(ProductionCompilerModuleHandoffIntakeError::Transport(
                 CompilerModuleHandoffErrorV3::AlreadyConsumed
             ))
         ));
@@ -884,11 +864,11 @@ mod tests {
         let producer = producer(0x60);
         let attempt = begin(&directory.0, &producer, 0x61);
         let (custody, _) = protected_parent_custody(0x62);
-        let intake = ProtectedCompilerModuleHandoffIntake::protected_v3();
+        let intake = ProductionCompilerModuleHandoffIntake::new();
 
         assert!(matches!(
-            intake.consume_v3(&directory.0, &producer, attempt, &custody),
-            Err(ProtectedCompilerModuleHandoffIntakeError::V3(
+            intake.consume(&directory.0, &producer, attempt, &custody),
+            Err(ProductionCompilerModuleHandoffIntakeError::Transport(
                 CompilerModuleHandoffErrorV3::NotPublished
             ))
         ));
@@ -904,11 +884,11 @@ mod tests {
         let v2_bytes = handoff.module_handoff().canonical_bytes();
         publish_compiler_module_handoff_v2(&directory.0, &producer, attempt, closure, v2_bytes)
             .unwrap();
-        let intake = ProtectedCompilerModuleHandoffIntake::protected_v3();
+        let intake = ProductionCompilerModuleHandoffIntake::new();
 
         assert!(matches!(
-            intake.consume_v3(&directory.0, &producer, attempt, &custody),
-            Err(ProtectedCompilerModuleHandoffIntakeError::V3(
+            intake.consume(&directory.0, &producer, attempt, &custody),
+            Err(ProductionCompilerModuleHandoffIntakeError::Transport(
                 CompilerModuleHandoffErrorV3::NotPublished
             ))
         ));
@@ -934,12 +914,15 @@ mod tests {
             b"existing protected V2 handoff",
         )
         .unwrap();
-        let intake = ProtectedCompilerModuleHandoffIntake::protected_v2(closure);
         assert_eq!(
-            intake
-                .consume_v2(&directory.0, &producer, attempt)
-                .unwrap()
-                .bytes(),
+            consume_qualification_compiler_module_handoff_v2(
+                &directory.0,
+                &producer,
+                attempt,
+                closure,
+            )
+            .unwrap()
+            .bytes(),
             b"existing protected V2 handoff"
         );
         assert!(matches!(
