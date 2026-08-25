@@ -268,6 +268,11 @@ fn ordinary_w0_output_carries_no_broker_reservation() {
 #[allow(unsafe_code)]
 fn broker_reservation_rebinds_authenticated_request_and_output_identity() {
     let closure = prepared_closure(None);
+    let static_host_lld = closure.static_host_lld_artifact_id().unwrap();
+    assert_eq!(
+        closure.static_host_lld_artifact_id().unwrap(),
+        static_host_lld
+    );
     let old_nonce = closure.nonce_sha256();
     let old_request = closure.lld_argv().unwrap().canonical_arguments()[3].clone();
     let reservation =

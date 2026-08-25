@@ -3,9 +3,10 @@
 //! The machine has exactly one lifetime slot. It retains the admitted protected-service token and
 //! the exact W0 [`AdmittedHostOutputV1`] inside the service. A reservation binds one opaque
 //! session ID and nonce, the complete Broker V4 session claim, and one durable publication-plan
-//! identity, then issues one move-only link permit. Consuming that permit is the only broker API
-//! that can form a reservation-bound W0 request. Completion admits only a terminal V4 transcript
-//! that matches the reservation and a W0 output carrying the exact request binding.
+//! identity, then issues one move-only link permit. The broker-owned path retains the prepared V4
+//! transcript, validates its grant and static-LLD artifact identity, consumes the permit, and owns
+//! the authenticated process and admitted output through terminal commit. Completion admits only
+//! a terminal V4 transcript that matches the reservation and exact W0 output binding.
 //! Anchor preparation consumes the machine into a move-only pre-challenge capability. Only
 //! durable preparation can consume that capability, generate a service-owned random attempt nonce,
 //! form the nonce-bound transaction and challenge, and release challenge bytes after exact W0
@@ -14,9 +15,10 @@
 //!
 //! `AUTHORITY=none`: this type-state model does not itself generate the service attempt nonce. It
 //! does not make reservation, anti-rollback state, durable nonce freshness, or publication
-//! durable. It does not invoke a linker, persist bytes, publish an artifact, authenticate
-//! anchor-key provenance, reconcile multiple writers, or grant replay, execution, publication,
-//! runtime, or GPU authority.
+//! durable. Linker invocation still requires a move-only approval minted by an external trusted
+//! tool-evidence authority. This model does not authenticate that evidence itself, publish an
+//! artifact, authenticate anchor-key provenance, reconcile multiple writers, or grant replay,
+//! publication, runtime, or GPU authority.
 //! Session ID and nonce uniqueness are caller preconditions; this model only rejects zero values,
 //! an ID/nonce collision, and a second reservation in one machine lifetime. The retained Linux
 //! admission is revalidated once at public reservation; later pure transitions do not provide
@@ -68,7 +70,8 @@ use std::fs::File;
 use std::os::fd::OwnedFd;
 
 use fe2o3_build_authority::{
-    BrokerSessionClaimV4, CompletedBrokerTranscriptV4, HOST_LINK_OUTPUT_MODE_V4,
+    BrokerSessionClaimV4, CompletedBrokerTranscriptV4, GrantedHostLinkTranscriptV4,
+    HOST_LINK_OUTPUT_MODE_V4, HostLinkCommitV4, HostLinkGrantV4, PreparedHostLinkTranscriptV4,
 };
 use fe2o3_external_anchor_protocol::{
     ANCHOR_CHALLENGE_WIRE_LEN_V1, ANCHOR_OBSERVATION_WIRE_LEN_V1, AnchorDecisionV1,
@@ -76,7 +79,8 @@ use fe2o3_external_anchor_protocol::{
     TransactionDigestV1,
 };
 use fe2o3_host_link_closure::{
-    AdmittedHostOutputV1, BrokerReservedHostLinkV1, HostLinkBrokerReservationV1, HostLinkClosureV1,
+    AdmittedHostOutputV1, ApprovedStaticHostLldV1, AuthenticatedHostLinkExecutionV1,
+    BrokerReservedHostLinkV1, HostLinkBrokerReservationV1, HostLinkClosureV1, HostLinkErrorCodeV1,
     Sha256Digest,
 };
 use sha2::{Digest, Sha256};
@@ -477,6 +481,18 @@ pub enum BrokerSessionErrorKindV1 {
     HostLinkClosureMismatch,
     /// W0 could not form the exact broker-reservation-bound request.
     HostLinkRequestBinding,
+    /// The V4 binding names another static host-LLD artifact identity.
+    HostLinkToolIdentityMismatch,
+    /// The V4 grant does not continue the broker-owned prepared transcript.
+    HostLinkGrantMismatch,
+    /// The exact approved static host LLD could not be launched.
+    HostLinkLaunch,
+    /// The authenticated static host LLD failed output admission.
+    HostLinkOutputAdmission,
+    /// Completion was requested before an authenticated output was admitted.
+    HostLinkOutputPending,
+    /// The V4 commit does not continue the broker-owned granted transcript.
+    HostLinkCommitMismatch,
     /// The W0 output carries another or no broker reservation.
     HostLinkReservationMismatch,
     /// The W0 output carries another authenticated request nonce.
@@ -531,6 +547,141 @@ impl fmt::Display for BrokerSessionMachineErrorV1 {
 }
 
 impl Error for BrokerSessionMachineErrorV1 {}
+
+/// Non-authoritative identity observation for one broker-retained host-link output.
+///
+/// This value contains no descriptor and grants no access to the admitted bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BrokerHostOutputObservationV1 {
+    sha256: [u8; 32],
+    length: u64,
+    mode: u32,
+}
+
+impl BrokerHostOutputObservationV1 {
+    /// Returns the admitted output content identity.
+    pub const fn sha256(self) -> [u8; 32] {
+        self.sha256
+    }
+
+    /// Returns the admitted output length.
+    pub const fn length(self) -> u64 {
+        self.length
+    }
+
+    /// Returns the admitted output mode.
+    pub const fn mode(self) -> u32 {
+        self.mode
+    }
+
+    /// Returns the fixed non-authority marker.
+    pub const fn authority(self) -> &'static str {
+        BROKER_SESSION_MACHINE_AUTHORITY_V1
+    }
+
+    fn from_output(output: &AdmittedHostOutputV1) -> Self {
+        Self {
+            sha256: *output.sha256().as_bytes(),
+            length: output.size(),
+            mode: output.mode(),
+        }
+    }
+}
+
+/// Result of polling one broker-owned authenticated host-link execution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrokerHostLinkPollV1 {
+    /// The authenticated worker has not yet produced a terminal admitted output.
+    Pending,
+    /// The broker retained the admitted output and exposes only its inert identity fields.
+    Admitted(BrokerHostOutputObservationV1),
+}
+
+/// Move-only reservation retaining the prepared Broker V4 transcript and unique W0 permit.
+///
+/// The only launch transition validates a matching grant before invoking the linker.
+///
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::BrokerReservedHostLinkSessionV1;
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<BrokerReservedHostLinkSessionV1>();
+/// ```
+pub struct BrokerReservedHostLinkSessionV1 {
+    machine: BrokerSessionMachineV1,
+    permit: BrokerHostLinkPermitV1,
+    prepared: PreparedHostLinkTranscriptV4,
+}
+
+/// Move-only broker custody over one authenticated static-host-LLD process and its output.
+///
+/// The execution and admitted descriptor never leave this value. A caller can observe only the
+/// bounded output identity needed to construct the terminal Broker V4 commit.
+///
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::BrokerOwnedHostLinkExecutionV1;
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<BrokerOwnedHostLinkExecutionV1>();
+/// ```
+pub struct BrokerOwnedHostLinkExecutionV1 {
+    machine: BrokerSessionMachineV1,
+    granted: GrantedHostLinkTranscriptV4,
+    execution: Option<AuthenticatedHostLinkExecutionV1>,
+    output: Option<AdmittedHostOutputV1>,
+}
+
+/// Move-only completed host-link session retaining the exact terminal V4 transcript.
+pub struct BrokerCompletedHostLinkV1 {
+    machine: BrokerSessionMachineV1,
+    transcript: CompletedBrokerTranscriptV4,
+}
+
+impl BrokerCompletedHostLinkV1 {
+    /// Returns the completed broker lifecycle stage.
+    pub const fn stage(&self) -> BrokerSessionStageV1 {
+        self.machine.stage()
+    }
+
+    /// Borrows the exact terminal transcript bound to the retained output.
+    pub const fn transcript(&self) -> &CompletedBrokerTranscriptV4 {
+        &self.transcript
+    }
+
+    /// Consumes the wrapper while preserving output custody inside the session machine.
+    pub fn into_parts(self) -> (BrokerSessionMachineV1, CompletedBrokerTranscriptV4) {
+        (self.machine, self.transcript)
+    }
+}
+
+impl fmt::Debug for BrokerReservedHostLinkSessionV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BrokerReservedHostLinkSessionV1")
+            .field("authority", &BROKER_SESSION_MACHINE_AUTHORITY_V1)
+            .field("stage", &self.machine.stage())
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for BrokerOwnedHostLinkExecutionV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BrokerOwnedHostLinkExecutionV1")
+            .field("authority", &BROKER_SESSION_MACHINE_AUTHORITY_V1)
+            .field("stage", &self.machine.stage())
+            .field("output_admitted", &self.output.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for BrokerCompletedHostLinkV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BrokerCompletedHostLinkV1")
+            .field("authority", &BROKER_SESSION_MACHINE_AUTHORITY_V1)
+            .field("stage", &self.machine.stage())
+            .finish_non_exhaustive()
+    }
+}
 
 /// Broker-owned, move-only model of one complete session lifecycle.
 ///
@@ -608,6 +759,32 @@ impl BrokerSessionMachineV1 {
         let client_matches = admission
             .matches_client_process(reservation.client_pid, reservation.client_start_time_ticks);
         self.core.reserve(admission, reservation, client_matches)
+    }
+
+    /// Consumes an empty machine into the broker-owned V4 host-link path.
+    ///
+    /// The prepared transcript is retained with the unique W0 permit. It cannot be substituted
+    /// after reservation or reused to validate more than one grant.
+    pub fn reserve_prepared_link(
+        mut self,
+        admission: ProtectedBrokerServiceAdmissionV1,
+        session_id: BrokerSessionIdV1,
+        nonce: BrokerSessionNonceV1,
+        prepared: PreparedHostLinkTranscriptV4,
+        durable_plan: DurablePublicationPlanIdentityV1,
+    ) -> Result<BrokerReservedHostLinkSessionV1, BrokerSessionMachineErrorV1> {
+        let reservation = BrokerSessionReservationV1::new(
+            session_id,
+            nonce,
+            prepared.session_claim(),
+            durable_plan,
+        )?;
+        let permit = self.reserve(admission, reservation)?;
+        Ok(BrokerReservedHostLinkSessionV1 {
+            machine: self,
+            permit,
+            prepared,
+        })
     }
 
     /// Consumes the unique permit before forming one exact reservation-bound W0 request.
@@ -766,6 +943,146 @@ impl BrokerSessionMachineV1 {
         &self,
     ) -> Result<[u8; ANCHOR_CHALLENGE_WIRE_LEN_V1], BrokerSessionMachineErrorV1> {
         self.core.anchor_challenge()
+    }
+}
+
+impl BrokerReservedHostLinkSessionV1 {
+    /// Returns the reserved broker lifecycle stage.
+    pub const fn stage(&self) -> BrokerSessionStageV1 {
+        self.machine.stage()
+    }
+
+    /// Returns the fixed non-authority marker.
+    pub const fn authority(&self) -> &'static str {
+        BROKER_SESSION_MACHINE_AUTHORITY_V1
+    }
+
+    /// Validates the exact V4 grant and enters broker-owned authenticated linker execution.
+    ///
+    /// `approval` must come from the external trusted tool-evidence authority. This transition
+    /// additionally requires V4 to name the closure's canonical static-LLD artifact identity,
+    /// consumes the one-shot W0 permit, and retains the process inside the broker service.
+    pub fn grant_and_launch(
+        self,
+        closure: HostLinkClosureV1,
+        grant: HostLinkGrantV4,
+        approval: ApprovedStaticHostLldV1,
+    ) -> Result<BrokerOwnedHostLinkExecutionV1, BrokerSessionMachineErrorV1> {
+        let BrokerReservedHostLinkSessionV1 {
+            mut machine,
+            mut permit,
+            prepared,
+        } = self;
+        let expected_tool = prepared.expected_binding().static_host_lld_identity();
+        let actual_tool = closure
+            .static_host_lld_artifact_id()
+            .map_err(|_| {
+                BrokerSessionMachineErrorV1::new(
+                    BrokerSessionErrorKindV1::HostLinkToolIdentityMismatch,
+                )
+            })?
+            .sha256();
+        if expected_tool != *actual_tool.as_bytes() {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::HostLinkToolIdentityMismatch,
+            ));
+        }
+        let granted = prepared.validate_grant(grant).map_err(|_| {
+            BrokerSessionMachineErrorV1::new(BrokerSessionErrorKindV1::HostLinkGrantMismatch)
+        })?;
+        let bound = machine.begin_link(&mut permit, closure)?;
+        let execution = bound.launch(approval).map_err(|_| {
+            BrokerSessionMachineErrorV1::new(BrokerSessionErrorKindV1::HostLinkLaunch)
+        })?;
+        Ok(BrokerOwnedHostLinkExecutionV1 {
+            machine,
+            granted,
+            execution: Some(execution),
+            output: None,
+        })
+    }
+}
+
+impl BrokerOwnedHostLinkExecutionV1 {
+    /// Returns the linking lifecycle stage.
+    pub const fn stage(&self) -> BrokerSessionStageV1 {
+        self.machine.stage()
+    }
+
+    /// Returns the fixed non-authority marker.
+    pub const fn authority(&self) -> &'static str {
+        BROKER_SESSION_MACHINE_AUTHORITY_V1
+    }
+
+    /// Polls the authenticated child while retaining both execution and output custody.
+    pub fn poll_output(&mut self) -> Result<BrokerHostLinkPollV1, BrokerSessionMachineErrorV1> {
+        if let Some(output) = &self.output {
+            return Ok(BrokerHostLinkPollV1::Admitted(
+                BrokerHostOutputObservationV1::from_output(output),
+            ));
+        }
+        let execution = self.execution.as_mut().ok_or_else(|| {
+            BrokerSessionMachineErrorV1::new(BrokerSessionErrorKindV1::InternalState)
+        })?;
+        let observation = match execution.try_admit_output() {
+            Ok(output) => BrokerHostOutputObservationV1::from_output(output),
+            Err(error) if error.code() == HostLinkErrorCodeV1::ResultPending => {
+                return Ok(BrokerHostLinkPollV1::Pending);
+            }
+            Err(_) => {
+                return Err(BrokerSessionMachineErrorV1::new(
+                    BrokerSessionErrorKindV1::HostLinkOutputAdmission,
+                ));
+            }
+        };
+        let output = self
+            .execution
+            .take()
+            .ok_or_else(|| {
+                BrokerSessionMachineErrorV1::new(BrokerSessionErrorKindV1::InternalState)
+            })?
+            .into_admitted_output()
+            .map_err(|_| {
+                BrokerSessionMachineErrorV1::new(BrokerSessionErrorKindV1::HostLinkOutputAdmission)
+            })?;
+        self.output = Some(output);
+        Ok(BrokerHostLinkPollV1::Admitted(observation))
+    }
+
+    /// Returns the admitted output identity without releasing its descriptor.
+    pub fn output_observation(&self) -> Option<BrokerHostOutputObservationV1> {
+        self.output
+            .as_ref()
+            .map(BrokerHostOutputObservationV1::from_output)
+    }
+
+    /// Consumes the execution after admission and validates one exact terminal V4 commit.
+    pub fn complete(
+        self,
+        commit: HostLinkCommitV4,
+    ) -> Result<BrokerCompletedHostLinkV1, BrokerSessionMachineErrorV1> {
+        let BrokerOwnedHostLinkExecutionV1 {
+            mut machine,
+            granted,
+            execution,
+            output,
+        } = self;
+        if execution.is_some() {
+            return Err(BrokerSessionMachineErrorV1::new(
+                BrokerSessionErrorKindV1::HostLinkOutputPending,
+            ));
+        }
+        let output = output.ok_or_else(|| {
+            BrokerSessionMachineErrorV1::new(BrokerSessionErrorKindV1::HostLinkOutputPending)
+        })?;
+        let transcript = granted.validate_commit(commit).map_err(|_| {
+            BrokerSessionMachineErrorV1::new(BrokerSessionErrorKindV1::HostLinkCommitMismatch)
+        })?;
+        machine.complete(&transcript, output)?;
+        Ok(BrokerCompletedHostLinkV1 {
+            machine,
+            transcript,
+        })
     }
 }
 
