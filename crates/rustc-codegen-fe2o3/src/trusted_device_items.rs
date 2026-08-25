@@ -3631,8 +3631,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn source_closure_rejects_symlinks_and_nonregular_files() {
+        use std::os::fd::AsRawFd as _;
         use std::os::unix::fs::symlink;
-        use std::os::unix::net::UnixListener;
 
         let manifest_link = ProviderPackageFixture::new();
         let manifest = manifest_link.root.join("Cargo.toml");
@@ -3680,15 +3680,21 @@ mod tests {
             .is_err()
         );
 
-        let socket = ProviderPackageFixture::new();
-        let _listener = UnixListener::bind(socket.source_root().join("provider.sock")).unwrap();
-        assert!(
-            reviewed_provider_source_closure_identity(
-                &socket.root,
-                ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
-            )
-            .is_err()
+        let nonregular = ProviderPackageFixture::new();
+        let source_root = fs::File::open(nonregular.source_root()).unwrap();
+        // SAFETY: the descriptor owns the fixture source directory and the relative name is a
+        // static NUL-terminated C string.
+        let result =
+            unsafe { libc::mkfifoat(source_root.as_raw_fd(), c"provider.fifo".as_ptr(), 0o600) };
+        let error = std::io::Error::last_os_error();
+        assert_eq!(result, 0, "create nonregular source fixture: {error}");
+        let error = reviewed_provider_source_closure_identity(
+            &nonregular.root,
+            ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
         );
+        let error = error.unwrap_err();
+        assert!(error.contains("provider.fifo"), "{error}");
+        assert!(error.contains("is not a regular file"), "{error}");
     }
 
     #[test]
