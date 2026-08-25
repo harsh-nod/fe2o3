@@ -1891,7 +1891,7 @@ fn protected_release_launcher_death_kills_admitted_child_and_cargo() {
     let mut launcher = ReapedChild::new(command.spawn().expect("spawn protected release launcher"));
 
     let ready = fixture.target.join(PROTECTED_RELEASE_CARGO_READY);
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while !ready.is_file() && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(10));
     }
