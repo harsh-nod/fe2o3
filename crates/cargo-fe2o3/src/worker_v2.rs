@@ -329,9 +329,28 @@ impl PreparedWorkerV2Config {
         qualification_oracle: Option<&OsStr>,
         config_path: Option<&OsStr>,
     ) -> Result<Option<Self>, WorkerV2ConfigError> {
+        Self::from_environment_values_with_qualification(
+            obsolete_pipeline,
+            qualification_oracle,
+            config_path,
+            cfg!(any(test, feature = "qualification-oracles-test-only")),
+        )
+    }
+
+    fn from_environment_values_with_qualification(
+        obsolete_pipeline: Option<&OsStr>,
+        qualification_oracle: Option<&OsStr>,
+        config_path: Option<&OsStr>,
+        qualification_oracles_enabled: bool,
+    ) -> Result<Option<Self>, WorkerV2ConfigError> {
         if let Some(value) = obsolete_pipeline {
             return Err(WorkerV2ConfigError::Invalid(format!(
                 "{OBSOLETE_CODEGEN_PIPELINE_ENV} has been removed; production compilation has no selector and temporary test oracles use {QUALIFICATION_ORACLE_ENV}; found {value:?}"
+            )));
+        }
+        if !qualification_oracles_enabled && let Some(value) = qualification_oracle {
+            return Err(WorkerV2ConfigError::Invalid(format!(
+                "{QUALIFICATION_ORACLE_ENV} is unavailable in production builds; remove {value:?} or rebuild cargo-fe2o3 with the qualification-oracles-test-only feature"
             )));
         }
         Self::from_selection(qualification_oracle, config_path)
@@ -1859,6 +1878,21 @@ mod tests {
                 Some(OsStr::new("/config"))
             ),
             Err(WorkerV2ConfigError::UnexpectedConfiguration)
+        ));
+    }
+
+    #[test]
+    fn production_build_rejects_qualification_before_reading_configuration() {
+        assert!(matches!(
+            PreparedWorkerV2Config::from_environment_values_with_qualification(
+                None,
+                Some(OsStr::new(SCALAR_GEMM_V1_PIPELINE)),
+                Some(OsStr::new("/does/not/exist")),
+                false,
+            ),
+            Err(WorkerV2ConfigError::Invalid(reason))
+                if reason.contains("qualification-oracles-test-only")
+                    && reason.contains(SCALAR_GEMM_V1_PIPELINE)
         ));
     }
 
