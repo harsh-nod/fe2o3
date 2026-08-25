@@ -30,6 +30,10 @@ type GeneralKernelFn = fn(
 struct SourceFacts {
     unsafe_blocks: usize,
     unsafe_functions: usize,
+    loop_depth: usize,
+    try_expressions: usize,
+    loop_try_expressions: usize,
+    loop_return_expressions: usize,
     function_calls: Vec<String>,
     method_calls: Vec<String>,
     indexed_paths: Vec<String>,
@@ -46,6 +50,27 @@ impl<'ast> Visit<'ast> for SourceFacts {
             self.unsafe_functions += 1;
         }
         syn::visit::visit_item_fn(self, function);
+    }
+
+    fn visit_expr_while(&mut self, expression: &'ast syn::ExprWhile) {
+        self.loop_depth += 1;
+        syn::visit::visit_expr_while(self, expression);
+        self.loop_depth -= 1;
+    }
+
+    fn visit_expr_try(&mut self, expression: &'ast syn::ExprTry) {
+        self.try_expressions += 1;
+        if self.loop_depth != 0 {
+            self.loop_try_expressions += 1;
+        }
+        syn::visit::visit_expr_try(self, expression);
+    }
+
+    fn visit_expr_return(&mut self, expression: &'ast syn::ExprReturn) {
+        if self.loop_depth != 0 {
+            self.loop_return_expressions += 1;
+        }
+        syn::visit::visit_expr_return(self, expression);
     }
 
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
@@ -98,6 +123,18 @@ fn source_forbids_unsafe_and_contains_matrix_tiling_and_epilogue() {
     facts.visit_file(&syntax);
     assert_eq!(facts.unsafe_blocks, 0);
     assert_eq!(facts.unsafe_functions, 0);
+    assert_eq!(
+        facts.try_expressions, 2,
+        "only the two grid-uniform matrix-view constructors may return early"
+    );
+    assert_eq!(
+        facts.loop_try_expressions, 0,
+        "lane-local checked loads must not return early from the MFMA loop"
+    );
+    assert_eq!(
+        facts.loop_return_expressions, 0,
+        "every lane entering the K loop must reconverge before MFMA"
+    );
     assert!(facts.function_calls.iter().any(|call| call == "index_1d"));
     for required in [
         "Bf16MfmaAMatrix::row_major",
@@ -124,6 +161,10 @@ fn source_forbids_unsafe_and_contains_matrix_tiling_and_epilogue() {
     for forbidden in ["get_unchecked", "get_unchecked_mut", "get_mut_at"] {
         assert!(!facts.method_calls.iter().any(|call| call == forbidden));
     }
+    assert!(
+        !facts.method_calls.iter().any(|call| call == "ok_or"),
+        "checked values must reconverge instead of becoming early returns"
+    );
     for input in ["a", "b"] {
         assert!(
             !facts.indexed_paths.iter().any(|path| path == input),
