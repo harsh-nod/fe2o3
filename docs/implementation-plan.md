@@ -172,8 +172,10 @@ authority. The backend fixture is not Rust user source.
 - `fe2o3-macros`: `#[kernel]` and future device extern annotations.
 - `reserved-fe2o3-symbols`: shared reserved symbol namespace.
 - `fe2o3-device`: no-std device API and intrinsic stubs.
-- `fe2o3-core`: HIP-backed context, stream, memory, module, and launch runtime.
-- `fe2o3-host`: launch macro and host ergonomics.
+- `fe2o3-core`: HIP-backed context, stream, memory, event, and capability
+  runtime; raw module and launch authority is qualification-only.
+- `fe2o3-host`: generated typed preparation and Worker V3 dispatch; the raw
+  launch macro is qualification-only.
 - `fe2o3-mir-model`: canonical Pliron-independent MIR semantics and
   transformations.
 - `dialect-mir`: compatibility facade over that model and a bounded
@@ -483,8 +485,11 @@ Status: MVP implemented for the current elementwise examples.
   `raw-disjoint-shift`, `raw-gather`, `raw-neighbors`, `raw-output-shift`,
   `saxpy`, `axpy-inplace`, `negate`, `normalize`, `pipeline`, and
   `vecadd-f64` examples load their HSACO files from that directory.
-- The examples use `fe2o3-core` to load modules, launch through HIP with the
-  backend ABI, copy output back, and validate results.
+- These historical raw-launch examples use `fe2o3-core` to load modules,
+  launch through HIP with the backend ABI, copy output back, and validate
+  results. They are qualification targets and require the explicit
+  `qualification-raw-launch-test-only` feature; they are not production-pipeline
+  acceptance evidence.
 - The path has run successfully on `gfx1201` with TheRock ROCm
   `7.13.0a20260509`.
 
@@ -496,6 +501,8 @@ Remaining work:
 
 Acceptance:
 
+- Except for the generated `fe2o3-vecadd` path, the historical commands below
+  require `--features qualification-raw-launch-test-only`.
 - `cargo fe2o3 run -p fe2o3-vecadd`, `cargo fe2o3 run -p fe2o3-add-inplace`,
   `cargo fe2o3 run -p fe2o3-copy`, `cargo fe2o3 run -p fe2o3-downsample`,
   `cargo fe2o3 run -p fe2o3-fill`, `cargo fe2o3 run -p fe2o3-gather-odd`,

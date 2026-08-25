@@ -1,6 +1,7 @@
 # Device operations
 
-`fe2o3-core` keeps its raw HIP launch and pointer APIs unsafe. The device
+`fe2o3-core` keeps raw pointer APIs unsafe and exposes raw HIP module and launch
+authority only with `qualification-raw-hip-test-only`. The device
 operation API adds a narrow safe layer for whole-buffer asynchronous copies.
 It does not schedule tasks, cancel work, infer kernel aliases, or make raw
 kernel launches safe.

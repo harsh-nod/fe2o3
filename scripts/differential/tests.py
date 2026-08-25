@@ -67,6 +67,12 @@ class ComparatorTests(unittest.TestCase):
 
 
 class HarnessTests(unittest.TestCase):
+    def test_generated_fixtures_explicitly_select_qualification_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            package = harness._prepare_fixture("fill", Path(directory))
+            manifest = (package / "Cargo.toml").read_text(encoding="ascii")
+            self.assertIn('features = ["qualification-oracles-test-only"]', manifest)
+
     def test_environment_validation_and_skip_semantics(self) -> None:
         settings = harness.validate_environment({})
         self.assertFalse(settings.hardware)

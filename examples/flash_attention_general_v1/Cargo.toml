@@ -11,12 +11,23 @@ publish = false
 members = []
 resolver = "3"
 
+[features]
+qualification-raw-launch-test-only = [
+    "dep:fe2o3-core",
+    "fe2o3-host/qualification-oracles-test-only",
+]
+
 [dependencies]
 fe2o3-device = { path = "../../crates/fe2o3-device" }
 
 [target.'cfg(not(target_arch = "amdgpu"))'.dependencies]
-fe2o3-core = { path = "../../crates/fe2o3-core" }
-fe2o3-host = { path = "../../crates/fe2o3-host" }
+fe2o3-core = { path = "../../crates/fe2o3-core", optional = true }
+fe2o3-host = { path = "../../crates/fe2o3-host", optional = true }
+
+[[bin]]
+name = "fe2o3-flash-attention-general-v1"
+path = "src/main.rs"
+required-features = ["qualification-raw-launch-test-only"]
 
 [lib]
 name = "fe2o3_flash_attention_general_v1"

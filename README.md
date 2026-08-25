@@ -310,11 +310,11 @@ target lowering, and host execution into explicit ownership boundaries:
   These records validate representation and consistency. They do not prove a
   claim, compile a kernel, execute a service, or grant artifact/runtime
   authority.
-- Compiler composition: `fe2o3-compiler-driver` routes one explicit
-  `PlironShadow` or `PlironV1` request to one configured backend and never
-  falls back to a second route. Shadow is inspect-only and `PlironV1` is the
-  only candidate-producing compiler API route. The production rustc backend
-  has no selector. Temporary non-publishing migration oracles are compiled
+- Compiler composition: `fe2o3-compiler-driver` executes one production
+  request through one configured backend and has no selector or fallback slot.
+  Inspection is an observation of that transaction rather than another
+  compiler implementation. The production rustc backend likewise has no
+  selector. Temporary non-publishing migration oracles are compiled
   only by the `qualification-oracles-test-only` backend feature and selected
   by `FE2O3_QUALIFICATION_ORACLE_V1` in isolated integration tests.
 - General kernel checks: `fe2o3-kernel-analysis` owns the fixed pre-lowering
@@ -458,9 +458,15 @@ Safe ownership of resources used by asynchronous copies is documented in
 - The HIP runtime provides contexts, streams, device buffers, pinned host
   buffers, events, synchronous transfers, event-backed borrowed and owned
   asynchronous transfers, module loading, and kernel launch.
-- Raw module loading and raw launch are explicit `unsafe` escape hatches. The
-  caller remains responsible for artifact trust, target and ABI compatibility,
-  pointer validity, aliasing, launch geometry, and resource lifetimes.
+- The `fe2o3-host` raw launch macro and parameter pack are qualification-only
+  `unsafe` escape hatches. Production applications load and dispatch through
+  the authenticated Worker V3 transaction and compiler-generated typed
+  arguments. Feature-free `fe2o3-core` retains context, stream, memory, event,
+  and capability APIs but does not export raw modules, functions, parameter
+  packs, launch configurations, or launch functions. Those primitives require
+  `qualification-raw-hip-test-only`; qualification callers remain responsible
+  for artifact trust, target and ABI compatibility, pointer validity, aliasing,
+  launch geometry, and resource lifetimes.
 - `DeviceCopy` and its derive macro restrict safe byte transfers to supported
   layouts and have compile-pass/compile-fail coverage.
 

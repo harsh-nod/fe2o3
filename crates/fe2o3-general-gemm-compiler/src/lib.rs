@@ -21,7 +21,7 @@ use fe2o3_compiler_api::{
     CandidateIdentityV1, CanonicalDiagnosticV1, CompileDispositionV1, CompileOutputV1,
     CompileRequestV1, CompilerStageV1, DiagnosticCodeV1, DiagnosticMessageV1, DiagnosticSeverityV1,
     DiagnosticSubjectIdentityV1, ObligationSetIdentityV1, PipelineConfigurationIdentityV1,
-    PipelineSelectorV1, StageSnapshotV1,
+    StageSnapshotV1,
 };
 use fe2o3_compiler_driver::{
     AdmittedGemmCompilerBackendV1, CompilerBackendFailureV1, GemmSemanticProgramV1,
@@ -829,8 +829,6 @@ impl GeneralGemmToolchainRouteV1 {
 /// A compile request, plan, KIR, schedule, ABI, or limit failed closed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GeneralGemmCompilationBindingErrorV1 {
-    /// Only the explicit candidate-producing Pliron V1 route is accepted.
-    PipelineSelector,
     /// One required request commitment is the all-zero untrusted sentinel.
     ZeroRequestCommitment,
     /// The request kernel differs from the consumed frontend receipt.
@@ -918,8 +916,6 @@ pub fn general_gemm_symbolic_pipeline_configuration_identity_v1(
 /// A production symbolic compilation input failed closed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GeneralGemmSymbolicCompilationErrorV1 {
-    /// Only the explicit Pliron V1 route is accepted.
-    PipelineSelector,
     /// One required request commitment is the all-zero sentinel.
     ZeroRequestCommitment,
     /// The request kernel differs from the consumed frontend receipt.
@@ -984,9 +980,6 @@ impl GeneralGemmSymbolicCompilationUnitV1 {
         schedule: GeneralGemmScheduleV1,
         limits: GeneralGemmLoweringLimitsV1,
     ) -> Result<Self, GeneralGemmSymbolicCompilationErrorV1> {
-        if request.selector() != PipelineSelectorV1::PlironV1 {
-            return Err(GeneralGemmSymbolicCompilationErrorV1::PipelineSelector);
-        }
         if request_commitments(request).iter().any(is_zero_identity) {
             return Err(GeneralGemmSymbolicCompilationErrorV1::ZeroRequestCommitment);
         }
@@ -1327,9 +1320,6 @@ impl GeneralGemmCompilationUnitV1 {
         abi: GeneralGemmRuntimeAbiV1,
         limits: GeneralGemmLoweringLimitsV1,
     ) -> Result<Self, GeneralGemmCompilationBindingErrorV1> {
-        if request.selector() != PipelineSelectorV1::PlironV1 {
-            return Err(GeneralGemmCompilationBindingErrorV1::PipelineSelector);
-        }
         if request_commitments(request).iter().any(is_zero_identity) {
             return Err(GeneralGemmCompilationBindingErrorV1::ZeroRequestCommitment);
         }

@@ -259,16 +259,17 @@ ordinary `target`. Packaged deployments without that source tree must provide
 a built backend through `FE2O3_BACKEND`.
 
 `cargo fe2o3 run` places a narrow application boundary in front of Cargo's
-effective exact-target runner. Every application or configured runner starts
-with an empty environment; no `PATH`, `TMPDIR`, build control, or arbitrary
-inherited variable is retained. The configured runner command, application
-path, and arguments remain byte-preserving. String and array runners from
-target configuration and target-runner environment variables are supported,
-including non-UTF-8 Unix values while Cargo resolves the runner.
-Recursive cargo-fe2o3 runners, including aliases and hardlinks to the same
-executable inode, and runner selections that cannot be resolved unambiguously
-fail closed. In particular, a `cfg(...)` runner must currently be made explicit
-as `target.<triple>.runner` for `cargo fe2o3 run`.
+exact-target application. Production always requires the authorized locked
+compiler closure and canonical Worker V3 load envelope; it has no no-envelope
+mode and rejects an intermediate Cargo runner. Qualification builds retain
+configured-runner and ordinary-application coverage while those test oracles
+are migrated. Every application or qualification runner starts with an empty
+environment; no `PATH`, `TMPDIR`, build control, or arbitrary inherited
+variable is retained. Runner commands, application paths, and arguments remain
+byte-preserving. Recursive cargo-fe2o3 runners, including aliases and hardlinks
+to the same executable inode, and runner selections that cannot be resolved
+unambiguously fail closed. In particular, a `cfg(...)` runner must currently be
+made explicit as `target.<triple>.runner` for qualification coverage.
 
 ## Cleanup
 
@@ -432,10 +433,11 @@ READY. The inherited slot's open-file-description lock survives that adoption.
 
 The supervisor becomes the application's actual parent, starts the seccomp
 worker for required-envelope launches, and owns every application authority and
-ACK descriptor. Immediately before every application or configured-runner exec,
-including the no-envelope path, `close_range(CLOSE_RANGE_CLOEXEC)` protects all
-non-stdio descriptors. Required-envelope launch then clears `FD_CLOEXEC` only
-for its exact envelope, artifact-directory, ACK, and test-only readiness ABI.
+ACK descriptor. Immediately before every application exec, and before the
+qualification-only configured-runner or no-envelope exec,
+`close_range(CLOSE_RANGE_CLOEXEC)` protects all non-stdio descriptors.
+Required-envelope launch then clears `FD_CLOEXEC` only for its exact envelope,
+artifact-directory, ACK, and test-only readiness ABI.
 The protocol channel, admission slot, seccomp-parent socket, evidence and build
 directories, and unrelated Cargo descriptors cannot survive exec. Consequently
 an application or orphan descendant cannot release or retain a slot. Saturated

@@ -167,29 +167,40 @@ pub(super) struct CollectedRustStageV1<'tcx> {
 struct ProductionTransactionBindingsV1 {
     producer: ProducerIdentity,
     output_dir: PathBuf,
-    build_attempt: Option<BuildAttempt>,
     compiler_ffi_envelope: Option<fe2o3_compiler_ffi::CompilerFfiEnvelopeV1>,
     compiler_custody: ProductionCompilerCustodyV1,
 }
 
 #[cfg(not(feature = "qualification-oracles-test-only"))]
-struct ProductionCompilerCustodyV1(Box<AdmittedProtectedRustcInvocationV1>);
+struct ProductionCompilerCustodyV1 {
+    invocation: Box<AdmittedProtectedRustcInvocationV1>,
+    attempt: BuildAttempt,
+}
 
 #[cfg(feature = "qualification-oracles-test-only")]
 enum ProductionCompilerCustodyV1 {
-    ProtectedV3(Box<AdmittedProtectedRustcInvocationV1>),
+    ProtectedV3 {
+        invocation: Box<AdmittedProtectedRustcInvocationV1>,
+        attempt: BuildAttempt,
+    },
     ExtractionOnly,
 }
 
 impl ProductionCompilerCustodyV1 {
-    fn protected(invocation: AdmittedProtectedRustcInvocationV1) -> Self {
+    fn protected(invocation: AdmittedProtectedRustcInvocationV1, attempt: BuildAttempt) -> Self {
         #[cfg(not(feature = "qualification-oracles-test-only"))]
         {
-            Self(Box::new(invocation))
+            Self {
+                invocation: Box::new(invocation),
+                attempt,
+            }
         }
         #[cfg(feature = "qualification-oracles-test-only")]
         {
-            Self::ProtectedV3(Box::new(invocation))
+            Self::ProtectedV3 {
+                invocation: Box::new(invocation),
+                attempt,
+            }
         }
     }
 
@@ -198,17 +209,32 @@ impl ProductionCompilerCustodyV1 {
         Self::ExtractionOnly
     }
 
-    fn into_publication_invocation(
-        self,
-    ) -> Result<Box<AdmittedProtectedRustcInvocationV1>, ProductionPipelineErrorV1> {
+    fn has_publication_attempt(&self) -> bool {
         #[cfg(not(feature = "qualification-oracles-test-only"))]
         {
-            Ok(self.0)
+            true
+        }
+        #[cfg(feature = "qualification-oracles-test-only")]
+        {
+            matches!(self, Self::ProtectedV3 { .. })
+        }
+    }
+
+    fn into_publication_custody(
+        self,
+    ) -> Result<(BuildAttempt, Box<AdmittedProtectedRustcInvocationV1>), ProductionPipelineErrorV1>
+    {
+        #[cfg(not(feature = "qualification-oracles-test-only"))]
+        {
+            Ok((self.attempt, self.invocation))
         }
         #[cfg(feature = "qualification-oracles-test-only")]
         {
             match self {
-                Self::ProtectedV3(invocation) => Ok(invocation),
+                Self::ProtectedV3 {
+                    invocation,
+                    attempt,
+                } => Ok((attempt, invocation)),
                 Self::ExtractionOnly => Err(ProductionPipelineErrorV1::ExtractionCannotPublish),
             }
         }
@@ -514,7 +540,12 @@ impl Gfx942LoweredProductionCompilationV1 {
             &self.bindings.transaction.output_dir,
             &self.bindings.transaction.compiler_ffi_envelope,
         );
-        6 + usize::from(self.bindings.transaction.build_attempt.is_some())
+        6 + usize::from(
+            self.bindings
+                .transaction
+                .compiler_custody
+                .has_publication_attempt(),
+        )
     }
 
     pub(crate) fn grants_artifact_or_launch_authority(&self) -> bool {
@@ -559,7 +590,6 @@ impl Gfx942LoweredProductionCompilationV1 {
         let ProductionTransactionBindingsV1 {
             producer,
             output_dir,
-            build_attempt,
             compiler_ffi_envelope,
             compiler_custody,
         } = transaction;
@@ -569,7 +599,7 @@ impl Gfx942LoweredProductionCompilationV1 {
             return Err(ProductionPipelineErrorV1::RustcLineageMismatch);
         }
         drop(reference_effect_bindings);
-        let invocation = compiler_custody.into_publication_invocation()?;
+        let (attempt, invocation) = compiler_custody.into_publication_custody()?;
         let semantic_lineage = crate::production_semantic_lineage_v3::PreparedProductionSemanticLineageV3::try_prepare(
             &rustc_identity_inventory,
             &rustc_preflight_plan,
@@ -590,11 +620,6 @@ impl Gfx942LoweredProductionCompilationV1 {
         let prepared =
             crate::production_worker_handoff::prepare_production_worker_handoff(compiler_module)
                 .map_err(ProductionPipelineErrorV1::WorkerHandoff)?;
-        let attempt = build_attempt.ok_or({
-            ProductionPipelineErrorV1::WorkerHandoff(
-                crate::production_worker_handoff::ProductionWorkerHandoffError::MissingBuildAttempt,
-            )
-        })?;
         Ok(PreparedProductionWorkerPublicationV1 {
             producer,
             output_dir,
@@ -678,7 +703,12 @@ impl RankedVerifiedProductionCompilationV1 {
             &self.bindings.transaction.output_dir,
             &self.bindings.transaction.compiler_ffi_envelope,
         );
-        6 + usize::from(self.bindings.transaction.build_attempt.is_some())
+        6 + usize::from(
+            self.bindings
+                .transaction
+                .compiler_custody
+                .has_publication_attempt(),
+        )
     }
 
     pub(crate) fn grants_artifact_or_launch_authority(&self) -> bool {
@@ -694,7 +724,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
         closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
         producer: ProducerIdentity,
         output_dir: PathBuf,
-        build_attempt: Option<BuildAttempt>,
+        build_attempt: BuildAttempt,
         invocation: AdmittedProtectedRustcInvocationV1,
     ) -> Result<Self, ProductionPipelineErrorV1> {
         Self::from_collected_device_closure_with_custody(
@@ -702,8 +732,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
             closure,
             producer,
             output_dir,
-            build_attempt,
-            ProductionCompilerCustodyV1::protected(invocation),
+            ProductionCompilerCustodyV1::protected(invocation, build_attempt),
         )
     }
 
@@ -713,14 +742,12 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
         closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
         producer: ProducerIdentity,
         output_dir: PathBuf,
-        build_attempt: Option<BuildAttempt>,
     ) -> Result<Self, ProductionPipelineErrorV1> {
         Self::from_collected_device_closure_with_custody(
             tcx,
             closure,
             producer,
             output_dir,
-            build_attempt,
             ProductionCompilerCustodyV1::extraction_only(),
         )
     }
@@ -730,7 +757,6 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
         closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
         producer: ProducerIdentity,
         output_dir: PathBuf,
-        build_attempt: Option<BuildAttempt>,
         compiler_custody: ProductionCompilerCustodyV1,
     ) -> Result<Self, ProductionPipelineErrorV1> {
         if closure.function_count() == 0 {
@@ -748,7 +774,6 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
                 transaction: ProductionTransactionBindingsV1 {
                     producer,
                     output_dir,
-                    build_attempt,
                     compiler_ffi_envelope,
                     compiler_custody,
                 },

@@ -9,8 +9,8 @@ use core::fmt;
 use fe2o3_compiler_api::{
     CompileLimitsV1, CompileRequestErrorV1, CompileRequestV1, CompilerProfileIdentityV1,
     CompilerStageV1, KernelInstanceIdentityV1, ObligationSetIdentityV1,
-    PipelineConfigurationIdentityV1, PipelineSelectorV1, RequestIdentityV1,
-    SnapshotFormatIdentityV1, SnapshotIdentityV1, StageSnapshotErrorV1, StageSnapshotV1,
+    PipelineConfigurationIdentityV1, RequestIdentityV1, SnapshotFormatIdentityV1,
+    SnapshotIdentityV1, StageSnapshotErrorV1, StageSnapshotV1,
     TargetProfileIdentityV1,
 };
 use fe2o3_compiler_driver::{
@@ -30,6 +30,8 @@ const SNAPSHOT_IDENTITY_DOMAIN_V1: &str = "fe2o3.general-gemm.frontend-snapshot-
 const KERNEL_IDENTITY_DOMAIN_V1: &str = "fe2o3.general-gemm.inert-kernel-instance-identity.v1";
 const OBLIGATION_IDENTITY_DOMAIN_V1: &str = "fe2o3.general-gemm.required-obligations-identity.v1";
 const REQUEST_IDENTITY_DOMAIN_V1: &str = "fe2o3.general-gemm.compile-request-identity.v1";
+// Retains the frozen production request-identity tag after selector retirement.
+const PRODUCTION_PIPELINE_IDENTITY_TAG_V1: u8 = 3;
 
 /// A mirrored corpus property disagrees with the compiler driver's schema.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -202,31 +204,28 @@ pub fn validate_gemm_property_schema_v1() -> Result<(), GemmPropertySchemaErrorV
     Ok(())
 }
 
-/// Caller-selected compiler identities and route for an inert binding.
+/// Caller-supplied compiler identities for an inert production binding.
 ///
 /// These values remain untrusted commitments. This type does not authenticate
-/// the selected compiler, target, or pipeline.
+/// the compiler, target, or pipeline configuration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralGemmCompilerProfilesV1 {
     compiler: CompilerProfileIdentityV1,
     target: TargetProfileIdentityV1,
     pipeline: PipelineConfigurationIdentityV1,
-    selector: PipelineSelectorV1,
 }
 
 impl GeneralGemmCompilerProfilesV1 {
-    /// Records caller-supplied identities and the explicit compiler route.
+    /// Records caller-supplied compiler, target, and pipeline commitments.
     pub const fn new(
         compiler: CompilerProfileIdentityV1,
         target: TargetProfileIdentityV1,
         pipeline: PipelineConfigurationIdentityV1,
-        selector: PipelineSelectorV1,
     ) -> Self {
         Self {
             compiler,
             target,
             pipeline,
-            selector,
         }
     }
 
@@ -245,10 +244,6 @@ impl GeneralGemmCompilerProfilesV1 {
         self.pipeline
     }
 
-    /// Returns the explicit compiler route.
-    pub const fn selector(self) -> PipelineSelectorV1 {
-        self.selector
-    }
 }
 
 /// A general GEMM frontend binding failed closed.
@@ -421,7 +416,7 @@ struct RequestIdentityFields {
 }
 
 fn request_identity(fields: RequestIdentityFields) -> RequestIdentityV1 {
-    let selector = [fields.profiles.selector() as u8];
+    let production_pipeline = [PRODUCTION_PIPELINE_IDENTITY_TAG_V1];
     let mut limit_bytes = Vec::with_capacity(18);
     limit_bytes.extend_from_slice(&fields.limits.max_stage_snapshots().to_le_bytes());
     limit_bytes.extend_from_slice(&fields.limits.max_stage_receipts().to_le_bytes());
@@ -437,7 +432,7 @@ fn request_identity(fields: RequestIdentityFields) -> RequestIdentityV1 {
             fields.profiles.target().as_bytes(),
             fields.profiles.pipeline().as_bytes(),
             fields.obligations.as_bytes(),
-            &selector,
+            &production_pipeline,
             fields.snapshot.as_bytes(),
             fields.format.as_bytes(),
             &limit_bytes,
@@ -475,7 +470,6 @@ pub fn bind_general_gemm_compiler_request_v1(
         profiles.target(),
         profiles.pipeline(),
         obligations,
-        profiles.selector(),
         snapshot,
         limits,
     )?;
@@ -522,7 +516,6 @@ pub fn validate_general_gemm_compiler_request_v1(
         request.compiler_profile_identity(),
         request.target_profile_identity(),
         request.pipeline_configuration_identity(),
-        request.selector(),
     );
     let expected_request = request_identity(RequestIdentityFields {
         kernel,
@@ -593,7 +586,6 @@ mod tests {
                     CompilerProfileIdentityV1::from_untrusted_bytes([0x11; 32]),
                     TargetProfileIdentityV1::from_untrusted_bytes([0x22; 32]),
                     PipelineConfigurationIdentityV1::from_untrusted_bytes([0x33; 32]),
-                    PipelineSelectorV1::PlironShadow,
                 ),
                 obligations,
                 snapshot,

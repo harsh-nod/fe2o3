@@ -151,9 +151,10 @@ must preserve the tests' path-substitution and build-custody properties.
 | `mir_import`, `same_session_rustc_v1`, `mir_import_v2` | Existing semantic/custody observations | Sole AMD-target importer subsumes each required fact and hostile test |
 | detached MIR/Kernel/GPU Pliron services | #140 migration and conformance evidence | Closed session constructs and transforms the same graphs through opaque handles |
 
-The dormant `fe2o3-legacy-compiler` fixture and compiler API `Legacy` selector
-were subsequently removed. `PlironShadow` remains non-authoritative evidence,
-while `PlironV1` is the only candidate-producing compiler API route.
+The dormant `fe2o3-legacy-compiler` fixture and every compiler API
+implementation selector were subsequently removed. The compiler API and driver
+now expose one production backend contract; non-authoritative comparison remains
+qualification tooling rather than a second route.
 
 ## Required next sequence
 

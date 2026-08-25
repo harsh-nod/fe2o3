@@ -8,6 +8,7 @@ mod launch;
 mod managed_memory;
 mod memory;
 mod memory_topology;
+#[cfg(any(test, feature = "qualification-raw-hip-test-only"))]
 mod module;
 mod operation;
 mod peer_access;
@@ -16,15 +17,17 @@ mod stream;
 mod vmm;
 
 pub use context::GpuContext;
-pub use cooperative::{
-    CooperativeCapabilityError, CooperativeLaunchCapability, launch_cooperative_kernel_on_stream,
-};
+#[cfg(any(test, feature = "qualification-raw-hip-test-only"))]
+pub use cooperative::launch_cooperative_kernel_on_stream;
+pub use cooperative::{CooperativeCapabilityError, CooperativeLaunchCapability};
 pub use device_copy::DeviceCopy;
 pub use device_target::ObservedDeviceTarget;
 pub use error::{Error, HipError, Result, check};
 pub use event::{Event, EventOptions};
 pub use fe2o3_macros::DeviceCopy;
-pub use launch::{DevicePtr, KernelParams, LaunchConfig, launch_kernel_on_stream};
+pub use launch::DevicePtr;
+#[cfg(any(test, feature = "qualification-raw-hip-test-only"))]
+pub use launch::{KernelParams, LaunchConfig, launch_kernel_on_stream};
 pub use managed_memory::{
     ManagedAdviceReceipt, ManagedAdviceRequest, ManagedAdviceState, ManagedAllocation,
     ManagedMemoryCleanupError, ManagedMemoryError, ManagedMemoryLocation, ManagedMigrationReceipt,
@@ -38,6 +41,7 @@ pub use memory_topology::{
     AllocationIdentity, AllocationKind, ContextIdentity, MemoryCapabilities,
     MemoryTopologyObservation, MemoryTopologyObservationError, PhysicalDeviceIdentity,
 };
+#[cfg(any(test, feature = "qualification-raw-hip-test-only"))]
 pub use module::{GpuFunction, GpuModule};
 pub use operation::{BorrowedDeviceOperation, OwnedDeviceOperation};
 pub use peer_access::{

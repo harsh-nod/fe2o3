@@ -216,6 +216,7 @@ pub use cooperative_launch::{
     CooperativeAdmissionError, CooperativeLaunchAdmission, CooperativeLaunchError,
     CooperativeResidencyAdmission,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use fe2o3_core::{KernelParams, LaunchConfig};
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use fe2o3_hsaco_finalize::WorkgroupSyncProfileKindV1;
@@ -608,6 +609,7 @@ pub mod __generated {
 ///     }
 /// }
 /// ```
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 #[macro_export]
 macro_rules! launch {
     (
@@ -632,6 +634,7 @@ macro_rules! launch {
 }
 
 #[doc(hidden)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 #[macro_export]
 macro_rules! __push_kernel_arg {
     ($params:ident, scalar($value:expr)) => {{

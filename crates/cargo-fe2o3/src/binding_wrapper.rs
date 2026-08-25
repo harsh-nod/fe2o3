@@ -143,6 +143,7 @@ const TARGET_ENV: &str = "FE2O3_TARGET";
 const VERIFY_KERNEL_IR_ENV: &str = "FE2O3_VERIFY_KERNEL_IR";
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const SCALAR_GEMM_V1_PIPELINE: &str = "collected-scalar-gemm-v1";
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const ROW_SOFTMAX_V1_PIPELINE: &str = "collected-row-softmax-v1";
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const NON_PRODUCTION_REPRODUCTION_RECORD_ENV: &str =
@@ -477,7 +478,12 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 .map_err(BindingWrapperError::CapabilityBroker)?;
             authenticate_pinned_rustc(&pinned_rustc, capability_binding.rustc_executable_sha256())?;
             validate_rustc_lib_tree_descriptor(capability_binding)?;
-            let compiler_capabilities = CompilerCapabilities::from_environment(capability_binding)?;
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+            let compiler_capabilities =
+                CompilerCapabilities::from_qualification_environment(capability_binding)?;
+            #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+            let compiler_capabilities =
+                CompilerCapabilities::from_production_environment(capability_binding)?;
             let current_dir =
                 std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
             #[cfg(any(test, feature = "qualification-oracles-test-only"))]
@@ -960,8 +966,7 @@ fn configure_build_observation_environment_with_test_mutation(
 }
 
 fn reject_dynamic_loader_environment() -> Result<(), BindingWrapperError> {
-    let authority_sensitive = std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").as_deref()
-        == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
+    let authority_sensitive = std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").is_some()
         || std::env::var_os(PRODUCTION_BUILD_CONFIG_ENV).is_some()
         || std::env::var_os(crate::build_config::WORKER_V2_CONFIG_ENV).is_some();
     let unprotected_validation = cfg!(debug_assertions)
@@ -2664,18 +2669,82 @@ struct CompilerCapabilities {
     backend: PinnedCodegenBackend,
     artifact: PinnedDirectory,
     compiler_closure: Option<fe2o3_compiler_closure_capability::CompilerClosureCapabilityV1>,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     invocation_authority: Option<capability_broker::BrokeredInvocationAuthorityV1>,
     output_dir: PathBuf,
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pinned_cargo_image_sha256: Option<[u8; 32]>,
 }
 
+fn receive_validated_compiler_capabilities(
+    binding: capability_broker::CapabilityBindingV3,
+) -> Result<capability_broker::BrokeredCapabilities, BindingWrapperError> {
+    let transferred = capability_broker::receive(managed_build_session()?, binding)
+        .map_err(BindingWrapperError::CapabilityBroker)?;
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    let pinned_cargo_image_sha256 = transferred
+        .pinned_cargo_image
+        .as_ref()
+        .map(|image| *image.sha256());
+    if binding.requires_compiler_closure_v2() != transferred.compiler_closure.is_some() {
+        return Err(BindingWrapperError::CapabilityBroker(
+            "brokered compiler-closure descriptor presence differs from the authenticated binding"
+                .to_owned(),
+        ));
+    }
+    if let Some(capability) = &transferred.compiler_closure {
+        capability
+            .revalidate()
+            .map_err(BindingWrapperError::CapabilityBroker)?;
+        let closure = capability.closure();
+        let closure_mismatch = closure.identity_sha256() != binding.compiler_closure_sha256()
+            || closure.rustc_executable_sha256() != binding.rustc_executable_sha256()
+            || closure.codegen_backend_sha256() != *transferred.backend.sha256();
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        let closure_mismatch = closure_mismatch
+            || pinned_cargo_image_sha256
+                .is_some_and(|cargo| closure.cargo_executable_sha256() != cargo);
+        if closure_mismatch {
+            return Err(BindingWrapperError::CapabilityBroker(
+                "brokered compiler closure differs from the retained compiler capabilities"
+                    .to_owned(),
+            ));
+        }
+    }
+    Ok(transferred)
+}
+
 impl CompilerCapabilities {
-    fn from_environment(
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    fn from_production_environment(
         binding: capability_broker::CapabilityBindingV3,
     ) -> Result<Self, BindingWrapperError> {
-        let mut transferred = capability_broker::receive(managed_build_session()?, binding)
+        let mut transferred = receive_validated_compiler_capabilities(binding)?;
+        transferred
+            .invocation_authority
+            .take()
+            .ok_or_else(|| {
+                BindingWrapperError::CapabilityBroker(
+                    "capability broker omitted invocation authority".to_owned(),
+                )
+            })?
+            .release()
             .map_err(BindingWrapperError::CapabilityBroker)?;
+        let output_dir = transferred.artifact.child_path();
+        Ok(Self {
+            binding,
+            backend: transferred.backend,
+            artifact: transferred.artifact,
+            compiler_closure: transferred.compiler_closure,
+            output_dir,
+        })
+    }
+
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    fn from_qualification_environment(
+        binding: capability_broker::CapabilityBindingV3,
+    ) -> Result<Self, BindingWrapperError> {
+        let mut transferred = receive_validated_compiler_capabilities(binding)?;
         let invocation_authority = transferred.invocation_authority.take().ok_or_else(|| {
             BindingWrapperError::CapabilityBroker(
                 "capability broker omitted invocation authority".to_owned(),
@@ -2695,36 +2764,12 @@ impl CompilerCapabilities {
             .pinned_cargo_image
             .as_ref()
             .map(|image| *image.sha256());
-        let compiler_closure = transferred.compiler_closure.take();
-        if binding.requires_compiler_closure_v2() != compiler_closure.is_some() {
-            return Err(BindingWrapperError::CapabilityBroker(
-                "brokered compiler-closure descriptor presence differs from the authenticated binding"
-                    .to_owned(),
-            ));
-        }
-        if let Some(capability) = &compiler_closure {
-            capability
-                .revalidate()
-                .map_err(BindingWrapperError::CapabilityBroker)?;
-            let closure = capability.closure();
-            if closure.identity_sha256() != binding.compiler_closure_sha256()
-                || closure.rustc_executable_sha256() != binding.rustc_executable_sha256()
-                || closure.codegen_backend_sha256() != *transferred.backend.sha256()
-                || pinned_cargo_image_sha256
-                    .is_some_and(|cargo| closure.cargo_executable_sha256() != cargo)
-            {
-                return Err(BindingWrapperError::CapabilityBroker(
-                    "brokered compiler closure differs from the retained compiler capabilities"
-                        .to_owned(),
-                ));
-            }
-        }
         let output_dir = transferred.artifact.child_path();
         Ok(Self {
             binding,
             backend: transferred.backend,
             artifact: transferred.artifact,
-            compiler_closure,
+            compiler_closure: transferred.compiler_closure,
             invocation_authority,
             output_dir,
             #[cfg(any(test, feature = "qualification-oracles-test-only"))]
@@ -2827,6 +2872,7 @@ impl CompilerCapabilities {
             crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV,
             hex(&self.compiler_closure_sha256()),
         );
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         self.inherit_invocation_authority(command)?;
         Ok(())
     }
@@ -2872,6 +2918,7 @@ impl CompilerCapabilities {
             .map_err(|error| BindingWrapperError::ChildCapability(error.to_string()))
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     fn inherit_invocation_authority(
         &self,
         command: &mut Command,
@@ -3001,6 +3048,9 @@ struct ManagedAttempt {
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     protected_source_path: Option<PathBuf>,
     compile_environment_profile: Option<BuildCompileEnvironmentProfileV1>,
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    production_build: ManagedProductionBuild,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     production_build: Option<ManagedProductionBuild>,
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     qualification_work: Option<ManagedQualificationWork>,
@@ -3010,6 +3060,22 @@ struct ManagedAttempt {
     row_softmax_provision: bool,
     #[cfg(feature = "compiler-handoff-observation-test-only")]
     compiler_handoff_observation: Option<crate::compiler_handoff_observation::Request>,
+}
+
+struct ManagedProductionAttempt {
+    output_dir: PathBuf,
+    producer: ProducerIdentity,
+    attempt: BuildAttempt,
+}
+
+impl From<&ManagedAttempt> for ManagedProductionAttempt {
+    fn from(managed: &ManagedAttempt) -> Self {
+        Self {
+            output_dir: managed.output_dir.clone(),
+            producer: managed.producer.clone(),
+            attempt: managed.attempt,
+        }
+    }
 }
 
 struct ManagedAttemptRevocationGuard {
@@ -3206,17 +3272,25 @@ enum CompletionFailure {
 impl ManagedAttempt {
     #[cfg(feature = "compiler-handoff-observation-test-only")]
     fn has_configured_work(&self) -> bool {
-        if self.production_build.is_some() {
-            return true;
+        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+        {
+            true
         }
         #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-        if self.qualification_work.is_some() {
-            return true;
+        {
+            self.production_build.is_some() || self.qualification_work.is_some()
         }
-        false
     }
 
     fn is_managed_recovery(&self) -> bool {
+        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+        if matches!(
+            &self.production_build,
+            ManagedProductionBuild::Recovered { .. } | ManagedProductionBuild::Ready { .. }
+        ) {
+            return true;
+        }
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         if matches!(
             &self.production_build,
             Some(ManagedProductionBuild::Recovered { .. } | ManagedProductionBuild::Ready { .. })
@@ -3431,7 +3505,7 @@ fn prepare_production_managed_attempt(
         producer,
         attempt,
         compile_environment_profile,
-        production_build: Some(production_build),
+        production_build,
         #[cfg(feature = "compiler-handoff-observation-test-only")]
         compiler_handoff_observation,
     };
@@ -3723,9 +3797,12 @@ fn prepare_managed_attempt(
 }
 
 fn complete_managed_attempt(
-    mut managed: ManagedAttempt,
+    managed: ManagedAttempt,
     parent_rustc_invocation_custody: Option<ParentRustcInvocationCustody>,
 ) -> Result<(), BindingWrapperError> {
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    let mut managed = managed;
+    let mut revocation = ManagedAttemptRevocationGuard::arm(&managed);
     let completion = match parent_rustc_invocation_custody {
         Some(custody) => custody.retain_through(|custody| {
             custody.revalidate().map_err(|error| {
@@ -3734,19 +3811,38 @@ fn complete_managed_attempt(
                 ))
             })?;
             debug_assert!(!custody.grants_compiler_authority());
-            complete_managed_attempt_inner(&mut managed, Some(custody))
+            #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+            {
+                complete_managed_attempt_inner(managed, Some(custody))
+            }
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+            {
+                complete_managed_attempt_inner(&mut managed, Some(custody))
+            }
         }),
-        None => complete_managed_attempt_inner(&mut managed, None),
+        None => {
+            #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+            {
+                complete_managed_attempt_inner(managed, None)
+            }
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+            {
+                complete_managed_attempt_inner(&mut managed, None)
+            }
+        }
     };
 
     match completion {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            revocation.disarm();
+            Ok(())
+        }
         Err(CompletionFailure::Uncommitted(primary)) => {
-            let cleanup =
-                fail_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).err();
+            let cleanup = revocation.revoke().err();
             Err(BindingWrapperError::ManagedCompletion { primary, cleanup })
         }
         Err(CompletionFailure::PreserveAttempt(primary)) => {
+            revocation.disarm();
             Err(BindingWrapperError::ManagedCompletion {
                 primary,
                 cleanup: None,
@@ -3757,15 +3853,11 @@ fn complete_managed_attempt(
 
 #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
 fn complete_managed_attempt_inner(
-    managed: &mut ManagedAttempt,
+    managed: ManagedAttempt,
     parent_custody: Option<&ParentRustcInvocationCustody>,
 ) -> Result<(), CompletionFailure> {
-    let build = managed.production_build.take().ok_or_else(|| {
-        CompletionFailure::Uncommitted(
-            "production managed attempt lost its V3 build transaction before completion".to_owned(),
-        )
-    })?;
-    complete_managed_production_build(managed, build, parent_custody)
+    let transaction = ManagedProductionAttempt::from(&managed);
+    complete_managed_production_build(&transaction, managed.production_build, parent_custody)
 }
 
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
@@ -3780,7 +3872,8 @@ fn complete_managed_attempt_inner(
         return complete_row_softmax_v1_provision(managed);
     }
     if let Some(build) = managed.production_build.take() {
-        return complete_managed_production_build(managed, build, parent_custody);
+        let transaction = ManagedProductionAttempt::from(&*managed);
+        return complete_managed_production_build(&transaction, build, parent_custody);
     }
     if let Some(work) = managed.qualification_work.take() {
         return complete_managed_qualification_work(managed, work);
@@ -3791,7 +3884,7 @@ fn complete_managed_attempt_inner(
 }
 
 fn complete_managed_production_build(
-    managed: &ManagedAttempt,
+    managed: &ManagedProductionAttempt,
     build: ManagedProductionBuild,
     parent_custody: Option<&ParentRustcInvocationCustody>,
 ) -> Result<(), CompletionFailure> {
@@ -4143,7 +4236,7 @@ fn complete_fresh_worker_v2(
 }
 
 fn complete_fresh_production_artifact(
-    managed: &ManagedAttempt,
+    managed: &ManagedProductionAttempt,
     worker: &PreparedProductionBuildConfig,
     compiler_closure: CompilerClosureV2,
     parent_custody: &ParentRustcInvocationCustody,
@@ -4210,7 +4303,7 @@ fn complete_fresh_production_artifact(
 }
 
 fn complete_recovered_production_artifact(
-    managed: &ManagedAttempt,
+    managed: &ManagedProductionAttempt,
     recovered: RecoveredProtectedWorkerV3HsacoPublicationV1,
     compiler_closure: CompilerClosureV2,
 ) -> Result<(), CompletionFailure> {
@@ -4229,7 +4322,7 @@ fn complete_recovered_production_artifact(
 }
 
 fn complete_published_production_artifact(
-    managed: &ManagedAttempt,
+    managed: &ManagedProductionAttempt,
     published: PublishedProtectedWorkerV3HsacoV1,
 ) -> Result<(), CompletionFailure> {
     let intent_identity = published.recovered_evidence().storage_record().identity();
@@ -4266,7 +4359,7 @@ fn complete_published_production_artifact(
 }
 
 fn complete_ready_production_artifact(
-    managed: &ManagedAttempt,
+    managed: &ManagedProductionAttempt,
     envelope: RecoveredWorkerV3LoadEnvelopeV1,
 ) -> Result<(), CompletionFailure> {
     let intent_identity = envelope.wire().publication_intent_record().identity();
@@ -9276,8 +9369,18 @@ mod tests {
         assert!(!source.contains(concat!("Recovery", "V3")));
         assert!(source.contains("enum ManagedProductionBuild"));
         assert!(source.contains("enum ManagedQualificationWork"));
+        assert!(source.contains("production_build: ManagedProductionBuild"));
         assert!(source.contains("production_build: Option<ManagedProductionBuild>"));
         assert!(source.contains("qualification_work: Option<ManagedQualificationWork>"));
+        let production_completion = source
+            .split("#[cfg(not(any(test, feature = \"qualification-oracles-test-only\")))]\nfn complete_managed_attempt_inner(")
+            .nth(1)
+            .expect("feature-free production completion")
+            .split("#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]")
+            .next()
+            .expect("bounded production completion");
+        assert!(!production_completion.contains(".take()"));
+        assert!(!production_completion.contains("Option<ManagedProductionBuild>"));
         assert!(source.contains("fn prepare_managed_production_build("));
         assert!(source.contains("fn prepare_production_managed_attempt("));
         assert!(source.contains("PreparedManagedWork::production(build)"));

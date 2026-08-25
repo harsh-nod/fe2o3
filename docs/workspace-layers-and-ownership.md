@@ -17,7 +17,7 @@ and runtime behavior. The words MUST, MUST NOT, SHOULD, and MAY are normative.
 Issues #134 and #135 introduce several independently implementable compiler,
 runtime, and verification components. They must be able to land alongside
 ordinary kernel, backend, runtime, evidence, and documentation work without
-making the root manifest, compiler selector, or existing monoliths permanent
+making the root manifest, compiler composition, or existing monoliths permanent
 merge bottlenecks.
 
 The workspace is therefore organized around stable architectural layers, not
@@ -162,18 +162,15 @@ correctness, or hardware qualification.
 
 ### Integration
 
-Integration owns CLI composition, rustc codegen integration, pipeline
-selection, shadow comparison, and end-to-end differential
-orchestration. Integration may compose any production layer but MUST NOT depend
-on examples or test fixtures. It is the only layer that selects `PlironShadow`
-or `PlironV1`.
+Integration owns CLI composition, rustc codegen integration, qualification
+comparison, and end-to-end differential orchestration. Integration may compose
+any production layer but MUST NOT depend on examples or test fixtures.
 
-`fe2o3-compiler-api` defines those two selectors as inert request data.
-`fe2o3-compiler-driver` routes exactly one selected, configured backend and
-revalidates its bounded output. Shadow cannot return an executable candidate;
-`PlironV1` is the only candidate-producing compiler API route. No production
-selection path depends on the new driver at this checkpoint; qualification
-routes remain composed separately in `rustc-codegen-fe2o3`.
+`fe2o3-compiler-api` defines one inert production request contract.
+`fe2o3-compiler-driver` owns exactly one configured backend and revalidates its
+bounded output. It has no implementation selector, shadow slot, or fallback.
+Qualification oracles remain separately feature-gated in
+`rustc-codegen-fe2o3` and cannot enter the feature-free production graph.
 
 `fe2o3-pliron-scalar-add-v1` is an intentionally narrow integration crate. It
 composes one checked-in backend fixture, the admitted Pliron/V2 lineage, the
@@ -261,7 +258,7 @@ runtime may independently consume the same canonical service transitions.
 ## Parallel Change Protocol
 
 Each feature lane owns its crate, tests, and local documentation. Changes
-SHOULD be small commits that preserve the legacy default and include positive,
+SHOULD be small commits that preserve the sole production route and include positive,
 negative, canonical round-trip, and compatibility tests proportional to the
 boundary changed.
 
@@ -270,14 +267,12 @@ The integration owner exclusively performs:
 1. shared dependency and lockfile changes;
 2. root workspace and dependency-policy changes;
 3. central dialect registration;
-4. compiler selector and release-pipeline composition;
+4. compiler and release-pipeline composition;
 5. cross-layer conflict resolution and final generic/hardware qualification.
 
-At the compiler API boundary, `PlironShadow` is inspect-only and `PlironV1`
-must fail closed without legacy fallback. Neither selector is wired into the
-production compiler at this checkpoint. The existing legacy path remains the
-production default until a separate reviewed milestone satisfies the Wave 0
-gates.
+At the compiler API boundary, every request enters the same production backend
+and must fail closed without fallback. Qualification comparisons are test
+oracles, not selectable compiler implementations.
 
 ## Policy Checker
 

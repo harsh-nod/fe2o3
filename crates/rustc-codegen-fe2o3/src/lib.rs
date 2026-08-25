@@ -296,6 +296,11 @@ impl BuildAttemptSelection {
     }
 }
 
+struct RetainedProductionDeviceAdmissionV1 {
+    target: production_target_v1::RetainedProductionTargetV1,
+    build_attempt: artifact_transaction::BuildAttempt,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct BackendConfig {
     pub verbose: bool,
@@ -488,12 +493,23 @@ impl CodegenBackend for Fe2o3CodegenBackend {
             let production_compilation = compilation_route.is_production();
             #[cfg(not(feature = "qualification-oracles-test-only"))]
             let production_compilation = true;
-            let mut production_target = None;
-            if production_compilation
-                && collector::count_production_roots_before_monomorphization_v1(tcx) > 0
-            {
-                production_target = Some(
-                    production_target_v1::RetainedProductionTargetV1::authenticate_before_collection(
+            let build_attempt = match self.config.build_attempt.resolve() {
+                Ok(attempt) => attempt,
+                Err(reason) => tcx.dcx().fatal(format!(
+                    "[rustc-codegen-fe2o3] invalid managed build attempt: {reason}"
+                )),
+            };
+            let production_root_count = production_compilation
+                .then(|| collector::count_production_roots_before_monomorphization_v1(tcx))
+                .unwrap_or(0);
+            let mut production_device_admission = if production_root_count > 0 {
+                let build_attempt = build_attempt.unwrap_or_else(|| {
+                    tcx.dcx().fatal(format!(
+                        "[rustc-codegen-fe2o3] production-v1 device compilation requires a managed {BUILD_ATTEMPT_ENV} before monomorphization"
+                    ))
+                });
+                Some(RetainedProductionDeviceAdmissionV1 {
+                    target: production_target_v1::RetainedProductionTargetV1::authenticate_before_collection(
                         tcx,
                         &self.config.target,
                     )
@@ -502,21 +518,29 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             "[rustc-codegen-fe2o3] production-v1 target authentication failed before monomorphization without fallback: {error}"
                         ))
                     }),
-                );
-            }
+                    build_attempt,
+                })
+            } else {
+                None
+            };
             let mono_partitions = tcx.collect_and_partition_mono_items(());
             let kernel_count = collector::count_kernels_in_cgus(tcx, mono_partitions.codegen_units);
+            if production_compilation && production_device_admission.is_some() != (kernel_count > 0)
+            {
+                let reason = if production_device_admission.is_some() {
+                    "authenticated device roots disappeared during monomorphization"
+                } else {
+                    "a device root appeared only after pre-monomorphization admission"
+                };
+                tcx.dcx().fatal(format!(
+                    "[rustc-codegen-fe2o3] production-v1 root custody changed across monomorphization: {reason}; compilation failed closed"
+                ));
+            }
             let crate_name = tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE);
             let output_dir = match managed_artifact_output(&self.config, kernel_count) {
                 Ok(output_dir) => output_dir,
                 Err(()) => tcx.dcx().fatal(format!(
                     "[rustc-codegen-fe2o3] {HSACO_DIR_ENV} must name a managed artifact directory when compiling kernels"
-                )),
-            };
-            let build_attempt = match self.config.build_attempt.resolve() {
-                Ok(attempt) => attempt,
-                Err(reason) => tcx.dcx().fatal(format!(
-                    "[rustc-codegen-fe2o3] invalid managed build attempt: {reason}"
                 )),
             };
             let local_source = tcx
@@ -554,17 +578,18 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                 match production_pipeline_v1::disposition(kernel_count) {
                     production_pipeline_v1::ProductionDispositionV1::HostOnly => {}
                     production_pipeline_v1::ProductionDispositionV1::DeviceTransaction => {
+                        let RetainedProductionDeviceAdmissionV1 {
+                            target,
+                            build_attempt,
+                        } = production_device_admission.take().expect(
+                            "device admission presence was validated after monomorphization",
+                        );
                         let has_custom_llvm_configuration = has_custom_llvm_configuration(tcx.sess);
                         if let Err(error) = production_pipeline_v1::reject_custom_llvm_configuration(
                             has_custom_llvm_configuration,
                         ) {
                             tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"));
                         }
-                        let target = production_target.take().unwrap_or_else(|| {
-                            tcx.dcx().fatal(
-                                "[rustc-codegen-fe2o3] production-v1 discovered a device root only after monomorphization; pre-collection root authentication failed closed",
-                            )
-                        });
                         let closure = match collector::collect_authenticated_kernel_closure_v1(
                             tcx,
                             mono_partitions.codegen_units,
@@ -2612,12 +2637,22 @@ mod tests {
             .next()
             .expect("bounded production route");
         assert!(production.contains("protected_rustc_invocation.take()"));
+        assert!(production.contains("production_device_admission.take()"));
+        assert!(!production.contains("build_attempt.unwrap_or_else"));
         assert!(production.contains("from_collected_device_closure("));
         assert!(production.contains("publish_worker_handoff()"));
         assert!(!production.contains("from_collected_device_closure_with_protected_invocation_v3"));
         assert!(!production.contains("publish_worker_handoff_v3"));
         assert!(!production.contains("None =>"));
+        assert!(!production_pipeline.contains("Option<BuildAttempt>"));
         assert!(production_pipeline.contains("publish_compiler_module_handoff_v3"));
+        let admission = backend
+            .find("let mut production_device_admission")
+            .expect("production device admission");
+        let monomorphization = backend
+            .find("let mono_partitions = tcx.collect_and_partition_mono_items")
+            .expect("monomorphization boundary");
+        assert!(admission < monomorphization);
     }
 
     #[cfg(feature = "qualification-oracles-test-only")]

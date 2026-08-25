@@ -1,8 +1,8 @@
 use fe2o3_amd_target::AmdTargetId;
 use fe2o3_compiler_api::{
     CompileLimitsV1, CompileRequestV1, CompilerProfileIdentityV1, KernelInstanceIdentityV1,
-    ObligationSetIdentityV1, PipelineConfigurationIdentityV1, PipelineSelectorV1,
-    RequestIdentityV1, SnapshotFormatIdentityV1, SnapshotIdentityV1, StageSnapshotV1,
+    ObligationSetIdentityV1, PipelineConfigurationIdentityV1, RequestIdentityV1,
+    SnapshotFormatIdentityV1, SnapshotIdentityV1, StageSnapshotV1,
     TargetProfileIdentityV1,
 };
 use fe2o3_compiler_driver::{
@@ -47,7 +47,6 @@ fn profiles() -> GeneralGemmCompilerProfilesV1 {
         CompilerProfileIdentityV1::from_untrusted_bytes([0x11; 32]),
         TargetProfileIdentityV1::from_untrusted_bytes([0x22; 32]),
         PipelineConfigurationIdentityV1::from_untrusted_bytes([0x33; 32]),
-        PipelineSelectorV1::PlironShadow,
     )
 }
 
@@ -126,7 +125,6 @@ fn exact_plan_and_caller_profiles_are_bound_into_an_inert_request() {
         compiler_request.pipeline_configuration_identity(),
         profiles.pipeline()
     );
-    assert_eq!(compiler_request.selector(), profiles.selector());
     assert!(
         compiler_request
             .input()
@@ -149,7 +147,7 @@ fn exact_plan_and_caller_profiles_are_bound_into_an_inert_request() {
 }
 
 #[test]
-fn every_caller_profile_identity_and_route_changes_the_request_binding() {
+fn every_caller_profile_identity_changes_the_request_binding() {
     let plan = plan(request([17, 19, 18], [23, 29, 31], [2.0, -1.0]));
     let base = bind_general_gemm_compiler_request_v1(&plan, profiles(), CompileLimitsV1::default())
         .unwrap();
@@ -158,25 +156,16 @@ fn every_caller_profile_identity_and_route_changes_the_request_binding() {
             CompilerProfileIdentityV1::from_untrusted_bytes([0x12; 32]),
             profiles().target(),
             profiles().pipeline(),
-            profiles().selector(),
         ),
         GeneralGemmCompilerProfilesV1::new(
             profiles().compiler(),
             TargetProfileIdentityV1::from_untrusted_bytes([0x23; 32]),
             profiles().pipeline(),
-            profiles().selector(),
         ),
         GeneralGemmCompilerProfilesV1::new(
             profiles().compiler(),
             profiles().target(),
             PipelineConfigurationIdentityV1::from_untrusted_bytes([0x34; 32]),
-            profiles().selector(),
-        ),
-        GeneralGemmCompilerProfilesV1::new(
-            profiles().compiler(),
-            profiles().target(),
-            profiles().pipeline(),
-            PipelineSelectorV1::PlironV1,
         ),
     ];
     for variant in variants {
@@ -255,7 +244,6 @@ fn rebuild(
         original.target_profile_identity(),
         original.pipeline_configuration_identity(),
         obligations,
-        original.selector(),
         input,
         original.limits(),
     )

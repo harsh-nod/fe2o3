@@ -76,7 +76,7 @@ fn transaction_in_active_session_v1<'tcx>(
     let output_dir = env::current_dir()
         .map_err(|error| format!("production extraction working directory failed: {error}"))?;
     crate::production_pipeline_v1::ProductionCompilationV1::from_collected_device_closure_for_extraction(
-        tcx, closure, producer, output_dir, None,
+        tcx, closure, producer, output_dir,
     )
     .map_err(|error| format!("production extraction transaction construction failed: {error}"))
 }

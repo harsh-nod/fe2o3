@@ -1,6 +1,8 @@
 #![cfg(not(feature = "qualification-oracles-test-only"))]
 
 use std::fs;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -91,6 +93,120 @@ fn production_managed_transaction_has_no_qualification_dispatch() {
     assert!(!environment.contains("GeneralGemm"));
     assert!(!environment.contains("WorkerV2"));
     assert!(!environment.contains("qualification"));
+}
+
+#[test]
+fn production_capability_intake_releases_oracle_authority_immediately() {
+    let source = include_str!("../src/binding_wrapper.rs");
+    let broker = include_str!("../src/capability_broker.rs");
+    let intake = source
+        .split("fn from_production_environment(")
+        .nth(1)
+        .expect("direct production capability intake exists")
+        .split("#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\n    fn from_qualification_environment(")
+        .next()
+        .expect("qualification capability intake follows production intake");
+    assert!(intake.contains(".invocation_authority"));
+    assert!(intake.contains(".release()"));
+    assert!(!intake.contains("ROW_SOFTMAX"));
+    assert!(!intake.contains("FE2O3_QUALIFICATION"));
+    assert!(!intake.contains("Some(invocation_authority)"));
+
+    assert!(source.contains(
+        "#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\n    invocation_authority: Option<capability_broker::BrokeredInvocationAuthorityV1>"
+    ));
+    assert!(broker.contains(
+        "Ordinary,\n        #[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\n        S09,"
+    ));
+    assert!(broker.contains(
+        "#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\n        pub(crate) fn inherit_for_child("
+    ));
+    assert!(broker.contains(
+        "#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\n        pinned_cargo_image: File,"
+    ));
+}
+
+#[test]
+fn production_run_has_one_worker_v3_application_path() {
+    let source = include_str!("../src/main.rs");
+    let injection = source
+        .split("fn inject_production_application_runner(")
+        .nth(1)
+        .expect("production runner injection exists")
+        .split(
+            "#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\nfn inject_qualification_application_runner(",
+        )
+        .next()
+        .expect("qualification runner injection follows production injection");
+    assert!(injection.contains("RUNNER_EXPECTS_ENVELOPE"));
+    assert!(injection.contains("does not permit an intermediate Cargo runner"));
+    assert!(!injection.contains("RUNNER_EXPECTS_NO_ENVELOPE"));
+    assert!(!injection.contains("expects_envelope"));
+
+    let execution = source
+        .split("if runner_count != 0 || !original_runner.is_empty()")
+        .nth(1)
+        .expect("production runner execution exists")
+        .split(
+            "#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\n    {\n        let handoff",
+        )
+        .next()
+        .expect("qualification runner execution follows production execution");
+    assert!(execution.contains("requires a canonical load envelope"));
+    assert!(execution.contains("run_application_with_handoff"));
+    assert!(!execution.contains("RUNNER_EXPECTS_NO_ENVELOPE"));
+    assert!(!execution.contains("run_qualification_application_without_handoff"));
+
+    let handoff_source = include_str!("../src/application_handoff.rs");
+    assert!(handoff_source.contains(
+        "#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\npub(crate) const RUNNER_EXPECTS_NO_ENVELOPE"
+    ));
+    let exec_source = include_str!("../src/application_exec.rs");
+    assert!(exec_source.contains(
+        "#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\npub(crate) fn configure_closed_descriptor_baseline"
+    ));
+}
+
+#[test]
+fn production_runner_rejects_no_envelope_marker() {
+    let scratch = ScratchDirectory::new();
+    fs::set_permissions(&scratch.0, fs::Permissions::from_mode(0o700))
+        .expect("make scratch generation private");
+    let mut owner_record = b"fe2o3-owned-v1\0".to_vec();
+    owner_record.extend_from_slice(&[1_u8; 16]);
+    let owner_path = scratch.0.join(".fe2o3-owned-v1");
+    fs::write(&owner_path, owner_record).expect("write generation owner record");
+    fs::set_permissions(&owner_path, fs::Permissions::from_mode(0o600))
+        .expect("make generation owner record private");
+    let metadata = fs::metadata(&scratch.0).expect("stat scratch directory");
+    let encoded_path = scratch
+        .0
+        .as_os_str()
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+        .env_clear()
+        .args([
+            "__fe2o3-runner-v1".to_owned(),
+            "3".to_owned(),
+            encoded_path,
+            metadata.dev().to_string(),
+            metadata.ino().to_string(),
+            "none".to_owned(),
+            "0".to_owned(),
+            "/bin/true".to_owned(),
+        ])
+        .output()
+        .expect("run production application boundary");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("production application runner requires the Worker V3 envelope marker"),
+        "{stderr}"
+    );
 }
 
 #[test]
