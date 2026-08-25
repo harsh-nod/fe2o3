@@ -905,6 +905,245 @@ fn private_pointer_not_rooted_in_a_kernel_parameter_is_invocation_local() {
 }
 
 #[test]
+fn private_pointer_round_trip_retains_exact_parameter_identity() {
+    let global_pointer = global_pointer(AccessMode::ReadWrite);
+    let private_slot = Type::pointer(
+        global_pointer.clone(),
+        AddressSpace::Private,
+        AccessMode::ReadWrite,
+    );
+    let module = module_with_kernel(
+        vec![global_pointer.clone(), Type::F32],
+        vec![
+            op(
+                2,
+                private_slot,
+                OperationKind::Alloca {
+                    element: global_pointer.clone(),
+                    count: None,
+                    address_space: AddressSpace::Private,
+                    alignment: 8,
+                },
+            ),
+            Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer: ValueId(2),
+                    value: ValueId(0),
+                    access: MemoryAccess::new(AddressSpace::Private, 8),
+                },
+            ),
+            op(
+                3,
+                global_pointer,
+                OperationKind::Load {
+                    pointer: ValueId(2),
+                    access: MemoryAccess::new(AddressSpace::Private, 8),
+                },
+            ),
+            Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer: ValueId(3),
+                    value: ValueId(1),
+                    access: MemoryAccess::new(AddressSpace::Global, 4),
+                },
+            ),
+        ],
+        dynamic_1d(),
+    );
+
+    let analysis = analyze(&module, 8);
+    assert!(
+        analysis.is_complete(),
+        "{:?}",
+        analysis.incomplete_reasons()
+    );
+    assert_eq!(analysis.obligations().accesses().len(), 1);
+    assert_eq!(
+        analysis.obligations().accesses()[0]
+            .allocation()
+            .parameter_index(),
+        0
+    );
+}
+
+#[test]
+fn private_pointer_round_trip_uses_the_last_reaching_store() {
+    let global_pointer = global_pointer(AccessMode::ReadWrite);
+    let private_slot = Type::pointer(
+        global_pointer.clone(),
+        AddressSpace::Private,
+        AccessMode::ReadWrite,
+    );
+    let private_access = MemoryAccess::new(AddressSpace::Private, 8);
+    let module = module_with_kernel(
+        vec![global_pointer.clone(), global_pointer.clone(), Type::F32],
+        vec![
+            op(
+                3,
+                private_slot,
+                OperationKind::Alloca {
+                    element: global_pointer.clone(),
+                    count: None,
+                    address_space: AddressSpace::Private,
+                    alignment: 8,
+                },
+            ),
+            Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer: ValueId(3),
+                    value: ValueId(0),
+                    access: private_access,
+                },
+            ),
+            Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer: ValueId(3),
+                    value: ValueId(1),
+                    access: private_access,
+                },
+            ),
+            op(
+                4,
+                global_pointer,
+                OperationKind::Load {
+                    pointer: ValueId(3),
+                    access: private_access,
+                },
+            ),
+            Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer: ValueId(4),
+                    value: ValueId(2),
+                    access: MemoryAccess::new(AddressSpace::Global, 4),
+                },
+            ),
+        ],
+        dynamic_1d(),
+    );
+
+    let analysis = analyze(&module, 8);
+    assert!(
+        analysis.is_complete(),
+        "{:?}",
+        analysis.incomplete_reasons()
+    );
+    assert_eq!(
+        analysis.obligations().accesses()[0]
+            .allocation()
+            .parameter_index(),
+        1
+    );
+}
+
+#[test]
+fn conflicting_private_pointer_join_fails_closed() {
+    let global_pointer = global_pointer(AccessMode::ReadWrite);
+    let private_slot = Type::pointer(
+        global_pointer.clone(),
+        AddressSpace::Private,
+        AccessMode::ReadWrite,
+    );
+    let private_access = MemoryAccess::new(AddressSpace::Private, 8);
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.push(op(
+        4,
+        private_slot,
+        OperationKind::Alloca {
+            element: global_pointer.clone(),
+            count: None,
+            address_space: AddressSpace::Private,
+            alignment: 8,
+        },
+    ));
+    entry.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(2),
+        then_target: BlockId(1),
+        then_arguments: vec![],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+    let mut left = BasicBlock::new(BlockId(1));
+    left.operations.push(Operation::new(
+        vec![],
+        OperationKind::Store {
+            pointer: ValueId(4),
+            value: ValueId(0),
+            access: private_access,
+        },
+    ));
+    left.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![],
+    });
+    let mut right = BasicBlock::new(BlockId(2));
+    right.operations.push(Operation::new(
+        vec![],
+        OperationKind::Store {
+            pointer: ValueId(4),
+            value: ValueId(1),
+            access: private_access,
+        },
+    ));
+    right.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![],
+    });
+    let mut join = BasicBlock::new(BlockId(3));
+    join.operations = vec![
+        op(
+            5,
+            global_pointer.clone(),
+            OperationKind::Load {
+                pointer: ValueId(4),
+                access: private_access,
+            },
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(5),
+                value: ValueId(3),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ),
+    ];
+    join.terminator = Some(Terminator::Return { values: vec![] });
+    let function = Function::kernel_entry(
+        "kernel_impl",
+        Signature::new(
+            vec![
+                global_pointer.clone(),
+                global_pointer,
+                Type::BOOL,
+                Type::F32,
+            ],
+            vec![],
+        ),
+        vec![ValueId(0), ValueId(1), ValueId(2), ValueId(3)],
+        vec![entry, left, right, join],
+    );
+    let mut module = Module::new("formal-private-pointer-join");
+    module.functions.push(function);
+    module
+        .kernels
+        .push(Kernel::new("kernel", "kernel_impl", dynamic_1d()));
+
+    let analysis = analyze(&module, 8);
+    assert!(analysis.incomplete_reasons().iter().any(|reason| matches!(
+        reason,
+        FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
+            pointer: ValueId(5),
+            ..
+        }
+    )));
+}
+
+#[test]
 fn unmodeled_barrier_effect_fails_closed() {
     let barrier = Barrier {
         execution_scope: SynchronizationScope::Workgroup,

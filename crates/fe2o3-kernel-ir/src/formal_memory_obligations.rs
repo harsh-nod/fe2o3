@@ -5,10 +5,11 @@ use std::{
 };
 
 use crate::{
-    AccessMode, AddressSpace, Axis, BinaryOp, ByteExpression, Constant, Function, FunctionId,
-    FunctionOperationLocation, IndexKind, IntrinsicKind, InvocationRange1d, KernelId, LaunchDomain,
-    LaunchExtent, MemoryAccess, Module, Operation, OperationKind, RegionValidationError,
-    ScalarType, Type, ValueId, VerificationErrors, VerifiedKernelIrModuleV1, verify_module_ref,
+    AccessMode, AddressSpace, Axis, BinaryOp, BlockId, ByteExpression, Constant, Function,
+    FunctionId, FunctionOperationLocation, IndexKind, IntrinsicKind, InvocationRange1d, KernelId,
+    LaunchDomain, LaunchExtent, MemoryAccess, Module, Operation, OperationKind,
+    RegionValidationError, ScalarType, Type, ValueId, VerificationErrors, VerifiedKernelIrModuleV1,
+    verify_module_ref,
 };
 
 mod receipt_v1;
@@ -592,11 +593,13 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
         .map(|allocation| (allocation.value, allocation.identity))
         .collect();
     let definitions = collect_definitions(function);
+    let private_load_sources = collect_private_load_sources(function, &definitions);
     let value_types = collect_types(function);
     let context = AccessDerivationContext {
         definitions: &definitions,
         value_types: &value_types,
         allocation_by_value: &allocation_by_value,
+        private_load_sources: &private_load_sources,
     };
     let mut accesses = Vec::new();
 
@@ -614,6 +617,9 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                 OperationKind::Load { access, .. }
                     if access.address_space == AddressSpace::Private => {}
                 OperationKind::Load { pointer, access } => {
+                    if direct_private_alloca_access_is_internal(*pointer, *access, &definitions) {
+                        continue;
+                    }
                     if let Some(invocations) = access_invocations {
                         match derive_access(
                             location,
@@ -635,6 +641,9 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                 OperationKind::Store {
                     pointer, access, ..
                 } => {
+                    if direct_private_alloca_access_is_internal(*pointer, *access, &definitions) {
+                        continue;
+                    }
                     if let Some(invocations) = access_invocations {
                         match derive_access(
                             location,
@@ -745,6 +754,29 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
             reasons: reasons.into_iter().collect(),
         })
     }
+}
+
+fn direct_private_alloca_access_is_internal(
+    pointer: ValueId,
+    access: MemoryAccess,
+    definitions: &Definitions<'_>,
+) -> bool {
+    if access.address_space != AddressSpace::Private {
+        return false;
+    }
+    definitions
+        .operations
+        .get(&pointer)
+        .is_some_and(|(operation, _)| {
+            matches!(
+                operation.kind,
+                OperationKind::Alloca {
+                    count: None,
+                    address_space: AddressSpace::Private,
+                    ..
+                }
+            )
+        })
 }
 
 fn resolve_invocations(
@@ -870,6 +902,167 @@ fn collect_definitions(function: &Function) -> Definitions<'_> {
     Definitions { operations }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PrivateSlotState {
+    Uninitialized,
+    Exact(ValueId),
+    Unknown,
+}
+
+impl PrivateSlotState {
+    fn join(self, other: Self) -> Self {
+        if self == other { self } else { Self::Unknown }
+    }
+}
+
+fn collect_private_load_sources(
+    function: &Function,
+    definitions: &Definitions<'_>,
+) -> BTreeMap<ValueId, ValueId> {
+    let body = function
+        .body
+        .as_ref()
+        .expect("verified function is defined");
+    let slots = definitions
+        .operations
+        .iter()
+        .filter_map(|(value, (operation, _))| {
+            matches!(
+                operation.kind,
+                OperationKind::Alloca {
+                    count: None,
+                    address_space: AddressSpace::Private,
+                    ..
+                }
+            )
+            .then_some(*value)
+        })
+        .collect::<BTreeSet<_>>();
+    if slots.is_empty() || body.blocks.is_empty() {
+        return BTreeMap::new();
+    }
+
+    let block_ids = body
+        .blocks
+        .iter()
+        .map(|block| block.id)
+        .collect::<BTreeSet<_>>();
+    let mut predecessors = block_ids
+        .iter()
+        .copied()
+        .map(|block| (block, BTreeSet::new()))
+        .collect::<BTreeMap<_, _>>();
+    for block in &body.blocks {
+        if let Some(terminator) = &block.terminator {
+            for successor in terminator.successors() {
+                if let Some(incoming) = predecessors.get_mut(&successor) {
+                    incoming.insert(block.id);
+                }
+            }
+        }
+    }
+
+    let entry = body.blocks[0].id;
+    let initial = slots
+        .iter()
+        .copied()
+        .map(|slot| (slot, PrivateSlotState::Uninitialized))
+        .collect::<BTreeMap<_, _>>();
+    let mut incoming = BTreeMap::<BlockId, BTreeMap<ValueId, PrivateSlotState>>::new();
+    let mut outgoing = BTreeMap::<BlockId, BTreeMap<ValueId, PrivateSlotState>>::new();
+    incoming.insert(entry, initial.clone());
+
+    loop {
+        let mut changed = false;
+        for block in &body.blocks {
+            let next_incoming = if block.id == entry {
+                Some(initial.clone())
+            } else {
+                predecessors.get(&block.id).and_then(|blocks| {
+                    let mut states = blocks.iter().filter_map(|block| outgoing.get(block));
+                    let first = states.next()?.clone();
+                    Some(states.fold(first, |mut joined, state| {
+                        for slot in &slots {
+                            let left = joined
+                                .get(slot)
+                                .copied()
+                                .unwrap_or(PrivateSlotState::Unknown);
+                            let right = state
+                                .get(slot)
+                                .copied()
+                                .unwrap_or(PrivateSlotState::Unknown);
+                            joined.insert(*slot, left.join(right));
+                        }
+                        joined
+                    }))
+                })
+            };
+            let Some(next_incoming) = next_incoming else {
+                continue;
+            };
+            changed |= incoming.get(&block.id) != Some(&next_incoming);
+            incoming.insert(block.id, next_incoming.clone());
+            let mut next_outgoing = next_incoming;
+            transfer_private_slot_stores(block, definitions, &mut next_outgoing);
+            changed |= outgoing.get(&block.id) != Some(&next_outgoing);
+            outgoing.insert(block.id, next_outgoing);
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let mut sources = BTreeMap::new();
+    for block in &body.blocks {
+        let Some(mut state) = incoming.get(&block.id).cloned() else {
+            continue;
+        };
+        for operation in &block.operations {
+            if let OperationKind::Load {
+                pointer: slot,
+                access,
+            } = operation.kind
+                && direct_private_alloca_access_is_internal(slot, access, definitions)
+                && let Some(PrivateSlotState::Exact(source)) = state.get(&slot).copied()
+            {
+                for result in &operation.results {
+                    sources.insert(result.id, source);
+                }
+            }
+            transfer_private_slot_store(operation, definitions, &mut state);
+        }
+    }
+    sources
+}
+
+fn transfer_private_slot_stores(
+    block: &crate::BasicBlock,
+    definitions: &Definitions<'_>,
+    state: &mut BTreeMap<ValueId, PrivateSlotState>,
+) {
+    for operation in &block.operations {
+        transfer_private_slot_store(operation, definitions, state);
+    }
+}
+
+fn transfer_private_slot_store(
+    operation: &Operation,
+    definitions: &Definitions<'_>,
+    state: &mut BTreeMap<ValueId, PrivateSlotState>,
+) {
+    let OperationKind::Store {
+        pointer,
+        value,
+        access,
+    } = operation.kind
+    else {
+        return;
+    };
+    if direct_private_alloca_access_is_internal(pointer, access, definitions) {
+        state.insert(pointer, PrivateSlotState::Exact(value));
+    }
+}
+
 fn collect_types(function: &Function) -> BTreeMap<ValueId, Type> {
     let mut types = BTreeMap::new();
     let body = function
@@ -896,6 +1089,7 @@ struct AccessDerivationContext<'analysis, 'module> {
     definitions: &'analysis Definitions<'module>,
     value_types: &'analysis BTreeMap<ValueId, Type>,
     allocation_by_value: &'analysis BTreeMap<ValueId, FormalAllocationIdentity>,
+    private_load_sources: &'analysis BTreeMap<ValueId, ValueId>,
 }
 
 fn derive_access(
@@ -916,6 +1110,7 @@ fn derive_access(
         context.definitions,
         context.value_types,
         context.allocation_by_value,
+        context.private_load_sources,
         location,
     )?;
     Ok(FormalMemoryAccess {
@@ -951,6 +1146,7 @@ fn derive_conservative_guarded_access(
         context.definitions,
         context.value_types,
         context.allocation_by_value,
+        context.private_load_sources,
         location,
     )?;
     Ok(FormalMemoryAccess {
@@ -970,7 +1166,28 @@ fn derive_pointer_allocation(
     definitions: &Definitions<'_>,
     value_types: &BTreeMap<ValueId, Type>,
     allocation_by_value: &BTreeMap<ValueId, FormalAllocationIdentity>,
+    private_load_sources: &BTreeMap<ValueId, ValueId>,
     access_location: FunctionOperationLocation,
+) -> Result<FormalAllocationIdentity, FormalMemoryIncompleteReason> {
+    derive_pointer_allocation_inner(
+        pointer,
+        definitions,
+        value_types,
+        allocation_by_value,
+        private_load_sources,
+        access_location,
+        &mut BTreeSet::new(),
+    )
+}
+
+fn derive_pointer_allocation_inner(
+    pointer: ValueId,
+    definitions: &Definitions<'_>,
+    value_types: &BTreeMap<ValueId, Type>,
+    allocation_by_value: &BTreeMap<ValueId, FormalAllocationIdentity>,
+    private_load_sources: &BTreeMap<ValueId, ValueId>,
+    access_location: FunctionOperationLocation,
+    visited_private_loads: &mut BTreeSet<ValueId>,
 ) -> Result<FormalAllocationIdentity, FormalMemoryIncompleteReason> {
     if let Some(allocation) = allocation_by_value.get(&pointer).copied()
         && matches!(value_types.get(&pointer), Some(Type::Pointer(_)))
@@ -990,13 +1207,40 @@ fn derive_pointer_allocation(
                 pointer,
             },
         ),
-        OperationKind::GetElementPointer { base, .. } => derive_pointer_allocation(
+        OperationKind::GetElementPointer { base, .. } => derive_pointer_allocation_inner(
             *base,
             definitions,
             value_types,
             allocation_by_value,
+            private_load_sources,
             access_location,
+            visited_private_loads,
         ),
+        OperationKind::Load { .. } => {
+            if !visited_private_loads.insert(pointer) {
+                return Err(FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
+                    location: *definition_location,
+                    pointer,
+                });
+            }
+            let source = private_load_sources.get(&pointer).copied().ok_or(
+                FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
+                    location: *definition_location,
+                    pointer,
+                },
+            )?;
+            let derived = derive_pointer_allocation_inner(
+                source,
+                definitions,
+                value_types,
+                allocation_by_value,
+                private_load_sources,
+                access_location,
+                visited_private_loads,
+            );
+            visited_private_loads.remove(&pointer);
+            derived
+        }
         _ => Err(FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
             location: *definition_location,
             pointer,
@@ -1015,7 +1259,28 @@ fn derive_pointer_expression(
     definitions: &Definitions<'_>,
     value_types: &BTreeMap<ValueId, Type>,
     allocation_by_value: &BTreeMap<ValueId, FormalAllocationIdentity>,
+    private_load_sources: &BTreeMap<ValueId, ValueId>,
     access_location: FunctionOperationLocation,
+) -> Result<PointerExpression, FormalMemoryIncompleteReason> {
+    derive_pointer_expression_inner(
+        pointer,
+        definitions,
+        value_types,
+        allocation_by_value,
+        private_load_sources,
+        access_location,
+        &mut BTreeSet::new(),
+    )
+}
+
+fn derive_pointer_expression_inner(
+    pointer: ValueId,
+    definitions: &Definitions<'_>,
+    value_types: &BTreeMap<ValueId, Type>,
+    allocation_by_value: &BTreeMap<ValueId, FormalAllocationIdentity>,
+    private_load_sources: &BTreeMap<ValueId, ValueId>,
+    access_location: FunctionOperationLocation,
+    visited_private_slots: &mut BTreeSet<ValueId>,
 ) -> Result<PointerExpression, FormalMemoryIncompleteReason> {
     if let Some(allocation) = allocation_by_value.get(&pointer).copied()
         && matches!(value_types.get(&pointer), Some(Type::Pointer(_)))
@@ -1044,12 +1309,14 @@ fn derive_pointer_expression(
                 pointer,
             }),
         OperationKind::GetElementPointer { base, offset } => {
-            let base_expression = derive_pointer_expression(
+            let base_expression = derive_pointer_expression_inner(
                 *base,
                 definitions,
                 value_types,
                 allocation_by_value,
+                private_load_sources,
                 access_location,
+                visited_private_slots,
             )?;
             let element_width = value_types.get(base).and_then(pointer_byte_width).ok_or(
                 FormalMemoryIncompleteReason::ElementWidthUnavailable {
@@ -1085,6 +1352,34 @@ fn derive_pointer_expression(
                 allocation: base_expression.allocation,
                 byte_offset,
             })
+        }
+        OperationKind::Load {
+            pointer: private_slot,
+            access,
+        } if direct_private_alloca_access_is_internal(*private_slot, *access, definitions) => {
+            if !visited_private_slots.insert(pointer) {
+                return Err(FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
+                    location: *definition_location,
+                    pointer,
+                });
+            }
+            let stored_value = private_load_sources.get(&pointer).copied().ok_or(
+                FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
+                    location: *definition_location,
+                    pointer,
+                },
+            )?;
+            let derived = derive_pointer_expression_inner(
+                stored_value,
+                definitions,
+                value_types,
+                allocation_by_value,
+                private_load_sources,
+                access_location,
+                visited_private_slots,
+            );
+            visited_private_slots.remove(&pointer);
+            derived
         }
         _ => Err(FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
             location: *definition_location,
