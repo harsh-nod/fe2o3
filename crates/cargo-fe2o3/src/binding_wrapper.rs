@@ -2774,7 +2774,7 @@ struct ManagedAttempt {
     attempt: BuildAttempt,
     protected_source_path: Option<PathBuf>,
     compile_environment_profile: Option<WorkerV2CompileEnvironmentProfileV1>,
-    worker_v2: Option<ManagedWorkerV2>,
+    worker_v2: Option<ManagedCompilerWork>,
     row_softmax_release: Option<RowSoftmaxReleaseContext>,
     row_softmax_provision: bool,
     #[cfg(feature = "compiler-handoff-observation-test-only")]
@@ -2890,7 +2890,26 @@ const fn protected_worker_v2_transition_blocker(
     }
 }
 
-enum ManagedWorkerV2 {
+enum ManagedCompilerWork {
+    Production(ManagedProductionBuild),
+    Qualification(ManagedQualificationWork),
+}
+
+enum ManagedProductionBuild {
+    Fresh {
+        config: Box<PreparedWorkerV2Config>,
+        compiler_closure: CompilerClosureV2,
+    },
+    Recovered {
+        recovered: Box<RecoveredProtectedWorkerV3HsacoPublicationV1>,
+        compiler_closure: CompilerClosureV2,
+    },
+    Ready {
+        envelope: Box<RecoveredWorkerV3LoadEnvelopeV1>,
+    },
+}
+
+enum ManagedQualificationWork {
     InProcessGeneralGemm {
         config: Box<PreparedWorkerV2Config>,
     },
@@ -2916,17 +2935,6 @@ enum ManagedWorkerV2 {
         compiler_closure: CompilerClosureV2,
         producer_binding: WorkerV2ProducerBindingV2,
     },
-    FreshV3 {
-        config: Box<PreparedWorkerV2Config>,
-        compiler_closure: CompilerClosureV2,
-    },
-    RecoveryV3 {
-        recovered: Box<RecoveredProtectedWorkerV3HsacoPublicationV1>,
-        compiler_closure: CompilerClosureV2,
-    },
-    RecoveryReadyV3 {
-        envelope: Box<RecoveredWorkerV3LoadEnvelopeV1>,
-    },
 }
 
 enum CompletionFailure {
@@ -2937,32 +2945,33 @@ enum CompletionFailure {
 impl ManagedAttempt {
     fn is_worker_v2_recovery(&self) -> bool {
         matches!(
-            self.worker_v2,
-            Some(
-                ManagedWorkerV2::RecoveryV1 { .. }
-                    | ManagedWorkerV2::RecoveryV2 { .. }
-                    | ManagedWorkerV2::RecoveryV3 { .. }
-                    | ManagedWorkerV2::RecoveryReadyV3 { .. }
-            )
+            &self.worker_v2,
+            Some(ManagedCompilerWork::Production(
+                ManagedProductionBuild::Recovered { .. } | ManagedProductionBuild::Ready { .. }
+            )) | Some(ManagedCompilerWork::Qualification(
+                ManagedQualificationWork::RecoveryV1 { .. }
+                    | ManagedQualificationWork::RecoveryV2 { .. }
+            ))
         )
     }
 
     fn source_debug_profile(&self) -> Option<WorkerV2SourceDebugProfileV1> {
         match &self.worker_v2 {
-            Some(ManagedWorkerV2::InProcessGeneralGemm { config, .. }) => {
-                config.source_debug_profile()
-            }
-            Some(
-                ManagedWorkerV2::FreshV1 { config, .. }
-                | ManagedWorkerV2::FreshV2 { config, .. }
-                | ManagedWorkerV2::FreshV3 { config, .. },
-            ) => config.source_debug_profile(),
-            Some(
-                ManagedWorkerV2::RecoveryV1 { .. }
-                | ManagedWorkerV2::RecoveryV2 { .. }
-                | ManagedWorkerV2::RecoveryV3 { .. }
-                | ManagedWorkerV2::RecoveryReadyV3 { .. },
-            )
+            Some(ManagedCompilerWork::Production(ManagedProductionBuild::Fresh {
+                config, ..
+            }))
+            | Some(ManagedCompilerWork::Qualification(
+                ManagedQualificationWork::InProcessGeneralGemm { config }
+                | ManagedQualificationWork::FreshV1 { config, .. }
+                | ManagedQualificationWork::FreshV2 { config, .. },
+            )) => config.source_debug_profile(),
+            Some(ManagedCompilerWork::Production(
+                ManagedProductionBuild::Recovered { .. } | ManagedProductionBuild::Ready { .. },
+            ))
+            | Some(ManagedCompilerWork::Qualification(
+                ManagedQualificationWork::RecoveryV1 { .. }
+                | ManagedQualificationWork::RecoveryV2 { .. },
+            ))
             | None => None,
         }
     }
@@ -2973,7 +2982,9 @@ impl ManagedAttempt {
 
     fn general_gemm_child_pins(&self) -> Option<GeneralGemmChildPinsV1<'_>> {
         match &self.worker_v2 {
-            Some(ManagedWorkerV2::InProcessGeneralGemm { config }) => {
+            Some(ManagedCompilerWork::Qualification(
+                ManagedQualificationWork::InProcessGeneralGemm { config },
+            )) => {
                 let pair = config
                     .general_gemm_v1()
                     .expect("in-process general GEMM has runtime-closure pins");
@@ -2984,15 +2995,13 @@ impl ManagedAttempt {
                     runtime_closure_v2_manifest_sha256: pair.runtime_closure_v2_manifest_sha256(),
                 })
             }
-            Some(
-                ManagedWorkerV2::FreshV1 { .. }
-                | ManagedWorkerV2::RecoveryV1 { .. }
-                | ManagedWorkerV2::FreshV2 { .. }
-                | ManagedWorkerV2::RecoveryV2 { .. }
-                | ManagedWorkerV2::FreshV3 { .. }
-                | ManagedWorkerV2::RecoveryV3 { .. }
-                | ManagedWorkerV2::RecoveryReadyV3 { .. },
-            )
+            Some(ManagedCompilerWork::Production(_))
+            | Some(ManagedCompilerWork::Qualification(
+                ManagedQualificationWork::FreshV1 { .. }
+                | ManagedQualificationWork::RecoveryV1 { .. }
+                | ManagedQualificationWork::FreshV2 { .. }
+                | ManagedQualificationWork::RecoveryV2 { .. },
+            ))
             | None => None,
         }
     }
@@ -3005,41 +3014,34 @@ impl ManagedAttempt {
         &self,
         pinned_cargo_image_sha256: [u8; 32],
     ) -> Result<Option<WorkerV2BuildObservation<'_>>, BindingWrapperError> {
-        match &self.worker_v2 {
-            Some(
-                ManagedWorkerV2::FreshV1 { config, .. }
-                | ManagedWorkerV2::FreshV2 { config, .. }
-                | ManagedWorkerV2::FreshV3 { config, .. },
-            ) if config.source_debug_profile().is_some() => {
-                let cargo_fe2o3_executable_sha256 =
-                    measure_build_executable("/proc/self/exe", "cargo-fe2o3 wrapper")?;
-                let current_dir =
-                    std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
-                let declared_cargo_executable = resolve_declared_cargo_executable(&current_dir)?;
-                let declared_cargo_executable_sha256 = measure_build_executable(
-                    &declared_cargo_executable,
-                    "declared CARGO executable",
-                )?;
-                let observation = observe_pinned_cargo_image_and_parent(pinned_cargo_image_sha256)?;
-                Ok(Some(config.build_observation(
-                    [0; 32],
-                    cargo_fe2o3_executable_sha256,
-                    declared_cargo_executable_sha256,
-                    observation.pinned_cargo_image_sha256,
-                    observation.observed_parent_pid,
-                    observation.observed_parent_start_time_ticks,
-                )))
-            }
-            Some(ManagedWorkerV2::InProcessGeneralGemm { .. })
-            | Some(ManagedWorkerV2::FreshV1 { .. })
-            | Some(ManagedWorkerV2::RecoveryV1 { .. })
-            | Some(ManagedWorkerV2::FreshV2 { .. })
-            | Some(ManagedWorkerV2::RecoveryV2 { .. })
-            | Some(ManagedWorkerV2::FreshV3 { .. })
-            | Some(ManagedWorkerV2::RecoveryV3 { .. })
-            | Some(ManagedWorkerV2::RecoveryReadyV3 { .. })
-            | None => Ok(None),
+        let config = match &self.worker_v2 {
+            Some(ManagedCompilerWork::Production(ManagedProductionBuild::Fresh {
+                config, ..
+            }))
+            | Some(ManagedCompilerWork::Qualification(
+                ManagedQualificationWork::FreshV1 { config, .. }
+                | ManagedQualificationWork::FreshV2 { config, .. },
+            )) => config,
+            _ => return Ok(None),
+        };
+        if config.source_debug_profile().is_none() {
+            return Ok(None);
         }
+        let cargo_fe2o3_executable_sha256 =
+            measure_build_executable("/proc/self/exe", "cargo-fe2o3 wrapper")?;
+        let current_dir = std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
+        let declared_cargo_executable = resolve_declared_cargo_executable(&current_dir)?;
+        let declared_cargo_executable_sha256 =
+            measure_build_executable(&declared_cargo_executable, "declared CARGO executable")?;
+        let observation = observe_pinned_cargo_image_and_parent(pinned_cargo_image_sha256)?;
+        Ok(Some(config.build_observation(
+            [0; 32],
+            cargo_fe2o3_executable_sha256,
+            declared_cargo_executable_sha256,
+            observation.pinned_cargo_image_sha256,
+            observation.observed_parent_pid,
+            observation.observed_parent_start_time_ticks,
+        )))
     }
 }
 
@@ -3170,9 +3172,11 @@ fn prepare_managed_attempt(
                 .map_err(BindingWrapperError::Artifact)?;
             (
                 attempt,
-                Some(ManagedWorkerV2::InProcessGeneralGemm {
-                    config: Box::new(config),
-                }),
+                Some(ManagedCompilerWork::Qualification(
+                    ManagedQualificationWork::InProcessGeneralGemm {
+                        config: Box::new(config),
+                    },
+                )),
                 true,
             )
         } else if let Some(compiler_closure) = production_compiler_closure {
@@ -3190,9 +3194,11 @@ fn prepare_managed_attempt(
             if let Some(envelope) = recovered_envelope {
                 (
                     attempt,
-                    Some(ManagedWorkerV2::RecoveryReadyV3 {
-                        envelope: Box::new(envelope),
-                    }),
+                    Some(ManagedCompilerWork::Production(
+                        ManagedProductionBuild::Ready {
+                            envelope: Box::new(envelope),
+                        },
+                    )),
                     false,
                 )
             } else {
@@ -3201,20 +3207,24 @@ fn prepare_managed_attempt(
                 ) {
                     Ok(recovered) => (
                         attempt,
-                        Some(ManagedWorkerV2::RecoveryV3 {
-                            recovered: Box::new(recovered),
-                            compiler_closure,
-                        }),
+                        Some(ManagedCompilerWork::Production(
+                            ManagedProductionBuild::Recovered {
+                                recovered: Box::new(recovered),
+                                compiler_closure,
+                            },
+                        )),
                         false,
                     ),
                     Err(WorkerV3HsacoPublicationErrorV1::Storage(
                         WorkerV3PublicationIntentErrorV1::NotFound,
                     )) => (
                         attempt,
-                        Some(ManagedWorkerV2::FreshV3 {
-                            config: Box::new(config),
-                            compiler_closure,
-                        }),
+                        Some(ManagedCompilerWork::Production(
+                            ManagedProductionBuild::Fresh {
+                                config: Box::new(config),
+                                compiler_closure,
+                            },
+                        )),
                         true,
                     ),
                     Err(error) => {
@@ -3248,12 +3258,14 @@ fn prepare_managed_attempt(
                 }
                 (
                     attempt,
-                    Some(ManagedWorkerV2::RecoveryV2 {
-                        resume,
-                        state: Box::new(state),
-                        compiler_closure,
-                        producer_binding,
-                    }),
+                    Some(ManagedCompilerWork::Qualification(
+                        ManagedQualificationWork::RecoveryV2 {
+                            resume,
+                            state: Box::new(state),
+                            compiler_closure,
+                            producer_binding,
+                        },
+                    )),
                     false,
                 )
             } else {
@@ -3264,13 +3276,15 @@ fn prepare_managed_attempt(
                     .map_err(BindingWrapperError::Artifact)?;
                 (
                     attempt,
-                    Some(ManagedWorkerV2::FreshV2 {
-                        config: Box::new(config),
-                        envelope_inputs,
-                        resume,
-                        compiler_closure,
-                        producer_binding,
-                    }),
+                    Some(ManagedCompilerWork::Qualification(
+                        ManagedQualificationWork::FreshV2 {
+                            config: Box::new(config),
+                            envelope_inputs,
+                            resume,
+                            compiler_closure,
+                            producer_binding,
+                        },
+                    )),
                     true,
                 )
             }
@@ -3289,10 +3303,12 @@ fn prepare_managed_attempt(
                 }
                 (
                     attempt,
-                    Some(ManagedWorkerV2::RecoveryV1 {
-                        resume,
-                        state: Box::new(state),
-                    }),
+                    Some(ManagedCompilerWork::Qualification(
+                        ManagedQualificationWork::RecoveryV1 {
+                            resume,
+                            state: Box::new(state),
+                        },
+                    )),
                     false,
                 )
             } else {
@@ -3303,11 +3319,13 @@ fn prepare_managed_attempt(
                     .map_err(BindingWrapperError::Artifact)?;
                 (
                     attempt,
-                    Some(ManagedWorkerV2::FreshV1 {
-                        config: Box::new(config),
-                        envelope_inputs,
-                        resume,
-                    }),
+                    Some(ManagedCompilerWork::Qualification(
+                        ManagedQualificationWork::FreshV1 {
+                            config: Box::new(config),
+                            envelope_inputs,
+                            resume,
+                        },
+                    )),
                     true,
                 )
             }
@@ -3394,76 +3412,99 @@ fn complete_managed_attempt_inner(
     if managed.row_softmax_provision {
         return complete_row_softmax_v1_provision(managed);
     }
-    if let Some(worker_v2) = managed.worker_v2.take() {
-        return match worker_v2 {
-            ManagedWorkerV2::InProcessGeneralGemm { config } => {
-                debug_assert!(config.executes_worker_in_rustc());
-                debug_assert!(config.general_gemm_v1().is_some());
-                Err(CompletionFailure::Uncommitted(
-                    "in-process general-GEMM qualification remains inert until rustc's private frontend correspondence and final join are connected"
-                        .to_owned(),
-                ))
+    if let Some(work) = managed.worker_v2.take() {
+        return match work {
+            ManagedCompilerWork::Production(build) => {
+                complete_managed_production_build(managed, build, parent_custody)
             }
-            ManagedWorkerV2::FreshV1 {
-                config,
-                envelope_inputs,
-                resume,
-            } => complete_fresh_worker_v2(managed, &config, envelope_inputs.as_ref(), &resume),
-            ManagedWorkerV2::RecoveryV1 { resume, state } => {
-                complete_recovered_worker_v2(managed, &resume, *state)
-            }
-            ManagedWorkerV2::FreshV2 {
-                config,
-                envelope_inputs,
-                resume,
-                compiler_closure,
-                producer_binding,
-            } => complete_fresh_protected_worker_v2(
-                managed,
-                &config,
-                envelope_inputs.as_ref(),
-                &resume,
-                compiler_closure,
-                &producer_binding,
-            ),
-            ManagedWorkerV2::RecoveryV2 {
-                resume,
-                state,
-                compiler_closure,
-                producer_binding,
-            } => complete_recovered_protected_worker_v2(
-                managed,
-                &resume,
-                *state,
-                compiler_closure,
-                &producer_binding,
-            ),
-            ManagedWorkerV2::FreshV3 {
-                config,
-                compiler_closure,
-            } => complete_fresh_production_worker_v3(
-                managed,
-                &config,
-                compiler_closure,
-                parent_custody.ok_or_else(|| {
-                    CompletionFailure::Uncommitted(
-                        "production V3 completion lost exact parent rustc invocation custody"
-                            .to_owned(),
-                    )
-                })?,
-            ),
-            ManagedWorkerV2::RecoveryV3 {
-                recovered,
-                compiler_closure,
-            } => complete_recovered_production_worker_v3(managed, *recovered, compiler_closure),
-            ManagedWorkerV2::RecoveryReadyV3 { envelope } => {
-                complete_ready_production_worker_v3(managed, *envelope)
+            ManagedCompilerWork::Qualification(work) => {
+                complete_managed_qualification_work(managed, work)
             }
         };
     }
     finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(|error| {
         CompletionFailure::Uncommitted(format!("build-attempt completion failed: {error}"))
     })
+}
+
+fn complete_managed_production_build(
+    managed: &ManagedAttempt,
+    build: ManagedProductionBuild,
+    parent_custody: Option<&ParentRustcInvocationCustody>,
+) -> Result<(), CompletionFailure> {
+    match build {
+        ManagedProductionBuild::Fresh {
+            config,
+            compiler_closure,
+        } => complete_fresh_production_worker_v3(
+            managed,
+            &config,
+            compiler_closure,
+            parent_custody.ok_or_else(|| {
+                CompletionFailure::Uncommitted(
+                    "production V3 completion lost exact parent rustc invocation custody"
+                        .to_owned(),
+                )
+            })?,
+        ),
+        ManagedProductionBuild::Recovered {
+            recovered,
+            compiler_closure,
+        } => complete_recovered_production_worker_v3(managed, *recovered, compiler_closure),
+        ManagedProductionBuild::Ready { envelope } => {
+            complete_ready_production_worker_v3(managed, *envelope)
+        }
+    }
+}
+
+fn complete_managed_qualification_work(
+    managed: &mut ManagedAttempt,
+    work: ManagedQualificationWork,
+) -> Result<(), CompletionFailure> {
+    match work {
+        ManagedQualificationWork::InProcessGeneralGemm { config } => {
+            debug_assert!(config.executes_worker_in_rustc());
+            debug_assert!(config.general_gemm_v1().is_some());
+            Err(CompletionFailure::Uncommitted(
+                "in-process general-GEMM qualification remains inert until rustc's private frontend correspondence and final join are connected"
+                    .to_owned(),
+            ))
+        }
+        ManagedQualificationWork::FreshV1 {
+            config,
+            envelope_inputs,
+            resume,
+        } => complete_fresh_worker_v2(managed, &config, envelope_inputs.as_ref(), &resume),
+        ManagedQualificationWork::RecoveryV1 { resume, state } => {
+            complete_recovered_worker_v2(managed, &resume, *state)
+        }
+        ManagedQualificationWork::FreshV2 {
+            config,
+            envelope_inputs,
+            resume,
+            compiler_closure,
+            producer_binding,
+        } => complete_fresh_protected_worker_v2(
+            managed,
+            &config,
+            envelope_inputs.as_ref(),
+            &resume,
+            compiler_closure,
+            &producer_binding,
+        ),
+        ManagedQualificationWork::RecoveryV2 {
+            resume,
+            state,
+            compiler_closure,
+            producer_binding,
+        } => complete_recovered_protected_worker_v2(
+            managed,
+            &resume,
+            *state,
+            compiler_closure,
+            &producer_binding,
+        ),
+    }
 }
 
 fn simulation_mode_selected() -> bool {
@@ -8829,6 +8870,11 @@ mod tests {
     fn production_binding_has_no_runtime_schema_selector() {
         let source = include_str!("binding_wrapper.rs");
         assert!(!source.contains(concat!("enum WorkerV2", "BindingSchema")));
+        assert!(!source.contains(concat!("enum ManagedWorker", "V2")));
+        assert!(!source.contains(concat!("Fresh", "V3")));
+        assert!(!source.contains(concat!("Recovery", "V3")));
+        assert!(source.contains("enum ManagedProductionBuild"));
+        assert!(source.contains("enum ManagedQualificationWork"));
         assert!(
             source.contains("else if let Some(compiler_closure) = production_compiler_closure")
         );
