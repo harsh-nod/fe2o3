@@ -68,7 +68,6 @@ const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
 pub(crate) const SIMULATION_MODE_ENV: &str = "FE2O3_SIMULATION_MODE_V1";
 pub(crate) const SIMULATION_ATTEMPT_ENV: &str = "FE2O3_SIMULATION_ATTEMPT_V1";
 const SIMULATION_PIPELINE: &str = "simulation-v1";
-const PRODUCTION_V1_PIPELINE: &str = "production-v1";
 const SIMULATION_FAILURE_ALREADY_REPORTED: &str =
     "cargo fe2o3 simulate emitted a structured simulation error";
 const EXPECTED_RUSTC_SHA256_ENV: &str = "FE2O3_EXPECTED_RUSTC_SHA256_V1";
@@ -463,23 +462,24 @@ fn cargo_with_backend_result(
     protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
     simulation: Option<&SimulationCommand>,
 ) -> Result<(), String> {
-    if authority_sensitive_request_selected(protected_release.is_some()) {
+    let production_target_profile = production_compilation_selected(
+        protected_release.is_some(),
+        simulation.is_some(),
+        env::var_os(worker_v2::CODEGEN_PIPELINE_ENV).as_deref(),
+    )?;
+    if authority_sensitive_request_selected(production_target_profile) {
         reject_dynamic_loader_environment()?;
     }
     scrub_process_dynamic_loader_environment();
     reject_preexisting_compiler_environment()?;
     let worker_v2 = worker_v2::PreparedWorkerV2Config::from_environment_for_cargo_setup()
         .map_err(|error| format!("Worker V2 setup failed: {error}"))?;
-    let production_target_profile = production_v1_selected(protected_release.is_some());
     validate_production_cargo_selection(
         args,
         production_target_profile,
         env::var_os(TARGET_ENV).as_deref(),
     )?;
-    let requires_authorized_closure = protected_release.is_some()
-        || worker_v2::production_pipeline_selected(
-            env::var_os(worker_v2::CODEGEN_PIPELINE_ENV).as_deref(),
-        )
+    let requires_authorized_closure = production_target_profile
         || env::var("FE2O3_CODEGEN_PIPELINE").as_deref() == Ok(AUTHORITY_BEARING_ROW_PIPELINE)
         || worker_v2
             .as_ref()
@@ -601,11 +601,8 @@ fn cargo_with_backend_result(
     run_cargo_with_backend(&mut context, command, args, protected_release, simulation)
 }
 
-fn authority_sensitive_request_selected(protected_release: bool) -> bool {
-    protected_release
-        || worker_v2::production_pipeline_selected(
-            env::var_os(worker_v2::CODEGEN_PIPELINE_ENV).as_deref(),
-        )
+fn authority_sensitive_request_selected(production_compilation: bool) -> bool {
+    production_compilation
         || env::var_os(worker_v2::CODEGEN_PIPELINE_ENV).as_deref()
         == Some(OsStr::new(AUTHORITY_BEARING_ROW_PIPELINE))
         // A Worker V2 manifest can select the source-debug authority profile. Treat the
@@ -614,10 +611,18 @@ fn authority_sensitive_request_selected(protected_release: bool) -> bool {
         || env::var_os(worker_v2::WORKER_V2_CONFIG_ENV).is_some()
 }
 
-fn production_v1_selected(protected_release: bool) -> bool {
-    protected_release
-        || env::var_os(worker_v2::CODEGEN_PIPELINE_ENV).as_deref()
-            == Some(OsStr::new(PRODUCTION_V1_PIPELINE))
+fn production_compilation_selected(
+    protected_release: bool,
+    simulation: bool,
+    selector: Option<&OsStr>,
+) -> Result<bool, String> {
+    if selector == Some(OsStr::new("production-v1")) {
+        return Err(format!(
+            "{} must be unset for production compilation; explicit `production-v1` selection has been removed",
+            worker_v2::CODEGEN_PIPELINE_ENV,
+        ));
+    }
+    Ok(protected_release || (!simulation && selector.is_none()))
 }
 
 fn validate_production_cargo_selection(
@@ -2748,7 +2753,8 @@ mod tests {
         SIMULATION_ATTEMPT_ENV, SIMULATION_MODE_ENV, TARGET_ENV, aggregate_post_spawn_results,
         configure_production_target_build_environment, configure_simulation_build_environment,
         inject_application_runner_config, normalize_invocation, parse_rocminfo_target,
-        resolve_amd_gpu_target, selected_run_target, validate_production_cargo_selection,
+        production_compilation_selected, resolve_amd_gpu_target, selected_run_target,
+        validate_production_cargo_selection,
     };
     use crate::project::PinnedDirectory;
     use std::ffi::{OsStr, OsString};
@@ -2820,6 +2826,22 @@ mod tests {
         assert_eq!(
             command_environment(&command, "FE2O3_HIP_SYS_DISABLE"),
             Some(OsStr::new("1"))
+        );
+    }
+
+    #[test]
+    fn production_is_the_unselected_route_and_has_no_selector() {
+        assert!(production_compilation_selected(false, false, None).unwrap());
+        assert!(production_compilation_selected(true, false, None).unwrap());
+        assert!(!production_compilation_selected(false, true, None).unwrap());
+        assert!(
+            !production_compilation_selected(false, false, Some(OsStr::new("kernel-ir-v1")))
+                .unwrap()
+        );
+        assert!(
+            production_compilation_selected(false, false, Some(OsStr::new("production-v1")))
+                .expect_err("obsolete production selector must fail")
+                .contains("must be unset for production compilation")
         );
     }
 

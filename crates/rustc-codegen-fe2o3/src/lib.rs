@@ -105,7 +105,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use pipeline_selection::{
-    CodegenPipeline, DevicePipelineRouteV1, PipelineSelection, QualificationPipelineV1,
+    DevicePipelineRouteV1, PipelineSelection, QualificationOracleV1, QualificationPipelineV1,
 };
 
 const MAX_FINALIZED_LLVM_IR_BYTES: usize = 16 * 1024 * 1024;
@@ -346,13 +346,13 @@ fn collect_qualification_oracle_input<'tcx>(
     let collection =
         collector::collect_qualification_device_functions(tcx, cgus, verbose, target, pipeline)
             .map_err(|error| error.to_string())?;
-    let pipeline = pipeline.pipeline();
+    let oracle = pipeline.oracle();
     let frontend_record = frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
         .map_err(|error| format!("frontend record extraction failed: {error}"))?;
     if verbose {
         eprintln!(
             "[rustc-codegen-fe2o3] validated `{}` qualification frontend record: {} function(s), {} canonical byte(s)",
-            pipeline.selector_name(),
+            oracle.selector_name(),
             frontend_record.unit().functions().len(),
             frontend_record.canonical_bytes().len(),
         );
@@ -403,21 +403,20 @@ impl CodegenBackend for Fe2o3CodegenBackend {
 
     fn codegen_crate(&self, tcx: TyCtxt<'_>, crate_info: &CrateInfo) -> Box<dyn Any> {
         with_no_trimmed_paths!({
-            let resolved_codegen_pipeline = self
+            let compilation_route = self
                 .config
                 .codegen_pipeline
                 .resolve()
                 .unwrap_or_else(|error| tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}")));
-            let codegen_pipeline = resolved_codegen_pipeline.pipeline();
             let mut protected_rustc_invocation =
-                protected_rustc_invocation::admit_for_codegen(codegen_pipeline)
+                protected_rustc_invocation::admit_for_codegen(compilation_route)
                     .unwrap_or_else(|error| {
                         tcx.dcx().fatal(format!(
                             "[rustc-codegen-fe2o3] protected rustc invocation admission failed without fallback: {error}"
                         ))
                     });
             let mut production_target = None;
-            if codegen_pipeline == CodegenPipeline::ProductionV1
+            if compilation_route.is_production()
                 && collector::count_production_roots_before_monomorphization_v1(tcx) > 0
             {
                 production_target = Some(
@@ -472,7 +471,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
             let mut generated_host_objects = host_object::GeneratedHostObjects::default();
             let mut temporary_host_objects = TemporaryHostObjects::default();
             let mut production_device_transaction_complete = false;
-            if codegen_pipeline == CodegenPipeline::ProductionV1 {
+            if compilation_route.is_production() {
                 match production_pipeline_v1::disposition(kernel_count) {
                     production_pipeline_v1::ProductionDispositionV1::HostOnly => {}
                     production_pipeline_v1::ProductionDispositionV1::DeviceTransaction => {
@@ -535,7 +534,10 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     }
                 }
             }
-            if kernel_count == 0 && codegen_pipeline == CodegenPipeline::CollectedGeneralGemmV1 {
+            let qualification_oracle = compilation_route.qualification_oracle();
+            if kernel_count == 0
+                && qualification_oracle == Some(QualificationOracleV1::CollectedGeneralGemmV1)
+            {
                 tcx.dcx().fatal(format!(
                     "[rustc-codegen-fe2o3] {} found no authenticated general GEMM kernel root; no fallback or artifact reconciliation was entered",
                     general_gemm_pipeline_v1::GENERAL_GEMM_PIPELINE_V1,
@@ -543,7 +545,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
             }
             let device_pipeline_route = if kernel_count > 0 {
                 Some(
-                    resolved_codegen_pipeline
+                    compilation_route
                         .device_route(production_device_transaction_complete)
                         .unwrap_or_else(|error| {
                             tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"))
@@ -556,7 +558,8 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                 device_pipeline_route
             {
                 let output_dir = output_dir.expect("kernel output was required above");
-                if codegen_pipeline == CodegenPipeline::SimulationV1 {
+                let qualification_oracle = qualification_pipeline.oracle();
+                if qualification_oracle == QualificationOracleV1::SimulationV1 {
                     let attempt = build_attempt.unwrap_or_else(|| {
                         tcx.dcx().fatal(
                             "[rustc-codegen-fe2o3] simulation-v1 requires a managed build attempt",
@@ -600,7 +603,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             "[rustc-codegen-fe2o3] simulation-v1 failed without fallback: {error}"
                         )),
                     }
-                } else if codegen_pipeline == CodegenPipeline::CollectedGeneralGemmV1 {
+                } else if qualification_oracle == QualificationOracleV1::CollectedGeneralGemmV1 {
                     let qualification = (|| -> Result<_, String> {
                         let attempt = build_attempt.ok_or_else(|| {
                             format!(
@@ -671,8 +674,8 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             general_gemm_pipeline_v1::GENERAL_GEMM_PIPELINE_V1,
                         )),
                     }
-                } else if codegen_pipeline
-                    == CodegenPipeline::CollectedExecutableScalarControlFlowV2
+                } else if qualification_oracle
+                    == QualificationOracleV1::CollectedExecutableScalarControlFlowV2
                 {
                     let lowering = (|| -> Result<_, String> {
                         let collection = collect_qualification_oracle_input(
@@ -710,7 +713,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2,
                         )),
                     }
-                } else if codegen_pipeline == CodegenPipeline::CollectedFlashAttentionV1 {
+                } else if qualification_oracle == QualificationOracleV1::CollectedFlashAttentionV1 {
                     let admission = (|| -> Result<_, String> {
                         let attempt = build_attempt.ok_or_else(|| {
                             format!(
@@ -802,7 +805,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             collected_flash_attention_v1::COLLECTED_FLASH_ATTENTION_PIPELINE_V1,
                         )),
                     }
-                } else if codegen_pipeline == CodegenPipeline::CollectedMoeTop2V1 {
+                } else if qualification_oracle == QualificationOracleV1::CollectedMoeTop2V1 {
                     let preparation = (|| -> Result<_, String> {
                         let attempt = build_attempt.ok_or_else(|| {
                             format!(
@@ -885,15 +888,15 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         )),
                     }
                 } else if matches!(
-                    codegen_pipeline,
-                    CodegenPipeline::CollectedLdsReductionV1
-                        | CodegenPipeline::CollectedScopedAtomicV1
+                    qualification_oracle,
+                    QualificationOracleV1::CollectedLdsReductionV1
+                        | QualificationOracleV1::CollectedScopedAtomicV1
                 ) {
-                    let kind = match codegen_pipeline {
-                        CodegenPipeline::CollectedLdsReductionV1 => {
+                    let kind = match qualification_oracle {
+                        QualificationOracleV1::CollectedLdsReductionV1 => {
                             collected_workgroup_sync_v1::WorkgroupSyncProfileKindV1::LdsReduction
                         }
-                        CodegenPipeline::CollectedScopedAtomicV1 => {
+                        QualificationOracleV1::CollectedScopedAtomicV1 => {
                             collected_workgroup_sync_v1::WorkgroupSyncProfileKindV1::ScopedAtomic
                         }
                         _ => unreachable!(),
@@ -947,7 +950,9 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             "[rustc-codegen-fe2o3] {pipeline} rejected the collected program without fallback: {error}"
                         )),
                     }
-                } else if codegen_pipeline == CodegenPipeline::CollectedWave64CollectivesV1 {
+                } else if qualification_oracle
+                    == QualificationOracleV1::CollectedWave64CollectivesV1
+                {
                     let admission = (|| -> Result<_, String> {
                         let collection = collect_qualification_oracle_input(
                             tcx,
@@ -997,7 +1002,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             collected_wave64_collectives_v1::COLLECTED_WAVE64_COLLECTIVES_PIPELINE_V1,
                         )),
                     }
-                } else if codegen_pipeline == CodegenPipeline::CollectedRowSoftmaxV1 {
+                } else if qualification_oracle == QualificationOracleV1::CollectedRowSoftmaxV1 {
                     let preparation = (|| -> Result<_, String> {
                         let attempt = build_attempt.ok_or_else(|| {
                             format!(
@@ -1115,7 +1120,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             collected_row_softmax_v1::COLLECTED_ROW_SOFTMAX_PIPELINE_V1,
                         )),
                     }
-                } else if codegen_pipeline == CodegenPipeline::CollectedTiledGemmV1 {
+                } else if qualification_oracle == QualificationOracleV1::CollectedTiledGemmV1 {
                     let preparation = (|| -> Result<_, String> {
                         let attempt = build_attempt.ok_or_else(|| {
                             format!(
@@ -1275,7 +1280,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             collected_tiled_gemm_v1::COLLECTED_TILED_GEMM_PIPELINE_V1,
                         )),
                     }
-                } else if codegen_pipeline == CodegenPipeline::CollectedScalarGemmV1 {
+                } else if qualification_oracle == QualificationOracleV1::CollectedScalarGemmV1 {
                     let preparation = (|| -> Result<_, String> {
                         let attempt = build_attempt.ok_or_else(|| {
                             format!(
@@ -1367,7 +1372,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             collected_scalar_gemm_v1::COLLECTED_SCALAR_GEMM_PIPELINE_V1,
                         )),
                     }
-                } else if codegen_pipeline == CodegenPipeline::KernelIrWorkerV2 {
+                } else if qualification_oracle == QualificationOracleV1::KernelIrWorkerV2 {
                     let attempt = build_attempt.unwrap_or_else(|| {
                         tcx.dcx().fatal(format!(
                             "[rustc-codegen-fe2o3] {CODEGEN_PIPELINE_ENV}=kernel-ir-worker-v2 requires a managed {BUILD_ATTEMPT_ENV}"
@@ -1492,7 +1497,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 qualification_pipeline,
                             )
                             .map_err(|reason| amdgpu_llvm::EmitError::Preflight { reason })?;
-                            if codegen_pipeline == CodegenPipeline::KernelIrV1 {
+                            if qualification_oracle == QualificationOracleV1::KernelIrV1 {
                                 general_gemm_semantic_preflight_v1(
                                     tcx,
                                     &collection,
@@ -1507,14 +1512,14 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 .map_err(|error| amdgpu_llvm::EmitError::Preflight {
                                     reason: format!("compiler FFI MIR import failed: {error}"),
                                 })?;
-                            match codegen_pipeline {
-                            CodegenPipeline::ProductionV1 | CodegenPipeline::SimulationV1 => {
+                            match qualification_oracle {
+                            QualificationOracleV1::SimulationV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
-                                    reason: "internal error: production/simulation semantic custody escaped its fail-closed transaction branch"
+                                    reason: "internal error: simulation semantic custody escaped its fail-closed transaction branch"
                                         .to_owned(),
                                 })
                             }
-                            CodegenPipeline::KernelIrV1 => {
+                            QualificationOracleV1::KernelIrV1 => {
                                 let module = kernel_ir_lowering::translate_and_verify_for_session(
                                     &mir_module,
                                     &self.config.target,
@@ -1556,62 +1561,62 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                     .collect::<Vec<_>>();
                                 kernel_ir_codegen::prepare_fill_collection(module, &kernel_names)
                             }
-                            CodegenPipeline::KernelIrWorkerV2 => {
+                            QualificationOracleV1::KernelIrWorkerV2 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
                                     reason: "internal error: Worker V2 entered the generic qualification artifact transaction"
                                         .to_owned(),
                                 })
                             }
-                            CodegenPipeline::CollectedExecutableScalarControlFlowV2 => {
+                            QualificationOracleV1::CollectedExecutableScalarControlFlowV2 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
                                     reason: "internal error: collected executable scalar-control-flow V2 entered the generic qualification artifact transaction"
                                         .to_owned(),
                                 })
                             }
-                            CodegenPipeline::CollectedFlashAttentionV1 => {
+                            QualificationOracleV1::CollectedFlashAttentionV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
                                     reason: "internal error: collected FlashAttention V1 entered the generic qualification artifact transaction"
                                         .to_owned(),
                                 })
                             }
-                            CodegenPipeline::CollectedGeneralGemmV1 => {
+                            QualificationOracleV1::CollectedGeneralGemmV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
                                     reason: "internal error: collected general GEMM V1 entered the generic qualification artifact transaction"
                                         .to_owned(),
                                 })
                             }
-                            CodegenPipeline::CollectedMoeTop2V1 => {
+                            QualificationOracleV1::CollectedMoeTop2V1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
                                     reason: "internal error: collected MoE top-2 V1 entered the generic qualification artifact transaction"
                                         .to_owned(),
                                 })
                             }
-                            CodegenPipeline::CollectedScalarGemmV1 => {
+                            QualificationOracleV1::CollectedScalarGemmV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
                                     reason: "internal error: collected scalar GEMM V1 entered the generic qualification artifact transaction"
                                         .to_owned(),
                                 })
                             }
-                            CodegenPipeline::CollectedRowSoftmaxV1 => {
+                            QualificationOracleV1::CollectedRowSoftmaxV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
                                     reason: "internal error: collected row softmax V1 entered the generic qualification artifact transaction"
                                         .to_owned(),
                                 })
                             }
-                            CodegenPipeline::CollectedTiledGemmV1 => {
+                            QualificationOracleV1::CollectedTiledGemmV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
                                     reason: "internal error: collected tiled GEMM V1 entered the generic qualification artifact transaction"
                                         .to_owned(),
                                 })
                             }
-                            CodegenPipeline::CollectedWave64CollectivesV1 => {
+                            QualificationOracleV1::CollectedWave64CollectivesV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
                                     reason: "internal error: collected Wave64 collectives V1 entered the generic qualification artifact transaction"
                                         .to_owned(),
                                 })
                             }
-                            CodegenPipeline::CollectedLdsReductionV1
-                            | CodegenPipeline::CollectedScopedAtomicV1 => {
+                            QualificationOracleV1::CollectedLdsReductionV1
+                            | QualificationOracleV1::CollectedScopedAtomicV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
                                     reason: "internal error: collected workgroup synchronization V1 entered the generic qualification artifact transaction"
                                         .to_owned(),
@@ -2762,6 +2767,7 @@ mod tests {
             "collected-general-gemm",
             "collected_general_gemm_v1",
             "COLLECTED-GENERAL-GEMM-V1",
+            "production-v1",
             "true",
             "1",
         ] {
@@ -2769,7 +2775,7 @@ mod tests {
             let error = selection.resolve().expect_err("selector must be exact");
             let message = error.to_string();
             assert!(message.contains("FE2O3_CODEGEN_PIPELINE"));
-            assert!(message.contains("production-v1"));
+            assert!(message.contains("must be unset for production compilation"));
             assert!(message.contains("kernel-ir-v1"));
             assert!(message.contains("kernel-ir-worker-v2"));
             assert!(message.contains("collected-tiled-gemm-v1"));
