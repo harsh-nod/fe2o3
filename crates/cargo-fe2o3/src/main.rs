@@ -167,6 +167,7 @@ fn main() -> ExitCode {
         Some("doctor") => doctor(),
         Some("build") => cargo_with_backend("build", &rest),
         Some("run") => cargo_with_backend("run", &rest),
+        #[cfg(feature = "qualification-oracles-test-only")]
         Some("simulate") => simulate_command(&rest),
         Some("smoke") => with_utf8_args(&rest, smoke),
         Some("examples") => with_utf8_args(&rest, example_manifest::command),
@@ -325,6 +326,7 @@ struct SimulationCommand {
     output: Option<PathBuf>,
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn simulate_command(args: &[OsString]) -> ExitCode {
     if matches!(args, [argument] if argument == "--help" || argument == "-h") {
         println!("{}", simulation_usage());
@@ -348,6 +350,7 @@ fn simulate_command(args: &[OsString]) -> ExitCode {
     }
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn parse_simulation_command(
     args: &[OsString],
 ) -> Result<(SimulationCommand, Vec<OsString>), String> {
@@ -412,6 +415,7 @@ fn parse_simulation_command(
     ))
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn simulation_usage() -> String {
     "usage: cargo fe2o3 simulate --request PATH [--output PATH] [-- CARGO_BUILD_ARGS...]".to_owned()
 }
@@ -2767,8 +2771,17 @@ fn is_gfx_target(candidate: &str) -> bool {
 
 fn print_help() {
     eprintln!(
-        "usage: cargo fe2o3 <command>\n\ncommands:\n  authority release   run an authority build through the protected self-launch boundary\n  doctor              check ROCm/HIP toolchain discovery\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n  simulate            compile source to exact KIR V7 and execute it deterministically on CPU\n  smoke               run manifest-selected GPU examples\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact or HSACO metadata without execution\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions"
+        "usage: cargo fe2o3 <command>\n\ncommands:\n  authority release   run an authority build through the protected self-launch boundary\n  doctor              check ROCm/HIP toolchain discovery\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n{}  smoke               run manifest-selected GPU examples\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact or HSACO metadata without execution\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions",
+        qualification_help_lines(),
     );
+}
+
+const fn qualification_help_lines() -> &'static str {
+    if cfg!(feature = "qualification-oracles-test-only") {
+        "  simulate            compile source to exact KIR V7 and execute it deterministically on CPU\n"
+    } else {
+        ""
+    }
 }
 
 #[cfg(test)]
@@ -2777,8 +2790,9 @@ mod tests {
         SIMULATION_ATTEMPT_ENV, SIMULATION_MODE_ENV, TARGET_ENV, aggregate_post_spawn_results,
         configure_production_target_build_environment, configure_simulation_build_environment,
         inject_application_runner_config, normalize_invocation, parse_rocminfo_target,
-        production_compilation_selected, reject_obsolete_codegen_pipeline, resolve_amd_gpu_target,
-        selected_run_target, validate_production_cargo_selection,
+        production_compilation_selected, qualification_help_lines,
+        reject_obsolete_codegen_pipeline, resolve_amd_gpu_target, selected_run_target,
+        validate_production_cargo_selection,
     };
     use crate::project::PinnedDirectory;
     use std::ffi::{OsStr, OsString};
@@ -2819,6 +2833,14 @@ mod tests {
             assert_eq!(normalize_invocation(direct.clone()), direct);
             assert_eq!(normalize_invocation(cargo), direct);
         }
+    }
+
+    #[test]
+    fn simulation_command_help_is_oracle_feature_only() {
+        assert_eq!(
+            qualification_help_lines().is_empty(),
+            !cfg!(feature = "qualification-oracles-test-only")
+        );
     }
 
     #[test]

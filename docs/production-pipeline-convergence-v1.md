@@ -58,6 +58,10 @@ and backend digests.
 | Worker publication restart | `ManagedProductionBuild` has only `Fresh`, `Recovered`, and `Ready` states. It performs strict V3 preflight, one-shot consumption, direct LLVM/LLD execution, independent inspection, durable publication, and load-readiness recovery. | Join generated host interfaces and runtime authorization to the recovered production artifact. |
 | Qualification isolation | Backend workload oracles and extraction drivers require `qualification-oracles-test-only`. Cargo V1/V2 work state, restart modules, workload parsers, and V2 intake require the same package-local feature. They are absent from feature-free builds, where managed work is directly `ManagedProductionBuild`. Host-only dependency units use rustc's built-in LLVM backend and receive no fe2o3 route selector, managed compiler arguments, backend descriptor, or artifact custody. | Delete each oracle after differential migration. |
 
+The `cargo fe2o3 simulate` command is also oracle-only and is absent from
+feature-free command dispatch and help. Production `build` and `run` cannot
+select it implicitly.
+
 Version suffixes remain on serialized records, identity domains, receipts, and
 external protocol types. Private production methods and states are unversioned
 because there is only one implementation. A new production schema must be an
