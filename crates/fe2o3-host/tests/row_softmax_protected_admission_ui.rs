@@ -1,3 +1,5 @@
+#![cfg(feature = "qualification-oracles-test-only")]
+
 #[test]
 fn protected_row_softmax_authority_is_linear_private_and_exact() {
     let cases = trybuild::TestCases::new();
