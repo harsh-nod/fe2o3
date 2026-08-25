@@ -1,0 +1,21 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK: PASS
+builtin.func @collective_fold_proved: builtin.function <() -> ()>
+{
+  ^entry_block1v1():
+    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 41, gpu_execution_global_x: gpu.execution_extent 1, gpu_execution_global_y: gpu.execution_extent 1, gpu_execution_global_z: gpu.execution_extent 1, gpu_execution_workgroup_x: gpu.execution_extent 1, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 1, gpu_execution_domain: gpu.execution_domain FullPhysicalWorkgroups]: <() -> ()>;
+    v0 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Global, kernel_allocation_origin: kernel.allocation_origin 17, kernel_noalias_class: kernel.noalias_class 17]: <() -> (kernel.ranked_view <32,true,[1]>)>;
+    v1 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 0]: <() -> (kernel.index )>;
+    v2 = kernel.semantic_expression_commitment () [] [kernel_semantic_expression_commitment: kernel.semantic_expression_commitment 0000000000000001000000000000000200000000000000030000000000000004]: <() -> (kernel.semantic_scalar )>;
+    v3 = kernel.semantic_expression_commitment () [] [kernel_semantic_expression_commitment: kernel.semantic_expression_commitment 0000000000000001000000000000000200000000000000030000000000000004]: <() -> (kernel.semantic_scalar )>;
+    v4 = kernel.semantic_expression_commitment () [] [kernel_semantic_expression_commitment: kernel.semantic_expression_commitment 0000000000000005000000000000000600000000000000070000000000000008]: <() -> (kernel.semantic_scalar )>;
+    v5 = kernel.semantic_expression_commitment () [] [kernel_semantic_expression_commitment: kernel.semantic_expression_commitment 0000000000000009000000000000000a000000000000000b000000000000000c]: <() -> (kernel.semantic_scalar )>;
+    kernel.ownership_contract (v0) [] [kernel_ownership_coverage: kernel.ownership_coverage TotalView, kernel_ownership_partition: kernel.ownership_partition ExactSets]: <(kernel.ranked_view <32,true,[1]>) -> ()>;
+    kernel.access (v0, v1) [] [kernel_access_kind: kernel.access_kind Write]: <(kernel.ranked_view <32,true,[1]>, kernel.index ) -> ()>;
+    kernel.require_finite_fold (v0, v2, v3, v4, v5) [] [kernel_fold_contract_identity: kernel.semantic_expression_commitment 0000000000000011000000000000001200000000000000130000000000000014, kernel_fold_domain_identity: kernel.semantic_expression_commitment 0000000000000015000000000000001600000000000000170000000000000018, kernel_fold_domain_bound: kernel.semantic_domain_bound 1, kernel_fold_step_bound: kernel.semantic_step_bound 1, kernel_fold_evaluation_order: kernel.semantic_evaluation_order Ascending, kernel_fold_numerical_policy: kernel.semantic_numerical_policy ExactBitVectorOperatorCongruence, kernel_fold_coverage_binding: kernel.semantic_coverage_binding TotalView]: <(kernel.ranked_view <32,true,[1]>, kernel.semantic_scalar , kernel.semantic_scalar , kernel.semantic_scalar , kernel.semantic_scalar ) -> ()>;
+    proof.obligation 0000000000000021000000000000002200000000000000230000000000000024 0000000000000025000000000000002600000000000000270000000000000028 0000000000000029000000000000002a000000000000002b000000000000002c FunctionalRefinement;
+    proof.evidence_ref 000000000000002d000000000000002e000000000000002f0000000000000030 0000000000000021000000000000002200000000000000230000000000000024 FunctionalRefinement Proved Mir;
+    proof.require_refinement (v2, v3) [] [proof_require_refinement_obligation_id: proof.id 0000000000000021000000000000002200000000000000230000000000000024]: <(kernel.semantic_scalar , kernel.semantic_scalar ) -> ()>;
+    kernel.return () [] []: <() -> ()>
+}

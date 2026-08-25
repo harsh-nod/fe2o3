@@ -13,6 +13,7 @@ pub use production::{
     PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V4, PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V5,
     PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V4, PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V5,
     PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V4, PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V5,
+    ProductionCollectiveSemanticContractV1, ProductionCollectiveSemanticKindV1,
     ProductionConstructionV1, ProductionEffectRefinementContractV2,
     ProductionFunctionalRefinementAdmissionErrorV2, ProductionFunctionalRefinementEvidenceV2,
     ProductionFunctionalRefinementTrustPolicyV2, ProductionGpuWriteSiteV2,

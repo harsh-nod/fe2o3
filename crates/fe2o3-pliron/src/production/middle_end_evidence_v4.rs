@@ -526,6 +526,18 @@ impl ProductionMiddleEndEvidenceV4 {
             .revalidate_structure()
             .map_err(ProductionMiddleEndEvidenceCodecErrorV4::RankedKernel)?;
         validate_live_reports(ranked)?;
+        if ranked.kernel().blocks().iter().any(|block| {
+            block.operations().iter().any(|operation| {
+                matches!(
+                    operation,
+                    ProductionRankedOperationV1::CollectiveSemantics { .. }
+                )
+            })
+        }) {
+            return Err(
+                ProductionMiddleEndEvidenceCodecErrorV4::CollectiveSemanticsRequireNewEvidenceVersion,
+            );
+        }
 
         let ranked_kernel_identity = derive_ranked_kernel_identity(ranked);
         if ranked_kernel_identity == [0; SHA256_BYTES] {
@@ -626,6 +638,7 @@ pub enum ProductionMiddleEndEvidenceCodecErrorV4 {
     SemanticOwner(ProductionSemanticMirErrorV1),
     RankedKernel(ProductionRankedKernelErrorV1),
     SemanticSourceIdentityMismatch,
+    CollectiveSemanticsRequireNewEvidenceVersion,
     ReportPassOrderMismatch {
         index: usize,
         expected: ProductionMiddleEndEvidencePassV4,
@@ -697,6 +710,9 @@ impl fmt::Display for ProductionMiddleEndEvidenceCodecErrorV4 {
             }
             Self::SemanticSourceIdentityMismatch => formatter.write_str(
                 "semantic source identity does not match the exact retained MIR and locator graph",
+            ),
+            Self::CollectiveSemanticsRequireNewEvidenceVersion => formatter.write_str(
+                "V4 cannot serialize collective semantics or hierarchical coverage; a new evidence version is required",
             ),
             Self::ReportPassOrderMismatch { index, .. } => write!(
                 formatter,
@@ -1143,6 +1159,7 @@ fn functional_refinement_graph_operation_tag(operation: &ProductionRankedOperati
         ProductionRankedOperationV1::SemanticConstant { .. } => 20,
         ProductionRankedOperationV1::SemanticBinary { .. } => 21,
         ProductionRankedOperationV1::SemanticExpression { .. } => 28,
+        ProductionRankedOperationV1::CollectiveSemantics { .. } => 29,
         ProductionRankedOperationV1::RequireEquivalent { .. } => 22,
         ProductionRankedOperationV1::RequireReferenceEquivalent { .. } => 23,
         ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
@@ -1478,6 +1495,56 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             digest.update([28]);
             digest.update(result.get().to_le_bytes());
             digest.update(expression.canonical_transcript_sha256(*numerical_contract));
+        }
+        ProductionRankedOperationV1::CollectiveSemantics {
+            contract,
+            view,
+            actual,
+            expected,
+            witness0,
+            witness1,
+        } => {
+            // V4 does not gain a coverage pass from this graph entry. This
+            // only commits the complete ranked recipe for proof correlation.
+            digest.update([30]);
+            digest.update([match contract.kind() {
+                super::ProductionCollectiveSemanticKindV1::FiniteFold => 1,
+                super::ProductionCollectiveSemanticKindV1::FiniteRecurrence => 2,
+                super::ProductionCollectiveSemanticKindV1::PermutationGather => 3,
+            }]);
+            for identity in [
+                contract.contract_identity(),
+                contract.source_domain_identity(),
+                contract.target_domain_identity(),
+            ] {
+                for word in identity {
+                    digest.update(word.to_le_bytes());
+                }
+            }
+            digest.update(contract.domain_bound().to_le_bytes());
+            digest.update(contract.step_bound().to_le_bytes());
+            digest.update([match contract.order() {
+                dialect_kernel::SemanticEvaluationOrderAttr::Ascending => 1,
+                dialect_kernel::SemanticEvaluationOrderAttr::Descending => 2,
+                dialect_kernel::SemanticEvaluationOrderAttr::Lexicographic => 3,
+                dialect_kernel::SemanticEvaluationOrderAttr::Explicit => 4,
+            }]);
+            digest.update([match contract.numerical_contract() {
+                super::ProductionNumericalContractV2::ExactBitVectorOperatorCongruence => 1,
+                super::ProductionNumericalContractV2::ExactIeee754OperatorCongruence {
+                    rounding: super::ProductionIeeeRoundingModeV2::NearestTiesToEven,
+                    exceptional_values:
+                        super::ProductionIeeeExceptionalValuePolicyV2::PreserveExactBits,
+                } => 2,
+                _ => 255,
+            }]);
+            digest.update([match contract.coverage() {
+                dialect_kernel::SemanticCoverageBindingAttr::TotalView => 1,
+                dialect_kernel::SemanticCoverageBindingAttr::CollectiveContributions => 2,
+            }]);
+            for value in [view, actual, expected, witness0, witness1] {
+                hash_value(digest, *value);
+            }
         }
         ProductionRankedOperationV1::RequireEquivalent { actual, expected } => {
             digest.update([12]);

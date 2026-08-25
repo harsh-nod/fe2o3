@@ -54,6 +54,20 @@ fn total_coverage_textual_pliron_fixtures() {
     }
 }
 
+#[test]
+fn collective_semantics_textual_pliron_fixtures() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/lit");
+    for fixture in [
+        "collective_fold_proved.pliron",
+        "collective_fold_missing_value_proof.pliron",
+        "collective_fold_coverage_mismatch.pliron",
+        "collective_recurrence_proved.pliron",
+        "collective_permutation_proved.pliron",
+    ] {
+        run_fixture(&root.join(fixture));
+    }
+}
+
 fn run_fixture(path: &Path) {
     let metadata = fs::metadata(path).expect("fixture metadata");
     assert!(metadata.is_file());

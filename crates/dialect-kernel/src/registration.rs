@@ -12,10 +12,13 @@ use crate::{
     IndexLessThanBranchOp, IndexType, IndexUnknownOp, IndexValueAttr, InvocationDimensionAttr,
     InvocationIndexOp, IterationDomainAttr, LaunchExtentAttr, MemorySpaceAttr, NoAliasClassAttr,
     OwnershipContractOp, OwnershipCoverageAttr, OwnershipPartitionAttr, RankedAccessOp,
-    RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp, SemanticBinaryKindAttr,
-    SemanticBinaryOp, SemanticConstantAttr, SemanticConstantOp, SemanticExpressionCommitmentAttr,
-    SemanticExpressionCommitmentOp, SemanticScalarType, SemanticSymbolAttr, SemanticSymbolOp,
-    TensorConvergenceAttr, TensorFragmentAttr, TensorInstructionAttr, TensorLayoutOp, TrapOp,
+    RankedViewOp, RankedViewType, RequireEquivalentOp, RequireFiniteFoldOp,
+    RequireFiniteRecurrenceOp, RequirePermutationGatherOp, ReturnOp, SemanticBinaryKindAttr,
+    SemanticBinaryOp, SemanticConstantAttr, SemanticConstantOp, SemanticCoverageBindingAttr,
+    SemanticDomainBoundAttr, SemanticEvaluationOrderAttr, SemanticExpressionCommitmentAttr,
+    SemanticExpressionCommitmentOp, SemanticNumericalPolicyAttr, SemanticScalarType,
+    SemanticStepBoundAttr, SemanticSymbolAttr, SemanticSymbolOp, TensorConvergenceAttr,
+    TensorFragmentAttr, TensorInstructionAttr, TensorLayoutOp, TrapOp,
 };
 
 fn registration_hook(
@@ -47,6 +50,11 @@ fn registration_hook(
     service.register_attribute::<SemanticConstantAttr>()?;
     service.register_attribute::<SemanticExpressionCommitmentAttr>()?;
     service.register_attribute::<SemanticBinaryKindAttr>()?;
+    service.register_attribute::<SemanticDomainBoundAttr>()?;
+    service.register_attribute::<SemanticStepBoundAttr>()?;
+    service.register_attribute::<SemanticEvaluationOrderAttr>()?;
+    service.register_attribute::<SemanticNumericalPolicyAttr>()?;
+    service.register_attribute::<SemanticCoverageBindingAttr>()?;
     service.register_attribute::<TensorConvergenceAttr>()?;
     service.register_attribute::<TensorInstructionAttr>()?;
     service.register_attribute::<TensorFragmentAttr>()?;
@@ -78,6 +86,9 @@ fn registration_hook(
     service.register_operation::<SemanticExpressionCommitmentOp>()?;
     service.register_operation::<SemanticBinaryOp>()?;
     service.register_operation::<RequireEquivalentOp>()?;
+    service.register_operation::<RequireFiniteFoldOp>()?;
+    service.register_operation::<RequireFiniteRecurrenceOp>()?;
+    service.register_operation::<RequirePermutationGatherOp>()?;
     service.register_operation::<TensorLayoutOp>()?;
     Ok(())
 }

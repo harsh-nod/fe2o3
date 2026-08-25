@@ -17,7 +17,8 @@ use dialect_kernel::{
     IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
     IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexUnknownOp, InvocationIndexOp,
     MAX_RANKED_MEMORY_RANK, OwnershipContractOp, RankedAccessOp, RankedViewOp, RankedViewType,
-    RequireEquivalentOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp,
+    RequireEquivalentOp, RequireFiniteFoldOp, RequireFiniteRecurrenceOp,
+    RequirePermutationGatherOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp,
     SemanticExpressionCommitmentOp, SemanticSymbolOp, TensorLayoutOp, TrapOp, ranked_view_type,
 };
 use dialect_proof::{EvidenceRefOp, ObligationOp, RequireEffectRefinementOp, RequireRefinementOp};
@@ -293,6 +294,9 @@ enum RankedOperationKind {
     SemanticConstant,
     SemanticBinary,
     SemanticExpressionCommitment,
+    FiniteFoldContract,
+    FiniteRecurrenceContract,
+    PermutationGatherContract,
     RequireEquivalent,
     ProofObligation,
     ProofEvidence,
@@ -386,6 +390,18 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         Some(RankedOperationKind::SemanticExpressionCommitment)
     } else if operation.downcast_ref::<RequireEquivalentOp>().is_some() {
         Some(RankedOperationKind::RequireEquivalent)
+    } else if operation.downcast_ref::<RequireFiniteFoldOp>().is_some() {
+        Some(RankedOperationKind::FiniteFoldContract)
+    } else if operation
+        .downcast_ref::<RequireFiniteRecurrenceOp>()
+        .is_some()
+    {
+        Some(RankedOperationKind::FiniteRecurrenceContract)
+    } else if operation
+        .downcast_ref::<RequirePermutationGatherOp>()
+        .is_some()
+    {
+        Some(RankedOperationKind::PermutationGatherContract)
     } else if operation.downcast_ref::<ObligationOp>().is_some() {
         Some(RankedOperationKind::ProofObligation)
     } else if operation.downcast_ref::<EvidenceRefOp>().is_some() {

@@ -6,7 +6,9 @@ use std::{
 };
 
 use dialect_kernel::{
-    RequireEquivalentOp, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantOp,
+    OwnershipContractOp, OwnershipCoverageAttr, RequireEquivalentOp, RequireFiniteFoldOp,
+    RequireFiniteRecurrenceOp, RequirePermutationGatherOp, SemanticBinaryKindAttr,
+    SemanticBinaryOp, SemanticConstantOp, SemanticCoverageBindingAttr,
     SemanticExpressionCommitmentOp, SemanticSymbolOp,
 };
 use dialect_proof::{
@@ -191,18 +193,29 @@ pub enum PlironSemanticRefinementFindingV1 {
         obligation: [u64; 4],
         reason: &'static str,
     },
+    CollectiveContractIncomplete {
+        block: usize,
+        operation: usize,
+        reason: &'static str,
+    },
+    CollectiveContractRejected {
+        block: usize,
+        operation: usize,
+        reason: &'static str,
+    },
     ResourceLimitExceeded,
 }
 
 impl PlironSemanticRefinementFindingV1 {
     pub const fn status(&self) -> KernelCheckStatusV1 {
         match self {
-            Self::ExpressionMismatch { .. } | Self::ReferenceContractRejected { .. } => {
-                KernelCheckStatusV1::Rejected
-            }
+            Self::ExpressionMismatch { .. }
+            | Self::ReferenceContractRejected { .. }
+            | Self::CollectiveContractRejected { .. } => KernelCheckStatusV1::Rejected,
             Self::BoundsPrerequisiteRejected
             | Self::UnresolvedExpression { .. }
             | Self::ReferenceContractIncomplete { .. }
+            | Self::CollectiveContractIncomplete { .. }
             | Self::ResourceLimitExceeded => KernelCheckStatusV1::Incomplete,
         }
     }
@@ -251,6 +264,22 @@ impl fmt::Display for PlironSemanticRefinementFindingV1 {
                 "error[FE2O3-SEMANTIC-004]: functional-reference obligation {} is invalid at block {block} op {operation}: {reason}",
                 proof_identity(*obligation),
             ),
+            Self::CollectiveContractIncomplete {
+                block,
+                operation,
+                reason,
+            } => write!(
+                formatter,
+                "error[FE2O3-SEMANTIC-005]: finite collective contract is incomplete at block {block} op {operation}: {reason}",
+            ),
+            Self::CollectiveContractRejected {
+                block,
+                operation,
+                reason,
+            } => write!(
+                formatter,
+                "error[FE2O3-SEMANTIC-006]: finite collective contract is invalid at block {block} op {operation}: {reason}",
+            ),
             Self::ResourceLimitExceeded => formatter.write_str(
                 "error[FE2O3-SEMANTIC-002]: semantic refinement analysis resource limit exceeded",
             ),
@@ -263,6 +292,8 @@ pub struct PlironSemanticRefinementReportV1 {
     findings: Vec<PlironSemanticRefinementFindingV1>,
     reference_obligations: usize,
     proved_reference_obligations: usize,
+    collective_contracts: usize,
+    proved_collective_contracts: usize,
     effect_refinement: PlironEffectRefinementReportV1,
 }
 
@@ -306,6 +337,22 @@ impl PlironSemanticRefinementReportV1 {
         self.is_clean()
             && self.reference_obligations != 0
             && self.reference_obligations == self.proved_reference_obligations
+    }
+
+    /// Number of closed finite fold, recurrence, and permutation contracts.
+    pub const fn collective_contract_count(&self) -> usize {
+        self.collective_contracts
+    }
+
+    /// Number independently joined to one proved MIR functional-refinement obligation.
+    pub const fn proved_collective_contract_count(&self) -> usize {
+        self.proved_collective_contracts
+    }
+
+    pub fn all_collective_contracts_are_proved(&self) -> bool {
+        self.is_clean()
+            && self.collective_contracts != 0
+            && self.collective_contracts == self.proved_collective_contracts
     }
 
     pub const fn effect_refinement(&self) -> &PlironEffectRefinementReportV1 {
@@ -378,6 +425,8 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
     let mut effect_requirement_ids = HashSet::new();
     let mut obligations = Vec::new();
     let mut evidence = Vec::new();
+    let mut ownership_contracts = Vec::new();
+    let mut collective_contracts = Vec::new();
     for (block_index, block) in function
         .get_region(context)
         .deref(context)
@@ -430,6 +479,38 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
                     record.property(context),
                     record.status(context),
                     record.covered_boundary(context),
+                ));
+            } else if let Some(ownership) = operation.downcast_ref::<OwnershipContractOp>() {
+                ownership_contracts.push((ownership.view(context), ownership.coverage(context)));
+            } else if let Some(contract) = operation.downcast_ref::<RequireFiniteFoldOp>() {
+                collective_contracts.push((
+                    block_index,
+                    operation_index,
+                    contract.view(context),
+                    contract.actual(context),
+                    contract.expected(context),
+                    contract.coverage(context),
+                    vec![contract.identity(context), contract.operator(context)],
+                ));
+            } else if let Some(contract) = operation.downcast_ref::<RequireFiniteRecurrenceOp>() {
+                collective_contracts.push((
+                    block_index,
+                    operation_index,
+                    contract.view(context),
+                    contract.actual(context),
+                    contract.expected(context),
+                    contract.coverage(context),
+                    vec![contract.initial(context), contract.transition(context)],
+                ));
+            } else if let Some(contract) = operation.downcast_ref::<RequirePermutationGatherOp>() {
+                collective_contracts.push((
+                    block_index,
+                    operation_index,
+                    contract.view(context),
+                    contract.actual(context),
+                    contract.expected(context),
+                    contract.coverage(context),
+                    vec![contract.mapping(context), contract.inverse(context)],
                 ));
             }
         }
@@ -618,6 +699,7 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
         }
     }
     let mut proved_reference_obligations = 0;
+    let mut proved_reference_pairs = HashSet::new();
     for (block, operation, _, actual, expected) in reference_requirements {
         let Some(actual_node) = expressions.identity(actual) else {
             push(
@@ -653,7 +735,98 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
             );
         } else if contract_valid.contains(&(block, operation)) {
             proved_reference_obligations += 1;
+            proved_reference_pairs.insert((actual, expected));
         }
+    }
+    let collective_count = collective_contracts.len();
+    let mut proved_collective_contracts = 0;
+    let mut used_reference_pairs = HashSet::new();
+    for (block, operation, view, actual, expected, coverage, witnesses) in collective_contracts {
+        let unresolved_witness = witnesses
+            .iter()
+            .copied()
+            .find(|witness| expressions.identity(*witness).is_none());
+        if let Some(witness) = unresolved_witness {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::CollectiveContractIncomplete {
+                    block,
+                    operation,
+                    reason: if witness.defining_op().is_some() {
+                        "a typed operator, transition, identity, mapping, or inverse commitment is unresolved"
+                    } else {
+                        "a contract witness has no defining semantic operation"
+                    },
+                },
+            );
+            continue;
+        }
+        let required_coverage = match coverage {
+            Some(SemanticCoverageBindingAttr::TotalView) => OwnershipCoverageAttr::TotalView,
+            Some(SemanticCoverageBindingAttr::CollectiveContributions) => {
+                OwnershipCoverageAttr::CollectiveContributions
+            }
+            None => {
+                push(
+                    &mut findings,
+                    PlironSemanticRefinementFindingV1::CollectiveContractRejected {
+                        block,
+                        operation,
+                        reason: "the coverage binding is absent",
+                    },
+                );
+                continue;
+            }
+        };
+        let matching_coverage = ownership_contracts
+            .iter()
+            .filter(|(candidate_view, _)| *candidate_view == view)
+            .collect::<Vec<_>>();
+        if matching_coverage.len() != 1 {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::CollectiveContractIncomplete {
+                    block,
+                    operation,
+                    reason: "exactly one independently verified ownership contract is required for the output view",
+                },
+            );
+            continue;
+        }
+        if matching_coverage[0].1 != Some(required_coverage) {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::CollectiveContractRejected {
+                    block,
+                    operation,
+                    reason: "the output ownership theorem does not match the declared coverage binding",
+                },
+            );
+            continue;
+        }
+        if !proved_reference_pairs.contains(&(actual, expected)) {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::CollectiveContractIncomplete {
+                    block,
+                    operation,
+                    reason: "coverage never proves a final value; an independently proved MIR functional-refinement equality is required",
+                },
+            );
+            continue;
+        }
+        if !used_reference_pairs.insert((actual, expected)) {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::CollectiveContractRejected {
+                    block,
+                    operation,
+                    reason: "one scalar proof equality cannot discharge multiple finite collective contracts",
+                },
+            );
+            continue;
+        }
+        proved_collective_contracts += 1;
     }
     let effect_refinement =
         run_pliron_effect_refinement_with_analyses_v1(context, function, analyses);
@@ -661,6 +834,8 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
         findings,
         reference_obligations: reference_count,
         proved_reference_obligations,
+        collective_contracts: collective_count,
+        proved_collective_contracts,
         effect_refinement,
     }
 }
@@ -709,6 +884,8 @@ fn one(finding: PlironSemanticRefinementFindingV1) -> PlironSemanticRefinementRe
         findings: vec![finding],
         reference_obligations: 0,
         proved_reference_obligations: 0,
+        collective_contracts: 0,
+        proved_collective_contracts: 0,
         effect_refinement: clean_effect_refinement_report_v1(),
     }
 }
@@ -763,6 +940,8 @@ mod status_tests {
             ],
             reference_obligations: 1,
             proved_reference_obligations: 0,
+            collective_contracts: 0,
+            proved_collective_contracts: 0,
             effect_refinement: clean_effect_refinement_report_v1(),
         };
         assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
@@ -772,6 +951,8 @@ mod status_tests {
                 findings: vec![],
                 reference_obligations: 0,
                 proved_reference_obligations: 0,
+                collective_contracts: 0,
+                proved_collective_contracts: 0,
                 effect_refinement: clean_effect_refinement_report_v1(),
             }
             .status(),

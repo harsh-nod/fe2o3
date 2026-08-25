@@ -21,12 +21,14 @@ use dialect_kernel::{
     BranchArgsOp, BranchOp, CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DYNAMIC_EXTENT,
     DeterministicJoinOp, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
     IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
-    IndexType, IndexUnknownOp, InvocationIndexOp, MAX_DETERMINISTIC_JOIN_INPUTS_V1,
-    MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, OwnershipContractOp, OwnershipCoverageAttr,
-    OwnershipPartitionAttr, RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp,
-    ReturnOp, SUPPORTED_ELEMENT_WIDTHS, SemanticBinaryKindAttr, SemanticBinaryOp,
-    SemanticConstantOp, SemanticExpressionCommitmentOp, SemanticSymbolOp, TensorConvergenceAttr,
-    TensorLayoutOp, TrapOp,
+    IndexType, IndexUnknownOp, InvocationIndexOp, MAX_COLLECTIVE_SEMANTIC_STEPS_V1,
+    MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, OwnershipContractOp,
+    OwnershipCoverageAttr, OwnershipPartitionAttr, RankedAccessOp, RankedViewOp, RankedViewType,
+    RequireEquivalentOp, RequireFiniteFoldOp, RequireFiniteRecurrenceOp,
+    RequirePermutationGatherOp, ReturnOp, SUPPORTED_ELEMENT_WIDTHS, SemanticBinaryKindAttr,
+    SemanticBinaryOp, SemanticConstantOp, SemanticCoverageBindingAttr, SemanticEvaluationOrderAttr,
+    SemanticExpressionCommitmentOp, SemanticNumericalPolicyAttr, SemanticSymbolOp,
+    TensorConvergenceAttr, TensorLayoutOp, TrapOp,
 };
 use dialect_proof::{
     CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, ProofIdAttr,
@@ -72,6 +74,111 @@ use crate::{
 };
 
 pub const HARD_MAX_PRODUCTION_RANKED_ARGUMENTS: usize = 64;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ProductionCollectiveSemanticKindV1 {
+    FiniteFold,
+    FiniteRecurrence,
+    PermutationGather,
+}
+
+/// Closed finite semantic contract retained by the production ranked recipe.
+///
+/// This metadata does not prove a GPU implementation. The mandatory semantic
+/// pass additionally requires an exact coverage theorem and an independently
+/// authenticated MIR functional-refinement equality over the contract values.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductionCollectiveSemanticContractV1 {
+    kind: ProductionCollectiveSemanticKindV1,
+    contract_identity: [u64; 4],
+    source_domain_identity: [u64; 4],
+    target_domain_identity: [u64; 4],
+    domain_bound: u64,
+    step_bound: u64,
+    order: SemanticEvaluationOrderAttr,
+    numerical_contract: ProductionNumericalContractV2,
+    coverage: SemanticCoverageBindingAttr,
+}
+
+impl ProductionCollectiveSemanticContractV1 {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        kind: ProductionCollectiveSemanticKindV1,
+        contract_identity: [u64; 4],
+        source_domain_identity: [u64; 4],
+        target_domain_identity: [u64; 4],
+        domain_bound: u64,
+        step_bound: u64,
+        order: SemanticEvaluationOrderAttr,
+        numerical_contract: ProductionNumericalContractV2,
+        coverage: SemanticCoverageBindingAttr,
+    ) -> Result<Self, ProductionRankedKernelErrorV1> {
+        let identities = [
+            contract_identity,
+            source_domain_identity,
+            target_domain_identity,
+        ];
+        if identities.contains(&[0; 4])
+            || contract_identity == source_domain_identity
+            || contract_identity == target_domain_identity
+            || domain_bound == 0
+            || domain_bound > MAX_COLLECTIVE_SEMANTIC_STEPS_V1
+            || step_bound == 0
+            || step_bound > domain_bound
+            || !numerical_contract.is_supported()
+            || matches!(kind, ProductionCollectiveSemanticKindV1::PermutationGather)
+                && source_domain_identity == target_domain_identity
+            || !matches!(kind, ProductionCollectiveSemanticKindV1::PermutationGather)
+                && source_domain_identity != target_domain_identity
+        {
+            return Err(ProductionRankedKernelErrorV1::InvalidCollectiveSemanticContract);
+        }
+        Ok(Self {
+            kind,
+            contract_identity,
+            source_domain_identity,
+            target_domain_identity,
+            domain_bound,
+            step_bound,
+            order,
+            numerical_contract,
+            coverage,
+        })
+    }
+
+    pub const fn kind(&self) -> ProductionCollectiveSemanticKindV1 {
+        self.kind
+    }
+    pub const fn contract_identity(&self) -> [u64; 4] {
+        self.contract_identity
+    }
+    pub const fn source_domain_identity(&self) -> [u64; 4] {
+        self.source_domain_identity
+    }
+    pub const fn target_domain_identity(&self) -> [u64; 4] {
+        self.target_domain_identity
+    }
+    pub const fn domain_bound(&self) -> u64 {
+        self.domain_bound
+    }
+    pub const fn step_bound(&self) -> u64 {
+        self.step_bound
+    }
+    pub const fn order(&self) -> SemanticEvaluationOrderAttr {
+        self.order
+    }
+    pub const fn numerical_contract(&self) -> ProductionNumericalContractV2 {
+        self.numerical_contract
+    }
+    pub const fn coverage(&self) -> SemanticCoverageBindingAttr {
+        self.coverage
+    }
+
+    /// Contract metadata alone never proves an implementation or final value.
+    pub const fn grants_gpu_implementation_refinement_authority(&self) -> bool {
+        false
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ProductionRankedValueIdV1(u32);
@@ -925,6 +1032,18 @@ pub enum ProductionRankedOperationV1 {
         expression: ProductionSemanticExpressionV2,
         numerical_contract: ProductionNumericalContractV2,
     },
+    /// One finite fold, recurrence, or permutation/gather contract.
+    ///
+    /// Witness 0 is the identity/initial value/mapping and witness 1 is the
+    /// operator/transition/inverse mapping according to `contract.kind()`.
+    CollectiveSemantics {
+        contract: ProductionCollectiveSemanticContractV1,
+        view: ProductionRankedValueV1,
+        actual: ProductionRankedValueV1,
+        expected: ProductionRankedValueV1,
+        witness0: ProductionRankedValueV1,
+        witness1: ProductionRankedValueV1,
+    },
     RequireEquivalent {
         actual: ProductionRankedValueV1,
         expected: ProductionRankedValueV1,
@@ -1362,6 +1481,7 @@ pub enum ProductionRankedKernelErrorV1 {
     InvalidAllocationContract,
     InvalidReferenceContract,
     InvalidSemanticExpression(ProductionSemanticExpressionErrorV2),
+    InvalidCollectiveSemanticContract,
     UnsupportedElementWidth(u32),
     DynamicExtentCountMismatch {
         expected: usize,
@@ -1627,6 +1747,9 @@ impl fmt::Display for ProductionRankedKernelErrorV1 {
                 formatter,
                 "invalid typed semantic expression: {error}"
             ),
+            Self::InvalidCollectiveSemanticContract => formatter.write_str(
+                "finite collective semantic contract is malformed, unsupported, or unbounded",
+            ),
             Self::UnsupportedElementWidth(width) => write!(
                 formatter,
                 "ranked view element width {width} is not one of {SUPPORTED_ELEMENT_WIDTHS:?}"
@@ -1699,7 +1822,14 @@ impl Error for ProductionRankedKernelErrorV1 {
 enum RecipeValueKindV1 {
     Index,
     Semantic,
-    View { rank: usize, writable: bool },
+    TypedSemantic {
+        scalar: super::ProductionSemanticScalarTypeV2,
+        numerical_contract: ProductionNumericalContractV2,
+    },
+    View {
+        rank: usize,
+        writable: bool,
+    },
 }
 
 fn require_value(
@@ -1748,7 +1878,9 @@ fn require_view(
 ) -> Result<(usize, bool), ProductionRankedKernelErrorV1> {
     match require_value(value, argument_count, locals)? {
         RecipeValueKindV1::View { rank, writable } => Ok((rank, writable)),
-        RecipeValueKindV1::Index | RecipeValueKindV1::Semantic => {
+        RecipeValueKindV1::Index
+        | RecipeValueKindV1::Semantic
+        | RecipeValueKindV1::TypedSemantic { .. } => {
             Err(ProductionRankedKernelErrorV1::ExpectedView(value))
         }
     }
@@ -1761,11 +1893,31 @@ fn require_semantic(
 ) -> Result<(), ProductionRankedKernelErrorV1> {
     if matches!(
         require_value(value, argument_count, locals)?,
-        RecipeValueKindV1::Semantic
+        RecipeValueKindV1::Semantic | RecipeValueKindV1::TypedSemantic { .. }
     ) {
         Ok(())
     } else {
         Err(ProductionRankedKernelErrorV1::ExpectedSemantic(value))
+    }
+}
+
+fn require_typed_semantic(
+    value: ProductionRankedValueV1,
+    argument_count: usize,
+    locals: &[RecipeValueKindV1],
+) -> Result<
+    (
+        super::ProductionSemanticScalarTypeV2,
+        ProductionNumericalContractV2,
+    ),
+    ProductionRankedKernelErrorV1,
+> {
+    match require_value(value, argument_count, locals)? {
+        RecipeValueKindV1::TypedSemantic {
+            scalar,
+            numerical_contract,
+        } => Ok((scalar, numerical_contract)),
+        _ => Err(ProductionRankedKernelErrorV1::InvalidCollectiveSemanticContract),
     }
 }
 
@@ -2031,7 +2183,58 @@ fn validate_operation(
                     ProductionSemanticExpressionErrorV2::UnsupportedNumericalContract,
                 ));
             }
-            Ok(Some((*result, RecipeValueKindV1::Semantic)))
+            Ok(Some((
+                *result,
+                RecipeValueKindV1::TypedSemantic {
+                    scalar: expression.scalar(),
+                    numerical_contract: *numerical_contract,
+                },
+            )))
+        }
+        ProductionRankedOperationV1::CollectiveSemantics {
+            contract,
+            view,
+            actual,
+            expected,
+            witness0,
+            witness1,
+        } => {
+            let (_, writable) = require_view(*view, argument_count, locals)?;
+            if !writable {
+                return Err(ProductionRankedKernelErrorV1::WriteThroughReadOnlyView);
+            }
+            let actual_type = require_typed_semantic(*actual, argument_count, locals)?;
+            let expected_type = require_typed_semantic(*expected, argument_count, locals)?;
+            let witness0_type = require_typed_semantic(*witness0, argument_count, locals)?;
+            let witness1_type = require_typed_semantic(*witness1, argument_count, locals)?;
+            if actual_type != expected_type
+                || actual_type.1 != contract.numerical_contract()
+                || !contract.numerical_contract().admits_scalar(actual_type.0)
+            {
+                return Err(ProductionRankedKernelErrorV1::InvalidCollectiveSemanticContract);
+            }
+            match contract.kind() {
+                ProductionCollectiveSemanticKindV1::FiniteFold
+                | ProductionCollectiveSemanticKindV1::FiniteRecurrence => {
+                    if witness0_type != actual_type || witness1_type != actual_type {
+                        return Err(
+                            ProductionRankedKernelErrorV1::InvalidCollectiveSemanticContract,
+                        );
+                    }
+                }
+                ProductionCollectiveSemanticKindV1::PermutationGather => {
+                    if witness0_type != witness1_type
+                        || !witness0_type.0.is_integer()
+                        || witness0_type.1
+                            != ProductionNumericalContractV2::ExactBitVectorOperatorCongruence
+                    {
+                        return Err(
+                            ProductionRankedKernelErrorV1::InvalidCollectiveSemanticContract,
+                        );
+                    }
+                }
+            }
+            Ok(None)
         }
         ProductionRankedOperationV1::RequireEquivalent { actual, expected }
         | ProductionRankedOperationV1::RequireReferenceEquivalent {
@@ -2213,6 +2416,18 @@ fn validate_block_argument_values_v1(
         } => {
             validate(*actual)?;
             validate(*expected)?;
+        }
+        ProductionRankedOperationV1::CollectiveSemantics {
+            view,
+            actual,
+            expected,
+            witness0,
+            witness1,
+            ..
+        } => {
+            for value in [view, actual, expected, witness0, witness1] {
+                validate(*value)?;
+            }
         }
         ProductionRankedOperationV1::RequireEffectRefinement { contract, .. }
         | ProductionRankedOperationV1::RequestEffectRefinement { contract, .. } => {
@@ -3314,6 +3529,84 @@ fn materialize_operation(
             let op = SemanticExpressionCommitmentOp::new(context, digest_words_v2(digest));
             (op.get_operation(), Some((*result, op.result(context))))
         }
+        ProductionRankedOperationV1::CollectiveSemantics {
+            contract,
+            view,
+            actual,
+            expected,
+            witness0,
+            witness1,
+        } => {
+            let view = resolve_value(*view, arguments, locals, block_arguments)?;
+            let actual = resolve_value(*actual, arguments, locals, block_arguments)?;
+            let expected = resolve_value(*expected, arguments, locals, block_arguments)?;
+            let witness0 = resolve_value(*witness0, arguments, locals, block_arguments)?;
+            let witness1 = resolve_value(*witness1, arguments, locals, block_arguments)?;
+            let contract_identity =
+                dialect_kernel::SemanticExpressionCommitmentAttr::new(contract.contract_identity());
+            let source_domain_identity = dialect_kernel::SemanticExpressionCommitmentAttr::new(
+                contract.source_domain_identity(),
+            );
+            let numerical_policy = semantic_numerical_policy_v1(contract.numerical_contract())?;
+            let op = match contract.kind() {
+                ProductionCollectiveSemanticKindV1::FiniteFold => RequireFiniteFoldOp::new(
+                    context,
+                    view,
+                    actual,
+                    expected,
+                    witness0,
+                    witness1,
+                    contract_identity,
+                    source_domain_identity,
+                    contract.domain_bound(),
+                    contract.step_bound(),
+                    contract.order(),
+                    numerical_policy,
+                    contract.coverage(),
+                )
+                .get_operation(),
+                ProductionCollectiveSemanticKindV1::FiniteRecurrence => {
+                    RequireFiniteRecurrenceOp::new(
+                        context,
+                        view,
+                        actual,
+                        expected,
+                        witness0,
+                        witness1,
+                        contract_identity,
+                        source_domain_identity,
+                        contract.domain_bound(),
+                        contract.step_bound(),
+                        contract.order(),
+                        numerical_policy,
+                        contract.coverage(),
+                    )
+                    .get_operation()
+                }
+                ProductionCollectiveSemanticKindV1::PermutationGather => {
+                    RequirePermutationGatherOp::new(
+                        context,
+                        view,
+                        actual,
+                        expected,
+                        witness0,
+                        witness1,
+                        contract_identity,
+                        source_domain_identity,
+                        dialect_kernel::SemanticExpressionCommitmentAttr::new(
+                            contract.target_domain_identity(),
+                        ),
+                        contract.domain_bound(),
+                        contract.step_bound(),
+                        contract.order(),
+                        numerical_policy,
+                        contract.coverage(),
+                    )
+                    .get_operation()
+                }
+            };
+            (op, None)
+        }
         ProductionRankedOperationV1::RequireEquivalent { actual, expected } => {
             let op = RequireEquivalentOp::new(
                 context,
@@ -3486,6 +3779,21 @@ fn materialize_operation(
         locals.push(value);
     }
     Ok(())
+}
+
+fn semantic_numerical_policy_v1(
+    contract: ProductionNumericalContractV2,
+) -> Result<SemanticNumericalPolicyAttr, ProductionRankedKernelErrorV1> {
+    match contract {
+        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence => {
+            Ok(SemanticNumericalPolicyAttr::ExactBitVectorOperatorCongruence)
+        }
+        ProductionNumericalContractV2::ExactIeee754OperatorCongruence {
+            rounding: super::ProductionIeeeRoundingModeV2::NearestTiesToEven,
+            exceptional_values: super::ProductionIeeeExceptionalValuePolicyV2::PreserveExactBits,
+        } => Ok(SemanticNumericalPolicyAttr::ExactIeeeNearestTiesToEvenPreserveBits),
+        _ => Err(ProductionRankedKernelErrorV1::InvalidCollectiveSemanticContract),
+    }
 }
 
 fn digest_as_proof_id(digest: DigestV1) -> [u64; 4] {

@@ -10,6 +10,11 @@ structured-algorithm root, it defines a bounded ranked-memory vocabulary:
   dimension. Atomic forms additionally retain explicit ordering and scope.
 - `kernel.index_lt_br`, `kernel.br`, and `kernel.return` form the closed CFG
   vocabulary used by target-neutral safety analysis.
+- `kernel.require_finite_fold`, `kernel.require_finite_recurrence`, and
+  `kernel.require_permutation_gather` retain bounded workload-neutral semantic
+  contracts. Each names its finite domain, step bound, evaluation order,
+  exact numerical policy, typed expression witnesses, and required output
+  ownership theorem.
 
 Every type and operation has an MLIR-style local `Verify` implementation.
 Local verification rejects malformed ranks, types, operand counts, dynamic
@@ -32,6 +37,12 @@ compare-exchange incomplete until that exact operation contract is represented.
 The vocabulary and analysis do not contain GEMM names, tiles, schedules, or
 target details. The same pass covers vectors, images, tensors, volumes, and
 future fixed-contract kernels.
+
+Collective coverage and value semantics remain separate theorems. In
+particular, `CollectiveContributions` proves exactly-once atomic participation,
+not the reduction operator, order, identity, or final value. The semantic
+refinement stage requires a separately proved MIR equality before any finite
+collective contract is clean.
 
 The shell does not lower operations, choose schedules or compilers, describe a
 hardware target, produce artifacts, or grant proof, publication, load, tuning,

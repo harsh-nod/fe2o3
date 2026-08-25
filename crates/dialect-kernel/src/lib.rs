@@ -25,8 +25,15 @@ mod registration;
 
 pub use registration::dialect_registration;
 
+mod collective_semantics;
 mod general_gemm;
 
+pub use collective_semantics::{
+    CollectiveSemanticContractError, MAX_COLLECTIVE_SEMANTIC_STEPS_V1, RequireFiniteFoldOp,
+    RequireFiniteRecurrenceOp, RequirePermutationGatherOp, SemanticCoverageBindingAttr,
+    SemanticDomainBoundAttr, SemanticEvaluationOrderAttr, SemanticNumericalPolicyAttr,
+    SemanticStepBoundAttr,
+};
 pub use general_gemm::{GeneralGemmAbiSchemaAttr, GeneralGemmEpilogueSchemaAttr, GeneralGemmOp};
 
 mod ranked_memory;
