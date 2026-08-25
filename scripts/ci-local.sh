@@ -212,6 +212,12 @@ run_check() {
   done
 
   cargo_args=(check --workspace --all-targets --locked)
+  # These fixtures intentionally require the authenticated cargo-fe2o3 wrapper
+  # to supply their compiler-owned crate binding.
+  cargo_args+=(
+    --exclude fe2o3-production-extraction-fixture
+    --exclude fe2o3-production-ranked-bounds-fixture
+  )
   for package in "${all_examples[@]}"; do
     if [[ -z "${rustc_example_set[${package}]+selected}" ]]; then
       cargo_args+=(--exclude "${package}")

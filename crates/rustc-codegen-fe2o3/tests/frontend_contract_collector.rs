@@ -1,3 +1,4 @@
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -108,6 +109,13 @@ fn compile_with_backend(
 ) -> Output {
     let artifact_dir = output.path.join(format!("{crate_name}-artifacts"));
     std::fs::create_dir_all(&artifact_dir).expect("create fixture artifact directory");
+    let guard_directory = output.path.join("artifact-path-guard");
+    std::fs::create_dir_all(&guard_directory).expect("create fixture artifact path guard");
+    std::fs::set_permissions(&guard_directory, std::fs::Permissions::from_mode(0o700))
+        .expect("secure fixture artifact path guard");
+    let metadata =
+        std::fs::metadata(&guard_directory).expect("inspect fixture artifact path guard");
+    let guard_identity = format!("{:016x}:{:016x}", metadata.dev(), metadata.ino());
     rustc()
         .arg(source)
         .args(["--edition=2024", "--crate-type=lib", "--crate-name"])
@@ -120,6 +128,8 @@ fn compile_with_backend(
         .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-v1")
         .env("FE2O3_VERBOSE", "1")
         .env("FE2O3_HSACO_DIR", artifact_dir)
+        .env("FE2O3_ARTIFACT_PATH_GUARD_DIR", guard_directory)
+        .env("FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY", guard_identity)
         .output()
         .expect("compile frontend-contract fixture with backend")
 }
