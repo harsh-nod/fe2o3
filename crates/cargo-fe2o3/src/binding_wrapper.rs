@@ -82,6 +82,16 @@ use reserved_fe2o3_symbols::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::build_config::{
+    BuildCompileEnvironmentProfileV1, BuildConfigError, BuildConfigIdentity,
+    OBSOLETE_PRODUCTION_SELECTOR, PreparedBuildConfig, WORKER_V2_CONFIG_ENV,
+    WORKER_V2_EXPECTED_ID_ENV, WORKER_V2_SOURCE_DEBUG_PROFILE_ENV, WorkerV2BuildObservation,
+    WorkerV2SourceDebugProfileV1, production_compilation_selected,
+};
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use crate::build_config::{
+    GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV, GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV,
+};
 use crate::capability_broker;
 use crate::inert_rustc_invocation_capture::{
     InertPreparedRustcInvocationCapture, InertRustcInvocationCaptureV2,
@@ -93,16 +103,6 @@ use crate::project::PinnedDirectory;
 use crate::protected_compiler_handoff_v3::consume_qualification_compiler_module_handoff_v2;
 use crate::protected_compiler_handoff_v3::{
     ParentRustcInvocationCustody, ProductionCompilerModuleHandoffIntake,
-};
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-use crate::worker_v2::{
-    GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV, GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV,
-};
-use crate::worker_v2::{
-    OBSOLETE_PRODUCTION_SELECTOR, PreparedWorkerV2Config, WORKER_V2_CONFIG_ENV,
-    WORKER_V2_EXPECTED_ID_ENV, WORKER_V2_SOURCE_DEBUG_PROFILE_ENV, WorkerV2BuildObservation,
-    WorkerV2CompileEnvironmentProfileV1, WorkerV2ConfigError, WorkerV2ConfigIdentity,
-    WorkerV2SourceDebugProfileV1, production_compilation_selected,
 };
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use crate::worker_v2_artifact_container::{
@@ -233,7 +233,7 @@ pub(crate) enum BindingWrapperError {
     },
     CurrentDirectory(std::io::Error),
     BuildObservation(String),
-    WorkerV2Configuration(WorkerV2ConfigError),
+    WorkerV2Configuration(BuildConfigError),
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     WorkerV2Restart(ResumeMarkerErrorV1),
     Artifact(EmitError),
@@ -425,12 +425,12 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             let metadata = ordered_rustc_codegen_metadata_v1(compile)?;
             let build_observation =
                 CompileBuildObservationV2::from_ordered_metadata(compile.crate_name(), &metadata)?;
-            let worker_v2 = PreparedWorkerV2Config::from_environment()
+            let worker_v2 = PreparedBuildConfig::from_environment()
                 .map_err(BindingWrapperError::WorkerV2Configuration)?;
             validate_expected_worker_v2_identity(worker_v2.as_ref())?;
             let capability_profile = if worker_v2
                 .as_ref()
-                .and_then(PreparedWorkerV2Config::source_debug_profile)
+                .and_then(PreparedBuildConfig::source_debug_profile)
                 .is_some()
             {
                 capability_broker::CapabilityProfileV1::S09
@@ -895,7 +895,7 @@ fn configure_build_observation_environment_with_test_mutation(
 fn reject_dynamic_loader_environment() -> Result<(), BindingWrapperError> {
     let authority_sensitive = std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").as_deref()
         == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
-        || std::env::var_os(crate::worker_v2::WORKER_V2_CONFIG_ENV).is_some();
+        || std::env::var_os(crate::build_config::WORKER_V2_CONFIG_ENV).is_some();
     let unprotected_validation = cfg!(debug_assertions)
         && std::env::var_os(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV).as_deref()
             == Some(OsStr::new("1"));
@@ -1413,16 +1413,16 @@ impl CompleteReviewedChildEnvironmentV2 {
 }
 
 fn materialize_reviewed_child_environment(
-    profile: Option<WorkerV2CompileEnvironmentProfileV1>,
+    profile: Option<BuildCompileEnvironmentProfileV1>,
     command: &mut Command,
     inherited: impl IntoIterator<Item = (OsString, OsString)>,
     _general_gemm_pins: Option<GeneralGemmChildPinsV1<'_>>,
 ) -> Result<Option<CompleteReviewedChildEnvironmentV2>, BindingWrapperError> {
     match profile {
-        Some(WorkerV2CompileEnvironmentProfileV1::ProductionGfx942) => {
+        Some(BuildCompileEnvironmentProfileV1::ProductionGfx942) => {
             materialize_closed_child_environment(command, inherited, None, "production").map(Some)
         }
-        Some(WorkerV2CompileEnvironmentProfileV1::S09AlphaGfx942O0) => {
+        Some(BuildCompileEnvironmentProfileV1::S09AlphaGfx942O0) => {
             materialize_closed_child_environment(
                 command,
                 inherited,
@@ -1432,15 +1432,15 @@ fn materialize_reviewed_child_environment(
             .map(Some)
         }
         #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-        Some(WorkerV2CompileEnvironmentProfileV1::ScalarGemmV1Gfx942) => {
+        Some(BuildCompileEnvironmentProfileV1::ScalarGemmV1Gfx942) => {
             materialize_scalar_gemm_v1_child_environment(command, inherited).map(Some)
         }
         #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-        Some(WorkerV2CompileEnvironmentProfileV1::RowSoftmaxV1Gfx942) => {
+        Some(BuildCompileEnvironmentProfileV1::RowSoftmaxV1Gfx942) => {
             materialize_row_softmax_v1_child_environment(command, inherited).map(Some)
         }
         #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-        Some(WorkerV2CompileEnvironmentProfileV1::GeneralGemmV1Gfx942) => {
+        Some(BuildCompileEnvironmentProfileV1::GeneralGemmV1Gfx942) => {
             let pins = _general_gemm_pins.ok_or_else(|| {
                 BindingWrapperError::BuildObservation(
                     "general GEMM child environment has no parent-authenticated Worker V2 pins"
@@ -1457,7 +1457,7 @@ fn materialize_reviewed_child_environment(
 #[derive(Clone, Copy)]
 struct GeneralGemmChildPinsV1<'a> {
     manifest_path: &'a Path,
-    expected_identity: WorkerV2ConfigIdentity,
+    expected_identity: BuildConfigIdentity,
     runtime_closure_v2_root: &'a Path,
     runtime_closure_v2_manifest_sha256: [u8; 32],
 }
@@ -1794,7 +1794,7 @@ fn materialize_general_gemm_v1_child_environment(
             "general GEMM child environment has invalid CARGO_MANIFEST_DIR".to_owned(),
         ));
     }
-    if required("FE2O3_QUALIFICATION_ORACLE_V1")? != crate::worker_v2::GENERAL_GEMM_V1_PIPELINE {
+    if required("FE2O3_QUALIFICATION_ORACLE_V1")? != crate::build_config::GENERAL_GEMM_V1_PIPELINE {
         return Err(BindingWrapperError::BuildObservation(
             "general GEMM child environment has changed FE2O3_QUALIFICATION_ORACLE_V1".to_owned(),
         ));
@@ -1848,7 +1848,7 @@ fn materialize_general_gemm_v1_child_environment(
         (OsString::from("CARGO_MANIFEST_DIR"), manifest_dir.clone()),
         (
             OsString::from("FE2O3_QUALIFICATION_ORACLE_V1"),
-            OsString::from(crate::worker_v2::GENERAL_GEMM_V1_PIPELINE),
+            OsString::from(crate::build_config::GENERAL_GEMM_V1_PIPELINE),
         ),
         (OsString::from(TARGET_ENV), OsString::from("gfx942:xnack-")),
         (
@@ -2458,7 +2458,7 @@ fn os_string(value: Vec<u8>) -> Result<OsString, ()> {
 }
 
 fn validate_expected_worker_v2_identity(
-    config: Option<&PreparedWorkerV2Config>,
+    config: Option<&PreparedBuildConfig>,
 ) -> Result<(), BindingWrapperError> {
     let Some(expected) = std::env::var_os(WORKER_V2_EXPECTED_ID_ENV) else {
         if let Some(config) = config.filter(|config| config.requires_expected_identity()) {
@@ -2468,7 +2468,7 @@ fn validate_expected_worker_v2_identity(
                 "scalar GEMM"
             };
             return Err(BindingWrapperError::WorkerV2Configuration(
-                WorkerV2ConfigError::Invalid(format!(
+                BuildConfigError::Invalid(format!(
                     "{profile} Worker V2 configuration requires {WORKER_V2_EXPECTED_ID_ENV}"
                 )),
             ));
@@ -2476,14 +2476,14 @@ fn validate_expected_worker_v2_identity(
         return Ok(());
     };
     let expected = expected.to_str().ok_or_else(|| {
-        BindingWrapperError::WorkerV2Configuration(WorkerV2ConfigError::Invalid(format!(
+        BindingWrapperError::WorkerV2Configuration(BuildConfigError::Invalid(format!(
             "{WORKER_V2_EXPECTED_ID_ENV} must be lowercase hexadecimal"
         )))
     })?;
     let actual = config.map(|config| config.identity().to_hex());
     if actual.as_deref() != Some(expected) {
         return Err(BindingWrapperError::WorkerV2Configuration(
-            WorkerV2ConfigError::Invalid(
+            BuildConfigError::Invalid(
                 "Worker V2 transitive inputs changed after Cargo generation preparation"
                     .to_string(),
             ),
@@ -2825,7 +2825,7 @@ struct ManagedAttempt {
     producer: ProducerIdentity,
     attempt: BuildAttempt,
     protected_source_path: Option<PathBuf>,
-    compile_environment_profile: Option<WorkerV2CompileEnvironmentProfileV1>,
+    compile_environment_profile: Option<BuildCompileEnvironmentProfileV1>,
     worker_v2: Option<ManagedCompilerWork>,
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     row_softmax_release: Option<RowSoftmaxReleaseContext>,
@@ -2968,7 +2968,7 @@ const fn managed_production_build(build: ManagedProductionBuild) -> ManagedCompi
 
 enum ManagedProductionBuild {
     Fresh {
-        config: Box<PreparedWorkerV2Config>,
+        config: Box<PreparedBuildConfig>,
         compiler_closure: CompilerClosureV2,
     },
     Recovered {
@@ -2983,10 +2983,10 @@ enum ManagedProductionBuild {
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 enum ManagedQualificationWork {
     InProcessGeneralGemm {
-        config: Box<PreparedWorkerV2Config>,
+        config: Box<PreparedBuildConfig>,
     },
     FreshV1 {
-        config: Box<PreparedWorkerV2Config>,
+        config: Box<PreparedBuildConfig>,
         envelope_inputs: Option<WorkerV2EnvelopeInputsV1>,
         resume: WorkerV2ResumeStoreV1,
     },
@@ -2995,7 +2995,7 @@ enum ManagedQualificationWork {
         state: Box<ResumeMarkerStateV1>,
     },
     FreshV2 {
-        config: Box<PreparedWorkerV2Config>,
+        config: Box<PreparedBuildConfig>,
         envelope_inputs: Option<WorkerV2EnvelopeInputsV1>,
         resume: WorkerV2ResumeStoreV2,
         compiler_closure: CompilerClosureV2,
@@ -3075,7 +3075,7 @@ impl ManagedAttempt {
         }
     }
 
-    const fn compile_environment_profile(&self) -> Option<WorkerV2CompileEnvironmentProfileV1> {
+    const fn compile_environment_profile(&self) -> Option<BuildCompileEnvironmentProfileV1> {
         self.compile_environment_profile
     }
 
@@ -3160,7 +3160,7 @@ impl ManagedAttempt {
 
 fn prepare_managed_attempt(
     compile: RustcCompileInvocationV2<'_>,
-    worker_v2: Option<PreparedWorkerV2Config>,
+    worker_v2: Option<PreparedBuildConfig>,
     current_dir: &std::path::Path,
     output_dir: &Path,
     managed_rustc_args: &[OsString],
@@ -3183,7 +3183,7 @@ fn prepare_managed_attempt(
         .as_deref()
         == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
     {
-        Some(WorkerV2CompileEnvironmentProfileV1::RowSoftmaxV1Gfx942)
+        Some(BuildCompileEnvironmentProfileV1::RowSoftmaxV1Gfx942)
     } else {
         worker_v2.as_ref().and_then(|config| {
             config.compile_environment_profile(
@@ -3199,7 +3199,7 @@ fn prepare_managed_attempt(
     });
     let protected_source_path = worker_v2
         .as_ref()
-        .and_then(PreparedWorkerV2Config::source_debug_profile)
+        .and_then(PreparedBuildConfig::source_debug_profile)
         .map(|_| compile.source_path().to_path_buf());
     let session = managed_build_session()?;
     let producer =
@@ -3235,7 +3235,7 @@ fn prepare_managed_attempt(
     let protected_compiler_closure = compiler_capabilities.protected_compiler_closure()?;
     let production_v1_worker = worker_v2
         .as_ref()
-        .is_some_and(PreparedWorkerV2Config::is_production_compilation);
+        .is_some_and(PreparedBuildConfig::is_production_compilation);
     let production_compiler_closure =
         require_production_compiler_closure(protected_compiler_closure, production_v1_worker)
             .map_err(|error| BindingWrapperError::BuildObservation(error.to_owned()))?;
@@ -3247,7 +3247,7 @@ fn prepare_managed_attempt(
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     let row_softmax_release = worker_v2
         .as_ref()
-        .and_then(PreparedWorkerV2Config::row_softmax_v1)
+        .and_then(PreparedBuildConfig::row_softmax_v1)
         .map(|row| {
             if release_action.as_deref() != Some(OsStr::new(ROW_SOFTMAX_V1_RUN_VALUE)) {
                 return Err(BindingWrapperError::BuildObservation(
@@ -3278,7 +3278,7 @@ fn prepare_managed_attempt(
         row_softmax_release.is_some() || row_softmax_provision,
         worker_v2
             .as_ref()
-            .is_some_and(PreparedWorkerV2Config::executes_worker_in_rustc),
+            .is_some_and(PreparedBuildConfig::executes_worker_in_rustc),
     );
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     if let Some(blocker) = blocker {
@@ -3900,7 +3900,7 @@ fn decode_framed_row_softmax_authority_fields(transcript: &[u8]) -> Result<Vec<&
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn complete_fresh_worker_v2(
     managed: &mut ManagedAttempt,
-    worker_v2: &PreparedWorkerV2Config,
+    worker_v2: &PreparedBuildConfig,
     envelope_inputs: Option<&WorkerV2EnvelopeInputsV1>,
     resume: &WorkerV2ResumeStoreV1,
 ) -> Result<(), CompletionFailure> {
@@ -3954,7 +3954,7 @@ fn complete_fresh_worker_v2(
 
 fn complete_fresh_production_artifact(
     managed: &ManagedAttempt,
-    worker: &PreparedWorkerV2Config,
+    worker: &PreparedBuildConfig,
     compiler_closure: CompilerClosureV2,
     parent_custody: &ParentRustcInvocationCustody,
 ) -> Result<(), CompletionFailure> {
@@ -4111,7 +4111,7 @@ fn complete_ready_production_artifact(
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn complete_fresh_protected_worker_v2(
     managed: &ManagedAttempt,
-    worker_v2: &PreparedWorkerV2Config,
+    worker_v2: &PreparedBuildConfig,
     envelope_inputs: Option<&WorkerV2EnvelopeInputsV1>,
     resume: &WorkerV2ResumeStoreV2,
     compiler_closure: CompilerClosureV2,
@@ -4298,7 +4298,7 @@ fn complete_fresh_protected_worker_v2(
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn complete_row_softmax_v1_release(
     managed: &mut ManagedAttempt,
-    worker_v2: &PreparedWorkerV2Config,
+    worker_v2: &PreparedBuildConfig,
     consumed: fe2o3_artifact_transaction::ConsumedCompilerModuleHandoffV1,
 ) -> Result<(), CompletionFailure> {
     let release = managed
@@ -5220,13 +5220,13 @@ fn success_exit_status() -> ExitStatus {
 
 fn derive_build_attempt_input(
     argv: &[OsString],
-    worker_v2: Option<&PreparedWorkerV2Config>,
+    worker_v2: Option<&PreparedBuildConfig>,
     current_dir: &std::path::Path,
     compiler_closure_sha256: [u8; 32],
 ) -> BuildInvocation {
     derive_build_attempt_input_with_config_identity(
         argv,
-        worker_v2.map(PreparedWorkerV2Config::identity),
+        worker_v2.map(PreparedBuildConfig::identity),
         current_dir,
         compiler_closure_sha256,
     )
@@ -5234,7 +5234,7 @@ fn derive_build_attempt_input(
 
 fn derive_build_attempt_input_with_config_identity(
     argv: &[OsString],
-    worker_v2_identity: Option<WorkerV2ConfigIdentity>,
+    worker_v2_identity: Option<BuildConfigIdentity>,
     current_dir: &std::path::Path,
     compiler_closure_sha256: [u8; 32],
 ) -> BuildInvocation {
@@ -5379,15 +5379,15 @@ mod tests {
         row_softmax_provider_observation_json, scope_host_dependency_environment,
         scope_managed_rustc_arguments, selected_kernel_root, worker_v3_readiness_is_absent,
     };
+    use crate::build_config::{
+        BuildCompileEnvironmentProfileV1, BuildConfigIdentity,
+        GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV,
+        GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV, PreparedBuildConfig, WorkerV2BuildObservation,
+    };
     use crate::inert_rustc_invocation_capture::InertRustcInvocationCaptureV2;
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
     use crate::pinned_executable::PinnedExecutable;
     use crate::project::PinnedDirectory;
-    use crate::worker_v2::{
-        GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV,
-        GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV, PreparedWorkerV2Config, WorkerV2BuildObservation,
-        WorkerV2CompileEnvironmentProfileV1, WorkerV2ConfigIdentity,
-    };
     use crate::worker_v2_artifact_container::{
         assemble_recovered_worker_v2_load_envelope_v2,
         canonical_worker_v2_container_for_fixture_v1,
@@ -5731,7 +5731,7 @@ mod tests {
     #[test]
     fn s09_worker_observation_propagates_every_exact_digest_and_clears_absence() {
         let observation = WorkerV2BuildObservation {
-            config_identity: WorkerV2ConfigIdentity::for_test([0x11; 32]),
+            config_identity: BuildConfigIdentity::for_test([0x11; 32]),
             executable_sha256: [0x12; 32],
             worker_build_identity: "worker-build-v2",
             llvm_build_identity: "llvm-build-v2",
@@ -6037,8 +6037,8 @@ mod tests {
     fn worker_v2_config_identity_changes_attempt_input() {
         let argv = args(&["rustc", "--crate-name", "unit", "unit.rs"]);
         let current_dir = std::env::current_dir().unwrap();
-        let first = WorkerV2ConfigIdentity::for_test([0x11; 32]);
-        let second = WorkerV2ConfigIdentity::for_test([0x12; 32]);
+        let first = BuildConfigIdentity::for_test([0x11; 32]);
+        let second = BuildConfigIdentity::for_test([0x12; 32]);
         assert_ne!(
             derive_build_attempt_input_with_config_identity(
                 &argv,
@@ -6482,7 +6482,7 @@ mod tests {
         ]
         .map(|(name, value)| (OsString::from(name), OsString::from(value)));
         let complete = materialize_reviewed_child_environment(
-            Some(WorkerV2CompileEnvironmentProfileV1::S09AlphaGfx942O0),
+            Some(BuildCompileEnvironmentProfileV1::S09AlphaGfx942O0),
             &mut command,
             inherited,
             None,
@@ -6582,14 +6582,14 @@ mod tests {
     }
 
     fn general_gemm_environment() -> Vec<(OsString, OsString)> {
-        let expected = WorkerV2ConfigIdentity::for_test([0x66; 32]).to_hex();
+        let expected = BuildConfigIdentity::for_test([0x66; 32]).to_hex();
         let runtime_manifest =
             hex(&fe2o3_verifier::GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256);
         [
             ("CARGO_MANIFEST_DIR", "/workspace/general"),
             (
                 "FE2O3_QUALIFICATION_ORACLE_V1",
-                crate::worker_v2::GENERAL_GEMM_V1_PIPELINE,
+                crate::build_config::GENERAL_GEMM_V1_PIPELINE,
             ),
             ("FE2O3_TARGET", "gfx942:xnack-"),
             ("FE2O3_VERIFY_KERNEL_IR", "1"),
@@ -6635,7 +6635,7 @@ mod tests {
     fn general_gemm_pins() -> GeneralGemmChildPinsV1<'static> {
         GeneralGemmChildPinsV1 {
             manifest_path: Path::new("/workspace/general/worker-v2.json"),
-            expected_identity: WorkerV2ConfigIdentity::for_test([0x66; 32]),
+            expected_identity: BuildConfigIdentity::for_test([0x66; 32]),
             runtime_closure_v2_root: Path::new("/opt/fe2o3/verus-runtime-v2/0.2026.08.02"),
             runtime_closure_v2_manifest_sha256:
                 fe2o3_verifier::GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256,
@@ -8564,7 +8564,7 @@ mod tests {
 
     fn protected_compiler_capabilities_for_test(
         output_dir: &Path,
-        config_identity: WorkerV2ConfigIdentity,
+        config_identity: BuildConfigIdentity,
     ) -> CompilerCapabilities {
         let backend = PinnedCodegenBackend::open(&std::env::current_exe().unwrap()).unwrap();
         let compiler_closure = CompilerClosureV2::new(
@@ -8703,7 +8703,7 @@ mod tests {
             value => panic!("unknown fail-closed child case {value:?}"),
         };
         let output_dir = PathBuf::from(std::env::var_os(FAIL_CLOSED_CHILD_ARTIFACT_ENV).unwrap());
-        let worker_v2 = PreparedWorkerV2Config::from_environment()
+        let worker_v2 = PreparedBuildConfig::from_environment()
             .unwrap()
             .expect("fail-closed Worker V2 config");
         let capabilities =

@@ -44,18 +44,20 @@ mod production_release_no_hardware;
     any(test, feature = "qualification-oracles-test-only")
 ))]
 use production_release_no_hardware as production_release;
+mod build_config;
 mod project;
 mod protected_compiler_handoff_v3;
 #[path = "rustc_runtime.rs"]
 mod rustc_lib_tree;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod simulation_capture;
 mod tool_commands;
 #[allow(dead_code)]
 #[path = "../../../examples/row_softmax_v1/src/verification_certificate.rs"]
 mod verification_certificate;
-mod worker_v2;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod worker_v2_artifact_container;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod worker_v2_envelope_mode;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod worker_v2_restart;
@@ -488,15 +490,15 @@ fn cargo_with_backend_result(
     let production_target_profile = production_compilation_selected(
         protected_release.is_some(),
         simulation.is_some(),
-        env::var_os(worker_v2::QUALIFICATION_ORACLE_ENV).as_deref(),
+        env::var_os(build_config::QUALIFICATION_ORACLE_ENV).as_deref(),
     )?;
     if authority_sensitive_request_selected(production_target_profile) {
         reject_dynamic_loader_environment()?;
     }
     scrub_process_dynamic_loader_environment();
     reject_preexisting_compiler_environment()?;
-    let worker_v2 = worker_v2::PreparedWorkerV2Config::from_environment_for_cargo_setup()
-        .map_err(|error| format!("Worker V2 setup failed: {error}"))?;
+    let build_config = build_config::PreparedBuildConfig::from_environment_for_cargo_setup()
+        .map_err(|error| format!("build configuration setup failed: {error}"))?;
     validate_production_cargo_selection(
         args,
         production_target_profile,
@@ -505,9 +507,9 @@ fn cargo_with_backend_result(
     let requires_authorized_closure = production_target_profile
         || env::var("FE2O3_QUALIFICATION_ORACLE_V1").as_deref()
             == Ok(AUTHORITY_BEARING_ROW_PIPELINE)
-        || worker_v2
+        || build_config
             .as_ref()
-            .and_then(worker_v2::PreparedWorkerV2Config::source_debug_profile)
+            .and_then(build_config::PreparedBuildConfig::source_debug_profile)
             .is_some();
     if requires_authorized_closure {
         require_protected_authority_launch(protected_release)?;
@@ -609,7 +611,7 @@ fn cargo_with_backend_result(
     let mut context = BackendRunContext::prepare(
         BackendRunPreparation {
             project,
-            worker_v2,
+            build_config,
             pinned_cargo,
             pinned_rustc,
             authority_backend,
@@ -627,12 +629,12 @@ fn cargo_with_backend_result(
 
 fn authority_sensitive_request_selected(production_compilation: bool) -> bool {
     production_compilation
-        || env::var_os(worker_v2::QUALIFICATION_ORACLE_ENV).as_deref()
+        || env::var_os(build_config::QUALIFICATION_ORACLE_ENV).as_deref()
         == Some(OsStr::new(AUTHORITY_BEARING_ROW_PIPELINE))
         // A Worker V2 manifest can select the source-debug authority profile. Treat the
         // unparsed selection as authority-sensitive so mutable manifest contents cannot
         // downgrade the loader check that precedes manifest authentication.
-        || env::var_os(worker_v2::WORKER_V2_CONFIG_ENV).is_some()
+        || env::var_os(build_config::WORKER_V2_CONFIG_ENV).is_some()
 }
 
 fn production_compilation_selected(
@@ -643,7 +645,7 @@ fn production_compilation_selected(
     if selector == Some(OsStr::new("production-v1")) {
         return Err(format!(
             "{} must be unset for production compilation; explicit `production-v1` selection has been removed",
-            worker_v2::QUALIFICATION_ORACLE_ENV,
+            build_config::QUALIFICATION_ORACLE_ENV,
         ));
     }
     Ok(protected_release || (!simulation && selector.is_none()))
@@ -655,7 +657,7 @@ fn reject_obsolete_codegen_pipeline(value: Option<&OsStr>) -> Result<(), String>
     };
     Err(format!(
         "{OBSOLETE_CODEGEN_PIPELINE_ENV} has been removed; production compilation has no selector and temporary test oracles use {}; found {value:?}",
-        worker_v2::QUALIFICATION_ORACLE_ENV,
+        build_config::QUALIFICATION_ORACLE_ENV,
     ))
 }
 
@@ -750,8 +752,8 @@ struct BackendRunContext {
     pinned_backend: pinned_codegen_backend::PinnedCodegenBackend,
     pinned_cargo: pinned_executable::PinnedExecutable,
     pinned_rustc: PinnedRustc,
-    _worker_v2: Option<worker_v2::PreparedWorkerV2Config>,
-    worker_v2_identity: Option<worker_v2::WorkerV2ConfigIdentity>,
+    _build_config: Option<build_config::PreparedBuildConfig>,
+    build_config_identity: Option<build_config::BuildConfigIdentity>,
     compiler_closure_sha256: [u8; 32],
     protected_compiler_closure: Option<fe2o3_build_authority::CompilerClosureV2>,
     target_dir: project::PinnedDirectory,
@@ -768,7 +770,7 @@ struct BackendRunContext {
 
 struct BackendRunPreparation {
     project: project::CargoProject,
-    worker_v2: Option<worker_v2::PreparedWorkerV2Config>,
+    build_config: Option<build_config::PreparedBuildConfig>,
     pinned_cargo: pinned_executable::PinnedExecutable,
     pinned_rustc: PinnedRustc,
     authority_backend: Option<(PathBuf, pinned_codegen_backend::PinnedCodegenBackend)>,
@@ -787,7 +789,7 @@ impl BackendRunContext {
     ) -> Result<Self, String> {
         let BackendRunPreparation {
             project,
-            worker_v2,
+            build_config,
             pinned_cargo,
             pinned_rustc,
             authority_backend,
@@ -868,7 +870,7 @@ impl BackendRunContext {
             },
             fe2o3_build_authority::CompilerClosureV2::identity_sha256,
         );
-        let worker_v2_identity = worker_v2.as_ref().map(|config| config.identity());
+        let build_config_identity = build_config.as_ref().map(|config| config.identity());
         let build_session = random_build_session()?;
         let mut cargo_configuration = project.semantic_configuration(
             args,
@@ -902,7 +904,7 @@ impl BackendRunContext {
         let semantic = generation::semantic_identity(
             &target,
             &compiler_closure_sha256,
-            worker_v2_identity,
+            build_config_identity,
             &cargo_configuration,
         )?;
         let mut generation = generation::PreparedGeneration::prepare(&target_dir, semantic)?;
@@ -930,8 +932,8 @@ impl BackendRunContext {
             pinned_backend,
             pinned_cargo,
             pinned_rustc,
-            _worker_v2: worker_v2,
-            worker_v2_identity,
+            _build_config: build_config,
+            build_config_identity,
             compiler_closure_sha256,
             protected_compiler_closure: protected_closure,
             target_dir,
@@ -1020,10 +1022,13 @@ fn run_cargo_with_backend_inner(
         }
     }
     if command == "run" {
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         let expects_envelope = context
-            ._worker_v2
+            ._build_config
             .as_ref()
             .is_some_and(|config| config.envelope_mode().is_required());
+        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+        let expects_envelope = false;
         inject_application_runner(
             &context.project,
             &context.pinned_cargo,
@@ -1036,9 +1041,9 @@ fn run_cargo_with_backend_inner(
     }
     let artifact_dir = context.generation.artifact_dir();
     let capability_profile = if context
-        ._worker_v2
+        ._build_config
         .as_ref()
-        .and_then(worker_v2::PreparedWorkerV2Config::source_debug_profile)
+        .and_then(build_config::PreparedBuildConfig::source_debug_profile)
         .is_some()
     {
         capability_broker::CapabilityProfileV1::S09
@@ -1056,7 +1061,7 @@ fn run_cargo_with_backend_inner(
         rustc_lib_tree_stat.st_mode,
     );
     let config_identity = context
-        .worker_v2_identity
+        .build_config_identity
         .map(|identity| *identity.as_bytes());
     let capability_broker = if let Some(compiler_closure) = context.protected_compiler_closure {
         let binding = capability_broker::CapabilityBindingV3::new_protected(
@@ -1153,16 +1158,16 @@ fn run_cargo_with_backend_inner(
         "LD_LIBRARY_PATH",
         format!("/proc/self/fd/{RUSTC_LIBRARY_CHILD_FD}"),
     );
-    match context.worker_v2_identity {
+    match context.build_config_identity {
         Some(identity) => {
             cargo
                 .as_command_mut()
-                .env(worker_v2::WORKER_V2_EXPECTED_ID_ENV, identity.to_hex());
+                .env(build_config::WORKER_V2_EXPECTED_ID_ENV, identity.to_hex());
         }
         None => {
             cargo
                 .as_command_mut()
-                .env_remove(worker_v2::WORKER_V2_EXPECTED_ID_ENV);
+                .env_remove(build_config::WORKER_V2_EXPECTED_ID_ENV);
         }
     }
     if let Some(admission) = protected_release {
@@ -1222,6 +1227,7 @@ fn run_cargo_with_backend_inner(
     context.project.validate_paths()?;
     context.target_dir.validate_path("Cargo target directory")?;
     context.generation.reject_if_substituted()?;
+    #[cfg(feature = "qualification-oracles-test-only")]
     let canonical_kir = simulation
         .map(|_| simulation_capture::consume_exactly_one(context.generation.artifact_dir()))
         .transpose()?;
@@ -1241,7 +1247,7 @@ fn run_cargo_with_backend_inner(
         }
     }
     #[cfg(not(feature = "qualification-oracles-test-only"))]
-    debug_assert!(simulation.is_none() && canonical_kir.is_none());
+    debug_assert!(simulation.is_none());
     Ok(())
 }
 
@@ -1251,7 +1257,7 @@ fn configure_simulation_build_environment(
 ) {
     if let Some(attempt) = attempt {
         command
-            .env(worker_v2::QUALIFICATION_ORACLE_ENV, SIMULATION_PIPELINE)
+            .env(build_config::QUALIFICATION_ORACLE_ENV, SIMULATION_PIPELINE)
             .env(SIMULATION_MODE_ENV, "1")
             .env(SIMULATION_ATTEMPT_ENV, attempt.to_hex())
             .env("FE2O3_HIP_SYS_DISABLE", "1");
@@ -2274,9 +2280,9 @@ fn find_or_build_backend(
         BINDING_WRAPPER_MODE_ENV,
         BUILD_SESSION_ENV,
         OBSOLETE_CODEGEN_PIPELINE_ENV,
-        worker_v2::QUALIFICATION_ORACLE_ENV,
-        worker_v2::WORKER_V2_CONFIG_ENV,
-        worker_v2::WORKER_V2_EXPECTED_ID_ENV,
+        build_config::QUALIFICATION_ORACLE_ENV,
+        build_config::WORKER_V2_CONFIG_ENV,
+        build_config::WORKER_V2_EXPECTED_ID_ENV,
         AUTHORITY_CARGO_SHA256_ENV,
         AUTHORITY_RUSTC_SHA256_ENV,
         AUTHORITY_RUSTC_RUNTIME_SHA256_ENV,

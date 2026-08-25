@@ -1,5 +1,5 @@
+use crate::build_config::BuildConfigIdentity;
 use crate::project::{PinnedDirectory, is_synthetic_dot_entry};
-use crate::worker_v2::WorkerV2ConfigIdentity;
 use cap_primitives::fs::{read_base_dir, remove_open_dir_all};
 use fe2o3_worker_v2_bundle::MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1;
 use rustix::fs::{AtFlags, FileType, FlockOperation};
@@ -20,7 +20,7 @@ const OWNER_MAGIC: &[u8] = b"fe2o3-owned-v1\0";
 const MARKER_NAME: &str = ".codegen-generation-v1";
 const MARKER_MAGIC: &[u8; 28] = b"fe2o3-codegen-generation-v1\0";
 const MARKER_BYTES: usize = MARKER_MAGIC.len() + 32 + 16 + 32 + 8;
-const GENERATION_SEMANTIC_IDENTITY_DOMAIN_V4: &[u8] = b"fe2o3-cargo-codegen-semantics-v4";
+const GENERATION_SEMANTIC_IDENTITY_DOMAIN_V5: &[u8] = b"fe2o3-cargo-codegen-semantics-v5";
 const MAX_SNAPSHOT_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_SNAPSHOT_ENTRIES: u64 = MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 as u64;
 const MAX_SNAPSHOT_DEPTH: usize = 64;
@@ -335,19 +335,19 @@ impl Drop for PreparedGeneration {
 pub(crate) fn semantic_identity(
     target: &str,
     compiler_closure_sha256: &[u8; 32],
-    worker_v2: Option<WorkerV2ConfigIdentity>,
+    build_config: Option<BuildConfigIdentity>,
     cargo_configuration: &[u8],
 ) -> Result<[u8; 32], String> {
     let mut hash = Sha256::new();
-    update_hash(&mut hash, GENERATION_SEMANTIC_IDENTITY_DOMAIN_V4);
+    update_hash(&mut hash, GENERATION_SEMANTIC_IDENTITY_DOMAIN_V5);
     update_hash(&mut hash, target.as_bytes());
     update_hash(&mut hash, compiler_closure_sha256);
-    match worker_v2 {
+    match build_config {
         Some(identity) => {
-            update_hash(&mut hash, b"worker-v2");
+            update_hash(&mut hash, b"build-config");
             update_hash(&mut hash, identity.as_bytes());
         }
-        None => update_hash(&mut hash, b"no-worker-v2"),
+        None => update_hash(&mut hash, b"no-build-config"),
     }
     update_hash(&mut hash, cargo_configuration);
 
@@ -909,10 +909,10 @@ mod tests {
     }
 
     #[test]
-    fn semantic_v4_preserves_the_v1_marker_wire() {
+    fn semantic_v5_preserves_the_v1_marker_wire() {
         assert_eq!(
-            GENERATION_SEMANTIC_IDENTITY_DOMAIN_V4,
-            b"fe2o3-cargo-codegen-semantics-v4"
+            GENERATION_SEMANTIC_IDENTITY_DOMAIN_V5,
+            b"fe2o3-cargo-codegen-semantics-v5"
         );
         assert_eq!(MARKER_MAGIC, b"fe2o3-codegen-generation-v1\0");
         assert_eq!(MARKER_BYTES, 116);
