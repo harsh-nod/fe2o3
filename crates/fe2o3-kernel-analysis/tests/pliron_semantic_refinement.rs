@@ -1,6 +1,6 @@
 use dialect_kernel::{
     DIALECT_NAME, RequireEquivalentOp, ReturnOp, SemanticBinaryKindAttr, SemanticBinaryOp,
-    SemanticScalarType, SemanticSymbolOp, register_dialect,
+    SemanticExpressionCommitmentOp, SemanticScalarType, SemanticSymbolOp, register_dialect,
 };
 use dialect_proof::{
     CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, ProofIdAttr,
@@ -91,6 +91,36 @@ fn identical_declared_expressions_are_accepted() {
     let report = run_pliron_semantic_refinement_check_v1(context, &function);
     assert_eq!(report.pass(), KernelCheckPassKindV1::SemanticRefinement);
     assert!(report.is_clean());
+}
+
+#[test]
+fn typed_commitments_normalize_only_by_exact_identity() {
+    let context = &mut setup();
+    let function = function(context, "typed_commitments", 0);
+    let entry = function.get_entry_block(context);
+    let actual = SemanticExpressionCommitmentOp::new(context, [1, 2, 3, 4]);
+    let equal = SemanticExpressionCommitmentOp::new(context, [1, 2, 3, 4]);
+    let different = SemanticExpressionCommitmentOp::new(context, [1, 2, 3, 5]);
+    let accepted = RequireEquivalentOp::new(context, actual.result(context), equal.result(context));
+    let rejected =
+        RequireEquivalentOp::new(context, actual.result(context), different.result(context));
+    let ret = ReturnOp::new(context);
+    for operation in [
+        actual.get_operation(),
+        equal.get_operation(),
+        different.get_operation(),
+        accepted.get_operation(),
+        rejected.get_operation(),
+        ret.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    let report = run_pliron_semantic_refinement_check_v1(context, &function);
+    assert!(!report.is_clean());
+    assert!(matches!(
+        report.findings(),
+        [PlironSemanticRefinementFindingV1::ExpressionMismatch { .. }]
+    ));
 }
 
 #[test]

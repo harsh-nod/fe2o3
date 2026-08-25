@@ -47,8 +47,8 @@ pub use ranked_memory::{
 };
 pub use semantic_contract::{
     RequireEquivalentOp, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr,
-    SemanticConstantOp, SemanticContractError, SemanticScalarType, SemanticSymbolAttr,
-    SemanticSymbolOp,
+    SemanticConstantOp, SemanticContractError, SemanticExpressionCommitmentAttr,
+    SemanticExpressionCommitmentOp, SemanticScalarType, SemanticSymbolAttr, SemanticSymbolOp,
 };
 pub use tensor_layout::{
     TensorConvergenceAttr, TensorFragmentAttr, TensorInstructionAttr, TensorLayoutDialectError,
@@ -393,6 +393,9 @@ pub fn register_dialect(
     <IndexBinaryKindAttr as Attribute>::register::<IndexBinaryKindAttr>(context);
     <SemanticSymbolAttr as Attribute>::register::<SemanticSymbolAttr>(context);
     <SemanticConstantAttr as Attribute>::register::<SemanticConstantAttr>(context);
+    <SemanticExpressionCommitmentAttr as Attribute>::register::<SemanticExpressionCommitmentAttr>(
+        context,
+    );
     <SemanticBinaryKindAttr as Attribute>::register::<SemanticBinaryKindAttr>(context);
     AlgorithmOp::register(context);
     GeneralGemmOp::register(context);
@@ -417,6 +420,7 @@ pub fn register_dialect(
     TrapOp::register(context);
     SemanticSymbolOp::register(context);
     SemanticConstantOp::register(context);
+    SemanticExpressionCommitmentOp::register(context);
     SemanticBinaryOp::register(context);
     RequireEquivalentOp::register(context);
     TensorConvergenceAttr::register(context);

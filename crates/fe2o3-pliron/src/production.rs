@@ -23,10 +23,12 @@ use super::{
 
 mod middle_end_evidence_v4;
 mod ranked;
+mod semantic_expression_v2;
 mod semantic_mir;
 
 pub use middle_end_evidence_v4::*;
 pub use ranked::*;
+pub use semantic_expression_v2::*;
 pub use semantic_mir::*;
 
 /// Hard cap for construction recipes registered during one production session.

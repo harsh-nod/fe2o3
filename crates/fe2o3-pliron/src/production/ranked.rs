@@ -25,7 +25,8 @@ use dialect_kernel::{
     MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, OwnershipContractOp, OwnershipCoverageAttr,
     OwnershipPartitionAttr, RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp,
     ReturnOp, SUPPORTED_ELEMENT_WIDTHS, SemanticBinaryKindAttr, SemanticBinaryOp,
-    SemanticConstantOp, SemanticSymbolOp, TensorConvergenceAttr, TensorLayoutOp, TrapOp,
+    SemanticConstantOp, SemanticExpressionCommitmentOp, SemanticSymbolOp, TensorConvergenceAttr,
+    TensorLayoutOp, TrapOp,
 };
 use dialect_proof::{
     CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, ProofIdAttr,
@@ -52,6 +53,11 @@ use pliron::{
     operation::Operation,
     r#type::TypeHandle,
     value::Value,
+};
+
+use super::{
+    ProductionNumericalContractV2, ProductionSemanticExpressionErrorV2,
+    ProductionSemanticExpressionV2,
 };
 
 use super::{
@@ -910,6 +916,12 @@ pub enum ProductionRankedOperationV1 {
         lhs: ProductionRankedValueV1,
         rhs: ProductionRankedValueV1,
     },
+    /// One closed, typed expression independently projected from source MIR.
+    SemanticExpression {
+        result: ProductionRankedValueIdV1,
+        expression: ProductionSemanticExpressionV2,
+        numerical_contract: ProductionNumericalContractV2,
+    },
     RequireEquivalent {
         actual: ProductionRankedValueV1,
         expected: ProductionRankedValueV1,
@@ -1346,6 +1358,7 @@ pub enum ProductionRankedKernelErrorV1 {
     InvalidExecutionLayout,
     InvalidAllocationContract,
     InvalidReferenceContract,
+    InvalidSemanticExpression(ProductionSemanticExpressionErrorV2),
     UnsupportedElementWidth(u32),
     DynamicExtentCountMismatch {
         expected: usize,
@@ -1379,6 +1392,80 @@ pub enum ProductionRankedKernelErrorV1 {
     Materialization(&'static str),
 }
 
+/// Positive, non-vacuous accounting for typed semantic proof obligations.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ProductionTypedSemanticObligationSummaryV2 {
+    pub expression_roots: usize,
+    pub expression_nodes: usize,
+    pub arithmetic_operations: usize,
+    pub comparisons: usize,
+    pub selects: usize,
+    pub casts: usize,
+    pub checked_operations: usize,
+    pub statically_discharged_domain_roots: usize,
+    pub exact_bitvector_operator_congruence_roots: usize,
+    /// MIR/KIR operator-identity and congruence only. Never target-value authority.
+    pub exact_ieee_operator_congruence_roots: usize,
+}
+
+impl ProductionTypedSemanticObligationSummaryV2 {
+    pub const fn is_non_vacuous(self) -> bool {
+        self.expression_roots != 0 && self.expression_nodes != 0
+    }
+
+    pub const fn grants_target_ieee_value_authority(self) -> bool {
+        false
+    }
+}
+
+pub fn typed_semantic_obligation_summary_v2(
+    kernel: &ProductionRankedKernelV1,
+) -> Result<ProductionTypedSemanticObligationSummaryV2, ProductionRankedKernelErrorV1> {
+    let mut summary = ProductionTypedSemanticObligationSummaryV2::default();
+    for operation in kernel.blocks().iter().flat_map(|block| block.operations()) {
+        let ProductionRankedOperationV1::SemanticExpression {
+            expression,
+            numerical_contract,
+            ..
+        } = operation
+        else {
+            continue;
+        };
+        let stats = expression
+            .validate()
+            .map_err(ProductionRankedKernelErrorV1::InvalidSemanticExpression)?;
+        if !numerical_contract.is_supported()
+            || !numerical_contract.admits_scalar(expression.scalar())
+        {
+            return Err(ProductionRankedKernelErrorV1::InvalidSemanticExpression(
+                ProductionSemanticExpressionErrorV2::UnsupportedNumericalContract,
+            ));
+        }
+        summary.expression_roots += 1;
+        summary.expression_nodes += stats.nodes;
+        summary.arithmetic_operations += stats.arithmetic_operations;
+        summary.comparisons += stats.comparisons;
+        summary.selects += stats.selects;
+        summary.casts += stats.casts;
+        summary.checked_operations += stats.checked_operations;
+        summary.statically_discharged_domain_roots +=
+            usize::from(expression.validate_static_domains().is_ok());
+        match numerical_contract {
+            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence => {
+                summary.exact_bitvector_operator_congruence_roots += 1;
+            }
+            ProductionNumericalContractV2::ExactIeee754OperatorCongruence { .. } => {
+                summary.exact_ieee_operator_congruence_roots += 1;
+            }
+            ProductionNumericalContractV2::Relaxed
+            | ProductionNumericalContractV2::ErrorBounded { .. } => {
+                unreachable!("unsupported numerical contracts were rejected above")
+            }
+        }
+    }
+    Ok(summary)
+}
+
 impl fmt::Display for ProductionRankedKernelErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1407,6 +1494,10 @@ impl fmt::Display for ProductionRankedKernelErrorV1 {
             ),
             Self::InvalidReferenceContract => formatter.write_str(
                 "functional-reference proof identities must be nonzero and pairwise distinct",
+            ),
+            Self::InvalidSemanticExpression(error) => write!(
+                formatter,
+                "invalid typed semantic expression: {error}"
             ),
             Self::UnsupportedElementWidth(width) => write!(
                 formatter,
@@ -1794,6 +1885,23 @@ fn validate_operation(
             require_semantic(*rhs, argument_count, locals)?;
             Ok(Some((*result, RecipeValueKindV1::Semantic)))
         }
+        ProductionRankedOperationV1::SemanticExpression {
+            result,
+            expression,
+            numerical_contract,
+        } => {
+            expression
+                .validate()
+                .map_err(ProductionRankedKernelErrorV1::InvalidSemanticExpression)?;
+            if !numerical_contract.is_supported()
+                || !numerical_contract.admits_scalar(expression.scalar())
+            {
+                return Err(ProductionRankedKernelErrorV1::InvalidSemanticExpression(
+                    ProductionSemanticExpressionErrorV2::UnsupportedNumericalContract,
+                ));
+            }
+            Ok(Some((*result, RecipeValueKindV1::Semantic)))
+        }
         ProductionRankedOperationV1::RequireEquivalent { actual, expected }
         | ProductionRankedOperationV1::RequireReferenceEquivalent {
             actual, expected, ..
@@ -2006,6 +2114,7 @@ fn validate_block_argument_values_v1(
         | ProductionRankedOperationV1::AllocationEffect { .. }
         | ProductionRankedOperationV1::SemanticSymbol { .. }
         | ProductionRankedOperationV1::SemanticConstant { .. } => {}
+        ProductionRankedOperationV1::SemanticExpression { .. } => {}
     }
     Ok(())
 }
@@ -3063,6 +3172,17 @@ fn materialize_operation(
             );
             (op.get_operation(), Some((*result, op.result(context))))
         }
+        ProductionRankedOperationV1::SemanticExpression {
+            result,
+            expression,
+            numerical_contract,
+        } => {
+            let digest = expression.canonical_transcript_sha256(*numerical_contract);
+            // The PLIRON operation is deliberately only a commitment. Typed
+            // authority remains in this retained, validated ranked recipe.
+            let op = SemanticExpressionCommitmentOp::new(context, digest_words_v2(digest));
+            (op.get_operation(), Some((*result, op.result(context))))
+        }
         ProductionRankedOperationV1::RequireEquivalent { actual, expected } => {
             let op = RequireEquivalentOp::new(
                 context,
@@ -3285,6 +3405,14 @@ fn authenticated_proof_ids(
         return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
     }
     Ok(identities)
+}
+
+fn digest_words_v2(digest: [u8; 32]) -> [u64; 4] {
+    let mut words = [0_u64; 4];
+    for (word, bytes) in words.iter_mut().zip(digest.chunks_exact(8)) {
+        *word = u64::from_le_bytes(bytes.try_into().expect("eight-byte digest chunk"));
+    }
+    words
 }
 
 fn materialize_terminator(

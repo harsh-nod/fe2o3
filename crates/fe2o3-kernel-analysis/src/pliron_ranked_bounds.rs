@@ -17,8 +17,8 @@ use dialect_kernel::{
     IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
     IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexUnknownOp, InvocationIndexOp,
     MAX_RANKED_MEMORY_RANK, OwnershipContractOp, RankedAccessOp, RankedViewOp, RankedViewType,
-    RequireEquivalentOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp, SemanticSymbolOp,
-    TensorLayoutOp, TrapOp, ranked_view_type,
+    RequireEquivalentOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp,
+    SemanticExpressionCommitmentOp, SemanticSymbolOp, TensorLayoutOp, TrapOp, ranked_view_type,
 };
 use dialect_proof::{EvidenceRefOp, ObligationOp, RequireEffectRefinementOp, RequireRefinementOp};
 use pliron::{
@@ -292,6 +292,7 @@ enum RankedOperationKind {
     SemanticSymbol,
     SemanticConstant,
     SemanticBinary,
+    SemanticExpressionCommitment,
     RequireEquivalent,
     ProofObligation,
     ProofEvidence,
@@ -378,6 +379,11 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         Some(RankedOperationKind::SemanticConstant)
     } else if operation.downcast_ref::<SemanticBinaryOp>().is_some() {
         Some(RankedOperationKind::SemanticBinary)
+    } else if operation
+        .downcast_ref::<SemanticExpressionCommitmentOp>()
+        .is_some()
+    {
+        Some(RankedOperationKind::SemanticExpressionCommitment)
     } else if operation.downcast_ref::<RequireEquivalentOp>().is_some() {
         Some(RankedOperationKind::RequireEquivalent)
     } else if operation.downcast_ref::<ObligationOp>().is_some() {

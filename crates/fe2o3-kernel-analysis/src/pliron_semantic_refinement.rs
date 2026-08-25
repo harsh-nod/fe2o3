@@ -7,7 +7,7 @@ use std::{
 
 use dialect_kernel::{
     RequireEquivalentOp, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantOp,
-    SemanticSymbolOp,
+    SemanticExpressionCommitmentOp, SemanticSymbolOp,
 };
 use dialect_proof::{
     CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, PropertyAttr,
@@ -37,6 +37,8 @@ enum SemanticNodeV1 {
     Symbol(u32),
     Constant(u64),
     Binary(SemanticBinaryKindAttr, usize, usize),
+    /// Opaque equality is sound only for byte-identical retained commitments.
+    Commitment([u64; 4]),
 }
 
 /// Shared canonical expression table used by scalar and effect refinement.
@@ -57,6 +59,9 @@ impl SemanticExpressionTableV1 {
                 operation.downcast_ref::<SemanticSymbolOp>().is_some()
                     || operation.downcast_ref::<SemanticConstantOp>().is_some()
                     || operation.downcast_ref::<SemanticBinaryOp>().is_some()
+                    || operation
+                        .downcast_ref::<SemanticExpressionCommitmentOp>()
+                        .is_some()
             })
             .collect::<Vec<_>>();
         Self::build(context, &definitions)
@@ -90,6 +95,10 @@ impl SemanticExpressionTableV1 {
                         }
                         _ => None,
                     }
+                } else if let Some(commitment) =
+                    operation.downcast_ref::<SemanticExpressionCommitmentOp>()
+                {
+                    commitment.identity(context).map(SemanticNodeV1::Commitment)
                 } else {
                     None
                 };
@@ -148,6 +157,10 @@ impl SemanticExpressionTableV1 {
                     self.describe(*rhs)
                 )
             }
+            SemanticNodeV1::Commitment(identity) => format!(
+                "typed-commitment:{:016x}{:016x}{:016x}{:016x}",
+                identity[0], identity[1], identity[2], identity[3]
+            ),
         }
     }
 }
@@ -376,6 +389,9 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
             if operation.downcast_ref::<SemanticSymbolOp>().is_some()
                 || operation.downcast_ref::<SemanticConstantOp>().is_some()
                 || operation.downcast_ref::<SemanticBinaryOp>().is_some()
+                || operation
+                    .downcast_ref::<SemanticExpressionCommitmentOp>()
+                    .is_some()
             {
                 definitions.push(operation.get_operation());
             } else if let Some(requirement) = operation.downcast_ref::<RequireEquivalentOp>() {

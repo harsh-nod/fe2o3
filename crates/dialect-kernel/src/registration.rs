@@ -13,9 +13,9 @@ use crate::{
     InvocationIndexOp, IterationDomainAttr, LaunchExtentAttr, MemorySpaceAttr, NoAliasClassAttr,
     OwnershipContractOp, OwnershipCoverageAttr, OwnershipPartitionAttr, RankedAccessOp,
     RankedViewOp, RankedViewType, RequireEquivalentOp, ReturnOp, SemanticBinaryKindAttr,
-    SemanticBinaryOp, SemanticConstantAttr, SemanticConstantOp, SemanticScalarType,
-    SemanticSymbolAttr, SemanticSymbolOp, TensorConvergenceAttr, TensorFragmentAttr,
-    TensorInstructionAttr, TensorLayoutOp, TrapOp,
+    SemanticBinaryOp, SemanticConstantAttr, SemanticConstantOp, SemanticExpressionCommitmentAttr,
+    SemanticExpressionCommitmentOp, SemanticScalarType, SemanticSymbolAttr, SemanticSymbolOp,
+    TensorConvergenceAttr, TensorFragmentAttr, TensorInstructionAttr, TensorLayoutOp, TrapOp,
 };
 
 fn registration_hook(
@@ -45,6 +45,7 @@ fn registration_hook(
     service.register_attribute::<IndexBinaryKindAttr>()?;
     service.register_attribute::<SemanticSymbolAttr>()?;
     service.register_attribute::<SemanticConstantAttr>()?;
+    service.register_attribute::<SemanticExpressionCommitmentAttr>()?;
     service.register_attribute::<SemanticBinaryKindAttr>()?;
     service.register_attribute::<TensorConvergenceAttr>()?;
     service.register_attribute::<TensorInstructionAttr>()?;
@@ -74,6 +75,7 @@ fn registration_hook(
     service.register_operation::<TrapOp>()?;
     service.register_operation::<SemanticSymbolOp>()?;
     service.register_operation::<SemanticConstantOp>()?;
+    service.register_operation::<SemanticExpressionCommitmentOp>()?;
     service.register_operation::<SemanticBinaryOp>()?;
     service.register_operation::<RequireEquivalentOp>()?;
     service.register_operation::<TensorLayoutOp>()?;

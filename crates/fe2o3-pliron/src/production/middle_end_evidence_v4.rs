@@ -1142,6 +1142,7 @@ fn functional_refinement_graph_operation_tag(operation: &ProductionRankedOperati
         ProductionRankedOperationV1::SemanticSymbol { .. } => 19,
         ProductionRankedOperationV1::SemanticConstant { .. } => 20,
         ProductionRankedOperationV1::SemanticBinary { .. } => 21,
+        ProductionRankedOperationV1::SemanticExpression { .. } => 28,
         ProductionRankedOperationV1::RequireEquivalent { .. } => 22,
         ProductionRankedOperationV1::RequireReferenceEquivalent { .. } => 23,
         ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
@@ -1466,6 +1467,15 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             digest.update([semantic_binary_tag(*kind)]);
             hash_value(digest, *lhs);
             hash_value(digest, *rhs);
+        }
+        ProductionRankedOperationV1::SemanticExpression {
+            result,
+            expression,
+            numerical_contract,
+        } => {
+            digest.update([28]);
+            digest.update(result.get().to_le_bytes());
+            digest.update(expression.canonical_transcript_sha256(*numerical_contract));
         }
         ProductionRankedOperationV1::RequireEquivalent { actual, expected } => {
             digest.update([12]);

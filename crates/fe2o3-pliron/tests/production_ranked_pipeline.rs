@@ -19,13 +19,14 @@ use fe2o3_pliron::{
     DialectRegistration, HARD_MAX_SESSION_OPERATION_TREE_ITEMS, ProductionConstructionV1,
     ProductionEffectRefinementContractV2, ProductionFunctionalRefinementAdmissionErrorV2,
     ProductionFunctionalRefinementTrustPolicyV2, ProductionGpuWriteSiteV2,
-    ProductionPlironSessionV1, ProductionRankedBlockV1, ProductionRankedCompileErrorV1,
-    ProductionRankedCompileErrorV2, ProductionRankedKernelErrorV1, ProductionRankedKernelV1,
-    ProductionRankedOperationV1, ProductionRankedTerminatorV1, ProductionRankedValueIdV1,
-    ProductionRankedValueV1, ProductionReferenceOutputSiteV2, ProductionReferenceProofV1,
-    ProductionReferenceProofV2, ProductionSessionErrorV1, ProductionSessionLimitsV1,
-    compile_ranked_kernel_for_lowering_v1, compile_ranked_kernel_for_lowering_v2,
-    normalized_effect_refinement_hash_for_kernel_v2,
+    ProductionNumericalContractV2, ProductionOverflowContractV2, ProductionPlironSessionV1,
+    ProductionRankedBlockV1, ProductionRankedCompileErrorV1, ProductionRankedCompileErrorV2,
+    ProductionRankedKernelErrorV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
+    ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
+    ProductionReferenceOutputSiteV2, ProductionReferenceProofV1, ProductionReferenceProofV2,
+    ProductionSemanticBinaryOpV2, ProductionSemanticExpressionV2, ProductionSemanticScalarTypeV2,
+    ProductionSessionErrorV1, ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
+    compile_ranked_kernel_for_lowering_v2, normalized_effect_refinement_hash_for_kernel_v2,
     normalized_functional_refinement_formula_hash_for_kernel_v2,
 };
 use fe2o3_proof_contracts::DigestV1;
@@ -925,6 +926,82 @@ fn authenticated_mir_reference_reaches_the_production_pipeline() {
     assert!(
         !input.retained_functional_refinement_receipts()[0].grants_artifact_or_launch_authority()
     );
+}
+
+#[test]
+fn typed_semantic_commitments_reach_all_mandatory_v2_passes() {
+    let scalar = ProductionSemanticScalarTypeV2::Integer {
+        signed: false,
+        bits: 32,
+    };
+    let expression = ProductionSemanticExpressionV2::Binary {
+        operation: ProductionSemanticBinaryOpV2::Add,
+        scalar,
+        overflow: ProductionOverflowContractV2::Wrapping,
+        lhs: Box::new(ProductionSemanticExpressionV2::Symbol { symbol: 9, scalar }),
+        rhs: Box::new(ProductionSemanticExpressionV2::Constant { scalar, bits: 4 }),
+    };
+    let actual = ProductionRankedValueIdV1::new(0);
+    let expected = ProductionRankedValueIdV1::new(1);
+    let kernel = ProductionRankedKernelV1::new(
+        "typed_authenticated_reference",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::SemanticExpression {
+                    result: actual,
+                    expression: expression.clone(),
+                    numerical_contract:
+                        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                },
+                ProductionRankedOperationV1::SemanticExpression {
+                    result: expected,
+                    expression,
+                    numerical_contract:
+                        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                },
+                ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
+                    actual: local(actual),
+                    expected: local(expected),
+                    subjects: functional_subjects(4),
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .unwrap();
+    let obligation = normalized_functional_refinement_formula_hash_for_kernel_v2(
+        &kernel,
+        0,
+        2,
+        local(actual),
+        local(expected),
+        functional_subjects(4),
+    )
+    .unwrap();
+    let (proof, imported, policy) = imported_reference(
+        functional_binding(4, obligation),
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+    );
+    let bound = kernel
+        .bind_functional_refinement_request_v2(0, 2, proof)
+        .unwrap();
+    let input = compile_ranked_kernel_for_lowering_v2(
+        construction(bound),
+        ProductionSessionLimitsV1::default(),
+        vec![imported],
+        policy,
+    )
+    .unwrap();
+    assert!(input.all_mandatory_reports_are_clean());
+    assert_eq!(
+        input.semantic_report().proved_reference_obligation_count(),
+        1
+    );
+    let summary = fe2o3_pliron::typed_semantic_obligation_summary_v2(input.kernel()).unwrap();
+    assert!(summary.is_non_vacuous());
+    assert_eq!(summary.expression_roots, 2);
+    assert_eq!(summary.exact_bitvector_operator_congruence_roots, 2);
 }
 
 #[test]
