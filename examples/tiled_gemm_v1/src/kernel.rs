@@ -57,7 +57,6 @@ pub const LDS_SLICE1_SOURCE_BLOCKERS_V1: [&str; 4] = [
 /// stops before descriptor publication or LLVM lowering.
 #[kernel(
     typed,
-    namespace = "c09558e16157fec495e78bc32a23b082213fa4a6ddabe48445a54cb3de591295",
     launch(required = [64, 1, 1], max = [64, 1, 1])
 )]
 pub fn tiled_gemm_lds_slice1(

@@ -16,10 +16,10 @@ pub struct Digest256V1 {
 
 pub open spec fn source_portable_mir_identity_v1() -> Digest256V1 {
     Digest256V1 {
-        word0: 0x22036a9bdf133924,
-        word1: 0xe3c1d95858f12232,
-        word2: 0x944c5f72680b3e61,
-        word3: 0xc24465025430d712,
+        word0: 0x2f3e24554d4fa024,
+        word1: 0x7e0ea6b146d02181,
+        word2: 0xbe2d22efec3755c5,
+        word3: 0x849d7dd33cc30a4f,
     }
 }
 

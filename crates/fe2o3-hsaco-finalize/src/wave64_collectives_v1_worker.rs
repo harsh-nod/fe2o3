@@ -53,8 +53,8 @@ const RUSTC_COMMIT: [u8; 20] = [
     0x8b, 0xe4, 0x46, 0xd9,
 ];
 const PORTABLE_MIR_CLOSURE_IDENTITY: [u8; 32] = [
-    0x55, 0x04, 0x3a, 0x3a, 0xc1, 0xaa, 0x25, 0xbd, 0x5e, 0x47, 0x58, 0x8b, 0x61, 0xc0, 0xb5, 0xfe,
-    0xdd, 0x0c, 0x9f, 0x4e, 0xbd, 0x1c, 0x59, 0x25, 0x5d, 0x0c, 0xfd, 0xbb, 0xd3, 0x06, 0x41, 0x4c,
+    0x19, 0xf6, 0xa4, 0x06, 0xa8, 0xcb, 0xe9, 0x40, 0x35, 0x65, 0x82, 0x6a, 0x71, 0x12, 0x99, 0xcb,
+    0xe2, 0xff, 0x81, 0xe1, 0x79, 0x7e, 0x8f, 0xfe, 0x75, 0xea, 0x93, 0xd7, 0x1a, 0xb9, 0x4b, 0x7e,
 ];
 const CANONICAL_IR_BINDING: &[u8] = b"fe2o3::wave64_collectives_v1;args=input-f32-slice,active-mask-u64,three-lane-owned-f32-slices;ordered-collectives=reduce-sum,inclusive-scan-sum,exclusive-scan-sum;inactive=contribute-and-publish-positive-zero";
 const DESCRIPTOR_PROFILE_BINDING: &[u8] = b"logical=wave64_collectives_v1;export=wave64_collectives_v1;descriptor=wave64_collectives_v1.kd;explicit-kernarg=72;complete-cov6-kernarg=328;wg=64,1,1;wave=64";
@@ -1124,6 +1124,14 @@ mod tests {
             .join(",");
         let compact_integrated = integrated.split_whitespace().collect::<String>();
         assert!(compact_integrated.contains(&portable_mir));
+        let worker = include_str!("../../../tools/fe2o3-llvm-link-worker/src/WorkerPipeline.cpp");
+        assert!(
+            worker
+                .split_whitespace()
+                .collect::<String>()
+                .contains(&portable_mir),
+            "C++ worker omitted the exact Wave64 portable-MIR identity",
+        );
     }
 
     #[test]

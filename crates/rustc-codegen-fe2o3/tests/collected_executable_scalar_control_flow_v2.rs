@@ -29,9 +29,10 @@ use fe2o3_kernel_descriptor::{
     AccessMode, AliasSemantics, BlockSizeV1, CapabilityV1, OwnershipSemantics,
     PhysicalAbiComponentKind, ScalarTypeV1,
 };
+use fe2o3_rustc_invocation::derive_cargo_metadata_build_observation_v2;
 use reserved_fe2o3_symbols::{
-    MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1, derive_crate_binding_id_v1,
-    derive_kernel_binding_id_v1, host_kernel_symbol_v1,
+    CRATE_BINDING_ID_ENV_V1, CrateBindingIdV1, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+    derive_crate_binding_id_v1, derive_kernel_binding_id_v1, host_kernel_symbol_v1,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -43,8 +44,12 @@ const TILED_GEMM_PIPELINE: &str = "collected-tiled-gemm-v1";
 const TILED_GEMM_FIXTURE: &str = include_str!("fixtures/collected-tiled-gemm-v1/src/lib.rs");
 const TILED_GEMM_LDS_SLICE1_FIXTURE: &str =
     include_str!("../../../examples/tiled_gemm_v1/src/kernel.rs");
+const TILED_GEMM_REVIEWED_METADATA: &str = "fe2o3-tiled-gemm-v1-reviewed";
+const TILED_GEMM_LDS_SLICE1_GENERATED_METADATA: &str = "e1f4d566b68639ae";
 const ROW_SOFTMAX_PIPELINE: &str = "collected-row-softmax-v1";
 const ROW_SOFTMAX_FIXTURE: &str = include_str!("../../../examples/row_softmax_v1/src/kernel.rs");
+const ROW_SOFTMAX_EXPLICIT_NAMESPACE_ATTRIBUTE: &str =
+    "    namespace = \"b9c43562d541f2f0489f311058c425d85a7ea6c328a3991bb6da17bdf85f766c\",\n";
 // Reviewed independently from the handoff identity and section payloads. This
 // binds every byte of the canonical LLVM lowering before compiler-owned data.
 const EXPECTED_ROW_LLVM_BODY_SHA256: [u8; 32] = [
@@ -1179,7 +1184,14 @@ fn build_collection_backend(workspace: &Path) -> &'static PinnedBackend {
         let mut command = Command::new(env!("CARGO"));
         command
             .current_dir(workspace)
-            .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
+            .args([
+                "build",
+                "--locked",
+                "-p",
+                "rustc-codegen-fe2o3",
+                "--features",
+                "qualification-oracles-test-only",
+            ])
             .arg("--target-dir")
             .arg(&target_dir)
             .env("CARGO_PROFILE_DEV_DEBUG", "1")
@@ -1631,6 +1643,22 @@ fn compile_tiled_gemm(
     target: &str,
     extra_args: &[&str],
 ) -> Output {
+    compile_tiled_gemm_with_lds_binding(
+        workspace, backend, output, source, target, extra_args, None, None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compile_tiled_gemm_with_lds_binding(
+    workspace: &Path,
+    backend: &PinnedBackend,
+    output: &TestOutputDir,
+    source: &str,
+    target: &str,
+    extra_args: &[&str],
+    lds_generated_metadata: Option<&str>,
+    lds_compiler_binding: Option<CrateBindingIdV1>,
+) -> Output {
     let is_lds_slice1 = source.contains("pub fn tiled_gemm_lds_slice1");
     build_frontend_dependencies(workspace).expect("build tiled GEMM frontend dependencies");
     backend
@@ -1654,6 +1682,11 @@ fn compile_tiled_gemm(
         "fe2o3_collected_tiled_gemm_lds_slice1_fixture"
     } else {
         "fe2o3_collected_tiled_gemm_v1_fixture"
+    };
+    let generated_metadata = if is_lds_slice1 {
+        lds_generated_metadata.unwrap_or(TILED_GEMM_LDS_SLICE1_GENERATED_METADATA)
+    } else {
+        "4ceb166423714bdc"
     };
     let producer = ProducerIdentity::from_codegen(crate_name, Some(&source_path))
         .expect("tiled GEMM fixture producer");
@@ -1688,16 +1721,10 @@ fn compile_tiled_gemm(
             cargo_target.join("debug/deps").display()
         ))
         .args(["-C", "overflow-checks=off"]);
-    if is_lds_slice1 {
-        command.arg("-Cmetadata=e1f4d566b68639ae");
-    } else {
-        command.arg("-Cmetadata=4ceb166423714bdc");
-    }
+    command.arg(format!("-Cmetadata={generated_metadata}"));
     command
-        .args([
-            "-Cmetadata=fe2o3-tiled-gemm-v1-reviewed",
-            "-Zmir-enable-passes=-JumpThreading",
-        ])
+        .arg(format!("-Cmetadata={TILED_GEMM_REVIEWED_METADATA}"))
+        .arg("-Zmir-enable-passes=-JumpThreading")
         .args(extra_args)
         .arg(format!(
             "-Zcodegen-backend={}",
@@ -1708,14 +1735,24 @@ fn compile_tiled_gemm(
         .env("FE2O3_VERBOSE", "1")
         .env("FE2O3_DUMP_LLVM", "1")
         .env("CARGO_MANIFEST_DIR", manifest_directory)
-        .env(
-            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
-            "c1ab2dc02fa023687ac7394e15746c39668b5d46ad47c40eae012bc3f42d05c0",
-        )
         .env("FE2O3_TARGET", target)
         .env("FE2O3_QUALIFICATION_ORACLE_V1", TILED_GEMM_PIPELINE)
         .env("FE2O3_BUILD_ATTEMPT_V1", attempt.to_env_value())
         .env("FE2O3_HSACO_DIR", output.artifacts());
+    let ordered_metadata = [generated_metadata, TILED_GEMM_REVIEWED_METADATA];
+    let compiler_binding = if is_lds_slice1 {
+        lds_compiler_binding.unwrap_or_else(|| {
+            derive_crate_binding_id_v1(crate_name, ordered_metadata.iter().copied())
+        })
+    } else {
+        derive_crate_binding_id_v1(crate_name, ordered_metadata.iter().copied())
+    };
+    command
+        .env(CRATE_BINDING_ID_ENV_V1, compiler_binding.to_hex())
+        .env(
+            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
+            derive_cargo_metadata_build_observation_v2(&ordered_metadata).to_hex(),
+        );
     let backend_descriptor = backend.file.as_raw_fd();
     unsafe {
         command.pre_exec(move || set_close_on_exec(backend_descriptor, false));
@@ -3359,6 +3396,22 @@ struct ExternalRowSoftmaxSpec<'a> {
     host_root: &'a Path,
 }
 
+fn wrapper_bound_external_row_softmax_source(source: &str) -> String {
+    assert_eq!(
+        source
+            .matches(ROW_SOFTMAX_EXPLICIT_NAMESPACE_ATTRIBUTE)
+            .count(),
+        1,
+        "external row-softmax fixture must carry exactly one reviewed fallback namespace"
+    );
+    let source = source.replacen(ROW_SOFTMAX_EXPLICIT_NAMESPACE_ATTRIBUTE, "", 1);
+    assert!(
+        !source.contains("namespace ="),
+        "external row-softmax fixture retained an explicit namespace"
+    );
+    source
+}
+
 fn compile_external_row_softmax_crate(
     workspace: &Path,
     cargo_target: &Path,
@@ -3380,7 +3433,8 @@ fn compile_external_row_softmax_crate_with_broker(
     let source_directory = crate_root.join("src");
     std::fs::create_dir_all(&source_directory).expect("create external row-softmax source root");
     let source = source_directory.join("lib.rs");
-    std::fs::write(&source, spec.source).expect("write external row-softmax source");
+    let wrapper_bound_source = wrapper_bound_external_row_softmax_source(spec.source);
+    std::fs::write(&source, wrapper_bound_source).expect("write external row-softmax source");
     let manifest = crate_root.join("Cargo.toml");
     std::fs::write(
         &manifest,
@@ -3745,7 +3799,8 @@ fn compile_clean_external_row_softmax_crate_with_handoff(
     let source_directory = crate_root.join("src");
     std::fs::create_dir_all(&source_directory).expect("create external row-softmax source root");
     let source = source_directory.join("lib.rs");
-    std::fs::write(&source, ROW_SOFTMAX_FIXTURE).expect("write external row-softmax source");
+    let wrapper_bound_source = wrapper_bound_external_row_softmax_source(ROW_SOFTMAX_FIXTURE);
+    std::fs::write(&source, wrapper_bound_source).expect("write external row-softmax source");
     let manifest = crate_root.join("Cargo.toml");
     std::fs::write(
         &manifest,
@@ -4764,17 +4819,20 @@ fn scalar_gemm_v1_frontend_receipt_selects_only_the_reviewed_full_portable_mir()
 
 #[test]
 fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
-    if isolated_backend_environment_is_unavailable() {
-        return;
-    }
     if rerun_with_configured_artifact_path_guard(
         "tiled_gemm_v1_source_authentication_and_adversaries_fail_closed",
     ) {
         return;
     }
     let workspace = workspace();
-    let backend = build_backend(&workspace);
+    let backend = build_collection_backend(&workspace);
     assert!(TILED_GEMM_FIXTURE.contains("launch(required = [64, 1, 1], max = [64, 1, 1])"));
+    assert!(TILED_GEMM_FIXTURE.contains("Bf16MfmaAMatrix::row_major"));
+    assert!(TILED_GEMM_FIXTURE.contains("Bf16MfmaBMatrix::row_major"));
+    assert!(TILED_GEMM_FIXTURE.contains("F32AccumulatorMatrix::row_major"));
+    assert!(TILED_GEMM_FIXTURE.contains("WaveLane::<Wave64>::current()"));
+    assert!(TILED_GEMM_FIXTURE.contains("c_matrix.load_m16n16(&lane, 0, 0)"));
+    assert!(!TILED_GEMM_FIXTURE.contains("namespace ="));
     assert!(TILED_GEMM_FIXTURE.contains("Tiled2D<Index1D, 64, 16, 16, 4>"));
     assert!(TILED_GEMM_FIXTURE.contains("checked_tiled_2d::<64, 16, 16, 4>()"));
     assert!(TILED_GEMM_FIXTURE.contains("get_tiled_2d_mut"));
@@ -4797,7 +4855,7 @@ fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
         exact.status.success()
             && exact_stderr.contains("consumed its single-use frontend receipt")
             && exact_stderr
-                .contains("8fbc1de394eb46ff9103a1842ae248bc5bfcdbc6820bd60525153ec066bcc18a")
+                .contains("0aaa6ba74b0c54784e94f7ff7551aeaeb7f4730cf6243d876d14369b7f6d40c2")
             && exact_stderr.contains("explicit kernarg 64 bytes, complete COV6 kernarg 320 bytes")
             && exact_stderr.contains("exact one-wave 64x1x1 one-tile launch with no LDS")
             && exact_stderr.contains("selected canonical fe2o3::tiled_gemm_v1")
@@ -4809,8 +4867,8 @@ fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
     );
 
     let same_name_source = TILED_GEMM_FIXTURE.replace(
-        "let lane_column = lane % 16;",
-        "let lane_column = lane % 8;",
+        "Bf16MfmaAMatrix::row_major(a, 0, 16, 16, 16)",
+        "Bf16MfmaAMatrix::row_major(a, 0, 16, 16, 8)",
     );
     assert_ne!(same_name_source, TILED_GEMM_FIXTURE);
     let same_name_output = TestOutputDir::new(&workspace);
@@ -4858,10 +4916,14 @@ fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
     let lookalike_source = TILED_GEMM_FIXTURE
         .replacen(
             "#[kernel(",
-            "fn lookalike_fragment(bits: [u16; 4]) -> Bf16MfmaFragment {\n    Bf16MfmaFragment::from_bits(bits)\n}\n\n#[kernel(",
+            "fn lookalike_extent(value: usize) -> usize {\n    value\n}\n\n#[kernel(",
             1,
         )
-        .replacen("Bf16MfmaFragment::from_bits([", "lookalike_fragment([", 1);
+        .replacen(
+            "Bf16MfmaAMatrix::row_major(a, 0, 16, 16, 16)",
+            "Bf16MfmaAMatrix::row_major(a, 0, lookalike_extent(16), 16, 16)",
+            1,
+        );
     assert_ne!(lookalike_source, TILED_GEMM_FIXTURE);
     let lookalike_output = TestOutputDir::new(&workspace);
     let lookalike = compile_tiled_gemm(
@@ -4960,6 +5022,7 @@ fn tiled_gemm_lds_slice1_attributed_source_publishes_only_the_bound_worker_v2_ha
     assert!(TILED_GEMM_LDS_SLICE1_FIXTURE.contains("gfx942_lds_bf16_tile_pair_m16x16_v1"));
     assert!(TILED_GEMM_LDS_SLICE1_FIXTURE.contains("gfx942_publish_lds_bf16_tile_pair_m16x16_v1"));
     assert!(!TILED_GEMM_LDS_SLICE1_FIXTURE.contains("\nmacro_rules!"));
+    assert!(!TILED_GEMM_LDS_SLICE1_FIXTURE.contains("namespace ="));
 
     let exact_output = TestOutputDir::new(&workspace);
     let exact = compile_tiled_gemm(
@@ -4971,8 +5034,23 @@ fn tiled_gemm_lds_slice1_attributed_source_publishes_only_the_bound_worker_v2_ha
         &[],
     );
     let exact_stderr = stderr(&exact);
+    let exact_crate_binding = derive_crate_binding_id_v1(
+        "fe2o3_collected_tiled_gemm_lds_slice1_fixture",
+        [
+            TILED_GEMM_LDS_SLICE1_GENERATED_METADATA,
+            TILED_GEMM_REVIEWED_METADATA,
+        ],
+    );
+    let exact_kernel_binding = derive_kernel_binding_id_v1(
+        exact_crate_binding,
+        MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+        "tiled_gemm_lds_slice1",
+        "tiled_gemm_lds_slice1",
+    );
+    let exact_root = host_kernel_symbol_v1(exact_kernel_binding);
     assert!(
         exact.status.success()
+            && exact_stderr.contains(&exact_root)
             && exact_stderr
                 .contains("selected canonical Kernel IR `fe2o3::tiled_gemm_lds_v1` identity")
             && exact_stderr.contains("constructed compiler descriptor")
@@ -5038,6 +5116,116 @@ fn tiled_gemm_lds_slice1_attributed_source_publishes_only_the_bound_worker_v2_ha
     assert!(!handoff.grants_link_authority());
     assert!(!handoff.grants_load_authority());
     assert!(!handoff.grants_launch_authority());
+
+    let fresh_metadata = "abcdef0123456789";
+    let fresh_crate_binding = derive_crate_binding_id_v1(
+        "fe2o3_collected_tiled_gemm_lds_slice1_fixture",
+        [fresh_metadata, TILED_GEMM_REVIEWED_METADATA],
+    );
+    let fresh_kernel_binding = derive_kernel_binding_id_v1(
+        fresh_crate_binding,
+        MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+        "tiled_gemm_lds_slice1",
+        "tiled_gemm_lds_slice1",
+    );
+    let fresh_root = host_kernel_symbol_v1(fresh_kernel_binding);
+    assert_ne!(fresh_root, exact_root);
+    let fresh_output = TestOutputDir::new(&workspace);
+    let fresh = compile_tiled_gemm_with_lds_binding(
+        &workspace,
+        backend,
+        &fresh_output,
+        TILED_GEMM_LDS_SLICE1_FIXTURE,
+        "gfx942:xnack-",
+        &[],
+        Some(fresh_metadata),
+        None,
+    );
+    let fresh_stderr = stderr(&fresh);
+    assert!(
+        fresh.status.success()
+            && fresh_stderr.contains(&fresh_root)
+            && fresh_stderr
+                .contains("selected canonical Kernel IR `fe2o3::tiled_gemm_lds_v1` identity")
+            && fresh_stderr.contains("completed protected attempt-scoped Worker V2 publication"),
+        "fresh compiler-derived root missed the attributed LDS boundary:\n{fresh_stderr}"
+    );
+    let fresh_handoff = consume_tiled_gemm_handoff(
+        &fresh_output,
+        TILED_GEMM_LDS_SLICE1_FIXTURE,
+        "fe2o3_collected_tiled_gemm_lds_slice1_fixture",
+    );
+    let fresh_module = std::str::from_utf8(fresh_handoff.module_bytes()).unwrap();
+    let fresh_authority =
+        decode_compiler_owned_module_section(fresh_module, ".fe2o3.tiled-lds-slice1-auth.v1")
+            .unwrap();
+    assert_ne!(fresh_authority, authority);
+}
+
+#[test]
+fn tiled_gemm_lds_slice1_explicit_or_substituted_bindings_fail_closed() {
+    if rerun_with_configured_artifact_path_guard(
+        "tiled_gemm_lds_slice1_explicit_or_substituted_bindings_fail_closed",
+    ) {
+        return;
+    }
+    let workspace = workspace();
+    let backend = build_collection_backend(&workspace);
+    let crate_name = "fe2o3_collected_tiled_gemm_lds_slice1_fixture";
+
+    let explicit_binding = derive_crate_binding_id_v1(crate_name, ["explicit-namespace-adversary"]);
+    let explicit_source = TILED_GEMM_LDS_SLICE1_FIXTURE.replacen(
+        "#[kernel(\n    typed,\n",
+        &format!(
+            "#[kernel(\n    typed,\n    namespace = \"{}\",\n",
+            explicit_binding.to_hex()
+        ),
+        1,
+    );
+    assert_ne!(explicit_source, TILED_GEMM_LDS_SLICE1_FIXTURE);
+    let explicit_output = TestOutputDir::new(&workspace);
+    let explicit = compile_tiled_gemm(
+        &workspace,
+        backend,
+        &explicit_output,
+        &explicit_source,
+        "gfx942:xnack-",
+        &[],
+    );
+    let explicit_stderr = stderr(&explicit);
+    assert!(
+        !explicit.status.success()
+            && explicit_stderr.contains("compiler-derived crate binding")
+            && explicit_stderr.contains("disagrees with explicit #[kernel(typed)] namespace")
+            && !explicit_stderr.contains("selected canonical Kernel IR")
+            && !explicit_stderr.contains("published attributed LDS Slice 1 Worker V2 handoff"),
+        "explicit namespace selected attributed LDS authority:\n{explicit_stderr}"
+    );
+    assert_tiled_gemm_published_no_handoff(&explicit_output);
+
+    let substituted_binding =
+        derive_crate_binding_id_v1(crate_name, ["substituted-compiler-binding-adversary"]);
+    let substituted_output = TestOutputDir::new(&workspace);
+    let substituted = compile_tiled_gemm_with_lds_binding(
+        &workspace,
+        backend,
+        &substituted_output,
+        TILED_GEMM_LDS_SLICE1_FIXTURE,
+        "gfx942:xnack-",
+        &[],
+        None,
+        Some(substituted_binding),
+    );
+    let substituted_stderr = stderr(&substituted);
+    assert!(
+        !substituted.status.success()
+            && substituted_stderr.contains("crate binding")
+            && substituted_stderr.contains("disagrees with rustc session binding")
+            && !substituted_stderr.contains("selected canonical Kernel IR")
+            && !substituted_stderr.contains("published attributed LDS Slice 1 Worker V2 handoff"),
+        "substituted compiler binding selected attributed LDS authority:\n{substituted_stderr}"
+    );
+    assert_tiled_gemm_published_no_handoff(&substituted_output);
 }
 
 #[test]
@@ -5067,8 +5255,8 @@ fn tiled_gemm_lds_slice1_source_mutations_cannot_select_canonical_ir() {
         (
             "index-drift",
             TILED_GEMM_LDS_SLICE1_FIXTURE.replace(
-                "a[a_row_base + depth_base + 3]",
-                "a[a_row_base + depth_base + 2]",
+                "a_matrix.load_m16k16(&lane, 0, 0)",
+                "a_matrix.load_m16k16(&lane, 0, 1)",
             ),
         ),
     ];
@@ -5093,8 +5281,8 @@ fn tiled_gemm_lds_slice1_source_mutations_cannot_select_canonical_ir() {
         "lookalike_lds_pair_v1()",
     ) + r#"
 fn lookalike_lds_pair_v1<'workgroup>() -> (
-    fe2o3_device::LdsTile16x16<'workgroup, fe2o3_device::Bf16>,
-    fe2o3_device::LdsTile16x16<'workgroup, fe2o3_device::Bf16>,
+    fe2o3_device::MfmaLdsTile16x16<'workgroup, fe2o3_device::MfmaOperandA>,
+    fe2o3_device::MfmaLdsTile16x16<'workgroup, fe2o3_device::MfmaOperandB>,
 ) {
     gfx942_lds_bf16_tile_pair_m16x16_v1()
 }

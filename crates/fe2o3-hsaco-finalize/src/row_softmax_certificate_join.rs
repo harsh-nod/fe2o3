@@ -16,12 +16,16 @@ use crate::{
     finalize_row_softmax_v1_structural_worker_v2_hsaco_v1,
 };
 
+#[cfg(test)]
+#[path = "../../../examples/row_softmax_v1/src/verification_certificate.rs"]
+mod public_row_softmax_certificate;
+
 const ADMISSION_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/ROW-SOFTMAX/PROTECTED-ARTIFACT-ADMISSION/V1\0";
 const TARGET: &str = "gfx942:xnack-";
 const COMPILER_PROFILE: &str = "fe2o3.manifest-derived-scalar-slice.v1";
 const KERNEL_IR_PROFILE: &str = "fe2o3::row_softmax_v1;fixed-row-64;wg64;cov6";
 const OCML_EXP_F32: &str = "__ocml_exp_f32";
-const SOURCE_SHA256: &str = "c4e2d6bb6eebe01eb6ae7c0da1a524113819a37b4ec2d0a5167f32cc3134e6f4";
+const SOURCE_SHA256: &str = "0b0d5e2964d4627bc7ef3dac882f86a9b3c49ab715245bacc3fc92f28f0d08b0";
 const PORTABLE_MIR_SHA256: &str =
     "cb10b6fac6475435e45a6f9166739c9e26bae17031105791abf3f440b004d4dd";
 const COMPILER_SEMANTICS_SHA256: &str =
@@ -589,6 +593,19 @@ const fn artifact_mismatch(field: &'static str) -> ProtectedRowSoftmaxV1Admissio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fe2o3_verifier::{
+        RowSoftmaxVerificationCertificateObservationV1, RowSoftmaxVerificationFileObservationV1,
+        authenticate_row_softmax_verification_certificate_v1,
+    };
+
+    const SOURCE: &[u8] = include_bytes!("../../../examples/row_softmax_v1/src/kernel.rs");
+    const NUMERICAL_POLICY: &[u8] =
+        include_bytes!("../../../examples/row_softmax_v1/src/numerical_contract.rs");
+    const PROOF: &[u8] = include_bytes!("../../../examples/row_softmax_v1/verus/row_softmax_v1.rs");
+    const CLOSURE: &[u8] =
+        include_bytes!("../../../examples/row_softmax_v1/verus/VERUS_CLOSURE_MANIFEST");
+    const TRUST: &[u8] =
+        include_bytes!("../../../examples/row_softmax_v1/verus/VERUS_TRUST_VOCABULARY");
 
     fn content(byte: u8) -> ContentIdentityV1 {
         ContentIdentityV1::from_parts([byte; 32], 64)
@@ -628,6 +645,48 @@ mod tests {
             descriptor_kernel: [6; 32],
             descriptor_digest: [7; 32],
         }
+    }
+
+    fn current_authenticated_certificate() -> AuthenticatedRowSoftmaxVerificationCertificateV1 {
+        let public = public_row_softmax_certificate::validate_row_softmax_verification_manifest_v1(
+            public_row_softmax_certificate::ROW_SOFTMAX_VERIFICATION_MANIFEST_V1,
+        )
+        .unwrap();
+        let manifest = public.manifest();
+        let evidence = [
+            (manifest.attributed_source.relative_path, SOURCE),
+            (manifest.numerical_policy.relative_path, NUMERICAL_POLICY),
+            (manifest.proof_source.relative_path, PROOF),
+            (manifest.verus_closure_manifest.relative_path, CLOSURE),
+            (manifest.verus_trust_vocabulary.relative_path, TRUST),
+        ]
+        .map(|(path, bytes)| Some(RowSoftmaxVerificationFileObservationV1::new(path, bytes)));
+        authenticate_row_softmax_verification_certificate_v1(
+            RowSoftmaxVerificationCertificateObservationV1::new(
+                public.canonical_manifest_bytes(),
+                pinned_sha256(public.canonical_manifest_sha256()),
+                evidence,
+            ),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn current_authenticated_certificate_is_accepted_by_protected_join() {
+        let certificate = current_authenticated_certificate();
+        validate_certificate(&certificate).unwrap();
+
+        let mut facts = canonical_facts();
+        facts.certificate_source = certificate.attributed_source_sha256();
+        facts.certificate_portable_mir = certificate.portable_mir_sha256();
+        facts.certificate_compiler_semantics = certificate.compiler_semantics_sha256();
+        facts.certificate_numerical_policy = certificate.numerical_policy_sha256();
+        facts.certificate_proof = certificate.proof_source_sha256();
+        facts.certificate_kernel_ir = certificate.kernel_ir_sha256();
+        facts.certificate_llvm_body = certificate.llvm_body_sha256();
+        facts.certificate_verus = certificate.verus_executable_sha256();
+        facts.certificate_solver = certificate.solver_executable_sha256();
+        validate_join_facts(&facts).unwrap();
     }
 
     #[test]

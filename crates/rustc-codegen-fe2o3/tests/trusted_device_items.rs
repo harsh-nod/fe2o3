@@ -140,6 +140,24 @@ fn local_marker_adversary_clears_generic_frontend_compilation() {
 }
 
 #[test]
+fn renamed_genuine_fixture_uses_the_name_neutral_exact_fill_profile() {
+    let fixture = include_str!("fixtures/renamed-genuine/src/main.rs");
+    assert!(fixture.contains("pub fn renamed_genuine(mut output: DisjointSlice<f32>)"));
+    assert!(fixture.contains("*value = 42.5;"));
+    assert!(!fixture.contains("namespace ="));
+
+    let codegen = include_str!("../src/kernel_ir_codegen.rs");
+    let production = codegen
+        .split_once("\n#[cfg(all(test, feature = \"qualification-oracles-test-only\"))]\nmod tests")
+        .expect("kernel IR codegen unit-test boundary")
+        .0;
+    assert!(
+        !production.contains("renamed_genuine"),
+        "terminal profile selection must not recognize the security fixture by name"
+    );
+}
+
+#[test]
 #[ignore = "requires the configured ROCm LLVM toolchain"]
 fn genuine_markers_emit_and_local_external_spoofs_fail_closed() {
     let _lock = backend_test_lock();

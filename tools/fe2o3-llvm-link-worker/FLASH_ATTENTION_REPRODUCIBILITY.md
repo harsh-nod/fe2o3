@@ -34,22 +34,23 @@ runs. The transcript SHA-256 was
 
 ## Stage identities
 
-ROCm 7.2.4 LLVM is retained only as forensic drift evidence. Both columns used
-the same compiler handoff, request profile, and digest-pinned OCML inputs.
+ROCm 7.2.4 LLVM is retained only as historical forensic drift evidence. Its
+column predates the current source-authority regeneration, so it is not a
+direct stage-by-stage comparison with the current canonical column.
 
 | Stage | Upstream LLVM 22.1.8 (canonical) | ROCm 7.2.4 LLVM (rejected drift) |
 | --- | --- | --- |
-| Compiler handoff | `d826a2c9c960292a8833f23106ac6b99b382abfcc2715648c676454d4ecbd1b2` | identical |
-| Input textual IR | `cdbcfb2e9ab688ddc3275e632a88f05d510e3a799799fc8952e6180e074de09b` | identical |
-| Linked bitcode | `46c7e4d163fd3e5dee25a694e1d60ec65f4df7fd68477c718730af3dd657f2f5` | `4107b280599ce9658a5614dccaa022f95d961eb96529bb7eb9c70648ffd4fa2a` |
-| Optimized bitcode | `1a9a39aeae72fd91276354dc0216de3b370ce0540a745ab2b66cc1c06de3eff6` | `f685f158120b3b37cc0732704c086a83bdc43d2dd1d3fad0a1c5c65e1ef7d6a1` |
-| Relocatable object | `1be71b56456b132b28f651b60653e4febfbb6c2047e846ee913582637b84f387` | `0b931914e3f3b9db16e36b0b4979bb6b97ae0fc9d769a9011f2e6ee0edcb9701` |
-| Raw linked HSACO | `e4a5a7fff7272063c30877d3d5ad13defc523d27b26792c9197fceea27e061e2` | `b6232bdc1f43ae1d5896ab78b914ff4917cd573d2365e9b658b5fd6254b21d98` |
+| Compiler handoff | `c4008265f589aa4a7f7f99a4f949f42040286aec954c231c3a6e8f34663b6ec2` | `d826a2c9c960292a8833f23106ac6b99b382abfcc2715648c676454d4ecbd1b2` |
+| Input textual IR | `25cc163bc1ee4d5dfbe90b535a2a9913de148f9496762b147ca95e6dda09aa33` | `cdbcfb2e9ab688ddc3275e632a88f05d510e3a799799fc8952e6180e074de09b` |
+| Linked bitcode | `f6cfd3083e2e7f539edbffdc4696c16a5af8bc513d5872f0ab2a9b7ee36e8d50` | `4107b280599ce9658a5614dccaa022f95d961eb96529bb7eb9c70648ffd4fa2a` |
+| Optimized bitcode | `7fcae92f41d0edb84da73ef65b4d2f148550f6be915411be81347106a75a65bd` | `f685f158120b3b37cc0732704c086a83bdc43d2dd1d3fad0a1c5c65e1ef7d6a1` |
+| Relocatable object | `359d06a95a0483b4363140c8494f54f66acf0c58d6a0fd67b4f432eca0b3dc94` | `0b931914e3f3b9db16e36b0b4979bb6b97ae0fc9d769a9011f2e6ee0edcb9701` |
+| Raw linked HSACO | `2ca9d787a2bb016da8f01a895b363fdea7eeab032c45ad7ab844e6317923b16c` | `b6232bdc1f43ae1d5896ab78b914ff4917cd573d2365e9b658b5fd6254b21d98` |
 | Kernel symbol | `d2aa57c0f468f574f44a9fea06bbb8e98aa9b60bb2d9303cc4d8b6caf0cfca54` (2540 bytes) | `60e09278e2901a1867a5a187614a4d33f12a45a733e266bf35b2693b85975d65` (2544 bytes) |
 
-The first measured divergence is linked bitcode. The machine disassembly then
-differs in branch distances and VGPR allocation, not merely in ELF layout or
-symbol extraction. A worker built against ROCm 7.2.4 now reports:
+The historical comparison first diverged at linked bitcode. Its machine
+disassembly then differed in branch distances and VGPR allocation, not merely
+in ELF layout or symbol extraction. A worker built against ROCm 7.2.4 reports:
 
 ```text
 exact FlashAttention V1 published machine identity requires LLVM build identity 'upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1', worker measured '7.2.4'

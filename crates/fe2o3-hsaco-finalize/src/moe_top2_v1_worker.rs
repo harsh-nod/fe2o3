@@ -61,11 +61,11 @@ const SECTION_IDENTITIES: [&str; 15] = [
     "0e4570bd52866dd23b8b00d83983aadc818c77580de8f7f5e2982e12a57e20e2",
     "4180ef61545684e646bd5227333e7514d22a2d379d7d657397df4d41f7a192d1",
     "fce826d20b8f2e4eca29180a2d9fc34949b51a07841dd7f79258625fc6a9f296",
-    "0ecec41db62eae781429526170aa60a73437f4cd8261b7e4d34ffe62309ad6e9",
-    "934c2205973e24216d537c5f89bc65d8e15dd68376dce477d1768e2936b4fc13",
-    "f796180c590cd84125921f2aaeb85ab13ef1b5c0502c1b1316bf9a2114fd30f6",
+    "b2dfff3527e234212f34ffda81468e6710cba983550fa652711b9565759c2a28",
+    "edeffa59729df775ae94d5d5eb1110b8ffd6bf07e9659ba2a96fc37c975d9b86",
+    "ddc0172cfc37016c86be2b579c4c98b14f823dd9371816b6648f1b8bd061bd88",
     "4950c225e0cdbdce4e1230166984949970290dedc19e8dc4cd31f865f1625a4a",
-    "3dbbe3ec9d58a7c285a14159294051498378f291525d8445113b17aab9b0e08b",
+    "b51420b63c55408540054826b0450cb59af371eb240bcf8621646dc7deb6feb3",
     "4c225cf47613b98e7baca366167bfa4c27ae43ec47433b49d1df5a1d960fb4aa",
     "496368f70c211b001417fb904622971d008ca24442beaef3e4c6c175b4f5f6ba",
     "100bc49f34627485a959b7201a238bbf8421df800d7f1028bbfff6bd8c51edd1",
@@ -738,4 +738,20 @@ fn validate_identity_text(value: &str, field: &'static str) -> Result<(), MoeTop
 
 fn profile_mismatch(field: &'static str) -> MoeTop2V1WorkerErrorV1 {
     MoeTop2V1WorkerErrorV1::ProfileMismatch(field)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cpp_worker_duplicates_every_compiler_section_identity() {
+        let worker = include_str!("../../../tools/fe2o3-llvm-link-worker/src/WorkerPipeline.cpp");
+        for identity in SECTION_IDENTITIES {
+            assert!(
+                worker.contains(identity),
+                "C++ worker omitted MoE compiler identity {identity}",
+            );
+        }
+    }
 }

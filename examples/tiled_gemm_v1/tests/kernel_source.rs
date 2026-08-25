@@ -62,9 +62,6 @@ fn attributed_kernel_and_generated_marker_compile_with_the_exact_abi() {
     let function: KernelFn =
         <__fe2o3_kernel_marker_tiled_gemm_lds_slice1 as KernelMarkerV1>::FUNCTION;
     let _: KernelFn = function;
-    let _: core::marker::PhantomData<
-        fe2o3_tiled_gemm_v1::kernel::tiled_gemm_lds_slice1_gpu::Marker,
-    > = core::marker::PhantomData;
 }
 
 #[test]
@@ -93,6 +90,40 @@ fn ordinary_host_invocation_panics_before_mutating_output() {
             .iter()
             .all(|value| value.to_bits() == sentinel.to_bits())
     );
+}
+
+#[test]
+fn standalone_manifest_separates_host_marker_from_production_source() {
+    let manifest = include_str!("../Cargo.toml");
+    assert!(manifest.contains("default = [\"host-contract\"]"));
+    assert!(manifest.contains("host-contract = []"));
+
+    let library = include_str!("../src/lib.rs");
+    assert!(library.contains("#[cfg(feature = \"host-contract\")]"));
+    assert!(library.contains("#[path = \"kernel_host_contract.rs\"]"));
+    assert!(library.contains("#[cfg(not(feature = \"host-contract\"))]"));
+    assert!(library.contains("#[path = \"kernel.rs\"]"));
+
+    let host_contract = include_str!("../src/kernel_host_contract.rs");
+    assert!(host_contract.contains("#[kernel]"));
+    assert!(!host_contract.contains("#[kernel(typed"));
+    assert!(!host_contract.contains("namespace"));
+    assert!(!host_contract.contains("CRATE_BINDING"));
+    assert!(!host_contract.contains("KERNEL_BINDING"));
+
+    let production = syn::parse_file(SOURCE).expect("production kernel source parses as Rust");
+    let kernel = function(&production, "tiled_gemm_lds_slice1");
+    let attribute = kernel
+        .attrs
+        .iter()
+        .find(|attribute| attribute.path().is_ident("kernel"))
+        .expect("production function has a kernel attribute");
+    let syn::Meta::List(attribute) = &attribute.meta else {
+        panic!("production kernel attribute is not a list");
+    };
+    let attribute = attribute.tokens.to_string();
+    assert!(attribute.contains("typed"));
+    assert!(!attribute.contains("namespace"));
 }
 
 #[test]
@@ -136,7 +167,7 @@ fn executable_function_body_contains_the_slice1_algorithm() {
     };
     let attribute = attribute.tokens.to_string();
     assert!(attribute.contains("typed"));
-    assert!(attribute.contains("c09558e16157fec495e78bc32a23b082213fa4a6ddabe48445a54cb3de591295"));
+    assert!(!attribute.contains("namespace"));
     assert!(attribute.contains("launch"));
     assert!(attribute.contains("required = [64 , 1 , 1]"));
     assert!(attribute.contains("max = [64 , 1 , 1]"));

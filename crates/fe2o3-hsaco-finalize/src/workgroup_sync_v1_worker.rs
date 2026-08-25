@@ -1102,6 +1102,8 @@ mod tests {
     fn integrated_compiler_bindings_are_duplicated_exactly() {
         let integrated =
             include_str!("../../rustc-codegen-fe2o3/src/collected_workgroup_sync_v1.rs");
+        let worker = include_str!("../../../tools/fe2o3-llvm-link-worker/src/WorkerPipeline.cpp");
+        let compact_worker = worker.split_whitespace().collect::<String>();
         for profile in [
             WorkgroupSyncProfileKindV1::LdsReduction,
             WorkgroupSyncProfileKindV1::ScopedAtomic,
@@ -1116,11 +1118,11 @@ mod tests {
             ] {
                 assert!(integrated.contains(binding), "missing binding {binding}");
             }
-            for identity in [
-                spec.portable_mir,
-                spec.fn_abi,
-                spec.compiler_semantics,
-                spec.trusted_terminals,
+            for (field, identity) in [
+                ("portable MIR", spec.portable_mir),
+                ("FnAbi", spec.fn_abi),
+                ("compiler semantics", spec.compiler_semantics),
+                ("trusted terminals", spec.trusted_terminals),
             ] {
                 let bytes = identity
                     .iter()
@@ -1131,12 +1133,61 @@ mod tests {
                     integrated
                         .split_whitespace()
                         .collect::<String>()
-                        .contains(&bytes)
+                        .contains(&bytes),
+                    "missing duplicated {field} identity for {}",
+                    profile.kernel(),
+                );
+            }
+            for (field, identity) in [
+                ("source", spec.source_sha256),
+                ("namespace", spec.namespace),
+                ("source authority", spec.source_authority),
+                ("portable MIR", spec.portable_mir),
+                ("FnAbi", spec.fn_abi),
+                ("compiler semantics", spec.compiler_semantics),
+                ("trusted terminals", spec.trusted_terminals),
+                ("ABI", spec.abi_identity()),
+                ("effects", spec.effects_identity()),
+                ("resources", spec.resources_identity()),
+                ("KIR", spec.kernel_ir_identity()),
+            ] {
+                let bytes = identity
+                    .iter()
+                    .map(|byte| format!("0x{byte:02x}"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                assert!(
+                    compact_worker.contains(&bytes),
+                    "missing C++ worker {field} identity for {}",
+                    profile.kernel(),
                 );
             }
         }
     }
 
+    #[test]
+    fn exact_profiles_pin_measured_source_authority() {
+        assert_eq!(
+            WorkgroupSyncProfileKindV1::LdsReduction
+                .spec()
+                .source_authority,
+            [
+                0xe8, 0x20, 0xad, 0xdd, 0x6c, 0xca, 0x8e, 0xb2, 0x4a, 0x14, 0x9e, 0x69, 0xec, 0x95,
+                0x30, 0x83, 0x64, 0x4e, 0x99, 0x5a, 0x56, 0x9e, 0xf5, 0x05, 0xe7, 0x60, 0x5b, 0x03,
+                0x65, 0xe5, 0x49, 0x3f,
+            ]
+        );
+        assert_eq!(
+            WorkgroupSyncProfileKindV1::ScopedAtomic
+                .spec()
+                .source_authority,
+            [
+                0x4f, 0xff, 0x32, 0xdb, 0x8b, 0xcf, 0x8d, 0x4d, 0xdd, 0x51, 0xd0, 0xd9, 0x8a, 0xf0,
+                0xd5, 0x2f, 0xb7, 0x74, 0x9e, 0x9a, 0x8a, 0x19, 0x5f, 0xf8, 0x65, 0x42, 0xf2, 0xe4,
+                0xe0, 0x79, 0x45, 0x55,
+            ]
+        );
+    }
     #[test]
     fn every_compiler_identity_section_mutation_fails_closed() {
         for pins in [

@@ -523,6 +523,23 @@ mod tests {
                 RowSoftmaxVerificationCertificateAuthenticationErrorV1::EvidencePath { index }
             );
 
+            let mut truncated = files[index].to_vec();
+            truncated.pop();
+            let mut wrong_length = evidence(files);
+            wrong_length[index] = Some(RowSoftmaxVerificationFileObservationV1::new(
+                EVIDENCE_SPECS_V1[index].path,
+                &truncated,
+            ));
+            let observed = RowSoftmaxVerificationCertificateObservationV1::new(
+                CANONICAL_MANIFEST_BYTES_V1,
+                pinned_sha256(CANONICAL_MANIFEST_SHA256_V1),
+                wrong_length,
+            );
+            assert_eq!(
+                authenticate_row_softmax_verification_certificate_v1(observed).unwrap_err(),
+                RowSoftmaxVerificationCertificateAuthenticationErrorV1::EvidenceLength { index }
+            );
+
             let mut stale = files[index].to_vec();
             stale[0] ^= 1;
             let mut wrong_bytes = evidence(files);

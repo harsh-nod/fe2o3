@@ -11,6 +11,13 @@ publish = false
 # vertical slice is ready to join the root workspace.
 [workspace]
 
+[features]
+# Ordinary Cargo exercises an authority-free ABI marker and the host-side
+# contract. cargo-fe2o3 production fixtures compile `src/kernel.rs` directly;
+# selecting that source through this manifest requires --no-default-features.
+default = ["host-contract"]
+host-contract = []
+
 [dependencies]
 fe2o3-amd-target = { path = "../../crates/fe2o3-amd-target" }
 fe2o3-compiler-api = { path = "../../crates/fe2o3-compiler-api" }

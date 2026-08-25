@@ -1,3 +1,5 @@
+use std::io::Write as _;
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
@@ -26,7 +28,8 @@ const SOURCE_REMAP: &str = "/fe2o3-reviewed-workspace/moe-top2-v1.rs";
 const WORKSPACE_REMAP: &str = "/fe2o3-reviewed-workspace";
 const SOURCE: &str = include_str!("../../../examples/moe_top2_v1/src/kernel.rs");
 const STRUCTURAL_CORRESPONDENCE: &str =
-    "decdfeaecdf9b08b29accfe34b36b103303eb081ee3bcf9691e4bc408e87672f";
+    "dbe774f4cd733c16c23f184e7ff33a967c6d1e413f7dc35c065808b70a8c3c14";
+const MODULE_OUTPUT_ENV: &str = "FE2O3_MOE_TOP2_MODULE_OUTPUT";
 const CONFIGURED_ARTIFACT_GUARD_CHILD_ENV: &str = "FE2O3_MOE_TOP2_CONFIGURED_GUARD_CHILD";
 static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(0);
 static FRONTEND_DEPENDENCIES: OnceLock<Result<(), String>> = OnceLock::new();
@@ -486,6 +489,17 @@ fn live_rustc_admission_emits_pinned_structural_record() {
     let handoff = CompilerModuleHandoffV2::decode(consumed.bytes())
         .expect("decode exact canonical MoE top-2 Worker V2 handoff");
     assert_eq!(handoff.canonical_bytes(), consumed.bytes());
+    if let Some(destination) = std::env::var_os(MODULE_OUTPUT_ENV) {
+        let mut module_file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(destination)
+            .expect("create private MoE LLVM output");
+        module_file
+            .write_all(handoff.module_bytes())
+            .expect("write exact MoE LLVM output");
+    }
     assert_eq!(handoff.kind(), CompilerModuleKindV1::LlvmTextIr);
     assert_eq!(
         handoff.target().as_amd_target_id().to_string(),
