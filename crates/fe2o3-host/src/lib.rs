@@ -2,6 +2,7 @@
 mod application_descriptor_handoff;
 mod argument_alias;
 mod artifact_binding;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod cooperative_launch;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod flash_attention_v1_lifecycle;
@@ -50,6 +51,7 @@ mod gfx942_ocml;
 mod hsa_executable_lifecycle;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod launch_kernel_v2_bridge;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod loaded_kernel;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod moe_expert_v1_denial;
@@ -198,15 +200,16 @@ pub use artifact_binding::{
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use artifact_binding::{
     AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1,
-    GeneratedArtifactAuthenticationError, GeneratedKernelBindingV1,
+    GeneratedArtifactAuthenticationError, GeneratedKernelBindingV1, GeneratedMarkerBindingError,
 };
 #[doc(hidden)]
 pub use artifact_binding::{
     CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
     CompilerGeneratedSemanticWitnessErrorV1, GeneratedKernelProfileError,
-    GeneratedMarkerBindingError, ValidatedCompilerGeneratedSemanticWitnessV1,
-    semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
+    ValidatedCompilerGeneratedSemanticWitnessV1, semantic_witness_from_backend_v1,
+    validate_compiler_generated_semantic_witness_v1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use cooperative_launch::{
     CooperativeAdmissionError, CooperativeLaunchAdmission, CooperativeLaunchError,
     CooperativeResidencyAdmission,
@@ -387,7 +390,9 @@ pub use launch_kernel_v2_bridge::{
     bind_current_recovered_launch_kernel_metadata_v2,
 };
 #[doc(hidden)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use loaded_kernel::{GeneratedAdmittedLaunch, LoadedKernelLoadError};
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use loaded_kernel::{
     LoadedArgumentAdmittedLaunch, LoadedKernel, LoadedKernelMatchError, LoadedLaunchError,
     LoadedPreparedLaunch,
@@ -501,40 +506,40 @@ pub mod __generated {
     pub use crate::{
         AlphaZetaCov6DispatchIdentityV1, AlphaZetaCov6KernelRoleV1, AlphaZetaCov6ProfileError,
         CompilerGeneratedAlphaZetaCov6ArgumentsV1, CompilerGeneratedScalarGemmV1Arguments,
-        GeneratedAlphaZetaCov6ArgumentBindingV1, GeneratedAlphaZetaCov6ArgumentError,
-        GeneratedAlphaZetaCov6CompletionV1, GeneratedAlphaZetaCov6GeometryError,
-        GeneratedAlphaZetaCov6PhysicalKernargError, GeneratedAlphaZetaCov6PrepareError,
-        GeneratedAlphaZetaCov6PrepareResultV1, GeneratedAlphaZetaCov6PreparedInvocationV1,
-        GeneratedLdsGemmSlice1HostAdapterErrorV1, GeneratedLdsGemmSlice1HostAdapterV1,
-        GeneratedScalarGemmV1ArgumentBinding, GeneratedScalarGemmV1Completion,
-        GeneratedScalarGemmV1PrepareError, GeneratedScalarGemmV1PrepareResult,
-        GeneratedScalarGemmV1PreparedInvocation, GeneratedScalarGemmV1ReadDeviceSlice,
-        GeneratedScalarGemmV1ReadWriteDeviceSlice, GeneratedWorkerV2VecAddBindError,
-        GeneratedWorkerV2VecAddCompletionV1, GeneratedWorkerV2VecAddExecutorV1,
-        GeneratedWorkerV2VecAddPrepareError, GeneratedWorkerV2VecAddPreparedV1,
-        ScalarGemmV1ArgumentError, ScalarGemmV1DispatchIdentity, ScalarGemmV1GeometryError,
-        ScalarGemmV1PhysicalKernargError, ScalarGemmV1ProfileError,
+        GeneratedAdmittedLaunch, GeneratedAlphaZetaCov6ArgumentBindingV1,
+        GeneratedAlphaZetaCov6ArgumentError, GeneratedAlphaZetaCov6CompletionV1,
+        GeneratedAlphaZetaCov6GeometryError, GeneratedAlphaZetaCov6PhysicalKernargError,
+        GeneratedAlphaZetaCov6PrepareError, GeneratedAlphaZetaCov6PrepareResultV1,
+        GeneratedAlphaZetaCov6PreparedInvocationV1, GeneratedLdsGemmSlice1HostAdapterErrorV1,
+        GeneratedLdsGemmSlice1HostAdapterV1, GeneratedScalarGemmV1ArgumentBinding,
+        GeneratedScalarGemmV1Completion, GeneratedScalarGemmV1PrepareError,
+        GeneratedScalarGemmV1PrepareResult, GeneratedScalarGemmV1PreparedInvocation,
+        GeneratedScalarGemmV1ReadDeviceSlice, GeneratedScalarGemmV1ReadWriteDeviceSlice,
+        GeneratedWorkerV2VecAddBindError, GeneratedWorkerV2VecAddCompletionV1,
+        GeneratedWorkerV2VecAddExecutorV1, GeneratedWorkerV2VecAddPrepareError,
+        GeneratedWorkerV2VecAddPreparedV1, LoadedKernelLoadError, ScalarGemmV1ArgumentError,
+        ScalarGemmV1DispatchIdentity, ScalarGemmV1GeometryError, ScalarGemmV1PhysicalKernargError,
+        ScalarGemmV1ProfileError,
     };
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub use crate::{
         AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1,
-        GeneratedArtifactAuthenticationError, GeneratedKernelBindingV1, GeneratedVecAddKernelV1,
-        GeneratedVecAddLoadError, GeneratedVecAddPrepareError, GeneratedVecAddPreparedV1,
-        GeneratedVecAddProfileError,
+        GeneratedArtifactAuthenticationError, GeneratedKernelBindingV1,
+        GeneratedMarkerBindingError, GeneratedVecAddKernelV1, GeneratedVecAddLoadError,
+        GeneratedVecAddPrepareError, GeneratedVecAddPreparedV1, GeneratedVecAddProfileError,
     };
     pub use crate::{
         CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationV1,
         CompilerGeneratedKernelProfileV1, CompilerGeneratedSemanticWitnessErrorV1,
-        CompilerGeneratedWorkerV3ArgumentsV1, GeneratedAdmittedLaunch,
-        GeneratedArgumentFieldProperty, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
-        GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1,
-        GeneratedKernelProfileError, GeneratedMarkerBindingError, GeneratedPackingComponentKindV1,
-        GeneratedPackingComponentV1, GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice,
-        GeneratedSliceArgumentPairV1, GeneratedWorkerV3ArgumentBindingV1,
-        GeneratedWorkerV3ArgumentErrorV1, GeneratedWorkerV3PrepareErrorV1,
-        GeneratedWorkerV3PreparedInvocationV1, GeneratedWriteDeviceSlice, LoadedKernelLoadError,
-        ValidatedCompilerGeneratedSemanticWitnessV1, semantic_witness_from_backend_v1,
-        validate_compiler_generated_semantic_witness_v1,
+        CompilerGeneratedWorkerV3ArgumentsV1, GeneratedArgumentFieldProperty,
+        GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
+        GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedKernelProfileError,
+        GeneratedPackingComponentKindV1, GeneratedPackingComponentV1, GeneratedReadDeviceSlice,
+        GeneratedReadWriteDeviceSlice, GeneratedSliceArgumentPairV1,
+        GeneratedWorkerV3ArgumentBindingV1, GeneratedWorkerV3ArgumentErrorV1,
+        GeneratedWorkerV3PrepareErrorV1, GeneratedWorkerV3PreparedInvocationV1,
+        GeneratedWriteDeviceSlice, ValidatedCompilerGeneratedSemanticWitnessV1,
+        semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
     };
     pub use fe2o3_artifacts::{
         AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, Mutability, Name,

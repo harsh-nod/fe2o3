@@ -1,6 +1,9 @@
 use crate::{
-    BlockSizeV1, DeviceIdentity, DimensionsV1, KernelBrand, KernelId, LaunchConstraintsV1,
-    LoadedKernel, ObservedContext, PrepareLaunchError, PreparedLaunch, UntrustedLaunchRequest,
+    BlockSizeV1, DeviceIdentity, DimensionsV1, KernelId, LaunchConstraintsV1, ObservedContext,
+};
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use crate::{
+    KernelBrand, LoadedKernel, PrepareLaunchError, PreparedLaunch, UntrustedLaunchRequest,
 };
 use fe2o3_amd_target::{AmdTargetId, ParseAmdTargetIdError};
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
@@ -235,6 +238,7 @@ impl ValidatedArtifactSelectionV1 {
     /// validation and the name checks performed here discharge none of those
     /// obligations.
     #[doc(hidden)]
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub unsafe fn bind_generated_marker<K: KernelMarkerV1>(
         &self,
     ) -> Result<GeneratedKernelBindingV1<K>, GeneratedMarkerBindingError> {
@@ -262,6 +266,7 @@ impl ValidatedArtifactSelectionV1 {
     /// Deliberately crate-private until generated code can provide unforgeable
     /// evidence that `K` denotes `self.identity().kernel_id()` and ABI.
     #[allow(dead_code)]
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) fn bind_marker<K>(&self) -> ArtifactKernelBrandV1<K> {
         let brand = KernelBrand::from_internal_binding(
             self.identity.kernel_id,
@@ -1174,10 +1179,12 @@ fn generated_profile_digest(domain: &[u8], field: &[u8]) -> DigestBytes {
 /// binding. Possessing this value does not authenticate the payload or prove a
 /// complete host ABI.
 #[doc(hidden)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub struct GeneratedKernelBindingV1<K: KernelMarkerV1> {
     inner: ArtifactKernelBrandV1<K>,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<K: KernelMarkerV1> GeneratedKernelBindingV1<K> {
     pub(crate) fn into_inner(self) -> ArtifactKernelBrandV1<K> {
         self.inner
@@ -1187,6 +1194,7 @@ impl<K: KernelMarkerV1> GeneratedKernelBindingV1<K> {
 /// Failure while matching generated marker names to a validated artifact.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub enum GeneratedMarkerBindingError {
     LogicalNameMismatch {
         marker: &'static str,
@@ -1198,6 +1206,7 @@ pub enum GeneratedMarkerBindingError {
     },
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl fmt::Display for GeneratedMarkerBindingError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1213,11 +1222,13 @@ impl fmt::Display for GeneratedMarkerBindingError {
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl std::error::Error for GeneratedMarkerBindingError {}
 
 /// Internal typed bridge. It is not exported because artifact structure does
 /// not validate the marker association.
 #[allow(dead_code)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) struct ArtifactKernelBrandV1<K> {
     pub(crate) identity: Arc<ArtifactKernelIdentityV1>,
     pub(crate) payload: Arc<[u8]>,
@@ -1226,6 +1237,7 @@ pub(crate) struct ArtifactKernelBrandV1<K> {
 }
 
 #[allow(dead_code)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<K> ArtifactKernelBrandV1<K> {
     pub(crate) fn identity(&self) -> &ArtifactKernelIdentityV1 {
         &self.identity
@@ -1277,6 +1289,7 @@ impl<K> ArtifactKernelBrandV1<K> {
 
 /// Internal data-only prepared bridge; no module handle or launch method.
 #[allow(dead_code)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) struct ArtifactPreparedLaunchV1<K> {
     identity: Arc<ArtifactKernelIdentityV1>,
     payload: Arc<[u8]>,
@@ -1284,6 +1297,7 @@ pub(crate) struct ArtifactPreparedLaunchV1<K> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) enum ArtifactMarkerPrepareError {
     WrongValidatedSelection,
     Launch(PrepareLaunchError),

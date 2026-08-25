@@ -658,6 +658,7 @@ impl<K> PreparedLaunch<K> {
         })
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) const fn observed_context(&self) -> &ObservedContext {
         &self.context
     }
@@ -706,6 +707,7 @@ impl<K> ArgumentAdmittedLaunch<'_, K> {
         self.admission.len()
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) const fn prepared(&self) -> &PreparedLaunch<K> {
         &self.prepared
     }
