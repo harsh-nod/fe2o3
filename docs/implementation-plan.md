@@ -480,8 +480,11 @@ Status: MVP implemented for the current elementwise examples.
   `raw-disjoint-shift`, `raw-gather`, `raw-neighbors`, `raw-output-shift`,
   `saxpy`, `axpy-inplace`, `negate`, `normalize`, `pipeline`, and
   `vecadd-f64` examples load their HSACO files from that directory.
-- The examples use `fe2o3-core` to load modules, launch through HIP with the
-  backend ABI, copy output back, and validate results.
+- These historical raw-launch examples use `fe2o3-core` to load modules,
+  launch through HIP with the backend ABI, copy output back, and validate
+  results. They are qualification targets and require the explicit
+  `qualification-raw-launch-test-only` feature; they are not production-pipeline
+  acceptance evidence.
 - The path has run successfully on `gfx1201` with TheRock ROCm
   `7.13.0a20260509`.
 
@@ -493,6 +496,8 @@ Remaining work:
 
 Acceptance:
 
+- Except for the generated `fe2o3-vecadd` path, the historical commands below
+  require `--features qualification-raw-launch-test-only`.
 - `cargo fe2o3 run -p fe2o3-vecadd`, `cargo fe2o3 run -p fe2o3-add-inplace`,
   `cargo fe2o3 run -p fe2o3-copy`, `cargo fe2o3 run -p fe2o3-downsample`,
   `cargo fe2o3 run -p fe2o3-fill`, `cargo fe2o3 run -p fe2o3-gather-odd`,

@@ -456,9 +456,14 @@ Safe ownership of resources used by asynchronous copies is documented in
 - The HIP runtime provides contexts, streams, device buffers, pinned host
   buffers, events, synchronous transfers, event-backed borrowed and owned
   asynchronous transfers, module loading, and kernel launch.
-- Raw module loading and raw launch are explicit `unsafe` escape hatches. The
-  caller remains responsible for artifact trust, target and ABI compatibility,
-  pointer validity, aliasing, launch geometry, and resource lifetimes.
+- The `fe2o3-host` raw launch macro and parameter pack are qualification-only
+  `unsafe` escape hatches. Production applications load and dispatch through
+  the authenticated Worker V3 transaction and compiler-generated typed
+  arguments. The lower-level `fe2o3-core` HIP primitives remain an explicitly
+  unsafe implementation surface pending the production runtime split;
+  qualification callers remain responsible for artifact trust, target and ABI
+  compatibility, pointer validity, aliasing, launch geometry, and resource
+  lifetimes.
 - `DeviceCopy` and its derive macro restrict safe byte transfers to supported
   layouts and have compile-pass/compile-fail coverage.
 

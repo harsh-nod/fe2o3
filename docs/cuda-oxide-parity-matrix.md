@@ -570,8 +570,9 @@ The detailed dependencies and exit criteria are in
   effect verification, architecture breadth, application handoff, and
   production authenticated dispatch are incomplete, so both rows remain
   Partial.
-- Row 80: the general `launch!` macro remains an explicit unsafe raw-ABI escape
-  hatch with compile-fail coverage. The generated vecadd module instead exposes
+- Row 80: the general `launch!` macro is now a qualification-only unsafe raw-ABI
+  escape hatch with compile-fail coverage; feature-free `fe2o3-host` does not
+  export it, `KernelParams`, or `LaunchConfig`. Generated bindings instead expose
   safe `prepare(...).launch(...)`; the example contains no raw parameter pack,
   artifact pathname, or unsafe user launch. The two-entry Worker V2 path does
   generate manifest-checked preparation and dispatch for the exact alpha/zeta
@@ -808,7 +809,7 @@ evidence remain absent.
 |:--|:--|:--|:--|:--|:--|:--|
 | 78 | `#[cuda_module]` Typed Launch | Full | Exact | Partial | A neutral module macro embeds bundles and generates typed sync/async methods from manifest entries | G3 |
 | 79 | `#[launch_contract]` / `PreparedLaunch<K>` | Full | Exact | Partial | Contracts check rank, exact/bounded block shape, resources, capabilities, context, and kernel identity | G0, G3, G5 |
-| 80 | `cuda_launch!` Macro | Full | Exact | Partial | `launch!` is explicitly unsafe for runtime-loaded raw functions and exposes complete obligations | G0, G3 |
+| 80 | `cuda_launch!` Macro | Full | Exact | Partial | Production uses compiler-generated typed Worker V3 dispatch; raw `launch!` is qualification-only | G0, G3 |
 | 81 | `cuda_launch_async!` Macro | Full | Exact | Partial | Raw lazy launch is unsafe; typed operations retain borrowed/owned resources through completion and cancellation | G3 |
 | 82 | `#[launch_bounds]` | Full | AMD-equivalent | Partial | Emit and validate AMD flat workgroup-size/occupancy metadata with architecture-specific limits | G4 |
 | 83 | `#[cluster_launch]` | Full | N/A | N/A | CUDA cluster dimensions are not accepted as portable AMD launch metadata | G6 |

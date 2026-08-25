@@ -546,7 +546,9 @@ geometry, packet, and completion into the public safe API.
 Exit requires compile-fail tests for cross-device, cross-generation, alias,
 premature-free, raw-address, and stale-completion misuse; no safe caller-packed
 kernarg or raw launch; and one source-to-completion evidence chain for the exact
-bounded kernel. Legacy raw APIs remain explicitly unsafe.
+bounded kernel. The legacy `fe2o3-host` raw launch API remains explicitly unsafe
+and qualification-only; isolating the lower-level `fe2o3-core` HIP primitives is
+still required.
 
 ### R6: proof and evidence closure
 
