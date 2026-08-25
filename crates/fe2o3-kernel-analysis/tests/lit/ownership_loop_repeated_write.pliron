@@ -1,0 +1,26 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: error[FE2O3-OWN-008]
+// CHECK: first write
+builtin.func @ownership_loop_repeated_write: builtin.function <() -> ()>
+{
+  ^entry_block1v1():
+    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 41, gpu_execution_global_x: gpu.execution_extent 1, gpu_execution_global_y: gpu.execution_extent 1, gpu_execution_global_z: gpu.execution_extent 1, gpu_execution_workgroup_x: gpu.execution_extent 1, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 1, gpu_execution_domain: gpu.execution_domain FullPhysicalWorkgroups]: <() -> ()>;
+    v0 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Global, kernel_allocation_origin: kernel.allocation_origin 17, kernel_noalias_class: kernel.noalias_class 17]: <() -> (kernel.ranked_view <32,true,[1]>)>;
+    v1 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 0]: <() -> (kernel.index )>;
+    v2 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 4]: <() -> (kernel.index )>;
+    v3 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 1]: <() -> (kernel.index )>;
+    kernel.ownership_contract (v0) [] [kernel_ownership_coverage: kernel.ownership_coverage TotalView, kernel_ownership_partition: kernel.ownership_partition ExactSets]: <(kernel.ranked_view <32,true,[1]>) -> ()>;
+    kernel.br_args (v1) [^header_block2v1] []: <(kernel.index ) -> ()>
+
+  ^header_block2v1(i_v4: kernel.index ):
+    kernel.index_lt_br_args (i_v4, v2, i_v4) [^body_block3v1, ^exit_block4v1] []: <(kernel.index , kernel.index , kernel.index ) -> ()>
+
+  ^body_block3v1(body_i_v5: kernel.index ):
+    kernel.access (v0, v1) [] [kernel_access_kind: kernel.access_kind Write]: <(kernel.ranked_view <32,true,[1]>, kernel.index ) -> ()>;
+    v6 = kernel.index_binary (body_i_v5, v3) [] [kernel_index_binary_kind: kernel.index_binary_kind Add]: <(kernel.index , kernel.index ) -> (kernel.index )>;
+    kernel.br_args (v6) [^header_block2v1] []: <(kernel.index ) -> ()>
+
+  ^exit_block4v1():
+    kernel.return () [] []: <() -> ()>
+}

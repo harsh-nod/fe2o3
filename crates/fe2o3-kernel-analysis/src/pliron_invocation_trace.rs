@@ -12,9 +12,9 @@ use dialect_gpu::{
     MemoryOrderAttr, MemoryScopeAttr,
 };
 use dialect_kernel::{
-    AccessKindAttr, BranchArgsOp, BranchOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
-    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, MemorySpaceAttr, RankedAccessOp,
-    RankedViewOp, ReturnOp, TensorLayoutOp, TrapOp,
+    AccessKindAttr, BranchArgsOp, BranchOp, IndexBinaryKindAttr, IndexBinaryOp,
+    IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
+    MemorySpaceAttr, RankedAccessOp, RankedViewOp, ReturnOp, TensorLayoutOp, TrapOp,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -327,16 +327,24 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
         let invocation = decode_invocation(linear, &launch_extents);
         let mut events = Vec::new();
         let mut block_index = 0_usize;
-        let mut visited = HashSet::new();
+        let mut environment = HashMap::<Value, u64>::new();
+        let mut visited = HashSet::<(usize, Vec<Option<u64>>)>::new();
         loop {
             charge_trace_work_v1(&mut total_steps, 1)?;
-            if !visited.insert(block_index) {
-                return Err(PlironTraceFailureV1::CyclicControlFlow { block: block_index });
-            }
             let block = blocks
                 .get(block_index)
                 .copied()
                 .ok_or(PlironTraceFailureV1::UnsupportedTerminator { block: block_index })?;
+            let block_state = (0..block.deref(context).get_num_arguments())
+                .map(|argument| {
+                    environment
+                        .get(&block.deref(context).get_argument(argument))
+                        .copied()
+                })
+                .collect::<Vec<_>>();
+            if !visited.insert((block_index, block_state)) {
+                return Err(PlironTraceFailureV1::CyclicControlFlow { block: block_index });
+            }
             let terminator = block
                 .deref(context)
                 .get_terminator(context)
@@ -431,7 +439,16 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
                     let indices = access
                         .indices(context)
                         .into_iter()
-                        .map(|index| sparse.fact(index).evaluate(&invocation))
+                        .map(|index| {
+                            evaluate_trace_value_v1(
+                                context,
+                                sparse,
+                                &invocation,
+                                &environment,
+                                index,
+                                0,
+                            )
+                        })
                         .collect();
                     events.push(PlironTraceEventV1::Memory {
                         location: PlironTraceLocationV1 {
@@ -471,58 +488,121 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
                 break;
             }
             let raw = terminator.get_operation().deref(context);
-            let successor = if terminator.downcast_ref::<BranchOp>().is_some()
-                || terminator.downcast_ref::<BranchArgsOp>().is_some()
-            {
-                raw.successors().next()
+            let (successor, edge_arguments) = if terminator.downcast_ref::<BranchOp>().is_some() {
+                (raw.successors().next(), Vec::new())
+            } else if let Some(branch) = terminator.downcast_ref::<BranchArgsOp>() {
+                (raw.successors().next(), branch.arguments(context))
             } else if let Some(branch) = terminator.downcast_ref::<IndexLessThanBranchOp>() {
-                let lhs = sparse
-                    .fact(branch.lhs(context))
-                    .evaluate(&invocation)
-                    .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
-                let rhs = sparse
-                    .fact(branch.rhs(context))
-                    .evaluate(&invocation)
-                    .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
-                raw.successors().nth(usize::from(lhs >= rhs))
+                let lhs = evaluate_trace_value_v1(
+                    context,
+                    sparse,
+                    &invocation,
+                    &environment,
+                    branch.lhs(context),
+                    0,
+                )
+                .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
+                let rhs = evaluate_trace_value_v1(
+                    context,
+                    sparse,
+                    &invocation,
+                    &environment,
+                    branch.rhs(context),
+                    0,
+                )
+                .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
+                (raw.successors().nth(usize::from(lhs >= rhs)), Vec::new())
             } else if let Some(branch) = terminator.downcast_ref::<IndexLessThanBranchArgsOp>() {
-                let lhs = sparse
-                    .fact(branch.lhs(context))
-                    .evaluate(&invocation)
-                    .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
-                let rhs = sparse
-                    .fact(branch.rhs(context))
-                    .evaluate(&invocation)
-                    .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
-                raw.successors().nth(usize::from(lhs >= rhs))
+                let lhs = evaluate_trace_value_v1(
+                    context,
+                    sparse,
+                    &invocation,
+                    &environment,
+                    branch.lhs(context),
+                    0,
+                )
+                .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
+                let rhs = evaluate_trace_value_v1(
+                    context,
+                    sparse,
+                    &invocation,
+                    &environment,
+                    branch.rhs(context),
+                    0,
+                )
+                .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
+                let successor_index = usize::from(lhs >= rhs);
+                let arguments = if successor_index == 0 {
+                    branch.true_arguments(context)
+                } else {
+                    branch.false_arguments(context)
+                };
+                (raw.successors().nth(successor_index), arguments)
             } else if let Some(branch) = terminator.downcast_ref::<IndexEqualBranchOp>() {
-                let lhs = sparse
-                    .fact(branch.lhs(context))
-                    .evaluate(&invocation)
-                    .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
-                let rhs = sparse
-                    .fact(branch.rhs(context))
-                    .evaluate(&invocation)
-                    .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
-                raw.successors().nth(usize::from(lhs != rhs))
+                let lhs = evaluate_trace_value_v1(
+                    context,
+                    sparse,
+                    &invocation,
+                    &environment,
+                    branch.lhs(context),
+                    0,
+                )
+                .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
+                let rhs = evaluate_trace_value_v1(
+                    context,
+                    sparse,
+                    &invocation,
+                    &environment,
+                    branch.rhs(context),
+                    0,
+                )
+                .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
+                (raw.successors().nth(usize::from(lhs != rhs)), Vec::new())
             } else if let Some(branch) = terminator.downcast_ref::<IndexEqualBranchArgsOp>() {
-                let lhs = sparse
-                    .fact(branch.lhs(context))
-                    .evaluate(&invocation)
-                    .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
-                let rhs = sparse
-                    .fact(branch.rhs(context))
-                    .evaluate(&invocation)
-                    .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
-                raw.successors().nth(usize::from(lhs != rhs))
+                let lhs = evaluate_trace_value_v1(
+                    context,
+                    sparse,
+                    &invocation,
+                    &environment,
+                    branch.lhs(context),
+                    0,
+                )
+                .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
+                let rhs = evaluate_trace_value_v1(
+                    context,
+                    sparse,
+                    &invocation,
+                    &environment,
+                    branch.rhs(context),
+                    0,
+                )
+                .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
+                let successor_index = usize::from(lhs != rhs);
+                let arguments = if successor_index == 0 {
+                    branch.true_arguments(context)
+                } else {
+                    branch.false_arguments(context)
+                };
+                (raw.successors().nth(successor_index), arguments)
             } else {
                 return Err(PlironTraceFailureV1::UnsupportedTerminator { block: block_index });
-            }
-            .ok_or(PlironTraceFailureV1::UnsupportedTerminator { block: block_index })?;
-            block_index = block_indices
+            };
+            let successor = successor
+                .ok_or(PlironTraceFailureV1::UnsupportedTerminator { block: block_index })?;
+            let next_block = block_indices
                 .get(&successor)
                 .copied()
                 .ok_or(PlironTraceFailureV1::UnsupportedTerminator { block: block_index })?;
+            bind_edge_arguments_v1(
+                context,
+                sparse,
+                &invocation,
+                &mut environment,
+                successor,
+                &edge_arguments,
+                block_index,
+            )?;
+            block_index = next_block;
         }
         let (grid, workgroup, subgroup, lane) = if let Some(layout) = layout {
             let (workgroup, subgroup, lane) = layout
@@ -542,6 +622,98 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
         });
     }
     Ok(traces)
+}
+
+fn evaluate_trace_value_v1(
+    context: &Context,
+    sparse: &crate::SparseIndexAnalysisV1,
+    invocation: &[u64],
+    environment: &HashMap<Value, u64>,
+    value: Value,
+    depth: usize,
+) -> Option<u64> {
+    evaluate_trace_value_with_origin_v1(context, sparse, invocation, environment, value, depth)
+        .map(|(value, _)| value)
+}
+
+fn evaluate_trace_value_with_origin_v1(
+    context: &Context,
+    sparse: &crate::SparseIndexAnalysisV1,
+    invocation: &[u64],
+    environment: &HashMap<Value, u64>,
+    value: Value,
+    depth: usize,
+) -> Option<(u64, bool)> {
+    if depth > 64 {
+        return None;
+    }
+    if let Some(value) = environment.get(&value).copied() {
+        return Some((value, true));
+    }
+    if let Some(value) = sparse.fact(value).evaluate(invocation) {
+        return Some((value, false));
+    }
+    let definition = value.defining_op()?;
+    let operation = Operation::get_op_dyn(definition, context);
+    let binary = operation.downcast_ref::<IndexBinaryOp>()?;
+    let (lhs, lhs_from_environment) = evaluate_trace_value_with_origin_v1(
+        context,
+        sparse,
+        invocation,
+        environment,
+        binary.lhs(context),
+        depth + 1,
+    )?;
+    let (rhs, rhs_from_environment) = evaluate_trace_value_with_origin_v1(
+        context,
+        sparse,
+        invocation,
+        environment,
+        binary.rhs(context),
+        depth + 1,
+    )?;
+    if !lhs_from_environment && !rhs_from_environment {
+        return None;
+    }
+    let result = match binary.kind(context)? {
+        IndexBinaryKindAttr::Add => lhs.checked_add(rhs),
+        IndexBinaryKindAttr::Multiply => lhs.checked_mul(rhs),
+        IndexBinaryKindAttr::Remainder => (rhs != 0).then(|| lhs % rhs),
+        IndexBinaryKindAttr::Divide => (rhs != 0).then(|| lhs / rhs),
+    }?;
+    Some((result, true))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn bind_edge_arguments_v1(
+    context: &Context,
+    sparse: &crate::SparseIndexAnalysisV1,
+    invocation: &[u64],
+    environment: &mut HashMap<Value, u64>,
+    successor: Ptr<BasicBlock>,
+    edge_arguments: &[Value],
+    source_block: usize,
+) -> Result<(), PlironTraceFailureV1> {
+    let successor = successor.deref(context);
+    if successor.get_num_arguments() != edge_arguments.len() {
+        return Err(PlironTraceFailureV1::UnsupportedTerminator {
+            block: source_block,
+        });
+    }
+    let values = edge_arguments
+        .iter()
+        .map(|argument| {
+            evaluate_trace_value_v1(context, sparse, invocation, environment, *argument, 0).ok_or(
+                PlironTraceFailureV1::UnresolvedBranch {
+                    block: source_block,
+                },
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for (index, value) in values.into_iter().enumerate() {
+        environment.insert(successor.get_argument(index), value);
+    }
+    Ok(())
 }
 
 fn decode_invocation(mut linear: u64, extents: &[u64]) -> Vec<u64> {
