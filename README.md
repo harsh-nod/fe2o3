@@ -986,7 +986,16 @@ Validate the authoritative example manifest and list a lane:
 ```bash
 cargo run --locked -p cargo-fe2o3 -- examples check
 cargo run --quiet --locked -p cargo-fe2o3 -- examples list rocm-compile
+cargo run --quiet --locked -p cargo-fe2o3 -- examples list cpu-test-raw
+cargo run --quiet --locked -p cargo-fe2o3 -- examples list cpu-test-wrapper-managed
 ```
+
+The two CPU-test queries form a sorted, disjoint, exhaustive partition of
+manifest packages selected for Rust checks but not ROCm compilation. The
+partition is computed from the exact structural wrapper-managed projection, so
+generic CI runs namespace-free typed-kernel tests through `cargo-fe2o3 test`
+and leaves ordinary packages on raw Cargo without package-name rules. CI
+revalidates both complete lists and the full structural projection after tests.
 
 Run the repository validation lanes:
 

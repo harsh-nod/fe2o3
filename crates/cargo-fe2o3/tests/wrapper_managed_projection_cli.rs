@@ -216,6 +216,108 @@ fn literal_cli_discovers_and_revalidates_the_real_exact_managed_set() {
 }
 
 #[test]
+fn literal_cli_computes_disjoint_exhaustive_cpu_test_partitions() {
+    let workspace = TestWorkspace::new();
+    write(
+        &workspace.0,
+        "Cargo.toml",
+        "[workspace]\nresolver = \"2\"\nmembers = [\n  \"examples/ignored\",\n  \"examples/managed\",\n  \"examples/raw-a\",\n  \"examples/raw-b\",\n  \"examples/rocm\",\n]\n",
+    );
+    write(
+        &workspace.0,
+        "examples/regression-manifest-v1.txt",
+        "fe2o3-example-regressions-v1\npackage|rustc_check|rocm_compile|gpu_smoke|artifacts\nignored|false|false|false|-\nmanaged|true|false|false|-\nraw-a|true|false|false|-\nraw-b|true|false|false|-\nrocm|true|true|false|rocm_kernel.hsaco\n",
+    );
+    for (package, source) in [
+        ("ignored", "pub fn ignored() {}\n"),
+        (
+            "managed",
+            "#[cfg_attr(any(), kernel(typed))] pub fn managed() {}\n",
+        ),
+        ("raw-a", "pub fn raw_a() {}\n"),
+        ("raw-b", "pub fn raw_b() {}\n"),
+        (
+            "rocm",
+            "#[cfg(any())] #[kernel(typed, namespace = \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\")] pub fn rocm_kernel() {}\n",
+        ),
+    ] {
+        add_package(&workspace.0.join("examples"), package, source);
+    }
+    let status = Command::new(cargo())
+        .args(["generate-lockfile", "--offline"])
+        .current_dir(&workspace.0)
+        .status()
+        .expect("generate CPU partition fixture lockfile");
+    assert!(status.success());
+
+    let binary = env!("CARGO_BIN_EXE_cargo-fe2o3");
+    let list = |lane: &str| {
+        let output = Command::new(binary)
+            .args(["examples", "list", lane])
+            .env("CARGO", cargo())
+            .current_dir(&workspace.0)
+            .output()
+            .expect("query CPU test package partition");
+        assert!(
+            output.status.success(),
+            "CPU partition query {lane} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("UTF-8 CPU package partition")
+    };
+    assert_eq!(list("cpu-test-raw"), "raw-a\nraw-b\n");
+    assert_eq!(list("cpu-test-wrapper-managed"), "managed\n");
+    assert_eq!(list("rustc-check"), "managed\nraw-a\nraw-b\nrocm\n");
+
+    let check = |packages: &[&str]| {
+        Command::new(binary)
+            .arg("examples")
+            .arg("check-cpu-test-partition")
+            .args(packages)
+            .env("CARGO", cargo())
+            .current_dir(&workspace.0)
+            .output()
+            .expect("revalidate CPU test package partition")
+    };
+    let output = check(&["raw-a", "raw-b", "--", "managed"]);
+    assert!(
+        output.status.success(),
+        "exact CPU partition revalidation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for (case, packages, expected) in [
+        ("missing-separator", vec!["raw-a", "managed"], "exactly one"),
+        (
+            "duplicate-separator",
+            vec!["raw-a", "--", "--", "managed"],
+            "exactly one",
+        ),
+        (
+            "unsorted",
+            vec!["raw-b", "raw-a", "--", "managed"],
+            "strictly sorted and unique",
+        ),
+        (
+            "duplicate",
+            vec!["raw-a", "raw-a", "--", "managed"],
+            "strictly sorted and unique",
+        ),
+        ("drift", vec!["raw-a", "--", "managed"], "partition changed"),
+    ] {
+        let output = check(&packages);
+        assert!(
+            !output.status.success(),
+            "hostile CPU partition case {case} was accepted"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(expected),
+            "CPU partition case {case}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
 fn literal_cli_rejects_non_rs_declared_target_roots() {
     let workspace = TestWorkspace::new();
     write(

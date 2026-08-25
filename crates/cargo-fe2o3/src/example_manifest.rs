@@ -82,6 +82,22 @@ struct Manifest {
     entries: Vec<Entry>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CpuTestLane {
+    Raw,
+    WrapperManaged,
+}
+
+impl CpuTestLane {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "cpu-test-raw" => Some(Self::Raw),
+            "cpu-test-wrapper-managed" => Some(Self::WrapperManaged),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct WorkspaceExample {
     package: String,
@@ -164,6 +180,56 @@ fn command_result(args: &[String]) -> Result<Vec<String>, String> {
     } else {
         load(&workspace_root)?
     };
+
+    if let [command, packages @ ..] = args
+        && command == "check-cpu-test-partition"
+    {
+        let separators = packages
+            .iter()
+            .enumerate()
+            .filter_map(|(index, package)| (package == "--").then_some(index))
+            .collect::<Vec<_>>();
+        let [separator] = separators.as_slice() else {
+            return Err(
+                "CPU test partition requires exactly one `--` separator between raw and wrapper-managed packages"
+                    .to_owned(),
+            );
+        };
+        let raw = &packages[..*separator];
+        let wrapper_managed = &packages[*separator + 1..];
+        validate_sorted_unique_package_list(raw, "raw CPU test")?;
+        validate_sorted_unique_package_list(wrapper_managed, "wrapper-managed CPU test")?;
+
+        let managed = workspace_binding_managed_packages(&workspace_root)?;
+        let (expected_raw, expected_wrapper_managed) = cpu_test_partitions(&manifest, &managed)?;
+        if raw != expected_raw.as_slice() || wrapper_managed != expected_wrapper_managed.as_slice()
+        {
+            return Err(format!(
+                "CPU test package partition changed: expected raw [{}] and wrapper-managed [{}], observed raw [{}] and wrapper-managed [{}]",
+                expected_raw.join(","),
+                expected_wrapper_managed.join(","),
+                raw.join(","),
+                wrapper_managed.join(",")
+            ));
+        }
+        return Ok(vec![format!(
+            "CPU test partition: {} raw, {} wrapper-managed package(s)",
+            raw.len(),
+            wrapper_managed.len()
+        )]);
+    }
+
+    if let [command, lane] = args
+        && command == "list"
+        && let Some(lane) = CpuTestLane::parse(lane)
+    {
+        let managed = workspace_binding_managed_packages(&workspace_root)?;
+        let (raw, wrapper_managed) = cpu_test_partitions(&manifest, &managed)?;
+        return Ok(match lane {
+            CpuTestLane::Raw => raw,
+            CpuTestLane::WrapperManaged => wrapper_managed,
+        });
+    }
 
     match args {
         [command] if command == "check" => {
@@ -293,10 +359,60 @@ fn command_result(args: &[String]) -> Result<Vec<String>, String> {
             )])
         }
         _ => Err(
-            "usage: cargo fe2o3 examples <check|list <all|rustc-check|rocm-compile|gpu-smoke|wrapper-managed>|check-artifacts <package> <absolute-artifact-directory>|check-wrapper-managed <package>...|check-wrapper-namespaces <package>...>"
+            "usage: cargo fe2o3 examples <check|list <all|rustc-check|rocm-compile|gpu-smoke|wrapper-managed|cpu-test-raw|cpu-test-wrapper-managed>|check-artifacts <package> <absolute-artifact-directory>|check-cpu-test-partition <raw-package>... -- <wrapper-managed-package>...|check-wrapper-managed <package>...|check-wrapper-namespaces <package>...>"
                 .to_string(),
         ),
     }
+}
+
+fn validate_sorted_unique_package_list(packages: &[String], kind: &str) -> Result<(), String> {
+    for package in packages {
+        validate_package_name(package)?;
+    }
+    if packages.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(format!(
+            "{kind} package arguments must be strictly sorted and unique"
+        ));
+    }
+    Ok(())
+}
+
+fn cpu_test_partitions(
+    manifest: &Manifest,
+    wrapper_managed_packages: &[String],
+) -> Result<(Vec<String>, Vec<String>), String> {
+    let wrapper_managed = wrapper_managed_packages
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    if wrapper_managed.len() != wrapper_managed_packages.len() {
+        return Err("wrapper-managed package projection is not unique".to_owned());
+    }
+
+    let eligible = manifest
+        .entries
+        .iter()
+        .filter(|entry| entry.rustc_check && !entry.rocm_compile)
+        .map(|entry| entry.package.as_str())
+        .collect::<BTreeSet<_>>();
+    let raw = eligible
+        .difference(&wrapper_managed)
+        .map(|package| (*package).to_owned())
+        .collect::<Vec<_>>();
+    let managed = eligible
+        .intersection(&wrapper_managed)
+        .map(|package| (*package).to_owned())
+        .collect::<Vec<_>>();
+
+    let reconstructed = raw
+        .iter()
+        .chain(&managed)
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    if reconstructed != eligible || raw.iter().any(|package| managed.contains(package)) {
+        return Err("CPU test package partition is not disjoint and exhaustive".to_owned());
+    }
+    Ok((raw, managed))
 }
 
 fn find_manifest_root_without_cargo() -> Result<PathBuf, String> {
@@ -2387,8 +2503,8 @@ mod tests {
         Lane, MANIFEST_COLUMNS, MANIFEST_VERSION, MAX_PACKAGE_SOURCE_DEPTH,
         MAX_PACKAGE_SOURCE_FILE_BYTES, MAX_PACKAGE_SOURCE_MODULE_EDGES,
         MAX_PACKAGE_SOURCE_TOKEN_DEPTH, PackageSourceScanState, SourceObjectSnapshot,
-        WorkspaceExample, canonical_contained_path, collect_rust_sources, load,
-        package_source_tree_requires_binding, package_source_tree_requires_binding_with_hook,
+        WorkspaceExample, canonical_contained_path, collect_rust_sources, cpu_test_partitions,
+        load, package_source_tree_requires_binding, package_source_tree_requires_binding_with_hook,
         package_source_tree_requires_binding_with_targets, parse, revalidate_retained_child,
         source_artifact_literals, source_has_explicit_kernel_namespace,
         source_has_external_module_edge, source_requires_wrapper_binding, validate_package_targets,
@@ -2478,6 +2594,39 @@ mod tests {
         assert!(manifest.entries[0].participates(Lane::RocmCompile));
         assert!(!manifest.entries[0].participates(Lane::GpuSmoke));
         assert!(manifest.entries[2].artifacts.is_empty());
+    }
+
+    #[test]
+    fn cpu_test_partition_is_sorted_disjoint_and_exhaustive() {
+        let manifest = parse(&example_manifest(
+            "fe2o3-managed|true|false|false|-\n\
+             fe2o3-raw|true|false|false|-\n\
+             fe2o3-rocm|true|true|false|rocm.hsaco\n\
+             fe2o3-unchecked|false|false|false|-\n",
+        ))
+        .expect("valid manifest");
+        let managed = vec![
+            "fe2o3-managed".to_owned(),
+            "fe2o3-non-example-managed".to_owned(),
+        ];
+
+        let (raw, wrapper_managed) =
+            cpu_test_partitions(&manifest, &managed).expect("valid partition");
+        assert_eq!(raw, ["fe2o3-raw"]);
+        assert_eq!(wrapper_managed, ["fe2o3-managed"]);
+
+        let (raw, wrapper_managed) =
+            cpu_test_partitions(&manifest, &["fe2o3-non-example-managed".to_owned()])
+                .expect("valid empty wrapper intersection");
+        assert_eq!(raw, ["fe2o3-managed", "fe2o3-raw"]);
+        assert!(wrapper_managed.is_empty());
+
+        let duplicate = vec!["fe2o3-managed".to_owned(), "fe2o3-managed".to_owned()];
+        assert!(
+            cpu_test_partitions(&manifest, &duplicate)
+                .expect_err("duplicate structural projection must fail closed")
+                .contains("not unique")
+        );
     }
 
     #[test]

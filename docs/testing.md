@@ -19,6 +19,16 @@ is the authoritative package selection for ordinary Rust checks, ROCm
 compilation, and GPU smoke. `verus-vecadd` remains ordinary-rustc-only and is
 never selected for ROCm compilation or GPU execution.
 
+CPU example tests are the exact manifest subset with `rustc_check=true` and
+`rocm_compile=false`. The `cpu-test-raw` and `cpu-test-wrapper-managed` queries
+partition that subset using the structural source projection: ordinary packages
+run with raw Cargo, while every package containing a namespace-free typed
+kernel runs through the feature-free `cargo-fe2o3 test` binding wrapper. The
+lists are sorted, disjoint, exhaustive, and both complete lists plus the full
+structural projection are rescanned after the managed tests. This routing
+applies to any kernel package; it does not encode package-name exceptions or
+require literal namespaces.
+
 The generic test subset runs `rustc-codegen-fe2o3` in a dedicated Cargo process.
 The command-plan regression in `scripts/tests/ci-local-test-gate.sh` enforces
 that separation in every generic CI run.

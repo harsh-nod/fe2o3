@@ -47,6 +47,7 @@ readonly TEST_DRIVER_SHA256_ENV="FE2O3_TEST_CARGO_FE2O3_SHA256"
 CARGO_FE2O3_BINARY=
 CARGO_FE2O3_SHA256=
 CARGO_FE2O3_DRIVER_ROOT=
+CARGO_FE2O3_DRIVER_PROFILE=
 CARGO_TARGET_DIRECTORY=
 CI_PRIVATE_TMP_ROOT=
 readonly -a ROCM_TRUSTED_DEVICE_ITEM_PACKAGES=(
@@ -377,6 +378,7 @@ prepare_cargo_fe2o3_driver() {
       return 2
       ;;
   esac
+  CARGO_FE2O3_DRIVER_PROFILE=
 
   CARGO_TARGET_DIRECTORY="$(resolve_cargo_target_directory)"
   prepare_private_tmp_root
@@ -459,6 +461,24 @@ PY
   CARGO_FE2O3_SHA256="${built_sha256}"
   chmod 500 -- "${CARGO_FE2O3_DRIVER_ROOT}"
   validate_cargo_fe2o3_driver
+  CARGO_FE2O3_DRIVER_PROFILE="${driver_profile}"
+}
+
+ensure_production_cargo_fe2o3_driver() {
+  local step_prefix="$1"
+  case "${CARGO_FE2O3_DRIVER_PROFILE}" in
+    production)
+      validate_cargo_fe2o3_driver
+      ;;
+    "")
+      prepare_cargo_fe2o3_driver "${step_prefix}" production
+      ;;
+    *)
+      printf 'CPU tests cannot reuse %s cargo-fe2o3 driver as production\n' \
+        "${CARGO_FE2O3_DRIVER_PROFILE}" >&2
+      return 2
+      ;;
+  esac
 }
 
 cleanup_cargo_fe2o3_driver() {
@@ -474,6 +494,10 @@ cleanup_cargo_fe2o3_driver() {
     "$(stat -c '%u' -- "${CI_PRIVATE_TMP_ROOT}")" == "$(id -u)" ]]; then
     rm -rf -- "${CI_PRIVATE_TMP_ROOT}"
   fi
+  CARGO_FE2O3_BINARY=
+  CARGO_FE2O3_SHA256=
+  CARGO_FE2O3_DRIVER_ROOT=
+  CARGO_FE2O3_DRIVER_PROFILE=
 }
 
 trap cleanup_cargo_fe2o3_driver EXIT
@@ -602,21 +626,35 @@ run_check() {
 
 run_cpu_tests() {
   local cargo_args=(test --locked)
-  local -a rustc_examples rocm_examples
-  local -A rocm_example_set=()
+  local wrapper_cargo_args=(test --locked --all-targets)
+  local -a raw_cpu_examples wrapper_cpu_examples wrapper_managed_packages
+  local -a loader_environment_removals
+  local -A selected_cpu_examples=()
   local package
+  ensure_production_cargo_fe2o3_driver cpu-tests
   for package in "${CPU_TEST_PACKAGES[@]}"; do
     cargo_args+=(-p "${package}")
   done
-  load_example_packages rustc-check rustc_examples
-  load_example_packages rocm-compile rocm_examples
-  for package in "${rocm_examples[@]}"; do
-    rocm_example_set["${package}"]=1
+  load_example_packages cpu-test-raw raw_cpu_examples "${CARGO_FE2O3_BINARY}"
+  load_example_packages cpu-test-wrapper-managed wrapper_cpu_examples \
+    "${CARGO_FE2O3_BINARY}"
+  load_example_packages wrapper-managed wrapper_managed_packages \
+    "${CARGO_FE2O3_BINARY}"
+  for package in "${raw_cpu_examples[@]}"; do
+    [[ -z "${selected_cpu_examples[${package}]+selected}" ]] || {
+      printf 'duplicate raw CPU example package: %s\n' "${package}" >&2
+      return 2
+    }
+    selected_cpu_examples["${package}"]=raw
+    cargo_args+=(-p "${package}")
   done
-  for package in "${rustc_examples[@]}"; do
-    if [[ -z "${rocm_example_set[${package}]+selected}" ]]; then
-      cargo_args+=(-p "${package}")
-    fi
+  for package in "${wrapper_cpu_examples[@]}"; do
+    [[ -z "${selected_cpu_examples[${package}]+selected}" ]] || {
+      printf 'CPU example partition selected package twice: %s\n' "${package}" >&2
+      return 2
+    }
+    selected_cpu_examples["${package}"]=wrapper-managed
+    wrapper_cargo_args+=(-p "${package}")
   done
   # Keep the generic test lane independent of whether the host happens to have
   # ROCm installed. The raw HIP crate supplies a fail-closed no-runtime ABI.
@@ -624,6 +662,24 @@ run_cpu_tests() {
     cargo test --locked -p cargo-fe2o3 \
       --features "${CARGO_FE2O3_QUALIFICATION_FEATURE}"
   run_step cpu-tests env FE2O3_HIP_SYS_DISABLE=1 cargo "${cargo_args[@]}"
+  load_dynamic_loader_environment_removals loader_environment_removals
+  if ((${#wrapper_cpu_examples[@]} > 0)); then
+    validate_cargo_fe2o3_driver
+    run_step wrapper-managed-cpu-tests \
+      env "${loader_environment_removals[@]}" FE2O3_HIP_SYS_DISABLE=1 \
+      "${CARGO_FE2O3_BINARY}" "${wrapper_cargo_args[@]}"
+  fi
+  # The queries above and the test command are authority-free policy scans. Recheck
+  # both selected lists and the complete structural set so source drift cannot
+  # silently reroute or omit a package.
+  run_step cpu-test-partition-revalidation \
+    env "${loader_environment_removals[@]}" \
+    "${CARGO_FE2O3_BINARY}" examples check-cpu-test-partition \
+    "${raw_cpu_examples[@]}" -- "${wrapper_cpu_examples[@]}"
+  run_step cpu-test-binding-projection-revalidation \
+    env "${loader_environment_removals[@]}" \
+    "${CARGO_FE2O3_BINARY}" examples check-wrapper-managed \
+    "${wrapper_managed_packages[@]}"
   run_step dialect-mir-pliron-tests \
     cargo test --locked -p dialect-mir --features pliron --test pliron_shell
 }

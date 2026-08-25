@@ -190,6 +190,7 @@ done
 declare -a STEP_NAMES=()
 declare -a STEP_COMMANDS=()
 declare -A STEP_TIMEOUT_OVERRIDES=()
+EMPTY_WRAPPER_CPU_INTERSECTION=0
 
 run_step() {
   local name="$1"
@@ -211,11 +212,16 @@ run_step_with_timeout() {
 prepare_cargo_fe2o3_driver() {
   local step_prefix="$1"
   local driver_profile="$2"
-  local root="${TIMEOUT_TEST_ROOT}/${step_prefix}-driver"
+  local root
   local -a feature_args=()
   case "${driver_profile}" in
-    production) ;;
+    production)
+      # Production bytes are content-identical across callers and therefore
+      # share one immutable private root, like the real digest-addressed driver.
+      root="${TIMEOUT_TEST_ROOT}/production-driver"
+      ;;
     qualification)
+      root="${TIMEOUT_TEST_ROOT}/${step_prefix}-driver"
       feature_args=(--features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}")
       ;;
     *)
@@ -224,11 +230,13 @@ prepare_cargo_fe2o3_driver() {
       return 2
       ;;
   esac
-  if [[ ! -d "${root}" ]]; then
-    mkdir -m 700 -- "${root}"
-    printf '#!/usr/bin/env bash\nexit 0\n' >"${root}/cargo-fe2o3"
-    chmod 500 -- "${root}/cargo-fe2o3" "${root}"
-  fi
+  [[ ! -e "${root}" && ! -L "${root}" ]] || {
+    printf 'mock refused duplicate private driver root: %s\n' "${root}" >&2
+    return 2
+  }
+  mkdir -m 700 -- "${root}"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${root}/cargo-fe2o3"
+  chmod 500 -- "${root}/cargo-fe2o3" "${root}"
   CARGO_FE2O3_DRIVER_ROOT="${root}"
   CARGO_FE2O3_BINARY="${root}/cargo-fe2o3"
   CARGO_FE2O3_SHA256="$(sha256sum -- "${CARGO_FE2O3_BINARY}")"
@@ -237,6 +245,21 @@ prepare_cargo_fe2o3_driver() {
     cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 \
     "${feature_args[@]}" \
     --message-format=json-render-diagnostics
+  CARGO_FE2O3_DRIVER_PROFILE="${driver_profile}"
+}
+
+reset_mock_production_driver() {
+  local root="${TIMEOUT_TEST_ROOT}/production-driver"
+  if [[ -d "${root}" && ! -L "${root}" ]]; then
+    chmod 700 -- "${root}"
+    rm -rf -- "${root}"
+  fi
+  if [[ "${CARGO_FE2O3_DRIVER_ROOT}" == "${root}" ]]; then
+    CARGO_FE2O3_BINARY=
+    CARGO_FE2O3_SHA256=
+    CARGO_FE2O3_DRIVER_ROOT=
+    CARGO_FE2O3_DRIVER_PROFILE=
+  fi
 }
 
 load_example_packages() {
@@ -249,6 +272,16 @@ load_example_packages() {
       ;;
     rustc-check)
       destination=(fe2o3-managed-a fe2o3-managed-b fe2o3-ordinary)
+      ;;
+    cpu-test-raw)
+      destination=(fe2o3-ordinary)
+      ;;
+    cpu-test-wrapper-managed)
+      if ((EMPTY_WRAPPER_CPU_INTERSECTION)); then
+        destination=()
+      else
+        destination=(fe2o3-managed-a fe2o3-managed-b)
+      fi
       ;;
     wrapper-managed)
       destination=(fe2o3-managed-a fe2o3-managed-b)
@@ -336,12 +369,39 @@ assert_all_codegen_targets_once() {
 
 run_tests
 assert_codegen_test_driver_once
+assert_equals \
+  'cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 --message-format=json-render-diagnostics' \
+  "$(step_command cpu-tests-cargo-fe2o3-bootstrap)" \
+  'CPU tests did not retain the feature-free production driver'
 cpu_command="$(step_command cpu-tests)"
 if [[ " ${cpu_command} " == *" -p ${RUSTC_CODEGEN_TEST_PACKAGE} "* ]]; then
   printf 'generic CPU tests mixed %s into the shared Cargo process\n' \
     "${RUSTC_CODEGEN_TEST_PACKAGE}" >&2
   exit 1
 fi
+for managed_package in fe2o3-managed-a fe2o3-managed-b; do
+  if [[ " ${cpu_command} " == *" -p ${managed_package} "* ]]; then
+    printf 'raw CPU tests included wrapper-managed package %s\n' \
+      "${managed_package}" >&2
+    exit 1
+  fi
+done
+[[ " ${cpu_command} " == *" -p fe2o3-ordinary "* ]] || {
+  printf '%s\n' 'raw CPU tests omitted the computed ordinary example package' >&2
+  exit 1
+}
+assert_equals \
+  "env FE2O3_HIP_SYS_DISABLE=1 ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 test --locked --all-targets -p fe2o3-managed-a -p fe2o3-managed-b" \
+  "$(step_command wrapper-managed-cpu-tests)" \
+  'managed CPU tests did not use the feature-free binding wrapper projection'
+assert_equals \
+  "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 examples check-cpu-test-partition fe2o3-ordinary -- fe2o3-managed-a fe2o3-managed-b" \
+  "$(step_command cpu-test-partition-revalidation)" \
+  'managed CPU tests did not revalidate both complete package lists'
+assert_equals \
+  "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 examples check-wrapper-managed fe2o3-managed-a fe2o3-managed-b" \
+  "$(step_command cpu-test-binding-projection-revalidation)" \
+  'managed CPU tests did not revalidate the complete structural projection'
 assert_equals \
   "python3 ${RUSTC_CODEGEN_SHARD_POLICY} check" \
   "$(step_command rustc-codegen-shard-policy)" \
@@ -449,6 +509,7 @@ done
 
 STEP_NAMES=()
 STEP_COMMANDS=()
+reset_mock_production_driver
 run_generic_core
 for core_step in \
   workspace-dependency-policy-tests \
@@ -478,6 +539,9 @@ for core_step in \
   backend-build \
   ci-local-test-gate \
   cpu-tests \
+  wrapper-managed-cpu-tests \
+  cpu-test-partition-revalidation \
+  cpu-test-binding-projection-revalidation \
   rustc-codegen-lib-tests \
   core-doc-tests \
   device-copy-renamed-dependency \
@@ -503,17 +567,33 @@ assert_equals \
   "$(step_command generic-check-cargo-fe2o3-bootstrap)" \
   'generic check did not retain the feature-free production driver'
 assert_equals \
-  "env ${TIMEOUT_TEST_ROOT}/generic-check-driver/cargo-fe2o3 check --workspace --all-targets --locked --exclude fe2o3-production-extraction-fixture --exclude fe2o3-production-ranked-bounds-fixture --exclude fe2o3-disabled-fixture" \
+  "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 check --workspace --all-targets --locked --exclude fe2o3-production-extraction-fixture --exclude fe2o3-production-ranked-bounds-fixture --exclude fe2o3-disabled-fixture" \
   "$(step_command workspace-binding-check)" \
   'managed check did not cover the whole supported workspace graph'
 assert_equals \
-  "bash scripts/tests/binding-check-boundary.sh ${TIMEOUT_TEST_ROOT}/generic-check-driver/cargo-fe2o3 fe2o3-managed-a" \
+  "bash scripts/tests/binding-check-boundary.sh ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 fe2o3-managed-a" \
   "$(step_command workspace-binding-check-boundary)" \
   'managed check omitted the backend/artifact/publication hostile boundary'
 assert_equals \
-  "env ${TIMEOUT_TEST_ROOT}/generic-check-driver/cargo-fe2o3 examples check-wrapper-managed fe2o3-managed-a fe2o3-managed-b" \
+  "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 examples check-wrapper-managed fe2o3-managed-a fe2o3-managed-b" \
   "$(step_command workspace-binding-projection-revalidation)" \
   'managed check did not revalidate the exact structural package projection'
+assert_equals \
+  0 \
+  "$(step_count cpu-tests-cargo-fe2o3-bootstrap)" \
+  'generic core rebuilt its byte-identical content-addressed production driver'
+assert_equals \
+  "env FE2O3_HIP_SYS_DISABLE=1 ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 test --locked --all-targets -p fe2o3-managed-a -p fe2o3-managed-b" \
+  "$(step_command wrapper-managed-cpu-tests)" \
+  'generic core did not route managed CPU tests through cargo-fe2o3'
+assert_equals \
+  "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 examples check-cpu-test-partition fe2o3-ordinary -- fe2o3-managed-a fe2o3-managed-b" \
+  "$(step_command cpu-test-partition-revalidation)" \
+  'generic core did not revalidate both complete CPU package lists'
+assert_equals \
+  "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 examples check-wrapper-managed fe2o3-managed-a fe2o3-managed-b" \
+  "$(step_command cpu-test-binding-projection-revalidation)" \
+  'generic core did not revalidate the CPU binding projection'
 for core_step in "${STEP_NAMES[@]}"; do
   if [[ "${core_step}" == rustc-codegen-test-* ]]; then
     printf 'generic core unexpectedly ran integration target: %s\n' "${core_step}" >&2
@@ -525,6 +605,7 @@ assert_step_count rustc-codegen-driver-bootstrap 0 \
 
 STEP_NAMES=()
 STEP_COMMANDS=()
+reset_mock_production_driver
 run_generic
 assert_codegen_test_driver_once
 assert_all_codegen_targets_once
@@ -532,6 +613,24 @@ assert_step_count rustc-codegen-shard-policy 1 \
   'serial generic gate did not run shard policy exactly once'
 assert_step_count rustc-codegen-lib-tests 1 \
   'serial generic gate did not run backend library tests exactly once'
+
+STEP_NAMES=()
+STEP_COMMANDS=()
+EMPTY_WRAPPER_CPU_INTERSECTION=1
+CARGO_FE2O3_DRIVER_PROFILE=
+reset_mock_production_driver
+run_cpu_tests
+assert_step_count wrapper-managed-cpu-tests 0 \
+  'empty managed CPU intersection still invoked the binding test command'
+assert_equals \
+  "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 examples check-cpu-test-partition fe2o3-ordinary --" \
+  "$(step_command cpu-test-partition-revalidation)" \
+  'empty managed CPU intersection skipped complete partition revalidation'
+assert_equals \
+  "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 examples check-wrapper-managed fe2o3-managed-a fe2o3-managed-b" \
+  "$(step_command cpu-test-binding-projection-revalidation)" \
+  'empty managed CPU intersection skipped full structural revalidation'
+EMPTY_WRAPPER_CPU_INTERSECTION=0
 
 STEP_NAMES=()
 STEP_COMMANDS=()
