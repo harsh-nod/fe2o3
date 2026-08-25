@@ -349,6 +349,18 @@ pub fn bind_current_recovered_launch_kernel_metadata_v2<'recovered>(
     bind_with_current_and_physical_override(current, recovered, family, None)
 }
 
+#[cfg(test)]
+pub(crate) fn bind_current_recovered_launch_kernel_metadata_for_test_v2<'recovered>(
+    recovered: &'recovered RecoveredWorkerV2PinnedDescriptorV1,
+    family: &LaunchKernelFamilyV2,
+) -> Result<CurrentRecoveredLaunchKernelMetadataV2<'recovered>, LaunchKernelMetadataBridgeErrorV2> {
+    validate_projection_family_preflight(family)?;
+    let current = recovered
+        .acquire_launch_kernel_v2_currentness_for_test()
+        .map_err(LaunchKernelMetadataBridgeErrorV2::CurrentPublication)?;
+    bind_with_current_and_physical_override(current, recovered, family, None)
+}
+
 fn validate_projection_family_preflight(
     family: &LaunchKernelFamilyV2,
 ) -> Result<(), LaunchKernelMetadataBridgeErrorV2> {
@@ -433,7 +445,7 @@ pub(crate) fn bind_current_recovered_launch_kernel_metadata_with_physical_probe_
 ) -> Result<CurrentRecoveredLaunchKernelMetadataV2<'recovered>, LaunchKernelMetadataBridgeErrorV2> {
     validate_projection_family_preflight(family)?;
     let current = recovered
-        .acquire_launch_kernel_v2_currentness()
+        .acquire_launch_kernel_v2_currentness_for_test()
         .map_err(LaunchKernelMetadataBridgeErrorV2::CurrentPublication)?;
     bind_with_current_and_physical_override(current, recovered, family, Some(physical))
 }

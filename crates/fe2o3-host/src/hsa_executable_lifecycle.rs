@@ -312,9 +312,35 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV2ExecutableV1<
             .map_err(WorkerV2ExecutableAuthenticationError::SemanticWitness)?;
         validate_required_profile(&admission)
             .map_err(WorkerV2ExecutableAuthenticationError::Profile)?;
-        admission
-            .acquire_currentness()
+        let current = admission
+            .acquire_retained_currentness_token()
             .map_err(WorkerV2ExecutableAuthenticationError::CurrentPublication)?;
+        drop(current);
+        Self::authenticate_after_currentness(admission, authenticator)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn authenticate_for_test<A: WorkerV2PrerequisiteAuthenticatorV1<K>>(
+        admission: AdmittedFinalizedWorkerV2BundleV1,
+        authenticator: &mut A,
+    ) -> Result<Self, WorkerV2ExecutableAuthenticationError<A::Error>> {
+        validate_compiler_generated_semantic_witness_v1::<K>()
+            .map_err(WorkerV2ExecutableAuthenticationError::SemanticWitness)?;
+        validate_required_profile(&admission)
+            .map_err(WorkerV2ExecutableAuthenticationError::Profile)?;
+        let current = crate::test_currentness_retry::retry_transient_busy(
+            || admission.acquire_retained_currentness_token(),
+            |error| matches!(error, FinalizedWorkerV2BundleAdmissionError::Busy),
+        )
+        .map_err(WorkerV2ExecutableAuthenticationError::CurrentPublication)?;
+        drop(current);
+        Self::authenticate_after_currentness(admission, authenticator)
+    }
+
+    fn authenticate_after_currentness<A: WorkerV2PrerequisiteAuthenticatorV1<K>>(
+        admission: AdmittedFinalizedWorkerV2BundleV1,
+        authenticator: &mut A,
+    ) -> Result<Self, WorkerV2ExecutableAuthenticationError<A::Error>> {
         let challenge_identity = admission
             .full_lineage_challenge_for(admission.artifact_identity())
             .map_err(WorkerV2ExecutableAuthenticationError::FullLineage)?;
@@ -356,6 +382,16 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV2ExecutableV1<
         &self,
     ) -> Result<DurableCurrentLinkPublicationTokenV1, FinalizedWorkerV2BundleAdmissionError> {
         self.admission.acquire_retained_currentness_token()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn acquire_retained_currentness_token_for_test(
+        &self,
+    ) -> Result<DurableCurrentLinkPublicationTokenV1, FinalizedWorkerV2BundleAdmissionError> {
+        crate::test_currentness_retry::retry_transient_busy(
+            || self.acquire_retained_currentness_token(),
+            |error| matches!(error, FinalizedWorkerV2BundleAdmissionError::Busy),
+        )
     }
 
     pub fn authorize_hsa_load<A: ReviewedHsaExecutableLifecycleAdapterV1>(
@@ -1204,6 +1240,22 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> AuthorizedHsaLoadV1<K, A> {
             .admission
             .acquire_retained_currentness_token()
             .map_err(HsaExecutableLoadError::CurrentPublication)?;
+        self.load_with_retained_currentness(&current)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn load_for_test(
+        self,
+    ) -> Result<LoadedHsaExecutableV1<K, A>, HsaExecutableLoadError<A::Error>> {
+        let current = crate::test_currentness_retry::retry_transient_busy(
+            || {
+                self.authenticated
+                    .admission
+                    .acquire_retained_currentness_token()
+            },
+            |error| matches!(error, FinalizedWorkerV2BundleAdmissionError::Busy),
+        )
+        .map_err(HsaExecutableLoadError::CurrentPublication)?;
         self.load_with_retained_currentness(&current)
     }
 
@@ -3981,7 +4033,7 @@ pub(crate) mod tests {
 
     fn authenticate(seed: u8) -> (AuthenticatedWorkerV2ExecutableV1<TestKernel>, TestDirectory) {
         let (admission, directory) = admitted_for_lifecycle_test(seed);
-        let authenticated = AuthenticatedWorkerV2ExecutableV1::authenticate(
+        let authenticated = AuthenticatedWorkerV2ExecutableV1::authenticate_for_test(
             admission,
             &mut FakeAuthenticator::exact(),
         )
@@ -3993,7 +4045,7 @@ pub(crate) mod tests {
         seed: u8,
     ) -> (AuthenticatedWorkerV2ExecutableV1<TestKernel>, TestDirectory) {
         let (admission, directory) = admitted_two_kernel_for_lifecycle_test(seed);
-        let authenticated = AuthenticatedWorkerV2ExecutableV1::authenticate(
+        let authenticated = AuthenticatedWorkerV2ExecutableV1::authenticate_for_test(
             admission,
             &mut FakeAuthenticator::exact(),
         )
@@ -4331,7 +4383,7 @@ pub(crate) mod tests {
         let authorized = authenticated.authorize_hsa_load(adapter).unwrap();
         assert!(authorized.grants_load_authority());
         assert!(!authorized.grants_launch_authority());
-        (authorized.load(), unloads, directory)
+        (authorized.load_for_test(), unloads, directory)
     }
 
     fn load_two_kernels(seed: u8) -> (TestLoadedResult, Arc<AtomicUsize>, TestDirectory) {
@@ -4345,7 +4397,7 @@ pub(crate) mod tests {
         let (authenticated, directory) = authenticate_two_kernels(seed);
         let (adapter, unloads) = FakeHsaAdapter::new(fault);
         let authorized = authenticated.authorize_hsa_load(adapter).unwrap();
-        (authorized.load(), unloads, directory)
+        (authorized.load_for_test(), unloads, directory)
     }
 
     #[test]
@@ -4364,14 +4416,14 @@ pub(crate) mod tests {
 
         let (admission, _directory) = admitted_alpha_cov6_for_lifecycle_test(ALPHA_COV6_TEST_SEED);
         let authenticated: AuthenticatedWorkerV2ExecutableV1<AlphaCov6TestKernel> =
-            AuthenticatedWorkerV2ExecutableV1::authenticate(
+            AuthenticatedWorkerV2ExecutableV1::authenticate_for_test(
                 admission,
                 &mut FakeAuthenticator::exact(),
             )
             .unwrap();
         let (adapter, unloads) = FakeHsaAdapter::new(AdapterFault::None);
         let authorized = authenticated.authorize_hsa_load(adapter).unwrap();
-        let mut loaded = authorized.load().unwrap();
+        let mut loaded = authorized.load_for_test().unwrap();
         assert_eq!(loaded.kernel_observation().export_symbol(), "alpha");
         assert_eq!(loaded.kernel_observation().kernarg_segment_size(), 296);
 
@@ -4590,7 +4642,7 @@ pub(crate) mod tests {
     fn loaded_executable_authenticates_each_exact_kernel_once_and_rejects_cache_conflicts() {
         let (admission, _directory) = admitted_two_kernel_for_lifecycle_test(0xb3);
         let (mut authenticator, calls) = CountingAuthenticator::new();
-        let authenticated = AuthenticatedWorkerV2ExecutableV1::<TestKernel>::authenticate(
+        let authenticated = AuthenticatedWorkerV2ExecutableV1::<TestKernel>::authenticate_for_test(
             admission,
             &mut authenticator,
         )
@@ -4600,7 +4652,7 @@ pub(crate) mod tests {
         let mut loaded = authenticated
             .authorize_hsa_load(adapter)
             .unwrap()
-            .load()
+            .load_for_test()
             .unwrap();
 
         let root_identity = loaded
@@ -5020,7 +5072,7 @@ pub(crate) mod tests {
     fn initial_authentication_rejects_a_substituted_semantic_witness_first() {
         let (admission, _directory) = admitted_for_lifecycle_test(0x8d);
         assert!(matches!(
-            AuthenticatedWorkerV2ExecutableV1::<SubstitutedPrimaryWitness>::authenticate(
+            AuthenticatedWorkerV2ExecutableV1::<SubstitutedPrimaryWitness>::authenticate_for_test(
                 admission,
                 &mut PanicAuthenticator,
             ),
@@ -5163,7 +5215,7 @@ pub(crate) mod tests {
             PrerequisiteFault::MissingRaceFreedom,
         ] {
             let (admission, _directory) = admitted_for_lifecycle_test(0x93);
-            let error = AuthenticatedWorkerV2ExecutableV1::<TestKernel>::authenticate(
+            let error = AuthenticatedWorkerV2ExecutableV1::<TestKernel>::authenticate_for_test(
                 admission,
                 &mut FakeAuthenticator { fault },
             )
@@ -5189,7 +5241,7 @@ pub(crate) mod tests {
         assert_ne!(first_challenge.package(), second_challenge.package());
         assert_ne!(first_challenge.receipt(), second_challenge.receipt());
         assert!(matches!(
-            AuthenticatedWorkerV2ExecutableV1::<TestKernel>::authenticate(
+            AuthenticatedWorkerV2ExecutableV1::<TestKernel>::authenticate_for_test(
                 second,
                 &mut StaleChallengeAuthenticator {
                     challenge: first_challenge,

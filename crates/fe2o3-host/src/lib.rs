@@ -71,6 +71,8 @@ mod recovered_worker_v2_admission;
 mod recovered_worker_v3_admission;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod row_softmax_protected_admission;
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+mod test_currentness_retry;
 mod tile_interop;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod worker_v2_bundle_admission;

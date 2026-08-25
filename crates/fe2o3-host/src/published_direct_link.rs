@@ -106,10 +106,38 @@ impl ValidatedPublishedDirectLinkSelectionV1 {
         if !current_lease.is_bound_to_handoff(&durable_handoff) {
             return Err(PublishedDirectLinkAdmissionError::CurrentLeaseSubstitution);
         }
-        let published = current_lease.published();
-        let _current = current_lease
+        let current = current_lease
             .acquire_current_token()
             .map_err(PublishedDirectLinkAdmissionError::current_publication)?;
+        Self::validate_with_current_token(
+            validated_bundle,
+            bridge,
+            current_lease,
+            &current,
+            container,
+            selected,
+            observed,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn validate_with_current_token(
+        validated_bundle: &ValidatedDirectLinkBundleEvidenceV1<'_>,
+        bridge: &ManifestClaimDirectLinkPublicationBridgeV1,
+        current_lease: ManifestClaimDirectLinkCurrentPublicationLeaseV1,
+        current: &ManifestClaimDirectLinkCurrentPublicationTokenV1,
+        container: &ArtifactContainerV1,
+        selected: SelectedNativeKernel<'_>,
+        observed: &ObservedContext,
+    ) -> Result<Self, PublishedDirectLinkAdmissionError> {
+        let durable_handoff = bridge.durable_plan_handoff();
+        if !current_lease.is_bound_to_handoff(&durable_handoff) {
+            return Err(PublishedDirectLinkAdmissionError::CurrentLeaseSubstitution);
+        }
+        current_lease
+            .validate_current_token(current)
+            .map_err(PublishedDirectLinkAdmissionError::current_publication)?;
+        let published = current_lease.published();
         let (binding_index, container_identity, finalized_payload_identity) =
             validate_direct_link_inputs(
                 validated_bundle,
@@ -122,7 +150,6 @@ impl ValidatedPublishedDirectLinkSelectionV1 {
         let selection = ValidatedArtifactSelectionV1::validate(selected, observed)
             .map_err(PublishedDirectLinkAdmissionError::ArtifactSelection)?;
         let payload_kernel_set = payload_kernel_set(selected);
-        drop(_current);
 
         Ok(Self {
             selection,
@@ -491,6 +518,7 @@ pub(crate) mod tests {
     #![cfg_attr(not(test), allow(dead_code, unused_imports))]
 
     use super::*;
+    use crate::test_currentness_retry::retry_transient_busy;
     use crate::{
         InspectedPublishedDirectLinkPhysicalLayoutV1, MissingPublishedDirectLinkLoadPrerequisiteV1,
         PhysicalMetadataValueV1, PublishedLoadAdmissionError,
@@ -529,8 +557,157 @@ pub(crate) mod tests {
 
     const ELF_HEADER_BYTES: usize = 64;
     const SECTION_HEADER_BYTES: usize = 64;
-
     static NEXT_PUBLICATION_DIRECTORY: AtomicU64 = AtomicU64::new(1);
+
+    fn validate_for_test(
+        validated_bundle: &ValidatedDirectLinkBundleEvidenceV1<'_>,
+        bridge: &ManifestClaimDirectLinkPublicationBridgeV1,
+        current_lease: ManifestClaimDirectLinkCurrentPublicationLeaseV1,
+        container: &ArtifactContainerV1,
+        selected: SelectedNativeKernel<'_>,
+        observed: &ObservedContext,
+    ) -> Result<ValidatedPublishedDirectLinkSelectionV1, PublishedDirectLinkAdmissionError> {
+        let current = retry_transient_busy(
+            || current_lease.acquire_current_token(),
+            |error| matches!(error, DurableLinkPublicationError::Busy),
+        )
+        .map_err(PublishedDirectLinkAdmissionError::current_publication)?;
+        ValidatedPublishedDirectLinkSelectionV1::validate_with_current_token(
+            validated_bundle,
+            bridge,
+            current_lease,
+            &current,
+            container,
+            selected,
+            observed,
+        )
+    }
+
+    fn inspect_for_test(
+        admission: ValidatedPublishedDirectLinkSelectionV1,
+    ) -> Result<InspectedPublishedDirectLinkPhysicalLayoutV1, PublishedPhysicalLayoutInspectionError>
+    {
+        let current = retry_transient_busy(
+            || admission.acquire_current_token(),
+            |error| matches!(error, DurableLinkPublicationError::Busy),
+        )
+        .map_err(|error| match error {
+            DurableLinkPublicationError::Busy => PublishedPhysicalLayoutInspectionError::Busy,
+            error => PublishedPhysicalLayoutInspectionError::CurrentPublication {
+                reason: error.to_string(),
+            },
+        })?;
+        InspectedPublishedDirectLinkPhysicalLayoutV1::inspect_with_current_token(
+            admission, &current,
+        )
+    }
+
+    fn into_pending_load_admission_for_test(
+        inspection: InspectedPublishedDirectLinkPhysicalLayoutV1,
+    ) -> Result<crate::PendingPublishedDirectLinkLoadAdmissionV1, PublishedLoadAdmissionError> {
+        let current = retry_transient_busy(
+            || inspection.acquire_current_publication_token(),
+            |error| matches!(error, PublishedPhysicalLayoutInspectionError::Busy),
+        )
+        .map_err(PublishedLoadAdmissionError::Inspection)?;
+        inspection.into_pending_load_admission_with_current_token(&current)
+    }
+
+    trait RevalidateAfterParallelSpawn {
+        type Error;
+
+        fn revalidate_after_parallel_spawn(
+            &self,
+            validated_bundle: &ValidatedDirectLinkBundleEvidenceV1<'_>,
+            bridge: &ManifestClaimDirectLinkPublicationBridgeV1,
+            container: &ArtifactContainerV1,
+            selected: SelectedNativeKernel<'_>,
+            observed: &ObservedContext,
+        ) -> Result<(), Self::Error>;
+    }
+
+    impl RevalidateAfterParallelSpawn for ValidatedPublishedDirectLinkSelectionV1 {
+        type Error = PublishedDirectLinkAdmissionError;
+
+        fn revalidate_after_parallel_spawn(
+            &self,
+            validated_bundle: &ValidatedDirectLinkBundleEvidenceV1<'_>,
+            bridge: &ManifestClaimDirectLinkPublicationBridgeV1,
+            container: &ArtifactContainerV1,
+            selected: SelectedNativeKernel<'_>,
+            observed: &ObservedContext,
+        ) -> Result<(), Self::Error> {
+            let current = retry_transient_busy(
+                || self.acquire_current_token(),
+                |error| matches!(error, DurableLinkPublicationError::Busy),
+            )
+            .map_err(PublishedDirectLinkAdmissionError::current_publication)?;
+            self.revalidate_with_current_token(
+                &current,
+                validated_bundle,
+                bridge,
+                container,
+                selected,
+                observed,
+            )
+        }
+    }
+
+    impl RevalidateAfterParallelSpawn for InspectedPublishedDirectLinkPhysicalLayoutV1 {
+        type Error = PublishedPhysicalLayoutInspectionError;
+
+        fn revalidate_after_parallel_spawn(
+            &self,
+            validated_bundle: &ValidatedDirectLinkBundleEvidenceV1<'_>,
+            bridge: &ManifestClaimDirectLinkPublicationBridgeV1,
+            container: &ArtifactContainerV1,
+            selected: SelectedNativeKernel<'_>,
+            observed: &ObservedContext,
+        ) -> Result<(), Self::Error> {
+            let current = retry_transient_busy(
+                || self.acquire_current_publication_token(),
+                |error| matches!(error, PublishedPhysicalLayoutInspectionError::Busy),
+            )?;
+            self.revalidate_with_current_token(
+                &current,
+                validated_bundle,
+                bridge,
+                container,
+                selected,
+                observed,
+            )
+        }
+    }
+
+    trait AcquireCurrentnessAfterParallelSpawn {
+        fn acquire_currentness_after_parallel_spawn(
+            &self,
+        ) -> Result<
+            crate::CurrentPendingPublishedDirectLinkLoadAdmissionV1<'_>,
+            PublishedLoadAdmissionError,
+        >;
+    }
+
+    impl AcquireCurrentnessAfterParallelSpawn for crate::PendingPublishedDirectLinkLoadAdmissionV1 {
+        fn acquire_currentness_after_parallel_spawn(
+            &self,
+        ) -> Result<
+            crate::CurrentPendingPublishedDirectLinkLoadAdmissionV1<'_>,
+            PublishedLoadAdmissionError,
+        > {
+            retry_transient_busy(
+                || self.acquire_currentness(),
+                |error| {
+                    matches!(
+                        error,
+                        PublishedLoadAdmissionError::Inspection(
+                            PublishedPhysicalLayoutInspectionError::Busy
+                        )
+                    )
+                },
+            )
+        }
+    }
 
     fn wait_for_child(mut child: Child, timeout: Duration) -> ExitStatus {
         let deadline = Instant::now() + timeout;
@@ -1326,7 +1503,7 @@ pub(crate) mod tests {
         let publication_directory = TestPublicationDirectory::new();
         let current_lease = publish(&publication_directory, &bridge, selected.payload());
         let observed = make_observed_for(identity, architecture);
-        let admission = ValidatedPublishedDirectLinkSelectionV1::validate(
+        let admission = validate_for_test(
             &validated,
             &bridge,
             current_lease,
@@ -2332,7 +2509,7 @@ pub(crate) mod tests {
         let observed = make_observed(1);
         let durable_handoff = bridge.durable_plan_handoff();
 
-        let admitted = ValidatedPublishedDirectLinkSelectionV1::validate(
+        let admitted = validate_for_test(
             &validated,
             &bridge,
             current_lease,
@@ -2362,7 +2539,13 @@ pub(crate) mod tests {
         assert!(!admitted.grants_load_authority());
         assert!(!admitted.grants_launch_authority());
         assert_eq!(
-            admitted.revalidate(&validated, &bridge, &fixture.container, selected, &observed,),
+            admitted.revalidate_after_parallel_spawn(
+                &validated,
+                &bridge,
+                &fixture.container,
+                selected,
+                &observed,
+            ),
             Ok(())
         );
     }
@@ -2379,7 +2562,7 @@ pub(crate) mod tests {
         let publication_directory = TestPublicationDirectory::new();
         let current_lease = publish(&publication_directory, &bridge, selected.payload());
         let observed = make_observed(2);
-        let admitted = ValidatedPublishedDirectLinkSelectionV1::validate(
+        let admitted = validate_for_test(
             &validated,
             &bridge,
             current_lease,
@@ -2392,7 +2575,7 @@ pub(crate) mod tests {
         let other_fixture = make_fixture(3);
         let other_validated = other_fixture.validated();
         assert_eq!(
-            admitted.revalidate(
+            admitted.revalidate_after_parallel_spawn(
                 &other_validated,
                 &bridge,
                 &fixture.container,
@@ -2406,7 +2589,7 @@ pub(crate) mod tests {
         let other_directory = TestPublicationDirectory::new();
         let other_lease = publish(&other_directory, &other_bridge, selected.payload());
         assert_eq!(
-            ValidatedPublishedDirectLinkSelectionV1::validate(
+            validate_for_test(
                 &validated,
                 &bridge,
                 other_lease,
@@ -2418,7 +2601,7 @@ pub(crate) mod tests {
             PublishedDirectLinkAdmissionError::CurrentLeaseSubstitution
         );
         assert_eq!(
-            admitted.revalidate(
+            admitted.revalidate_after_parallel_spawn(
                 &validated,
                 &other_bridge,
                 &fixture.container,
@@ -2441,7 +2624,7 @@ pub(crate) mod tests {
         let publication_directory = TestPublicationDirectory::new();
         let current_lease = publish(&publication_directory, &bridge, selected.payload());
         let observed = make_observed(4);
-        let admitted = ValidatedPublishedDirectLinkSelectionV1::validate(
+        let admitted = validate_for_test(
             &validated,
             &bridge,
             current_lease,
@@ -2457,7 +2640,7 @@ pub(crate) mod tests {
             .select_native_kernel(substitute.primary_kernel)
             .unwrap();
         assert_eq!(
-            admitted.revalidate(
+            admitted.revalidate_after_parallel_spawn(
                 &validated,
                 &bridge,
                 &substitute.container,
@@ -2485,7 +2668,7 @@ pub(crate) mod tests {
             .unwrap();
 
         assert_eq!(
-            ValidatedPublishedDirectLinkSelectionV1::validate(
+            validate_for_test(
                 &validated,
                 &bridge,
                 current_lease,
@@ -2514,7 +2697,7 @@ pub(crate) mod tests {
         let publication_directory = TestPublicationDirectory::new();
         let current_lease = publish(&publication_directory, &bridge, selected.payload());
         let observed = make_observed(7);
-        let admitted = ValidatedPublishedDirectLinkSelectionV1::validate(
+        let admitted = validate_for_test(
             &validated,
             &bridge,
             current_lease,
@@ -2525,7 +2708,7 @@ pub(crate) mod tests {
         .unwrap();
 
         assert_eq!(
-            admitted.revalidate(
+            admitted.revalidate_after_parallel_spawn(
                 &validated,
                 &bridge,
                 &fixture.container,
@@ -2550,7 +2733,7 @@ pub(crate) mod tests {
         let publication_directory = TestPublicationDirectory::new();
         let current_lease = publish(&publication_directory, &bridge, selected.payload());
         let observed = make_observed(8);
-        let admitted = ValidatedPublishedDirectLinkSelectionV1::validate(
+        let admitted = validate_for_test(
             &validated,
             &bridge,
             current_lease,
@@ -2561,7 +2744,7 @@ pub(crate) mod tests {
         .unwrap();
 
         assert_eq!(
-            admitted.revalidate(
+            admitted.revalidate_after_parallel_spawn(
                 &validated,
                 &bridge,
                 &fixture.container,
@@ -2595,8 +2778,7 @@ pub(crate) mod tests {
             "primary_kernel"
         );
 
-        let inspected =
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admission.admission).unwrap();
+        let inspected = inspect_for_test(admission.admission).unwrap();
 
         assert_eq!(inspected.code_object_version(), CodeObjectVersion::V6);
         assert_eq!(inspected.target().to_string(), "gfx1151");
@@ -2635,7 +2817,7 @@ pub(crate) mod tests {
         assert!(!inspected.grants_load_authority());
         assert!(!inspected.grants_launch_authority());
         assert_eq!(
-            inspected.revalidate(
+            inspected.revalidate_after_parallel_spawn(
                 &admission.validated,
                 &admission.bridge,
                 &fixture.container,
@@ -2654,9 +2836,8 @@ pub(crate) mod tests {
         let expected_identity = prepared.admission.artifact_selection().identity().clone();
         let expected_container = prepared.admission.container_identity();
         let expected_payload = prepared.admission.finalized_payload_identity();
-        let inspected =
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(prepared.admission).unwrap();
-        let pending = inspected.into_pending_load_admission().unwrap();
+        let inspected = inspect_for_test(prepared.admission).unwrap();
+        let pending = into_pending_load_admission_for_test(inspected).unwrap();
 
         assert_eq!(pending.generation(), 52);
         assert_eq!(pending.published().attempt().generation(), 52);
@@ -2680,7 +2861,7 @@ pub(crate) mod tests {
         assert!(!pending.grants_load_authority());
         assert!(!pending.grants_launch_authority());
 
-        let current = pending.acquire_currentness().unwrap();
+        let current = pending.acquire_currentness_after_parallel_spawn().unwrap();
         assert_eq!(current.admission().artifact_identity(), &expected_identity);
         assert!(!current.grants_load_authority());
         assert!(!current.grants_launch_authority());
@@ -2699,7 +2880,7 @@ pub(crate) mod tests {
         let directory = TestPublicationDirectory::new();
         let first_bridge = make_bridge(&fixture, &validated, 0, 1, 53);
         let first_lease = publish(&directory, &first_bridge, selected.payload());
-        let admission = ValidatedPublishedDirectLinkSelectionV1::validate(
+        let admission = validate_for_test(
             &validated,
             &first_bridge,
             first_lease,
@@ -2708,16 +2889,20 @@ pub(crate) mod tests {
             &observed,
         )
         .unwrap();
-        let pending = InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admission)
-            .unwrap()
-            .into_pending_load_admission()
-            .unwrap();
+        let pending =
+            into_pending_load_admission_for_test(inspect_for_test(admission).unwrap()).unwrap();
 
         let second_bridge = make_bridge(&fixture, &validated, 0, 2, 53);
         let second_lease = publish(&directory, &second_bridge, selected.payload());
-        assert!(second_lease.acquire_current_token().is_ok());
+        assert!(
+            retry_transient_busy(
+                || second_lease.acquire_current_token(),
+                |error| matches!(error, DurableLinkPublicationError::Busy),
+            )
+            .is_ok()
+        );
         assert!(matches!(
-            pending.acquire_currentness(),
+            pending.acquire_currentness_after_parallel_spawn(),
             Err(PublishedLoadAdmissionError::Inspection(
                 PublishedPhysicalLayoutInspectionError::CurrentPublication { .. }
             ))
@@ -2737,10 +2922,9 @@ pub(crate) mod tests {
         );
         let prepared = prepare_hsaco_admission(&fixture, 54, "gfx1151");
         let directory = prepared._publication_directory.path.clone();
-        let pending = InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(prepared.admission)
-            .unwrap()
-            .into_pending_load_admission()
-            .unwrap();
+        let pending =
+            into_pending_load_admission_for_test(inspect_for_test(prepared.admission).unwrap())
+                .unwrap();
 
         let mut substitute = hsaco.bytes;
         substitute[0] ^= 0xff;
@@ -2758,7 +2942,7 @@ pub(crate) mod tests {
         fs::write(artifact, substitute).unwrap();
 
         assert!(matches!(
-            pending.acquire_currentness(),
+            pending.acquire_currentness_after_parallel_spawn(),
             Err(PublishedLoadAdmissionError::Inspection(
                 PublishedPhysicalLayoutInspectionError::CurrentPublication { .. }
             ))
@@ -2778,8 +2962,7 @@ pub(crate) mod tests {
         );
         let target_admission = prepare_hsaco_admission(&target_fixture, 55, "gfx1151");
         assert_eq!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(target_admission.admission)
-                .unwrap_err(),
+            inspect_for_test(target_admission.admission).unwrap_err(),
             PublishedPhysicalLayoutInspectionError::TargetMismatch
         );
 
@@ -2789,8 +2972,7 @@ pub(crate) mod tests {
             make_hsaco_fixture(56, cov_hsaco.bytes, "gfx1151", "primary_kernel", false, 0);
         let cov_admission = prepare_hsaco_admission(&cov_fixture, 56, "gfx1151");
         assert_eq!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(cov_admission.admission)
-                .unwrap_err(),
+            inspect_for_test(cov_admission.admission).unwrap_err(),
             PublishedPhysicalLayoutInspectionError::Inspection(KernelBindingError::Inspection(
                 InspectionError::UnsupportedCodeObjectVersion,
             ))
@@ -2807,8 +2989,7 @@ pub(crate) mod tests {
         );
         let symbol_admission = prepare_hsaco_admission(&symbol_fixture, 57, "gfx1151");
         assert_eq!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(symbol_admission.admission)
-                .unwrap_err(),
+            inspect_for_test(symbol_admission.admission).unwrap_err(),
             PublishedPhysicalLayoutInspectionError::KernelSetMismatch
         );
 
@@ -2825,8 +3006,7 @@ pub(crate) mod tests {
         );
         let abi_admission = prepare_hsaco_admission(&abi_fixture, 58, "gfx1151");
         assert_eq!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(abi_admission.admission)
-                .unwrap_err(),
+            inspect_for_test(abi_admission.admission).unwrap_err(),
             PublishedPhysicalLayoutInspectionError::PhysicalLayoutMismatch {
                 export_symbol: "primary_kernel".to_owned(),
                 field: "explicit kernarg size",
@@ -2853,8 +3033,7 @@ pub(crate) mod tests {
 
         let fixture = fixture_from_generated_container(40, container);
         let admission = prepare_hsaco_admission(&fixture, 40, "gfx1151");
-        let inspected =
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admission.admission).unwrap();
+        let inspected = inspect_for_test(admission.admission).unwrap();
 
         assert_eq!(inspected.code_object_version(), CodeObjectVersion::V6);
         assert_eq!(inspected.target().to_string(), "gfx1151");
@@ -2909,7 +3088,7 @@ pub(crate) mod tests {
         let directory = TestPublicationDirectory::new();
         let first_bridge = make_bridge(&fixture, &validated, 0, 1, 50);
         let first_lease = publish(&directory, &first_bridge, selected.payload());
-        let admission = ValidatedPublishedDirectLinkSelectionV1::validate(
+        let admission = validate_for_test(
             &validated,
             &first_bridge,
             first_lease,
@@ -2918,13 +3097,22 @@ pub(crate) mod tests {
             &observed,
         )
         .unwrap();
-        let inspected = InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admission).unwrap();
+        let inspected = inspect_for_test(admission).unwrap();
 
         let second_bridge = make_bridge(&fixture, &validated, 0, 2, 50);
         let second_lease = publish(&directory, &second_bridge, selected.payload());
-        assert!(second_lease.acquire_current_token().is_ok());
+        assert!(
+            retry_transient_busy(
+                || second_lease.acquire_current_token(),
+                |error| matches!(error, DurableLinkPublicationError::Busy),
+            )
+            .is_ok()
+        );
         assert!(matches!(
-            inspected.acquire_current_publication_token(),
+            retry_transient_busy(
+                || inspected.acquire_current_publication_token(),
+                |error| matches!(error, PublishedPhysicalLayoutInspectionError::Busy),
+            ),
             Err(PublishedPhysicalLayoutInspectionError::CurrentPublication { .. })
         ));
         assert_eq!(
@@ -2942,7 +3130,11 @@ pub(crate) mod tests {
         let hsaco = test_hsaco("gfx1151", 0);
         let fixture = make_hsaco_fixture(51, hsaco.bytes, "gfx1151", "primary_kernel", false, 0);
         let prepared = prepare_hsaco_admission(&fixture, 51, "gfx1151");
-        let current = prepared.admission.acquire_current_token().unwrap();
+        let current = retry_transient_busy(
+            || prepared.admission.acquire_current_token(),
+            |error| matches!(error, DurableLinkPublicationError::Busy),
+        )
+        .unwrap();
         assert_eq!(
             prepared.admission.revalidate(
                 &prepared.validated,
@@ -2993,7 +3185,13 @@ pub(crate) mod tests {
         );
         drop(current);
         assert_eq!(
-            inspected.revalidate(&validated, &bridge, &fixture.container, selected, &observed,),
+            inspected.revalidate_after_parallel_spawn(
+                &validated,
+                &bridge,
+                &fixture.container,
+                selected,
+                &observed,
+            ),
             Ok(())
         );
     }
@@ -3204,7 +3402,7 @@ pub(crate) mod tests {
         fs::write(artifact, substitute).unwrap();
 
         assert!(matches!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted.admission),
+            inspect_for_test(admitted.admission),
             Err(PublishedPhysicalLayoutInspectionError::CurrentPublication { .. })
         ));
     }
@@ -3224,7 +3422,7 @@ pub(crate) mod tests {
         let admitted = prepare_hsaco_admission(&fixture, 22, "gfx1151");
 
         assert!(matches!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted.admission),
+            inspect_for_test(admitted.admission),
             Err(PublishedPhysicalLayoutInspectionError::Inspection(
                 KernelBindingError::Inspection(InspectionError::InvalidElf("invalid ELF magic"))
             ))
@@ -3246,7 +3444,7 @@ pub(crate) mod tests {
         let admitted = prepare_hsaco_admission(&fixture, 23, "gfx1151");
 
         assert_eq!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted.admission).unwrap_err(),
+            inspect_for_test(admitted.admission).unwrap_err(),
             PublishedPhysicalLayoutInspectionError::Inspection(KernelBindingError::Inspection(
                 InspectionError::UnsupportedCodeObjectVersion,
             ))
@@ -3267,7 +3465,7 @@ pub(crate) mod tests {
         let admitted = prepare_hsaco_admission(&fixture, 24, "gfx1151");
 
         assert_eq!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted.admission).unwrap_err(),
+            inspect_for_test(admitted.admission).unwrap_err(),
             PublishedPhysicalLayoutInspectionError::TargetMismatch
         );
     }
@@ -3286,7 +3484,7 @@ pub(crate) mod tests {
         let admitted = prepare_hsaco_admission(&fixture, 25, "gfx1151");
 
         assert_eq!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted.admission).unwrap_err(),
+            inspect_for_test(admitted.admission).unwrap_err(),
             PublishedPhysicalLayoutInspectionError::KernelSetMismatch
         );
     }
@@ -3305,7 +3503,7 @@ pub(crate) mod tests {
         let admitted = prepare_hsaco_admission(&fixture, 26, "gfx1151");
 
         assert_eq!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted.admission).unwrap_err(),
+            inspect_for_test(admitted.admission).unwrap_err(),
             PublishedPhysicalLayoutInspectionError::KernelSetMismatch
         );
     }
@@ -3324,7 +3522,7 @@ pub(crate) mod tests {
         let admitted = prepare_hsaco_admission(&fixture, 27, "gfx1151");
 
         assert_eq!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted.admission).unwrap_err(),
+            inspect_for_test(admitted.admission).unwrap_err(),
             PublishedPhysicalLayoutInspectionError::PhysicalLayoutMismatch {
                 export_symbol: "primary_kernel".to_owned(),
                 field: "static group segment size",
@@ -3347,7 +3545,7 @@ pub(crate) mod tests {
         let admitted = prepare_hsaco_admission(&fixture, 28, "gfx1151");
 
         assert_eq!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted.admission).unwrap_err(),
+            inspect_for_test(admitted.admission).unwrap_err(),
             PublishedPhysicalLayoutInspectionError::Inspection(
                 KernelBindingError::InvalidKernelDescriptor(
                     "reserved descriptor bytes are nonzero"
@@ -3385,7 +3583,7 @@ pub(crate) mod tests {
         let admitted = prepare_hsaco_admission(&fixture, 44, "gfx1151");
 
         assert_eq!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admitted.admission).unwrap_err(),
+            inspect_for_test(admitted.admission).unwrap_err(),
             PublishedPhysicalLayoutInspectionError::Inspection(
                 KernelBindingError::MissingDescriptorSymbol,
             )
@@ -3412,12 +3610,8 @@ pub(crate) mod tests {
         );
         let first_admission = prepare_hsaco_admission(&first_fixture, 36, "gfx1151");
         let second_admission = prepare_hsaco_admission(&second_fixture, 37, "gfx1151");
-        let first =
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(first_admission.admission)
-                .unwrap();
-        let second =
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(second_admission.admission)
-                .unwrap();
+        let first = inspect_for_test(first_admission.admission).unwrap();
+        let second = inspect_for_test(second_admission.admission).unwrap();
 
         let arguments = first.selected_kernel().arguments();
         assert_eq!(arguments, second.selected_kernel().arguments());
@@ -3530,8 +3724,7 @@ pub(crate) mod tests {
             admission.admission.payload_kernel_set()[0].launch().rank(),
             3
         );
-        let inspected =
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admission.admission).unwrap();
+        let inspected = inspect_for_test(admission.admission).unwrap();
         assert_eq!(
             inspected.selected_kernel().launch().rank(),
             PhysicalMetadataValueV1::Unknown
@@ -3584,8 +3777,7 @@ pub(crate) mod tests {
             0,
         );
         let admission = prepare_hsaco_admission(&fixture, 49, "gfx1151");
-        let inspected =
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admission.admission).unwrap();
+        let inspected = inspect_for_test(admission.admission).unwrap();
         let launch = inspected.selected_kernel().launch();
 
         assert_eq!(
@@ -3640,8 +3832,7 @@ pub(crate) mod tests {
             );
             let admission = prepare_hsaco_admission(&fixture, 38, "gfx1151");
             assert_eq!(
-                InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admission.admission)
-                    .unwrap_err(),
+                inspect_for_test(admission.admission).unwrap_err(),
                 PublishedPhysicalLayoutInspectionError::PhysicalLayoutMismatch {
                     export_symbol: "primary_kernel".to_owned(),
                     field,
@@ -3658,8 +3849,7 @@ pub(crate) mod tests {
             physical_test_launch(1024),
         );
         let admission = prepare_hsaco_admission(&fixture, 39, "gfx1151");
-        let inspected =
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admission.admission).unwrap();
+        let inspected = inspect_for_test(admission.admission).unwrap();
         assert_eq!(
             inspected
                 .selected_kernel()
@@ -3684,8 +3874,7 @@ pub(crate) mod tests {
         );
         let padded_admission = prepare_hsaco_admission(&padded_fixture, 45, "gfx1151");
         assert_eq!(
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(padded_admission.admission)
-                .unwrap_err(),
+            inspect_for_test(padded_admission.admission).unwrap_err(),
             PublishedPhysicalLayoutInspectionError::PhysicalLayoutMismatch {
                 export_symbol: "primary_kernel".to_owned(),
                 field: "explicit kernarg size",
@@ -3705,10 +3894,7 @@ pub(crate) mod tests {
             let alignment_admission =
                 prepare_hsaco_admission(&alignment_fixture, usize::from(seed), "gfx1151");
             assert_eq!(
-                InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(
-                    alignment_admission.admission,
-                )
-                .unwrap_err(),
+                inspect_for_test(alignment_admission.admission,).unwrap_err(),
                 PublishedPhysicalLayoutInspectionError::PhysicalLayoutMismatch {
                     export_symbol: "primary_kernel".to_owned(),
                     field: "kernarg segment alignment",
@@ -3738,11 +3924,10 @@ pub(crate) mod tests {
         );
         let first = prepare_hsaco_admission(&first_fixture, 29, "gfx1151");
         let second = prepare_hsaco_admission(&second_fixture, 30, "gfx1151");
-        let inspected =
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(first.admission).unwrap();
+        let inspected = inspect_for_test(first.admission).unwrap();
 
         assert_eq!(
-            inspected.revalidate(
+            inspected.revalidate_after_parallel_spawn(
                 &second.validated,
                 &second.bridge,
                 &second_fixture.container,
@@ -3770,11 +3955,10 @@ pub(crate) mod tests {
         );
         let first = prepare_hsaco_admission(&fixture, 31, "gfx1151");
         let second = prepare_hsaco_admission(&fixture, 32, "gfx1151");
-        let inspected =
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(first.admission).unwrap();
+        let inspected = inspect_for_test(first.admission).unwrap();
 
         assert_eq!(
-            inspected.revalidate(
+            inspected.revalidate_after_parallel_spawn(
                 &second.validated,
                 &second.bridge,
                 &fixture.container,
@@ -3807,8 +3991,7 @@ pub(crate) mod tests {
             .observed
             .clone()
             .with_changed_test_hip_capabilities();
-        let inspected =
-            InspectedPublishedDirectLinkPhysicalLayoutV1::inspect(admission.admission).unwrap();
+        let inspected = inspect_for_test(admission.admission).unwrap();
 
         for (observed, expected) in [
             (wrong_context, ArtifactRevalidationError::WrongContext),
@@ -3822,7 +4005,7 @@ pub(crate) mod tests {
             ),
         ] {
             assert_eq!(
-                inspected.revalidate(
+                inspected.revalidate_after_parallel_spawn(
                     &admission.validated,
                     &admission.bridge,
                     &fixture.container,

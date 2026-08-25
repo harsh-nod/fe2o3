@@ -5,10 +5,13 @@
 //! mutation can race it. A malicious application in the same process can bypass these cooperative
 //! assumptions and must instead be isolated from authority by a separate broker.
 
+#[cfg(test)]
+use crate::recovered_worker_v2_admission::recover_worker_v2_load_envelope_for_test;
+#[cfg(all(not(test), feature = "qualification-oracles-test-only"))]
+use crate::recovered_worker_v2_admission::recover_worker_v2_load_envelope_v1;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use crate::recovered_worker_v2_admission::{
     RecoveredWorkerV2AdmissionError, RecoveredWorkerV2PinnedDescriptorV1,
-    recover_worker_v2_load_envelope_v1,
 };
 use crate::{
     KernelId, ObservedContext, RecoveredWorkerV3AdmissionErrorV1,
@@ -505,6 +508,16 @@ pub(crate) fn consume_worker_v2_application_handoff_descriptors_v1(
     };
     retained.revalidate()?;
     let output = descriptor_directory_path(&retained.directory);
+    #[cfg(test)]
+    let recovered = recover_worker_v2_load_envelope_for_test(
+        &output,
+        &retained.exact_envelope_bytes,
+        compiler_transaction,
+        kernel_id,
+        observed,
+    )
+    .map_err(WorkerV2ApplicationDescriptorHandoffErrorV1::Recovery)?;
+    #[cfg(not(test))]
     let recovered = recover_worker_v2_load_envelope_v1(
         &output,
         &retained.exact_envelope_bytes,
@@ -515,8 +528,11 @@ pub(crate) fn consume_worker_v2_application_handoff_descriptors_v1(
     .map_err(WorkerV2ApplicationDescriptorHandoffErrorV1::Recovery)?;
     seal_descriptor_occurrences(&descriptor_identities)?;
     retained.revalidate()?;
-    recovered
-        .revalidate_currentness()
+    #[cfg(test)]
+    let recovered_currentness = recovered.revalidate_currentness_for_test();
+    #[cfg(not(test))]
+    let recovered_currentness = recovered.revalidate_currentness();
+    recovered_currentness
         .map_err(WorkerV2ApplicationDescriptorHandoffErrorV1::RecoveryCurrentness)?;
     emit_acknowledgment(&acknowledgment, expectation.acknowledgment(challenge))?;
     Ok(recovered.retain_application_descriptors(retained))

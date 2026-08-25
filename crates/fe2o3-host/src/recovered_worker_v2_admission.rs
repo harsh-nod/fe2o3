@@ -80,6 +80,7 @@ impl fmt::Debug for RecoveredWorkerV2PinnedDescriptorV1 {
 impl RecoveredWorkerV2PinnedDescriptorV1 {
     /// Decodes and admits one exact envelope against its durable output directory.
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg_attr(test, allow(dead_code))]
     pub(crate) fn recover(
         output_dir: &Path,
         envelope_bytes: &[u8],
@@ -97,6 +98,48 @@ impl RecoveredWorkerV2PinnedDescriptorV1 {
                 .map_err(RecoveredWorkerV2AdmissionError::Publication)?;
         validate_raw_final_lineage(&envelope, &current_lease)?;
         let admission = AdmittedFinalizedWorkerV2BundleV1::admit_recovered(
+            envelope,
+            compiler_transaction,
+            current_lease,
+            kernel_id,
+            observed,
+        )
+        .map_err(RecoveredWorkerV2AdmissionError::Admission)?;
+        validate_descriptor_against_physical(
+            &descriptor,
+            descriptor_code_object_version,
+            &admission,
+        )?;
+
+        Ok(Self {
+            admission,
+            descriptor,
+            observed: observed.clone(),
+            #[cfg(target_os = "linux")]
+            application_descriptors: None,
+        })
+    }
+
+    #[cfg(test)]
+    fn recover_for_test(
+        output_dir: &Path,
+        envelope_bytes: &[u8],
+        compiler_transaction: CompilerTransactionEvidenceCapsuleV2,
+        kernel_id: KernelId,
+        observed: &ObservedContext,
+    ) -> Result<Self, RecoveredWorkerV2AdmissionError> {
+        let envelope = WorkerV2LoadEnvelopeV1::from_bytes(envelope_bytes)
+            .map_err(RecoveredWorkerV2AdmissionError::Decode)?;
+        let descriptor_code_object_version =
+            envelope.descriptor_lineage().table().code_object_version();
+        let descriptor = select_descriptor(&envelope, kernel_id)?;
+        let current_lease = crate::test_currentness_retry::retry_transient_busy(
+            || reacquire_current_hsaco_publication_lease_v1(output_dir, envelope.published_claim()),
+            |error| matches!(error, DurablePublishedClaimReacquisitionErrorV1::Busy),
+        )
+        .map_err(RecoveredWorkerV2AdmissionError::Publication)?;
+        validate_raw_final_lineage(&envelope, &current_lease)?;
+        let admission = AdmittedFinalizedWorkerV2BundleV1::admit_recovered_for_test(
             envelope,
             compiler_transaction,
             current_lease,
@@ -178,11 +221,32 @@ impl RecoveredWorkerV2PinnedDescriptorV1 {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub(crate) fn revalidate_currentness_for_test(
+        &self,
+    ) -> Result<(), FinalizedWorkerV2BundleAdmissionError> {
+        crate::test_currentness_retry::retry_transient_busy(
+            || self.revalidate_currentness(),
+            |error| matches!(error, FinalizedWorkerV2BundleAdmissionError::Busy),
+        )
+    }
+
     pub(crate) fn acquire_launch_kernel_v2_currentness(
         &self,
     ) -> Result<CurrentFinalizedWorkerV2BundleAdmissionV1<'_>, FinalizedWorkerV2BundleAdmissionError>
     {
         self.admission.acquire_currentness()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn acquire_launch_kernel_v2_currentness_for_test(
+        &self,
+    ) -> Result<CurrentFinalizedWorkerV2BundleAdmissionV1<'_>, FinalizedWorkerV2BundleAdmissionError>
+    {
+        crate::test_currentness_retry::retry_transient_busy(
+            || self.acquire_launch_kernel_v2_currentness(),
+            |error| matches!(error, FinalizedWorkerV2BundleAdmissionError::Busy),
+        )
     }
 
     pub const fn authenticates_prerequisites(&self) -> bool {
@@ -235,6 +299,58 @@ impl RecoveredWorkerV2PinnedDescriptorV1 {
                 .map_err(RecoveredWorkerV2SynchronousHsaHandoffError::Authentication)?;
         let currentness = authenticated
             .acquire_retained_currentness_token()
+            .map_err(RecoveredWorkerV2SynchronousHsaHandoffError::CurrentPublication)?;
+        let authorized = authenticated
+            .authorize_hsa_load(adapter)
+            .map_err(RecoveredWorkerV2SynchronousHsaHandoffError::Authorization)?;
+        let loaded = authorized
+            .load_with_retained_currentness(&currentness)
+            .map_err(RecoveredWorkerV2SynchronousHsaHandoffError::Load)?;
+        Ok(RecoveredWorkerV2SynchronousHsaHandoffV1 {
+            loaded,
+            currentness,
+            observed: self.observed,
+            #[cfg(target_os = "linux")]
+            application_descriptors: self.application_descriptors,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn load_generated_synchronous_hsa_handoff_for_test_v1<K, Authenticator, Adapter>(
+        self,
+        authenticator: &mut Authenticator,
+        adapter: Adapter,
+    ) -> Result<
+        RecoveredWorkerV2SynchronousHsaHandoffV1<K, Adapter>,
+        RecoveredWorkerV2SynchronousHsaHandoffError<Authenticator::Error, Adapter::Error>,
+    >
+    where
+        K: CompilerGeneratedKernelExpectationV1,
+        Authenticator: WorkerV2PrerequisiteAuthenticatorV1<K>,
+        Adapter: ReviewedHsaImplicitKernargAdapterV1,
+    {
+        #[cfg(target_os = "linux")]
+        if let Some(descriptors) = &self.application_descriptors {
+            descriptors
+                .revalidate()
+                .map_err(RecoveredWorkerV2SynchronousHsaHandoffError::ApplicationDescriptors)?;
+        }
+        let initial_currentness = crate::test_currentness_retry::retry_transient_busy(
+            || self.admission.acquire_retained_currentness_token(),
+            |error| matches!(error, FinalizedWorkerV2BundleAdmissionError::Busy),
+        )
+        .map_err(RecoveredWorkerV2SynchronousHsaHandoffError::CurrentPublication)?;
+        drop(initial_currentness);
+        self.admission
+            .select_typed_kernel::<K>()
+            .map_err(RecoveredWorkerV2SynchronousHsaHandoffError::Selection)?;
+        let authenticated = AuthenticatedWorkerV2ExecutableV1::<K>::authenticate_for_test(
+            self.admission,
+            authenticator,
+        )
+        .map_err(RecoveredWorkerV2SynchronousHsaHandoffError::Authentication)?;
+        let currentness = authenticated
+            .acquire_retained_currentness_token_for_test()
             .map_err(RecoveredWorkerV2SynchronousHsaHandoffError::CurrentPublication)?;
         let authorized = authenticated
             .authorize_hsa_load(adapter)
@@ -732,6 +848,7 @@ fn validate_raw_final_lineage(
 
 /// Recovers one read-only descriptor without exposing the envelope's HSACO bytes.
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn recover_worker_v2_load_envelope_v1(
     output_dir: &Path,
     envelope_bytes: &[u8],
@@ -740,6 +857,23 @@ pub(crate) fn recover_worker_v2_load_envelope_v1(
     observed: &ObservedContext,
 ) -> Result<RecoveredWorkerV2PinnedDescriptorV1, RecoveredWorkerV2AdmissionError> {
     RecoveredWorkerV2PinnedDescriptorV1::recover(
+        output_dir,
+        envelope_bytes,
+        compiler_transaction,
+        kernel_id,
+        observed,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn recover_worker_v2_load_envelope_for_test(
+    output_dir: &Path,
+    envelope_bytes: &[u8],
+    compiler_transaction: CompilerTransactionEvidenceCapsuleV2,
+    kernel_id: KernelId,
+    observed: &ObservedContext,
+) -> Result<RecoveredWorkerV2PinnedDescriptorV1, RecoveredWorkerV2AdmissionError> {
+    RecoveredWorkerV2PinnedDescriptorV1::recover_for_test(
         output_dir,
         envelope_bytes,
         compiler_transaction,
@@ -2291,12 +2425,14 @@ mod tests {
         let (mut authenticator, authentication_calls) = ExactPrerequisiteAuthenticator::new();
         let (adapter, unloads, dispatches) = ExactHsaAdapter::for_scalar_gemm();
         let authenticated =
-            AuthenticatedWorkerV2ExecutableV1::<ScalarGemmTestKernel>::authenticate(
+            AuthenticatedWorkerV2ExecutableV1::<ScalarGemmTestKernel>::authenticate_for_test(
                 admission,
                 &mut authenticator,
             )
             .unwrap();
-        let currentness = authenticated.acquire_retained_currentness_token().unwrap();
+        let currentness = authenticated
+            .acquire_retained_currentness_token_for_test()
+            .unwrap();
         let authorized = authenticated.authorize_hsa_load(adapter).unwrap();
         let loaded = authorized
             .load_with_retained_currentness(&currentness)
@@ -2949,7 +3085,7 @@ mod tests {
                 .unwrap()
                 .validate(expectation, challenge)
                 .unwrap();
-            recovered.revalidate_currentness().unwrap();
+            recovered.revalidate_currentness_for_test().unwrap();
             drop(recovered);
         } else if mode == "failure" {
             assert!(matches!(
@@ -3037,11 +3173,11 @@ mod tests {
 
         let renamed = fixture._directory.0.join("renamed-output");
         fs::rename(&fixture.output, &renamed).unwrap();
-        recovered.revalidate_currentness().unwrap();
+        recovered.revalidate_currentness_for_test().unwrap();
         let (mut authenticator, authentication_calls) = ExactPrerequisiteAuthenticator::new();
         let (adapter, unloads) = ExactHsaAdapter::new();
         let authority = recovered
-            .load_generated_synchronous_hsa_handoff_v1::<
+            .load_generated_synchronous_hsa_handoff_for_test_v1::<
                 HandoffKernel,
                 ExactPrerequisiteAuthenticator,
                 ExactHsaAdapter,
@@ -3253,7 +3389,7 @@ mod tests {
         let (mut authenticator, authentication_calls) = ExactPrerequisiteAuthenticator::new();
         let (adapter, unloads) = ExactHsaAdapter::new();
         let error = recovered
-            .load_generated_synchronous_hsa_handoff_v1::<
+            .load_generated_synchronous_hsa_handoff_for_test_v1::<
                 HandoffKernel,
                 ExactPrerequisiteAuthenticator,
                 ExactHsaAdapter,
@@ -3313,12 +3449,15 @@ mod tests {
             make_observed_for(usize::from(seed.wrapping_add(2)), "gfx942:sramecc+:xnack-");
         let (mut authenticator, _) = ExactPrerequisiteAuthenticator::new();
         let (adapter, unloads) = ExactHsaAdapter::new();
-        let authenticated = AuthenticatedWorkerV2ExecutableV1::<AlphaCov6TestKernel>::authenticate(
-            admission,
-            &mut authenticator,
-        )
-        .unwrap();
-        let currentness = authenticated.acquire_retained_currentness_token().unwrap();
+        let authenticated =
+            AuthenticatedWorkerV2ExecutableV1::<AlphaCov6TestKernel>::authenticate_for_test(
+                admission,
+                &mut authenticator,
+            )
+            .unwrap();
+        let currentness = authenticated
+            .acquire_retained_currentness_token_for_test()
+            .unwrap();
         let authorized = authenticated.authorize_hsa_load(adapter).unwrap();
         let loaded = authorized
             .load_with_retained_currentness(&currentness)
@@ -3420,7 +3559,7 @@ mod tests {
     #[test]
     fn canonical_envelope_recovers_one_inert_pinned_descriptor() {
         let fixture = recovery_fixture(1, "gfx942", "vecadd");
-        let recovered = recover_worker_v2_load_envelope_v1(
+        let recovered = recover_worker_v2_load_envelope_for_test(
             &fixture.output,
             &fixture.envelope,
             fixture.compiler_transaction.clone(),
@@ -3440,7 +3579,7 @@ mod tests {
         assert!(!recovered.authenticates_prerequisites());
         assert!(!recovered.grants_load_authority());
         assert!(!recovered.grants_launch_authority());
-        recovered.revalidate_currentness().unwrap();
+        recovered.revalidate_currentness_for_test().unwrap();
     }
 
     #[test]
@@ -3451,7 +3590,7 @@ mod tests {
             &fixture.envelope[..fixture.envelope.len() - 1],
         ] {
             assert!(matches!(
-                recover_worker_v2_load_envelope_v1(
+                recover_worker_v2_load_envelope_for_test(
                     &fixture.output,
                     bytes,
                     fixture.compiler_transaction.clone(),
@@ -3464,7 +3603,7 @@ mod tests {
         let mut trailing = fixture.envelope.clone();
         trailing.push(0);
         assert!(matches!(
-            recover_worker_v2_load_envelope_v1(
+            recover_worker_v2_load_envelope_for_test(
                 &fixture.output,
                 &trailing,
                 fixture.compiler_transaction.clone(),
@@ -3479,7 +3618,7 @@ mod tests {
         let last = substituted.len() - 1;
         substituted[last] ^= 1;
         assert!(matches!(
-            recover_worker_v2_load_envelope_v1(
+            recover_worker_v2_load_envelope_for_test(
                 &fixture.output,
                 &substituted,
                 fixture.compiler_transaction.clone(),
@@ -3490,7 +3629,7 @@ mod tests {
         ));
         let oversized = vec![0; fe2o3_worker_v2_bundle::MAX_WORKER_V2_LOAD_ENVELOPE_BYTES + 1];
         assert!(matches!(
-            recover_worker_v2_load_envelope_v1(
+            recover_worker_v2_load_envelope_for_test(
                 &fixture.output,
                 &oversized,
                 fixture.compiler_transaction.clone(),
@@ -3508,30 +3647,34 @@ mod tests {
         let stale = recovery_fixture(3, "gfx942", "vecadd");
         fail_build_attempt(&stale.output, &stale.owner, stale.attempt).unwrap();
         assert!(matches!(
-            recover_worker_v2_load_envelope_v1(
+            recover_worker_v2_load_envelope_for_test(
                 &stale.output,
                 &stale.envelope,
                 stale.compiler_transaction.clone(),
                 stale.kernel_id,
                 &stale.observed,
             ),
-            Err(RecoveredWorkerV2AdmissionError::Publication(_))
+            Err(RecoveredWorkerV2AdmissionError::Publication(
+                DurablePublishedClaimReacquisitionErrorV1::AttemptState
+            ))
         ));
 
         let first = recovery_fixture(4, "gfx942", "vecadd");
         let second = recovery_fixture(5, "gfx942", "vecadd");
         assert!(matches!(
-            recover_worker_v2_load_envelope_v1(
+            recover_worker_v2_load_envelope_for_test(
                 &second.output,
                 &first.envelope,
                 first.compiler_transaction.clone(),
                 first.kernel_id,
                 &first.observed,
             ),
-            Err(RecoveredWorkerV2AdmissionError::Publication(_))
+            Err(RecoveredWorkerV2AdmissionError::Publication(
+                DurablePublishedClaimReacquisitionErrorV1::AttemptNotFound
+            ))
         ));
         assert!(matches!(
-            recover_worker_v2_load_envelope_v1(
+            recover_worker_v2_load_envelope_for_test(
                 &first.output,
                 &first.envelope,
                 first.compiler_transaction.clone(),
@@ -3548,7 +3691,7 @@ mod tests {
         let second = recovery_fixture(10, "gfx942", "vecadd");
 
         assert!(matches!(
-            recover_worker_v2_load_envelope_v1(
+            recover_worker_v2_load_envelope_for_test(
                 &first.output,
                 &first.envelope,
                 second.compiler_transaction.clone(),
@@ -3565,7 +3708,7 @@ mod tests {
     fn raw_final_and_physical_kernel_substitution_are_rejected() {
         let raw_substitution = recovery_fixture(6, "gfx950", "vecadd");
         assert!(matches!(
-            recover_worker_v2_load_envelope_v1(
+            recover_worker_v2_load_envelope_for_test(
                 &raw_substitution.output,
                 &raw_substitution.envelope,
                 raw_substitution.compiler_transaction.clone(),
@@ -3577,7 +3720,7 @@ mod tests {
 
         let physical_substitution = recovery_fixture(7, "gfx942", "substituted_kernel");
         assert!(matches!(
-            recover_worker_v2_load_envelope_v1(
+            recover_worker_v2_load_envelope_for_test(
                 &physical_substitution.output,
                 &physical_substitution.envelope,
                 physical_substitution.compiler_transaction.clone(),
@@ -3592,7 +3735,7 @@ mod tests {
     fn recovered_envelope_handoff_authenticates_loads_and_unloads_exact_bytes() {
         assert_handoff_contract_identity();
         let fixture = recovery_fixture(20, "gfx942", "vecadd");
-        let recovered = recover_worker_v2_load_envelope_v1(
+        let recovered = recover_worker_v2_load_envelope_for_test(
             &fixture.output,
             &fixture.envelope,
             fixture.compiler_transaction.clone(),
@@ -3605,7 +3748,7 @@ mod tests {
         let (adapter, unloads) = ExactHsaAdapter::new();
 
         let authority = recovered
-            .load_generated_synchronous_hsa_handoff_v1::<
+            .load_generated_synchronous_hsa_handoff_for_test_v1::<
                 HandoffKernel,
                 ExactPrerequisiteAuthenticator,
                 ExactHsaAdapter,
@@ -3638,12 +3781,15 @@ mod tests {
         let (mut authenticator, _) = ExactPrerequisiteAuthenticator::new();
         let turnover_completed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (adapter, unloads) = ExactHsaAdapter::with_turnover_probe(turnover_completed.clone());
-        let authenticated = AuthenticatedWorkerV2ExecutableV1::<AlphaCov6TestKernel>::authenticate(
-            admission,
-            &mut authenticator,
-        )
-        .unwrap();
-        let currentness = authenticated.acquire_retained_currentness_token().unwrap();
+        let authenticated =
+            AuthenticatedWorkerV2ExecutableV1::<AlphaCov6TestKernel>::authenticate_for_test(
+                admission,
+                &mut authenticator,
+            )
+            .unwrap();
+        let currentness = authenticated
+            .acquire_retained_currentness_token_for_test()
+            .unwrap();
         let authorized = authenticated.authorize_hsa_load(adapter).unwrap();
         let loaded = authorized
             .load_with_retained_currentness(&currentness)
@@ -3703,7 +3849,7 @@ mod tests {
     #[test]
     fn wrong_marker_is_rejected_before_the_unsafe_authenticator() {
         let fixture = recovery_fixture(21, "gfx942", "vecadd");
-        let recovered = recover_worker_v2_load_envelope_v1(
+        let recovered = recover_worker_v2_load_envelope_for_test(
             &fixture.output,
             &fixture.envelope,
             fixture.compiler_transaction.clone(),
@@ -3715,7 +3861,7 @@ mod tests {
         let (adapter, unloads) = ExactHsaAdapter::new();
 
         let error = recovered
-            .load_generated_synchronous_hsa_handoff_v1::<
+            .load_generated_synchronous_hsa_handoff_for_test_v1::<
                 WrongMarker,
                 ExactPrerequisiteAuthenticator,
                 ExactHsaAdapter,
@@ -3739,7 +3885,7 @@ mod tests {
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
         let fixture = recovery_fixture(22, "gfx942", "vecadd");
-        let recovered = recover_worker_v2_load_envelope_v1(
+        let recovered = recover_worker_v2_load_envelope_for_test(
             &fixture.output,
             &fixture.envelope,
             fixture.compiler_transaction.clone(),
@@ -3762,7 +3908,7 @@ mod tests {
         let (mut authenticator, authentication_calls) = ExactPrerequisiteAuthenticator::new();
         let (adapter, unloads) = ExactHsaAdapter::new();
         let error = recovered
-            .load_generated_synchronous_hsa_handoff_v1::<
+            .load_generated_synchronous_hsa_handoff_for_test_v1::<
                 HandoffKernel,
                 ExactPrerequisiteAuthenticator,
                 ExactHsaAdapter,
@@ -3771,7 +3917,9 @@ mod tests {
 
         assert!(matches!(
             error,
-            RecoveredWorkerV2SynchronousHsaHandoffError::CurrentPublication(_)
+            RecoveredWorkerV2SynchronousHsaHandoffError::CurrentPublication(
+                FinalizedWorkerV2BundleAdmissionError::CurrentPublication { .. }
+            )
         ));
         assert_eq!(
             authentication_calls.load(std::sync::atomic::Ordering::SeqCst),
@@ -3783,7 +3931,7 @@ mod tests {
     #[test]
     fn changed_publication_bytes_are_rejected_before_authentication_or_hsa_load() {
         let fixture = recovery_fixture(25, "gfx942", "vecadd");
-        let recovered = recover_worker_v2_load_envelope_v1(
+        let recovered = recover_worker_v2_load_envelope_for_test(
             &fixture.output,
             &fixture.envelope,
             fixture.compiler_transaction.clone(),
@@ -3799,7 +3947,7 @@ mod tests {
         let (mut authenticator, authentication_calls) = ExactPrerequisiteAuthenticator::new();
         let (adapter, unloads) = ExactHsaAdapter::new();
         let error = recovered
-            .load_generated_synchronous_hsa_handoff_v1::<
+            .load_generated_synchronous_hsa_handoff_for_test_v1::<
                 HandoffKernel,
                 ExactPrerequisiteAuthenticator,
                 ExactHsaAdapter,
@@ -3808,7 +3956,9 @@ mod tests {
 
         assert!(matches!(
             error,
-            RecoveredWorkerV2SynchronousHsaHandoffError::CurrentPublication(_)
+            RecoveredWorkerV2SynchronousHsaHandoffError::CurrentPublication(
+                FinalizedWorkerV2BundleAdmissionError::CurrentPublication { .. }
+            )
         ));
         assert_eq!(
             authentication_calls.load(std::sync::atomic::Ordering::SeqCst),
@@ -3823,7 +3973,7 @@ mod tests {
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
         let fixture = recovery_fixture(8, "gfx942", "vecadd");
-        let recovered = recover_worker_v2_load_envelope_v1(
+        let recovered = recover_worker_v2_load_envelope_for_test(
             &fixture.output,
             &fixture.envelope,
             fixture.compiler_transaction.clone(),
@@ -3843,16 +3993,23 @@ mod tests {
         fs::write(&artifact, bytes).unwrap();
         fs::set_permissions(&artifact, fs::Permissions::from_mode(0o600)).unwrap();
 
-        assert!(recovered.revalidate_currentness().is_err());
         assert!(matches!(
-            recover_worker_v2_load_envelope_v1(
+            recovered.revalidate_currentness_for_test(),
+            Err(FinalizedWorkerV2BundleAdmissionError::CurrentPublication { .. })
+        ));
+        assert!(matches!(
+            recover_worker_v2_load_envelope_for_test(
                 &fixture.output,
                 &fixture.envelope,
                 fixture.compiler_transaction.clone(),
                 fixture.kernel_id,
                 &fixture.observed,
             ),
-            Err(RecoveredWorkerV2AdmissionError::Publication(_))
+            Err(RecoveredWorkerV2AdmissionError::Publication(
+                DurablePublishedClaimReacquisitionErrorV1::Publication(
+                    DurableLinkPublicationError::CurrentPublication { .. }
+                )
+            ))
         ));
     }
 
@@ -3885,7 +4042,7 @@ mod tests {
             include_explicit_argument_alignments,
             include_required_workgroup_size,
         );
-        let recovered = recover_worker_v2_load_envelope_v1(
+        let recovered = recover_worker_v2_load_envelope_for_test(
             &fixture.output,
             &fixture.envelope,
             fixture.compiler_transaction.clone(),
@@ -3917,7 +4074,7 @@ mod tests {
             manifest_abi(),
             None,
         );
-        let recovered = recover_worker_v2_load_envelope_v1(
+        let recovered = recover_worker_v2_load_envelope_for_test(
             &fixture.output,
             &fixture.envelope,
             fixture.compiler_transaction.clone(),
@@ -3946,7 +4103,7 @@ mod tests {
             manifest_abi(),
             None,
         );
-        let recovered = recover_worker_v2_load_envelope_v1(
+        let recovered = recover_worker_v2_load_envelope_for_test(
             &fixture.output,
             &fixture.envelope,
             fixture.compiler_transaction.clone(),
@@ -3976,7 +4133,7 @@ mod tests {
             abi,
             None,
         );
-        let recovered = recover_worker_v2_load_envelope_v1(
+        let recovered = recover_worker_v2_load_envelope_for_test(
             &fixture.output,
             &fixture.envelope,
             fixture.compiler_transaction.clone(),
@@ -4005,7 +4162,7 @@ mod tests {
             manifest_abi(),
             Some(optional_hidden_argument),
         );
-        let recovered = recover_worker_v2_load_envelope_v1(
+        let recovered = recover_worker_v2_load_envelope_for_test(
             &fixture.output,
             &fixture.envelope,
             fixture.compiler_transaction.clone(),
@@ -4027,7 +4184,10 @@ mod tests {
             crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
                 &recovered,
             );
-        crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family).unwrap();
+        crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(
+            &recovered, &family,
+        )
+        .unwrap();
 
         for (seed, abi, expected) in [
             (
@@ -4067,7 +4227,7 @@ mod tests {
                     &model_recovered,
                 );
             assert!(matches!(
-                crate::bind_current_recovered_launch_kernel_metadata_v2(
+                crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(
                     &recovered,
                     &family,
                 ),
@@ -4110,7 +4270,7 @@ mod tests {
                     &recovered,
                 );
             let omitted_identity =
-                crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family)
+                crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &family)
                     .unwrap()
                     .physical_signature()
                     .identity();
@@ -4234,7 +4394,7 @@ mod tests {
                 &recovered,
             );
         let binding =
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family).unwrap();
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &family).unwrap();
         let signature = binding.physical_signature();
         assert_eq!(signature.explicit(), &family.signature);
         assert_eq!(signature.implicit_argument_offset(), 16);
@@ -4354,7 +4514,7 @@ mod tests {
                     &model_recovered,
                 );
             assert!(matches!(
-                crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family,),
+                crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &family,),
                 Err(
                     crate::LaunchKernelMetadataBridgeErrorV2::UnsupportedPhysicalAbi(
                         "optional COV6 hidden arguments"
@@ -4399,7 +4559,7 @@ mod tests {
         ));
 
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family,),
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &family,),
             Err(
                 crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
                     "artifact launch block size"
@@ -4433,7 +4593,7 @@ mod tests {
         drop(current);
 
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family,),
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &family,),
             Err(
                 crate::LaunchKernelMetadataBridgeErrorV2::MissingPhysicalMetadata(
                     "physical argument alignment"
@@ -4520,7 +4680,7 @@ mod tests {
             crate::PhysicalMetadataValueV1::Known(2)
         );
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family,),
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &family,),
             Err(
                 crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
                     "artifact maximum grid"
@@ -4559,7 +4719,7 @@ mod tests {
             0
         );
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family,),
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &family,),
             Err(
                 crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
                     "artifact dynamic LDS limit"
@@ -4589,7 +4749,7 @@ mod tests {
             fe2o3_kernel_descriptor::OwnershipSemantics::UniqueBorrow
         );
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family,),
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &family,),
             Err(
                 crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
                     "artifact ABI argument ownership"
@@ -4613,7 +4773,10 @@ mod tests {
                 &recovered,
             );
 
-        crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family).unwrap();
+        crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(
+            &recovered, &family,
+        )
+        .unwrap();
 
         for axis in 0..3 {
             let mut observed = limits.map(crate::PhysicalMetadataValueV1::Known);
@@ -4804,7 +4967,7 @@ mod tests {
                 &recovered,
             );
         let binding =
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family).unwrap();
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &family).unwrap();
 
         assert_eq!(binding.target(), family.target);
         assert_eq!(
@@ -4887,7 +5050,7 @@ mod tests {
         candidate.target.identity = fe2o3_kernel_ir::TargetIdentityV2::from_bytes([0x81; 32]);
         crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &candidate,),
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &candidate,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::TargetSubstitution)
         ));
 
@@ -4895,7 +5058,7 @@ mod tests {
         candidate.logical_name = "substituted-logical-name".to_owned();
         crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &candidate,),
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &candidate,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::LogicalNameSubstitution)
         ));
 
@@ -4903,7 +5066,7 @@ mod tests {
         candidate.variants[0].entry_name = "substituted_entry".to_owned();
         crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &candidate,),
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &candidate,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::EntryNameSubstitution)
         ));
 
@@ -4912,7 +5075,7 @@ mod tests {
             fe2o3_kernel_ir::ArtifactIdentityV2::from_bytes([0x82; 32]);
         crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &candidate,),
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &candidate,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::ArtifactSubstitution)
         ));
 
@@ -4921,7 +5084,7 @@ mod tests {
             fe2o3_kernel_ir::KernelIdentityV2::from_bytes([0x83; 32]);
         crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &candidate,),
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &candidate,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::KernelSubstitution)
         ));
 
@@ -4930,7 +5093,7 @@ mod tests {
             fe2o3_kernel_ir::KernelSignatureIdentityV2::from_bytes([0x84; 32]);
         crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &candidate,),
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &candidate,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::SignatureSubstitution)
         ));
 
@@ -4942,7 +5105,7 @@ mod tests {
             fe2o3_kernel_ir::SemanticTypeIdentityV2::from_bytes([0x85; 32]);
         crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &candidate,),
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &candidate,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::SignatureSubstitution)
         ));
     }
@@ -4959,7 +5122,7 @@ mod tests {
         candidate.variants[0].resources.private_segment_bytes += 1;
         crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &candidate,),
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &candidate,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::ResourceSubstitution)
         ));
 
@@ -4970,7 +5133,7 @@ mod tests {
                 * u64::from(candidate.variants[0].launch.maximum_flat_workgroup_size);
         crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &candidate,),
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &candidate,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::LaunchGeometrySubstitution)
         ));
 
@@ -4981,7 +5144,7 @@ mod tests {
             .push(fe2o3_kernel_ir::LaunchCapabilityV2::StaticLds);
         crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &candidate,),
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &candidate,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::ResourceSubstitution)
         ));
 
@@ -4989,7 +5152,7 @@ mod tests {
         candidate.variants[0].resources.private_segment_bytes = 1_048_577;
         crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &candidate,),
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &candidate,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::ResourceSubstitution)
         ));
     }
@@ -5007,7 +5170,7 @@ mod tests {
         };
 
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family,),
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &family,),
             Err(
                 crate::LaunchKernelMetadataBridgeErrorV2::UnsupportedPhysicalLaunchContract(
                     "non-exact block policy"
@@ -5039,7 +5202,7 @@ mod tests {
         limit: usize,
     ) {
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(
                 recovered,
                 family,
             ),
@@ -5091,7 +5254,7 @@ mod tests {
                 &recovered,
             );
         let first =
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family).unwrap();
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &family).unwrap();
         let physical_signature = first.physical_signature().identity();
         let launch = first.launch_projection();
         let resources = first.resource_projection();
@@ -5108,7 +5271,7 @@ mod tests {
         family.variants[0].capabilities.clear();
         family.variants[0].proof_obligations.clear();
         let rebound =
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family).unwrap();
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &family).unwrap();
         assert_eq!(rebound.physical_signature().identity(), physical_signature);
         assert_eq!(rebound.launch_projection(), launch);
         assert_eq!(rebound.resource_projection(), resources);
@@ -5140,7 +5303,7 @@ mod tests {
         family.variants.push(duplicate);
 
         let binding =
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family).unwrap();
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &family).unwrap();
         assert!(!format!("{binding:?}").contains("occupancy-waves-2-7-policy-deadbeef"));
     }
 
@@ -5157,8 +5320,10 @@ mod tests {
         fs::write(artifact, bytes).unwrap();
 
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family,),
-            Err(crate::LaunchKernelMetadataBridgeErrorV2::CurrentPublication(_))
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &family,),
+            Err(crate::LaunchKernelMetadataBridgeErrorV2::CurrentPublication(
+                FinalizedWorkerV2BundleAdmissionError::CurrentPublication { .. }
+            ))
         ));
     }
 
@@ -5170,11 +5335,17 @@ mod tests {
                 &recovered,
             );
         family.variants[0].variant_name.clear();
-        crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family).unwrap();
+        crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(
+            &recovered, &family,
+        )
+        .unwrap();
 
         family.variants[0].variant_name =
             "x".repeat(fe2o3_kernel_ir::LaunchKernelLimitsV2::default().max_name_bytes + 1);
-        crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family).unwrap();
+        crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(
+            &recovered, &family,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -5185,7 +5356,7 @@ mod tests {
                 &recovered,
             );
         let binding =
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family).unwrap();
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_for_test_v2(&recovered, &family).unwrap();
 
         let output = fixture.output.clone();
         let owner = fixture.owner.clone();

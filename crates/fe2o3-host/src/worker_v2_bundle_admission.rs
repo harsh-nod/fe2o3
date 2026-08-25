@@ -255,12 +255,60 @@ impl AdmittedFinalizedWorkerV2BundleV1 {
     }
 
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg_attr(test, allow(dead_code))]
     pub(crate) fn admit_recovered(
         envelope: WorkerV2LoadEnvelopeV1,
         compiler_transaction: CompilerTransactionEvidenceCapsuleV2,
         current_lease: DurableCurrentLinkPublicationLeaseV1,
         kernel_id: KernelId,
         observed: &ObservedContext,
+    ) -> Result<Self, FinalizedWorkerV2BundleAdmissionError> {
+        Self::admit_recovered_with_token_acquirer(
+            envelope,
+            compiler_transaction,
+            current_lease,
+            kernel_id,
+            observed,
+            DurableCurrentLinkPublicationLeaseV1::acquire_current_token,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn admit_recovered_for_test(
+        envelope: WorkerV2LoadEnvelopeV1,
+        compiler_transaction: CompilerTransactionEvidenceCapsuleV2,
+        current_lease: DurableCurrentLinkPublicationLeaseV1,
+        kernel_id: KernelId,
+        observed: &ObservedContext,
+    ) -> Result<Self, FinalizedWorkerV2BundleAdmissionError> {
+        Self::admit_recovered_with_token_acquirer(
+            envelope,
+            compiler_transaction,
+            current_lease,
+            kernel_id,
+            observed,
+            |lease| {
+                crate::test_currentness_retry::retry_transient_busy(
+                    || lease.acquire_current_token(),
+                    |error| matches!(error, DurableLinkPublicationError::Busy),
+                )
+            },
+        )
+    }
+
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    fn admit_recovered_with_token_acquirer(
+        envelope: WorkerV2LoadEnvelopeV1,
+        compiler_transaction: CompilerTransactionEvidenceCapsuleV2,
+        current_lease: DurableCurrentLinkPublicationLeaseV1,
+        kernel_id: KernelId,
+        observed: &ObservedContext,
+        acquire_current: impl FnOnce(
+            &DurableCurrentLinkPublicationLeaseV1,
+        ) -> Result<
+            DurableCurrentLinkPublicationTokenV1,
+            DurableLinkPublicationError,
+        >,
     ) -> Result<Self, FinalizedWorkerV2BundleAdmissionError> {
         let expectation = envelope
             .direct_link_evidence()
@@ -290,11 +338,14 @@ impl AdmittedFinalizedWorkerV2BundleV1 {
             raw_hsaco: envelope.raw_hsaco().identity(),
             compiler_transaction: compiler_transaction.identity(),
         };
-        let parts = admit_parts_with_lease(
+        let current = acquire_current(&current_lease)
+            .map_err(FinalizedWorkerV2BundleAdmissionError::current_publication)?;
+        let parts = admit_parts_with_current_token(
             claim.plan().attempt(),
             envelope.raw_hsaco().bytes(),
             claim.receipt(),
             current_lease,
+            &current,
             &validated_bundle,
             envelope.container(),
             selected,
@@ -645,6 +696,34 @@ fn admit_parts_with_lease(
     let current = current_lease
         .acquire_current_token()
         .map_err(FinalizedWorkerV2BundleAdmissionError::current_publication)?;
+    admit_parts_with_current_token(
+        prepared_attempt,
+        prepared_bytes,
+        receipt,
+        current_lease,
+        &current,
+        validated_bundle,
+        container,
+        selected,
+        observed,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn admit_parts_with_current_token(
+    prepared_attempt: BuildAttempt,
+    prepared_bytes: &[u8],
+    receipt: BackendPublicationReceiptV1,
+    current_lease: DurableCurrentLinkPublicationLeaseV1,
+    current: &DurableCurrentLinkPublicationTokenV1,
+    validated_bundle: &ValidatedDirectLinkBundleEvidenceV1<'_>,
+    container: &ArtifactContainerV1,
+    selected: SelectedNativeKernel<'_>,
+    observed: &ObservedContext,
+) -> Result<AdmissionParts, FinalizedWorkerV2BundleAdmissionError> {
+    current_lease
+        .validate_current_token(current)
+        .map_err(FinalizedWorkerV2BundleAdmissionError::current_publication)?;
     let published = current_lease.published();
 
     validate_worker_publication(
@@ -703,8 +782,6 @@ fn admit_parts_with_lease(
     {
         return Err(FinalizedWorkerV2BundleAdmissionError::FinalizationSemanticMismatch);
     }
-    drop(current);
-
     Ok(AdmissionParts {
         current_lease,
         receipt,
@@ -1211,6 +1288,7 @@ pub(crate) mod tests {
         scalar_gemm_v1_hsaco_for_target, typed_vecadd_hsaco_for_target,
         typed_vecadd_two_kernel_hsaco_for_target,
     };
+    use crate::test_currentness_retry::retry_transient_busy;
     use fe2o3_artifact_transaction::{
         AtomicPublicationIdentityV1, BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1,
         DurableLinkPublicationPlanV1, FinalizationIdentityV1, FinalizedOutputIdentityV1,
@@ -1219,6 +1297,55 @@ pub(crate) mod tests {
         UpstreamCodeObjectEvidenceIdentityV1, ValidatedResponseIdentityV1, begin_build_attempt,
         publish_exact_hsaco_evidence_for_attempt_v1,
     };
+
+    #[allow(clippy::too_many_arguments)]
+    fn admit_parts_for_test(
+        prepared_attempt: BuildAttempt,
+        prepared_bytes: &[u8],
+        publication: AttemptScopedHsacoPublicationResultV1,
+        validated_bundle: &ValidatedDirectLinkBundleEvidenceV1<'_>,
+        container: &ArtifactContainerV1,
+        selected: SelectedNativeKernel<'_>,
+        observed: &ObservedContext,
+    ) -> Result<AdmissionParts, FinalizedWorkerV2BundleAdmissionError> {
+        let receipt = publication.receipt();
+        let current_lease = publication.into_current_lease();
+        let current = retry_transient_busy(
+            || current_lease.acquire_current_token(),
+            |error| matches!(error, DurableLinkPublicationError::Busy),
+        )
+        .map_err(FinalizedWorkerV2BundleAdmissionError::current_publication)?;
+        admit_parts_with_current_token(
+            prepared_attempt,
+            prepared_bytes,
+            receipt,
+            current_lease,
+            &current,
+            validated_bundle,
+            container,
+            selected,
+            observed,
+        )
+    }
+
+    fn acquire_current_token_for_test(
+        lease: &DurableCurrentLinkPublicationLeaseV1,
+    ) -> Result<DurableCurrentLinkPublicationTokenV1, DurableLinkPublicationError> {
+        retry_transient_busy(
+            || lease.acquire_current_token(),
+            |error| matches!(error, DurableLinkPublicationError::Busy),
+        )
+    }
+
+    fn acquire_currentness_for_test(
+        admission: &AdmittedFinalizedWorkerV2BundleV1,
+    ) -> Result<CurrentFinalizedWorkerV2BundleAdmissionV1<'_>, FinalizedWorkerV2BundleAdmissionError>
+    {
+        retry_transient_busy(
+            || admission.acquire_currentness(),
+            |error| matches!(error, FinalizedWorkerV2BundleAdmissionError::Busy),
+        )
+    }
     #[cfg(feature = "hardware-test-hooks")]
     use fe2o3_artifact_transaction::{
         fail_build_attempt, install_begin_build_attempt_lock_probe_v1,
@@ -1692,7 +1819,7 @@ pub(crate) mod tests {
         let validated = input.fixture.validated();
         let selected_kernel = selected(&input.fixture);
         let observed = make_observed_for(seed.into(), REQUIRED_GFX942_TEST_TARGET);
-        let parts = admit_parts(
+        let parts = admit_parts_for_test(
             input.attempt,
             &input.exact_bytes,
             input.publication,
@@ -1735,7 +1862,7 @@ pub(crate) mod tests {
         let validated = input.fixture.validated();
         let selected_kernel = selected(&input.fixture);
         let observed = make_observed_for(seed.into(), REQUIRED_GFX942_TEST_TARGET);
-        let parts = admit_parts(
+        let parts = admit_parts_for_test(
             input.attempt,
             &input.exact_bytes,
             input.publication,
@@ -1778,7 +1905,7 @@ pub(crate) mod tests {
         let validated = input.fixture.validated();
         let selected_kernel = selected(&input.fixture);
         let observed = make_observed_for(seed.into(), REQUIRED_GFX942_TEST_TARGET);
-        let parts = admit_parts(
+        let parts = admit_parts_for_test(
             input.attempt,
             &input.exact_bytes,
             input.publication,
@@ -1821,7 +1948,7 @@ pub(crate) mod tests {
         let validated = input.fixture.validated();
         let selected_kernel = selected(&input.fixture);
         let observed = make_observed_for(seed.into(), REQUIRED_GFX942_TEST_TARGET);
-        let parts = admit_parts(
+        let parts = admit_parts_for_test(
             input.attempt,
             &input.exact_bytes,
             input.publication,
@@ -1934,7 +2061,7 @@ pub(crate) mod tests {
         .unwrap();
         let validated = fixture.validated();
         let selected_kernel = selected(&fixture);
-        let parts = admit_parts(
+        let parts = admit_parts_for_test(
             attempt,
             &finalized_bytes,
             publication,
@@ -2024,7 +2151,7 @@ pub(crate) mod tests {
             finish_admission_fixture(seed, 0, fixture, finalized_bytes.clone(), finalized_bytes);
         let validated = input.fixture.validated();
         let selected_kernel = selected(&input.fixture);
-        let parts = admit_parts(
+        let parts = admit_parts_for_test(
             input.attempt,
             &input.exact_bytes,
             input.publication,
@@ -2133,7 +2260,7 @@ pub(crate) mod tests {
             .find(|kernel| kernel.export_symbol() == "zeta")
             .unwrap();
         assert_eq!(physical_zeta.launch().kernarg_segment_size(), 312);
-        let current = admission.acquire_currentness().unwrap();
+        let current = acquire_currentness_for_test(&admission).unwrap();
         assert_eq!(current.exact_artifact_bytes(), exact_bytes);
     }
 
@@ -2143,7 +2270,7 @@ pub(crate) mod tests {
         let validated = input.fixture.validated();
         let selected_kernel = selected(&input.fixture);
         let observed = make_observed_for(0x31, REQUIRED_GFX942_TEST_TARGET);
-        let parts = admit_parts(
+        let parts = admit_parts_for_test(
             input.attempt,
             &input.exact_bytes,
             input.publication,
@@ -2178,7 +2305,7 @@ pub(crate) mod tests {
                 .required_workgroup_size(),
             crate::PhysicalMetadataValueV1::Known([256, 1, 1])
         );
-        let current = parts.current_lease.acquire_current_token().unwrap();
+        let current = acquire_current_token_for_test(&parts.current_lease).unwrap();
         assert_eq!(current.exact_artifact_bytes(), input.exact_bytes);
     }
 
@@ -2190,7 +2317,7 @@ pub(crate) mod tests {
         let validated = input.fixture.validated();
         let selected_kernel = selected(&input.fixture);
         let observed = make_observed_for(0x35, REQUIRED_GFX942_TEST_TARGET);
-        let parts = admit_parts(
+        let parts = admit_parts_for_test(
             input.attempt,
             &input.exact_bytes,
             input.publication,
@@ -2207,7 +2334,7 @@ pub(crate) mod tests {
             parts.linked_output_identity.digest(),
             DigestAlgorithm::Sha256.calculate(&input.exact_bytes)
         );
-        let current = parts.current_lease.acquire_current_token().unwrap();
+        let current = acquire_current_token_for_test(&parts.current_lease).unwrap();
         assert_eq!(current.exact_artifact_bytes(), input.finalized_bytes);
     }
 
@@ -2222,7 +2349,7 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert!(matches!(
-            admit_parts(
+            admit_parts_for_test(
                 other_attempt,
                 &input.exact_bytes,
                 input.publication,
@@ -2241,7 +2368,7 @@ pub(crate) mod tests {
         let mut substituted = input.exact_bytes.clone();
         substituted.push(0);
         assert!(matches!(
-            admit_parts(
+            admit_parts_for_test(
                 input.attempt,
                 &substituted,
                 input.publication,
@@ -2261,7 +2388,7 @@ pub(crate) mod tests {
         let selected_kernel = selected(&input.fixture);
         let observed = make_observed_for(0x51, REQUIRED_GFX942_TEST_TARGET);
         assert!(matches!(
-            admit_parts(
+            admit_parts_for_test(
                 input.attempt,
                 &input.exact_bytes,
                 input.publication,
@@ -2279,7 +2406,7 @@ pub(crate) mod tests {
         let selected_kernel = selected(&other.fixture);
         let observed = make_observed_for(0x52, REQUIRED_GFX942_TEST_TARGET);
         assert!(matches!(
-            admit_parts(
+            admit_parts_for_test(
                 input.attempt,
                 &input.exact_bytes,
                 input.publication,
@@ -2333,7 +2460,7 @@ pub(crate) mod tests {
         let selected = selected(&replacement);
         let observed = make_observed_for(0x61, architecture);
         assert!(matches!(
-            admit_parts(
+            admit_parts_for_test(
                 input.attempt,
                 &input.exact_bytes,
                 input.publication,
