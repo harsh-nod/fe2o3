@@ -61,6 +61,7 @@ mod mir_import_v2;
 mod moe_top2_v1_codegen;
 mod monomorphization_dead;
 mod production_geometry_v1;
+mod production_mir_pliron_verus_join_v1;
 mod production_pipeline_v1;
 mod production_ranked_projection_v1;
 mod production_reference_effect_join_v2;

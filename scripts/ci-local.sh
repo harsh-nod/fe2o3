@@ -481,6 +481,8 @@ run_verus() {
     "${REPO_ROOT}/examples/scalar_gemm_v1/run-verus.sh" --require
   run_step mir-pliron-semantic-refinement-verus \
     "${REPO_ROOT}/scripts/test-mir-pliron-semantic-refinement-verus.sh"
+  run_step mir-pliron-per-compilation-verus \
+    "${REPO_ROOT}/scripts/test-mir-pliron-per-compilation-verus.sh"
 }
 
 run_authority_launcher_tests() {

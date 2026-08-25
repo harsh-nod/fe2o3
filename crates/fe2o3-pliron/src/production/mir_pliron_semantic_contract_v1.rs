@@ -197,6 +197,7 @@ pub struct ProductionVerifiedMirPlironKernelV1 {
     evidence: ProductionMiddleEndEvidenceV5,
     total_output: ProductionTotalOutputRefinementReportV2,
     semantics: ProductionMirPlironSemanticContractReportV1,
+    contract: MirPlironSemanticContractV1,
 }
 
 impl ProductionVerifiedMirPlironKernelV1 {
@@ -211,6 +212,13 @@ impl ProductionVerifiedMirPlironKernelV1 {
     }
     pub const fn semantic_contract_report(&self) -> ProductionMirPlironSemanticContractReportV1 {
         self.semantics
+    }
+    /// Returns the exact validated contract retained under this move-only owner.
+    ///
+    /// The contract is data, not proof authority. Its fields have already been
+    /// reconciled against the owned MIR receipts and live PLIRON evidence.
+    pub const fn semantic_contract(&self) -> &MirPlironSemanticContractV1 {
+        &self.contract
     }
     pub const fn establishes_total_output_refinement_at_mir_pliron_boundary(&self) -> bool {
         true
@@ -259,6 +267,7 @@ pub fn verify_ranked_kernel_against_safe_reference_mir_v1(
         evidence,
         total_output,
         semantics,
+        contract: contract.clone(),
     })
 }
 
