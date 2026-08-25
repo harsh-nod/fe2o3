@@ -47,6 +47,7 @@ mod production_pipeline_v1;
 mod production_ranked_projection_v1;
 mod production_reference_effect_join_v2;
 mod production_rustc_driver_v1;
+mod production_rustc_drop_v1;
 mod production_semantic_body_v1;
 mod production_semantic_fn_abi_v1;
 mod production_semantic_lineage_v3;

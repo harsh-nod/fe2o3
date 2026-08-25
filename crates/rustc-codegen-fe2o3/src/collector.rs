@@ -34,6 +34,8 @@ use rustc_middle::ty::{
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
+use crate::production_rustc_drop_v1::{ProductionRustcDropClassV1, classify_rustc_drop_v1};
+
 mod production_importer_v1;
 
 pub(crate) use production_importer_v1::{
@@ -3038,17 +3040,21 @@ impl<'tcx> DeviceCollector<'tcx> {
             }
             TerminatorKind::Drop { place, unwind, .. }
                 if self.purpose.accepts_extended_edges()
-                    && !self
-                        .tcx
-                        .instantiate_and_normalize_erasing_regions(
-                            caller.args,
-                            TypingEnv::fully_monomorphized(),
-                            EarlyBinder::bind(place.ty(body, self.tcx).ty),
-                        )
-                        .needs_drop(self.tcx, TypingEnv::fully_monomorphized())
                     && matches!(unwind, UnwindAction::Continue | UnwindAction::Unreachable) =>
             {
-                Ok(())
+                match classify_rustc_drop_v1(self.tcx, *caller, body, *place) {
+                    Ok(ProductionRustcDropClassV1::Trivial) => Ok(()),
+                    Ok(ProductionRustcDropClassV1::RequiresDropGlue) => Err(self.reachable_error(
+                        caller,
+                        "[FE2O3-FFI-EDGE001] unsupported executable MIR edge `Drop requiring drop glue`",
+                        None,
+                    )),
+                    Err(_) => Err(self.reachable_error(
+                        caller,
+                        "[FE2O3-FFI-EDGE001] Drop place type failed monomorphic normalization",
+                        None,
+                    )),
+                }
             }
             TerminatorKind::Goto { .. }
             | TerminatorKind::SwitchInt { .. }
