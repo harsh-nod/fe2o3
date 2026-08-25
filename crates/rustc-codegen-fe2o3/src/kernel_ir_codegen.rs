@@ -4,48 +4,74 @@
 //! `translate_and_verify` produced this in-memory module. This module must not be used to grant
 //! the same authority to decoded or caller-constructed kernel IR.
 
+#[cfg(feature = "qualification-oracles-test-only")]
 use crate::QUALIFICATION_ORACLE_ENV;
+#[cfg(feature = "qualification-oracles-test-only")]
 use crate::amdgpu_llvm::{EmitError, PreparedDeviceKernel};
+#[cfg(feature = "qualification-oracles-test-only")]
 use crate::trusted_device_items::TrustedDeviceItem;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use fe2o3_compiler_ffi::DeviceTargetV1;
 use fe2o3_compiler_ffi::{
     COMPILER_DESCRIPTOR_SECTION_NAME_V1, CompilerDescriptorSourceIdentityV1,
-    CompilerDescriptorSourceV1, DeviceTargetV1,
+    CompilerDescriptorSourceV1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use fe2o3_kernel_ir::{
     AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
-    AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant,
-    F32MathFunction, F32MathImplementation, FloatOperation, FunctionBody, FunctionRole,
-    IntrinsicOperation, KernelId, MemoryAccess, Module, Operation, OperationKind, TargetCapability,
-    Terminator, Type, ValueDef, ValueId, WorkgroupSize, verify_module,
 };
+#[cfg(feature = "qualification-oracles-test-only")]
+use fe2o3_kernel_ir::{
+    AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant,
+    FunctionBody, IntrinsicOperation, KernelId, MemoryAccess, ValueDef, ValueId, WorkgroupSize,
+};
+use fe2o3_kernel_ir::{
+    F32MathFunction, F32MathImplementation, FloatOperation, FunctionRole, Module, Operation,
+    OperationKind, TargetCapability, Terminator, Type, verify_module,
+};
+#[cfg(feature = "qualification-oracles-test-only")]
 use sha2::{Digest as _, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+#[cfg(feature = "qualification-oracles-test-only")]
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fmt;
-use std::fs;
-use std::path::Path;
+#[cfg(feature = "qualification-oracles-test-only")]
+use std::{fs, path::Path};
 
+#[cfg(feature = "qualification-oracles-test-only")]
 const FILL_KERNEL: &str = "fill";
+#[cfg(feature = "qualification-oracles-test-only")]
 const VECADD_KERNEL: &str = "vecadd";
+#[cfg(feature = "qualification-oracles-test-only")]
 const NO_QUALIFICATION_FALLBACK_HINT: &str =
     "production-v1 does not fall back to a qualification-only lowering route";
+#[cfg(feature = "qualification-oracles-test-only")]
 const WORKGROUP_X: u32 = 256;
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) const TILED_GEMM_FRONTEND_TEST_LLVM_FILE: &str =
     "tiled_gemm_frontend_v1.imported.gfx942-xnack-.ll";
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) const TILED_GEMM_LDS_SLICE1_AUTHORITY_SECTION_V1: &str =
     ".fe2o3.tiled-lds-slice1-auth.v1";
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) const TILED_GEMM_LDS_SLICE1_RESOURCE_SECTION_V1: &str =
     ".fe2o3.tiled-lds-slice1-resources.v1";
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) const MOE_TOP2_SECTION_PREFIX_V1: &str = ".fe2o3.moe";
+#[cfg(feature = "qualification-oracles-test-only")]
 const REVIEWED_ROW_SOFTMAX_LEGACY_LLVM_SHA256: [u8; 32] = [
     0x0a, 0x33, 0x13, 0x67, 0x53, 0x44, 0x43, 0x7b, 0xc7, 0xb8, 0x94, 0xad, 0x2f, 0x4d, 0xad, 0xb3,
     0x81, 0x07, 0xd9, 0x02, 0x96, 0xa9, 0x66, 0x5b, 0x76, 0x32, 0x34, 0xac, 0xd2, 0x40, 0x5a, 0xcc,
 ];
+#[cfg(feature = "qualification-oracles-test-only")]
 const REVIEWED_ROW_SOFTMAX_V1_LLVM_SHA256: [u8; 32] = [
     0xd4, 0x8d, 0x33, 0x20, 0xc2, 0x86, 0xc6, 0xda, 0x22, 0x53, 0xa1, 0x04, 0x38, 0x60, 0x89, 0xe3,
     0x89, 0x64, 0x8f, 0x42, 0x60, 0xf2, 0xe7, 0xef, 0xda, 0x21, 0x26, 0x9f, 0xef, 0x95, 0x1c, 0x2c,
 ];
+#[cfg(feature = "qualification-oracles-test-only")]
 const ROW_SOFTMAX_UPSTREAM_LLVM_BUILD_IDENTITY_V1: &str =
     "upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1";
+#[cfg(feature = "qualification-oracles-test-only")]
 const ROW_SOFTMAX_UPSTREAM_LLVM_TARGET_TRIPLE_V1: &str = "amdgcn-amd-amdhsa";
 /// Reviewed observation from the exact upstream LLVM build named above.
 ///
@@ -62,10 +88,14 @@ const ROW_SOFTMAX_UPSTREAM_LLVM_TARGET_TRIPLE_V1: &str = "amdgcn-amd-amdhsa";
 /// constant only after authenticating the complete legacy lowering digest;
 /// Worker V2 independently compares the submitted layout with the live target
 /// machine before OCML import or native linking.
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) const ROW_SOFTMAX_UPSTREAM_LLVM_DATA_LAYOUT_V1: &str = "e-m:e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) const FLASH_ATTENTION_AUTHORITY_TRANSCRIPT_SECTION_V1: &str =
     ".fe2o3.flash-attention-authority-transcript.v1";
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) const FLASH_ATTENTION_AUTHORITY_SECTION_V1: &str = ".fe2o3.flash-attention-auth.v1";
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) const FLASH_ATTENTION_OCML_BOUNDARY_SECTION_V1: &str =
     ".fe2o3.flash-attention-ocml-exp.v1";
 
@@ -105,12 +135,14 @@ pub(crate) struct InertCompilerModuleTextV1 {
 /// Private binding of the reviewed LLVM 22.1.8 measurement. This is not a
 /// dynamic LLVM query, and no caller-supplied layout text enters the value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(feature = "qualification-oracles-test-only")]
 struct RowSoftmaxReviewedLlvmLayoutMeasurementV1 {
     llvm_build_identity: &'static str,
     target_triple: &'static str,
     data_layout: &'static str,
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn reviewed_row_softmax_upstream_llvm_layout_v1() -> RowSoftmaxReviewedLlvmLayoutMeasurementV1 {
     RowSoftmaxReviewedLlvmLayoutMeasurementV1 {
         llvm_build_identity: ROW_SOFTMAX_UPSTREAM_LLVM_BUILD_IDENTITY_V1,
@@ -128,6 +160,7 @@ impl InertCompilerModuleTextV1 {
         &self.kernel_entries
     }
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn device_definitions(&self) -> &[String] {
         &self.device_definitions
     }
@@ -144,6 +177,7 @@ impl InertCompilerModuleTextV1 {
         &self.external_declarations
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) const fn descriptor_source_identity(
         &self,
     ) -> Option<CompilerDescriptorSourceIdentityV1> {
@@ -170,16 +204,26 @@ pub(crate) enum CompilerModuleConstructionError {
     DescriptorSourceAlreadyBound,
     DescriptorKernelEntryClosureMismatch,
     DescriptorSymbolClosureMismatch,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     UnsupportedFloatTarget(String),
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     UnsupportedTargetBinding(String),
+    #[cfg(feature = "qualification-oracles-test-only")]
     SourceDebug(crate::source_debug::SourceDebugError),
+    #[cfg(feature = "qualification-oracles-test-only")]
     ScalarGemmLowering(String),
+    #[cfg(feature = "qualification-oracles-test-only")]
     TiledGemmLowering(String),
+    #[cfg(feature = "qualification-oracles-test-only")]
     TiledGemmLdsSlice1Lowering(String),
+    #[cfg(feature = "qualification-oracles-test-only")]
     RowSoftmaxLowering(String),
+    #[cfg(feature = "qualification-oracles-test-only")]
     MoeTop2Lowering(String),
+    #[cfg(feature = "qualification-oracles-test-only")]
     FlashAttentionLowering(String),
     Verification(fe2o3_kernel_ir::VerificationErrors),
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     Lowering(dialect_amdgcn::LoweringErrors),
 }
 
@@ -197,41 +241,52 @@ impl fmt::Display for CompilerModuleConstructionError {
             Self::DescriptorSymbolClosureMismatch => {
                 formatter.write_str("compiler descriptor symbols do not match the module closure")
             }
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::UnsupportedFloatTarget(target) => write!(
                 formatter,
                 "compiler-module float contracts require exact gfx942 lowering; found target `{target}`"
             ),
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::UnsupportedTargetBinding(target) => write!(
                 formatter,
                 "compiler-module exact target binding requires gfx942:xnack-; found target `{target}`"
             ),
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::SourceDebug(error) => {
                 write!(formatter, "source-debug metadata rejected: {error}")
             }
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::ScalarGemmLowering(error) => {
                 write!(formatter, "exact scalar GEMM lowering rejected: {error}")
             }
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::TiledGemmLowering(error) => {
                 write!(formatter, "exact tiled GEMM lowering rejected: {error}")
             }
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::TiledGemmLdsSlice1Lowering(error) => {
                 write!(formatter, "exact LDS Slice 1 lowering rejected: {error}")
             }
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::RowSoftmaxLowering(error) => {
                 write!(formatter, "exact row-softmax lowering rejected: {error}")
             }
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::MoeTop2Lowering(error) => {
                 write!(formatter, "exact MoE top-2 lowering rejected: {error}")
             }
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::FlashAttentionLowering(error) => {
                 write!(formatter, "exact FlashAttention lowering rejected: {error}")
             }
             Self::Verification(error) => write!(formatter, "{error}"),
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::Lowering(error) => write!(formatter, "{error}"),
         }
     }
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn bind_source_debug_metadata_v1(
     mut module: InertCompilerModuleTextV1,
     profile: &crate::source_debug::AlphaSourceDebugV2,
@@ -265,6 +320,7 @@ pub(crate) fn construct_inert_compiler_module_text_v1(
     construct_inert_compiler_module_text_for_target_v1(module, None)
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn construct_inert_compiler_module_text_for_target_v1(
     module: &Module,
     target: Option<DeviceTargetV1>,
@@ -408,6 +464,7 @@ fn compiler_module_symbol_closure_v1(module: &Module) -> CompilerModuleSymbolClo
 ///
 /// This keeps the scalar-specific floating-point and target audit in the same
 /// path that later embeds compiler-authenticated descriptor source bytes.
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn construct_inert_scalar_gemm_v1_module_text(
     module: &Module,
 ) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
@@ -434,6 +491,7 @@ pub(crate) fn construct_inert_scalar_gemm_v1_module_text(
 ///
 /// This calls the dedicated canonical lowering API directly. It performs no
 /// code-object construction, linking, publication, execution, or COMGR work.
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn construct_inert_tiled_gemm_v1_module_text(
     module: &Module,
 ) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
@@ -460,6 +518,7 @@ pub(crate) fn construct_inert_tiled_gemm_v1_module_text(
 ///
 /// The dedicated dialect entry point verifies the exact canonical graph and
 /// its two 512-byte static LDS allocations before returning inert LLVM text.
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn construct_inert_tiled_gemm_lds_slice1_module_text(
     module: &Module,
 ) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
@@ -489,6 +548,7 @@ pub(crate) fn construct_inert_tiled_gemm_lds_slice1_module_text(
 ///
 /// The result retains exactly one unresolved OCML import. This function does
 /// not locate OCML bitcode, invoke a worker, link, or construct an artifact.
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn construct_inert_row_softmax_v1_module_text(
     module: &Module,
 ) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
@@ -544,6 +604,7 @@ pub(crate) fn construct_inert_row_softmax_v1_module_text(
     })
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn bind_reviewed_row_softmax_upstream_llvm_layout_v1(
     legacy_llvm_ir: String,
     measurement: RowSoftmaxReviewedLlvmLayoutMeasurementV1,
@@ -606,6 +667,7 @@ fn bind_reviewed_row_softmax_upstream_llvm_layout_v1(
     Ok(bound)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn validate_row_softmax_upstream_llvm_layout_v1(
     llvm_ir: &str,
     measurement: RowSoftmaxReviewedLlvmLayoutMeasurementV1,
@@ -630,6 +692,7 @@ fn validate_row_softmax_upstream_llvm_layout_v1(
 /// Constructs the sole LLVM module admitted by the authenticated fixed-shape
 /// FlashAttention sidecar. The two call sites retain one unresolved OCML exp
 /// import; provider selection and native finalization remain later stages.
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn construct_inert_flash_attention_v1_module_text(
     ir: &fe2o3_kernel_ir::FlashAttentionKernelIrV1,
     profile: &fe2o3_kernel_ir::FlashAttentionProfileV1,
@@ -669,6 +732,7 @@ pub(crate) fn construct_inert_flash_attention_v1_module_text(
 }
 
 /// Lowers only the source-authenticated exact T8/E4/K2/C4 MoE sidecar.
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn construct_inert_moe_top2_v1_module_text(
     ir: &fe2o3_kernel_ir::MoeTop2KernelIrV1,
     profile: &fe2o3_kernel_ir::MoeTop2ProfileV1,
@@ -693,6 +757,7 @@ pub(crate) fn construct_inert_moe_top2_v1_module_text(
     })
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn canonical_flash_attention_v1_llvm() -> String {
     use std::fmt::Write as _;
 
@@ -854,6 +919,7 @@ fn canonical_flash_attention_v1_llvm() -> String {
     output
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn emit_flash_score(output: &mut String, prefix: &str, key: &str) {
     use std::fmt::Write as _;
 
@@ -1020,6 +1086,7 @@ pub(crate) fn bind_compiler_descriptor_source_v1(
 
 /// Binds the exact single-use scalar frontend authority into compiler-owned
 /// non-allocatable module assembly retained by the Worker V2 request.
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn bind_scalar_gemm_frontend_authority_v1(
     mut module: InertCompilerModuleTextV1,
     authority: [u8; 32],
@@ -1034,6 +1101,7 @@ pub(crate) fn bind_scalar_gemm_frontend_authority_v1(
 }
 
 /// Binds the single-use tiled frontend authority to the exact LLVM handoff.
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn bind_tiled_gemm_frontend_authority_v1(
     mut module: InertCompilerModuleTextV1,
     authority: [u8; 32],
@@ -1049,6 +1117,7 @@ pub(crate) fn bind_tiled_gemm_frontend_authority_v1(
 
 /// Binds the consumed attributed-source authority and exact compiler resource
 /// transcript to the LDS Slice 1 Worker V2 module.
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn bind_tiled_gemm_lds_slice1_authority_v1(
     mut module: InertCompilerModuleTextV1,
     authority: [u8; 32],
@@ -1075,6 +1144,7 @@ pub(crate) fn bind_tiled_gemm_lds_slice1_authority_v1(
 
 /// Binds the private row frontend authority and the retained abstract-exp proof
 /// boundary into distinct compiler-owned, non-allocatable sections.
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn bind_row_softmax_frontend_authority_v1(
     mut module: InertCompilerModuleTextV1,
     authority_transcript: &[u8],
@@ -1111,6 +1181,7 @@ pub(crate) fn bind_row_softmax_frontend_authority_v1(
 
 /// Binds the complete authenticated Flash transcript, its commitment, and the
 /// deliberately limited OCML boundary to the exact compiler module.
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn bind_flash_attention_v1_authority(
     mut module: InertCompilerModuleTextV1,
     authority_transcript: &[u8],
@@ -1146,6 +1217,7 @@ pub(crate) fn bind_flash_attention_v1_authority(
 
 /// Binds every identity retained by the consumed exact MoE receipt to the
 /// compiler-owned module. The provider section commits an empty closure.
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn bind_moe_top2_v1_identities(
     mut module: InertCompilerModuleTextV1,
     parts: &crate::collected_moe_top2_v1::AuthenticatedMoeTop2WorkerPartsV1,
@@ -1184,6 +1256,7 @@ pub(crate) fn bind_moe_top2_v1_identities(
     Ok(module)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn append_commitment_section(llvm_ir: &mut String, section: &str, bytes: &[u8]) {
     llvm_ir.push_str("module asm \".section ");
     llvm_ir.push_str(section);
@@ -1474,6 +1547,7 @@ fn check_compiler_module_limit(
     }
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn prepare_fill_collection(
     mut module: Module,
     expected_kernel_names: &[String],
@@ -1578,6 +1652,7 @@ pub(crate) fn prepare_fill_collection(
 /// This writes textual LLVM IR and grants no artifact, publication, load, or
 /// execution authority. The ordinary production export gate still runs after
 /// this observation is retained.
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn retain_tiled_gemm_frontend_test_llvm(
     module: &Module,
     directory: &Path,
@@ -1621,6 +1696,7 @@ pub(crate) fn retain_tiled_gemm_frontend_test_llvm(
     Ok(())
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn audit_tiled_gemm_frontend_test_llvm(llvm: &str) -> Result<(), EmitError> {
     for required in [
         "target triple = \"amdgcn-amd-amdhsa\"",
@@ -1666,6 +1742,7 @@ fn audit_tiled_gemm_frontend_test_llvm(llvm: &str) -> Result<(), EmitError> {
     Ok(())
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn legalize_fill_body(body: &mut FunctionBody, parameters: &[Type]) -> Result<(), EmitError> {
     if body.parameters.len() != parameters.len() {
         return Err(reject(
@@ -1783,6 +1860,7 @@ fn legalize_fill_body(body: &mut FunctionBody, parameters: &[Type]) -> Result<()
     Ok(())
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn legalize_vecadd_body(body: &mut FunctionBody, parameters: &[Type]) -> Result<(), EmitError> {
     if body.parameters.len() != parameters.len() {
         return Err(reject(
@@ -1960,6 +2038,7 @@ fn legalize_vecadd_body(body: &mut FunctionBody, parameters: &[Type]) -> Result<
     )
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn require_exact_vecadd_shape(
     body: &FunctionBody,
     parameters: [ValueId; 3],
@@ -2310,6 +2389,7 @@ fn require_exact_vecadd_shape(
     Ok(())
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn block(body: &FunctionBody, id: BlockId) -> &BasicBlock {
     body.blocks
         .iter()
@@ -2317,6 +2397,7 @@ fn block(body: &FunctionBody, id: BlockId) -> &BasicBlock {
         .expect("verified branch target")
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn single_result(operation: &Operation, expected_type: &Type) -> Result<ValueId, EmitError> {
     let [result] = operation.results.as_slice() else {
         return Err(reject(format!(
@@ -2333,6 +2414,7 @@ fn single_result(operation: &Operation, expected_type: &Type) -> Result<ValueId,
     Ok(result.id)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn insert_unique(
     values: &mut BTreeMap<ValueId, ValueId>,
     key: ValueId,
@@ -2347,6 +2429,7 @@ fn insert_unique(
     Ok(())
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn require_map_value<T: Copy>(
     values: &BTreeMap<ValueId, T>,
     key: ValueId,
@@ -2358,6 +2441,7 @@ fn require_map_value<T: Copy>(
         .ok_or_else(|| reject(format!("vecadd is missing {label} for {key}")))
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn require_gep(
     geps: &BTreeMap<ValueId, (ValueId, ValueId, Type)>,
     base: ValueId,
@@ -2379,6 +2463,7 @@ fn require_gep(
     Ok(*result)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn require_load(
     loads: &BTreeMap<ValueId, (ValueId, MemoryAccess)>,
     pointer: ValueId,
@@ -2399,6 +2484,7 @@ fn require_load(
     Ok(*result)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn find_compare(
     compares: &[(ValueId, ComparePredicate, ValueId, ValueId)],
     lhs: ValueId,
@@ -2423,6 +2509,7 @@ fn find_compare(
     Ok(*result)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn legalize_option_switches(
     body: &mut FunctionBody,
     kernel_name: &str,
@@ -2496,6 +2583,7 @@ fn legalize_option_switches(
     Ok(())
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn collect_value_types(body: &FunctionBody, parameters: &[Type]) -> BTreeMap<ValueId, Type> {
     let mut types = body
         .parameters
@@ -2516,6 +2604,7 @@ fn collect_value_types(body: &FunctionBody, parameters: &[Type]) -> BTreeMap<Val
     types
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn require_call_shape(
     name: &str,
     operation: &Operation,
@@ -2542,6 +2631,7 @@ fn require_call_shape(
     Ok(())
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn fresh_value(next: &mut u32, ty: Type) -> Result<ValueDef, EmitError> {
     let value = ValueDef::new(ValueId(*next), ty);
     *next = next
@@ -2550,22 +2640,27 @@ fn fresh_value(next: &mut u32, ty: Type) -> Result<ValueDef, EmitError> {
     Ok(value)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn readonly_f32_slice() -> Type {
     Type::slice(Type::F32, AddressSpace::Global, AccessMode::ReadOnly)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn writable_f32_slice() -> Type {
     Type::slice(Type::F32, AddressSpace::Global, AccessMode::ReadWrite)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn readonly_f32_pointer() -> Type {
     Type::pointer(Type::F32, AddressSpace::Global, AccessMode::ReadOnly)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn writable_f32_pointer() -> Type {
     Type::pointer(Type::F32, AddressSpace::Global, AccessMode::ReadWrite)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn reject(reason: impl Into<String>) -> EmitError {
     EmitError::Preflight {
         reason: format!(
@@ -2575,7 +2670,7 @@ fn reject(reason: impl Into<String>) -> EmitError {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod tests {
     use super::*;
     use fe2o3_compiler_ffi::CompilerDescriptorSourceV1;

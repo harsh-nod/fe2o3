@@ -17,6 +17,7 @@ use crate::protected_rustc_invocation::{
     AdmittedProtectedRustcInvocationV1, ProtectedRustcInvocationErrorV1,
 };
 
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) const SIMULATION_PIPELINE_V1: &str = "simulation-v1";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

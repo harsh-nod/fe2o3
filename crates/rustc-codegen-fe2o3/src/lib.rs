@@ -16,29 +16,47 @@ extern crate rustc_target;
 
 mod amdgpu_llvm;
 mod closure_profile_v1;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod collected_executable_scalar_control_flow_v2;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod collected_flash_attention_v1;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod collected_general_gemm_v1;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod collected_moe_top2_v1;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod collected_row_softmax_v1;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod collected_scalar_gemm_v1;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod collected_tiled_gemm_lds_slice1_v1;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod collected_tiled_gemm_v1;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod collected_wave64_collectives_v1;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod collected_workgroup_sync_v1;
 mod collector;
 mod compiler_descriptor;
 mod compiler_ffi_adapter;
 mod device_ffi;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod frontend_record_bridge;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod general_gemm_final_join_v1;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod general_gemm_intrinsic_semantics_v1;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod general_gemm_pipeline_v1;
 mod host_object;
 mod kernel_ir_codegen;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod kernel_ir_lowering;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod mir_import;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod mir_import_v2;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod moe_top2_v1_codegen;
 mod monomorphization_dead;
 mod production_geometry_v1;
@@ -64,17 +82,22 @@ mod rust_type_layout_v3;
 mod rustc_semantic_adapter_v1;
 mod rustc_semantic_plan_v1;
 pub mod s09_identity_v2;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod same_session_rustc_v1;
 pub mod scalar_mir_v2;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod semantic_features;
 pub mod semantic_layout_bridge;
 pub mod semantic_type_adapter_v2;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod semantic_witness;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod source_debug;
 mod static_registration;
 #[cfg(test)]
 mod test_temp_dir;
 mod trusted_device_items;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod typed_artifact;
 mod worker_v2_producer;
 
@@ -98,20 +121,25 @@ use std::any::Any;
 use std::env;
 use std::fmt;
 use std::fs;
+#[cfg(feature = "qualification-oracles-test-only")]
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
+#[cfg(feature = "qualification-oracles-test-only")]
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use qualification_selection::{
-    DeviceCompilationRoute, QualificationOracle, QualificationSelection,
-    SelectedQualificationOracle,
-};
+use qualification_selection::QualificationSelection;
+#[cfg(feature = "qualification-oracles-test-only")]
+use qualification_selection::{QualificationOracle, SelectedQualificationOracle};
 
+#[cfg(feature = "qualification-oracles-test-only")]
 const MAX_FINALIZED_LLVM_IR_BYTES: usize = 16 * 1024 * 1024;
+#[cfg(feature = "qualification-oracles-test-only")]
 const MAX_FINALIZED_HSACO_BYTES: usize = 4 * 1024 * 1024;
+#[cfg(feature = "qualification-oracles-test-only")]
 const TEMP_DIRECTORY_ATTEMPTS: usize = 64;
+#[cfg(feature = "qualification-oracles-test-only")]
 static NEXT_HOST_OBJECT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
 pub const TARGET_ENV: &str = "FE2O3_TARGET";
@@ -150,6 +178,7 @@ struct OngoingFe2o3Codegen {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg(feature = "qualification-oracles-test-only")]
 struct TypedKernelRootV1 {
     logical_name: String,
     export_name: String,
@@ -170,6 +199,7 @@ struct TemporaryHostObject {
 }
 
 impl TemporaryHostObjects {
+    #[cfg(feature = "qualification-oracles-test-only")]
     fn reserve(&mut self, parent: &Path, artifact_id: &str) -> Result<PathBuf, TypedVerticalError> {
         let artifact_prefix = artifact_id
             .get(..16)
@@ -278,6 +308,7 @@ impl BackendConfig {
     }
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn dump_authenticated_frontend_contracts(
     frontend: &frontend_record_bridge::CompilerFrontendRecordV1,
 ) {
@@ -338,6 +369,7 @@ fn has_custom_llvm_configuration(session: &Session) -> bool {
     !session.opts.cg.llvm_args.is_empty() || !session.opts.cg.passes.is_empty()
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn collect_qualification_oracle_input<'tcx>(
     tcx: TyCtxt<'tcx>,
     cgus: &[rustc_middle::mir::mono::CodegenUnit<'tcx>],
@@ -470,8 +502,14 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                 );
             }
 
+            #[cfg(feature = "qualification-oracles-test-only")]
             let mut generated_host_objects = host_object::GeneratedHostObjects::default();
+            #[cfg(not(feature = "qualification-oracles-test-only"))]
+            let generated_host_objects = host_object::GeneratedHostObjects::default();
+            #[cfg(feature = "qualification-oracles-test-only")]
             let mut temporary_host_objects = TemporaryHostObjects::default();
+            #[cfg(not(feature = "qualification-oracles-test-only"))]
+            let temporary_host_objects = TemporaryHostObjects::default();
             let mut production_device_transaction_complete = false;
             if compilation_route.is_production() {
                 match production_pipeline_v1::disposition(kernel_count) {
@@ -536,7 +574,9 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     }
                 }
             }
+            #[cfg(feature = "qualification-oracles-test-only")]
             let qualification_oracle = compilation_route.qualification_oracle();
+            #[cfg(feature = "qualification-oracles-test-only")]
             if kernel_count == 0
                 && qualification_oracle == Some(QualificationOracle::CollectedGeneralGemmV1)
             {
@@ -545,20 +585,15 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     general_gemm_pipeline_v1::GENERAL_GEMM_PIPELINE_V1,
                 ));
             }
-            let device_pipeline_route = if kernel_count > 0 {
-                Some(
-                    compilation_route
-                        .device_route(production_device_transaction_complete)
-                        .unwrap_or_else(|error| {
-                            tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"))
-                        }),
-                )
-            } else {
-                None
-            };
-            if let Some(DeviceCompilationRoute::QualificationOracle(qualification_pipeline)) =
-                device_pipeline_route
-            {
+            if kernel_count > 0 {
+                compilation_route
+                    .validate_device_transaction(production_device_transaction_complete)
+                    .unwrap_or_else(|error| {
+                        tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"))
+                    });
+            }
+            #[cfg(feature = "qualification-oracles-test-only")]
+            if let Some(qualification_pipeline) = compilation_route.qualification() {
                 let output_dir = output_dir.expect("kernel output was required above");
                 let qualification_oracle = qualification_pipeline.oracle();
                 if qualification_oracle == QualificationOracle::SimulationV1 {
@@ -1739,6 +1774,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
     }
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn general_gemm_semantic_preflight_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     collection: &collector::CollectionResult<'tcx>,
@@ -1770,6 +1806,7 @@ fn general_gemm_semantic_preflight_v1<'tcx>(
     }
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn typed_roots_from_collection(
     functions: &[collector::CollectedFunction<'_>],
 ) -> Result<Vec<TypedKernelRootV1>, TypedVerticalError> {
@@ -1829,6 +1866,7 @@ fn typed_roots_from_collection(
         .collect()
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn generate_typed_host_objects(
     roots: &[TypedKernelRootV1],
     artifacts: &[amdgpu_llvm::DeviceArtifact],
@@ -1899,6 +1937,7 @@ fn generate_typed_host_objects(
     Ok((objects, temporary))
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn generate_semantic_witness_host_objects(
     roots: &[compiler_descriptor::TypedDescriptorRootV1],
     output_dir: &Path,
@@ -1933,6 +1972,7 @@ fn generate_semantic_witness_host_objects(
     Ok((objects, temporary))
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn match_typed_artifacts(
     roots: &[TypedKernelRootV1],
     artifacts: &[amdgpu_llvm::DeviceArtifact],
@@ -1985,6 +2025,7 @@ fn match_typed_artifacts(
     Ok(matches)
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn valid_ascii_symbol_stem(name: &str) -> bool {
     let mut bytes = name.bytes();
     let Some(first) = bytes.next() else {
@@ -1995,6 +2036,7 @@ fn valid_ascii_symbol_stem(name: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn finalized_artifact_bytes<'artifact>(
     snapshot: &'artifact artifact_transaction::FinalizedArtifactSnapshot,
     kind: &'static str,
@@ -2013,6 +2055,7 @@ fn finalized_artifact_bytes<'artifact>(
 }
 
 #[derive(Debug)]
+#[cfg(feature = "qualification-oracles-test-only")]
 enum TypedVerticalError {
     InvalidCollectedRoot {
         export_name: String,
@@ -2044,6 +2087,7 @@ enum TypedVerticalError {
     HostObject(host_object::HostObjectError),
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 impl fmt::Display for TypedVerticalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -2105,6 +2149,7 @@ impl fmt::Display for TypedVerticalError {
     }
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 impl std::error::Error for TypedVerticalError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -2486,19 +2531,29 @@ fn optional_tool(llvm_bin: &Path, name: &str) -> Option<PathBuf> {
 mod tests {
     use super::{
         AmdGpuTarget, BackendConfig, BuildAttemptSelection, QualificationSelection, RocmToolchain,
-        TemporaryHostObjects, TypedKernelRootV1, TypedVerticalError, finalized_artifact_bytes,
-        generate_typed_host_objects, llvm_compile_command, managed_artifact_output,
-        match_typed_artifacts, validate_hsaco_metadata_text,
+        llvm_compile_command, managed_artifact_output, validate_hsaco_metadata_text,
     };
+    #[cfg(feature = "qualification-oracles-test-only")]
+    use super::{
+        TemporaryHostObjects, TypedKernelRootV1, TypedVerticalError, finalized_artifact_bytes,
+        generate_typed_host_objects, match_typed_artifacts,
+    };
+    #[cfg(feature = "qualification-oracles-test-only")]
     use crate::amdgpu_llvm::DeviceArtifact;
+    #[cfg(feature = "qualification-oracles-test-only")]
     use crate::collector::TypedKernelProfile;
+    #[cfg(feature = "qualification-oracles-test-only")]
     use fe2o3_artifact_transaction::FinalizedArtifactSnapshot;
+    #[cfg(feature = "qualification-oracles-test-only")]
     use rustc_codegen_ssa::CompiledModules;
     use std::ffi::OsStr;
+    #[cfg(feature = "qualification-oracles-test-only")]
     use std::fs;
     use std::path::{Path, PathBuf};
+    #[cfg(feature = "qualification-oracles-test-only")]
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
     #[test]
@@ -2535,8 +2590,10 @@ mod tests {
         assert!(row_v1.contains("publish_prepared_row_softmax_v1_worker_handoff("));
     }
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     struct TestDirectory(PathBuf);
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     impl TestDirectory {
         fn new() -> Self {
             fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
@@ -2550,12 +2607,14 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     impl Drop for TestDirectory {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     fn typed_root(logical_name: &str, export_name: &str) -> TypedKernelRootV1 {
         let crate_binding =
             reserved_fe2o3_symbols::derive_crate_binding_id_v1("fixture", ["metadata"]);
@@ -2582,6 +2641,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     fn published_artifact(name: &str) -> DeviceArtifact {
         DeviceArtifact {
             kernel_name: name.to_owned(),
@@ -2631,6 +2691,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "qualification-oracles-test-only")]
     fn ordinary_kernels_leave_generated_host_objects_empty() {
         let artifacts = [published_artifact("ordinary")];
         let (objects, temporary) = generate_typed_host_objects(
@@ -2652,6 +2713,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "qualification-oracles-test-only")]
     fn typed_roots_match_finalized_artifacts_by_export_name() {
         let roots = [typed_root("add", "vecadd"), typed_root("sum", "vector_sum")];
         let artifacts = [
@@ -2664,6 +2726,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "qualification-oracles-test-only")]
     fn typed_artifact_matching_rejects_missing_duplicates_and_invalid_symbols() {
         let missing = match_typed_artifacts(
             &[typed_root("vecadd", "vecadd")],
@@ -2706,6 +2769,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "qualification-oracles-test-only")]
     fn finalized_artifact_snapshots_are_exact_and_bounded() {
         let directory = TestDirectory::new();
         let path = directory.0.join("vecadd.ll");
@@ -2737,6 +2801,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "qualification-oracles-test-only")]
     fn temporary_host_objects_survive_until_their_owner_drops() {
         const ARTIFACT_ID: &str =
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -2776,11 +2841,19 @@ mod tests {
             let error = selection.resolve().expect_err("selector must be exact");
             let message = error.to_string();
             assert!(message.contains("FE2O3_QUALIFICATION_ORACLE_V1"));
+            #[cfg(feature = "qualification-oracles-test-only")]
             assert!(message.contains("must be unset for production compilation"));
+            #[cfg(not(feature = "qualification-oracles-test-only"))]
+            assert!(message.contains("backend feature `qualification-oracles-test-only`"));
+            #[cfg(feature = "qualification-oracles-test-only")]
             assert!(message.contains("kernel-ir-v1"));
+            #[cfg(feature = "qualification-oracles-test-only")]
             assert!(message.contains("kernel-ir-worker-v2"));
+            #[cfg(feature = "qualification-oracles-test-only")]
             assert!(message.contains("collected-tiled-gemm-v1"));
+            #[cfg(feature = "qualification-oracles-test-only")]
             assert!(message.contains("collected-row-softmax-v1"));
+            #[cfg(feature = "qualification-oracles-test-only")]
             assert!(message.contains("collected-general-gemm-v1"));
         }
     }

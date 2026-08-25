@@ -44,7 +44,10 @@ inputs and are remeasured; no machine-specific digest is compiled in.
 
 Production has no pipeline selector. `FE2O3_CODEGEN_PIPELINE` is rejected, and
 `FE2O3_QUALIFICATION_ORACLE_V1` is reserved for temporary non-production test
-oracles such as simulation and migration equivalence checks.
+oracles such as simulation and migration equivalence checks. Those oracles
+exist only in a `rustc-codegen-fe2o3` backend built with the
+`qualification-oracles-test-only` feature; the production backend rejects the
+environment variable.
 
 `cargo fe2o3 authority release probe` exercises this exact launcher/handoff
 boundary and exits before Cargo, artifact generation, HSA loading, or GPU
@@ -261,6 +264,7 @@ removal is available; symlinked or substituted selected paths fail closed.
 
 ## Narrow Worker V2 handoff flow
 
+In a backend built with `qualification-oracles-test-only`,
 `FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-worker-v2` requires
 `FE2O3_WORKER_V2_CONFIG_V2` to name an absolute path to a strict V2 JSON
 manifest. The manifest is an explicit operator policy input, not compiler

@@ -14,9 +14,9 @@ use fe2o3_rustc_invocation::{
     VerificationModeV1, encode_descriptor_v1, encode_descriptor_v2,
 };
 
-use crate::qualification_selection::{
-    CompilationRoute, QualificationOracle, QualificationSelection,
-};
+use crate::qualification_selection::CompilationRoute;
+#[cfg(feature = "qualification-oracles-test-only")]
+use crate::qualification_selection::{QualificationOracle, QualificationSelection};
 
 use super::*;
 
@@ -121,6 +121,7 @@ fn validate(
     )
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn qualification_route(oracle: QualificationOracle) -> CompilationRoute {
     QualificationSelection::ExplicitQualification(oracle)
         .resolve()
@@ -137,28 +138,32 @@ fn absent_and_present_selection_is_exact_and_ordinary_compatible() {
         CompilationRoute::Production.rustc_invocation_policy(false),
         RustcInvocationPolicy::ProtectedV3,
     );
-    for oracle in QualificationOracle::ALL {
-        let route = qualification_route(oracle);
-        assert_eq!(
-            route.rustc_invocation_policy(true),
-            RustcInvocationPolicy::QualificationObserved,
-        );
-        assert_eq!(
-            route.rustc_invocation_policy(false),
-            match oracle {
-                QualificationOracle::CollectedRowSoftmaxV1 => {
-                    RustcInvocationPolicy::ProtectedV3
+    #[cfg(feature = "qualification-oracles-test-only")]
+    {
+        for oracle in QualificationOracle::ALL {
+            let route = qualification_route(oracle);
+            assert_eq!(
+                route.rustc_invocation_policy(true),
+                RustcInvocationPolicy::QualificationObserved,
+            );
+            assert_eq!(
+                route.rustc_invocation_policy(false),
+                match oracle {
+                    QualificationOracle::CollectedRowSoftmaxV1 => {
+                        RustcInvocationPolicy::ProtectedV3
+                    }
+                    QualificationOracle::SimulationV1 => {
+                        RustcInvocationPolicy::QualificationObserved
+                    }
+                    _ => RustcInvocationPolicy::Unmanaged,
                 }
-                QualificationOracle::SimulationV1 => {
-                    RustcInvocationPolicy::QualificationObserved
-                }
-                _ => RustcInvocationPolicy::Unmanaged,
-            }
-        );
+            );
+        }
     }
 }
 
 #[test]
+#[cfg(feature = "qualification-oracles-test-only")]
 fn unprotected_routes_reject_protected_signals_without_consuming_unknown_fds() {
     let _guard = FD_TEST_LOCK.lock().unwrap();
     let descriptor_bytes =
@@ -233,6 +238,7 @@ fn unprotected_routes_reject_protected_signals_without_consuming_unknown_fds() {
 }
 
 #[test]
+#[cfg(feature = "qualification-oracles-test-only")]
 fn qualification_routes_require_paired_authenticated_observations_and_no_authority() {
     let _guard = FD_TEST_LOCK.lock().unwrap();
     let descriptor_bytes =
@@ -363,6 +369,7 @@ fn zero_kernel_protected_selection_cannot_downgrade_or_leave_an_inherited_fd() {
         CompilationRoute::Production.rustc_invocation_policy(false),
         RustcInvocationPolicy::ProtectedV3,
     );
+    #[cfg(feature = "qualification-oracles-test-only")]
     assert_eq!(
         qualification_route(QualificationOracle::CollectedRowSoftmaxV1)
             .rustc_invocation_policy(false),
