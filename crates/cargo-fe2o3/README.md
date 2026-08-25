@@ -59,6 +59,11 @@ variables; qualification rejects the production variables. Envelope,
 source-debug, exact-workload, and restart-oracle fields are not part of the
 production schema.
 
+The rustc wrapper owns production work directly as a `ManagedProductionBuild`
+transaction. Enabling qualification tests does not wrap that transaction in a
+route enum or change its state type; compatibility work occupies a separate
+cfg-gated slot and cannot be selected by production configuration.
+
 Cargo dependency units that are not the selected kernel root are host-only
 rustc compilations, not another fe2o3 route. The wrapper removes all managed
 compiler arguments, the fe2o3 backend descriptor, qualification selection, and
