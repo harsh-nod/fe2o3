@@ -137,6 +137,8 @@ fn transcript_validation_consumes_prepare_grant_and_commit_in_order() {
     assert_eq!(prepared.request_identity(), transcript.request);
     assert_eq!(prepared.plan_identity(), transcript.plan);
     assert_eq!(prepared.closure_identity(), transcript.closure);
+    assert_eq!(prepared.expected_binding(), transcript.binding);
+    assert_eq!(prepared.expected_process(), transcript.process);
 
     let validated_grant = prepared.validate_grant(transcript.grant()).unwrap();
     assert_eq!(validated_grant.grant_identity(), transcript.grant);

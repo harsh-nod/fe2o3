@@ -494,6 +494,31 @@ impl HostLinkClosureV1 {
         self.plan.plan_digest()
     }
 
+    /// Returns the canonical artifact identity of the static host LLD retained by the plan.
+    ///
+    /// The identity binds the executable bytes, size, mode, release nonce, target, provenance,
+    /// label, and ELF profile. It is intended for comparison with a broker capability binding;
+    /// possessing it grants no tool approval or launch authority.
+    pub fn static_host_lld_artifact_id(&self) -> Result<ArtifactIdV1, HostLinkError> {
+        self.revalidate_inputs()?;
+        let tool = self
+            .plan
+            .producer(self.plan.manifest().spec.toolchain.static_host_lld)
+            .ok_or_else(|| {
+                HostLinkError::new(
+                    HostLinkErrorCodeV1::ToolApproval,
+                    "sealed plan lost its exact static_host_lld descriptor",
+                )
+            })?;
+        if tool.identity().kind != HostArtifactKindV1::StaticHostLld {
+            return Err(HostLinkError::new(
+                HostLinkErrorCodeV1::ToolApproval,
+                "sealed plan static_host_lld identity has the wrong artifact kind",
+            ));
+        }
+        Ok(tool.identity().id)
+    }
+
     pub const fn nonce_sha256(&self) -> Sha256Digest {
         self.nonce_sha256
     }

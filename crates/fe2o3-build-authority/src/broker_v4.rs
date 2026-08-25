@@ -277,7 +277,11 @@ impl CapabilityBindingV4 {
         self.release_contract_identity
     }
 
-    /// Returns the authenticated static host-LLD identity.
+    /// Returns the canonical W0 static-host-LLD artifact identity.
+    ///
+    /// W1 interprets these bytes as the digest carried by `ArtifactIdV1`, which binds the tool's
+    /// bytes, size, mode, release, target, provenance, label, and ELF profile. This protocol crate
+    /// does not authenticate that interpretation or grant tool approval.
     pub const fn static_host_lld_identity(self) -> [u8; 32] {
         self.static_host_lld_identity
     }
@@ -1007,6 +1011,19 @@ pub struct PreparedHostLinkTranscriptV4 {
 }
 
 impl PreparedHostLinkTranscriptV4 {
+    /// Returns the exact V4 binding retained by this prepared transcript.
+    ///
+    /// The binding is public inert protocol state. Returning it grants no linker,
+    /// publication, or replay authority.
+    pub const fn expected_binding(&self) -> CapabilityBindingV4 {
+        self.expected_binding
+    }
+
+    /// Returns the protected process identity retained by this prepared transcript.
+    pub const fn expected_process(&self) -> ProcessIdentityV4 {
+        self.expected_process
+    }
+
     /// Returns the validated request identity.
     pub const fn request_identity(&self) -> [u8; 32] {
         self.request_identity

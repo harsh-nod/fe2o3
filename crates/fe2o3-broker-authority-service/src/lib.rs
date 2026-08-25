@@ -81,11 +81,12 @@
 //! require_serialize::<LiveClientPidfdIdentityV1>();
 //! ```
 //!
-//! The [`BrokerSessionMachineV1`] is a separate fixed-capacity, in-memory lifecycle model. It
-//! retains an admitted client capability, issues one move-only reservation permit, and requires
-//! that permit before a reservation-bound W0 request can be formed. It binds one completed Broker
-//! V4 transcript and exact W0 output, then owns one external-anchor verification token through a
-//! logical consume or abort decision. Anchor preparation consumes the machine into an opaque,
+//! The [`BrokerSessionMachineV1`] is a separate fixed-capacity, in-memory lifecycle model. Its
+//! broker-owned route retains prepared and granted Broker V4 state, requires the V4 static-LLD
+//! identity to match the exact W0 closure, invokes only an externally approved static linker, and
+//! keeps the authenticated execution and admitted output inside the service through terminal
+//! commit. It then owns one external-anchor verification token through a logical consume or abort
+//! decision. Anchor preparation consumes the machine into an opaque,
 //! move-only [`BrokerAnchorPreparedSessionV1`] before the service attempt nonce, transaction, or
 //! challenge exists. Durable preparation stages exact W0, obtains Linux `getrandom` entropy, and
 //! forms the nonce-bound challenge internally. [`BrokerDurableSessionTransactionV1`] provides the
@@ -94,8 +95,8 @@
 //! record. Restart can re-emit the challenge only through a validated
 //! [`BrokerRecoveredPreparedSessionV1`]. Recovery distinguishes prepared, anchor-committed,
 //! published, aborted, and invalid records. It remains `AUTHORITY=none`: this is not anti-rollback
-//! storage, cross-system atomicity, key provenance, multi-writer exclusion, linker invocation,
-//! publication authority, or runtime authority.
+//! storage, cross-system atomicity, key provenance, multi-writer exclusion, trusted tool-evidence
+//! approval, publication authority, or runtime authority.
 //!
 #[cfg(not(target_os = "linux"))]
 compile_error!(
@@ -129,12 +130,14 @@ pub use linux::{
 pub use session::{
     BROKER_LINK_RESERVATION_DIGEST_DOMAIN_V1, BROKER_SESSION_CAPACITY_V1,
     BROKER_SESSION_MACHINE_AUTHORITY_V1, BROKER_V4_COMPLETED_TRANSCRIPT_DIGEST_DOMAIN_V1,
-    BrokerAnchorModeV1, BrokerAnchorPreparedSessionV1, BrokerHostLinkPermitV1,
-    BrokerSessionErrorKindV1, BrokerSessionIdV1, BrokerSessionMachineErrorV1,
-    BrokerSessionMachineV1, BrokerSessionNonceV1, BrokerSessionObservationV1,
-    BrokerSessionReservationV1, BrokerSessionStageV1, CommittedBrokerPublicationV1,
-    DurablePublicationPlanIdentityV1, completed_broker_transcript_digest_v1,
+    BrokerAnchorModeV1, BrokerAnchorPreparedSessionV1, BrokerCompletedHostLinkV1,
+    BrokerHostLinkPermitV1, BrokerHostLinkPollV1, BrokerHostOutputObservationV1,
+    BrokerOwnedHostLinkExecutionV1, BrokerReservedHostLinkSessionV1, BrokerSessionErrorKindV1,
+    BrokerSessionIdV1, BrokerSessionMachineErrorV1, BrokerSessionMachineV1, BrokerSessionNonceV1,
+    BrokerSessionObservationV1, BrokerSessionReservationV1, BrokerSessionStageV1,
+    CommittedBrokerPublicationV1, DurablePublicationPlanIdentityV1,
+    completed_broker_transcript_digest_v1,
 };
 
-/// This foundation grants no execution, persistence, publication, or launch authority.
+/// This foundation grants no independent tool approval, persistence, publication, or GPU authority.
 pub const BROKER_AUTHORITY_SERVICE_AUTHORITY_V1: &str = "none";
