@@ -1,7 +1,7 @@
 use fe2o3_device::{DisjointSlice, kernel, thread};
 use fe2o3_host::CompilerGeneratedKernelContractV1;
 
-#[kernel(typed)]
+#[kernel(typed, qualification_worker_v2)]
 pub fn vecadd(a: &[f32], b: &[f32], mut output: DisjointSlice<f32>) {
     let index = thread::index_1d();
     let offset = index.get();

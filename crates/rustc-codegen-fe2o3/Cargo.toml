@@ -79,5 +79,9 @@ required-features = ["qualification-oracles-test-only"]
 name = "reference_binding_v1"
 required-features = ["qualification-oracles-test-only"]
 
+[[test]]
+name = "cross_crate_typed_binding"
+required-features = ["qualification-oracles-test-only"]
+
 [package.metadata.rust-analyzer]
 rustc_private = true
