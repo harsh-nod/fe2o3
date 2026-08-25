@@ -5,12 +5,12 @@ use std::{error::Error, fmt};
 
 use dialect_kernel::OwnershipCoverageAttr;
 use fe2o3_functional_proof::{
-    COMPLETE_GPU_HIERARCHY_V1, MirPlironSemanticContractV1, ParallelFoldOrderV1,
-    ParallelHierarchyLevelV1, ParallelNumericalPolicyV1, ParallelOutputRelationV1,
-    ParallelReferenceContractErrorV1, ParallelReferenceContractV1, ParallelScheduleRelationV1,
-    SemanticCollectiveContractV1, SemanticCollectiveKindV1, SemanticEvaluationOrderV1,
-    SemanticFiniteExtentV1, SemanticNumericalPolicyV1, SemanticOutputContractV1,
-    SemanticScalarTypeV1, SemanticTypedRootV1,
+    COMPLETE_GPU_HIERARCHY_V1, MirPlironSemanticContractV1, ParallelCallKindV1,
+    ParallelCallSummaryV1, ParallelExecutionScopeV1, ParallelFoldOrderV1, ParallelHierarchyLevelV1,
+    ParallelNumericalPolicyV1, ParallelOutputRelationV1, ParallelReferenceContractErrorV1,
+    ParallelReferenceContractV1, ParallelScheduleRelationV1, SemanticCollectiveContractV1,
+    SemanticCollectiveKindV1, SemanticEvaluationOrderV1, SemanticFiniteExtentV1,
+    SemanticNumericalPolicyV1, SemanticOutputContractV1, SemanticScalarTypeV1, SemanticTypedRootV1,
 };
 use fe2o3_kernel_analysis::HierarchicalOwnershipLevelV1;
 use fe2o3_proof_contracts::DigestV1;
@@ -23,6 +23,13 @@ use super::{
 
 const DYNAMIC_BOUND_DOMAIN_V1: &[u8] = b"FE2O3/PARALLEL-REFERENCE/DYNAMIC-BOUND/V1\0";
 const DERIVED_RELATION_DOMAIN_V1: &[u8] = b"FE2O3/PARALLEL-REFERENCE/DERIVED-RELATION/V1\0";
+const TENSOR_LAYOUT_DOMAIN_V1: &[u8] = b"FE2O3/PARALLEL-REFERENCE/TENSOR-LAYOUT/V1\0";
+const TENSOR_CALLSITE_DOMAIN_V1: &[u8] = b"FE2O3/PARALLEL-REFERENCE/TENSOR-CALLSITE/V1\0";
+const TENSOR_SUMMARY_DOMAIN_V1: &[u8] = b"FE2O3/PARALLEL-REFERENCE/TENSOR-SUMMARY/V1\0";
+const TENSOR_BARRIER_DOMAIN_V1: &[u8] = b"FE2O3/PARALLEL-REFERENCE/TENSOR-BARRIER/V1\0";
+const TENSOR_DIRECT_DOMAIN_V1: &[u8] = b"FE2O3/PARALLEL-REFERENCE/TENSOR-DIRECT/V1\0";
+const TENSOR_CONTRIBUTION_DOMAIN_V1: &[u8] = b"FE2O3/PARALLEL-REFERENCE/TENSOR-CONTRIBUTION/V1\0";
+const TENSOR_SCATTER_DOMAIN_V1: &[u8] = b"FE2O3/PARALLEL-REFERENCE/TENSOR-SCATTER/V1\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProductionParallelReferenceContractReportV1 {
@@ -88,7 +95,7 @@ pub enum ProductionParallelReferenceContractErrorV1 {
     NumericalProofIncomplete { index: usize },
     CallSummaryDerivationIncomplete { index: usize, kind: &'static str },
     CallSummaryMismatch { index: usize },
-    TensorFragmentOwnershipIncomplete { index: usize },
+    TensorFragmentOwnershipIncomplete { index: usize, detail: &'static str },
     UnmodeledTensorSites { declared: usize, live: usize },
     ContractConstruction(ParallelReferenceContractErrorV1),
     CounterOverflow,
@@ -129,7 +136,7 @@ impl fmt::Display for ProductionParallelReferenceContractErrorV1 {
             Self::NumericalProofIncomplete { index } => write!(formatter, "error[FE2O3-PARALLEL-010]: finite error policy for relation {index} lacks a live typed witness or retained authenticated proof"),
             Self::CallSummaryDerivationIncomplete { index, kind } => write!(formatter, "error[FE2O3-PARALLEL-011]: compiler cannot independently derive {kind} call summary {index} from the current ranked IR; declaration-only summaries are not evidence"),
             Self::CallSummaryMismatch { index } => write!(formatter, "error[FE2O3-PARALLEL-012]: helper or intrinsic summary {index} differs from live typed roots, scope, callsite, or authenticated proof"),
-            Self::TensorFragmentOwnershipIncomplete { index } => write!(formatter, "error[FE2O3-PARALLEL-013]: cooperative tensor summary {index} lacks a clean live fragment ownership and convergence proof"),
+            Self::TensorFragmentOwnershipIncomplete { index, detail } => write!(formatter, "error[FE2O3-PARALLEL-013]: cooperative tensor summary {index} is incomplete: {detail}"),
             Self::UnmodeledTensorSites { declared, live } => write!(formatter, "error[FE2O3-PARALLEL-014]: parallel contract models {declared} cooperative tensor sites but the live ranked graph contains {live}"),
             Self::CounterOverflow => formatter.write_str("error[FE2O3-PARALLEL-015]: parallel relation count cannot be represented in the production report"),
             Self::ContractConstruction(error) => write!(formatter, "error[FE2O3-PARALLEL-017]: compiler-derived parallel contract was invalid: {error}"),
@@ -211,15 +218,8 @@ pub fn derive_and_require_parallel_reference_contract_v1(
     ),
     ProductionParallelReferenceContractErrorV1,
 > {
-    if tensor_site_count(ranked) != 0 {
-        return Err(
-            ProductionParallelReferenceContractErrorV1::UnmodeledTensorSites {
-                declared: 0,
-                live: tensor_site_count(ranked),
-            },
-        );
-    }
     let mut relations = Vec::with_capacity(semantic_contract.outputs().len());
+    let mut call_summaries = Vec::new();
     for (index, output) in semantic_contract.outputs().iter().enumerate() {
         let proof = output_receipt_identity(ranked, output)
             .ok_or(ProductionParallelReferenceContractErrorV1::OutputRelationMismatch { index })?;
@@ -353,6 +353,21 @@ pub fn derive_and_require_parallel_reference_contract_v1(
                 );
             }
         };
+        let tensor_summaries = derive_tensor_call_summaries_v1(
+            ranked,
+            evidence,
+            semantic_contract,
+            output,
+            index,
+            schedule,
+            numerical_policy,
+            proof,
+        )?;
+        let tensor_summary_ids = tensor_summaries
+            .iter()
+            .map(ParallelCallSummaryV1::identity)
+            .collect();
+        call_summaries.extend(tensor_summaries);
         relations.push(
             ParallelOutputRelationV1::new(
                 derived_relation_identity(semantic_contract, output, index),
@@ -361,15 +376,18 @@ pub fn derive_and_require_parallel_reference_contract_v1(
                 schedule,
                 numerical_policy,
                 COMPLETE_GPU_HIERARCHY_V1.to_vec(),
-                vec![],
+                tensor_summary_ids,
                 proof,
             )
             .map_err(ProductionParallelReferenceContractErrorV1::ContractConstruction)?,
         );
     }
-    let contract =
-        ParallelReferenceContractV1::new(semantic_contract.canonical_sha256(), relations, vec![])
-            .map_err(ProductionParallelReferenceContractErrorV1::ContractConstruction)?;
+    let contract = ParallelReferenceContractV1::new(
+        semantic_contract.canonical_sha256(),
+        relations,
+        call_summaries,
+    )
+    .map_err(ProductionParallelReferenceContractErrorV1::ContractConstruction)?;
     let report = require_parallel_reference_contract_v1(
         ranked,
         evidence,
@@ -438,6 +456,7 @@ pub fn require_parallel_reference_contract_v1(
     }
 
     let mut counts = RelationCountsV1::default();
+    let mut derived_call_summaries = Vec::new();
     for (index, output) in semantic_contract.outputs().iter().enumerate() {
         let Some(relation) = expected
             .relations()
@@ -620,25 +639,32 @@ pub fn require_parallel_reference_contract_v1(
                 counts.recurrence += 1;
             }
         }
+        let tensor_summaries = derive_tensor_call_summaries_v1(
+            ranked,
+            evidence,
+            semantic_contract,
+            output,
+            index,
+            relation.schedule(),
+            relation.numerical_policy(),
+            output_proof,
+        )?;
+        let derived_ids = tensor_summaries
+            .iter()
+            .map(ParallelCallSummaryV1::identity)
+            .collect::<Vec<_>>();
+        if relation.call_summaries() != derived_ids {
+            return Err(ProductionParallelReferenceContractErrorV1::CallSummaryMismatch { index });
+        }
+        derived_call_summaries.extend(tensor_summaries);
     }
 
     let live_tensor_sites = tensor_site_count(ranked);
-    if live_tensor_sites != 0 {
-        return Err(
-            ProductionParallelReferenceContractErrorV1::UnmodeledTensorSites {
-                declared: 0,
-                live: live_tensor_sites,
-            },
-        );
-    }
-    if !expected.call_summaries().is_empty() {
-        return Err(
-            ProductionParallelReferenceContractErrorV1::CallSummaryDerivationIncomplete {
-                index: 0,
-                kind: "call",
-            },
-        );
-    }
+    reconcile_tensor_summaries_v1(
+        expected.call_summaries(),
+        &derived_call_summaries,
+        live_tensor_sites,
+    )?;
 
     Ok(ProductionParallelReferenceContractReportV1 {
         contract_identity: expected.canonical_sha256(),
@@ -648,7 +674,7 @@ pub fn require_parallel_reference_contract_v1(
         fold_relations: count(counts.fold)?,
         bounded_recurrences: count(counts.recurrence)?,
         call_summaries: count(expected.call_summaries().len())?,
-        tensor_summaries: 0,
+        tensor_summaries: count(live_tensor_sites)?,
         error_bounded_relations: count(counts.error_bounded)?,
     })
 }
@@ -910,6 +936,495 @@ fn require_numerical_policy(
     }
 }
 
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn derive_tensor_call_summaries_v1(
+    ranked: &ProductionRankedKernelLoweringInputV1,
+    evidence: &ProductionMiddleEndEvidenceV5,
+    semantic_contract: &MirPlironSemanticContractV1,
+    output: &SemanticOutputContractV1,
+    output_index: usize,
+    schedule: ParallelScheduleRelationV1,
+    numerical_policy: ParallelNumericalPolicyV1,
+    proof: DigestV1,
+) -> Result<Vec<ParallelCallSummaryV1>, ProductionParallelReferenceContractErrorV1> {
+    let sites = ranked
+        .kernel()
+        .blocks()
+        .iter()
+        .enumerate()
+        .flat_map(|(block, body)| {
+            body.operations()
+                .iter()
+                .enumerate()
+                .filter_map(move |(operation, item)| match item {
+                    ProductionRankedOperationV1::TensorLayout {
+                        contract,
+                        convergence,
+                        active_lanes,
+                        binding,
+                    } => Some((
+                        block,
+                        operation,
+                        contract,
+                        *convergence,
+                        *active_lanes,
+                        *binding,
+                    )),
+                    _ => None,
+                })
+        })
+        .collect::<Vec<_>>();
+    if sites.is_empty() {
+        return Ok(vec![]);
+    }
+    if semantic_contract.outputs().len() != 1 {
+        return Err(
+            ProductionParallelReferenceContractErrorV1::OutputSpecificHierarchyIncomplete {
+                outputs: semantic_contract.outputs().len(),
+            },
+        );
+    }
+    if !ranked.tensor_layout_report().is_clean() {
+        return Err(
+            ProductionParallelReferenceContractErrorV1::TensorFragmentOwnershipIncomplete {
+                index: 0,
+                detail: "the mandatory tensor-layout verifier did not establish exact fragment ownership and convergence",
+            },
+        );
+    }
+    let mut summaries = Vec::with_capacity(sites.len());
+    for (ordinal, (block, operation, contract, convergence, active_lanes, binding)) in
+        sites.into_iter().enumerate()
+    {
+        let binding = binding.ok_or(
+            ProductionParallelReferenceContractErrorV1::TensorFragmentOwnershipIncomplete {
+                index: ordinal,
+                detail: "the live tensor site has no compiler-derived typed capability binding",
+            },
+        )?;
+        let descriptor = contract.profile.semantic_descriptor().ok_or(
+            ProductionParallelReferenceContractErrorV1::CallSummaryDerivationIncomplete {
+                index: ordinal,
+                kind: "cooperative tensor target profile",
+            },
+        )?;
+        if convergence != dialect_kernel::TensorConvergenceAttr::UniformSubgroup
+            || active_lanes != u32::from(contract.subgroup_width)
+            || contract.subgroup_width != descriptor.subgroup_width
+            || binding.argument_count() != descriptor.call_argument_count
+            || descriptor.contribution_shape
+                != [
+                    contract.a.shape[0],
+                    contract.a.shape[1],
+                    contract.b.shape[1],
+                ]
+            || descriptor.output_shape != contract.accumulator.shape
+            || !matches!(
+                contract.tail_mask,
+                fe2o3_kernel_ir::TensorTailMaskV1::ExactPhysicalTile
+                    | fe2o3_kernel_ir::TensorTailMaskV1::ZeroFilledPredicateInputs
+            )
+            || binding.accumulator_root() == binding.result_root()
+            || binding.context_root() == binding.lane_root()
+        {
+            return Err(
+                ProductionParallelReferenceContractErrorV1::TensorFragmentOwnershipIncomplete {
+                    index: ordinal,
+                    detail: "the live tensor call has incompatible scope, convergence, arity, or capability-root provenance",
+                },
+            );
+        }
+        let layout_identity = tensor_layout_identity_v1(contract, ordinal)?;
+        let staging_identity =
+            tensor_staging_identity_v1(ranked, contract, binding, block, operation, ordinal)?;
+        let contribution_identity =
+            tensor_contribution_identity_v1(semantic_contract, output, schedule, descriptor);
+        let scatter_identity = tensor_scatter_identity_v1(ranked, output, proof).ok_or(
+            ProductionParallelReferenceContractErrorV1::TensorFragmentOwnershipIncomplete {
+                index: ordinal,
+                detail: "the tensor result has no unique total-view output scatter contract",
+            },
+        )?;
+        let mut callsite = Sha256::new();
+        hash_domain(&mut callsite, TENSOR_CALLSITE_DOMAIN_V1);
+        callsite.update(semantic_contract.canonical_sha256().as_bytes());
+        callsite.update(evidence.identity().sha256());
+        callsite.update((block as u64).to_le_bytes());
+        callsite.update((operation as u64).to_le_bytes());
+        callsite.update((ordinal as u64).to_le_bytes());
+        for identity in [
+            binding.context_root(),
+            binding.lane_root(),
+            binding.lhs_root(),
+            binding.rhs_root(),
+            binding.accumulator_root(),
+            binding.result_root(),
+            layout_identity,
+            staging_identity,
+            contribution_identity,
+            scatter_identity,
+            proof,
+        ] {
+            callsite.update(identity.as_bytes());
+        }
+        callsite.update(binding.argument_count().to_le_bytes());
+        let callsite_identity = DigestV1::from_untrusted_bytes(callsite.finalize().into());
+        let mut summary = Sha256::new();
+        hash_domain(&mut summary, TENSOR_SUMMARY_DOMAIN_V1);
+        summary.update(callsite_identity.as_bytes());
+        summary.update(output.actual().as_bytes());
+        summary.update(output.reference().as_bytes());
+        summary.update(proof.as_bytes());
+        summary.update((output_index as u64).to_le_bytes());
+        let identity = DigestV1::from_untrusted_bytes(summary.finalize().into());
+        summaries.push(
+            ParallelCallSummaryV1::new(
+                identity,
+                callsite_identity,
+                output.actual(),
+                output.reference(),
+                proof,
+                binding.argument_count(),
+                ParallelExecutionScopeV1::Subgroup,
+                ParallelCallKindV1::CooperativeTensorIntrinsic {
+                    site_ordinal: u32::try_from(ordinal)
+                        .map_err(|_| ProductionParallelReferenceContractErrorV1::CounterOverflow)?,
+                    layout_identity,
+                },
+                numerical_policy,
+            )
+            .map_err(ProductionParallelReferenceContractErrorV1::ContractConstruction)?,
+        );
+    }
+    Ok(summaries)
+}
+
+fn tensor_layout_identity_v1(
+    contract: &fe2o3_kernel_ir::TensorLayoutContractV1,
+    index: usize,
+) -> Result<DigestV1, ProductionParallelReferenceContractErrorV1> {
+    let mut digest = Sha256::new();
+    hash_domain(&mut digest, TENSOR_LAYOUT_DOMAIN_V1);
+    super::middle_end_evidence_v4::hash_tensor_layout_contract(&mut digest, contract);
+    for fragment in [contract.a, contract.b, contract.accumulator] {
+        for lane in 0..contract.subgroup_width {
+            for component in 0..fragment.fragment_elements {
+                let coordinate = fragment.logical_coordinate(lane, component).ok_or(
+                    ProductionParallelReferenceContractErrorV1::TensorFragmentOwnershipIncomplete {
+                        index,
+                        detail: "a lane/component fragment mapping did not produce a logical coordinate",
+                    },
+                )?;
+                digest.update(coordinate[0].to_le_bytes());
+                digest.update(coordinate[1].to_le_bytes());
+            }
+        }
+    }
+    Ok(DigestV1::from_untrusted_bytes(digest.finalize().into()))
+}
+
+fn tensor_staging_identity_v1(
+    ranked: &ProductionRankedKernelLoweringInputV1,
+    contract: &fe2o3_kernel_ir::TensorLayoutContractV1,
+    binding: super::ProductionCooperativeTensorBindingV1,
+    tensor_block: usize,
+    tensor_operation: usize,
+    index: usize,
+) -> Result<DigestV1, ProductionParallelReferenceContractErrorV1> {
+    let uses_workgroup_staging = [contract.a.lds_swizzle, contract.b.lds_swizzle]
+        .into_iter()
+        .any(|swizzle| swizzle != fe2o3_kernel_ir::TensorLdsSwizzleV1::None);
+    let mut digest = Sha256::new();
+    if !uses_workgroup_staging {
+        hash_domain(&mut digest, TENSOR_DIRECT_DOMAIN_V1);
+    } else {
+        hash_domain(&mut digest, TENSOR_BARRIER_DOMAIN_V1);
+        let barriers =
+            dominating_tensor_barriers_v1(ranked.kernel(), tensor_block, tensor_operation);
+        if barriers.is_empty() {
+            return Err(
+                ProductionParallelReferenceContractErrorV1::TensorFragmentOwnershipIncomplete {
+                    index,
+                    detail: "workgroup-staged tensor operands have no dominating release/acquire workgroup barrier",
+                },
+            );
+        }
+        digest.update((barriers.len() as u64).to_le_bytes());
+        for (barrier_block, barrier_operation, memory_scope, order) in barriers {
+            digest.update((barrier_block as u64).to_le_bytes());
+            digest.update((barrier_operation as u64).to_le_bytes());
+            digest.update([match memory_scope {
+                dialect_gpu::MemoryScopeAttr::Workgroup => 1,
+                dialect_gpu::MemoryScopeAttr::Device => 2,
+                dialect_gpu::MemoryScopeAttr::System => 3,
+                dialect_gpu::MemoryScopeAttr::Subgroup => 4,
+            }]);
+            digest.update([match order {
+                dialect_gpu::MemoryOrderAttr::AcquireRelease => 1,
+                dialect_gpu::MemoryOrderAttr::SequentiallyConsistent => 2,
+                dialect_gpu::MemoryOrderAttr::Acquire => 3,
+                dialect_gpu::MemoryOrderAttr::Release => 4,
+            }]);
+        }
+    }
+    digest.update(binding.lhs_root().as_bytes());
+    digest.update(binding.rhs_root().as_bytes());
+    digest.update([match contract.a.lds_swizzle {
+        fe2o3_kernel_ir::TensorLdsSwizzleV1::None => 1,
+        fe2o3_kernel_ir::TensorLdsSwizzleV1::Xor4 => 2,
+        fe2o3_kernel_ir::TensorLdsSwizzleV1::Unsupported(code) => 3_u8.saturating_add(code),
+    }]);
+    digest.update([match contract.b.lds_swizzle {
+        fe2o3_kernel_ir::TensorLdsSwizzleV1::None => 1,
+        fe2o3_kernel_ir::TensorLdsSwizzleV1::Xor4 => 2,
+        fe2o3_kernel_ir::TensorLdsSwizzleV1::Unsupported(code) => 3_u8.saturating_add(code),
+    }]);
+    Ok(DigestV1::from_untrusted_bytes(digest.finalize().into()))
+}
+
+fn dominating_tensor_barriers_v1(
+    kernel: &super::ProductionRankedKernelV1,
+    tensor_block: usize,
+    tensor_operation: usize,
+) -> Vec<(
+    usize,
+    usize,
+    dialect_gpu::MemoryScopeAttr,
+    dialect_gpu::MemoryOrderAttr,
+)> {
+    kernel
+        .blocks()
+        .iter()
+        .enumerate()
+        .flat_map(|(block, body)| {
+            body.operations()
+                .iter()
+                .enumerate()
+                .filter_map(move |(operation, item)| match item {
+                    ProductionRankedOperationV1::Barrier {
+                        execution_scope: dialect_gpu::HierarchyAttr::Workgroup,
+                        memory_scope:
+                            memory_scope @ (dialect_gpu::MemoryScopeAttr::Workgroup
+                            | dialect_gpu::MemoryScopeAttr::Device
+                            | dialect_gpu::MemoryScopeAttr::System),
+                        address_space: dialect_gpu::AddressSpaceAttr::Workgroup,
+                        order:
+                            order @ (dialect_gpu::MemoryOrderAttr::AcquireRelease
+                            | dialect_gpu::MemoryOrderAttr::SequentiallyConsistent),
+                    } if (block != tensor_block
+                        && block_dominates_v1(kernel, block, tensor_block))
+                        || (block == tensor_block && operation < tensor_operation) =>
+                    {
+                        Some((block, operation, *memory_scope, *order))
+                    }
+                    _ => None,
+                })
+        })
+        .collect()
+}
+
+fn tensor_contribution_identity_v1(
+    semantic_contract: &MirPlironSemanticContractV1,
+    output: &SemanticOutputContractV1,
+    schedule: ParallelScheduleRelationV1,
+    descriptor: fe2o3_kernel_ir::TensorInstructionSemanticDescriptorV1,
+) -> DigestV1 {
+    let mut digest = Sha256::new();
+    hash_domain(&mut digest, TENSOR_CONTRIBUTION_DOMAIN_V1);
+    digest.update(semantic_contract.canonical_sha256().as_bytes());
+    digest.update(output.output_domain().as_bytes());
+    for extent in descriptor.contribution_shape {
+        digest.update(extent.to_le_bytes());
+    }
+    for extent in descriptor.output_shape {
+        digest.update(extent.to_le_bytes());
+    }
+    hash_schedule_v1(&mut digest, schedule);
+    DigestV1::from_untrusted_bytes(digest.finalize().into())
+}
+
+fn tensor_scatter_identity_v1(
+    ranked: &ProductionRankedKernelLoweringInputV1,
+    output: &SemanticOutputContractV1,
+    proof: DigestV1,
+) -> Option<DigestV1> {
+    let mut ownership = ranked
+        .kernel()
+        .blocks()
+        .iter()
+        .flat_map(|block| block.operations())
+        .filter_map(|operation| match operation {
+            ProductionRankedOperationV1::OwnershipContract {
+                view,
+                coverage: OwnershipCoverageAttr::TotalView,
+                partition,
+            } if super::production_ranked_value_identity_v1(*view) == output.view_identity() => {
+                Some(*partition)
+            }
+            _ => None,
+        });
+    let partition = ownership.next()?;
+    if ownership.next().is_some() {
+        return None;
+    }
+    let mut digest = Sha256::new();
+    hash_domain(&mut digest, TENSOR_SCATTER_DOMAIN_V1);
+    for identity in [
+        output.identity(),
+        output.view_identity(),
+        output.output_domain(),
+        output.actual(),
+        output.reference(),
+        proof,
+    ] {
+        digest.update(identity.as_bytes());
+    }
+    digest.update([match partition {
+        dialect_kernel::OwnershipPartitionAttr::ExactSets => 1,
+        dialect_kernel::OwnershipPartitionAttr::DenseRectangles => 2,
+    }]);
+    Some(DigestV1::from_untrusted_bytes(digest.finalize().into()))
+}
+
+fn hash_schedule_v1(digest: &mut Sha256, schedule: ParallelScheduleRelationV1) {
+    match schedule {
+        ParallelScheduleRelationV1::PointwiseBijection => digest.update([1]),
+        ParallelScheduleRelationV1::Permutation { collective } => {
+            digest.update([2]);
+            digest.update(collective.as_bytes());
+        }
+        ParallelScheduleRelationV1::Fold {
+            collective,
+            order,
+            reference_order,
+        } => {
+            digest.update([3]);
+            digest.update(collective.as_bytes());
+            match order {
+                ParallelFoldOrderV1::Preserved => digest.update([1]),
+                ParallelFoldOrderV1::AlgebraicallyReordered {
+                    associativity_proof,
+                    commutativity_proof,
+                } => {
+                    digest.update([2]);
+                    digest.update(associativity_proof.as_bytes());
+                    digest.update(commutativity_proof.as_bytes());
+                }
+                ParallelFoldOrderV1::ErrorBoundedReordering { proof } => {
+                    digest.update([3]);
+                    digest.update(proof.as_bytes());
+                }
+            }
+            digest.update([evaluation_order_tag_v1(reference_order)]);
+        }
+        ParallelScheduleRelationV1::BoundedRecurrence {
+            collective,
+            loop_contract,
+            dynamic_bound_proof,
+            reference_order,
+        } => {
+            digest.update([4]);
+            digest.update(collective.as_bytes());
+            digest.update(loop_contract.as_bytes());
+            match dynamic_bound_proof {
+                Some(proof) => {
+                    digest.update([1]);
+                    digest.update(proof.as_bytes());
+                }
+                None => digest.update([0]),
+            }
+            digest.update([evaluation_order_tag_v1(reference_order)]);
+        }
+    }
+}
+
+fn evaluation_order_tag_v1(order: SemanticEvaluationOrderV1) -> u8 {
+    match order {
+        SemanticEvaluationOrderV1::SequentialAscending => 1,
+        SemanticEvaluationOrderV1::SequentialDescending => 2,
+        SemanticEvaluationOrderV1::Lexicographic => 3,
+        SemanticEvaluationOrderV1::ExplicitTree => 4,
+    }
+}
+
+fn hash_domain(digest: &mut Sha256, domain: &[u8]) {
+    digest.update((domain.len() as u64).to_le_bytes());
+    digest.update(domain);
+}
+
+fn block_dominates_v1(
+    kernel: &super::ProductionRankedKernelV1,
+    candidate: usize,
+    target: usize,
+) -> bool {
+    if candidate == target {
+        return true;
+    }
+    if candidate == 0 {
+        return true;
+    }
+    let mut visited = vec![false; kernel.blocks().len()];
+    let mut work = vec![0_usize];
+    while let Some(block) = work.pop() {
+        if block == candidate || visited.get(block).copied().unwrap_or(true) {
+            continue;
+        }
+        visited[block] = true;
+        if block == target {
+            return false;
+        }
+        for successor in ranked_successors_v1(kernel.blocks()[block].terminator()) {
+            work.push(successor);
+        }
+    }
+    true
+}
+
+fn ranked_successors_v1(terminator: &super::ProductionRankedTerminatorV1) -> Vec<usize> {
+    use super::ProductionRankedTerminatorV1 as T;
+    match terminator {
+        T::IndexLessThan {
+            true_block,
+            false_block,
+            ..
+        }
+        | T::IndexLessThanArgs {
+            true_block,
+            false_block,
+            ..
+        }
+        | T::IndexEqual {
+            true_block,
+            false_block,
+            ..
+        }
+        | T::IndexEqualArgs {
+            true_block,
+            false_block,
+            ..
+        } => {
+            vec![*true_block as usize, *false_block as usize]
+        }
+        T::AnalysisSplit {
+            first_block,
+            second_block,
+            ..
+        }
+        | T::AnalysisSplitArgs {
+            first_block,
+            second_block,
+            ..
+        } => {
+            vec![*first_block as usize, *second_block as usize]
+        }
+        T::Branch { target }
+        | T::BranchArgs { target, .. }
+        | T::BranchArgsAdd { target, .. }
+        | T::BranchArgsAddAt { target, .. } => vec![*target as usize],
+        T::Return | T::Trap => vec![],
+    }
+}
+
 fn tensor_site_count(ranked: &ProductionRankedKernelLoweringInputV1) -> usize {
     ranked
         .kernel()
@@ -918,6 +1433,30 @@ fn tensor_site_count(ranked: &ProductionRankedKernelLoweringInputV1) -> usize {
         .flat_map(|block| block.operations())
         .filter(|operation| matches!(operation, ProductionRankedOperationV1::TensorLayout { .. }))
         .count()
+}
+
+fn reconcile_tensor_summaries_v1(
+    declared: &[ParallelCallSummaryV1],
+    derived: &[ParallelCallSummaryV1],
+    live_tensor_sites: usize,
+) -> Result<(), ProductionParallelReferenceContractErrorV1> {
+    if declared.len() != live_tensor_sites {
+        return Err(
+            ProductionParallelReferenceContractErrorV1::UnmodeledTensorSites {
+                declared: declared.len(),
+                live: live_tensor_sites,
+            },
+        );
+    }
+    if declared != derived {
+        let index = declared
+            .iter()
+            .zip(derived)
+            .position(|(declared, derived)| declared != derived)
+            .unwrap_or(declared.len().min(derived.len()));
+        return Err(ProductionParallelReferenceContractErrorV1::CallSummaryMismatch { index });
+    }
+    Ok(())
 }
 
 /// Compiler-derived identity of the finite bound already established for one
@@ -979,6 +1518,7 @@ mod tests {
             },
             ProductionParallelReferenceContractErrorV1::TensorFragmentOwnershipIncomplete {
                 index: 7,
+                detail: "missing fragment ownership",
             },
         ] {
             assert!(error.is_incomplete(), "{error}");
@@ -1099,5 +1639,249 @@ mod tests {
             error,
             ProductionParallelReferenceContractErrorV1::NumericalProofIncomplete { index: 0 }
         ));
+    }
+
+    #[test]
+    fn tensor_layout_identity_binds_layout_swizzle_tail_and_lane_coordinates() {
+        let canonical =
+            fe2o3_kernel_ir::TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64();
+        let base = tensor_layout_identity_v1(&canonical, 0).unwrap();
+
+        let mut lds = canonical.with_a_lds_xor4();
+        assert_ne!(base, tensor_layout_identity_v1(&lds, 0).unwrap());
+        lds.tail_mask = fe2o3_kernel_ir::TensorTailMaskV1::ZeroFilledPredicateInputs;
+        assert_ne!(base, tensor_layout_identity_v1(&lds, 0).unwrap());
+
+        let mut substituted = canonical;
+        let fe2o3_kernel_ir::TensorSymbolicMapV1::LaneComponentAffine { ref mut axes, .. } =
+            substituted.accumulator.mapping
+        else {
+            panic!("canonical layout must have an affine accumulator map");
+        };
+        axes[0].constant = 1;
+        assert_ne!(base, tensor_layout_identity_v1(&substituted, 0).unwrap());
+    }
+
+    #[test]
+    fn tensor_capability_binding_rejects_missing_roots_and_argument_overflow() {
+        use super::super::ProductionCooperativeTensorBindingV1;
+
+        assert!(
+            ProductionCooperativeTensorBindingV1::new(
+                DigestV1::ZERO,
+                digest(2),
+                digest(3),
+                digest(4),
+                digest(5),
+                digest(6),
+                4,
+            )
+            .is_none()
+        );
+        assert!(
+            ProductionCooperativeTensorBindingV1::new(
+                digest(1),
+                digest(2),
+                digest(3),
+                digest(4),
+                digest(5),
+                digest(6),
+                257,
+            )
+            .is_none()
+        );
+        let binding = ProductionCooperativeTensorBindingV1::new(
+            digest(1),
+            digest(2),
+            digest(3),
+            digest(4),
+            digest(5),
+            digest(6),
+            4,
+        )
+        .unwrap();
+        assert_eq!(binding.argument_count(), 4);
+        assert_eq!(binding.result_root(), digest(6));
+    }
+
+    #[test]
+    fn tensor_contribution_identity_rejects_schedule_substitution() {
+        fn identity(schedule: ParallelScheduleRelationV1) -> DigestV1 {
+            let mut digest = Sha256::new();
+            hash_domain(&mut digest, TENSOR_CONTRIBUTION_DOMAIN_V1);
+            hash_schedule_v1(&mut digest, schedule);
+            DigestV1::from_untrusted_bytes(digest.finalize().into())
+        }
+
+        assert_ne!(
+            identity(ParallelScheduleRelationV1::PointwiseBijection),
+            identity(ParallelScheduleRelationV1::Permutation {
+                collective: digest(9),
+            })
+        );
+        assert_ne!(
+            identity(ParallelScheduleRelationV1::Fold {
+                collective: digest(9),
+                order: ParallelFoldOrderV1::Preserved,
+                reference_order: SemanticEvaluationOrderV1::SequentialAscending,
+            }),
+            identity(ParallelScheduleRelationV1::Fold {
+                collective: digest(9),
+                order: ParallelFoldOrderV1::Preserved,
+                reference_order: SemanticEvaluationOrderV1::SequentialDescending,
+            })
+        );
+        assert_ne!(
+            identity(ParallelScheduleRelationV1::Fold {
+                collective: digest(9),
+                order: ParallelFoldOrderV1::AlgebraicallyReordered {
+                    associativity_proof: digest(10),
+                    commutativity_proof: digest(11),
+                },
+                reference_order: SemanticEvaluationOrderV1::SequentialAscending,
+            }),
+            identity(ParallelScheduleRelationV1::Fold {
+                collective: digest(9),
+                order: ParallelFoldOrderV1::AlgebraicallyReordered {
+                    associativity_proof: digest(12),
+                    commutativity_proof: digest(11),
+                },
+                reference_order: SemanticEvaluationOrderV1::SequentialAscending,
+            })
+        );
+    }
+
+    #[test]
+    fn tensor_summary_reconciliation_rejects_count_and_identity_substitution() {
+        let summary = |tag| {
+            ParallelCallSummaryV1::new(
+                digest(tag),
+                digest(20),
+                digest(21),
+                digest(22),
+                digest(23),
+                4,
+                ParallelExecutionScopeV1::Subgroup,
+                ParallelCallKindV1::CooperativeTensorIntrinsic {
+                    site_ordinal: 0,
+                    layout_identity: digest(24),
+                },
+                ParallelNumericalPolicyV1::ExactBitVector,
+            )
+            .unwrap()
+        };
+        let derived = vec![summary(1)];
+        assert!(matches!(
+            reconcile_tensor_summaries_v1(&[], &derived, 1),
+            Err(
+                ProductionParallelReferenceContractErrorV1::UnmodeledTensorSites {
+                    declared: 0,
+                    live: 1,
+                }
+            )
+        ));
+        assert!(matches!(
+            reconcile_tensor_summaries_v1(&[summary(2)], &derived, 1),
+            Err(ProductionParallelReferenceContractErrorV1::CallSummaryMismatch { index: 0 })
+        ));
+        reconcile_tensor_summaries_v1(&derived, &derived, 1).unwrap();
+    }
+
+    #[test]
+    fn tensor_failures_have_stable_production_diagnostics() {
+        assert!(
+            ProductionParallelReferenceContractErrorV1::TensorFragmentOwnershipIncomplete {
+                index: 3,
+                detail: "subgroup convergence was not proved",
+            }
+            .to_string()
+            .starts_with("error[FE2O3-PARALLEL-013]")
+        );
+        assert!(
+            ProductionParallelReferenceContractErrorV1::UnmodeledTensorSites {
+                declared: 1,
+                live: 2,
+            }
+            .to_string()
+            .contains("models 1 cooperative tensor sites")
+        );
+        assert!(
+            ProductionParallelReferenceContractErrorV1::CallSummaryMismatch { index: 4 }
+                .to_string()
+                .contains("summary 4")
+        );
+    }
+
+    #[test]
+    fn tensor_staging_requires_a_dominating_workgroup_publish_barrier() {
+        use super::super::{
+            ProductionRankedBlockV1, ProductionRankedKernelV1, ProductionRankedTerminatorV1,
+        };
+
+        let tensor = ProductionRankedOperationV1::TensorLayout {
+            contract:
+                fe2o3_kernel_ir::TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64_lds_xor4(),
+            convergence: dialect_kernel::TensorConvergenceAttr::UniformSubgroup,
+            active_lanes: 64,
+            binding: None,
+        };
+        let barrier = |execution_scope| ProductionRankedOperationV1::Barrier {
+            execution_scope,
+            memory_scope: dialect_gpu::MemoryScopeAttr::Workgroup,
+            address_space: dialect_gpu::AddressSpaceAttr::Workgroup,
+            order: dialect_gpu::MemoryOrderAttr::AcquireRelease,
+        };
+        let kernel = ProductionRankedKernelV1::new(
+            "tensor_barrier",
+            0,
+            vec![
+                ProductionRankedBlockV1::new(
+                    vec![barrier(dialect_gpu::HierarchyAttr::Workgroup)],
+                    ProductionRankedTerminatorV1::Branch { target: 1 },
+                ),
+                ProductionRankedBlockV1::new(
+                    vec![tensor.clone()],
+                    ProductionRankedTerminatorV1::Return,
+                ),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            dominating_tensor_barriers_v1(&kernel, 1, 0),
+            vec![(
+                0,
+                0,
+                dialect_gpu::MemoryScopeAttr::Workgroup,
+                dialect_gpu::MemoryOrderAttr::AcquireRelease,
+            )]
+        );
+
+        let wrong_scope = ProductionRankedKernelV1::new(
+            "tensor_wrong_scope",
+            0,
+            vec![
+                ProductionRankedBlockV1::new(
+                    vec![barrier(dialect_gpu::HierarchyAttr::Subgroup)],
+                    ProductionRankedTerminatorV1::Branch { target: 1 },
+                ),
+                ProductionRankedBlockV1::new(
+                    vec![tensor.clone()],
+                    ProductionRankedTerminatorV1::Return,
+                ),
+            ],
+        )
+        .unwrap();
+        assert!(dominating_tensor_barriers_v1(&wrong_scope, 1, 0).is_empty());
+
+        let too_late = ProductionRankedKernelV1::new(
+            "tensor_late_barrier",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                vec![tensor, barrier(dialect_gpu::HierarchyAttr::Workgroup)],
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap();
+        assert!(dominating_tensor_barriers_v1(&too_late, 0, 0).is_empty());
     }
 }

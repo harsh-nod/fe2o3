@@ -1490,6 +1490,7 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             contract,
             convergence,
             active_lanes,
+            binding,
         } => {
             digest.update([RANKED_TENSOR_LAYOUT_TAG_V4]);
             hash_tensor_layout_contract(digest, contract);
@@ -1500,6 +1501,23 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
                 dialect_kernel::TensorConvergenceAttr::Opaque => 4,
             }]);
             digest.update(active_lanes.to_le_bytes());
+            match binding {
+                None => digest.update([0]),
+                Some(binding) => {
+                    digest.update([1]);
+                    for root in [
+                        binding.context_root(),
+                        binding.lane_root(),
+                        binding.lhs_root(),
+                        binding.rhs_root(),
+                        binding.accumulator_root(),
+                        binding.result_root(),
+                    ] {
+                        digest.update(root.as_bytes());
+                    }
+                    digest.update(binding.argument_count().to_le_bytes());
+                }
+            }
         }
         ProductionRankedOperationV1::SemanticSymbol { result, symbol } => {
             digest.update([9]);
@@ -1689,7 +1707,7 @@ fn hash_functional_refinement_subjects(
     }
 }
 
-fn hash_tensor_layout_contract(digest: &mut Sha256, contract: &TensorLayoutContractV1) {
+pub(super) fn hash_tensor_layout_contract(digest: &mut Sha256, contract: &TensorLayoutContractV1) {
     match contract.profile {
         TensorInstructionProfileV1::Gfx942MfmaBf16F32M16N16K16Wave64 => digest.update([1]),
         TensorInstructionProfileV1::IncompatibleWave32 => digest.update([2]),
@@ -2281,6 +2299,7 @@ mod tests {
             contract: TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64(),
             convergence: dialect_kernel::TensorConvergenceAttr::UniformSubgroup,
             active_lanes: 64,
+            binding: None,
         };
         assert_ne!(identity(&execution), identity(&tensor));
     }
@@ -2372,5 +2391,51 @@ mod tests {
             rhs: ProductionRankedValueV1::Argument(1),
         };
         assert_ne!(operation_identity(&divide), operation_identity(&add));
+    }
+
+    #[test]
+    fn ranked_tensor_identity_binds_every_capability_root_and_argument_count() {
+        fn operation_identity(operation: &ProductionRankedOperationV1) -> [u8; SHA256_BYTES] {
+            let mut digest = Sha256::new();
+            hash_ranked_operation(&mut digest, operation);
+            digest.finalize().into()
+        }
+
+        fn binding(
+            tags: [u8; 6],
+            argument_count: u16,
+        ) -> super::super::ProductionCooperativeTensorBindingV1 {
+            super::super::ProductionCooperativeTensorBindingV1::new(
+                fe2o3_proof_contracts::DigestV1::from_untrusted_bytes([tags[0]; 32]),
+                fe2o3_proof_contracts::DigestV1::from_untrusted_bytes([tags[1]; 32]),
+                fe2o3_proof_contracts::DigestV1::from_untrusted_bytes([tags[2]; 32]),
+                fe2o3_proof_contracts::DigestV1::from_untrusted_bytes([tags[3]; 32]),
+                fe2o3_proof_contracts::DigestV1::from_untrusted_bytes([tags[4]; 32]),
+                fe2o3_proof_contracts::DigestV1::from_untrusted_bytes([tags[5]; 32]),
+                argument_count,
+            )
+            .unwrap()
+        }
+
+        let operation = |binding| ProductionRankedOperationV1::TensorLayout {
+            contract: TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64(),
+            convergence: dialect_kernel::TensorConvergenceAttr::UniformSubgroup,
+            active_lanes: 64,
+            binding: Some(binding),
+        };
+        let base = operation(binding([1, 2, 3, 4, 5, 6], 4));
+        for index in 0..6 {
+            let mut tags = [1, 2, 3, 4, 5, 6];
+            tags[index] = 9;
+            assert_ne!(
+                operation_identity(&base),
+                operation_identity(&operation(binding(tags, 4))),
+                "capability root {index} was not bound",
+            );
+        }
+        assert_ne!(
+            operation_identity(&base),
+            operation_identity(&operation(binding([1, 2, 3, 4, 5, 6], 5))),
+        );
     }
 }

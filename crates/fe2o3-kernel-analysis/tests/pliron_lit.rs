@@ -80,6 +80,11 @@ fn parallel_reference_prerequisite_mutation_fixtures() {
         "collective_permutation_non_integer_map.pliron",
         "tensor_layout_wrong_accumulator_permutation.pliron",
         "tensor_layout_wrong_fragment_width.pliron",
+        "tensor_layout_wrong_role.pliron",
+        "tensor_layout_missing_tail.pliron",
+        "tensor_layout_partial_subgroup.pliron",
+        "tensor_layout_subgroup_scoped.pliron",
+        "tensor_layout_mixed_swizzle.pliron",
         "tensor_layout_divergent_trace.pliron",
     ] {
         run_fixture(&root.join(fixture));

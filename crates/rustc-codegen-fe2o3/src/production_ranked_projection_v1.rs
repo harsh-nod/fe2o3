@@ -43,15 +43,18 @@ use fe2o3_mir_model::{
     SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
     SemanticOptionAvailabilityV1, SemanticOptionDominanceV1, semantic_option_producers_v1,
 };
+use fe2o3_proof_contracts::DigestV1;
+use sha2::{Digest as _, Sha256};
 
 use fe2o3_pliron::{
-    ProductionConstructionV1, ProductionOverflowContractV2, ProductionRankedBlockV1,
-    ProductionRankedCompileErrorV1, ProductionRankedKernelErrorV1, ProductionRankedKernelV1,
-    ProductionRankedOperationV1, ProductionRankedTerminatorV1, ProductionRankedValueIdV1,
-    ProductionRankedValueV1, ProductionSemanticBinaryOpV2, ProductionSemanticCastV2,
-    ProductionSemanticComparisonV2, ProductionSemanticExpressionV2, ProductionSemanticMirErrorV1,
-    ProductionSemanticMirOwnerV1, ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2,
-    ProductionSessionErrorV1, ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
+    ProductionConstructionV1, ProductionCooperativeTensorBindingV1, ProductionOverflowContractV2,
+    ProductionRankedBlockV1, ProductionRankedCompileErrorV1, ProductionRankedKernelErrorV1,
+    ProductionRankedKernelV1, ProductionRankedOperationV1, ProductionRankedTerminatorV1,
+    ProductionRankedValueIdV1, ProductionRankedValueV1, ProductionSemanticBinaryOpV2,
+    ProductionSemanticCastV2, ProductionSemanticComparisonV2, ProductionSemanticExpressionV2,
+    ProductionSemanticMirErrorV1, ProductionSemanticMirOwnerV1, ProductionSemanticScalarTypeV2,
+    ProductionSemanticUnaryOpV2, ProductionSessionErrorV1, ProductionSessionLimitsV1,
+    compile_ranked_kernel_for_lowering_v1,
 };
 
 const ROOT_NAME_V1: &str = "semantic_safety_module";
@@ -65,6 +68,7 @@ const MAX_PROJECTED_CAPABILITY_ENUM_DEPTH_V1: usize = 8;
 const MAX_PROJECTED_LOOP_GRAPH_WORK_V1: usize =
     MAX_RANKED_BOUNDS_BLOCKS * (MAX_RANKED_BOUNDS_BLOCKS + MAX_RANKED_BOUNDS_EDGES);
 const PRIVATE_ALLOCATION_ORIGIN_TAG_V1: u64 = 1_u64 << 63;
+const TENSOR_CAPABILITY_ROOT_DOMAIN_V1: &[u8] = b"FE2O3/TENSOR-CAPABILITY-ROOT/V1\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ProjectedAccessSourceV1 {
@@ -327,6 +331,16 @@ struct ProjectedReadViewAccessV1 {
 struct ProjectedMfmaAccumulatorV1 {
     contract: SemanticMfmaAccumulatorContractV1,
     lane_root: u64,
+    value_root: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AuthenticatedTensorInstructionV1 {
+    context_root: u64,
+    lhs: ProjectedMfmaOperandV1,
+    rhs: ProjectedMfmaOperandV1,
+    accumulator: ProjectedMfmaAccumulatorV1,
+    contract: fe2o3_kernel_ir::TensorLayoutContractV1,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2783,6 +2797,7 @@ fn transfer_capability_terminator_v1(
                         ProjectedMfmaAccumulatorV1 {
                             contract: *contract,
                             lane_root,
+                            value_root: root,
                         },
                     ))
                 }
@@ -2797,17 +2812,27 @@ fn transfer_capability_terminator_v1(
             accumulator,
             ..
         } => match authenticate_tensor_instruction_v1(call, state, *lhs, *rhs, *accumulator) {
-            Ok((accumulator_origin, contract))
-                if destination.place().ty() == *accumulator_fragment =>
-            {
+            Ok(authenticated) if destination.place().ty() == *accumulator_fragment => {
+                // Keep the accumulator-chain root stable across a loop backedge.
+                // The site result has its own retained root in the binding below.
+                let result = authenticated.accumulator;
+                let binding = tensor_site_binding_v1(
+                    authenticated,
+                    root,
+                    u16::try_from(call.arguments().len()).unwrap_or(u16::MAX),
+                )
+                .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "an MFMA call whose typed capability binding is invalid",
+                ))?;
                 (
                     ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Accumulator(
-                        accumulator_origin,
+                        result,
                     )),
                     Some(ProductionRankedOperationV1::TensorLayout {
-                        contract,
+                        contract: authenticated.contract,
                         convergence: TensorConvergenceAttr::UniformSubgroup,
-                        active_lanes: u32::from(contract.subgroup_width),
+                        active_lanes: u32::from(authenticated.contract.subgroup_width),
+                        binding: Some(binding),
                     }),
                 )
             }
@@ -2911,22 +2936,15 @@ fn authenticate_tensor_instruction_v1(
     lhs_contract: SemanticMfmaOperandContractV1,
     rhs_contract: SemanticMfmaOperandContractV1,
     accumulator_contract: SemanticMfmaAccumulatorContractV1,
-) -> Result<
-    (
-        ProjectedMfmaAccumulatorV1,
-        fe2o3_kernel_ir::TensorLayoutContractV1,
-    ),
-    &'static str,
-> {
+) -> Result<AuthenticatedTensorInstructionV1, &'static str> {
     if call.arguments().len() != 4 {
         return Err("an MFMA call without its exact context and three typed operands");
     }
-    if !matches!(
-        capability_known_origin_v1(state, &call.arguments()[0]),
-        Some(ProjectedCapabilityOriginV1::MatrixContext { .. })
-    ) {
+    let Some(ProjectedCapabilityOriginV1::MatrixContext { root: context_root }) =
+        capability_known_origin_v1(state, &call.arguments()[0])
+    else {
         return Err("an MFMA call without dominating compiler-issued matrix context");
-    }
+    };
     let Some(ProjectedCapabilityOriginV1::Operand(lhs)) =
         capability_known_origin_v1(state, &call.arguments()[1])
     else {
@@ -2982,7 +3000,60 @@ fn authenticate_tensor_instruction_v1(
     if rhs.storage_layout == SemanticMfmaStorageLayoutV1::LdsXor4 {
         contract = contract.with_b_lds_xor4();
     }
-    Ok((accumulator, contract))
+    Ok(AuthenticatedTensorInstructionV1 {
+        context_root,
+        lhs,
+        rhs,
+        accumulator,
+        contract,
+    })
+}
+
+fn tensor_operand_root_v1(operand: ProjectedMfmaOperandV1) -> DigestV1 {
+    tensor_capability_root_v1(
+        match operand.contract.role {
+            SemanticMfmaOperandRoleV1::A => 3,
+            SemanticMfmaOperandRoleV1::B => 4,
+        },
+        &[
+            operand.lane_root,
+            operand.allocation.allocation_origin,
+            operand.allocation.noalias_class,
+            u64::from(operand.allocation.writable),
+            match operand.storage_layout {
+                SemanticMfmaStorageLayoutV1::RowMajor => 1,
+                SemanticMfmaStorageLayoutV1::LdsXor4 => 2,
+            },
+        ],
+    )
+}
+
+fn tensor_site_binding_v1(
+    authenticated: AuthenticatedTensorInstructionV1,
+    result_root: u64,
+    argument_count: u16,
+) -> Option<ProductionCooperativeTensorBindingV1> {
+    ProductionCooperativeTensorBindingV1::new(
+        tensor_capability_root_v1(1, &[authenticated.context_root]),
+        tensor_capability_root_v1(2, &[authenticated.accumulator.lane_root]),
+        tensor_operand_root_v1(authenticated.lhs),
+        tensor_operand_root_v1(authenticated.rhs),
+        tensor_capability_root_v1(5, &[authenticated.accumulator.value_root]),
+        tensor_capability_root_v1(6, &[result_root]),
+        argument_count,
+    )
+}
+
+fn tensor_capability_root_v1(kind: u8, words: &[u64]) -> DigestV1 {
+    let mut digest = Sha256::new();
+    digest.update((TENSOR_CAPABILITY_ROOT_DOMAIN_V1.len() as u64).to_le_bytes());
+    digest.update(TENSOR_CAPABILITY_ROOT_DOMAIN_V1);
+    digest.update([kind]);
+    digest.update((words.len() as u64).to_le_bytes());
+    for word in words {
+        digest.update(word.to_le_bytes());
+    }
+    DigestV1::from_untrusted_bytes(digest.finalize().into())
 }
 
 fn capability_known_origin_v1(
@@ -9004,9 +9075,13 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             contract,
             convergence,
             active_lanes,
+            binding,
         } => format!(
-            "  kernel.tensor_layout <{:?}, {:?}, active_lanes={}>\n",
-            contract, convergence, active_lanes,
+            "  kernel.tensor_layout <{:?}, {:?}, active_lanes={}, capability_binding={}>\n",
+            contract,
+            convergence,
+            active_lanes,
+            binding.is_some(),
         ),
         ProductionRankedOperationV1::SemanticSymbol { result, symbol } => {
             format!("  %{} = kernel.semantic_symbol {}\n", result.get(), symbol)
@@ -14378,6 +14453,7 @@ mod tests {
                     ProjectedMfmaAccumulatorV1 {
                         contract: mfma_accumulator_contract(),
                         lane_root: 20,
+                        value_root: 30,
                     },
                 )),
             ),
@@ -14391,7 +14467,7 @@ mod tests {
             SemanticMfmaStorageLayoutV1::LdsXor4,
             SemanticMfmaStorageLayoutV1::RowMajor,
         );
-        let (_, contract) = authenticate_tensor_instruction_v1(
+        let authenticated = authenticate_tensor_instruction_v1(
             &call,
             &state,
             mfma_operand_contract(SemanticMfmaOperandRoleV1::A),
@@ -14399,6 +14475,7 @@ mod tests {
             mfma_accumulator_contract(),
         )
         .unwrap();
+        let contract = authenticated.contract;
 
         assert_eq!(
             contract.a.lds_swizzle,
@@ -14412,6 +14489,29 @@ mod tests {
             contract.tail_mask,
             fe2o3_kernel_ir::TensorTailMaskV1::ZeroFilledPredicateInputs
         );
+        assert_eq!(authenticated.context_root, 10);
+        assert_eq!(authenticated.accumulator.value_root, 30);
+        assert_ne!(
+            tensor_operand_root_v1(authenticated.lhs),
+            tensor_operand_root_v1(authenticated.rhs),
+            "operand roles must remain part of otherwise identical allocation roots",
+        );
+        let mut substituted = authenticated.lhs;
+        substituted.allocation.noalias_class += 1;
+        assert_ne!(
+            tensor_operand_root_v1(authenticated.lhs),
+            tensor_operand_root_v1(substituted),
+            "allocation provenance substitution must change the retained root",
+        );
+        let binding = tensor_site_binding_v1(authenticated, 40, 4).unwrap();
+        assert_eq!(binding.argument_count(), 4);
+        assert_eq!(
+            binding.accumulator_root(),
+            tensor_capability_root_v1(5, &[30])
+        );
+        assert_eq!(binding.result_root(), tensor_capability_root_v1(6, &[40]));
+        assert_ne!(binding.accumulator_root(), binding.result_root());
+        assert!(tensor_site_binding_v1(authenticated, 40, 0).is_none());
     }
 
     #[test]

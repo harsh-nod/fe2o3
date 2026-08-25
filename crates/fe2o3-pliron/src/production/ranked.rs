@@ -1,7 +1,8 @@
 use fe2o3_functional_proof::{
     FunctionalRefinementBindingV2, FunctionalRefinementBoundaryV2,
     FunctionalRefinementReceiptIdentityV2, FunctionalRefinementSubjectsV2,
-    ImportedFunctionalRefinementProofV2, VerusToolchainIdentityV2,
+    HARD_MAX_PARALLEL_CALL_ARGUMENTS_V1, ImportedFunctionalRefinementProofV2,
+    VerusToolchainIdentityV2,
 };
 use fe2o3_proof_contracts::DigestV1;
 use sha2::{Digest as _, Sha256};
@@ -70,6 +71,84 @@ use super::{
     ProductionSemanticCastV2, ProductionSemanticComparisonV2, ProductionSemanticExpressionErrorV2,
     ProductionSemanticExpressionV2, ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2,
 };
+
+/// Compiler-derived provenance retained for one cooperative tensor call.
+///
+/// These are identities of typed capability roots, not user assertions. The
+/// source projector obtains them from the dominating context, lane, operand,
+/// and accumulator producers. Production semantic composition additionally
+/// binds this record to the live layout, control-flow site, output relation,
+/// hierarchy reports, and authenticated refinement receipt.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ProductionCooperativeTensorBindingV1 {
+    context_root: DigestV1,
+    lane_root: DigestV1,
+    lhs_root: DigestV1,
+    rhs_root: DigestV1,
+    accumulator_root: DigestV1,
+    result_root: DigestV1,
+    argument_count: u16,
+}
+
+impl ProductionCooperativeTensorBindingV1 {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        context_root: DigestV1,
+        lane_root: DigestV1,
+        lhs_root: DigestV1,
+        rhs_root: DigestV1,
+        accumulator_root: DigestV1,
+        result_root: DigestV1,
+        argument_count: u16,
+    ) -> Option<Self> {
+        if [
+            context_root,
+            lane_root,
+            lhs_root,
+            rhs_root,
+            accumulator_root,
+            result_root,
+        ]
+        .into_iter()
+        .any(DigestV1::is_zero)
+            || argument_count == 0
+            || argument_count > HARD_MAX_PARALLEL_CALL_ARGUMENTS_V1
+        {
+            return None;
+        }
+        Some(Self {
+            context_root,
+            lane_root,
+            lhs_root,
+            rhs_root,
+            accumulator_root,
+            result_root,
+            argument_count,
+        })
+    }
+
+    pub const fn context_root(self) -> DigestV1 {
+        self.context_root
+    }
+    pub const fn lane_root(self) -> DigestV1 {
+        self.lane_root
+    }
+    pub const fn lhs_root(self) -> DigestV1 {
+        self.lhs_root
+    }
+    pub const fn rhs_root(self) -> DigestV1 {
+        self.rhs_root
+    }
+    pub const fn accumulator_root(self) -> DigestV1 {
+        self.accumulator_root
+    }
+    pub const fn result_root(self) -> DigestV1 {
+        self.result_root
+    }
+    pub const fn argument_count(self) -> u16 {
+        self.argument_count
+    }
+}
 
 use super::{
     ConstructedGraphStageV1, HARD_MAX_PRODUCTION_CONSTRUCTIONS, KernelChecksVerifiedGraphStageV1,
@@ -1142,6 +1221,7 @@ pub enum ProductionRankedOperationV1 {
         contract: TensorLayoutContractV1,
         convergence: TensorConvergenceAttr,
         active_lanes: u32,
+        binding: Option<ProductionCooperativeTensorBindingV1>,
     },
     SemanticSymbol {
         result: ProductionRankedValueIdV1,
@@ -3746,6 +3826,7 @@ fn materialize_operation(
             contract,
             convergence,
             active_lanes,
+            ..
         } => {
             let op = TensorLayoutOp::new(context, contract, *convergence, *active_lanes);
             (op.get_operation(), None)
