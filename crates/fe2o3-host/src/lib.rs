@@ -3,10 +3,12 @@ mod application_descriptor_handoff;
 mod argument_alias;
 mod artifact_binding;
 mod cooperative_launch;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod flash_attention_v1_lifecycle;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_alpha_zeta_cov6;
 mod generated_argument_plan;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_flash_attention_v1;
 mod generated_lds_gemm;
 mod generated_lds_gemm_lifecycle;
@@ -194,6 +196,7 @@ pub use cooperative_launch::{
 pub use fe2o3_core::{KernelParams, LaunchConfig};
 pub use fe2o3_hsaco_finalize::WorkgroupSyncProfileKindV1;
 pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use flash_attention_v1_lifecycle::{
     CompletedFlashAttentionV1, FlashAttentionV1DispatchErrorV1, FlashAttentionV1JoinErrorV1,
     FlashAttentionV1KernelResourceObservationV1, FlashAttentionV1LoadErrorV1,
@@ -217,6 +220,7 @@ pub use generated_argument_plan::{
     GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedPackingComponentKindV1,
     GeneratedPackingComponentV1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_flash_attention_v1::{
     FlashAttentionV1BufferAccessV1, FlashAttentionV1BufferRoleV1,
     GeneratedFlashAttentionV1HostAdapterErrorV1, GeneratedFlashAttentionV1HostAdapterV1,
