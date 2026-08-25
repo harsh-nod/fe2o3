@@ -834,6 +834,16 @@ struct SharedAllocationRecord<B: MemoryBackend> {
     phase: SharedAllocationPhaseV1,
 }
 
+impl<B: MemoryBackend> SharedAllocationRecord<B> {
+    fn is_fully_released(&self) -> bool {
+        self.phase == SharedAllocationPhaseV1::Released
+            && self.free_attempted
+            && self.reservation.is_none()
+            && self.mapping.is_none()
+            && self.handle.is_none()
+    }
+}
+
 struct DeviceMemoryRecord<B: MemoryBackend> {
     id: u64,
     generation: u64,
@@ -847,6 +857,16 @@ struct DeviceMemoryRecord<B: MemoryBackend> {
     handle: Option<u64>,
     free_attempted: bool,
     phase: DeviceMemoryPhaseV1,
+}
+
+impl<B: MemoryBackend> DeviceMemoryRecord<B> {
+    fn is_fully_released(&self) -> bool {
+        self.phase == DeviceMemoryPhaseV1::Released
+            && self.free_attempted
+            && self.reservation.is_none()
+            && self.mapping.is_none()
+            && self.handle.is_none()
+    }
 }
 
 struct SharedMemoryEngine<B: MemoryBackend> {
@@ -923,6 +943,10 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
     ) -> Result<SharedGttAllocationV1<P, GttCpuWritableV1>, MemorySessionError> {
         self.require_active()?;
         let layout = profile_layout::<P>(requested_bytes)?;
+        if self.allocations.len() >= MAX_SHARED_GTT_ALLOCATIONS_V1 {
+            self.allocations
+                .retain(|record| !record.is_fully_released());
+        }
         if self.allocations.len() >= MAX_SHARED_GTT_ALLOCATIONS_V1 {
             return Err(MemorySessionError::SharedAllocationCapacity {
                 maximum: MAX_SHARED_GTT_ALLOCATIONS_V1,
@@ -1103,6 +1127,10 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             return Err(MemorySessionError::InvalidDeviceMemoryAuthority);
         }
         let layout = device_memory_layout(requested_bytes, alignment, flags)?;
+        if self.device_memory.len() >= MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1 {
+            self.device_memory
+                .retain(|record| !record.is_fully_released());
+        }
         if self.device_memory.len() >= MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1 {
             return Err(MemorySessionError::DeviceMemoryAllocationCapacity {
                 maximum: MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1,
@@ -4358,6 +4386,84 @@ mod tests {
     }
 
     #[test]
+    fn released_shared_allocations_do_not_consume_record_capacity() {
+        let mut engine = acquired();
+        let mut anchor = engine.allocate::<HostVisibleCoherentGttV1>(1).unwrap();
+        engine
+            .with_bytes_mut(&mut anchor, |bytes| bytes[0] = 0x5a)
+            .unwrap();
+        let cycles = MAX_SHARED_GTT_ALLOCATIONS_V1 * 4;
+        let mut stale = None;
+
+        for cycle in 0..cycles {
+            let token = engine.allocate::<HostVisibleCoherentGttV1>(1).unwrap();
+            if cycle == 0 {
+                stale = Some(SharedGttAllocationV1 {
+                    session_id: token.session_id,
+                    id: token.id,
+                    generation: token.generation,
+                    layout: token.layout,
+                    marker: PhantomData::<(HostVisibleCoherentGttV1, GttCpuWritableV1)>,
+                });
+            }
+            engine
+                .release(token, SharedAllocationPhaseV1::CpuWritable)
+                .unwrap();
+            assert!(engine.allocations.len() <= MAX_SHARED_GTT_ALLOCATIONS_V1);
+        }
+
+        let stale = stale.unwrap();
+        assert!(
+            !engine
+                .allocations
+                .iter()
+                .any(|record| record.id == stale.id)
+        );
+        assert_eq!(
+            engine
+                .allocations
+                .iter()
+                .filter(|record| record.phase != SharedAllocationPhaseV1::Released)
+                .count(),
+            1
+        );
+        assert_eq!(engine.next_id, u64::try_from(cycles).unwrap() + 2);
+        assert_eq!(engine.retained_gpu_va_bytes, 4096);
+        assert_eq!(engine.backend.free_calls, cycles);
+        assert_eq!(engine.backend.release_va_calls, cycles);
+
+        engine.backend.next_handle = 2;
+        let replacement = engine.allocate::<HostVisibleCoherentGttV1>(1).unwrap();
+        let replacement_index = engine
+            .index(&replacement, SharedAllocationPhaseV1::CpuWritable)
+            .unwrap();
+        assert_eq!(engine.allocations[replacement_index].handle, Some(2));
+        assert!(matches!(
+            engine.release(stale, SharedAllocationPhaseV1::CpuWritable),
+            Err(MemorySessionError::InvalidAllocationAuthority)
+        ));
+        assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Active);
+        assert_eq!(engine.backend.free_calls, cycles);
+        engine
+            .release(replacement, SharedAllocationPhaseV1::CpuWritable)
+            .unwrap();
+        assert_eq!(
+            engine
+                .with_bytes(&anchor, SharedAllocationPhaseV1::CpuWritable, |bytes| bytes
+                    [0])
+                .unwrap(),
+            0x5a
+        );
+        engine
+            .release(anchor, SharedAllocationPhaseV1::CpuWritable)
+            .unwrap();
+        assert_eq!(engine.retained_gpu_va_bytes, 0);
+        assert_eq!(engine.backend.free_calls, cycles + 2);
+        assert_eq!(engine.backend.release_va_calls, cycles + 2);
+        assert!(engine.allocations.len() <= MAX_SHARED_GTT_ALLOCATIONS_V1);
+    }
+
+    #[test]
     fn overlap_kernel_output_and_cpu_address_substitution_quarantine_globally() {
         let mut overlap = acquired();
         overlap.backend.fixed_va = Some(0x2_0000);
@@ -5216,5 +5322,74 @@ mod tests {
             MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1
         );
         assert_eq!(leases.len(), MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1);
+    }
+
+    #[test]
+    fn released_device_memory_does_not_consume_record_capacity() {
+        let mut engine = acquired();
+        let (device, vm) = device_vm(1);
+        let anchor = engine.allocate_device_memory(device, vm, 1, 1).unwrap();
+        let cycles = MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1 * 4;
+        let mut stale = None;
+
+        for cycle in 0..cycles {
+            let lease = engine.allocate_device_memory(device, vm, 1, 1).unwrap();
+            if cycle == 0 {
+                stale = Some(Gfx942DeviceMemoryLeaseV1 {
+                    id: lease.id,
+                    generation: lease.generation,
+                    device: lease.device,
+                    vm: lease.vm,
+                    layout: lease.layout,
+                    marker: PhantomData::<Gfx942DeviceMemoryUnmappedV1>,
+                });
+            }
+            engine.release_device_memory(lease).unwrap();
+            assert!(engine.device_memory.len() <= MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1);
+        }
+
+        let stale = stale.unwrap();
+        assert!(
+            !engine
+                .device_memory
+                .iter()
+                .any(|record| record.id == stale.id)
+        );
+        assert_eq!(
+            engine
+                .device_memory
+                .iter()
+                .filter(|record| record.phase != DeviceMemoryPhaseV1::Released)
+                .count(),
+            1
+        );
+        assert_eq!(
+            engine.next_device_memory_id,
+            u64::try_from(cycles).unwrap() + 2
+        );
+        assert_eq!(engine.retained_device_memory_bytes, 4096);
+        assert_eq!(engine.backend.free_calls, cycles);
+        assert_eq!(engine.backend.release_va_calls, cycles);
+
+        engine.backend.next_handle = 2;
+        let replacement = engine.allocate_device_memory(device, vm, 1, 1).unwrap();
+        let replacement_index = engine
+            .device_memory_index(&replacement, DeviceMemoryPhaseV1::Unmapped)
+            .unwrap();
+        assert_eq!(engine.device_memory[replacement_index].handle, Some(2));
+        assert!(matches!(
+            engine.release_device_memory(stale),
+            Err(MemorySessionError::InvalidDeviceMemoryAuthority)
+        ));
+        assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Active);
+        assert_eq!(engine.backend.free_calls, cycles);
+        engine.release_device_memory(replacement).unwrap();
+        let anchor = engine.map_device_memory(anchor).unwrap();
+        let anchor = engine.unmap_device_memory(anchor).unwrap();
+        engine.release_device_memory(anchor).unwrap();
+        assert_eq!(engine.retained_device_memory_bytes, 0);
+        assert_eq!(engine.backend.free_calls, cycles + 2);
+        assert_eq!(engine.backend.release_va_calls, cycles + 2);
+        assert!(engine.device_memory.len() <= MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1);
     }
 }
