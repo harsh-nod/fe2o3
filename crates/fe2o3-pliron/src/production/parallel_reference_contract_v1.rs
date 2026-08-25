@@ -114,6 +114,7 @@ pub enum ProductionParallelReferenceContractErrorV1 {
     CallSummaryMismatch { index: usize },
     TensorFragmentOwnershipIncomplete { index: usize, detail: &'static str },
     UnmodeledTensorSites { declared: usize, live: usize },
+    TensorOutputAssociationIncomplete { outputs: usize },
     ContractConstruction(ParallelReferenceContractErrorV1),
     CounterOverflow,
 }
@@ -135,6 +136,7 @@ impl ProductionParallelReferenceContractErrorV1 {
                 | Self::NumericalProofIncomplete { .. }
                 | Self::CallSummaryDerivationIncomplete { .. }
                 | Self::TensorFragmentOwnershipIncomplete { .. }
+                | Self::TensorOutputAssociationIncomplete { .. }
         )
     }
 }
@@ -161,6 +163,7 @@ impl fmt::Display for ProductionParallelReferenceContractErrorV1 {
             Self::CallSummaryMismatch { index } => write!(formatter, "error[FE2O3-PARALLEL-012]: helper or intrinsic summary {index} differs from live typed roots, scope, callsite, or authenticated proof"),
             Self::TensorFragmentOwnershipIncomplete { index, detail } => write!(formatter, "error[FE2O3-PARALLEL-013]: cooperative tensor summary {index} is incomplete: {detail}"),
             Self::UnmodeledTensorSites { declared, live } => write!(formatter, "error[FE2O3-PARALLEL-014]: parallel contract models {declared} cooperative tensor sites but the live ranked graph contains {live}"),
+            Self::TensorOutputAssociationIncomplete { outputs } => write!(formatter, "error[FE2O3-PARALLEL-022]: compiler-derived tensor dataflow does not uniquely associate each cooperative tensor site with one of {outputs} output relations"),
             Self::CounterOverflow => formatter.write_str("error[FE2O3-PARALLEL-015]: parallel relation count cannot be represented in the production report"),
             Self::ContractConstruction(error) => write!(formatter, "error[FE2O3-PARALLEL-017]: compiler-derived parallel contract was invalid: {error}"),
         }
@@ -1310,7 +1313,7 @@ fn derive_tensor_call_summaries_v1(
     }
     if semantic_contract.outputs().len() != 1 {
         return Err(
-            ProductionParallelReferenceContractErrorV1::OutputSpecificHierarchyIncomplete {
+            ProductionParallelReferenceContractErrorV1::TensorOutputAssociationIncomplete {
                 outputs: semantic_contract.outputs().len(),
             },
         );
