@@ -1,4 +1,4 @@
-use std::ffi::{CString, OsString};
+use std::ffi::{CString, OsStr, OsString};
 use std::fs::File;
 use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -25,6 +25,14 @@ impl TestWorkspace {
                 Err(error) => panic!("failed to create test workspace: {error}"),
             }
         }
+    }
+
+    fn command(&self, program: impl AsRef<OsStr>) -> Command {
+        let mut command = Command::new(program);
+        command
+            .env("CARGO_TARGET_DIR", self.0.join("target"))
+            .current_dir(&self.0);
+        command
     }
 }
 
@@ -109,9 +117,9 @@ fn fixture() -> TestWorkspace {
         "[package]\nname = \"ordinary-dependent\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[dependencies]\nmanaged-library = { path = \"../managed-library\" }\n",
     );
 
-    let status = Command::new(cargo())
+    let status = workspace
+        .command(cargo())
         .args(["generate-lockfile", "--offline"])
-        .current_dir(&workspace.0)
         .status()
         .expect("run Cargo lockfile generation");
     assert!(status.success(), "fixture lockfile generation failed");
@@ -122,10 +130,10 @@ fn fixture() -> TestWorkspace {
 fn literal_cli_discovers_and_revalidates_the_real_exact_managed_set() {
     let workspace = fixture();
     let binary = env!("CARGO_BIN_EXE_cargo-fe2o3");
-    let output = Command::new(binary)
+    let output = workspace
+        .command(binary)
         .args(["examples", "list", "wrapper-managed"])
         .env("CARGO", cargo())
-        .current_dir(&workspace.0)
         .output()
         .expect("run literal projection discovery");
     assert!(
@@ -138,7 +146,8 @@ fn literal_cli_discovers_and_revalidates_the_real_exact_managed_set() {
         "managed-feature\nmanaged-include\nmanaged-library\n"
     );
 
-    let status = Command::new(binary)
+    let status = workspace
+        .command(binary)
         .args([
             "examples",
             "check-wrapper-managed",
@@ -147,15 +156,14 @@ fn literal_cli_discovers_and_revalidates_the_real_exact_managed_set() {
             "managed-library",
         ])
         .env("CARGO", cargo())
-        .current_dir(&workspace.0)
         .status()
         .expect("run exact projection revalidation");
     assert!(status.success(), "exact projection revalidation failed");
 
-    let output = Command::new(binary)
+    let output = workspace
+        .command(binary)
         .args(["examples", "check-wrapper-managed", "managed-feature"])
         .env("CARGO", cargo())
-        .current_dir(&workspace.0)
         .output()
         .expect("run hostile incomplete projection");
     assert!(
@@ -196,7 +204,8 @@ fn literal_cli_discovers_and_revalidates_the_real_exact_managed_set() {
     ] {
         let target = workspace.0.join(format!("target-{case}"));
         std::fs::create_dir(&target).expect("create isolated target");
-        let output = Command::new(binary)
+        let output = workspace
+            .command(binary)
             .args(args)
             .env("CARGO", cargo())
             .env("CARGO_TARGET_DIR", &target)
@@ -204,7 +213,6 @@ fn literal_cli_discovers_and_revalidates_the_real_exact_managed_set() {
             .env("CARGO_PKG_NAME", "attacker")
             .env("CARGO_PKG_VERSION", "attacker")
             .env("CARGO_MANIFEST_DIR", "/attacker")
-            .current_dir(&workspace.0)
             .output()
             .expect("run package-aware dependency check");
         assert!(
@@ -243,19 +251,19 @@ fn literal_cli_computes_disjoint_exhaustive_cpu_test_partitions() {
     ] {
         add_package(&workspace.0.join("examples"), package, source);
     }
-    let status = Command::new(cargo())
+    let status = workspace
+        .command(cargo())
         .args(["generate-lockfile", "--offline"])
-        .current_dir(&workspace.0)
         .status()
         .expect("generate CPU partition fixture lockfile");
     assert!(status.success());
 
     let binary = env!("CARGO_BIN_EXE_cargo-fe2o3");
     let list = |lane: &str| {
-        let output = Command::new(binary)
+        let output = workspace
+            .command(binary)
             .args(["examples", "list", lane])
             .env("CARGO", cargo())
-            .current_dir(&workspace.0)
             .output()
             .expect("query CPU test package partition");
         assert!(
@@ -270,12 +278,12 @@ fn literal_cli_computes_disjoint_exhaustive_cpu_test_partitions() {
     assert_eq!(list("rustc-check"), "managed\nraw-a\nraw-b\nrocm\n");
 
     let check = |packages: &[&str]| {
-        Command::new(binary)
+        workspace
+            .command(binary)
             .arg("examples")
             .arg("check-cpu-test-partition")
             .args(packages)
             .env("CARGO", cargo())
-            .current_dir(&workspace.0)
             .output()
             .expect("revalidate CPU test package partition")
     };
@@ -335,16 +343,16 @@ fn literal_cli_rejects_non_rs_declared_target_roots() {
         "non-rs/src/lib.kernel",
         "#[cfg(any())] #[kernel(typed)] pub fn managed() {}\n",
     );
-    let status = Command::new(cargo())
+    let status = workspace
+        .command(cargo())
         .args(["generate-lockfile", "--offline"])
-        .current_dir(&workspace.0)
         .status()
         .expect("generate non-rs fixture lockfile");
     assert!(status.success());
-    let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+    let output = workspace
+        .command(env!("CARGO_BIN_EXE_cargo-fe2o3"))
         .args(["examples", "list", "wrapper-managed"])
         .env("CARGO", cargo())
-        .current_dir(&workspace.0)
         .output()
         .expect("run non-rs projection rejection");
     assert!(!output.status.success(), "non-rs Cargo target was accepted");
