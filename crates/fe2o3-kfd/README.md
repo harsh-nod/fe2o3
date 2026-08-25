@@ -373,8 +373,9 @@ no-Drop-call behavior.
 
 The first production composition consumes one checked gfx942:xnack- device and
 creates a redacted, non-Clone queue session. It allocates one exact 4 KiB AQL
-ring with the required doubled GPUVA, one exact 4 KiB control mapping with
-distinct aligned write/read counters in the same page, a 4 KiB EOP mapping,
+ring with the required doubled GPUVA, one exact 4 KiB control mapping with the
+AMD AQL write/read counters at `+0x38`/`+0x80` in distinct cache lines and the
+`0x80` read-base-offset field at `+0x88`, a 4 KiB EOP mapping,
 and the exact 0xb167000-byte CWSR mapping. EOP and CWSR use the separately named
 fe2o3 executable-GTT policy; this is not ROCr policy equivalence. All four
 linear role authorities and the shared model owner transfer into the queue
@@ -385,7 +386,7 @@ adapter maps the exact complete 8192-byte KFD process doorbell slice. It checks
 the encoded returned offset, installs MADV_DONTFORK before enabling the VMA,
 and exposes neither an address, pointer, fd, handle, nor public MMIO store. The
 internal submission foundation initializes every ring header to exact INVALID
-type 1 and the two control counters as atomics before GPU mapping. It uses the
+type 1 and the reviewed AMD AQL control prefix before GPU mapping. It uses the
 canonical `fe2o3-aql` single-producer model, the actual acquire/read counters,
 and the additive V2 fixed-batch bound of one through 8192 packets. A maximum
 batch requires a ring of at least 512 KiB. One batch performs one

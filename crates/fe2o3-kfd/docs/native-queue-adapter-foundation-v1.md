@@ -106,8 +106,9 @@ one internal, non-`Clone` single-producer submission owner. Before CREATE,
 every logical 64-byte ring slot contains the exact little-endian `u32` INVALID
 header value `1`; an all-zero slot would encode VENDOR_SPECIFIC and is rejected
 by the initialization contract. Each slot header is explicitly initialized as
-an `AtomicU32`, and both control counters are explicitly initialized as
-`AtomicU64`, before GPU mapping.
+an `AtomicU32`. The AMD AQL write/read counters are initialized as `AtomicU64`
+at `+0x38`/`+0x80`, and the `0x80` read-base-offset field is written at `+0x88`,
+before GPU mapping.
 
 Submission acquire-loads the actual shared write and read counters, requires
 the write observation to equal the retained model, and applies

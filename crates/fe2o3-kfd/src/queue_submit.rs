@@ -362,14 +362,17 @@ pub(super) fn initialize_invalid_ring(bytes: &mut [u8]) -> Result<(), NativeAqlS
     Ok(())
 }
 
-pub(super) fn initialize_control_atomics(
+pub(crate) fn initialize_amd_aql_control(
     bytes: &mut [u8],
 ) -> Result<(), NativeAqlSubmissionErrorV1> {
     if bytes.len() != 4096 {
         return Err(NativeAqlSubmissionErrorV1::CounterObservation);
     }
     bytes.fill(0);
-    for offset in [0, 8] {
+    for offset in [
+        crate::queue_resources::AMD_AQL_WRITE_DISPATCH_ID_OFFSET_V1,
+        crate::queue_resources::AMD_AQL_READ_DISPATCH_ID_OFFSET_V1,
+    ] {
         let pointer = bytes[offset..].as_mut_ptr().cast::<AtomicU64>();
         if !(pointer as usize).is_multiple_of(core::mem::align_of::<AtomicU64>()) {
             return Err(NativeAqlSubmissionErrorV1::CounterObservation);
@@ -378,6 +381,9 @@ pub(super) fn initialize_control_atomics(
         // initialized as AtomicU64 before the mapping becomes GPU accessible.
         unsafe { pointer.write(AtomicU64::new(0)) };
     }
+    let field_offset = crate::queue_resources::AMD_AQL_READ_BASE_OFFSET_FIELD_V1;
+    bytes[field_offset..field_offset + core::mem::size_of::<u32>()]
+        .copy_from_slice(&crate::queue_resources::AMD_AQL_READ_BASE_OFFSET_VALUE_V1.to_le_bytes());
     Ok(())
 }
 
@@ -728,6 +734,28 @@ mod tests {
             assert!(slot[4..].iter().all(|byte| *byte == 0));
         }
         assert!(initialize_invalid_ring(&mut [0; 4_095]).is_err());
+    }
+
+    #[test]
+    fn amd_aql_control_initialization_matches_the_reviewed_layout() {
+        #[repr(align(64))]
+        struct AlignedControl([u8; 4096]);
+
+        let mut control = AlignedControl([0xff; 4096]);
+        initialize_amd_aql_control(&mut control.0).unwrap();
+        let mut expected = [0_u8; 4096];
+        expected[0x88..0x8c].copy_from_slice(&0x80_u32.to_le_bytes());
+        assert_eq!(control.0, expected);
+        assert_eq!(
+            u64::from_le_bytes(control.0[0x38..0x40].try_into().unwrap()),
+            0
+        );
+        assert_eq!(
+            u64::from_le_bytes(control.0[0x80..0x88].try_into().unwrap()),
+            0
+        );
+        assert!(initialize_amd_aql_control(&mut [0; 4095]).is_err());
+        assert!(initialize_amd_aql_control(&mut [0; 4097]).is_err());
     }
 
     #[test]

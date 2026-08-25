@@ -1,6 +1,23 @@
+#include "amd_hsa_queue.h"
 #include <linux/kfd_ioctl.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+
+_Static_assert(offsetof(amd_queue_t, write_dispatch_id) == 0x38,
+               "amd_queue_t write_dispatch_id offset");
+_Static_assert(offsetof(amd_queue_t, read_dispatch_id) == 0x80,
+               "amd_queue_t read_dispatch_id offset");
+_Static_assert(offsetof(amd_queue_t,
+                        read_dispatch_id_field_base_byte_offset) == 0x88,
+               "amd_queue_t read-dispatch base-offset field");
+_Static_assert(offsetof(amd_queue_v2_t, write_dispatch_id) == 0x38,
+               "amd_queue_v2_t write_dispatch_id offset");
+_Static_assert(offsetof(amd_queue_v2_t, read_dispatch_id) == 0x80,
+               "amd_queue_v2_t read_dispatch_id offset");
+_Static_assert(offsetof(amd_queue_v2_t,
+                        read_dispatch_id_field_base_byte_offset) == 0x88,
+               "amd_queue_v2_t read-dispatch base-offset field");
 
 static uint64_t align_up(uint64_t value, uint64_t alignment) {
     return (value + alignment - 1) & ~(alignment - 1);
