@@ -49,6 +49,22 @@ CARGO_FE2O3_SHA256=
 CARGO_FE2O3_DRIVER_ROOT=
 CARGO_TARGET_DIRECTORY=
 CI_PRIVATE_TMP_ROOT=
+readonly -a ROCM_TRUSTED_DEVICE_ITEM_PACKAGES=(
+  fe2o3-vecadd
+  fe2o3-trusted-item-renamed-genuine
+  fe2o3-trusted-item-lookalike-type
+  fe2o3-trusted-item-lookalike-helper
+  fe2o3-trusted-item-lookalike-thread
+  fe2o3-trusted-item-external-spoof
+  fe2o3-trusted-item-local-marker
+  fe2o3-typed-alias-spoof
+)
+# This proof fixture is also compiled outside the managed wrapper and carries a
+# source-identity-pinned fallback namespace. Every other gate source must use
+# the compiler-derived binding.
+readonly -a ROCM_EXPLICIT_NAMESPACE_FALLBACK_PACKAGES=(
+  fe2o3-typed-alias-spoof
+)
 readonly CPU_TEST_PACKAGES=(
   dialect-amdgcn
   dialect-autotune
@@ -477,6 +493,32 @@ load_dynamic_loader_environment_removals() {
   done < <(compgen -e)
 }
 
+validate_managed_wrapper_source_namespaces() {
+  local package fallback
+  local -a managed_packages=() loader_environment_removals
+  local -A seen=() fallback_packages=()
+
+  for fallback in "${ROCM_EXPLICIT_NAMESPACE_FALLBACK_PACKAGES[@]}"; do
+    fallback_packages["${fallback}"]=1
+  done
+  for package in "$@"; do
+    if [[ -n "${seen[${package}]:-}" ]]; then
+      continue
+    fi
+    seen["${package}"]=1
+    if [[ -n "${fallback_packages[${package}]:-}" ]]; then
+      continue
+    fi
+    managed_packages+=("${package}")
+  done
+  ((${#managed_packages[@]} > 0)) || return 0
+  validate_cargo_fe2o3_driver
+  load_dynamic_loader_environment_removals loader_environment_removals
+  env "${loader_environment_removals[@]}" \
+    "${CARGO_FE2O3_BINARY}" examples check-wrapper-namespaces \
+    "${managed_packages[@]}"
+}
+
 load_example_packages() {
   local lane="$1"
   local destination_name="$2"
@@ -897,6 +939,9 @@ run_rocm_compile() {
   validate_cargo_fe2o3_driver
   load_example_packages \
     rocm-compile example_packages "${CARGO_FE2O3_BINARY}"
+  validate_managed_wrapper_source_namespaces \
+    "${example_packages[@]}" \
+    "${ROCM_TRUSTED_DEVICE_ITEM_PACKAGES[@]}"
   validate_cargo_fe2o3_driver
   run_step rocm-doctor \
     env "${loader_environment_removals[@]}" \
@@ -967,7 +1012,8 @@ run_rocm_compile() {
     run_step "rocm-artifacts-${package}" \
       env "${loader_environment_removals[@]}" \
         "${CARGO_FE2O3_BINARY}" \
-        examples check-artifacts "${package}"
+        examples check-artifacts "${package}" \
+        "${CARGO_TARGET_DIRECTORY}/fe2o3"
   done
 }
 

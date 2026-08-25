@@ -707,12 +707,36 @@ prepare_cargo_fe2o3_driver() {
     "${feature_args[@]}" \
     --message-format=json-render-diagnostics
 }
+declare -a validated_managed_wrapper_packages=()
+validate_managed_wrapper_source_namespaces() {
+  validated_managed_wrapper_packages=("$@")
+}
 load_example_packages() {
   local destination_name="$2"
   local -n destination="${destination_name}"
   destination=(fe2o3-fill)
 }
 run_rocm_compile
+assert_equals \
+  'fe2o3-typed-alias-spoof' \
+  "${ROCM_EXPLICIT_NAMESPACE_FALLBACK_PACKAGES[*]}" \
+  'ROCm explicit namespace fallback allowlist expanded or changed'
+for managed_package in \
+  fe2o3-fill \
+  fe2o3-vecadd \
+  fe2o3-trusted-item-renamed-genuine \
+  fe2o3-trusted-item-lookalike-type \
+  fe2o3-trusted-item-lookalike-helper \
+  fe2o3-trusted-item-lookalike-thread \
+  fe2o3-trusted-item-external-spoof \
+  fe2o3-trusted-item-local-marker \
+  fe2o3-typed-alias-spoof; do
+  printf '%s\n' "${validated_managed_wrapper_packages[@]}" |
+    rg -Fx -- "${managed_package}" >/dev/null || {
+      printf 'ROCm compile namespace gate omitted %s\n' "${managed_package}" >&2
+      exit 1
+    }
+done
 assert_equals \
   'cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 --features qualification-oracles-test-only --message-format=json-render-diagnostics' \
   "$(step_command rocm-cargo-fe2o3-bootstrap)" \
@@ -738,7 +762,7 @@ assert_equals \
   "$(step_command rocm-build-fe2o3-fill)" \
   'ROCm compile did not invoke the resolved driver directly for example build'
 assert_equals \
-  "env ${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 examples check-artifacts fe2o3-fill" \
+  "env ${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 examples check-artifacts fe2o3-fill ${TIMEOUT_TEST_ROOT}/external-target/fe2o3" \
   "$(step_command rocm-artifacts-fe2o3-fill)" \
   'ROCm compile did not invoke the resolved driver directly for artifact inspection'
 assert_equals \
