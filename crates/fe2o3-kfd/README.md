@@ -390,8 +390,8 @@ and the additive V2 fixed-batch bound of one through 8192 packets. A maximum
 batch requires a ring of at least 512 KiB. One batch performs one
 acquire-release write-pointer fetch-add by the full count, copies all INVALID
 packet bodies before any aligned release header, publishes headers in packet
-order, and performs one release-fenced x86-SFENCE volatile `u64` doorbell
-store of the last packet ID. Counter divergence/regression and every possible
+order, and then performs release-fenced x86-SFENCE volatile `u64` doorbell
+stores for every packet ID in monotonic order. Counter divergence/regression and every possible
 side-effect failure poison the non-Clone owner; only full or insufficient
 space before the actual reservation is retryable. The publication
 path revalidates the live process-global runtime transition, event, all shadow
@@ -517,7 +517,8 @@ kernarg while keeping the same native queue, ring, completion arena, event,
 runtime, and doorbell alive. Its exact detached-lease ledger must be consumed by
 a later `bind_fixed_dispatch` or explicit release. The later batch may have a
 different program count, packet count, geometry, scalar bytes, and dispatch-data
-set. It is still published by one reservation and one final doorbell store.
+set. It is still published by one reservation, followed by monotonic doorbell
+stores for every published packet ID.
 
 Storage that entered fully initialized remains fully initialized across generic
 completion and can be rebound without another upload. Exact pre-publication

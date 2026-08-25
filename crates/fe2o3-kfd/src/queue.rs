@@ -75,7 +75,7 @@ pub use live::{
 /// Canonical claim boundary for the executable native-queue foundation.
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
     "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r15-v1\n",
-    "compute_session_sha256=394618a23ca31cacbd9ef757e9ad4c0977dd0b5ee83cf66bcd9a6fafdefe6ce3\n",
+    "compute_session_sha256=522cb47f86ff5bf835f139fbb93b4929f0b96f10ce639a3d8cec08cf24d1cf20\n",
     "operations=create,update,disable,destroy\n",
     "projection=existing-bounded-queue-lifecycle-model,pending-before-ioctl,append-only-history\n",
     "resources=backend-specific-private-capability,linearly-retained,exact-ring-control-eop-cwsr-mappings-required\n",
@@ -85,7 +85,7 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
     "linux-boundary=private-create-update-destroy-ioctl-shims,production-create-destroy-composition\n",
     "composition=shared-memory-linear-role-authorities,exact-one-page-same-va-userptr-writable-coherent-control,exact-set-device-memory-dispatch-transfer,transferred-model-foundation,whole-slice-doorbell-mmap\n",
     "creation=every-error-from-userptr-control-allocation-attempt-through-live-session-return-recovers-no-authority-permanently-poisons-process-global-runtime-gate-and-requires-process-termination\n",
-    "submission=crate-private-single-producer-aql-fixed-batch-v2-through-8192,ring-capacity-checked,one-actual-write-counter-fetch-add-by-count,all-invalid-bodies-before-release-headers,one-final-doorbell-store\n",
+    "submission=crate-private-single-producer-aql-fixed-batch-v2-through-8192,ring-capacity-checked,one-actual-write-counter-fetch-add-by-count,all-invalid-bodies-before-release-headers,monotonic-one-doorbell-per-packet-after-publication\n",
     "completion=separate-linear-8192-signal-host-coherent-arena,heap-owned-fixed-cardinality-retention,unique-signal-per-packet,crate-private-generation-binding,bounded-acquire-poll,addressless-timeout-execution-observation-before-terminal-poison,release-reset-after-exact-batch-completion\n",
     "barrier-probe=three-consuming-fresh-queue-entries,aql-special-doubled-or-plain-executable-one-x-or-selected-gpu-userptr-final-rocr-derived-flags-one-x-ring-with-no-full-rocr-order-parity,typed-poll-bound-before-device-consumption,zero-dependency-system-scope-packet,isolated-one-signal-lease,no-code-kernarg-or-dispatch-generation,success-after-completion-reset-and-confirmed-destroy-release-only,every-error-at-or-after-userptr-control-registration-entry-permanently-poisons-process-global-runtime-gate-and-is-terminal,execution-failure-opaque-quarantine-until-process-teardown,process-global-runtime-gate-poison-armed-before-destroy-and-cleared-only-after-confirmed-success,terminal-teardown-or-panic-retains-permanent-gate-poison-recovers-no-authority-native-resource-disposition-indeterminate-process-termination-required-no-retry-reopen-or-confirmed-cleanup\n",
     "dispatch-binding=public-addressless-inspected-code-zero-pointer-and-caller-zero-implicit-kernarg-private-substitution,mapped-device-lease-fixed-batch-completion-generation-composition,metadata-derived-COV6-geometry-and-dynamic-lds-only,queue-pointer-and-runtime-address-fields-rejected,real-resource-retention-through-recycle,recycled-only-detach-and-rebind-on-one-live-queue,actual-mapped-authority-return-only-after-exact-recycle\n",
@@ -96,7 +96,7 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1`].
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1: &str =
-    "7ad48909659fc9df130472419dcbc96bba76868be3e1766b8d4e6a701cb8b2b6";
+    "fa68777a4add8f9203737b6f8f89e5742e74d5a79650d933ba4cff92119e7c99";
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

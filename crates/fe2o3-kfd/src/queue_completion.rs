@@ -29,7 +29,7 @@ pub const GFX942_AQL_COMPLETION_MANIFEST_V1: &str = concat!(
     "profile=fe2o3-mi300x-gfx942-aql-completion-r7-v1\n",
     "aql_dispatch_schema_sha256=82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0\n",
     "aql_barrier_and_schema_sha256=bdca900cd5c6eaccbddfc5a854e956382a08ce87bec4ccd5284baacf932cdfb5\n",
-    "aql_fixed_batch_schema_sha256=a3c74fe4aa26a62772253de267812f2fb1626247685d8c4e8ed8bbb2a5a9e34a\n",
+    "aql_fixed_batch_schema_sha256=293e030fbbcc09aab02f46d72614fbe4b860db630a47f682352a9d69c51bf9fa\n",
     "arena=one-host-visible-coherent-gtt-allocation,524288-bytes,8192-distinct-64-byte-aligned-user-signals\n",
     "batch=1-through-8192,heap-owned-fixed-cardinality-state,one-unique-signal-per-packet,no-aggregate-alias\n",
     "initialization=typed-amd-busy-signal-construction,kind-user-1,value-pending-1,event-fields-zero,before-gpu-map\n",
@@ -45,7 +45,7 @@ pub const GFX942_AQL_COMPLETION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_AQL_COMPLETION_MANIFEST_V1`].
 pub const GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1: &str =
-    "56c7fb38daeffda945cffeb287ed61f26ee9446dbf8edbbd5337dd008309bd0f";
+    "1f864d524c1b11827ee92517aa77536e0d9e4ba646e05f0eba46e384a3f02a37";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CompletionOwnerPhaseV1 {

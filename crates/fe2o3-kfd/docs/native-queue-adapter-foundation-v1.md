@@ -120,11 +120,13 @@ the actual write pointer. It selects every exact masked slot, copies all
 complete still-INVALID packet bodies before publishing any packet, and then
 release-stores the aligned little-endian `u32` full headers in packet order. A
 one-dimensional packet publishes exactly `0x00011402`. A final currentness
-check precedes one release fence, x86 SFENCE, and one volatile little-endian
-`u64` doorbell store of the batch's last packet ID.
+check precedes release fence, x86 SFENCE, and volatile little-endian `u64`
+doorbell stores for every packet ID in monotonic order.
 
-Any error after the pure reservation or any possible shared-memory side effect
-permanently poisons the submission owner. Counter mismatch, read regression,
+Any error after the pure reservation or any possible shared-memory or MMIO side
+effect permanently poisons the submission owner. A notification failure may
+leave the complete published batch device-visible, so no packet-prefix execution
+authority is inferred. Counter mismatch, read regression,
 impossible distance, exhaustion, or currentness loss also poison it; only an
 ordinary full or insufficient-space observation before the actual write
 reservation remains retryable. The mapped production path never creates an
@@ -213,7 +215,7 @@ queue session; no KFD wakeup or public address is introduced.
 One fixed batch binding reserves a distinct signal per packet and retains the
 exact queue, signal-allocation, code-mapping, kernarg-mapping, and dispatch
 generations.
-It publishes through the existing one-reservation/one-doorbell primitive.
+It publishes through the existing one-reservation/monotonic-doorbell primitive.
 Bounded polling acquires every signal value and distinguishes pending, all-zero
 ready, unexpected-value fault, and timeout. Only all-zero evidence permits a
 release reset and slot-generation advance. A live or completed-but-unrecycled

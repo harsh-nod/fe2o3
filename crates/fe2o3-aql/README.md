@@ -54,7 +54,7 @@ doorbell under a separately reviewed batch-publication contract.
 The V2 maximum occupies 512 KiB of logical ring slots. A ring smaller than the
 requested fixed batch is rejected before the reservation model changes; a
 later native owner must still admit and own the corresponding ring, completion
-signals, one write-counter increment, and one final doorbell publication.
+signals, one write-counter increment, and monotonic per-packet doorbell publication.
 
 The prepared-batch target preserves body-before-header call order but remains
 inert. Its callback trait does not authenticate a target implementation,

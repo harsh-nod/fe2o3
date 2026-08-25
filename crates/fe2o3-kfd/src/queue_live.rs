@@ -78,9 +78,9 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "queue_resource_profile_sha256=822d8b9c60a74bc9905a0e3d9a5518e657def0c40406c1d5978c485650477b9d\n",
     "aql_dispatch_schema_sha256=82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0\n",
     "aql_barrier_and_schema_sha256=bdca900cd5c6eaccbddfc5a854e956382a08ce87bec4ccd5284baacf932cdfb5\n",
-    "aql_fixed_batch_schema_sha256=a3c74fe4aa26a62772253de267812f2fb1626247685d8c4e8ed8bbb2a5a9e34a\n",
-    "aql_completion_schema_sha256=56c7fb38daeffda945cffeb287ed61f26ee9446dbf8edbbd5337dd008309bd0f\n",
-    "dispatch_binding_schema_sha256=4307f4e7aedd1a1b8582fd150966fb5d8b9a4c95955759abcf5d755faa113da4\n",
+    "aql_fixed_batch_schema_sha256=293e030fbbcc09aab02f46d72614fbe4b860db630a47f682352a9d69c51bf9fa\n",
+    "aql_completion_schema_sha256=1f864d524c1b11827ee92517aa77536e0d9e4ba646e05f0eba46e384a3f02a37\n",
+    "dispatch_binding_schema_sha256=1460ff4d10c521840b7031dc58846e0475812708afe6d5e1f300fc8cfbac1461\n",
     "event_schema_sha256=bdde2e2d9b03690d6a63dba3d91074da214d87ece9ae1894c4d7a160bced58b8\n",
     "runtime_enable_schema_sha256=fa47481b10ea4bd89438d10b82bd8197088906e55f5f0c827dc7aa5aba906288\n",
     "source.rocr.queues.c=b7ead541340ac996c2305b2e9660cb3176edcd61ee509d4880f02659fbb6f32b\n",
@@ -95,7 +95,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "creation-boundary=planning-session-dispatch-and-ring-errors-before-userptr-control-registration-entry-retain-existing-classification,every-error-from-the-control-allocation-attempt-through-live-session-return-is-terminal-recovers-no-authority-permanently-poisons-the-process-global-runtime-gate-and-requires-process-termination\n",
     "runtime=one-process-global-fe2o3-owner;exact-enable-r_debug0-mode1-capabilities0-before-event-and-any-queue;ttmp-save-excluded;foreign-kfd-clients-excluded\n",
     "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-explicit-two-atomic-u64-zero;completion-arena-exact-8192-typed-64-byte-user-signals-pending-1-before-gpu-map;one-first-internal-auto-reset-signal-event-id-1-through-255-before-create;8-cwsr-bo-and-shadow-headers-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,one-first-shadow-aligned-error-reason-zero,exact-event-id\n",
-    "submission=crate-private-non-clone-single-producer,aql-fixed-batch-v2-count-1-through-8192-and-ring-capacity-bounded,heap-owned-fixed-cardinality-state,no-mapped-slice-or-raw-pointer-escape,rptr-wptr-acquire,one-actual-wptr-acq-rel-fetch-add-by-count,all-invalid-bodies-before-per-packet-independent-0x1402-or-wait-for-prior-0x1502-ordered-u32-release-headers,exact-one-zero-setup-barrier-and-0x1403,conservative-service-default-wait-for-prior,release-fence-x86-sfence,one-final-volatile-u64-doorbell-store-of-last-packet-id\n",
+    "submission=crate-private-non-clone-single-producer,aql-fixed-batch-v2-count-1-through-8192-and-ring-capacity-bounded,heap-owned-fixed-cardinality-state,no-mapped-slice-or-raw-pointer-escape,rptr-wptr-acquire,one-actual-wptr-acq-rel-fetch-add-by-count,all-invalid-bodies-before-per-packet-independent-0x1402-or-wait-for-prior-0x1502-ordered-u32-release-headers,exact-one-zero-setup-barrier-and-0x1403,conservative-service-default-wait-for-prior,release-fence-x86-sfence,monotonic-volatile-u64-doorbell-store-per-published-packet-id\n",
     "completion=crate-private-non-clone-generation-bound-fixed-batches-and-one-signal-barrier-probe,fixed-batch-signal-code-kernarg-dispatch-and-queue-generations-retained,barrier-probe-queue-and-signal-generations-only,bounded-atomic-acquire-poll-with-one-pre-post-currentness-envelope-and-same-scan-redacted-progress,pending-ready-fault-timeout-distinct,timeout-retains-private-linear-operation-through-sequential-pre-post-currentness-enveloped-addressless-write-read-counter-first-retained-packet-header-setup-first-retained-signal-kind-value-and-CWSR-reason-observation-before-poison,release-reset-only-after-all-retained-signals-zero\n",
     "liveness-probe=three-public-consuming-checked-device-entries-select-production-aql-special-doubled-diagnostic-plain-executable-one-x-or-diagnostic-userptr-writable-executable-coherent-uncached-no-substitute-one-x-ring,selected-backing-and-exact-ring-span-bound-into-plan-and-configuration,selected-backing-bound-into-every-redacted-outcome,typed-nonzero-bounded-polls-validated-before-device-consumption,diagnostic-backings-not-selectable-by-reusable-or-dispatch-queue-APIs,exact-fresh-zero-history-no-dispatch-queue,one-zero-dependency-system-scope-barrier,queue-and-signal-generation-only,submission-retryable-only-by-explicit-before-side-effect-stage-classification,success-requires-currentness-packet-count1-write1-read0or1-timing-sensitive-header0x1403-or-device-consumed-invalid1-setup0-user-signal-completed-zero-exception-then-signal-reset-and-confirmed-explicit-queue-destroy,Creation-has-no-live-queue-and-precedes-userptr-control-registration-entry,TerminalCreation-covers-every-error-at-or-after-userptr-control-registration-entry-every-create-result-not-explicitly-failed-no-effect-and-every-post-create-failure-recovers-no-authority-permanently-poisons-process-global-runtime-gate-and-requires-process-termination,QuarantinedExecution-retains-opaque-custody-until-process-teardown,process-global-runtime-gate-poison-armed-before-destroy-and-cleared-only-after-confirmed-success,TerminalTeardown-and-panic-retain-permanent-gate-poison-and-recover-no-authority-native-resource-disposition-indeterminate-process-termination-required-no-retry-reopen-or-confirmed-cleanup\n",
     "dispatch=public-addressless-linear-fixed-batch,1-through-32-inspected-programs,1-through-8192-packets,validated-code-materialization,zero-pointer-kernarg-internal-injection,metadata-derived-COV6-geometry-and-dynamic-lds-implicit-subset-with-caller-zero-suffix,queue-pointer-and-runtime-address-fields-rejected,exact-mapped-data-set-retained-even-when-unreferenced-by-current-batch,referenced-subset-only-inspected-access-and-sealed-initialization-gates,ordinary-release-or-exact-recycle-gated-attached-or-detached-return-after-destroy\n",
@@ -114,7 +114,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "394618a23ca31cacbd9ef757e9ad4c0977dd0b5ee83cf66bcd9a6fafdefe6ce3";
+    "522cb47f86ff5bf835f139fbb93b4929f0b96f10ce639a3d8cec08cf24d1cf20";
 
 type AqlSpecialRingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -2290,7 +2290,7 @@ impl ComputeAqlQueueSessionV1 {
     /// publication and C4 per-packet completion. No public caller can construct
     /// the required resource owner inputs.
     /// Publishes the entire prepared fixed batch with one ring reservation and
-    /// one final doorbell store, retaining one completion signal per packet.
+    /// monotonic doorbell stores for every packet, retaining one completion signal per packet.
     pub fn submit_fixed_dispatch<const N: usize>(
         &mut self,
     ) -> Result<Gfx942DispatchBatchV1<N>, ComputeAqlQueueSessionErrorV1> {
@@ -4034,15 +4034,15 @@ mod tests {
         );
         assert_eq!(
             fe2o3_aql::AQL_FIXED_BATCH_MODEL_MANIFEST_SHA256_V2,
-            "a3c74fe4aa26a62772253de267812f2fb1626247685d8c4e8ed8bbb2a5a9e34a"
+            "293e030fbbcc09aab02f46d72614fbe4b860db630a47f682352a9d69c51bf9fa"
         );
         assert_eq!(
             super::super::completion::GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1,
-            "56c7fb38daeffda945cffeb287ed61f26ee9446dbf8edbbd5337dd008309bd0f"
+            "1f864d524c1b11827ee92517aa77536e0d9e4ba646e05f0eba46e384a3f02a37"
         );
         assert_eq!(
             super::super::dispatch_binding::GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1,
-            "4307f4e7aedd1a1b8582fd150966fb5d8b9a4c95955759abcf5d755faa113da4"
+            "1460ff4d10c521840b7031dc58846e0475812708afe6d5e1f300fc8cfbac1461"
         );
         assert_eq!(
             SHARED_GTT_MEMORY_PROFILE_SHA256_V1,

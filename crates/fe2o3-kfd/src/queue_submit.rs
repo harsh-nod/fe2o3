@@ -168,10 +168,13 @@ impl NativeAqlSubmissionOwnerV1 {
         };
         batch.publish_with(&mut target)?;
 
-        // Every packet is already published here. Failure prevents MMIO but
-        // is not recoverable or retryable by this owner.
+        // Every packet is already published here. A failed notification may
+        // precede its store or may follow an indeterminate MMIO side effect;
+        // either way, this owner remains terminal and cannot retry the batch.
         backend.check_currentness()?;
-        backend.ring_doorbell_release(reservation.last_packet_id())?;
+        for entry in reservation.entries() {
+            backend.ring_doorbell_release(entry.packet_id())?;
+        }
         self.phase = SubmissionPhaseV1::Ready;
         Ok(reservation.last_packet_id())
     }
@@ -533,7 +536,8 @@ mod tests {
         FetchAdd,
         Body(usize),
         Header(usize),
-        Doorbell,
+        DoorbellBefore(usize),
+        DoorbellAfter(usize),
     }
 
     struct FakeBackend {
@@ -549,6 +553,7 @@ mod tests {
         fetch_return_override: Option<u64>,
         body_calls: usize,
         header_calls: usize,
+        doorbell_calls: usize,
         trace: Vec<&'static str>,
         doorbells: Vec<u64>,
     }
@@ -582,6 +587,7 @@ mod tests {
                 fetch_return_override: None,
                 body_calls: 0,
                 header_calls: 0,
+                doorbell_calls: 0,
                 trace: Vec::new(),
                 doorbells: Vec::new(),
             }
@@ -675,9 +681,17 @@ mod tests {
             packet_id: u64,
         ) -> Result<(), NativeAqlSubmissionErrorV1> {
             self.trace.push("doorbell");
+            let call = self.doorbell_calls;
+            self.doorbell_calls += 1;
+            if self.fail_after == Some(FailureAfterV1::DoorbellBefore(call)) {
+                return Err(self
+                    .fail_error
+                    .take()
+                    .unwrap_or(NativeAqlSubmissionErrorV1::Doorbell));
+            }
             release_fence_before_mmio();
             self.doorbells.push(packet_id);
-            if self.fail_after == Some(FailureAfterV1::Doorbell) {
+            if self.fail_after == Some(FailureAfterV1::DoorbellAfter(call)) {
                 return Err(self
                     .fail_error
                     .take()
@@ -828,7 +842,7 @@ mod tests {
             FailureAfterV1::FetchAdd,
             FailureAfterV1::Body(0),
             FailureAfterV1::Header(0),
-            FailureAfterV1::Doorbell,
+            FailureAfterV1::DoorbellAfter(0),
         ];
         for stage in stages {
             for insufficient in [false, true] {
@@ -996,21 +1010,21 @@ mod tests {
     }
 
     #[test]
-    fn batches_of_two_four_and_sixteen_use_one_reservation_and_one_doorbell() {
+    fn batches_of_two_four_and_sixteen_use_one_reservation_and_monotonic_doorbells() {
         assert_successful_batch::<2>();
         assert_successful_batch::<4>();
         assert_successful_batch::<16>();
     }
 
     #[test]
-    fn fixed_batch_of_8192_uses_one_fetch_add_and_one_final_doorbell() {
+    fn fixed_batch_of_8192_uses_one_fetch_add_and_all_monotonic_doorbells() {
         let mut owner = NativeAqlSubmissionOwnerV1::new(524_288).unwrap();
         let mut backend = FakeBackend::with_ring_bytes(524_288, 0, 0);
         assert_eq!(owner.submit_batch(batch::<8192>(), &mut backend), Ok(8191));
         assert_eq!(backend.write.load(Ordering::Relaxed), 8192);
         assert_eq!(backend.body_calls, 8192);
         assert_eq!(backend.header_calls, 8192);
-        assert_eq!(backend.doorbells, [8191]);
+        assert_eq!(backend.doorbells, (0..8192).collect::<Vec<_>>());
         assert_eq!(
             backend
                 .trace
@@ -1025,7 +1039,7 @@ mod tests {
                 .iter()
                 .filter(|event| **event == "doorbell")
                 .count(),
-            1
+            8192
         );
         assert!(backend.trace[4..8196].iter().all(|event| *event == "body"));
         assert!(
@@ -1036,12 +1050,12 @@ mod tests {
     }
 
     #[test]
-    fn batch_wrap_uses_exact_ordered_slots_and_last_packet_doorbell() {
+    fn batch_wrap_uses_exact_ordered_slots_and_monotonic_doorbells() {
         let mut owner = NativeAqlSubmissionOwnerV1::from_counters(4_096, 62, 62).unwrap();
         let mut backend = FakeBackend::new(62, 62);
         assert_eq!(owner.submit_batch(batch::<4>(), &mut backend), Ok(65));
         assert_eq!(backend.write.load(Ordering::Relaxed), 66);
-        assert_eq!(backend.doorbells, [65]);
+        assert_eq!(backend.doorbells, [62, 63, 64, 65]);
 
         for (batch_index, slot) in [62_u32, 63, 0, 1].into_iter().enumerate() {
             assert_eq!(backend.slot_word(slot, 0), 0x0001_1402);
@@ -1128,10 +1142,16 @@ mod tests {
                 NativeAqlSubmissionErrorV1::PacketHeader,
             ));
         }
-        cases.push((
-            FailureAfterV1::Doorbell,
-            NativeAqlSubmissionErrorV1::Doorbell,
-        ));
+        for index in 0..4 {
+            cases.push((
+                FailureAfterV1::DoorbellBefore(index),
+                NativeAqlSubmissionErrorV1::Doorbell,
+            ));
+            cases.push((
+                FailureAfterV1::DoorbellAfter(index),
+                NativeAqlSubmissionErrorV1::Doorbell,
+            ));
+        }
 
         for (failure, expected) in cases {
             let mut owner = NativeAqlSubmissionOwnerV1::new(4_096).unwrap();
@@ -1142,11 +1162,14 @@ mod tests {
                 Err(expected)
             );
             assert_eq!(backend.write.load(Ordering::Relaxed), 4, "{failure:?}");
-            assert!(backend.doorbells.len() <= 1, "{failure:?}");
-            if failure == FailureAfterV1::Doorbell {
-                assert_eq!(backend.doorbells, [3]);
-            } else {
-                assert!(backend.doorbells.is_empty(), "{failure:?}");
+            match failure {
+                FailureAfterV1::DoorbellBefore(index) => {
+                    assert_eq!(backend.doorbells, (0..index as u64).collect::<Vec<_>>());
+                }
+                FailureAfterV1::DoorbellAfter(index) => {
+                    assert_eq!(backend.doorbells, (0..=index as u64).collect::<Vec<_>>());
+                }
+                _ => assert!(backend.doorbells.is_empty(), "{failure:?}"),
             }
 
             let trace = backend.trace.clone();
@@ -1205,7 +1228,7 @@ mod tests {
             Ok(N as u64 - 1)
         );
         assert_eq!(backend.write.load(Ordering::Relaxed), N as u64);
-        assert_eq!(backend.doorbells, [N as u64 - 1]);
+        assert_eq!(backend.doorbells, (0..N as u64).collect::<Vec<_>>());
         assert_eq!(
             backend.trace[..4],
             ["check", "observe", "check", "fetch-add"]
@@ -1216,7 +1239,12 @@ mod tests {
                 .iter()
                 .all(|event| *event == "header")
         );
-        assert_eq!(backend.trace[4 + 2 * N..], ["check", "doorbell"]);
+        assert_eq!(backend.trace[4 + 2 * N], "check");
+        assert!(
+            backend.trace[5 + 2 * N..]
+                .iter()
+                .all(|event| *event == "doorbell")
+        );
         assert_eq!(
             backend
                 .trace
@@ -1231,7 +1259,7 @@ mod tests {
                 .iter()
                 .filter(|event| **event == "doorbell")
                 .count(),
-            1
+            N
         );
         for index in 0..N {
             assert_eq!(backend.slot_word(index as u32, 0), 0x0001_1402);

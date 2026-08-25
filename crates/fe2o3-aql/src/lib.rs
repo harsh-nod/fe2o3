@@ -166,13 +166,13 @@ state=single-producer-write,last-observed-read,power-of-two-ring-capacity
 admission=nondecreasing-read,read<=write,distance<=capacity,count<=capacity,count<=available,checked-u64-next-write
 slots=packet-id&(capacity-1),ordered,distinct-within-admitted-batch,wrap-aware
 transition=all-checks-before-write-or-last-read-mutation
-publication=all-invalid-bodies-before-any-per-packet-retained-exact-release-header,independent:0x1402,wait-for-prior:0x1502,one-final-doorbell-required-by-later-native-owner
+publication=all-invalid-bodies-before-any-per-packet-retained-exact-release-header,independent:0x1402,wait-for-prior:0x1502,monotonic-per-packet-doorbells-required-by-later-native-owner
 authority=inert-arithmetic-and-packet-values-only,no-native-reservation,no-counter-access,no-packet-write,no-publication,no-doorbell,no-completion
 "#;
 
 /// SHA-256 of [`AQL_FIXED_BATCH_MODEL_MANIFEST_V2`].
 pub const AQL_FIXED_BATCH_MODEL_MANIFEST_SHA256_V2: &str =
-    "a3c74fe4aa26a62772253de267812f2fb1626247685d8c4e8ed8bbb2a5a9e34a";
+    "293e030fbbcc09aab02f46d72614fbe4b860db630a47f682352a9d69c51bf9fa";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AqlAddressObservationError {

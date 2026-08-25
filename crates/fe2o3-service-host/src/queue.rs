@@ -31,7 +31,7 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
     "queue=one-long-lived-kfd-compute-aql-owner,ring-event-doorbell-and-signal-resources-retained-across-rebind\n",
     "batch=1-through-8192-fixed-packets,conservative-wait-for-prior-ordering-default-with-explicit-independent-opt-in,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges,optional-initialized-enclosing-host-snapshot-associated-with-one-strict-interior\n",
     "implicit-kernarg=exact-trailing-256-byte-COV6-caller-zero-suffix,lower-owner-privately-populates-metadata-derived-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds,queue-pointer-and-runtime-service-or-address-fields-rejected\n",
-    "publication=one-reservation-one-write-counter-fetch-add,one-retained-final-ordering-header-per-packet,one-final-doorbell-per-fixed-batch\n",
+    "publication=one-reservation-one-write-counter-fetch-add,one-retained-final-ordering-header-per-packet,monotonic-doorbell-per-packet-after-fixed-batch-publication\n",
     "custody=prepared-published-completed-recycled-unbound-linear-service-types,consuming-poll-with-progress-returns-pending-or-completed-custody-plus-same-scan-redacted-counts-and-first-pending-index,terminal-timeout-failure-borrows-addressless-currentness-enveloped-execution-observation,exact-completion-and-signal-recycle-before-detach-rebind-or-attached-or-unbound-returning-destroy\n",
     "data=read-and-readwrite-require-sealed-full-initialization,write-only-may-consume-uninitialized-exclusive-storage,initialized-state-retained-after-generic-completion-without-stale-content-digest\n",
     "subleases=whole-native-allocation-owner-retained,partition-registry-transfers-with-ledger,partitioned-bindings-require-member-index-and-contained-offset-extent,detached-initialized-replacement-preflights-and-atomically-installs-an-exact-new-partition,replacement-denies-old-allocation-generation\n",
@@ -45,7 +45,7 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "a11e0245fab4f1959a0ab54e9b64f3aadb68831e391f7c9bce64f77bbce10036";
+    "aaa3828bf07035f192062470f4494b5d5dbc7cafe198a39cd4ce132ccc646189";
 
 /// Queue composition, transition, or teardown error.
 #[derive(Debug)]
@@ -288,7 +288,7 @@ impl<const N: usize> ServiceQueueSessionV1<N> {
         self.owner.observation()
     }
 
-    /// Publishes the complete fixed batch as one KFD reservation and one doorbell store.
+    /// Publishes the complete fixed batch as one KFD reservation and monotonic doorbells.
     pub fn submit(
         mut self,
     ) -> Result<ServicePublishedQueueSessionV1<N>, ServiceQueueOperationFailureV1> {
