@@ -685,6 +685,7 @@ impl PreparedBuildConfig {
         }
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) fn build_observation(
         &self,
         prepared_rustc_command_sha256: [u8; 32],
