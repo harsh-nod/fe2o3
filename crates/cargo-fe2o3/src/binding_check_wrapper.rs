@@ -1,8 +1,9 @@
-//! Authority-free rustc wrapper for host-only workspace checking.
+//! Authority-free rustc wrapper for host-only workspace checking and trusted tests.
 //!
 //! This mode derives the same compilation-unit binding as the production
 //! wrapper, but deliberately has no backend, artifact directory, capability
-//! broker, build attempt, publication, or GPU authority.
+//! broker, build attempt, publication, or GPU authority and performs no performance
+//! prediction. Test execution remains trusted project code; this wrapper is not a sandbox.
 
 use fe2o3_rustc_invocation::{
     RustcArgsErrorV2, RustcCodegenMetadataErrorV1, RustcInvocationV2, classify_rustc_invocation_v2,

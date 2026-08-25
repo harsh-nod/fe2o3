@@ -988,14 +988,35 @@ cargo run --locked -p cargo-fe2o3 -- examples check
 cargo run --quiet --locked -p cargo-fe2o3 -- examples list rocm-compile
 cargo run --quiet --locked -p cargo-fe2o3 -- examples list cpu-test-raw
 cargo run --quiet --locked -p cargo-fe2o3 -- examples list cpu-test-wrapper-managed
+cargo fe2o3 test --locked --all-targets -p fe2o3-vecadd
 ```
 
 The two CPU-test queries form a sorted, disjoint, exhaustive partition of
 manifest packages selected for Rust checks but not ROCm compilation. The
 partition is computed from the exact structural wrapper-managed projection, so
-generic CI runs namespace-free typed-kernel tests through `cargo-fe2o3 test`
-and leaves ordinary packages on raw Cargo without package-name rules. CI
-revalidates both complete lists and the full structural projection after tests.
+generic CI runs namespace-free typed-kernel tests through the mandatory
+`cargo fe2o3 test --all-targets` host path and leaves ordinary packages on raw
+Cargo without package-name rules. CI revalidates both complete lists and the
+full structural projection after tests.
+
+This binding-only path executes trusted workspace source, Cargo configuration,
+build scripts, procedural macros, linkers, and test bodies. It rejects a caller
+`--target`, `--config`, Cargo-side `-Z`, `--doc`, and `--no-run`, and rejects
+ambient compiler, rustdoc, protected fe2o3, and test-runner selection. Configured
+compiler, protected fe2o3, loader, and test-runner selection is rejected;
+configured rustdoc is overridden with the disabled selection, and ambient loader
+variables are scrubbed. The fixed runner retains and hashes Cargo's original test
+executable. While Cargo's path remains stable, this preserves ordinary
+`current_exe` and `$ORIGIN` behavior and prevents directory-entry substitution
+between pin and execution; the runner checks the retained object again afterward.
+That is not same-inode immutability, origin authentication, a sandbox, or an
+atomic Cargo-configuration snapshot. The pre/post protected-configuration scans
+are diagnostic checks against persistent changes, not a TOCTOU proof.
+
+The command produces ordinary Cargo host-test files but grants no fe2o3 backend,
+HSACO, publication, or immutable-artifact authority. It neither requests nor
+establishes GPU evidence and performs no performance prediction. Trusted test
+code is not confined from files, the network, or device nodes.
 
 Run the repository validation lanes:
 

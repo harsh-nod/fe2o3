@@ -23,11 +23,39 @@ CPU example tests are the exact manifest subset with `rustc_check=true` and
 `rocm_compile=false`. The `cpu-test-raw` and `cpu-test-wrapper-managed` queries
 partition that subset using the structural source projection: ordinary packages
 run with raw Cargo, while every package containing a namespace-free typed
-kernel runs through the feature-free `cargo-fe2o3 test` binding wrapper. The
-lists are sorted, disjoint, exhaustive, and both complete lists plus the full
-structural projection are rescanned after the managed tests. This routing
-applies to any kernel package; it does not encode package-name exceptions or
-require literal namespaces.
+kernel runs through the feature-free binding wrapper using exactly:
+
+```text
+cargo fe2o3 test --locked --all-targets -p <wrapper-managed-package>
+```
+
+`--all-targets` is mandatory. The host-test command rejects caller `--target`,
+`--config`, Cargo-side `-Z`, `--doc`, and `--no-run` arguments. It also rejects
+ambient runner and rustdoc selection plus configured runner, protected fe2o3,
+dynamic-loader, and compiler selection. Configured rustdoc is overridden with
+the disabled selection, and ambient loader variables are scrubbed. The lists are
+sorted, disjoint, exhaustive, and both complete lists plus the full structural
+projection are rescanned after the managed tests. This routing applies to any
+kernel package; it does not encode package-name exceptions or require literal
+namespaces.
+
+Workspace source and configuration outside those protected selections, build
+scripts, procedural macros, linkers, and test bodies are trusted and execute as
+the current user. The fixed runner closes its child environment and descriptor
+boundary, but it is not a sandbox. It opens and hashes Cargo's original test
+executable. While Cargo's path remains stable, executing the retained original
+preserves ordinary `current_exe` and `$ORIGIN` behavior and prevents
+directory-entry substitution between pin and execution; the runner rechecks the
+object afterward. This does not freeze same-inode writes or grant
+immutable-artifact or origin authority. The protected-configuration scans before
+and after Cargo are diagnostic checks for persistent changes, not an atomic
+snapshot or TOCTOU proof.
+
+This route may create ordinary Cargo host artifacts, but it has no fe2o3
+backend, HSACO, publication, or artifact authority. It makes no GPU observation
+or performance prediction. Because project code is trusted rather than
+confined, those claims do not mean a test body is prevented from opening files,
+network sockets, or device nodes.
 
 The generic test subset runs `rustc-codegen-fe2o3` in a dedicated Cargo process.
 The command-plan regression in `scripts/tests/ci-local-test-gate.sh` enforces

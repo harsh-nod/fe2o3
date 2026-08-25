@@ -55,6 +55,29 @@ exclusions. This route admits no codegen backend, artifact directory,
 publication action, worker, or GPU authority; it is not compiler qualification
 or artifact production.
 
+Generic CPU testing partitions the manifest entries with `rustc_check=true` and
+`rocm_compile=false` by that same structural projection. Ordinary entries use
+raw Cargo. Managed entries use the feature-free
+`cargo fe2o3 test --locked --all-targets -p <package>` path; `--all-targets` is
+required, while caller `--target`, `--config`, Cargo-side `-Z`, `--doc`,
+`--no-run`, and ambient compiler, rustdoc, protected fe2o3, and runner selections
+are rejected. Configured compiler, protected fe2o3, loader, and runner selection
+is rejected; configured rustdoc is overridden with the disabled selection, and
+ambient loader variables are scrubbed. The raw and managed lists remain
+package-name independent, sorted, disjoint, and exhaustive.
+
+The host-test route trusts workspace source and non-protected Cargo
+configuration, build scripts, procedural macros, linkers, and tests. Its fixed
+runner closes the test child's environment and descriptor boundary; it is not a
+sandbox. The runner opens and hashes Cargo's original test executable, executes
+the retained original while Cargo's path remains stable to preserve ordinary
+`current_exe` and `$ORIGIN` behavior and prevent directory-entry substitution
+between pin and execution, then rechecks it afterward. That behavior does not
+freeze same-inode writes and grants no immutable-artifact, origin, backend,
+HSACO, publication, GPU, or performance-prediction authority. Ordinary Cargo
+host artifacts are still produced, and trusted test code remains able to access
+the user's files, network, and device nodes.
+
 This projection is deliberately package-wide and feature-independent. Every
 regular `*.rs` file outside the exact generated Cargo target-directory boundary
 participates. Every exact Cargo target
@@ -88,9 +111,12 @@ descriptor-relatively so symlinks and special files fail the availability
 check even though only regular `*.rs` files are parsed for binding ownership.
 Cargo metadata paths, manifests, directories, and opened package sources are
 revalidated during each bounded scan, and generic CI recomputes the exact
-managed set after the binding-only checks. This is an authority-free policy
-snapshot, not authentication of later Cargo compilation inputs, and it makes
-no TOCTOU claim beyond each individual retained scan. Artifact and publication
+managed set after the binding-only checks and tests. It also revalidates both
+CPU-test partitions after managed test execution. These are authority-free
+policy snapshots, not authentication of later Cargo compilation inputs. The
+protected Cargo-configuration scans before and after host tests diagnose a
+persistent change but are not an atomic snapshot; neither mechanism makes a
+TOCTOU claim beyond each individual retained scan. Artifact and publication
 authority continue to require their separate authenticated source, worker, and
 finalizer contracts.
 
