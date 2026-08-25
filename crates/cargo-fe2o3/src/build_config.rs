@@ -62,6 +62,8 @@ pub(crate) use crate::worker_v2_envelope_mode::WorkerV2EnvelopeModeV1;
 
 pub(crate) const QUALIFICATION_ORACLE_ENV: &str = "FE2O3_QUALIFICATION_ORACLE_V1";
 const OBSOLETE_CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
+pub(crate) const PRODUCTION_BUILD_CONFIG_ENV: &str = "FE2O3_PRODUCTION_BUILD_CONFIG_V1";
+pub(crate) const PRODUCTION_BUILD_EXPECTED_ID_ENV: &str = "FE2O3_PRODUCTION_BUILD_EXPECTED_ID_V1";
 pub(crate) const WORKER_V2_CONFIG_ENV: &str = "FE2O3_WORKER_V2_CONFIG_V2";
 pub(crate) const WORKER_V2_EXPECTED_ID_ENV: &str = "FE2O3_WORKER_V2_EXPECTED_ID_V1";
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
@@ -82,7 +84,8 @@ const SCALAR_GEMM_V1_PIPELINE: &str = "collected-scalar-gemm-v1";
 const ROW_SOFTMAX_V1_PIPELINE: &str = "collected-row-softmax-v1";
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) const GENERAL_GEMM_V1_PIPELINE: &str = "collected-general-gemm-v1";
-const CONFIG_FORMAT: &str = "fe2o3-worker-v2-config-v2";
+const PRODUCTION_BUILD_CONFIG_FORMAT: &str = "fe2o3-production-build-config-v1";
+const WORKER_V2_CONFIG_FORMAT: &str = "fe2o3-worker-v2-config-v2";
 const S09_ALPHA_DEBUG_PROFILE: &str = "s09-alpha-gfx942-o0-v1";
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_CONFIG_PATH_BYTES: usize = 4096;
@@ -201,7 +204,7 @@ pub(crate) struct PreparedBuildConfig {
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     manifest_path: PathBuf,
     identity: BuildConfigIdentity,
-    profile: WorkerConfigProfile,
+    profile: BuildConfigProfile,
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     envelope_mode: WorkerV2EnvelopeModeV1,
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
@@ -288,7 +291,7 @@ pub(crate) enum WorkerV2SourceDebugProfileV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum WorkerConfigProfile {
+enum BuildConfigProfile {
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     General,
     Production,
@@ -300,7 +303,7 @@ enum WorkerConfigProfile {
     GeneralGemmV1,
 }
 
-impl WorkerConfigProfile {
+impl BuildConfigProfile {
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     fn from_environment_value(value: &OsStr) -> Option<Self> {
         if value == WORKER_V2_PIPELINE {
@@ -369,6 +372,7 @@ impl PreparedBuildConfig {
         Self::from_environment_values(
             std::env::var_os(OBSOLETE_CODEGEN_PIPELINE_ENV).as_deref(),
             std::env::var_os(QUALIFICATION_ORACLE_ENV).as_deref(),
+            std::env::var_os(PRODUCTION_BUILD_CONFIG_ENV).as_deref(),
             std::env::var_os(WORKER_V2_CONFIG_ENV).as_deref(),
         )
     }
@@ -376,12 +380,14 @@ impl PreparedBuildConfig {
     fn from_environment_values(
         obsolete_pipeline: Option<&OsStr>,
         qualification_oracle: Option<&OsStr>,
-        config_path: Option<&OsStr>,
+        production_config_path: Option<&OsStr>,
+        qualification_config_path: Option<&OsStr>,
     ) -> Result<Option<Self>, BuildConfigError> {
         Self::from_environment_values_with_qualification(
             obsolete_pipeline,
             qualification_oracle,
-            config_path,
+            production_config_path,
+            qualification_config_path,
             cfg!(any(test, feature = "qualification-oracles-test-only")),
         )
     }
@@ -389,7 +395,8 @@ impl PreparedBuildConfig {
     fn from_environment_values_with_qualification(
         obsolete_pipeline: Option<&OsStr>,
         qualification_oracle: Option<&OsStr>,
-        config_path: Option<&OsStr>,
+        production_config_path: Option<&OsStr>,
+        qualification_config_path: Option<&OsStr>,
         qualification_oracles_enabled: bool,
     ) -> Result<Option<Self>, BuildConfigError> {
         if let Some(value) = obsolete_pipeline {
@@ -402,7 +409,21 @@ impl PreparedBuildConfig {
                 "{QUALIFICATION_ORACLE_ENV} is unavailable in production builds; remove {value:?} or rebuild cargo-fe2o3 with the qualification-oracles-test-only feature"
             )));
         }
-        Self::from_selection(qualification_oracle, config_path)
+        if qualification_oracle.is_none() {
+            if qualification_config_path.is_some() {
+                return Err(BuildConfigError::Invalid(format!(
+                    "{WORKER_V2_CONFIG_ENV} is qualification-only; production requires {PRODUCTION_BUILD_CONFIG_ENV}"
+                )));
+            }
+            Self::from_selection(None, production_config_path)
+        } else {
+            if production_config_path.is_some() {
+                return Err(BuildConfigError::Invalid(format!(
+                    "{PRODUCTION_BUILD_CONFIG_ENV} cannot be combined with {QUALIFICATION_ORACLE_ENV}"
+                )));
+            }
+            Self::from_selection(qualification_oracle, qualification_config_path)
+        }
     }
 
     pub(crate) fn from_environment_for_cargo_setup() -> Result<Option<Self>, BuildConfigError> {
@@ -426,11 +447,11 @@ impl PreparedBuildConfig {
             )));
         }
         let selected = if production_compilation_selected(profile) {
-            Some(WorkerConfigProfile::Production)
+            Some(BuildConfigProfile::Production)
         } else {
             #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             {
-                profile.and_then(WorkerConfigProfile::from_environment_value)
+                profile.and_then(BuildConfigProfile::from_environment_value)
             }
             #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
             {
@@ -440,7 +461,7 @@ impl PreparedBuildConfig {
         match (selected, config_path) {
             (None, None) => Ok(None),
             #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-            (Some(WorkerConfigProfile::RowSoftmaxV1), None) => Ok(None),
+            (Some(BuildConfigProfile::RowSoftmaxV1), None) => Ok(None),
             (None, Some(_)) => Err(BuildConfigError::UnexpectedConfiguration),
             (Some(_), None) => Err(BuildConfigError::MissingConfiguration),
             (Some(_), Some(path)) if path.is_empty() => Err(BuildConfigError::MissingConfiguration),
@@ -452,16 +473,16 @@ impl PreparedBuildConfig {
 
     #[cfg(test)]
     fn from_manifest(path: &Path) -> Result<Self, BuildConfigError> {
-        Self::from_manifest_for_profile(path, WorkerConfigProfile::General)
+        Self::from_manifest_for_profile(path, BuildConfigProfile::General)
     }
 
     fn from_manifest_for_profile(
         path: &Path,
-        profile: WorkerConfigProfile,
+        profile: BuildConfigProfile,
     ) -> Result<Self, BuildConfigError> {
         require_absolute_path(path, "configuration")?;
         #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-        if profile == WorkerConfigProfile::GeneralGemmV1 {
+        if profile == BuildConfigProfile::GeneralGemmV1 {
             require_closed_child_manifest_path(path, "configuration")?;
         }
         let bytes = read_bounded(path, MAX_CONFIG_BYTES, "configuration")?;
@@ -476,10 +497,15 @@ impl PreparedBuildConfig {
             ));
         }
 
-        let root = exact_root_object(&value)?;
-        if required_string(root, "format", "configuration")? != CONFIG_FORMAT {
+        let root = exact_root_object(&value, profile)?;
+        let required_format = if profile == BuildConfigProfile::Production {
+            PRODUCTION_BUILD_CONFIG_FORMAT
+        } else {
+            WORKER_V2_CONFIG_FORMAT
+        };
+        if required_string(root, "format", "configuration")? != required_format {
             return Err(BuildConfigError::Invalid(format!(
-                "configuration format must be exactly {CONFIG_FORMAT:?}"
+                "configuration format must be exactly {required_format:?}"
             )));
         }
 
@@ -571,22 +597,7 @@ impl PreparedBuildConfig {
     }
 
     pub(crate) const fn requires_expected_identity(&self) -> bool {
-        if self.source_debug_profile.is_some() {
-            return true;
-        }
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-        {
-            matches!(
-                self.profile,
-                WorkerConfigProfile::ScalarGemmV1
-                    | WorkerConfigProfile::RowSoftmaxV1
-                    | WorkerConfigProfile::GeneralGemmV1
-            )
-        }
-        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
-        {
-            false
-        }
+        true
     }
 
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
@@ -602,7 +613,7 @@ impl PreparedBuildConfig {
     pub(crate) const fn executes_worker_in_rustc(&self) -> bool {
         #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         {
-            matches!(self.profile, WorkerConfigProfile::GeneralGemmV1)
+            matches!(self.profile, BuildConfigProfile::GeneralGemmV1)
         }
         #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
         {
@@ -611,7 +622,15 @@ impl PreparedBuildConfig {
     }
 
     pub(crate) const fn is_production_compilation(&self) -> bool {
-        matches!(self.profile, WorkerConfigProfile::Production)
+        matches!(self.profile, BuildConfigProfile::Production)
+    }
+
+    pub(crate) const fn expected_identity_environment(&self) -> &'static str {
+        if self.is_production_compilation() {
+            PRODUCTION_BUILD_EXPECTED_ID_ENV
+        } else {
+            WORKER_V2_EXPECTED_ID_ENV
+        }
     }
 
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
@@ -642,7 +661,7 @@ impl PreparedBuildConfig {
         if !self.selects(crate_name, source, working_directory) {
             return None;
         }
-        if self.profile == WorkerConfigProfile::Production {
+        if self.profile == BuildConfigProfile::Production {
             return Some(BuildCompileEnvironmentProfileV1::ProductionGfx942);
         }
         if self.source_debug_profile.is_some() {
@@ -650,11 +669,11 @@ impl PreparedBuildConfig {
         }
         #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         {
-            if self.profile == WorkerConfigProfile::ScalarGemmV1 {
+            if self.profile == BuildConfigProfile::ScalarGemmV1 {
                 Some(BuildCompileEnvironmentProfileV1::ScalarGemmV1Gfx942)
-            } else if self.profile == WorkerConfigProfile::RowSoftmaxV1 {
+            } else if self.profile == BuildConfigProfile::RowSoftmaxV1 {
                 Some(BuildCompileEnvironmentProfileV1::RowSoftmaxV1Gfx942)
-            } else if self.profile == WorkerConfigProfile::GeneralGemmV1 {
+            } else if self.profile == BuildConfigProfile::GeneralGemmV1 {
                 Some(BuildCompileEnvironmentProfileV1::GeneralGemmV1Gfx942)
             } else {
                 None
@@ -817,7 +836,7 @@ impl PreparedBuildConfig {
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn parse_general_gemm_v1(
     root: &Map<String, Value>,
-    profile: WorkerConfigProfile,
+    profile: BuildConfigProfile,
     providers: &[WorkerInputV1],
     options: &[LinkOptionV1],
     source_debug_profile: Option<WorkerV2SourceDebugProfileV1>,
@@ -825,7 +844,7 @@ fn parse_general_gemm_v1(
     candidate_output: &WorkerOutputConstraintsV1,
 ) -> Result<Option<PreparedGeneralGemmV1Config>, BuildConfigError> {
     let Some(value) = root.get("general_gemm_v1") else {
-        if profile == WorkerConfigProfile::GeneralGemmV1 {
+        if profile == BuildConfigProfile::GeneralGemmV1 {
             return Err(BuildConfigError::Invalid(
                 "general-GEMM Worker V2 configuration requires general_gemm_v1 qualification-pair pins"
                     .to_owned(),
@@ -833,7 +852,7 @@ fn parse_general_gemm_v1(
         }
         return Ok(None);
     };
-    if profile != WorkerConfigProfile::GeneralGemmV1 {
+    if profile != BuildConfigProfile::GeneralGemmV1 {
         return Err(BuildConfigError::Invalid(
             "general_gemm_v1 pins are valid only for collected-general-gemm-v1".to_owned(),
         ));
@@ -918,7 +937,7 @@ fn parse_general_gemm_v1(
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn parse_row_softmax_v1(
     root: &Map<String, Value>,
-    profile: WorkerConfigProfile,
+    profile: BuildConfigProfile,
     providers: &[WorkerInputV1],
     options: &[LinkOptionV1],
     source_debug_profile: Option<WorkerV2SourceDebugProfileV1>,
@@ -926,7 +945,7 @@ fn parse_row_softmax_v1(
     candidate_output: &WorkerOutputConstraintsV1,
 ) -> Result<Option<PreparedRowSoftmaxV1Config>, BuildConfigError> {
     let Some(value) = root.get("row_softmax_v1") else {
-        if profile == WorkerConfigProfile::RowSoftmaxV1 {
+        if profile == BuildConfigProfile::RowSoftmaxV1 {
             return Err(BuildConfigError::Invalid(
                 "row-softmax Worker V2 configuration requires row_softmax_v1 policy pins"
                     .to_owned(),
@@ -934,7 +953,7 @@ fn parse_row_softmax_v1(
         }
         return Ok(None);
     };
-    if profile != WorkerConfigProfile::RowSoftmaxV1 {
+    if profile != BuildConfigProfile::RowSoftmaxV1 {
         return Err(BuildConfigError::Invalid(
             "row_softmax_v1 policy pins are valid only for collected-row-softmax-v1".to_owned(),
         ));
@@ -1131,7 +1150,7 @@ impl ConfiguredEnvelopeInputs {
 }
 
 fn transitive_identity(
-    profile: WorkerConfigProfile,
+    profile: BuildConfigProfile,
     manifest: &[u8],
     worker: &PinnedWorkerV1,
     providers: &[WorkerInputV1],
@@ -1203,36 +1222,26 @@ impl fmt::Display for BuildConfigError {
         match self {
             Self::MissingConfiguration => write!(
                 formatter,
-                "a Worker V2 codegen profile requires {WORKER_V2_CONFIG_ENV}"
+                "production requires {PRODUCTION_BUILD_CONFIG_ENV}; a qualification profile requires {WORKER_V2_CONFIG_ENV}"
             ),
             Self::UnexpectedConfiguration => {
-                #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-                {
-                    write!(
-                        formatter,
-                        "{WORKER_V2_CONFIG_ENV} is valid only when {QUALIFICATION_ORACLE_ENV} is unset for production compilation or exactly {WORKER_V2_PIPELINE}, {SCALAR_GEMM_V1_PIPELINE}, {ROW_SOFTMAX_V1_PIPELINE}, or {GENERAL_GEMM_V1_PIPELINE}"
-                    )
-                }
-                #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
-                {
-                    write!(
-                        formatter,
-                        "{WORKER_V2_CONFIG_ENV} is valid only when {QUALIFICATION_ORACLE_ENV} is unset for production compilation"
-                    )
-                }
+                write!(
+                    formatter,
+                    "build configuration does not match a supported production or qualification route"
+                )
             }
             Self::Io { kind, path, error } => {
                 write!(
                     formatter,
-                    "failed to read Worker V2 {kind} {}: {error}",
+                    "failed to read build configuration {kind} {}: {error}",
                     path.display()
                 )
             }
-            Self::Json(error) => write!(formatter, "invalid Worker V2 configuration JSON: {error}"),
-            Self::Invalid(reason) => write!(formatter, "invalid Worker V2 configuration: {reason}"),
-            Self::LinkPlan(error) => write!(formatter, "invalid Worker V2 link option: {error}"),
-            Self::Protocol(error) => write!(formatter, "invalid Worker V2 protocol input: {error}"),
-            Self::Worker(error) => write!(formatter, "invalid Worker V2 measurement: {error}"),
+            Self::Json(error) => write!(formatter, "invalid build configuration JSON: {error}"),
+            Self::Invalid(reason) => write!(formatter, "invalid build configuration: {reason}"),
+            Self::LinkPlan(error) => write!(formatter, "invalid build link option: {error}"),
+            Self::Protocol(error) => write!(formatter, "invalid build input: {error}"),
+            Self::Worker(error) => write!(formatter, "invalid build worker measurement: {error}"),
         }
     }
 }
@@ -1459,16 +1468,21 @@ fn exact_object<'a>(
     Ok(object)
 }
 
-fn exact_root_object(value: &Value) -> Result<&Map<String, Value>, BuildConfigError> {
+fn exact_root_object(
+    value: &Value,
+    profile: BuildConfigProfile,
+) -> Result<&Map<String, Value>, BuildConfigError> {
     let object = value
         .as_object()
         .ok_or_else(|| BuildConfigError::Invalid("configuration must be an object".to_owned()))?;
     let keys = object.keys().map(String::as_str).collect::<Vec<_>>();
-    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
-    if keys != ROOT_KEYS {
-        return Err(BuildConfigError::Invalid(format!(
-            "production configuration must contain exactly the fields {ROOT_KEYS:?}; found {keys:?}"
-        )));
+    if profile == BuildConfigProfile::Production {
+        if keys != ROOT_KEYS {
+            return Err(BuildConfigError::Invalid(format!(
+                "production configuration must contain exactly the fields {ROOT_KEYS:?}; found {keys:?}"
+            )));
+        }
+        return Ok(object);
     }
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     {
@@ -1491,8 +1505,10 @@ fn exact_root_object(value: &Value) -> Result<&Map<String, Value>, BuildConfigEr
                 "configuration contains unknown or duplicate configuration fields; found {keys:?}"
             )));
         }
+        return Ok(object);
     }
-    Ok(object)
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    unreachable!("production is the only feature-free build configuration profile")
 }
 
 fn required_value<'a>(
@@ -1826,7 +1842,7 @@ mod tests {
         let worker_identity = ContentIdentityV1::calculate(&worker_bytes);
         let value = json!({
             "candidate_output_max_bytes": 4096,
-            "format": CONFIG_FORMAT,
+            "format": WORKER_V2_CONFIG_FORMAT,
             "limits": {
                 "stderr_bytes": 1024,
                 "stdout_bytes": 16384,
@@ -1858,6 +1874,15 @@ mod tests {
             }
         });
         let path = directory.0.join("config.json");
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        path
+    }
+
+    fn production_manifest(directory: &TestDirectory) -> PathBuf {
+        let qualification = manifest(directory);
+        let mut value: Value = serde_json::from_slice(&fs::read(qualification).unwrap()).unwrap();
+        value["format"] = json!(PRODUCTION_BUILD_CONFIG_FORMAT);
+        let path = directory.0.join("production-build-config.json");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         path
     }
@@ -1970,6 +1995,7 @@ mod tests {
                 Some(OsStr::new("production-v1")),
                 None,
                 None,
+                None,
             ),
             Err(BuildConfigError::Invalid(reason))
                 if reason.contains("FE2O3_CODEGEN_PIPELINE has been removed")
@@ -2018,12 +2044,75 @@ mod tests {
             PreparedBuildConfig::from_environment_values_with_qualification(
                 None,
                 Some(OsStr::new(SCALAR_GEMM_V1_PIPELINE)),
+                None,
                 Some(OsStr::new("/does/not/exist")),
                 false,
             ),
             Err(BuildConfigError::Invalid(reason))
                 if reason.contains("qualification-oracles-test-only")
                     && reason.contains(SCALAR_GEMM_V1_PIPELINE)
+        ));
+        assert!(matches!(
+            PreparedBuildConfig::from_environment_values_with_qualification(
+                None,
+                None,
+                None,
+                Some(OsStr::new("/does/not/exist")),
+                true,
+            ),
+            Err(BuildConfigError::Invalid(reason))
+                if reason.contains("qualification-only")
+                    && reason.contains(PRODUCTION_BUILD_CONFIG_ENV)
+        ));
+        assert!(matches!(
+            PreparedBuildConfig::from_environment_values_with_qualification(
+                None,
+                Some(OsStr::new(WORKER_V2_PIPELINE)),
+                Some(OsStr::new("/does/not/exist")),
+                None,
+                true,
+            ),
+            Err(BuildConfigError::Invalid(reason))
+                if reason.contains("cannot be combined")
+                    && reason.contains(PRODUCTION_BUILD_CONFIG_ENV)
+        ));
+    }
+
+    #[test]
+    fn production_profile_rejects_qualification_schema_and_fields() {
+        let directory = TestDirectory::new();
+        let path = production_manifest(&directory);
+        let production =
+            PreparedBuildConfig::from_manifest_for_profile(&path, BuildConfigProfile::Production)
+                .unwrap();
+        assert_eq!(
+            production.expected_identity_environment(),
+            PRODUCTION_BUILD_EXPECTED_ID_ENV
+        );
+
+        let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        value["format"] = json!(WORKER_V2_CONFIG_FORMAT);
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            PreparedBuildConfig::from_manifest_for_profile(
+                &path,
+                BuildConfigProfile::Production,
+            ),
+            Err(BuildConfigError::Invalid(reason))
+                if reason.contains(PRODUCTION_BUILD_CONFIG_FORMAT)
+        ));
+
+        value["format"] = json!(PRODUCTION_BUILD_CONFIG_FORMAT);
+        value["load_envelope"] = json!("required");
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            PreparedBuildConfig::from_manifest_for_profile(
+                &path,
+                BuildConfigProfile::Production,
+            ),
+            Err(BuildConfigError::Invalid(reason))
+                if reason.contains("production configuration")
+                    && reason.contains("load_envelope")
         ));
     }
 
@@ -2033,7 +2122,7 @@ mod tests {
         let path = general_gemm_manifest(&directory);
         let config = PreparedBuildConfig::from_manifest_for_profile(
             &path,
-            WorkerConfigProfile::GeneralGemmV1,
+            BuildConfigProfile::GeneralGemmV1,
         )
         .unwrap();
         let pair = config.general_gemm_v1().unwrap();
@@ -2057,7 +2146,7 @@ mod tests {
         assert!(matches!(
             PreparedBuildConfig::from_manifest_for_profile(
                 &path,
-                WorkerConfigProfile::GeneralGemmV1,
+                BuildConfigProfile::GeneralGemmV1,
             ),
             Err(BuildConfigError::Invalid(reason))
                 if reason.contains("unsupported value")
@@ -2071,7 +2160,7 @@ mod tests {
         let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         let reference_identity = PreparedBuildConfig::from_manifest_for_profile(
             &path,
-            WorkerConfigProfile::GeneralGemmV1,
+            BuildConfigProfile::GeneralGemmV1,
         )
         .unwrap()
         .identity();
@@ -2079,7 +2168,7 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let substituted = PreparedBuildConfig::from_manifest_for_profile(
             &path,
-            WorkerConfigProfile::GeneralGemmV1,
+            BuildConfigProfile::GeneralGemmV1,
         )
         .unwrap();
         assert_eq!(
@@ -2096,7 +2185,7 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         let substituted = PreparedBuildConfig::from_manifest_for_profile(
             &path,
-            WorkerConfigProfile::GeneralGemmV1,
+            BuildConfigProfile::GeneralGemmV1,
         )
         .unwrap();
         assert_eq!(
@@ -2114,7 +2203,7 @@ mod tests {
         assert!(matches!(
             PreparedBuildConfig::from_manifest_for_profile(
                 &path,
-                WorkerConfigProfile::GeneralGemmV1,
+                BuildConfigProfile::GeneralGemmV1,
             ),
             Err(BuildConfigError::Invalid(reason))
                 if reason.contains("must contain exactly")
@@ -2129,7 +2218,7 @@ mod tests {
         assert!(matches!(
             PreparedBuildConfig::from_manifest_for_profile(
                 &path,
-                WorkerConfigProfile::GeneralGemmV1,
+                BuildConfigProfile::GeneralGemmV1,
             ),
             Err(BuildConfigError::Invalid(reason))
                 if reason.contains("proof_timeout_seconds")
@@ -2141,7 +2230,7 @@ mod tests {
         assert!(matches!(
             PreparedBuildConfig::from_manifest_for_profile(
                 &path,
-                WorkerConfigProfile::GeneralGemmV1,
+                BuildConfigProfile::GeneralGemmV1,
             ),
             Err(BuildConfigError::Invalid(reason))
                 if reason.contains("absolute")
@@ -2154,7 +2243,7 @@ mod tests {
         assert!(matches!(
             PreparedBuildConfig::from_manifest_for_profile(
                 &path,
-                WorkerConfigProfile::GeneralGemmV1,
+                BuildConfigProfile::GeneralGemmV1,
             ),
             Err(BuildConfigError::Invalid(reason))
                 if reason.contains("compiled-in reviewed manifest")
@@ -2175,7 +2264,7 @@ mod tests {
         assert!(matches!(
             PreparedBuildConfig::from_manifest_for_profile(
                 &lexical_alias,
-                WorkerConfigProfile::GeneralGemmV1,
+                BuildConfigProfile::GeneralGemmV1,
             ),
             Err(BuildConfigError::Invalid(reason)) if reason.contains("canonical absolute UTF-8")
         ));
@@ -2196,11 +2285,9 @@ mod tests {
     fn row_softmax_manifest_binds_exact_provider_ocml_and_workload_policy() {
         let directory = TestDirectory::new();
         let path = row_softmax_manifest(&directory);
-        let config = PreparedBuildConfig::from_manifest_for_profile(
-            &path,
-            WorkerConfigProfile::RowSoftmaxV1,
-        )
-        .unwrap();
+        let config =
+            PreparedBuildConfig::from_manifest_for_profile(&path, BuildConfigProfile::RowSoftmaxV1)
+                .unwrap();
         assert!(config.requires_expected_identity());
         assert!(config.providers.is_empty());
         assert!(config.row_softmax_v1().is_some());
@@ -2217,11 +2304,9 @@ mod tests {
         let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         value["row_softmax_v1"]["ocml_manifest_sha256"] = json!(hex(&[0x36; 32]));
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-        let changed = PreparedBuildConfig::from_manifest_for_profile(
-            &path,
-            WorkerConfigProfile::RowSoftmaxV1,
-        )
-        .unwrap();
+        let changed =
+            PreparedBuildConfig::from_manifest_for_profile(&path, BuildConfigProfile::RowSoftmaxV1)
+                .unwrap();
         assert_ne!(first_identity, changed.identity());
     }
 
@@ -2240,7 +2325,7 @@ mod tests {
         assert!(matches!(
             PreparedBuildConfig::from_manifest_for_profile(
                 &path,
-                WorkerConfigProfile::RowSoftmaxV1
+                BuildConfigProfile::RowSoftmaxV1
             ),
             Err(BuildConfigError::Invalid(reason))
                 if reason.contains("request-side link providers")
@@ -2253,7 +2338,7 @@ mod tests {
         assert!(matches!(
             PreparedBuildConfig::from_manifest_for_profile(
                 &path,
-                WorkerConfigProfile::RowSoftmaxV1
+                BuildConfigProfile::RowSoftmaxV1
             ),
             Err(BuildConfigError::Invalid(reason))
                 if reason.contains("requires COV6")
@@ -2283,15 +2368,17 @@ mod tests {
     fn compile_environment_profile_requires_exact_profile_and_unit_selection() {
         let directory = TestDirectory::new();
         let path = manifest(&directory);
+        let production_path = production_manifest(&directory);
         let general = PreparedBuildConfig::from_selection(
             Some(OsStr::new(WORKER_V2_PIPELINE)),
             Some(path.as_os_str()),
         )
         .unwrap()
         .unwrap();
-        let production = PreparedBuildConfig::from_selection(None, Some(path.as_os_str()))
-            .unwrap()
-            .unwrap();
+        let production =
+            PreparedBuildConfig::from_selection(None, Some(production_path.as_os_str()))
+                .unwrap()
+                .unwrap();
         let scalar = PreparedBuildConfig::from_selection(
             Some(OsStr::new(SCALAR_GEMM_V1_PIPELINE)),
             Some(path.as_os_str()),
@@ -2302,10 +2389,18 @@ mod tests {
         assert_ne!(general.identity(), scalar.identity());
         assert_ne!(general.identity(), production.identity());
         assert_ne!(production.identity(), scalar.identity());
-        assert_eq!(production.profile, WorkerConfigProfile::Production);
-        assert!(!general.requires_expected_identity());
-        assert!(!production.requires_expected_identity());
+        assert_eq!(production.profile, BuildConfigProfile::Production);
+        assert!(general.requires_expected_identity());
+        assert!(production.requires_expected_identity());
         assert!(scalar.requires_expected_identity());
+        assert_eq!(
+            general.expected_identity_environment(),
+            WORKER_V2_EXPECTED_ID_ENV
+        );
+        assert_eq!(
+            production.expected_identity_environment(),
+            PRODUCTION_BUILD_EXPECTED_ID_ENV
+        );
         assert_eq!(
             general.compile_environment_profile("kernel", Path::new("src/lib.rs"), &directory.0),
             None

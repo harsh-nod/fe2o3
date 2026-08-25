@@ -65,21 +65,23 @@ fn cargo_fe2o3_executable(workspace: &Path, cargo_build_target: &Path) -> PathBu
     executable
 }
 
-fn worker_config(workspace: &Path, isolated_target: &Path) -> PathBuf {
+fn production_build_config(workspace: &Path, isolated_target: &Path) -> PathBuf {
     let worker = std::env::current_exe().expect("current production pipeline test executable");
-    let bytes = std::fs::read(&worker).expect("read inert Worker V2 executable");
+    let bytes = std::fs::read(&worker).expect("read inert production worker executable");
     let digest = Sha256::digest(&bytes)
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
-    let config = isolated_target.join("worker-v2-config.json");
-    let worker = worker.to_str().expect("UTF-8 Worker V2 executable path");
+    let config = isolated_target.join("production-build-config.json");
+    let worker = worker
+        .to_str()
+        .expect("UTF-8 production worker executable path");
     let workspace = workspace.to_str().expect("UTF-8 workspace path");
     let json = format!(
-        "{{\"candidate_output_max_bytes\":4194304,\"format\":\"fe2o3-worker-v2-config-v2\",\"limits\":{{\"stderr_bytes\":65536,\"stdout_bytes\":8388608,\"timeout_ms\":30000}},\"link_options\":[{{\"name\":\"code-object-version\",\"value\":\"5\"}},{{\"name\":\"opt-level\",\"value\":\"2\"}},{{\"name\":\"strip-debug\",\"value\":\"true\"}},{{\"name\":\"verify-each\",\"value\":\"true\"}}],\"providers\":[],\"units\":[{{\"crate_name\":\"fe2o3_fill\",\"source\":\"examples/fill/src/main.rs\",\"working_directory\":{workspace:?}}}],\"worker\":{{\"byte_len\":{},\"llvm_build_identity\":\"test-only-unreached-llvm\",\"path\":{worker:?},\"sha256\":\"{digest}\",\"worker_build_identity\":\"test-only-unreached-worker\"}}}}",
+        "{{\"candidate_output_max_bytes\":4194304,\"format\":\"fe2o3-production-build-config-v1\",\"limits\":{{\"stderr_bytes\":65536,\"stdout_bytes\":8388608,\"timeout_ms\":30000}},\"link_options\":[{{\"name\":\"code-object-version\",\"value\":\"5\"}},{{\"name\":\"opt-level\",\"value\":\"2\"}},{{\"name\":\"strip-debug\",\"value\":\"true\"}},{{\"name\":\"verify-each\",\"value\":\"true\"}}],\"providers\":[],\"units\":[{{\"crate_name\":\"fe2o3_fill\",\"source\":\"examples/fill/src/main.rs\",\"working_directory\":{workspace:?}}}],\"worker\":{{\"byte_len\":{},\"llvm_build_identity\":\"test-only-unreached-llvm\",\"path\":{worker:?},\"sha256\":\"{digest}\",\"worker_build_identity\":\"test-only-unreached-worker\"}}}}",
         bytes.len()
     );
-    std::fs::write(&config, json).expect("write canonical inert Worker V2 config");
+    std::fs::write(&config, json).expect("write canonical inert production build config");
     config
 }
 
@@ -99,7 +101,7 @@ fn cargo_fe2o3(
     workspace: &Path,
     executable: &Path,
     isolated_target: &Path,
-    worker_config: &Path,
+    build_config: &Path,
     command: &str,
     package: &str,
 ) -> Output {
@@ -107,7 +109,7 @@ fn cargo_fe2o3(
     process
         .current_dir(workspace)
         .env("FE2O3_TARGET", "gfx942")
-        .env("FE2O3_WORKER_V2_CONFIG_V2", worker_config)
+        .env("FE2O3_PRODUCTION_BUILD_CONFIG_V1", build_config)
         .env("CARGO_TARGET_DIR", isolated_target)
         .env_remove("LD_LIBRARY_PATH")
         .args([command, "-p", package, "--target", "amdgcn-amd-amdhsa"]);
@@ -129,13 +131,13 @@ fn attributed_kernel_enters_one_transaction_and_fails_without_fallback() {
     };
     let isolated_target = ScratchTarget::new();
     let executable = cargo_fe2o3_executable(&workspace, &cargo_build_target);
-    let worker_config = worker_config(&workspace, isolated_target.path());
+    let build_config = production_build_config(&workspace, isolated_target.path());
 
     let output = cargo_fe2o3(
         &workspace,
         &executable,
         isolated_target.path(),
-        &worker_config,
+        &build_config,
         "build",
         "fe2o3-fill",
     );
@@ -167,7 +169,7 @@ fn attributed_kernel_enters_one_transaction_and_fails_without_fallback() {
         "semantic importer authenticated rustc target",
         "selected canonical Kernel IR module",
         "emitted fill",
-        "published inert Worker V2",
+        "published inert production worker",
     ] {
         assert!(
             !stderr.contains(forbidden),

@@ -84,9 +84,10 @@ use sha2::{Digest, Sha256};
 
 use crate::build_config::{
     BuildCompileEnvironmentProfileV1, BuildConfigError, BuildConfigIdentity,
-    OBSOLETE_PRODUCTION_SELECTOR, PreparedBuildConfig, WORKER_V2_CONFIG_ENV,
-    WORKER_V2_EXPECTED_ID_ENV, WORKER_V2_SOURCE_DEBUG_PROFILE_ENV, WorkerV2BuildObservation,
-    WorkerV2SourceDebugProfileV1, production_compilation_selected,
+    OBSOLETE_PRODUCTION_SELECTOR, PRODUCTION_BUILD_CONFIG_ENV, PRODUCTION_BUILD_EXPECTED_ID_ENV,
+    PreparedBuildConfig, WORKER_V2_CONFIG_ENV, WORKER_V2_EXPECTED_ID_ENV,
+    WORKER_V2_SOURCE_DEBUG_PROFILE_ENV, WorkerV2BuildObservation, WorkerV2SourceDebugProfileV1,
+    production_compilation_selected,
 };
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use crate::build_config::{
@@ -233,7 +234,7 @@ pub(crate) enum BindingWrapperError {
     },
     CurrentDirectory(std::io::Error),
     BuildObservation(String),
-    WorkerV2Configuration(BuildConfigError),
+    BuildConfiguration(BuildConfigError),
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     WorkerV2Restart(ResumeMarkerErrorV1),
     Artifact(EmitError),
@@ -308,8 +309,8 @@ impl fmt::Display for BindingWrapperError {
             Self::BuildObservation(error) => {
                 write!(formatter, "failed to collect build observation: {error}")
             }
-            Self::WorkerV2Configuration(error) => {
-                write!(formatter, "Worker V2 setup failed: {error}")
+            Self::BuildConfiguration(error) => {
+                write!(formatter, "build configuration setup failed: {error}")
             }
             #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::WorkerV2Restart(error) => {
@@ -348,7 +349,7 @@ impl Error for BindingWrapperError {
             Self::CodegenMetadata(error) => Some(error),
             Self::Spawn(error) => Some(error),
             Self::CurrentDirectory(error) => Some(error),
-            Self::WorkerV2Configuration(error) => Some(error),
+            Self::BuildConfiguration(error) => Some(error),
             #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::WorkerV2Restart(error) => Some(error),
             Self::Artifact(error) => Some(error),
@@ -426,8 +427,8 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             let build_observation =
                 CompileBuildObservationV2::from_ordered_metadata(compile.crate_name(), &metadata)?;
             let worker_v2 = PreparedBuildConfig::from_environment()
-                .map_err(BindingWrapperError::WorkerV2Configuration)?;
-            validate_expected_worker_v2_identity(worker_v2.as_ref())?;
+                .map_err(BindingWrapperError::BuildConfiguration)?;
+            validate_expected_build_config_identity(worker_v2.as_ref())?;
             let capability_profile = if worker_v2
                 .as_ref()
                 .and_then(PreparedBuildConfig::source_debug_profile)
@@ -895,6 +896,7 @@ fn configure_build_observation_environment_with_test_mutation(
 fn reject_dynamic_loader_environment() -> Result<(), BindingWrapperError> {
     let authority_sensitive = std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").as_deref()
         == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
+        || std::env::var_os(PRODUCTION_BUILD_CONFIG_ENV).is_some()
         || std::env::var_os(crate::build_config::WORKER_V2_CONFIG_ENV).is_some();
     let unprotected_validation = cfg!(debug_assertions)
         && std::env::var_os(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV).as_deref()
@@ -2457,35 +2459,63 @@ fn os_string(value: Vec<u8>) -> Result<OsString, ()> {
     String::from_utf8(value).map(OsString::from).map_err(|_| ())
 }
 
-fn validate_expected_worker_v2_identity(
+fn validate_expected_build_config_identity(
     config: Option<&PreparedBuildConfig>,
 ) -> Result<(), BindingWrapperError> {
-    let Some(expected) = std::env::var_os(WORKER_V2_EXPECTED_ID_ENV) else {
-        if let Some(config) = config.filter(|config| config.requires_expected_identity()) {
-            let profile = if config.source_debug_profile().is_some() {
-                "S09"
-            } else {
-                "scalar GEMM"
-            };
-            return Err(BindingWrapperError::WorkerV2Configuration(
-                BuildConfigError::Invalid(format!(
-                    "{profile} Worker V2 configuration requires {WORKER_V2_EXPECTED_ID_ENV}"
-                )),
+    let production = std::env::var_os(PRODUCTION_BUILD_EXPECTED_ID_ENV);
+    let qualification = std::env::var_os(WORKER_V2_EXPECTED_ID_ENV);
+    if production.is_some() && qualification.is_some() {
+        return Err(BindingWrapperError::BuildConfiguration(
+            BuildConfigError::Invalid(format!(
+                "{PRODUCTION_BUILD_EXPECTED_ID_ENV} and {WORKER_V2_EXPECTED_ID_ENV} are mutually exclusive"
+            )),
+        ));
+    }
+    if config.is_none() && (production.is_some() || qualification.is_some()) {
+        return Err(BindingWrapperError::BuildConfiguration(
+            BuildConfigError::Invalid(
+                "build configuration identity is present without a build configuration".to_owned(),
+            ),
+        ));
+    }
+    let expected_name = config.map_or(PRODUCTION_BUILD_EXPECTED_ID_ENV, |config| {
+        config.expected_identity_environment()
+    });
+    let expected = if expected_name == PRODUCTION_BUILD_EXPECTED_ID_ENV {
+        production.as_ref()
+    } else {
+        qualification.as_ref()
+    };
+    let Some(expected) = expected else {
+        if config.is_some_and(PreparedBuildConfig::requires_expected_identity) {
+            return Err(BindingWrapperError::BuildConfiguration(
+                BuildConfigError::Invalid(format!("build configuration requires {expected_name}")),
             ));
         }
         return Ok(());
     };
+    let wrong_environment_present = if expected_name == PRODUCTION_BUILD_EXPECTED_ID_ENV {
+        qualification.is_some()
+    } else {
+        production.is_some()
+    };
+    if wrong_environment_present {
+        return Err(BindingWrapperError::BuildConfiguration(
+            BuildConfigError::Invalid(
+                "build configuration identity used the wrong route namespace".to_owned(),
+            ),
+        ));
+    }
     let expected = expected.to_str().ok_or_else(|| {
-        BindingWrapperError::WorkerV2Configuration(BuildConfigError::Invalid(format!(
-            "{WORKER_V2_EXPECTED_ID_ENV} must be lowercase hexadecimal"
+        BindingWrapperError::BuildConfiguration(BuildConfigError::Invalid(format!(
+            "{expected_name} must be lowercase hexadecimal"
         )))
     })?;
     let actual = config.map(|config| config.identity().to_hex());
     if actual.as_deref() != Some(expected) {
-        return Err(BindingWrapperError::WorkerV2Configuration(
+        return Err(BindingWrapperError::BuildConfiguration(
             BuildConfigError::Invalid(
-                "Worker V2 transitive inputs changed after Cargo generation preparation"
-                    .to_string(),
+                "build configuration inputs changed after Cargo generation preparation".to_string(),
             ),
         ));
     }
@@ -2781,6 +2811,8 @@ fn scope_host_dependency_environment(command: &mut Command) {
         QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1,
         crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV,
         crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV,
+        PRODUCTION_BUILD_CONFIG_ENV,
+        PRODUCTION_BUILD_EXPECTED_ID_ENV,
         WORKER_V2_CONFIG_ENV,
         WORKER_V2_EXPECTED_ID_ENV,
         QUALIFICATION_RELEASE_ACTION_ENV,
@@ -3414,7 +3446,7 @@ fn prepare_managed_attempt(
                 } else {
                     let envelope_inputs = config
                         .load_envelope_inputs()
-                        .map_err(BindingWrapperError::WorkerV2Configuration)?;
+                        .map_err(BindingWrapperError::BuildConfiguration)?;
                     let attempt = begin_build_attempt(output_dir, &producer, invocation, session)
                         .map_err(BindingWrapperError::Artifact)?;
                     (
@@ -3468,7 +3500,7 @@ fn prepare_managed_attempt(
                 } else {
                     let envelope_inputs = config
                         .load_envelope_inputs()
-                        .map_err(BindingWrapperError::WorkerV2Configuration)?;
+                        .map_err(BindingWrapperError::BuildConfiguration)?;
                     let attempt = begin_build_attempt(output_dir, &producer, invocation, session)
                         .map_err(BindingWrapperError::Artifact)?;
                     (
@@ -8727,7 +8759,7 @@ mod tests {
             {
                 assert!(message.contains(case.expected_error()), "{message}");
             }
-            Err(BindingWrapperError::WorkerV2Configuration(error))
+            Err(BindingWrapperError::BuildConfiguration(error))
                 if matches!(case, FailClosedCase::InvalidEnvelopeInputs) =>
             {
                 assert!(error.to_string().contains(case.expected_error()), "{error}");
