@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use sha2::{Digest as _, Sha256};
+
 const PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 
 fn workspace() -> PathBuf {
@@ -40,21 +42,50 @@ impl Drop for ScratchTarget {
     }
 }
 
-fn cargo_fe2o3(
-    workspace: &Path,
-    cargo_build_target: &Path,
-    isolated_target: &Path,
-    command: &str,
-    package: &str,
-) -> Output {
-    let mut process = Command::new(env!("CARGO"));
-    process
+fn cargo_fe2o3_executable(workspace: &Path, cargo_build_target: &Path) -> PathBuf {
+    let mut build = Command::new(env!("CARGO"));
+    build
         .current_dir(workspace)
-        .env(PIPELINE_ENV, "production-v1")
-        .env("CARGO_TARGET_DIR", isolated_target)
-        .args(["run", "--locked", "--target-dir"])
+        .args(["build", "--locked", "--target-dir"])
         .arg(cargo_build_target)
-        .args(["-p", "cargo-fe2o3", "--", command, "-p", package]);
+        .args(["-p", "cargo-fe2o3", "--bin", "cargo-fe2o3"]);
+    remove_rustc_overrides(&mut build);
+    let output = build.output().expect("build cargo-fe2o3 executable");
+    assert!(
+        output.status.success(),
+        "cargo-fe2o3 build failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let executable = cargo_build_target
+        .join("debug")
+        .join(format!("cargo-fe2o3{}", std::env::consts::EXE_SUFFIX));
+    assert!(
+        executable.is_file(),
+        "cargo-fe2o3 executable is missing at {}",
+        executable.display()
+    );
+    executable
+}
+
+fn worker_config(workspace: &Path, isolated_target: &Path) -> PathBuf {
+    let worker = std::env::current_exe().expect("current production pipeline test executable");
+    let bytes = std::fs::read(&worker).expect("read inert Worker V2 executable");
+    let digest = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let config = isolated_target.join("worker-v2-config.json");
+    let worker = worker.to_str().expect("UTF-8 Worker V2 executable path");
+    let workspace = workspace.to_str().expect("UTF-8 workspace path");
+    let json = format!(
+        "{{\"candidate_output_max_bytes\":4194304,\"format\":\"fe2o3-worker-v2-config-v2\",\"limits\":{{\"stderr_bytes\":65536,\"stdout_bytes\":8388608,\"timeout_ms\":30000}},\"link_options\":[{{\"name\":\"code-object-version\",\"value\":\"5\"}},{{\"name\":\"opt-level\",\"value\":\"2\"}},{{\"name\":\"strip-debug\",\"value\":\"true\"}},{{\"name\":\"verify-each\",\"value\":\"true\"}}],\"providers\":[],\"units\":[{{\"crate_name\":\"fe2o3_fill\",\"source\":\"examples/fill/src/main.rs\",\"working_directory\":{workspace:?}}}],\"worker\":{{\"byte_len\":{},\"llvm_build_identity\":\"test-only-unreached-llvm\",\"path\":{worker:?},\"sha256\":\"{digest}\",\"worker_build_identity\":\"test-only-unreached-worker\"}}}}",
+        bytes.len()
+    );
+    std::fs::write(&config, json).expect("write canonical inert Worker V2 config");
+    config
+}
+
+fn remove_rustc_overrides(process: &mut Command) {
     for variable in [
         "RUSTC",
         "CARGO_BUILD_RUSTC",
@@ -64,6 +95,26 @@ fn cargo_fe2o3(
     ] {
         process.env_remove(variable);
     }
+}
+
+fn cargo_fe2o3(
+    workspace: &Path,
+    executable: &Path,
+    isolated_target: &Path,
+    worker_config: &Path,
+    command: &str,
+    package: &str,
+) -> Output {
+    let mut process = Command::new(executable);
+    process
+        .current_dir(workspace)
+        .env(PIPELINE_ENV, "production-v1")
+        .env("FE2O3_TARGET", "gfx942")
+        .env("FE2O3_WORKER_V2_CONFIG_V2", worker_config)
+        .env("CARGO_TARGET_DIR", isolated_target)
+        .env_remove("LD_LIBRARY_PATH")
+        .args([command, "-p", package, "--target", "amdgcn-amd-amdhsa"]);
+    remove_rustc_overrides(&mut process);
     process.output().expect("run cargo-fe2o3")
 }
 
@@ -71,15 +122,23 @@ fn cargo_fe2o3(
 #[ignore = "requires the configured gfx942 cargo-fe2o3 compiler toolchain"]
 fn attributed_kernel_enters_one_transaction_and_fails_without_fallback() {
     let workspace = workspace();
-    let cargo_build_target = std::env::var_os("CARGO_TARGET_DIR")
+    let configured_target = std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace.join("target"));
+    let cargo_build_target = if configured_target.is_absolute() {
+        configured_target
+    } else {
+        workspace.join(configured_target)
+    };
     let isolated_target = ScratchTarget::new();
+    let executable = cargo_fe2o3_executable(&workspace, &cargo_build_target);
+    let worker_config = worker_config(&workspace, isolated_target.path());
 
     let output = cargo_fe2o3(
         &workspace,
-        &cargo_build_target,
+        &executable,
         isolated_target.path(),
+        &worker_config,
         "build",
         "fe2o3-fill",
     );
@@ -87,13 +146,12 @@ fn attributed_kernel_enters_one_transaction_and_fails_without_fallback() {
 
     assert!(
         !output.status.success(),
-        "unimplemented production transaction unexpectedly succeeded"
+        "unprotected production transaction unexpectedly succeeded"
     );
     assert!(
-        stderr.contains("target authentication failed before monomorphization without fallback")
-            && stderr.contains("requires authoritative rustc LLVM target")
-            && stderr.contains("amdgcn-amd-amdhsa")
-            && stderr.contains("x86_64-unknown-linux-gnu"),
+        stderr.contains(
+            "cargo fe2o3 authority release requires a protected pre-exec launcher/image contract; this build has no admitted release launcher"
+        ),
         "missing fail-closed production diagnostic:\n{stderr}"
     );
     for forbidden in [
@@ -110,6 +168,7 @@ fn attributed_kernel_enters_one_transaction_and_fails_without_fallback() {
         "collected-lds-reduction-v1",
         "collected-scoped-atomic-v1",
         "semantic importer authenticated rustc target",
+        "selected canonical Kernel IR module",
         "emitted fill",
         "published inert Worker V2",
     ] {

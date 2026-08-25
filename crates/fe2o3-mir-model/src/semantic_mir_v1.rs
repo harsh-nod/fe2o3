@@ -1812,6 +1812,15 @@ impl SemanticTypeShapeV1 {
     }
 }
 
+/// Rust source type classification that is not reducible to a structural MIR
+/// shape without losing language-level validity semantics.
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SemanticRustTypeKindV1 {
+    #[default]
+    Ordinary,
+    Str,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticTypeDeclV1 {
     identity: SemanticTypeIdentityV1,
@@ -1819,6 +1828,7 @@ pub struct SemanticTypeDeclV1 {
     layout: SemanticTypeLayoutV1,
     shape: SemanticTypeShapeV1,
     abi_properties: SemanticTypeAbiPropertiesV1,
+    rust_type_kind: SemanticRustTypeKindV1,
 }
 
 impl SemanticTypeDeclV1 {
@@ -1834,6 +1844,7 @@ impl SemanticTypeDeclV1 {
             layout,
             shape,
             abi_properties: SemanticTypeAbiPropertiesV1::new(false, false),
+            rust_type_kind: SemanticRustTypeKindV1::Ordinary,
         }
     }
 
@@ -1842,6 +1853,11 @@ impl SemanticTypeDeclV1 {
         abi_properties: SemanticTypeAbiPropertiesV1,
     ) -> Self {
         self.abi_properties = abi_properties;
+        self
+    }
+
+    pub const fn with_rust_type_kind(mut self, rust_type_kind: SemanticRustTypeKindV1) -> Self {
+        self.rust_type_kind = rust_type_kind;
         self
     }
 
@@ -1863,6 +1879,10 @@ impl SemanticTypeDeclV1 {
 
     pub const fn abi_properties(&self) -> SemanticTypeAbiPropertiesV1 {
         self.abi_properties
+    }
+
+    pub const fn rust_type_kind(&self) -> SemanticRustTypeKindV1 {
+        self.rust_type_kind
     }
 }
 
@@ -5704,7 +5724,8 @@ pub struct AdmittedInertSemanticMirV1 {
 ///
 /// A distinct body is admitted only for the exact unit-ABI wrapper emitted for
 /// a Rust `Result<(), E>` kernel. The wrapper must forward every argument in
-/// order, discard the helper result, and perform no other computation.
+/// order, discard the helper result, and perform no other computation. Other
+/// functions may remain in the exact reachable closure of that body.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SemanticKernelBodySelectionV1 {
     root: SemanticFunctionIdV1,
@@ -5847,12 +5868,10 @@ fn select_kernel_body_v1(
             body: *root,
         });
     }
-    if request.functions.len() != 2
-        || !matches!(
-            request.types[root_function.abi.source_output_type().0 as usize].shape,
-            SemanticTypeShapeV1::Unit
-        )
-    {
+    if !matches!(
+        request.types[root_function.abi.source_output_type().0 as usize].shape,
+        SemanticTypeShapeV1::Unit
+    ) {
         return None;
     }
 
@@ -8291,6 +8310,28 @@ fn validate_type(
     validate_type_abi_properties(context.request, ty)?;
     if let Some(niche) = ty.layout.largest_niche {
         validate_layout_niche(niche, Some(ty.layout.rustc_size_bytes))?;
+    }
+    if ty.rust_type_kind == SemanticRustTypeKindV1::Str
+        && (!matches!(ty.shape, SemanticTypeShapeV1::Opaque)
+            || ty.layout.fields
+                != (SemanticFieldsShapeV1::Array {
+                    stride_bytes: 1,
+                    count: 0,
+                })
+            || ty.layout.rustc_size_bytes != 0
+            || ty.layout.size_bytes.is_some()
+            || ty.layout.alignment_bytes != 1
+            || !matches!(
+                ty.layout.backend_repr,
+                SemanticBackendReprV1::Memory { sized: false }
+            )
+            || ty.layout.largest_niche.is_some()
+            || ty.layout.uninhabited
+            || ty.layout.max_repr_alignment_bytes.is_some()
+            || ty.layout.unadjusted_abi_alignment_bytes != 1
+            || ty.layout.randomization_seed != 0)
+    {
+        return Err(SemanticMirErrorV1::InvalidTypeLayout);
     }
     let location = SemanticMirLocationV1::Type(id);
     match &ty.shape {
@@ -12736,12 +12777,12 @@ fn niche_scalar_constant_variant(
     outer_scalar: SemanticBackendScalarV1,
     bits: u128,
 ) -> Option<u32> {
-    let Some(SemanticScalarTypeV1::Integer {
-        bits: physical_bits,
-        ..
-    }) = backend_integer_semantic_scalar(niche.tag)
-    else {
-        return None;
+    let physical_bits = match niche.tag.primitive() {
+        SemanticBackendPrimitiveV1::Integer { bits, .. } => bits,
+        SemanticBackendPrimitiveV1::Pointer { size_bytes, .. } => {
+            u16::try_from(size_bytes.checked_mul(8)?).ok()?
+        }
+        SemanticBackendPrimitiveV1::Float { .. } => return None,
     };
     if niche.tag_field != 0
         || niche.source.expected_offset_bytes != 0
@@ -14473,6 +14514,9 @@ fn encode_type(
     writer.bool(ty.abi_properties.rustc_layout_is_noundef)?;
     encode_optional_pointee_info(writer, ty.abi_properties.first_pointee)?;
     encode_optional_pointee_info(writer, ty.abi_properties.second_pointee)?;
+    if ty.rust_type_kind == SemanticRustTypeKindV1::Str {
+        return writer.u8(13);
+    }
     match &ty.shape {
         SemanticTypeShapeV1::Unit => writer.u8(0),
         SemanticTypeShapeV1::Never => writer.u8(1),

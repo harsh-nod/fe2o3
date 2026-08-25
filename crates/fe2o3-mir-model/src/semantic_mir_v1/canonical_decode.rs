@@ -565,7 +565,13 @@ impl<'a> CanonicalDecoderV1<'a> {
             first_pointee: self.optional_pointee_info()?,
             second_pointee: self.optional_pointee_info()?,
         };
-        let shape = match self.tagged("type shape", 12)? {
+        let shape_tag = self.tagged("type shape", 13)?;
+        let rust_type_kind = if shape_tag == 13 {
+            SemanticRustTypeKindV1::Str
+        } else {
+            SemanticRustTypeKindV1::Ordinary
+        };
+        let shape = match shape_tag {
             0 => SemanticTypeShapeV1::Unit,
             1 => SemanticTypeShapeV1::Never,
             2 => SemanticTypeShapeV1::Scalar(self.scalar_type()?),
@@ -631,11 +637,13 @@ impl<'a> CanonicalDecoderV1<'a> {
             12 => SemanticTypeShapeV1::Slice {
                 element: SemanticTypeIdV1(self.u32()?),
             },
+            13 => SemanticTypeShapeV1::Opaque,
             _ => unreachable!(),
         };
         Ok(
             SemanticTypeDeclV1::new(identity, layout_identity, layout, shape)
-                .with_rustc_abi_properties(abi_properties),
+                .with_rustc_abi_properties(abi_properties)
+                .with_rust_type_kind(rust_type_kind),
         )
     }
 

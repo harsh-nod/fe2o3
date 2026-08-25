@@ -36,6 +36,7 @@ use rustc_middle::mir::{
 use rustc_middle::ty::layout::{LayoutCx, LayoutOf};
 use rustc_middle::ty::{EarlyBinder, Instance, Ty, TyCtxt, TyKind, TypingEnv};
 
+use crate::production_rustc_drop_v1::{ProductionRustcDropClassV1, classify_rustc_drop_v1};
 use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1;
 
 const MAX_ERROR_COMPONENT_CHARS_V1: usize = 512;
@@ -1017,7 +1018,37 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 ))
             }
             TerminatorKind::TailCall { .. } => Err(unsupported("TailCall terminator", block, None)),
-            TerminatorKind::Drop { .. } => Err(unsupported("Drop terminator", block, None)),
+            TerminatorKind::Drop {
+                place,
+                target,
+                unwind,
+                ..
+            } => {
+                if !matches!(unwind, UnwindAction::Continue | UnwindAction::Unreachable) {
+                    return Err(unsupported("drop with executable unwind edge", block, None));
+                }
+                match classify_rustc_drop_v1(self.tcx, self.instance, self.body, *place) {
+                    Ok(ProductionRustcDropClassV1::Trivial) => {}
+                    Ok(ProductionRustcDropClassV1::RequiresDropGlue) => {
+                        return Err(unsupported(
+                            "Drop terminator requiring drop glue",
+                            block,
+                            None,
+                        ));
+                    }
+                    Err(_) => {
+                        return Err(unsupported(
+                            "Drop place type that failed monomorphic normalization",
+                            block,
+                            None,
+                        ));
+                    }
+                }
+                let _place = self.construct_place(*place, block, None)?;
+                Ok(SemanticTerminatorKindV1::Goto(
+                    self.edge(SemanticEdgeRoleV1::Goto, target.index())?,
+                ))
+            }
             TerminatorKind::Assert {
                 cond,
                 expected,

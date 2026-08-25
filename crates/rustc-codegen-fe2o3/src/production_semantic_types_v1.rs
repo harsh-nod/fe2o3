@@ -14,9 +14,10 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticFieldsShapeV1, SemanticFunctionSafetyV1, SemanticLayoutNicheV1, SemanticMirErrorV1,
     SemanticMutabilityV1, SemanticNicheEnumEncodingV1, SemanticNichePathComponentV1,
     SemanticNicheSourceV1, SemanticPointerKindV1, SemanticPointerMetadataV1, SemanticPointerTypeV1,
-    SemanticRustcVariantsV1, SemanticScalarTypeV1, SemanticScalarValidityRangeV1,
-    SemanticTypeAbiPropertiesV1, SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeIdentityV1,
-    SemanticTypeLayoutDetailsV1, SemanticTypeLayoutV1, SemanticTypeShapeV1,
+    SemanticRustTypeKindV1, SemanticRustcVariantsV1, SemanticScalarTypeV1,
+    SemanticScalarValidityRangeV1, SemanticTypeAbiPropertiesV1, SemanticTypeDeclV1,
+    SemanticTypeIdV1, SemanticTypeIdentityV1, SemanticTypeLayoutDetailsV1, SemanticTypeLayoutV1,
+    SemanticTypeShapeV1,
 };
 use rustc_abi::{
     Align, BackendRepr, ExternAbi, FieldIdx, FieldsShape, HasDataLayout, PointeeInfo, PointerKind,
@@ -211,6 +212,11 @@ fn construct_type_v1<'tcx>(
     context: &TypeConstructionContextV1<'_, 'tcx>,
     producer: &RetainedSemanticTypeProducerV1<'tcx>,
 ) -> Result<SemanticTypeDeclV1, ProductionSemanticTypeErrorV1> {
+    let rust_type_kind = if matches!(producer.ty.kind(), TyKind::Str) {
+        SemanticRustTypeKindV1::Str
+    } else {
+        SemanticRustTypeKindV1::Ordinary
+    };
     let shape = match producer.ty.kind() {
         TyKind::Bool => SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool),
         TyKind::Char => SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Char),
@@ -296,6 +302,7 @@ fn construct_type_v1<'tcx>(
         TyKind::Slice(element) => SemanticTypeShapeV1::Slice {
             element: context.type_id(*element)?,
         },
+        TyKind::Str => SemanticTypeShapeV1::Opaque,
         TyKind::FnDef(..) => SemanticTypeShapeV1::Opaque,
         TyKind::FnPtr(signature, header) => {
             if header.abi != ExternAbi::Rust || header.c_variadic {
@@ -322,8 +329,7 @@ fn construct_type_v1<'tcx>(
                 return_type,
             }
         }
-        TyKind::Str
-        | TyKind::Pat(..)
+        TyKind::Pat(..)
         | TyKind::Foreign(..)
         | TyKind::UnsafeBinder(..)
         | TyKind::Dynamic(..)
@@ -338,7 +344,7 @@ fn construct_type_v1<'tcx>(
         | TyKind::Infer(..)
         | TyKind::Error(..) => return Err(context.unsupported("preflight-rejected type")),
     };
-    let layout = construct_layout_v1(context, producer, &shape)?;
+    let layout = construct_layout_v1(context, producer, &shape, rust_type_kind)?;
     let abi_properties = construct_abi_properties_v1(context, producer, &shape)?;
     Ok(SemanticTypeDeclV1::new(
         producer.identity,
@@ -346,7 +352,8 @@ fn construct_type_v1<'tcx>(
         layout,
         shape,
     )
-    .with_rustc_abi_properties(abi_properties))
+    .with_rustc_abi_properties(abi_properties)
+    .with_rust_type_kind(rust_type_kind))
 }
 
 fn construct_abi_properties_v1<'tcx>(
@@ -632,12 +639,14 @@ fn pointer_shape_v1<'tcx>(
 ) -> Result<SemanticTypeShapeV1, ProductionSemanticTypeErrorV1> {
     let (first, metadata) = match backend_repr {
         BackendRepr::Scalar(first) => {
-            if matches!(pointee.kind(), TyKind::Slice(_)) {
-                return Err(context.unsupported("slice pointer without length metadata"));
+            if matches!(pointee.kind(), TyKind::Slice(_) | TyKind::Str) {
+                return Err(context.unsupported("slice/string pointer without length metadata"));
             }
             (first, SemanticPointerMetadataV1::None)
         }
-        BackendRepr::ScalarPair(first, _) if matches!(pointee.kind(), TyKind::Slice(_)) => {
+        BackendRepr::ScalarPair(first, _)
+            if matches!(pointee.kind(), TyKind::Slice(_) | TyKind::Str) =>
+        {
             (first, SemanticPointerMetadataV1::SliceLength)
         }
         BackendRepr::ScalarPair(..) => {
@@ -673,6 +682,7 @@ fn construct_layout_v1<'tcx>(
     context: &TypeConstructionContextV1<'_, 'tcx>,
     producer: &RetainedSemanticTypeProducerV1<'tcx>,
     shape: &SemanticTypeShapeV1,
+    rust_type_kind: SemanticRustTypeKindV1,
 ) -> Result<SemanticTypeLayoutV1, ProductionSemanticTypeErrorV1> {
     let layout = producer.layout;
     let fields = fields_shape_v1(context, &layout.fields)?;
@@ -732,7 +742,9 @@ fn construct_layout_v1<'tcx>(
         layout.is_uninhabited(),
         layout.max_repr_align.map(|alignment| alignment.bytes()),
         layout.unadjusted_abi_align.bytes(),
-        if matches!(shape, SemanticTypeShapeV1::Slice { .. }) {
+        if matches!(shape, SemanticTypeShapeV1::Slice { .. })
+            || rust_type_kind == SemanticRustTypeKindV1::Str
+        {
             0
         } else {
             layout.randomization_seed.as_u64()
