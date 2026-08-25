@@ -68,6 +68,11 @@ if [[ "$(python3 "${POLICY}" tests 09-general-gemm-semantic)" != \
     'general GEMM semantic frontend must remain in its exact isolated shard' >&2
   exit 1
 fi
+if [[ "$(python3 "${POLICY}" tests 07-frontend-types)" != $'cross_crate_imports\nfrontend_contract_collector\ng2_monomorphization\nproduction_extraction_driver_v1\nproduction_general_matrix_driver_v1\nproduction_pipeline_v1\nproduction_ranked_bounds_driver_v1\nreference_binding_v1\ntrusted_device_items' ]]; then
+  printf '%s\n' \
+    'frontend/type shard must contain the exact current production driver set' >&2
+  exit 1
+fi
 
 FIXTURE_PACKAGE="${TEST_ROOT}/package"
 readonly FIXTURE_PACKAGE

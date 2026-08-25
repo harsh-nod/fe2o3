@@ -39,13 +39,16 @@ readonly RUNTIME_IDENTITY_ORACLE="${REPO_ROOT}/scripts/runtime-identity-oracle.s
 readonly RUNTIME_PURE_RUST_TARGET_DIR="${DEFAULT_CARGO_TARGET_ROOT}/runtime-pure-rust-policy"
 readonly CI_STEP_TIMEOUT_SECONDS="${FE2O3_CI_STEP_TIMEOUT_SECONDS:-3000}"
 readonly GENERAL_GEMM_SEMANTIC_FRONTEND_TIMEOUT_SECONDS=4200
+readonly COLLECTED_CONTROL_FLOW_TIMEOUT_SECONDS=4200
+readonly COLLECTED_CONTROL_FLOW_TEST_THREADS=1
 readonly CI_STEP_KILL_AFTER_SECONDS="${FE2O3_CI_STEP_KILL_AFTER_SECONDS:-15}"
+readonly TEST_DRIVER_BINARY_ENV="FE2O3_TEST_CARGO_FE2O3_BIN"
+readonly TEST_DRIVER_SHA256_ENV="FE2O3_TEST_CARGO_FE2O3_SHA256"
 CARGO_FE2O3_BINARY=
 CARGO_FE2O3_SHA256=
 CARGO_FE2O3_DRIVER_ROOT=
 CARGO_TARGET_DIRECTORY=
 CI_PRIVATE_TMP_ROOT=
-
 readonly CPU_TEST_PACKAGES=(
   dialect-amdgcn
   dialect-autotune
@@ -405,6 +408,11 @@ PY
       "${built_binary}" >&2
     return 2
   }
+  [[ "$(realpath --canonicalize-existing -- "${built_binary}")" == "${built_binary}" ]] || {
+    printf 'Cargo reported a noncanonical cargo-fe2o3 executable: %s\n' \
+      "${built_binary}" >&2
+    return 2
+  }
   built_sha256="$(sha256sum -- "${built_binary}")"
   built_sha256="${built_sha256%% *}"
   CARGO_FE2O3_DRIVER_ROOT="${TMPDIR}/fe2o3-ci-driver-${built_sha256}"
@@ -685,8 +693,11 @@ load_rustc_codegen_shard_targets() {
 run_rustc_codegen_lib_tests() {
   # Do not combine this with integration targets: Cargo can emit a test rlib
   # and an unversioned backend dylib with different Rust symbol hashes.
+  # Keep the aggregate rustc-private harness bounded like the isolated targets;
+  # full debuginfo can exceed the executable identity measurement limit.
   run_step rustc-codegen-lib-tests \
-    cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --lib
+    env CARGO_PROFILE_DEV_DEBUG=1 \
+      cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --lib
   run_step rustc-codegen-qualification-route-tests \
     cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" \
       --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
@@ -712,11 +723,24 @@ run_rustc_codegen_target() {
     --test "${test_target}"
   )
 
+  # This target launches several independent clean Cargo graphs. Bound libtest
+  # concurrency explicitly so runner core count cannot multiply their storage
+  # and compiler pressure without limit.
+  if [[ "${test_target}" == collected_executable_scalar_control_flow_v2 ]]; then
+    command+=(-- --test-threads="${COLLECTED_CONTROL_FLOW_TEST_THREADS}")
+  fi
+
   # Cargo can emit a test rlib and an unversioned backend dylib with different
   # Rust symbol hashes during one --all-targets build. Each target-isolated
   # invocation produces the exact backend dylib before running its linked test.
   # Match the limited-debug profile used by the production automatic backend
   # builder so clean and cache-restored shards exercise the same bounded image.
+  if [[ "${test_target}" == collected_executable_scalar_control_flow_v2 ]]; then
+    run_step_with_timeout "${COLLECTED_CONTROL_FLOW_TIMEOUT_SECONDS}" \
+      "rustc-codegen-test-${test_target}" \
+      "${command[@]}"
+    return
+  fi
   if [[ "${test_target}" == general_gemm_semantic_frontend ]]; then
     run_step_with_timeout "${GENERAL_GEMM_SEMANTIC_FRONTEND_TIMEOUT_SECONDS}" \
       "rustc-codegen-test-${test_target}" \
@@ -851,23 +875,40 @@ run_generic() {
 
 run_rocm_compile() {
   export FE2O3_TARGET="${FE2O3_TARGET:-gfx1100}"
-  local -a example_packages
-  load_example_packages rocm-compile example_packages
-  run_step rocm-doctor cargo run --locked -p cargo-fe2o3 -- doctor
+  local -a example_packages loader_environment_removals
+
+  prepare_cargo_fe2o3_driver rocm
+  load_dynamic_loader_environment_removals loader_environment_removals
+  validate_cargo_fe2o3_driver
+  load_example_packages \
+    rocm-compile example_packages "${CARGO_FE2O3_BINARY}"
+  validate_cargo_fe2o3_driver
+  run_step rocm-doctor \
+    env "${loader_environment_removals[@]}" \
+      "${CARGO_FE2O3_BINARY}" doctor
   run_step rocm-trusted-device-items \
-    cargo test --locked -p rustc-codegen-fe2o3 \
+    env "${loader_environment_removals[@]}" \
+      FE2O3_TEST_CARGO_FE2O3_BIN="${CARGO_FE2O3_BINARY}" \
+      FE2O3_TEST_CARGO_FE2O3_SHA256="${CARGO_FE2O3_SHA256}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
       --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
       --test trusted_device_items \
       genuine_markers_emit_and_local_external_spoofs_fail_closed -- \
       --ignored --exact
   run_step rocm-trusted-device-item-stale-cleanup \
-    cargo test --locked -p rustc-codegen-fe2o3 \
+    env "${loader_environment_removals[@]}" \
+      FE2O3_TEST_CARGO_FE2O3_BIN="${CARGO_FE2O3_BINARY}" \
+      FE2O3_TEST_CARGO_FE2O3_SHA256="${CARGO_FE2O3_SHA256}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
       --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
       --test trusted_device_items \
       rejected_lookalikes_remove_preseeded_artifacts_atomically -- \
       --ignored --exact
   run_step rocm-cross-crate-typed-binding \
-    env FE2O3_TEST_TARGET="${FE2O3_TARGET}" \
+    env "${loader_environment_removals[@]}" \
+      FE2O3_TEST_CARGO_FE2O3_BIN="${CARGO_FE2O3_BINARY}" \
+      FE2O3_TEST_CARGO_FE2O3_SHA256="${CARGO_FE2O3_SHA256}" \
+      FE2O3_TEST_TARGET="${FE2O3_TARGET}" \
       cargo test --locked -p rustc-codegen-fe2o3 \
       --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
       --test cross_crate_typed_binding \
@@ -878,13 +919,19 @@ run_rocm_compile() {
       rocm_compiles_the_golden_to_an_amdgpu_code_object -- \
       --ignored --exact
   run_step rocm-kernel-ir-codegen-rejection \
-    cargo test --locked -p rustc-codegen-fe2o3 \
+    env "${loader_environment_removals[@]}" \
+      FE2O3_TEST_CARGO_FE2O3_BIN="${CARGO_FE2O3_BINARY}" \
+      FE2O3_TEST_CARGO_FE2O3_SHA256="${CARGO_FE2O3_SHA256}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
       --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
       --test kernel_ir_codegen \
       selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_artifacts -- \
       --ignored --exact
   run_step rocm-kernel-ir-vecadd \
-    cargo test --locked -p rustc-codegen-fe2o3 \
+    env "${loader_environment_removals[@]}" \
+      FE2O3_TEST_CARGO_FE2O3_BIN="${CARGO_FE2O3_BINARY}" \
+      FE2O3_TEST_CARGO_FE2O3_SHA256="${CARGO_FE2O3_SHA256}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
       --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
       --test kernel_ir_codegen \
       opt_in_vecadd_publishes_exact_g1_without_gpu -- \
@@ -897,10 +944,14 @@ run_rocm_compile() {
     # package fingerprint that predates the new generation.
     run_step "rocm-clean-${package}" \
       cargo clean -p "${package}"
+    validate_cargo_fe2o3_driver
     run_step "rocm-build-${package}" \
-      cargo run --locked -p cargo-fe2o3 -- build -p "${package}"
+      env "${loader_environment_removals[@]}" \
+        "${CARGO_FE2O3_BINARY}" build -p "${package}"
+    validate_cargo_fe2o3_driver
     run_step "rocm-artifacts-${package}" \
-      cargo run --quiet --locked -p cargo-fe2o3 -- \
+      env "${loader_environment_removals[@]}" \
+        "${CARGO_FE2O3_BINARY}" \
         examples check-artifacts "${package}"
   done
 }
@@ -961,10 +1012,20 @@ run_hardware_smoke() {
     return 2
   fi
 
+  local -a loader_environment_removals
+  prepare_cargo_fe2o3_driver hardware
+  load_dynamic_loader_environment_removals loader_environment_removals
+
+  validate_cargo_fe2o3_driver
   run_step hardware-rocminfo rocminfo
-  run_step hardware-doctor cargo run --locked -p cargo-fe2o3 -- doctor
+  validate_cargo_fe2o3_driver
+  run_step hardware-doctor \
+    env "${loader_environment_removals[@]}" \
+      "${CARGO_FE2O3_BINARY}" doctor
   local rocm_path="${ROCM_PATH:-/opt/rocm}"
-  local native_test="${REPO_ROOT}/target/fe2o3-hip-device-properties-test"
+  local native_test_directory="${CARGO_TARGET_DIRECTORY}/ci-native"
+  local native_test="${native_test_directory}/fe2o3-hip-device-properties-test"
+  mkdir -p -- "${native_test_directory}"
   run_step hardware-hip-device-properties-build \
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -D__HIP_PLATFORM_AMD__ \
       -I "${rocm_path}/include" -I "${REPO_ROOT}/crates/fe2o3-hip-sys/native" \
@@ -980,22 +1041,31 @@ run_hardware_smoke() {
     cargo test --locked -p fe2o3-core --test device_copy_derive_hardware -- \
       --ignored --exact derived_struct_bytes_round_trip_through_device_memory
   run_step hardware-kernel-ir-fill \
-    cargo test --locked -p rustc-codegen-fe2o3 \
+    env "${loader_environment_removals[@]}" \
+      FE2O3_TEST_CARGO_FE2O3_BIN="${CARGO_FE2O3_BINARY}" \
+      FE2O3_TEST_CARGO_FE2O3_SHA256="${CARGO_FE2O3_SHA256}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
       --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
       --test kernel_ir_codegen \
       opt_in_fill_publishes_g1_and_executes_on_the_gpu -- \
       --ignored --exact
   run_step hardware-kernel-ir-vecadd \
-    cargo test --locked -p rustc-codegen-fe2o3 \
+    env "${loader_environment_removals[@]}" \
+      FE2O3_TEST_CARGO_FE2O3_BIN="${CARGO_FE2O3_BINARY}" \
+      FE2O3_TEST_CARGO_FE2O3_SHA256="${CARGO_FE2O3_SHA256}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
       --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
       --test kernel_ir_codegen \
       opt_in_vecadd_publishes_exact_g1_and_executes_on_the_gpu -- \
       --ignored --exact
-  run_step hardware-smoke cargo run --locked -p cargo-fe2o3 -- smoke
+  validate_cargo_fe2o3_driver
+  run_step hardware-smoke \
+    env "${loader_environment_removals[@]}" \
+      "${CARGO_FE2O3_BINARY}" smoke
   local test_wavefront
   test_wavefront="$(wavefront_for_target "${FE2O3_TARGET}")"
   run_step hardware-hsaco-inspection env \
-    FE2O3_TEST_HSACO="${REPO_ROOT}/target/fe2o3/vecadd.hsaco" \
+    FE2O3_TEST_HSACO="${CARGO_TARGET_DIRECTORY}/fe2o3/vecadd.hsaco" \
     FE2O3_TEST_TARGET="${FE2O3_TARGET}" \
     FE2O3_TEST_WAVEFRONT="${test_wavefront}" \
     cargo test --locked -p fe2o3-hsaco --test inspection \
@@ -1007,8 +1077,15 @@ run_s09_debug_hardware() {
     printf '%s\n' 'S09 debug hardware requires FE2O3_S09_EVIDENCE_DIR' >&2
     return 2
   fi
+  local -a loader_environment_removals
+  prepare_cargo_fe2o3_driver s09
+  load_dynamic_loader_environment_removals loader_environment_removals
+  validate_cargo_fe2o3_driver
   run_step s09-debug-hardware \
-    bash scripts/s09-debug-ci.sh "${FE2O3_S09_EVIDENCE_DIR}"
+    env "${loader_environment_removals[@]}" \
+      FE2O3_TEST_CARGO_FE2O3_BIN="${CARGO_FE2O3_BINARY}" \
+      FE2O3_TEST_CARGO_FE2O3_SHA256="${CARGO_FE2O3_SHA256}" \
+      bash scripts/s09-debug-ci.sh "${FE2O3_S09_EVIDENCE_DIR}"
 }
 
 run_parity_production_immutable() {
@@ -1019,6 +1096,7 @@ run_parity_production_immutable() {
 main() {
   cd "${REPO_ROOT}"
   mkdir -p "${LOG_DIR}"
+  validate_private_directory 'CI log directory' "${LOG_DIR}"
 
   case "${1:-}" in
     generic) run_generic ;;

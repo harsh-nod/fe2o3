@@ -4,6 +4,11 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use fe2o3_artifacts::DigestAlgorithm;
 
+const ROCM_QUALIFICATION_ORACLE: &str = "kernel-ir-v1";
+
+#[path = "support/cargo_fe2o3.rs"]
+mod cargo_fe2o3;
+
 const GENUINE_CASES: &[(&str, &str)] = &[
     ("fe2o3-vecadd", "vecadd"),
     ("fe2o3-trusted-item-renamed-genuine", "renamed_genuine"),
@@ -80,21 +85,13 @@ fn backend_build(workspace: &Path, package: &str) -> Output {
 }
 
 fn backend_build_with_args(workspace: &Path, package: &str, args: &[&str]) -> Output {
-    Command::new(env!("CARGO"))
+    let mut command = cargo_fe2o3::non_production_command(workspace);
+    command
         .current_dir(workspace)
-        .args([
-            "run",
-            "--locked",
-            "-p",
-            "cargo-fe2o3",
-            "--",
-            "build",
-            "-p",
-            package,
-        ])
-        .args(args)
-        .output()
-        .expect("run cargo-fe2o3")
+        .args(["build", "-p", package])
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", ROCM_QUALIFICATION_ORACLE)
+        .args(args);
+    command.output().expect("run cargo-fe2o3")
 }
 
 fn build_codegen_backend(workspace: &Path) -> PathBuf {
@@ -108,7 +105,7 @@ fn build_codegen_backend(workspace: &Path) -> PathBuf {
         "backend build failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    workspace.join("target/debug/librustc_codegen_fe2o3.so")
+    cargo_fe2o3::cargo_target_root(workspace).join("debug/librustc_codegen_fe2o3.so")
 }
 
 fn initialize_owned_artifact_directory(workspace: &Path) {
@@ -195,7 +192,7 @@ fn genuine_markers_emit_and_local_external_spoofs_fail_closed() {
 fn rejected_lookalikes_remove_preseeded_artifacts_atomically() {
     let _lock = backend_test_lock();
     let workspace = workspace();
-    let artifact_dir = workspace.join("target/fe2o3");
+    let artifact_dir = cargo_fe2o3::cargo_target_root(&workspace).join("fe2o3");
 
     for &(package, kernel, expected) in REJECTED_CASES {
         initialize_owned_artifact_directory(&workspace);
@@ -277,10 +274,8 @@ fn registration_contract_accepts_genuine_metadata_and_rejects_spoofs_and_duplica
 fn general_v3_rejects_local_disjoint_slice_and_index1d_lookalikes() {
     let _lock = backend_test_lock();
     let workspace = workspace();
-    let target = workspace.join(format!(
-        "target/general-v3-spoof-probe-{}",
-        std::process::id()
-    ));
+    let target = cargo_fe2o3::cargo_target_root(&workspace)
+        .join(format!("general-v3-spoof-probe-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&target);
     let backend = build_codegen_backend(&workspace);
     let source = "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs";
@@ -300,14 +295,10 @@ fn general_v3_rejects_local_disjoint_slice_and_index1d_lookalikes() {
         worker_bytes.len(),
     );
     std::fs::write(&config, json).expect("write spoof probe Worker V2 config");
-    let rejected = Command::new(env!("CARGO"))
+    let mut command = cargo_fe2o3::non_production_command(&workspace);
+    command
         .current_dir(&workspace)
         .args([
-            "run",
-            "--locked",
-            "-p",
-            "cargo-fe2o3",
-            "--",
             "build",
             "-p",
             "fe2o3-typed-alias-spoof",
@@ -319,7 +310,8 @@ fn general_v3_rejects_local_disjoint_slice_and_index1d_lookalikes() {
         .env("FE2O3_BACKEND", &backend)
         .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-worker-v2")
         .env("FE2O3_TARGET", "gfx942:xnack-")
-        .env("FE2O3_WORKER_V2_CONFIG_V2", &config)
+        .env("FE2O3_WORKER_V2_CONFIG_V2", &config);
+    let rejected = command
         .output()
         .expect("run isolated general V3 lookalike probe");
     let _ = std::fs::remove_dir_all(&target);
@@ -339,7 +331,7 @@ fn general_v3_rejects_local_disjoint_slice_and_index1d_lookalikes() {
 fn malformed_registrations_invalidate_preseeded_artifacts_atomically() {
     let _lock = backend_test_lock();
     let workspace = workspace();
-    let artifact_dir = workspace.join("target/fe2o3");
+    let artifact_dir = cargo_fe2o3::cargo_target_root(&workspace).join("fe2o3");
 
     for &(feature, expected) in &REGISTRATION_REJECTED_CASES[..2] {
         initialize_owned_artifact_directory(&workspace);

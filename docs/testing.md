@@ -583,7 +583,15 @@ FE2O3_TARGET=gfx1151 scripts/ci-local.sh rocm-compile
 ```
 
 Use the target reported by `rocminfo` on the machine under test. Compilation
-does not execute a kernel. This lane also compiles the trusted-device marker
+does not execute a kernel. The ROCm, hardware-smoke, and S09 lanes resolve an
+existing canonical, current-user-owned, private Cargo target before building a
+single `cargo-fe2o3` qualification driver. They authenticate the exact Cargo
+package, source, binary-target, profile, and target-root receipt, copy that
+binary into a mode-0500 private directory, and bind every nested qualification
+test to its SHA-256 identity. Direct driver launches remove dynamic-loader
+controls while preserving unrelated environment variables. If `TMPDIR` is not
+configured, the gate creates and trap-cleans a private temporary root under the
+admitted Cargo target. This lane also compiles the trusted-device marker
 fixtures. `#[kernel]` generates a typed `KernelMarkerV1` with deterministic
 marker symbol; public kernels expose the marker publicly but doc-hidden.
 Genuine and renamed dependencies must emit, while local lookalikes, the
