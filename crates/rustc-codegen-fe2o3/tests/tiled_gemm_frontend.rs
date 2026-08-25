@@ -6,6 +6,9 @@ use std::{
     os::unix::fs::{MetadataExt, PermissionsExt},
 };
 
+#[path = "support/cargo_fe2o3.rs"]
+mod cargo_fe2o3;
+
 fn backend_test_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -33,27 +36,16 @@ fn cargo_target_directory(workspace: &Path) -> PathBuf {
 }
 
 fn genuine_build(workspace: &Path, target: &str, retained_llvm: Option<&Path>) -> Output {
-    let mut command = Command::new(env!("CARGO"));
+    let mut command = cargo_fe2o3::non_production_command(workspace);
     command
         .current_dir(workspace)
         .args([
-            "run",
-            "--locked",
-            "-p",
-            "cargo-fe2o3",
-            "--features",
-            "qualification-oracles-test-only",
-            "--",
             "build",
             "-p",
             "fe2o3-half-math-compiler-fixture",
             "--bin",
             "tiled_gemm_frontend_v1",
         ])
-        .env(
-            "FE2O3_BACKEND",
-            cargo_target_directory(workspace).join("debug/librustc_codegen_fe2o3.so"),
-        )
         .env("FE2O3_TARGET", target)
         .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1");
     if let Some(directory) = retained_llvm {
@@ -67,27 +59,12 @@ fn genuine_build(workspace: &Path, target: &str, retained_llvm: Option<&Path>) -
 fn provider_impostor_build(workspace: &Path, package: &str, managed_target: &Path) -> Output {
     let fixture =
         workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/tiled-gemm-provider-impostor");
-    Command::new(env!("CARGO"))
+    cargo_fe2o3::non_production_command(workspace)
         .current_dir(workspace)
-        .args([
-            "run",
-            "--locked",
-            "-p",
-            "cargo-fe2o3",
-            "--features",
-            "qualification-oracles-test-only",
-            "--",
-            "build",
-            "--locked",
-            "--manifest-path",
-        ])
+        .args(["build", "--locked", "--manifest-path"])
         .arg(fixture.join("Cargo.toml"))
         .args(["-p", package, "--target-dir"])
         .arg(managed_target)
-        .env(
-            "FE2O3_BACKEND",
-            cargo_target_directory(workspace).join("debug/librustc_codegen_fe2o3.so"),
-        )
         .env("FE2O3_TARGET", "gfx942:xnack-")
         .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1")
         .output()
