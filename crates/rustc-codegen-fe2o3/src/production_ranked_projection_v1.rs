@@ -12347,7 +12347,9 @@ mod tests {
                 | ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
                 | ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
                 | ProductionRankedOperationV1::RequireEffectRefinement { .. }
-                | ProductionRankedOperationV1::RequestEffectRefinement { .. } => None,
+                | ProductionRankedOperationV1::RequestEffectRefinement { .. }
+                | ProductionRankedOperationV1::RequireNumericalRefinement { .. }
+                | ProductionRankedOperationV1::RequestNumericalRefinement { .. } => None,
             })
             .collect()
     }

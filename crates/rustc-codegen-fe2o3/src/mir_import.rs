@@ -2115,7 +2115,7 @@ fn import_bf16_fragment_layout<'tcx>(
             repr_c: true,
             size: 8,
             alignment: 2,
-            field_count: 1,
+            field_count: 3,
             field_offset: 0,
             array_length: 4,
             array_stride: 2,
@@ -2141,7 +2141,7 @@ fn import_f32_fragment_layout<'tcx>(
             repr_c: true,
             size: 16,
             alignment: 4,
-            field_count: 1,
+            field_count: 3,
             field_offset: 0,
             array_length: 4,
             array_stride: 4,
@@ -2173,14 +2173,48 @@ fn import_fragment_container<'a>(
             "outer type does not have one variant",
         ));
     };
-    let [field] = variant.fields.as_slice() else {
+    if variant.fields.len() != usize::from(expected.field_count) {
         return Err(matrix_layout_error(
             role,
-            "outer type does not have one field",
+            "outer type does not have the exact payload and invariant-marker field count",
+        ));
+    }
+    let mut payload = None;
+    for field in &variant.fields {
+        if matches!(field.layout.kind, TypeLayoutKind::Array(_)) {
+            if payload.replace(field).is_some() {
+                return Err(matrix_layout_error(
+                    role,
+                    "outer type has more than one array payload field",
+                ));
+            }
+            continue;
+        }
+        if field.layout.size_bytes != 0
+            || field.layout.uninhabited
+            || field.layout.largest_niche.is_some()
+            || !matches!(
+                field.layout.backend_representation,
+                BackendRepresentationFacts::Memory
+            )
+        {
+            return Err(matrix_layout_error(
+                role,
+                "non-payload fields are not inert zero-sized invariant markers",
+            ));
+        }
+    }
+    let Some(field) = payload else {
+        return Err(matrix_layout_error(
+            role,
+            "outer type has no array payload field",
         ));
     };
     let TypeLayoutKind::Array(array) = &field.layout.kind else {
-        return Err(matrix_layout_error(role, "field is not an array"));
+        return Err(matrix_layout_error(
+            role,
+            "selected payload field is not an array",
+        ));
     };
     let observed = MatrixFragmentLayoutV1 {
         repr_c: adt.representation.c,

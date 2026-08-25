@@ -187,7 +187,14 @@ fn same_name_dependency_alias_and_hostile_rust_abis_fail_at_provider_binding() {
     let _ = std::fs::remove_dir_all(&managed_target);
     let built = Command::new(env!("CARGO"))
         .current_dir(&workspace)
-        .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
+        .args([
+            "build",
+            "--locked",
+            "-p",
+            "rustc-codegen-fe2o3",
+            "--features",
+            "qualification-oracles-test-only",
+        ])
         .env("CARGO_PROFILE_DEV_DEBUG", "0")
         .output()
         .expect("build codegen backend");
@@ -317,7 +324,14 @@ fn genuine_matrix_items_reach_verified_ir_and_local_markers_fail_closed() {
 
     let built = Command::new(env!("CARGO"))
         .current_dir(&workspace)
-        .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
+        .args([
+            "build",
+            "--locked",
+            "-p",
+            "rustc-codegen-fe2o3",
+            "--features",
+            "qualification-oracles-test-only",
+        ])
         .output()
         .expect("build codegen backend");
     assert!(
