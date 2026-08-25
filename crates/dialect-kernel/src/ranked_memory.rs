@@ -225,6 +225,14 @@ pub enum OwnershipCoverageAttr {
     /// owner. This proves disjoint effect ownership without claiming that the
     /// writes cover storage outside the kernel's effect domain.
     ExactEffectDomain,
+    /// Every logical element of the ranked view has exactly one observable
+    /// write event, that event is final, and every observable global write in
+    /// the function is covered by an ownership contract.
+    TotalView,
+    /// Every physical invocation contributes exactly once through an atomic
+    /// write to the ranked view. This proves contribution coverage only; it
+    /// does not prove an operator identity, associativity, or the final value.
+    CollectiveContributions,
 }
 
 /// Shape requirement for hierarchy-level ownership summaries.

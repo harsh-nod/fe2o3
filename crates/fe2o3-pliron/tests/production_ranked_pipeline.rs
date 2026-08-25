@@ -1577,7 +1577,7 @@ fn hierarchy_owned_output_kernel(has_holes: bool) -> ProductionRankedKernelV1 {
         },
         ProductionRankedOperationV1::OwnershipContract {
             view: local(VIEW),
-            coverage: OwnershipCoverageAttr::ExactView,
+            coverage: OwnershipCoverageAttr::TotalView,
             partition: if has_holes {
                 OwnershipPartitionAttr::ExactSets
             } else {
@@ -1630,6 +1630,45 @@ fn production_pipeline_enforces_complete_gpu_hierarchy_ownership() {
     .expect("complete disjoint hierarchy ownership");
     assert!(input.ownership_report().is_clean());
     assert!(!input.ownership_report().regions().is_empty());
+    assert!(
+        input
+            .ownership_report()
+            .all_total_view_contracts_are_proved()
+    );
+    assert_eq!(
+        input
+            .ownership_report()
+            .coverage_summary()
+            .total_view_declared(),
+        1
+    );
+}
+
+#[test]
+fn v2_lowering_input_retains_non_vacuous_total_output_coverage() {
+    let (_, _, policy) = imported_reference(
+        functional_binding(4, proof_digest(5)),
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+    );
+    let input = compile_ranked_kernel_for_lowering_v2(
+        construction(hierarchy_owned_output_kernel(false)),
+        ProductionSessionLimitsV1::default(),
+        vec![],
+        policy,
+    )
+    .expect("V2 mandatory pipeline retains total-output coverage");
+    assert!(
+        input
+            .ownership_report()
+            .all_total_view_contracts_are_proved()
+    );
+    assert_eq!(
+        input
+            .ownership_report()
+            .coverage_summary()
+            .total_view_proved(),
+        1
+    );
 }
 
 #[test]

@@ -1391,6 +1391,8 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             digest.update([match coverage {
                 dialect_kernel::OwnershipCoverageAttr::ExactView => 1,
                 dialect_kernel::OwnershipCoverageAttr::ExactEffectDomain => 2,
+                dialect_kernel::OwnershipCoverageAttr::TotalView => 3,
+                dialect_kernel::OwnershipCoverageAttr::CollectiveContributions => 4,
             }]);
             digest.update([match partition {
                 dialect_kernel::OwnershipPartitionAttr::ExactSets => 1,

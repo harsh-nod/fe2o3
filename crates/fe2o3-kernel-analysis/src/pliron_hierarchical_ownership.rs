@@ -7,13 +7,13 @@
 //! invocation/subgroup/workgroup/grid partitions.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt,
 };
 
 use dialect_kernel::{
-    DYNAMIC_EXTENT, OwnershipContractOp, OwnershipCoverageAttr, OwnershipPartitionAttr,
-    RankedAccessOp, RankedViewOp,
+    AccessKindAttr, AllocationEffectOp, DYNAMIC_EXTENT, MemorySpaceAttr, OwnershipContractOp,
+    OwnershipCoverageAttr, OwnershipPartitionAttr, RankedAccessOp, RankedViewOp,
 };
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
@@ -72,6 +72,34 @@ pub struct HierarchicalOwnerWitnessV1 {
     subgroup: u64,
     lane: u64,
     location: HierarchicalOwnershipLocationV1,
+}
+
+/// Exact hierarchy identity of an invocation required by a collective
+/// contribution contract.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HierarchicalInvocationWitnessV1 {
+    invocation: Vec<u64>,
+    workgroup: u64,
+    subgroup: u64,
+    lane: u64,
+}
+
+impl HierarchicalInvocationWitnessV1 {
+    pub fn invocation(&self) -> &[u64] {
+        &self.invocation
+    }
+
+    pub const fn workgroup(&self) -> u64 {
+        self.workgroup
+    }
+
+    pub const fn subgroup(&self) -> u64 {
+        self.subgroup
+    }
+
+    pub const fn lane(&self) -> u64 {
+        self.lane
+    }
 }
 
 impl HierarchicalOwnerWitnessV1 {
@@ -144,6 +172,7 @@ impl HierarchicalDimensionRangeV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HierarchicalOwnershipRegionV1 {
     view: String,
+    coverage: OwnershipCoverageAttr,
     identity: HierarchicalRegionIdentityV1,
     element_count: usize,
     bounds: Vec<HierarchicalDimensionRangeV1>,
@@ -153,6 +182,10 @@ pub struct HierarchicalOwnershipRegionV1 {
 impl HierarchicalOwnershipRegionV1 {
     pub fn view(&self) -> &str {
         &self.view
+    }
+
+    pub const fn coverage(&self) -> OwnershipCoverageAttr {
+        self.coverage
     }
 
     pub const fn identity(&self) -> &HierarchicalRegionIdentityV1 {
@@ -243,6 +276,47 @@ pub enum HierarchicalOwnershipFindingV1 {
         coordinate: Vec<u64>,
         extents: Vec<u64>,
     },
+    OutputOverwritten {
+        view: String,
+        coordinate: Vec<u64>,
+        first: HierarchicalOwnerWitnessV1,
+        overwrite: HierarchicalOwnerWitnessV1,
+    },
+    UnmodeledObservableWrite {
+        view: String,
+        location: HierarchicalOwnershipLocationV1,
+    },
+    UnmodeledObservableAllocationWrite {
+        allocation_origin: u64,
+        noalias_class: u64,
+        location: HierarchicalOwnershipLocationV1,
+    },
+    MayAliasObservableWrite {
+        contracted_view: String,
+        alias_view: String,
+        contracted_noalias_class: u64,
+        alias_noalias_class: u64,
+        location: HierarchicalOwnershipLocationV1,
+    },
+    AbnormalCompletion {
+        view: String,
+        invocation: HierarchicalInvocationWitnessV1,
+        location: HierarchicalOwnershipLocationV1,
+    },
+    NonAtomicContribution {
+        view: String,
+        owner: HierarchicalOwnerWitnessV1,
+    },
+    MissingContribution {
+        view: String,
+        invocation: HierarchicalInvocationWitnessV1,
+    },
+    DuplicateContribution {
+        view: String,
+        invocation: HierarchicalInvocationWitnessV1,
+        first: HierarchicalOwnerWitnessV1,
+        second: HierarchicalOwnerWitnessV1,
+    },
     NonRectangularRegion {
         view: String,
         region: HierarchicalRegionIdentityV1,
@@ -258,6 +332,14 @@ impl HierarchicalOwnershipFindingV1 {
             | Self::OutOfRange { .. }
             | Self::OverlappingOwners { .. }
             | Self::CoverageHole { .. }
+            | Self::OutputOverwritten { .. }
+            | Self::UnmodeledObservableWrite { .. }
+            | Self::UnmodeledObservableAllocationWrite { .. }
+            | Self::MayAliasObservableWrite { .. }
+            | Self::AbnormalCompletion { .. }
+            | Self::NonAtomicContribution { .. }
+            | Self::MissingContribution { .. }
+            | Self::DuplicateContribution { .. }
             | Self::NonRectangularRegion { .. } => KernelCheckStatusV1::Rejected,
             Self::ContractLimitExceeded { .. }
             | Self::MalformedContract { .. }
@@ -312,7 +394,7 @@ impl fmt::Display for HierarchicalOwnershipFindingV1 {
             ),
             Self::EffectDomainIncomplete { detail } => write!(
                 formatter,
-                "error[FE2O3-OWN-002]: exact effect-domain ownership is incomplete: {detail}",
+                "error[FE2O3-OWN-002]: mandatory ownership coverage is incomplete: {detail}",
             ),
             Self::DynamicExtentIncomplete { view, dimension } => write!(
                 formatter,
@@ -382,6 +464,87 @@ impl fmt::Display for HierarchicalOwnershipFindingV1 {
                 formatter,
                 "error[FE2O3-OWN-006]: exact ownership of {view} has a hole at logical coordinate {coordinate:?} within extents {extents:?}; no invocation, subgroup, or workgroup owns that element",
             ),
+            Self::OutputOverwritten {
+                view,
+                coordinate,
+                first,
+                overwrite,
+            } => write!(
+                formatter,
+                "error[FE2O3-OWN-008]: total output {view}{coordinate:?} is overwritten by invocation {:?} at block {} op {}; its first write was invocation {:?} at block {} op {}; failed proof: every logical output must have one final observable write",
+                overwrite.invocation,
+                overwrite.location.block,
+                overwrite.location.operation,
+                first.invocation,
+                first.location.block,
+                first.location.operation,
+            ),
+            Self::UnmodeledObservableWrite { view, location } => write!(
+                formatter,
+                "error[FE2O3-OWN-009]: observable global write to {view} at block {} op {} has no ownership contract; total-output admission requires every observable global write to be modeled",
+                location.block, location.operation,
+            ),
+            Self::UnmodeledObservableAllocationWrite {
+                allocation_origin,
+                noalias_class,
+                location,
+            } => write!(
+                formatter,
+                "error[FE2O3-OWN-015]: whole-allocation global write at block {} op {} (allocation origin {allocation_origin}, noalias class {noalias_class}) has no coordinate-level ownership contract; total-output admission requires every observable global write to be modeled",
+                location.block, location.operation,
+            ),
+            Self::MayAliasObservableWrite {
+                contracted_view,
+                alias_view,
+                contracted_noalias_class,
+                alias_noalias_class,
+                location,
+            } => write!(
+                formatter,
+                "error[FE2O3-OWN-013]: total output {contracted_view} may alias observable write through {alias_view} at block {} op {} (noalias classes {contracted_noalias_class} and {alias_noalias_class}); distinct nonzero classes are required to prove disjoint final outputs",
+                location.block, location.operation,
+            ),
+            Self::AbnormalCompletion {
+                view,
+                invocation,
+                location,
+            } => write!(
+                formatter,
+                "error[FE2O3-OWN-014]: invocation {:?} (workgroup {}, subgroup {}, lane {}) traps at block {} op {} while proving coverage of {view}; total and collective coverage require normal completion",
+                invocation.invocation,
+                invocation.workgroup,
+                invocation.subgroup,
+                invocation.lane,
+                location.block,
+                location.operation,
+            ),
+            Self::NonAtomicContribution { view, owner } => write!(
+                formatter,
+                "error[FE2O3-OWN-010]: collective contribution to {view} by invocation {:?} at block {} op {} is not atomic; contribution coverage requires atomic writes",
+                owner.invocation, owner.location.block, owner.location.operation,
+            ),
+            Self::MissingContribution { view, invocation } => write!(
+                formatter,
+                "error[FE2O3-OWN-011]: collective contribution coverage for {view} has no contribution from invocation {:?} (workgroup {}, subgroup {}, lane {})",
+                invocation.invocation, invocation.workgroup, invocation.subgroup, invocation.lane,
+            ),
+            Self::DuplicateContribution {
+                view,
+                invocation,
+                first,
+                second,
+            } => write!(
+                formatter,
+                "error[FE2O3-OWN-012]: collective contribution coverage for {view} has two contributions from invocation {:?} (workgroup {}, subgroup {}, lane {}) at block {} op {} and block {} op {}",
+                invocation.invocation,
+                invocation.workgroup,
+                invocation.subgroup,
+                invocation.lane,
+                first.location.block,
+                first.location.operation,
+                second.location.block,
+                second.location.operation,
+            ),
             Self::NonRectangularRegion {
                 view,
                 region,
@@ -394,10 +557,42 @@ impl fmt::Display for HierarchicalOwnershipFindingV1 {
     }
 }
 
+/// Non-vacuous counts retained with the mandatory ownership report.
+///
+/// A declared contract is proved only when its complete finite-domain analysis
+/// adds no rejected or incomplete finding. These counts are compiler evidence,
+/// not artifact or launch authority.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct HierarchicalCoverageProofSummaryV1 {
+    total_view_declared: usize,
+    total_view_proved: usize,
+    collective_contributions_declared: usize,
+    collective_contributions_proved: usize,
+}
+
+impl HierarchicalCoverageProofSummaryV1 {
+    pub const fn total_view_declared(self) -> usize {
+        self.total_view_declared
+    }
+
+    pub const fn total_view_proved(self) -> usize {
+        self.total_view_proved
+    }
+
+    pub const fn collective_contributions_declared(self) -> usize {
+        self.collective_contributions_declared
+    }
+
+    pub const fn collective_contributions_proved(self) -> usize {
+        self.collective_contributions_proved
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HierarchicalOwnershipReportV1 {
     findings: Vec<HierarchicalOwnershipFindingV1>,
     regions: Vec<HierarchicalOwnershipRegionV1>,
+    coverage_summary: HierarchicalCoverageProofSummaryV1,
 }
 
 impl HierarchicalOwnershipReportV1 {
@@ -419,6 +614,27 @@ impl HierarchicalOwnershipReportV1 {
 
     pub fn regions(&self) -> &[HierarchicalOwnershipRegionV1] {
         &self.regions
+    }
+
+    pub const fn coverage_summary(&self) -> HierarchicalCoverageProofSummaryV1 {
+        self.coverage_summary
+    }
+
+    /// True only for a clean report containing at least one proved total-view
+    /// contract. A clean function with no such declaration is not evidence.
+    pub fn all_total_view_contracts_are_proved(&self) -> bool {
+        self.is_clean()
+            && self.coverage_summary.total_view_declared != 0
+            && self.coverage_summary.total_view_declared == self.coverage_summary.total_view_proved
+    }
+
+    /// True only for a clean report containing at least one proved collective
+    /// contribution contract. This does not prove a reduction's value.
+    pub fn all_collective_contribution_contracts_are_proved(&self) -> bool {
+        self.is_clean()
+            && self.coverage_summary.collective_contributions_declared != 0
+            && self.coverage_summary.collective_contributions_declared
+                == self.coverage_summary.collective_contributions_proved
     }
 
     pub fn is_clean(&self) -> bool {
@@ -487,65 +703,114 @@ pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
         Ok(contracts) => contracts,
         Err(finding) => return one(*finding),
     };
+    let mut coverage_summary = declared_coverage_summary(&contracts);
 
     analyses.prepare_execution_layout(context, function);
     let layout = match analyses.execution_layout() {
         Ok(Some(layout)) => layout,
         Ok(None) => {
-            return one(HierarchicalOwnershipFindingV1::ExecutionLayoutIncomplete {
-                detail: "kernel.ownership_contract requires gpu.execution_layout".to_owned(),
-            });
+            return one_with_summary(
+                HierarchicalOwnershipFindingV1::ExecutionLayoutIncomplete {
+                    detail: "kernel.ownership_contract requires gpu.execution_layout".to_owned(),
+                },
+                coverage_summary,
+            );
         }
         Err(failure) => {
-            return one(HierarchicalOwnershipFindingV1::ExecutionLayoutIncomplete {
-                detail: trace_failure_detail(failure),
-            });
+            return one_with_summary(
+                HierarchicalOwnershipFindingV1::ExecutionLayoutIncomplete {
+                    detail: trace_failure_detail(failure),
+                },
+                coverage_summary,
+            );
         }
     };
     analyses.prepare_sparse_indices(context, function);
     if let Err(failure) = analyses.sparse_indices() {
-        return one(
+        return one_with_summary(
             HierarchicalOwnershipFindingV1::SparseIndexAnalysisIncomplete {
                 detail: format!("{failure:?}"),
             },
+            coverage_summary,
         );
     }
     let needs_effect_domain = contracts
         .iter()
         .any(|contract| contract.coverage == OwnershipCoverageAttr::ExactEffectDomain);
-    if needs_effect_domain {
+    let needs_mandatory_bounds = contracts.iter().any(|contract| {
+        matches!(
+            contract.coverage,
+            OwnershipCoverageAttr::ExactEffectDomain
+                | OwnershipCoverageAttr::TotalView
+                | OwnershipCoverageAttr::CollectiveContributions
+        )
+    });
+    let mut mandatory_bounds_failure = None;
+    if needs_mandatory_bounds {
         let bounds = run_pliron_ranked_bounds_check_with_analyses_v1(context, function, analyses);
         if !bounds.is_clean() {
-            return one(HierarchicalOwnershipFindingV1::EffectDomainIncomplete {
-                detail: "mandatory ranked bounds did not prove every potential write site safe"
-                    .to_owned(),
-            });
+            let detail = bounds
+                .findings()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ");
+            let detail = format!("mandatory ranked bounds failed: {detail}");
+            if needs_effect_domain {
+                return one_with_summary(
+                    HierarchicalOwnershipFindingV1::EffectDomainIncomplete { detail },
+                    coverage_summary,
+                );
+            }
+            mandatory_bounds_failure = Some(detail);
         }
+    }
+    if needs_effect_domain {
         let race = run_pliron_ranked_race_check_with_analyses_v1(context, function, analyses);
         if !race.is_clean() {
-            return one(HierarchicalOwnershipFindingV1::EffectDomainIncomplete {
-                detail: race
-                    .findings()
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join("; "),
-            });
+            return one_with_summary(
+                HierarchicalOwnershipFindingV1::EffectDomainIncomplete {
+                    detail: race
+                        .findings()
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                },
+                coverage_summary,
+            );
         }
     }
-    let needs_exact_view = contracts
+    let needs_total_output = contracts
         .iter()
-        .any(|contract| contract.coverage == OwnershipCoverageAttr::ExactView);
-    if needs_exact_view {
+        .any(|contract| contract.coverage == OwnershipCoverageAttr::TotalView);
+    if needs_total_output
+        && let Some(finding) =
+            first_unmodeled_or_aliasing_observable_write(context, function, &contracts)
+    {
+        return one_with_summary(finding, coverage_summary);
+    }
+    let needs_exact_trace = contracts.iter().any(|contract| {
+        matches!(
+            contract.coverage,
+            OwnershipCoverageAttr::ExactView
+                | OwnershipCoverageAttr::TotalView
+                | OwnershipCoverageAttr::CollectiveContributions
+        )
+    });
+    if needs_exact_trace {
         analyses.prepare_exact_trace(context, function);
     }
-    let traces = if needs_exact_view {
+    let traces = if needs_exact_trace {
         match analyses.exact_trace() {
             Ok(traces) => Some(traces),
             Err(failure) => {
-                return one(HierarchicalOwnershipFindingV1::TraceIncomplete {
-                    detail: trace_failure_detail(failure),
-                });
+                return one_with_summary(
+                    HierarchicalOwnershipFindingV1::TraceIncomplete {
+                        detail: trace_failure_detail(failure),
+                    },
+                    coverage_summary,
+                );
             }
         }
     } else {
@@ -559,7 +824,7 @@ pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
     let mut regions = Vec::new();
     for contract in contracts {
         let (extents, element_count) = match contract.coverage {
-            OwnershipCoverageAttr::ExactView => {
+            OwnershipCoverageAttr::ExactView | OwnershipCoverageAttr::TotalView => {
                 let extents = match resolve_extents(context, sparse, &contract) {
                     Ok(extents) => extents,
                     Err(finding) => {
@@ -576,6 +841,16 @@ pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
                 };
                 (Some(extents), Some(element_count))
             }
+            OwnershipCoverageAttr::CollectiveContributions => {
+                let extents = match resolve_extents(context, sparse, &contract) {
+                    Ok(extents) => extents,
+                    Err(finding) => {
+                        findings.push(*finding);
+                        continue;
+                    }
+                };
+                (Some(extents), None)
+            }
             OwnershipCoverageAttr::ExactEffectDomain => {
                 if let Err(finding) = validate_effect_domain_site(context, function, &contract) {
                     findings.push(*finding);
@@ -583,18 +858,123 @@ pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
                 continue;
             }
         };
+        let finding_count = findings.len();
         analyze_contract(
             context,
             &contract,
             extents.as_deref(),
             element_count,
-            traces.expect("exact-view contracts prepared exact traces"),
+            traces.expect("whole-domain contracts prepared exact traces"),
             layout.grid,
             &mut findings,
             &mut regions,
         );
+        if findings.len() == finding_count && mandatory_bounds_failure.is_none() {
+            match contract.coverage {
+                OwnershipCoverageAttr::TotalView => coverage_summary.total_view_proved += 1,
+                OwnershipCoverageAttr::CollectiveContributions => {
+                    coverage_summary.collective_contributions_proved += 1;
+                }
+                OwnershipCoverageAttr::ExactView | OwnershipCoverageAttr::ExactEffectDomain => {}
+            }
+        }
     }
-    HierarchicalOwnershipReportV1 { findings, regions }
+    if findings.is_empty()
+        && let Some(detail) = mandatory_bounds_failure
+    {
+        findings.push(HierarchicalOwnershipFindingV1::EffectDomainIncomplete { detail });
+    }
+    HierarchicalOwnershipReportV1 {
+        findings,
+        regions,
+        coverage_summary,
+    }
+}
+
+fn first_unmodeled_or_aliasing_observable_write(
+    context: &Context,
+    function: &FuncOp,
+    contracts: &[ContractV1],
+) -> Option<HierarchicalOwnershipFindingV1> {
+    let modeled = contracts
+        .iter()
+        .map(|contract| contract.view)
+        .collect::<HashSet<_>>();
+    let total_outputs = contracts
+        .iter()
+        .filter(|contract| contract.coverage == OwnershipCoverageAttr::TotalView)
+        .collect::<Vec<_>>();
+    for (block, basic_block) in function
+        .get_region(context)
+        .deref(context)
+        .iter(context)
+        .enumerate()
+    {
+        for (operation, raw) in basic_block.deref(context).iter(context).enumerate() {
+            let op = Operation::get_op_dyn(raw, context);
+            if let Some(effect) = op.downcast_ref::<AllocationEffectOp>()
+                && effect.memory_space(context) == Some(MemorySpaceAttr::Global)
+                && effect
+                    .kind(context)
+                    .is_some_and(|kind| kind.writes_memory())
+            {
+                return Some(
+                    HierarchicalOwnershipFindingV1::UnmodeledObservableAllocationWrite {
+                        allocation_origin: effect.allocation_origin(context).unwrap_or(0),
+                        noalias_class: effect.noalias_class(context).unwrap_or(0),
+                        location: HierarchicalOwnershipLocationV1 { block, operation },
+                    },
+                );
+            }
+            let Some(access) = op.downcast_ref::<RankedAccessOp>() else {
+                continue;
+            };
+            if !access
+                .kind(context)
+                .is_some_and(|kind| kind.writes_memory())
+            {
+                continue;
+            }
+            let view = access.view(context);
+            let Some(view_op) = view
+                .defining_op()
+                .map(|definition| Operation::get_op_dyn(definition, context))
+                .and_then(|definition| definition.downcast_ref::<RankedViewOp>().copied())
+            else {
+                continue;
+            };
+            if view_op.memory_space(context) != Some(MemorySpaceAttr::Global) {
+                continue;
+            }
+            let location = HierarchicalOwnershipLocationV1 { block, operation };
+            if !modeled.contains(&view) {
+                return Some(HierarchicalOwnershipFindingV1::UnmodeledObservableWrite {
+                    view: view.unique_name(context).to_string(),
+                    location,
+                });
+            }
+            let alias_noalias_class = view_op.noalias_class(context).unwrap_or(0);
+            for contract in &total_outputs {
+                if contract.view == view {
+                    continue;
+                }
+                let contracted_noalias_class = contract.view_op.noalias_class(context).unwrap_or(0);
+                if contracted_noalias_class == 0
+                    || alias_noalias_class == 0
+                    || contracted_noalias_class == alias_noalias_class
+                {
+                    return Some(HierarchicalOwnershipFindingV1::MayAliasObservableWrite {
+                        contracted_view: contract.view_name.clone(),
+                        alias_view: view.unique_name(context).to_string(),
+                        contracted_noalias_class,
+                        alias_noalias_class,
+                        location,
+                    });
+                }
+            }
+        }
+    }
+    None
 }
 
 pub(crate) fn require_pliron_hierarchical_ownership_with_analyses_v1(
@@ -813,7 +1193,29 @@ fn analyze_contract(
 ) {
     let mut owners = BTreeMap::<Vec<u64>, HierarchicalOwnerWitnessV1>::new();
     let mut sets = BTreeMap::<HierarchicalRegionIdentityV1, BTreeSet<Vec<u64>>>::new();
+    let collective = contract.coverage == OwnershipCoverageAttr::CollectiveContributions;
     for trace in traces {
+        if matches!(
+            contract.coverage,
+            OwnershipCoverageAttr::TotalView | OwnershipCoverageAttr::CollectiveContributions
+        ) && let Some(PlironTraceEventV1::Trap { location }) = trace
+            .events
+            .iter()
+            .find(|event| matches!(event, PlironTraceEventV1::Trap { .. }))
+        {
+            findings.push(HierarchicalOwnershipFindingV1::AbnormalCompletion {
+                view: contract.view_name.clone(),
+                invocation: HierarchicalInvocationWitnessV1 {
+                    invocation: trace.invocation.clone(),
+                    workgroup: trace.workgroup,
+                    subgroup: trace.subgroup,
+                    lane: trace.lane,
+                },
+                location: (*location).into(),
+            });
+            return;
+        }
+        let mut contributions = Vec::<HierarchicalOwnerWitnessV1>::new();
         for event in &trace.events {
             let PlironTraceEventV1::Memory {
                 location,
@@ -869,24 +1271,59 @@ fn analyze_contract(
                 });
                 return;
             }
-            if let Some(first) = owners.get(&coordinate)
-                && first.invocation != witness.invocation
-            {
-                let class = if first.workgroup != witness.workgroup {
-                    HierarchicalOverlapClassV1::AcrossWorkgroups
-                } else if first.subgroup != witness.subgroup {
-                    HierarchicalOverlapClassV1::AcrossSubgroups
-                } else {
-                    HierarchicalOverlapClassV1::WithinSubgroup
-                };
-                findings.push(HierarchicalOwnershipFindingV1::OverlappingOwners {
-                    view: contract.view_name.clone(),
-                    coordinate,
-                    class,
-                    first: first.clone(),
-                    second: witness,
-                });
-                return;
+            if collective {
+                if !matches!(
+                    access,
+                    AccessKindAttr::AtomicWrite | AccessKindAttr::AtomicReadModifyWrite
+                ) {
+                    findings.push(HierarchicalOwnershipFindingV1::NonAtomicContribution {
+                        view: contract.view_name.clone(),
+                        owner: witness,
+                    });
+                    return;
+                }
+                if let Some(first) = contributions.first() {
+                    findings.push(HierarchicalOwnershipFindingV1::DuplicateContribution {
+                        view: contract.view_name.clone(),
+                        invocation: HierarchicalInvocationWitnessV1 {
+                            invocation: trace.invocation.clone(),
+                            workgroup: trace.workgroup,
+                            subgroup: trace.subgroup,
+                            lane: trace.lane,
+                        },
+                        first: first.clone(),
+                        second: witness,
+                    });
+                    return;
+                }
+                contributions.push(witness.clone());
+            } else if let Some(first) = owners.get(&coordinate) {
+                if first.invocation != witness.invocation {
+                    let class = if first.workgroup != witness.workgroup {
+                        HierarchicalOverlapClassV1::AcrossWorkgroups
+                    } else if first.subgroup != witness.subgroup {
+                        HierarchicalOverlapClassV1::AcrossSubgroups
+                    } else {
+                        HierarchicalOverlapClassV1::WithinSubgroup
+                    };
+                    findings.push(HierarchicalOwnershipFindingV1::OverlappingOwners {
+                        view: contract.view_name.clone(),
+                        coordinate,
+                        class,
+                        first: first.clone(),
+                        second: witness,
+                    });
+                    return;
+                }
+                if contract.coverage == OwnershipCoverageAttr::TotalView {
+                    findings.push(HierarchicalOwnershipFindingV1::OutputOverwritten {
+                        view: contract.view_name.clone(),
+                        coordinate,
+                        first: first.clone(),
+                        overwrite: witness,
+                    });
+                    return;
+                }
             }
             owners.entry(coordinate.clone()).or_insert(witness);
             for identity in [
@@ -900,6 +1337,18 @@ fn analyze_contract(
             ] {
                 sets.entry(identity).or_default().insert(coordinate.clone());
             }
+        }
+        if collective && contributions.is_empty() {
+            findings.push(HierarchicalOwnershipFindingV1::MissingContribution {
+                view: contract.view_name.clone(),
+                invocation: HierarchicalInvocationWitnessV1 {
+                    invocation: trace.invocation.clone(),
+                    workgroup: trace.workgroup,
+                    subgroup: trace.subgroup,
+                    lane: trace.lane,
+                },
+            });
+            return;
         }
     }
 
@@ -921,7 +1370,8 @@ fn analyze_contract(
         }
     }
 
-    if let (Some(extents), Some(element_count)) = (extents, element_count)
+    if !collective
+        && let (Some(extents), Some(element_count)) = (extents, element_count)
         && owners.len() != element_count
         && let Some(coordinate) = first_domain_hole(extents, &owners)
     {
@@ -938,6 +1388,7 @@ fn analyze_contract(
         let dense_rectangle = rectangle_volume(&bounds) == Some(coordinates.len());
         HierarchicalOwnershipRegionV1 {
             view: contract.view_name.clone(),
+            coverage: contract.coverage,
             identity,
             element_count: coordinates.len(),
             bounds,
@@ -1031,12 +1482,35 @@ fn clean() -> HierarchicalOwnershipReportV1 {
     HierarchicalOwnershipReportV1 {
         findings: Vec::new(),
         regions: Vec::new(),
+        coverage_summary: HierarchicalCoverageProofSummaryV1::default(),
     }
 }
 
 fn one(finding: HierarchicalOwnershipFindingV1) -> HierarchicalOwnershipReportV1 {
+    one_with_summary(finding, HierarchicalCoverageProofSummaryV1::default())
+}
+
+fn one_with_summary(
+    finding: HierarchicalOwnershipFindingV1,
+    coverage_summary: HierarchicalCoverageProofSummaryV1,
+) -> HierarchicalOwnershipReportV1 {
     HierarchicalOwnershipReportV1 {
         findings: vec![finding],
         regions: Vec::new(),
+        coverage_summary,
     }
+}
+
+fn declared_coverage_summary(contracts: &[ContractV1]) -> HierarchicalCoverageProofSummaryV1 {
+    let mut summary = HierarchicalCoverageProofSummaryV1::default();
+    for contract in contracts {
+        match contract.coverage {
+            OwnershipCoverageAttr::TotalView => summary.total_view_declared += 1,
+            OwnershipCoverageAttr::CollectiveContributions => {
+                summary.collective_contributions_declared += 1;
+            }
+            OwnershipCoverageAttr::ExactView | OwnershipCoverageAttr::ExactEffectDomain => {}
+        }
+    }
+    summary
 }

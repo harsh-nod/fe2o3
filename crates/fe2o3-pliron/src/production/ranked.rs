@@ -631,6 +631,8 @@ fn ownership_coverage_tag(coverage: OwnershipCoverageAttr) -> u8 {
     match coverage {
         OwnershipCoverageAttr::ExactView => 1,
         OwnershipCoverageAttr::ExactEffectDomain => 2,
+        OwnershipCoverageAttr::TotalView => 3,
+        OwnershipCoverageAttr::CollectiveContributions => 4,
     }
 }
 fn ownership_partition_tag(partition: OwnershipPartitionAttr) -> u8 {
