@@ -484,6 +484,7 @@ pub(crate) fn run_child(args: &[OsString]) -> ExitCode {
 }
 
 fn launch(args: &[OsString]) -> Result<ExitStatus, String> {
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     if !crate::authority_sensitive_request_selected(true) {
         return Err(
             "authority release requires an authority-bearing pipeline selection".to_owned(),

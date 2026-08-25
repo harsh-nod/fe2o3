@@ -72,6 +72,10 @@ selection logic is compiled only into the qualification harness. The
 feature-free binding wrapper admits every managed kernel root through protected
 rustc and requires compiler-closure custody directly; it does not compile the
 qualification-oracle predicates or qualification command preparation path.
+The feature-free Cargo driver also binds the fixed gfx942 target profile and
+production semantic-generation identity directly. Its backend preparation
+context has no production-route boolean and compiles no simulation selection;
+those controls exist only in the qualification harness.
 
 The feature-free rustc backend likewise does not compile
 `QualificationSelection`, `CompilationRoute`, or `RustcInvocationPolicy`.

@@ -44,6 +44,25 @@ fn production_configuration_has_no_compatibility_type_alias() {
 }
 
 #[test]
+fn production_driver_rejects_qualification_before_target_preparation() {
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+        .env_clear()
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1")
+        .args(["build", "--target", "host-placeholder"])
+        .output()
+        .expect("run cargo-fe2o3");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("FE2O3_QUALIFICATION_ORACLE_V1 is unavailable")
+            && stderr.contains("production compilation has no selector"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("production-v1 requires exact FE2O3_TARGET"));
+}
+
+#[test]
 fn production_manifest_rejects_qualification_envelope_fields() {
     let scratch = ScratchDirectory::new();
     let manifest = scratch.0.join("build-config.json");
