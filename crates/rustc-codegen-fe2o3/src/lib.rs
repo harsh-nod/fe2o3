@@ -554,6 +554,11 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                 match production_pipeline_v1::disposition(kernel_count) {
                     production_pipeline_v1::ProductionDispositionV1::HostOnly => {}
                     production_pipeline_v1::ProductionDispositionV1::DeviceTransaction => {
+                        let build_attempt = build_attempt.unwrap_or_else(|| {
+                            tcx.dcx().fatal(format!(
+                                "[rustc-codegen-fe2o3] production-v1 device compilation requires a managed {BUILD_ATTEMPT_ENV} before collection"
+                            ))
+                        });
                         let has_custom_llvm_configuration = has_custom_llvm_configuration(tcx.sess);
                         if let Err(error) = production_pipeline_v1::reject_custom_llvm_configuration(
                             has_custom_llvm_configuration,
@@ -2612,11 +2617,13 @@ mod tests {
             .next()
             .expect("bounded production route");
         assert!(production.contains("protected_rustc_invocation.take()"));
+        assert!(production.contains("build_attempt.unwrap_or_else"));
         assert!(production.contains("from_collected_device_closure("));
         assert!(production.contains("publish_worker_handoff()"));
         assert!(!production.contains("from_collected_device_closure_with_protected_invocation_v3"));
         assert!(!production.contains("publish_worker_handoff_v3"));
         assert!(!production.contains("None =>"));
+        assert!(!production_pipeline.contains("Option<BuildAttempt>"));
         assert!(production_pipeline.contains("publish_compiler_module_handoff_v3"));
     }
 
