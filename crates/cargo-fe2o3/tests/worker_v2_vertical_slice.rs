@@ -671,6 +671,7 @@ fn static_application_fixtures() -> &'static StaticApplicationFixtures {
                 "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS",
                 "-C target-feature=+crt-static",
             )
+            .env("CARGO_PROFILE_DEV_DEBUG", "0")
             .env("FE2O3_HIP_SYS_DISABLE", "1")
             .args([
                 "build",
