@@ -204,8 +204,8 @@ run_format() {
 
 run_check() {
   local -a all_examples rustc_examples wrapper_managed_packages cargo_args
-  local -a managed_args loader_environment_removals
-  local -A rustc_example_set=() excluded_packages=()
+  local -a loader_environment_removals
+  local -A rustc_example_set=()
   local package
   prepare_cargo_fe2o3_driver generic-check
   validate_cargo_fe2o3_driver
@@ -226,37 +226,31 @@ run_check() {
   )
   for package in "${all_examples[@]}"; do
     if [[ -z "${rustc_example_set[${package}]+selected}" ]]; then
-      excluded_packages["${package}"]=1
       cargo_args+=(--exclude "${package}")
     fi
   done
-  for package in "${wrapper_managed_packages[@]}"; do
-    if [[ -z "${excluded_packages[${package}]+excluded}" ]]; then
-      excluded_packages["${package}"]=1
-      cargo_args+=(--exclude "${package}")
-    fi
-  done
-
-  # `cargo check` does not link libamdhip64, so all host-facing examples are safe
-  # to validate on a generic runner. Sources whose typed kernel binding is owned by
-  # cargo-fe2o3 are excluded here and checked through the exact binding-only route.
-  run_step workspace-check cargo "${cargo_args[@]}"
 
   ((${#wrapper_managed_packages[@]} > 0)) || {
     printf '%s\n' 'workspace contains no structurally detected wrapper-managed package' >&2
     return 2
   }
-  managed_args=(check --all-targets --locked)
-  for package in "${wrapper_managed_packages[@]}"; do
-    managed_args+=(-p "${package}")
-  done
+  # The package-aware wrapper sees the complete supported workspace graph. Its sealed
+  # target-source projection injects bindings only for directly managed package targets,
+  # including transitive managed libraries, and leaves ordinary dependencies unbound.
   load_dynamic_loader_environment_removals loader_environment_removals
   run_step workspace-binding-check \
     env "${loader_environment_removals[@]}" \
-    "${CARGO_FE2O3_BINARY}" "${managed_args[@]}"
+    "${CARGO_FE2O3_BINARY}" "${cargo_args[@]}"
   run_step workspace-binding-check-boundary \
     bash scripts/tests/binding-check-boundary.sh \
     "${CARGO_FE2O3_BINARY}" "${wrapper_managed_packages[0]}"
+  # This is an authority-free policy rescan, not a retained source snapshot.
+  # Recompute the exact set after the nested Cargo checks so projection drift
+  # fails this lane before it reports success.
+  run_step workspace-binding-projection-revalidation \
+    env "${loader_environment_removals[@]}" \
+    "${CARGO_FE2O3_BINARY}" examples check-wrapper-managed \
+    "${wrapper_managed_packages[@]}"
 }
 
 run_cpu_tests() {

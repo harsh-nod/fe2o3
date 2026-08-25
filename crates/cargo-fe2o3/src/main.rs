@@ -4,6 +4,7 @@ mod application_sandbox;
 mod application_supervisor;
 mod authority_release;
 mod authorized_kernel_closure;
+mod binding_check_projection;
 mod binding_check_wrapper;
 mod binding_wrapper;
 mod capability_broker;
@@ -105,6 +106,7 @@ const CARGO_BINDING_WRAPPER_CHILD_FD: std::os::fd::RawFd = 191;
 const CARGO_BINDING_TRAMPOLINE_CHILD_FD: std::os::fd::RawFd = 192;
 const BACKEND_BUILD_CHILD_FD: std::os::fd::RawFd = 196;
 const CARGO_BINDING_CHECK_WRAPPER_CHILD_FD: std::os::fd::RawFd = 200;
+const CARGO_BINDING_CHECK_PROJECTION_CHILD_FD: std::os::fd::RawFd = 201;
 const RUSTC_LIBRARY_CHILD_FD: std::os::fd::RawFd = 193;
 const RUSTC_CHILD_FD: std::os::fd::RawFd = 194;
 const RUSTC_INVOCATION_CHILD_FD: std::os::fd::RawFd =
@@ -126,6 +128,20 @@ const _: () = assert!(CARGO_BINDING_CHECK_WRAPPER_CHILD_FD != RUSTC_CHILD_FD);
 const _: () = assert!(CARGO_BINDING_CHECK_WRAPPER_CHILD_FD != RUSTC_INVOCATION_CHILD_FD);
 const _: () = assert!(CARGO_BINDING_CHECK_WRAPPER_CHILD_FD != ARTIFACT_CHILD_FD);
 const _: () = assert!(CARGO_BINDING_CHECK_WRAPPER_CHILD_FD != BACKEND_CHILD_FD);
+const _: () = assert!(CARGO_BINDING_CHECK_PROJECTION_CHILD_FD != RUSTC_LIBRARY_CHILD_FD);
+const _: () = assert!(CARGO_BINDING_CHECK_PROJECTION_CHILD_FD != RUSTC_CHILD_FD);
+const _: () = assert!(CARGO_BINDING_CHECK_PROJECTION_CHILD_FD != CARGO_BINDING_WRAPPER_CHILD_FD);
+const _: () = assert!(CARGO_BINDING_CHECK_PROJECTION_CHILD_FD != CARGO_BINDING_TRAMPOLINE_CHILD_FD);
+const _: () = assert!(CARGO_BINDING_CHECK_PROJECTION_CHILD_FD != BACKEND_BUILD_CHILD_FD);
+const _: () =
+    assert!(CARGO_BINDING_CHECK_PROJECTION_CHILD_FD != CARGO_BINDING_CHECK_WRAPPER_CHILD_FD);
+const _: () = assert!(
+    CARGO_BINDING_CHECK_PROJECTION_CHILD_FD
+        != fe2o3_artifact_transaction::BROKERED_INVOCATION_AUTHORITY_CHILD_FD_V1
+);
+const _: () = assert!(CARGO_BINDING_CHECK_PROJECTION_CHILD_FD != RUSTC_INVOCATION_CHILD_FD);
+const _: () = assert!(CARGO_BINDING_CHECK_PROJECTION_CHILD_FD != ARTIFACT_CHILD_FD);
+const _: () = assert!(CARGO_BINDING_CHECK_PROJECTION_CHILD_FD != BACKEND_CHILD_FD);
 
 const COMPILER_SELECTION_ENVIRONMENT: &[&str] = &[
     "RUSTC",
@@ -331,6 +347,11 @@ fn binding_check_result(args: &[OsString]) -> Result<(), String> {
     reject_configured_compiler_selection(&project, args, &pinned_cargo, None, false)?;
     let pinned_rustc = pin_default_rustc(&project)?;
     let host_target = pinned_rustc_host_target(&pinned_rustc)?;
+    let projection = example_manifest::pinned_workspace_binding_projection(
+        project.workspace_root().display_path(),
+        &pinned_cargo,
+    )?;
+    let sealed_projection = binding_check_projection::SealedProjection::new(&projection)?;
 
     let wrapper_path = env::current_exe()
         .map_err(|error| format!("failed to locate cargo-fe2o3 executable: {error}"))?;
@@ -350,6 +371,10 @@ fn binding_check_result(args: &[OsString]) -> Result<(), String> {
     wrapper
         .inherit_for_child_at(cargo.as_command_mut(), CARGO_BINDING_CHECK_WRAPPER_CHILD_FD)
         .map_err(|error| format!("failed to inherit the binding-check wrapper: {error}"))?;
+    sealed_projection.inherit_for_child_at(
+        cargo.as_command_mut(),
+        CARGO_BINDING_CHECK_PROJECTION_CHILD_FD,
+    )?;
     let mut forwarded_args = args.to_vec();
     let separator = forwarded_args
         .iter()
@@ -360,6 +385,7 @@ fn binding_check_result(args: &[OsString]) -> Result<(), String> {
         [OsString::from("--target"), OsString::from(host_target)],
     );
     binding_check_wrapper::clear_prohibited_environment(cargo.as_command_mut());
+    clear_inherited_cargo_unit_identity(cargo.as_command_mut());
     cargo
         .as_command_mut()
         .arg("check")
@@ -369,6 +395,8 @@ fn binding_check_result(args: &[OsString]) -> Result<(), String> {
         .env("CARGO_BUILD_RUSTC_WRAPPER", "")
         .env("RUSTC_WORKSPACE_WRAPPER", workspace_wrapper)
         .env_remove(CARGO_PRIMARY_PACKAGE_ENV)
+        .env_remove("CARGO_PKG_NAME")
+        .env_remove("CARGO_MANIFEST_DIR")
         .env(binding_check_wrapper::MODE_ENV_V1, "1")
         .env("FE2O3_HIP_SYS_DISABLE", "1");
     remove_dynamic_loader_environment(cargo.as_command_mut());
@@ -396,6 +424,24 @@ fn binding_check_result(args: &[OsString]) -> Result<(), String> {
         ],
     );
     post_spawn
+}
+
+fn clear_inherited_cargo_unit_identity(command: &mut Command) {
+    clear_cargo_unit_identity_names(command, env::vars_os().map(|(name, _)| name));
+}
+
+fn clear_cargo_unit_identity_names(
+    command: &mut Command,
+    names: impl IntoIterator<Item = OsString>,
+) {
+    for name in names {
+        if name == CARGO_PRIMARY_PACKAGE_ENV
+            || name == "CARGO_MANIFEST_DIR"
+            || name.as_encoded_bytes().starts_with(b"CARGO_PKG_")
+        {
+            command.env_remove(name);
+        }
+    }
 }
 
 fn doctor() -> ExitCode {
@@ -646,6 +692,7 @@ fn cargo_with_backend_result(
     let cargo_declaration = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let source_cargo = if requires_authorized_closure {
         let cargo_path = require_absolute_authority_tool_path(&cargo_declaration, "CARGO")?;
+        reject_authority_rustup_proxy(&cargo_path, "Cargo")?;
         pinned_executable::PinnedExecutable::open(&cargo_path)
             .map_err(|error| format!("failed to pin authority Cargo executable: {error}"))?
     } else {
@@ -2507,6 +2554,23 @@ fn require_absolute_authority_tool_path(value: &OsStr, name: &str) -> Result<Pat
     Ok(path)
 }
 
+fn reject_authority_rustup_proxy(path: &Path, tool: &str) -> Result<(), String> {
+    let canonical = std::fs::canonicalize(path).map_err(|error| {
+        format!(
+            "failed to inspect authority {tool} executable {}: {error}",
+            path.display()
+        )
+    })?;
+    if path.file_name() == Some(OsStr::new("rustup"))
+        || canonical.file_name() == Some(OsStr::new("rustup"))
+    {
+        return Err(format!(
+            "cargo fe2o3 authority {tool} path resolves to a rustup proxy; rustup is never executed during authority selection"
+        ));
+    }
+    Ok(())
+}
+
 fn pin_authority_rustc(
     invocation_directory: &Path,
     expected_executable_sha256: [u8; 32],
@@ -2672,14 +2736,22 @@ fn resolve_rustup_toolchain_tool(
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
-    let mut path = output.stdout;
-    while matches!(path.last(), Some(b'\n' | b'\r')) {
-        path.pop();
+    let path = parse_rustup_tool_path(&output.stdout, tool)?;
+    Ok(path)
+}
+
+fn parse_rustup_tool_path(stdout: &[u8], tool: &str) -> Result<PathBuf, String> {
+    let mut path = stdout;
+    if path.ends_with(b"\n") {
+        path = &path[..path.len() - 1];
+        if path.ends_with(b"\r") {
+            path = &path[..path.len() - 1];
+        }
     }
-    if path.is_empty() || path.contains(&b'\n') || path.contains(&0) {
+    if path.is_empty() || path.contains(&b'\n') || path.contains(&b'\r') || path.contains(&0) {
         return Err(format!("pinned rustup returned a noncanonical {tool} path"));
     }
-    let path = PathBuf::from(os_string(path)?);
+    let path = PathBuf::from(os_string(path.to_vec())?);
     if !path.is_absolute() {
         return Err(format!("pinned rustup returned a relative {tool} path"));
     }
@@ -3011,12 +3083,15 @@ const fn qualification_help_lines() -> &'static str {
 mod tests {
     use super::{
         SIMULATION_ATTEMPT_ENV, SIMULATION_MODE_ENV, TARGET_ENV, aggregate_post_spawn_results,
+        clear_cargo_unit_identity_names,
         configure_production_target_build_environment, configure_simulation_build_environment,
         inject_application_runner_config, normalize_invocation, parse_rocminfo_target,
-        production_compilation_selected, qualification_help_lines,
+        parse_rustup_tool_path, production_compilation_selected, qualification_help_lines,
+        reject_authority_rustup_proxy,
         reject_obsolete_codegen_pipeline, resolve_amd_gpu_target, selected_run_target,
         validate_production_cargo_selection,
     };
+    use crate::pinned_executable_test_directory::TestDirectory;
     use crate::project::PinnedDirectory;
     use std::ffi::{OsStr, OsString};
     use std::process::Command;
@@ -3057,6 +3132,82 @@ mod tests {
             assert_eq!(normalize_invocation(direct.clone()), direct);
             assert_eq!(normalize_invocation(cargo), direct);
         }
+    }
+
+    #[test]
+    fn rustup_cargo_output_requires_one_absolute_path_line() {
+        assert_eq!(
+            parse_rustup_tool_path(b"/toolchain/bin/cargo\n", "cargo")
+                .expect("absolute LF-terminated path"),
+            std::path::PathBuf::from("/toolchain/bin/cargo")
+        );
+        assert_eq!(
+            parse_rustup_tool_path(b"/toolchain/bin/cargo\r\n", "cargo")
+                .expect("absolute CRLF-terminated path"),
+            std::path::PathBuf::from("/toolchain/bin/cargo")
+        );
+        for malformed in [
+            b"".as_slice(),
+            b"cargo\n".as_slice(),
+            b"./cargo\n".as_slice(),
+            b"/first/cargo\n/second/cargo\n".as_slice(),
+            b"/toolchain/bin/cargo\n\n".as_slice(),
+            b"/toolchain/bin/car\0go\n".as_slice(),
+            b"/toolchain/bin/cargo\r".as_slice(),
+        ] {
+            assert!(
+                parse_rustup_tool_path(malformed, "cargo").is_err(),
+                "accepted malformed rustup output: {malformed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn authority_cargo_selection_never_resolves_a_rustup_proxy() {
+        let directory = TestDirectory::new();
+        let rustup = directory.path().join("rustup");
+        std::fs::write(&rustup, b"not executed").expect("write proxy fixture");
+        let error = reject_authority_rustup_proxy(&rustup, "Cargo")
+            .expect_err("direct rustup proxy must be rejected");
+        assert!(error.contains("rustup is never executed"), "{error}");
+
+        let cargo_alias = directory.path().join("cargo");
+        std::os::unix::fs::symlink(&rustup, &cargo_alias).expect("create cargo proxy alias");
+        let error = reject_authority_rustup_proxy(&cargo_alias, "Cargo")
+            .expect_err("cargo alias to rustup must be rejected");
+        assert!(error.contains("rustup is never executed"), "{error}");
+    }
+
+    #[test]
+    fn binding_check_parent_clears_ambient_cargo_unit_identity() {
+        let mut command = Command::new("cargo");
+        command
+            .env("CARGO_PRIMARY_PACKAGE", "attacker")
+            .env("CARGO_MANIFEST_DIR", "/attacker")
+            .env("CARGO_PKG_NAME", "attacker")
+            .env("CARGO_PKG_VERSION", "attacker")
+            .env("CARGO_TARGET_DIR", "/retained");
+        clear_cargo_unit_identity_names(
+            &mut command,
+            [
+                OsString::from("CARGO_PRIMARY_PACKAGE"),
+                OsString::from("CARGO_MANIFEST_DIR"),
+                OsString::from("CARGO_PKG_NAME"),
+                OsString::from("CARGO_PKG_VERSION"),
+            ],
+        );
+        for name in [
+            "CARGO_PRIMARY_PACKAGE",
+            "CARGO_MANIFEST_DIR",
+            "CARGO_PKG_NAME",
+            "CARGO_PKG_VERSION",
+        ] {
+            assert_eq!(command_environment(&command, name), None);
+        }
+        assert_eq!(
+            command_environment(&command, "CARGO_TARGET_DIR"),
+            Some(OsStr::new("/retained"))
+        );
     }
 
     #[test]

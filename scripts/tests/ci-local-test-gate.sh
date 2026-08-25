@@ -202,11 +202,20 @@ load_example_packages() {
   local lane="$1"
   local destination_name="$2"
   local -n destination="${destination_name}"
-  if [[ "${lane}" == wrapper-managed ]]; then
-    destination=(fe2o3-managed-fixture)
-  else
-    destination=()
-  fi
+  case "${lane}" in
+    all)
+      destination=(fe2o3-disabled-fixture fe2o3-managed-a fe2o3-managed-b fe2o3-ordinary)
+      ;;
+    rustc-check)
+      destination=(fe2o3-managed-a fe2o3-managed-b fe2o3-ordinary)
+      ;;
+    wrapper-managed)
+      destination=(fe2o3-managed-a fe2o3-managed-b)
+      ;;
+    *)
+      destination=()
+      ;;
+  esac
 }
 
 step_command() {
@@ -403,9 +412,9 @@ for core_step in \
   hosted-parity-ci-tests \
   format \
   generic-check-cargo-fe2o3-bootstrap \
-  workspace-check \
   workspace-binding-check \
   workspace-binding-check-boundary \
+  workspace-binding-projection-revalidation \
   backend-build \
   ci-local-test-gate \
   cpu-tests \
@@ -437,18 +446,20 @@ assert_equals \
   "python3 ${WORKSPACE_DEPENDENCY_POLICY_CHECKER} --policy ${WORKSPACE_DEPENDENCY_POLICY}" \
   "$(step_command workspace-dependency-policy)" \
   'generic core did not enforce the workspace dependency policy'
+assert_step_count workspace-check 0 \
+  'generic check retained the unsound raw/wrapper split'
 assert_equals \
-  'cargo check --workspace --all-targets --locked --exclude fe2o3-managed-fixture' \
-  "$(step_command workspace-check)" \
-  'raw workspace check did not exclude the structurally managed package'
-assert_equals \
-  "env ${TIMEOUT_TEST_ROOT}/generic-check-driver/cargo-fe2o3 check --all-targets --locked -p fe2o3-managed-fixture" \
+  "env ${TIMEOUT_TEST_ROOT}/generic-check-driver/cargo-fe2o3 check --workspace --all-targets --locked --exclude fe2o3-disabled-fixture" \
   "$(step_command workspace-binding-check)" \
-  'managed check did not use the exact authority-free package projection'
+  'managed check did not cover the whole supported workspace graph'
 assert_equals \
-  "bash scripts/tests/binding-check-boundary.sh ${TIMEOUT_TEST_ROOT}/generic-check-driver/cargo-fe2o3 fe2o3-managed-fixture" \
+  "bash scripts/tests/binding-check-boundary.sh ${TIMEOUT_TEST_ROOT}/generic-check-driver/cargo-fe2o3 fe2o3-managed-a" \
   "$(step_command workspace-binding-check-boundary)" \
   'managed check omitted the backend/artifact/publication hostile boundary'
+assert_equals \
+  "env ${TIMEOUT_TEST_ROOT}/generic-check-driver/cargo-fe2o3 examples check-wrapper-managed fe2o3-managed-a fe2o3-managed-b" \
+  "$(step_command workspace-binding-projection-revalidation)" \
+  'managed check did not revalidate the exact structural package projection'
 for core_step in "${STEP_NAMES[@]}"; do
   if [[ "${core_step}" == rustc-codegen-test-* ]]; then
     printf 'generic core unexpectedly ran integration target: %s\n' "${core_step}" >&2

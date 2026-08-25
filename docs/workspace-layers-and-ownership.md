@@ -44,15 +44,63 @@ dialect registration, production-route boundary, qualification feature, and rele
 are integration-owned files. Feature agents SHOULD NOT edit them. A dependency
 addition that changes `Cargo.lock` is a separate, integration-reviewed commit.
 
-Generic workspace checking separates ordinary Cargo targets from typed kernel
-sources whose compilation-unit binding is intentionally supplied by
-`cargo-fe2o3`. The checked Cargo target-source projection identifies those
-packages structurally; raw `cargo check --workspace --all-targets` excludes
-them, and `cargo fe2o3 check --all-targets -p ...` checks exactly the same
-package set with a host-only binding wrapper. That wrapper derives the normal
-crate-name/ordered-metadata binding but admits no codegen backend, artifact
-directory, publication action, worker, or GPU authority. It is not a compiler
-qualification or artifact-production route.
+Generic workspace checking runs the complete supported workspace graph through
+`cargo fe2o3 check --workspace --all-targets`. A sealed, metadata-derived map
+identifies every exact Cargo target source and whether its package structurally
+requires a compiler-derived binding. The host-only wrapper injects the normal
+crate-name/ordered-metadata binding for those targets, including transitive
+managed libraries, and leaves ordinary targets unbound. Manifest-declared
+examples that do not participate in generic checking remain explicit Cargo
+exclusions. This route admits no codegen backend, artifact directory,
+publication action, worker, or GPU authority; it is not compiler qualification
+or artifact production.
+
+This projection is deliberately package-wide and feature-independent. Every
+regular `*.rs` file outside the exact generated Cargo target-directory boundary
+participates. Every exact Cargo target
+root reported by metadata MUST also be a package-owned UTF-8 `.rs` path, matching
+the rustc invocation parser's input contract. Conventional `mod`,
+literal `#[path]`, and literal `include!` edges are considered resolved only
+when they name a source already scanned beneath the same package root. A
+dynamic, missing, or package-external edge conservatively selects a package
+that has no observed binding declaration. When the package contains an
+explicit fallback and no direct unnamespaced typed kernel, that observed
+fallback wins and the external edge does not select the wrapper. The external
+content remains uninspected; an unnamespaced typed kernel hidden there can make
+ordinary compilation fail, but cannot grant compiler or publication authority.
+Nested Cargo package roots are always separate, uninspected ownership
+boundaries; an edge from the parent into one is an external selection boundary.
+A package MUST NOT mix a directly observed compiler-derived binding with an
+explicit fallback namespace anywhere in the complete projection, even when
+Cargo features or targets make the sources mutually exclusive. Unparseable
+scanned sources are rejected. This strict package ownership rule avoids feature-dependent binding selection
+and is checked with mixed-target and external-edge adversaries.
+
+Each Cargo target source MUST be owned beneath its package root. Cross-package
+source reuse uses a package-owned target root with an explicit external
+module/include edge; when no direct fallback is observed, that unresolved
+boundary makes the owning package managed, but the projection scanner does not
+follow or authenticate the included file.
+The exact Cargo `target_directory` reported by metadata is a generated-output
+boundary: declared sources beneath it are rejected, and an in-package target
+subtree is skipped without inspection. Other package-tree entries are opened
+descriptor-relatively so symlinks and special files fail the availability
+check even though only regular `*.rs` files are parsed for binding ownership.
+Cargo metadata paths, manifests, directories, and opened package sources are
+revalidated during each bounded scan, and generic CI recomputes the exact
+managed set after the binding-only checks. This is an authority-free policy
+snapshot, not authentication of later Cargo compilation inputs, and it makes
+no TOCTOU claim beyond each individual retained scan. Artifact and publication
+authority continue to require their separate authenticated source, worker, and
+finalizer contracts.
+
+Source depth, file size, entry, token, module-edge, byte, and name-byte limits
+apply to each package scan. Separate aggregate package, Cargo-target, source
+entry, source-file, byte, and name-byte limits bound the complete workspace
+projection before the binding-check Cargo process is launched.
+The source-token traversal limit applies after bounded source bytes have been
+parsed by `syn`; extreme parser nesting remains a local availability limitation,
+not a compiler, artifact, or publication authority boundary.
 
 ## Layers
 
