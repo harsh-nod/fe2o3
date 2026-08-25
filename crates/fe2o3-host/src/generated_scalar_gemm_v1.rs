@@ -1897,5 +1897,22 @@ pub use worker_v2::{
     ScalarGemmV1ArgumentError, ScalarGemmV1DispatchIdentity, ScalarGemmV1GeometryError,
     ScalarGemmV1PhysicalKernargError, ScalarGemmV1ProfileError,
 };
-#[cfg(any(test, feature = "hardware-test-hooks"))]
+#[cfg(any(
+    test,
+    all(
+        feature = "qualification-oracles-test-only",
+        feature = "hardware-test-hooks"
+    )
+))]
 pub(crate) use worker_v2::{scalar_gemm_v1_test_abi, scalar_gemm_v1_test_launch};
+
+#[cfg(all(
+    feature = "qualification-oracles-test-only",
+    feature = "hardware-test-hooks"
+))]
+const _: fn() -> fe2o3_artifacts::AbiLayout = scalar_gemm_v1_test_abi;
+#[cfg(all(
+    feature = "qualification-oracles-test-only",
+    feature = "hardware-test-hooks"
+))]
+const _: fn() -> fe2o3_artifacts::LaunchContract = scalar_gemm_v1_test_launch;
