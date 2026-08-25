@@ -38,7 +38,7 @@ use super::dispatch_binding::{
 };
 use super::submit::{
     NativeAqlSubmissionBackendV1, NativeAqlSubmissionErrorV1, NativeAqlSubmissionOwnerV1,
-    NativeBarrierAndSubmissionFailureV1, initialize_control_atomics, initialize_invalid_ring,
+    NativeBarrierAndSubmissionFailureV1, initialize_amd_aql_control, initialize_invalid_ring,
 };
 use super::*;
 use crate::queue_linux::{
@@ -70,12 +70,12 @@ static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and fixed-batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r26-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r27-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
     "memory_profile_sha256=51bf22abe635f62619ef1c87e6328720861d3d0c1fdd3613229e9e6e3cea3cd5\n",
     "kfd_userptr_memory_schema_sha256=c1cee09bdf884d2c14a5dbb89c1f6f7885962c75b1457caf412821490919ee9e\n",
     "kfd_userptr_queue_control_schema_sha256=f1d75410d6bfacff2ea15ecfff226eb8aed7912ee324a36b8ed8550fa52bce02\n",
-    "queue_resource_profile_sha256=822d8b9c60a74bc9905a0e3d9a5518e657def0c40406c1d5978c485650477b9d\n",
+    "queue_resource_profile_sha256=37d45132916d2ecefdec8f53ecab817cbdbaa9b9863440353163bd460626ab02\n",
     "aql_dispatch_schema_sha256=82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0\n",
     "aql_barrier_and_schema_sha256=bdca900cd5c6eaccbddfc5a854e956382a08ce87bec4ccd5284baacf932cdfb5\n",
     "aql_fixed_batch_schema_sha256=a3c74fe4aa26a62772253de267812f2fb1626247685d8c4e8ed8bbb2a5a9e34a\n",
@@ -94,7 +94,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "userptr-diagnostic=smallest-selected-gpu-ring-backing-discriminator,no-full-rocr-allocation-or-map-order-parity-claim\n",
     "creation-boundary=planning-session-dispatch-and-ring-errors-before-userptr-control-registration-entry-retain-existing-classification,every-error-from-the-control-allocation-attempt-through-live-session-return-is-terminal-recovers-no-authority-permanently-poisons-the-process-global-runtime-gate-and-requires-process-termination\n",
     "runtime=one-process-global-fe2o3-owner;exact-enable-r_debug0-mode1-capabilities0-before-event-and-any-queue;ttmp-save-excluded;foreign-kfd-clients-excluded\n",
-    "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-explicit-two-atomic-u64-zero;completion-arena-exact-8192-typed-64-byte-user-signals-pending-1-before-gpu-map;one-first-internal-auto-reset-signal-event-id-1-through-255-before-create;8-cwsr-bo-and-shadow-headers-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,one-first-shadow-aligned-error-reason-zero,exact-event-id\n",
+    "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-amd-aql-v1-write-dispatch-id-at-0x38-read-dispatch-id-at-0x80-both-atomic-u64-zero-read-base-offset-u32-0x80-at-0x88;completion-arena-exact-8192-typed-64-byte-user-signals-pending-1-before-gpu-map;one-first-internal-auto-reset-signal-event-id-1-through-255-before-create;8-cwsr-bo-and-shadow-headers-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,one-first-shadow-aligned-error-reason-zero,exact-event-id\n",
     "submission=crate-private-non-clone-single-producer,aql-fixed-batch-v2-count-1-through-8192-and-ring-capacity-bounded,heap-owned-fixed-cardinality-state,no-mapped-slice-or-raw-pointer-escape,rptr-wptr-acquire,one-actual-wptr-acq-rel-fetch-add-by-count,all-invalid-bodies-before-per-packet-independent-0x1402-or-wait-for-prior-0x1502-ordered-u32-release-headers,exact-one-zero-setup-barrier-and-0x1403,conservative-service-default-wait-for-prior,release-fence-x86-sfence,one-final-volatile-u64-doorbell-store-of-last-packet-id\n",
     "completion=crate-private-non-clone-generation-bound-fixed-batches-and-one-signal-barrier-probe,fixed-batch-signal-code-kernarg-dispatch-and-queue-generations-retained,barrier-probe-queue-and-signal-generations-only,bounded-atomic-acquire-poll-with-one-pre-post-currentness-envelope-and-same-scan-redacted-progress,pending-ready-fault-timeout-distinct,timeout-retains-private-linear-operation-through-sequential-pre-post-currentness-enveloped-addressless-write-read-counter-first-retained-packet-header-setup-first-retained-signal-kind-value-and-CWSR-reason-observation-before-poison,release-reset-only-after-all-retained-signals-zero\n",
     "liveness-probe=three-public-consuming-checked-device-entries-select-production-aql-special-doubled-diagnostic-plain-executable-one-x-or-diagnostic-userptr-writable-executable-coherent-uncached-no-substitute-one-x-ring,selected-backing-and-exact-ring-span-bound-into-plan-and-configuration,selected-backing-bound-into-every-redacted-outcome,typed-nonzero-bounded-polls-validated-before-device-consumption,diagnostic-backings-not-selectable-by-reusable-or-dispatch-queue-APIs,exact-fresh-zero-history-no-dispatch-queue,one-zero-dependency-system-scope-barrier,queue-and-signal-generation-only,submission-retryable-only-by-explicit-before-side-effect-stage-classification,success-requires-currentness-packet-count1-write1-read0or1-timing-sensitive-header0x1403-or-device-consumed-invalid1-setup0-user-signal-completed-zero-exception-then-signal-reset-and-confirmed-explicit-queue-destroy,Creation-has-no-live-queue-and-precedes-userptr-control-registration-entry,TerminalCreation-covers-every-error-at-or-after-userptr-control-registration-entry-every-create-result-not-explicitly-failed-no-effect-and-every-post-create-failure-recovers-no-authority-permanently-poisons-process-global-runtime-gate-and-requires-process-termination,QuarantinedExecution-retains-opaque-custody-until-process-teardown,process-global-runtime-gate-poison-armed-before-destroy-and-cleared-only-after-confirmed-success,TerminalTeardown-and-panic-retain-permanent-gate-poison-and-recover-no-authority-native-resource-disposition-indeterminate-process-termination-required-no-retry-reopen-or-confirmed-cleanup\n",
@@ -114,7 +114,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "394618a23ca31cacbd9ef757e9ad4c0977dd0b5ee83cf66bcd9a6fafdefe6ce3";
+    "c8419fbffe7ce8ab6b80003100c87ae737b60d8912b84bc162b51541d356406a";
 
 type AqlSpecialRingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -1459,9 +1459,9 @@ impl ComputeAqlQueueSessionV1 {
         ring_initialization
             .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("INVALID ring initialization"))?;
         let control_initialization =
-            memory.with_bytes_mut(&mut control, initialize_control_atomics)?;
+            memory.with_bytes_mut(&mut control, initialize_amd_aql_control)?;
         control_initialization.map_err(|_| {
-            ComputeAqlQueueSessionErrorV1::Contract("AQL control atomic initialization")
+            ComputeAqlQueueSessionErrorV1::Contract("AMD AQL control initialization")
         })?;
         let completion_initialization = memory.with_bytes_mut(
             &mut completion_signals,
@@ -3228,10 +3228,21 @@ fn build_resource_authority(
         ));
     }
     // KFD truncates each pointer to its GPU page and requires that page to be
-    // one exact PAGE_SIZE GPUVM mapping. Both distinct counters live within
-    // that single reviewed page.
+    // one exact PAGE_SIZE GPUVM mapping. The AMD AQL queue ABI places these
+    // counters in distinct cache lines within that single reviewed page.
     let (write_pointer, read_pointer) = cf
-        .checked_disjoint_gpu_subranges((0, 8, 8), (8, 8, 8))
+        .checked_disjoint_gpu_subranges(
+            (
+                geometry.control().write_dispatch_id_offset_bytes(),
+                geometry.control().counter_bytes(),
+                geometry.control().counter_alignment_bytes(),
+            ),
+            (
+                geometry.control().read_dispatch_id_offset_bytes(),
+                geometry.control().counter_bytes(),
+                geometry.control().counter_alignment_bytes(),
+            ),
+        )
         .ok_or(ComputeAqlQueueSessionErrorV1::Contract("control subranges"))?;
     let eop_base = ef
         .checked_gpu_subrange(0, geometry.end_of_pipe().mapping_bytes(), 4096)
@@ -4050,7 +4061,7 @@ mod tests {
         );
         assert_eq!(
             GFX942_QUEUE_RESOURCE_PROFILE_SHA256_V1,
-            "822d8b9c60a74bc9905a0e3d9a5518e657def0c40406c1d5978c485650477b9d"
+            "37d45132916d2ecefdec8f53ecab817cbdbaa9b9863440353163bd460626ab02"
         );
         assert_eq!(
             fe2o3_kfd_uapi::KFD_USERPTR_MEMORY_SCHEMA_MANIFEST_SHA256,
