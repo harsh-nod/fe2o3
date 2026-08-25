@@ -7,6 +7,9 @@
 //! addresses, publish packets, map a doorbell, create a queue, or establish
 //! that firmware consumed a packet.
 
+extern crate alloc;
+
+use alloc::boxed::Box;
 use core::{
     mem::{align_of, offset_of, size_of},
     sync::atomic::{AtomicI64, Ordering},
@@ -32,7 +35,7 @@ source.queue.h=aa1cd1acea3405e8c18076b406dd91b5433438792f7cbe8ac5bc3d46df25a9ca
 source.amd_hsa_kernel_code.h=2f48b1fff5432fb96aa460d3c5ac0bccb2e8996adfa5ecdb508722f3911ff9d0
 legacy_release_u32_reference.fe2o3_hsa_runtime.native.runtime.c=99dc188ad8b12561b66ac4a156fdbcfec068c1797fad75afa43a45d3a830554f,not-invalid-body-evidence
 packet=size:64,align:8,header:0,setup:2,workgroup:4,grid:12,private:24,group:28,kernel-object:32,kernarg:40,reserved2:48,completion-signal:56
-publication=initial-type:invalid-1,initial-setup-dimensions:1..3,prepared-api-exposes-invariant-final-header-only,backend-preserves-copied-setup,single-release-u32-at-offset-0,type:2,barrier:0,acquire:system-2,release:system-2,header:0x1402
+publication=initial-type:invalid-1,initial-setup-dimensions:1..3,prepared-retains-exact-final-header,ordering:independent-barrier0-header0x1402|wait-for-prior-barrier1-header0x1502,backend-preserves-copied-setup,single-release-u32-at-offset-0,type:2,acquire:system-2,release:system-2
 ring-reservation=mutable-single-producer-model,packet-bytes:64,ring-bytes:4096..2147483648-power-of-two,capacity:64..33554432,monotonic-u64-no-wrap,nondecreasing-read,read<=write,distance<=capacity,slot:packet-id&(capacity-1)
 signal=size:64,align:64,kind-offset:0,value-offset:8,kind:user-1,pending:1,complete:0,event-fields:zero,byte-encoder:exact-64,classifier:1-pending|0-completed|other-unexpected-preserved,busy-poll-only
 address-observations=nonzero,kernel-object-align:64,completion-signal-align:64,kernarg-align:caller-supplied-power-of-two-1..4096
@@ -41,15 +44,16 @@ authority=inert-wire-values-only,no-address-provenance,no-allocation,no-typed-ob
 
 /// SHA-256 of [`AQL_DISPATCH_ABI_SCHEMA_MANIFEST_V1`].
 pub const AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_V1: &str =
-    "b691e0df36e2c1f0695f49a19d49d3fbbe4380e8e9999b01368df02783952edf";
+    "82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0";
 
 /// Typed SHA-256 bytes of [`AQL_DISPATCH_ABI_SCHEMA_MANIFEST_V1`].
 pub const AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_BYTES_V1: [u8; 32] = [
-    0xb6, 0x91, 0xe0, 0xdf, 0x36, 0xe2, 0xc1, 0xf0, 0x69, 0x5f, 0x49, 0xa1, 0x9d, 0x49, 0xd3, 0xfb,
-    0xbe, 0x43, 0x80, 0xe8, 0xe9, 0x99, 0x9b, 0x01, 0x36, 0x8d, 0xf0, 0x27, 0x83, 0x95, 0x2e, 0xdf,
+    0x82, 0xfb, 0xd7, 0xcf, 0x0b, 0x6c, 0x86, 0x47, 0xdc, 0xe3, 0xf9, 0xb1, 0x1e, 0x4f, 0x13, 0xa2,
+    0xda, 0xdf, 0xe3, 0x42, 0x35, 0x09, 0xf7, 0x69, 0xa4, 0xbc, 0x6c, 0xc8, 0x7b, 0xb7, 0xac, 0xd0,
 ];
 
 pub const AQL_KERNEL_DISPATCH_PACKET_BYTES_V1: usize = 64;
+pub const AQL_BARRIER_AND_PACKET_BYTES_V1: usize = 64;
 pub const AMD_SIGNAL_BYTES_V1: usize = 64;
 pub const AMD_SIGNAL_ALIGNMENT_V1: usize = 64;
 pub const AMD_SIGNAL_KIND_USER_V1: i64 = 1;
@@ -57,14 +61,82 @@ pub const AMD_SIGNAL_VALUE_PENDING_V1: i64 = 1;
 pub const AMD_SIGNAL_VALUE_COMPLETE_V1: i64 = 0;
 pub const AQL_INVALID_PACKET_HEADER_V1: u16 = 1;
 pub const AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1: u16 = 0x1402;
+pub const AQL_SYSTEM_SCOPED_WAIT_FOR_PRIOR_KERNEL_DISPATCH_HEADER_V1: u16 = 0x1502;
+pub const AQL_SYSTEM_SCOPED_BARRIER_AND_HEADER_V1: u16 = 0x1403;
 pub const AQL_MIN_RING_BYTES_V1: u32 = 4096;
 pub const AQL_MAX_RING_BYTES_V1: u32 = 1 << 31;
 /// Maximum packets admitted by one V1 arithmetic batch reservation.
 ///
 /// At 64 bytes per packet this bounds one reservation to 16 KiB of logical
 /// ring slots. It does not size a native queue or claim that one batch is a
-/// complete inference schedule.
+/// complete command schedule.
 pub const AQL_MAX_BATCH_PACKETS_V1: u32 = 256;
+
+/// Maximum packets admitted by one V2 fixed-capacity publication.
+///
+/// At 64 bytes per packet this requires at least a 512 KiB ring for the
+/// maximum batch. The bound is a host resource policy, not a hardware queue
+/// limit.
+pub const AQL_MAX_FIXED_BATCH_PACKETS_V2: u32 = 8192;
+
+/// Execution-order policy encoded in one kernel-dispatch packet header.
+///
+/// System-scoped acquire and release fences govern memory visibility. They do
+/// not by themselves make a dispatch wait for preceding queue packets.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u16)]
+pub enum AqlDispatchOrderingV1 {
+    /// The dispatch may become eligible independently of prior queue packets.
+    Independent = AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1,
+    /// The dispatch waits until all preceding queue packets have completed.
+    WaitForPrior = AQL_SYSTEM_SCOPED_WAIT_FOR_PRIOR_KERNEL_DISPATCH_HEADER_V1,
+}
+
+impl AqlDispatchOrderingV1 {
+    /// Returns the exact system-scoped kernel-dispatch header.
+    pub const fn header(self) -> u16 {
+        self as u16
+    }
+
+    /// Admits exactly one reviewed system-scoped dispatch header.
+    pub const fn from_header(header: u16) -> Option<Self> {
+        match header {
+            AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1 => Some(Self::Independent),
+            AQL_SYSTEM_SCOPED_WAIT_FOR_PRIOR_KERNEL_DISPATCH_HEADER_V1 => Some(Self::WaitForPrior),
+            _ => None,
+        }
+    }
+}
+
+/// Stable name of the reviewed zero-dependency BARRIER_AND packet contract.
+pub const AQL_BARRIER_AND_ABI_SCHEMA_ID_V1: &str =
+    "rocr-7.2.4-amdhsa-aql-barrier-and-zero-dependency-v1";
+
+/// Canonical wire-format and publication manifest for one liveness barrier.
+pub const AQL_BARRIER_AND_ABI_SCHEMA_MANIFEST_V1: &str = r#"schema=rocr-7.2.4-amdhsa-aql-barrier-and-zero-dependency-v1
+platform=linux-x86_64,little-endian,pointer-width:64
+rocr_commit=97f5574fe2fdc7bef44fb01545347912ee9f1779,tag:rocm-7.2.4
+source.hsa.h=51ea864cc3e83a9ce824c294dd98a5724eeec87b76fafded1a01d406206ce0f5
+dispatch_signal_schema_sha256=82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0
+packet=size:64,align:8,header:0,reserved0:2,reserved1:4,dep-signals:8,16,24,32,40,reserved2:48,completion-signal:56
+publication=initial-type:invalid-1,initial-reserved0-zero,reserved1-zero,reserved2-zero,system-scope-zero-dependency-final-header:0x1403,single-release-u32-at-offset-0,type:3,acquire:system-2,release:system-2
+dependencies=all-five-signal-handles-zero,all-five-dependency-bytes-zero
+completion=nonzero,64-byte-aligned,external-retained-user-signal
+authority=inert-wire-value-only,no-address-provenance,no-allocation,no-typed-object-placement,no-queue,no-publication,no-doorbell,no-execution
+"#;
+
+/// SHA-256 of [`AQL_BARRIER_AND_ABI_SCHEMA_MANIFEST_V1`].
+pub const AQL_BARRIER_AND_ABI_SCHEMA_MANIFEST_SHA256_V1: &str =
+    "bdca900cd5c6eaccbddfc5a854e956382a08ce87bec4ccd5284baacf932cdfb5";
+
+/// Returns whether a first-word publication has one reviewed packet header and setup pair.
+///
+/// Kernel dispatches retain setup dimensions one through three. BARRIER_AND
+/// reserves the upper halfword and therefore requires it to remain zero.
+pub const fn is_reviewed_aql_publication_v1(header: u16, setup: u16) -> bool {
+    (AqlDispatchOrderingV1::from_header(header).is_some() && setup >= 1 && setup <= 3)
+        || (header == AQL_SYSTEM_SCOPED_BARRIER_AND_HEADER_V1 && setup == 0)
+}
 
 /// Stable name of the inert V1 batch-reservation model.
 pub const AQL_BATCH_RESERVATION_MODEL_SCHEMA_ID_V1: &str =
@@ -83,6 +155,24 @@ authority=inert-arithmetic-only,no-native-reservation,no-counter-access,no-packe
 /// SHA-256 of [`AQL_BATCH_RESERVATION_MODEL_MANIFEST_V1`].
 pub const AQL_BATCH_RESERVATION_MODEL_MANIFEST_SHA256_V1: &str =
     "0734191a1975f1bfc66bbcdbfd47f907656963b35c97a6d3f4cd2e04d2f59a83";
+
+/// Additive fixed-capacity reservation/publication profile retaining V1.
+pub const AQL_FIXED_BATCH_MODEL_MANIFEST_V2: &str = r#"schema=fe2o3-aql-single-producer-fixed-batch-v2
+v1_schema_sha256=0734191a1975f1bfc66bbcdbfd47f907656963b35c97a6d3f4cd2e04d2f59a83
+packet-count=1..8192
+packet-bytes=64
+minimum-ring-for-maximum-batch=524288
+state=single-producer-write,last-observed-read,power-of-two-ring-capacity
+admission=nondecreasing-read,read<=write,distance<=capacity,count<=capacity,count<=available,checked-u64-next-write
+slots=packet-id&(capacity-1),ordered,distinct-within-admitted-batch,wrap-aware
+transition=all-checks-before-write-or-last-read-mutation
+publication=all-invalid-bodies-before-any-per-packet-retained-exact-release-header,independent:0x1402,wait-for-prior:0x1502,one-final-doorbell-required-by-later-native-owner
+authority=inert-arithmetic-and-packet-values-only,no-native-reservation,no-counter-access,no-packet-write,no-publication,no-doorbell,no-completion
+"#;
+
+/// SHA-256 of [`AQL_FIXED_BATCH_MODEL_MANIFEST_V2`].
+pub const AQL_FIXED_BATCH_MODEL_MANIFEST_SHA256_V2: &str =
+    "a3c74fe4aa26a62772253de267812f2fb1626247685d8c4e8ed8bbb2a5a9e34a";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AqlAddressObservationError {
@@ -239,13 +329,31 @@ impl AqlSingleProducerRingModelV1 {
         observed_read: u64,
         packet_count: u32,
     ) -> Result<AqlRingBatchReservationV1, AqlRingReservationError> {
+        self.reserve_batch_with_maximum(observed_read, packet_count, AQL_MAX_BATCH_PACKETS_V1)
+    }
+
+    /// Reserves one additive V2 fixed batch without changing the V1 bound.
+    pub const fn reserve_fixed_batch_v2(
+        &mut self,
+        observed_read: u64,
+        packet_count: u32,
+    ) -> Result<AqlRingBatchReservationV1, AqlRingReservationError> {
+        self.reserve_batch_with_maximum(observed_read, packet_count, AQL_MAX_FIXED_BATCH_PACKETS_V2)
+    }
+
+    const fn reserve_batch_with_maximum(
+        &mut self,
+        observed_read: u64,
+        packet_count: u32,
+        maximum: u32,
+    ) -> Result<AqlRingBatchReservationV1, AqlRingReservationError> {
         if packet_count == 0 {
             return Err(AqlRingReservationError::ZeroPacketCount);
         }
-        if packet_count > AQL_MAX_BATCH_PACKETS_V1 {
+        if packet_count > maximum {
             return Err(AqlRingReservationError::PacketCountExceedsReviewedMaximum {
                 requested: packet_count,
-                maximum: AQL_MAX_BATCH_PACKETS_V1,
+                maximum,
             });
         }
         if packet_count > self.capacity.packets {
@@ -510,6 +618,101 @@ pub enum AqlDispatchPacketError {
     CompletionSignal(AqlAddressObservationError),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AqlBarrierAndPacketErrorV1 {
+    CompletionSignal(AqlAddressObservationError),
+}
+
+/// Exact unpublished 64-byte AMDHSA BARRIER_AND packet.
+///
+/// All five dependency signal handles are zero. A higher-level retained queue
+/// owner can use this inert value as one input to a liveness probe, but the
+/// value itself is not liveness or execution evidence. Its only external
+/// binding is the completion signal. A queue implementation must copy the
+/// complete INVALID body into one exclusively owned slot before publishing the
+/// paired header.
+#[derive(Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct AqlBarrierAndPacketV1 {
+    full_header: u32,
+    reserved1: u32,
+    dep_signals: [u64; 5],
+    reserved2: u64,
+    completion_signal: u64,
+}
+
+impl AqlBarrierAndPacketV1 {
+    /// Constructs one unpublished system-scoped zero-dependency barrier.
+    pub fn new_unpublished(
+        completion_signal: ObservedGpuAddressV1,
+    ) -> Result<AqlPreparedBarrierAndV1, AqlBarrierAndPacketErrorV1> {
+        let completion_signal = completion_signal
+            .require_alignment(AMD_SIGNAL_ALIGNMENT_V1 as u64)
+            .map_err(AqlBarrierAndPacketErrorV1::CompletionSignal)?;
+        Ok(AqlPreparedBarrierAndV1 {
+            packet: Self {
+                full_header: u32::from(AQL_INVALID_PACKET_HEADER_V1),
+                reserved1: 0,
+                dep_signals: [0; 5],
+                reserved2: 0,
+                completion_signal: completion_signal.raw(),
+            },
+        })
+    }
+
+    pub const fn is_unpublished(&self) -> bool {
+        self.full_header == AQL_INVALID_PACKET_HEADER_V1 as u32
+    }
+
+    pub const fn completion_signal(&self) -> u64 {
+        self.completion_signal
+    }
+
+    pub fn encode_unpublished_le(&self) -> [u8; AQL_BARRIER_AND_PACKET_BYTES_V1] {
+        let mut bytes = [0_u8; AQL_BARRIER_AND_PACKET_BYTES_V1];
+        bytes[0..4].copy_from_slice(&self.full_header.to_le_bytes());
+        bytes[4..8].copy_from_slice(&self.reserved1.to_le_bytes());
+        for (index, signal) in self.dep_signals.iter().enumerate() {
+            let offset = 8 + index * size_of::<u64>();
+            bytes[offset..offset + size_of::<u64>()].copy_from_slice(&signal.to_le_bytes());
+        }
+        bytes[48..56].copy_from_slice(&self.reserved2.to_le_bytes());
+        bytes[56..64].copy_from_slice(&self.completion_signal.to_le_bytes());
+        bytes
+    }
+}
+
+/// Linear unpublished zero-dependency barrier paired with its exact header.
+#[derive(Debug, Eq, PartialEq)]
+pub struct AqlPreparedBarrierAndV1 {
+    packet: AqlBarrierAndPacketV1,
+}
+
+impl AqlPreparedBarrierAndV1 {
+    pub fn publish_with<T: AqlBarrierAndPublicationTargetV1>(
+        self,
+        target: &mut T,
+    ) -> Result<(), T::Error> {
+        target.write_unpublished_barrier(&self.packet)?;
+        target.publish_barrier_release_header(AQL_SYSTEM_SCOPED_BARRIER_AND_HEADER_V1)
+    }
+}
+
+/// Backend boundary keeping one barrier body and its final header paired.
+///
+/// Implementing this inert trait grants no queue, signal, address, packet-slot,
+/// or doorbell authority.
+pub trait AqlBarrierAndPublicationTargetV1 {
+    type Error;
+
+    fn write_unpublished_barrier(
+        &mut self,
+        packet: &AqlBarrierAndPacketV1,
+    ) -> Result<(), Self::Error>;
+
+    fn publish_barrier_release_header(&mut self, header: u16) -> Result<(), Self::Error>;
+}
+
 /// Exact unpublished 64-byte AMDHSA kernel-dispatch packet.
 ///
 /// The packet starts with type `INVALID` and its exact setup dimensions. A
@@ -545,6 +748,30 @@ impl AqlKernelDispatchPacketV1 {
         kernarg_alignment: u64,
         completion_signal: ObservedGpuAddressV1,
     ) -> Result<AqlPreparedKernelDispatchV1, AqlDispatchPacketError> {
+        Self::new_unpublished_with_ordering(
+            geometry,
+            private_segment_size,
+            group_segment_size,
+            kernel_object,
+            kernarg_address,
+            kernarg_alignment,
+            completion_signal,
+            AqlDispatchOrderingV1::Independent,
+        )
+    }
+
+    /// Constructs an unpublished packet with an explicit execution-order policy.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_unpublished_with_ordering(
+        geometry: AqlDispatchGeometryV1,
+        private_segment_size: u32,
+        group_segment_size: u32,
+        kernel_object: ObservedGpuAddressV1,
+        kernarg_address: ObservedGpuAddressV1,
+        kernarg_alignment: u64,
+        completion_signal: ObservedGpuAddressV1,
+        ordering: AqlDispatchOrderingV1,
+    ) -> Result<AqlPreparedKernelDispatchV1, AqlDispatchPacketError> {
         let kernel_object = kernel_object
             .require_alignment(64)
             .map_err(AqlDispatchPacketError::KernelObject)?;
@@ -574,7 +801,7 @@ impl AqlKernelDispatchPacketV1 {
             reserved2: 0,
             completion_signal: completion_signal.raw(),
         };
-        Ok(AqlPreparedKernelDispatchV1 { packet })
+        Ok(AqlPreparedKernelDispatchV1 { packet, ordering })
     }
 
     pub const fn is_unpublished(&self) -> bool {
@@ -621,15 +848,21 @@ impl AqlKernelDispatchPacketV1 {
 #[derive(Debug, Eq, PartialEq)]
 pub struct AqlPreparedKernelDispatchV1 {
     packet: AqlKernelDispatchPacketV1,
+    ordering: AqlDispatchOrderingV1,
 }
 
 impl AqlPreparedKernelDispatchV1 {
+    /// Returns the explicit execution-order policy retained for publication.
+    pub const fn ordering(&self) -> AqlDispatchOrderingV1 {
+        self.ordering
+    }
+
     pub fn publish_with<T: AqlPacketPublicationTargetV1>(
         self,
         target: &mut T,
     ) -> Result<(), T::Error> {
         target.write_unpublished(&self.packet)?;
-        target.publish_release_header(AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1)
+        target.publish_release_header(self.ordering.header())
     }
 }
 
@@ -680,11 +913,8 @@ impl<const N: usize> AqlPreparedKernelDispatchBatchV1<N> {
         for (batch_index, packet) in self.packets.iter().enumerate() {
             target.write_unpublished(batch_index as u32, &packet.packet)?;
         }
-        for batch_index in 0..N {
-            target.publish_release_header(
-                batch_index as u32,
-                AQL_SYSTEM_SCOPED_KERNEL_DISPATCH_HEADER_V1,
-            )?;
+        for (batch_index, packet) in self.packets.iter().enumerate() {
+            target.publish_release_header(batch_index as u32, packet.ordering.header())?;
         }
         Ok(())
     }
@@ -693,6 +923,67 @@ impl<const N: usize> AqlPreparedKernelDispatchBatchV1<N> {
 impl AqlPreparedKernelDispatchBatchV1<1> {
     pub const fn one(packet: AqlPreparedKernelDispatchV1) -> Self {
         Self { packets: [packet] }
+    }
+}
+
+/// A fixed inert V2 batch supporting one through 8192 packet values.
+///
+/// Like V1, this owns no queue, slot, address, counter, completion signal, or
+/// publication authority. The separate type preserves the frozen V1 bound.
+#[derive(Debug, Eq, PartialEq)]
+pub struct AqlPreparedKernelDispatchBatchV2<const N: usize> {
+    packets: Box<[AqlPreparedKernelDispatchV1; N]>,
+}
+
+impl<const N: usize> AqlPreparedKernelDispatchBatchV2<N> {
+    pub fn try_from_packets(
+        packets: [AqlPreparedKernelDispatchV1; N],
+    ) -> Result<Self, AqlPreparedKernelDispatchBatchErrorV1> {
+        Self::try_from_boxed_packets(Box::new(packets))
+    }
+
+    /// Admits an already heap-owned exact-cardinality packet set.
+    pub fn try_from_boxed_packets(
+        packets: Box<[AqlPreparedKernelDispatchV1; N]>,
+    ) -> Result<Self, AqlPreparedKernelDispatchBatchErrorV1> {
+        if N == 0 {
+            return Err(AqlPreparedKernelDispatchBatchErrorV1::ZeroPacketCount);
+        }
+        if N > AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize {
+            return Err(
+                AqlPreparedKernelDispatchBatchErrorV1::PacketCountExceedsReviewedMaximum {
+                    requested: N,
+                    maximum: AQL_MAX_FIXED_BATCH_PACKETS_V2,
+                },
+            );
+        }
+        Ok(Self { packets })
+    }
+
+    pub const fn packet_count(&self) -> u32 {
+        N as u32
+    }
+
+    /// Preserves the V1 all-body-before-any-header publication order.
+    pub fn publish_with<T: AqlPacketBatchPublicationTargetV1>(
+        self,
+        target: &mut T,
+    ) -> Result<(), T::Error> {
+        for (batch_index, packet) in self.packets.iter().enumerate() {
+            target.write_unpublished(batch_index as u32, &packet.packet)?;
+        }
+        for (batch_index, packet) in self.packets.iter().enumerate() {
+            target.publish_release_header(batch_index as u32, packet.ordering.header())?;
+        }
+        Ok(())
+    }
+}
+
+impl AqlPreparedKernelDispatchBatchV2<1> {
+    pub fn one(packet: AqlPreparedKernelDispatchV1) -> Self {
+        Self {
+            packets: Box::new([packet]),
+        }
     }
 }
 
@@ -820,6 +1111,14 @@ pub enum AqlCompletionObservationV1 {
 }
 
 const _: () = {
+    assert!(size_of::<AqlBarrierAndPacketV1>() == AQL_BARRIER_AND_PACKET_BYTES_V1);
+    assert!(align_of::<AqlBarrierAndPacketV1>() == 8);
+    assert!(offset_of!(AqlBarrierAndPacketV1, full_header) == 0);
+    assert!(offset_of!(AqlBarrierAndPacketV1, reserved1) == 4);
+    assert!(offset_of!(AqlBarrierAndPacketV1, dep_signals) == 8);
+    assert!(offset_of!(AqlBarrierAndPacketV1, reserved2) == 48);
+    assert!(offset_of!(AqlBarrierAndPacketV1, completion_signal) == 56);
+
     assert!(size_of::<AqlKernelDispatchPacketV1>() == AQL_KERNEL_DISPATCH_PACKET_BYTES_V1);
     assert!(align_of::<AqlKernelDispatchPacketV1>() == 8);
     assert!(offset_of!(AqlKernelDispatchPacketV1, full_header) == 0);

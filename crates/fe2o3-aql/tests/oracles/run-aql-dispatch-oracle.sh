@@ -5,7 +5,8 @@ rocr_source=${1:-/home/harsh/work/rocm-systems-7.2.4-issue137-r4-readonly}
 root=$rocr_source/projects/rocr-runtime/runtime/hsa-runtime
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$here/../../../.." && pwd)
-binary=${TMPDIR:-/tmp}/fe2o3-aql-dispatch-oracle
+dispatch_binary=${TMPDIR:-/tmp}/fe2o3-aql-dispatch-oracle
+barrier_binary=${TMPDIR:-/tmp}/fe2o3-aql-barrier-and-oracle
 
 check() {
     expected=$1
@@ -31,5 +32,10 @@ check 99dc188ad8b12561b66ac4a156fdbcfec068c1797fad75afa43a45d3a830554f "$repo_ro
 
 cc -std=c11 -Wall -Wextra -Werror \
     -I"$root/inc" \
-    "$here/aql_dispatch_7_2_4.c" -o "$binary"
-"$binary"
+    "$here/aql_dispatch_7_2_4.c" -o "$dispatch_binary"
+"$dispatch_binary"
+
+cc -std=c11 -Wall -Wextra -Werror \
+    -I"$root/inc" \
+    "$here/aql_barrier_and_7_2_4.c" -o "$barrier_binary"
+"$barrier_binary"
