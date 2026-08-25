@@ -302,6 +302,85 @@ fn fill_module() -> Module {
     module
 }
 
+fn private_pointer_slot_module() -> Module {
+    let global_pointer = global_pointer(AccessMode::ReadOnly);
+    let private_slot = Type::pointer(
+        global_pointer.clone(),
+        AddressSpace::Private,
+        AccessMode::ReadWrite,
+    );
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations = vec![
+        op(
+            1,
+            global_pointer.clone(),
+            OperationKind::SliceData { slice: ValueId(0) },
+        ),
+        op(
+            2,
+            private_slot,
+            OperationKind::Alloca {
+                element: global_pointer.clone(),
+                count: None,
+                address_space: AddressSpace::Private,
+                alignment: 8,
+            },
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(2),
+                value: ValueId(1),
+                access: MemoryAccess::new(AddressSpace::Private, 8),
+            },
+        ),
+        op(
+            3,
+            global_pointer.clone(),
+            OperationKind::Load {
+                pointer: ValueId(2),
+                access: MemoryAccess::new(AddressSpace::Private, 8),
+            },
+        ),
+        op(4, Type::INDEX, OperationKind::Constant(Constant::Index(0))),
+        op(
+            5,
+            global_pointer,
+            OperationKind::GetElementPointer {
+                base: ValueId(3),
+                offset: ValueId(4),
+            },
+        ),
+        op(
+            6,
+            Type::F32,
+            OperationKind::Load {
+                pointer: ValueId(5),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ),
+    ];
+    entry.terminator = Some(Terminator::Return { values: vec![] });
+    let function = Function::kernel_entry(
+        "private_pointer_slot_impl",
+        Signature::new(vec![global_slice(AccessMode::ReadOnly)], vec![]),
+        vec![ValueId(0)],
+        vec![entry],
+    );
+    let mut kernel = Kernel::new(
+        "private_pointer_slot",
+        "private_pointer_slot_impl",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    let mut module = Module::new("tests::private_pointer_slot");
+    module.functions.push(function);
+    module.kernels.push(kernel);
+    exact_gfx942_xnack_minus(module)
+}
+
 fn exact_gfx942_xnack_minus(mut module: Module) -> Module {
     let target = gfx942_xnack_minus_target_capability();
     module.required_capabilities.insert(target.clone());
@@ -1570,6 +1649,20 @@ fn dynamic_1d_fill_matches_the_exact_golden() {
     assert!(output.contains("mul i64 %v2.group, 64"));
     assert!(!output.contains("256"));
     assert!(!output.contains("getelementptr inbounds"));
+}
+
+#[test]
+fn gfx942_private_pointer_slots_lower_with_exact_address_spaces() {
+    let output = lower_kernel_to_gfx942_xnack_minus_llvm_ir(
+        &private_pointer_slot_module(),
+        &KernelId::new("private_pointer_slot"),
+    )
+    .unwrap();
+
+    assert!(output.contains("%v2 = alloca ptr addrspace(1), align 8, addrspace(5)"));
+    assert!(output.contains("store ptr addrspace(1) %v1, ptr addrspace(5) %v2, align 8"));
+    assert!(output.contains("%v3 = load ptr addrspace(1), ptr addrspace(5) %v2, align 8"));
+    assert!(output.contains("%v5 = getelementptr float, ptr addrspace(1) %v3, i64 0"));
 }
 
 #[test]
