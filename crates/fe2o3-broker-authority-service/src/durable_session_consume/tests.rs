@@ -14,15 +14,15 @@ use fe2o3_external_anchor_protocol::{
     UnsignedAnchorObservationV1,
 };
 use fe2o3_host_link_closure::{
-    ApprovedStaticHostLldV1, ArtifactProvenanceV1, AuthenticatedHostLinkExecutionV1, ElfClassV1,
-    ElfEndianV1, ElfProfileV1, ExecutableToolchainV1, FixedRootSetV1, HostArtifactCatalogV1,
-    HostArtifactKindV1, HostLinkClosureV1, HostLinkError, HostLinkErrorCodeV1, HostLinkHandoffV1,
-    HostLinkPlanSpecV1, HostLinkPlanV1, OutputTypeV1, PlanArgumentV1, ProducerArtifactSpecV1,
-    PublishedHostArtifactV1, ReleaseNonceV1, RuntimeDsoClosureV1, TargetTripleV1,
+    ApprovedStaticHostLldV1, ArtifactProvenanceV1, ElfClassV1, ElfEndianV1, ElfProfileV1,
+    ExecutableToolchainV1, FixedRootSetV1, HostArtifactCatalogV1, HostArtifactKindV1,
+    HostLinkClosureV1, HostLinkHandoffV1, HostLinkPlanSpecV1, HostLinkPlanV1, OutputTypeV1,
+    PlanArgumentV1, ProducerArtifactSpecV1, PublishedHostArtifactV1, ReleaseNonceV1,
+    RuntimeDsoClosureV1, TargetTripleV1,
 };
 use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::{PermissionsExt, symlink};
@@ -34,9 +34,11 @@ use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 use crate::{
-    AdmissionErrorKindV1, BrokerAnchorModeV1, BrokerAnchorPreparedSessionV1, BrokerSessionIdV1,
-    BrokerSessionMachineV1, BrokerSessionNonceV1, BrokerSessionReservationV1, BrokerSessionStageV1,
-    ExpectedClientProcessIdentityV1, LiveClientPidfdIdentityV1, ProtectedBrokerServiceAdmissionV1,
+    AdmissionErrorKindV1, BrokerAnchorModeV1, BrokerAnchorPreparedSessionV1, BrokerHostLinkPollV1,
+    BrokerHostOutputObservationV1, BrokerOwnedHostLinkExecutionV1, BrokerReservedHostLinkSessionV1,
+    BrokerSessionErrorKindV1, BrokerSessionIdV1, BrokerSessionMachineV1, BrokerSessionNonceV1,
+    BrokerSessionStageV1, ExpectedClientProcessIdentityV1, LiveClientPidfdIdentityV1,
+    ProtectedBrokerServiceAdmissionV1,
 };
 
 const RECORD_BOUNDARIES: [RetainedDurableRecordBoundaryV1; 7] = [
@@ -183,6 +185,41 @@ struct RealPreparedFixture {
     _client_peer: OwnedFd,
 }
 
+#[derive(Clone, Copy)]
+struct RealHostLinkCommitContext {
+    process: ProcessIdentityV4,
+    binding: CapabilityBindingV4,
+    request_identity: [u8; 32],
+    plan_identity: [u8; 32],
+    closure_identity: [u8; 32],
+    grant_identity: [u8; 32],
+    durable_plan_identity: [u8; 32],
+}
+
+impl RealHostLinkCommitContext {
+    fn commit(
+        self,
+        output_sha256: [u8; 32],
+        output_length: u64,
+        output_mode: u32,
+        grant_identity: Option<[u8; 32]>,
+    ) -> HostLinkCommitV4 {
+        HostLinkCommitV4::new(
+            self.process,
+            self.binding.identity_sha256(),
+            self.request_identity,
+            self.plan_identity,
+            self.closure_identity,
+            grant_identity.unwrap_or(self.grant_identity),
+            output_sha256,
+            output_length,
+            output_mode,
+            self.durable_plan_identity,
+        )
+        .unwrap()
+    }
+}
+
 fn release_nonce() -> ReleaseNonceV1 {
     ReleaseNonceV1::new([0x73; 32]).unwrap()
 }
@@ -218,6 +255,32 @@ fn expected_static_output_profile() -> ElfProfileV1 {
         has_writable_executable_segment: false,
         has_executable_stack: false,
     }
+}
+
+fn expected_real_host_output() -> Vec<u8> {
+    let mut output = vec![0_u8; 121];
+    output[..4].copy_from_slice(b"\x7fELF");
+    output[4] = 2;
+    output[5] = 1;
+    output[6] = 1;
+    output[16..18].copy_from_slice(&2_u16.to_le_bytes());
+    output[18..20].copy_from_slice(&62_u16.to_le_bytes());
+    output[20..24].copy_from_slice(&1_u32.to_le_bytes());
+    output[24..32].copy_from_slice(&0x400078_u64.to_le_bytes());
+    output[32..40].copy_from_slice(&64_u64.to_le_bytes());
+    output[52..54].copy_from_slice(&64_u16.to_le_bytes());
+    output[54..56].copy_from_slice(&56_u16.to_le_bytes());
+    output[56..58].copy_from_slice(&1_u16.to_le_bytes());
+    output[58..60].copy_from_slice(&64_u16.to_le_bytes());
+    output[64..68].copy_from_slice(&1_u32.to_le_bytes());
+    output[68..72].copy_from_slice(&5_u32.to_le_bytes());
+    output[80..88].copy_from_slice(&0x400000_u64.to_le_bytes());
+    output[88..96].copy_from_slice(&0x400000_u64.to_le_bytes());
+    output[96..104].copy_from_slice(&121_u64.to_le_bytes());
+    output[104..112].copy_from_slice(&121_u64.to_le_bytes());
+    output[112..120].copy_from_slice(&0x1000_u64.to_le_bytes());
+    output[120] = 0xc3;
+    output
 }
 
 fn real_worker_path() -> &'static Path {
@@ -323,22 +386,6 @@ fn real_host_link_closure() -> HostLinkClosureV1 {
     closure
 }
 
-fn await_real_host_output(
-    execution: &mut AuthenticatedHostLinkExecutionV1,
-) -> Result<(), HostLinkError> {
-    let deadline = Instant::now() + Duration::from_secs(35);
-    loop {
-        match execution.try_admit_output() {
-            Ok(_) => return Ok(()),
-            Err(error) if error.code() == HostLinkErrorCodeV1::ResultPending => {
-                assert!(Instant::now() < deadline, "authenticated launch timed out");
-                thread::sleep(Duration::from_millis(1));
-            }
-            Err(error) => return Err(error),
-        }
-    }
-}
-
 #[allow(unsafe_code)]
 fn current_process_pidfd() -> OwnedFd {
     let pid = libc::pid_t::try_from(std::process::id()).unwrap();
@@ -380,6 +427,110 @@ fn real_test_admission(directory: &TempDir) -> (ProtectedBrokerServiceAdmissionV
 }
 
 #[allow(unsafe_code)]
+fn reserved_real_host_link_for_rejection(
+    seed: u8,
+    wrong_tool_identity: bool,
+    wrong_grant_request: bool,
+) -> (
+    BrokerReservedHostLinkSessionV1,
+    HostLinkClosureV1,
+    HostLinkGrantV4,
+    ApprovedStaticHostLldV1,
+    RealHostLinkCommitContext,
+    OwnedFd,
+) {
+    let directory = TempDir::new().unwrap();
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let (admission, client_peer) = real_test_admission(&directory);
+    let (client_pid, client_start_time_ticks) = admission.non_authoritative_test_process_identity();
+    let process = ProcessIdentityV4::new(client_pid, client_start_time_ticks).unwrap();
+    let closure = real_host_link_closure();
+    let plan_identity = *closure.plan_digest().as_bytes();
+    let closure_identity = *closure.closure_digest().as_bytes();
+    let actual_tool_identity = *closure
+        .static_host_lld_artifact_id()
+        .unwrap()
+        .sha256()
+        .as_bytes();
+    let approval = unsafe { ApprovedStaticHostLldV1::from_verified_evidence(&closure) }.unwrap();
+    let static_host_lld_identity = if wrong_tool_identity {
+        [seed.wrapping_add(0x51).max(1); 32]
+    } else {
+        actual_tool_identity
+    };
+    let binding =
+        CapabilityBindingV4::new([0x41; 32], [0x42; 32], static_host_lld_identity).unwrap();
+    let request_identity = [seed.wrapping_add(1).max(1); 32];
+    let prepare = HostLinkPrepareV4::new(
+        process,
+        binding.identity_sha256(),
+        request_identity,
+        plan_identity,
+        closure_identity,
+    )
+    .unwrap();
+    let prepared = BrokerTranscriptValidatorV4::new(binding, process)
+        .validate_prepare(prepare)
+        .unwrap();
+    let grant_request_identity = if wrong_grant_request {
+        [seed.wrapping_add(2).max(1); 32]
+    } else {
+        request_identity
+    };
+    let grant_identity = [seed.wrapping_add(3).max(1); 32];
+    let grant = HostLinkGrantV4::new(
+        process,
+        binding.identity_sha256(),
+        grant_request_identity,
+        plan_identity,
+        closure_identity,
+        grant_identity,
+    )
+    .unwrap();
+    let durable_plan_identity = [seed.wrapping_add(6).max(1); 32];
+    let reserved = BrokerSessionMachineV1::new()
+        .reserve_prepared_link(
+            admission,
+            BrokerSessionIdV1::from_bytes([seed.wrapping_add(4).max(1); 32]).unwrap(),
+            BrokerSessionNonceV1::from_bytes([seed.wrapping_add(5).max(1); 32]).unwrap(),
+            prepared,
+            DurablePublicationPlanIdentityV1::from_bytes(durable_plan_identity).unwrap(),
+        )
+        .unwrap();
+    (
+        reserved,
+        closure,
+        grant,
+        approval,
+        RealHostLinkCommitContext {
+            process,
+            binding,
+            request_identity,
+            plan_identity,
+            closure_identity,
+            grant_identity,
+            durable_plan_identity,
+        },
+        client_peer,
+    )
+}
+
+fn await_broker_owned_output(
+    execution: &mut BrokerOwnedHostLinkExecutionV1,
+) -> BrokerHostOutputObservationV1 {
+    let deadline = Instant::now() + Duration::from_secs(35);
+    loop {
+        match execution.poll_output().unwrap() {
+            BrokerHostLinkPollV1::Pending => {
+                assert!(Instant::now() < deadline, "authenticated launch timed out");
+                thread::sleep(Duration::from_millis(1));
+            }
+            BrokerHostLinkPollV1::Admitted(output) => return output,
+        }
+    }
+}
+
+#[allow(unsafe_code)]
 fn real_prepared_fixture(seed: u8) -> RealPreparedFixture {
     let directory = TempDir::new().unwrap();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
@@ -398,7 +549,14 @@ fn real_prepared_fixture(seed: u8) -> RealPreparedFixture {
     let closure = real_host_link_closure();
     let plan_identity = *closure.plan_digest().as_bytes();
     let closure_identity = *closure.closure_digest().as_bytes();
-    let binding = CapabilityBindingV4::new([0x31; 32], [0x32; 32], [0x33; 32]).unwrap();
+    let static_host_lld_identity = *closure
+        .static_host_lld_artifact_id()
+        .unwrap()
+        .sha256()
+        .as_bytes();
+    let approval = unsafe { ApprovedStaticHostLldV1::from_verified_evidence(&closure) }.unwrap();
+    let binding =
+        CapabilityBindingV4::new([0x31; 32], [0x32; 32], static_host_lld_identity).unwrap();
     let request_identity = [seed.wrapping_add(1).max(1); 32];
     let grant_identity = [seed.wrapping_add(2).max(1); 32];
     let prepare = HostLinkPrepareV4::new(
@@ -412,24 +570,6 @@ fn real_prepared_fixture(seed: u8) -> RealPreparedFixture {
     let prepared_transcript = BrokerTranscriptValidatorV4::new(binding, process)
         .validate_prepare(prepare)
         .unwrap();
-    let reservation = BrokerSessionReservationV1::new(
-        BrokerSessionIdV1::from_bytes([seed.wrapping_add(3).max(1); 32]).unwrap(),
-        BrokerSessionNonceV1::from_bytes([seed.wrapping_add(4).max(1); 32]).unwrap(),
-        prepared_transcript.session_claim(),
-        plan.broker_identity().unwrap(),
-    )
-    .unwrap();
-    let mut machine = BrokerSessionMachineV1::new();
-    let mut permit = machine.reserve(admission, reservation).unwrap();
-    let bound = machine.begin_link(&mut permit, closure).unwrap();
-    let approval =
-        unsafe { ApprovedStaticHostLldV1::from_verified_evidence(bound.closure()) }.unwrap();
-    let mut execution = bound.launch(approval).unwrap();
-    await_real_host_output(&mut execution).unwrap();
-    let output = execution.into_admitted_output().unwrap();
-    let mut output_file = output.try_clone_file().unwrap();
-    let mut output_bytes = Vec::new();
-    output_file.read_to_end(&mut output_bytes).unwrap();
     let grant = HostLinkGrantV4::new(
         process,
         binding.identity_sha256(),
@@ -439,6 +579,23 @@ fn real_prepared_fixture(seed: u8) -> RealPreparedFixture {
         grant_identity,
     )
     .unwrap();
+    let reserved = BrokerSessionMachineV1::new()
+        .reserve_prepared_link(
+            admission,
+            BrokerSessionIdV1::from_bytes([seed.wrapping_add(3).max(1); 32]).unwrap(),
+            BrokerSessionNonceV1::from_bytes([seed.wrapping_add(4).max(1); 32]).unwrap(),
+            prepared_transcript,
+            plan.broker_identity().unwrap(),
+        )
+        .unwrap();
+    assert_eq!(reserved.stage(), BrokerSessionStageV1::Reserved);
+    let mut execution = reserved.grant_and_launch(closure, grant, approval).unwrap();
+    let output = await_broker_owned_output(&mut execution);
+    assert_eq!(execution.output_observation(), Some(output));
+    assert_eq!(
+        execution.poll_output().unwrap(),
+        BrokerHostLinkPollV1::Admitted(output)
+    );
     let commit = HostLinkCommitV4::new(
         process,
         binding.identity_sha256(),
@@ -446,21 +603,15 @@ fn real_prepared_fixture(seed: u8) -> RealPreparedFixture {
         plan_identity,
         closure_identity,
         grant_identity,
-        *output.sha256().as_bytes(),
-        output.size(),
+        output.sha256(),
+        output.length(),
         output.mode(),
         plan.identity_bytes(),
     )
     .unwrap();
-    let transcript = prepared_transcript
-        .validate_grant(grant)
-        .unwrap()
-        .validate_commit(commit)
-        .unwrap();
-    assert_eq!(
-        machine.complete(&transcript, output).unwrap().stage(),
-        BrokerSessionStageV1::Completed
-    );
+    let completed = execution.complete(commit).unwrap();
+    assert_eq!(completed.stage(), BrokerSessionStageV1::Completed);
+    let (machine, transcript) = completed.into_parts();
     let prepared_session = machine
         .prepare_anchor(
             BrokerAnchorModeV1::Advance,
@@ -485,9 +636,66 @@ fn real_prepared_fixture(seed: u8) -> RealPreparedFixture {
         prepared_session,
         transcript,
         signing,
-        output_bytes,
+        output_bytes: expected_real_host_output(),
         _client_peer: client_peer,
     }
+}
+
+#[test]
+fn broker_owned_link_rejects_static_tool_substitution_before_launch() {
+    let (reserved, closure, grant, approval, _context, _client_peer) =
+        reserved_real_host_link_for_rejection(0x21, true, false);
+    assert_eq!(reserved.stage(), BrokerSessionStageV1::Reserved);
+    assert_eq!(
+        reserved
+            .grant_and_launch(closure, grant, approval)
+            .unwrap_err()
+            .kind(),
+        BrokerSessionErrorKindV1::HostLinkToolIdentityMismatch
+    );
+}
+
+#[test]
+fn broker_owned_link_rejects_grant_substitution_before_launch() {
+    let (reserved, closure, grant, approval, _context, _client_peer) =
+        reserved_real_host_link_for_rejection(0x31, false, true);
+    assert_eq!(
+        reserved
+            .grant_and_launch(closure, grant, approval)
+            .unwrap_err()
+            .kind(),
+        BrokerSessionErrorKindV1::HostLinkGrantMismatch
+    );
+}
+
+#[test]
+fn broker_owned_link_consumes_running_execution_on_premature_commit() {
+    let (reserved, closure, grant, approval, context, _client_peer) =
+        reserved_real_host_link_for_rejection(0x41, false, false);
+    let execution = reserved.grant_and_launch(closure, grant, approval).unwrap();
+    let commit = context.commit([0x91; 32], 121, HOST_LINK_OUTPUT_MODE_V4, None);
+    assert_eq!(
+        execution.complete(commit).unwrap_err().kind(),
+        BrokerSessionErrorKindV1::HostLinkOutputPending
+    );
+}
+
+#[test]
+fn broker_owned_link_rejects_commit_substitution_after_admission() {
+    let (reserved, closure, grant, approval, context, _client_peer) =
+        reserved_real_host_link_for_rejection(0x51, false, false);
+    let mut execution = reserved.grant_and_launch(closure, grant, approval).unwrap();
+    let output = await_broker_owned_output(&mut execution);
+    let commit = context.commit(
+        output.sha256(),
+        output.length(),
+        output.mode(),
+        Some([0xe7; 32]),
+    );
+    assert_eq!(
+        execution.complete(commit).unwrap_err().kind(),
+        BrokerSessionErrorKindV1::HostLinkCommitMismatch
+    );
 }
 
 fn sign_transaction_challenge(
