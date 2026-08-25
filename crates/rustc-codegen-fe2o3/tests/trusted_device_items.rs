@@ -23,7 +23,7 @@ const REJECTED_CASES: &[(&str, &str, &str)] = &[
     (
         "fe2o3-trusted-item-lookalike-helper",
         "lookalike_helper",
-        "missing `output[idx] = <elementwise expression>` store",
+        "UnsupportedType: argument local1 has unsupported type `&mut fe2o3_device::DisjointSlice<f32>`",
     ),
     (
         "fe2o3-trusted-item-lookalike-thread",
