@@ -236,9 +236,6 @@ pub(crate) struct PreparedBuildConfig {
     general_gemm_v1: Option<PreparedGeneralGemmV1Config>,
 }
 
-#[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
-pub(crate) type PreparedBuildConfig = PreparedProductionBuildConfig;
-
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PreparedGeneralGemmV1Config {
@@ -862,14 +859,6 @@ impl PreparedProductionBuildConfig {
 
     pub(crate) const fn identity(&self) -> BuildConfigIdentity {
         self.link.identity
-    }
-
-    pub(crate) const fn executes_worker_in_rustc(&self) -> bool {
-        false
-    }
-
-    pub(crate) fn into_production(self) -> Result<Self, BuildConfigError> {
-        Ok(self)
     }
 
     pub(crate) fn compile_environment_profile(

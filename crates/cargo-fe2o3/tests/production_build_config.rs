@@ -29,6 +29,21 @@ impl Drop for ScratchDirectory {
 }
 
 #[test]
+fn production_configuration_has_no_compatibility_type_alias() {
+    let source = include_str!("../src/build_config.rs");
+    assert!(!source.contains("type PreparedBuildConfig = PreparedProductionBuildConfig"));
+    let production_api = source
+        .split("impl PreparedProductionBuildConfig {")
+        .nth(1)
+        .expect("production configuration API exists")
+        .split("fn prepare_production_manifest")
+        .next()
+        .expect("production parser follows its API");
+    assert!(!production_api.contains("executes_worker_in_rustc"));
+    assert!(!production_api.contains("into_production"));
+}
+
+#[test]
 fn production_manifest_rejects_qualification_envelope_fields() {
     let scratch = ScratchDirectory::new();
     let manifest = scratch.0.join("build-config.json");

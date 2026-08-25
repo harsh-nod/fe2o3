@@ -497,8 +497,13 @@ fn cargo_with_backend_result(
     }
     scrub_process_dynamic_loader_environment();
     reject_preexisting_compiler_environment()?;
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     let build_config = build_config::PreparedBuildConfig::from_environment_for_cargo_setup()
         .map_err(|error| format!("build configuration setup failed: {error}"))?;
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    let build_config =
+        build_config::PreparedProductionBuildConfig::from_environment_for_cargo_setup()
+            .map_err(|error| format!("production build configuration setup failed: {error}"))?;
     validate_production_cargo_selection(
         args,
         production_target_profile,
@@ -754,7 +759,10 @@ struct BackendRunContext {
     pinned_backend: pinned_codegen_backend::PinnedCodegenBackend,
     pinned_cargo: pinned_executable::PinnedExecutable,
     pinned_rustc: PinnedRustc,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     _build_config: Option<build_config::PreparedBuildConfig>,
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    _build_config: Option<build_config::PreparedProductionBuildConfig>,
     build_config_identity: Option<build_config::BuildConfigIdentity>,
     compiler_closure_sha256: [u8; 32],
     protected_compiler_closure: Option<fe2o3_build_authority::CompilerClosureV2>,
@@ -772,7 +780,10 @@ struct BackendRunContext {
 
 struct BackendRunPreparation {
     project: project::CargoProject,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     build_config: Option<build_config::PreparedBuildConfig>,
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    build_config: Option<build_config::PreparedProductionBuildConfig>,
     pinned_cargo: pinned_executable::PinnedExecutable,
     pinned_rustc: PinnedRustc,
     authority_backend: Option<(PathBuf, pinned_codegen_backend::PinnedCodegenBackend)>,

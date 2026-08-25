@@ -94,13 +94,13 @@ use sha2::{Digest, Sha256};
 use crate::build_config::{
     BuildCompileEnvironmentProfileV1, BuildConfigError, BuildConfigIdentity,
     OBSOLETE_PRODUCTION_SELECTOR, PRODUCTION_BUILD_CONFIG_ENV, PRODUCTION_BUILD_EXPECTED_ID_ENV,
-    PreparedBuildConfig, PreparedProductionBuildConfig, WORKER_V2_CONFIG_ENV,
-    WORKER_V2_EXPECTED_ID_ENV, WORKER_V2_SOURCE_DEBUG_PROFILE_ENV, production_compilation_selected,
+    PreparedProductionBuildConfig, WORKER_V2_CONFIG_ENV, WORKER_V2_EXPECTED_ID_ENV,
+    WORKER_V2_SOURCE_DEBUG_PROFILE_ENV, production_compilation_selected,
 };
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use crate::build_config::{
     GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV, GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV,
-    WorkerV2BuildObservation, WorkerV2SourceDebugProfileV1,
+    PreparedBuildConfig, WorkerV2BuildObservation, WorkerV2SourceDebugProfileV1,
 };
 use crate::capability_broker;
 use crate::inert_rustc_invocation_capture::{
@@ -441,7 +441,11 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             let metadata = ordered_rustc_codegen_metadata_v1(compile)?;
             let build_observation =
                 CompileBuildObservationV2::from_ordered_metadata(compile.crate_name(), &metadata)?;
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             let build_config = PreparedBuildConfig::from_environment()
+                .map_err(BindingWrapperError::BuildConfiguration)?;
+            #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+            let build_config = PreparedProductionBuildConfig::from_environment()
                 .map_err(BindingWrapperError::BuildConfiguration)?;
             validate_expected_build_config_identity(build_config.as_ref())?;
             #[cfg(any(test, feature = "qualification-oracles-test-only"))]
@@ -2570,7 +2574,7 @@ fn validate_expected_build_config_identity(
 
 #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
 fn validate_expected_build_config_identity(
-    config: Option<&PreparedBuildConfig>,
+    config: Option<&PreparedProductionBuildConfig>,
 ) -> Result<(), BindingWrapperError> {
     if std::env::var_os(WORKER_V2_EXPECTED_ID_ENV).is_some() {
         return Err(BindingWrapperError::BuildConfiguration(
@@ -3279,7 +3283,12 @@ impl ManagedAttempt {
 
 fn prepare_managed_attempt(
     compile: RustcCompileInvocationV2<'_>,
-    build_config: Option<PreparedBuildConfig>,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))] build_config: Option<
+        PreparedBuildConfig,
+    >,
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))] build_config: Option<
+        PreparedProductionBuildConfig,
+    >,
     current_dir: &std::path::Path,
     output_dir: &Path,
     managed_rustc_args: &[OsString],
@@ -3416,7 +3425,11 @@ fn prepare_managed_attempt(
         return Err(BindingWrapperError::BuildObservation(message.to_owned()));
     }
     let (attempt, prepared_work, began_attempt) = if let Some(config) = build_config {
-        if config.executes_worker_in_rustc() {
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        let executes_worker_in_rustc = config.executes_worker_in_rustc();
+        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+        let executes_worker_in_rustc = false;
+        if executes_worker_in_rustc {
             #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             {
                 let pair = config
@@ -3481,18 +3494,20 @@ fn prepare_managed_attempt(
                     ),
                     Err(WorkerV3HsacoPublicationErrorV1::Storage(
                         WorkerV3PublicationIntentErrorV1::NotFound,
-                    )) => (
-                        attempt,
-                        PreparedManagedWork::production(ManagedProductionBuild::Fresh {
-                            config: Box::new(
-                                config
-                                    .into_production()
-                                    .map_err(BindingWrapperError::BuildConfiguration)?,
-                            ),
-                            compiler_closure,
-                        }),
-                        true,
-                    ),
+                    )) => {
+                        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+                        let config = config
+                            .into_production()
+                            .map_err(BindingWrapperError::BuildConfiguration)?;
+                        (
+                            attempt,
+                            PreparedManagedWork::production(ManagedProductionBuild::Fresh {
+                                config: Box::new(config),
+                                compiler_closure,
+                            }),
+                            true,
+                        )
+                    }
                     Err(error) => {
                         return Err(BindingWrapperError::BuildObservation(format!(
                             "production V3 restart recovery failed closed: {error}"
@@ -5325,13 +5340,22 @@ fn success_exit_status() -> ExitStatus {
 
 fn derive_build_attempt_input(
     argv: &[OsString],
-    worker_v2: Option<&PreparedBuildConfig>,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))] worker_v2: Option<
+        &PreparedBuildConfig,
+    >,
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))] worker_v2: Option<
+        &PreparedProductionBuildConfig,
+    >,
     current_dir: &std::path::Path,
     compiler_closure_sha256: [u8; 32],
 ) -> BuildInvocation {
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    let identity = worker_v2.map(PreparedBuildConfig::identity);
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    let identity = worker_v2.map(PreparedProductionBuildConfig::identity);
     derive_build_attempt_input_with_config_identity(
         argv,
-        worker_v2.map(PreparedBuildConfig::identity),
+        identity,
         current_dir,
         compiler_closure_sha256,
     )
