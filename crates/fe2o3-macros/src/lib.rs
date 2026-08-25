@@ -18,10 +18,13 @@ use reserved_fe2o3_symbols::{
     KERNEL_REGISTRATION_KIND_KERNEL, KERNEL_REGISTRATION_KIND_TYPED_GENERAL_LAYOUT_V3,
     KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2, KERNEL_REGISTRATION_MAGIC,
     KERNEL_REGISTRATION_PREFIX, KERNEL_REGISTRATION_VERSION_V1, KERNEL_REGISTRATION_VERSION_V2,
-    KERNEL_REGISTRATION_VERSION_V3, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1, RESERVED_ROOT,
-    TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
-    artifact_length_symbol_v1, artifact_pointer_symbol_v1, derive_kernel_binding_id_v1,
-    host_kernel_symbol_v1, semantic_witness_length_symbol_v1, semantic_witness_pointer_symbol_v1,
+    KERNEL_REGISTRATION_VERSION_V3, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+    REFERENCE_BINDING_REGISTRATION_KIND_V1, REFERENCE_BINDING_REGISTRATION_MAGIC_V1,
+    REFERENCE_BINDING_REGISTRATION_PREFIX_V1, REFERENCE_BINDING_REGISTRATION_VERSION_V1,
+    RESERVED_ROOT, TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
+    TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2, artifact_length_symbol_v1, artifact_pointer_symbol_v1,
+    derive_kernel_binding_id_v1, host_kernel_symbol_v1, semantic_witness_length_symbol_v1,
+    semantic_witness_pointer_symbol_v1,
 };
 use syn::{
     Data, DeriveInput, Expr, ExprArray, FnArg, ForeignItem, GenericArgument, ItemFn,
@@ -353,6 +356,7 @@ enum KernelMode {
 struct KernelOptions {
     mode: KernelMode,
     explicit_namespace: Option<CrateBindingIdV1>,
+    reference: Option<String>,
     launch: Option<ParsedLaunchBoundsV1>,
     unsafe_assembly: Option<ParsedUnsafeAssemblyV1>,
     control_flow: Option<ParsedControlFlowOptionsV1>,
@@ -413,6 +417,7 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
         return Ok(KernelOptions {
             mode: KernelMode::Basic,
             explicit_namespace: None,
+            reference: None,
             launch: None,
             unsafe_assembly: None,
             control_flow: None,
@@ -422,6 +427,7 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
     let arguments = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(attr.clone())?;
     let mut typed = false;
     let mut explicit_namespace = None;
+    let mut reference = None;
     let mut launch = None;
     let mut unsafe_assembly = None;
     let mut control_flow = None;
@@ -451,6 +457,21 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
                     CrateBindingIdV1::from_hex(&literal.value())
                         .map_err(|error| syn::Error::new_spanned(literal, error))?,
                 );
+            }
+            Meta::NameValue(value) if value.path.is_ident("reference") => {
+                if reference.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        value,
+                        "#[kernel] accepts at most one safe Rust reference function",
+                    ));
+                }
+                let Expr::Path(path) = value.value else {
+                    return Err(syn::Error::new_spanned(
+                        value,
+                        "#[kernel] reference must be a Rust function path",
+                    ));
+                };
+                reference = Some(quote!(#path).to_string());
             }
             Meta::List(list) if list.path.is_ident("launch") => {
                 if launch.is_some() {
@@ -482,7 +503,7 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
             _ => {
                 return Err(syn::Error::new_spanned(
                     argument,
-                    "#[kernel] accepts only #[kernel], #[kernel(typed)], namespace, launch(...), unsafe_asm(...), and control_flow(...) declarations",
+                    "#[kernel] accepts only #[kernel], #[kernel(typed)], namespace, reference, launch(...), unsafe_asm(...), and control_flow(...) declarations",
                 ));
             }
         }
@@ -494,6 +515,12 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
             "#[kernel] namespace requires typed mode",
         ));
     }
+    if reference.is_some() && !typed {
+        return Err(syn::Error::new_spanned(
+            attr,
+            "#[kernel] safe Rust reference bindings require typed mode",
+        ));
+    }
 
     Ok(KernelOptions {
         mode: if typed {
@@ -502,6 +529,7 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
             KernelMode::Basic
         },
         explicit_namespace,
+        reference,
         launch,
         unsafe_assembly,
         control_flow,
@@ -922,6 +950,7 @@ fn expand_kernel_with_device_import(
         KernelOptions {
             mode: KernelMode::Basic,
             explicit_namespace: None,
+            reference: None,
             launch: None,
             unsafe_assembly: None,
             control_flow: None,
@@ -1169,6 +1198,13 @@ fn expand_legacy_kernel_with_imports(
             );
         }
     });
+    let reference_registration = expand_reference_registration_v1(
+        &original_name,
+        original_ident.span(),
+        &internal_ident,
+        &function_pointer,
+        options.reference.as_ref(),
+    );
 
     let typed_module = if let (Some(kernel_binding), Some(host_import)) =
         (kernel_binding, host_import)
@@ -1252,6 +1288,7 @@ fn expand_legacy_kernel_with_imports(
 
         #frontend_registration
         #control_flow_registration
+        #reference_registration
 
         const _: () = {
             #fallback_device_import
@@ -1505,6 +1542,13 @@ fn expand_general_typed_kernel_with_imports(
             );
         }
     });
+    let reference_registration = expand_reference_registration_v1(
+        &original_name,
+        original_ident.span(),
+        &internal_ident,
+        &function_pointer,
+        options.reference.as_ref(),
+    );
     let module_ident = format_ident!("{original_name}_gpu");
     let semantic_witness_pointer_ident =
         format_ident!("{}", semantic_witness_pointer_symbol_v1(kernel_binding));
@@ -1598,6 +1642,7 @@ fn expand_general_typed_kernel_with_imports(
 
         #frontend_registration
         #control_flow_registration
+        #reference_registration
 
         const _: () = {
             #fallback_device_import
@@ -1617,6 +1662,50 @@ fn expand_general_typed_kernel_with_imports(
 
         #typed_module
     })
+}
+
+fn expand_reference_registration_v1(
+    original_name: &str,
+    span: proc_macro2::Span,
+    internal_ident: &syn::Ident,
+    function_pointer: &proc_macro2::TokenStream,
+    reference: Option<&String>,
+) -> proc_macro2::TokenStream {
+    let Some(reference) = reference else {
+        return quote! {};
+    };
+    let reference: syn::ExprPath =
+        syn::parse_str(reference).expect("kernel option parsing retained one Rust path");
+    let anchor_ident = format_ident!("__fe2o3_kernel_reference_anchor_v1_{original_name}");
+    let registration_ident =
+        format_ident!("{REFERENCE_BINDING_REGISTRATION_PREFIX_V1}{original_name}");
+    let marker_value = syn::LitStr::new(original_name, span);
+    quote! {
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
+        fn #anchor_ident() {
+            let _ = ::core::hint::black_box(#reference);
+        }
+
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        #[used]
+        static #registration_ident: (
+            u64,
+            u16,
+            u16,
+            &'static str,
+            #function_pointer,
+            fn(),
+        ) = (
+            #REFERENCE_BINDING_REGISTRATION_MAGIC_V1,
+            #REFERENCE_BINDING_REGISTRATION_VERSION_V1,
+            #REFERENCE_BINDING_REGISTRATION_KIND_V1,
+            #marker_value,
+            #internal_ident,
+            #anchor_ident,
+        );
+    }
 }
 
 fn fe2o3_device_import() -> syn::Result<proc_macro2::TokenStream> {
@@ -5048,6 +5137,7 @@ mod tests {
             KernelOptions {
                 mode: KernelMode::Basic,
                 explicit_namespace: None,
+                reference: None,
                 launch: None,
                 unsafe_assembly: None,
                 control_flow: None,
@@ -5058,11 +5148,20 @@ mod tests {
             KernelOptions {
                 mode: KernelMode::Typed,
                 explicit_namespace: None,
+                reference: None,
                 launch: None,
                 unsafe_assembly: None,
                 control_flow: None,
             }
         );
+        let reference =
+            parse_kernel_options(quote::quote!(typed, reference = crate::cpu_reference)).unwrap();
+        assert_eq!(
+            reference.reference.as_deref(),
+            Some("crate :: cpu_reference"),
+        );
+        assert!(parse_kernel_options(quote::quote!(reference = cpu_reference)).is_err());
+        assert!(parse_kernel_options(quote::quote!(typed, reference = |value| value)).is_err());
 
         let explicit = parse_kernel_options(quote::quote!(
             typed,
@@ -5358,6 +5457,7 @@ mod tests {
             KernelOptions {
                 mode: KernelMode::Typed,
                 explicit_namespace: None,
+                reference: Some("crate :: cpu_reference".to_owned()),
                 launch: None,
                 unsafe_assembly: None,
                 control_flow: None,
@@ -5371,8 +5471,10 @@ mod tests {
         .to_string();
 
         assert!(expansion.contains("pub mod vecadd_gpu"));
+        assert!(expansion.contains("fn __fe2o3_kernel_reference_anchor_v1_vecadd"));
+        assert!(expansion.contains("core :: hint :: black_box (crate :: cpu_reference)"));
+        assert!(expansion.contains("static __fe2o3_kernel_reference_binding_v1_vecadd"));
         assert!(expansion.contains("2u16 , 3u16"));
-        assert!(!expansion.contains("1u16 , 1u16"));
         assert!(expansion.contains(&format!(
             "fn {} () -> * const u8",
             artifact_pointer_symbol_v1(kernel_binding)

@@ -20,7 +20,7 @@ use dialect_kernel::{
     RequireEquivalentOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp, SemanticSymbolOp,
     TensorLayoutOp, TrapOp, ranked_view_type,
 };
-use dialect_proof::{EvidenceRefOp, ObligationOp, RequireRefinementOp};
+use dialect_proof::{EvidenceRefOp, ObligationOp, RequireEffectRefinementOp, RequireRefinementOp};
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
     common_traits::Named,
@@ -296,6 +296,7 @@ enum RankedOperationKind {
     ProofObligation,
     ProofEvidence,
     RequireRefinement,
+    RequireEffectRefinement,
     TensorLayout,
 }
 
@@ -385,6 +386,11 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         Some(RankedOperationKind::ProofEvidence)
     } else if operation.downcast_ref::<RequireRefinementOp>().is_some() {
         Some(RankedOperationKind::RequireRefinement)
+    } else if operation
+        .downcast_ref::<RequireEffectRefinementOp>()
+        .is_some()
+    {
+        Some(RankedOperationKind::RequireEffectRefinement)
     } else if operation.downcast_ref::<TensorLayoutOp>().is_some() {
         Some(RankedOperationKind::TensorLayout)
     } else {

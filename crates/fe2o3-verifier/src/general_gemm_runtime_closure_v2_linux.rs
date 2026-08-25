@@ -9,6 +9,9 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
+#[cfg(test)]
+use std::sync::Mutex;
+
 use rustix::fs::{
     AtFlags, FileType, MemfdFlags, Mode, OFlags, ResolveFlags, SealFlags, fchmod, fcntl_add_seals,
     fcntl_get_seals, fstat, inotify, memfd_create, open, openat, openat2, readlinkat, statat,
@@ -21,15 +24,21 @@ use crate::authenticated_verus_execution_v2::{
     FILE_LIMIT_V2, supervise_bounded_process_group_v2, validate_controller_security_v2,
 };
 
+#[cfg(test)]
+use super::GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME;
 use super::{
-    EntryKindV2, FileSpecV2, GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME,
-    GeneralGemmProofSourceV2, GeneralGemmRuntimeClosureErrorKindV2,
+    EntryKindV2, FileSpecV2, GeneralGemmProofSourceV2, GeneralGemmRuntimeClosureErrorKindV2,
     GeneralGemmRuntimeClosureErrorV2, GeneralGemmRuntimeProcessOutputV2, InterpreterSpecV2,
     MAX_TARGET_FILE_BYTES, ManifestV2,
 };
+#[path = "functional_refinement_process_tree_v1_linux.rs"]
+mod functional_refinement_process_tree_v1;
 
 const MAX_DIRECTORY_ENTRIES: usize = 256;
 const MAX_TOTAL_RUNTIME_BYTES: u64 = 1024 * 1024 * 1024;
+
+#[cfg(test)]
+static RUNTIME_CLOSURE_PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 const RUST_VERIFY_FD: RawFd = 180;
 const Z3_FD: RawFd = 181;
@@ -277,12 +286,10 @@ impl RetainedRuntimeClosureV2 {
         let root_directory = directories
             .get(Path::new(""))
             .expect("retained runtime root exists");
-        let installed_manifest = open_regular_beneath(
-            &root_directory.file,
-            OsStr::new(GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME),
-        )?;
+        let installed_manifest =
+            open_regular_beneath(&root_directory.file, OsStr::new(manifest.manifest_name))?;
         let manifest_spec = FileSpecV2 {
-            path: PathBuf::from(GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME),
+            path: PathBuf::from(manifest.manifest_name),
             mode: manifest.manifest_mode,
             size: Some(manifest.manifest_bytes.len() as u64),
             sha256: Sha256::digest(manifest.manifest_bytes).into(),
@@ -452,6 +459,41 @@ impl RetainedRuntimeClosureV2 {
             })
     }
 
+    fn allowed_runtime_object_identities(
+        &self,
+    ) -> Result<
+        Vec<functional_refinement_process_tree_v1::AllowedRuntimeExecutableV1>,
+        GeneralGemmRuntimeClosureErrorV2,
+    > {
+        let mut executables = Vec::new();
+        for file in &self.files {
+            if let Some(executable) =
+                functional_refinement_process_tree_v1::allowed_runtime_executable(
+                    &file.file,
+                    file.snapshot.object_identity(),
+                    &file.path,
+                )?
+            {
+                executables.push(executable);
+            }
+        }
+        if let Some(interpreter) = &self.interpreter {
+            let executable = functional_refinement_process_tree_v1::allowed_runtime_executable(
+                &interpreter.file.file,
+                interpreter.file.snapshot.object_identity(),
+                &interpreter.file.path,
+            )?
+            .ok_or_else(|| {
+                error(
+                    GeneralGemmRuntimeClosureErrorKindV2::ContentMismatch,
+                    "retained interpreter is not one x86-64 ELF executable image",
+                )
+            })?;
+            executables.push(executable);
+        }
+        Ok(executables)
+    }
+
     #[cfg(test)]
     fn open_for_test(
         root: &Path,
@@ -514,6 +556,15 @@ pub(super) fn execute_generated_rust_verify(
     result
 }
 
+pub(super) fn execute_functional_refinement_generated_rust_verify(
+    runtime: &RetainedRuntimeClosureV2,
+    source: &CanonicalGeneratedVerusProofInputV3,
+    deadline: Instant,
+    output_limit: usize,
+) -> Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2> {
+    functional_refinement_process_tree_v1::execute(runtime, source, deadline, output_limit)
+}
+
 fn execute_rust_verify_common(
     runtime: &RetainedRuntimeClosureV2,
     source_argument: &str,
@@ -536,7 +587,7 @@ fn execute_rust_verify_common(
     if Instant::now() >= deadline {
         return Err(error(
             GeneralGemmRuntimeClosureErrorKindV2::TimedOut,
-            "general GEMM proof deadline elapsed before spawn",
+            "retained proof deadline elapsed before spawn",
         ));
     }
 
@@ -546,11 +597,10 @@ fn execute_rust_verify_common(
     let toolchain = runtime.required_directory(Path::new("toolchain"))?;
     let toolchain_lib = runtime.required_directory(Path::new("toolchain/lib"))?;
     let system_lib = runtime.required_directory(Path::new("system-lib"))?;
-    let proof = runtime.required_directory(Path::new("proof"))?;
     let empty = runtime.required_directory(Path::new("empty"))?;
 
-    // Normalize all source descriptors above the fixed child map. This prevents an ambient
-    // descriptor allocation pattern from making one dup2 destination overwrite a later source.
+    // Generated proofs do not inherit the reviewed workload-source directory. This keeps their
+    // execution authority limited to the pinned tool assets and their sealed source.
     let mut source_files = vec![
         rust_verify,
         z3,
@@ -558,12 +608,20 @@ fn execute_rust_verify_common(
         toolchain,
         toolchain_lib,
         system_lib,
-        proof,
         empty,
     ];
-    if let Some(generated_source) = generated_source {
+    let proof_index = if generated_source.is_none() {
+        let index = source_files.len();
+        source_files.push(runtime.required_directory(Path::new("proof"))?);
+        Some(index)
+    } else {
+        None
+    };
+    let generated_index = generated_source.map(|generated_source| {
+        let index = source_files.len();
         source_files.push(generated_source);
-    }
+        index
+    });
     let sources = duplicate_child_sources(&source_files)?;
     let mut inherited = vec![
         (sources[0].as_raw_fd(), RUST_VERIFY_FD, true),
@@ -572,12 +630,14 @@ fn execute_rust_verify_common(
         (sources[3].as_raw_fd(), TOOLCHAIN_DIRECTORY_FD, false),
         (sources[4].as_raw_fd(), TOOLCHAIN_LIB_DIRECTORY_FD, false),
         (sources[5].as_raw_fd(), SYSTEM_LIB_DIRECTORY_FD, false),
-        (sources[6].as_raw_fd(), PROOF_DIRECTORY_FD, false),
     ];
-    if generated_source.is_some() {
-        inherited.push((sources[8].as_raw_fd(), GENERATED_PROOF_SOURCE_FD, false));
+    if let Some(index) = proof_index {
+        inherited.push((sources[index].as_raw_fd(), PROOF_DIRECTORY_FD, false));
     }
-    let empty_descriptor = sources[7].as_raw_fd();
+    if let Some(index) = generated_index {
+        inherited.push((sources[index].as_raw_fd(), GENERATED_PROOF_SOURCE_FD, false));
+    }
+    let empty_descriptor = sources[6].as_raw_fd();
 
     let mut command = Command::new(format!("/proc/self/fd/{RUST_VERIFY_FD}"));
     command
@@ -1436,6 +1496,11 @@ mod tests {
 
     impl TestClosure {
         fn new() -> Self {
+            // A concurrent fork would duplicate a fixture writer and its later
+            // exec-close would look like a post-retention CLOSE_WRITE event.
+            let _process_guard = RUNTIME_CLOSURE_PROCESS_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let root = std::env::temp_dir().join(format!(
                 "fe2o3-general-gemm-runtime-v2-{}-{}",
                 std::process::id(),
@@ -1734,6 +1799,9 @@ mod tests {
     #[test]
     fn proof_child_boundary_clears_environment_and_installs_only_explicit_inputs() {
         let tree = TestClosure::new();
+        let _process_guard = RUNTIME_CLOSURE_PROCESS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let empty = File::open(tree.root.join("empty")).unwrap();
         let source = File::open(tree.root.join("lib")).unwrap();
         let generated_input = CanonicalGeneratedVerusProofInputV3::new(

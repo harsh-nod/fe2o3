@@ -49,6 +49,8 @@ const PASS_RECORD_BYTES_V4: usize = 10;
 const SHA256_BYTES: usize = 32;
 const IDENTITY_DOMAIN_V4: &[u8] = b"FE2O3/PRODUCTION-MIDDLE-END-EVIDENCE-IDENTITY/V4\0";
 const RANKED_KERNEL_IDENTITY_DOMAIN_V4: &[u8] = b"FE2O3/PRODUCTION-RANKED-KERNEL-IDENTITY/V4\0";
+const FUNCTIONAL_REFINEMENT_GRAPH_IDENTITY_DOMAIN_V2: &[u8] =
+    b"FE2O3/PRODUCTION-FUNCTIONAL-REFINEMENT-GRAPH/V2\0";
 
 /// Stable wire domain for a production middle-end evidence record.
 pub const PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V4: &[u8] =
@@ -1051,6 +1053,130 @@ fn derive_ranked_kernel_identity(
     digest.finalize().into()
 }
 
+/// Canonical identity of the complete ranked graph covered by a functional-refinement request.
+///
+/// The only normalized transition is the compiler-owned replacement of an unbound request with
+/// its exactly bound requirement. Proof receipt bytes are deliberately excluded so the graph can
+/// be hashed before the receipt exists. Every other operation and every CFG terminator is exact.
+pub(super) fn derive_functional_refinement_graph_identity_v2(
+    kernel: &super::ProductionRankedKernelV1,
+) -> [u8; SHA256_BYTES] {
+    let mut digest = Sha256::new();
+    digest.update(FUNCTIONAL_REFINEMENT_GRAPH_IDENTITY_DOMAIN_V2);
+    hash_blob(&mut digest, kernel.function_name().as_bytes());
+    hash_usize(&mut digest, kernel.argument_count());
+    hash_usize(&mut digest, kernel.blocks().len());
+    for block in kernel.blocks() {
+        digest.update(block.index_argument_count().to_le_bytes());
+        hash_usize(&mut digest, block.operations().len());
+        for operation in block.operations() {
+            hash_functional_refinement_graph_operation(&mut digest, operation);
+        }
+        hash_ranked_terminator(&mut digest, block.terminator());
+    }
+    digest.finalize().into()
+}
+
+fn hash_functional_refinement_graph_operation(
+    digest: &mut Sha256,
+    operation: &ProductionRankedOperationV1,
+) {
+    digest.update([functional_refinement_graph_operation_tag(operation)]);
+    match operation {
+        ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
+            actual,
+            expected,
+            subjects,
+        } => {
+            digest.update([250]);
+            hash_value(digest, *actual);
+            hash_value(digest, *expected);
+            hash_functional_refinement_subjects(digest, *subjects);
+        }
+        ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent {
+            actual,
+            expected,
+            proof,
+        } => {
+            digest.update([250]);
+            hash_value(digest, *actual);
+            hash_value(digest, *expected);
+            hash_functional_refinement_subjects(digest, proof.binding().subjects());
+        }
+        ProductionRankedOperationV1::RequestEffectRefinement { contract, subjects } => {
+            digest.update([251]);
+            hash_effect_refinement_contract(digest, contract);
+            hash_functional_refinement_subjects(digest, *subjects);
+        }
+        ProductionRankedOperationV1::RequireEffectRefinement { contract, proof } => {
+            digest.update([251]);
+            hash_effect_refinement_contract(digest, contract);
+            hash_functional_refinement_subjects(digest, proof.binding().subjects());
+        }
+        _ => hash_ranked_operation(digest, operation),
+    }
+}
+
+fn functional_refinement_graph_operation_tag(operation: &ProductionRankedOperationV1) -> u8 {
+    match operation {
+        ProductionRankedOperationV1::ExecutionLayout { .. } => 1,
+        ProductionRankedOperationV1::View { .. } => 2,
+        ProductionRankedOperationV1::ViewInSpace { .. } => 3,
+        ProductionRankedOperationV1::IndexConstant { .. } => 4,
+        ProductionRankedOperationV1::IndexUnknown { .. } => 5,
+        ProductionRankedOperationV1::InvocationIndex { .. } => 6,
+        ProductionRankedOperationV1::IndexBinary { .. } => 7,
+        ProductionRankedOperationV1::DeterministicJoin { .. } => 8,
+        ProductionRankedOperationV1::CheckedTiledIndex2D { .. } => 9,
+        ProductionRankedOperationV1::CheckedRowStripedIndex2D { .. } => 10,
+        ProductionRankedOperationV1::Dimension { .. } => 11,
+        ProductionRankedOperationV1::Access { .. } => 12,
+        ProductionRankedOperationV1::ValueAccess { .. } => 26,
+        ProductionRankedOperationV1::AtomicAccess { .. } => 13,
+        ProductionRankedOperationV1::AtomicValueAccess { .. } => 27,
+        ProductionRankedOperationV1::OwnershipContract { .. } => 14,
+        ProductionRankedOperationV1::AllocationEffect { .. } => 15,
+        ProductionRankedOperationV1::Barrier { .. } => 16,
+        ProductionRankedOperationV1::Fence { .. } => 17,
+        ProductionRankedOperationV1::TensorLayout { .. } => 18,
+        ProductionRankedOperationV1::SemanticSymbol { .. } => 19,
+        ProductionRankedOperationV1::SemanticConstant { .. } => 20,
+        ProductionRankedOperationV1::SemanticBinary { .. } => 21,
+        ProductionRankedOperationV1::RequireEquivalent { .. } => 22,
+        ProductionRankedOperationV1::RequireReferenceEquivalent { .. } => 23,
+        ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
+        | ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. } => 24,
+        ProductionRankedOperationV1::RequireEffectRefinement { .. }
+        | ProductionRankedOperationV1::RequestEffectRefinement { .. } => 25,
+    }
+}
+
+fn hash_effect_refinement_contract(
+    digest: &mut Sha256,
+    contract: &super::ProductionEffectRefinementContractV2,
+) {
+    digest.update(contract.contract_identity().to_le_bytes());
+    digest.update(contract.gpu_write_site().block().to_le_bytes());
+    digest.update(contract.gpu_write_site().operation().to_le_bytes());
+    digest.update(contract.reference_output_site().argument().to_le_bytes());
+    digest.update(contract.reference_output_site().block().to_le_bytes());
+    digest.update(contract.reference_output_site().statement().to_le_bytes());
+    hash_value(digest, contract.view());
+    hash_values(digest, contract.indices());
+    hash_values(digest, contract.gpu_coordinates());
+    hash_values(digest, contract.reference_coordinates());
+    for value in [
+        contract.gpu_domain(),
+        contract.reference_domain(),
+        contract.gpu_precondition(),
+        contract.reference_precondition(),
+        contract.gpu_value(),
+        contract.reference_value(),
+    ] {
+        hash_value(digest, value);
+    }
+}
+
 fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperationV1) {
     match operation {
         ProductionRankedOperationV1::ExecutionLayout {
@@ -1212,6 +1338,18 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             hash_value(digest, *view);
             hash_values(digest, indices);
         }
+        ProductionRankedOperationV1::ValueAccess {
+            kind,
+            view,
+            indices,
+            value,
+        } => {
+            digest.update([28]);
+            digest.update([access_kind_tag(*kind)]);
+            hash_value(digest, *view);
+            hash_values(digest, indices);
+            hash_value(digest, *value);
+        }
         ProductionRankedOperationV1::AtomicAccess {
             kind,
             ordering,
@@ -1226,6 +1364,22 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             hash_value(digest, *view);
             hash_values(digest, indices);
         }
+        ProductionRankedOperationV1::AtomicValueAccess {
+            kind,
+            ordering,
+            scope,
+            view,
+            indices,
+            value,
+        } => {
+            digest.update([29]);
+            digest.update([access_kind_tag(*kind)]);
+            digest.update([atomic_ordering_tag(*ordering)]);
+            digest.update([atomic_scope_tag(*scope)]);
+            hash_value(digest, *view);
+            hash_values(digest, indices);
+            hash_value(digest, *value);
+        }
         ProductionRankedOperationV1::OwnershipContract {
             view,
             coverage,
@@ -1235,6 +1389,7 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             hash_value(digest, *view);
             digest.update([match coverage {
                 dialect_kernel::OwnershipCoverageAttr::ExactView => 1,
+                dialect_kernel::OwnershipCoverageAttr::ExactEffectDomain => 2,
             }]);
             digest.update([match partition {
                 dialect_kernel::OwnershipPartitionAttr::ExactSets => 1,
@@ -1336,6 +1491,70 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
                 }
             }
         }
+        ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent {
+            actual,
+            expected,
+            proof,
+        } => {
+            digest.update([24]);
+            hash_value(digest, *actual);
+            hash_value(digest, *expected);
+            digest.update(proof.receipt_identity().digest().as_bytes());
+            let binding = proof.binding();
+            digest.update([binding.safe_reference_kind() as u8]);
+            for identity in [
+                binding.safe_reference_identity(),
+                binding.safe_reference_source_hash(),
+                binding.safe_reference_mir_hash(),
+                binding.kernel_subject_identity(),
+                binding.kernel_mir_hash(),
+                binding.normalized_obligation_effect_ir_hash(),
+            ] {
+                digest.update(identity.as_bytes());
+            }
+        }
+        ProductionRankedOperationV1::RequireEffectRefinement { contract, proof } => {
+            digest.update([25]);
+            hash_effect_refinement_contract(digest, contract);
+            digest.update(proof.receipt_identity().digest().as_bytes());
+            digest.update(
+                proof
+                    .binding()
+                    .normalized_obligation_effect_ir_hash()
+                    .as_bytes(),
+            );
+        }
+        ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
+            actual,
+            expected,
+            subjects,
+        } => {
+            digest.update([26]);
+            hash_value(digest, *actual);
+            hash_value(digest, *expected);
+            hash_functional_refinement_subjects(digest, *subjects);
+        }
+        ProductionRankedOperationV1::RequestEffectRefinement { contract, subjects } => {
+            digest.update([27]);
+            digest.update(contract.request_shape_hash().as_bytes());
+            hash_functional_refinement_subjects(digest, *subjects);
+        }
+    }
+}
+
+fn hash_functional_refinement_subjects(
+    digest: &mut Sha256,
+    subjects: fe2o3_functional_proof::FunctionalRefinementSubjectsV2,
+) {
+    digest.update([subjects.safe_reference_kind() as u8]);
+    for identity in [
+        subjects.safe_reference_identity(),
+        subjects.safe_reference_source_hash(),
+        subjects.safe_reference_mir_hash(),
+        subjects.kernel_subject_identity(),
+        subjects.kernel_mir_hash(),
+    ] {
+        digest.update(identity.as_bytes());
     }
 }
 

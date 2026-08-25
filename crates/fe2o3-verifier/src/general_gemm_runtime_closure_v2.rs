@@ -21,6 +21,8 @@ mod linux;
 /// Exact installed manifest filename.
 pub const GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME: &str =
     "GENERAL_GEMM_RUNTIME_CLOSURE_V2.manifest";
+pub(crate) const FUNCTIONAL_REFINEMENT_RUNTIME_V1_MANIFEST_NAME: &str =
+    "FUNCTIONAL_REFINEMENT_RUNTIME_V1.manifest";
 
 /// SHA-256 of the byte-canonical reviewed runtime manifest.
 pub const GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256: [u8; 32] = [
@@ -30,8 +32,12 @@ pub const GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256: [u8; 32] = [
 
 const MANIFEST_BYTES: &[u8] =
     include_bytes!("../verus/pins/GENERAL_GEMM_RUNTIME_CLOSURE_V2.manifest");
+const FUNCTIONAL_REFINEMENT_MANIFEST_BYTES: &[u8] =
+    include_bytes!("../verus/pins/FUNCTIONAL_REFINEMENT_RUNTIME_V1.manifest");
 const RUST_TARGET_PINS: &[u8] = include_bytes!("../verus/pins/rust_target_1_97_1.sha256");
 const CLOSURE_IDENTITY_DOMAIN: &[u8] = b"fe2o3-general-gemm-runtime-closure-v2\0";
+const FUNCTIONAL_REFINEMENT_CLOSURE_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/FUNCTIONAL-REFINEMENT/RETAINED-RUNTIME/V1\0";
 const TARGET_PREFIX: &str = "toolchain/lib/rustlib/x86_64-unknown-linux-gnu/lib";
 const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 const MAX_RUNTIME_FILES: usize = 128;
@@ -407,6 +413,106 @@ const REVIEWED_GENERAL_GEMM_SOURCES: [(&str, &[u8]); 14] = [
     ("proof/scalar_gemm_v1.rs", SCALAR_GEMM_SOURCE),
 ];
 
+pub(crate) struct RetainedGeneratedVerusRuntimeBackendV1 {
+    root: PathBuf,
+    identity: [u8; 32],
+    owner_process: u32,
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    retained: linux::RetainedRuntimeClosureV2,
+}
+
+pub(crate) type RetainedGeneratedVerusRuntimeBackendErrorV1 = GeneralGemmRuntimeClosureErrorV2;
+pub(crate) type RetainedGeneratedVerusRuntimeBackendOutputV1 = GeneralGemmRuntimeProcessOutputV2;
+
+pub(crate) fn open_retained_generated_verus_runtime_v1(
+    root: &Path,
+) -> Result<RetainedGeneratedVerusRuntimeBackendV1, RetainedGeneratedVerusRuntimeBackendErrorV1> {
+    validate_absolute_path(root)?;
+    validate_runtime_root_path(root)?;
+    let manifest = ManifestV2::parse_functional_refinement_runtime_v1()?;
+    let identity = functional_refinement_closure_identity_v1();
+    let owner_process = std::process::id();
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        let retained = linux::RetainedRuntimeClosureV2::open_protected(root, &manifest)?;
+        Ok(RetainedGeneratedVerusRuntimeBackendV1 {
+            root: root.to_path_buf(),
+            identity,
+            owner_process,
+            retained,
+        })
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    {
+        let _ = (manifest, identity, owner_process);
+        Err(GeneralGemmRuntimeClosureErrorV2::new(
+            GeneralGemmRuntimeClosureErrorKindV2::UnsupportedPlatform,
+            "retained no-follow runtime admission requires Linux",
+        ))
+    }
+}
+
+impl RetainedGeneratedVerusRuntimeBackendV1 {
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub(crate) const fn identity(&self) -> [u8; 32] {
+        self.identity
+    }
+
+    pub(crate) fn revalidate(&self) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+        if std::process::id() != self.owner_process {
+            return Err(GeneralGemmRuntimeClosureErrorV2::new(
+                GeneralGemmRuntimeClosureErrorKindV2::OwnerProcessChanged,
+                "runtime closure lease crossed a process boundary",
+            ));
+        }
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        {
+            self.retained.revalidate()
+        }
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        {
+            Err(GeneralGemmRuntimeClosureErrorV2::new(
+                GeneralGemmRuntimeClosureErrorKindV2::UnsupportedPlatform,
+                "retained no-follow runtime admission requires Linux",
+            ))
+        }
+    }
+
+    pub(crate) fn execute_generated_rust_verify(
+        &self,
+        source: &CanonicalGeneratedVerusProofInputV3,
+        deadline: Instant,
+        output_limit: usize,
+    ) -> Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2> {
+        self.revalidate()?;
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        let result = linux::execute_functional_refinement_generated_rust_verify(
+            &self.retained,
+            source,
+            deadline,
+            output_limit,
+        );
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        let result = Err(GeneralGemmRuntimeClosureErrorV2::new(
+            GeneralGemmRuntimeClosureErrorKindV2::UnsupportedPlatform,
+            "sealed generated rust_verify execution requires Linux x86-64",
+        ));
+        self.revalidate()?;
+        result
+    }
+}
+
+fn functional_refinement_closure_identity_v1() -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(FUNCTIONAL_REFINEMENT_CLOSURE_IDENTITY_DOMAIN_V1);
+    put_blob(&mut digest, FUNCTIONAL_REFINEMENT_MANIFEST_BYTES);
+    put_blob(&mut digest, RUST_TARGET_PINS);
+    digest.finalize().into()
+}
+
 fn validate_absolute_path(path: &Path) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
     if !path.is_absolute()
         || path.as_os_str().is_empty()
@@ -490,6 +596,7 @@ pub(super) struct InterpreterSpecV2 {
 
 #[derive(Debug)]
 pub(super) struct ManifestV2 {
+    pub(super) manifest_name: &'static str,
     pub(super) root_mode: u32,
     pub(super) manifest_mode: u32,
     pub(super) manifest_bytes: &'static [u8],
@@ -555,8 +662,56 @@ impl ManifestV2 {
             sha256: decode_sha256(interpreter_fields[4])?,
             links: Vec::new(),
         };
-        let manifest = parse_remaining_manifest(lines, interpreter)?;
+        let manifest = parse_remaining_manifest(
+            lines,
+            interpreter,
+            MANIFEST_BYTES,
+            GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME,
+        )?;
         validate_reviewed_general_gemm_sources(&manifest.files)?;
+        Ok(manifest)
+    }
+
+    fn parse_functional_refinement_runtime_v1() -> Result<Self, GeneralGemmRuntimeClosureErrorV2> {
+        const MANIFEST_SHA256: [u8; 32] = [
+            0xff, 0xef, 0x09, 0xbd, 0x24, 0x0c, 0x90, 0xe7, 0x2c, 0xbf, 0xf3, 0x1a, 0x82, 0xbc,
+            0x51, 0x73, 0xc7, 0x96, 0xba, 0x7a, 0xb9, 0xaf, 0x23, 0x92, 0x45, 0xe7, 0xad, 0x89,
+            0x2c, 0x25, 0x64, 0x1c,
+        ];
+        if FUNCTIONAL_REFINEMENT_MANIFEST_BYTES.len() > MAX_MANIFEST_BYTES
+            || Sha256::digest(FUNCTIONAL_REFINEMENT_MANIFEST_BYTES).as_slice() != MANIFEST_SHA256
+            || !FUNCTIONAL_REFINEMENT_MANIFEST_BYTES.ends_with(b"\n")
+            || FUNCTIONAL_REFINEMENT_MANIFEST_BYTES.ends_with(b"\n\n")
+        {
+            return Err(invalid_manifest(
+                "functional-refinement runtime manifest identity or framing differs",
+            ));
+        }
+        let source = std::str::from_utf8(FUNCTIONAL_REFINEMENT_MANIFEST_BYTES)
+            .map_err(|_| invalid_manifest("functional-refinement runtime manifest is not UTF-8"))?;
+        let mut lines = source.lines();
+        parse_reviewed_header(&mut lines, "format|fe2o3-functional-refinement-runtime-v1")?;
+        validate_rust_target_pins()?;
+        let interpreter = parse_interpreter(&mut lines)?;
+        let manifest = parse_remaining_manifest(
+            lines,
+            interpreter,
+            FUNCTIONAL_REFINEMENT_MANIFEST_BYTES,
+            FUNCTIONAL_REFINEMENT_RUNTIME_V1_MANIFEST_NAME,
+        )?;
+        if manifest
+            .directories
+            .iter()
+            .any(|entry| entry.path == Path::new("proof") || entry.path.starts_with("proof"))
+            || manifest
+                .files
+                .iter()
+                .any(|entry| entry.path == Path::new("proof") || entry.path.starts_with("proof"))
+        {
+            return Err(invalid_manifest(
+                "functional-refinement runtime contains workload proof inventory",
+            ));
+        }
         Ok(manifest)
     }
 
@@ -566,8 +721,14 @@ impl ManifestV2 {
         directories: Vec<DirectorySpecV2>,
         files: Vec<FileSpecV2>,
     ) -> Self {
-        let children = expected_children(&directories, &files).expect("valid synthetic manifest");
+        let children = expected_children(
+            GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME,
+            &directories,
+            &files,
+        )
+        .expect("valid synthetic manifest");
         Self {
+            manifest_name: GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME,
             root_mode: 0o555,
             manifest_mode: 0o444,
             manifest_bytes,
@@ -599,9 +760,65 @@ fn validate_reviewed_general_gemm_sources(
     Ok(())
 }
 
+fn parse_reviewed_header(
+    lines: &mut std::str::Lines<'_>,
+    format: &str,
+) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+    for expected in [
+        format,
+        "platform|linux-x86_64",
+        "root-mode|0555",
+        "manifest-mode|0444",
+        "verus-version|0.2026.08.02.b677dd5",
+        "rust-toolchain|1.97.1-x86_64-unknown-linux-gnu",
+        "rustc-commit|8bab26f4f68e0e26f0bb7960be334d5b520ea452",
+        "llvm-version|22.1.6",
+        "launcher-excluded|4713704|ad2669f579d898ede53f2bf84e80a1daf4e3578739b0f5807ef209a0c9f382dd",
+        "rustup-excluded|20838840|4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10",
+        "rust-target-pins|62|6303|f32b5f5de52152a9a9706759532fdbdac4d3a6ed63a1efb3c56a0ec9025faffd",
+    ] {
+        if lines.next() != Some(expected) {
+            return Err(invalid_manifest("reviewed manifest header differs"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_rust_target_pins() -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+    if RUST_TARGET_PINS.len() != 6303
+        || RUST_TARGET_PINS.lines().count() != 62
+        || Sha256::digest(RUST_TARGET_PINS).as_slice()
+            != decode_sha256("f32b5f5de52152a9a9706759532fdbdac4d3a6ed63a1efb3c56a0ec9025faffd")?
+    {
+        return Err(invalid_manifest("Rust target pin identity differs"));
+    }
+    Ok(())
+}
+
+fn parse_interpreter(
+    lines: &mut std::str::Lines<'_>,
+) -> Result<InterpreterSpecV2, GeneralGemmRuntimeClosureErrorV2> {
+    let interpreter_line = lines
+        .next()
+        .ok_or_else(|| invalid_manifest("interpreter record is missing"))?;
+    let fields = interpreter_line.split('|').collect::<Vec<_>>();
+    if fields.len() != 5 || fields[0] != "interpreter" {
+        return Err(invalid_manifest("interpreter record is malformed"));
+    }
+    Ok(InterpreterSpecV2 {
+        requested: absolute_manifest_path(fields[1])?,
+        canonical: absolute_manifest_path(fields[2])?,
+        size: parse_decimal(fields[3])?,
+        sha256: decode_sha256(fields[4])?,
+        links: Vec::new(),
+    })
+}
+
 fn parse_remaining_manifest(
     mut lines: std::str::Lines<'_>,
     mut interpreter: InterpreterSpecV2,
+    manifest_bytes: &'static [u8],
+    manifest_name: &'static str,
 ) -> Result<ManifestV2, GeneralGemmRuntimeClosureErrorV2> {
     for _ in 0..2 {
         let line = lines
@@ -662,11 +879,12 @@ fn parse_remaining_manifest(
             "runtime file inventory contains duplicates",
         ));
     }
-    let children = expected_children(&directories, &files)?;
+    let children = expected_children(manifest_name, &directories, &files)?;
     Ok(ManifestV2 {
+        manifest_name,
         root_mode: 0o555,
         manifest_mode: 0o444,
-        manifest_bytes: MANIFEST_BYTES,
+        manifest_bytes,
         directories,
         files,
         children,
@@ -702,6 +920,7 @@ fn append_target_pins(files: &mut Vec<FileSpecV2>) -> Result<(), GeneralGemmRunt
 }
 
 fn expected_children(
+    manifest_name: &'static str,
     directories: &[DirectorySpecV2],
     files: &[FileSpecV2],
 ) -> Result<BTreeMap<PathBuf, BTreeMap<PathBuf, EntryKindV2>>, GeneralGemmRuntimeClosureErrorV2> {
@@ -710,10 +929,10 @@ fn expected_children(
         .map(|directory| directory.path.clone())
         .collect::<BTreeSet<_>>();
     let mut children = BTreeMap::<PathBuf, BTreeMap<PathBuf, EntryKindV2>>::new();
-    children.entry(PathBuf::new()).or_default().insert(
-        PathBuf::from(GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME),
-        EntryKindV2::File,
-    );
+    children
+        .entry(PathBuf::new())
+        .or_default()
+        .insert(PathBuf::from(manifest_name), EntryKindV2::File);
     for directory in directories {
         let parent = directory.path.parent().unwrap_or_else(|| Path::new(""));
         if !parent.as_os_str().is_empty() && !declared.contains(parent) {
@@ -852,6 +1071,32 @@ mod tests {
             GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256
         );
         assert_ne!(closure_identity().as_bytes(), [0; 32]);
+    }
+
+    #[test]
+    fn functional_refinement_runtime_has_no_workload_proof_inventory() {
+        let manifest = ManifestV2::parse_functional_refinement_runtime_v1().unwrap();
+        assert_eq!(
+            manifest.manifest_name,
+            FUNCTIONAL_REFINEMENT_RUNTIME_V1_MANIFEST_NAME
+        );
+        assert!(
+            manifest
+                .directories
+                .iter()
+                .all(|entry| !entry.path.starts_with("proof"))
+        );
+        assert!(
+            manifest
+                .files
+                .iter()
+                .all(|entry| !entry.path.starts_with("proof"))
+        );
+        assert_ne!(functional_refinement_closure_identity_v1(), [0; 32]);
+        assert_ne!(
+            functional_refinement_closure_identity_v1(),
+            closure_identity().as_bytes()
+        );
     }
 
     #[test]

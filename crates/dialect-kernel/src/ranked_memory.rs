@@ -221,6 +221,10 @@ pub enum OwnershipCoverageAttr {
     /// Every logical element of the ranked view has exactly one invocation
     /// owner after guarded control flow is applied.
     ExactView,
+    /// Every coordinate in the compiler-derived set of actual writes has one
+    /// owner. This proves disjoint effect ownership without claiming that the
+    /// writes cover storage outside the kernel's effect domain.
+    ExactEffectDomain,
 }
 
 /// Shape requirement for hierarchy-level ownership summaries.

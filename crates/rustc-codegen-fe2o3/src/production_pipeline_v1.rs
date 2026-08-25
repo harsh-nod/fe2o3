@@ -227,6 +227,7 @@ struct AuthenticatedProductionBindingsV1 {
     rustc_identity_inventory: crate::collector::AuthenticatedRustcIdentityInventoryV3,
     rustc_preflight_plan: crate::collector::AuthenticatedRustcPreflightPlanV3,
     rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
+    reference_effect_bindings: crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     typed_descriptor_roots: Vec<crate::compiler_descriptor::TypedDescriptorRootV1>,
     transaction: ProductionTransactionBindingsV1,
 }
@@ -561,6 +562,7 @@ impl Gfx942LoweredProductionCompilationV1 {
             rustc_identity_inventory,
             rustc_preflight_plan,
             rustc_target,
+            reference_effect_bindings,
             typed_descriptor_roots,
             transaction,
         } = bindings;
@@ -576,6 +578,7 @@ impl Gfx942LoweredProductionCompilationV1 {
         {
             return Err(ProductionPipelineErrorV1::RustcLineageMismatch);
         }
+        drop(reference_effect_bindings);
         let publication = match publication {
             ProductionCompilerModulePublicationV1::OrdinaryV1 => {
                 PreparedProductionCompilerPublicationV1::OrdinaryV1
@@ -809,9 +812,14 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
             typed_descriptor_roots,
             transaction,
         } = self.stage;
-        let (semantic_mir, rustc_identity_inventory, rustc_preflight_plan, rustc_target) =
-            crate::collector::construct_production_semantic_mir_v1(tcx, closure)
-                .map_err(ProductionPipelineErrorV1::SemanticImport)?;
+        let (
+            semantic_mir,
+            rustc_identity_inventory,
+            rustc_preflight_plan,
+            rustc_target,
+            reference_effect_bindings,
+        ) = crate::collector::construct_production_semantic_mir_v1(tcx, closure)
+            .map_err(ProductionPipelineErrorV1::SemanticImport)?;
         Ok(ProductionCompilationV1 {
             stage: AdmittedSemanticMirStageV1 {
                 semantic_mir,
@@ -819,6 +827,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
                     rustc_identity_inventory,
                     rustc_preflight_plan,
                     rustc_target,
+                    reference_effect_bindings,
                     typed_descriptor_roots,
                     transaction,
                 },
@@ -831,7 +840,8 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
     pub(crate) fn verify_general_kernel_checks(
         self,
     ) -> Result<RankedVerifiedProductionCompilationV1, ProductionPipelineErrorV1> {
-        self.import_semantic_mir()?
+        let admitted = self.import_semantic_mir()?;
+        admitted
             .construct_semantic_middle_end()?
             .verify_general_kernel_checks()
     }
@@ -841,7 +851,8 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
     pub(crate) fn lower_gfx942(
         self,
     ) -> Result<Gfx942LoweredProductionCompilationV1, ProductionPipelineErrorV1> {
-        self.import_semantic_mir()?
+        let admitted = self.import_semantic_mir()?;
+        admitted
             .construct_semantic_middle_end()?
             .verify_general_kernel_checks()?
             .lower_target_neutral()?
@@ -950,6 +961,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, EquivalentSemanticMirStageV1> {
             crate::production_ranked_projection_v1::project_and_verify_ranked_semantic_mir_v1(
                 semantic_mir,
                 source_rank,
+                &bindings.reference_effect_bindings,
             )
             .map_err(ProductionPipelineErrorV1::RankedProjection)?;
         Ok(RankedVerifiedProductionCompilationV1 { ranked, bindings })
@@ -1072,6 +1084,10 @@ mod tests {
             .find(".lower_target_neutral()?")
             .expect("target-neutral lowering");
         assert!(verify < lower, "lowering ran before general PLIRON checks");
+        assert!(
+            include_str!("production_ranked_projection_v1.rs")
+                .contains("prepare_reference_effect_request_v2")
+        );
     }
 
     #[test]
@@ -1084,6 +1100,7 @@ mod tests {
             include_str!("production_semantic_fn_abi_v1.rs"),
             include_str!("production_semantic_types_v1.rs"),
             include_str!("production_semantic_terminal_v1.rs"),
+            include_str!("reference_effect_v1.rs"),
         ];
         for forbidden in [
             concat!("General", "Gemm"),

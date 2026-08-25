@@ -218,6 +218,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         AuthenticatedRustcIdentityInventoryV3,
         AuthenticatedRustcPreflightPlanV3,
         crate::production_target_v1::AuthenticatedProductionTargetV1,
+        crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     ),
     ProductionSemanticImportErrorV1,
 > {
@@ -253,6 +254,14 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
     if !exact_ordered_axes_match(retained_roots, independently_observed_roots) {
         return Err(ProductionSemanticImportErrorV1::RootCustodyMismatch);
     }
+    let reference_effect_bindings =
+        crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::new(
+            collection
+                .functions
+                .iter()
+                .filter_map(|function| function.reference_effect_binding.clone())
+                .collect(),
+        );
     let identity_inventory = build_identity_inventory_v1(tcx, &target, &collection, &roots)?;
     require_lineage_transcript_bound_v3(
         "rustc identity inventory",
@@ -336,6 +345,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
             canonical_transcript: rustc_preflight_plan_transcript,
         },
         target,
+        reference_effect_bindings,
     ))
 }
 

@@ -525,6 +525,9 @@ pub(crate) enum ProductionRankedProjectionErrorV1 {
         ranked_ir: String,
         access_sources: Vec<ProjectedAccessSourceV1>,
     },
+    ReferenceEffectJoin(
+        crate::production_reference_effect_join_v2::ProductionReferenceEffectJoinErrorV2,
+    ),
 }
 
 impl fmt::Display for ProductionRankedProjectionErrorV1 {
@@ -603,6 +606,7 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
                     indent_ir(ranked_ir),
                 )
             }
+            Self::ReferenceEffectJoin(error) => error.fmt(formatter),
         }
     }
 }
@@ -613,6 +617,7 @@ impl std::error::Error for ProductionRankedProjectionErrorV1 {
             Self::SemanticOwner(error) => Some(error),
             Self::Recipe(error) => Some(error),
             Self::Compile { error, .. } => Some(error),
+            Self::ReferenceEffectJoin(error) => Some(error),
             Self::Incomplete(_)
             | Self::UnprovenAssert { .. }
             | Self::Unsupported(_)
@@ -625,6 +630,7 @@ impl std::error::Error for ProductionRankedProjectionErrorV1 {
 pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     semantic_owner: ProductionSemanticMirOwnerV1,
     source_rank: u8,
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
 ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
     semantic_owner
         .verify_equivalence()
@@ -660,6 +666,33 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         source_rank,
     )?];
     let mut next_value = 0_u32;
+    let reserved_reference_values = if reference_bindings.as_slice().is_empty() {
+        None
+    } else {
+        let count = crate::production_reference_effect_join_v2::reserved_reference_value_count_v2(
+            reference_bindings,
+        )?;
+        let mut values = Vec::with_capacity(count);
+        for _ in 0..count {
+            values.push(next_value_id(&mut next_value)?);
+        }
+        entry_operations.extend(
+            values
+                .iter()
+                .take(3)
+                .copied()
+                .map(|result| ProductionRankedOperationV1::SemanticConstant { result, value: 0 }),
+        );
+        for (axis, result) in values.iter().skip(3).copied().enumerate() {
+            let symbol = u32::try_from(axis).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "reference-effect logical point rank does not fit the semantic symbol domain",
+                )
+            })?;
+            entry_operations.push(ProductionRankedOperationV1::SemanticSymbol { result, symbol });
+        }
+        Some(values)
+    };
     let mut incomplete = None;
     let mut projected_views = vec![None; function.locals().len()];
     let mut discarded_ir = String::new();
@@ -861,26 +894,42 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         entry_operations,
         projected_blocks,
     )?;
+    let reference_writes = projected_reference_gpu_writes_v2(function, &blocks, &sources)?;
     let access_sources = production_access_sources(&blocks, &sources)?;
-    let ranked_ir = format_ranked_cfg(function_name(root_function)?, &blocks)?;
     let kernel = ProductionRankedKernelV1::new(
         function_name(root_function)?,
         bounds_checks.argument_count,
         blocks,
     )
     .map_err(ProductionRankedProjectionErrorV1::Recipe)?;
-    let construction = ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, kernel)
-        .map_err(ProductionRankedProjectionErrorV1::Construction)?;
-    let lowering =
-        compile_ranked_kernel_for_lowering_v1(construction, ProductionSessionLimitsV1::default())
-            .map_err(|error| ProductionRankedProjectionErrorV1::Compile {
-            error,
-            ranked_ir: ranked_ir.clone(),
-            access_sources: sources,
-        })?;
     if let Some(detail) = incomplete {
         return Err(ProductionRankedProjectionErrorV1::Incomplete(detail));
     }
+    let lowering = if reference_bindings.as_slice().is_empty() {
+        let ranked_ir = format_ranked_cfg(function_name(root_function)?, kernel.blocks())?;
+        let construction = ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, kernel)
+            .map_err(ProductionRankedProjectionErrorV1::Construction)?;
+        compile_ranked_kernel_for_lowering_v1(construction, ProductionSessionLimitsV1::default())
+            .map_err(|error| ProductionRankedProjectionErrorV1::Compile {
+                error,
+                ranked_ir,
+                access_sources: sources,
+            })?
+    } else {
+        let reserved_reference_values =
+            reserved_reference_values.ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "reference-effect scalar reservations were not retained",
+            ))?;
+        crate::production_reference_effect_join_v2::prepare_reference_effect_request_v2(
+            kernel,
+            reference_bindings,
+            &reference_writes,
+            reserved_reference_values,
+        )
+        .and_then(|request| request.prove_and_compile())
+        .map_err(ProductionRankedProjectionErrorV1::ReferenceEffectJoin)?
+    };
+    let ranked_ir = format_ranked_cfg(function_name(root_function)?, lowering.kernel().blocks())?;
     let receipt = ProductionRankedSemanticProjectionReceiptV1::assert_compiler_internal_projection(
         semantic_owner,
         lowering,
@@ -889,6 +938,100 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     )
     .map_err(ProductionRankedProjectionErrorV1::Custody)?;
     Ok(ProductionRankedSemanticProgramV1 { receipt })
+}
+
+fn projected_reference_gpu_writes_v2(
+    function: &SemanticFunctionDeclV1,
+    blocks: &[ProductionRankedBlockV1],
+    sources: &[ProjectedAccessSourceV1],
+) -> Result<
+    Vec<crate::production_reference_effect_join_v2::RankedGpuWriteV2>,
+    ProductionRankedProjectionErrorV1,
+> {
+    let mut allocation_origins = HashMap::new();
+    for block in blocks {
+        for operation in block.operations() {
+            match operation {
+                ProductionRankedOperationV1::View {
+                    result,
+                    allocation_origin,
+                    ..
+                }
+                | ProductionRankedOperationV1::ViewInSpace {
+                    result,
+                    allocation_origin,
+                    ..
+                } => {
+                    allocation_origins
+                        .insert(ProductionRankedValueV1::Local(*result), *allocation_origin);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut writes = Vec::new();
+    for source in sources
+        .iter()
+        .filter(|source| source.access.writes_memory())
+    {
+        let Some(
+            ProductionRankedOperationV1::Access { view, indices, .. }
+            | ProductionRankedOperationV1::AtomicAccess { view, indices, .. },
+        ) = blocks
+            .get(source.block)
+            .and_then(|block| block.operations().get(source.operation))
+        else {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a projected write correspondence does not identify one ranked write",
+            ));
+        };
+        let allocation_origin = allocation_origins.get(view).copied().ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "a projected write view has no exact allocation origin",
+            ),
+        )?;
+        let value = source
+            .semantic_site
+            .and_then(|site| site.statement.map(|statement| (site.block, statement)))
+            .and_then(|(block, statement)| {
+                function
+                    .blocks()
+                    .get(block)
+                    .and_then(|block| block.statements().get(statement))
+            })
+            .and_then(|statement| exact_semantic_store_constant_v2(statement.kind()));
+        writes.push(
+            crate::production_reference_effect_join_v2::RankedGpuWriteV2 {
+                block: source.block,
+                operation: source.operation,
+                allocation_origin,
+                view: *view,
+                indices: indices.clone(),
+                value,
+            },
+        );
+    }
+    Ok(writes)
+}
+
+fn exact_semantic_store_constant_v2(kind: &SemanticStatementKindV1) -> Option<u64> {
+    let operand = match kind {
+        SemanticStatementKindV1::Assign(assignment) => {
+            let SemanticRvalueKindV1::Use(operand) = assignment.value().kind() else {
+                return None;
+            };
+            operand
+        }
+        SemanticStatementKindV1::Store(store) => store.value(),
+        _ => return None,
+    };
+    let SemanticOperandV1::Constant(constant) = operand else {
+        return None;
+    };
+    let SemanticConstantValueV1::Scalar(value) = constant.value() else {
+        return None;
+    };
+    u64::try_from(value.bits()).ok()
 }
 
 fn production_access_sources(
@@ -966,6 +1109,7 @@ fn project_rust_bounds_checks(
         length_source: Option<SemanticLocalIdV1>,
     }
 
+    let constants = constant_locals(function);
     let mut definitions = vec![LocalDefinitionV1::default(); function.locals().len()];
     let mut predecessors = vec![Vec::new(); function.blocks().len()];
     for (block_index, block) in function.blocks().iter().enumerate() {
@@ -1035,6 +1179,14 @@ fn project_rust_bounds_checks(
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a Rust bounds check without the canonical success/unreachable shape",
             ));
+        }
+        if constant_operand_value(length, &constants).is_some()
+            && constant_operand_value(index, &constants).is_some()
+        {
+            // Literal array checks do not authorize a dynamic access. The
+            // projected ranked access retains both constants and the static
+            // shape verifier accepts or rejects the exact relation.
+            continue;
         }
         let condition_local = simple_operand_local(condition).ok_or(
             ProductionRankedProjectionErrorV1::Incomplete(
@@ -8193,6 +8345,18 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             ranked_value_text_v1(*view),
             format_ranked_values(indices),
         ),
+        ProductionRankedOperationV1::ValueAccess {
+            kind,
+            view,
+            indices,
+            value,
+        } => format!(
+            "  kernel.value_access {:?} {}[{}] = {}\n",
+            kind,
+            ranked_value_text_v1(*view),
+            format_ranked_values(indices),
+            ranked_value_text_v1(*value),
+        ),
         ProductionRankedOperationV1::AtomicAccess {
             kind,
             ordering,
@@ -8206,6 +8370,22 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             scope,
             ranked_value_text_v1(*view),
             format_ranked_values(indices),
+        ),
+        ProductionRankedOperationV1::AtomicValueAccess {
+            kind,
+            ordering,
+            scope,
+            view,
+            indices,
+            value,
+        } => format!(
+            "  kernel.atomic_value_access {:?} <{:?}, {:?}> {}[{}] = {}\n",
+            kind,
+            ordering,
+            scope,
+            ranked_value_text_v1(*view),
+            format_ranked_values(indices),
+            ranked_value_text_v1(*value),
         ),
         ProductionRankedOperationV1::OwnershipContract {
             view,
@@ -8286,6 +8466,54 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             proof.obligation_id()[1],
             proof.obligation_id()[2],
             proof.obligation_id()[3],
+        ),
+        ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent {
+            actual,
+            expected,
+            proof,
+        } => format!(
+            "  proof.require_authenticated_refinement {}, {} <receipt={}>\n",
+            ranked_value_text_v1(*actual),
+            ranked_value_text_v1(*expected),
+            crate::encode_hex(proof.receipt_identity().digest().as_bytes()),
+        ),
+        ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
+            actual,
+            expected,
+            subjects,
+        } => format!(
+            "  proof.request_authenticated_refinement {}, {} <reference_mir={}, kernel_mir={}>\n",
+            ranked_value_text_v1(*actual),
+            ranked_value_text_v1(*expected),
+            crate::encode_hex(subjects.safe_reference_mir_hash().as_bytes()),
+            crate::encode_hex(subjects.kernel_mir_hash().as_bytes()),
+        ),
+        ProductionRankedOperationV1::RequireEffectRefinement { contract, proof } => format!(
+            "  proof.require_effect_refinement {}[{}], {}, {}, {}, {}, {}, {} <contract={}, receipt={}>\n",
+            ranked_value_text_v1(contract.view()),
+            format_ranked_values(contract.indices()),
+            ranked_value_text_v1(contract.gpu_domain()),
+            ranked_value_text_v1(contract.reference_domain()),
+            ranked_value_text_v1(contract.gpu_precondition()),
+            ranked_value_text_v1(contract.reference_precondition()),
+            ranked_value_text_v1(contract.gpu_value()),
+            ranked_value_text_v1(contract.reference_value()),
+            contract.contract_identity(),
+            crate::encode_hex(proof.receipt_identity().digest().as_bytes()),
+        ),
+        ProductionRankedOperationV1::RequestEffectRefinement { contract, subjects } => format!(
+            "  proof.request_effect_refinement {}[{}], {}, {}, {}, {}, {}, {} <contract={}, reference_mir={}, kernel_mir={}>\n",
+            ranked_value_text_v1(contract.view()),
+            format_ranked_values(contract.indices()),
+            ranked_value_text_v1(contract.gpu_domain()),
+            ranked_value_text_v1(contract.reference_domain()),
+            ranked_value_text_v1(contract.gpu_precondition()),
+            ranked_value_text_v1(contract.reference_precondition()),
+            ranked_value_text_v1(contract.gpu_value()),
+            ranked_value_text_v1(contract.reference_value()),
+            contract.contract_identity(),
+            crate::encode_hex(subjects.safe_reference_mir_hash().as_bytes()),
+            crate::encode_hex(subjects.kernel_mir_hash().as_bytes()),
         ),
     }
 }
@@ -10689,6 +10917,29 @@ mod tests {
         project_rust_bounds_checks(function, first_argument, &mut operations, &mut next_value)
     }
 
+    fn literal_bounds_check_function(index: u128, length: u128) -> SemanticFunctionDeclV1 {
+        projection_function_with_locals(
+            vec![
+                block(
+                    80,
+                    vec![],
+                    SemanticTerminatorKindV1::Assert {
+                        condition: constant(u128::from(index < length)),
+                        expected: true,
+                        message: SemanticAssertMessageV1::BoundsCheck {
+                            length: constant(length),
+                            index: constant(index),
+                        },
+                        target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 1),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
+                block(81, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![local(82, SCALAR_TYPE, SemanticLocalRoleV1::Return)],
+        )
+    }
+
     fn option_dominance_chain(
         producer_count: usize,
     ) -> (SemanticFunctionDeclV1, Vec<SemanticOptionProducerV1>) {
@@ -10877,7 +11128,9 @@ mod tests {
             .iter()
             .filter_map(|operation| match operation {
                 ProductionRankedOperationV1::Access { kind, .. }
+                | ProductionRankedOperationV1::ValueAccess { kind, .. }
                 | ProductionRankedOperationV1::AtomicAccess { kind, .. }
+                | ProductionRankedOperationV1::AtomicValueAccess { kind, .. }
                 | ProductionRankedOperationV1::AllocationEffect { kind, .. } => Some(*kind),
                 ProductionRankedOperationV1::View { .. }
                 | ProductionRankedOperationV1::ExecutionLayout { .. }
@@ -10898,7 +11151,11 @@ mod tests {
                 | ProductionRankedOperationV1::SemanticConstant { .. }
                 | ProductionRankedOperationV1::SemanticBinary { .. }
                 | ProductionRankedOperationV1::RequireEquivalent { .. }
-                | ProductionRankedOperationV1::RequireReferenceEquivalent { .. } => None,
+                | ProductionRankedOperationV1::RequireReferenceEquivalent { .. }
+                | ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
+                | ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
+                | ProductionRankedOperationV1::RequireEffectRefinement { .. }
+                | ProductionRankedOperationV1::RequestEffectRefinement { .. } => None,
             })
             .collect()
     }
@@ -11116,6 +11373,22 @@ mod tests {
             projected.checks[0].extent,
             ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(1))
         );
+    }
+
+    #[test]
+    fn literal_array_bounds_check_does_not_manufacture_dynamic_authorization() {
+        for function in [
+            literal_bounds_check_function(63, 64),
+            literal_bounds_check_function(64, 64),
+        ] {
+            let mut operations = Vec::new();
+            let mut next_value = 0;
+            let projected =
+                project_rust_bounds_checks(&function, 0, &mut operations, &mut next_value).unwrap();
+            assert!(projected.checks.is_empty());
+            assert!(operations.is_empty());
+            assert_eq!(next_value, 0);
+        }
     }
 
     #[test]

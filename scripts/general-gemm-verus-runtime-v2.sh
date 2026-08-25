@@ -7,14 +7,27 @@ readonly SCRIPT_DIRECTORY
 REPOSITORY_ROOT="$(cd -- "$SCRIPT_DIRECTORY/.." && pwd -P)"
 readonly REPOSITORY_ROOT
 readonly PINS_DIRECTORY="$REPOSITORY_ROOT/crates/fe2o3-verifier/verus/pins"
-readonly MANIFEST="$PINS_DIRECTORY/GENERAL_GEMM_RUNTIME_CLOSURE_V2.manifest"
 readonly TARGET_PINS="$PINS_DIRECTORY/rust_target_1_97_1.sha256"
-readonly INSTALLED_MANIFEST_NAME=GENERAL_GEMM_RUNTIME_CLOSURE_V2.manifest
+case "${FE2O3_RETAINED_RUNTIME_PROFILE:-general-gemm-v2}" in
+    general-gemm-v2)
+        readonly MANIFEST="$PINS_DIRECTORY/GENERAL_GEMM_RUNTIME_CLOSURE_V2.manifest"
+        readonly INSTALLED_MANIFEST_NAME=GENERAL_GEMM_RUNTIME_CLOSURE_V2.manifest
+        readonly RUNTIME_LABEL='general-GEMM Verus runtime V2'
+        readonly SUCCESS_PREFIX=FE2O3_GENERAL_GEMM_RUNTIME_V2
+        ;;
+    functional-refinement-v1)
+        readonly MANIFEST="$PINS_DIRECTORY/FUNCTIONAL_REFINEMENT_RUNTIME_V1.manifest"
+        readonly INSTALLED_MANIFEST_NAME=FUNCTIONAL_REFINEMENT_RUNTIME_V1.manifest
+        readonly RUNTIME_LABEL='functional-refinement Verus runtime V1'
+        readonly SUCCESS_PREFIX=FE2O3_FUNCTIONAL_REFINEMENT_RUNTIME_V1
+        ;;
+    *) printf 'unknown retained runtime profile\n' >&2; exit 2 ;;
+esac
 readonly TARGET_PREFIX=toolchain/lib/rustlib/x86_64-unknown-linux-gnu/lib
 readonly TARGET_SOURCE_PREFIX=lib/rustlib/x86_64-unknown-linux-gnu/lib
 
 die() {
-    printf 'general-GEMM Verus runtime V2: %s\n' "$*" >&2
+    printf '%s: %s\n' "$RUNTIME_LABEL" "$*" >&2
     exit 1
 }
 
@@ -172,7 +185,7 @@ audit_source() {
         [[ "$(sha256_file "$source")" == "$digest" ]] || die "target SHA-256 differs: $source"
     done < "$TARGET_PINS"
     verify_interpreter
-    printf 'FE2O3_GENERAL_GEMM_RUNTIME_V2_SOURCE_OK manifest_sha256=%s\n' "$(sha256_file "$MANIFEST")"
+    printf '%s_SOURCE_OK manifest_sha256=%s\n' "$SUCCESS_PREFIX" "$(sha256_file "$MANIFEST")"
 }
 
 expected_inventory() {
@@ -222,8 +235,8 @@ audit_installed() {
     done < "$TARGET_PINS"
     verify_file "$root/$INSTALLED_MANIFEST_NAME" 0444 "$(wc -c < "$MANIFEST" | tr -d ' ')" "$(sha256_file "$MANIFEST")" true
     verify_interpreter
-    printf 'FE2O3_GENERAL_GEMM_RUNTIME_V2_INSTALLED_OK manifest_sha256=%s root=%s\n' \
-        "$(sha256_file "$MANIFEST")" "$root"
+    printf '%s_INSTALLED_OK manifest_sha256=%s root=%s\n' \
+        "$SUCCESS_PREFIX" "$(sha256_file "$MANIFEST")" "$root"
 }
 
 provision() {

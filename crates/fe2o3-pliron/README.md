@@ -181,3 +181,27 @@ The root workspace owns the exact Pliron revision so every dialect and lowering
 crate resolves one audited upstream implementation. The selective
 `pliron-llvm` dependency resolves that same revision and cannot broaden this
 crate's authority boundary.
+
+## Policy-verified functional-refinement receipts
+
+V2 functional-refinement requests use an acyclic binding transition.
+The validated ranked recipe first contains an unbound scalar or effect request
+with supplied MIR subjects. `fe2o3-verifier` derives the proof program from that
+DAG and returns a receipt verified under an explicit import policy. The consuming
+`bind_functional_refinement_request_v2` method replaces only the addressed
+unbound request. Production V2 compilation rejects unbound requests, V1
+declarations, untrusted signers/toolchains, stale transcript hashes, duplicate
+claims, missing proofs, and unused proofs.
+
+The transcript includes formula definitions, view/allocation facts, the unique
+correlated write, and ownership. A V2 receipt at the configured MIR boundary
+materializes a retained `Proved` solver result only under the policy supplied to
+this generic API. That result is not compiler-authenticated MIR custody and does
+not itself authorize rustc production. The compiler must privately join it to
+retained rustc MIR identities and a compiler-owned policy before making a
+same-session refinement claim.
+
+Verus proves the compiler-derived effect formulas conditional on the trusted
+MIR-to-effect extractor and the exact numeric model encoded in those formulas.
+This is not a proof of full MIR operational semantics, source-to-ISA
+correspondence, artifact integrity, or launch behavior.

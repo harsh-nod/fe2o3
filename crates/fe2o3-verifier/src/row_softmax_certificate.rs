@@ -15,7 +15,7 @@ const MAX_CANONICAL_MANIFEST_BYTES_V1: usize = 8 * 1024;
 const MAX_EVIDENCE_FILE_BYTES_V1: usize = 1024 * 1024;
 
 const CANONICAL_MANIFEST_SHA256_V1: &str =
-    "8a133c4d58294fe648b1e34aec5c08c0cf24860ea57f0eded84fd8132da377bf";
+    "8114b1d9fde2928742dd736970e3dc6eb4aa9dfca8fb3f1113e60a11269cae20";
 const PORTABLE_MIR_SHA256_V1: &str =
     "cb10b6fac6475435e45a6f9166739c9e26bae17031105791abf3f440b004d4dd";
 const COMPILER_SEMANTICS_SHA256_V1: &str =
@@ -31,7 +31,7 @@ const SOLVER_EXECUTABLE_SHA256_V1: &str =
 
 const CANONICAL_MANIFEST_BYTES_V1: &[u8] = b"FE2O3-ROW-SOFTMAX-VERIFICATION-V1
 lineage-source=e874da2083c2a1eb192048ea5f88a053c28d0ee2|crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1/src/lib.rs|1289|c4e2d6bb6eebe01eb6ae7c0da1a524113819a37b4ec2d0a5167f32cc3134e6f4
-attributed-source=examples/row_softmax_v1/src/kernel.rs|1289|c4e2d6bb6eebe01eb6ae7c0da1a524113819a37b4ec2d0a5167f32cc3134e6f4
+attributed-source=examples/row_softmax_v1/src/kernel.rs|1297|0b0d5e2964d4627bc7ef3dac882f86a9b3c49ab715245bacc3fc92f28f0d08b0
 portable-mir=cb10b6fac6475435e45a6f9166739c9e26bae17031105791abf3f440b004d4dd
 compiler-semantics=3132d86d229a3977ed9c5283c241c4f6c85aff23c1d177fb0d23c0743279f0a4
 compiler-profile=fe2o3.manifest-derived-scalar-slice.v1|rustc-1.96.0-nightly|55e86c996809902e8bbad512cfb4d2c18be446d9|llvm-22.1.2
@@ -50,8 +50,8 @@ boundary=inert;exact-input-output-lengths-are-authenticated-preconditions-not-ob
 const EVIDENCE_SPECS_V1: [EvidenceSpecV1; 5] = [
     EvidenceSpecV1 {
         path: "examples/row_softmax_v1/src/kernel.rs",
-        byte_len: 1_289,
-        sha256: "c4e2d6bb6eebe01eb6ae7c0da1a524113819a37b4ec2d0a5167f32cc3134e6f4",
+        byte_len: 1_297,
+        sha256: "0b0d5e2964d4627bc7ef3dac882f86a9b3c49ab715245bacc3fc92f28f0d08b0",
     },
     EvidenceSpecV1 {
         path: "examples/row_softmax_v1/src/numerical_contract.rs",
@@ -448,7 +448,7 @@ mod tests {
         assert_eq!(first.identity(), second.identity());
         assert_eq!(
             first.identity().as_bytes(),
-            &pinned_sha256("47dd165ad5dc3afe8469f96d485a78e21599829daa86ead1b06aa69b2577f2dc")
+            &pinned_sha256("be34ce8bb86778c1fda58e1de46d80ff45ec8264c1803968cbcdb1bc383320ac")
         );
         assert_eq!(first.target(), "gfx942:xnack-");
         assert_eq!(first.row_elements(), 64);

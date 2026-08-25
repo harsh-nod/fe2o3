@@ -53,6 +53,16 @@ pub const KERNEL_REGISTRATION_V2_FIELD_COUNT: usize = 8;
 /// &str generated_host_contract_identity, fn pointer)`.
 pub const KERNEL_REGISTRATION_V3_FIELD_COUNT: usize = 10;
 
+/// Final-path-segment prefix for one kernel-to-safe-Rust reference binding.
+pub const REFERENCE_BINDING_REGISTRATION_PREFIX_V1: &str = "__fe2o3_kernel_reference_binding_v1_";
+/// ASCII `FE2O3REF`, interpreted as a little-endian `u64`.
+pub const REFERENCE_BINDING_REGISTRATION_MAGIC_V1: u64 = u64::from_le_bytes(*b"FE2O3REF");
+pub const REFERENCE_BINDING_REGISTRATION_VERSION_V1: u16 = 1;
+pub const REFERENCE_BINDING_REGISTRATION_KIND_V1: u16 = 1;
+/// Tuple fields: magic, version, kind, logical kernel name, kernel pointer,
+/// and a compiler-generated reference anchor pointer.
+pub const REFERENCE_BINDING_REGISTRATION_FIELD_COUNT_V1: usize = 6;
+
 /// Final-path-segment prefix for device FFI registration statics.
 pub const DEVICE_FFI_REGISTRATION_PREFIX_V1: &str = "__fe2o3_device_ffi_registration_v1_";
 /// Prefix carried in compiler-visible documentation metadata on an FFI item.

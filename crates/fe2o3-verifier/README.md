@@ -428,6 +428,32 @@ caller-provided and its two direct stages do not prove a real Verus-to-solver
 invocation relationship. Both sealed paths currently require Linux
 `memfd_create`, `fcntl` seals, ptrace/pidfd support, and `/proc`.
 
+Compiler-generated functional-refinement proofs use the separate
+FunctionalRefinementVerusRuntimeLeaseV1. Its retained manifest contains only
+the exact verifier, solver, Rust toolchain/target files, system libraries, and
+empty directory. It contains no workload proof sources, and the generated
+proof child receives only a sealed source descriptor. The canonical obligation
+binds the complete ranked graph, including CFG/control dependencies, execution
+layout, GPU/reference write sites, semantic RHS and coordinate/value formulas,
+and the ownership contract. The mandatory V2 pipeline recomputes effect and
+hierarchy witnesses from that graph; those reports are not receipt-attested
+shortcuts. A proved effect is partial correctness unless the freshly computed
+ownership result also proves exact total output coverage. This is MIR/effect
+evidence only, not source-to-MIR, source-to-ISA, artifact, or launch authority.
+
+Generated functional-refinement execution on Linux/x86-64 additionally uses a
+descendant-aware ptrace/seccomp controller. It admits the pinned Rust thread
+clone ABI, one retained auxiliary `rust_verify`, and one retained Z3 process in
+that order; authenticates every process executable and inherited descriptor
+set; and rejects extra, nested, or sequential descendants. Executable mmap and
+mprotect requests are limited to retained ELF executable load ranges, while
+session, process-group, namespace, credential, signaling, cross-process-memory,
+socket, io_uring, and untraced-clone escape paths fail closed. CPU, process,
+descriptor, address-space, data, file, core, output, and wall-clock bounds apply
+to the complete traced tree, and cleanup kills and waits every observed tracee.
+This confinement authenticates proof-tool execution; it does not turn the
+result into compiler, artifact, module-load, or kernel-launch authority.
+
 The general-GEMM V2 runner is narrower than the public authenticated V2
 protocol. It accepts only a same-process `GeneralGemmVerusRuntimeClosureLeaseV2`
 over the exact protected `/opt/fe2o3/verus-runtime-v2/<version>` closure. It
@@ -575,3 +601,13 @@ The existing legacy `build_invocation_plan` and `execute_recorder` APIs still
 accept caller-supplied tool identities and intentionally cannot construct
 `AuthenticatedRecorderOutputV1` (or its deprecated
 `AuthenticatedVerusExecutionEvidenceV1` alias).
+
+## Ranked functional-refinement V2
+
+The V2 ranked producer accepts no caller-authored Verus source. It consumes a
+validated unbound scalar/effect request, walks its semantic DAG, computes the
+versioned Pliron transcript, and generates `CanonicalGeneratedVerusProofInputV3`
+internally. A distributed path returns a signable receipt; a local path uses an
+ephemeral compiler-owned signer and returns the move-only imported proof plus
+the matching production trust policy. Both require the retained no-follow
+`rust_verify`/Z3 closure and cover only safe-reference MIR to kernel MIR.

@@ -30,14 +30,13 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
 
 #[kernel(
     typed,
-    namespace = "409a087b69c0a4c4431f5bb659606feed29b109454cfb528f220397bf0349bcb"
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+    namespace = "48fb4bcf479bf2a11a1b1efd9a3bc4c3a8621c90e0678c0975f5af56ac5a0a95"
 )]
 #[cfg(not(any(
     feature = "oob",
     feature = "shifted",
     feature = "grid_exclusive",
-    feature = "production_safe",
-    feature = "production_oob",
     feature = "blocked",
     feature = "barrier_after_access",
     feature = "barrier_before_access",
@@ -56,7 +55,8 @@ pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
 
 #[kernel(
     typed,
-    namespace = "d5e6306fc6d085e809eda08b970bad03531d474a128843df69f1ed181e89fa1b"
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+    namespace = "470f5285b02bb6a6a44f8fc1b6eed398da1aba14f10994e6f55ab6c9d1402d76"
 )]
 #[cfg(feature = "oob")]
 #[allow(unconditional_panic)]
@@ -70,7 +70,8 @@ pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
 
 #[kernel(
     typed,
-    namespace = "be106fd078c3d060c4116b385a8baecd9304a4b92106105e8efcddd3174011bf"
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+    namespace = "bc19535a7545ef14cad09ec24a34f27528a3d11ef1578f275387c73a5196a518"
 )]
 #[cfg(feature = "shifted")]
 pub fn checked_shifted(mut output: DisjointSlice<f32, Shifted<Index1D, 4>>) {
@@ -83,7 +84,8 @@ pub fn checked_shifted(mut output: DisjointSlice<f32, Shifted<Index1D, 4>>) {
 
 #[kernel(
     typed,
-    namespace = "3e9e4387be6f680bd9bce54206ec008602d61c3f115631ce6711f6501379c01c"
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+    namespace = "985200fee1788778fd86d4c69071d74bba7399e981f45964832a71ec8ab4d83f"
 )]
 #[cfg(feature = "grid_exclusive")]
 pub fn grid_exclusive(mut output: DisjointSlice<f32, GridExclusive>) {
@@ -96,34 +98,8 @@ pub fn grid_exclusive(mut output: DisjointSlice<f32, GridExclusive>) {
 
 #[kernel(
     typed,
-    namespace = "54c58fba8acb2f20497d528eb87c83d76e6af1dfe27f1d2778ffda8d69221fa9"
-)]
-#[cfg(feature = "production_safe")]
-pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
-    let input = [value; 64];
-    let selected = input[63];
-    if let Some(element) = output.get_mut(thread::index_1d()) {
-        *element = selected;
-    }
-}
-
-#[kernel(
-    typed,
-    namespace = "73adbf13666463e194459888d8d7c5084f35ebdb009511ac82225994ff184b2a"
-)]
-#[cfg(feature = "production_oob")]
-#[allow(unconditional_panic)]
-pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
-    let input = [value; 64];
-    let selected = input[64];
-    if let Some(element) = output.get_mut(thread::index_1d()) {
-        *element = selected;
-    }
-}
-
-#[kernel(
-    typed,
-    namespace = "b9fe29428bdba6d62863664f0f44be15fc465334eb1fcfa52ac1bb98c48abaf2"
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+    namespace = "88aaf4adb87cd2b6797b984dc70210af6f35ce38286623232fe84b475664e3c9"
 )]
 #[cfg(feature = "blocked")]
 pub fn blocked(mut output: DisjointSlice<f32, Blocked<Index1D, 1, 2>>) {

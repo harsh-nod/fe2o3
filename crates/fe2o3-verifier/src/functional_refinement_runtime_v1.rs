@@ -1,0 +1,131 @@
+//! Workload-neutral retained runtime for compiler-generated functional-refinement proofs.
+//!
+//! The public identity covers only the pinned verifier, solver, Rust toolchain, and runtime
+//! dependencies. Reviewed workload proof sources are deliberately excluded: generated proofs
+//! receive their source through a sealed descriptor and cannot inherit the retained proof tree.
+
+use std::{error::Error, fmt, path::Path, time::Instant};
+
+use crate::{
+    CanonicalGeneratedVerusProofInputV3, RetainedGeneratedVerusRuntimeBackendErrorV1,
+    RetainedGeneratedVerusRuntimeBackendOutputV1, open_retained_generated_verus_runtime_v1,
+};
+
+/// Domain-separated identity of the exact workload-neutral verifier runtime.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[repr(transparent)]
+pub struct FunctionalRefinementVerusRuntimeIdentityV1([u8; 32]);
+
+impl FunctionalRefinementVerusRuntimeIdentityV1 {
+    /// Returns the exact identity bytes.
+    pub const fn as_bytes(self) -> [u8; 32] {
+        self.0
+    }
+}
+
+/// Non-copyable lease over the retained workload-neutral generated-proof runtime.
+///
+/// Opening or revalidating the runtime does not establish a proof or grant compiler authority.
+pub struct FunctionalRefinementVerusRuntimeLeaseV1 {
+    identity: FunctionalRefinementVerusRuntimeIdentityV1,
+    backend: crate::RetainedGeneratedVerusRuntimeBackendV1,
+}
+
+impl fmt::Debug for FunctionalRefinementVerusRuntimeLeaseV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("FunctionalRefinementVerusRuntimeLeaseV1")
+            .field("root", &self.backend.root())
+            .field("identity", &self.identity)
+            .finish_non_exhaustive()
+    }
+}
+
+impl FunctionalRefinementVerusRuntimeLeaseV1 {
+    /// Opens and retains the exact no-follow runtime closure.
+    pub fn open(root: impl AsRef<Path>) -> Result<Self, FunctionalRefinementRuntimeErrorV1> {
+        let root = root.as_ref();
+        let backend =
+            open_retained_generated_verus_runtime_v1(root).map_err(runtime_error_from_backend)?;
+        Ok(Self {
+            identity: FunctionalRefinementVerusRuntimeIdentityV1(backend.identity()),
+            backend,
+        })
+    }
+
+    /// Returns the diagnostic path supplied when this lease was opened.
+    pub fn root(&self) -> &Path {
+        self.backend.root()
+    }
+
+    /// Returns the exact workload-neutral runtime identity.
+    pub const fn identity(&self) -> FunctionalRefinementVerusRuntimeIdentityV1 {
+        self.identity
+    }
+
+    /// Revalidates the retained runtime objects and path edges.
+    pub fn revalidate(&self) -> Result<(), FunctionalRefinementRuntimeErrorV1> {
+        self.backend
+            .revalidate()
+            .map_err(runtime_error_from_backend)
+    }
+
+    pub(crate) fn execute_generated_rust_verify(
+        &self,
+        source: &CanonicalGeneratedVerusProofInputV3,
+        deadline: Instant,
+        output_limit: usize,
+    ) -> Result<FunctionalRefinementRuntimeProcessOutputV1, FunctionalRefinementRuntimeErrorV1>
+    {
+        self.backend
+            .execute_generated_rust_verify(source, deadline, output_limit)
+            .map(FunctionalRefinementRuntimeProcessOutputV1::from)
+            .map_err(runtime_error_from_backend)
+    }
+}
+
+/// Bounded output from one retained generated-proof process.
+pub(crate) struct FunctionalRefinementRuntimeProcessOutputV1 {
+    pub(crate) exit_code: Option<i32>,
+    pub(crate) signal: Option<i32>,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
+}
+
+impl From<RetainedGeneratedVerusRuntimeBackendOutputV1>
+    for FunctionalRefinementRuntimeProcessOutputV1
+{
+    fn from(output: RetainedGeneratedVerusRuntimeBackendOutputV1) -> Self {
+        Self {
+            exit_code: output.exit_code,
+            signal: output.signal,
+            stdout: output.stdout,
+            stderr: output.stderr,
+        }
+    }
+}
+
+/// Runtime admission, revalidation, or execution failure.
+#[derive(Debug)]
+pub struct FunctionalRefinementRuntimeErrorV1 {
+    detail: String,
+}
+
+impl fmt::Display for FunctionalRefinementRuntimeErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.detail)
+    }
+}
+
+impl Error for FunctionalRefinementRuntimeErrorV1 {}
+
+fn runtime_error_from_backend(
+    error: RetainedGeneratedVerusRuntimeBackendErrorV1,
+) -> FunctionalRefinementRuntimeErrorV1 {
+    FunctionalRefinementRuntimeErrorV1 {
+        detail: format!(
+            "retained generated-proof runtime failed: {:?}",
+            error.kind()
+        ),
+    }
+}

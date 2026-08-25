@@ -8,7 +8,7 @@
 
 use std::{error::Error, fmt};
 
-use dialect_kernel::SemanticScalarType;
+use dialect_kernel::{SemanticScalarType, is_index_type, ranked_view_type};
 use pliron::{
     attribute::Attribute,
     builtin::op_interfaces::{NOpdsInterface, NRegionsInterface, NResultsInterface},
@@ -507,6 +507,191 @@ impl Verify for RequireRefinementOp {
     }
 }
 
+/// Joins one MIR-level functional-refinement obligation to one logical GPU
+/// write and its normalized sequential-reference effect.
+///
+/// This operation is inert. Its local verifier checks only the bounded typed
+/// payload. Whole-function analysis must correlate it with a real write,
+/// reconstruct the write's guarded ownership domain, validate MIR proof
+/// evidence, and compare the domain, precondition, and value expressions.
+#[pliron_op(
+    name = "proof.require_effect_refinement",
+    format,
+    interfaces = [NResultsInterface<0>, NRegionsInterface<0>],
+    attributes = (proof_require_effect_refinement_obligation_id: ProofIdAttr)
+)]
+pub struct RequireEffectRefinementOp;
+
+impl RequireEffectRefinementOp {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        context: &mut Context,
+        obligation_id: ProofIdAttr,
+        view: Value,
+        indices: Vec<Value>,
+        gpu_coordinates: Vec<Value>,
+        reference_coordinates: Vec<Value>,
+        gpu_domain: Value,
+        reference_domain: Value,
+        gpu_precondition: Value,
+        reference_precondition: Value,
+        gpu_value: Value,
+        reference_value: Value,
+    ) -> Self {
+        let mut operands = Vec::with_capacity(indices.len() * 3 + 7);
+        operands.push(view);
+        operands.extend(indices);
+        operands.extend(gpu_coordinates);
+        operands.extend(reference_coordinates);
+        operands.extend([
+            gpu_domain,
+            reference_domain,
+            gpu_precondition,
+            reference_precondition,
+            gpu_value,
+            reference_value,
+        ]);
+        let operation = Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![],
+            operands,
+            vec![],
+            0,
+        );
+        let op = Self::from_operation(operation);
+        op.set_attr_proof_require_effect_refinement_obligation_id(context, obligation_id);
+        op
+    }
+
+    pub fn obligation_id(&self, context: &Context) -> Option<[u64; 4]> {
+        self.get_attr_proof_require_effect_refinement_obligation_id(context)
+            .map(|identity| identity.words())
+    }
+
+    pub fn view(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_operand(0)
+    }
+
+    pub fn indices(&self, context: &Context) -> Vec<Value> {
+        let rank = ranked_view_type(self.view(context), context)
+            .map(|view| view.deref(context).rank())
+            .unwrap_or(0);
+        let operation = self.get_operation();
+        let operation = operation.deref(context);
+        (1..=rank)
+            .map(|operand| operation.get_operand(operand))
+            .collect()
+    }
+
+    pub fn gpu_coordinates(&self, context: &Context) -> Vec<Value> {
+        let rank = ranked_view_type(self.view(context), context)
+            .map(|view| view.deref(context).rank())
+            .unwrap_or(0);
+        let operation = self.get_operation();
+        let operation = operation.deref(context);
+        (1 + rank..1 + rank * 2)
+            .map(|operand| operation.get_operand(operand))
+            .collect()
+    }
+
+    pub fn reference_coordinates(&self, context: &Context) -> Vec<Value> {
+        let rank = ranked_view_type(self.view(context), context)
+            .map(|view| view.deref(context).rank())
+            .unwrap_or(0);
+        let operation = self.get_operation();
+        let operation = operation.deref(context);
+        (1 + rank * 2..1 + rank * 3)
+            .map(|operand| operation.get_operand(operand))
+            .collect()
+    }
+
+    fn semantic_operand(&self, context: &Context, offset: usize) -> Value {
+        let rank = ranked_view_type(self.view(context), context)
+            .map(|view| view.deref(context).rank())
+            .unwrap_or(0);
+        self.get_operation()
+            .deref(context)
+            .get_operand(1 + rank * 3 + offset)
+    }
+
+    pub fn gpu_domain(&self, context: &Context) -> Value {
+        self.semantic_operand(context, 0)
+    }
+
+    pub fn reference_domain(&self, context: &Context) -> Value {
+        self.semantic_operand(context, 1)
+    }
+
+    pub fn gpu_precondition(&self, context: &Context) -> Value {
+        self.semantic_operand(context, 2)
+    }
+
+    pub fn reference_precondition(&self, context: &Context) -> Value {
+        self.semantic_operand(context, 3)
+    }
+
+    pub fn gpu_value(&self, context: &Context) -> Value {
+        self.semantic_operand(context, 4)
+    }
+
+    pub fn reference_value(&self, context: &Context) -> Value {
+        self.semantic_operand(context, 5)
+    }
+}
+
+impl Verify for RequireEffectRefinementOp {
+    fn verify(&self, context: &Context) -> Result<()> {
+        let operation = self.get_operation();
+        let operation = operation.deref(context);
+        if operation.get_num_operands() < 7 {
+            return verify_err!(
+                self.loc(context),
+                "proof effect refinement has a truncated operand payload"
+            );
+        }
+        let view = operation.get_operand(0);
+        let Some(view_type) = ranked_view_type(view, context) else {
+            return verify_err!(
+                self.loc(context),
+                "proof effect refinement operand 0 is not a ranked view"
+            );
+        };
+        let rank = view_type.deref(context).rank();
+        verify_closed_shape_with_operands(self, context, rank * 3 + 7, 1)?;
+        required_attr(
+            self,
+            context,
+            self.get_attr_proof_require_effect_refinement_obligation_id(context),
+            "obligation_id",
+        )?;
+        for operand in 1..=rank {
+            if !is_index_type(operation.get_operand(operand), context) {
+                return verify_err!(
+                    self.loc(context),
+                    "proof effect refinement index operand {} is not kernel.index",
+                    operand - 1
+                );
+            }
+        }
+        for operand in rank + 1..rank * 3 + 7 {
+            if !operation
+                .get_operand(operand)
+                .get_type(context)
+                .deref(context)
+                .is::<SemanticScalarType>()
+            {
+                return verify_err!(
+                    self.loc(context),
+                    "proof effect refinement semantic operand {} is not kernel.semantic_scalar",
+                    operand - rank - 1
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
 fn verification_error(op: &dyn Op, context: &Context, message: &str) -> pliron::result::Error {
     pliron::verify_error!(op.loc(context), "{message}")
 }
@@ -575,6 +760,7 @@ pub fn register_dialect(
     <ObligationOp as Op>::register(context);
     <EvidenceRefOp as Op>::register(context);
     <RequireRefinementOp as Op>::register(context);
+    <RequireEffectRefinementOp as Op>::register(context);
 
     let marker = context.aux_data.insert(Box::new(RegistrationMarker));
     context
