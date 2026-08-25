@@ -318,14 +318,15 @@ Migration follows these rules:
 2. Move exact-profile entry points behind qualification-oracle tests or tools.
 3. Migrate a semantic slice only after ordinary attributed Rust passes the
    general route and differential tests match its existing oracle.
-4. Once a slice migrates, remove its production selector immediately.
+4. Once a slice migrates, keep the old implementation only as a qualification
+   oracle until its differential coverage is no longer needed.
 5. For a kernel-containing crate, unsupported production behavior is terminal.
    `legacy-v1` and exact-profile selectors are never fallbacks.
 6. Host-only Rust code may continue through rustc LLVM; that is not a device
    compiler route.
-7. Keep `PlironShadow` only as non-authoritative evidence outside production
-   device compilation. The compiler API `Legacy` route is removed, and
-   exact-profile qualification selectors retire as their slices migrate.
+7. Keep non-authoritative comparisons only in qualification tooling. The
+   compiler API has no implementation selector, and exact-profile qualification
+   oracles retire as their differential coverage migrates.
 
 Production became the sole unselected route after the first scalar slice
 completed its compile, host-interface, artifact, and hardware gates. It has no

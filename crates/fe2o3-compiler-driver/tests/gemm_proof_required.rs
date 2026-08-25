@@ -10,10 +10,9 @@ use fe2o3_compiler_api::{
     CandidateFormatIdentityV1, CandidateIdentityV1, CompileDispositionV1, CompileLimitsV1,
     CompileOutputV1, CompileRequestV1, CompilerProfileIdentityV1, CompilerStageV1,
     DiagnosticSubjectIdentityV1, ExecutableCandidateV1, KernelInstanceIdentityV1,
-    ObligationSetIdentityV1, PipelineConfigurationIdentityV1, PipelineSelectorV1, ReceiptOutcomeV1,
-    RequestIdentityV1, SnapshotFormatIdentityV1, SnapshotIdentityV1, StageReceiptV1,
-    StageSnapshotV1, TargetProfileIdentityV1, TransformConfigurationIdentityV1,
-    TransformIdentityV1,
+    ObligationSetIdentityV1, PipelineConfigurationIdentityV1, ReceiptOutcomeV1, RequestIdentityV1,
+    SnapshotFormatIdentityV1, SnapshotIdentityV1, StageReceiptV1, StageSnapshotV1,
+    TargetProfileIdentityV1, TransformConfigurationIdentityV1, TransformIdentityV1,
 };
 use fe2o3_compiler_driver::{
     AdmittedGemmCompilerBackendV1, CompilerBackendFailureV1, GEMM_REQUIRED_SAFETY_PROPERTIES_V1,
@@ -46,7 +45,6 @@ fn request_with(request_identity: u8, obligation_identity: u8) -> CompileRequest
         TargetProfileIdentityV1::from_untrusted_bytes(identity(0x14)),
         PipelineConfigurationIdentityV1::from_untrusted_bytes(identity(0x15)),
         ObligationSetIdentityV1::from_untrusted_bytes(identity(obligation_identity)),
-        PipelineSelectorV1::PlironV1,
         StageSnapshotV1::new(
             CompilerStageV1::FrontendInput,
             SnapshotIdentityV1::from_untrusted_bytes(identity(0x17)),

@@ -245,8 +245,8 @@ continue to point downward according to the machine-checked
 | `fe2o3-amd-target` | Canonical AMD target identities, features, and capability contracts | Compiler execution and runtime observation |
 | `fe2o3-amdgcn-model` | Existing strict AMDGPU vocabulary, legalization/lowering, OCML/OCKL selection, and LLVM text generation | Pliron object identity, host borrow policy, artifact/launch authority |
 | `dialect-amdgcn` | Compatibility re-export of `fe2o3-amdgcn-model` | Claiming an implemented `amdgcn.*` Pliron dialect |
-| `fe2o3-compiler-api` | Target-neutral request, selector, snapshot, receipt, diagnostic, and output contracts | Running a compiler or publishing its candidate |
-| `fe2o3-compiler-driver` | Single-route fail-closed API dispatch for inspect-only shadow evidence or the candidate-producing Pliron route | Production selection, codegen ownership, artifact/runtime authority |
+| `fe2o3-compiler-api` | Target-neutral request, snapshot, receipt, diagnostic, and output contracts | Running a compiler or publishing its candidate |
+| `fe2o3-compiler-driver` | Single-backend fail-closed execution and output revalidation for the production compiler contract | Codegen ownership, artifact/runtime authority |
 | `fe2o3-build-authority`, `fe2o3-rustc-invocation`, `fe2o3-compiler-closure-capability`, `fe2o3-artifact-transaction` | Canonical compiler provenance, exact invocation, sealed closure coordination, and attempt-scoped handoff/publication records | Compiler semantics, LLVM execution, artifact authorship, or load/launch authority |
 | `fe2o3-pliron-scalar-add-v1` | Exact backend-fixture lineage, repository policy, scalar finalizer join, and sealed one-shot HSA consumer | General backend selection, Rust-source extraction, reusable approval authority, or general runtime policy |
 | `fe2o3-artifacts` | Versioned neutral bundle and identity records | Compilation and loading policy |

@@ -310,11 +310,11 @@ target lowering, and host execution into explicit ownership boundaries:
   These records validate representation and consistency. They do not prove a
   claim, compile a kernel, execute a service, or grant artifact/runtime
   authority.
-- Compiler composition: `fe2o3-compiler-driver` routes one explicit
-  `PlironShadow` or `PlironV1` request to one configured backend and never
-  falls back to a second route. Shadow is inspect-only and `PlironV1` is the
-  only candidate-producing compiler API route. The production rustc backend
-  has no selector. Temporary non-publishing migration oracles are compiled
+- Compiler composition: `fe2o3-compiler-driver` executes one production
+  request through one configured backend and has no selector or fallback slot.
+  Inspection is an observation of that transaction rather than another
+  compiler implementation. The production rustc backend likewise has no
+  selector. Temporary non-publishing migration oracles are compiled
   only by the `qualification-oracles-test-only` backend feature and selected
   by `FE2O3_QUALIFICATION_ORACLE_V1` in isolated integration tests.
 - General kernel checks: `fe2o3-kernel-analysis` owns the fixed pre-lowering

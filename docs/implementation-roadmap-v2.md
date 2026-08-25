@@ -33,9 +33,9 @@ but both issues remain open.
 - Canonical, Pliron-independent ownership now exists for the MIR model,
   compiler API, solver-neutral proof contracts, target-neutral host-operation
   contracts, and executable-free persistent-service model.
-- `fe2o3-compiler-driver` provides fail-closed single-route API dispatch for
-  inspect-only `PlironShadow` evidence and candidate-producing `PlironV1`.
-  It is not wired into production compiler selection; the current
+- `fe2o3-compiler-driver` provides a fail-closed single-backend API contract
+  with no implementation selector or fallback. It is not yet the owner of the
+  rustc production composition; the current
   implementation remains in `rustc-codegen-fe2o3`.
 - `fe2o3-pliron` provides the pinned D0 context, private context identity,
   registration, bounded pass-plan shell, and owner-held textual bridge. The
@@ -61,9 +61,9 @@ but both issues remain open.
   analysis also enforces one aggregate 512-call and 32-terminal budget before
   the positive boundary. Finalization freshly
   derives distinct graph, Worker V2, and finalized-machine axes from the
-  retained concrete owners. The production selector remains fail-closed until
-  the #174 authenticated MIR-to-KIR receipt and the rustc-owned final authority
-  join consume this #173 structural and late-machine route.
+  retained concrete owners. Production remains fail-closed until the #174
+  authenticated MIR-to-KIR receipt and the rustc-owned final authority join
+  consume this #173 structural and late-machine route.
 - `fe2o3-service-host` consumes the service and host models through
   authority-free, borrow-retaining typestates. It has no HSA/HIP handles and
   performs no allocation, publication, load, launch, execution, wait,

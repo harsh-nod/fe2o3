@@ -33,7 +33,7 @@ pub use receipt::{ReceiptOutcomeV1, StageReceiptErrorV1, StageReceiptV1};
 pub use request::{
     CompileLimitFieldV1, CompileLimitsErrorV1, CompileLimitsV1, CompileRequestErrorV1,
     CompileRequestV1, MAX_DIAGNOSTICS_V1, MAX_STAGE_RECEIPTS_V1, MAX_STAGE_SNAPSHOTS_V1,
-    MAX_TOTAL_SNAPSHOT_BYTES_V1, PipelineSelectorV1,
+    MAX_TOTAL_SNAPSHOT_BYTES_V1,
 };
 pub use snapshot::{
     CompilerStageV1, MAX_STAGE_SNAPSHOT_BYTES_V1, StageSnapshotErrorV1, StageSnapshotV1,

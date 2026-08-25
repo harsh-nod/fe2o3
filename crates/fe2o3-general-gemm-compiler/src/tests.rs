@@ -53,7 +53,6 @@ fn request_for(kir: &GeneralGemmKirV1, request_byte: u8) -> CompileRequestV1 {
         TargetProfileIdentityV1::from_untrusted_bytes(identity(0x14)),
         PipelineConfigurationIdentityV1::from_untrusted_bytes(identity(0x15)),
         obligations,
-        PipelineSelectorV1::PlironV1,
         input,
         CompileLimitsV1::new(16, 16, 16, 4096, 16_384, 4096).unwrap(),
     )
@@ -91,7 +90,6 @@ fn symbolic_request_for(
         TargetProfileIdentityV1::from_untrusted_bytes(identity(0x14)),
         general_gemm_symbolic_pipeline_configuration_identity_v1(schedule),
         obligations,
-        PipelineSelectorV1::PlironV1,
         input,
         CompileLimitsV1::new(16, 16, 16, 4096, 16_384, 4096).unwrap(),
     )
@@ -246,7 +244,6 @@ fn symbolic_compilation_rejects_concrete_obligations_and_schedule_relabeling() {
         concrete_request.target_profile_identity(),
         general_gemm_symbolic_pipeline_configuration_identity_v1(schedule),
         concrete_request.input_obligations_identity(),
-        PipelineSelectorV1::PlironV1,
         concrete_request.input().clone(),
         concrete_request.limits(),
     )
@@ -938,7 +935,6 @@ fn zero_request_commitments_and_invalid_limit_configuration_fail_closed() {
         TargetProfileIdentityV1::from_untrusted_bytes(identity(0x14)),
         PipelineConfigurationIdentityV1::from_untrusted_bytes(identity(0x15)),
         ObligationSetIdentityV1::from_untrusted_bytes(identity(0x16)),
-        PipelineSelectorV1::PlironV1,
         input,
         CompileLimitsV1::default(),
     )

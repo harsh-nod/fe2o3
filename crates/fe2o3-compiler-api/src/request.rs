@@ -1,4 +1,4 @@
-//! Bounded V1 compile requests and pipeline selection.
+//! Bounded V1 compile requests for the sole production pipeline.
 
 use core::fmt;
 
@@ -16,23 +16,6 @@ pub const MAX_STAGE_RECEIPTS_V1: u16 = 256;
 pub const MAX_DIAGNOSTICS_V1: u16 = 256;
 /// Hard maximum aggregate byte length of all V1 output snapshots.
 pub const MAX_TOTAL_SNAPSHOT_BYTES_V1: u32 = 64 * 1024 * 1024;
-
-/// Explicit compiler implementation selected by a request.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-#[repr(u8)]
-pub enum PipelineSelectorV1 {
-    /// Inspect-only Pliron comparison with no artifact-producing authority.
-    PlironShadow = 2,
-    /// Explicit Pliron V1 artifact-producing pipeline.
-    PlironV1 = 3,
-}
-
-impl PipelineSelectorV1 {
-    /// Reports whether this selector may return an executable candidate.
-    pub const fn may_produce_candidate(self) -> bool {
-        matches!(self, Self::PlironV1)
-    }
-}
 
 /// Named field in [`CompileLimitsV1`].
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -304,7 +287,6 @@ pub struct CompileRequestV1 {
     target_profile_identity: TargetProfileIdentityV1,
     pipeline_configuration_identity: PipelineConfigurationIdentityV1,
     input_obligations_identity: ObligationSetIdentityV1,
-    selector: PipelineSelectorV1,
     input: StageSnapshotV1,
     limits: CompileLimitsV1,
 }
@@ -319,7 +301,6 @@ impl CompileRequestV1 {
         target_profile_identity: TargetProfileIdentityV1,
         pipeline_configuration_identity: PipelineConfigurationIdentityV1,
         input_obligations_identity: ObligationSetIdentityV1,
-        selector: PipelineSelectorV1,
         input: StageSnapshotV1,
         limits: CompileLimitsV1,
     ) -> Result<Self, CompileRequestErrorV1> {
@@ -344,7 +325,6 @@ impl CompileRequestV1 {
             target_profile_identity,
             pipeline_configuration_identity,
             input_obligations_identity,
-            selector,
             input,
             limits,
         })
@@ -378,11 +358,6 @@ impl CompileRequestV1 {
     /// Returns the obligation-set commitment attached to the frontend input.
     pub const fn input_obligations_identity(&self) -> ObligationSetIdentityV1 {
         self.input_obligations_identity
-    }
-
-    /// Returns the explicit pipeline selector.
-    pub const fn selector(&self) -> PipelineSelectorV1 {
-        self.selector
     }
 
     /// Returns the opaque frontend input snapshot.
@@ -422,18 +397,9 @@ mod tests {
             TargetProfileIdentityV1::from_untrusted_bytes([6; 32]),
             PipelineConfigurationIdentityV1::from_untrusted_bytes([7; 32]),
             ObligationSetIdentityV1::from_untrusted_bytes([8; 32]),
-            PipelineSelectorV1::PlironV1,
             input,
             limits,
         )
-    }
-
-    #[test]
-    fn selectors_preserve_tags_and_separate_shadow_from_production() {
-        assert_eq!(PipelineSelectorV1::PlironShadow as u8, 2);
-        assert_eq!(PipelineSelectorV1::PlironV1 as u8, 3);
-        assert!(!PipelineSelectorV1::PlironShadow.may_produce_candidate());
-        assert!(PipelineSelectorV1::PlironV1.may_produce_candidate());
     }
 
     #[test]
@@ -488,7 +454,6 @@ mod tests {
             })
         );
         let accepted = request(snapshot(CompilerStageV1::FrontendInput, vec![1]), limits).unwrap();
-        assert_eq!(accepted.selector(), PipelineSelectorV1::PlironV1);
         assert_eq!(accepted.input().canonical_bytes(), &[1]);
     }
 }

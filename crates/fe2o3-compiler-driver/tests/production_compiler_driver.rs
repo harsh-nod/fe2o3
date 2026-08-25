@@ -5,29 +5,16 @@ use fe2o3_compiler_api::{
     CompileLimitsV1, CompileOutputV1, CompileRequestV1, CompilerProfileIdentityV1, CompilerStageV1,
     DiagnosticCodeV1, DiagnosticMessageV1, DiagnosticSeverityV1, ExecutableCandidateV1,
     KernelInstanceIdentityV1, ObligationSetIdentityV1, PipelineConfigurationIdentityV1,
-    PipelineSelectorV1, ReceiptOutcomeV1, RequestIdentityV1, SnapshotFormatIdentityV1,
-    SnapshotIdentityV1, StageReceiptV1, StageSnapshotV1, TargetProfileIdentityV1,
-    TransformConfigurationIdentityV1, TransformIdentityV1,
+    ReceiptOutcomeV1, RequestIdentityV1, SnapshotFormatIdentityV1, SnapshotIdentityV1,
+    StageReceiptV1, StageSnapshotV1, TargetProfileIdentityV1, TransformConfigurationIdentityV1,
+    TransformIdentityV1,
 };
 use fe2o3_compiler_driver::{
-    CompilerBackendFailureV1, DriverDiagnosticV1, ExplicitPipelineDriverV1,
+    CompilerBackendFailureV1, DriverDiagnosticV1, ProductionCompilerDriverV1,
     TransactionalCompilerBackendV1, TransactionalCompilerDriverV1,
 };
 
 const BACKEND_DIAGNOSTIC_CODE: u32 = 0x4245_0001;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum BackendSlot {
-    PlironShadow,
-    PlironV1,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct BackendCall {
-    slot: BackendSlot,
-    selector: PipelineSelectorV1,
-    request_identity: RequestIdentityV1,
-}
 
 #[derive(Clone, Debug)]
 enum FakeAction {
@@ -36,27 +23,10 @@ enum FakeAction {
     Fail(CompilerBackendFailureV1),
 }
 
-impl FakeAction {
-    fn returning(output: CompileOutputV1) -> Self {
-        Self::Return(Box::new(output))
-    }
-}
-
 #[derive(Clone, Debug)]
 struct RecordingBackend {
-    slot: BackendSlot,
-    calls: Rc<RefCell<Vec<BackendCall>>>,
+    calls: Rc<RefCell<Vec<RequestIdentityV1>>>,
     action: FakeAction,
-}
-
-impl RecordingBackend {
-    fn new(slot: BackendSlot, calls: Rc<RefCell<Vec<BackendCall>>>, action: FakeAction) -> Self {
-        Self {
-            slot,
-            calls,
-            action,
-        }
-    }
 }
 
 impl TransactionalCompilerBackendV1 for RecordingBackend {
@@ -64,12 +34,7 @@ impl TransactionalCompilerBackendV1 for RecordingBackend {
         &mut self,
         request: &CompileRequestV1,
     ) -> Result<CompileOutputV1, CompilerBackendFailureV1> {
-        self.calls.borrow_mut().push(BackendCall {
-            slot: self.slot,
-            selector: request.selector(),
-            request_identity: request.identity(),
-        });
-
+        self.calls.borrow_mut().push(request.identity());
         match &self.action {
             FakeAction::ValidSourceRejection => Ok(source_rejection(request)),
             FakeAction::Return(output) => Ok((**output).clone()),
@@ -82,12 +47,7 @@ fn limits() -> CompileLimitsV1 {
     CompileLimitsV1::new(4, 4, 4, 16, 32, 16).unwrap()
 }
 
-fn request(
-    selector: PipelineSelectorV1,
-    request_identity: u8,
-    input_identity: u8,
-    limits: CompileLimitsV1,
-) -> CompileRequestV1 {
+fn request(request_identity: u8, input_identity: u8, limits: CompileLimitsV1) -> CompileRequestV1 {
     CompileRequestV1::new(
         RequestIdentityV1::from_untrusted_bytes([request_identity; 32]),
         KernelInstanceIdentityV1::from_untrusted_bytes([2; 32]),
@@ -95,7 +55,6 @@ fn request(
         TargetProfileIdentityV1::from_untrusted_bytes([4; 32]),
         PipelineConfigurationIdentityV1::from_untrusted_bytes([5; 32]),
         obligations(6),
-        selector,
         snapshot(CompilerStageV1::FrontendInput, input_identity),
         limits,
     )
@@ -184,7 +143,6 @@ fn source_rejection(request: &CompileRequestV1) -> CompileOutputV1 {
         mir_obligations,
     );
     let rejected = rejected_receipt(1, mir.identity(), mir_obligations);
-
     CompileOutputV1::new(
         request,
         CompileDispositionV1::Rejected,
@@ -213,7 +171,6 @@ fn candidate_output(request: &CompileRequestV1) -> CompileOutputV1 {
         vec![0x7f, b'E', b'L', b'F'],
     )
     .unwrap();
-
     CompileOutputV1::new(
         request,
         CompileDispositionV1::CandidateProduced,
@@ -241,14 +198,13 @@ fn two_diagnostic_rejection(request: &CompileRequestV1) -> CompileOutputV1 {
 }
 
 fn driver(
-    calls: &Rc<RefCell<Vec<BackendCall>>>,
-    shadow: FakeAction,
-    pliron: FakeAction,
-) -> ExplicitPipelineDriverV1<RecordingBackend, RecordingBackend> {
-    ExplicitPipelineDriverV1::new(
-        RecordingBackend::new(BackendSlot::PlironShadow, Rc::clone(calls), shadow),
-        RecordingBackend::new(BackendSlot::PlironV1, Rc::clone(calls), pliron),
-    )
+    calls: &Rc<RefCell<Vec<RequestIdentityV1>>>,
+    action: FakeAction,
+) -> ProductionCompilerDriverV1<RecordingBackend> {
+    ProductionCompilerDriverV1::new(RecordingBackend {
+        calls: Rc::clone(calls),
+        action,
+    })
 }
 
 fn assert_driver_rejection(
@@ -257,7 +213,6 @@ fn assert_driver_rejection(
     reason: DriverDiagnosticV1,
 ) {
     assert_eq!(output.request_identity(), request.identity());
-    assert_eq!(output.selector(), request.selector());
     assert_eq!(output.disposition(), CompileDispositionV1::Rejected);
     assert!(output.snapshots().is_empty());
     assert!(output.receipts().is_empty());
@@ -272,65 +227,26 @@ fn assert_driver_rejection(
 }
 
 #[test]
-fn every_selector_invokes_exactly_its_backend_slot() {
+fn every_request_invokes_the_sole_backend_once() {
     let calls = Rc::new(RefCell::new(Vec::new()));
-    let mut driver = driver(
-        &calls,
-        FakeAction::ValidSourceRejection,
-        FakeAction::ValidSourceRejection,
-    );
-    let cases = [
-        (
-            PipelineSelectorV1::PlironShadow,
-            BackendSlot::PlironShadow,
-            0x11,
-        ),
-        (PipelineSelectorV1::PlironV1, BackendSlot::PlironV1, 0x12),
-    ];
-
-    for (index, (selector, slot, identity)) in cases.into_iter().enumerate() {
-        let request = request(selector, identity, identity + 0x20, limits());
-        let output = driver.compile_transaction(&request);
-
-        assert_eq!(output.request_identity(), request.identity());
-        assert_eq!(output.selector(), selector);
-        assert_eq!(
-            output.diagnostics()[0].code().get(),
-            BACKEND_DIAGNOSTIC_CODE
-        );
-        assert_eq!(calls.borrow().len(), index + 1);
-        assert_eq!(
-            calls.borrow()[index],
-            BackendCall {
-                slot,
-                selector,
-                request_identity: request.identity(),
-            }
-        );
-    }
-}
-
-#[test]
-fn pliron_v1_failure_is_terminal_and_never_invokes_shadow() {
-    let calls = Rc::new(RefCell::new(Vec::new()));
-    let mut driver = driver(
-        &calls,
-        FakeAction::ValidSourceRejection,
-        FakeAction::Fail(CompilerBackendFailureV1::Unavailable),
-    );
-    let request = request(PipelineSelectorV1::PlironV1, 0x13, 0x23, limits());
+    let mut driver = driver(&calls, FakeAction::ValidSourceRejection);
+    let request = request(0x11, 0x21, limits());
 
     let output = driver.compile_transaction(&request);
 
-    assert_driver_rejection(&output, &request, DriverDiagnosticV1::BackendUnavailable);
-    assert_eq!(
-        *calls.borrow(),
-        [BackendCall {
-            slot: BackendSlot::PlironV1,
-            selector: PipelineSelectorV1::PlironV1,
-            request_identity: request.identity(),
-        }]
-    );
+    assert_eq!(output.request_identity(), request.identity());
+    assert_eq!(calls.borrow().as_slice(), &[request.identity()]);
+}
+
+#[test]
+fn valid_candidate_from_the_sole_backend_is_preserved() {
+    let request = request(0x12, 0x22, limits());
+    let expected = candidate_output(&request);
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let mut driver = driver(&calls, FakeAction::Return(Box::new(expected.clone())));
+
+    assert_eq!(driver.compile_transaction(&request), expected);
+    assert_eq!(calls.borrow().as_slice(), &[request.identity()]);
 }
 
 #[test]
@@ -353,148 +269,71 @@ fn backend_failures_have_stable_fail_closed_diagnostics() {
             DriverDiagnosticV1::BackendInternalFailure,
         ),
     ];
-
     for (failure, reason) in cases {
-        for (selector, slot) in [
-            (PipelineSelectorV1::PlironShadow, BackendSlot::PlironShadow),
-            (PipelineSelectorV1::PlironV1, BackendSlot::PlironV1),
-        ] {
-            let calls = Rc::new(RefCell::new(Vec::new()));
-            let failing = FakeAction::Fail(failure);
-            let mut driver = driver(
-                &calls,
-                if selector == PipelineSelectorV1::PlironShadow {
-                    failing.clone()
-                } else {
-                    FakeAction::ValidSourceRejection
-                },
-                if selector == PipelineSelectorV1::PlironV1 {
-                    failing
-                } else {
-                    FakeAction::ValidSourceRejection
-                },
-            );
-            let request = request(selector, 0x14, 0x24, limits());
-
-            let output = driver.compile_transaction(&request);
-
-            assert_driver_rejection(&output, &request, reason);
-            assert_eq!(calls.borrow().len(), 1);
-            assert_eq!(calls.borrow()[0].slot, slot);
-        }
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let mut driver = driver(&calls, FakeAction::Fail(failure));
+        let request = request(0x13, 0x23, limits());
+        let output = driver.compile_transaction(&request);
+        assert_driver_rejection(&output, &request, reason);
+        assert_eq!(calls.borrow().as_slice(), &[request.identity()]);
     }
 }
 
 #[test]
 fn request_identity_mismatch_is_rejected_without_committing_backend_records() {
-    let routed = request(PipelineSelectorV1::PlironV1, 0x15, 0x25, limits());
-    let foreign = request(PipelineSelectorV1::PlironV1, 0x16, 0x25, limits());
+    let routed = request(0x14, 0x24, limits());
+    let foreign = request(0x15, 0x24, limits());
     let calls = Rc::new(RefCell::new(Vec::new()));
     let mut driver = driver(
         &calls,
-        FakeAction::ValidSourceRejection,
-        FakeAction::returning(source_rejection(&foreign)),
+        FakeAction::Return(Box::new(source_rejection(&foreign))),
     );
 
     let output = driver.compile_transaction(&routed);
 
     assert_driver_rejection(&output, &routed, DriverDiagnosticV1::OutputRequestMismatch);
-    assert_eq!(
-        calls.borrow().as_slice(),
-        &[(BackendCall {
-            slot: BackendSlot::PlironV1,
-            selector: PipelineSelectorV1::PlironV1,
-            request_identity: routed.identity(),
-        })]
-    );
-}
-
-#[test]
-fn selector_mismatch_is_rejected_even_when_request_identity_matches() {
-    let routed = request(PipelineSelectorV1::PlironV1, 0x17, 0x27, limits());
-    let wrong_selector = request(PipelineSelectorV1::PlironShadow, 0x17, 0x27, limits());
-    let calls = Rc::new(RefCell::new(Vec::new()));
-    let mut driver = driver(
-        &calls,
-        FakeAction::ValidSourceRejection,
-        FakeAction::returning(source_rejection(&wrong_selector)),
-    );
-
-    let output = driver.compile_transaction(&routed);
-
-    assert_driver_rejection(&output, &routed, DriverDiagnosticV1::OutputSelectorMismatch);
-    assert_eq!(calls.borrow().len(), 1);
-    assert_eq!(calls.borrow()[0].slot, BackendSlot::PlironV1);
-}
-
-#[test]
-fn pliron_shadow_rejects_candidate_before_other_output_mismatches() {
-    let routed = request(PipelineSelectorV1::PlironShadow, 0x18, 0x28, limits());
-    let candidate_request = request(PipelineSelectorV1::PlironV1, 0x19, 0x28, limits());
-    let calls = Rc::new(RefCell::new(Vec::new()));
-    let mut driver = driver(
-        &calls,
-        FakeAction::returning(candidate_output(&candidate_request)),
-        FakeAction::ValidSourceRejection,
-    );
-
-    let output = driver.compile_transaction(&routed);
-
-    assert_driver_rejection(
-        &output,
-        &routed,
-        DriverDiagnosticV1::ShadowCandidateProhibited,
-    );
-    assert_eq!(calls.borrow().len(), 1);
-    assert_eq!(calls.borrow()[0].slot, BackendSlot::PlironShadow);
+    assert_eq!(calls.borrow().as_slice(), &[routed.identity()]);
 }
 
 #[test]
 fn backend_output_malformed_for_routed_input_is_rejected() {
-    let routed = request(PipelineSelectorV1::PlironV1, 0x1a, 0x2a, limits());
-    let colliding_identity = request(PipelineSelectorV1::PlironV1, 0x1a, 0x2b, limits());
+    let routed = request(0x16, 0x26, limits());
+    let colliding_identity = request(0x16, 0x27, limits());
     let calls = Rc::new(RefCell::new(Vec::new()));
     let mut driver = driver(
         &calls,
-        FakeAction::ValidSourceRejection,
-        FakeAction::returning(source_rejection(&colliding_identity)),
+        FakeAction::Return(Box::new(source_rejection(&colliding_identity))),
     );
 
     let output = driver.compile_transaction(&routed);
 
     assert_driver_rejection(&output, &routed, DriverDiagnosticV1::InvalidBackendOutput);
-    assert_eq!(calls.borrow().len(), 1);
-    assert_eq!(calls.borrow()[0].slot, BackendSlot::PlironV1);
+    assert_eq!(calls.borrow().as_slice(), &[routed.identity()]);
 }
 
 #[test]
 fn backend_output_valid_only_under_looser_limits_is_rejected() {
     let tight_limits = CompileLimitsV1::new(1, 1, 1, 1, 1, 1).unwrap();
-    let routed = request(PipelineSelectorV1::PlironV1, 0x1b, 0x2c, tight_limits);
-    let permissive = request(PipelineSelectorV1::PlironV1, 0x1b, 0x2c, limits());
+    let routed = request(0x17, 0x28, tight_limits);
+    let permissive = request(0x17, 0x28, limits());
     let calls = Rc::new(RefCell::new(Vec::new()));
     let mut driver = driver(
         &calls,
-        FakeAction::ValidSourceRejection,
-        FakeAction::returning(two_diagnostic_rejection(&permissive)),
+        FakeAction::Return(Box::new(two_diagnostic_rejection(&permissive))),
     );
 
     let output = driver.compile_transaction(&routed);
 
     assert_driver_rejection(&output, &routed, DriverDiagnosticV1::InvalidBackendOutput);
-    assert_eq!(calls.borrow().len(), 1);
+    assert_eq!(calls.borrow().as_slice(), &[routed.identity()]);
 }
 
 #[test]
 fn valid_source_rejection_preserves_the_complete_receipt_chain() {
-    let request = request(PipelineSelectorV1::PlironV1, 0x1c, 0x2d, limits());
+    let request = request(0x18, 0x29, limits());
     let expected = source_rejection(&request);
     let calls = Rc::new(RefCell::new(Vec::new()));
-    let mut driver = driver(
-        &calls,
-        FakeAction::ValidSourceRejection,
-        FakeAction::returning(expected.clone()),
-    );
+    let mut driver = driver(&calls, FakeAction::Return(Box::new(expected.clone())));
 
     let output = driver.compile_transaction(&request);
 
@@ -510,5 +349,5 @@ fn valid_source_rejection_preserves_the_complete_receipt_chain() {
         output.receipts()[0].output_obligations_identity(),
         Some(output.receipts()[1].input_obligations_identity())
     );
-    assert_eq!(calls.borrow().len(), 1);
+    assert_eq!(calls.borrow().as_slice(), &[request.identity()]);
 }

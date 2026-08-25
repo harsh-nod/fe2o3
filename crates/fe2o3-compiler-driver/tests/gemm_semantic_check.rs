@@ -3,8 +3,8 @@ use std::{cell::Cell, rc::Rc};
 use fe2o3_compiler_api::{
     CompileDispositionV1, CompileLimitsV1, CompileOutputV1, CompileRequestV1,
     CompilerProfileIdentityV1, CompilerStageV1, KernelInstanceIdentityV1, ObligationSetIdentityV1,
-    PipelineConfigurationIdentityV1, PipelineSelectorV1, RequestIdentityV1,
-    SnapshotFormatIdentityV1, SnapshotIdentityV1, StageSnapshotV1, TargetProfileIdentityV1,
+    PipelineConfigurationIdentityV1, RequestIdentityV1, SnapshotFormatIdentityV1,
+    SnapshotIdentityV1, StageSnapshotV1, TargetProfileIdentityV1,
 };
 use fe2o3_compiler_driver::{
     AdmittedGemmCompilerBackendV1, CompilerBackendFailureV1, GemmProofEvaluationFailureV1,
@@ -32,7 +32,6 @@ fn request(
         TargetProfileIdentityV1::from_untrusted_bytes([4; 32]),
         PipelineConfigurationIdentityV1::from_untrusted_bytes([5; 32]),
         obligation_set_identity,
-        PipelineSelectorV1::PlironV1,
         StageSnapshotV1::new(
             CompilerStageV1::FrontendInput,
             snapshot_identity,
@@ -63,18 +62,16 @@ enum SameIdentityRequestMutation {
     CompilerProfile,
     TargetProfile,
     PipelineConfiguration,
-    Selector,
     Limits,
     SnapshotFormat,
     SnapshotPayload,
 }
 
-const SAME_IDENTITY_REQUEST_MUTATIONS: [SameIdentityRequestMutation; 8] = [
+const SAME_IDENTITY_REQUEST_MUTATIONS: [SameIdentityRequestMutation; 7] = [
     SameIdentityRequestMutation::KernelInstance,
     SameIdentityRequestMutation::CompilerProfile,
     SameIdentityRequestMutation::TargetProfile,
     SameIdentityRequestMutation::PipelineConfiguration,
-    SameIdentityRequestMutation::Selector,
     SameIdentityRequestMutation::Limits,
     SameIdentityRequestMutation::SnapshotFormat,
     SameIdentityRequestMutation::SnapshotPayload,
@@ -107,10 +104,6 @@ fn mutate_request_with_same_identity(
             PipelineConfigurationIdentityV1::from_untrusted_bytes([15; 32])
         }
         _ => request.pipeline_configuration_identity(),
-    };
-    let selector = match mutation {
-        SameIdentityRequestMutation::Selector => PipelineSelectorV1::PlironShadow,
-        _ => request.selector(),
     };
     let limits = match mutation {
         SameIdentityRequestMutation::Limits => CompileLimitsV1::new(
@@ -149,7 +142,6 @@ fn mutate_request_with_same_identity(
         target_profile_identity,
         pipeline_configuration_identity,
         request.input_obligations_identity(),
-        selector,
         input,
         limits,
     )

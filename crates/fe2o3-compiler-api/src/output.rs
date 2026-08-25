@@ -4,8 +4,8 @@ use core::fmt;
 
 use crate::{
     CandidateFormatIdentityV1, CandidateIdentityV1, CanonicalDiagnosticV1, CompileRequestV1,
-    CompilerStageV1, PipelineSelectorV1, ReceiptOutcomeV1, RequestIdentityV1, SnapshotIdentityV1,
-    StageReceiptV1, StageSnapshotV1,
+    CompilerStageV1, ReceiptOutcomeV1, RequestIdentityV1, SnapshotIdentityV1, StageReceiptV1,
+    StageSnapshotV1,
 };
 
 /// Hard maximum byte length of one V1 executable candidate.
@@ -103,8 +103,6 @@ impl ExecutableCandidateV1 {
 pub enum CompileDispositionV1 {
     /// Compilation rejected the input transactionally.
     Rejected = 1,
-    /// Inspect-only shadow processing completed without an executable candidate.
-    ShadowOnly = 2,
     /// An artifact-producing pipeline returned an opaque executable candidate.
     CandidateProduced = 3,
 }
@@ -222,18 +220,6 @@ pub enum CompileOutputErrorV1 {
     SuccessfulOutputWithError,
     /// A rejected output included an executable candidate.
     RejectedOutputWithCandidate,
-    /// Shadow output included an executable candidate.
-    ShadowOutputWithCandidate,
-    /// The shadow disposition was used with a non-shadow selector.
-    ShadowDispositionSelectorMismatch {
-        /// Selector copied from the request.
-        selector: PipelineSelectorV1,
-    },
-    /// A candidate disposition was selected for an inspect-only pipeline.
-    CandidateNotAllowedForSelector {
-        /// Selector copied from the request.
-        selector: PipelineSelectorV1,
-    },
     /// Candidate-producing disposition omitted the candidate.
     CandidateDispositionWithoutCandidate,
     /// A candidate was supplied for a disposition that does not admit it.
@@ -258,12 +244,11 @@ impl std::error::Error for CompileOutputErrorV1 {}
 /// Fully validated result of one V1 compile request.
 ///
 /// Construction enforces deterministic ordering, receipt chaining, caller
-/// limits, transactional rejection, and selector disposition. It does not
+/// limits and transactional rejection. It does not
 /// authenticate any commitment or grant authority over the candidate.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompileOutputV1 {
     request_identity: RequestIdentityV1,
-    selector: PipelineSelectorV1,
     disposition: CompileDispositionV1,
     snapshots: Vec<StageSnapshotV1>,
     receipts: Vec<StageReceiptV1>,
@@ -291,17 +276,10 @@ impl CompileOutputV1 {
         validate_diagnostic_sequence(&diagnostics)?;
         validate_snapshot_identities(request, &snapshots)?;
         validate_receipts(request, disposition, &snapshots, &receipts)?;
-        validate_disposition(
-            request,
-            disposition,
-            &snapshots,
-            &diagnostics,
-            candidate.as_ref(),
-        )?;
+        validate_disposition(disposition, &snapshots, &diagnostics, candidate.as_ref())?;
 
         Ok(Self {
             request_identity: request.identity(),
-            selector: request.selector(),
             disposition,
             snapshots,
             receipts,
@@ -313,11 +291,6 @@ impl CompileOutputV1 {
     /// Returns the request commitment copied from the validated request.
     pub const fn request_identity(&self) -> RequestIdentityV1 {
         self.request_identity
-    }
-
-    /// Returns the selected compiler pipeline.
-    pub const fn selector(&self) -> PipelineSelectorV1 {
-        self.selector
     }
 
     /// Returns the output disposition.
@@ -525,7 +498,6 @@ fn validate_receipts(
 }
 
 fn validate_disposition(
-    request: &CompileRequestV1,
     disposition: CompileDispositionV1,
     snapshots: &[StageSnapshotV1],
     diagnostics: &[CanonicalDiagnosticV1],
@@ -541,25 +513,7 @@ fn validate_disposition(
                 return Err(CompileOutputErrorV1::RejectedOutputWithoutError);
             }
         }
-        CompileDispositionV1::ShadowOnly => {
-            if request.selector() != PipelineSelectorV1::PlironShadow {
-                return Err(CompileOutputErrorV1::ShadowDispositionSelectorMismatch {
-                    selector: request.selector(),
-                });
-            }
-            if candidate.is_some() {
-                return Err(CompileOutputErrorV1::ShadowOutputWithCandidate);
-            }
-            if has_error {
-                return Err(CompileOutputErrorV1::SuccessfulOutputWithError);
-            }
-        }
         CompileDispositionV1::CandidateProduced => {
-            if !request.selector().may_produce_candidate() {
-                return Err(CompileOutputErrorV1::CandidateNotAllowedForSelector {
-                    selector: request.selector(),
-                });
-            }
             if has_error {
                 return Err(CompileOutputErrorV1::SuccessfulOutputWithError);
             }
@@ -612,7 +566,7 @@ mod tests {
         CompileLimitsV1::new(4, 4, 4, 16, 32, 16).unwrap()
     }
 
-    fn request(selector: PipelineSelectorV1, limits: CompileLimitsV1) -> CompileRequestV1 {
+    fn request(limits: CompileLimitsV1) -> CompileRequestV1 {
         CompileRequestV1::new(
             RequestIdentityV1::from_untrusted_bytes([1; 32]),
             KernelInstanceIdentityV1::from_untrusted_bytes([2; 32]),
@@ -620,7 +574,6 @@ mod tests {
             TargetProfileIdentityV1::from_untrusted_bytes([4; 32]),
             PipelineConfigurationIdentityV1::from_untrusted_bytes([5; 32]),
             ObligationSetIdentityV1::from_untrusted_bytes([9; 32]),
-            selector,
             snapshot(CompilerStageV1::FrontendInput, 6, 1),
             limits,
         )
@@ -680,7 +633,7 @@ mod tests {
 
     #[test]
     fn artifact_pipeline_returns_only_a_candidate_bound_to_terminal_hsaco() {
-        let request = request(PipelineSelectorV1::PlironV1, limits());
+        let request = request(limits());
         let output = CompileOutputV1::new(
             &request,
             CompileDispositionV1::CandidateProduced,
@@ -692,65 +645,14 @@ mod tests {
         .unwrap();
 
         assert_eq!(output.request_identity(), request.identity());
-        assert_eq!(output.selector(), PipelineSelectorV1::PlironV1);
         assert_eq!(output.snapshots().len(), 1);
         assert_eq!(output.receipts().len(), 1);
         assert_eq!(output.candidate().unwrap().bytes(), &[0x7f; 4]);
     }
 
     #[test]
-    fn shadow_pipeline_can_return_inspection_records_but_no_candidate() {
-        let request = request(PipelineSelectorV1::PlironShadow, limits());
-        let output = CompileOutputV1::new(
-            &request,
-            CompileDispositionV1::ShadowOnly,
-            vec![snapshot(CompilerStageV1::Kernel, 13, 4)],
-            vec![receipt(0, CompilerStageV1::Kernel, 6, 13)],
-            vec![diagnostic(0, DiagnosticSeverityV1::Note)],
-            None,
-        )
-        .unwrap();
-
-        assert_eq!(output.disposition(), CompileDispositionV1::ShadowOnly);
-        assert!(output.candidate().is_none());
-    }
-
-    #[test]
-    fn selector_and_disposition_cannot_broaden_candidate_policy() {
-        let shadow = request(PipelineSelectorV1::PlironShadow, limits());
-        assert_eq!(
-            CompileOutputV1::new(
-                &shadow,
-                CompileDispositionV1::CandidateProduced,
-                vec![snapshot(CompilerStageV1::Hsaco, 13, 1)],
-                vec![receipt(0, CompilerStageV1::Hsaco, 6, 13)],
-                vec![],
-                Some(candidate(13, 1)),
-            ),
-            Err(CompileOutputErrorV1::CandidateNotAllowedForSelector {
-                selector: PipelineSelectorV1::PlironShadow,
-            })
-        );
-
-        let pliron = request(PipelineSelectorV1::PlironV1, limits());
-        assert_eq!(
-            CompileOutputV1::new(
-                &pliron,
-                CompileDispositionV1::ShadowOnly,
-                vec![snapshot(CompilerStageV1::Kernel, 13, 1)],
-                vec![receipt(0, CompilerStageV1::Kernel, 6, 13)],
-                vec![],
-                None,
-            ),
-            Err(CompileOutputErrorV1::ShadowDispositionSelectorMismatch {
-                selector: PipelineSelectorV1::PlironV1,
-            })
-        );
-    }
-
-    #[test]
     fn rejected_output_requires_an_error_and_never_a_candidate() {
-        let request = request(PipelineSelectorV1::PlironV1, limits());
+        let request = request(limits());
         assert_eq!(
             CompileOutputV1::new(
                 &request,
@@ -788,11 +690,11 @@ mod tests {
 
     #[test]
     fn successful_outputs_require_receipts_and_reject_error_diagnostics() {
-        let request = request(PipelineSelectorV1::PlironShadow, limits());
+        let request = request(limits());
         assert_eq!(
             CompileOutputV1::new(
                 &request,
-                CompileDispositionV1::ShadowOnly,
+                CompileDispositionV1::CandidateProduced,
                 vec![],
                 vec![],
                 vec![],
@@ -803,7 +705,7 @@ mod tests {
         assert_eq!(
             CompileOutputV1::new(
                 &request,
-                CompileDispositionV1::ShadowOnly,
+                CompileDispositionV1::CandidateProduced,
                 vec![snapshot(CompilerStageV1::Kernel, 13, 1)],
                 vec![receipt(0, CompilerStageV1::Kernel, 6, 13)],
                 vec![diagnostic(0, DiagnosticSeverityV1::Error)],
@@ -815,11 +717,11 @@ mod tests {
 
     #[test]
     fn diagnostic_and_receipt_sequences_are_contiguous() {
-        let request = request(PipelineSelectorV1::PlironShadow, limits());
+        let request = request(limits());
         assert_eq!(
             CompileOutputV1::new(
                 &request,
-                CompileDispositionV1::ShadowOnly,
+                CompileDispositionV1::CandidateProduced,
                 vec![snapshot(CompilerStageV1::Kernel, 13, 1)],
                 vec![receipt(1, CompilerStageV1::Kernel, 6, 13)],
                 vec![],
@@ -833,7 +735,7 @@ mod tests {
         assert_eq!(
             CompileOutputV1::new(
                 &request,
-                CompileDispositionV1::ShadowOnly,
+                CompileDispositionV1::CandidateProduced,
                 vec![snapshot(CompilerStageV1::Kernel, 13, 1)],
                 vec![receipt(0, CompilerStageV1::Kernel, 6, 13)],
                 vec![diagnostic(1, DiagnosticSeverityV1::Note)],
@@ -848,11 +750,11 @@ mod tests {
 
     #[test]
     fn receipt_chain_and_snapshot_order_are_exact() {
-        let request = request(PipelineSelectorV1::PlironShadow, limits());
+        let request = request(limits());
         assert_eq!(
             CompileOutputV1::new(
                 &request,
-                CompileDispositionV1::ShadowOnly,
+                CompileDispositionV1::CandidateProduced,
                 vec![snapshot(CompilerStageV1::Mir, 13, 1)],
                 vec![receipt(0, CompilerStageV1::Mir, 99, 13)],
                 vec![],
@@ -863,7 +765,7 @@ mod tests {
         assert_eq!(
             CompileOutputV1::new(
                 &request,
-                CompileDispositionV1::ShadowOnly,
+                CompileDispositionV1::CandidateProduced,
                 vec![
                     snapshot(CompilerStageV1::Kernel, 14, 1),
                     snapshot(CompilerStageV1::Mir, 13, 1),
@@ -893,7 +795,7 @@ mod tests {
         assert_eq!(
             CompileOutputV1::new(
                 &request,
-                CompileDispositionV1::ShadowOnly,
+                CompileDispositionV1::CandidateProduced,
                 vec![snapshot(CompilerStageV1::Mir, 13, 1)],
                 vec![wrong_obligations],
                 vec![],
@@ -905,11 +807,11 @@ mod tests {
 
     #[test]
     fn snapshots_are_unique_and_match_receipt_stage() {
-        let request = request(PipelineSelectorV1::PlironShadow, limits());
+        let request = request(limits());
         assert_eq!(
             CompileOutputV1::new(
                 &request,
-                CompileDispositionV1::ShadowOnly,
+                CompileDispositionV1::CandidateProduced,
                 vec![snapshot(CompilerStageV1::Kernel, 6, 1)],
                 vec![receipt(0, CompilerStageV1::Kernel, 6, 6)],
                 vec![],
@@ -920,7 +822,7 @@ mod tests {
         assert_eq!(
             CompileOutputV1::new(
                 &request,
-                CompileDispositionV1::ShadowOnly,
+                CompileDispositionV1::CandidateProduced,
                 vec![snapshot(CompilerStageV1::Gpu, 13, 1)],
                 vec![receipt(0, CompilerStageV1::Kernel, 6, 13)],
                 vec![],
@@ -937,11 +839,11 @@ mod tests {
     #[test]
     fn request_limits_apply_to_counts_and_payloads() {
         let tight = CompileLimitsV1::new(1, 1, 1, 2, 2, 2).unwrap();
-        let request = request(PipelineSelectorV1::PlironShadow, tight);
+        let request = request(tight);
         assert_eq!(
             CompileOutputV1::new(
                 &request,
-                CompileDispositionV1::ShadowOnly,
+                CompileDispositionV1::CandidateProduced,
                 vec![snapshot(CompilerStageV1::Kernel, 13, 3)],
                 vec![receipt(0, CompilerStageV1::Kernel, 6, 13)],
                 vec![],
@@ -956,7 +858,7 @@ mod tests {
         assert_eq!(
             CompileOutputV1::new(
                 &request,
-                CompileDispositionV1::ShadowOnly,
+                CompileDispositionV1::CandidateProduced,
                 vec![snapshot(CompilerStageV1::Kernel, 13, 1)],
                 vec![receipt(0, CompilerStageV1::Kernel, 6, 13)],
                 vec![
@@ -975,7 +877,7 @@ mod tests {
 
     #[test]
     fn candidate_must_bind_to_terminal_hsaco_snapshot() {
-        let request = request(PipelineSelectorV1::PlironV1, limits());
+        let request = request(limits());
         assert_eq!(
             CompileOutputV1::new(
                 &request,
@@ -1004,7 +906,7 @@ mod tests {
 
     #[test]
     fn rejected_receipt_is_terminal_and_only_valid_for_rejection() {
-        let request = request(PipelineSelectorV1::PlironShadow, limits());
+        let request = request(limits());
         assert_eq!(
             CompileOutputV1::new(
                 &request,
@@ -1022,7 +924,7 @@ mod tests {
         assert_eq!(
             CompileOutputV1::new(
                 &request,
-                CompileDispositionV1::ShadowOnly,
+                CompileDispositionV1::CandidateProduced,
                 vec![],
                 vec![rejected_receipt(0, 6)],
                 vec![],
