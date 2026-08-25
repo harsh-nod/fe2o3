@@ -1,4 +1,6 @@
-//! Closed, typed scalar semantics shared by independent CPU and GPU projections.
+//! Closed typed scalar-operator transcripts emitted by independent CPU and GPU
+//! projections. Equality proves operator identity/congruence at the MIR/KIR
+//! boundary only; it grants no arithmetic-value or target-instruction authority.
 
 use core::fmt;
 use std::collections::BTreeSet;
@@ -111,6 +113,26 @@ impl ProductionNumericalContractV2 {
             )
         )
     }
+
+    pub fn exact_for_expression(expression: &ProductionSemanticExpressionV2) -> Self {
+        if expression.contains_float_semantics() {
+            Self::ExactIeee754OperatorCongruence {
+                rounding: ProductionIeeeRoundingModeV2::NearestTiesToEven,
+                exceptional_values: ProductionIeeeExceptionalValuePolicyV2::PreserveExactBits,
+            }
+        } else {
+            Self::ExactBitVectorOperatorCongruence
+        }
+    }
+
+    pub fn admits_expression(self, expression: &ProductionSemanticExpressionV2) -> bool {
+        self.is_supported()
+            && if expression.contains_float_semantics() {
+                matches!(self, Self::ExactIeee754OperatorCongruence { .. })
+            } else {
+                matches!(self, Self::ExactBitVectorOperatorCongruence)
+            }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -152,7 +174,10 @@ pub enum ProductionSemanticComparisonV2 {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ProductionSemanticCastV2 {
     Integer,
-    Float,
+    IntegerToFloat,
+    FloatToFloat,
+    /// Rust `as` conversion, including NaN-to-zero and endpoint saturation.
+    FloatToIntegerSaturating,
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -207,6 +232,31 @@ impl ProductionSemanticExpressionV2 {
             | Self::Select { scalar, .. } => *scalar,
             Self::Compare { .. } => ProductionSemanticScalarTypeV2::Bool,
             Self::Cast { target, .. } => *target,
+        }
+    }
+
+    pub fn contains_float_semantics(&self) -> bool {
+        if self.scalar().is_float() {
+            return true;
+        }
+        match self {
+            Self::Symbol { .. } | Self::Constant { .. } => false,
+            Self::Unary { operand, .. } | Self::Cast { operand, .. } => {
+                operand.contains_float_semantics()
+            }
+            Self::Binary { lhs, rhs, .. } | Self::Compare { lhs, rhs, .. } => {
+                lhs.contains_float_semantics() || rhs.contains_float_semantics()
+            }
+            Self::Select {
+                condition,
+                when_true,
+                when_false,
+                ..
+            } => {
+                condition.contains_float_semantics()
+                    || when_true.contains_float_semantics()
+                    || when_false.contains_float_semantics()
+            }
         }
     }
 
@@ -429,8 +479,17 @@ impl ProductionSemanticExpressionV2 {
                 lhs,
                 rhs,
             } => {
+                let shift = matches!(
+                    operation,
+                    ProductionSemanticBinaryOpV2::ShiftLeft
+                        | ProductionSemanticBinaryOpV2::ShiftRight
+                );
                 if lhs.scalar() != *scalar
-                    || rhs.scalar() != *scalar
+                    || if shift {
+                        !rhs.scalar().is_integer()
+                    } else {
+                        rhs.scalar() != *scalar
+                    }
                     || !scalar.is_integer() && !scalar.is_float()
                     || scalar.is_float()
                         && (!matches!(
@@ -500,9 +559,14 @@ impl ProductionSemanticExpressionV2 {
                                 || (!target.is_integer()
                                     && *target != ProductionSemanticScalarTypeV2::Bool)
                         }
-                        ProductionSemanticCastV2::Float => {
-                            (!source.is_float() && !source.is_integer())
-                                || (!target.is_float() && !target.is_integer())
+                        ProductionSemanticCastV2::IntegerToFloat => {
+                            !source.is_integer() || !target.is_float()
+                        }
+                        ProductionSemanticCastV2::FloatToFloat => {
+                            !source.is_float() || !target.is_float()
+                        }
+                        ProductionSemanticCastV2::FloatToIntegerSaturating => {
+                            !source.is_float() || !target.is_integer()
                         }
                     }
                 {
@@ -888,6 +952,80 @@ mod tests {
     }
 
     #[test]
+    fn overflow_mode_substitution_changes_identity_and_cannot_mint_completion() {
+        let scalar = ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits: 32,
+        };
+        let make = |overflow| ProductionSemanticExpressionV2::Binary {
+            operation: ProductionSemanticBinaryOpV2::Add,
+            scalar,
+            overflow,
+            lhs: Box::new(u32_symbol(1)),
+            rhs: Box::new(ProductionSemanticExpressionV2::Constant { scalar, bits: 1 }),
+        };
+        let wrapping = make(ProductionOverflowContractV2::Wrapping);
+        let checked = make(ProductionOverflowContractV2::Checked);
+        assert_ne!(wrapping.canonical_sha256(), checked.canonical_sha256());
+        assert!(wrapping.validate_static_domains().is_ok());
+        assert_eq!(
+            checked.validate_static_domains(),
+            Err(ProductionSemanticExpressionErrorV2::IncompleteDomain),
+        );
+    }
+
+    #[test]
+    fn mixed_float_expressions_require_the_ieee_operator_contract() {
+        let float = ProductionSemanticScalarTypeV2::Float { bits: 32 };
+        let expression = ProductionSemanticExpressionV2::Compare {
+            operation: ProductionSemanticComparisonV2::LessThan,
+            operand_scalar: float,
+            lhs: Box::new(ProductionSemanticExpressionV2::Symbol {
+                symbol: 0,
+                scalar: float,
+            }),
+            rhs: Box::new(ProductionSemanticExpressionV2::Constant {
+                scalar: float,
+                bits: 0,
+            }),
+        };
+        assert_eq!(expression.scalar(), ProductionSemanticScalarTypeV2::Bool);
+        assert!(
+            !ProductionNumericalContractV2::ExactBitVectorOperatorCongruence
+                .admits_expression(&expression)
+        );
+        assert!(matches!(
+            ProductionNumericalContractV2::exact_for_expression(&expression),
+            ProductionNumericalContractV2::ExactIeee754OperatorCongruence { .. }
+        ));
+    }
+
+    #[test]
+    fn float_to_integer_cast_binds_the_saturating_policy() {
+        let source = ProductionSemanticScalarTypeV2::Float { bits: 32 };
+        let target = ProductionSemanticScalarTypeV2::Integer {
+            signed: true,
+            bits: 32,
+        };
+        let operand = Box::new(ProductionSemanticExpressionV2::Constant {
+            scalar: source,
+            bits: f32::NAN.to_bits().into(),
+        });
+        let saturating = ProductionSemanticExpressionV2::Cast {
+            kind: ProductionSemanticCastV2::FloatToIntegerSaturating,
+            source,
+            target,
+            operand,
+        };
+        assert!(saturating.validate().is_ok());
+        assert!(saturating.validate_static_domains().is_ok());
+        assert!(matches!(
+            ProductionNumericalContractV2::exact_for_expression(&saturating),
+            ProductionNumericalContractV2::ExactIeee754OperatorCongruence { .. }
+        ));
+    }
+
+    #[test]
     fn partial_operations_require_statically_discharged_domains() {
         let scalar = ProductionSemanticScalarTypeV2::Integer {
             signed: false,
@@ -955,6 +1093,89 @@ mod tests {
         assert_ne!(
             expression.canonical_transcript_sha256(nearest),
             expression.canonical_transcript_sha256(toward_zero),
+        );
+    }
+
+    #[test]
+    fn type_symbol_overflow_cast_and_policy_mutations_are_all_bound() {
+        let u32_scalar = ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits: 32,
+        };
+        let u64_scalar = ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits: 64,
+        };
+        let binary = |symbol, scalar, overflow| ProductionSemanticExpressionV2::Binary {
+            operation: ProductionSemanticBinaryOpV2::Add,
+            scalar,
+            overflow,
+            lhs: Box::new(ProductionSemanticExpressionV2::Symbol { symbol, scalar }),
+            rhs: Box::new(ProductionSemanticExpressionV2::Constant { scalar, bits: 1 }),
+        };
+        let base = ProductionSemanticExpressionV2::Cast {
+            kind: ProductionSemanticCastV2::Integer,
+            source: u32_scalar,
+            target: u64_scalar,
+            operand: Box::new(binary(
+                1,
+                u32_scalar,
+                ProductionOverflowContractV2::Wrapping,
+            )),
+        };
+        let mutations = [
+            ProductionSemanticExpressionV2::Cast {
+                kind: ProductionSemanticCastV2::Integer,
+                source: u32_scalar,
+                target: u64_scalar,
+                operand: Box::new(binary(
+                    2,
+                    u32_scalar,
+                    ProductionOverflowContractV2::Wrapping,
+                )),
+            },
+            ProductionSemanticExpressionV2::Cast {
+                kind: ProductionSemanticCastV2::Integer,
+                source: u64_scalar,
+                target: u32_scalar,
+                operand: Box::new(binary(
+                    1,
+                    u64_scalar,
+                    ProductionOverflowContractV2::Wrapping,
+                )),
+            },
+            ProductionSemanticExpressionV2::Cast {
+                kind: ProductionSemanticCastV2::Integer,
+                source: u32_scalar,
+                target: u64_scalar,
+                operand: Box::new(binary(1, u32_scalar, ProductionOverflowContractV2::Checked)),
+            },
+            ProductionSemanticExpressionV2::Cast {
+                kind: ProductionSemanticCastV2::IntegerToFloat,
+                source: u32_scalar,
+                target: ProductionSemanticScalarTypeV2::Float { bits: 64 },
+                operand: Box::new(binary(
+                    1,
+                    u32_scalar,
+                    ProductionOverflowContractV2::Wrapping,
+                )),
+            },
+        ];
+        let contract = ProductionNumericalContractV2::ExactBitVectorOperatorCongruence;
+        for mutation in mutations {
+            assert_ne!(
+                base.canonical_transcript_sha256(contract),
+                mutation.canonical_transcript_sha256(contract),
+            );
+        }
+        assert_ne!(
+            base.canonical_transcript_sha256(contract),
+            base.canonical_transcript_sha256(
+                ProductionNumericalContractV2::ExactIeee754OperatorCongruence {
+                    rounding: ProductionIeeeRoundingModeV2::NearestTiesToEven,
+                    exceptional_values: ProductionIeeeExceptionalValuePolicyV2::PreserveExactBits,
+                },
+            ),
         );
     }
 }

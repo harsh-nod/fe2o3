@@ -24,8 +24,9 @@ use fe2o3_pliron::{
     ProductionRankedKernelErrorV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
     ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
     ProductionReferenceOutputSiteV2, ProductionReferenceProofV1, ProductionReferenceProofV2,
-    ProductionSemanticBinaryOpV2, ProductionSemanticExpressionV2, ProductionSemanticScalarTypeV2,
-    ProductionSessionErrorV1, ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
+    ProductionSemanticBinaryOpV2, ProductionSemanticExpressionErrorV2,
+    ProductionSemanticExpressionV2, ProductionSemanticScalarTypeV2, ProductionSessionErrorV1,
+    ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
     compile_ranked_kernel_for_lowering_v2, normalized_effect_refinement_hash_for_kernel_v2,
     normalized_functional_refinement_formula_hash_for_kernel_v2,
 };
@@ -1002,6 +1003,72 @@ fn typed_semantic_commitments_reach_all_mandatory_v2_passes() {
     assert!(summary.is_non_vacuous());
     assert_eq!(summary.expression_roots, 2);
     assert_eq!(summary.exact_bitvector_operator_congruence_roots, 2);
+}
+
+#[test]
+fn undefined_typed_expressions_are_rejected_before_external_receipt_import() {
+    let scalar = ProductionSemanticScalarTypeV2::Integer {
+        signed: false,
+        bits: 32,
+    };
+    let symbol = || ProductionSemanticExpressionV2::Symbol { symbol: 9, scalar };
+    let constant = |bits| ProductionSemanticExpressionV2::Constant { scalar, bits };
+    let (proof, _imported, _policy) = imported_reference(
+        functional_binding(4, proof_digest(44)),
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+    );
+    for expression in [
+        ProductionSemanticExpressionV2::Binary {
+            operation: ProductionSemanticBinaryOpV2::Add,
+            scalar,
+            overflow: ProductionOverflowContractV2::Checked,
+            lhs: Box::new(symbol()),
+            rhs: Box::new(constant(1)),
+        },
+        ProductionSemanticExpressionV2::Binary {
+            operation: ProductionSemanticBinaryOpV2::Divide,
+            scalar,
+            overflow: ProductionOverflowContractV2::Wrapping,
+            lhs: Box::new(symbol()),
+            rhs: Box::new(symbol()),
+        },
+    ] {
+        let actual = ProductionRankedValueIdV1::new(0);
+        let expected = ProductionRankedValueIdV1::new(1);
+        let error = ProductionRankedKernelV1::new(
+            "external_receipt_cannot_bypass_definedness",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                vec![
+                    ProductionRankedOperationV1::SemanticExpression {
+                        result: actual,
+                        expression,
+                        numerical_contract:
+                            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                    },
+                    ProductionRankedOperationV1::SemanticExpression {
+                        result: expected,
+                        expression: constant(0),
+                        numerical_contract:
+                            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                    },
+                    ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent {
+                        actual: local(actual),
+                        expected: local(expected),
+                        proof,
+                    },
+                ],
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            ProductionRankedKernelErrorV1::InvalidSemanticExpression(
+                ProductionSemanticExpressionErrorV2::IncompleteDomain,
+            ),
+        );
+    }
 }
 
 #[test]

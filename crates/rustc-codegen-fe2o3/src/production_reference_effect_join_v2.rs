@@ -8,10 +8,13 @@ use dialect_kernel::{
 use fe2o3_functional_proof::{FunctionalRefinementSubjectsV2, SafeReferenceKindV2};
 use fe2o3_pliron::{
     ProductionConstructionV1, ProductionEffectRefinementContractV2, ProductionGpuWriteSiteV2,
-    ProductionRankedBlockV1, ProductionRankedCompileErrorV2, ProductionRankedKernelErrorV1,
+    ProductionNumericalContractV2, ProductionOverflowContractV2, ProductionRankedBlockV1,
+    ProductionRankedCompileErrorV2, ProductionRankedKernelErrorV1,
     ProductionRankedKernelLoweringInputV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
     ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
-    ProductionReferenceOutputSiteV2, ProductionReferenceProofV2, ProductionSessionLimitsV1,
+    ProductionReferenceOutputSiteV2, ProductionReferenceProofV2, ProductionSemanticBinaryOpV2,
+    ProductionSemanticCastV2, ProductionSemanticComparisonV2, ProductionSemanticExpressionV2,
+    ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2, ProductionSessionLimitsV1,
     compile_ranked_kernel_for_lowering_v2,
 };
 use fe2o3_proof_contracts::DigestV1;
@@ -22,8 +25,9 @@ use crate::reference_effect_bijection_v1::{
 };
 use crate::reference_effect_v1::{
     AuthenticatedReferenceEffectBindingsV1, ReferenceArgumentRelationV1, ReferenceBinaryOpV1,
-    ReferenceConstantV1, ReferenceEffectExpressionV1, ReferenceOutputCoordinateV1,
-    ReferencePathPredicateV1, ReferenceScalarTypeV1,
+    ReferenceCastKindV1, ReferenceConstantV1, ReferenceEffectExpressionV1, ReferenceEffectIrV1,
+    ReferenceOutputCoordinateV1, ReferencePathPredicateV1, ReferenceScalarTypeV1,
+    ReferenceUnaryOpV1,
 };
 
 const ROOT_NAME_V2: &str = "semantic_safety_module";
@@ -38,7 +42,7 @@ pub(crate) struct RankedGpuWriteV2 {
     pub(crate) allocation_origin: u64,
     pub(crate) view: ProductionRankedValueV1,
     pub(crate) indices: Vec<ProductionRankedValueV1>,
-    pub(crate) value: Option<u64>,
+    pub(crate) value: Result<ProductionSemanticExpressionV2, &'static str>,
 }
 
 pub(crate) fn reserved_reference_value_count_v2(
@@ -175,15 +179,24 @@ pub(crate) fn prepare_reference_effect_request_v2(
             write.block == pair.gpu_block as usize && write.operation == pair.gpu_operation as usize
         })
         .ok_or(ProductionReferenceEffectJoinErrorV2::WriteLocation)?;
-    let gpu_scalar =
-        write
-            .value
-            .ok_or(ProductionReferenceEffectJoinErrorV2::UnmodeledGpuValue {
-                block: write.block,
-                operation: write.operation,
-            })?;
-    let reference_value =
-        reference_constant_expression_value(reference_write.rhs.clone(), *element)?;
+    let gpu_expression = write.value.clone().map_err(|detail| {
+        ProductionReferenceEffectJoinErrorV2::UnmodeledGpuValue {
+            block: write.block,
+            operation: write.operation,
+            detail,
+        }
+    })?;
+    let reference_expression =
+        reference_expression_v2(&binding.effect_ir, &reference_write.rhs, *element)?;
+    if gpu_expression.scalar() != reference_expression.scalar() {
+        return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedGpuEffect {
+            block: write.block,
+            operation: write.operation,
+            detail: "GPU and reference RHS scalar types disagree",
+        });
+    }
+    let numerical_contract =
+        ProductionNumericalContractV2::exact_for_expression(&reference_expression);
     let reference_indices = reference_ranked_indices_v2(&kernel, &reference_write.coordinate)?;
     let expected_reserved_values = 3_usize
         .checked_add(reference_indices.len())
@@ -225,11 +238,17 @@ pub(crate) fn prepare_reference_effect_request_v2(
         .ok_or(ProductionReferenceEffectJoinErrorV2::WriteLocation)?;
     let mut entry_operations = entry.operations().to_vec();
     replace_reserved_semantic_constant_v2(&mut entry_operations, true_value, 1)?;
-    replace_reserved_semantic_constant_v2(&mut entry_operations, gpu_value_id, gpu_scalar)?;
-    replace_reserved_semantic_constant_v2(
+    replace_reserved_semantic_expression_v2(
+        &mut entry_operations,
+        gpu_value_id,
+        gpu_expression,
+        numerical_contract,
+    )?;
+    replace_reserved_semantic_expression_v2(
         &mut entry_operations,
         reference_value_id,
-        reference_value,
+        reference_expression,
+        numerical_contract,
     )?;
     for (axis, identity) in reserved_values[3..].iter().copied().enumerate() {
         let expected_symbol = u32::try_from(axis).map_err(|_| {
@@ -321,46 +340,241 @@ pub(crate) fn prepare_reference_effect_request_v2(
     })
 }
 
-fn reference_constant_expression_value(
-    value: ReferenceEffectExpressionV1,
-    scalar: ReferenceScalarTypeV1,
-) -> Result<u64, ProductionReferenceEffectJoinErrorV2> {
-    if !supported_ranked_scalar_v2(scalar) {
-        return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
-            "per-coordinate source join currently accepts unsigned integer or bool output constants",
-        ));
-    }
-    let ReferenceEffectExpressionV1::Constant(ReferenceConstantV1::Scalar {
-        scalar: actual,
-        bits,
-    }) = value
-    else {
-        return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
-            "reference output RHS is not one normalized scalar constant",
-        ));
-    };
-    if actual != scalar {
-        return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
-            "reference output constant type disagrees with its logical ABI",
-        ));
-    }
-    u64::try_from(bits).map_err(|_| {
-        ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
-            "reference output constant does not fit the ranked semantic scalar domain",
-        )
+fn supported_ranked_scalar_v2(scalar: ReferenceScalarTypeV1) -> bool {
+    reference_scalar_v2(scalar).is_some()
+}
+
+fn reference_scalar_v2(scalar: ReferenceScalarTypeV1) -> Option<ProductionSemanticScalarTypeV2> {
+    Some(match scalar {
+        ReferenceScalarTypeV1::Bool => ProductionSemanticScalarTypeV2::Bool,
+        ReferenceScalarTypeV1::U8 => ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits: 8,
+        },
+        ReferenceScalarTypeV1::U16 => ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits: 16,
+        },
+        ReferenceScalarTypeV1::U32 => ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits: 32,
+        },
+        ReferenceScalarTypeV1::U64 | ReferenceScalarTypeV1::Usize => {
+            ProductionSemanticScalarTypeV2::Integer {
+                signed: false,
+                bits: 64,
+            }
+        }
+        ReferenceScalarTypeV1::I8 => ProductionSemanticScalarTypeV2::Integer {
+            signed: true,
+            bits: 8,
+        },
+        ReferenceScalarTypeV1::I16 => ProductionSemanticScalarTypeV2::Integer {
+            signed: true,
+            bits: 16,
+        },
+        ReferenceScalarTypeV1::I32 => ProductionSemanticScalarTypeV2::Integer {
+            signed: true,
+            bits: 32,
+        },
+        ReferenceScalarTypeV1::I64 | ReferenceScalarTypeV1::Isize => {
+            ProductionSemanticScalarTypeV2::Integer {
+                signed: true,
+                bits: 64,
+            }
+        }
+        ReferenceScalarTypeV1::F32 => ProductionSemanticScalarTypeV2::Float { bits: 32 },
+        ReferenceScalarTypeV1::F64 => ProductionSemanticScalarTypeV2::Float { bits: 64 },
     })
 }
 
-fn supported_ranked_scalar_v2(scalar: ReferenceScalarTypeV1) -> bool {
-    matches!(
-        scalar,
-        ReferenceScalarTypeV1::Bool
-            | ReferenceScalarTypeV1::U8
-            | ReferenceScalarTypeV1::U16
-            | ReferenceScalarTypeV1::U32
-            | ReferenceScalarTypeV1::U64
-            | ReferenceScalarTypeV1::Usize
-    )
+fn reference_expression_v2(
+    effect_ir: &ReferenceEffectIrV1,
+    expression: &ReferenceEffectExpressionV1,
+    expected: ReferenceScalarTypeV1,
+) -> Result<ProductionSemanticExpressionV2, ProductionReferenceEffectJoinErrorV2> {
+    let expression = reference_expression_inner_v2(effect_ir, expression, 0)?;
+    let expected = reference_scalar_v2(expected).ok_or(
+        ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+            "reference output scalar is outside typed semantic refinement V2",
+        ),
+    )?;
+    if expression.scalar() != expected {
+        return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+            "reference output RHS type disagrees with its logical ABI",
+        ));
+    }
+    expression
+        .validate()
+        .map_err(ProductionReferenceEffectJoinErrorV2::SemanticExpression)?;
+    Ok(expression)
+}
+
+fn reference_expression_inner_v2(
+    effect_ir: &ReferenceEffectIrV1,
+    expression: &ReferenceEffectExpressionV1,
+    depth: usize,
+) -> Result<ProductionSemanticExpressionV2, ProductionReferenceEffectJoinErrorV2> {
+    if depth >= fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 {
+        return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+            "reference RHS exceeds the typed semantic expression depth bound",
+        ));
+    }
+    match expression {
+        ReferenceEffectExpressionV1::PointCoordinate { axis } => {
+            Ok(ProductionSemanticExpressionV2::Symbol {
+                symbol: *axis,
+                scalar: ProductionSemanticScalarTypeV2::Integer {
+                    signed: false,
+                    bits: 64,
+                },
+            })
+        }
+        ReferenceEffectExpressionV1::KernelScalarArgument { argument } => {
+            let scalar = effect_ir
+                .relations
+                .iter()
+                .find_map(|relation| match relation {
+                    ReferenceArgumentRelationV1::ScalarInput {
+                        argument: actual,
+                        scalar,
+                    } if actual == argument => reference_scalar_v2(*scalar),
+                    _ => None,
+                })
+                .ok_or(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+                    "reference RHS scalar argument has no exact logical ABI type",
+                ))?;
+            let symbol = crate::reference_effect_v1::kernel_scalar_symbol_v2(*argument).ok_or(
+                ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+                    "reference scalar argument exceeds the reserved semantic symbol namespace",
+                ),
+            )?;
+            Ok(ProductionSemanticExpressionV2::Symbol { symbol, scalar })
+        }
+        ReferenceEffectExpressionV1::Constant(ReferenceConstantV1::Scalar { scalar, bits }) => {
+            let scalar = reference_scalar_v2(*scalar).ok_or(
+                ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+                    "reference RHS constant type is unsupported",
+                ),
+            )?;
+            let bits = u64::try_from(*bits).map_err(|_| {
+                ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+                    "reference RHS constant exceeds 64 bits",
+                )
+            })?;
+            Ok(ProductionSemanticExpressionV2::Constant { scalar, bits })
+        }
+        ReferenceEffectExpressionV1::Constant(ReferenceConstantV1::ZeroSized) => {
+            Err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+                "reference RHS is a zero-sized value rather than a scalar",
+            ))
+        }
+        ReferenceEffectExpressionV1::Binary {
+            operation,
+            lhs,
+            rhs,
+            checked,
+        } => {
+            let lhs = reference_expression_inner_v2(effect_ir, lhs, depth + 1)?;
+            let rhs = reference_expression_inner_v2(effect_ir, rhs, depth + 1)?;
+            let comparison = match operation {
+                ReferenceBinaryOpV1::Equal => Some(ProductionSemanticComparisonV2::Equal),
+                ReferenceBinaryOpV1::LessThan => Some(ProductionSemanticComparisonV2::LessThan),
+                ReferenceBinaryOpV1::LessEqual => Some(ProductionSemanticComparisonV2::LessOrEqual),
+                ReferenceBinaryOpV1::NotEqual => Some(ProductionSemanticComparisonV2::NotEqual),
+                ReferenceBinaryOpV1::GreaterEqual => {
+                    Some(ProductionSemanticComparisonV2::GreaterOrEqual)
+                }
+                ReferenceBinaryOpV1::GreaterThan => {
+                    Some(ProductionSemanticComparisonV2::GreaterThan)
+                }
+                _ => None,
+            };
+            if let Some(operation) = comparison {
+                return Ok(ProductionSemanticExpressionV2::Compare {
+                    operation,
+                    operand_scalar: lhs.scalar(),
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                });
+            }
+            let operation = match operation {
+                ReferenceBinaryOpV1::Add => ProductionSemanticBinaryOpV2::Add,
+                ReferenceBinaryOpV1::Subtract => ProductionSemanticBinaryOpV2::Subtract,
+                ReferenceBinaryOpV1::Multiply => ProductionSemanticBinaryOpV2::Multiply,
+                ReferenceBinaryOpV1::Divide => ProductionSemanticBinaryOpV2::Divide,
+                ReferenceBinaryOpV1::Remainder => ProductionSemanticBinaryOpV2::Remainder,
+                ReferenceBinaryOpV1::BitXor => ProductionSemanticBinaryOpV2::BitXor,
+                ReferenceBinaryOpV1::BitAnd => ProductionSemanticBinaryOpV2::BitAnd,
+                ReferenceBinaryOpV1::BitOr => ProductionSemanticBinaryOpV2::BitOr,
+                ReferenceBinaryOpV1::ShiftLeft => ProductionSemanticBinaryOpV2::ShiftLeft,
+                ReferenceBinaryOpV1::ShiftRight => ProductionSemanticBinaryOpV2::ShiftRight,
+                ReferenceBinaryOpV1::Equal
+                | ReferenceBinaryOpV1::LessThan
+                | ReferenceBinaryOpV1::LessEqual
+                | ReferenceBinaryOpV1::NotEqual
+                | ReferenceBinaryOpV1::GreaterEqual
+                | ReferenceBinaryOpV1::GreaterThan => unreachable!(),
+            };
+            Ok(ProductionSemanticExpressionV2::Binary {
+                operation,
+                scalar: lhs.scalar(),
+                overflow: if *checked {
+                    ProductionOverflowContractV2::Checked
+                } else {
+                    ProductionOverflowContractV2::Wrapping
+                },
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            })
+        }
+        ReferenceEffectExpressionV1::Unary { operation, operand } => {
+            let operand = reference_expression_inner_v2(effect_ir, operand, depth + 1)?;
+            Ok(ProductionSemanticExpressionV2::Unary {
+                operation: match operation {
+                    ReferenceUnaryOpV1::Not => ProductionSemanticUnaryOpV2::Not,
+                    ReferenceUnaryOpV1::Negate => ProductionSemanticUnaryOpV2::Negate,
+                },
+                scalar: operand.scalar(),
+                operand: Box::new(operand),
+            })
+        }
+        ReferenceEffectExpressionV1::Cast {
+            kind,
+            source,
+            target,
+            operand,
+        } => {
+            let source = reference_scalar_v2(*source).ok_or(
+                ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+                    "reference cast source type is unsupported",
+                ),
+            )?;
+            let target = reference_scalar_v2(*target).ok_or(
+                ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+                    "reference cast target type is unsupported",
+                ),
+            )?;
+            let kind = match kind {
+                ReferenceCastKindV1::Integer => ProductionSemanticCastV2::Integer,
+                ReferenceCastKindV1::IntegerToFloat => ProductionSemanticCastV2::IntegerToFloat,
+                ReferenceCastKindV1::FloatToFloat => ProductionSemanticCastV2::FloatToFloat,
+                ReferenceCastKindV1::FloatToIntegerSaturating => {
+                    ProductionSemanticCastV2::FloatToIntegerSaturating
+                }
+            };
+            Ok(ProductionSemanticExpressionV2::Cast {
+                kind,
+                source,
+                target,
+                operand: Box::new(reference_expression_inner_v2(
+                    effect_ir,
+                    operand,
+                    depth + 1,
+                )?),
+            })
+        }
+    }
 }
 
 fn compiler_extracted_gpu_effect_v1(
@@ -407,12 +621,6 @@ fn compiler_extracted_gpu_effect_v1(
             .collect::<Result<Vec<_>, _>>()?
             .into_boxed_slice(),
     );
-    let value = write
-        .value
-        .ok_or(ProductionReferenceEffectJoinErrorV2::UnmodeledGpuValue {
-            block: write.block,
-            operation: write.operation,
-        })?;
     Ok(CompilerExtractedGpuOutputEffectV1 {
         output_argument,
         block: u32::try_from(write.block).map_err(|_| {
@@ -431,10 +639,6 @@ fn compiler_extracted_gpu_effect_v1(
         })?,
         coordinate,
         guard: ReferencePathPredicateV1::unconditional_v1(),
-        rhs: ReferenceEffectExpressionV1::Constant(ReferenceConstantV1::Scalar {
-            scalar,
-            bits: u128::from(value),
-        }),
     })
 }
 
@@ -518,7 +722,8 @@ fn operation_result_v2(
         | ProductionRankedOperationV1::CheckedRowStripedIndex2D { result, .. }
         | ProductionRankedOperationV1::Dimension { result, .. }
         | ProductionRankedOperationV1::SemanticConstant { result, .. }
-        | ProductionRankedOperationV1::SemanticSymbol { result, .. } => Some(*result),
+        | ProductionRankedOperationV1::SemanticSymbol { result, .. }
+        | ProductionRankedOperationV1::SemanticExpression { result, .. } => Some(*result),
         _ => None,
     }
 }
@@ -822,6 +1027,41 @@ fn replace_reserved_semantic_constant_v2(
     Ok(())
 }
 
+fn replace_reserved_semantic_expression_v2(
+    operations: &mut [ProductionRankedOperationV1],
+    identity: ProductionRankedValueIdV1,
+    expression: ProductionSemanticExpressionV2,
+    numerical_contract: ProductionNumericalContractV2,
+) -> Result<(), ProductionReferenceEffectJoinErrorV2> {
+    let mut found = false;
+    for operation in operations {
+        if operation_result_v2(operation) != Some(identity) {
+            continue;
+        }
+        if !matches!(
+            operation,
+            ProductionRankedOperationV1::SemanticConstant { .. }
+        ) || found
+        {
+            return Err(ProductionReferenceEffectJoinErrorV2::InvalidReservedValue(
+                identity.get(),
+            ));
+        }
+        *operation = ProductionRankedOperationV1::SemanticExpression {
+            result: identity,
+            expression: expression.clone(),
+            numerical_contract,
+        };
+        found = true;
+    }
+    if !found {
+        return Err(ProductionReferenceEffectJoinErrorV2::InvalidReservedValue(
+            identity.get(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_reserved_semantic_symbol_v2(
     operations: &[ProductionRankedOperationV1],
     identity: ProductionRankedValueIdV1,
@@ -870,6 +1110,7 @@ pub(crate) enum ProductionReferenceEffectJoinErrorV2 {
     UnmodeledGpuValue {
         block: usize,
         operation: usize,
+        detail: &'static str,
     },
     AmbiguousOwnership,
     WriteLocation,
@@ -879,6 +1120,7 @@ pub(crate) enum ProductionReferenceEffectJoinErrorV2 {
     },
     ReservedValueCountOverflow,
     InvalidReservedValue(u32),
+    SemanticExpression(fe2o3_pliron::ProductionSemanticExpressionErrorV2),
     Subjects(String),
     Recipe(ProductionRankedKernelErrorV1),
     Construction(String),
@@ -922,9 +1164,13 @@ impl fmt::Display for ProductionReferenceEffectJoinErrorV2 {
             Self::UnsupportedGpuIndex(detail) => {
                 write!(formatter, "source-to-proof V2 cannot normalize the GPU coordinate: {detail}")
             }
-            Self::UnmodeledGpuValue { block, operation } => write!(
+            Self::UnmodeledGpuValue {
+                block,
+                operation,
+                detail,
+            } => write!(
                 formatter,
-                "source-to-proof V2 cannot normalize the GPU store value at ranked block {block} op {operation}; only a compiler-derived exact scalar expression is accepted"
+                "source-to-proof V2 cannot normalize the GPU store value at ranked block {block} op {operation}: {detail}"
             ),
             Self::AmbiguousOwnership => formatter.write_str(
                 "source-to-proof V2 output view already has an ownership contract; one compiler-owned contract is required",
@@ -943,6 +1189,9 @@ impl fmt::Display for ProductionReferenceEffectJoinErrorV2 {
                 formatter,
                 "source-to-proof V2 reserved semantic value %{identity} is missing, duplicated, or has the wrong ranked type"
             ),
+            Self::SemanticExpression(error) => {
+                write!(formatter, "source-to-proof V2 semantic expression is invalid: {error}")
+            }
             Self::Subjects(detail) => {
                 write!(formatter, "source-to-proof V2 subject identity is invalid: {detail}")
             }
@@ -1039,7 +1288,13 @@ mod tests {
             allocation_origin: 1,
             view: ProductionRankedValueV1::Local(view),
             indices: vec![ProductionRankedValueV1::Local(invocation)],
-            value: Some(17),
+            value: Ok(ProductionSemanticExpressionV2::Constant {
+                scalar: ProductionSemanticScalarTypeV2::Integer {
+                    signed: false,
+                    bits: 32,
+                },
+                bits: 17,
+            }),
         };
         (kernel, write)
     }
@@ -1071,6 +1326,70 @@ mod tests {
         assert!(matches!(
             validate_bounds_only_gpu_guard_v2(&kernel, &write),
             Err(ProductionReferenceEffectJoinErrorV2::UnsupportedGpuEffect { .. })
+        ));
+    }
+
+    fn scalar_reference_ir(scalar: ReferenceScalarTypeV1) -> ReferenceEffectIrV1 {
+        ReferenceEffectIrV1 {
+            argument_count: 1,
+            local_count: 0,
+            relations: vec![ReferenceArgumentRelationV1::ScalarInput {
+                argument: 0,
+                scalar,
+            }]
+            .into_boxed_slice(),
+            blocks: Box::default(),
+            observable_output_effects: Box::default(),
+        }
+    }
+
+    #[test]
+    fn independently_translates_reference_integer_expression() {
+        let effect_ir = scalar_reference_ir(ReferenceScalarTypeV1::U32);
+        let expression = ReferenceEffectExpressionV1::Binary {
+            operation: ReferenceBinaryOpV1::Add,
+            lhs: Box::new(ReferenceEffectExpressionV1::KernelScalarArgument { argument: 0 }),
+            rhs: Box::new(ReferenceEffectExpressionV1::Constant(
+                ReferenceConstantV1::Scalar {
+                    scalar: ReferenceScalarTypeV1::U32,
+                    bits: 7,
+                },
+            )),
+            checked: false,
+        };
+        let translated =
+            reference_expression_v2(&effect_ir, &expression, ReferenceScalarTypeV1::U32).unwrap();
+        assert!(matches!(
+            translated,
+            ProductionSemanticExpressionV2::Binary {
+                operation: ProductionSemanticBinaryOpV2::Add,
+                overflow: ProductionOverflowContractV2::Wrapping,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn reference_float_cast_retains_saturating_policy_and_ieee_contract() {
+        let effect_ir = scalar_reference_ir(ReferenceScalarTypeV1::F32);
+        let expression = ReferenceEffectExpressionV1::Cast {
+            kind: ReferenceCastKindV1::FloatToIntegerSaturating,
+            source: ReferenceScalarTypeV1::F32,
+            target: ReferenceScalarTypeV1::I32,
+            operand: Box::new(ReferenceEffectExpressionV1::KernelScalarArgument { argument: 0 }),
+        };
+        let translated =
+            reference_expression_v2(&effect_ir, &expression, ReferenceScalarTypeV1::I32).unwrap();
+        assert!(matches!(
+            translated,
+            ProductionSemanticExpressionV2::Cast {
+                kind: ProductionSemanticCastV2::FloatToIntegerSaturating,
+                ..
+            }
+        ));
+        assert!(matches!(
+            ProductionNumericalContractV2::exact_for_expression(&translated),
+            ProductionNumericalContractV2::ExactIeee754OperatorCongruence { .. }
         ));
     }
 }

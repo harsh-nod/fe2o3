@@ -363,7 +363,7 @@ impl SemanticFormulaProgramV2 {
                 } => {
                     let stats = expression.validate().map_err(|_| invalid_ranked_recipe())?;
                     if !numerical_contract.is_supported()
-                        || !numerical_contract.admits_scalar(expression.scalar())
+                        || !numerical_contract.admits_expression(expression)
                     {
                         return Err(invalid_ranked_recipe());
                     }
@@ -1144,7 +1144,7 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_checked_overflow_fails_closed_before_proof_source() {
+    fn dynamic_checked_overflow_fails_closed_at_ranked_admission() {
         let scalar = ProductionSemanticScalarTypeV2::Integer {
             signed: false,
             bits: 32,
@@ -1156,7 +1156,7 @@ mod tests {
             lhs: Box::new(ProductionSemanticExpressionV2::Symbol { symbol: 1, scalar }),
             rhs: Box::new(ProductionSemanticExpressionV2::Symbol { symbol: 2, scalar }),
         };
-        let kernel = ProductionRankedKernelV1::new(
+        let error = ProductionRankedKernelV1::new(
             "dynamic_checked_domain",
             0,
             vec![ProductionRankedBlockV1::new(
@@ -1182,17 +1182,13 @@ mod tests {
                 ProductionRankedTerminatorV1::Return,
             )],
         )
-        .unwrap();
-        let summary = fe2o3_pliron::typed_semantic_obligation_summary_v2(&kernel).unwrap();
-        assert_eq!(summary.checked_operations, 2);
-        assert_eq!(summary.statically_discharged_domain_roots, 0);
-        let error =
-            generate_ranked_functional_refinement_proof_v2(&kernel, 0, 2, subjects()).unwrap_err();
+        .unwrap_err();
         assert_eq!(
-            error.kind(),
-            FunctionalRefinementVerusExecutionErrorKindV2::IncompleteSemanticDomain
+            error,
+            fe2o3_pliron::ProductionRankedKernelErrorV1::InvalidSemanticExpression(
+                fe2o3_pliron::ProductionSemanticExpressionErrorV2::IncompleteDomain,
+            ),
         );
-        assert!(error.to_string().contains("dynamic guard"));
     }
 
     #[test]

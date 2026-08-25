@@ -15,8 +15,8 @@ use rustc_abi::ExternAbi;
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_hir::{BlockCheckMode, ExprKind, Mutability, Safety, UnsafeSource};
 use rustc_middle::mir::{
-    BinOp, Body, Operand, Place, ProjectionElem, Rvalue, StatementKind, TerminatorKind, UnOp,
-    UnwindAction,
+    BinOp, Body, CastKind, Operand, Place, ProjectionElem, Rvalue, StatementKind, TerminatorKind,
+    UnOp, UnwindAction,
 };
 use rustc_middle::ty::{Instance, Ty, TyCtxt, TyKind, TypingEnv};
 use sha2::{Digest as _, Sha256};
@@ -32,6 +32,12 @@ pub(crate) const MAX_REFERENCE_POINT_AXES_V1: usize = 3;
 pub(crate) const MAX_REFERENCE_GUARD_CLAUSES_V1: usize = 65_536;
 pub(crate) const MAX_REFERENCE_GUARD_ATOMS_V1: usize = 262_144;
 pub(crate) const MAX_REFERENCE_EXPRESSION_NODES_V1: usize = 8_192;
+
+/// Keeps logical kernel-scalar arguments disjoint from the three point-axis
+/// symbols used by the functional-refinement formula.
+pub(crate) fn kernel_scalar_symbol_v2(argument: u32) -> Option<u32> {
+    (1_u32 << 30).checked_add(argument)
+}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ReferenceScalarTypeV1 {
@@ -145,6 +151,14 @@ pub(crate) enum ReferenceUnaryOpV1 {
     Negate,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum ReferenceCastKindV1 {
+    Integer,
+    IntegerToFloat,
+    FloatToFloat,
+    FloatToIntegerSaturating,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ReferenceValueV1 {
     Use(ReferenceOperandV1),
@@ -156,6 +170,12 @@ pub(crate) enum ReferenceValueV1 {
     },
     Unary {
         operation: ReferenceUnaryOpV1,
+        operand: ReferenceOperandV1,
+    },
+    Cast {
+        kind: ReferenceCastKindV1,
+        source: ReferenceScalarTypeV1,
+        target: ReferenceScalarTypeV1,
         operand: ReferenceOperandV1,
     },
 }
@@ -221,6 +241,12 @@ pub(crate) enum ReferenceEffectExpressionV1 {
     },
     Unary {
         operation: ReferenceUnaryOpV1,
+        operand: Box<Self>,
+    },
+    Cast {
+        kind: ReferenceCastKindV1,
+        source: ReferenceScalarTypeV1,
+        target: ReferenceScalarTypeV1,
         operand: Box<Self>,
     },
 }
@@ -982,14 +1008,14 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
         &self,
         local: u32,
     ) -> Result<ReferenceEffectExpressionV1, ReferenceBindingErrorV1> {
-        self.resolve_local_inner_v1(local, &mut BTreeSet::new(), &mut 0)
+        self.resolve_local_inner_v1(local, &mut BTreeSet::new(), &mut 0, 0)
     }
 
     fn resolve_value_v1(
         &self,
         value: &ReferenceValueV1,
     ) -> Result<ReferenceEffectExpressionV1, ReferenceBindingErrorV1> {
-        self.resolve_value_inner_v1(value, &mut BTreeSet::new(), &mut 0)
+        self.resolve_value_inner_v1(value, &mut BTreeSet::new(), &mut 0, 0)
     }
 
     fn charge_node_v1(work: &mut usize) -> Result<(), ReferenceBindingErrorV1> {
@@ -1004,12 +1030,24 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
         Ok(())
     }
 
+    fn require_depth_v1(depth: usize) -> Result<(), ReferenceBindingErrorV1> {
+        if depth > fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 {
+            return Err(ReferenceBindingErrorV1::new(format!(
+                "reference effect expression exceeds {} resolution levels",
+                fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2,
+            )));
+        }
+        Ok(())
+    }
+
     fn resolve_local_inner_v1(
         &self,
         local: u32,
         visiting: &mut BTreeSet<u32>,
         work: &mut usize,
+        depth: usize,
     ) -> Result<ReferenceEffectExpressionV1, ReferenceBindingErrorV1> {
+        Self::require_depth_v1(depth)?;
         Self::charge_node_v1(work)?;
         if local > 0 && local <= self.effect_ir.argument_count {
             let reference_argument = local - 1;
@@ -1074,7 +1112,7 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
                 "reference effect local _{local} has a cyclic scalar definition",
             )));
         }
-        let resolved = self.resolve_value_inner_v1(value, visiting, work);
+        let resolved = self.resolve_value_inner_v1(value, visiting, work, depth);
         visiting.remove(&local);
         resolved
     }
@@ -1084,7 +1122,9 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
         operand: &ReferenceOperandV1,
         visiting: &mut BTreeSet<u32>,
         work: &mut usize,
+        depth: usize,
     ) -> Result<ReferenceEffectExpressionV1, ReferenceBindingErrorV1> {
+        Self::require_depth_v1(depth)?;
         match operand {
             ReferenceOperandV1::Constant(constant) => {
                 Self::charge_node_v1(work)?;
@@ -1093,7 +1133,7 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
             ReferenceOperandV1::Copy(place) | ReferenceOperandV1::Move(place)
                 if place.projection.is_empty() =>
             {
-                self.resolve_local_inner_v1(place.local, visiting, work)
+                self.resolve_local_inner_v1(place.local, visiting, work, depth)
             }
             ReferenceOperandV1::Copy(place) | ReferenceOperandV1::Move(place) => {
                 Err(ReferenceBindingErrorV1::new(format!(
@@ -1109,11 +1149,13 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
         value: &ReferenceValueV1,
         visiting: &mut BTreeSet<u32>,
         work: &mut usize,
+        depth: usize,
     ) -> Result<ReferenceEffectExpressionV1, ReferenceBindingErrorV1> {
+        Self::require_depth_v1(depth)?;
         Self::charge_node_v1(work)?;
         match value {
             ReferenceValueV1::Use(operand) => {
-                self.resolve_operand_inner_v1(operand, visiting, work)
+                self.resolve_operand_inner_v1(operand, visiting, work, depth + 1)
             }
             ReferenceValueV1::Binary {
                 operation,
@@ -1122,16 +1164,37 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
                 checked,
             } => Ok(ReferenceEffectExpressionV1::Binary {
                 operation: *operation,
-                lhs: Box::new(self.resolve_operand_inner_v1(lhs, visiting, work)?),
-                rhs: Box::new(self.resolve_operand_inner_v1(rhs, visiting, work)?),
+                lhs: Box::new(self.resolve_operand_inner_v1(lhs, visiting, work, depth + 1)?),
+                rhs: Box::new(self.resolve_operand_inner_v1(rhs, visiting, work, depth + 1)?),
                 checked: *checked,
             }),
             ReferenceValueV1::Unary { operation, operand } => {
                 Ok(ReferenceEffectExpressionV1::Unary {
                     operation: *operation,
-                    operand: Box::new(self.resolve_operand_inner_v1(operand, visiting, work)?),
+                    operand: Box::new(self.resolve_operand_inner_v1(
+                        operand,
+                        visiting,
+                        work,
+                        depth + 1,
+                    )?),
                 })
             }
+            ReferenceValueV1::Cast {
+                kind,
+                source,
+                target,
+                operand,
+            } => Ok(ReferenceEffectExpressionV1::Cast {
+                kind: *kind,
+                source: *source,
+                target: *target,
+                operand: Box::new(self.resolve_operand_inner_v1(
+                    operand,
+                    visiting,
+                    work,
+                    depth + 1,
+                )?),
+            }),
         }
     }
 }
@@ -1239,6 +1302,7 @@ fn reference_guarded_edges_v1(
                     condition,
                     &mut BTreeSet::new(),
                     &mut 0,
+                    1,
                 )?,
                 expected: *expected,
             }),
@@ -1249,7 +1313,7 @@ fn reference_guarded_edges_v1(
             otherwise,
         } => {
             let expression =
-                resolver.resolve_operand_inner_v1(discriminant, &mut BTreeSet::new(), &mut 0)?;
+                resolver.resolve_operand_inner_v1(discriminant, &mut BTreeSet::new(), &mut 0, 1)?;
             let mut by_target = BTreeMap::<u32, Vec<u128>>::new();
             let mut all_values = Vec::with_capacity(values.len());
             for (value, target) in values {
@@ -1527,6 +1591,46 @@ fn lower_rvalue_v1<'tcx>(
             },
             operand: lower_operand_v1(tcx, body, operand, block)?,
         }),
+        Rvalue::Cast(kind, operand, target) => {
+            let source = scalar_type_v1(operand.ty(body, tcx)).ok_or_else(|| {
+                ReferenceBindingErrorV1::at(
+                    tcx,
+                    body,
+                    block,
+                    "cast source is outside reference-effect scalar semantics",
+                )
+            })?;
+            let target = scalar_type_v1(*target).ok_or_else(|| {
+                ReferenceBindingErrorV1::at(
+                    tcx,
+                    body,
+                    block,
+                    "cast target is outside reference-effect scalar semantics",
+                )
+            })?;
+            let kind = match kind {
+                CastKind::IntToInt => ReferenceCastKindV1::Integer,
+                CastKind::IntToFloat => ReferenceCastKindV1::IntegerToFloat,
+                CastKind::FloatToFloat => ReferenceCastKindV1::FloatToFloat,
+                CastKind::FloatToInt => ReferenceCastKindV1::FloatToIntegerSaturating,
+                _ => {
+                    return Err(ReferenceBindingErrorV1::at(
+                        tcx,
+                        body,
+                        block,
+                        format_args!(
+                            "cast operation '{kind:?}' is outside reference-effect V2 numeric semantics"
+                        ),
+                    ));
+                }
+            };
+            Ok(ReferenceValueV1::Cast {
+                kind,
+                source,
+                target,
+                operand: lower_operand_v1(tcx, body, operand, block)?,
+            })
+        }
         unsupported => Err(ReferenceBindingErrorV1::at(
             tcx,
             body,
@@ -1653,6 +1757,15 @@ fn digest_value(digest: &mut Sha256, value: &ReferenceValueV1) {
             ]);
             digest_operand(digest, operand);
         }
+        ReferenceValueV1::Cast {
+            kind,
+            source,
+            target,
+            operand,
+        } => {
+            digest.update([3, *kind as u8, scalar_tag(*source), scalar_tag(*target)]);
+            digest_operand(digest, operand);
+        }
     }
 }
 
@@ -1688,6 +1801,15 @@ fn digest_effect_expression_v1(digest: &mut Sha256, expression: &ReferenceEffect
                     ReferenceUnaryOpV1::Negate => 1,
                 },
             ]);
+            digest_effect_expression_v1(digest, operand);
+        }
+        ReferenceEffectExpressionV1::Cast {
+            kind,
+            source,
+            target,
+            operand,
+        } => {
+            digest.update([5, *kind as u8, scalar_tag(*source), scalar_tag(*target)]);
             digest_effect_expression_v1(digest, operand);
         }
     }
@@ -1929,5 +2051,57 @@ mod tests {
                 .to_string()
                 .contains("cannot omit a global output write")
         );
+    }
+
+    fn alias_chain_reference_ir(local_count: u32) -> ReferenceEffectIrV1 {
+        let assignments = (1..=local_count)
+            .map(|local| ReferenceAssignmentV1 {
+                statement: local - 1,
+                destination: ReferencePlaceV1 {
+                    local,
+                    projection: Box::default(),
+                },
+                value: if local == local_count {
+                    ReferenceValueV1::Use(scalar_operand(17))
+                } else {
+                    ReferenceValueV1::Use(ReferenceOperandV1::Copy(ReferencePlaceV1 {
+                        local: local + 1,
+                        projection: Box::default(),
+                    }))
+                },
+            })
+            .collect::<Vec<_>>();
+        ReferenceEffectIrV1 {
+            argument_count: 0,
+            local_count: local_count + 1,
+            relations: Box::default(),
+            blocks: vec![ReferenceBlockV1 {
+                block: 0,
+                assignments: assignments.into_boxed_slice(),
+                terminator: ReferenceTerminatorV1::Return,
+            }]
+            .into_boxed_slice(),
+            observable_output_effects: Box::default(),
+        }
+    }
+
+    #[test]
+    fn reference_expression_resolution_enforces_128_level_depth_budget() {
+        let boundary = alias_chain_reference_ir(128);
+        assert_eq!(
+            ReferenceExpressionResolverV1::new(&boundary)
+                .unwrap()
+                .resolve_local_v1(1)
+                .unwrap(),
+            ReferenceEffectExpressionV1::Constant(scalar_constant(17)),
+        );
+        for depth in [129, 4_096] {
+            let overdeep = alias_chain_reference_ir(depth);
+            let error = ReferenceExpressionResolverV1::new(&overdeep)
+                .unwrap()
+                .resolve_local_v1(1)
+                .unwrap_err();
+            assert!(error.to_string().contains("exceeds 128 resolution levels"));
+        }
     }
 }

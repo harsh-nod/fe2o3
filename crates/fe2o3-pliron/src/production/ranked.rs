@@ -1436,9 +1436,10 @@ pub fn typed_semantic_obligation_summary_v2(
         let stats = expression
             .validate()
             .map_err(ProductionRankedKernelErrorV1::InvalidSemanticExpression)?;
-        if !numerical_contract.is_supported()
-            || !numerical_contract.admits_scalar(expression.scalar())
-        {
+        expression
+            .validate_static_domains()
+            .map_err(ProductionRankedKernelErrorV1::InvalidSemanticExpression)?;
+        if !numerical_contract.is_supported() || !numerical_contract.admits_expression(expression) {
             return Err(ProductionRankedKernelErrorV1::InvalidSemanticExpression(
                 ProductionSemanticExpressionErrorV2::UnsupportedNumericalContract,
             ));
@@ -1450,8 +1451,7 @@ pub fn typed_semantic_obligation_summary_v2(
         summary.selects += stats.selects;
         summary.casts += stats.casts;
         summary.checked_operations += stats.checked_operations;
-        summary.statically_discharged_domain_roots +=
-            usize::from(expression.validate_static_domains().is_ok());
+        summary.statically_discharged_domain_roots += 1;
         match numerical_contract {
             ProductionNumericalContractV2::ExactBitVectorOperatorCongruence => {
                 summary.exact_bitvector_operator_congruence_roots += 1;
@@ -1895,8 +1895,11 @@ fn validate_operation(
             expression
                 .validate()
                 .map_err(ProductionRankedKernelErrorV1::InvalidSemanticExpression)?;
+            expression
+                .validate_static_domains()
+                .map_err(ProductionRankedKernelErrorV1::InvalidSemanticExpression)?;
             if !numerical_contract.is_supported()
-                || !numerical_contract.admits_scalar(expression.scalar())
+                || !numerical_contract.admits_expression(expression)
             {
                 return Err(ProductionRankedKernelErrorV1::InvalidSemanticExpression(
                     ProductionSemanticExpressionErrorV2::UnsupportedNumericalContract,

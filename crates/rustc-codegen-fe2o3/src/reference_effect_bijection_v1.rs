@@ -6,8 +6,7 @@
 use std::fmt;
 
 use crate::reference_effect_v1::{
-    ReferenceEffectExpressionV1, ReferenceOutputCoordinateV1, ReferenceOutputWriteV1,
-    ReferencePathPredicateV1,
+    ReferenceOutputCoordinateV1, ReferenceOutputWriteV1, ReferencePathPredicateV1,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -17,7 +16,6 @@ pub(crate) struct CompilerExtractedGpuOutputEffectV1 {
     pub(crate) operation: u32,
     pub(crate) coordinate: ReferenceOutputCoordinateV1,
     pub(crate) guard: ReferencePathPredicateV1,
-    pub(crate) rhs: ReferenceEffectExpressionV1,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -32,7 +30,9 @@ pub(crate) struct ReferenceEffectPairV1 {
 /// output-write events in the supported source subset.
 ///
 /// Both inputs must be independently extracted. In particular, callers may
-/// not populate the reference coordinate, guard, or RHS from the GPU effect.
+/// not populate the reference coordinate or guard from the GPU effect. RHS
+/// equivalence is established later from two independently translated typed
+/// expressions; it is deliberately not part of write-site pairing.
 /// `gpu.guard` is the normalized logical path predicate. It may exclude only
 /// the exact memory-bounds selection predicate already discharged by the
 /// mandatory ranked bounds pass. Every other GPU path condition must be
@@ -45,10 +45,21 @@ pub(crate) fn establish_reference_effect_bijection_v1(
     let mut used_gpu = vec![false; gpu.len()];
     let mut pairs = Vec::with_capacity(reference.len());
     for reference_effect in reference {
-        let exact = gpu.iter().enumerate().find(|(index, gpu_effect)| {
-            !used_gpu[*index] && same_semantics_v1(reference_effect, gpu_effect)
-        });
-        if let Some((index, gpu_effect)) = exact {
+        let exact = gpu
+            .iter()
+            .enumerate()
+            .filter(|(index, gpu_effect)| {
+                !used_gpu[*index] && same_site_v1(reference_effect, gpu_effect)
+            })
+            .collect::<Vec<_>>();
+        if exact.len() > 1 {
+            return Err(ReferenceEffectBijectionErrorV1::AmbiguousGpuOutput {
+                output_argument: reference_effect.argument,
+                reference_block: reference_effect.block,
+                reference_statement: reference_effect.statement,
+            });
+        }
+        if let Some((index, gpu_effect)) = exact.first().copied() {
             used_gpu[index] = true;
             pairs.push(ReferenceEffectPairV1 {
                 reference_block: reference_effect.block,
@@ -87,8 +98,7 @@ pub(crate) fn establish_reference_effect_bijection_v1(
                 gpu_operation: candidate.operation,
             });
         }
-        debug_assert_ne!(candidate.rhs, reference_effect.rhs);
-        return Err(ReferenceEffectBijectionErrorV1::RhsMismatch {
+        return Err(ReferenceEffectBijectionErrorV1::GuardMismatch {
             output_argument: reference_effect.argument,
             reference_block: reference_effect.block,
             reference_statement: reference_effect.statement,
@@ -106,19 +116,23 @@ pub(crate) fn establish_reference_effect_bijection_v1(
     Ok(pairs.into_boxed_slice())
 }
 
-fn same_semantics_v1(
+fn same_site_v1(
     reference: &ReferenceOutputWriteV1,
     gpu: &CompilerExtractedGpuOutputEffectV1,
 ) -> bool {
     reference.argument == gpu.output_argument
         && reference.coordinate == gpu.coordinate
         && reference.guard == gpu.guard
-        && reference.rhs == gpu.rhs
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ReferenceEffectBijectionErrorV1 {
     MissingGpuOutput {
+        output_argument: u32,
+        reference_block: u32,
+        reference_statement: u32,
+    },
+    AmbiguousGpuOutput {
         output_argument: u32,
         reference_block: u32,
         reference_statement: u32,
@@ -136,13 +150,6 @@ pub(crate) enum ReferenceEffectBijectionErrorV1 {
         gpu_operation: u32,
     },
     GuardMismatch {
-        output_argument: u32,
-        reference_block: u32,
-        reference_statement: u32,
-        gpu_block: u32,
-        gpu_operation: u32,
-    },
-    RhsMismatch {
         output_argument: u32,
         reference_block: u32,
         reference_statement: u32,
@@ -172,6 +179,15 @@ impl fmt::Display for ReferenceEffectBijectionErrorV1 {
                 "GPU output argument {} write at block {gpu_block}, operation {gpu_operation} has no reference output effect",
                 output_argument + 1,
             ),
+            Self::AmbiguousGpuOutput {
+                output_argument,
+                reference_block,
+                reference_statement,
+            } => write!(
+                formatter,
+                "reference output argument {} write at block {reference_block}, statement {reference_statement} has multiple indistinguishable GPU output effects",
+                output_argument + 1,
+            ),
             Self::CoordinateMismatch {
                 output_argument,
                 reference_block,
@@ -194,17 +210,6 @@ impl fmt::Display for ReferenceEffectBijectionErrorV1 {
                 "output argument {} guard mismatch between reference block {reference_block}, statement {reference_statement} and GPU block {gpu_block}, operation {gpu_operation}",
                 output_argument + 1,
             ),
-            Self::RhsMismatch {
-                output_argument,
-                reference_block,
-                reference_statement,
-                gpu_block,
-                gpu_operation,
-            } => write!(
-                formatter,
-                "output argument {} RHS mismatch between reference block {reference_block}, statement {reference_statement} and GPU block {gpu_block}, operation {gpu_operation}",
-                output_argument + 1,
-            ),
         }
     }
 }
@@ -215,8 +220,8 @@ impl std::error::Error for ReferenceEffectBijectionErrorV1 {}
 mod tests {
     use super::*;
     use crate::reference_effect_v1::{
-        ReferenceConstantV1, ReferenceGuardAtomV1, ReferenceGuardClauseV1, ReferenceOperandV1,
-        ReferenceScalarTypeV1, ReferenceValueV1,
+        ReferenceConstantV1, ReferenceEffectExpressionV1, ReferenceGuardAtomV1,
+        ReferenceGuardClauseV1, ReferenceOperandV1, ReferenceScalarTypeV1, ReferenceValueV1,
     };
 
     fn constant(bits: u128) -> ReferenceEffectExpressionV1 {
@@ -271,7 +276,6 @@ mod tests {
             operation: 7,
             coordinate: reference.coordinate,
             guard: reference.guard,
-            rhs: reference.rhs,
         }
     }
 
@@ -328,14 +332,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_rhs_mismatch() {
-        let mut gpu = gpu_effect();
-        gpu.rhs = constant(18);
+    fn rejects_ambiguous_gpu_output_site() {
+        let gpu = gpu_effect();
         let error =
-            establish_reference_effect_bijection_v1(&[reference_effect()], &[gpu]).unwrap_err();
+            establish_reference_effect_bijection_v1(&[reference_effect()], &[gpu.clone(), gpu])
+                .unwrap_err();
         assert!(matches!(
             error,
-            ReferenceEffectBijectionErrorV1::RhsMismatch { .. }
+            ReferenceEffectBijectionErrorV1::AmbiguousGpuOutput { .. }
         ));
     }
 }
