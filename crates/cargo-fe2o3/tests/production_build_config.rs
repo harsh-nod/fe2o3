@@ -44,6 +44,75 @@ fn production_configuration_has_no_compatibility_type_alias() {
 }
 
 #[test]
+fn production_managed_transaction_has_no_qualification_dispatch() {
+    let source = include_str!("../src/binding_wrapper.rs");
+    let preparation = source
+        .split("fn prepare_production_managed_attempt(")
+        .nth(1)
+        .expect("direct production preparation exists")
+        .split("#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\nfn prepare_managed_attempt(")
+        .next()
+        .expect("qualification preparation follows production preparation");
+    for rejected in [
+        "PreparedManagedWork",
+        "ManagedQualificationWork",
+        "executes_worker_in_rustc",
+        "WorkerV2ResumeStore",
+        "row_softmax",
+        "qualification",
+    ] {
+        assert!(
+            !preparation.contains(rejected),
+            "production preparation contains qualification decision {rejected}"
+        );
+    }
+    assert!(preparation.contains("prepare_managed_production_build"));
+    assert!(preparation.contains("production_build: Some(production_build)"));
+
+    let completion = source
+        .split("fn complete_managed_attempt_inner(")
+        .nth(1)
+        .expect("direct production completion exists")
+        .split("#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\nfn complete_managed_attempt_inner(")
+        .next()
+        .expect("qualification completion follows production completion");
+    assert!(!completion.contains("finish_build_attempt"));
+    assert!(!completion.contains("qualification_work"));
+    assert!(completion.contains("production_build.take().ok_or_else"));
+    assert!(completion.contains("complete_managed_production_build"));
+
+    let environment = source
+        .split("fn materialize_production_child_environment(")
+        .nth(1)
+        .expect("direct production child environment exists")
+        .split("#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\nfn materialize_reviewed_child_environment(")
+        .next()
+        .expect("qualification child environment follows production environment");
+    assert!(!environment.contains("GeneralGemm"));
+    assert!(!environment.contains("WorkerV2"));
+    assert!(!environment.contains("qualification"));
+}
+
+#[test]
+fn production_driver_rejects_qualification_before_target_preparation() {
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+        .env_clear()
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1")
+        .args(["build", "--target", "host-placeholder"])
+        .output()
+        .expect("run cargo-fe2o3");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("FE2O3_QUALIFICATION_ORACLE_V1 is unavailable")
+            && stderr.contains("production compilation has no selector"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("production-v1 requires exact FE2O3_TARGET"));
+}
+
+#[test]
 fn production_manifest_rejects_qualification_envelope_fields() {
     let scratch = ScratchDirectory::new();
     let manifest = scratch.0.join("build-config.json");

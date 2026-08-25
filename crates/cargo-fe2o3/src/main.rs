@@ -82,6 +82,7 @@ const MANAGED_RUSTC_ARGS_ENV: &str = "FE2O3_MANAGED_RUSTC_ARGS_V1";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
 pub(crate) const SIMULATION_MODE_ENV: &str = "FE2O3_SIMULATION_MODE_V1";
 pub(crate) const SIMULATION_ATTEMPT_ENV: &str = "FE2O3_SIMULATION_ATTEMPT_V1";
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const SIMULATION_PIPELINE: &str = "simulation-v1";
 #[cfg(feature = "qualification-oracles-test-only")]
 const SIMULATION_FAILURE_ALREADY_REPORTED: &str =
@@ -100,6 +101,7 @@ const AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_ENV: &str =
     "FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_V1";
 const NON_PRODUCTION_AUTHORITY_VALIDATION_ENV: &str =
     "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1";
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const AUTHORITY_BEARING_ROW_PIPELINE: &str = "collected-row-softmax-v1";
 const INTERNAL_RUNNER_ARG: &str = "__fe2o3-runner-v1";
 const CARGO_BINDING_WRAPPER_CHILD_FD: std::os::fd::RawFd = 191;
@@ -487,14 +489,23 @@ fn cargo_with_backend_result(
     simulation: Option<&SimulationCommand>,
 ) -> Result<(), String> {
     reject_obsolete_codegen_pipeline(env::var_os(OBSOLETE_CODEGEN_PIPELINE_ENV).as_deref())?;
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     let production_target_profile = production_compilation_selected(
         protected_release.is_some(),
         simulation.is_some(),
         env::var_os(build_config::QUALIFICATION_ORACLE_ENV).as_deref(),
     )?;
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    validate_production_compilation_environment(
+        simulation.is_some(),
+        env::var_os(build_config::QUALIFICATION_ORACLE_ENV).as_deref(),
+    )?;
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     if authority_sensitive_request_selected(production_target_profile) {
         reject_dynamic_loader_environment()?;
     }
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    reject_dynamic_loader_environment()?;
     scrub_process_dynamic_loader_environment();
     reject_preexisting_compiler_environment()?;
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
@@ -504,11 +515,14 @@ fn cargo_with_backend_result(
     let build_config =
         build_config::PreparedProductionBuildConfig::from_environment_for_cargo_setup()
             .map_err(|error| format!("production build configuration setup failed: {error}"))?;
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     validate_production_cargo_selection(
         args,
         production_target_profile,
         env::var_os(TARGET_ENV).as_deref(),
     )?;
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    validate_production_cargo_inputs(args, env::var_os(TARGET_ENV).as_deref())?;
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     let requires_authorized_closure = production_target_profile
         || env::var("FE2O3_QUALIFICATION_ORACLE_V1").as_deref()
@@ -517,7 +531,7 @@ fn cargo_with_backend_result(
             .as_ref()
             .is_some_and(build_config::PreparedBuildConfig::requires_source_debug_profile);
     #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
-    let requires_authorized_closure = production_target_profile;
+    let requires_authorized_closure = true;
     if requires_authorized_closure {
         require_protected_authority_launch(protected_release)?;
         reject_authority_environment_overrides(args)?;
@@ -615,25 +629,27 @@ fn cargo_with_backend_result(
         .transpose()?;
     let protected_compiler_closure =
         protected_release.map(authority_release::ProtectedReleaseAdmission::compiler_closure);
-    let mut context = BackendRunContext::prepare(
-        BackendRunPreparation {
-            project,
-            build_config,
-            pinned_cargo,
-            pinned_rustc,
-            authority_backend,
-            protected_binding_wrapper,
-            cargo_binding_trampoline,
-            protected_compiler_closure,
-            authorized_closure,
-            production_target_profile,
-        },
-        args,
-        simulation.is_some(),
-    )?;
+    let preparation = BackendRunPreparation {
+        project,
+        build_config,
+        pinned_cargo,
+        pinned_rustc,
+        authority_backend,
+        protected_binding_wrapper,
+        cargo_binding_trampoline,
+        protected_compiler_closure,
+        authorized_closure,
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        production_target_profile,
+    };
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    let mut context = BackendRunContext::prepare(preparation, args, simulation.is_some())?;
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    let mut context = BackendRunContext::prepare(preparation, args)?;
     run_cargo_with_backend(&mut context, command, args, protected_release, simulation)
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn authority_sensitive_request_selected(production_compilation: bool) -> bool {
     production_compilation
         || env::var_os(build_config::QUALIFICATION_ORACLE_ENV).as_deref()
@@ -644,6 +660,7 @@ fn authority_sensitive_request_selected(production_compilation: bool) -> bool {
         || env::var_os(build_config::WORKER_V2_CONFIG_ENV).is_some()
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn production_compilation_selected(
     protected_release: bool,
     simulation: bool,
@@ -658,6 +675,23 @@ fn production_compilation_selected(
     Ok(protected_release || (!simulation && selector.is_none()))
 }
 
+#[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+fn validate_production_compilation_environment(
+    simulation: bool,
+    qualification_oracle: Option<&OsStr>,
+) -> Result<(), String> {
+    if simulation {
+        return Err("simulation is unavailable in the production cargo-fe2o3 build".to_owned());
+    }
+    if let Some(value) = qualification_oracle {
+        return Err(format!(
+            "{} is unavailable in the production cargo-fe2o3 build; production compilation has no selector; found {value:?}",
+            build_config::QUALIFICATION_ORACLE_ENV,
+        ));
+    }
+    Ok(())
+}
+
 fn reject_obsolete_codegen_pipeline(value: Option<&OsStr>) -> Result<(), String> {
     let Some(value) = value else {
         return Ok(());
@@ -668,6 +702,7 @@ fn reject_obsolete_codegen_pipeline(value: Option<&OsStr>) -> Result<(), String>
     ))
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn validate_production_cargo_selection(
     args: &[OsString],
     production_target_profile: bool,
@@ -676,6 +711,13 @@ fn validate_production_cargo_selection(
     if !production_target_profile {
         return Ok(());
     }
+    validate_production_cargo_inputs(args, device_target)
+}
+
+fn validate_production_cargo_inputs(
+    args: &[OsString],
+    device_target: Option<&OsStr>,
+) -> Result<(), String> {
     if device_target
         != Some(OsStr::new(
             fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_CPU_V1,
@@ -775,6 +817,7 @@ struct BackendRunContext {
     build_session: fe2o3_artifact_transaction::BuildSession,
     requires_locked_closure: bool,
     authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     production_target_profile: bool,
 }
 
@@ -791,6 +834,7 @@ struct BackendRunPreparation {
     cargo_binding_trampoline: Option<pinned_executable::PinnedExecutable>,
     protected_compiler_closure: Option<fe2o3_build_authority::CompilerClosureV2>,
     authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     production_target_profile: bool,
 }
 
@@ -798,7 +842,7 @@ impl BackendRunContext {
     fn prepare(
         preparation: BackendRunPreparation,
         args: &[OsString],
-        simulation: bool,
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))] simulation: bool,
     ) -> Result<Self, String> {
         let BackendRunPreparation {
             project,
@@ -810,9 +854,13 @@ impl BackendRunContext {
             cargo_binding_trampoline,
             protected_compiler_closure,
             authorized_closure,
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             production_target_profile,
         } = preparation;
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         let target = amd_gpu_target(simulation);
+        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+        let target = fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_CPU_V1.to_owned();
         let target_dir = project.open_or_create_target()?;
         pinned_rustc.assert_lib_tree_unmutated()?;
         let (backend, pinned_backend) = match authority_backend {
@@ -896,21 +944,18 @@ impl BackendRunContext {
                 .extend_from_slice(&(authorized_closure.snapshot().len() as u64).to_le_bytes());
             cargo_configuration.extend_from_slice(authorized_closure.snapshot());
         }
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         if simulation {
             cargo_configuration.extend_from_slice(b"fe2o3-cargo-simulation-v1\0");
             cargo_configuration.extend_from_slice(b"fe2o3-simulation-attempt-v1\0");
             cargo_configuration.extend_from_slice(build_session.as_bytes());
         }
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         if production_target_profile {
-            cargo_configuration.extend_from_slice(b"fe2o3-production-target-profile-v1\0");
-            cargo_configuration
-                .extend_from_slice(fe2o3_amd_target::PRODUCTION_GFX942_RUSTC_TARGET_V1.as_bytes());
-            cargo_configuration.push(0);
-            cargo_configuration.extend_from_slice(
-                fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_V1.as_bytes(),
-            );
-            cargo_configuration.push(0);
+            append_production_target_semantic_configuration(&mut cargo_configuration);
         }
+        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+        append_production_target_semantic_configuration(&mut cargo_configuration);
         let backend_reference = pinned_backend
             .fixed_child_descriptor_path(BACKEND_CHILD_FD)
             .map_err(|error| format!("failed to retain pinned codegen backend: {error}"))?;
@@ -920,10 +965,14 @@ impl BackendRunContext {
             build_config_identity,
             &cargo_configuration,
         )?;
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         let mut generation = generation::PreparedGeneration::prepare(&target_dir, semantic)?;
+        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+        let generation = generation::PreparedGeneration::prepare(&target_dir, semantic)?;
         let managed_rustc_args =
             match generation::managed_rustc_args(&backend_reference, generation.token()) {
                 Ok(arguments) => arguments,
+                #[cfg(any(test, feature = "qualification-oracles-test-only"))]
                 Err(error) if simulation => {
                     return match aggregate_post_spawn_results(
                         Err(error),
@@ -958,9 +1007,19 @@ impl BackendRunContext {
             build_session,
             requires_locked_closure: authorized_closure.is_some(),
             authorized_closure,
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             production_target_profile,
         })
     }
+}
+
+fn append_production_target_semantic_configuration(configuration: &mut Vec<u8>) {
+    configuration.extend_from_slice(b"fe2o3-production-target-profile-v1\0");
+    configuration.extend_from_slice(fe2o3_amd_target::PRODUCTION_GFX942_RUSTC_TARGET_V1.as_bytes());
+    configuration.push(0);
+    configuration
+        .extend_from_slice(fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_V1.as_bytes());
+    configuration.push(0);
 }
 
 fn run_cargo_with_backend(
@@ -1145,14 +1204,20 @@ fn run_cargo_with_backend_inner(
             hex_encode(&context.compiler_closure_sha256),
         )
         .env(BUILD_SESSION_ENV, context.build_session.to_hex());
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     configure_simulation_build_environment(
         cargo.as_command_mut(),
         simulation.map(|_| context.build_session),
     );
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    scrub_simulation_build_environment(cargo.as_command_mut());
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     configure_production_target_build_environment(
         cargo.as_command_mut(),
         context.production_target_profile,
     );
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    configure_production_target_environment(cargo.as_command_mut());
     if context.requires_locked_closure {
         // Authority builds do not admit unpinned C tools, ROCm headers, or native libraries.
         cargo.as_command_mut().env("FE2O3_HIP_SYS_DISABLE", "1");
@@ -1285,6 +1350,7 @@ fn run_cargo_with_backend_inner(
     Ok(())
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn configure_simulation_build_environment(
     command: &mut Command,
     attempt: Option<fe2o3_artifact_transaction::BuildSession>,
@@ -1303,19 +1369,32 @@ fn configure_simulation_build_environment(
     }
 }
 
+#[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+fn scrub_simulation_build_environment(command: &mut Command) {
+    command
+        .env_remove(SIMULATION_MODE_ENV)
+        .env_remove(SIMULATION_ATTEMPT_ENV)
+        .env_remove("FE2O3_HIP_SYS_DISABLE");
+}
+
+fn configure_production_target_environment(command: &mut Command) {
+    command
+        .env(
+            TARGET_ENV,
+            fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1,
+        )
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env(
+            fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_ENV_V1,
+            fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_V1,
+        );
+}
+
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn configure_production_target_build_environment(command: &mut Command, enabled: bool) {
     if enabled {
-        command
-            .env(
-                TARGET_ENV,
-                fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1,
-            )
-            .env_remove("RUSTFLAGS")
-            .env_remove("CARGO_ENCODED_RUSTFLAGS")
-            .env(
-                fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_ENV_V1,
-                fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_V1,
-            );
+        configure_production_target_environment(command);
     }
 }
 
