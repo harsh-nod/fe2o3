@@ -5441,6 +5441,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::ffi::{OsStr, OsString};
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     #[cfg(target_os = "linux")]
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -8490,29 +8491,45 @@ mod tests {
     #[derive(Clone, Copy)]
     enum FailClosedCase {
         RowSoftmax,
-        InvalidEnvelopeInputs,
+        MalformedEnvelopeInputs,
+        InvalidEnvelopeFileCustody,
     }
 
     impl FailClosedCase {
         const fn label(self) -> &'static str {
             match self {
                 Self::RowSoftmax => "row-softmax",
-                Self::InvalidEnvelopeInputs => "invalid-envelope-inputs",
+                Self::MalformedEnvelopeInputs => "malformed-envelope-inputs",
+                Self::InvalidEnvelopeFileCustody => "invalid-envelope-file-custody",
             }
         }
 
         const fn pipeline(self) -> &'static str {
             match self {
                 Self::RowSoftmax => ROW_SOFTMAX_V1_PIPELINE,
-                Self::InvalidEnvelopeInputs => "kernel-ir-worker-v2",
+                Self::MalformedEnvelopeInputs | Self::InvalidEnvelopeFileCustody => {
+                    "kernel-ir-worker-v2"
+                }
             }
         }
 
         const fn expected_error(self) -> &'static str {
             match self {
                 Self::RowSoftmax => "protected row-softmax requires",
-                Self::InvalidEnvelopeInputs => "must be one private, single-link regular file",
+                Self::MalformedEnvelopeInputs => {
+                    "load_envelope_inputs is not a canonical capsule: Worker V2 envelope inputs magic is invalid"
+                }
+                Self::InvalidEnvelopeFileCustody => {
+                    "must be one private, single-link regular file of the declared size"
+                }
             }
+        }
+
+        const fn is_envelope_inputs(self) -> bool {
+            matches!(
+                self,
+                Self::MalformedEnvelopeInputs | Self::InvalidEnvelopeFileCustody
+            )
         }
     }
 
@@ -8586,14 +8603,31 @@ mod tests {
                     "row_elements": 64
                 });
             }
-            FailClosedCase::InvalidEnvelopeInputs => {
+            FailClosedCase::MalformedEnvelopeInputs
+            | FailClosedCase::InvalidEnvelopeFileCustody => {
                 let capsule = workspace.join("envelope-inputs.capsule");
-                fs::write(&capsule, b"capsule-canary").unwrap();
+                let capsule_bytes = match case {
+                    FailClosedCase::MalformedEnvelopeInputs => b"capsule-canary".to_vec(),
+                    FailClosedCase::InvalidEnvelopeFileCustody => {
+                        let fixture = alpha_zeta_fixture(ProfileMutation::None);
+                        assert!(fixture.is_finalized);
+                        protected_required_envelope_inputs(&fixture.bytes, &fixture.bytes, 0xe1)
+                            .to_bytes()
+                    }
+                    FailClosedCase::RowSoftmax => unreachable!(),
+                };
+                fs::write(&capsule, &capsule_bytes).unwrap();
+                let mode = match case {
+                    FailClosedCase::MalformedEnvelopeInputs => 0o600,
+                    FailClosedCase::InvalidEnvelopeFileCustody => 0o644,
+                    FailClosedCase::RowSoftmax => unreachable!(),
+                };
+                fs::set_permissions(&capsule, fs::Permissions::from_mode(mode)).unwrap();
                 value["load_envelope"] = json!("required");
                 value["load_envelope_inputs"] = json!({
-                    "byte_len": 14,
+                    "byte_len": capsule_bytes.len(),
                     "path": capsule,
-                    "sha256": hex(&Sha256::digest(b"capsule-canary"))
+                    "sha256": hex(&Sha256::digest(&capsule_bytes))
                 });
             }
         }
@@ -8740,7 +8774,8 @@ mod tests {
         };
         let case = match case.to_str().unwrap() {
             "row-softmax" => FailClosedCase::RowSoftmax,
-            "invalid-envelope-inputs" => FailClosedCase::InvalidEnvelopeInputs,
+            "malformed-envelope-inputs" => FailClosedCase::MalformedEnvelopeInputs,
+            "invalid-envelope-file-custody" => FailClosedCase::InvalidEnvelopeFileCustody,
             value => panic!("unknown fail-closed child case {value:?}"),
         };
         let output_dir = PathBuf::from(std::env::var_os(FAIL_CLOSED_CHILD_ARTIFACT_ENV).unwrap());
@@ -8768,9 +8803,7 @@ mod tests {
             {
                 assert!(message.contains(case.expected_error()), "{message}");
             }
-            Err(BindingWrapperError::WorkerV2Configuration(error))
-                if matches!(case, FailClosedCase::InvalidEnvelopeInputs) =>
-            {
+            Err(BindingWrapperError::WorkerV2Configuration(error)) if case.is_envelope_inputs() => {
                 assert!(error.to_string().contains(case.expected_error()), "{error}");
             }
             Err(error) => panic!("unexpected fail-closed error: {error}"),
@@ -8790,7 +8823,7 @@ mod tests {
             recursive_file_snapshot(path)
                 .into_iter()
                 .filter(|(name, bytes)| {
-                    !matches!(case, FailClosedCase::InvalidEnvelopeInputs)
+                    !case.is_envelope_inputs()
                         || !bytes.is_empty()
                         || !name
                             .file_name()
@@ -8831,8 +8864,13 @@ mod tests {
     }
 
     #[test]
-    fn protected_invalid_envelope_inputs_leave_durable_evidence_unchanged() {
-        run_fail_closed_artifact_immutability_case(FailClosedCase::InvalidEnvelopeInputs);
+    fn protected_malformed_envelope_inputs_leave_durable_evidence_unchanged() {
+        run_fail_closed_artifact_immutability_case(FailClosedCase::MalformedEnvelopeInputs);
+    }
+
+    #[test]
+    fn protected_invalid_envelope_file_custody_leaves_durable_evidence_unchanged() {
+        run_fail_closed_artifact_immutability_case(FailClosedCase::InvalidEnvelopeFileCustody);
     }
 
     #[test]
