@@ -17,59 +17,58 @@ use fe2o3_hsaco_finalize::ProtectedFirstBuildWorkerV3Error;
 use fe2o3_rustc_invocation::RustcInvocationDescriptorV3;
 
 use crate::inert_rustc_invocation_capture::{
-    InertPreparedRustcInvocationCapture, InertRustcInvocationCaptureV2,
-    InertRustcInvocationCaptureV3,
+    InertPreparedRustcInvocationCapture, InertRustcInvocationCaptureV3,
 };
 
-/// Move-only parent custody selected for one exactly prepared rustc child.
-pub(crate) enum ParentRustcInvocationCustody {
-    InertV2(InertRustcInvocationCaptureV2),
-    ProtectedV3(Box<ParentProtectedRustcInvocationCustodyV3>),
+/// Move-only parent custody of the exact protected invocation prepared for one
+/// production rustc child.
+///
+/// Qualification V2 captures are observations only and are not retained as
+/// production custody. This value grants no compiler, link, load, or launch
+/// authority.
+pub(crate) struct ParentRustcInvocationCustody {
+    invocation: Box<InertRustcInvocationCaptureV3>,
+    capability: RustcInvocationCapabilityV1,
 }
 
 impl ParentRustcInvocationCustody {
     pub(crate) fn retain(
         capture: Option<InertPreparedRustcInvocationCapture>,
         capability: Option<RustcInvocationCapabilityV1>,
-    ) -> Result<Option<Self>, ParentProtectedRustcInvocationCustodyErrorV3> {
+    ) -> Result<Option<Self>, ParentRustcInvocationCustodyError> {
         match (capture, capability) {
             (Some(InertPreparedRustcInvocationCapture::V3(invocation)), Some(capability)) => {
-                let custody = ParentProtectedRustcInvocationCustodyV3 {
+                let custody = Self {
                     invocation,
                     capability,
                 };
                 custody.revalidate()?;
-                Ok(Some(Self::ProtectedV3(Box::new(custody))))
+                Ok(Some(custody))
             }
-            (Some(InertPreparedRustcInvocationCapture::V2(capture)), None) => {
-                Ok(Some(Self::InertV2(capture)))
-            }
+            (Some(InertPreparedRustcInvocationCapture::V2(_)), None) => Ok(None),
             (None, None) => Ok(None),
             (Some(InertPreparedRustcInvocationCapture::V3(_)), None) => {
-                Err(ParentProtectedRustcInvocationCustodyErrorV3::MissingCapability)
+                Err(ParentRustcInvocationCustodyError::MissingCapability)
             }
             (Some(InertPreparedRustcInvocationCapture::V2(_)), Some(_)) => {
-                Err(ParentProtectedRustcInvocationCustodyErrorV3::CapabilityForV2)
+                Err(ParentRustcInvocationCustodyError::CapabilityForV2)
             }
-            (None, Some(_)) => Err(ParentProtectedRustcInvocationCustodyErrorV3::MissingCapture),
+            (None, Some(_)) => Err(ParentRustcInvocationCustodyError::MissingCapture),
         }
     }
 
-    pub(crate) fn revalidate(&self) -> Result<(), ParentProtectedRustcInvocationCustodyErrorV3> {
-        match self {
-            Self::InertV2(capture) => {
-                debug_assert_eq!(capture.descriptor().amd_target(), "gfx942:xnack-");
-                Ok(())
-            }
-            Self::ProtectedV3(custody) => custody.revalidate(),
+    pub(crate) fn revalidate(&self) -> Result<(), ParentRustcInvocationCustodyError> {
+        self.capability
+            .revalidate()
+            .map_err(ParentRustcInvocationCustodyError::Capability)?;
+        if self.invocation.descriptor() != self.capability.descriptor() {
+            return Err(ParentRustcInvocationCustodyError::DescriptorMismatch);
         }
+        Ok(())
     }
 
-    fn protected_v3(&self) -> Option<&ParentProtectedRustcInvocationCustodyV3> {
-        match self {
-            Self::InertV2(_) => None,
-            Self::ProtectedV3(custody) => Some(custody.as_ref()),
-        }
+    const fn descriptor(&self) -> &RustcInvocationDescriptorV3 {
+        self.invocation.descriptor()
     }
 
     /// Runs one operation while the exact selected parent custody remains live.
@@ -82,33 +81,8 @@ impl ParentRustcInvocationCustody {
     }
 }
 
-/// Move-only parent custody of the exact protected invocation prepared for one rustc child.
-///
-/// The capture and sealed capability remain inert. Retaining them proves neither that rustc ran nor
-/// that it authored an artifact, and grants no compiler, link, load, or launch authority.
-pub(crate) struct ParentProtectedRustcInvocationCustodyV3 {
-    invocation: Box<InertRustcInvocationCaptureV3>,
-    capability: RustcInvocationCapabilityV1,
-}
-
-impl ParentProtectedRustcInvocationCustodyV3 {
-    pub(crate) fn revalidate(&self) -> Result<(), ParentProtectedRustcInvocationCustodyErrorV3> {
-        self.capability
-            .revalidate()
-            .map_err(ParentProtectedRustcInvocationCustodyErrorV3::Capability)?;
-        if self.invocation.descriptor() != self.capability.descriptor() {
-            return Err(ParentProtectedRustcInvocationCustodyErrorV3::DescriptorMismatch);
-        }
-        Ok(())
-    }
-
-    pub(crate) const fn descriptor(&self) -> &RustcInvocationDescriptorV3 {
-        self.invocation.descriptor()
-    }
-}
-
 #[derive(Debug)]
-pub(crate) enum ParentProtectedRustcInvocationCustodyErrorV3 {
+pub(crate) enum ParentRustcInvocationCustodyError {
     MissingCapture,
     MissingCapability,
     CapabilityForV2,
@@ -116,7 +90,7 @@ pub(crate) enum ParentProtectedRustcInvocationCustodyErrorV3 {
     Capability(String),
 }
 
-impl fmt::Display for ParentProtectedRustcInvocationCustodyErrorV3 {
+impl fmt::Display for ParentRustcInvocationCustodyError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingCapture => formatter.write_str(
@@ -135,7 +109,7 @@ impl fmt::Display for ParentProtectedRustcInvocationCustodyErrorV3 {
     }
 }
 
-impl Error for ParentProtectedRustcInvocationCustodyErrorV3 {}
+impl Error for ParentRustcInvocationCustodyError {}
 
 /// Move-only result of parent-authorized current V3 consumption.
 ///
@@ -223,9 +197,6 @@ impl ProductionCompilerModuleHandoffIntake {
         parent_custody
             .revalidate()
             .map_err(ProductionCompilerModuleHandoffIntakeError::ParentCustody)?;
-        let protected_custody = parent_custody
-            .protected_v3()
-            .ok_or(ProductionCompilerModuleHandoffIntakeError::UnprotectedParentCustody)?;
         let receipt = recover_compiler_module_handoff_receipt_v3(output_dir, producer, attempt)
             .map_err(ProductionCompilerModuleHandoffIntakeError::Transport)?;
         if receipt.attempt() != attempt || receipt.grants_compiler_authority() {
@@ -243,10 +214,10 @@ impl ProductionCompilerModuleHandoffIntake {
         let token = lease
             .acquire_current_token()
             .map_err(ProductionCompilerModuleHandoffIntakeError::Transport)?;
-        if token.handoff().capsule().invocation() != protected_custody.descriptor() {
+        if token.handoff().capsule().invocation() != parent_custody.descriptor() {
             return Err(ProductionCompilerModuleHandoffIntakeError::InvocationMismatch);
         }
-        let compiler_closure = *protected_custody.descriptor().compiler_closure();
+        let compiler_closure = *parent_custody.descriptor().compiler_closure();
         let prepared = preflight(token.handoff(), receipt, compiler_closure)
             .map_err(ProductionCompilerModuleHandoffIntakeError::WorkerPreflight)?;
         parent_custody
@@ -284,12 +255,11 @@ pub(crate) fn consume_qualification_compiler_module_handoff_v2(
 
 #[derive(Debug)]
 pub(crate) enum ProductionCompilerModuleHandoffIntakeError {
-    ParentCustody(ParentProtectedRustcInvocationCustodyErrorV3),
+    ParentCustody(ParentRustcInvocationCustodyError),
     Transport(CompilerModuleHandoffErrorV3),
     WorkerPreflight(ProtectedFirstBuildWorkerV3Error),
     TransportBindingMismatch,
     InvocationMismatch,
-    UnprotectedParentCustody,
 }
 
 impl fmt::Display for ProductionCompilerModuleHandoffIntakeError {
@@ -304,9 +274,6 @@ impl fmt::Display for ProductionCompilerModuleHandoffIntakeError {
             Self::InvocationMismatch => formatter.write_str(
                 "consumed V3 compiler-module handoff does not retain the exact parent-prepared rustc invocation",
             ),
-            Self::UnprotectedParentCustody => formatter.write_str(
-                "protected V3 compiler-module intake requires protected parent invocation custody",
-            ),
         }
     }
 }
@@ -317,9 +284,7 @@ impl Error for ProductionCompilerModuleHandoffIntakeError {
             Self::ParentCustody(error) => Some(error),
             Self::Transport(error) => Some(error),
             Self::WorkerPreflight(error) => Some(error),
-            Self::TransportBindingMismatch
-            | Self::InvocationMismatch
-            | Self::UnprotectedParentCustody => None,
+            Self::TransportBindingMismatch | Self::InvocationMismatch => None,
         }
     }
 }
@@ -413,6 +378,11 @@ mod tests {
     #[test]
     fn production_intake_has_no_runtime_schema_selector() {
         let source = include_str!("protected_compiler_handoff_v3.rs");
+        assert!(!source.contains(concat!(
+            "pub(crate) enum ParentRustc",
+            "InvocationCustody {"
+        )));
+        assert!(!source.contains(concat!("Inert", "V2(")));
         let production = source
             .split("pub(crate) struct ProductionCompilerModuleHandoffIntake")
             .nth(1)
@@ -438,6 +408,23 @@ mod tests {
     }
 
     fn protected_parent_custody(seed: u8) -> (ParentRustcInvocationCustody, CompilerClosureV2) {
+        let (capture, closure) = parent_capture_v2(seed);
+        let prepared = InertPreparedRustcInvocationCapture::from_v2_and_protected_closure(
+            capture,
+            Some(closure),
+        )
+        .unwrap();
+        let capability = fe2o3_compiler_closure_capability::RustcInvocationCapabilityV1::create(
+            prepared.descriptor_v3().unwrap().clone(),
+        )
+        .unwrap();
+        let custody = ParentRustcInvocationCustody::retain(Some(prepared), Some(capability))
+            .unwrap()
+            .unwrap();
+        (custody, closure)
+    }
+
+    fn parent_capture_v2(seed: u8) -> (InertRustcInvocationCaptureV2, CompilerClosureV2) {
         let closure = compiler_closure(seed);
         let mut command = Command::new("/proc/self/fd/9");
         command.args([
@@ -467,19 +454,7 @@ mod tests {
             closure.codegen_backend_sha256(),
         )
         .unwrap();
-        let prepared = InertPreparedRustcInvocationCapture::from_v2_and_protected_closure(
-            capture,
-            Some(closure),
-        )
-        .unwrap();
-        let capability = fe2o3_compiler_closure_capability::RustcInvocationCapabilityV1::create(
-            prepared.descriptor_v3().unwrap().clone(),
-        )
-        .unwrap();
-        let custody = ParentRustcInvocationCustody::retain(Some(prepared), Some(capability))
-            .unwrap()
-            .unwrap();
-        (custody, closure)
+        (capture, closure)
     }
 
     fn producer(seed: u8) -> ProducerIdentity {
@@ -602,11 +577,8 @@ mod tests {
         let module_handoff = module_handoff(seed);
         let commitment =
             InertFinalCompilerModuleCommitmentV3::from_handoff(&module_handoff).unwrap();
-        let capsule = canonical_capsule_bytes(
-            custody.protected_v3().unwrap().descriptor(),
-            seed,
-            commitment.canonical_bytes(),
-        );
+        let capsule =
+            canonical_capsule_bytes(custody.descriptor(), seed, commitment.canonical_bytes());
         let capsule_identity: [u8; 32] = capsule[capsule.len() - 32..].try_into().unwrap();
         let module_identity = module_handoff.identity();
 
@@ -657,6 +629,19 @@ mod tests {
             "managed-completion-finished"
         });
         assert_eq!(completed, "managed-completion-finished");
+    }
+
+    #[test]
+    fn qualification_v2_capture_does_not_become_production_custody() {
+        let (capture, _) = parent_capture_v2(0x11);
+        let prepared =
+            InertPreparedRustcInvocationCapture::from_v2_and_protected_closure(capture, None)
+                .unwrap();
+        assert!(
+            ParentRustcInvocationCustody::retain(Some(prepared), None)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
