@@ -1669,11 +1669,16 @@ mod platform {
 
             let pinned_result = pinned.command();
             match pinned_result {
-                Ok(mut command) => {
+                Ok(command) => {
                     assert_eq!(command.as_command().get_program(), pinned.execution_path());
                     assert_eq!(command.configured_argv0(), selected.as_os_str());
+                    drop(command);
                     assert!(
-                        command.status().unwrap().success(),
+                        crate::process_execution::retry_transient_executable_busy(|| {
+                            pinned.command().unwrap().status()
+                        })
+                        .unwrap()
+                        .success(),
                         "pinned command reopened replacement"
                     );
                 }

@@ -5863,16 +5863,27 @@ mod tests {
         let selected =
             resolve_command_executable_with_path(OsStr::new("rustc"), &root, Some(&first_path))
                 .unwrap();
-        let pinned = PinnedExecutable::open(&selected).unwrap();
+        let pinned = PinnedExecutable::open(&selected)
+            .unwrap()
+            .seal_executable_image()
+            .unwrap();
         let disagreed =
             resolve_command_executable_with_path(OsStr::new("rustc"), &root, Some(&second_path))
                 .unwrap();
         assert_ne!(selected, disagreed);
-        assert!(pinned.command().unwrap().status().unwrap().success());
         assert!(
-            !crate::process_execution::status(&mut Command::new(disagreed))
-                .unwrap()
-                .success()
+            crate::process_execution::retry_transient_executable_busy(|| {
+                pinned.command().unwrap().status()
+            })
+            .unwrap()
+            .success()
+        );
+        assert!(
+            !crate::process_execution::retry_transient_executable_busy(|| {
+                crate::process_execution::status(&mut Command::new(&disagreed))
+            })
+            .unwrap()
+            .success()
         );
         fs::remove_dir_all(root).unwrap();
     }
