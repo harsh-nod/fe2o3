@@ -48,6 +48,34 @@ pub proof fn fe2o3_finite_recurrence_refinement_v1(
     assert(actual =~= reference);
 }
 
+pub open spec fn fe2o3_inverse_permutation_v1(
+    mapping: Seq<nat>,
+    inverse: Seq<nat>,
+) -> bool {
+    &&& mapping.len() == inverse.len()
+    &&& forall|i: int| 0 <= i < mapping.len() ==> {
+        &&& #[trigger] mapping[i] < mapping.len()
+        &&& inverse[mapping[i] as int] == i
+    }
+}
+
+pub proof fn fe2o3_permutation_injective_v1(
+    mapping: Seq<nat>,
+    inverse: Seq<nat>,
+    left: nat,
+    right: nat,
+)
+    requires
+        fe2o3_inverse_permutation_v1(mapping, inverse),
+        left < mapping.len(),
+        right < mapping.len(),
+        mapping[left as int] == mapping[right as int],
+    ensures left == right,
+{
+    assert(inverse[mapping[left as int] as int] == left);
+    assert(inverse[mapping[right as int] as int] == right);
+}
+
 } // verus!
 
 fn main() {}

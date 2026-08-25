@@ -17,15 +17,6 @@ pub const HARD_MAX_SEMANTIC_OUTPUTS_V1: usize = 4_096;
 
 const CONTRACT_DOMAIN_V1: &[u8] = b"FE2O3/MIR-PLIRON-SEMANTIC-CONTRACT/V1\0";
 
-/// Exact source digest of the reviewed shared Verus theorem and its four
-/// workload instantiations. Runtime proof execution remains a separate receipt.
-pub const MIR_PLIRON_SEMANTIC_REFINEMENT_THEOREM_SHA256_V1: DigestV1 =
-    DigestV1::from_untrusted_bytes([
-        0x21, 0xc5, 0xcc, 0x55, 0xf9, 0x5f, 0x4b, 0x38, 0xd6, 0x51, 0x83, 0xf5, 0x91, 0x2c, 0xc0,
-        0x86, 0xd8, 0xc8, 0xff, 0x35, 0xbb, 0x81, 0x35, 0xe6, 0xd6, 0xd0, 0xd2, 0x1a, 0x3b, 0xba,
-        0xae, 0xa2,
-    ]);
-
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum SemanticFiniteExtentV1 {
     Static(u64),

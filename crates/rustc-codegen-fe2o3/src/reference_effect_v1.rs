@@ -34,6 +34,7 @@ pub(crate) const MAX_REFERENCE_GUARD_CLAUSES_V1: usize = 65_536;
 pub(crate) const MAX_REFERENCE_GUARD_ATOMS_V1: usize = 262_144;
 pub(crate) const MAX_REFERENCE_EXPRESSION_NODES_V1: usize = 8_192;
 pub(crate) const MAX_REFERENCE_SYMBOLIC_STEPS_V2: usize = 65_536;
+pub(crate) const MAX_REFERENCE_SYMBOLIC_WORK_NODES_V2: usize = 1_048_576;
 pub(crate) const MAX_REFERENCE_LOOP_ITERATIONS_V2: usize = 4_096;
 pub(crate) const MAX_REFERENCE_HELPER_ARGUMENTS_V2: usize = 64;
 
@@ -570,6 +571,53 @@ struct ReferenceSymbolicStateV2 {
     traces: BTreeMap<(u32, u32), ReferenceLoopTraceV2>,
 }
 
+#[derive(Default)]
+struct ReferenceSymbolicWorkBudgetV2 {
+    charged_nodes: usize,
+}
+
+impl ReferenceSymbolicWorkBudgetV2 {
+    fn charge_v2(&mut self, nodes: usize) -> Result<(), ReferenceBindingErrorV1> {
+        self.charged_nodes = self.charged_nodes.checked_add(nodes).ok_or_else(|| {
+            ReferenceBindingErrorV1::new("reference symbolic work-node accounting overflowed")
+        })?;
+        if self.charged_nodes > MAX_REFERENCE_SYMBOLIC_WORK_NODES_V2 {
+            return Err(ReferenceBindingErrorV1::new(format!(
+                "reference symbolic execution exceeds {MAX_REFERENCE_SYMBOLIC_WORK_NODES_V2} cumulative expression work nodes",
+            )));
+        }
+        Ok(())
+    }
+
+    fn charge_expression_v2(
+        &mut self,
+        expression: &ReferenceEffectExpressionV1,
+    ) -> Result<(), ReferenceBindingErrorV1> {
+        self.charge_v2(symbolic_expression_nodes_v2(expression)?)
+    }
+
+    fn charge_environment_v2(
+        &mut self,
+        environment: &ReferenceSymbolicEnvironmentV2,
+    ) -> Result<(), ReferenceBindingErrorV1> {
+        self.charge_v2(symbolic_environment_nodes_v2(environment)?)
+    }
+
+    fn charge_predicate_v2(
+        &mut self,
+        predicate: &ReferencePathPredicateV1,
+    ) -> Result<(), ReferenceBindingErrorV1> {
+        self.charge_v2(symbolic_predicate_nodes_v2(predicate)?)
+    }
+
+    fn charge_state_clone_v2(
+        &mut self,
+        state: &ReferenceSymbolicStateV2,
+    ) -> Result<(), ReferenceBindingErrorV1> {
+        self.charge_v2(symbolic_state_nodes_v2(state)?)
+    }
+}
+
 impl ReferenceEffectIrV1 {
     fn observable_output_writes_with_loops_v2(
         &self,
@@ -626,6 +674,8 @@ impl ReferenceEffectIrV1 {
         let mut writes = Vec::new();
         let mut completed_traces = Vec::new();
         let mut steps = 0_usize;
+        let mut work_budget = ReferenceSymbolicWorkBudgetV2::default();
+        work_budget.charge_environment_v2(&pending[0].environment)?;
         while let Some(mut state) = pending.pop_front() {
             steps = steps.checked_add(1).ok_or_else(|| {
                 ReferenceBindingErrorV1::new("reference symbolic execution step count overflowed")
@@ -637,8 +687,10 @@ impl ReferenceEffectIrV1 {
             }
             if loop_headers.contains(&state.block) {
                 for (latch, header) in backedges {
-                    if *header == state.block {
-                        state.traces.entry((*header, *latch)).or_insert_with(|| {
+                    if *header == state.block && !state.traces.contains_key(&(*header, *latch)) {
+                        work_budget.charge_environment_v2(&state.environment)?;
+                        state.traces.insert(
+                            (*header, *latch),
                             ReferenceLoopTraceV2 {
                                 header: *header,
                                 latch: *latch,
@@ -646,8 +698,8 @@ impl ReferenceEffectIrV1 {
                                 initial: state.environment.clone(),
                                 transitions: Vec::new(),
                                 variants: Vec::new(),
-                            }
-                        });
+                            },
+                        );
                     }
                 }
             }
@@ -670,6 +722,14 @@ impl ReferenceEffectIrV1 {
                         &state.environment,
                         &assignment.value,
                     )?)?;
+                    require_symbolic_expression_budget_v2(&rhs)?;
+                    work_budget.charge_expression_v2(&rhs)?;
+                    work_budget.charge_predicate_v2(&state.guard)?;
+                    if writes.len() >= MAX_REFERENCE_STATEMENTS_V1 {
+                        return Err(ReferenceBindingErrorV1::new(format!(
+                            "reference symbolic execution exceeds {MAX_REFERENCE_STATEMENTS_V1} retained output writes",
+                        )));
+                    }
                     writes.push(ReferenceOutputWriteV1 {
                         argument,
                         block: block.block,
@@ -688,6 +748,8 @@ impl ReferenceEffectIrV1 {
                     )));
                 }
                 let value = symbolic_value_v2(&state.environment, &assignment.value)?;
+                require_symbolic_value_budget_v2(&value)?;
+                work_budget.charge_v2(symbolic_value_nodes_v2(&value)?)?;
                 state
                     .environment
                     .insert(assignment.destination.local, value);
@@ -704,6 +766,7 @@ impl ReferenceEffectIrV1 {
                         *target,
                         backedges,
                         &loop_nodes,
+                        &mut work_budget,
                     )?;
                 }
                 ReferenceTerminatorV1::Assert {
@@ -735,6 +798,7 @@ impl ReferenceEffectIrV1 {
                         *success,
                         backedges,
                         &loop_nodes,
+                        &mut work_budget,
                     )?;
                 }
                 ReferenceTerminatorV1::Switch {
@@ -750,6 +814,7 @@ impl ReferenceEffectIrV1 {
                             .values_mut()
                             .filter(|trace| trace.header == block.block)
                         {
+                            work_budget.charge_expression_v2(&expression)?;
                             trace.variants.push(expression.clone());
                         }
                     }
@@ -765,6 +830,7 @@ impl ReferenceEffectIrV1 {
                             target,
                             backedges,
                             &loop_nodes,
+                            &mut work_budget,
                         )?;
                     } else {
                         if loop_headers.contains(&block.block) {
@@ -780,6 +846,7 @@ impl ReferenceEffectIrV1 {
                             all_values.push(*value);
                         }
                         for (target, accepted) in by_target {
+                            work_budget.charge_state_clone_v2(&state)?;
                             let mut branch = state.clone();
                             branch.guard = reference_predicate_and_atom_v1(
                                 &branch.guard,
@@ -789,6 +856,7 @@ impl ReferenceEffectIrV1 {
                                     inside_set: true,
                                 },
                             )?;
+                            work_budget.charge_predicate_v2(&branch.guard)?;
                             dispatch_symbolic_edge_v2(
                                 &mut pending,
                                 branch,
@@ -796,6 +864,7 @@ impl ReferenceEffectIrV1 {
                                 target,
                                 backedges,
                                 &loop_nodes,
+                                &mut work_budget,
                             )?;
                         }
                         state.guard = reference_predicate_and_atom_v1(
@@ -806,6 +875,7 @@ impl ReferenceEffectIrV1 {
                                 inside_set: false,
                             },
                         )?;
+                        work_budget.charge_predicate_v2(&state.guard)?;
                         dispatch_symbolic_edge_v2(
                             &mut pending,
                             state,
@@ -813,6 +883,7 @@ impl ReferenceEffectIrV1 {
                             *otherwise,
                             backedges,
                             &loop_nodes,
+                            &mut work_budget,
                         )?;
                     }
                 }
@@ -1093,6 +1164,140 @@ fn symbolic_scalar_v2(
     }
 }
 
+fn require_symbolic_value_budget_v2(
+    value: &ReferenceSymbolicValueV2,
+) -> Result<(), ReferenceBindingErrorV1> {
+    match value {
+        ReferenceSymbolicValueV2::Scalar(expression)
+        | ReferenceSymbolicValueV2::CheckedPair {
+            value: expression, ..
+        } => require_symbolic_expression_budget_v2(expression),
+    }
+}
+
+fn require_symbolic_expression_budget_v2(
+    expression: &ReferenceEffectExpressionV1,
+) -> Result<(), ReferenceBindingErrorV1> {
+    symbolic_expression_nodes_v2(expression).map(|_| ())
+}
+
+fn symbolic_expression_nodes_v2(
+    expression: &ReferenceEffectExpressionV1,
+) -> Result<usize, ReferenceBindingErrorV1> {
+    let mut pending = vec![(expression, 0_usize)];
+    let mut nodes = 0_usize;
+    while let Some((expression, depth)) = pending.pop() {
+        if depth > fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 {
+            return Err(ReferenceBindingErrorV1::new(format!(
+                "reference symbolic expression exceeds depth {}",
+                fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2,
+            )));
+        }
+        nodes = nodes.checked_add(1).ok_or_else(|| {
+            ReferenceBindingErrorV1::new("reference symbolic expression node count overflowed")
+        })?;
+        if nodes > MAX_REFERENCE_EXPRESSION_NODES_V1 {
+            return Err(ReferenceBindingErrorV1::new(format!(
+                "reference symbolic expression exceeds {MAX_REFERENCE_EXPRESSION_NODES_V1} nodes",
+            )));
+        }
+        match expression {
+            ReferenceEffectExpressionV1::Binary { lhs, rhs, .. } => {
+                pending.push((lhs, depth + 1));
+                pending.push((rhs, depth + 1));
+            }
+            ReferenceEffectExpressionV1::Unary { operand, .. }
+            | ReferenceEffectExpressionV1::Cast { operand, .. } => {
+                pending.push((operand, depth + 1));
+            }
+            ReferenceEffectExpressionV1::PointCoordinate { .. }
+            | ReferenceEffectExpressionV1::KernelScalarArgument { .. }
+            | ReferenceEffectExpressionV1::Constant(_) => {}
+        }
+    }
+    Ok(nodes)
+}
+
+fn symbolic_value_nodes_v2(
+    value: &ReferenceSymbolicValueV2,
+) -> Result<usize, ReferenceBindingErrorV1> {
+    match value {
+        ReferenceSymbolicValueV2::Scalar(expression)
+        | ReferenceSymbolicValueV2::CheckedPair {
+            value: expression, ..
+        } => symbolic_expression_nodes_v2(expression),
+    }
+}
+
+fn symbolic_environment_nodes_v2(
+    environment: &ReferenceSymbolicEnvironmentV2,
+) -> Result<usize, ReferenceBindingErrorV1> {
+    environment.values().try_fold(0_usize, |total, value| {
+        total
+            .checked_add(symbolic_value_nodes_v2(value)?)
+            .ok_or_else(|| {
+                ReferenceBindingErrorV1::new("reference symbolic environment node count overflowed")
+            })
+    })
+}
+
+fn symbolic_predicate_nodes_v2(
+    predicate: &ReferencePathPredicateV1,
+) -> Result<usize, ReferenceBindingErrorV1> {
+    predicate.clauses.iter().try_fold(0_usize, |total, clause| {
+        clause.atoms.iter().try_fold(total, |total, atom| {
+            let expression = match atom {
+                ReferenceGuardAtomV1::SwitchValueSet { discriminant, .. } => discriminant,
+                ReferenceGuardAtomV1::Assert { condition, .. } => condition,
+            };
+            total
+                .checked_add(symbolic_expression_nodes_v2(expression)?)
+                .ok_or_else(|| {
+                    ReferenceBindingErrorV1::new(
+                        "reference symbolic predicate node count overflowed",
+                    )
+                })
+        })
+    })
+}
+
+fn symbolic_trace_nodes_v2(trace: &ReferenceLoopTraceV2) -> Result<usize, ReferenceBindingErrorV1> {
+    let mut nodes = symbolic_environment_nodes_v2(&trace.initial)?;
+    for environment in &trace.transitions {
+        nodes = nodes
+            .checked_add(symbolic_environment_nodes_v2(environment)?)
+            .ok_or_else(|| {
+                ReferenceBindingErrorV1::new("reference symbolic trace node count overflowed")
+            })?;
+    }
+    for expression in &trace.variants {
+        nodes = nodes
+            .checked_add(symbolic_expression_nodes_v2(expression)?)
+            .ok_or_else(|| {
+                ReferenceBindingErrorV1::new("reference symbolic trace node count overflowed")
+            })?;
+    }
+    Ok(nodes)
+}
+
+fn symbolic_state_nodes_v2(
+    state: &ReferenceSymbolicStateV2,
+) -> Result<usize, ReferenceBindingErrorV1> {
+    let mut nodes = symbolic_environment_nodes_v2(&state.environment)?
+        .checked_add(symbolic_predicate_nodes_v2(&state.guard)?)
+        .ok_or_else(|| {
+            ReferenceBindingErrorV1::new("reference symbolic state node count overflowed")
+        })?;
+    for trace in state.traces.values() {
+        nodes = nodes
+            .checked_add(symbolic_trace_nodes_v2(trace)?)
+            .ok_or_else(|| {
+                ReferenceBindingErrorV1::new("reference symbolic state node count overflowed")
+            })?;
+    }
+    Ok(nodes)
+}
+
 fn dispatch_symbolic_edge_v2(
     pending: &mut VecDeque<ReferenceSymbolicStateV2>,
     mut state: ReferenceSymbolicStateV2,
@@ -1100,6 +1305,7 @@ fn dispatch_symbolic_edge_v2(
     target: u32,
     backedges: &BTreeSet<(u32, u32)>,
     loop_nodes: &BTreeMap<(u32, u32), BTreeSet<u32>>,
+    work_budget: &mut ReferenceSymbolicWorkBudgetV2,
 ) -> Result<(), ReferenceBindingErrorV1> {
     if backedges.contains(&(source, target)) {
         let trace = state.traces.get_mut(&(target, source)).ok_or_else(|| {
@@ -1107,6 +1313,7 @@ fn dispatch_symbolic_edge_v2(
                 "reference backedge {source}->{target} has no canonical loop trace",
             ))
         })?;
+        work_budget.charge_environment_v2(&state.environment)?;
         trace.transitions.push(state.environment.clone());
         if trace.transitions.len() > MAX_REFERENCE_LOOP_ITERATIONS_V2 {
             return Err(ReferenceBindingErrorV1::new(format!(
@@ -1229,6 +1436,7 @@ fn validate_reference_loop_shapes_v2(
 ) -> Result<(), ReferenceBindingErrorV1> {
     let mut headers = BTreeSet::new();
     let loop_nodes = reference_natural_loop_nodes_v2(effect_ir, backedges)?;
+    reject_overlapping_reference_loops_v2(&loop_nodes)?;
     for (latch, header) in backedges {
         if !headers.insert(*header) {
             return Err(ReferenceBindingErrorV1::new(format!(
@@ -1276,6 +1484,23 @@ fn validate_reference_loop_shapes_v2(
             return Err(ReferenceBindingErrorV1::new(format!(
                 "reference loop <header={header}, latch={latch}> must have exactly one header exit",
             )));
+        }
+    }
+    Ok(())
+}
+
+fn reject_overlapping_reference_loops_v2(
+    loop_nodes: &BTreeMap<(u32, u32), BTreeSet<u32>>,
+) -> Result<(), ReferenceBindingErrorV1> {
+    let loops = loop_nodes.iter().collect::<Vec<_>>();
+    for (left_index, (left_identity, left_nodes)) in loops.iter().enumerate() {
+        for (right_identity, right_nodes) in loops.iter().skip(left_index + 1) {
+            if !left_nodes.is_disjoint(right_nodes) {
+                return Err(ReferenceBindingErrorV1::new(format!(
+                    "reference loops <header={}, latch={}> and <header={}, latch={}> overlap or nest; activation-specific recurrence summaries are not implemented",
+                    left_identity.1, left_identity.0, right_identity.1, right_identity.0,
+                )));
+            }
         }
     }
     Ok(())
@@ -3966,9 +4191,60 @@ mod tests {
             1,
             &BTreeSet::from([(4, 1)]),
             &BTreeMap::from([((4, 1), BTreeSet::from([1, 4]))]),
+            &mut ReferenceSymbolicWorkBudgetV2::default(),
         )
         .unwrap_err();
         assert!(error.to_string().contains("exceeds 4096 iterations"));
         state.traces.clear();
+    }
+
+    #[test]
+    fn overlapping_or_nested_loop_regions_fail_before_symbolic_execution() {
+        let mut overlapping = BTreeMap::new();
+        overlapping.insert((2, 1), BTreeSet::from([1, 2, 3]));
+        overlapping.insert((4, 3), BTreeSet::from([3, 4]));
+        let error = reject_overlapping_reference_loops_v2(&overlapping).unwrap_err();
+        assert!(error.to_string().contains("overlap or nest"));
+
+        let disjoint = BTreeMap::from([
+            ((2, 1), BTreeSet::from([1, 2])),
+            ((4, 3), BTreeSet::from([3, 4])),
+        ]);
+        reject_overlapping_reference_loops_v2(&disjoint).unwrap();
+    }
+
+    #[test]
+    fn symbolic_unrolling_checks_depth_before_recursive_hashing() {
+        let mut expression = ReferenceEffectExpressionV1::Constant(ReferenceConstantV1::Scalar {
+            scalar: ReferenceScalarTypeV1::U64,
+            bits: 1,
+        });
+        for _ in 0..=fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 {
+            expression = ReferenceEffectExpressionV1::Unary {
+                operation: ReferenceUnaryOpV1::Not,
+                operand: Box::new(expression),
+            };
+        }
+        let error = require_symbolic_expression_budget_v2(&expression).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("symbolic expression exceeds depth")
+        );
+    }
+
+    #[test]
+    fn symbolic_execution_has_one_cumulative_expression_work_budget() {
+        let mut budget = ReferenceSymbolicWorkBudgetV2 {
+            charged_nodes: MAX_REFERENCE_SYMBOLIC_WORK_NODES_V2,
+        };
+        let error = budget
+            .charge_expression_v2(&ReferenceEffectExpressionV1::Constant(scalar_constant(1)))
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("cumulative expression work nodes")
+        );
     }
 }

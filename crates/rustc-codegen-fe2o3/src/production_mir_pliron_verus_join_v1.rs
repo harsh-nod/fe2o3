@@ -1,11 +1,12 @@
-//! Compiler-private retained-runtime join for aggregate MIR/PLIRON proof.
+//! Compiler-private retained-runtime join for aggregate MIR/PLIRON conditional lemmas.
 
 use std::{error::Error, fmt};
 
-use fe2o3_functional_proof::MirPlironSemanticContractV1;
+use fe2o3_functional_proof::{MirPlironSemanticContractV1, ParallelReferenceContractV1};
 use fe2o3_pliron::{
     ProductionFunctionalRefinementTrustPolicyV2, ProductionMiddleEndEvidenceV5,
-    ProductionMirPlironSemanticContractReportV1, ProductionRankedKernelLoweringInputV1,
+    ProductionMirPlironSemanticContractReportV1, ProductionParallelReferenceContractReportV1,
+    ProductionRankedKernelLoweringInputV1,
 };
 use fe2o3_verifier::{
     FunctionalRefinementVerusRuntimeLeaseV1, ProductionMirPlironPerCompilationVerusErrorV1,
@@ -37,6 +38,8 @@ pub(crate) fn authenticate_mir_pliron_contract_per_compilation_v1(
     evidence: &ProductionMiddleEndEvidenceV5,
     contract: &MirPlironSemanticContractV1,
     structural_report: ProductionMirPlironSemanticContractReportV1,
+    parallel_contract: &ParallelReferenceContractV1,
+    parallel_report: ProductionParallelReferenceContractReportV1,
 ) -> Result<AuthenticatedMirPlironPerCompilationVerificationV1, ProductionMirPlironVerusJoinErrorV1>
 {
     let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open(
@@ -54,6 +57,8 @@ pub(crate) fn authenticate_mir_pliron_contract_per_compilation_v1(
         evidence,
         contract,
         structural_report,
+        parallel_contract,
+        parallel_report,
         PER_COMPILATION_PROOF_TIMEOUT_SECONDS_V1,
     )
     .map_err(ProductionMirPlironVerusJoinErrorV1::Verification)?;

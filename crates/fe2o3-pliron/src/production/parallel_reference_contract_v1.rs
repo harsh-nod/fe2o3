@@ -1,15 +1,16 @@
 //! Production join from compiler-derived sequential/parallel facts to one
 //! workload-neutral parallel-reference contract.
 
-use std::{collections::BTreeSet, error::Error, fmt};
+use std::{error::Error, fmt};
 
 use dialect_kernel::OwnershipCoverageAttr;
 use fe2o3_functional_proof::{
-    MirPlironSemanticContractV1, ParallelCallKindV1, ParallelCallSummaryV1, ParallelFoldOrderV1,
-    ParallelHierarchyLevelV1, ParallelNumericalPolicyV1, ParallelReferenceContractV1,
-    ParallelScheduleRelationV1, SemanticCollectiveContractV1, SemanticCollectiveKindV1,
-    SemanticEvaluationOrderV1, SemanticFiniteExtentV1, SemanticNumericalPolicyV1,
-    SemanticOutputContractV1, SemanticScalarTypeV1, SemanticTypedRootV1,
+    COMPLETE_GPU_HIERARCHY_V1, MirPlironSemanticContractV1, ParallelFoldOrderV1,
+    ParallelHierarchyLevelV1, ParallelNumericalPolicyV1, ParallelOutputRelationV1,
+    ParallelReferenceContractErrorV1, ParallelReferenceContractV1, ParallelScheduleRelationV1,
+    SemanticCollectiveContractV1, SemanticCollectiveKindV1, SemanticEvaluationOrderV1,
+    SemanticFiniteExtentV1, SemanticNumericalPolicyV1, SemanticOutputContractV1,
+    SemanticScalarTypeV1, SemanticTypedRootV1,
 };
 use fe2o3_kernel_analysis::HierarchicalOwnershipLevelV1;
 use fe2o3_proof_contracts::DigestV1;
@@ -20,8 +21,8 @@ use super::{
     ProductionRankedKernelLoweringInputV1, ProductionRankedOperationV1,
 };
 
-const TENSOR_SITE_DOMAIN_V1: &[u8] = b"FE2O3/PARALLEL-REFERENCE/TENSOR-SITE/V1\0";
 const DYNAMIC_BOUND_DOMAIN_V1: &[u8] = b"FE2O3/PARALLEL-REFERENCE/DYNAMIC-BOUND/V1\0";
+const DERIVED_RELATION_DOMAIN_V1: &[u8] = b"FE2O3/PARALLEL-REFERENCE/DERIVED-RELATION/V1\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProductionParallelReferenceContractReportV1 {
@@ -77,6 +78,7 @@ pub enum ProductionParallelReferenceContractErrorV1 {
     SemanticContractMismatch,
     OutputCoverageIncomplete { declared: usize, live: usize },
     OutputRelationMismatch { index: usize },
+    OutputSpecificHierarchyIncomplete { outputs: usize },
     HierarchyCoverageIncomplete { level: ParallelHierarchyLevelV1 },
     AuthenticatedProofIncomplete { identity: DigestV1 },
     ScheduleRelationIncomplete { index: usize, detail: &'static str },
@@ -88,6 +90,7 @@ pub enum ProductionParallelReferenceContractErrorV1 {
     CallSummaryMismatch { index: usize },
     TensorFragmentOwnershipIncomplete { index: usize },
     UnmodeledTensorSites { declared: usize, live: usize },
+    ContractConstruction(ParallelReferenceContractErrorV1),
     CounterOverflow,
 }
 
@@ -99,6 +102,7 @@ impl ProductionParallelReferenceContractErrorV1 {
             self,
             Self::OutputCoverageIncomplete { .. }
                 | Self::HierarchyCoverageIncomplete { .. }
+                | Self::OutputSpecificHierarchyIncomplete { .. }
                 | Self::AuthenticatedProofIncomplete { .. }
                 | Self::ScheduleRelationIncomplete { .. }
                 | Self::DynamicBoundProofIncomplete { .. }
@@ -115,6 +119,7 @@ impl fmt::Display for ProductionParallelReferenceContractErrorV1 {
             Self::SemanticContractMismatch => formatter.write_str("error[FE2O3-PARALLEL-001]: parallel relation does not bind the exact compiler-verified MIR/PLIRON semantic contract"),
             Self::OutputCoverageIncomplete { declared, live } => write!(formatter, "error[FE2O3-PARALLEL-002]: parallel reference coverage is incomplete: {declared} logical output relations were declared but {live} live total-output ownership proofs were derived"),
             Self::OutputRelationMismatch { index } => write!(formatter, "error[FE2O3-PARALLEL-003]: parallel output relation {index} does not match its compiler-derived output domain, view, values, or ownership contract"),
+            Self::OutputSpecificHierarchyIncomplete { outputs } => write!(formatter, "error[FE2O3-PARALLEL-016]: the current hierarchy report cannot bind {outputs} output views independently; production rejects multi-output hierarchy composition until the report carries stable ranked-view identities"),
             Self::HierarchyCoverageIncomplete { level } => write!(formatter, "error[FE2O3-PARALLEL-004]: compiler could not derive nonempty {level:?} ownership while relating the sequential output domain to the complete GPU hierarchy"),
             Self::AuthenticatedProofIncomplete { identity } => write!(formatter, "error[FE2O3-PARALLEL-005]: no retained authenticated per-compilation proof has identity {identity:?}"),
             Self::ScheduleRelationIncomplete { index, detail } => write!(formatter, "error[FE2O3-PARALLEL-006]: schedule relation {index} is incomplete: {detail}"),
@@ -127,11 +132,19 @@ impl fmt::Display for ProductionParallelReferenceContractErrorV1 {
             Self::TensorFragmentOwnershipIncomplete { index } => write!(formatter, "error[FE2O3-PARALLEL-013]: cooperative tensor summary {index} lacks a clean live fragment ownership and convergence proof"),
             Self::UnmodeledTensorSites { declared, live } => write!(formatter, "error[FE2O3-PARALLEL-014]: parallel contract models {declared} cooperative tensor sites but the live ranked graph contains {live}"),
             Self::CounterOverflow => formatter.write_str("error[FE2O3-PARALLEL-015]: parallel relation count cannot be represented in the production report"),
+            Self::ContractConstruction(error) => write!(formatter, "error[FE2O3-PARALLEL-017]: compiler-derived parallel contract was invalid: {error}"),
         }
     }
 }
 
-impl Error for ProductionParallelReferenceContractErrorV1 {}
+impl Error for ProductionParallelReferenceContractErrorV1 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::ContractConstruction(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 /// Compiler-owned builder over immutable live ranked IR and mandatory reports.
 /// The supplied contract is only an expected encoding checked against these
@@ -184,6 +197,194 @@ impl<'a> ProductionParallelReferenceContractBuilderV1<'a> {
     }
 }
 
+/// Derives the strongest currently supported parallel relation from immutable
+/// compiler-owned facts, then independently reconciles the result.
+pub fn derive_and_require_parallel_reference_contract_v1(
+    ranked: &ProductionRankedKernelLoweringInputV1,
+    evidence: &ProductionMiddleEndEvidenceV5,
+    semantics: ProductionMirPlironSemanticContractReportV1,
+    semantic_contract: &MirPlironSemanticContractV1,
+) -> Result<
+    (
+        ParallelReferenceContractV1,
+        ProductionParallelReferenceContractReportV1,
+    ),
+    ProductionParallelReferenceContractErrorV1,
+> {
+    if tensor_site_count(ranked) != 0 {
+        return Err(
+            ProductionParallelReferenceContractErrorV1::UnmodeledTensorSites {
+                declared: 0,
+                live: tensor_site_count(ranked),
+            },
+        );
+    }
+    let mut relations = Vec::with_capacity(semantic_contract.outputs().len());
+    for (index, output) in semantic_contract.outputs().iter().enumerate() {
+        let proof = output_receipt_identity(ranked, output)
+            .ok_or(ProductionParallelReferenceContractErrorV1::OutputRelationMismatch { index })?;
+        let (actual, reference) = output_roots(output, semantic_contract)
+            .ok_or(ProductionParallelReferenceContractErrorV1::OutputRelationMismatch { index })?;
+        let numerical_policy = match (
+            actual.scalar(),
+            actual.numerical_policy(),
+            reference.numerical_policy(),
+        ) {
+            (
+                SemanticScalarTypeV1::Boolean
+                | SemanticScalarTypeV1::Signed(_)
+                | SemanticScalarTypeV1::Unsigned(_),
+                SemanticNumericalPolicyV1::ExactBitVector,
+                SemanticNumericalPolicyV1::ExactBitVector,
+            ) => ParallelNumericalPolicyV1::ExactBitVector,
+            (
+                SemanticScalarTypeV1::Float(_),
+                SemanticNumericalPolicyV1::IeeeOperatorCongruence {
+                    rounding,
+                    exceptional_values,
+                },
+                SemanticNumericalPolicyV1::IeeeOperatorCongruence {
+                    rounding: reference_rounding,
+                    exceptional_values: reference_exceptional_values,
+                },
+            ) if rounding == reference_rounding
+                && exceptional_values == reference_exceptional_values =>
+            {
+                ParallelNumericalPolicyV1::IeeeOperatorCongruence {
+                    rounding,
+                    exceptional_values,
+                }
+            }
+            _ => {
+                return Err(
+                    ProductionParallelReferenceContractErrorV1::NumericalPolicyRejected {
+                        index,
+                        detail: "compiler-derived actual and reference roots do not share one admitted exact numerical policy",
+                    },
+                );
+            }
+        };
+        let matching_collectives = semantic_contract
+            .collectives()
+            .iter()
+            .filter(|collective| {
+                collective.view_identity() == output.view_identity()
+                    && collective.actual() == output.actual()
+                    && collective.expected() == output.reference()
+                    && collective.target_domain() == output.output_domain()
+            })
+            .collect::<Vec<_>>();
+        let schedule = match matching_collectives.as_slice() {
+            [] if actual.commitment() == reference.commitment() => {
+                ParallelScheduleRelationV1::PointwiseBijection
+            }
+            [] => {
+                return Err(
+                    ProductionParallelReferenceContractErrorV1::ScheduleRelationIncomplete {
+                        index,
+                        detail: "distinct actual/reference expressions have no unique live collective schedule",
+                    },
+                );
+            }
+            [collective] => match collective.kind() {
+                SemanticCollectiveKindV1::PermutationGather => {
+                    ParallelScheduleRelationV1::Permutation {
+                        collective: collective.identity(),
+                    }
+                }
+                SemanticCollectiveKindV1::FiniteFold => ParallelScheduleRelationV1::Fold {
+                    collective: collective.identity(),
+                    order: ParallelFoldOrderV1::Preserved,
+                    reference_order: collective.order(),
+                },
+                SemanticCollectiveKindV1::FiniteRecurrence => {
+                    let loops = semantic_contract
+                        .loops()
+                        .iter()
+                        .filter(|loop_contract| {
+                            loop_contract.iteration_domain() == collective.source_domain()
+                        })
+                        .collect::<Vec<_>>();
+                    let [loop_contract] = loops.as_slice() else {
+                        return Err(
+                            ProductionParallelReferenceContractErrorV1::ScheduleRelationIncomplete {
+                                index,
+                                detail: "finite recurrence does not have exactly one canonical loop over its contribution domain",
+                            },
+                        );
+                    };
+                    let dynamic = semantic_contract
+                        .domains()
+                        .iter()
+                        .find(|domain| domain.identity() == loop_contract.iteration_domain())
+                        .is_some_and(|domain| {
+                            domain.extents().iter().any(|extent| {
+                                matches!(extent, SemanticFiniteExtentV1::Dynamic { .. })
+                            })
+                        });
+                    ParallelScheduleRelationV1::BoundedRecurrence {
+                        collective: collective.identity(),
+                        loop_contract: loop_contract.identity(),
+                        dynamic_bound_proof: dynamic.then(|| {
+                            production_dynamic_loop_bound_identity_v1(
+                                semantic_contract,
+                                loop_contract,
+                            )
+                        }),
+                        reference_order: collective.order(),
+                    }
+                }
+            },
+            _ => {
+                return Err(
+                    ProductionParallelReferenceContractErrorV1::ScheduleRelationIncomplete {
+                        index,
+                        detail: "output has more than one candidate live collective schedule",
+                    },
+                );
+            }
+        };
+        relations.push(
+            ParallelOutputRelationV1::new(
+                derived_relation_identity(semantic_contract, output, index),
+                output.identity(),
+                output.output_domain(),
+                schedule,
+                numerical_policy,
+                COMPLETE_GPU_HIERARCHY_V1.to_vec(),
+                vec![],
+                proof,
+            )
+            .map_err(ProductionParallelReferenceContractErrorV1::ContractConstruction)?,
+        );
+    }
+    let contract =
+        ParallelReferenceContractV1::new(semantic_contract.canonical_sha256(), relations, vec![])
+            .map_err(ProductionParallelReferenceContractErrorV1::ContractConstruction)?;
+    let report = require_parallel_reference_contract_v1(
+        ranked,
+        evidence,
+        semantics,
+        semantic_contract,
+        &contract,
+    )?;
+    Ok((contract, report))
+}
+
+fn derived_relation_identity(
+    contract: &MirPlironSemanticContractV1,
+    output: &SemanticOutputContractV1,
+    index: usize,
+) -> DigestV1 {
+    let mut digest = Sha256::new();
+    digest.update((DERIVED_RELATION_DOMAIN_V1.len() as u64).to_le_bytes());
+    digest.update(DERIVED_RELATION_DOMAIN_V1);
+    digest.update(contract.canonical_sha256().as_bytes());
+    digest.update(output.identity().as_bytes());
+    digest.update((index as u64).to_le_bytes());
+    DigestV1::from_untrusted_bytes(digest.finalize().into())
+}
+
 #[allow(clippy::too_many_lines)]
 pub fn require_parallel_reference_contract_v1(
     ranked: &ProductionRankedKernelLoweringInputV1,
@@ -219,31 +420,14 @@ pub fn require_parallel_reference_contract_v1(
         );
     }
 
-    for required in [
-        ParallelHierarchyLevelV1::Invocation,
-        ParallelHierarchyLevelV1::Subgroup,
-        ParallelHierarchyLevelV1::Workgroup,
-        ParallelHierarchyLevelV1::Grid,
-    ] {
-        let present = ranked.ownership_report().regions().iter().any(|region| {
-            region.coverage() == OwnershipCoverageAttr::TotalView
-                && hierarchy_level(region.identity().level()) == required
-                && region.element_count() != 0
-        });
-        if !present {
-            return Err(
-                ProductionParallelReferenceContractErrorV1::HierarchyCoverageIncomplete {
-                    level: required,
-                },
-            );
-        }
+    if semantic_contract.outputs().len() != 1 {
+        return Err(
+            ProductionParallelReferenceContractErrorV1::OutputSpecificHierarchyIncomplete {
+                outputs: semantic_contract.outputs().len(),
+            },
+        );
     }
 
-    let receipt_ids = ranked
-        .retained_functional_refinement_receipts()
-        .iter()
-        .map(|receipt| receipt.receipt_identity().digest())
-        .collect::<BTreeSet<_>>();
     let mut counts = RelationCountsV1::default();
     for (index, output) in semantic_contract.outputs().iter().enumerate() {
         let Some(relation) = expected
@@ -263,13 +447,39 @@ pub fn require_parallel_reference_contract_v1(
                 ProductionParallelReferenceContractErrorV1::OutputRelationMismatch { index },
             );
         }
-        require_receipt(&receipt_ids, relation.authenticated_proof())?;
+        for required in [
+            ParallelHierarchyLevelV1::Invocation,
+            ParallelHierarchyLevelV1::Subgroup,
+            ParallelHierarchyLevelV1::Workgroup,
+            ParallelHierarchyLevelV1::Grid,
+        ] {
+            let present = ranked.ownership_report().regions().iter().any(|region| {
+                region.coverage() == OwnershipCoverageAttr::TotalView
+                    && hierarchy_level(region.identity().level()) == required
+                    && region.element_count() != 0
+            });
+            if !present {
+                return Err(
+                    ProductionParallelReferenceContractErrorV1::HierarchyCoverageIncomplete {
+                        level: required,
+                    },
+                );
+            }
+        }
+        let output_proof = output_receipt_identity(ranked, output)
+            .ok_or(ProductionParallelReferenceContractErrorV1::OutputRelationMismatch { index })?;
+        if relation.authenticated_proof() != output_proof {
+            return Err(
+                ProductionParallelReferenceContractErrorV1::AuthenticatedProofIncomplete {
+                    identity: relation.authenticated_proof(),
+                },
+            );
+        }
         require_numerical_policy(
             index,
             relation.numerical_policy(),
             output,
             semantic_contract,
-            &receipt_ids,
         )?;
         if matches!(
             relation.numerical_policy(),
@@ -326,14 +536,7 @@ pub fn require_parallel_reference_contract_v1(
                     output,
                     semantic_contract,
                 )?;
-                require_fold_order(
-                    index,
-                    order,
-                    reference_order,
-                    collective,
-                    relation.numerical_policy(),
-                    &receipt_ids,
-                )?;
+                require_fold_order(index, order, reference_order, collective)?;
                 counts.fold += 1;
             }
             ParallelScheduleRelationV1::BoundedRecurrence {
@@ -410,26 +613,21 @@ pub fn require_parallel_reference_contract_v1(
     }
 
     let live_tensor_sites = tensor_site_count(ranked);
-    let declared_tensor_sites = expected
-        .call_summaries()
-        .iter()
-        .filter(|summary| {
-            matches!(
-                summary.kind(),
-                ParallelCallKindV1::CooperativeTensorIntrinsic { .. }
-            )
-        })
-        .count();
-    if live_tensor_sites != declared_tensor_sites {
+    if live_tensor_sites != 0 {
         return Err(
             ProductionParallelReferenceContractErrorV1::UnmodeledTensorSites {
-                declared: declared_tensor_sites,
+                declared: 0,
                 live: live_tensor_sites,
             },
         );
     }
-    for (index, summary) in expected.call_summaries().iter().enumerate() {
-        require_call_summary(index, summary, ranked, semantic_contract, &receipt_ids)?;
+    if !expected.call_summaries().is_empty() {
+        return Err(
+            ProductionParallelReferenceContractErrorV1::CallSummaryDerivationIncomplete {
+                index: 0,
+                kind: "call",
+            },
+        );
     }
 
     Ok(ProductionParallelReferenceContractReportV1 {
@@ -440,7 +638,7 @@ pub fn require_parallel_reference_contract_v1(
         fold_relations: count(counts.fold)?,
         bounded_recurrences: count(counts.recurrence)?,
         call_summaries: count(expected.call_summaries().len())?,
-        tensor_summaries: count(declared_tensor_sites)?,
+        tensor_summaries: 0,
         error_bounded_relations: count(counts.error_bounded)?,
     })
 }
@@ -463,15 +661,26 @@ fn hierarchy_level(level: HierarchicalOwnershipLevelV1) -> ParallelHierarchyLeve
     }
 }
 
-fn require_receipt(
-    receipts: &BTreeSet<DigestV1>,
-    identity: DigestV1,
-) -> Result<(), ProductionParallelReferenceContractErrorV1> {
-    if receipts.contains(&identity) {
-        Ok(())
-    } else {
-        Err(ProductionParallelReferenceContractErrorV1::AuthenticatedProofIncomplete { identity })
-    }
+fn output_receipt_identity(
+    ranked: &ProductionRankedKernelLoweringInputV1,
+    output: &SemanticOutputContractV1,
+) -> Option<DigestV1> {
+    let mut matches = ranked
+        .kernel()
+        .blocks()
+        .iter()
+        .flat_map(|block| block.operations())
+        .filter_map(|operation| match operation {
+            ProductionRankedOperationV1::RequireEffectRefinement { contract, proof }
+                if super::production_effect_contract_identity_v1(contract.contract_identity())
+                    == output.identity() =>
+            {
+                Some(proof.receipt_identity().digest())
+            }
+            _ => None,
+        });
+    let identity = matches.next()?;
+    matches.next().is_none().then_some(identity)
 }
 
 fn has_total_ownership_contract(
@@ -518,6 +727,8 @@ fn require_collective<'a>(
         );
     };
     if collective.kind() != kind
+        || collective.view_identity() != output.view_identity()
+        || collective.target_domain() != output.output_domain()
         || collective.actual() != output.actual()
         || collective.expected() != output.reference()
         || contract
@@ -544,8 +755,6 @@ fn require_fold_order(
     declared: ParallelFoldOrderV1,
     reference_order: SemanticEvaluationOrderV1,
     collective: &SemanticCollectiveContractV1,
-    numerical: ParallelNumericalPolicyV1,
-    receipts: &BTreeSet<DigestV1>,
 ) -> Result<(), ProductionParallelReferenceContractErrorV1> {
     match declared {
         ParallelFoldOrderV1::Preserved if collective.order() == reference_order => Ok(()),
@@ -555,35 +764,18 @@ fn require_fold_order(
                 detail: "live fold order differs from the sequential reference order",
             },
         ),
-        ParallelFoldOrderV1::AlgebraicallyReordered {
-            associativity_proof,
-            commutativity_proof,
-        } => {
-            if matches!(
-                numerical,
-                ParallelNumericalPolicyV1::IeeeOperatorCongruence { .. }
-            ) {
-                return Err(
-                    ProductionParallelReferenceContractErrorV1::FoldOrderRejected {
-                        index,
-                        detail: "IEEE operator congruence does not justify reassociation; preserve order or provide an explicit finite error policy",
-                    },
-                );
-            }
-            require_receipt(receipts, associativity_proof)?;
-            require_receipt(receipts, commutativity_proof)
-        }
-        ParallelFoldOrderV1::ErrorBoundedReordering { proof } => {
-            if !matches!(numerical, ParallelNumericalPolicyV1::ErrorBounded { .. }) {
-                return Err(
-                    ProductionParallelReferenceContractErrorV1::FoldOrderRejected {
-                        index,
-                        detail: "error-bounded reordering requires an explicit finite numerical error policy",
-                    },
-                );
-            }
-            require_receipt(receipts, proof)
-        }
+        ParallelFoldOrderV1::AlgebraicallyReordered { .. } => Err(
+            ProductionParallelReferenceContractErrorV1::FoldOrderRejected {
+                index,
+                detail: "algebraic reordering requires a claim-specific associativity and commutativity receipt; effect-refinement receipts cannot prove algebraic laws",
+            },
+        ),
+        ParallelFoldOrderV1::ErrorBoundedReordering { .. } => Err(
+            ProductionParallelReferenceContractErrorV1::FoldOrderRejected {
+                index,
+                detail: "error-bounded reordering requires a claim-specific finite-error receipt; effect-refinement receipts cannot prove error bounds",
+            },
+        ),
     }
 }
 
@@ -592,7 +784,6 @@ fn require_numerical_policy(
     policy: ParallelNumericalPolicyV1,
     output: &SemanticOutputContractV1,
     contract: &MirPlironSemanticContractV1,
-    receipts: &BTreeSet<DigestV1>,
 ) -> Result<(), ProductionParallelReferenceContractErrorV1> {
     let Some((actual, reference)) = output_roots(output, contract) else {
         return Err(
@@ -651,32 +842,8 @@ fn require_numerical_policy(
                 )
             }
         }
-        ParallelNumericalPolicyV1::ErrorBounded {
-            witness_root,
-            proof,
-            ..
-        } => {
-            let witness = contract
-                .typed_roots()
-                .iter()
-                .find(|root| root.identity() == witness_root);
-            let live_float = matches!(actual.scalar(), SemanticScalarTypeV1::Float(_))
-                && matches!(reference.scalar(), SemanticScalarTypeV1::Float(_));
-            let witness_matches = output.auxiliary_roots().contains(&witness_root)
-                && witness.is_some_and(|root| {
-                    root.domain() == output.output_domain()
-                        && matches!(root.scalar(), SemanticScalarTypeV1::Float(_))
-                });
-            let roots_have_ieee_model = matches!(
-                actual.numerical_policy(),
-                SemanticNumericalPolicyV1::IeeeOperatorCongruence { .. }
-            ) && actual.numerical_policy()
-                == reference.numerical_policy();
-            if live_float && witness_matches && roots_have_ieee_model && receipts.contains(&proof) {
-                Ok(())
-            } else {
-                Err(ProductionParallelReferenceContractErrorV1::NumericalProofIncomplete { index })
-            }
+        ParallelNumericalPolicyV1::ErrorBounded { .. } => {
+            Err(ProductionParallelReferenceContractErrorV1::NumericalProofIncomplete { index })
         }
         ParallelNumericalPolicyV1::UnboundedRelaxed => Err(
             ProductionParallelReferenceContractErrorV1::NumericalPolicyRejected {
@@ -684,115 +851,6 @@ fn require_numerical_policy(
                 detail: "unbounded relaxed floating-point semantics cannot establish functional correctness",
             },
         ),
-    }
-}
-
-fn require_call_summary(
-    index: usize,
-    summary: &ParallelCallSummaryV1,
-    ranked: &ProductionRankedKernelLoweringInputV1,
-    contract: &MirPlironSemanticContractV1,
-    receipts: &BTreeSet<DigestV1>,
-) -> Result<(), ProductionParallelReferenceContractErrorV1> {
-    require_receipt(receipts, summary.authenticated_proof())?;
-    let actual = contract
-        .typed_roots()
-        .iter()
-        .find(|root| root.identity() == summary.actual_root());
-    let reference = contract
-        .typed_roots()
-        .iter()
-        .find(|root| root.identity() == summary.reference_root());
-    let (Some(actual), Some(reference)) = (actual, reference) else {
-        return Err(ProductionParallelReferenceContractErrorV1::CallSummaryMismatch { index });
-    };
-    if actual.scalar() != reference.scalar()
-        || actual.domain() != reference.domain()
-        || !summary_policy_matches(
-            summary.numerical_policy(),
-            actual,
-            reference,
-            contract,
-            receipts,
-        )
-    {
-        return Err(ProductionParallelReferenceContractErrorV1::CallSummaryMismatch { index });
-    }
-    match summary.kind() {
-        ParallelCallKindV1::SafeRustHelper => Err(
-            ProductionParallelReferenceContractErrorV1::CallSummaryDerivationIncomplete {
-                index,
-                kind: "safe Rust helper",
-            },
-        ),
-        ParallelCallKindV1::CompilerIntrinsic => Err(
-            ProductionParallelReferenceContractErrorV1::CallSummaryDerivationIncomplete {
-                index,
-                kind: "non-tensor compiler intrinsic",
-            },
-        ),
-        ParallelCallKindV1::CooperativeTensorIntrinsic {
-            site_ordinal,
-            layout_identity,
-        } => {
-            if summary.argument_count() != 3 || !ranked.tensor_layout_report().is_clean() {
-                return Err(
-                    ProductionParallelReferenceContractErrorV1::TensorFragmentOwnershipIncomplete {
-                        index,
-                    },
-                );
-            }
-            let Some(live) = production_tensor_site_identity_v1(ranked, site_ordinal) else {
-                return Err(
-                    ProductionParallelReferenceContractErrorV1::TensorFragmentOwnershipIncomplete {
-                        index,
-                    },
-                );
-            };
-            if live != layout_identity || summary.callsite_identity() != live {
-                return Err(
-                    ProductionParallelReferenceContractErrorV1::CallSummaryMismatch { index },
-                );
-            }
-            Ok(())
-        }
-    }
-}
-
-fn summary_policy_matches(
-    policy: ParallelNumericalPolicyV1,
-    actual: &SemanticTypedRootV1,
-    reference: &SemanticTypedRootV1,
-    contract: &MirPlironSemanticContractV1,
-    receipts: &BTreeSet<DigestV1>,
-) -> bool {
-    match policy {
-        ParallelNumericalPolicyV1::ExactBitVector => {
-            actual.numerical_policy() == SemanticNumericalPolicyV1::ExactBitVector
-                && reference.numerical_policy() == SemanticNumericalPolicyV1::ExactBitVector
-        }
-        ParallelNumericalPolicyV1::IeeeOperatorCongruence {
-            rounding,
-            exceptional_values,
-        } => {
-            let policy = SemanticNumericalPolicyV1::IeeeOperatorCongruence {
-                rounding,
-                exceptional_values,
-            };
-            actual.numerical_policy() == policy && reference.numerical_policy() == policy
-        }
-        ParallelNumericalPolicyV1::ErrorBounded {
-            witness_root,
-            proof,
-            ..
-        } => {
-            contract
-                .typed_roots()
-                .iter()
-                .any(|root| root.identity() == witness_root && root.domain() == actual.domain())
-                && receipts.contains(&proof)
-        }
-        ParallelNumericalPolicyV1::UnboundedRelaxed => false,
     }
 }
 
@@ -804,27 +862,6 @@ fn tensor_site_count(ranked: &ProductionRankedKernelLoweringInputV1) -> usize {
         .flat_map(|block| block.operations())
         .filter(|operation| matches!(operation, ProductionRankedOperationV1::TensorLayout { .. }))
         .count()
-}
-
-/// Compiler-derived identity of one exact cooperative tensor site. The whole
-/// ranked-kernel identity binds its fragment maps, convergence, CFG, and every
-/// other operation; the ordinal selects one live tensor site without naming a
-/// target instruction or workload.
-pub fn production_tensor_site_identity_v1(
-    ranked: &ProductionRankedKernelLoweringInputV1,
-    site_ordinal: u32,
-) -> Option<DigestV1> {
-    let live = tensor_site_count(ranked);
-    let ordinal = usize::try_from(site_ordinal).ok()?;
-    if ordinal >= live {
-        return None;
-    }
-    let mut digest = Sha256::new();
-    digest.update((TENSOR_SITE_DOMAIN_V1.len() as u64).to_le_bytes());
-    digest.update(TENSOR_SITE_DOMAIN_V1);
-    digest.update(super::middle_end_evidence_v4::derive_ranked_kernel_identity(ranked));
-    digest.update(site_ordinal.to_le_bytes());
-    Some(DigestV1::from_untrusted_bytes(digest.finalize().into()))
 }
 
 /// Compiler-derived identity of the finite bound already established for one
@@ -867,6 +904,9 @@ mod tests {
             },
             ProductionParallelReferenceContractErrorV1::HierarchyCoverageIncomplete {
                 level: ParallelHierarchyLevelV1::Workgroup,
+            },
+            ProductionParallelReferenceContractErrorV1::OutputSpecificHierarchyIncomplete {
+                outputs: 2,
             },
             ProductionParallelReferenceContractErrorV1::AuthenticatedProofIncomplete {
                 identity: digest(1),
@@ -911,5 +951,96 @@ mod tests {
         ] {
             assert!(!error.is_incomplete(), "{error}");
         }
+    }
+
+    #[test]
+    fn effect_receipt_digests_cannot_authorize_reassociation_or_error_bounds() {
+        let collective = SemanticCollectiveContractV1::new(
+            digest(1),
+            SemanticCollectiveKindV1::FiniteFold,
+            digest(2),
+            digest(3),
+            digest(3),
+            digest(4),
+            digest(5),
+            digest(6),
+            digest(7),
+            16,
+            16,
+            SemanticEvaluationOrderV1::SequentialAscending,
+            fe2o3_functional_proof::SemanticCoverageBindingV1::TotalView,
+        )
+        .unwrap();
+        let error = require_fold_order(
+            0,
+            ParallelFoldOrderV1::AlgebraicallyReordered {
+                associativity_proof: digest(9),
+                commutativity_proof: digest(9),
+            },
+            SemanticEvaluationOrderV1::SequentialAscending,
+            &collective,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("claim-specific"));
+
+        let domain = digest(10);
+        let ieee = SemanticNumericalPolicyV1::IeeeOperatorCongruence {
+            rounding: fe2o3_functional_proof::SemanticIeeeRoundingV1::NearestTiesEven,
+            exceptional_values: fe2o3_functional_proof::SemanticIeeeExceptionalValueV1::ExactBits,
+        };
+        let roots = [11_u8, 12, 13]
+            .map(|identity| {
+                SemanticTypedRootV1::new(
+                    digest(identity),
+                    digest(if identity == 12 { 14 } else { identity }),
+                    domain,
+                    SemanticScalarTypeV1::Float(32),
+                    ieee,
+                )
+                .unwrap()
+            })
+            .to_vec();
+        let output = SemanticOutputContractV1::new(
+            digest(15),
+            digest(16),
+            domain,
+            digest(11),
+            digest(12),
+            vec![digest(13)],
+        )
+        .unwrap();
+        let contract = MirPlironSemanticContractV1::new(
+            digest(17),
+            digest(18),
+            digest(19),
+            vec![
+                fe2o3_functional_proof::SemanticFiniteDomainV1::new(
+                    domain,
+                    vec![SemanticFiniteExtentV1::Static(16)],
+                )
+                .unwrap(),
+            ],
+            roots,
+            vec![],
+            vec![],
+            vec![output],
+        )
+        .unwrap();
+        let error = require_numerical_policy(
+            0,
+            ParallelNumericalPolicyV1::ErrorBounded {
+                absolute_error_f64_bits: 1.0_f64.to_bits(),
+                relative_error_f64_bits: 1.0_f64.to_bits(),
+                witness_root: digest(13),
+                proof: digest(9),
+            },
+            &contract.outputs()[0],
+            &contract,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ProductionParallelReferenceContractErrorV1::NumericalProofIncomplete { index: 0 }
+        ));
     }
 }

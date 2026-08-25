@@ -47,14 +47,15 @@ pub use production::{
     ProductionTypedSemanticObligationSummaryV2, ProductionVerifiedMirPlironKernelV1,
     compile_ranked_kernel_for_lowering_v1, compile_ranked_kernel_for_lowering_v2,
     derive_and_reconcile_mir_pliron_semantic_contract_v1,
+    derive_and_require_parallel_reference_contract_v1,
     normalized_effect_refinement_hash_for_kernel_v2,
     normalized_functional_refinement_formula_hash_for_kernel_v2,
     production_dynamic_loop_bound_identity_v1, production_effect_contract_identity_v1,
     production_loop_transition_identity_v1, production_loop_variant_identity_v1,
-    production_ranked_value_identity_v1, production_tensor_site_identity_v1,
-    require_mir_pliron_semantic_contract_v1, require_parallel_reference_contract_v1,
-    require_total_output_refinement_v2, typed_semantic_commitment_reconciliation_v2,
-    typed_semantic_obligation_summary_v2, verify_ranked_kernel_against_safe_reference_mir_v1,
+    production_ranked_value_identity_v1, require_mir_pliron_semantic_contract_v1,
+    require_parallel_reference_contract_v1, require_total_output_refinement_v2,
+    typed_semantic_commitment_reconciliation_v2, typed_semantic_obligation_summary_v2,
+    verify_ranked_kernel_against_safe_reference_mir_v1,
 };
 
 use std::{

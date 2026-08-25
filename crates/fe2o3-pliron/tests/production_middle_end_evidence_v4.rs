@@ -35,6 +35,7 @@ use fe2o3_pliron::{
     ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1, ProductionSemanticScalarTypeV2,
     ProductionSessionLimitsV1, ShellLimits, compile_ranked_kernel_for_lowering_v1,
     compile_ranked_kernel_for_lowering_v2, derive_and_reconcile_mir_pliron_semantic_contract_v1,
+    derive_and_require_parallel_reference_contract_v1,
     normalized_effect_refinement_hash_for_kernel_v2,
     normalized_functional_refinement_formula_hash_for_kernel_v2,
     production_effect_contract_identity_v1, production_loop_transition_identity_v1,
@@ -1105,6 +1106,7 @@ fn exact_mir_pliron_contract_joins_live_typed_effect_evidence() {
     assert!(report.binds_safe_reference_mir_to_live_pliron());
     assert!(!report.proves_the_compiler_implementation_sound());
     assert!(!report.grants_llvm_or_later_authority());
+
     assert!(verified.establishes_total_output_refinement_at_mir_pliron_boundary());
     assert!(verified.compiler_projection_and_pass_soundness_remain_trusted());
     assert!(!verified.grants_llvm_or_later_authority());
@@ -1343,6 +1345,17 @@ fn production_parallel_relation_is_derived_from_live_output_and_hierarchy_facts(
     assert_eq!(report.pointwise_relations(), 1);
     assert!(report.binds_reference_domains_to_complete_gpu_hierarchy());
     assert!(!report.grants_llvm_or_later_authority());
+
+    let (derived, derived_report) =
+        derive_and_require_parallel_reference_contract_v1(&input, &evidence, semantics, &contract)
+            .unwrap();
+    assert_eq!(
+        derived.semantic_contract_identity(),
+        contract.canonical_sha256()
+    );
+    assert_eq!(derived.relations().len(), 1);
+    assert_eq!(derived.relations()[0].authenticated_proof(), receipt);
+    assert_eq!(derived_report.pointwise_relations(), 1);
 
     let wrong = ParallelOutputRelationV1::new(
         proof_digest(91),

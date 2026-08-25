@@ -4,11 +4,10 @@ use std::{collections::BTreeSet, error::Error, fmt};
 
 use dialect_kernel::{DYNAMIC_EXTENT, SemanticCoverageBindingAttr, SemanticEvaluationOrderAttr};
 use fe2o3_functional_proof::{
-    FunctionalRefinementBoundaryV2, MIR_PLIRON_SEMANTIC_REFINEMENT_THEOREM_SHA256_V1,
-    MirPlironSemanticContractV1, SemanticCollectiveKindV1, SemanticCoverageBindingV1,
-    SemanticEvaluationOrderV1, SemanticFiniteExtentV1, SemanticIeeeExceptionalValueV1,
-    SemanticIeeeRoundingV1, SemanticLoopContractV1, SemanticLoopDirectionV1,
-    SemanticNumericalPolicyV1, SemanticScalarTypeV1,
+    FunctionalRefinementBoundaryV2, MirPlironSemanticContractV1, SemanticCollectiveKindV1,
+    SemanticCoverageBindingV1, SemanticEvaluationOrderV1, SemanticFiniteExtentV1,
+    SemanticIeeeExceptionalValueV1, SemanticIeeeRoundingV1, SemanticLoopContractV1,
+    SemanticLoopDirectionV1, SemanticNumericalPolicyV1, SemanticScalarTypeV1,
 };
 use fe2o3_proof_contracts::DigestV1;
 use sha2::{Digest as _, Sha256};
@@ -38,7 +37,6 @@ pub struct ProductionMirPlironSemanticContractReportV1 {
     finite_collectives: u64,
     total_outputs: u64,
     typed_roots: u64,
-    refinement_theorem_identity: DigestV1,
 }
 
 impl ProductionMirPlironSemanticContractReportV1 {
@@ -60,10 +58,6 @@ impl ProductionMirPlironSemanticContractReportV1 {
     pub const fn typed_roots(self) -> u64 {
         self.typed_roots
     }
-    pub const fn refinement_theorem_identity(self) -> DigestV1 {
-        self.refinement_theorem_identity
-    }
-
     /// The accepted statement is bound to the exact MIR subjects and PLIRON
     /// evidence. Soundness of the MIR projector and mandatory analyses remains
     /// in the compiler trusted base.
@@ -437,7 +431,6 @@ pub fn require_mir_pliron_semantic_contract_v1(
         finite_collectives: count(contract.collectives().len())?,
         total_outputs: count(contract.outputs().len())?,
         typed_roots: count(contract.typed_roots().len())?,
-        refinement_theorem_identity: MIR_PLIRON_SEMANTIC_REFINEMENT_THEOREM_SHA256_V1,
     })
 }
 

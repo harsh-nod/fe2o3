@@ -92,6 +92,7 @@ fn execute_functional_refinement_verus_and_prepare_receipt_v2(
     binding: FunctionalRefinementBindingV2,
     signer_identity: DigestV1,
     timeout_seconds: u32,
+    boundary: FunctionalRefinementBoundaryV2,
 ) -> Result<UnsignedFunctionalRefinementReceiptV2, FunctionalRefinementVerusExecutionErrorV2> {
     if timeout_seconds == 0 || timeout_seconds > MAX_FUNCTIONAL_REFINEMENT_VERUS_TIMEOUT_SECONDS_V2
     {
@@ -130,7 +131,7 @@ fn execute_functional_refinement_verus_and_prepare_receipt_v2(
         toolchain,
         execution_identity,
         FunctionalRefinementResultV2::Proved,
-        FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+        boundary,
     )
     .map_err(FunctionalRefinementVerusExecutionErrorV2::receipt)
 }
@@ -173,6 +174,7 @@ pub fn prepare_ranked_functional_refinement_receipt_v2(
         binding,
         signer_identity,
         timeout_seconds,
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
     )?;
     Ok(PreparedFunctionalRefinementReceiptV2 { binding, unsigned })
 }
@@ -231,7 +233,7 @@ pub fn execute_and_import_ranked_functional_refinement_locally_v2(
 /// Keeping this crate-private prevents downstream callers from supplying
 /// arbitrary source to a production API. Public producers must first derive
 /// their source and binding from compiler-retained state.
-pub(crate) fn execute_and_import_generated_functional_refinement_locally_v2(
+pub(crate) fn execute_and_import_generated_mir_pliron_composition_locally_v1(
     runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
     source: CanonicalGeneratedVerusProofInputV3,
     binding: FunctionalRefinementBindingV2,
@@ -248,7 +250,7 @@ pub(crate) fn execute_and_import_generated_functional_refinement_locally_v2(
     let policy = FunctionalRefinementImportPolicyV2::new(
         signing.verifying_key().to_bytes(),
         toolchain,
-        FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToLivePliron,
     )
     .map_err(FunctionalRefinementVerusExecutionErrorV2::receipt)?;
     let production_policy =
@@ -260,6 +262,7 @@ pub(crate) fn execute_and_import_generated_functional_refinement_locally_v2(
         binding,
         policy.signer_identity(),
         timeout_seconds,
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToLivePliron,
     )?;
     let signature = signing.sign(unsigned.signing_bytes()).to_bytes();
     let wire = unsigned.attach_signature(signature);

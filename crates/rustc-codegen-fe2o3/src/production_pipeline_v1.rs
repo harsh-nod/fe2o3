@@ -41,7 +41,7 @@ pub(crate) enum ProductionPipelineErrorV1 {
     SemanticImport(crate::collector::ProductionSemanticImportErrorV1),
     SemanticMiddleEnd(fe2o3_pliron::ProductionSemanticMirErrorV1),
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
-    MiddleEndEvidence(fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV5),
+    RankedVerification(crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1),
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     FormalMemoryAdmission(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
     Geometry(crate::production_geometry_v1::ProductionGeometryErrorV1),
@@ -74,8 +74,8 @@ impl fmt::Display for ProductionPipelineErrorV1 {
             Self::RankedProjection(error) => {
                 write!(formatter, "production-v1 general kernel verification failed: {error}")
             }
-            Self::MiddleEndEvidence(error) => {
-                write!(formatter, "production-v1 middle-end evidence failed: {error}")
+            Self::RankedVerification(error) => {
+                write!(formatter, "production-v1 ranked verification failed: {error}")
             }
             Self::TargetNeutralLowering(error) => {
                 write!(formatter, "production-v1 target-neutral lowering failed: {error}")
@@ -126,7 +126,7 @@ impl std::error::Error for ProductionPipelineErrorV1 {
             Self::SemanticImport(error) => Some(error),
             Self::SemanticMiddleEnd(error) => Some(error),
             Self::RankedProjection(error) => Some(error),
-            Self::MiddleEndEvidence(error) => Some(error),
+            Self::RankedVerification(error) => Some(error),
             Self::TargetNeutralLowering(error) => Some(error),
             Self::FormalMemoryAdmission(error) => Some(error),
             Self::Geometry(error) => Some(error),
@@ -926,7 +926,14 @@ impl RankedVerifiedProductionCompilationV1 {
         let Self { ranked, bindings } = self;
         let (receipt, ranked_verification) = ranked
             .into_verified_receipt()
-            .map_err(ProductionPipelineErrorV1::MiddleEndEvidence)?;
+            .map_err(ProductionPipelineErrorV1::RankedVerification)?;
+        debug_assert_eq!(
+            ranked_verification.has_authenticated_functional_verification(),
+            receipt
+                .lowering()
+                .has_retained_functional_refinement_receipts()
+        );
+        debug_assert!(ranked_verification.retained_functional_verification_is_coherent());
         let [typed_root] = bindings.typed_descriptor_roots.as_slice() else {
             return Err(ProductionPipelineErrorV1::Geometry(
                 crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
@@ -1027,6 +1034,33 @@ mod tests {
         assert!(
             include_str!("production_ranked_projection_v1.rs")
                 .contains("prepare_reference_effect_request_v2")
+        );
+    }
+
+    #[test]
+    fn referenced_kernels_complete_all_functional_gates_before_kir_lowering() {
+        let projection = include_str!("production_ranked_projection_v1.rs");
+        let semantic = projection
+            .find("derive_and_reconcile_mir_pliron_semantic_contract_v1")
+            .expect("compiler-owned semantic-contract derivation");
+        let parallel = projection
+            .find("derive_and_require_parallel_reference_contract_v1")
+            .expect("compiler-owned parallel-contract derivation");
+        let aggregate = projection
+            .find("authenticate_mir_pliron_contract_per_compilation_v1")
+            .expect("aggregate per-compilation Verus gate");
+        assert!(semantic < parallel && parallel < aggregate);
+
+        let pipeline = include_str!("production_pipeline_v1.rs");
+        let verification = pipeline
+            .find(".into_verified_receipt()")
+            .expect("ranked verification transition");
+        let lowering = pipeline
+            .find("ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks")
+            .expect("KIR lowering transition");
+        assert!(
+            verification < lowering,
+            "KIR lowering ran before functional verification"
         );
     }
 
