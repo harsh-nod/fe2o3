@@ -537,6 +537,20 @@ impl SemanticEnumPayloadDominanceV1 {
             })
     }
 
+    /// Reports whether `dominator` is reachable and dominates `block`.
+    ///
+    /// This exposes only an inert CFG fact. Consumers remain responsible for
+    /// proving that the value they retain was defined before leaving the
+    /// dominating block.
+    pub fn block_dominates(&self, dominator: SemanticBlockIdV1, block: SemanticBlockIdV1) -> bool {
+        dominates_with_intervals(
+            &self.dominator_preorder,
+            &self.dominator_subtree_end,
+            dominator.index() as usize,
+            block.index() as usize,
+        )
+    }
+
     /// Returns deterministic charged analysis work.
     pub const fn work_units(&self) -> usize {
         self.work_units
@@ -1039,4 +1053,34 @@ fn local_definition_counts(
         }
     }
     Ok(definitions)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SemanticEnumPayloadDominanceV1;
+    use crate::semantic_mir_v1::SemanticBlockIdV1;
+
+    #[test]
+    fn enum_payload_cfg_dominance_rejects_siblings_and_unreachable_blocks() {
+        let facts = SemanticEnumPayloadDominanceV1 {
+            availability_by_local: Box::new([]),
+            payload_targets: Box::new([]),
+            dominator_preorder: Box::new([0, 1, 2, usize::MAX]),
+            dominator_subtree_end: Box::new([3, 2, 3, usize::MAX]),
+            work_units: 0,
+        };
+
+        assert!(facts.block_dominates(
+            SemanticBlockIdV1::from_index(0),
+            SemanticBlockIdV1::from_index(2)
+        ));
+        assert!(!facts.block_dominates(
+            SemanticBlockIdV1::from_index(1),
+            SemanticBlockIdV1::from_index(2)
+        ));
+        assert!(!facts.block_dominates(
+            SemanticBlockIdV1::from_index(0),
+            SemanticBlockIdV1::from_index(3)
+        ));
+    }
 }
