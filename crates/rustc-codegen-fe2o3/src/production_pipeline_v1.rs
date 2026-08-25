@@ -52,8 +52,8 @@ pub(crate) enum ProductionPipelineErrorV1 {
     SemanticLineage(crate::production_semantic_lineage_v3::ProductionSemanticLineageErrorV3),
     RustcLineageMismatch,
     ProtectedRustcInvocation(ProtectedRustcInvocationErrorV1),
-    ProtectedHandoffRequiresV2,
-    UnprotectedHandoffRequiresV1,
+    #[cfg(feature = "qualification-oracles-test-only")]
+    ExtractionCannotPublish,
     WorkerHandoff(crate::worker_v2_producer::WorkerV2ProducerError),
     StrictV3Publication(fe2o3_artifact_transaction::CompilerModuleHandoffErrorV3),
 }
@@ -106,11 +106,9 @@ impl fmt::Display for ProductionPipelineErrorV1 {
                 formatter,
                 "production-v1 final protected rustc invocation validation failed: {error}"
             ),
-            Self::ProtectedHandoffRequiresV2 => formatter.write_str(
-                "production-v1 protected compiler closure cannot publish through the V1 handoff protocol",
-            ),
-            Self::UnprotectedHandoffRequiresV1 => formatter.write_str(
-                "production-v1 unprotected qualification cannot publish through the V2 handoff protocol",
+            #[cfg(feature = "qualification-oracles-test-only")]
+            Self::ExtractionCannotPublish => formatter.write_str(
+                "production extraction custody cannot publish a compiler-module handoff",
             ),
             Self::WorkerHandoff(error) => {
                 write!(formatter, "production-v1 compiler-module handoff failed: {error}")
@@ -141,10 +139,10 @@ impl std::error::Error for ProductionPipelineErrorV1 {
             Self::StrictV3Publication(error) => Some(error),
             Self::CustomLlvmConfiguration
             | Self::EmptyCollectedDeviceClosure
-            | Self::ProtectedHandoffRequiresV2
-            | Self::UnprotectedHandoffRequiresV1
             | Self::RustcLineageMismatch
             | Self::UpstreamLlvmLayoutBinding(_) => None,
+            #[cfg(feature = "qualification-oracles-test-only")]
+            Self::ExtractionCannotPublish => None,
         }
     }
 }
@@ -171,56 +169,13 @@ struct ProductionTransactionBindingsV1 {
     output_dir: PathBuf,
     build_attempt: Option<BuildAttempt>,
     compiler_ffi_envelope: Option<fe2o3_compiler_ffi::CompilerFfiEnvelopeV1>,
-    publication: ProductionCompilerModulePublicationV1,
+    compiler_custody: ProductionCompilerCustodyV1,
 }
 
-enum ProductionCompilerModulePublicationV1 {
-    OrdinaryV1,
+enum ProductionCompilerCustodyV1 {
     ProtectedV3(Box<AdmittedProtectedRustcInvocationV1>),
-}
-
-impl ProductionCompilerModulePublicationV1 {
-    const ORDINARY_V1: Self = Self::OrdinaryV1;
-
-    fn protected_v3(invocation: AdmittedProtectedRustcInvocationV1) -> Self {
-        Self::ProtectedV3(Box::new(invocation))
-    }
-}
-
-enum PreparedProductionCompilerPublicationV1 {
-    OrdinaryV1,
-    ProtectedV3 {
-        invocation: Box<AdmittedProtectedRustcInvocationV1>,
-        semantic_lineage:
-            crate::production_semantic_lineage_v3::PreparedProductionSemanticLineageV3,
-    },
-}
-
-impl PreparedProductionCompilerPublicationV1 {
-    fn require_v1(self) -> Result<(), ProductionPipelineErrorV1> {
-        match self {
-            Self::OrdinaryV1 => Ok(()),
-            Self::ProtectedV3 { .. } => Err(ProductionPipelineErrorV1::ProtectedHandoffRequiresV2),
-        }
-    }
-
-    fn require_v3(
-        self,
-    ) -> Result<
-        (
-            AdmittedProtectedRustcInvocationV1,
-            crate::production_semantic_lineage_v3::PreparedProductionSemanticLineageV3,
-        ),
-        ProductionPipelineErrorV1,
-    > {
-        match self {
-            Self::OrdinaryV1 => Err(ProductionPipelineErrorV1::UnprotectedHandoffRequiresV1),
-            Self::ProtectedV3 {
-                invocation,
-                semantic_lineage,
-            } => Ok((*invocation, semantic_lineage)),
-        }
-    }
+    #[cfg(feature = "qualification-oracles-test-only")]
+    ExtractionOnly,
 }
 
 struct AuthenticatedProductionBindingsV1 {
@@ -299,11 +254,9 @@ struct PreparedProductionWorkerPublicationV1 {
     producer: ProducerIdentity,
     output_dir: PathBuf,
     attempt: BuildAttempt,
-    publication: PreparedProductionCompilerPublicationV1,
-    rustc_identity_inventory: crate::collector::AuthenticatedRustcIdentityInventoryV3,
-    rustc_preflight_plan: crate::collector::AuthenticatedRustcPreflightPlanV3,
+    invocation: Box<AdmittedProtectedRustcInvocationV1>,
+    semantic_lineage: crate::production_semantic_lineage_v3::PreparedProductionSemanticLineageV3,
     rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
-    ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV5,
     prepared: crate::worker_v2_producer::PreparedProductionLineageWorkerHandoffV3,
 }
 
@@ -571,7 +524,7 @@ impl Gfx942LoweredProductionCompilationV1 {
             output_dir,
             build_attempt,
             compiler_ffi_envelope,
-            publication,
+            compiler_custody,
         } = transaction;
         if rustc_preflight_plan.rustc_identity_inventory_sha256()
             != rustc_identity_inventory.sha256()
@@ -579,27 +532,23 @@ impl Gfx942LoweredProductionCompilationV1 {
             return Err(ProductionPipelineErrorV1::RustcLineageMismatch);
         }
         drop(reference_effect_bindings);
-        let publication = match publication {
-            ProductionCompilerModulePublicationV1::OrdinaryV1 => {
-                PreparedProductionCompilerPublicationV1::OrdinaryV1
-            }
-            ProductionCompilerModulePublicationV1::ProtectedV3(invocation) => {
-                let semantic_lineage = crate::production_semantic_lineage_v3::PreparedProductionSemanticLineageV3::try_prepare(
-                    &rustc_identity_inventory,
-                    &rustc_preflight_plan,
-                    &rustc_target,
-                    &ranked_verification,
-                    &admitted,
-                    &target_module,
-                    &llvm_ir,
-                )
-                .map_err(ProductionPipelineErrorV1::SemanticLineage)?;
-                PreparedProductionCompilerPublicationV1::ProtectedV3 {
-                    invocation,
-                    semantic_lineage,
-                }
+        let invocation = match compiler_custody {
+            ProductionCompilerCustodyV1::ProtectedV3(invocation) => invocation,
+            #[cfg(feature = "qualification-oracles-test-only")]
+            ProductionCompilerCustodyV1::ExtractionOnly => {
+                return Err(ProductionPipelineErrorV1::ExtractionCannotPublish);
             }
         };
+        let semantic_lineage = crate::production_semantic_lineage_v3::PreparedProductionSemanticLineageV3::try_prepare(
+            &rustc_identity_inventory,
+            &rustc_preflight_plan,
+            &rustc_target,
+            &ranked_verification,
+            &admitted,
+            &target_module,
+            &llvm_ir,
+        )
+        .map_err(ProductionPipelineErrorV1::SemanticLineage)?;
         let compiler_module = AuthenticatedProductionGfx942ModuleV1 {
             admitted,
             target_module,
@@ -619,47 +568,19 @@ impl Gfx942LoweredProductionCompilationV1 {
             producer,
             output_dir,
             attempt,
-            publication,
-            rustc_identity_inventory,
-            rustc_preflight_plan,
+            invocation,
+            semantic_lineage,
             rustc_target,
-            ranked_verification,
             prepared,
         })
     }
 
     fn publish_worker_handoff(
         self,
-    ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV1, ProductionPipelineErrorV1>
-    {
-        let publication = self.prepare_worker_handoff()?;
-        let _ = (
-            publication.rustc_identity_inventory.canonical_transcript(),
-            publication.rustc_preflight_plan.canonical_transcript(),
-            publication.rustc_target.rustc_layout(),
-            publication.ranked_verification.ranked_ir(),
-            publication
-                .ranked_verification
-                .middle_end_evidence()
-                .canonical_bytes(),
-        );
-        publication.publication.require_v1()?;
-        crate::worker_v2_producer::publish_prepared_production_v1_worker_handoff(
-            &publication.output_dir,
-            &publication.producer,
-            publication.attempt,
-            publication.prepared.into_worker_handoff(),
-        )
-        .map_err(ProductionPipelineErrorV1::WorkerHandoff)
-    }
-
-    fn publish_worker_handoff_v3(
-        self,
     ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV3, ProductionPipelineErrorV1>
     {
         let publication = self.prepare_worker_handoff()?;
-        let (invocation, semantic_lineage) = publication.publication.require_v3()?;
-        let invocation = invocation
+        let invocation = (*publication.invocation)
             .finish_for_publication()
             .map_err(ProductionPipelineErrorV1::ProtectedRustcInvocation)?;
         invocation.revalidate().map_err(|detail| {
@@ -672,7 +593,8 @@ impl Gfx942LoweredProductionCompilationV1 {
             .prepared
             .into_validated_parts()
             .map_err(ProductionPipelineErrorV1::WorkerHandoff)?;
-        let strict_handoff = semantic_lineage
+        let strict_handoff = publication
+            .semantic_lineage
             .finish(
                 invocation_descriptor,
                 publication.rustc_target.device_target(),
@@ -690,6 +612,7 @@ impl Gfx942LoweredProductionCompilationV1 {
     }
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 impl RankedVerifiedProductionCompilationV1 {
     pub(crate) fn ranked_ir(&self) -> &str {
         self.ranked.ranked_ir()
@@ -741,42 +664,43 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
         producer: ProducerIdentity,
         output_dir: PathBuf,
         build_attempt: Option<BuildAttempt>,
-    ) -> Result<Self, ProductionPipelineErrorV1> {
-        Self::from_collected_device_closure_with_publication(
-            tcx,
-            closure,
-            producer,
-            output_dir,
-            build_attempt,
-            ProductionCompilerModulePublicationV1::ORDINARY_V1,
-        )
-    }
-
-    pub(crate) fn from_collected_device_closure_with_protected_invocation_v3(
-        tcx: TyCtxt<'tcx>,
-        closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
-        producer: ProducerIdentity,
-        output_dir: PathBuf,
-        build_attempt: Option<BuildAttempt>,
         invocation: AdmittedProtectedRustcInvocationV1,
     ) -> Result<Self, ProductionPipelineErrorV1> {
-        Self::from_collected_device_closure_with_publication(
+        Self::from_collected_device_closure_with_custody(
             tcx,
             closure,
             producer,
             output_dir,
             build_attempt,
-            ProductionCompilerModulePublicationV1::protected_v3(invocation),
+            ProductionCompilerCustodyV1::ProtectedV3(Box::new(invocation)),
         )
     }
 
-    fn from_collected_device_closure_with_publication(
+    #[cfg(feature = "qualification-oracles-test-only")]
+    pub(crate) fn from_collected_device_closure_for_extraction(
         tcx: TyCtxt<'tcx>,
         closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
         producer: ProducerIdentity,
         output_dir: PathBuf,
         build_attempt: Option<BuildAttempt>,
-        publication: ProductionCompilerModulePublicationV1,
+    ) -> Result<Self, ProductionPipelineErrorV1> {
+        Self::from_collected_device_closure_with_custody(
+            tcx,
+            closure,
+            producer,
+            output_dir,
+            build_attempt,
+            ProductionCompilerCustodyV1::ExtractionOnly,
+        )
+    }
+
+    fn from_collected_device_closure_with_custody(
+        tcx: TyCtxt<'tcx>,
+        closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
+        producer: ProducerIdentity,
+        output_dir: PathBuf,
+        build_attempt: Option<BuildAttempt>,
+        compiler_custody: ProductionCompilerCustodyV1,
     ) -> Result<Self, ProductionPipelineErrorV1> {
         if closure.function_count() == 0 {
             return Err(ProductionPipelineErrorV1::EmptyCollectedDeviceClosure);
@@ -795,7 +719,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
                     output_dir,
                     build_attempt,
                     compiler_ffi_envelope,
-                    publication,
+                    compiler_custody,
                 },
             },
             invariant_session: PhantomData,
@@ -837,6 +761,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
     }
 
     /// Consumes the only production transaction through import and verification.
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn verify_general_kernel_checks(
         self,
     ) -> Result<RankedVerifiedProductionCompilationV1, ProductionPipelineErrorV1> {
@@ -865,20 +790,14 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
     /// or launch authority.
     pub(crate) fn publish_worker_handoff(
         self,
-    ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV1, ProductionPipelineErrorV1>
+    ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV3, ProductionPipelineErrorV1>
     {
         self.lower_gfx942()?.publish_worker_handoff()
     }
 
-    pub(crate) fn publish_worker_handoff_v3(
-        self,
-    ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV3, ProductionPipelineErrorV1>
-    {
-        self.lower_gfx942()?.publish_worker_handoff_v3()
-    }
-
     /// Retains the original extraction milestone while consuming the same
     /// transaction and importer as the production backend.
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn require_semantic_mir_import(self) -> ProductionPipelineErrorV1 {
         match self.import_semantic_mir() {
             Ok(transaction) => match transaction.construct_semantic_middle_end() {
@@ -917,6 +836,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, AdmittedSemanticMirStageV1> {
 }
 
 impl<'tcx> ProductionCompilationV1<'tcx, EquivalentSemanticMirStageV1> {
+    #[cfg(feature = "qualification-oracles-test-only")]
     fn require_target_neutral_lowering(self) -> ProductionPipelineErrorV1 {
         let EquivalentSemanticMirStageV1 {
             semantic_mir,
@@ -1014,17 +934,6 @@ mod tests {
             disposition(usize::MAX),
             ProductionDispositionV1::DeviceTransaction
         );
-
-        assert_eq!(disposition(0), ProductionDispositionV1::HostOnly);
-        assert!(
-            PreparedProductionCompilerPublicationV1::OrdinaryV1
-                .require_v1()
-                .is_ok()
-        );
-        assert!(matches!(
-            PreparedProductionCompilerPublicationV1::OrdinaryV1.require_v3(),
-            Err(ProductionPipelineErrorV1::UnprotectedHandoffRequiresV1)
-        ));
     }
 
     #[test]
@@ -1088,6 +997,27 @@ mod tests {
             include_str!("production_ranked_projection_v1.rs")
                 .contains("prepare_reference_effect_request_v2")
         );
+    }
+
+    #[test]
+    fn production_publication_has_one_protected_custody_path() {
+        let pipeline = include_str!("production_pipeline_v1.rs");
+        let worker = include_str!("worker_v2_producer.rs");
+        for removed in [
+            concat!("ProductionCompilerModule", "PublicationV1"),
+            concat!("PreparedProductionCompiler", "PublicationV1"),
+            concat!("ProtectedHandoff", "RequiresV2"),
+            concat!("UnprotectedHandoff", "RequiresV1"),
+            concat!("publish_worker_handoff", "_v3"),
+            concat!("publish_prepared_production_v1", "_worker_handoff("),
+        ] {
+            assert!(
+                !pipeline.contains(removed) && !worker.contains(removed),
+                "obsolete production publication variant remains: {removed}",
+            );
+        }
+        assert!(pipeline.contains(concat!("ProductionCompilerCustodyV1::Protected", "V3")));
+        assert!(pipeline.contains(concat!("publish_compiler_module_handoff", "_v3")));
     }
 
     #[test]
@@ -1176,12 +1106,13 @@ mod tests {
         assert!(authentication < monomorphization);
     }
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     #[test]
     fn process_isolated_extraction_uses_the_production_transaction() {
         let driver = include_str!("production_rustc_driver_v1.rs");
         for required in [
             "reject_custom_llvm_configuration",
-            "ProductionCompilationV1::from_collected_device_closure",
+            "ProductionCompilationV1::from_collected_device_closure_for_extraction",
             "require_semantic_mir_import",
         ] {
             assert!(

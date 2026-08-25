@@ -466,40 +466,43 @@ pub(crate) struct AuthenticatedRankedVerificationV5 {
 }
 
 impl AuthenticatedRankedVerificationV5 {
-    pub(crate) fn ranked_ir(&self) -> &str {
-        self.middle_end_evidence.ranked_ir()
-    }
-
     pub(crate) const fn middle_end_evidence(&self) -> &fe2o3_pliron::ProductionMiddleEndEvidenceV5 {
         &self.middle_end_evidence
     }
 }
 
 impl ProductionRankedSemanticProgramV1 {
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn ranked_ir(&self) -> &str {
         self.receipt.ranked_ir()
     }
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn function_name(&self) -> &str {
         self.receipt.lowering().kernel().function_name()
     }
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn semantic_function_count(&self) -> usize {
         self.receipt.semantic().semantic().functions().len()
     }
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn semantic_callable_count(&self) -> usize {
         self.receipt.semantic().semantic().callables().len()
     }
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn bounds_are_clean(&self) -> bool {
         self.receipt.lowering().bounds_report().is_clean()
     }
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn all_kernel_checks_are_clean(&self) -> bool {
         self.receipt.lowering().all_mandatory_reports_are_clean()
     }
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) const fn grants_artifact_or_launch_authority(&self) -> bool {
         false
     }

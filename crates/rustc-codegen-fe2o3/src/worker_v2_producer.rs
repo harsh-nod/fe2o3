@@ -31,6 +31,7 @@ use crate::kernel_ir_codegen::{
 };
 #[cfg(feature = "qualification-oracles-test-only")]
 use fe2o3_amd_target::{CapabilityDerivationError, WavefrontWidth};
+#[cfg(feature = "qualification-oracles-test-only")]
 use fe2o3_artifact_transaction::{
     BuildAttempt, CompilerModuleHandoffErrorV1 as HandoffPublicationErrorV1,
     CompilerModuleHandoffReceiptV1, ProducerIdentity, publish_compiler_module_handoff_v1,
@@ -69,6 +70,7 @@ use sha2::{Digest as _, Sha256};
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
+#[cfg(feature = "qualification-oracles-test-only")]
 use std::path::Path;
 
 #[cfg(feature = "qualification-oracles-test-only")]
@@ -129,10 +131,6 @@ pub(crate) struct PreparedProductionLineageWorkerHandoffV3 {
 }
 
 impl PreparedProductionLineageWorkerHandoffV3 {
-    pub(crate) fn into_worker_handoff(self) -> PreparedProductionV1WorkerHandoffV1 {
-        self.worker_handoff
-    }
-
     pub(crate) fn into_validated_parts(
         self,
     ) -> Result<(CompilerModuleHandoffV2, CompilerDescriptorSourceV1), WorkerV2ProducerError> {
@@ -301,17 +299,6 @@ impl PreparedRowSoftmaxV1WorkerHandoffV1 {
     pub(crate) const fn handoff(&self) -> &CompilerModuleHandoffV2 {
         &self.handoff
     }
-}
-
-pub(crate) fn publish_prepared_production_v1_worker_handoff(
-    output_dir: &Path,
-    producer: &ProducerIdentity,
-    attempt: BuildAttempt,
-    prepared: PreparedProductionV1WorkerHandoffV1,
-) -> Result<CompilerModuleHandoffReceiptV1, WorkerV2ProducerError> {
-    let handoff = validate_prepared_production_v1_worker_handoff(prepared)?;
-    publish_compiler_module_handoff_v1(output_dir, producer, attempt, handoff.canonical_bytes())
-        .map_err(WorkerV2ProducerError::Publication)
 }
 
 fn validate_prepared_production_v1_worker_handoff(
@@ -1704,6 +1691,7 @@ pub(crate) enum WorkerV2ProducerError {
     CompilerDescriptor(CompilerDescriptorError),
     SymbolManifest(CompilerModuleSymbolManifestErrorV1),
     Handoff(CompilerModuleHandoffErrorV2),
+    #[cfg(feature = "qualification-oracles-test-only")]
     Publication(HandoffPublicationErrorV1),
     #[cfg(feature = "qualification-oracles-test-only")]
     ProtectedPublication(HandoffPublicationErrorV2),
@@ -1822,6 +1810,7 @@ impl fmt::Display for WorkerV2ProducerError {
                     "compiler-module handoff construction failed: {error}"
                 )
             }
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::Publication(error) => {
                 write!(
                     formatter,
@@ -1847,6 +1836,7 @@ impl Error for WorkerV2ProducerError {
             #[cfg(feature = "qualification-oracles-test-only")]
             Self::TargetCapabilities(error) => Some(error),
             Self::Handoff(error) => Some(error),
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::Publication(error) => Some(error),
             #[cfg(feature = "qualification-oracles-test-only")]
             Self::ProtectedPublication(error) => Some(error),

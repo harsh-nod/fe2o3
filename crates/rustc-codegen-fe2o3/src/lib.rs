@@ -63,6 +63,7 @@ mod production_geometry_v1;
 mod production_pipeline_v1;
 mod production_ranked_projection_v1;
 mod production_reference_effect_join_v2;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod production_rustc_driver_v1;
 mod production_rustc_drop_v1;
 mod production_semantic_body_v1;
@@ -102,6 +103,7 @@ mod typed_artifact;
 mod worker_v2_producer;
 
 #[doc(hidden)]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub use production_rustc_driver_v1::{
     run_production_extraction_driver_v1, run_production_gfx942_llvm_extraction_driver_v1,
     run_production_ranked_extraction_driver_v1,
@@ -540,8 +542,13 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         let output_dir = output_dir
                             .expect("device output was required above")
                             .to_path_buf();
-                        let publication = match protected_rustc_invocation.take() {
-                            Some(invocation) => production_pipeline_v1::ProductionCompilationV1::from_collected_device_closure_with_protected_invocation_v3(
+                        let invocation = protected_rustc_invocation.take().unwrap_or_else(|| {
+                            tcx.dcx().fatal(
+                                "[rustc-codegen-fe2o3] production-v1 requires protected rustc invocation custody",
+                            )
+                        });
+                        let publication =
+                            production_pipeline_v1::ProductionCompilationV1::from_collected_device_closure(
                                 tcx,
                                 closure,
                                 producer.clone(),
@@ -549,18 +556,8 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 build_attempt,
                                 invocation,
                             )
-                            .and_then(|transaction| transaction.publish_worker_handoff_v3())
-                            .map(|receipt| receipt.length()),
-                            None => production_pipeline_v1::ProductionCompilationV1::from_collected_device_closure(
-                                tcx,
-                                closure,
-                                producer.clone(),
-                                output_dir,
-                                build_attempt,
-                            )
                             .and_then(|transaction| transaction.publish_worker_handoff())
-                            .map(|receipt| receipt.length()),
-                        };
+                            .map(|receipt| receipt.length());
                         match publication {
                             Ok(publication_length) => {
                                 production_device_transaction_complete = true;
@@ -2560,34 +2557,20 @@ mod tests {
     fn admitted_protected_modules_route_only_through_strict_v3_publication() {
         let backend = include_str!("lib.rs");
         let production_pipeline = include_str!("production_pipeline_v1.rs");
-        let worker_producer = include_str!("worker_v2_producer.rs");
         let production = backend
-            .split("match protected_rustc_invocation.take()")
+            .split("let mut production_device_transaction_complete")
             .nth(1)
-            .expect("production consumes protected invocation custody");
-        let (production_v3, production_v1) = production
-            .split_once("None =>")
-            .expect("protected and ordinary production publication arms");
-        assert!(
-            production_v3.contains("from_collected_device_closure_with_protected_invocation_v3")
-        );
-        assert!(production_v3.contains("publish_worker_handoff_v3"));
-        assert!(!production_v3.contains("publish_worker_handoff()"));
+            .expect("production transaction tracking exists")
+            .split(".validate_device_transaction")
+            .next()
+            .expect("bounded production route");
+        assert!(production.contains("protected_rustc_invocation.take()"));
+        assert!(production.contains("from_collected_device_closure("));
+        assert!(production.contains("publish_worker_handoff()"));
+        assert!(!production.contains("from_collected_device_closure_with_protected_invocation_v3"));
+        assert!(!production.contains("publish_worker_handoff_v3"));
+        assert!(!production.contains("None =>"));
         assert!(production_pipeline.contains("publish_compiler_module_handoff_v3"));
-        assert!(!worker_producer.contains("publish_prepared_production_v1_worker_handoff_v2"));
-        assert!(production_v1.contains("from_collected_device_closure("));
-        assert!(production_v1.contains("publish_worker_handoff()"));
-
-        let row = backend
-            .split("match protected_compiler_closure")
-            .nth(1)
-            .expect("row-softmax retains protected and ordinary arms");
-        let (row_v2, row_v1) = row
-            .split_once("None =>")
-            .expect("protected and ordinary row-softmax publication arms");
-        assert!(row_v2.contains("publish_prepared_row_softmax_v1_worker_handoff_v2"));
-        assert!(!row_v2.contains("publish_prepared_row_softmax_v1_worker_handoff("));
-        assert!(row_v1.contains("publish_prepared_row_softmax_v1_worker_handoff("));
     }
 
     #[cfg(feature = "qualification-oracles-test-only")]

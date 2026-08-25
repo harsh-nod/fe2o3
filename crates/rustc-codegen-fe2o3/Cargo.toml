@@ -61,6 +61,23 @@ crate-type = ["rlib", "dylib"]
 [[bin]]
 name = "fe2o3-rustc-extract"
 path = "src/bin/fe2o3-rustc-extract.rs"
+required-features = ["qualification-oracles-test-only"]
+
+[[test]]
+name = "production_extraction_driver_v1"
+required-features = ["qualification-oracles-test-only"]
+
+[[test]]
+name = "production_general_matrix_driver_v1"
+required-features = ["qualification-oracles-test-only"]
+
+[[test]]
+name = "production_ranked_bounds_driver_v1"
+required-features = ["qualification-oracles-test-only"]
+
+[[test]]
+name = "reference_binding_v1"
+required-features = ["qualification-oracles-test-only"]
 
 [package.metadata.rust-analyzer]
 rustc_private = true
