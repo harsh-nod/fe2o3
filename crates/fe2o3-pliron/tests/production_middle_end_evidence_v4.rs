@@ -28,7 +28,8 @@ use fe2o3_pliron::{
     ProductionFunctionalRefinementTrustPolicyV2, ProductionGpuWriteSiteV2,
     ProductionMiddleEndAssuranceV4, ProductionMiddleEndEvidenceCodecErrorV4,
     ProductionMiddleEndEvidencePassV4, ProductionMiddleEndEvidenceV4,
-    ProductionMiddleEndEvidenceV5, ProductionNumericalContractV2, ProductionRankedBlockV1,
+    ProductionMiddleEndEvidenceV5, ProductionNumericalContractV2,
+    ProductionNumericalRefinementContractV2, ProductionRankedBlockV1,
     ProductionRankedKernelLoweringInputV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
     ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
     ProductionReferenceOutputSiteV2, ProductionReferenceProofV2, ProductionSemanticExpressionV2,
@@ -38,10 +39,11 @@ use fe2o3_pliron::{
     derive_and_require_parallel_reference_contract_v1,
     normalized_effect_refinement_hash_for_kernel_v2,
     normalized_functional_refinement_formula_hash_for_kernel_v2,
-    production_effect_contract_identity_v1, production_loop_transition_identity_v1,
-    production_loop_variant_identity_v1, production_ranked_value_identity_v1,
-    require_mir_pliron_semantic_contract_v1, require_parallel_reference_contract_v1,
-    require_total_output_refinement_v2, verify_ranked_kernel_against_safe_reference_mir_v1,
+    normalized_numerical_refinement_hash_for_kernel_v2, production_effect_contract_identity_v1,
+    production_loop_transition_identity_v1, production_loop_variant_identity_v1,
+    production_ranked_value_identity_v1, require_mir_pliron_semantic_contract_v1,
+    require_parallel_reference_contract_v1, require_total_output_refinement_v2,
+    verify_ranked_kernel_against_safe_reference_mir_v1,
 };
 use fe2o3_proof_contracts::DigestV1;
 
@@ -540,6 +542,236 @@ fn total_output_refinement_input_with_collective(
     )
     .unwrap()
 }
+
+#[derive(Clone, Copy)]
+enum NumericalGuardFixture {
+    Total,
+    FalseDomain,
+    PartialPrecondition,
+}
+
+#[derive(Clone, Copy)]
+enum NumericalSiteFixture {
+    Matched,
+    Unmatched,
+    Duplicate,
+}
+
+fn numerical_total_output_refinement_input(
+    guard_fixture: NumericalGuardFixture,
+    site_fixture: NumericalSiteFixture,
+) -> ProductionRankedKernelLoweringInputV1 {
+    let local = |identity| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(identity));
+    let float = ProductionSemanticScalarTypeV2::Float { bits: 32 };
+    let boolean = ProductionSemanticScalarTypeV2::Bool;
+    let unsigned = ProductionSemanticScalarTypeV2::Integer {
+        signed: false,
+        bits: 64,
+    };
+    let domain_expression = match guard_fixture {
+        NumericalGuardFixture::FalseDomain => ProductionSemanticExpressionV2::Constant {
+            scalar: boolean,
+            bits: 0,
+        },
+        NumericalGuardFixture::Total | NumericalGuardFixture::PartialPrecondition => {
+            ProductionSemanticExpressionV2::Constant {
+                scalar: boolean,
+                bits: 1,
+            }
+        }
+    };
+    let precondition_expression = match guard_fixture {
+        NumericalGuardFixture::PartialPrecondition => ProductionSemanticExpressionV2::Symbol {
+            symbol: 91,
+            scalar: boolean,
+        },
+        NumericalGuardFixture::Total | NumericalGuardFixture::FalseDomain => {
+            ProductionSemanticExpressionV2::Constant {
+                scalar: boolean,
+                bits: 1,
+            }
+        }
+    };
+    let effect = ProductionEffectRefinementContractV2::new(
+        81,
+        ProductionGpuWriteSiteV2::new(0, 9),
+        ProductionReferenceOutputSiteV2::new(0, 0, 0),
+        local(0),
+        vec![local(1)],
+        vec![local(6)],
+        vec![local(6)],
+        local(4),
+        local(4),
+        local(5),
+        local(5),
+        local(2),
+        local(3),
+    )
+    .unwrap();
+    let (numerical_actual, numerical_reference) = match site_fixture {
+        NumericalSiteFixture::Matched | NumericalSiteFixture::Duplicate => (local(2), local(3)),
+        NumericalSiteFixture::Unmatched => (local(3), local(2)),
+    };
+    let numerical = ProductionNumericalRefinementContractV2::new(
+        82,
+        numerical_actual,
+        numerical_reference,
+        local(4),
+        local(5),
+        0.001_f64.to_bits(),
+        0.01_f64.to_bits(),
+    )
+    .unwrap();
+    let duplicate = ProductionNumericalRefinementContractV2::new(
+        83,
+        local(2),
+        local(3),
+        local(4),
+        local(5),
+        0.002_f64.to_bits(),
+        0.02_f64.to_bits(),
+    )
+    .unwrap();
+    let mut operations = vec![
+        ProductionRankedOperationV1::ExecutionLayout {
+            grid_identity: 13,
+            global_extents: [1, 1, 1],
+            workgroup_extents: [1, 1, 1],
+            subgroup_size: 1,
+            full_physical_workgroups: true,
+        },
+        ProductionRankedOperationV1::ViewInSpace {
+            result: ProductionRankedValueIdV1::new(0),
+            element_width: 32,
+            writable: true,
+            shape: vec![1],
+            dynamic_extents: vec![],
+            allocation_origin: 13,
+            noalias_class: 13,
+            memory_space: MemorySpaceAttr::Global,
+        },
+        ProductionRankedOperationV1::IndexConstant {
+            result: ProductionRankedValueIdV1::new(1),
+            value: 0,
+        },
+        ProductionRankedOperationV1::SemanticExpression {
+            result: ProductionRankedValueIdV1::new(2),
+            expression: ProductionSemanticExpressionV2::Constant {
+                scalar: float,
+                bits: 7,
+            },
+            numerical_contract: ProductionNumericalContractV2::exact_for(float),
+        },
+        ProductionRankedOperationV1::SemanticExpression {
+            result: ProductionRankedValueIdV1::new(3),
+            expression: ProductionSemanticExpressionV2::Constant {
+                scalar: float,
+                bits: 7,
+            },
+            numerical_contract: ProductionNumericalContractV2::exact_for(float),
+        },
+        ProductionRankedOperationV1::SemanticExpression {
+            result: ProductionRankedValueIdV1::new(4),
+            expression: domain_expression,
+            numerical_contract: ProductionNumericalContractV2::exact_for(boolean),
+        },
+        ProductionRankedOperationV1::SemanticExpression {
+            result: ProductionRankedValueIdV1::new(5),
+            expression: precondition_expression,
+            numerical_contract: ProductionNumericalContractV2::exact_for(boolean),
+        },
+        ProductionRankedOperationV1::SemanticExpression {
+            result: ProductionRankedValueIdV1::new(6),
+            expression: ProductionSemanticExpressionV2::Constant {
+                scalar: unsigned,
+                bits: 0,
+            },
+            numerical_contract: ProductionNumericalContractV2::exact_for(unsigned),
+        },
+        ProductionRankedOperationV1::OwnershipContract {
+            view: local(0),
+            coverage: OwnershipCoverageAttr::TotalView,
+            partition: OwnershipPartitionAttr::ExactSets,
+        },
+        ProductionRankedOperationV1::ValueAccess {
+            kind: AccessKindAttr::Write,
+            view: local(0),
+            indices: vec![local(1)],
+            value: local(2),
+        },
+        ProductionRankedOperationV1::RequestEffectRefinement {
+            contract: effect,
+            subjects: functional_subjects(),
+        },
+        ProductionRankedOperationV1::RequestNumericalRefinement {
+            contract: numerical,
+            subjects: functional_subjects(),
+        },
+    ];
+    if matches!(site_fixture, NumericalSiteFixture::Duplicate) {
+        operations.push(ProductionRankedOperationV1::RequestNumericalRefinement {
+            contract: duplicate,
+            subjects: functional_subjects(),
+        });
+    }
+    let skeleton = ProductionRankedKernelV1::new(
+        "numerical_total_output_refinement",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            operations,
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .unwrap();
+
+    let mut proofs = Vec::new();
+    let mut imported = Vec::new();
+    let mut policy = None;
+    for operation_index in 10..skeleton.blocks()[0].operations().len() {
+        let obligation = match &skeleton.blocks()[0].operations()[operation_index] {
+            ProductionRankedOperationV1::RequestEffectRefinement { contract, .. } => {
+                normalized_effect_refinement_hash_for_kernel_v2(
+                    &skeleton,
+                    0,
+                    operation_index,
+                    contract,
+                    functional_subjects(),
+                )
+                .unwrap()
+            }
+            ProductionRankedOperationV1::RequestNumericalRefinement { contract, .. } => {
+                normalized_numerical_refinement_hash_for_kernel_v2(
+                    &skeleton,
+                    0,
+                    operation_index,
+                    *contract,
+                    functional_subjects(),
+                )
+                .unwrap()
+            }
+            _ => unreachable!(),
+        };
+        let (proof, receipt, current_policy) = imported_reference(obligation);
+        proofs.push((operation_index, proof));
+        imported.push(receipt);
+        policy.get_or_insert(current_policy);
+    }
+    let mut bound = skeleton;
+    for (operation_index, proof) in proofs {
+        bound = bound
+            .bind_functional_refinement_request_v2(0, operation_index, proof)
+            .unwrap();
+    }
+    compile_ranked_kernel_for_lowering_v2(
+        ProductionConstructionV1::ranked_kernel("numerical_total_output_refinement", bound)
+            .unwrap(),
+        ProductionSessionLimitsV1::default(),
+        imported,
+        policy.expect("the fixture has effect and numerical requests"),
+    )
+    .unwrap()
+}
+
 fn two_output_refinement_input(
     second_noalias_class: u64,
 ) -> Result<ProductionRankedKernelLoweringInputV1, fe2o3_pliron::ProductionRankedCompileErrorV2> {
@@ -1742,6 +1974,110 @@ fn production_parallel_relation_is_derived_from_live_output_and_hierarchy_facts(
             .unwrap_err();
     assert!(error.is_incomplete());
     assert!(error.to_string().contains("no retained authenticated"));
+}
+
+fn numerical_parallel_contract(
+    guard_fixture: NumericalGuardFixture,
+    site_fixture: NumericalSiteFixture,
+) -> Result<ParallelReferenceContractV1, fe2o3_pliron::ProductionParallelReferenceContractErrorV1> {
+    let input = numerical_total_output_refinement_input(guard_fixture, site_fixture);
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let reconciled =
+        derive_and_reconcile_mir_pliron_semantic_contract_v1(&input, &evidence).unwrap();
+    let semantics = require_mir_pliron_semantic_contract_v1(
+        &input,
+        &evidence,
+        reconciled.total_output_report(),
+        reconciled.contract(),
+    )
+    .unwrap();
+    derive_and_require_parallel_reference_contract_v1(
+        &input,
+        &evidence,
+        semantics,
+        reconciled.contract(),
+    )
+    .map(|(contract, _)| contract)
+}
+
+#[test]
+fn claim_specific_numerical_receipt_is_bound_to_its_unique_total_output() {
+    let contract =
+        numerical_parallel_contract(NumericalGuardFixture::Total, NumericalSiteFixture::Matched)
+            .unwrap();
+    assert_eq!(contract.relations().len(), 1);
+    assert!(matches!(
+        contract.relations()[0].numerical_policy(),
+        ParallelNumericalPolicyV1::ErrorBounded {
+            absolute_error_f64_bits,
+            relative_error_f64_bits,
+            ..
+        } if absolute_error_f64_bits == 0.001_f64.to_bits()
+            && relative_error_f64_bits == 0.01_f64.to_bits()
+    ));
+}
+
+#[test]
+fn false_numerical_domain_cannot_claim_total_output_coverage() {
+    let error = numerical_parallel_contract(
+        NumericalGuardFixture::FalseDomain,
+        NumericalSiteFixture::Matched,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        fe2o3_pliron::ProductionParallelReferenceContractErrorV1::NumericalCoverageIncomplete {
+            index: 0,
+            component: "domain",
+        }
+    ));
+}
+
+#[test]
+fn partial_numerical_precondition_cannot_claim_total_output_coverage() {
+    let error = numerical_parallel_contract(
+        NumericalGuardFixture::PartialPrecondition,
+        NumericalSiteFixture::Matched,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        fe2o3_pliron::ProductionParallelReferenceContractErrorV1::NumericalCoverageIncomplete {
+            index: 0,
+            component: "precondition",
+        }
+    ));
+}
+
+#[test]
+fn unmatched_numerical_site_is_rejected_instead_of_silently_disappearing() {
+    let error = numerical_parallel_contract(
+        NumericalGuardFixture::Total,
+        NumericalSiteFixture::Unmatched,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        fe2o3_pliron::ProductionParallelReferenceContractErrorV1::NumericalSiteUnmatched {
+            site: 0,
+        }
+    ));
+}
+
+#[test]
+fn duplicate_numerical_sites_for_one_output_are_rejected() {
+    let error = numerical_parallel_contract(
+        NumericalGuardFixture::Total,
+        NumericalSiteFixture::Duplicate,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        fe2o3_pliron::ProductionParallelReferenceContractErrorV1::DuplicateNumericalSite {
+            index: 0,
+        }
+    ));
 }
 
 #[test]

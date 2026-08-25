@@ -85,23 +85,77 @@ impl ProductionParallelReferenceContractReportV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProductionParallelReferenceContractErrorV1 {
     SemanticContractMismatch,
-    OutputCoverageIncomplete { declared: usize, live: usize },
-    OutputRelationMismatch { index: usize },
-    StableRankedViewIdentityMissing { index: usize },
-    DuplicateOutputView { first: usize, second: usize },
-    OutputSeparationIncomplete { first: usize, second: usize },
-    OutputOwnershipMismatch { index: usize },
+    OutputCoverageIncomplete {
+        declared: usize,
+        live: usize,
+    },
+    OutputRelationMismatch {
+        index: usize,
+    },
+    StableRankedViewIdentityMissing {
+        index: usize,
+    },
+    DuplicateOutputView {
+        first: usize,
+        second: usize,
+    },
+    OutputSeparationIncomplete {
+        first: usize,
+        second: usize,
+    },
+    OutputOwnershipMismatch {
+        index: usize,
+    },
     OutputProductMismatch,
-    HierarchyCoverageIncomplete { level: ParallelHierarchyLevelV1 },
-    AuthenticatedProofIncomplete { identity: DigestV1 },
-    ScheduleRelationIncomplete { index: usize, detail: &'static str },
-    FoldOrderRejected { index: usize, detail: &'static str },
-    DynamicBoundProofIncomplete { index: usize },
-    NumericalPolicyRejected { index: usize, detail: &'static str },
-    NumericalProofIncomplete { index: usize },
-    CallSummaryDerivationIncomplete { index: usize, kind: &'static str },
-    CallSummaryMismatch { index: usize },
-    TensorFunctionalRefinementIncomplete { live_sites: usize, outputs: usize },
+    HierarchyCoverageIncomplete {
+        level: ParallelHierarchyLevelV1,
+    },
+    AuthenticatedProofIncomplete {
+        identity: DigestV1,
+    },
+    ScheduleRelationIncomplete {
+        index: usize,
+        detail: &'static str,
+    },
+    FoldOrderRejected {
+        index: usize,
+        detail: &'static str,
+    },
+    DynamicBoundProofIncomplete {
+        index: usize,
+    },
+    NumericalPolicyRejected {
+        index: usize,
+        detail: &'static str,
+    },
+    NumericalProofIncomplete {
+        index: usize,
+    },
+    NumericalSiteUnmatched {
+        site: usize,
+    },
+    NumericalSiteAmbiguous {
+        site: usize,
+        outputs: usize,
+    },
+    DuplicateNumericalSite {
+        index: usize,
+    },
+    NumericalCoverageIncomplete {
+        index: usize,
+        component: &'static str,
+    },
+    CallSummaryDerivationIncomplete {
+        index: usize,
+        kind: &'static str,
+    },
+    CallSummaryMismatch {
+        index: usize,
+    },
+    TensorFunctionalRefinementIncomplete {
+        live_sites: usize,
+        outputs: usize,
+    },
     ContractConstruction(ParallelReferenceContractErrorV1),
     CounterOverflow,
 }
@@ -145,6 +199,10 @@ impl fmt::Display for ProductionParallelReferenceContractErrorV1 {
             Self::DynamicBoundProofIncomplete { index } => write!(formatter, "error[FE2O3-PARALLEL-008]: dynamic bounded recurrence {index} does not match the compiler-derived finite-bound identity for the live canonical loop"),
             Self::NumericalPolicyRejected { index, detail } => write!(formatter, "error[FE2O3-PARALLEL-009]: numerical policy for relation {index} is invalid: {detail}"),
             Self::NumericalProofIncomplete { index } => write!(formatter, "error[FE2O3-PARALLEL-010]: finite error policy for relation {index} lacks a live typed witness or retained authenticated proof"),
+            Self::NumericalSiteUnmatched { site } => write!(formatter, "error[FE2O3-PARALLEL-023]: numerical refinement site {site} does not match any logical output actual/reference roots"),
+            Self::NumericalSiteAmbiguous { site, outputs } => write!(formatter, "error[FE2O3-PARALLEL-024]: numerical refinement site {site} ambiguously matches {outputs} logical outputs"),
+            Self::DuplicateNumericalSite { index } => write!(formatter, "error[FE2O3-PARALLEL-025]: logical output {index} has more than one numerical refinement site"),
+            Self::NumericalCoverageIncomplete { index, component } => write!(formatter, "error[FE2O3-PARALLEL-026]: numerical refinement for logical output {index} is not total: {component} must be the canonical typed constant true"),
             Self::CallSummaryDerivationIncomplete { index, kind } => write!(formatter, "error[FE2O3-PARALLEL-011]: compiler cannot independently derive {kind} call summary {index} from the current ranked IR; declaration-only summaries are not evidence"),
             Self::CallSummaryMismatch { index } => write!(formatter, "error[FE2O3-PARALLEL-012]: helper or intrinsic summary {index} differs from live typed roots, scope, callsite, or authenticated proof"),
             Self::TensorFunctionalRefinementIncomplete { live_sites, outputs } => write!(formatter, "error[FE2O3-PARALLEL-013]: functional refinement is incomplete for {live_sites} live cooperative tensor site(s) and {outputs} logical output(s): typed SSA def-use and claim-specific tensor arithmetic receipts are not implemented"),
@@ -224,6 +282,7 @@ pub fn derive_and_require_parallel_reference_contract_v1(
     require_no_live_tensor_functional_sites_v1(ranked.kernel(), semantic_contract.outputs().len())?;
     let mut relations = Vec::with_capacity(semantic_contract.outputs().len());
     let bindings = derive_live_output_bindings_v1(ranked, evidence, semantic_contract)?;
+    let numerical = LiveNumericalRefinementIndexV1::from_ranked(ranked, semantic_contract)?;
     let output_product_identity =
         output_product_identity_v1(semantic_contract, evidence, &bindings);
     for (index, output) in semantic_contract.outputs().iter().enumerate() {
@@ -231,53 +290,52 @@ pub fn derive_and_require_parallel_reference_contract_v1(
         let proof = binding.authenticated_proof;
         let (actual, reference) = output_roots(output, semantic_contract)
             .ok_or(ProductionParallelReferenceContractErrorV1::OutputRelationMismatch { index })?;
-        let exact_numerical_policy = match (
-            actual.scalar(),
-            actual.numerical_policy(),
-            reference.numerical_policy(),
-        ) {
-            (
-                SemanticScalarTypeV1::Boolean
-                | SemanticScalarTypeV1::Signed(_)
-                | SemanticScalarTypeV1::Unsigned(_),
-                SemanticNumericalPolicyV1::ExactBitVector,
-                SemanticNumericalPolicyV1::ExactBitVector,
-            ) => ParallelNumericalPolicyV1::ExactBitVector,
-            (
-                SemanticScalarTypeV1::Float(_),
-                SemanticNumericalPolicyV1::IeeeOperatorCongruence {
-                    rounding,
-                    exceptional_values,
-                },
-                SemanticNumericalPolicyV1::IeeeOperatorCongruence {
-                    rounding: reference_rounding,
-                    exceptional_values: reference_exceptional_values,
-                },
-            ) if rounding == reference_rounding
-                && exceptional_values == reference_exceptional_values =>
-            {
-                ParallelNumericalPolicyV1::IeeeOperatorCongruence {
-                    rounding,
-                    exceptional_values,
-                }
-            }
-            _ => {
-                return Err(
-                    ProductionParallelReferenceContractErrorV1::NumericalPolicyRejected {
-                        index,
-                        detail: "compiler-derived actual and reference roots do not share one admitted exact numerical policy",
-                    },
-                );
-            }
-        };
-        let numerical_policy = match numerical_refinement_for_output(ranked, output) {
-            Some((contract, proof)) => ParallelNumericalPolicyV1::ErrorBounded {
-                absolute_error_f64_bits: contract.absolute_error_f64_bits(),
-                relative_error_f64_bits: contract.relative_error_f64_bits(),
-                witness_root: contract.request_shape_hash(),
-                proof,
+        let numerical_policy = match numerical.for_output(index) {
+            Some(site) => ParallelNumericalPolicyV1::ErrorBounded {
+                absolute_error_f64_bits: site.contract.absolute_error_f64_bits(),
+                relative_error_f64_bits: site.contract.relative_error_f64_bits(),
+                witness_root: site.contract.request_shape_hash(),
+                proof: site.proof,
             },
-            None => exact_numerical_policy,
+            None => match (
+                actual.scalar(),
+                actual.numerical_policy(),
+                reference.numerical_policy(),
+            ) {
+                (
+                    SemanticScalarTypeV1::Boolean
+                    | SemanticScalarTypeV1::Signed(_)
+                    | SemanticScalarTypeV1::Unsigned(_),
+                    SemanticNumericalPolicyV1::ExactBitVector,
+                    SemanticNumericalPolicyV1::ExactBitVector,
+                ) => ParallelNumericalPolicyV1::ExactBitVector,
+                (
+                    SemanticScalarTypeV1::Float(_),
+                    SemanticNumericalPolicyV1::IeeeOperatorCongruence {
+                        rounding,
+                        exceptional_values,
+                    },
+                    SemanticNumericalPolicyV1::IeeeOperatorCongruence {
+                        rounding: reference_rounding,
+                        exceptional_values: reference_exceptional_values,
+                    },
+                ) if rounding == reference_rounding
+                    && exceptional_values == reference_exceptional_values =>
+                {
+                    ParallelNumericalPolicyV1::IeeeOperatorCongruence {
+                        rounding,
+                        exceptional_values,
+                    }
+                }
+                _ => {
+                    return Err(
+                        ProductionParallelReferenceContractErrorV1::NumericalPolicyRejected {
+                            index,
+                            detail: "compiler-derived actual and reference roots do not share one admitted exact numerical policy",
+                        },
+                    );
+                }
+            },
         };
         let matching_collectives = semantic_contract
             .collectives()
@@ -808,6 +866,7 @@ pub fn require_parallel_reference_contract_v1(
     }
 
     let bindings = derive_live_output_bindings_v1(ranked, evidence, semantic_contract)?;
+    let numerical = LiveNumericalRefinementIndexV1::from_ranked(ranked, semantic_contract)?;
     let derived_product = output_product_identity_v1(semantic_contract, evidence, &bindings);
     if expected.output_product_identity() != derived_product {
         return Err(ProductionParallelReferenceContractErrorV1::OutputProductMismatch);
@@ -845,7 +904,7 @@ pub fn require_parallel_reference_contract_v1(
             relation.numerical_policy(),
             output,
             semantic_contract,
-            Some(ranked),
+            numerical.for_output(index),
         )?;
         if matches!(
             relation.numerical_policy(),
@@ -983,6 +1042,14 @@ pub fn require_parallel_reference_contract_v1(
     if !expected.call_summaries().is_empty() {
         return Err(ProductionParallelReferenceContractErrorV1::CallSummaryMismatch { index: 0 });
     }
+    if counts.error_bounded != numerical.site_count() {
+        return Err(
+            ProductionParallelReferenceContractErrorV1::NumericalPolicyRejected {
+                index: counts.error_bounded,
+                detail: "live numerical refinement sites and error-bounded output relations are not one-to-one",
+            },
+        );
+    }
 
     Ok(ProductionParallelReferenceContractReportV1 {
         contract_identity: expected.canonical_sha256(),
@@ -1016,28 +1083,135 @@ fn hierarchy_level(level: HierarchicalOwnershipLevelV1) -> ParallelHierarchyLeve
     }
 }
 
-fn numerical_refinement_for_output(
+#[derive(Clone, Copy)]
+struct LiveNumericalRefinementV1 {
+    contract: super::ProductionNumericalRefinementContractV2,
+    proof: DigestV1,
+    proof_is_admitted: bool,
+}
+
+struct LiveNumericalRefinementIndexV1 {
+    by_output: Vec<Option<LiveNumericalRefinementV1>>,
+    site_count: usize,
+}
+
+impl LiveNumericalRefinementIndexV1 {
+    fn from_ranked(
+        ranked: &ProductionRankedKernelLoweringInputV1,
+        semantic_contract: &MirPlironSemanticContractV1,
+    ) -> Result<Self, ProductionParallelReferenceContractErrorV1> {
+        let mut outputs_by_roots = BTreeMap::<(DigestV1, DigestV1), Vec<usize>>::new();
+        for (index, output) in semantic_contract.outputs().iter().enumerate() {
+            outputs_by_roots
+                .entry((output.actual(), output.reference()))
+                .or_default()
+                .push(index);
+        }
+
+        let proof_is_admitted = ranked
+            .semantic_report()
+            .all_numerical_obligations_are_proved();
+        let mut by_output = vec![None; semantic_contract.outputs().len()];
+        let mut site_count = 0_usize;
+        for operation in ranked
+            .kernel()
+            .blocks()
+            .iter()
+            .flat_map(|block| block.operations())
+        {
+            let ProductionRankedOperationV1::RequireNumericalRefinement { contract, proof } =
+                operation
+            else {
+                continue;
+            };
+            let site = site_count;
+            site_count = site_count
+                .checked_add(1)
+                .ok_or(ProductionParallelReferenceContractErrorV1::CounterOverflow)?;
+            let roots = (
+                super::production_ranked_value_identity_v1(contract.actual()),
+                super::production_ranked_value_identity_v1(contract.reference()),
+            );
+            let Some(outputs) = outputs_by_roots.get(&roots) else {
+                return Err(
+                    ProductionParallelReferenceContractErrorV1::NumericalSiteUnmatched { site },
+                );
+            };
+            let [index] = outputs.as_slice() else {
+                return Err(
+                    ProductionParallelReferenceContractErrorV1::NumericalSiteAmbiguous {
+                        site,
+                        outputs: outputs.len(),
+                    },
+                );
+            };
+            if by_output[*index].is_some() {
+                return Err(
+                    ProductionParallelReferenceContractErrorV1::DuplicateNumericalSite {
+                        index: *index,
+                    },
+                );
+            }
+            for (component, value) in [
+                ("domain", contract.domain()),
+                ("precondition", contract.precondition()),
+            ] {
+                if !is_canonical_typed_true_v1(ranked, value) {
+                    return Err(
+                        ProductionParallelReferenceContractErrorV1::NumericalCoverageIncomplete {
+                            index: *index,
+                            component,
+                        },
+                    );
+                }
+            }
+            by_output[*index] = Some(LiveNumericalRefinementV1 {
+                contract: *contract,
+                proof: proof.receipt_identity().digest(),
+                proof_is_admitted,
+            });
+        }
+        Ok(Self {
+            by_output,
+            site_count,
+        })
+    }
+
+    fn for_output(&self, index: usize) -> Option<LiveNumericalRefinementV1> {
+        self.by_output.get(index).copied().flatten()
+    }
+
+    const fn site_count(&self) -> usize {
+        self.site_count
+    }
+}
+
+fn is_canonical_typed_true_v1(
     ranked: &ProductionRankedKernelLoweringInputV1,
-    output: &SemanticOutputContractV1,
-) -> Option<(super::ProductionNumericalRefinementContractV2, DigestV1)> {
-    let mut matches = ranked
+    value: ProductionRankedValueV1,
+) -> bool {
+    let ProductionRankedValueV1::Local(value) = value else {
+        return false;
+    };
+    let mut definitions = ranked
         .kernel()
         .blocks()
         .iter()
         .flat_map(|block| block.operations())
-        .filter_map(|operation| match operation {
-            ProductionRankedOperationV1::RequireNumericalRefinement { contract, proof }
-                if super::production_ranked_value_identity_v1(contract.actual())
-                    == output.actual()
-                    && super::production_ranked_value_identity_v1(contract.reference())
-                        == output.reference() =>
-            {
-                Some((*contract, proof.receipt_identity().digest()))
-            }
-            _ => None,
+        .filter(|operation| match operation {
+            ProductionRankedOperationV1::SemanticExpression {
+                result,
+                expression:
+                    super::ProductionSemanticExpressionV2::Constant {
+                        scalar: super::ProductionSemanticScalarTypeV2::Bool,
+                        bits: 1,
+                    },
+                numerical_contract:
+                    super::ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+            } => *result == value,
+            _ => false,
         });
-    let relation = matches.next()?;
-    matches.next().is_none().then_some(relation)
+    definitions.next().is_some() && definitions.next().is_none()
 }
 
 fn output_roots<'a>(
@@ -1132,7 +1306,7 @@ fn require_numerical_policy(
     policy: ParallelNumericalPolicyV1,
     output: &SemanticOutputContractV1,
     contract: &MirPlironSemanticContractV1,
-    ranked: Option<&ProductionRankedKernelLoweringInputV1>,
+    numerical: Option<LiveNumericalRefinementV1>,
 ) -> Result<(), ProductionParallelReferenceContractErrorV1> {
     let Some((actual, reference)) = output_roots(output, contract) else {
         return Err(
@@ -1150,6 +1324,14 @@ fn require_numerical_policy(
             ProductionParallelReferenceContractErrorV1::NumericalPolicyRejected {
                 index,
                 detail: "actual/reference scalar types or logical domains differ",
+            },
+        );
+    }
+    if numerical.is_some() && !matches!(policy, ParallelNumericalPolicyV1::ErrorBounded { .. }) {
+        return Err(
+            ProductionParallelReferenceContractErrorV1::NumericalPolicyRejected {
+                index,
+                detail: "a live numerical refinement site must be represented by the output error-bounded policy",
             },
         );
     }
@@ -1196,18 +1378,14 @@ fn require_numerical_policy(
             relative_error_f64_bits,
             witness_root,
             proof,
-        } => match ranked.and_then(|ranked| {
-            numerical_refinement_for_output(ranked, output).map(|relation| (ranked, relation))
-        }) {
-            Some((ranked, (numerical, retained_proof)))
+        } => match numerical {
+            Some(site)
                 if matches!(actual.scalar(), SemanticScalarTypeV1::Float(_))
-                    && numerical.absolute_error_f64_bits() == absolute_error_f64_bits
-                    && numerical.relative_error_f64_bits() == relative_error_f64_bits
-                    && numerical.request_shape_hash() == witness_root
-                    && retained_proof == proof
-                    && ranked
-                        .semantic_report()
-                        .all_numerical_obligations_are_proved() =>
+                    && site.contract.absolute_error_f64_bits() == absolute_error_f64_bits
+                    && site.contract.relative_error_f64_bits() == relative_error_f64_bits
+                    && site.contract.request_shape_hash() == witness_root
+                    && site.proof == proof
+                    && site.proof_is_admitted =>
             {
                 Ok(())
             }
@@ -1338,6 +1516,16 @@ mod tests {
             ProductionParallelReferenceContractErrorV1::NumericalPolicyRejected {
                 index: 0,
                 detail: "unbounded relaxed",
+            },
+            ProductionParallelReferenceContractErrorV1::NumericalSiteUnmatched { site: 0 },
+            ProductionParallelReferenceContractErrorV1::NumericalSiteAmbiguous {
+                site: 0,
+                outputs: 2,
+            },
+            ProductionParallelReferenceContractErrorV1::DuplicateNumericalSite { index: 0 },
+            ProductionParallelReferenceContractErrorV1::NumericalCoverageIncomplete {
+                index: 0,
+                component: "domain",
             },
             ProductionParallelReferenceContractErrorV1::CallSummaryMismatch { index: 0 },
         ] {

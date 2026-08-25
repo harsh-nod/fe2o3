@@ -1297,7 +1297,10 @@ pub enum ProductionRankedOperationV1 {
         contract: ProductionNumericalRefinementContractV2,
         proof: ProductionReferenceProofV2,
     },
-    /// Generator input for a finite-error theorem before exact proof import.
+    /// Import input for a claim-specific finite-error theorem.
+    ///
+    /// The generic Verus generator rejects this request because scalar
+    /// equality does not prove guarded finiteness or the stated inequality.
     RequestNumericalRefinement {
         contract: ProductionNumericalRefinementContractV2,
         subjects: FunctionalRefinementSubjectsV2,

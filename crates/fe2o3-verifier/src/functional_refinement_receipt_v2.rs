@@ -2,7 +2,9 @@
 //!
 //! This path is workload-neutral: it derives a bounded Verus program from a validated ranked
 //! scalar/effect request and binds the exact source, process result, retained runtime closure, and
-//! functional-refinement statement. The public producer accepts no caller-authored Verus source.
+//! functional-refinement statement. Finite-error requests require imported claim-specific proofs;
+//! this generic generator cannot discharge them from scalar equality. The public producer accepts
+//! no caller-authored Verus source.
 //! It does not establish Rust source-to-MIR correspondence; current MIR subjects are supplied by
 //! the compiler frontend.
 
@@ -28,7 +30,6 @@ use fe2o3_pliron::{
     ProductionRankedOperationV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
     normalized_effect_refinement_hash_for_kernel_v2,
     normalized_functional_refinement_formula_hash_for_kernel_v2,
-    normalized_numerical_refinement_hash_for_kernel_v2,
 };
 use fe2o3_proof_contracts::DigestV1;
 use rand_core::OsRng;
@@ -152,8 +153,10 @@ impl PreparedFunctionalRefinementReceiptV2 {
     }
 }
 
-/// Generates Verus source from the ranked semantic DAG and executes it through
-/// the retained runtime. There is no caller-provided source parameter.
+/// Generates Verus source for scalar/effect requests from the ranked semantic
+/// DAG and executes it through the retained runtime. Finite-error requests are
+/// rejected for claim-specific import. There is no caller-provided source
+/// parameter.
 pub fn prepare_ranked_functional_refinement_receipt_v2(
     runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
     kernel: &ProductionRankedKernelV1,
@@ -337,23 +340,8 @@ fn generate_ranked_functional_refinement_proof_v2(
             ]);
             (obligation, pairs)
         }
-        ProductionRankedOperationV1::RequestNumericalRefinement {
-            contract,
-            subjects: request_subjects,
-        } if *request_subjects == subjects => {
-            let obligation = normalized_numerical_refinement_hash_for_kernel_v2(
-                kernel,
-                block_index,
-                operation_index,
-                *contract,
-                subjects,
-            )
-            .map_err(|_| invalid_ranked_recipe())?;
-            // The compiler-owned automatic discharge proves exact equality,
-            // which is strictly stronger than every validated nonnegative
-            // finite-error bound. Non-exact claims require an independently
-            // verified receipt for this same obligation digest.
-            (obligation, vec![(contract.actual(), contract.reference())])
+        ProductionRankedOperationV1::RequestNumericalRefinement { .. } => {
+            return Err(claim_specific_numerical_proof_required());
         }
         _ => return Err(invalid_ranked_recipe()),
     };
@@ -1105,6 +1093,16 @@ fn incomplete_semantic_domain() -> FunctionalRefinementVerusExecutionErrorV2 {
     }
 }
 
+fn claim_specific_numerical_proof_required() -> FunctionalRefinementVerusExecutionErrorV2 {
+    FunctionalRefinementVerusExecutionErrorV2 {
+        kind: FunctionalRefinementVerusExecutionErrorKindV2::ClaimSpecificNumericalProofRequired,
+        detail: Some(
+            "finite-error refinement requires an imported claim-specific receipt proving the exact guard, finiteness, and absolute/relative inequality"
+                .to_owned(),
+        ),
+    }
+}
+
 fn validate_proved_output(
     observed: &FunctionalRefinementRuntimeProcessOutputV1,
 ) -> Result<(), FunctionalRefinementVerusExecutionErrorV2> {
@@ -1180,6 +1178,7 @@ pub enum FunctionalRefinementVerusExecutionErrorKindV2 {
     InvalidTimeout,
     InvalidRankedProofRecipe,
     IncompleteSemanticDomain,
+    ClaimSpecificNumericalProofRequired,
     GeneratedSource,
     Runtime,
     UnexpectedProofResult,
@@ -1531,7 +1530,7 @@ mod tests {
     }
 
     #[test]
-    fn numerical_generator_proves_the_stronger_exact_fallback_and_binds_bounds() {
+    fn numerical_generator_rejects_the_unsound_exact_fallback() {
         let float = ProductionSemanticScalarTypeV2::Float { bits: 32 };
         let boolean = ProductionSemanticScalarTypeV2::Bool;
         let local = ProductionRankedValueV1::Local;
@@ -1596,19 +1595,16 @@ mod tests {
             .unwrap()
         };
 
-        let (binding, source) =
-            generate_ranked_functional_refinement_proof_v2(&build(0.001), 0, 4, subjects())
-                .unwrap();
-        let generated = std::str::from_utf8(source.source()).unwrap();
-        assert!(generated.contains("assert(v0 == v1);"));
-        let (mutated, mutated_source) =
-            generate_ranked_functional_refinement_proof_v2(&build(0.002), 0, 4, subjects())
-                .unwrap();
-        assert_eq!(source.source(), mutated_source.source());
-        assert_ne!(
-            binding.normalized_obligation_effect_ir_hash(),
-            mutated.normalized_obligation_effect_ir_hash()
-        );
+        for absolute in [0.001, 0.002] {
+            let error =
+                generate_ranked_functional_refinement_proof_v2(&build(absolute), 0, 4, subjects())
+                    .unwrap_err();
+            assert_eq!(
+                error.kind(),
+                FunctionalRefinementVerusExecutionErrorKindV2::ClaimSpecificNumericalProofRequired
+            );
+            assert!(error.to_string().contains("claim-specific receipt"));
+        }
     }
 
     #[test]
