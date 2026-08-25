@@ -2,8 +2,8 @@ use dialect_gpu::{AddressSpaceAttr, ExecutionLayoutOp, FenceOp, MemoryOrderAttr,
 use dialect_kernel::{
     AccessKindAttr, AllocationEffectOp, AtomicOrderingAttr, AtomicScopeAttr, BranchOp,
     CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DIALECT_NAME, IndexBinaryKindAttr,
-    IndexBinaryOp, IndexConstantOp, IndexLessThanBranchOp, InvocationIndexOp, MemorySpaceAttr,
-    RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp, register_dialect,
+    IndexBinaryOp, IndexConstantOp, IndexEqualBranchOp, IndexLessThanBranchOp, InvocationIndexOp,
+    MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckPassKindV1, KernelCheckStatusV1, RankedRaceFindingV1,
@@ -884,7 +884,7 @@ fn checked_row_striped_overflowing_invocation_is_not_proved_injective() {
 }
 
 #[test]
-fn dynamic_launch_identity_remains_unresolved_after_a_bounds_guard() {
+fn dynamic_launch_identity_is_symbolically_disjoint_after_a_bounds_guard() {
     let context = &mut setup();
     let function = function(context, "dynamic_identity");
     let entry = function.get_entry_block(context);
@@ -917,12 +917,178 @@ fn dynamic_launch_identity_remains_unresolved_after_a_bounds_guard() {
     append(context, access_block, &to_exit);
     append(context, exit, &ret);
 
+    assert!(run_pliron_ranked_race_check_v1(context, &function).is_clean());
+}
+
+#[test]
+fn dynamic_launch_shift_is_symbolically_disjoint_after_a_bounds_guard() {
+    let context = &mut setup();
+    let function = function(context, "dynamic_shift");
+    let entry = function.get_entry_block(context);
+    let bounds_block = block(context, &function, "bounds");
+    let access_block = block(context, &function, "access");
+    let exit = block(context, &function, "exit");
+    let output = view(context, vec![1028], MemorySpaceAttr::Global);
+    let invocation = InvocationIndexOp::new(context, 0, 0);
+    let offset = IndexConstantOp::new(context, 4);
+    let shifted = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        invocation.result(context),
+        offset.result(context),
+    );
+    let extent = IndexConstantOp::new(context, 1024);
+    let branch = IndexLessThanBranchOp::new(
+        context,
+        invocation.result(context),
+        extent.result(context),
+        bounds_block,
+        exit,
+    );
+    let output_extent = IndexConstantOp::new(context, 1028);
+    let bounds_branch = IndexLessThanBranchOp::new(
+        context,
+        shifted.result(context),
+        output_extent.result(context),
+        access_block,
+        exit,
+    );
+    let write = access(
+        context,
+        AccessKindAttr::Write,
+        output.result(context),
+        shifted.result(context),
+    );
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    for operation in [
+        output.get_operation(),
+        invocation.get_operation(),
+        offset.get_operation(),
+        shifted.get_operation(),
+        extent.get_operation(),
+        branch.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    append(context, bounds_block, &output_extent);
+    append(context, bounds_block, &bounds_branch);
+    append(context, access_block, &write);
+    append(context, access_block, &to_exit);
+    append(context, exit, &ret);
+
+    assert!(run_pliron_ranked_race_check_v1(context, &function).is_clean());
+}
+
+#[test]
+fn dynamic_launch_bound_is_discarded_at_an_unguarded_merge() {
+    let context = &mut setup();
+    let function = function(context, "unguarded_merge");
+    let entry = function.get_entry_block(context);
+    let guarded = block(context, &function, "guarded");
+    let unguarded = block(context, &function, "unguarded");
+    let merge = block(context, &function, "merge");
+    let access_block = block(context, &function, "access");
+    let exit = block(context, &function, "exit");
+    let output = view(context, vec![1028], MemorySpaceAttr::Global);
+    let invocation = InvocationIndexOp::new(context, 0, 0);
+    let offset = IndexConstantOp::new(context, 4);
+    let shifted = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        invocation.result(context),
+        offset.result(context),
+    );
+    let extent = IndexConstantOp::new(context, 1024);
+    let branch = IndexLessThanBranchOp::new(
+        context,
+        invocation.result(context),
+        extent.result(context),
+        guarded,
+        unguarded,
+    );
+    let guarded_to_merge = BranchOp::new(context, merge);
+    let unguarded_to_merge = BranchOp::new(context, merge);
+    let output_extent = IndexConstantOp::new(context, 1028);
+    let bounds_branch = IndexLessThanBranchOp::new(
+        context,
+        shifted.result(context),
+        output_extent.result(context),
+        access_block,
+        exit,
+    );
+    let write = access(
+        context,
+        AccessKindAttr::Write,
+        output.result(context),
+        shifted.result(context),
+    );
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    for operation in [
+        output.get_operation(),
+        invocation.get_operation(),
+        offset.get_operation(),
+        shifted.get_operation(),
+        extent.get_operation(),
+        branch.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    append(context, guarded, &guarded_to_merge);
+    append(context, unguarded, &unguarded_to_merge);
+    append(context, merge, &output_extent);
+    append(context, merge, &bounds_branch);
+    append(context, access_block, &write);
+    append(context, access_block, &to_exit);
+    append(context, exit, &ret);
+
     let report = run_pliron_ranked_race_check_v1(context, &function);
     assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     assert!(report.findings().iter().any(|finding| matches!(
         finding,
         RankedRaceFindingV1::DynamicLaunchExtent { dimension: 0 }
     )));
+}
+
+#[test]
+fn dynamic_launch_equality_zero_proves_a_single_writer() {
+    let context = &mut setup();
+    let function = function(context, "single_writer");
+    let entry = function.get_entry_block(context);
+    let access_block = block(context, &function, "access");
+    let exit = block(context, &function, "exit");
+    let output = view(context, vec![1], MemorySpaceAttr::Global);
+    let invocation = InvocationIndexOp::new(context, 0, 0);
+    let zero = IndexConstantOp::new(context, 0);
+    let branch = IndexEqualBranchOp::new(
+        context,
+        invocation.result(context),
+        zero.result(context),
+        access_block,
+        exit,
+    );
+    let write = access(
+        context,
+        AccessKindAttr::Write,
+        output.result(context),
+        zero.result(context),
+    );
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    for operation in [
+        output.get_operation(),
+        invocation.get_operation(),
+        zero.get_operation(),
+        branch.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    append(context, access_block, &write);
+    append(context, access_block, &to_exit);
+    append(context, exit, &ret);
+
+    assert!(run_pliron_ranked_race_check_v1(context, &function).is_clean());
 }
 
 #[test]

@@ -7,14 +7,15 @@
 //! O(invocations * effects * rank), never pairwise in invocation count.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     fmt,
 };
 
 use dialect_gpu::{AddressSpaceAttr, FenceOp};
 use dialect_kernel::{
-    AccessKindAttr, AllocationEffectOp, AtomicOrderingAttr, AtomicScopeAttr, MemorySpaceAttr,
-    RankedAccessOp, RankedViewOp,
+    AccessKindAttr, AllocationEffectOp, AtomicOrderingAttr, AtomicScopeAttr, IndexConstantOp,
+    IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
+    InvocationIndexOp, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp, RankedViewOp,
 };
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
@@ -670,7 +671,13 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
         });
     };
 
-    if symbolically_proves_disjoint(&effects, &sparse, &launch_extents) {
+    let invocation_bounds = invocation_upper_bounds_by_block(context, function);
+    if symbolically_proves_disjoint(
+        &effects,
+        &sparse,
+        &launch_extents,
+        invocation_bounds.as_deref(),
+    ) {
         return clean();
     }
     let release_signal_views = effects
@@ -985,6 +992,7 @@ fn symbolically_proves_disjoint(
     effects: &[EffectV1],
     sparse: &SparseIndexAnalysisV1,
     launch_extents: &[u64],
+    invocation_bounds: Option<&[[Option<u64>; MAX_RANKED_MEMORY_RANK]]>,
 ) -> bool {
     let mut by_view: HashMap<u64, Vec<&EffectV1>> = HashMap::new();
     for effect in effects {
@@ -1020,12 +1028,25 @@ fn symbolically_proves_disjoint(
             let mut representative = None;
             for effect in effects {
                 let Some(first) = representative else {
-                    if !affine_map_is_injective(&effect.indices, sparse, launch_extents) {
+                    if !effect_affine_map_is_injective(
+                        effect,
+                        sparse,
+                        launch_extents,
+                        invocation_bounds,
+                    ) {
                         return false;
                     }
                     representative = Some(&effect.indices);
                     continue;
                 };
+                if !effect_affine_map_is_injective(
+                    effect,
+                    sparse,
+                    launch_extents,
+                    invocation_bounds,
+                ) {
+                    return false;
+                }
                 if !same_index_formula(first, &effect.indices, sparse) {
                     return false;
                 }
@@ -1055,12 +1076,20 @@ fn symbolically_proves_disjoint(
         let mut representative = None;
         for effect in relevant {
             let Some(first) = representative else {
-                if !affine_map_is_injective(&effect.indices, sparse, launch_extents) {
+                if !effect_affine_map_is_injective(
+                    effect,
+                    sparse,
+                    launch_extents,
+                    invocation_bounds,
+                ) {
                     return false;
                 }
                 representative = Some(&effect.indices);
                 continue;
             };
+            if !effect_affine_map_is_injective(effect, sparse, launch_extents, invocation_bounds) {
+                return false;
+            }
             if !same_index_formula(first, &effect.indices, sparse) {
                 return false;
             }
@@ -1174,7 +1203,147 @@ fn affine_map_is_injective(
         .iter()
         .map(|index| sparse.fact(*index).affine().cloned())
         .collect::<Option<Vec<_>>>();
-    facts.is_some_and(|facts| affine_facts_are_injective(&facts, launch_extents))
+    facts.is_some_and(|facts| {
+        affine_facts_are_injective(&facts, launch_extents)
+            || affine_facts_contain_unit_coordinate_embedding(&facts, launch_extents)
+    })
+}
+
+fn effect_affine_map_is_injective(
+    effect: &EffectV1,
+    sparse: &SparseIndexAnalysisV1,
+    launch_extents: &[u64],
+    invocation_bounds: Option<&[[Option<u64>; MAX_RANKED_MEMORY_RANK]]>,
+) -> bool {
+    let mut effective_extents = launch_extents.to_vec();
+    if let Some(bounds) = invocation_bounds.and_then(|bounds| bounds.get(effect.location.block)) {
+        for (dimension, extent) in effective_extents.iter_mut().enumerate() {
+            if *extent == 0
+                && let Some(bound) = bounds.get(dimension).copied().flatten()
+            {
+                *extent = bound;
+            }
+        }
+    }
+    affine_map_is_injective(&effect.indices, sparse, &effective_extents)
+}
+
+fn invocation_upper_bounds_by_block(
+    context: &Context,
+    function: &FuncOp,
+) -> Option<Vec<[Option<u64>; MAX_RANKED_MEMORY_RANK]>> {
+    let blocks = function
+        .get_region(context)
+        .deref(context)
+        .iter(context)
+        .collect::<Vec<_>>();
+    let indices = blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| (*block, index))
+        .collect::<HashMap<_, _>>();
+    let entry = *indices.get(&function.get_entry_block(context))?;
+    let empty: [Option<u64>; MAX_RANKED_MEMORY_RANK] = [None; MAX_RANKED_MEMORY_RANK];
+    let mut inputs = vec![None; blocks.len()];
+    inputs[entry] = Some(empty);
+    let mut worklist = VecDeque::from([entry]);
+    let mut work = 0_usize;
+
+    while let Some(block_index) = worklist.pop_front() {
+        work = work.checked_add(1)?;
+        if work > MAX_PLIRON_RACE_EFFECT_INSTANCES_V1 {
+            return None;
+        }
+        let source = inputs[block_index]?;
+        let terminator = blocks[block_index].deref(context).get_terminator(context)?;
+        let operation = Operation::get_op_dyn(terminator, context);
+        let guard = invocation_upper_bound_guard(operation.as_ref(), context);
+        let raw = terminator.deref(context);
+        for (successor_index, successor) in raw.successors().enumerate() {
+            let target = *indices.get(&successor)?;
+            if target == entry {
+                continue;
+            }
+            let mut candidate = source;
+            if successor_index == 0
+                && let Some((dimension, bound)) = guard
+            {
+                let slot = candidate.get_mut(dimension)?;
+                *slot = Some(slot.map_or(bound, |current| current.min(bound)));
+            }
+            let merged = match inputs[target] {
+                None => candidate,
+                Some(current) => std::array::from_fn(|dimension| {
+                    match (current[dimension], candidate[dimension]) {
+                        (Some(lhs), Some(rhs)) => Some(lhs.max(rhs)),
+                        _ => None,
+                    }
+                }),
+            };
+            if inputs[target] != Some(merged) {
+                inputs[target] = Some(merged);
+                worklist.push_back(target);
+            }
+        }
+    }
+
+    Some(
+        inputs
+            .into_iter()
+            .map(|bounds| bounds.unwrap_or(empty))
+            .collect(),
+    )
+}
+
+fn invocation_upper_bound_guard(
+    operation: &dyn pliron::op::Op,
+    context: &Context,
+) -> Option<(usize, u64)> {
+    let less_than = operation
+        .downcast_ref::<IndexLessThanBranchOp>()
+        .map(|branch| (branch.lhs(context), branch.rhs(context)))
+        .or_else(|| {
+            operation
+                .downcast_ref::<IndexLessThanBranchArgsOp>()
+                .map(|branch| (branch.lhs(context), branch.rhs(context)))
+        });
+    if let Some((lhs, rhs)) = less_than {
+        return Some((
+            invocation_dimension(lhs, context)?,
+            index_constant(rhs, context)?,
+        ));
+    }
+    let equal = operation
+        .downcast_ref::<IndexEqualBranchOp>()
+        .map(|branch| (branch.lhs(context), branch.rhs(context)))
+        .or_else(|| {
+            operation
+                .downcast_ref::<IndexEqualBranchArgsOp>()
+                .map(|branch| (branch.lhs(context), branch.rhs(context)))
+        })?;
+    let dimension = invocation_dimension(equal.0, context)
+        .filter(|_| index_constant(equal.1, context) == Some(0))
+        .or_else(|| {
+            invocation_dimension(equal.1, context)
+                .filter(|_| index_constant(equal.0, context) == Some(0))
+        })?;
+    Some((dimension, 1))
+}
+
+fn invocation_dimension(value: Value, context: &Context) -> Option<usize> {
+    let operation = Operation::get_op_dyn(value.defining_op()?, context);
+    usize::try_from(
+        operation
+            .downcast_ref::<InvocationIndexOp>()?
+            .dimension(context)?,
+    )
+    .ok()
+    .filter(|dimension| *dimension < MAX_RANKED_MEMORY_RANK)
+}
+
+fn index_constant(value: Value, context: &Context) -> Option<u64> {
+    let operation = Operation::get_op_dyn(value.defining_op()?, context);
+    operation.downcast_ref::<IndexConstantOp>()?.value(context)
 }
 
 fn affine_facts_are_injective(facts: &[SparseAffineIndexV1], launch_extents: &[u64]) -> bool {

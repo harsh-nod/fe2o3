@@ -1109,6 +1109,7 @@ fn project_rust_bounds_checks(
         length_source: Option<SemanticLocalIdV1>,
     }
 
+    let constants = constant_locals(function);
     let mut definitions = vec![LocalDefinitionV1::default(); function.locals().len()];
     let mut predecessors = vec![Vec::new(); function.blocks().len()];
     for (block_index, block) in function.blocks().iter().enumerate() {
@@ -1178,6 +1179,14 @@ fn project_rust_bounds_checks(
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a Rust bounds check without the canonical success/unreachable shape",
             ));
+        }
+        if constant_operand_value(length, &constants).is_some()
+            && constant_operand_value(index, &constants).is_some()
+        {
+            // Literal array checks do not authorize a dynamic access. The
+            // projected ranked access retains both constants and the static
+            // shape verifier accepts or rejects the exact relation.
+            continue;
         }
         let condition_local = simple_operand_local(condition).ok_or(
             ProductionRankedProjectionErrorV1::Incomplete(
@@ -10908,6 +10917,29 @@ mod tests {
         project_rust_bounds_checks(function, first_argument, &mut operations, &mut next_value)
     }
 
+    fn literal_bounds_check_function(index: u128, length: u128) -> SemanticFunctionDeclV1 {
+        projection_function_with_locals(
+            vec![
+                block(
+                    80,
+                    vec![],
+                    SemanticTerminatorKindV1::Assert {
+                        condition: constant(u128::from(index < length)),
+                        expected: true,
+                        message: SemanticAssertMessageV1::BoundsCheck {
+                            length: constant(length),
+                            index: constant(index),
+                        },
+                        target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 1),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
+                block(81, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![local(82, SCALAR_TYPE, SemanticLocalRoleV1::Return)],
+        )
+    }
+
     fn option_dominance_chain(
         producer_count: usize,
     ) -> (SemanticFunctionDeclV1, Vec<SemanticOptionProducerV1>) {
@@ -11341,6 +11373,22 @@ mod tests {
             projected.checks[0].extent,
             ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(1))
         );
+    }
+
+    #[test]
+    fn literal_array_bounds_check_does_not_manufacture_dynamic_authorization() {
+        for function in [
+            literal_bounds_check_function(63, 64),
+            literal_bounds_check_function(64, 64),
+        ] {
+            let mut operations = Vec::new();
+            let mut next_value = 0;
+            let projected =
+                project_rust_bounds_checks(&function, 0, &mut operations, &mut next_value).unwrap();
+            assert!(projected.checks.is_empty());
+            assert!(operations.is_empty());
+            assert_eq!(next_value, 0);
+        }
     }
 
     #[test]
