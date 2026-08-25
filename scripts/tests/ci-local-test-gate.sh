@@ -210,7 +210,20 @@ run_step_with_timeout() {
 
 prepare_cargo_fe2o3_driver() {
   local step_prefix="$1"
+  local driver_profile="$2"
   local root="${TIMEOUT_TEST_ROOT}/${step_prefix}-driver"
+  local -a feature_args=()
+  case "${driver_profile}" in
+    production) ;;
+    qualification)
+      feature_args=(--features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}")
+      ;;
+    *)
+      printf 'mock received unknown driver profile: %s\n' \
+        "${driver_profile}" >&2
+      return 2
+      ;;
+  esac
   if [[ ! -d "${root}" ]]; then
     mkdir -m 700 -- "${root}"
     printf '#!/usr/bin/env bash\nexit 0\n' >"${root}/cargo-fe2o3"
@@ -222,6 +235,7 @@ prepare_cargo_fe2o3_driver() {
   CARGO_FE2O3_SHA256="${CARGO_FE2O3_SHA256%% *}"
   run_step "${step_prefix}-cargo-fe2o3-bootstrap" \
     cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 \
+    "${feature_args[@]}" \
     --message-format=json-render-diagnostics
 }
 
@@ -485,6 +499,10 @@ assert_equals \
 assert_step_count workspace-check 0 \
   'generic check retained the unsound raw/wrapper split'
 assert_equals \
+  'cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 --message-format=json-render-diagnostics' \
+  "$(step_command generic-check-cargo-fe2o3-bootstrap)" \
+  'generic check did not retain the feature-free production driver'
+assert_equals \
   "env ${TIMEOUT_TEST_ROOT}/generic-check-driver/cargo-fe2o3 check --workspace --all-targets --locked --exclude fe2o3-production-extraction-fixture --exclude fe2o3-production-ranked-bounds-fixture --exclude fe2o3-disabled-fixture" \
   "$(step_command workspace-binding-check)" \
   'managed check did not cover the whole supported workspace graph'
@@ -660,7 +678,20 @@ unset LD_FE2O3_CI_TEST DYLD_FE2O3_CI_TEST GLIBC_TUNABLES FE2O3_CI_TEST_PRESERVED
 
 prepare_cargo_fe2o3_driver() {
   local step_prefix="$1"
+  local driver_profile="$2"
   local root="${TIMEOUT_TEST_ROOT}/${step_prefix}-driver"
+  local -a feature_args=()
+  case "${driver_profile}" in
+    production) ;;
+    qualification)
+      feature_args=(--features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}")
+      ;;
+    *)
+      printf 'mock received unknown driver profile: %s\n' \
+        "${driver_profile}" >&2
+      return 2
+      ;;
+  esac
   mkdir -p -- "${TIMEOUT_TEST_ROOT}/external-target"
   chmod 700 -- "${TIMEOUT_TEST_ROOT}/external-target"
   mkdir -m 700 -- "${root}"
@@ -673,6 +704,7 @@ prepare_cargo_fe2o3_driver() {
   CARGO_FE2O3_SHA256="${CARGO_FE2O3_SHA256%% *}"
   run_step "${step_prefix}-cargo-fe2o3-bootstrap" \
     cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 \
+    "${feature_args[@]}" \
     --message-format=json-render-diagnostics
 }
 load_example_packages() {
@@ -682,9 +714,9 @@ load_example_packages() {
 }
 run_rocm_compile
 assert_equals \
-  'cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 --message-format=json-render-diagnostics' \
+  'cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 --features qualification-oracles-test-only --message-format=json-render-diagnostics' \
   "$(step_command rocm-cargo-fe2o3-bootstrap)" \
-  'ROCm compile did not build the shared driver once'
+  'ROCm compile did not build the qualification-enabled shared driver once'
 assert_equals \
   "env ${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 doctor" \
   "$(step_command rocm-doctor)" \
@@ -726,6 +758,10 @@ export FE2O3_ALLOW_GPU_SMOKE=1
 export FE2O3_TARGET=gfx942:xnack-
 run_hardware_smoke
 assert_equals \
+  'cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 --features qualification-oracles-test-only --message-format=json-render-diagnostics' \
+  "$(step_command hardware-cargo-fe2o3-bootstrap)" \
+  'hardware smoke did not build the qualification-enabled driver'
+assert_equals \
   "cc -std=c11 -Wall -Wextra -Werror -D__HIP_PLATFORM_AMD__ -I /opt/rocm/include -I ${REPO_ROOT}/crates/fe2o3-hip-sys/native ${REPO_ROOT}/crates/fe2o3-hip-sys/native/device_properties_test.c -L /opt/rocm/lib -Wl\,-rpath\,/opt/rocm/lib -lamdhip64 -o ${TIMEOUT_TEST_ROOT}/external-target/ci-native/fe2o3-hip-device-properties-test" \
   "$(step_command hardware-hip-device-properties-build)" \
   'hardware smoke native helper did not use the resolved external target directory'
@@ -743,6 +779,10 @@ STEP_NAMES=()
 STEP_COMMANDS=()
 export FE2O3_S09_EVIDENCE_DIR="${TIMEOUT_TEST_ROOT}/s09-evidence"
 run_s09_debug_hardware
+assert_equals \
+  'cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 --features qualification-oracles-test-only --message-format=json-render-diagnostics' \
+  "$(step_command s09-cargo-fe2o3-bootstrap)" \
+  'S09 did not build the qualification-enabled driver'
 assert_equals \
   "env FE2O3_TEST_CARGO_FE2O3_BIN=${TIMEOUT_TEST_ROOT}/s09-driver/cargo-fe2o3 FE2O3_TEST_CARGO_FE2O3_SHA256=${CARGO_FE2O3_SHA256} bash scripts/s09-debug-ci.sh ${TIMEOUT_TEST_ROOT}/s09-evidence" \
   "$(step_command s09-debug-hardware)" \

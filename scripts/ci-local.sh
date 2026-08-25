@@ -346,8 +346,21 @@ prepare_private_tmp_root() {
 
 prepare_cargo_fe2o3_driver() {
   local step_prefix="$1"
+  local driver_profile="$2"
   local metadata_receipt receipt built_binary built_sha256
-  local -a driver_identity
+  local -a driver_identity feature_args=()
+
+  case "${driver_profile}" in
+    production) ;;
+    qualification)
+      feature_args=(--features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}")
+      ;;
+    *)
+      printf 'unknown cargo-fe2o3 driver profile: %s\n' \
+        "${driver_profile}" >&2
+      return 2
+      ;;
+  esac
 
   CARGO_TARGET_DIRECTORY="$(resolve_cargo_target_directory)"
   prepare_private_tmp_root
@@ -394,10 +407,12 @@ PY
   receipt="$(mktemp -- "${TMPDIR}/cargo-fe2o3-artifacts.XXXXXX.json")"
   run_step "${step_prefix}-cargo-fe2o3-bootstrap" \
     bash -c 'set -Eeuo pipefail
+      receipt="$1"
+      shift
       exec env CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=1 \
         cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 \
-        --message-format=json-render-diagnostics >"$1"' \
-    cargo-fe2o3-bootstrap "${receipt}"
+        "$@" --message-format=json-render-diagnostics >"${receipt}"' \
+    cargo-fe2o3-bootstrap "${receipt}" "${feature_args[@]}"
   built_binary="$(resolve_cargo_fe2o3_artifact "${receipt}" \
     "${driver_identity[0]}" "${driver_identity[1]}" \
     "${CARGO_TARGET_DIRECTORY}")"
@@ -497,7 +512,7 @@ run_check() {
   local -a loader_environment_removals
   local -A rustc_example_set=()
   local package
-  prepare_cargo_fe2o3_driver generic-check
+  prepare_cargo_fe2o3_driver generic-check production
   validate_cargo_fe2o3_driver
   load_example_packages all all_examples "${CARGO_FE2O3_BINARY}"
   load_example_packages rustc-check rustc_examples "${CARGO_FE2O3_BINARY}"
@@ -877,7 +892,7 @@ run_rocm_compile() {
   export FE2O3_TARGET="${FE2O3_TARGET:-gfx1100}"
   local -a example_packages loader_environment_removals
 
-  prepare_cargo_fe2o3_driver rocm
+  prepare_cargo_fe2o3_driver rocm qualification
   load_dynamic_loader_environment_removals loader_environment_removals
   validate_cargo_fe2o3_driver
   load_example_packages \
@@ -1013,7 +1028,7 @@ run_hardware_smoke() {
   fi
 
   local -a loader_environment_removals
-  prepare_cargo_fe2o3_driver hardware
+  prepare_cargo_fe2o3_driver hardware qualification
   load_dynamic_loader_environment_removals loader_environment_removals
 
   validate_cargo_fe2o3_driver
@@ -1078,7 +1093,7 @@ run_s09_debug_hardware() {
     return 2
   fi
   local -a loader_environment_removals
-  prepare_cargo_fe2o3_driver s09
+  prepare_cargo_fe2o3_driver s09 qualification
   load_dynamic_loader_environment_removals loader_environment_removals
   validate_cargo_fe2o3_driver
   run_step s09-debug-hardware \

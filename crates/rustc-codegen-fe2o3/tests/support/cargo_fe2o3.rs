@@ -11,6 +11,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) const TEST_DRIVER_ENV: &str = "FE2O3_TEST_CARGO_FE2O3_BIN";
 pub(crate) const TEST_DRIVER_SHA256_ENV: &str = "FE2O3_TEST_CARGO_FE2O3_SHA256";
+const QUALIFICATION_DRIVER_BUILD_ARGUMENTS: [&str; 9] = [
+    "build",
+    "--locked",
+    "-p",
+    "cargo-fe2o3",
+    "--bin",
+    "cargo-fe2o3",
+    "--features",
+    "qualification-oracles-test-only",
+    "--message-format=json-render-diagnostics",
+];
 
 #[derive(Debug)]
 struct DriverIdentity {
@@ -406,15 +417,9 @@ fn unique_driver_artifact(
 fn discover_built_driver(workspace: &Path) -> Result<DriverIdentity, String> {
     let expected = cargo_driver_build(workspace)?;
     let mut command = Command::new(env!("CARGO"));
-    command.current_dir(workspace).args([
-        "build",
-        "--locked",
-        "-p",
-        "cargo-fe2o3",
-        "--bin",
-        "cargo-fe2o3",
-        "--message-format=json-render-diagnostics",
-    ]);
+    command
+        .current_dir(workspace)
+        .args(QUALIFICATION_DRIVER_BUILD_ARGUMENTS);
     scrub_dynamic_loader_environment(&mut command);
     let output = command
         .output()
@@ -494,8 +499,9 @@ pub fn non_production_command(workspace: &Path) -> Command {
 #[cfg(test)]
 mod tests {
     use super::{
-        CargoDriverBuild, driver_artifact_path, is_dynamic_loader_environment_name,
-        scrub_dynamic_loader_environment, unique_driver_artifact,
+        CargoDriverBuild, QUALIFICATION_DRIVER_BUILD_ARGUMENTS, driver_artifact_path,
+        is_dynamic_loader_environment_name, scrub_dynamic_loader_environment,
+        unique_driver_artifact,
     };
     use std::ffi::OsStr;
     use std::path::PathBuf;
@@ -520,6 +526,24 @@ mod tests {
                 .get_envs()
                 .find_map(|(name, value)| (name == OsStr::new("FE2O3_PRESERVED")).then_some(value)),
             Some(Some(OsStr::new("present")))
+        );
+    }
+
+    #[test]
+    fn fallback_driver_is_explicitly_qualification_enabled() {
+        assert_eq!(
+            QUALIFICATION_DRIVER_BUILD_ARGUMENTS,
+            [
+                "build",
+                "--locked",
+                "-p",
+                "cargo-fe2o3",
+                "--bin",
+                "cargo-fe2o3",
+                "--features",
+                "qualification-oracles-test-only",
+                "--message-format=json-render-diagnostics",
+            ]
         );
     }
 
