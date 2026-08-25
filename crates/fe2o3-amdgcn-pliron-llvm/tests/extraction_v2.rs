@@ -5,8 +5,9 @@ use fe2o3_amdgcn_pliron_llvm::{
 };
 use fe2o3_llvm_handoff::{
     AddressSpaceV1, BinaryOperationV2, CallingConventionV2, FloatBinaryOperationV2,
-    FunctionAttributeV1, FunctionKindV2, IdentityV1, InstructionKindV2, ReturnTypeV2, ScalarTypeV1,
-    StageIdentitiesV1, TargetFeatureV1, TerminatorV2, ValueIdV2, ValueTypeV2, WorkgroupSizeRangeV1,
+    FunctionAttributeV1, FunctionAttributeV2, FunctionKindV2, IdentityV1, InstructionKindV2,
+    ReturnTypeV2, ScalarTypeV1, StageIdentitiesV1, TargetFeatureV1, TerminatorV2, ValueIdV2,
+    ValueTypeV2, WorkgroupSizeRangeV1,
 };
 
 fn request() -> ScalarKernelModuleV1 {
@@ -141,6 +142,50 @@ fn typed_v2_boundary_is_deterministic_and_round_trips() {
         fe2o3_llvm_handoff::Gfx942HandoffV2::decode_canonical(encoded.as_bytes()).unwrap();
     assert_eq!(decoded, direct);
     assert_eq!(decoded.encode_canonical(), encoded);
+}
+
+#[test]
+fn opt_in_abi_attributes_survive_the_typed_boundary() {
+    let attributes_v1 = [
+        FunctionAttributeV1::NoCompletionAction,
+        FunctionAttributeV1::NoDefaultQueue,
+        FunctionAttributeV1::NoHeapPointer,
+        FunctionAttributeV1::NoHostcallPointer,
+        FunctionAttributeV1::NoMultigridSyncArgument,
+        FunctionAttributeV1::NoQueuePointer,
+    ];
+    let attributes_v2 = [
+        FunctionAttributeV2::NoCompletionAction,
+        FunctionAttributeV2::NoDefaultQueue,
+        FunctionAttributeV2::NoHeapPointer,
+        FunctionAttributeV2::NoHostcallPointer,
+        FunctionAttributeV2::NoMultigridSyncArgument,
+        FunctionAttributeV2::NoQueuePointer,
+    ];
+    let mut input = request();
+    input.function_attributes.extend(attributes_v1);
+
+    let handoff = lower_scalar_kernel_v1(&input)
+        .unwrap()
+        .extract_handoff_v2()
+        .unwrap();
+    let function = &handoff.module().functions()[0];
+    assert!(attributes_v1.iter().all(|attribute| {
+        handoff.base().kernels()[0]
+            .function_attributes()
+            .contains(attribute)
+    }));
+    assert!(
+        attributes_v2
+            .iter()
+            .all(|attribute| function.attributes().contains(attribute))
+    );
+
+    let encoded = handoff.encode_canonical();
+    assert_eq!(
+        fe2o3_llvm_handoff::Gfx942HandoffV2::decode_canonical(encoded.as_bytes()).unwrap(),
+        handoff
+    );
 }
 
 #[test]

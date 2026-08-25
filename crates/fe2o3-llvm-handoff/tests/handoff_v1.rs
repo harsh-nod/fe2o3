@@ -170,6 +170,58 @@ fn fixture(permuted: bool) -> Gfx942HandoffV1 {
     Gfx942HandoffV1::new(fixture_input(permuted)).unwrap()
 }
 
+const ABI_ATTRIBUTES_V1: [FunctionAttributeV1; 6] = [
+    FunctionAttributeV1::NoCompletionAction,
+    FunctionAttributeV1::NoDefaultQueue,
+    FunctionAttributeV1::NoHeapPointer,
+    FunctionAttributeV1::NoHostcallPointer,
+    FunctionAttributeV1::NoMultigridSyncArgument,
+    FunctionAttributeV1::NoQueuePointer,
+];
+
+const ABI_ATTRIBUTE_NAMES: [&str; 6] = [
+    "amdgpu-no-completion-action",
+    "amdgpu-no-default-queue",
+    "amdgpu-no-heap-ptr",
+    "amdgpu-no-hostcall-ptr",
+    "amdgpu-no-multigrid-sync-arg",
+    "amdgpu-no-queue-ptr",
+];
+
+#[test]
+fn abi_function_attributes_are_opt_in_named_and_round_trip() {
+    let defaults =
+        FunctionAttributeV1::gfx942_kernel_defaults(WorkgroupSizeRangeV1::new(64, 256).unwrap());
+    assert_eq!(defaults.len(), 9);
+    assert!(
+        ABI_ATTRIBUTES_V1
+            .iter()
+            .all(|attribute| !defaults.contains(attribute))
+    );
+    assert_eq!(
+        ABI_ATTRIBUTES_V1.map(FunctionAttributeV1::canonical_name),
+        ABI_ATTRIBUTE_NAMES
+    );
+
+    let mut input = fixture_input(false);
+    let original = input.kernels[0].clone();
+    let mut attributes = original.function_attributes().to_vec();
+    attributes.extend(ABI_ATTRIBUTES_V1);
+    input.kernels[0] = KernelEntryV1::new(
+        original.symbol(),
+        original.parameters().to_vec(),
+        attributes,
+        original.origin(),
+    )
+    .unwrap();
+    let handoff = Gfx942HandoffV1::new(input).unwrap();
+    let encoded = handoff.encode_canonical();
+    assert_eq!(
+        Gfx942HandoffV1::decode_canonical(encoded.as_bytes()).unwrap(),
+        handoff
+    );
+}
+
 #[test]
 fn positive_gfx942_handoff_round_trips_with_exact_policy() {
     let handoff = fixture(false);

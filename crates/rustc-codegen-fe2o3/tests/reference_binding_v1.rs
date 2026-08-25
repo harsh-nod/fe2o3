@@ -77,7 +77,7 @@ fn run_feature(target: &Path, feature: &str) -> String {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
-fn annotated_reference_reaches_the_proof_runtime_boundary_and_mutation_is_rejected() {
+fn annotated_reference_and_rhs_mutation_are_both_proof_gated_without_runtime() {
     let target = ScratchTarget::new();
     let positive = run_feature(&target.0, "reference-positive");
     assert!(
@@ -88,10 +88,10 @@ fn annotated_reference_reaches_the_proof_runtime_boundary_and_mutation_is_reject
 
     let mutated = run_feature(&target.0, "reference-mutated");
     assert!(
-        mutated.contains("source-to-proof V2 effect mismatch")
-            && mutated.contains("RHS mismatch")
-            && !mutated.contains("functional-refinement proof runtime unavailable"),
-        "mutated reference was not rejected by the independently extracted effect bijection:\n{mutated}",
+        mutated.contains("functional-refinement proof runtime unavailable at /opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5")
+            && mutated.contains("compilation stopped before proof admission or artifact emission")
+            && !mutated.contains("source-to-proof V2 effect mismatch"),
+        "mutated reference did not remain gated by the typed formal-proof boundary:\n{mutated}",
     );
 }
 

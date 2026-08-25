@@ -8,6 +8,9 @@ It provides:
 
 - bounded one-, two-, and three-dimensional dispatch geometry;
 - the exact INVALID unpublished 64-byte kernel-dispatch packet layout;
+- the exact INVALID unpublished 64-byte zero-dependency BARRIER_AND packet,
+  including zero reserved/dependency fields and the system-scoped `0x1403`
+  release header;
 - a linear prepared value that exposes only the invariant system-scoped final
   header after the exact INVALID body;
 - checked monotonic single-producer reservation arithmetic and slot wrapping;
@@ -15,6 +18,9 @@ It provides:
   with distinct wrap-aware slots;
 - a fixed prepared-batch value that drives all INVALID body writes before any
   ordered release-header callback;
+- an additive V2 fixed-batch type and reservation transition for 1 through
+  8192 packets, with the exact-cardinality packet array heap-owned, while
+  retaining the exact V1 256-packet boundary;
 - the exact 64-byte, 64-aligned busy-wait completion signal initialized to one,
   plus an exact inert pending-signal byte image;
 - pure classification of a completion value already acquired elsewhere;
@@ -45,10 +51,21 @@ publication, reserve the actual write counter once, copy every INVALID packet
 body, release-publish every paired header, and ring the exact admitted
 doorbell under a separately reviewed batch-publication contract.
 
+The V2 maximum occupies 512 KiB of logical ring slots. A ring smaller than the
+requested fixed batch is rejected before the reservation model changes; a
+later native owner must still admit and own the corresponding ring, completion
+signals, one write-counter increment, and one final doorbell publication.
+
 The prepared-batch target preserves body-before-header call order but remains
 inert. Its callback trait does not authenticate a target implementation,
 perform a release atomic, or prove that indices name the reservation's native
 slots. Those joins remain private responsibilities of the queue owner.
+
+The prepared BARRIER_AND value is likewise inert. Its exact bytes and typed
+publication callback do not by themselves prove queue consumption, signal
+completion, progress, liveness, or teardown. A higher-level queue owner must
+bind the signal, publish the packet, observe completion, recycle the signal,
+and explicitly destroy the queue.
 
 GPU writes to the signal value and their visibility to a Rust atomic load are
 contracted platform/coherency facts. Rust's language memory model alone does
@@ -67,7 +84,10 @@ The authenticated
 Verus model proves the corresponding bounded mathematical body-copy,
 release-word, frame, pending-signal byte-image, supplied-value classification,
 and single-producer counter relations, including concrete non-vacuity witnesses
-and five expected-negative mutations. It does not refine
+and five expected-negative mutations. Its release-word theorem is scoped to the
+independent `0x1402` header; the wait-for-prior `0x1502` header is admitted by
+the executable schema and tests but does not yet extend that Verus theorem. It
+does not refine
 this crate's executable Rust, establish that a publication target performs a
 CPU release atomic, authenticate a read pointer, or prove device visibility,
 firmware consumption, native slot ownership, completion, liveness, or

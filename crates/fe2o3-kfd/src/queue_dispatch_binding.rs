@@ -1,0 +1,4378 @@
+//! Private dispatch binding for the retained gfx942 compute-AQL queue.
+//!
+//! This module closes host-side identity, layout, ownership, and lifetime
+//! composition. It deliberately has no public constructor or submission
+//! method: device-data initialization/effect premises and native execution
+//! semantics remain reviewed integration obligations.
+
+#![allow(dead_code)]
+
+use core::fmt;
+
+use fe2o3_amdhsa_loader::{KernelIdentityInputsV1, ValidatedKernelEnvelope};
+use fe2o3_aql::{
+    AQL_MAX_FIXED_BATCH_PACKETS_V2, AqlDispatchGeometryV1, AqlDispatchOrderingV1,
+    AqlRingCapacityV1, ObservedGpuAddressV1,
+};
+use fe2o3_hsaco::{
+    ArgumentAccess, ArgumentAddressSpace, COV6_IMPLICIT_ARGUMENT_BYTES, ExplicitValueKind,
+    HiddenValueKind, InspectedKernel,
+};
+use fe2o3_runtime_model::{MemoryMappingKeyV1, QueueKeyV1};
+use sha2::{Digest, Sha256};
+
+use super::completion::{
+    CompletionDispatchGenerationBindingV1, CompletionPacketTemplateV1, Gfx942CompletedBatchV1,
+    Gfx942CompletionBatchV1, Gfx942CompletionErrorV1, Gfx942CompletionPollV1,
+    Gfx942CompletionPollWithProgressV1, Gfx942CompletionProgressV1,
+};
+use super::device_content::Gfx942DeviceContentDescriptorV1;
+use crate::HOST_VISIBLE_MEMORY_PAGE_BYTES_V1;
+use crate::MemorySessionError;
+use crate::shared_memory::{
+    AqlDispatchCodeResourceRoleV1, AqlDispatchHostDataResourceRoleV1,
+    AqlDispatchKernargResourceRoleV1, ExecutableGttV1, Gfx942DeviceMemoryDispatchAuthorityV1,
+    Gfx942DeviceMemoryIdentityV1, Gfx942DeviceMemoryLeaseV1, Gfx942DeviceMemoryMappedV1,
+    Gfx942InitializedDeviceMemoryV1, Gfx942InitializedHostVisibleMemoryV1,
+    GttGpuAccessibleExecutableV1, GttGpuAccessibleMutableV1, HostVisibleCoherentGttV1,
+    KernargGttV1, SharedGttAllocationIdentityV1, SharedGttAllocationV1, SharedGttMemorySessionV1,
+    SharedGttQueueResourceAuthorityV1,
+};
+
+pub(crate) const MAX_DISPATCH_DATA_LEASES_V1: usize = 16;
+pub(crate) const MAX_DISPATCH_KERNARG_BYTES_V1: usize = 65_536;
+pub const GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1: usize = 32;
+pub const GFX942_MAX_FIXED_DISPATCH_PACKETS_V1: usize = AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize;
+const KERNEL_DESCRIPTOR_BYTES_V1: u64 = 64;
+const COV6_IMPLICIT_ARGUMENT_BYTES_V1: usize = COV6_IMPLICIT_ARGUMENT_BYTES as usize;
+
+const COV6_BLOCK_COUNT_X_OFFSET_V1: usize = 0;
+const COV6_BLOCK_COUNT_Y_OFFSET_V1: usize = 4;
+const COV6_BLOCK_COUNT_Z_OFFSET_V1: usize = 8;
+const COV6_GROUP_SIZE_X_OFFSET_V1: usize = 12;
+const COV6_GROUP_SIZE_Y_OFFSET_V1: usize = 14;
+const COV6_GROUP_SIZE_Z_OFFSET_V1: usize = 16;
+const COV6_REMAINDER_X_OFFSET_V1: usize = 18;
+const COV6_REMAINDER_Y_OFFSET_V1: usize = 20;
+const COV6_REMAINDER_Z_OFFSET_V1: usize = 22;
+const COV6_GLOBAL_OFFSET_X_OFFSET_V1: usize = 40;
+const COV6_GLOBAL_OFFSET_Y_OFFSET_V1: usize = 48;
+const COV6_GLOBAL_OFFSET_Z_OFFSET_V1: usize = 56;
+const COV6_GRID_DIMENSIONS_OFFSET_V1: usize = 64;
+const COV6_DYNAMIC_LDS_SIZE_OFFSET_V1: usize = 120;
+
+/// One inert global-buffer field in a fixed dispatch kernarg image.
+///
+/// This value identifies an inspected explicit-argument ordinal and a bounded
+/// subrange of separately owned dispatch data. It contains no native
+/// address and grants no initialization, access-effect, or dispatch authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942DispatchBufferBindingV1 {
+    explicit_argument_index: usize,
+    data_index: usize,
+    data_byte_offset: u64,
+    byte_len: u64,
+    completed_snapshot: Option<CompletedSnapshotRangeV1>,
+}
+
+impl Gfx942DispatchBufferBindingV1 {
+    pub const fn new(
+        explicit_argument_index: usize,
+        data_index: usize,
+        data_byte_offset: u64,
+        byte_len: u64,
+    ) -> Self {
+        Self {
+            explicit_argument_index,
+            data_index,
+            data_byte_offset,
+            byte_len,
+            completed_snapshot: None,
+        }
+    }
+
+    /// Associates an initialized enclosing range with one interior buffer pointer.
+    ///
+    /// This constructor is descriptive. Queue composition validates exact
+    /// bounds, strict containment, initialization, inspected write access, and
+    /// isolation from every other writable binding before retaining the range.
+    pub const fn new_with_completed_snapshot(
+        explicit_argument_index: usize,
+        data_index: usize,
+        data_byte_offset: u64,
+        byte_len: u64,
+        snapshot_byte_offset: u64,
+        snapshot_byte_len: u64,
+    ) -> Self {
+        Self {
+            explicit_argument_index,
+            data_index,
+            data_byte_offset,
+            byte_len,
+            completed_snapshot: Some(CompletedSnapshotRangeV1 {
+                offset: snapshot_byte_offset,
+                byte_len: snapshot_byte_len,
+                interior_offset: data_byte_offset,
+                interior_byte_len: byte_len,
+            }),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CompletedSnapshotRangeV1 {
+    offset: u64,
+    byte_len: u64,
+    interior_offset: u64,
+    interior_byte_len: u64,
+}
+
+/// One inert packet description for a checked fixed dispatch batch.
+///
+/// The caller supplies scalar bytes, geometry, and buffer indices. Every
+/// device-pointer field must be zero. When the inspected COV6 metadata declares
+/// the supported implicit geometry or dynamic-LDS fields, the caller must also
+/// provide the exact trailing 256-byte implicit suffix entirely zero. Queue
+/// construction derives pointer locations, alignments, access effects, and the
+/// admitted implicit values from inspected metadata and checked geometry, then
+/// performs substitution only inside the retained native owner.
+///
+/// ```compile_fail
+/// use fe2o3_kfd::Gfx942FixedDispatchPacketV1;
+///
+/// fn cannot_extract_kernarg(packet: Gfx942FixedDispatchPacketV1) {
+///     let _ = packet.kernarg_bytes;
+/// }
+/// ```
+pub struct Gfx942FixedDispatchPacketV1 {
+    program_index: usize,
+    geometry: AqlDispatchGeometryV1,
+    ordering: AqlDispatchOrderingV1,
+    dynamic_group_segment_bytes: u32,
+    kernarg_bytes: Box<[u8]>,
+    buffers: Box<[Gfx942DispatchBufferBindingV1]>,
+}
+
+impl Gfx942FixedDispatchPacketV1 {
+    pub fn new(
+        program_index: usize,
+        geometry: AqlDispatchGeometryV1,
+        dynamic_group_segment_bytes: u32,
+        kernarg_bytes: Box<[u8]>,
+        buffers: Box<[Gfx942DispatchBufferBindingV1]>,
+    ) -> Self {
+        Self::new_with_ordering(
+            program_index,
+            geometry,
+            AqlDispatchOrderingV1::WaitForPrior,
+            dynamic_group_segment_bytes,
+            kernarg_bytes,
+            buffers,
+        )
+    }
+
+    /// Creates an explicitly independent packet that need not wait for prior work.
+    pub fn new_independent(
+        program_index: usize,
+        geometry: AqlDispatchGeometryV1,
+        dynamic_group_segment_bytes: u32,
+        kernarg_bytes: Box<[u8]>,
+        buffers: Box<[Gfx942DispatchBufferBindingV1]>,
+    ) -> Self {
+        Self::new_with_ordering(
+            program_index,
+            geometry,
+            AqlDispatchOrderingV1::Independent,
+            dynamic_group_segment_bytes,
+            kernarg_bytes,
+            buffers,
+        )
+    }
+
+    /// Creates a packet with an explicit reviewed AQL execution-order policy.
+    pub fn new_with_ordering(
+        program_index: usize,
+        geometry: AqlDispatchGeometryV1,
+        ordering: AqlDispatchOrderingV1,
+        dynamic_group_segment_bytes: u32,
+        kernarg_bytes: Box<[u8]>,
+        buffers: Box<[Gfx942DispatchBufferBindingV1]>,
+    ) -> Self {
+        Self {
+            program_index,
+            geometry,
+            ordering,
+            dynamic_group_segment_bytes,
+            kernarg_bytes,
+            buffers,
+        }
+    }
+
+    pub const fn program_index(&self) -> usize {
+        self.program_index
+    }
+
+    pub const fn geometry(&self) -> AqlDispatchGeometryV1 {
+        self.geometry
+    }
+
+    pub const fn ordering(&self) -> AqlDispatchOrderingV1 {
+        self.ordering
+    }
+
+    pub const fn dynamic_group_segment_bytes(&self) -> u32 {
+        self.dynamic_group_segment_bytes
+    }
+
+    pub fn buffer_count(&self) -> usize {
+        self.buffers.len()
+    }
+}
+
+impl fmt::Debug for Gfx942FixedDispatchPacketV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942FixedDispatchPacketV1")
+            .field("program_index", &self.program_index)
+            .field("geometry", &self.geometry)
+            .field("ordering", &self.ordering)
+            .field(
+                "dynamic_group_segment_bytes",
+                &self.dynamic_group_segment_bytes,
+            )
+            .field("kernarg_bytes", &self.kernarg_bytes.len())
+            .field("buffer_count", &self.buffers.len())
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Gfx942FixedDispatchDataKindV1 {
+    DeviceLocal,
+    HostVisibleCoherent,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942FixedDispatchDataLayoutV1 {
+    kind: Gfx942FixedDispatchDataKindV1,
+    requested_bytes: u64,
+    alignment: u64,
+}
+
+impl Gfx942FixedDispatchDataLayoutV1 {
+    pub const fn kind(self) -> Gfx942FixedDispatchDataKindV1 {
+        self.kind
+    }
+
+    pub const fn requested_bytes(self) -> u64 {
+        self.requested_bytes
+    }
+
+    pub const fn alignment(self) -> u64 {
+        self.alignment
+    }
+}
+
+enum DispatchDataStorageV1 {
+    Uninitialized(Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>),
+    InitializedContent(Gfx942InitializedDeviceMemoryV1),
+    InitializedAfterDispatch(Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>),
+    HostVisibleUninitialized(
+        SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+    ),
+    HostVisibleInitialized(Gfx942InitializedHostVisibleMemoryV1),
+}
+
+/// Ordered non-authority identity retained by an unbound queue.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Gfx942FixedDispatchStorageIdentityV1 {
+    DeviceUninitialized(Gfx942DeviceMemoryIdentityV1),
+    DeviceInitializedContent(Gfx942DeviceMemoryIdentityV1),
+    DeviceInitializedAfterDispatch(Gfx942DeviceMemoryIdentityV1),
+    HostVisibleUninitialized(SharedGttAllocationIdentityV1),
+    HostVisibleInitialized(SharedGttAllocationIdentityV1),
+}
+
+/// Move-only device-local or coherent host-visible input for fixed dispatch.
+///
+/// Uninitialized storage is admitted only for inspected write-only arguments.
+/// Read-only and read-write arguments require the sealed initialized variant.
+/// Neither variant exposes a native address, allocation handle, or generation.
+///
+/// ```compile_fail
+/// use fe2o3_kfd::Gfx942FixedDispatchDataV1;
+///
+/// fn cannot_clone(data: Gfx942FixedDispatchDataV1) {
+///     let _ = data.clone();
+/// }
+/// ```
+pub struct Gfx942FixedDispatchDataV1 {
+    storage: DispatchDataStorageV1,
+}
+
+impl Gfx942FixedDispatchDataV1 {
+    pub fn uninitialized(lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>) -> Self {
+        Self {
+            storage: DispatchDataStorageV1::Uninitialized(lease),
+        }
+    }
+
+    pub fn initialized(memory: Gfx942InitializedDeviceMemoryV1) -> Self {
+        Self {
+            storage: DispatchDataStorageV1::InitializedContent(memory),
+        }
+    }
+
+    pub(super) fn initialized_after_dispatch(
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+    ) -> Self {
+        Self {
+            storage: DispatchDataStorageV1::InitializedAfterDispatch(lease),
+        }
+    }
+
+    pub fn host_visible_uninitialized(
+        token: SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+    ) -> Self {
+        Self {
+            storage: DispatchDataStorageV1::HostVisibleUninitialized(token),
+        }
+    }
+
+    pub fn host_visible_initialized(memory: Gfx942InitializedHostVisibleMemoryV1) -> Self {
+        Self {
+            storage: DispatchDataStorageV1::HostVisibleInitialized(memory),
+        }
+    }
+
+    pub const fn layout(&self) -> Gfx942FixedDispatchDataLayoutV1 {
+        match &self.storage {
+            DispatchDataStorageV1::Uninitialized(lease)
+            | DispatchDataStorageV1::InitializedAfterDispatch(lease) => {
+                let layout = lease.layout();
+                Gfx942FixedDispatchDataLayoutV1 {
+                    kind: Gfx942FixedDispatchDataKindV1::DeviceLocal,
+                    requested_bytes: layout.requested_bytes(),
+                    alignment: layout.alignment(),
+                }
+            }
+            DispatchDataStorageV1::InitializedContent(memory) => {
+                let layout = memory.layout();
+                Gfx942FixedDispatchDataLayoutV1 {
+                    kind: Gfx942FixedDispatchDataKindV1::DeviceLocal,
+                    requested_bytes: layout.requested_bytes(),
+                    alignment: layout.alignment(),
+                }
+            }
+            DispatchDataStorageV1::HostVisibleUninitialized(token) => {
+                Gfx942FixedDispatchDataLayoutV1 {
+                    kind: Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+                    requested_bytes: token.layout().requested_bytes() as u64,
+                    alignment: HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
+                }
+            }
+            DispatchDataStorageV1::HostVisibleInitialized(memory) => {
+                Gfx942FixedDispatchDataLayoutV1 {
+                    kind: Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+                    requested_bytes: memory.layout().requested_bytes() as u64,
+                    alignment: HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
+                }
+            }
+        }
+    }
+
+    pub(crate) const fn storage_identity(&self) -> Gfx942FixedDispatchStorageIdentityV1 {
+        match &self.storage {
+            DispatchDataStorageV1::Uninitialized(lease) => {
+                Gfx942FixedDispatchStorageIdentityV1::DeviceUninitialized(lease.storage_identity())
+            }
+            DispatchDataStorageV1::InitializedContent(memory) => {
+                Gfx942FixedDispatchStorageIdentityV1::DeviceInitializedContent(
+                    memory.storage_identity(),
+                )
+            }
+            DispatchDataStorageV1::InitializedAfterDispatch(lease) => {
+                Gfx942FixedDispatchStorageIdentityV1::DeviceInitializedAfterDispatch(
+                    lease.storage_identity(),
+                )
+            }
+            DispatchDataStorageV1::HostVisibleUninitialized(token) => {
+                Gfx942FixedDispatchStorageIdentityV1::HostVisibleUninitialized(
+                    token.storage_identity(),
+                )
+            }
+            DispatchDataStorageV1::HostVisibleInitialized(memory) => {
+                Gfx942FixedDispatchStorageIdentityV1::HostVisibleInitialized(
+                    memory.storage_identity(),
+                )
+            }
+        }
+    }
+
+    /// Returns whether the complete requested extent has initialized bytes.
+    ///
+    /// This observation does not identify their current content after any
+    /// device publication.
+    pub const fn is_fully_initialized(&self) -> bool {
+        !matches!(
+            self.storage,
+            DispatchDataStorageV1::Uninitialized(_)
+                | DispatchDataStorageV1::HostVisibleUninitialized(_)
+        )
+    }
+
+    pub(crate) fn into_parts(self) -> DispatchDataInputV1 {
+        let layout = self.layout();
+        match self.storage {
+            DispatchDataStorageV1::Uninitialized(lease) => DispatchDataInputV1 {
+                layout,
+                storage: DispatchDataInputStorageV1::Device(lease),
+                initialized_content: None,
+                fully_initialized: false,
+            },
+            DispatchDataStorageV1::InitializedContent(memory) => {
+                let (lease, content) = memory.into_parts();
+                DispatchDataInputV1 {
+                    layout,
+                    storage: DispatchDataInputStorageV1::Device(lease),
+                    initialized_content: Some(content),
+                    fully_initialized: true,
+                }
+            }
+            DispatchDataStorageV1::InitializedAfterDispatch(lease) => DispatchDataInputV1 {
+                layout,
+                storage: DispatchDataInputStorageV1::Device(lease),
+                initialized_content: None,
+                fully_initialized: true,
+            },
+            DispatchDataStorageV1::HostVisibleUninitialized(token) => DispatchDataInputV1 {
+                layout,
+                storage: DispatchDataInputStorageV1::HostVisible(token),
+                initialized_content: None,
+                fully_initialized: false,
+            },
+            DispatchDataStorageV1::HostVisibleInitialized(memory) => DispatchDataInputV1 {
+                layout,
+                storage: DispatchDataInputStorageV1::HostVisible(memory.into_token()),
+                initialized_content: None,
+                fully_initialized: true,
+            },
+        }
+    }
+}
+
+pub(crate) enum DispatchDataInputStorageV1 {
+    Device(Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>),
+    HostVisible(SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>),
+}
+
+pub(crate) struct DispatchDataInputV1 {
+    pub(crate) layout: Gfx942FixedDispatchDataLayoutV1,
+    pub(crate) storage: DispatchDataInputStorageV1,
+    pub(crate) initialized_content: Option<Gfx942DeviceContentDescriptorV1>,
+    pub(crate) fully_initialized: bool,
+}
+
+impl fmt::Debug for Gfx942FixedDispatchDataV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942FixedDispatchDataV1")
+            .field("layout", &self.layout())
+            .field("fully_initialized", &self.is_fully_initialized())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Inert request for one owned copy from a recycled coherent dispatch range.
+///
+/// The request contains no address or allocation authority. The retained queue
+/// revalidates its dispatch generation, data ordinal, inspected write effect,
+/// coherent storage kind, and exact byte bounds before copying.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942CompletedDispatchReadRequestV1 {
+    dispatch_generation: u64,
+    data_index: usize,
+    offset: u64,
+    byte_len: u64,
+}
+
+/// Inert request for one exact admitted enclosing snapshot after recycle.
+///
+/// The request contains no address or allocation authority. The retained
+/// queue revalidates the dispatch generation and the exact snapshot declared
+/// beside one initialized coherent writable binding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942CompletedDispatchSnapshotRequestV1 {
+    dispatch_generation: u64,
+    data_index: usize,
+    offset: u64,
+    byte_len: u64,
+}
+
+impl Gfx942CompletedDispatchSnapshotRequestV1 {
+    /// Describes one generation, data ordinal, and exact snapshot range.
+    pub const fn new(
+        dispatch_generation: u64,
+        data_index: usize,
+        offset: u64,
+        byte_len: u64,
+    ) -> Self {
+        Self {
+            dispatch_generation,
+            data_index,
+            offset,
+            byte_len,
+        }
+    }
+}
+
+impl Gfx942CompletedDispatchReadRequestV1 {
+    pub const fn new(
+        dispatch_generation: u64,
+        data_index: usize,
+        offset: u64,
+        byte_len: u64,
+    ) -> Self {
+        Self {
+            dispatch_generation,
+            data_index,
+            offset,
+            byte_len,
+        }
+    }
+}
+
+/// Owned bytes copied from one exact completed-and-recycled coherent range.
+#[derive(Debug, Eq, PartialEq)]
+pub struct Gfx942CompletedDispatchReadbackV1 {
+    dispatch_generation: u64,
+    data_index: usize,
+    offset: u64,
+    bytes: Box<[u8]>,
+}
+
+impl Gfx942CompletedDispatchReadbackV1 {
+    pub const fn dispatch_generation(&self) -> u64 {
+        self.dispatch_generation
+    }
+
+    pub const fn data_index(&self) -> usize {
+        self.data_index
+    }
+
+    pub const fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+/// Frozen claim boundary for the addressless fixed-dispatch binding slice.
+pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
+    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r11-v1\n",
+    "target=gfx942:xnack-,COV6,one-selected-current-device-vm-and-queue-generation\n",
+    "code=1-through-32-validated-amdhsa-kernel-envelopes,content-and-selected-descriptor-identity,exact-zero-then-copy-materialization-into-owned-gtt,read-only-seal-before-map,per-packet-program-selection,unused-inspected-programs-retained-without-publication,descriptor-resolution-with-checked-relative-arithmetic\n",
+    "kernarg=public-inert-complete-byte-images,exact-inspected-size-and-power-of-two-alignment,optional-exact-trailing-256-byte-COV6-implicit-suffix-must-be-caller-zero,metadata-declared-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds-only,queue-pointer-and-runtime-service-or-address-fields-rejected,all-global-buffer-fields-zero,checked-nonoverlapping-8-byte-internal-device-pointer-patches,one-owned-kernarg-gtt-arena-with-N-distinct-checked-aligned-slices,private-initialization-before-map\n",
+    "geometry=block-count-floor-grid-div-workgroup,remainder-grid-mod-workgroup,inactive-dimensions-count-and-group-one-remainder-zero,uniform-workgroup-rejects-any-nonzero-remainder\n",
+    "data=1-through-16-actual-linear-mapped-device-local-or-host-visible-coherent-authorities,exact-device-vm-and-allocation-generation,complete-device-local-live-set,all-authorities-retained-even-when-no-packet-references-them,checked-bounded-referenced-subranges,inspected-actual-access-derived-internally-only-for-referenced-authorities,read-or-readwrite-requires-sealed-full-extent-initialization,write-only-admits-uninitialized-exclusive-storage,optional-enclosing-snapshot-requires-coherent-full-initialization\n",
+    "batch=1-through-8192,aql-fixed-batch-v2,minimum-ring-packet-capacity-checked,all-program-code-owners,N-distinct-kernarg-slices,conservative-wait-for-prior-default-with-explicit-independent-opt-in,one-generation-bound-template-retaining-the-final-header-per-packet,one-reservation-one-write-counter-fetch-add-one-final-doorbell-and-one-signal-per-packet-composition\n",
+    "retention=queue-owns-all-code-kernarg-and-data-authorities-through-exact-ready-and-recycle,unreferenced-data-has-no-inspected-effect-or-readback-authority,ordinary-destroy-releases-all,returning-destroy-requires-one-exact-recycled-generation-and-returns-actual-mapped-authorities-with-owning-memory-session,fully-initialized-state-preserved-without-stale-current-content-digest,initially-uninitialized-remains-uninitialized\n",
+    "readback=owned-byte-copy-only-after-exact-completion-and-signal-recycle,exact-dispatch-generation-and-retained-host-visible-allocation-authority,ordinary-request-must-be-contained-in-exactly-one-metadata-inspected-write-or-readwrite-binding;optional-snapshot-request-must-exactly-match-one-retained-strictly-enclosing-initialized-range-with-one-isolated-inspected-writable-interior;device-local-readonly-unwritten-out-of-range-overlapping-subrange-and-stale-requests-rejected,no-initialization-promotion\n",
+    "queue-transfer=ordinary-path-still-rejects-device-memory,dispatch-path-requires-exact-complete-distinct-set-of-every-live-mapped-c3-lease-before-model-mutation\n",
+    "failure=all-layout-and-identity-validation-before-native-preparation;post-side-effect-failure,currentness,publication,completion,timeout,recycle-or-release-ambiguity-poisons-and-requires-teardown\n",
+    "authority=public-linear-addressless-construction-submit-poll-wait-recycle-and-returning-destroy,no-address-handle-pointer-fd-packet-template-signal-or-mmio-export\n",
+    "proof=bounded-host-state-machine-and-mock-fault-tests-only,no-concrete-verus-or-machine-refinement\n",
+    "contracted=code-segment-permission-refinement,cpu-gpu-coherence,firmware-dispatch-effects-and-quiescence,acquire-observed-device-write-visibility\n",
+    "excluded=queue-pointer,printf-hostcall-heap-default-queue-completion-action-multigrid-private-base-shared-base-and-unknown-implicit-fields,caller-effect-assertion,caller-initialization-assertion,public-packet-template,async-copy,device-address-export,peer-map,full-write-coverage-or-initialization-promotion,numerical-correctness,hardware-execution\n",
+);
+
+/// SHA-256 of [`GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1`].
+pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1: &str =
+    "4307f4e7aedd1a1b8582fd150966fb5d8b9a4c95955759abcf5d755faa113da4";
+
+type CodeAuthority = SharedGttQueueResourceAuthorityV1<
+    AqlDispatchCodeResourceRoleV1,
+    ExecutableGttV1,
+    GttGpuAccessibleExecutableV1,
+>;
+type KernargAuthority = SharedGttQueueResourceAuthorityV1<
+    AqlDispatchKernargResourceRoleV1,
+    KernargGttV1,
+    GttGpuAccessibleMutableV1,
+>;
+type HostDataAuthority = SharedGttQueueResourceAuthorityV1<
+    AqlDispatchHostDataResourceRoleV1,
+    HostVisibleCoherentGttV1,
+    GttGpuAccessibleMutableV1,
+>;
+
+enum DispatchDataAuthorityV1 {
+    Device(Gfx942DeviceMemoryDispatchAuthorityV1),
+    HostVisible(HostDataAuthority),
+}
+
+impl DispatchDataAuthorityV1 {
+    const fn kind(&self) -> Gfx942FixedDispatchDataKindV1 {
+        match self {
+            Self::Device(_) => Gfx942FixedDispatchDataKindV1::DeviceLocal,
+            Self::HostVisible(_) => Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+        }
+    }
+
+    const fn vm(&self) -> fe2o3_runtime_model::VmKeyV1 {
+        match self {
+            Self::Device(authority) => authority.facts().vm(),
+            Self::HostVisible(authority) => authority.facts().mapping().allocation.vm,
+        }
+    }
+
+    fn checked_gpu_subrange(&self, offset: u64, byte_len: u64, alignment: u64) -> Option<u64> {
+        match self {
+            Self::Device(authority) => authority
+                .facts()
+                .checked_gpu_subrange(offset, byte_len, alignment),
+            Self::HostVisible(authority) => authority
+                .facts()
+                .checked_gpu_subrange(offset, byte_len, alignment),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DeviceDataEffectV1 {
+    ReadOnly,
+    WriteOnly,
+    ReadWrite,
+}
+
+impl DeviceDataEffectV1 {
+    const fn reads(self) -> bool {
+        matches!(self, Self::ReadOnly | Self::ReadWrite)
+    }
+}
+
+/// Write-only premise for one whole uninitialized C3 allocation.
+///
+/// Read effects remain rejected until the device-content foundation can
+/// consume an authenticated copy-kernel completion and the queue can return
+/// its retained destination lease. There is intentionally no caller boolean.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DeviceDataPremiseV1 {
+    role_identity: [u8; 32],
+    valid_bytes: u64,
+    effect: DeviceDataEffectV1,
+}
+
+impl DeviceDataPremiseV1 {
+    pub(crate) const fn new(
+        role_identity: [u8; 32],
+        valid_bytes: u64,
+        effect: DeviceDataEffectV1,
+    ) -> Self {
+        Self {
+            role_identity,
+            valid_bytes,
+            effect,
+        }
+    }
+}
+
+pub(crate) struct DeviceDataAllocationInputV1 {
+    requested_bytes: u64,
+    alignment: u64,
+    premise: DeviceDataPremiseV1,
+}
+
+impl DeviceDataAllocationInputV1 {
+    pub(crate) const fn new(
+        requested_bytes: u64,
+        alignment: u64,
+        premise: DeviceDataPremiseV1,
+    ) -> Self {
+        Self {
+            requested_bytes,
+            alignment,
+            premise,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DevicePointerPatchV1 {
+    byte_offset: usize,
+    data_index: usize,
+    data_byte_offset: u64,
+    required_bytes: u64,
+    required_alignment: u64,
+}
+
+impl DevicePointerPatchV1 {
+    pub(crate) const fn new(
+        byte_offset: usize,
+        data_index: usize,
+        data_byte_offset: u64,
+        required_bytes: u64,
+        required_alignment: u64,
+    ) -> Self {
+        Self {
+            byte_offset,
+            data_index,
+            data_byte_offset,
+            required_bytes,
+            required_alignment,
+        }
+    }
+}
+
+/// Complete typed kernarg image before private device-pointer substitution.
+///
+/// Bytes and patch locations have no public accessor or constructor.
+pub(crate) struct TypedKernargImageV1 {
+    layout_identity: [u8; 32],
+    bytes: Box<[u8]>,
+    device_pointers: Box<[DevicePointerPatchV1]>,
+}
+
+impl TypedKernargImageV1 {
+    pub(crate) fn new(
+        layout_identity: [u8; 32],
+        bytes: Box<[u8]>,
+        device_pointers: Box<[DevicePointerPatchV1]>,
+    ) -> Self {
+        Self {
+            layout_identity,
+            bytes,
+            device_pointers,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DispatchGeometryV1 {
+    geometry: AqlDispatchGeometryV1,
+    dynamic_group_segment_bytes: u32,
+}
+
+impl DispatchGeometryV1 {
+    pub(crate) const fn new(
+        geometry: AqlDispatchGeometryV1,
+        dynamic_group_segment_bytes: u32,
+    ) -> Self {
+        Self {
+            geometry,
+            dynamic_group_segment_bytes,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum Gfx942DispatchBindingErrorV1 {
+    ZeroPacketCount,
+    PacketCountExceedsMaximum { requested: usize, maximum: usize },
+    RingCapacity { requested: usize, capacity: u32 },
+    ProgramCount { requested: usize, maximum: usize },
+    DataLeaseCount { requested: usize, maximum: usize },
+    InvalidCode(&'static str),
+    InvalidKernarg { packet: usize, detail: &'static str },
+    InvalidData { index: usize, detail: &'static str },
+    Geometry { packet: usize, detail: &'static str },
+    Memory(MemorySessionError),
+    Completion(Gfx942CompletionErrorV1),
+    WrongQueueGeneration,
+    StaleDispatchGeneration,
+    ResourcePhase,
+    GenerationExhausted,
+    Poisoned,
+}
+
+impl fmt::Display for Gfx942DispatchBindingErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{self:?}")
+    }
+}
+
+impl std::error::Error for Gfx942DispatchBindingErrorV1 {}
+
+impl From<MemorySessionError> for Gfx942DispatchBindingErrorV1 {
+    fn from(value: MemorySessionError) -> Self {
+        Self::Memory(value)
+    }
+}
+
+impl From<Gfx942CompletionErrorV1> for Gfx942DispatchBindingErrorV1 {
+    fn from(value: Gfx942CompletionErrorV1) -> Self {
+        Self::Completion(value)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DispatchOwnerPhaseV1 {
+    Prepared,
+    InFlight { generation: u64 },
+    Completed { generation: u64 },
+    Poisoned,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DispatchGenerationOwnerV1 {
+    next_generation: u64,
+    phase: DispatchOwnerPhaseV1,
+    recycled_generation: Option<u64>,
+}
+
+impl DispatchGenerationOwnerV1 {
+    const fn new() -> Self {
+        Self {
+            next_generation: 1,
+            phase: DispatchOwnerPhaseV1::Prepared,
+            recycled_generation: None,
+        }
+    }
+
+    fn next(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+        self.ensure_prepared()?;
+        let generation = self.next_generation;
+        generation
+            .checked_add(1)
+            .ok_or(Gfx942DispatchBindingErrorV1::GenerationExhausted)?;
+        Ok(generation)
+    }
+
+    fn commit_begin(&mut self, generation: u64) {
+        debug_assert_eq!(self.next_generation, generation);
+        self.next_generation = generation + 1;
+        self.phase = DispatchOwnerPhaseV1::InFlight { generation };
+        self.recycled_generation = None;
+    }
+
+    fn active(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+        match self.phase {
+            DispatchOwnerPhaseV1::InFlight { generation }
+            | DispatchOwnerPhaseV1::Completed { generation } => Ok(generation),
+            DispatchOwnerPhaseV1::Poisoned => Err(Gfx942DispatchBindingErrorV1::Poisoned),
+            DispatchOwnerPhaseV1::Prepared => Err(Gfx942DispatchBindingErrorV1::ResourcePhase),
+        }
+    }
+
+    fn cancel(&mut self, generation: u64) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.require(DispatchOwnerPhaseV1::InFlight { generation })?;
+        self.phase = DispatchOwnerPhaseV1::Prepared;
+        Ok(())
+    }
+
+    fn complete(&mut self, generation: u64) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.require(DispatchOwnerPhaseV1::InFlight { generation })?;
+        self.phase = DispatchOwnerPhaseV1::Completed { generation };
+        Ok(())
+    }
+
+    fn recycle(&mut self, generation: u64) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.require(DispatchOwnerPhaseV1::Completed { generation })?;
+        self.phase = DispatchOwnerPhaseV1::Prepared;
+        self.recycled_generation = Some(generation);
+        Ok(())
+    }
+
+    fn returned_generation(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+        self.ensure_prepared()?;
+        self.recycled_generation
+            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)
+    }
+
+    fn poison(&mut self) {
+        self.phase = DispatchOwnerPhaseV1::Poisoned;
+    }
+
+    fn ensure_prepared(&self) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        match self.phase {
+            DispatchOwnerPhaseV1::Prepared => Ok(()),
+            DispatchOwnerPhaseV1::Poisoned => Err(Gfx942DispatchBindingErrorV1::Poisoned),
+            _ => Err(Gfx942DispatchBindingErrorV1::ResourcePhase),
+        }
+    }
+
+    fn require(&self, expected: DispatchOwnerPhaseV1) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        match self.phase {
+            DispatchOwnerPhaseV1::Poisoned => Err(Gfx942DispatchBindingErrorV1::Poisoned),
+            actual if actual == expected => Ok(()),
+            _ => Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ResolvedCodeIdentityV1 {
+    authenticated: KernelIdentityInputsV1,
+    dispatch_abi_identity: [u8; 32],
+    materialized_sha256: [u8; 32],
+    mapping: MemoryMappingKeyV1,
+    descriptor_address: ObservedGpuAddressV1,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct RetainedDataPremiseV1 {
+    layout: Gfx942FixedDispatchDataLayoutV1,
+    role_identity: [u8; 32],
+    valid_bytes: u64,
+    effect: Option<DeviceDataEffectV1>,
+    initialized_content: Option<Gfx942DeviceContentDescriptorV1>,
+    fully_initialized: bool,
+    writable_ranges: Box<[CompletedWritableRangeV1]>,
+    completed_snapshots: Box<[CompletedSnapshotRangeV1]>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct PublicRetainedDataPlanV1 {
+    layout: Gfx942FixedDispatchDataLayoutV1,
+    effect: Option<DeviceDataEffectV1>,
+    fully_initialized: bool,
+    writable_ranges: Box<[CompletedWritableRangeV1]>,
+    completed_snapshots: Box<[CompletedSnapshotRangeV1]>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CompletedWritableRangeV1 {
+    offset: u64,
+    byte_len: u64,
+}
+
+/// One actual mapped C3 authority returned only after exact C4 recycle.
+pub(super) struct ReturnedDispatchDataLeaseV1 {
+    authority: DispatchDataAuthorityV1,
+    premise: RetainedDataPremiseV1,
+}
+
+impl ReturnedDispatchDataLeaseV1 {
+    pub(super) const fn role_identity(&self) -> [u8; 32] {
+        self.premise.role_identity
+    }
+
+    pub(super) const fn valid_bytes(&self) -> u64 {
+        self.premise.valid_bytes
+    }
+
+    pub(super) const fn effect(&self) -> Option<DeviceDataEffectV1> {
+        self.premise.effect
+    }
+
+    pub(super) const fn is_fully_initialized(&self) -> bool {
+        self.premise.fully_initialized
+    }
+
+    pub(super) fn into_data(self) -> Gfx942FixedDispatchDataV1 {
+        match (self.authority, self.premise.fully_initialized) {
+            (DispatchDataAuthorityV1::Device(authority), true) => {
+                Gfx942FixedDispatchDataV1::initialized_after_dispatch(authority.into_lease())
+            }
+            (DispatchDataAuthorityV1::Device(authority), false) => {
+                Gfx942FixedDispatchDataV1::uninitialized(authority.into_lease())
+            }
+            (DispatchDataAuthorityV1::HostVisible(authority), true) => {
+                Gfx942FixedDispatchDataV1::host_visible_initialized(
+                    Gfx942InitializedHostVisibleMemoryV1::from_completed_dispatch(
+                        authority.into_token(),
+                    ),
+                )
+            }
+            (DispatchDataAuthorityV1::HostVisible(authority), false) => {
+                Gfx942FixedDispatchDataV1::host_visible_uninitialized(authority.into_token())
+            }
+        }
+    }
+}
+
+/// Exact returned C3 set from one completed and recycled dispatch generation.
+pub(super) struct ReturnedDispatchDataV1 {
+    generation: u64,
+    data: Vec<ReturnedDispatchDataLeaseV1>,
+}
+
+impl ReturnedDispatchDataV1 {
+    pub(super) const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub(super) fn data(&self) -> &[ReturnedDispatchDataLeaseV1] {
+        &self.data
+    }
+
+    pub(super) fn into_data(self) -> Vec<ReturnedDispatchDataLeaseV1> {
+        self.data
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PreparedDispatchPacketV1 {
+    geometry: AqlDispatchGeometryV1,
+    ordering: AqlDispatchOrderingV1,
+    private_segment_size: u32,
+    group_segment_size: u32,
+    kernarg_address: ObservedGpuAddressV1,
+    kernarg_alignment: u64,
+    kernarg_mapping: MemoryMappingKeyV1,
+    kernarg_layout_identity: [u8; 32],
+    code_bound_kernarg_layout: bool,
+    code_index: usize,
+}
+
+fn prepared_kernarg_layout_matches_code(
+    code_bound: bool,
+    kernarg_layout_identity: [u8; 32],
+    dispatch_abi_identity: [u8; 32],
+) -> bool {
+    !code_bound || kernarg_layout_identity == dispatch_abi_identity
+}
+
+/// Queue-retained real resource owner for one prepared batch shape.
+pub(super) struct DispatchResourceOwnerV1 {
+    code: Vec<CodeAuthority>,
+    code_identity: Vec<ResolvedCodeIdentityV1>,
+    kernarg: KernargAuthority,
+    packets: Vec<PreparedDispatchPacketV1>,
+    data: Vec<DispatchDataAuthorityV1>,
+    data_premises: Vec<RetainedDataPremiseV1>,
+    generation: DispatchGenerationOwnerV1,
+}
+
+impl DispatchResourceOwnerV1 {
+    pub(super) fn device_authorities(&self) -> Vec<&Gfx942DeviceMemoryDispatchAuthorityV1> {
+        self.data
+            .iter()
+            .filter_map(|authority| match authority {
+                DispatchDataAuthorityV1::Device(authority) => Some(authority),
+                DispatchDataAuthorityV1::HostVisible(_) => None,
+            })
+            .collect()
+    }
+
+    pub(super) fn active_generation(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+        self.generation.active()
+    }
+
+    pub(super) fn bind_templates<const N: usize>(
+        &mut self,
+        queue: QueueKeyV1,
+    ) -> Result<[CompletionPacketTemplateV1; N], Gfx942DispatchBindingErrorV1> {
+        self.require_prepared()?;
+        validate_packet_count::<N>()?;
+        if self.packets.len() != N
+            || self.code_identity.len() != self.code.len()
+            || self
+                .code_identity
+                .iter()
+                .any(|identity| identity.mapping.allocation.vm != queue.vm)
+            || self.kernarg.facts().mapping().allocation.vm != queue.vm
+            || self.data.iter().any(|authority| authority.vm() != queue.vm)
+        {
+            return Err(Gfx942DispatchBindingErrorV1::WrongQueueGeneration);
+        }
+        let generation = self.generation.next()?;
+        let templates: Vec<_> = self
+            .packets
+            .iter()
+            .enumerate()
+            .map(|(packet_index, packet)| {
+                let code = self.code_identity.get(packet.code_index).ok_or(
+                    Gfx942DispatchBindingErrorV1::InvalidCode("packet program index"),
+                )?;
+                if !prepared_kernarg_layout_matches_code(
+                    packet.code_bound_kernarg_layout,
+                    packet.kernarg_layout_identity,
+                    code.dispatch_abi_identity,
+                ) {
+                    return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                        packet: packet_index,
+                        detail: "prepared kernarg dispatch ABI identity",
+                    });
+                }
+                Ok(CompletionPacketTemplateV1::new(
+                    packet.geometry,
+                    packet.ordering,
+                    packet.private_segment_size,
+                    packet.group_segment_size,
+                    code.descriptor_address,
+                    packet.kernarg_address,
+                    packet.kernarg_alignment,
+                    CompletionDispatchGenerationBindingV1::new(
+                        queue,
+                        code.mapping,
+                        packet.kernarg_mapping,
+                        generation,
+                    ),
+                ))
+            })
+            .collect::<Result<Vec<_>, Gfx942DispatchBindingErrorV1>>()?;
+        let templates =
+            templates
+                .try_into()
+                .map_err(|_| Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                    packet: 0,
+                    detail: "prepared packet cardinality",
+                })?;
+        self.generation.commit_begin(generation);
+        Ok(templates)
+    }
+
+    pub(super) fn cancel_binding(
+        &mut self,
+        generation: u64,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.generation.cancel(generation)
+    }
+
+    pub(super) fn mark_completed(
+        &mut self,
+        generation: u64,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.generation.complete(generation)
+    }
+
+    pub(super) fn mark_recycled(
+        &mut self,
+        generation: u64,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.generation.recycle(generation)
+    }
+
+    pub(super) fn poison(&mut self) {
+        self.generation.poison();
+    }
+
+    pub(super) fn ensure_releasable(&self) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.require_prepared()
+    }
+
+    pub(super) fn ensure_returnable(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+        self.generation.returned_generation()
+    }
+
+    pub(super) fn read_completed_host_visible(
+        &self,
+        memory: &mut SharedGttMemorySessionV1,
+        request: Gfx942CompletedDispatchReadRequestV1,
+    ) -> Result<Gfx942CompletedDispatchReadbackV1, Gfx942DispatchBindingErrorV1> {
+        let generation =
+            validate_completed_read_request(&self.generation, &self.data_premises, request)?;
+        let authority =
+            self.data
+                .get(request.data_index)
+                .ok_or(Gfx942DispatchBindingErrorV1::InvalidData {
+                    index: request.data_index,
+                    detail: "completed read authority ordinal",
+                })?;
+        if authority.kind() != Gfx942FixedDispatchDataKindV1::HostVisibleCoherent {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "completed read requires coherent host-visible storage",
+            });
+        }
+        let DispatchDataAuthorityV1::HostVisible(authority) = authority else {
+            unreachable!("coherent kind check matched retained authority");
+        };
+        let bytes = memory.copy_completed_dispatch_host_data_subrange(
+            authority,
+            request.offset,
+            request.byte_len,
+        )?;
+        Ok(Gfx942CompletedDispatchReadbackV1 {
+            dispatch_generation: generation,
+            data_index: request.data_index,
+            offset: request.offset,
+            bytes,
+        })
+    }
+
+    pub(super) fn read_completed_host_visible_snapshot(
+        &self,
+        memory: &mut SharedGttMemorySessionV1,
+        request: Gfx942CompletedDispatchSnapshotRequestV1,
+    ) -> Result<Gfx942CompletedDispatchReadbackV1, Gfx942DispatchBindingErrorV1> {
+        let generation =
+            validate_completed_snapshot_request(&self.generation, &self.data_premises, request)?;
+        let authority =
+            self.data
+                .get(request.data_index)
+                .ok_or(Gfx942DispatchBindingErrorV1::InvalidData {
+                    index: request.data_index,
+                    detail: "completed snapshot authority ordinal",
+                })?;
+        if authority.kind() != Gfx942FixedDispatchDataKindV1::HostVisibleCoherent {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "completed snapshot requires coherent host-visible storage",
+            });
+        }
+        let DispatchDataAuthorityV1::HostVisible(authority) = authority else {
+            unreachable!("coherent kind check matched retained authority");
+        };
+        let bytes = memory.copy_completed_dispatch_host_data_subrange(
+            authority,
+            request.offset,
+            request.byte_len,
+        )?;
+        Ok(Gfx942CompletedDispatchReadbackV1 {
+            dispatch_generation: generation,
+            data_index: request.data_index,
+            offset: request.offset,
+            bytes,
+        })
+    }
+
+    pub(super) fn release(
+        self,
+        memory: &mut SharedGttMemorySessionV1,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.require_prepared()?;
+        let kernarg = memory.unmap_from_gpu(self.kernarg.into_token())?;
+        memory.release(kernarg)?;
+        for code in self.code {
+            let code = memory.unmap_executable_from_gpu(code.into_token())?;
+            memory.release_executable(code)?;
+        }
+        for data in self.data {
+            match data {
+                DispatchDataAuthorityV1::Device(authority) => {
+                    let lease = memory.unmap_gfx942_device_memory(authority.into_lease())?;
+                    memory.release_gfx942_device_memory(lease)?;
+                }
+                DispatchDataAuthorityV1::HostVisible(authority) => {
+                    let token = memory.unmap_from_gpu(authority.into_token())?;
+                    memory.release(token)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Releases code and kernarg while returning the exact mapped C3 set.
+    ///
+    /// The generation owner admits this transition only after a matching C4
+    /// completion was observed and its signal was recycled. The returned
+    /// authorities retain no public address, handle, pointer, or descriptor.
+    pub(super) fn release_non_data_after_recycle(
+        self,
+        memory: &mut SharedGttMemorySessionV1,
+    ) -> Result<ReturnedDispatchDataV1, Gfx942DispatchBindingErrorV1> {
+        let generation = self.generation.returned_generation()?;
+        if self.data.len() != self.data_premises.len() {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: self.data.len().min(self.data_premises.len()),
+                detail: "retained data/premise cardinality",
+            });
+        }
+        let kernarg = memory.unmap_from_gpu(self.kernarg.into_token())?;
+        memory.release(kernarg)?;
+        for code in self.code {
+            let code = memory.unmap_executable_from_gpu(code.into_token())?;
+            memory.release_executable(code)?;
+        }
+        let data = self
+            .data
+            .into_iter()
+            .zip(self.data_premises)
+            .map(|(authority, premise)| ReturnedDispatchDataLeaseV1 { authority, premise })
+            .collect();
+        Ok(ReturnedDispatchDataV1 { generation, data })
+    }
+
+    fn require_prepared(&self) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.generation.ensure_prepared()
+    }
+}
+
+fn validate_completed_read_request(
+    generation_owner: &DispatchGenerationOwnerV1,
+    premises: &[RetainedDataPremiseV1],
+    request: Gfx942CompletedDispatchReadRequestV1,
+) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+    let generation = generation_owner.returned_generation()?;
+    if request.dispatch_generation == 0 || request.dispatch_generation != generation {
+        return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration);
+    }
+    let premise =
+        premises
+            .get(request.data_index)
+            .ok_or(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "completed read data ordinal",
+            })?;
+    if premise.layout.kind() != Gfx942FixedDispatchDataKindV1::HostVisibleCoherent {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: request.data_index,
+            detail: "completed read requires coherent host-visible storage",
+        });
+    }
+    if !matches!(
+        premise.effect,
+        Some(DeviceDataEffectV1::WriteOnly | DeviceDataEffectV1::ReadWrite)
+    ) {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: request.data_index,
+            detail: "completed read requires inspected write access",
+        });
+    }
+    let end = request.offset.checked_add(request.byte_len).ok_or(
+        Gfx942DispatchBindingErrorV1::InvalidData {
+            index: request.data_index,
+            detail: "completed read range overflow",
+        },
+    )?;
+    if request.byte_len == 0 || end > premise.valid_bytes {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: request.data_index,
+            detail: "completed read range",
+        });
+    }
+    let matching_ranges = premise
+        .writable_ranges
+        .iter()
+        .filter(|range| {
+            ranges_overlap_u64(
+                range.offset,
+                range.byte_len,
+                request.offset,
+                request.byte_len,
+            )
+        })
+        .collect::<Vec<_>>();
+    let writable_end = matching_ranges
+        .first()
+        .and_then(|range| range.offset.checked_add(range.byte_len));
+    if matching_ranges.len() != 1
+        || request.offset < matching_ranges[0].offset
+        || writable_end.is_none_or(|writable_end| end > writable_end)
+    {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: request.data_index,
+            detail: "completed read requires one inspected writable range",
+        });
+    }
+    Ok(generation)
+}
+
+fn validate_completed_snapshot_request(
+    generation_owner: &DispatchGenerationOwnerV1,
+    premises: &[RetainedDataPremiseV1],
+    request: Gfx942CompletedDispatchSnapshotRequestV1,
+) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+    let generation = generation_owner.returned_generation()?;
+    if request.dispatch_generation == 0 || request.dispatch_generation != generation {
+        return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration);
+    }
+    let premise =
+        premises
+            .get(request.data_index)
+            .ok_or(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "completed snapshot data ordinal",
+            })?;
+    if premise.layout.kind() != Gfx942FixedDispatchDataKindV1::HostVisibleCoherent {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: request.data_index,
+            detail: "completed snapshot requires coherent host-visible storage",
+        });
+    }
+    if !premise.fully_initialized {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: request.data_index,
+            detail: "completed snapshot requires full initialization",
+        });
+    }
+    let end = request.offset.checked_add(request.byte_len).ok_or(
+        Gfx942DispatchBindingErrorV1::InvalidData {
+            index: request.data_index,
+            detail: "completed snapshot range overflow",
+        },
+    )?;
+    if request.byte_len == 0 || end > premise.valid_bytes {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: request.data_index,
+            detail: "completed snapshot range",
+        });
+    }
+    let exact_matches = premise
+        .completed_snapshots
+        .iter()
+        .filter(|snapshot| {
+            snapshot.offset == request.offset && snapshot.byte_len == request.byte_len
+        })
+        .count();
+    if exact_matches != 1 {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: request.data_index,
+            detail: "completed snapshot requires one exact admitted range",
+        });
+    }
+    Ok(generation)
+}
+
+/// Linear published dispatch batch retaining one exact resource generation.
+///
+/// It has no public constructor or operation, and is neither `Clone` nor
+/// `Copy`.
+///
+/// ```compile_fail
+/// use fe2o3_kfd::Gfx942DispatchBatchV1;
+///
+/// fn consume<const N: usize>(_: Gfx942DispatchBatchV1<N>) {}
+/// fn cannot_use_twice<const N: usize>(batch: Gfx942DispatchBatchV1<N>) {
+///     consume(batch);
+///     consume(batch);
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_kfd::Gfx942DispatchBatchV1;
+///
+/// fn cannot_clone<const N: usize>(batch: Gfx942DispatchBatchV1<N>) {
+///     let _ = batch.clone();
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_kfd::Gfx942DispatchBatchV1;
+///
+/// fn cannot_extract_addresses<const N: usize>(batch: &Gfx942DispatchBatchV1<N>) {
+///     let _ = batch.kernel_object();
+///     let _ = batch.kernarg_address();
+///     let _ = batch.device_addresses();
+/// }
+/// ```
+#[must_use = "a published dispatch batch must remain bound through completion"]
+pub struct Gfx942DispatchBatchV1<const N: usize> {
+    completion: Gfx942CompletionBatchV1<N>,
+    generation: u64,
+}
+
+impl<const N: usize> fmt::Debug for Gfx942DispatchBatchV1<N> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942DispatchBatchV1")
+            .field("packet_count", &N)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Linear exact-batch completion before signal recycle.
+///
+/// ```compile_fail
+/// use fe2o3_kfd::Gfx942CompletedDispatchBatchV1;
+///
+/// fn consume<const N: usize>(_: Gfx942CompletedDispatchBatchV1<N>) {}
+/// fn cannot_recycle_twice<const N: usize>(batch: Gfx942CompletedDispatchBatchV1<N>) {
+///     consume(batch);
+///     consume(batch);
+/// }
+/// ```
+#[must_use = "completed dispatch resources remain retained until signal recycle"]
+pub struct Gfx942CompletedDispatchBatchV1<const N: usize> {
+    completion: Gfx942CompletedBatchV1<N>,
+    generation: u64,
+}
+
+impl<const N: usize> fmt::Debug for Gfx942CompletedDispatchBatchV1<N> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942CompletedDispatchBatchV1")
+            .field("packet_count", &N)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug)]
+pub enum Gfx942DispatchPollV1<const N: usize> {
+    Pending(Gfx942DispatchBatchV1<N>),
+    Ready(Gfx942CompletedDispatchBatchV1<N>),
+}
+
+/// Addressless progress from one exact fixed-dispatch completion scan.
+///
+/// Signal loads occur sequentially, not as one atomic snapshot. Counts record
+/// what that scan observed, and the first pending index can already be stale by
+/// the time this value is returned.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942DispatchProgressV1 {
+    packet_count: u16,
+    completed_count: u16,
+    pending_count: u16,
+    first_pending_batch_index: Option<u16>,
+}
+
+impl Gfx942DispatchProgressV1 {
+    pub const fn packet_count(self) -> u16 {
+        self.packet_count
+    }
+
+    pub const fn completed_count(self) -> u16 {
+        self.completed_count
+    }
+
+    pub const fn pending_count(self) -> u16 {
+        self.pending_count
+    }
+
+    /// Returns the earliest batch-local index observed pending in this scan.
+    pub const fn first_pending_batch_index(self) -> Option<u16> {
+        self.first_pending_batch_index
+    }
+
+    fn from_completion(progress: Gfx942CompletionProgressV1) -> Self {
+        Self {
+            packet_count: progress.packet_count(),
+            completed_count: progress.completed_count(),
+            pending_count: progress.pending_count(),
+            first_pending_batch_index: progress.first_pending_batch_index(),
+        }
+    }
+}
+
+/// Linear dispatch custody paired with progress from the same completion scan.
+#[derive(Debug)]
+pub enum Gfx942DispatchPollWithProgressV1<const N: usize> {
+    Pending {
+        batch: Gfx942DispatchBatchV1<N>,
+        progress: Gfx942DispatchProgressV1,
+    },
+    Ready {
+        completed: Gfx942CompletedDispatchBatchV1<N>,
+        progress: Gfx942DispatchProgressV1,
+    },
+}
+
+pub(super) fn wrap_published<const N: usize>(
+    completion: Gfx942CompletionBatchV1<N>,
+    generation: u64,
+) -> Gfx942DispatchBatchV1<N> {
+    Gfx942DispatchBatchV1 {
+        completion,
+        generation,
+    }
+}
+
+pub(super) fn unwrap_published<const N: usize>(
+    batch: Gfx942DispatchBatchV1<N>,
+) -> (Gfx942CompletionBatchV1<N>, u64) {
+    (batch.completion, batch.generation)
+}
+
+pub(super) fn wrap_poll<const N: usize>(
+    poll: Gfx942CompletionPollV1<N>,
+    generation: u64,
+) -> Gfx942DispatchPollV1<N> {
+    match poll {
+        Gfx942CompletionPollV1::Pending(completion) => {
+            Gfx942DispatchPollV1::Pending(wrap_published(completion, generation))
+        }
+        Gfx942CompletionPollV1::Ready(completion) => {
+            Gfx942DispatchPollV1::Ready(Gfx942CompletedDispatchBatchV1 {
+                completion,
+                generation,
+            })
+        }
+    }
+}
+
+pub(super) fn wrap_poll_with_progress<const N: usize>(
+    poll: Gfx942CompletionPollWithProgressV1<N>,
+    generation: u64,
+) -> Gfx942DispatchPollWithProgressV1<N> {
+    match poll {
+        Gfx942CompletionPollWithProgressV1::Pending { batch, progress } => {
+            Gfx942DispatchPollWithProgressV1::Pending {
+                batch: wrap_published(batch, generation),
+                progress: Gfx942DispatchProgressV1::from_completion(progress),
+            }
+        }
+        Gfx942CompletionPollWithProgressV1::Ready {
+            completed,
+            progress,
+        } => Gfx942DispatchPollWithProgressV1::Ready {
+            completed: Gfx942CompletedDispatchBatchV1 {
+                completion: completed,
+                generation,
+            },
+            progress: Gfx942DispatchProgressV1::from_completion(progress),
+        },
+    }
+}
+
+pub(super) fn unwrap_completed<const N: usize>(
+    batch: Gfx942CompletedDispatchBatchV1<N>,
+) -> (Gfx942CompletedBatchV1<N>, u64) {
+    (batch.completion, batch.generation)
+}
+
+pub(super) fn wrap_completed<const N: usize>(
+    completion: Gfx942CompletedBatchV1<N>,
+    generation: u64,
+) -> Gfx942CompletedDispatchBatchV1<N> {
+    Gfx942CompletedDispatchBatchV1 {
+        completion,
+        generation,
+    }
+}
+
+/// Builds real owned code, kernarg, and C3 data authorities without publishing.
+pub(super) fn prepare_dispatch_resources<const N: usize>(
+    memory: &mut SharedGttMemorySessionV1,
+    kernel: ValidatedKernelEnvelope<'_>,
+    geometry: [DispatchGeometryV1; N],
+    kernargs: [TypedKernargImageV1; N],
+    data: Vec<DeviceDataAllocationInputV1>,
+) -> Result<DispatchResourceOwnerV1, Gfx942DispatchBindingErrorV1> {
+    validate_packet_count::<N>()?;
+    let resources = kernel.resources();
+    let plan = *kernel.envelope().plan();
+    let image_len_u64 = plan
+        .image_end()
+        .checked_sub(plan.image_start())
+        .ok_or(Gfx942DispatchBindingErrorV1::InvalidCode("image range"))?;
+    let image_len = usize::try_from(image_len_u64)
+        .map_err(|_| Gfx942DispatchBindingErrorV1::InvalidCode("image size conversion"))?;
+    if image_len == 0 {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidCode("empty image"));
+    }
+    let descriptor_offset = kernel
+        .selected_binding()
+        .descriptor_address()
+        .checked_sub(plan.image_start())
+        .ok_or(Gfx942DispatchBindingErrorV1::InvalidCode(
+            "descriptor precedes image",
+        ))?;
+    descriptor_offset
+        .checked_add(KERNEL_DESCRIPTOR_BYTES_V1)
+        .filter(|end| *end <= image_len_u64)
+        .ok_or(Gfx942DispatchBindingErrorV1::InvalidCode(
+            "descriptor outside image",
+        ))?;
+    if !descriptor_offset.is_multiple_of(KERNEL_DESCRIPTOR_BYTES_V1) {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidCode(
+            "descriptor alignment",
+        ));
+    }
+    let kernarg_size = usize::try_from(resources.kernarg_segment_size())
+        .map_err(|_| Gfx942DispatchBindingErrorV1::InvalidCode("kernarg size conversion"))?;
+    if kernarg_size == 0 || kernarg_size > MAX_DISPATCH_KERNARG_BYTES_V1 {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidCode(
+            "kernarg size bound",
+        ));
+    }
+    let kernarg_alignment = resources.kernarg_segment_alignment();
+    if kernarg_alignment == 0 || !kernarg_alignment.is_power_of_two() {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidCode(
+            "kernarg alignment",
+        ));
+    }
+    let kernarg_alignment = usize::try_from(kernarg_alignment)
+        .ok()
+        .filter(|alignment| *alignment <= 4096)
+        .ok_or(Gfx942DispatchBindingErrorV1::InvalidCode(
+            "kernarg alignment bound",
+        ))?;
+    let kernarg_stride = kernarg_size
+        .checked_add(kernarg_alignment - 1)
+        .map(|bytes| bytes & !(kernarg_alignment - 1))
+        .ok_or(Gfx942DispatchBindingErrorV1::InvalidCode("kernarg stride"))?;
+    let kernarg_arena_bytes =
+        kernarg_stride
+            .checked_mul(N)
+            .ok_or(Gfx942DispatchBindingErrorV1::InvalidCode(
+                "kernarg arena size",
+            ))?;
+    validate_geometry(
+        resources,
+        kernel.selected_kernel().uniform_work_group_size(),
+        &geometry,
+    )?;
+    validate_data_inputs(&data)?;
+    validate_kernargs(&kernargs, kernarg_size, &data)?;
+    let requests: Vec<_> = data
+        .iter()
+        .map(|input| (input.requested_bytes, input.alignment))
+        .collect();
+    memory.validate_gfx942_dispatch_allocation_requests(&requests)?;
+    let mut data_authorities = Vec::with_capacity(data.len());
+    let mut data_premises = Vec::with_capacity(data.len());
+    for input in data {
+        let premise = input.premise;
+        let lease = memory.allocate_gfx942_device_memory(input.requested_bytes, input.alignment)?;
+        let lease = memory.map_gfx942_device_memory(lease)?;
+        let authority = memory.retain_gfx942_device_memory_for_dispatch(lease)?;
+        data_premises.push(RetainedDataPremiseV1 {
+            layout: Gfx942FixedDispatchDataLayoutV1 {
+                kind: Gfx942FixedDispatchDataKindV1::DeviceLocal,
+                requested_bytes: input.requested_bytes,
+                alignment: input.alignment,
+            },
+            role_identity: premise.role_identity,
+            valid_bytes: premise.valid_bytes,
+            effect: Some(premise.effect),
+            initialized_content: None,
+            fully_initialized: false,
+            writable_ranges: Box::new([]),
+            completed_snapshots: Box::new([]),
+        });
+        data_authorities.push(DispatchDataAuthorityV1::Device(authority));
+    }
+
+    let mut code = memory.allocate_executable(image_len)?;
+    let materialized_sha256 = memory.with_bytes_mut(&mut code, |bytes| {
+        kernel
+            .materialize_into(bytes)
+            .map(|()| Sha256::digest(bytes).into())
+    })?;
+    let materialized_sha256 = match materialized_sha256 {
+        Ok(digest) => digest,
+        Err(_) => {
+            let _ = memory.quarantine_queue_composition("dispatch code materialization failure");
+            return Err(Gfx942DispatchBindingErrorV1::InvalidCode("materialization"));
+        }
+    };
+    let code = memory.seal_executable(code)?;
+    let code = memory.map_executable_to_gpu(code)?;
+    let code = memory.retain_aql_dispatch_code_resource(code)?;
+    let descriptor_address = code
+        .facts()
+        .checked_gpu_subrange(descriptor_offset, KERNEL_DESCRIPTOR_BYTES_V1, 64)
+        .and_then(|address| ObservedGpuAddressV1::new(address).ok())
+        .ok_or(Gfx942DispatchBindingErrorV1::InvalidCode(
+            "resolved descriptor address",
+        ))?;
+    let code_identity = ResolvedCodeIdentityV1 {
+        authenticated: kernel.identity_inputs(),
+        dispatch_abi_identity: kernel
+            .dispatch_abi_identity()
+            .unwrap_or_else(|| kernel.identity_inputs().closure_sha256()),
+        materialized_sha256,
+        mapping: code.facts().mapping(),
+        descriptor_address,
+    };
+
+    let private_segment_size = u32::try_from(resources.private_segment_fixed_size())
+        .map_err(|_| Gfx942DispatchBindingErrorV1::InvalidCode("private segment size"))?;
+    let mut kernarg = memory.allocate_kernarg(kernarg_arena_bytes)?;
+    memory.with_bytes_mut(&mut kernarg, |bytes| {
+        bytes.fill(0);
+        for (packet_index, typed) in kernargs.iter().enumerate() {
+            let start = packet_index * kernarg_stride;
+            let packet_bytes = &mut bytes[start..start + kernarg_size];
+            packet_bytes.copy_from_slice(&typed.bytes);
+            for patch in &typed.device_pointers {
+                let address = data_authorities[patch.data_index]
+                    .checked_gpu_subrange(
+                        patch.data_byte_offset,
+                        patch.required_bytes,
+                        patch.required_alignment,
+                    )
+                    .expect("dispatch preflight checked device pointer range");
+                packet_bytes[patch.byte_offset..patch.byte_offset + 8]
+                    .copy_from_slice(&address.to_le_bytes());
+            }
+        }
+    })?;
+    let kernarg = memory.map_to_gpu(kernarg)?;
+    let kernarg = memory.retain_aql_dispatch_kernarg_resource(kernarg)?;
+    let mut packets = Vec::with_capacity(N);
+    for (packet_index, (typed, dispatch_geometry)) in kernargs.into_iter().zip(geometry).enumerate()
+    {
+        let kernarg_offset = packet_index
+            .checked_mul(kernarg_stride)
+            .and_then(|offset| u64::try_from(offset).ok())
+            .ok_or(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet: packet_index,
+                detail: "kernarg slice offset",
+            })?;
+        let kernarg_address = kernarg
+            .facts()
+            .checked_gpu_subrange(
+                kernarg_offset,
+                kernarg_size as u64,
+                kernarg_alignment as u64,
+            )
+            .and_then(|address| ObservedGpuAddressV1::new(address).ok())
+            .ok_or(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet: packet_index,
+                detail: "mapped kernarg address",
+            })?;
+        let group_segment_size = u64::from(dispatch_geometry.dynamic_group_segment_bytes)
+            .checked_add(resources.group_segment_fixed_size())
+            .and_then(|bytes| u32::try_from(bytes).ok())
+            .ok_or(Gfx942DispatchBindingErrorV1::Geometry {
+                packet: packet_index,
+                detail: "group segment size",
+            })?;
+        packets.push(PreparedDispatchPacketV1 {
+            geometry: dispatch_geometry.geometry,
+            ordering: AqlDispatchOrderingV1::WaitForPrior,
+            private_segment_size,
+            group_segment_size,
+            kernarg_address,
+            kernarg_alignment: kernarg_alignment as u64,
+            kernarg_mapping: kernarg.facts().mapping(),
+            kernarg_layout_identity: typed.layout_identity,
+            code_bound_kernarg_layout: false,
+            code_index: 0,
+        });
+    }
+
+    Ok(DispatchResourceOwnerV1 {
+        code: vec![code],
+        code_identity: vec![code_identity],
+        kernarg,
+        packets,
+        data: data_authorities,
+        data_premises,
+        generation: DispatchGenerationOwnerV1::new(),
+    })
+}
+
+struct FixedDispatchProgramPlanV1 {
+    image_len: usize,
+    descriptor_offset: u64,
+    resources: fe2o3_amdhsa_loader::SelectedKernelResourceBindingV1,
+    implicit_kernarg: Option<Cov6ImplicitKernargPlanV1>,
+}
+
+struct FixedDispatchPacketPlanV1 {
+    input: Gfx942FixedDispatchPacketV1,
+    patches: Box<[DevicePointerPatchV1]>,
+    implicit_kernarg: Option<Cov6ImplicitKernargValuesV1>,
+    kernarg_offset: usize,
+    kernarg_alignment: usize,
+    private_segment_size: u32,
+    group_segment_size: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cov6ImplicitKernargFieldKindV1 {
+    BlockCount(usize),
+    GroupSize(usize),
+    Remainder(usize),
+    GlobalOffset(usize),
+    GridDimensions,
+    DynamicLdsSize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cov6ImplicitKernargFieldV1 {
+    kind: Cov6ImplicitKernargFieldKindV1,
+    relative_offset: usize,
+    byte_len: usize,
+}
+
+struct Cov6ImplicitKernargPlanV1 {
+    byte_offset: usize,
+    fields: Box<[Cov6ImplicitKernargFieldV1]>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cov6ImplicitKernargValuesV1 {
+    block_count: [u32; 3],
+    group_size: [u16; 3],
+    remainder: [u16; 3],
+    grid_dimensions: u16,
+    dynamic_lds_size: u32,
+}
+
+fn validate_packet_program_indices<const N: usize>(
+    program_count: usize,
+    packets: &[Gfx942FixedDispatchPacketV1; N],
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    for (packet, input) in packets.iter().enumerate() {
+        if input.program_index >= program_count {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet,
+                detail: "program index",
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Consumes inspected executable custody and exact mapped data authorities,
+/// then prepares one addressless fixed batch without publishing it.
+pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
+    memory: &mut SharedGttMemorySessionV1,
+    programs: Vec<ValidatedKernelEnvelope<'_>>,
+    packets: [Gfx942FixedDispatchPacketV1; N],
+    data: Vec<Gfx942FixedDispatchDataV1>,
+) -> Result<DispatchResourceOwnerV1, Gfx942DispatchBindingErrorV1> {
+    validate_packet_count::<N>()?;
+    if programs.is_empty() || programs.len() > GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1 {
+        return Err(Gfx942DispatchBindingErrorV1::ProgramCount {
+            requested: programs.len(),
+            maximum: GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1,
+        });
+    }
+    if data.is_empty() || data.len() > MAX_DISPATCH_DATA_LEASES_V1 {
+        return Err(Gfx942DispatchBindingErrorV1::DataLeaseCount {
+            requested: data.len(),
+            maximum: MAX_DISPATCH_DATA_LEASES_V1,
+        });
+    }
+    validate_packet_program_indices(programs.len(), &packets)?;
+    let data_layouts: Vec<_> = data.iter().map(Gfx942FixedDispatchDataV1::layout).collect();
+    let data_initialized: Vec<_> = data
+        .iter()
+        .map(Gfx942FixedDispatchDataV1::is_fully_initialized)
+        .collect();
+    let mut program_plans = Vec::with_capacity(programs.len());
+    for kernel in &programs {
+        let resources = kernel.resources();
+        let plan = *kernel.envelope().plan();
+        let image_len_u64 = plan
+            .image_end()
+            .checked_sub(plan.image_start())
+            .ok_or(Gfx942DispatchBindingErrorV1::InvalidCode("image range"))?;
+        let image_len = usize::try_from(image_len_u64)
+            .map_err(|_| Gfx942DispatchBindingErrorV1::InvalidCode("image size conversion"))?;
+        let descriptor_offset = kernel
+            .selected_binding()
+            .descriptor_address()
+            .checked_sub(plan.image_start())
+            .ok_or(Gfx942DispatchBindingErrorV1::InvalidCode(
+                "descriptor precedes image",
+            ))?;
+        if image_len == 0
+            || descriptor_offset
+                .checked_add(KERNEL_DESCRIPTOR_BYTES_V1)
+                .is_none_or(|end| end > image_len_u64)
+            || !descriptor_offset.is_multiple_of(KERNEL_DESCRIPTOR_BYTES_V1)
+        {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidCode(
+                "descriptor image range",
+            ));
+        }
+        let implicit_kernarg = validate_cov6_implicit_kernarg_layout(kernel.selected_kernel())?;
+        validate_kernarg_resource_shape(resources)?;
+        program_plans.push(FixedDispatchProgramPlanV1 {
+            image_len,
+            descriptor_offset,
+            resources,
+            implicit_kernarg,
+        });
+    }
+
+    let mut data_effects = vec![None; data.len()];
+    let mut data_writable_ranges = vec![Vec::new(); data.len()];
+    let mut data_completed_snapshots = vec![Vec::new(); data.len()];
+    let mut packet_plans = Vec::with_capacity(N);
+    let mut kernarg_arena_bytes = 0usize;
+    for (packet_index, input) in packets.into_iter().enumerate() {
+        let program_plan = program_plans.get(input.program_index).ok_or(
+            Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet: packet_index,
+                detail: "program index",
+            },
+        )?;
+        let kernel = &programs[input.program_index];
+        let kernarg_size = usize::try_from(program_plan.resources.kernarg_segment_size())
+            .map_err(|_| Gfx942DispatchBindingErrorV1::InvalidCode("kernarg size conversion"))?;
+        if input.kernarg_bytes.len() != kernarg_size {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet: packet_index,
+                detail: "exact kernarg byte extent",
+            });
+        }
+        let kernarg_alignment = usize::try_from(program_plan.resources.kernarg_segment_alignment())
+            .map_err(|_| {
+                Gfx942DispatchBindingErrorV1::InvalidCode("kernarg alignment conversion")
+            })?;
+        let kernarg_offset = align_up(kernarg_arena_bytes, kernarg_alignment).ok_or(
+            Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet: packet_index,
+                detail: "kernarg arena offset",
+            },
+        )?;
+        kernarg_arena_bytes = kernarg_offset.checked_add(kernarg_size).ok_or(
+            Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet: packet_index,
+                detail: "kernarg arena extent",
+            },
+        )?;
+        let patches = validate_public_packet_bindings(
+            packet_index,
+            kernel,
+            &input,
+            &data_layouts,
+            PublicDataBindingStateV1 {
+                effects: &mut data_effects,
+                writable_ranges: &mut data_writable_ranges,
+                completed_snapshots: &mut data_completed_snapshots,
+            },
+        )?;
+        let geometry = DispatchGeometryV1::new(input.geometry, input.dynamic_group_segment_bytes);
+        validate_geometry(
+            program_plan.resources,
+            kernel.selected_kernel().uniform_work_group_size(),
+            &[geometry],
+        )?;
+        let implicit_kernarg = validate_and_derive_cov6_implicit_kernarg(
+            packet_index,
+            kernel.selected_kernel(),
+            &input,
+            program_plan.implicit_kernarg.as_ref(),
+        )?;
+        let private_segment_size =
+            u32::try_from(program_plan.resources.private_segment_fixed_size())
+                .map_err(|_| Gfx942DispatchBindingErrorV1::InvalidCode("private segment size"))?;
+        let group_segment_size = u64::from(input.dynamic_group_segment_bytes)
+            .checked_add(program_plan.resources.group_segment_fixed_size())
+            .and_then(|bytes| u32::try_from(bytes).ok())
+            .ok_or(Gfx942DispatchBindingErrorV1::Geometry {
+                packet: packet_index,
+                detail: "group segment size",
+            })?;
+        packet_plans.push(FixedDispatchPacketPlanV1 {
+            input,
+            patches,
+            implicit_kernarg,
+            kernarg_offset,
+            kernarg_alignment,
+            private_segment_size,
+            group_segment_size,
+        });
+    }
+    let data_plans = plan_public_retained_data(
+        &data_layouts,
+        &data_initialized,
+        data_effects,
+        data_writable_ranges,
+        data_completed_snapshots,
+    )?;
+
+    let mut data_authorities = Vec::with_capacity(data.len());
+    let mut data_premises = Vec::with_capacity(data.len());
+    for (input, plan) in data.into_iter().zip(data_plans) {
+        let input = input.into_parts();
+        debug_assert_eq!(input.layout, plan.layout);
+        debug_assert_eq!(input.fully_initialized, plan.fully_initialized);
+        let authority = match input.storage {
+            DispatchDataInputStorageV1::Device(lease) => DispatchDataAuthorityV1::Device(
+                memory.retain_gfx942_device_memory_for_dispatch(lease)?,
+            ),
+            DispatchDataInputStorageV1::HostVisible(token) => DispatchDataAuthorityV1::HostVisible(
+                memory.retain_aql_dispatch_host_data_resource(token)?,
+            ),
+        };
+        data_authorities.push(authority);
+        data_premises.push(RetainedDataPremiseV1 {
+            layout: plan.layout,
+            role_identity: [0; 32],
+            valid_bytes: plan.layout.requested_bytes(),
+            effect: plan.effect,
+            initialized_content: input.initialized_content,
+            fully_initialized: plan.fully_initialized,
+            writable_ranges: plan.writable_ranges,
+            completed_snapshots: plan.completed_snapshots,
+        });
+    }
+
+    let mut code = Vec::with_capacity(programs.len());
+    let mut code_identity = Vec::with_capacity(programs.len());
+    for (kernel, plan) in programs.into_iter().zip(&program_plans) {
+        let mut allocation = memory.allocate_executable(plan.image_len)?;
+        let materialized_sha256 = memory.with_bytes_mut(&mut allocation, |bytes| {
+            kernel
+                .materialize_into(bytes)
+                .map(|()| Sha256::digest(bytes).into())
+        })?;
+        let materialized_sha256 = match materialized_sha256 {
+            Ok(digest) => digest,
+            Err(_) => {
+                let _ =
+                    memory.quarantine_queue_composition("dispatch code materialization failure");
+                return Err(Gfx942DispatchBindingErrorV1::InvalidCode("materialization"));
+            }
+        };
+        let allocation = memory.seal_executable(allocation)?;
+        let allocation = memory.map_executable_to_gpu(allocation)?;
+        let allocation = memory.retain_aql_dispatch_code_resource(allocation)?;
+        let descriptor_address = allocation
+            .facts()
+            .checked_gpu_subrange(plan.descriptor_offset, KERNEL_DESCRIPTOR_BYTES_V1, 64)
+            .and_then(|address| ObservedGpuAddressV1::new(address).ok())
+            .ok_or(Gfx942DispatchBindingErrorV1::InvalidCode(
+                "resolved descriptor address",
+            ))?;
+        code_identity.push(ResolvedCodeIdentityV1 {
+            authenticated: kernel.identity_inputs(),
+            dispatch_abi_identity: kernel
+                .dispatch_abi_identity()
+                .unwrap_or_else(|| kernel.identity_inputs().closure_sha256()),
+            materialized_sha256,
+            mapping: allocation.facts().mapping(),
+            descriptor_address,
+        });
+        code.push(allocation);
+    }
+
+    let mut kernarg = memory.allocate_kernarg(kernarg_arena_bytes)?;
+    memory.with_bytes_mut(&mut kernarg, |bytes| {
+        bytes.fill(0);
+        for packet in &packet_plans {
+            let start = packet.kernarg_offset;
+            let end = start + packet.input.kernarg_bytes.len();
+            let packet_bytes = &mut bytes[start..end];
+            packet_bytes.copy_from_slice(&packet.input.kernarg_bytes);
+            for patch in &packet.patches {
+                let address = data_authorities[patch.data_index]
+                    .checked_gpu_subrange(
+                        patch.data_byte_offset,
+                        patch.required_bytes,
+                        patch.required_alignment,
+                    )
+                    .expect("public dispatch preflight checked pointer range");
+                packet_bytes[patch.byte_offset..patch.byte_offset + 8]
+                    .copy_from_slice(&address.to_le_bytes());
+            }
+            match (
+                program_plans[packet.input.program_index]
+                    .implicit_kernarg
+                    .as_ref(),
+                packet.implicit_kernarg,
+            ) {
+                (Some(plan), Some(values)) => {
+                    initialize_cov6_implicit_kernarg(packet_bytes, plan, values)
+                }
+                (None, None) => {}
+                _ => unreachable!("implicit-kernarg preflight plan/value mismatch"),
+            }
+        }
+    })?;
+    let kernarg = memory.map_to_gpu(kernarg)?;
+    let kernarg = memory.retain_aql_dispatch_kernarg_resource(kernarg)?;
+    let mut prepared_packets = Vec::with_capacity(N);
+    for packet in packet_plans {
+        let kernarg_address = kernarg
+            .facts()
+            .checked_gpu_subrange(
+                packet.kernarg_offset as u64,
+                packet.input.kernarg_bytes.len() as u64,
+                packet.kernarg_alignment as u64,
+            )
+            .and_then(|address| ObservedGpuAddressV1::new(address).ok())
+            .ok_or(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet: prepared_packets.len(),
+                detail: "mapped kernarg address",
+            })?;
+        prepared_packets.push(PreparedDispatchPacketV1 {
+            geometry: packet.input.geometry,
+            ordering: packet.input.ordering,
+            private_segment_size: packet.private_segment_size,
+            group_segment_size: packet.group_segment_size,
+            kernarg_address,
+            kernarg_alignment: packet.kernarg_alignment as u64,
+            kernarg_mapping: kernarg.facts().mapping(),
+            kernarg_layout_identity: code_identity[packet.input.program_index]
+                .dispatch_abi_identity,
+            code_bound_kernarg_layout: true,
+            code_index: packet.input.program_index,
+        });
+    }
+
+    Ok(DispatchResourceOwnerV1 {
+        code,
+        code_identity,
+        kernarg,
+        packets: prepared_packets,
+        data: data_authorities,
+        data_premises,
+        generation: DispatchGenerationOwnerV1::new(),
+    })
+}
+
+fn validate_kernarg_resource_shape(
+    resources: fe2o3_amdhsa_loader::SelectedKernelResourceBindingV1,
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    let size = resources.kernarg_segment_size();
+    let alignment = resources.kernarg_segment_alignment();
+    if size == 0
+        || size > MAX_DISPATCH_KERNARG_BYTES_V1 as u64
+        || alignment == 0
+        || !alignment.is_power_of_two()
+        || alignment > 4096
+    {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidCode(
+            "kernarg resource shape",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_cov6_implicit_kernarg_layout(
+    kernel: &InspectedKernel,
+) -> Result<Option<Cov6ImplicitKernargPlanV1>, Gfx942DispatchBindingErrorV1> {
+    let hidden = kernel.hidden_arguments();
+    if hidden.is_empty() {
+        if kernel.implicit_argument_offset().is_some() || kernel.implicit_argument_size() != 0 {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidCode(
+                "implicit-kernarg metadata without hidden fields",
+            ));
+        }
+        return Ok(None);
+    }
+
+    let byte_offset = exact_cov6_implicit_kernarg_offset(
+        kernel.implicit_argument_offset(),
+        kernel.implicit_argument_size(),
+        kernel.kernarg_segment_size(),
+    )
+    .ok_or(Gfx942DispatchBindingErrorV1::InvalidCode(
+        "exact trailing COV6 implicit-kernarg extent",
+    ))?;
+
+    let mut fields = Vec::with_capacity(hidden.len());
+    for argument in hidden {
+        let field = admitted_cov6_implicit_kernarg_field(argument.value_kind()).ok_or(
+            Gfx942DispatchBindingErrorV1::InvalidCode(
+                "unsupported runtime or address implicit-kernarg field",
+            ),
+        )?;
+        let observed_offset = argument
+            .offset()
+            .checked_sub(byte_offset as u64)
+            .and_then(|offset| usize::try_from(offset).ok());
+        if observed_offset != Some(field.relative_offset)
+            || usize::try_from(argument.size()).ok() != Some(field.byte_len)
+            || field
+                .relative_offset
+                .checked_add(field.byte_len)
+                .is_none_or(|end| end > COV6_IMPLICIT_ARGUMENT_BYTES_V1)
+            || fields
+                .iter()
+                .any(|prior: &Cov6ImplicitKernargFieldV1| prior.kind == field.kind)
+        {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidCode(
+                "noncanonical COV6 implicit-kernarg field",
+            ));
+        }
+        fields.push(field);
+    }
+
+    Ok(Some(Cov6ImplicitKernargPlanV1 {
+        byte_offset,
+        fields: fields.into_boxed_slice(),
+    }))
+}
+
+fn exact_cov6_implicit_kernarg_offset(
+    byte_offset: Option<u64>,
+    byte_len: u64,
+    kernarg_byte_len: u64,
+) -> Option<usize> {
+    let byte_offset = byte_offset?;
+    if byte_len != COV6_IMPLICIT_ARGUMENT_BYTES
+        || byte_offset.checked_add(byte_len) != Some(kernarg_byte_len)
+    {
+        return None;
+    }
+    usize::try_from(byte_offset).ok()
+}
+
+fn admitted_cov6_implicit_kernarg_field(
+    kind: HiddenValueKind,
+) -> Option<Cov6ImplicitKernargFieldV1> {
+    let (kind, relative_offset, byte_len) = match kind {
+        HiddenValueKind::BlockCountX => (
+            Cov6ImplicitKernargFieldKindV1::BlockCount(0),
+            COV6_BLOCK_COUNT_X_OFFSET_V1,
+            4,
+        ),
+        HiddenValueKind::BlockCountY => (
+            Cov6ImplicitKernargFieldKindV1::BlockCount(1),
+            COV6_BLOCK_COUNT_Y_OFFSET_V1,
+            4,
+        ),
+        HiddenValueKind::BlockCountZ => (
+            Cov6ImplicitKernargFieldKindV1::BlockCount(2),
+            COV6_BLOCK_COUNT_Z_OFFSET_V1,
+            4,
+        ),
+        HiddenValueKind::GroupSizeX => (
+            Cov6ImplicitKernargFieldKindV1::GroupSize(0),
+            COV6_GROUP_SIZE_X_OFFSET_V1,
+            2,
+        ),
+        HiddenValueKind::GroupSizeY => (
+            Cov6ImplicitKernargFieldKindV1::GroupSize(1),
+            COV6_GROUP_SIZE_Y_OFFSET_V1,
+            2,
+        ),
+        HiddenValueKind::GroupSizeZ => (
+            Cov6ImplicitKernargFieldKindV1::GroupSize(2),
+            COV6_GROUP_SIZE_Z_OFFSET_V1,
+            2,
+        ),
+        HiddenValueKind::RemainderX => (
+            Cov6ImplicitKernargFieldKindV1::Remainder(0),
+            COV6_REMAINDER_X_OFFSET_V1,
+            2,
+        ),
+        HiddenValueKind::RemainderY => (
+            Cov6ImplicitKernargFieldKindV1::Remainder(1),
+            COV6_REMAINDER_Y_OFFSET_V1,
+            2,
+        ),
+        HiddenValueKind::RemainderZ => (
+            Cov6ImplicitKernargFieldKindV1::Remainder(2),
+            COV6_REMAINDER_Z_OFFSET_V1,
+            2,
+        ),
+        HiddenValueKind::GlobalOffsetX => (
+            Cov6ImplicitKernargFieldKindV1::GlobalOffset(0),
+            COV6_GLOBAL_OFFSET_X_OFFSET_V1,
+            8,
+        ),
+        HiddenValueKind::GlobalOffsetY => (
+            Cov6ImplicitKernargFieldKindV1::GlobalOffset(1),
+            COV6_GLOBAL_OFFSET_Y_OFFSET_V1,
+            8,
+        ),
+        HiddenValueKind::GlobalOffsetZ => (
+            Cov6ImplicitKernargFieldKindV1::GlobalOffset(2),
+            COV6_GLOBAL_OFFSET_Z_OFFSET_V1,
+            8,
+        ),
+        HiddenValueKind::GridDimensions => (
+            Cov6ImplicitKernargFieldKindV1::GridDimensions,
+            COV6_GRID_DIMENSIONS_OFFSET_V1,
+            2,
+        ),
+        HiddenValueKind::DynamicLdsSize => (
+            Cov6ImplicitKernargFieldKindV1::DynamicLdsSize,
+            COV6_DYNAMIC_LDS_SIZE_OFFSET_V1,
+            4,
+        ),
+        HiddenValueKind::None
+        | HiddenValueKind::PrintfBuffer
+        | HiddenValueKind::HostcallBuffer
+        | HiddenValueKind::HeapV1
+        | HiddenValueKind::DefaultQueue
+        | HiddenValueKind::CompletionAction
+        | HiddenValueKind::MultigridSyncArgument
+        | HiddenValueKind::PrivateBase
+        | HiddenValueKind::SharedBase
+        | HiddenValueKind::QueuePointer => return None,
+    };
+    Some(Cov6ImplicitKernargFieldV1 {
+        kind,
+        relative_offset,
+        byte_len,
+    })
+}
+
+fn validate_and_derive_cov6_implicit_kernarg(
+    packet: usize,
+    kernel: &InspectedKernel,
+    input: &Gfx942FixedDispatchPacketV1,
+    plan: Option<&Cov6ImplicitKernargPlanV1>,
+) -> Result<Option<Cov6ImplicitKernargValuesV1>, Gfx942DispatchBindingErrorV1> {
+    let Some(plan) = plan else {
+        return Ok(None);
+    };
+    validate_caller_zero_cov6_implicit_suffix(packet, &input.kernarg_bytes, plan)?;
+    derive_cov6_implicit_kernarg_values(
+        input.geometry,
+        input.dynamic_group_segment_bytes,
+        kernel.uniform_work_group_size(),
+    )
+    .map(Some)
+    .map_err(|detail| Gfx942DispatchBindingErrorV1::Geometry { packet, detail })
+}
+
+fn validate_caller_zero_cov6_implicit_suffix(
+    packet: usize,
+    kernarg: &[u8],
+    plan: &Cov6ImplicitKernargPlanV1,
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    let suffix_end = plan
+        .byte_offset
+        .checked_add(COV6_IMPLICIT_ARGUMENT_BYTES_V1)
+        .ok_or(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+            packet,
+            detail: "implicit-kernarg suffix overflow",
+        })?;
+    if kernarg
+        .get(plan.byte_offset..suffix_end)
+        .is_none_or(|suffix| suffix.iter().any(|byte| *byte != 0))
+    {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+            packet,
+            detail: "caller must zero the complete COV6 implicit-kernarg suffix",
+        });
+    }
+    Ok(())
+}
+
+fn derive_cov6_implicit_kernarg_values(
+    geometry: AqlDispatchGeometryV1,
+    dynamic_lds_size: u32,
+    uniform_workgroup: bool,
+) -> Result<Cov6ImplicitKernargValuesV1, &'static str> {
+    let dimensions = usize::from(geometry.dimensions());
+    if !(1..=3).contains(&dimensions) {
+        return Err("implicit-kernarg grid dimensions");
+    }
+    let grid = geometry.grid();
+    let observed_workgroup = geometry.workgroup();
+    let mut block_count = [1; 3];
+    let mut group_size = [1; 3];
+    let mut remainder = [0; 3];
+    for axis in 0..3 {
+        let workgroup = u32::from(observed_workgroup[axis]);
+        if axis >= dimensions {
+            if grid[axis] != 1 || workgroup != 1 {
+                return Err("inactive implicit-kernarg dimension");
+            }
+            continue;
+        }
+        block_count[axis] = grid[axis] / workgroup;
+        group_size[axis] = observed_workgroup[axis];
+        remainder[axis] = (grid[axis] % workgroup) as u16;
+    }
+    if uniform_workgroup && remainder != [0; 3] {
+        return Err("uniform workgroup has a partial remainder");
+    }
+    Ok(Cov6ImplicitKernargValuesV1 {
+        block_count,
+        group_size,
+        remainder,
+        grid_dimensions: geometry.dimensions(),
+        dynamic_lds_size,
+    })
+}
+
+fn initialize_cov6_implicit_kernarg(
+    kernarg: &mut [u8],
+    plan: &Cov6ImplicitKernargPlanV1,
+    values: Cov6ImplicitKernargValuesV1,
+) {
+    debug_assert!(
+        kernarg[plan.byte_offset..plan.byte_offset + COV6_IMPLICIT_ARGUMENT_BYTES_V1]
+            .iter()
+            .all(|byte| *byte == 0)
+    );
+    for field in &plan.fields {
+        let offset = plan.byte_offset + field.relative_offset;
+        match field.kind {
+            Cov6ImplicitKernargFieldKindV1::BlockCount(axis) => {
+                put_u32(kernarg, offset, values.block_count[axis]);
+            }
+            Cov6ImplicitKernargFieldKindV1::GroupSize(axis) => {
+                put_u16(kernarg, offset, values.group_size[axis]);
+            }
+            Cov6ImplicitKernargFieldKindV1::Remainder(axis) => {
+                put_u16(kernarg, offset, values.remainder[axis]);
+            }
+            Cov6ImplicitKernargFieldKindV1::GlobalOffset(axis) => {
+                let _ = axis;
+                put_u64(kernarg, offset, 0);
+            }
+            Cov6ImplicitKernargFieldKindV1::GridDimensions => {
+                put_u16(kernarg, offset, values.grid_dimensions);
+            }
+            Cov6ImplicitKernargFieldKindV1::DynamicLdsSize => {
+                put_u32(kernarg, offset, values.dynamic_lds_size);
+            }
+        }
+    }
+}
+
+fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
+    bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
+    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+struct PublicDataBindingStateV1<'a> {
+    effects: &'a mut [Option<DeviceDataEffectV1>],
+    writable_ranges: &'a mut [Vec<CompletedWritableRangeV1>],
+    completed_snapshots: &'a mut [Vec<CompletedSnapshotRangeV1>],
+}
+
+fn validate_public_packet_bindings(
+    packet: usize,
+    kernel: &ValidatedKernelEnvelope<'_>,
+    input: &Gfx942FixedDispatchPacketV1,
+    data: &[Gfx942FixedDispatchDataLayoutV1],
+    state: PublicDataBindingStateV1<'_>,
+) -> Result<Box<[DevicePointerPatchV1]>, Gfx942DispatchBindingErrorV1> {
+    let arguments = kernel.selected_kernel().explicit_arguments();
+    let global_count = arguments
+        .iter()
+        .filter(|argument| argument.value_kind() == ExplicitValueKind::GlobalBuffer)
+        .count();
+    if input.buffers.len() != global_count {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+            packet,
+            detail: "global-buffer binding cardinality",
+        });
+    }
+    let mut seen_arguments = vec![false; arguments.len()];
+    let mut patches = Vec::with_capacity(input.buffers.len());
+    for binding in &input.buffers {
+        let argument = arguments.get(binding.explicit_argument_index).ok_or(
+            Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet,
+                detail: "explicit argument index",
+            },
+        )?;
+        if seen_arguments[binding.explicit_argument_index]
+            || argument.value_kind() != ExplicitValueKind::GlobalBuffer
+            || argument.size() != 8
+            || argument.address_space() != Some(ArgumentAddressSpace::Global)
+        {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet,
+                detail: "inspected global-buffer argument",
+            });
+        }
+        seen_arguments[binding.explicit_argument_index] = true;
+        let layout =
+            data.get(binding.data_index)
+                .ok_or(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                    packet,
+                    detail: "dispatch data index",
+                })?;
+        let (patch, effect, completed_snapshot) = validate_inspected_buffer_contract(
+            packet,
+            &input.kernarg_bytes,
+            binding,
+            layout.requested_bytes(),
+            layout.alignment(),
+            &input.buffers,
+            InspectedBufferContractV1 {
+                pointer_offset: argument.offset(),
+                declared_access: argument.access(),
+                actual_access: kernel.dispatch_actual_access(binding.explicit_argument_index),
+                pointee_alignment: kernel
+                    .dispatch_pointee_alignment(binding.explicit_argument_index),
+            },
+        )?;
+        state.effects[binding.data_index] =
+            Some(merge_effect(state.effects[binding.data_index], effect));
+        if matches!(
+            effect,
+            DeviceDataEffectV1::WriteOnly | DeviceDataEffectV1::ReadWrite
+        ) {
+            state.writable_ranges[binding.data_index].push(CompletedWritableRangeV1 {
+                offset: binding.data_byte_offset,
+                byte_len: binding.byte_len,
+            });
+        }
+        if let Some(snapshot) = completed_snapshot {
+            state.completed_snapshots[binding.data_index].push(snapshot);
+        }
+        if patches.iter().any(|prior: &DevicePointerPatchV1| {
+            ranges_overlap_usize(prior.byte_offset, 8, patch.byte_offset, 8)
+        }) {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet,
+                detail: "overlapping pointer fields",
+            });
+        }
+        patches.push(patch);
+    }
+    if arguments.iter().enumerate().any(|(index, argument)| {
+        argument.value_kind() == ExplicitValueKind::GlobalBuffer && !seen_arguments[index]
+    }) {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+            packet,
+            detail: "missing inspected global-buffer binding",
+        });
+    }
+    Ok(patches.into_boxed_slice())
+}
+
+#[derive(Clone, Copy)]
+struct InspectedBufferContractV1 {
+    pointer_offset: u64,
+    declared_access: Option<ArgumentAccess>,
+    actual_access: Option<ArgumentAccess>,
+    pointee_alignment: Option<u64>,
+}
+
+fn validate_inspected_buffer_contract(
+    packet: usize,
+    kernarg_bytes: &[u8],
+    binding: &Gfx942DispatchBufferBindingV1,
+    allocation_bytes: u64,
+    allocation_alignment: u64,
+    all_bindings: &[Gfx942DispatchBufferBindingV1],
+    contract: InspectedBufferContractV1,
+) -> Result<
+    (
+        DevicePointerPatchV1,
+        DeviceDataEffectV1,
+        Option<CompletedSnapshotRangeV1>,
+    ),
+    Gfx942DispatchBindingErrorV1,
+> {
+    let access = contract
+        .actual_access
+        .ok_or(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+            packet,
+            detail: "missing inspected actual access",
+        })?;
+    if contract
+        .declared_access
+        .is_some_and(|declared| declared != access)
+    {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+            packet,
+            detail: "declared/actual access contradiction",
+        });
+    }
+    let required_alignment =
+        contract
+            .pointee_alignment
+            .ok_or(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet,
+                detail: "missing inspected pointee alignment",
+            })?;
+    let pointer_offset = usize::try_from(contract.pointer_offset).map_err(|_| {
+        Gfx942DispatchBindingErrorV1::InvalidKernarg {
+            packet,
+            detail: "pointer field offset conversion",
+        }
+    })?;
+    let pointer_end =
+        pointer_offset
+            .checked_add(8)
+            .ok_or(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet,
+                detail: "pointer field overflow",
+            })?;
+    if !pointer_offset.is_multiple_of(8)
+        || pointer_end > kernarg_bytes.len()
+        || kernarg_bytes[pointer_offset..pointer_end] != [0; 8]
+        || binding.byte_len == 0
+        || required_alignment == 0
+        || !required_alignment.is_power_of_two()
+        || required_alignment > allocation_alignment
+        || !binding.data_byte_offset.is_multiple_of(required_alignment)
+        || binding
+            .data_byte_offset
+            .checked_add(binding.byte_len)
+            .is_none_or(|end| end > allocation_bytes)
+        || all_bindings.iter().any(|other| {
+            other != binding
+                && other.data_index == binding.data_index
+                && ranges_overlap_u64(
+                    other.data_byte_offset,
+                    other.byte_len,
+                    binding.data_byte_offset,
+                    binding.byte_len,
+                )
+        })
+    {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+            packet,
+            detail: "dispatch buffer range or alias",
+        });
+    }
+    let effect = match access {
+        ArgumentAccess::ReadOnly => DeviceDataEffectV1::ReadOnly,
+        ArgumentAccess::WriteOnly => DeviceDataEffectV1::WriteOnly,
+        ArgumentAccess::ReadWrite => DeviceDataEffectV1::ReadWrite,
+    };
+    if let Some(snapshot) = binding.completed_snapshot {
+        validate_completed_snapshot_binding(
+            packet,
+            binding,
+            snapshot,
+            allocation_bytes,
+            all_bindings,
+            effect,
+        )?;
+    }
+    Ok((
+        DevicePointerPatchV1::new(
+            pointer_offset,
+            binding.data_index,
+            binding.data_byte_offset,
+            binding.byte_len,
+            required_alignment,
+        ),
+        effect,
+        binding.completed_snapshot,
+    ))
+}
+
+fn validate_completed_snapshot_binding(
+    packet: usize,
+    binding: &Gfx942DispatchBufferBindingV1,
+    snapshot: CompletedSnapshotRangeV1,
+    allocation_bytes: u64,
+    all_bindings: &[Gfx942DispatchBufferBindingV1],
+    effect: DeviceDataEffectV1,
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    let interior_end = binding
+        .data_byte_offset
+        .checked_add(binding.byte_len)
+        .ok_or(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+            packet,
+            detail: "completed snapshot interior overflow",
+        })?;
+    let snapshot_end = snapshot.offset.checked_add(snapshot.byte_len).ok_or(
+        Gfx942DispatchBindingErrorV1::InvalidKernarg {
+            packet,
+            detail: "completed snapshot range overflow",
+        },
+    )?;
+    if !matches!(
+        effect,
+        DeviceDataEffectV1::WriteOnly | DeviceDataEffectV1::ReadWrite
+    ) {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+            packet,
+            detail: "completed snapshot requires inspected write access",
+        });
+    }
+    if snapshot.interior_offset != binding.data_byte_offset
+        || snapshot.interior_byte_len != binding.byte_len
+        || snapshot.byte_len == 0
+        || snapshot.offset >= binding.data_byte_offset
+        || interior_end >= snapshot_end
+        || snapshot_end > allocation_bytes
+    {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+            packet,
+            detail: "completed snapshot strict enclosing range",
+        });
+    }
+    if all_bindings.iter().any(|other| {
+        other != binding
+            && other.data_index == binding.data_index
+            && ranges_overlap_u64(
+                snapshot.offset,
+                snapshot.byte_len,
+                other.data_byte_offset,
+                other.byte_len,
+            )
+    }) {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+            packet,
+            detail: "completed snapshot overlaps another buffer binding",
+        });
+    }
+    Ok(())
+}
+
+fn merge_effect(
+    existing: Option<DeviceDataEffectV1>,
+    next: DeviceDataEffectV1,
+) -> DeviceDataEffectV1 {
+    match existing {
+        None => next,
+        Some(existing) if existing == next => next,
+        Some(_) => DeviceDataEffectV1::ReadWrite,
+    }
+}
+
+fn validate_initialization_premises(
+    effects: &[Option<DeviceDataEffectV1>],
+    initialized: &[bool],
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    if effects.len() != initialized.len() {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: effects.len().min(initialized.len()),
+            detail: "initialization/effect cardinality",
+        });
+    }
+    for (index, effect) in effects.iter().enumerate() {
+        if effect.is_some_and(DeviceDataEffectV1::reads) && !initialized[index] {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index,
+                detail: "inspected read requires sealed initialized storage",
+            });
+        }
+    }
+    Ok(())
+}
+
+fn plan_public_retained_data(
+    layouts: &[Gfx942FixedDispatchDataLayoutV1],
+    initialized: &[bool],
+    effects: Vec<Option<DeviceDataEffectV1>>,
+    writable_ranges: Vec<Vec<CompletedWritableRangeV1>>,
+    completed_snapshots: Vec<Vec<CompletedSnapshotRangeV1>>,
+) -> Result<Vec<PublicRetainedDataPlanV1>, Gfx942DispatchBindingErrorV1> {
+    let expected = layouts.len();
+    let observed = [
+        initialized.len(),
+        effects.len(),
+        writable_ranges.len(),
+        completed_snapshots.len(),
+    ];
+    if observed.iter().any(|&len| len != expected) {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: observed
+                .into_iter()
+                .chain(core::iter::once(expected))
+                .min()
+                .unwrap_or(0),
+            detail: "public retained data cardinality",
+        });
+    }
+    validate_initialization_premises(&effects, initialized)?;
+    validate_completed_snapshot_premises(
+        layouts,
+        initialized,
+        &writable_ranges,
+        &completed_snapshots,
+    )?;
+    Ok(layouts
+        .iter()
+        .copied()
+        .zip(initialized.iter().copied())
+        .zip(effects)
+        .zip(writable_ranges)
+        .zip(completed_snapshots)
+        .map(
+            |((((layout, fully_initialized), effect), writable_ranges), completed_snapshots)| {
+                PublicRetainedDataPlanV1 {
+                    layout,
+                    effect,
+                    fully_initialized,
+                    writable_ranges: writable_ranges.into_boxed_slice(),
+                    completed_snapshots: completed_snapshots.into_boxed_slice(),
+                }
+            },
+        )
+        .collect())
+}
+
+fn validate_completed_snapshot_premises(
+    layouts: &[Gfx942FixedDispatchDataLayoutV1],
+    initialized: &[bool],
+    writable_ranges: &[Vec<CompletedWritableRangeV1>],
+    snapshots: &[Vec<CompletedSnapshotRangeV1>],
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    if layouts.len() != initialized.len()
+        || layouts.len() != writable_ranges.len()
+        || layouts.len() != snapshots.len()
+    {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: layouts
+                .len()
+                .min(initialized.len())
+                .min(writable_ranges.len())
+                .min(snapshots.len()),
+            detail: "completed snapshot premise cardinality",
+        });
+    }
+    for (index, declared) in snapshots.iter().enumerate() {
+        if declared.is_empty() {
+            continue;
+        }
+        if layouts[index].kind() != Gfx942FixedDispatchDataKindV1::HostVisibleCoherent {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index,
+                detail: "completed snapshot requires coherent host-visible storage",
+            });
+        }
+        if !initialized[index] {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index,
+                detail: "completed snapshot requires full initialization",
+            });
+        }
+        for (position, snapshot) in declared.iter().enumerate() {
+            if declared[..position].iter().any(|prior| {
+                ranges_overlap_u64(
+                    prior.offset,
+                    prior.byte_len,
+                    snapshot.offset,
+                    snapshot.byte_len,
+                )
+            }) {
+                return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                    index,
+                    detail: "completed snapshot ranges overlap",
+                });
+            }
+            let exact_interior_count = writable_ranges[index]
+                .iter()
+                .filter(|range| {
+                    range.offset == snapshot.interior_offset
+                        && range.byte_len == snapshot.interior_byte_len
+                })
+                .count();
+            let overlapping_write_count = writable_ranges[index]
+                .iter()
+                .filter(|range| {
+                    ranges_overlap_u64(
+                        range.offset,
+                        range.byte_len,
+                        snapshot.offset,
+                        snapshot.byte_len,
+                    )
+                })
+                .count();
+            if exact_interior_count != 1 || overlapping_write_count != 1 {
+                return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                    index,
+                    detail: "completed snapshot writable effect isolation",
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn align_up(value: usize, alignment: usize) -> Option<usize> {
+    value
+        .checked_add(alignment.checked_sub(1)?)
+        .map(|end| end & !(alignment - 1))
+}
+
+fn ranges_overlap_u64(left: u64, left_len: u64, right: u64, right_len: u64) -> bool {
+    let Some(left_end) = left.checked_add(left_len) else {
+        return true;
+    };
+    let Some(right_end) = right.checked_add(right_len) else {
+        return true;
+    };
+    left < right_end && right < left_end
+}
+
+fn validate_packet_count<const N: usize>() -> Result<(), Gfx942DispatchBindingErrorV1> {
+    if N == 0 {
+        return Err(Gfx942DispatchBindingErrorV1::ZeroPacketCount);
+    }
+    if N > AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize {
+        return Err(Gfx942DispatchBindingErrorV1::PacketCountExceedsMaximum {
+            requested: N,
+            maximum: AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize,
+        });
+    }
+    Ok(())
+}
+
+pub(super) fn validate_fixed_batch_ring<const N: usize>(
+    ring_bytes: u32,
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    validate_packet_count::<N>()?;
+    let capacity = AqlRingCapacityV1::from_ring_bytes(ring_bytes)
+        .map_err(|_| Gfx942DispatchBindingErrorV1::RingCapacity {
+            requested: N,
+            capacity: 0,
+        })?
+        .packets();
+    if N > capacity as usize {
+        return Err(Gfx942DispatchBindingErrorV1::RingCapacity {
+            requested: N,
+            capacity,
+        });
+    }
+    Ok(())
+}
+
+fn validate_data_inputs(
+    data: &[DeviceDataAllocationInputV1],
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    if data.is_empty() || data.len() > MAX_DISPATCH_DATA_LEASES_V1 {
+        return Err(Gfx942DispatchBindingErrorV1::DataLeaseCount {
+            requested: data.len(),
+            maximum: MAX_DISPATCH_DATA_LEASES_V1,
+        });
+    }
+    for (index, input) in data.iter().enumerate() {
+        let premise = input.premise;
+        if premise.role_identity == [0; 32] {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index,
+                detail: "zero role identity",
+            });
+        }
+        if input.requested_bytes == 0
+            || input.alignment == 0
+            || !input.alignment.is_power_of_two()
+            || input.alignment > 4096
+            || premise.valid_bytes == 0
+            || premise.valid_bytes > input.requested_bytes
+        {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index,
+                detail: "valid byte extent",
+            });
+        }
+        if premise.effect.reads() {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index,
+                detail: "read requires authenticated initialized-content authority",
+            });
+        }
+        if data[..index]
+            .iter()
+            .any(|prior| prior.premise.role_identity == premise.role_identity)
+        {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index,
+                detail: "role identity alias",
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_kernargs<const N: usize>(
+    kernargs: &[TypedKernargImageV1; N],
+    expected_bytes: usize,
+    data: &[DeviceDataAllocationInputV1],
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    let mut referenced = vec![false; data.len()];
+    for (packet, kernarg) in kernargs.iter().enumerate() {
+        if kernarg.layout_identity == [0; 32] || kernarg.bytes.len() != expected_bytes {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet,
+                detail: "typed layout identity or size",
+            });
+        }
+        for (patch_index, patch) in kernarg.device_pointers.iter().enumerate() {
+            let end = patch.byte_offset.checked_add(8).ok_or(
+                Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                    packet,
+                    detail: "pointer field overflow",
+                },
+            )?;
+            if !patch.byte_offset.is_multiple_of(8)
+                || end > kernarg.bytes.len()
+                || kernarg.bytes[patch.byte_offset..end] != [0; 8]
+                || patch.required_bytes == 0
+                || patch.required_alignment == 0
+                || !patch.required_alignment.is_power_of_two()
+                || patch.data_index >= data.len()
+                || !patch
+                    .data_byte_offset
+                    .is_multiple_of(patch.required_alignment)
+                || patch.required_alignment > data[patch.data_index].alignment
+                || patch
+                    .data_byte_offset
+                    .checked_add(patch.required_bytes)
+                    .is_none_or(|end| end > data[patch.data_index].premise.valid_bytes)
+                || kernarg.device_pointers[..patch_index]
+                    .iter()
+                    .any(|prior| ranges_overlap_usize(prior.byte_offset, 8, patch.byte_offset, 8))
+            {
+                return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                    packet,
+                    detail: "device pointer patch",
+                });
+            }
+            referenced[patch.data_index] = true;
+        }
+    }
+    if let Some(index) = referenced.iter().position(|referenced| !referenced) {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index,
+            detail: "lease not referenced by kernarg",
+        });
+    }
+    Ok(())
+}
+
+fn validate_geometry<const N: usize>(
+    resources: fe2o3_amdhsa_loader::SelectedKernelResourceBindingV1,
+    uniform_workgroup: bool,
+    geometry: &[DispatchGeometryV1; N],
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    for (packet, dispatch) in geometry.iter().enumerate() {
+        let observed_workgroup = dispatch.geometry.workgroup();
+        let workgroup = observed_workgroup.map(u32::from);
+        let grid = dispatch.geometry.grid();
+        let flat = u64::from(workgroup[0])
+            .checked_mul(u64::from(workgroup[1]))
+            .and_then(|xy| xy.checked_mul(u64::from(workgroup[2])))
+            .ok_or(Gfx942DispatchBindingErrorV1::Geometry {
+                packet,
+                detail: "workgroup product",
+            })?;
+        if flat > u64::from(resources.max_flat_workgroup_size())
+            || resources
+                .required_workgroup_size()
+                .is_some_and(|required| required != workgroup)
+        {
+            return Err(Gfx942DispatchBindingErrorV1::Geometry {
+                packet,
+                detail: "workgroup resource contract",
+            });
+        }
+        if uniform_workgroup
+            && grid
+                .iter()
+                .zip(workgroup)
+                .any(|(grid, workgroup)| !grid.is_multiple_of(workgroup))
+        {
+            return Err(Gfx942DispatchBindingErrorV1::Geometry {
+                packet,
+                detail: "uniform workgroup has a partial remainder",
+            });
+        }
+        for dimension in 0..3 {
+            if resources.max_workgroups()[dimension]
+                .is_some_and(|maximum| grid[dimension].div_ceil(workgroup[dimension]) > maximum)
+            {
+                return Err(Gfx942DispatchBindingErrorV1::Geometry {
+                    packet,
+                    detail: "workgroup count",
+                });
+            }
+        }
+        u64::from(dispatch.dynamic_group_segment_bytes)
+            .checked_add(resources.group_segment_fixed_size())
+            .and_then(|bytes| u32::try_from(bytes).ok())
+            .ok_or(Gfx942DispatchBindingErrorV1::Geometry {
+                packet,
+                detail: "group segment size",
+            })?;
+    }
+    Ok(())
+}
+
+fn ranges_overlap_usize(left: usize, left_len: usize, right: usize, right_len: usize) -> bool {
+    let Some(left_end) = left.checked_add(left_len) else {
+        return true;
+    };
+    let Some(right_end) = right.checked_add(right_len) else {
+        return true;
+    };
+    left < right_end && right < left_end
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn code_bound_kernarg_layout_requires_exact_dispatch_abi_identity() {
+        assert!(prepared_kernarg_layout_matches_code(
+            true, [0x41; 32], [0x41; 32]
+        ));
+        assert!(!prepared_kernarg_layout_matches_code(
+            true, [0x41; 32], [0x42; 32]
+        ));
+        assert!(prepared_kernarg_layout_matches_code(
+            false, [0x41; 32], [0x42; 32]
+        ));
+    }
+
+    fn premise(seed: u8, effect: DeviceDataEffectV1) -> DeviceDataPremiseV1 {
+        DeviceDataPremiseV1::new([seed; 32], 4096, effect)
+    }
+
+    fn typed(bytes: usize, patches: impl Into<Box<[DevicePointerPatchV1]>>) -> TypedKernargImageV1 {
+        TypedKernargImageV1::new(
+            [0x51; 32],
+            vec![0; bytes].into_boxed_slice(),
+            patches.into(),
+        )
+    }
+
+    // Pure preflight uses the same layout values as real C3 leases. The native
+    // lifecycle and fault boundaries are covered by shared_memory's backend
+    // fault matrix; these tests target dispatch-specific mutation ordering.
+    fn fake_input(seed: u64, premise: DeviceDataPremiseV1) -> DeviceDataAllocationInputV1 {
+        let _ = seed;
+        DeviceDataAllocationInputV1 {
+            requested_bytes: 4096,
+            alignment: 4096,
+            premise,
+        }
+    }
+
+    fn implicit_plan(byte_offset: usize, kinds: &[HiddenValueKind]) -> Cov6ImplicitKernargPlanV1 {
+        Cov6ImplicitKernargPlanV1 {
+            byte_offset,
+            fields: kinds
+                .iter()
+                .map(|kind| admitted_cov6_implicit_kernarg_field(*kind).unwrap())
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn manifest_digest_is_frozen() {
+        let digest = Sha256::digest(GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1);
+        let rendered: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        assert_eq!(rendered, GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1);
+    }
+
+    #[test]
+    fn implicit_kernarg_admits_only_geometry_and_dynamic_lds_fields() {
+        let admitted = [
+            (
+                HiddenValueKind::BlockCountX,
+                Cov6ImplicitKernargFieldKindV1::BlockCount(0),
+                0,
+                4,
+            ),
+            (
+                HiddenValueKind::BlockCountY,
+                Cov6ImplicitKernargFieldKindV1::BlockCount(1),
+                4,
+                4,
+            ),
+            (
+                HiddenValueKind::BlockCountZ,
+                Cov6ImplicitKernargFieldKindV1::BlockCount(2),
+                8,
+                4,
+            ),
+            (
+                HiddenValueKind::GroupSizeX,
+                Cov6ImplicitKernargFieldKindV1::GroupSize(0),
+                12,
+                2,
+            ),
+            (
+                HiddenValueKind::GroupSizeY,
+                Cov6ImplicitKernargFieldKindV1::GroupSize(1),
+                14,
+                2,
+            ),
+            (
+                HiddenValueKind::GroupSizeZ,
+                Cov6ImplicitKernargFieldKindV1::GroupSize(2),
+                16,
+                2,
+            ),
+            (
+                HiddenValueKind::RemainderX,
+                Cov6ImplicitKernargFieldKindV1::Remainder(0),
+                18,
+                2,
+            ),
+            (
+                HiddenValueKind::RemainderY,
+                Cov6ImplicitKernargFieldKindV1::Remainder(1),
+                20,
+                2,
+            ),
+            (
+                HiddenValueKind::RemainderZ,
+                Cov6ImplicitKernargFieldKindV1::Remainder(2),
+                22,
+                2,
+            ),
+            (
+                HiddenValueKind::GlobalOffsetX,
+                Cov6ImplicitKernargFieldKindV1::GlobalOffset(0),
+                40,
+                8,
+            ),
+            (
+                HiddenValueKind::GlobalOffsetY,
+                Cov6ImplicitKernargFieldKindV1::GlobalOffset(1),
+                48,
+                8,
+            ),
+            (
+                HiddenValueKind::GlobalOffsetZ,
+                Cov6ImplicitKernargFieldKindV1::GlobalOffset(2),
+                56,
+                8,
+            ),
+            (
+                HiddenValueKind::GridDimensions,
+                Cov6ImplicitKernargFieldKindV1::GridDimensions,
+                64,
+                2,
+            ),
+            (
+                HiddenValueKind::DynamicLdsSize,
+                Cov6ImplicitKernargFieldKindV1::DynamicLdsSize,
+                120,
+                4,
+            ),
+        ];
+        for (metadata_kind, kind, relative_offset, byte_len) in admitted {
+            assert_eq!(
+                admitted_cov6_implicit_kernarg_field(metadata_kind),
+                Some(Cov6ImplicitKernargFieldV1 {
+                    kind,
+                    relative_offset,
+                    byte_len,
+                })
+            );
+        }
+
+        for rejected in [
+            HiddenValueKind::None,
+            HiddenValueKind::PrintfBuffer,
+            HiddenValueKind::HostcallBuffer,
+            HiddenValueKind::HeapV1,
+            HiddenValueKind::DefaultQueue,
+            HiddenValueKind::CompletionAction,
+            HiddenValueKind::MultigridSyncArgument,
+            HiddenValueKind::PrivateBase,
+            HiddenValueKind::SharedBase,
+            HiddenValueKind::QueuePointer,
+        ] {
+            assert_eq!(admitted_cov6_implicit_kernarg_field(rejected), None);
+        }
+    }
+
+    #[test]
+    fn implicit_kernarg_requires_one_exact_trailing_256_byte_extent() {
+        assert_eq!(
+            exact_cov6_implicit_kernarg_offset(Some(48), 256, 304),
+            Some(48)
+        );
+        for invalid in [
+            exact_cov6_implicit_kernarg_offset(None, 256, 304),
+            exact_cov6_implicit_kernarg_offset(Some(48), 255, 303),
+            exact_cov6_implicit_kernarg_offset(Some(48), 256, 305),
+            exact_cov6_implicit_kernarg_offset(Some(u64::MAX - 127), 256, u64::MAX),
+        ] {
+            assert_eq!(invalid, None);
+        }
+    }
+
+    #[test]
+    fn caller_must_zero_every_byte_of_the_implicit_suffix() {
+        let plan = implicit_plan(16, &[]);
+        let mut kernarg = vec![0; 16 + COV6_IMPLICIT_ARGUMENT_BYTES_V1];
+        kernarg[0] = 0xa5;
+        assert!(validate_caller_zero_cov6_implicit_suffix(7, &kernarg, &plan).is_ok());
+
+        for index in [16, 16 + 127, kernarg.len() - 1] {
+            let mut hostile = kernarg.clone();
+            hostile[index] = 1;
+            assert!(matches!(
+                validate_caller_zero_cov6_implicit_suffix(7, &hostile, &plan),
+                Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                    packet: 7,
+                    detail: "caller must zero the complete COV6 implicit-kernarg suffix"
+                })
+            ));
+        }
+        assert!(validate_caller_zero_cov6_implicit_suffix(7, &kernarg[..271], &plan).is_err());
+    }
+
+    #[test]
+    fn implicit_kernarg_uses_full_block_counts_and_partial_remainders() {
+        let values = derive_cov6_implicit_kernarg_values(
+            AqlDispatchGeometryV1::new([257, 3, 1], [64, 2, 1]).unwrap(),
+            384,
+            false,
+        )
+        .unwrap();
+        assert_eq!(values.block_count, [4, 1, 1]);
+        assert_eq!(values.group_size, [64, 2, 1]);
+        assert_eq!(values.remainder, [1, 1, 0]);
+        assert_eq!(values.grid_dimensions, 2);
+        assert_eq!(values.dynamic_lds_size, 384);
+
+        assert!(
+            derive_cov6_implicit_kernarg_values(
+                AqlDispatchGeometryV1::new([257, 3, 1], [64, 2, 1]).unwrap(),
+                384,
+                true,
+            )
+            .is_err()
+        );
+        let uniform = derive_cov6_implicit_kernarg_values(
+            AqlDispatchGeometryV1::new([256, 4, 1], [64, 2, 1]).unwrap(),
+            0,
+            true,
+        )
+        .unwrap();
+        assert_eq!(uniform.block_count, [4, 2, 1]);
+        assert_eq!(uniform.remainder, [0, 0, 0]);
+    }
+
+    #[test]
+    fn private_initializer_writes_only_metadata_declared_implicit_fields() {
+        let kinds = [
+            HiddenValueKind::BlockCountX,
+            HiddenValueKind::BlockCountY,
+            HiddenValueKind::BlockCountZ,
+            HiddenValueKind::GroupSizeX,
+            HiddenValueKind::GroupSizeY,
+            HiddenValueKind::GroupSizeZ,
+            HiddenValueKind::RemainderX,
+            HiddenValueKind::RemainderY,
+            HiddenValueKind::RemainderZ,
+            HiddenValueKind::GlobalOffsetX,
+            HiddenValueKind::GlobalOffsetY,
+            HiddenValueKind::GlobalOffsetZ,
+            HiddenValueKind::GridDimensions,
+            HiddenValueKind::DynamicLdsSize,
+        ];
+        let plan = implicit_plan(8, &kinds);
+        let values = derive_cov6_implicit_kernarg_values(
+            AqlDispatchGeometryV1::new([257, 3, 1], [64, 2, 1]).unwrap(),
+            384,
+            false,
+        )
+        .unwrap();
+        let mut actual = vec![0; 8 + COV6_IMPLICIT_ARGUMENT_BYTES_V1];
+        actual[..8].fill(0xa5);
+        initialize_cov6_implicit_kernarg(&mut actual, &plan, values);
+
+        let mut expected = vec![0; actual.len()];
+        expected[..8].fill(0xa5);
+        put_u32(&mut expected, 8, 4);
+        put_u32(&mut expected, 12, 1);
+        put_u32(&mut expected, 16, 1);
+        put_u16(&mut expected, 20, 64);
+        put_u16(&mut expected, 22, 2);
+        put_u16(&mut expected, 24, 1);
+        put_u16(&mut expected, 26, 1);
+        put_u16(&mut expected, 28, 1);
+        put_u16(&mut expected, 30, 0);
+        put_u64(&mut expected, 48, 0);
+        put_u64(&mut expected, 56, 0);
+        put_u64(&mut expected, 64, 0);
+        put_u16(&mut expected, 72, 2);
+        put_u32(&mut expected, 128, 384);
+        assert_eq!(actual, expected);
+    }
+
+    fn inspected(
+        pointer_offset: u64,
+        actual_access: Option<ArgumentAccess>,
+        pointee_alignment: Option<u64>,
+    ) -> InspectedBufferContractV1 {
+        InspectedBufferContractV1 {
+            pointer_offset,
+            declared_access: actual_access,
+            actual_access,
+            pointee_alignment,
+        }
+    }
+
+    #[test]
+    fn public_buffer_contract_rejects_pointer_range_alignment_and_alias_drift() {
+        let binding = Gfx942DispatchBufferBindingV1::new(0, 0, 0, 64);
+        let bytes = [0u8; 32];
+        let (patch, effect, completed_snapshot) = validate_inspected_buffer_contract(
+            0,
+            &bytes,
+            &binding,
+            4096,
+            4096,
+            &[binding],
+            inspected(8, Some(ArgumentAccess::ReadOnly), Some(16)),
+        )
+        .unwrap();
+        assert_eq!(patch.byte_offset, 8);
+        assert_eq!(effect, DeviceDataEffectV1::ReadOnly);
+        assert_eq!(completed_snapshot, None);
+
+        let mut nonzero = bytes;
+        nonzero[8] = 1;
+        assert!(
+            validate_inspected_buffer_contract(
+                0,
+                &nonzero,
+                &binding,
+                4096,
+                4096,
+                &[binding],
+                inspected(8, Some(ArgumentAccess::ReadOnly), Some(16)),
+            )
+            .is_err()
+        );
+
+        let overflow = Gfx942DispatchBufferBindingV1::new(0, 0, 4080, 32);
+        assert!(
+            validate_inspected_buffer_contract(
+                0,
+                &bytes,
+                &overflow,
+                4096,
+                4096,
+                &[overflow],
+                inspected(8, Some(ArgumentAccess::WriteOnly), Some(16)),
+            )
+            .is_err()
+        );
+
+        let misaligned = Gfx942DispatchBufferBindingV1::new(0, 0, 4, 64);
+        assert!(
+            validate_inspected_buffer_contract(
+                0,
+                &bytes,
+                &misaligned,
+                4096,
+                4096,
+                &[misaligned],
+                inspected(8, Some(ArgumentAccess::WriteOnly), Some(16)),
+            )
+            .is_err()
+        );
+
+        let alias = Gfx942DispatchBufferBindingV1::new(1, 0, 32, 64);
+        assert!(
+            validate_inspected_buffer_contract(
+                0,
+                &bytes,
+                &binding,
+                4096,
+                4096,
+                &[binding, alias],
+                inspected(8, Some(ArgumentAccess::ReadOnly), Some(16)),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn public_buffer_contract_requires_inspected_access_and_alignment() {
+        let binding = Gfx942DispatchBufferBindingV1::new(0, 0, 0, 64);
+        let bytes = [0u8; 32];
+        assert!(
+            validate_inspected_buffer_contract(
+                0,
+                &bytes,
+                &binding,
+                4096,
+                4096,
+                &[binding],
+                inspected(8, None, Some(16)),
+            )
+            .is_err()
+        );
+        assert!(
+            validate_inspected_buffer_contract(
+                0,
+                &bytes,
+                &binding,
+                4096,
+                4096,
+                &[binding],
+                inspected(8, Some(ArgumentAccess::ReadOnly), None),
+            )
+            .is_err()
+        );
+        assert!(
+            validate_inspected_buffer_contract(
+                0,
+                &bytes,
+                &binding,
+                4096,
+                4096,
+                &[binding],
+                InspectedBufferContractV1 {
+                    pointer_offset: 8,
+                    declared_access: Some(ArgumentAccess::WriteOnly),
+                    actual_access: Some(ArgumentAccess::ReadOnly),
+                    pointee_alignment: Some(16),
+                },
+            )
+            .is_err()
+        );
+        assert!(
+            validate_inspected_buffer_contract(
+                0,
+                &bytes,
+                &binding,
+                4096,
+                4096,
+                &[binding],
+                inspected(4, Some(ArgumentAccess::ReadOnly), Some(16)),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn completed_snapshot_binding_requires_strict_isolated_writable_enclosure() {
+        let valid =
+            Gfx942DispatchBufferBindingV1::new_with_completed_snapshot(0, 0, 64, 64, 32, 128);
+        let bytes = [0u8; 32];
+        let (_, effect, snapshot) = validate_inspected_buffer_contract(
+            0,
+            &bytes,
+            &valid,
+            256,
+            64,
+            &[valid],
+            inspected(8, Some(ArgumentAccess::WriteOnly), Some(16)),
+        )
+        .unwrap();
+        assert_eq!(effect, DeviceDataEffectV1::WriteOnly);
+        assert_eq!(
+            snapshot,
+            Some(CompletedSnapshotRangeV1 {
+                offset: 32,
+                byte_len: 128,
+                interior_offset: 64,
+                interior_byte_len: 64,
+            })
+        );
+
+        assert!(
+            validate_inspected_buffer_contract(
+                0,
+                &bytes,
+                &valid,
+                256,
+                64,
+                &[valid],
+                inspected(8, Some(ArgumentAccess::ReadOnly), Some(16)),
+            )
+            .is_err()
+        );
+        for invalid in [
+            Gfx942DispatchBufferBindingV1::new_with_completed_snapshot(0, 0, 64, 64, 64, 96),
+            Gfx942DispatchBufferBindingV1::new_with_completed_snapshot(0, 0, 64, 64, 32, 96),
+            Gfx942DispatchBufferBindingV1::new_with_completed_snapshot(0, 0, 64, 64, 32, 240),
+        ] {
+            assert!(
+                validate_inspected_buffer_contract(
+                    0,
+                    &bytes,
+                    &invalid,
+                    256,
+                    64,
+                    &[invalid],
+                    inspected(8, Some(ArgumentAccess::WriteOnly), Some(16)),
+                )
+                .is_err()
+            );
+        }
+
+        let alias = Gfx942DispatchBufferBindingV1::new(1, 0, 144, 16);
+        assert!(
+            validate_inspected_buffer_contract(
+                0,
+                &bytes,
+                &valid,
+                256,
+                64,
+                &[valid, alias],
+                inspected(8, Some(ArgumentAccess::WriteOnly), Some(16)),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn completed_snapshot_premises_require_initialized_coherent_isolated_writes() {
+        let host = Gfx942FixedDispatchDataLayoutV1 {
+            kind: Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+            requested_bytes: 256,
+            alignment: 64,
+        };
+        let device = Gfx942FixedDispatchDataLayoutV1 {
+            kind: Gfx942FixedDispatchDataKindV1::DeviceLocal,
+            requested_bytes: 256,
+            alignment: 64,
+        };
+        let writable = vec![CompletedWritableRangeV1 {
+            offset: 64,
+            byte_len: 64,
+        }];
+        let snapshot = CompletedSnapshotRangeV1 {
+            offset: 32,
+            byte_len: 128,
+            interior_offset: 64,
+            interior_byte_len: 64,
+        };
+        assert!(
+            validate_completed_snapshot_premises(
+                &[host],
+                &[true],
+                core::slice::from_ref(&writable),
+                &[vec![snapshot]],
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_completed_snapshot_premises(
+                &[host],
+                &[false],
+                core::slice::from_ref(&writable),
+                &[vec![snapshot]],
+            )
+            .is_err()
+        );
+        assert!(
+            validate_completed_snapshot_premises(
+                &[device],
+                &[true],
+                core::slice::from_ref(&writable),
+                &[vec![snapshot]],
+            )
+            .is_err()
+        );
+
+        let extra_write = vec![
+            CompletedWritableRangeV1 {
+                offset: 64,
+                byte_len: 64,
+            },
+            CompletedWritableRangeV1 {
+                offset: 144,
+                byte_len: 8,
+            },
+        ];
+        assert!(
+            validate_completed_snapshot_premises(
+                &[host],
+                &[true],
+                &[extra_write],
+                &[vec![snapshot]],
+            )
+            .is_err()
+        );
+        let overlapping_snapshot = CompletedSnapshotRangeV1 {
+            offset: 16,
+            byte_len: 152,
+            interior_offset: 64,
+            interior_byte_len: 64,
+        };
+        assert!(
+            validate_completed_snapshot_premises(
+                &[host],
+                &[true],
+                &[writable],
+                &[vec![snapshot, overlapping_snapshot]],
+            )
+            .is_err()
+        );
+        assert!(validate_completed_snapshot_premises(&[host], &[], &[], &[]).is_err());
+    }
+
+    #[test]
+    fn public_read_effect_requires_sealed_initialization() {
+        assert!(
+            validate_initialization_premises(&[Some(DeviceDataEffectV1::WriteOnly)], &[false],)
+                .is_ok()
+        );
+        assert!(
+            validate_initialization_premises(&[Some(DeviceDataEffectV1::ReadOnly)], &[true],)
+                .is_ok()
+        );
+        assert!(matches!(
+            validate_initialization_premises(&[Some(DeviceDataEffectV1::ReadWrite)], &[false],),
+            Err(Gfx942DispatchBindingErrorV1::InvalidData { index: 0, .. })
+        ));
+        assert_eq!(
+            merge_effect(
+                Some(DeviceDataEffectV1::WriteOnly),
+                DeviceDataEffectV1::ReadOnly,
+            ),
+            DeviceDataEffectV1::ReadWrite
+        );
+    }
+
+    #[test]
+    fn public_fixed_batch_retains_untouched_roster_premises() {
+        let layout = Gfx942FixedDispatchDataLayoutV1 {
+            kind: Gfx942FixedDispatchDataKindV1::DeviceLocal,
+            requested_bytes: 256,
+            alignment: 64,
+        };
+        for untouched_initialized in [false, true] {
+            let initialized = [false, untouched_initialized];
+            let plans = plan_public_retained_data(
+                &[layout, layout],
+                &initialized,
+                vec![Some(DeviceDataEffectV1::WriteOnly), None],
+                vec![
+                    vec![CompletedWritableRangeV1 {
+                        offset: 0,
+                        byte_len: 256,
+                    }],
+                    vec![],
+                ],
+                vec![vec![], vec![]],
+            )
+            .unwrap();
+
+            assert_eq!(plans.len(), 2);
+            assert_eq!(plans[0].effect, Some(DeviceDataEffectV1::WriteOnly));
+            assert!(!plans[0].fully_initialized);
+            assert_eq!(plans[1].effect, None);
+            assert_eq!(plans[1].fully_initialized, untouched_initialized);
+            assert!(plans[1].writable_ranges.is_empty());
+            assert!(plans[1].completed_snapshots.is_empty());
+        }
+
+        assert!(matches!(
+            validate_initialization_premises(
+                &[
+                    Some(DeviceDataEffectV1::WriteOnly),
+                    Some(DeviceDataEffectV1::ReadOnly),
+                ],
+                &[false, false],
+            ),
+            Err(Gfx942DispatchBindingErrorV1::InvalidData { index: 1, .. })
+        ));
+        assert!(
+            validate_initialization_premises(
+                &[
+                    Some(DeviceDataEffectV1::WriteOnly),
+                    Some(DeviceDataEffectV1::ReadOnly),
+                ],
+                &[false, true],
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn packet_and_data_bounds_are_exact() {
+        assert_eq!(
+            validate_packet_count::<0>().unwrap_err().to_string(),
+            "ZeroPacketCount"
+        );
+        assert!(validate_packet_count::<1>().is_ok());
+        assert!(validate_packet_count::<8192>().is_ok());
+        assert!(matches!(
+            validate_packet_count::<8193>(),
+            Err(Gfx942DispatchBindingErrorV1::PacketCountExceedsMaximum { .. })
+        ));
+        assert!(matches!(
+            validate_data_inputs(&[]),
+            Err(Gfx942DispatchBindingErrorV1::DataLeaseCount { .. })
+        ));
+        let sixteen: Vec<_> = (1..=16)
+            .map(|seed| fake_input(seed, premise(seed as u8, DeviceDataEffectV1::WriteOnly)))
+            .collect();
+        assert!(validate_data_inputs(&sixteen).is_ok());
+        let seventeen: Vec<_> = (1..=17)
+            .map(|seed| fake_input(seed, premise(seed as u8, DeviceDataEffectV1::WriteOnly)))
+            .collect();
+        assert!(matches!(
+            validate_data_inputs(&seventeen),
+            Err(Gfx942DispatchBindingErrorV1::DataLeaseCount { .. })
+        ));
+    }
+
+    #[test]
+    fn fixed_batch_ring_must_cover_every_packet_before_native_preparation() {
+        assert!(validate_fixed_batch_ring::<1024>(65_536).is_ok());
+        assert!(validate_fixed_batch_ring::<8192>(524_288).is_ok());
+        assert!(matches!(
+            validate_fixed_batch_ring::<8192>(262_144),
+            Err(Gfx942DispatchBindingErrorV1::RingCapacity {
+                requested: 8192,
+                capacity: 4096,
+            })
+        ));
+        assert!(matches!(
+            validate_fixed_batch_ring::<8193>(1_048_576),
+            Err(Gfx942DispatchBindingErrorV1::PacketCountExceedsMaximum { .. })
+        ));
+    }
+
+    #[test]
+    fn data_premises_reject_uninitialized_reads_and_identity_aliases() {
+        for effect in [DeviceDataEffectV1::ReadOnly, DeviceDataEffectV1::ReadWrite] {
+            assert!(matches!(
+                validate_data_inputs(&[fake_input(1, premise(1, effect))]),
+                Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                    detail: "read requires authenticated initialized-content authority",
+                    ..
+                })
+            ));
+        }
+        assert!(
+            validate_data_inputs(&[fake_input(1, premise(1, DeviceDataEffectV1::WriteOnly))])
+                .is_ok()
+        );
+        assert!(matches!(
+            validate_data_inputs(&[
+                fake_input(1, premise(7, DeviceDataEffectV1::WriteOnly)),
+                fake_input(2, premise(7, DeviceDataEffectV1::WriteOnly)),
+            ]),
+            Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                detail: "role identity alias",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn typed_pointer_layout_is_complete_bounded_and_nonoverlapping() {
+        let data = [
+            fake_input(1, premise(1, DeviceDataEffectV1::WriteOnly)),
+            fake_input(2, premise(2, DeviceDataEffectV1::WriteOnly)),
+        ];
+        let valid = typed(
+            32,
+            vec![
+                DevicePointerPatchV1::new(0, 0, 0, 4096, 8),
+                DevicePointerPatchV1::new(8, 1, 0, 4096, 8),
+            ],
+        );
+        assert!(validate_kernargs(&[valid], 32, &data).is_ok());
+
+        let cases = [
+            typed(32, vec![DevicePointerPatchV1::new(1, 0, 0, 8, 8)]),
+            typed(32, vec![DevicePointerPatchV1::new(32, 0, 0, 8, 8)]),
+            typed(32, vec![DevicePointerPatchV1::new(0, 2, 0, 8, 8)]),
+            typed(32, vec![DevicePointerPatchV1::new(0, 0, 4090, 8, 8)]),
+            typed(
+                32,
+                vec![
+                    DevicePointerPatchV1::new(0, 0, 0, 8, 8),
+                    DevicePointerPatchV1::new(0, 1, 0, 8, 8),
+                ],
+            ),
+        ];
+        for invalid in cases {
+            assert!(matches!(
+                validate_kernargs(&[invalid], 32, &data),
+                Err(Gfx942DispatchBindingErrorV1::InvalidKernarg { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn every_data_lease_must_be_referenced_by_every_batch_shape() {
+        let data = [
+            fake_input(1, premise(1, DeviceDataEffectV1::WriteOnly)),
+            fake_input(2, premise(2, DeviceDataEffectV1::WriteOnly)),
+        ];
+        let only_first = typed(16, vec![DevicePointerPatchV1::new(0, 0, 0, 8, 8)]);
+        assert!(matches!(
+            validate_kernargs(&[only_first], 16, &data),
+            Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: 1,
+                detail: "lease not referenced by kernarg"
+            })
+        ));
+    }
+
+    #[test]
+    fn owner_phase_is_linear_and_terminal_poison_is_sticky() {
+        let mut owner = DispatchGenerationOwnerV1::new();
+        let generation = owner.next().unwrap();
+        assert_eq!(generation, 1);
+        assert!(owner.active().is_err());
+        owner.commit_begin(generation);
+        assert_eq!(owner.active().unwrap(), generation);
+        assert!(owner.cancel(generation + 1).is_err());
+        owner.complete(generation).unwrap();
+        assert!(owner.recycle(generation + 1).is_err());
+        owner.recycle(generation).unwrap();
+        assert!(owner.ensure_prepared().is_ok());
+        assert_eq!(owner.returned_generation().unwrap(), generation);
+        owner.poison();
+        assert!(matches!(
+            owner.next(),
+            Err(Gfx942DispatchBindingErrorV1::Poisoned)
+        ));
+    }
+
+    #[test]
+    fn fixed_batch_may_select_one_program_from_a_larger_inspected_roster() {
+        let packets = [Gfx942FixedDispatchPacketV1::new(
+            11,
+            AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+            0,
+            Vec::new().into_boxed_slice(),
+            Vec::new().into_boxed_slice(),
+        )];
+        validate_packet_program_indices(12, &packets).unwrap();
+        assert!(matches!(
+            validate_packet_program_indices(11, &packets),
+            Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet: 0,
+                detail: "program index",
+            })
+        ));
+    }
+
+    #[test]
+    fn recycled_queue_can_admit_a_different_second_fixed_batch_generation() {
+        let queue_generation = 19u64;
+        let first = Gfx942FixedDispatchPacketV1::new(
+            0,
+            AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+            0,
+            vec![0, 0, 0, 1].into_boxed_slice(),
+            Vec::new().into_boxed_slice(),
+        );
+        let second = [
+            Gfx942FixedDispatchPacketV1::new(
+                1,
+                AqlDispatchGeometryV1::new([128, 1, 1], [64, 1, 1]).unwrap(),
+                256,
+                vec![0, 0, 0, 2].into_boxed_slice(),
+                Vec::new().into_boxed_slice(),
+            ),
+            Gfx942FixedDispatchPacketV1::new(
+                0,
+                AqlDispatchGeometryV1::new([32, 2, 1], [32, 1, 1]).unwrap(),
+                0,
+                vec![0, 0, 0, 3].into_boxed_slice(),
+                Vec::new().into_boxed_slice(),
+            ),
+        ];
+        assert_ne!(first.program_index, second[0].program_index);
+        assert_ne!(first.geometry, second[0].geometry);
+        assert_ne!(first.kernarg_bytes, second[0].kernarg_bytes);
+        validate_fixed_batch_ring::<1>(65_536).unwrap();
+        validate_fixed_batch_ring::<2>(65_536).unwrap();
+
+        let fully_initialized = true;
+        let mut owner = DispatchGenerationOwnerV1::new();
+        let first_generation = owner.next().unwrap();
+        owner.commit_begin(first_generation);
+        owner.complete(first_generation).unwrap();
+        owner.recycle(first_generation).unwrap();
+        let second_generation = owner.next().unwrap();
+        owner.commit_begin(second_generation);
+        owner.complete(second_generation).unwrap();
+        owner.recycle(second_generation).unwrap();
+
+        assert_eq!(first_generation, 1);
+        assert_eq!(second_generation, 2);
+        assert_eq!(queue_generation, 19);
+        assert!(fully_initialized);
+        assert_eq!(second.len(), 2);
+    }
+
+    #[test]
+    fn stale_and_double_use_transitions_never_mutate_generation_state() {
+        let mut owner = DispatchGenerationOwnerV1::new();
+        let generation = owner.next().unwrap();
+        owner.commit_begin(generation);
+        for stale in [0, generation + 1, u64::MAX] {
+            let before = owner;
+            assert!(matches!(
+                owner.cancel(stale),
+                Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration)
+            ));
+            assert_eq!(owner, before);
+            assert!(matches!(
+                owner.complete(stale),
+                Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration)
+            ));
+            assert_eq!(owner, before);
+            assert!(matches!(
+                owner.recycle(stale),
+                Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration)
+            ));
+            assert_eq!(owner, before);
+        }
+        owner.complete(generation).unwrap();
+        let completed = owner;
+        assert!(owner.complete(generation).is_err());
+        assert_eq!(owner, completed);
+        owner.recycle(generation).unwrap();
+        let recycled = owner;
+        assert!(owner.recycle(generation).is_err());
+        assert_eq!(owner, recycled);
+        assert_eq!(owner.returned_generation().unwrap(), generation);
+
+        let next = owner.next().unwrap();
+        owner.commit_begin(next);
+        assert!(owner.returned_generation().is_err());
+        owner.cancel(next).unwrap();
+        assert!(owner.returned_generation().is_err());
+    }
+
+    #[test]
+    fn data_return_requires_exact_completion_and_recycle() {
+        let mut owner = DispatchGenerationOwnerV1::new();
+        assert!(owner.returned_generation().is_err());
+
+        let generation = owner.next().unwrap();
+        owner.commit_begin(generation);
+        assert!(owner.returned_generation().is_err());
+        owner.complete(generation).unwrap();
+        assert!(owner.returned_generation().is_err());
+        assert!(owner.recycle(generation + 1).is_err());
+        assert!(owner.returned_generation().is_err());
+        owner.recycle(generation).unwrap();
+        assert_eq!(owner.returned_generation().unwrap(), generation);
+    }
+
+    fn readback_premise(
+        kind: Gfx942FixedDispatchDataKindV1,
+        effect: DeviceDataEffectV1,
+        ranges: &[(u64, u64)],
+    ) -> RetainedDataPremiseV1 {
+        RetainedDataPremiseV1 {
+            layout: Gfx942FixedDispatchDataLayoutV1 {
+                kind,
+                requested_bytes: 256,
+                alignment: 64,
+            },
+            role_identity: [0; 32],
+            valid_bytes: 256,
+            effect: Some(effect),
+            initialized_content: None,
+            fully_initialized: false,
+            writable_ranges: ranges
+                .iter()
+                .map(|&(offset, byte_len)| CompletedWritableRangeV1 { offset, byte_len })
+                .collect(),
+            completed_snapshots: Box::new([]),
+        }
+    }
+
+    fn snapshot_readback_premise(
+        kind: Gfx942FixedDispatchDataKindV1,
+        fully_initialized: bool,
+    ) -> RetainedDataPremiseV1 {
+        let mut premise = readback_premise(kind, DeviceDataEffectV1::WriteOnly, &[(64, 64)]);
+        premise.fully_initialized = fully_initialized;
+        premise.completed_snapshots = Box::new([CompletedSnapshotRangeV1 {
+            offset: 32,
+            byte_len: 128,
+            interior_offset: 64,
+            interior_byte_len: 64,
+        }]);
+        premise
+    }
+
+    #[test]
+    fn completed_read_requests_reject_phase_generation_effect_bounds_and_overlap() {
+        let writable = readback_premise(
+            Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+            DeviceDataEffectV1::WriteOnly,
+            &[(64, 64)],
+        );
+        let mut owner = DispatchGenerationOwnerV1::new();
+        let generation = owner.next().unwrap();
+        let request = Gfx942CompletedDispatchReadRequestV1::new(generation, 0, 64, 64);
+        assert!(validate_completed_read_request(&owner, &[writable], request).is_err());
+
+        owner.commit_begin(generation);
+        let writable = readback_premise(
+            Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+            DeviceDataEffectV1::WriteOnly,
+            &[(64, 64)],
+        );
+        assert!(validate_completed_read_request(&owner, &[writable], request).is_err());
+        owner.complete(generation).unwrap();
+        let writable = readback_premise(
+            Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+            DeviceDataEffectV1::WriteOnly,
+            &[(64, 64)],
+        );
+        assert!(validate_completed_read_request(&owner, &[writable], request).is_err());
+        owner.recycle(generation).unwrap();
+
+        let valid = || {
+            readback_premise(
+                Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+                DeviceDataEffectV1::WriteOnly,
+                &[(64, 64)],
+            )
+        };
+        assert_eq!(
+            validate_completed_read_request(&owner, &[valid()], request).unwrap(),
+            generation
+        );
+        for rejected in [
+            Gfx942CompletedDispatchReadRequestV1::new(0, 0, 64, 64),
+            Gfx942CompletedDispatchReadRequestV1::new(generation + 1, 0, 64, 64),
+            Gfx942CompletedDispatchReadRequestV1::new(generation, 1, 64, 64),
+            Gfx942CompletedDispatchReadRequestV1::new(generation, 0, 64, 0),
+            Gfx942CompletedDispatchReadRequestV1::new(generation, 0, 63, 1),
+            Gfx942CompletedDispatchReadRequestV1::new(generation, 0, 120, 16),
+            Gfx942CompletedDispatchReadRequestV1::new(generation, 0, 250, 16),
+        ] {
+            assert!(validate_completed_read_request(&owner, &[valid()], rejected).is_err());
+        }
+
+        let readonly = readback_premise(
+            Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+            DeviceDataEffectV1::ReadOnly,
+            &[],
+        );
+        assert!(validate_completed_read_request(&owner, &[readonly], request).is_err());
+        let mut untouched = readback_premise(
+            Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+            DeviceDataEffectV1::ReadOnly,
+            &[],
+        );
+        untouched.effect = None;
+        assert!(matches!(
+            validate_completed_read_request(&owner, &[untouched], request),
+            Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: 0,
+                detail: "completed read requires inspected write access",
+            })
+        ));
+        let device = readback_premise(
+            Gfx942FixedDispatchDataKindV1::DeviceLocal,
+            DeviceDataEffectV1::WriteOnly,
+            &[(64, 64)],
+        );
+        assert!(validate_completed_read_request(&owner, &[device], request).is_err());
+        let overlap = readback_premise(
+            Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+            DeviceDataEffectV1::ReadWrite,
+            &[(32, 64), (64, 64)],
+        );
+        assert!(validate_completed_read_request(&owner, &[overlap], request).is_err());
+        let readwrite = readback_premise(
+            Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+            DeviceDataEffectV1::ReadWrite,
+            &[(64, 64)],
+        );
+        assert!(validate_completed_read_request(&owner, &[readwrite], request).is_ok());
+
+        let next = owner.next().unwrap();
+        owner.commit_begin(next);
+        owner.complete(next).unwrap();
+        owner.recycle(next).unwrap();
+        assert!(validate_completed_read_request(&owner, &[valid()], request).is_err());
+        assert_eq!(
+            validate_completed_read_request(
+                &owner,
+                &[valid()],
+                Gfx942CompletedDispatchReadRequestV1::new(next, 0, 64, 64),
+            )
+            .unwrap(),
+            next
+        );
+    }
+
+    #[test]
+    fn completed_snapshot_requests_require_exact_recycled_declaration() {
+        let mut owner = DispatchGenerationOwnerV1::new();
+        let generation = owner.next().unwrap();
+        owner.commit_begin(generation);
+        owner.complete(generation).unwrap();
+        owner.recycle(generation).unwrap();
+
+        let request = Gfx942CompletedDispatchSnapshotRequestV1::new(generation, 0, 32, 128);
+        assert_eq!(
+            validate_completed_snapshot_request(
+                &owner,
+                &[snapshot_readback_premise(
+                    Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+                    true,
+                )],
+                request,
+            )
+            .unwrap(),
+            generation
+        );
+        for rejected in [
+            Gfx942CompletedDispatchSnapshotRequestV1::new(0, 0, 32, 128),
+            Gfx942CompletedDispatchSnapshotRequestV1::new(generation + 1, 0, 32, 128),
+            Gfx942CompletedDispatchSnapshotRequestV1::new(generation, 1, 32, 128),
+            Gfx942CompletedDispatchSnapshotRequestV1::new(generation, 0, 32, 127),
+            Gfx942CompletedDispatchSnapshotRequestV1::new(generation, 0, 33, 127),
+            Gfx942CompletedDispatchSnapshotRequestV1::new(generation, 0, 32, 0),
+            Gfx942CompletedDispatchSnapshotRequestV1::new(generation, 0, 250, 16),
+        ] {
+            assert!(
+                validate_completed_snapshot_request(
+                    &owner,
+                    &[snapshot_readback_premise(
+                        Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+                        true,
+                    )],
+                    rejected,
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            validate_completed_snapshot_request(
+                &owner,
+                &[snapshot_readback_premise(
+                    Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+                    false,
+                )],
+                request,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_completed_snapshot_request(
+                &owner,
+                &[snapshot_readback_premise(
+                    Gfx942FixedDispatchDataKindV1::DeviceLocal,
+                    true,
+                )],
+                request,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_completed_read_request(
+                &owner,
+                &[snapshot_readback_premise(
+                    Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+                    true,
+                )],
+                Gfx942CompletedDispatchReadRequestV1::new(generation, 0, 32, 128),
+            )
+            .is_err()
+        );
+        let mut untouched = readback_premise(
+            Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+            DeviceDataEffectV1::ReadOnly,
+            &[],
+        );
+        untouched.effect = None;
+        untouched.fully_initialized = true;
+        assert!(matches!(
+            validate_completed_snapshot_request(&owner, &[untouched], request),
+            Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: 0,
+                detail: "completed snapshot requires one exact admitted range",
+            })
+        ));
+    }
+
+    #[test]
+    fn exhaustion_and_poison_from_each_phase_are_terminal_and_fail_closed() {
+        let exhausted = DispatchGenerationOwnerV1 {
+            next_generation: u64::MAX,
+            phase: DispatchOwnerPhaseV1::Prepared,
+            recycled_generation: None,
+        };
+        let before = exhausted;
+        assert!(matches!(
+            exhausted.next(),
+            Err(Gfx942DispatchBindingErrorV1::GenerationExhausted)
+        ));
+        assert_eq!(exhausted, before);
+
+        for phase in [
+            DispatchOwnerPhaseV1::Prepared,
+            DispatchOwnerPhaseV1::InFlight { generation: 7 },
+            DispatchOwnerPhaseV1::Completed { generation: 7 },
+        ] {
+            let mut owner = DispatchGenerationOwnerV1 {
+                next_generation: 8,
+                phase,
+                recycled_generation: None,
+            };
+            owner.poison();
+            assert_eq!(owner.phase, DispatchOwnerPhaseV1::Poisoned);
+            assert!(matches!(
+                owner.next(),
+                Err(Gfx942DispatchBindingErrorV1::Poisoned)
+            ));
+            assert!(matches!(
+                owner.cancel(7),
+                Err(Gfx942DispatchBindingErrorV1::Poisoned)
+            ));
+            assert!(matches!(
+                owner.complete(7),
+                Err(Gfx942DispatchBindingErrorV1::Poisoned)
+            ));
+            assert!(matches!(
+                owner.recycle(7),
+                Err(Gfx942DispatchBindingErrorV1::Poisoned)
+            ));
+        }
+    }
+}

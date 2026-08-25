@@ -232,7 +232,27 @@ fn validate_retained_v1_sidecar<'a>(
 }
 
 fn has_exact_function_attributes(attributes: &[FunctionAttributeV1]) -> bool {
-    attributes.len() == 9
+    attributes.len() >= 9
+        && attributes.iter().all(|attribute| {
+            matches!(
+                attribute,
+                FunctionAttributeV1::NoUnwind
+                    | FunctionAttributeV1::FlatWorkgroupSize(_)
+                    | FunctionAttributeV1::DenormalFpMathF32Ieee
+                    | FunctionAttributeV1::UnsafeFpMathDisabled
+                    | FunctionAttributeV1::NoInfsFpMathDisabled
+                    | FunctionAttributeV1::NoNansFpMathDisabled
+                    | FunctionAttributeV1::NoSignedZerosFpMathDisabled
+                    | FunctionAttributeV1::ApproxFuncFpMathDisabled
+                    | FunctionAttributeV1::FpContractOff
+                    | FunctionAttributeV1::NoCompletionAction
+                    | FunctionAttributeV1::NoDefaultQueue
+                    | FunctionAttributeV1::NoHeapPointer
+                    | FunctionAttributeV1::NoHostcallPointer
+                    | FunctionAttributeV1::NoMultigridSyncArgument
+                    | FunctionAttributeV1::NoQueuePointer
+            )
+        })
         && attributes
             .iter()
             .filter(|attribute| matches!(attribute, FunctionAttributeV1::NoUnwind))
