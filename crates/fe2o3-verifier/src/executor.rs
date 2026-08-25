@@ -17,6 +17,26 @@ pub const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(2);
 const CAPTURE_SHUTDOWN_GRACE: Duration = Duration::from_millis(100);
 
+pub(crate) fn spawn_artifact_coordinated_child(command: &mut Command) -> io::Result<Child> {
+    fe2o3_artifact_transaction::with_artifact_process_spawn_v1(|| command.spawn())
+}
+
+#[cfg(test)]
+pub(crate) fn output_artifact_coordinated_child(
+    command: &mut Command,
+) -> io::Result<std::process::Output> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    spawn_artifact_coordinated_child(command)?.wait_with_output()
+}
+
+#[cfg(test)]
+pub(crate) fn status_artifact_coordinated_child(command: &mut Command) -> io::Result<ExitStatus> {
+    spawn_artifact_coordinated_child(command)?.wait()
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ExecutionLimits {
     max_stdout_bytes: usize,
@@ -131,7 +151,7 @@ pub fn execute_recorder(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let child = command.spawn().map_err(|error| {
+    let child = spawn_artifact_coordinated_child(&mut command).map_err(|error| {
         ExecutionError::new(
             ExecutionErrorKind::SpawnFailed(error.kind()),
             ProcessOutput::default(),

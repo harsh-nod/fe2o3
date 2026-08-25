@@ -1631,7 +1631,7 @@ mod bounded_process_group {
             if private_group {
                 command.process_group(0);
             }
-            command.spawn().unwrap()
+            crate::executor::spawn_artifact_coordinated_child(&mut command).unwrap()
         }
 
         #[test]
@@ -4257,6 +4257,24 @@ mod platform {
     }
 
     fn spawn_target(
+        role: VerusExecutionRoleV2,
+        image: &SealedExecutable,
+        arguments: &[CString],
+        control_fd: c_int,
+        inherited: &[c_int],
+        limits: ProcessLimits,
+        deadline: Instant,
+    ) -> Result<SpawnedTarget, AuthenticatedVerusExecutionErrorV2> {
+        // The custom clone3 launcher owns the fork/exec handshake that `Command::spawn`
+        // normally covers, so keep it inside the artifact spawn coordinator through exec.
+        fe2o3_artifact_transaction::with_artifact_process_spawn_v1(|| {
+            spawn_target_inner(
+                role, image, arguments, control_fd, inherited, limits, deadline,
+            )
+        })
+    }
+
+    fn spawn_target_inner(
         role: VerusExecutionRoleV2,
         image: &SealedExecutable,
         arguments: &[CString],

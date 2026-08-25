@@ -22,7 +22,7 @@ use std::os::raw::{c_char, c_int, c_uint};
 
 use fe2o3_artifacts::DigestAlgorithm;
 
-use crate::executor::supervise_child;
+use crate::executor::{spawn_artifact_coordinated_child, supervise_child};
 use crate::{
     Digest, ExecutionError, ExecutionLimits, InvocationPaths, InvocationPlan, MAX_PATH_BYTES,
     MAX_RESULT_BYTES, MeasuredToolIdentity, PlanError, ProcessOutput, ProofRequestV1,
@@ -453,7 +453,7 @@ fn execute_authenticated_recorder_with_challenge(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let child = command.spawn().map_err(|error| {
+    let child = spawn_artifact_coordinated_child(&mut command).map_err(|error| {
         AuthenticatedExecutionError::Execution(ExecutionError::from_spawn(error.kind()))
     })?;
     let output = supervise_child(child, timeout_seconds, limits)

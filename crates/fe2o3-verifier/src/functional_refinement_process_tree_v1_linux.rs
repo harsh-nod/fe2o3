@@ -470,12 +470,13 @@ pub(super) fn execute(
     unsafe {
         command.pre_exec(move || prepare_child(&child_bindings, cpu_seconds));
     }
-    let mut child = command.spawn().map_err(|error| {
-        controller_error(
-            GeneralGemmRuntimeClosureErrorKindV2::Process,
-            format!("spawn traced functional-refinement verifier: {error}"),
-        )
-    })?;
+    let mut child =
+        crate::executor::spawn_artifact_coordinated_child(&mut command).map_err(|error| {
+            controller_error(
+                GeneralGemmRuntimeClosureErrorKindV2::Process,
+                format!("spawn traced functional-refinement verifier: {error}"),
+            )
+        })?;
     drop(duplicates);
     let result = supervise(
         &mut child,
@@ -1908,7 +1909,7 @@ mod tests {
         unsafe {
             command.pre_exec(move || prepare_child(&prepared, 2));
         }
-        let mut child = command.spawn().unwrap();
+        let mut child = crate::executor::spawn_artifact_coordinated_child(&mut command).unwrap();
         let deadline = Instant::now() + deadline_after;
         let result = supervise(
             &mut child,

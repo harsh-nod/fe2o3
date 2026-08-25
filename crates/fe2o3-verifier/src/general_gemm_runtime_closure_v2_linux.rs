@@ -672,12 +672,13 @@ fn execute_rust_verify_common(
     unsafe {
         command.pre_exec(move || prepare_proof_child(&inherited, empty_descriptor));
     }
-    let mut child = command.spawn().map_err(|source| {
-        process_error(
-            format!("spawn retained rust_verify: {source}"),
-            GeneralGemmRuntimeClosureErrorKindV2::Process,
-        )
-    })?;
+    let mut child =
+        crate::executor::spawn_artifact_coordinated_child(&mut command).map_err(|source| {
+            process_error(
+                format!("spawn retained rust_verify: {source}"),
+                GeneralGemmRuntimeClosureErrorKindV2::Process,
+            )
+        })?;
     let output = supervise_bounded_process_group_v2(&mut child, deadline, output_limit).map_err(
         |failure| {
             let kind = match failure.kind() {
@@ -1871,7 +1872,7 @@ mod tests {
         unsafe {
             command.pre_exec(move || prepare_proof_child(&inherited, empty_descriptor));
         }
-        let output = command.output().unwrap();
+        let output = crate::executor::output_artifact_coordinated_child(&mut command).unwrap();
         assert!(
             output.status.success(),
             "child preparation failed: {}",
