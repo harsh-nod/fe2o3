@@ -179,7 +179,8 @@ Simulation has no HSA, HIP, KFD, or ROCm runtime.
 
 `cargo fe2o3 simulate` is compiled only with
 `qualification-oracles-test-only`; it is absent from normal command dispatch
-and help. This is a qualification route, not the production compiler
+and help, and `fe2o3-kir-sim-cli` is absent from the feature-free normal
+dependency graph. This is a qualification route, not the production compiler
 transaction. It
 provides exact KIR V7 custody from the current generic frontend and runs every
 kernel/type/operation admitted by both that lowering and the simulator. An

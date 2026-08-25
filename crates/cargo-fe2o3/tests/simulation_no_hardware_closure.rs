@@ -6,6 +6,7 @@ use std::process::Command;
 const FORBIDDEN: [&str; 6] = ["hsa", "hip", "kfd", "rocm", "amdgpu", "drm_amdgpu"];
 
 #[test]
+#[cfg(feature = "qualification-oracles-test-only")]
 fn simulation_help_requires_no_input_or_hardware_environment() {
     let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
         .args(["simulate", "--help"])
@@ -18,6 +19,20 @@ fn simulation_help_requires_no_input_or_hardware_environment() {
         "usage: cargo fe2o3 simulate --request PATH [--output PATH] [-- CARGO_BUILD_ARGS...]\n"
     );
     assert!(output.stderr.is_empty());
+}
+
+#[test]
+#[cfg(not(feature = "qualification-oracles-test-only"))]
+fn production_binary_has_no_simulation_command() {
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+        .args(["simulate", "--help"])
+        .env_clear()
+        .output()
+        .expect("probe absent simulation command");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 command error");
+    assert!(stderr.contains("unknown cargo-fe2o3 command"), "{stderr}");
+    assert!(!stderr.contains("compile source to exact KIR"), "{stderr}");
 }
 
 #[test]
@@ -43,7 +58,7 @@ fn default_binary_has_no_gpu_runtime_dynamic_dependency() {
 }
 
 #[test]
-fn default_normal_dependency_graph_excludes_gpu_runtime_crates() {
+fn production_dependency_graph_excludes_optional_runtime_and_simulation_crates() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = Command::new(env!("CARGO"))
         .current_dir(&workspace)
@@ -70,6 +85,7 @@ fn default_normal_dependency_graph_excludes_gpu_runtime_crates() {
         "fe2o3-host ",
         "fe2o3-hsa-runtime ",
         "fe2o3-hip-sys ",
+        "fe2o3-kir-sim-cli ",
     ] {
         assert!(
             !tree.lines().any(|line| line.starts_with(package)),

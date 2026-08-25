@@ -81,6 +81,7 @@ const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
 pub(crate) const SIMULATION_MODE_ENV: &str = "FE2O3_SIMULATION_MODE_V1";
 pub(crate) const SIMULATION_ATTEMPT_ENV: &str = "FE2O3_SIMULATION_ATTEMPT_V1";
 const SIMULATION_PIPELINE: &str = "simulation-v1";
+#[cfg(feature = "qualification-oracles-test-only")]
 const SIMULATION_FAILURE_ALREADY_REPORTED: &str =
     "cargo fe2o3 simulate emitted a structured simulation error";
 const EXPECTED_RUSTC_SHA256_ENV: &str = "FE2O3_EXPECTED_RUSTC_SHA256_V1";
@@ -320,11 +321,15 @@ fn cargo_with_backend(command: &str, args: &[OsString]) -> ExitCode {
     }
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 struct SimulationCommand {
     request: PathBuf,
     request_identity: fe2o3_kir_sim_cli::SimulationRequestIdentityV1,
     output: Option<PathBuf>,
 }
+
+#[cfg(not(feature = "qualification-oracles-test-only"))]
+struct SimulationCommand;
 
 #[cfg(feature = "qualification-oracles-test-only")]
 fn simulate_command(args: &[OsString]) -> ExitCode {
@@ -1223,6 +1228,7 @@ fn run_cargo_with_backend_inner(
     if simulation.is_none() {
         context.generation.commit()?;
     }
+    #[cfg(feature = "qualification-oracles-test-only")]
     if let (Some(simulation), Some(canonical_kir)) = (simulation, canonical_kir) {
         let status = fe2o3_kir_sim_cli::run_captured_kir_v7_with_bound_request(
             &canonical_kir,
@@ -1234,6 +1240,8 @@ fn run_cargo_with_backend_inner(
             return Err(SIMULATION_FAILURE_ALREADY_REPORTED.to_owned());
         }
     }
+    #[cfg(not(feature = "qualification-oracles-test-only"))]
+    debug_assert!(simulation.is_none() && canonical_kir.is_none());
     Ok(())
 }
 

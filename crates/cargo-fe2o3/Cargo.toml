@@ -10,7 +10,7 @@ description = "Cargo subcommand for fe2o3."
 
 [features]
 compiler-handoff-observation-test-only = []
-qualification-oracles-test-only = []
+qualification-oracles-test-only = ["dep:fe2o3-kir-sim-cli"]
 worker-v2-fault-injection-test-only = ["qualification-oracles-test-only"]
 legacy-hsa-runtime = [
     "qualification-oracles-test-only",
@@ -42,7 +42,7 @@ fe2o3-hsaco-finalize.workspace = true
 fe2o3-host = { workspace = true, optional = true }
 fe2o3-kernel-descriptor.workspace = true
 fe2o3-kernel-ir.workspace = true
-fe2o3-kir-sim-cli.workspace = true
+fe2o3-kir-sim-cli = { workspace = true, optional = true }
 fe2o3-process-identity.workspace = true
 fe2o3-rustc-invocation.workspace = true
 fe2o3-scalar-gemm-v1 = { path = "../../examples/scalar_gemm_v1", optional = true }
