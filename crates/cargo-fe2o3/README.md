@@ -36,7 +36,7 @@ process cannot continue when their respective admitted parent dies.
 Release starts from a cleared environment. The complete allowlist is `CARGO`;
 the backend, Cargo, binding-trampoline, rustc-path, rustc, and rustc-runtime
 `FE2O3_AUTHORITY_*_V1` inputs; `FE2O3_BACKEND`, `FE2O3_TARGET`, optional
-`FE2O3_WORKER_V2_CONFIG_V2`, `LANG=C`, `LC_ALL=C`, and `TZ=UTC`.
+`FE2O3_PRODUCTION_BUILD_CONFIG_V1`, `LANG=C`, `LC_ALL=C`, and `TZ=UTC`.
 Aliases, extra variables or descriptors, loader variables, rustup/tool
 selectors, noncanonical paths, changed backing objects, replayed attempts, and
 closure/runtime-tree drift fail closed. Tool digests are operator-provisioned
@@ -48,6 +48,16 @@ oracles such as simulation and migration equivalence checks. Those oracles
 exist only in `cargo-fe2o3` and `rustc-codegen-fe2o3` builds made with each
 package's `qualification-oracles-test-only` feature. Feature-free binaries
 reject the environment variable.
+
+Production requires `FE2O3_PRODUCTION_BUILD_CONFIG_V1` to name a canonical
+`fe2o3-production-build-config-v1` JSON recipe. The recipe pins the selected
+Rust compilation units, upstream-LLVM worker image, typed link providers,
+link options, output bound, and execution limits. Cargo authenticates its
+transitive identity and passes only `FE2O3_PRODUCTION_BUILD_EXPECTED_ID_V1` to
+the wrapper. Production rejects the Worker V2 config and expected-identity
+variables; qualification rejects the production variables. Envelope,
+source-debug, exact-workload, and restart-oracle fields are not part of the
+production schema.
 
 Cargo dependency units that are not the selected kernel root are host-only
 rustc compilations, not another fe2o3 route. The wrapper removes all managed
@@ -109,7 +119,7 @@ fixed child descriptor, so the measured bytes are the bytes selected for
 rustc. Path substitution is checked before and after Cargo runs.
 
 Generated output carries an atomic deletion guard and a bounded generation
-marker that binds the sealed backend digest, transitive Worker V2 inputs,
+marker that binds the sealed backend digest, transitive build inputs,
 target, effective Cargo build/target/profile configuration, inherited codegen
 environment, rustflags, and a snapshot of the generated artifact tree. Cargo's
 own environment and configured rustflags remain intact. fe2o3 passes its
@@ -214,7 +224,7 @@ Process ancestry cannot
 distinguish either case from an intended compiler invocation without trusted
 Cargo or rustc cooperation. Same-UID process inspection or injection may also
 cross the boundary where host policy permits it. The broker compares a request
-with the expected build session, profile, and Worker V2 configuration identity.
+with the expected build session, profile, and build-configuration identity.
 The client and broker also verify Linux peer credentials and exact
 `cargo-fe2o3` executable object and bytes, then authenticate the exchange with a
 fresh challenge bound to a separate 256-bit broker secret. These checks reject

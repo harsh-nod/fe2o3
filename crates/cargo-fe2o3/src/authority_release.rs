@@ -72,7 +72,9 @@ const RELEASE_ENVIRONMENT_ALLOWLIST: &[&str] = &[
     "FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1",
     "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
     "FE2O3_BACKEND",
+    "FE2O3_PRODUCTION_BUILD_CONFIG_V1",
     "FE2O3_TARGET",
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     "FE2O3_WORKER_V2_CONFIG_V2",
     "LANG",
     "LC_ALL",

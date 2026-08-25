@@ -267,6 +267,10 @@ Production has no selector. An unset qualification-oracle environment enters
 the sole production transaction; `production-v1` is rejected if supplied as
 either an obsolete pipeline value or an oracle name. Versioned `V1`/`V2`/`V3`
 suffixes identify frozen records and protocols, not selectable implementations.
+Production build inputs use only `FE2O3_PRODUCTION_BUILD_CONFIG_V1` with the
+`fe2o3-production-build-config-v1` schema. Worker V2 config, expected-identity,
+envelope, and source-debug controls are qualification-only and cannot be mixed
+with that production namespace.
 
 Migration follows these rules:
 

@@ -34,14 +34,14 @@ fn production_manifest_rejects_qualification_envelope_fields() {
     let manifest = scratch.0.join("build-config.json");
     fs::write(
         &manifest,
-        br#"{"candidate_output_max_bytes":1,"format":"fe2o3-worker-v2-config-v2","limits":{},"link_options":[],"load_envelope":"required","load_envelope_inputs":{},"providers":[],"units":[],"worker":{}}"#,
+        br#"{"candidate_output_max_bytes":1,"format":"fe2o3-production-build-config-v1","limits":{},"link_options":[],"load_envelope":"required","load_envelope_inputs":{},"providers":[],"units":[],"worker":{}}"#,
     )
     .expect("write manifest");
 
     let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
         .env_clear()
         .env("FE2O3_TARGET", "gfx942")
-        .env("FE2O3_WORKER_V2_CONFIG_V2", &manifest)
+        .env("FE2O3_PRODUCTION_BUILD_CONFIG_V1", &manifest)
         .args(["build", "--target", "amdgcn-amd-amdhsa"])
         .output()
         .expect("run cargo-fe2o3");
@@ -53,4 +53,27 @@ fn production_manifest_rejects_qualification_envelope_fields() {
             && stderr.contains("load_envelope"),
         "{stderr}"
     );
+}
+
+#[test]
+fn production_rejects_worker_v2_namespace_before_reading_its_manifest() {
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+        .env_clear()
+        .env("FE2O3_TARGET", "gfx942")
+        .env(
+            "FE2O3_WORKER_V2_CONFIG_V2",
+            "/does/not/exist/worker-v2-config.json",
+        )
+        .args(["build", "--target", "amdgcn-amd-amdhsa"])
+        .output()
+        .expect("run cargo-fe2o3");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("FE2O3_WORKER_V2_CONFIG_V2 is qualification-only")
+            && stderr.contains("FE2O3_PRODUCTION_BUILD_CONFIG_V1"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("does/not/exist"), "{stderr}");
 }

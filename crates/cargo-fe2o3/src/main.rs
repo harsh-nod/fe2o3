@@ -631,9 +631,9 @@ fn authority_sensitive_request_selected(production_compilation: bool) -> bool {
     production_compilation
         || env::var_os(build_config::QUALIFICATION_ORACLE_ENV).as_deref()
         == Some(OsStr::new(AUTHORITY_BEARING_ROW_PIPELINE))
-        // A Worker V2 manifest can select the source-debug authority profile. Treat the
-        // unparsed selection as authority-sensitive so mutable manifest contents cannot
-        // downgrade the loader check that precedes manifest authentication.
+        // An unparsed build manifest can select an authority-sensitive profile, so its
+        // mutable contents must not downgrade the loader check before authentication.
+        || env::var_os(build_config::PRODUCTION_BUILD_CONFIG_ENV).is_some()
         || env::var_os(build_config::WORKER_V2_CONFIG_ENV).is_some()
 }
 
@@ -1158,17 +1158,21 @@ fn run_cargo_with_backend_inner(
         "LD_LIBRARY_PATH",
         format!("/proc/self/fd/{RUSTC_LIBRARY_CHILD_FD}"),
     );
-    match context.build_config_identity {
-        Some(identity) => {
+    cargo
+        .as_command_mut()
+        .env_remove(build_config::PRODUCTION_BUILD_EXPECTED_ID_ENV)
+        .env_remove(build_config::WORKER_V2_EXPECTED_ID_ENV);
+    match (
+        context.build_config_identity,
+        context._build_config.as_ref(),
+    ) {
+        (Some(identity), Some(config)) => {
             cargo
                 .as_command_mut()
-                .env(build_config::WORKER_V2_EXPECTED_ID_ENV, identity.to_hex());
+                .env(config.expected_identity_environment(), identity.to_hex());
         }
-        None => {
-            cargo
-                .as_command_mut()
-                .env_remove(build_config::WORKER_V2_EXPECTED_ID_ENV);
-        }
+        (None, None) => {}
+        _ => unreachable!("build configuration and identity have matching presence"),
     }
     if let Some(admission) = protected_release {
         admission.configure_descendant(cargo.as_command_mut());
@@ -2281,6 +2285,8 @@ fn find_or_build_backend(
         BUILD_SESSION_ENV,
         OBSOLETE_CODEGEN_PIPELINE_ENV,
         build_config::QUALIFICATION_ORACLE_ENV,
+        build_config::PRODUCTION_BUILD_CONFIG_ENV,
+        build_config::PRODUCTION_BUILD_EXPECTED_ID_ENV,
         build_config::WORKER_V2_CONFIG_ENV,
         build_config::WORKER_V2_EXPECTED_ID_ENV,
         AUTHORITY_CARGO_SHA256_ENV,
