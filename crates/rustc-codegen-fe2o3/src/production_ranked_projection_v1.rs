@@ -9192,6 +9192,29 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             crate::encode_hex(subjects.safe_reference_mir_hash().as_bytes()),
             crate::encode_hex(subjects.kernel_mir_hash().as_bytes()),
         ),
+        ProductionRankedOperationV1::RequireNumericalRefinement { contract, proof } => format!(
+            "  proof.require_numerical_refinement {}, {}, {}, {} <contract={}, absolute_error=0x{:016x}, relative_error=0x{:016x}, receipt={}>\n",
+            ranked_value_text_v1(contract.actual()),
+            ranked_value_text_v1(contract.reference()),
+            ranked_value_text_v1(contract.domain()),
+            ranked_value_text_v1(contract.precondition()),
+            contract.contract_identity(),
+            contract.absolute_error_f64_bits(),
+            contract.relative_error_f64_bits(),
+            crate::encode_hex(proof.receipt_identity().digest().as_bytes()),
+        ),
+        ProductionRankedOperationV1::RequestNumericalRefinement { contract, subjects } => format!(
+            "  proof.request_numerical_refinement {}, {}, {}, {} <contract={}, absolute_error=0x{:016x}, relative_error=0x{:016x}, reference_mir={}, kernel_mir={}>\n",
+            ranked_value_text_v1(contract.actual()),
+            ranked_value_text_v1(contract.reference()),
+            ranked_value_text_v1(contract.domain()),
+            ranked_value_text_v1(contract.precondition()),
+            contract.contract_identity(),
+            contract.absolute_error_f64_bits(),
+            contract.relative_error_f64_bits(),
+            crate::encode_hex(subjects.safe_reference_mir_hash().as_bytes()),
+            crate::encode_hex(subjects.kernel_mir_hash().as_bytes()),
+        ),
     }
 }
 

@@ -32,6 +32,8 @@ fn binary(workspace: &Path) -> &'static Path {
                 "cargo-fe2o3",
                 "--bin",
                 "cargo-fe2o3",
+                "--features",
+                "qualification-oracles-test-only",
             ]);
             scrub_dynamic_loader_environment(&mut command);
             let output = command.output().expect("build cargo-fe2o3 test binary");
