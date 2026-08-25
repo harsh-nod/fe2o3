@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -93,15 +94,17 @@ mod tests {
         if let Some(marker) = std::env::var_os("BINDING_TEST_EXECUTION_MARKER") {
             std::fs::write(marker, b"executed").expect("write host-test execution marker");
         }
-        for (name, _) in std::env::vars_os() {
+        for (name, value) in std::env::vars_os() {
             let name = name.to_string_lossy();
             assert!(!name.starts_with("FE2O3_"), "protected variable {name}");
+            if matches!(name.as_ref(), "RUSTC" | "CARGO_BUILD_RUSTC") {
+                assert_eq!(value, "/proc/self/fd/194", "unpinned compiler {name}");
+                continue;
+            }
             assert!(
                 !matches!(
                     name.as_ref(),
-                    "RUSTC"
-                        | "CARGO_BUILD_RUSTC"
-                        | "RUSTC_WRAPPER"
+                    "RUSTC_WRAPPER"
                         | "CARGO_BUILD_RUSTC_WRAPPER"
                         | "RUSTC_WORKSPACE_WRAPPER"
                         | "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"
@@ -124,11 +127,33 @@ mod tests {
         unsafe extern "C" {
             fn fcntl(fd: i32, command: i32, ...) -> i32;
         }
-        for fd in [191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201] {
+        for fd in [191, 192, 195, 196, 197, 198, 199, 200, 201] {
             // SAFETY: F_GETFD only queries whether this integer descriptor is open.
             assert_eq!(unsafe { fcntl(fd, 1) }, -1, "fixed descriptor {fd} remained open");
             assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(9));
         }
+        for fd in [193, 194] {
+            // SAFETY: F_GETFD only queries whether this integer descriptor is open.
+            let flags = unsafe { fcntl(fd, 1) };
+            assert!(flags >= 0, "pinned compiler descriptor {fd} was closed");
+            assert_eq!(flags & 1, 0, "pinned compiler descriptor {fd} is close-on-exec");
+        }
+        let loader_path = std::env::var_os("LD_LIBRARY_PATH")
+            .expect("pinned rustc library environment");
+        assert!(
+            std::env::split_paths(&loader_path)
+                .any(|component| component == std::path::Path::new("/proc/self/fd/193")),
+            "pinned rustc library descriptor is absent from LD_LIBRARY_PATH"
+        );
+        assert!(std::fs::metadata("/proc/self/fd/193").expect("inspect rustc lib tree").is_dir());
+        assert!(std::fs::metadata("/proc/self/fd/194").expect("inspect rustc image").is_file());
+        let rustc = std::process::Command::new(
+            std::env::var_os("RUSTC").expect("pinned nested rustc environment"),
+        )
+        .arg("-vV")
+        .output()
+        .expect("execute pinned nested rustc");
+        assert!(rustc.status.success(), "pinned nested rustc failed");
 
         let executable = std::env::current_exe().expect("resolve original test executable");
         assert!(executable.exists(), "current test executable was detached from its Cargo path");
@@ -158,6 +183,49 @@ fn binding_test(workspace: &TestWorkspace) -> Command {
         .env("CARGO", cargo())
         .current_dir(&workspace.0);
     command
+}
+
+#[test]
+fn internal_binding_host_runner_rejects_missing_pinned_toolchain_descriptors() {
+    let workspace = TestWorkspace::new();
+    let marker = workspace.0.join("unexpected-test-execution");
+    let test = write_executable(
+        &workspace.0,
+        "test.sh",
+        &format!("#!/bin/sh\nprintf executed > '{}'\n", marker.display()),
+    );
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    command
+        .arg("__fe2o3-binding-host-test-runner-v1")
+        .arg(test)
+        .env("FE2O3_BINDING_CHECK_WRAPPER_MODE_V1", "1")
+        .env("LD_LIBRARY_PATH", "/proc/self/fd/193");
+    // SAFETY: the child callback closes only the two fixed descriptors whose absence this
+    // subprocess regression validates.
+    unsafe {
+        command.pre_exec(|| {
+            libc::close(193);
+            libc::close(194);
+            Ok(())
+        });
+    }
+    let output = command
+        .output()
+        .expect("run internal binding-only host-test runner");
+    assert!(
+        !output.status.success(),
+        "runner accepted missing descriptors"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("cannot inspect pinned rustc library descriptor 193"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !marker.exists(),
+        "test executable ran before descriptor validation"
+    );
 }
 
 #[test]

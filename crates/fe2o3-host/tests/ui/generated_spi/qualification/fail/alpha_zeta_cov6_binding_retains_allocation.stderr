@@ -1,5 +1,5 @@
 error: lifetime may not live long enough
-  --> tests/ui/generated_spi/fail/alpha_zeta_cov6_binding_retains_allocation.rs:12:9
+  --> tests/ui/generated_spi/qualification/fail/alpha_zeta_cov6_binding_retains_allocation.rs:12:9
    |
  6 |   fn escape<'allocation>(
    |             ----------- lifetime `'allocation` defined here

@@ -1,5 +1,5 @@
 error[E0451]: fields `resolved` and `geometry` of struct `fe2o3_host::GeneratedAlphaZetaCov6PreparedInvocationV1` are private
- --> tests/ui/generated_spi/fail/alpha_zeta_cov6_prepared_fields_are_private.rs:9:54
+ --> tests/ui/generated_spi/qualification/fail/alpha_zeta_cov6_prepared_fields_are_private.rs:9:54
   |
 9 |     let GeneratedAlphaZetaCov6PreparedInvocationV1 { resolved, geometry, .. } = prepared;
   |                                                      ^^^^^^^^  ^^^^^^^^ private field

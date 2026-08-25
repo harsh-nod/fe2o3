@@ -1,5 +1,5 @@
 error[E0624]: method `device_pointer` is private
- --> tests/ui/generated_spi/fail/generated_slices_have_no_raw_pointer.rs:7:19
+ --> tests/ui/generated_spi/qualification/fail/generated_slices_have_no_raw_pointer.rs:7:19
   |
 7 |     let _ = input.device_pointer();
   |                   ^^^^^^^^^^^^^^ private method
@@ -10,7 +10,7 @@ error[E0624]: method `device_pointer` is private
   |     ------------------------------------------------ private method defined here
 
 error[E0599]: no method named `device_pointer` found for struct `fe2o3_host::GeneratedReadWriteDeviceSlice<'allocation, T>` in the current scope
- --> tests/ui/generated_spi/fail/generated_slices_have_no_raw_pointer.rs:8:19
+ --> tests/ui/generated_spi/qualification/fail/generated_slices_have_no_raw_pointer.rs:8:19
   |
 8 |     let _ = state.device_pointer();
   |                   ^^^^^^^^^^^^^^ method not found in `fe2o3_host::GeneratedReadWriteDeviceSlice<'_, f32>`

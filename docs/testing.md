@@ -300,6 +300,16 @@ cargo test --locked -p fe2o3-pliron-scalar-add-v1 \
   -- --ignored --exact --nocapture
 ```
 
+`generic-core` executes this crate's feature-free unit and UI boundary tests.
+`rocm-compile` uses the pinned `cargo-fe2o3` driver to run the
+qualification-enabled `fe2o3-host` and scalar-add unit/UI targets without
+running ignored hardware tests. Those guarded tests share a private Cargo
+target created for that CI run and removed at exit, so artifacts from another
+run cannot enter their trybuild cache. Nested Cargo tools such as trybuild
+receive the inherited fully sealed rustc image and read-only library-tree
+descriptor from the parent test. The live MI300X test above remains a separate,
+explicit opt-in.
+
 The qualified Worker executable has SHA-256
 `12c06e0da5d812c1db6f33450f99a8d70087c585eec552f7f8616077704361fd`
 and embedded build identity

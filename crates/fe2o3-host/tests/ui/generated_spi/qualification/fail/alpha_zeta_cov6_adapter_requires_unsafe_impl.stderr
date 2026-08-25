@@ -1,5 +1,5 @@
 error[E0200]: the trait `fe2o3_host::CompilerGeneratedAlphaZetaCov6ArgumentsV1<'static, K>` requires an `unsafe impl` declaration
-  --> tests/ui/generated_spi/fail/alpha_zeta_cov6_adapter_requires_unsafe_impl.rs:11:1
+  --> tests/ui/generated_spi/qualification/fail/alpha_zeta_cov6_adapter_requires_unsafe_impl.rs:11:1
    |
 11 | / impl<K: CompilerGeneratedKernelExpectationV1>
 12 | |     CompilerGeneratedAlphaZetaCov6ArgumentsV1<'static, K> for Arguments

@@ -666,9 +666,10 @@ fn binding_host_test_runner_result(args: &[OsString]) -> Result<std::process::Ex
         }
     }
     // Cargo may add target-directory dylib paths to the CLI-forced rustc library path. Retaining
-    // only that forced/augmented runtime path preserves ordinary Cargo test dependencies; every
-    // other observed dynamic-loader variable is removed from the test child.
-    application_exec::configure_closed_descriptor_baseline(command.as_command_mut());
+    // that forced/augmented path and the two pinned compiler descriptors keeps nested Cargo tools
+    // such as trybuild on the same compiler as their parent test. Test code is trusted here and
+    // receives no artifact or GPU authority.
+    configure_binding_host_test_toolchain(command.as_command_mut())?;
     let status = command
         .status()
         .map_err(|error| format!("failed to execute the pinned host test: {error}"))?;
@@ -677,6 +678,166 @@ fn binding_host_test_runner_result(args: &[OsString]) -> Result<std::process::Ex
         .command()
         .map_err(|error| format!("host-test executable changed across execution: {error}"))?;
     Ok(status)
+}
+
+fn configure_binding_host_test_toolchain(command: &mut Command) -> Result<(), String> {
+    let descriptors = BindingHostTestToolchainDescriptors::observe()?;
+    let rustc = format!("/proc/self/fd/{RUSTC_CHILD_FD}");
+    command.env("RUSTC", &rustc).env("CARGO_BUILD_RUSTC", rustc);
+    // SAFETY: this single callback closes the ambient descriptor set, revalidates the two
+    // parent-inherited compiler objects, and exposes only those objects to trusted test code.
+    unsafe {
+        command.pre_exec(move || {
+            application_exec::protect_all_nonstdio_descriptors()?;
+            descriptors.revalidate()?;
+            application_exec::expose_descriptor(RUSTC_LIBRARY_CHILD_FD)?;
+            application_exec::expose_descriptor(RUSTC_CHILD_FD)?;
+            Ok(())
+        });
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct BindingHostTestToolchainDescriptors {
+    library_device: u64,
+    library_inode: u64,
+    library_mode: u32,
+    rustc_device: u64,
+    rustc_inode: u64,
+    rustc_mode: u32,
+    rustc_size: i64,
+}
+
+impl BindingHostTestToolchainDescriptors {
+    const REQUIRED_RUSTC_SEALS: i32 =
+        libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+
+    fn observe() -> Result<Self, String> {
+        let library_stat = fixed_descriptor_stat(RUSTC_LIBRARY_CHILD_FD).map_err(|error| {
+            format!(
+                "binding-only host-test runner cannot inspect pinned rustc library descriptor {RUSTC_LIBRARY_CHILD_FD}: {error}"
+            )
+        })?;
+        let library_status = fixed_descriptor_fcntl(RUSTC_LIBRARY_CHILD_FD, libc::F_GETFL)
+            .map_err(|error| {
+            format!(
+                "binding-only host-test runner cannot inspect pinned rustc library access: {error}"
+            )
+        })?;
+        if library_stat.st_mode & libc::S_IFMT != libc::S_IFDIR
+            || library_status & libc::O_ACCMODE != libc::O_RDONLY
+        {
+            return Err(
+                "binding-only host-test runner requires a read-only pinned rustc library directory"
+                    .to_owned(),
+            );
+        }
+
+        let rustc_stat = fixed_descriptor_stat(RUSTC_CHILD_FD).map_err(|error| {
+            format!(
+                "binding-only host-test runner cannot inspect pinned rustc descriptor {RUSTC_CHILD_FD}: {error}"
+            )
+        })?;
+        let rustc_seals =
+            fixed_descriptor_fcntl(RUSTC_CHILD_FD, libc::F_GET_SEALS).map_err(|error| {
+                format!("binding-only host-test runner cannot inspect pinned rustc seals: {error}")
+            })?;
+        if rustc_stat.st_mode & libc::S_IFMT != libc::S_IFREG
+            || rustc_stat.st_mode & 0o111 == 0
+            || rustc_seals != Self::REQUIRED_RUSTC_SEALS
+        {
+            return Err(
+                "binding-only host-test runner requires an executable fully sealed rustc image"
+                    .to_owned(),
+            );
+        }
+
+        let library_path = PathBuf::from(format!("/proc/self/fd/{RUSTC_LIBRARY_CHILD_FD}"));
+        let loader_path = env::var_os("LD_LIBRARY_PATH")
+            .ok_or_else(|| "binding-only host-test runner requires LD_LIBRARY_PATH".to_owned())?;
+        if !env::split_paths(&loader_path).any(|component| component == library_path) {
+            return Err(
+                "binding-only host-test runner requires its pinned rustc library descriptor in LD_LIBRARY_PATH"
+                    .to_owned(),
+            );
+        }
+
+        Ok(Self {
+            library_device: library_stat.st_dev,
+            library_inode: library_stat.st_ino,
+            library_mode: library_stat.st_mode,
+            rustc_device: rustc_stat.st_dev,
+            rustc_inode: rustc_stat.st_ino,
+            rustc_mode: rustc_stat.st_mode,
+            rustc_size: rustc_stat.st_size,
+        })
+    }
+
+    fn revalidate(self) -> std::io::Result<()> {
+        let library_stat = fixed_descriptor_stat(RUSTC_LIBRARY_CHILD_FD)?;
+        let library_status = fixed_descriptor_fcntl(RUSTC_LIBRARY_CHILD_FD, libc::F_GETFL)?;
+        let rustc_stat = fixed_descriptor_stat(RUSTC_CHILD_FD)?;
+        let rustc_seals = fixed_descriptor_fcntl(RUSTC_CHILD_FD, libc::F_GET_SEALS)?;
+        if (
+            library_stat.st_dev,
+            library_stat.st_ino,
+            library_stat.st_mode,
+        ) != (self.library_device, self.library_inode, self.library_mode)
+            || library_status & libc::O_ACCMODE != libc::O_RDONLY
+            || (
+                rustc_stat.st_dev,
+                rustc_stat.st_ino,
+                rustc_stat.st_mode,
+                rustc_stat.st_size,
+            ) != (
+                self.rustc_device,
+                self.rustc_inode,
+                self.rustc_mode,
+                self.rustc_size,
+            )
+            || rustc_seals != Self::REQUIRED_RUSTC_SEALS
+        {
+            return Err(std::io::Error::from_raw_os_error(
+                rustix::io::Errno::STALE.raw_os_error(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn fixed_descriptor_stat(descriptor: std::os::fd::RawFd) -> std::io::Result<libc::stat> {
+    loop {
+        let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: fstat initializes the supplied stat object on success and accepts invalid raw
+        // descriptor numbers by returning EBADF without dereferencing descriptor-owned memory.
+        if unsafe { libc::fstat(descriptor, status.as_mut_ptr()) } == 0 {
+            // SAFETY: a successful fstat initialized the complete object.
+            return Ok(unsafe { status.assume_init() });
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+fn fixed_descriptor_fcntl(
+    descriptor: std::os::fd::RawFd,
+    command: libc::c_int,
+) -> std::io::Result<libc::c_int> {
+    loop {
+        // SAFETY: F_GETFL and F_GET_SEALS read only the supplied descriptor state; invalid
+        // descriptor numbers are reported as EBADF.
+        let result = unsafe { libc::fcntl(descriptor, command) };
+        if result >= 0 {
+            return Ok(result);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
 }
 
 fn is_cargo_target_runner_environment_name(name: &OsStr) -> bool {

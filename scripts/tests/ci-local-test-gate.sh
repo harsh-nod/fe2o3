@@ -39,6 +39,27 @@ OWNED_TMP_PATH="$(
   exit 1
 }
 
+QUALIFICATION_TARGET="$(
+  env CI_LOG_DIR="${TIMEOUT_TEST_ROOT}/qualification-target-logs" \
+    bash -c '
+      source "$1"
+      CARGO_TARGET_DIRECTORY="$2"
+      prepare_cargo_fe2o3_qualification_target
+      printf "%s\n" "${CARGO_FE2O3_QUALIFICATION_TARGET_DIRECTORY}"
+    ' bash "${TEST_SCRIPT_DIR}/../ci-local.sh" "${OWNED_TMP_TARGET}"
+)"
+[[ "${QUALIFICATION_TARGET}" == \
+  "${OWNED_TMP_TARGET}/fe2o3-qualification-tests-"* ]] || {
+  printf 'ci-local created an unexpected qualification target: %s\n' \
+    "${QUALIFICATION_TARGET}" >&2
+  exit 1
+}
+[[ ! -e "${QUALIFICATION_TARGET}" && ! -L "${QUALIFICATION_TARGET}" ]] || {
+  printf 'ci-local did not trap-clean its qualification target: %s\n' \
+    "${QUALIFICATION_TARGET}" >&2
+  exit 1
+}
+
 set +e
 timeout 10s env \
   FE2O3_CI_STEP_TIMEOUT_SECONDS=1 \
@@ -388,6 +409,10 @@ for managed_package in fe2o3-managed-a fe2o3-managed-b; do
 done
 [[ " ${cpu_command} " == *" -p fe2o3-ordinary "* ]] || {
   printf '%s\n' 'raw CPU tests omitted the computed ordinary example package' >&2
+  exit 1
+}
+[[ " ${cpu_command} " == *" -p fe2o3-pliron-scalar-add-v1 "* ]] || {
+  printf '%s\n' 'raw CPU tests omitted the scalar feature-free boundary suite' >&2
   exit 1
 }
 assert_equals \
@@ -844,6 +869,21 @@ assert_equals \
   "env ${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 doctor" \
   "$(step_command rocm-doctor)" \
   'ROCm compile did not invoke the resolved driver directly for doctor'
+assert_equals \
+  'fe2o3-host fe2o3-pliron-scalar-add-v1' \
+  "${ROCM_QUALIFICATION_TEST_PACKAGES[*]}" \
+  'ROCm qualification test package set changed without review'
+qualification_target="${TIMEOUT_TEST_ROOT}/external-target/fe2o3-qualification-tests-${BASHPID}"
+assert_equals \
+  "${qualification_target}" \
+  "${CARGO_FE2O3_QUALIFICATION_TARGET_DIRECTORY}" \
+  'ROCm qualification tests did not use the fresh private target'
+for qualification_package in "${ROCM_QUALIFICATION_TEST_PACKAGES[@]}"; do
+  assert_equals \
+    "env -u FE2O3_TARGET CARGO_TARGET_DIR=${qualification_target} ${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 test --locked --all-targets -p ${qualification_package} --features ${CARGO_FE2O3_QUALIFICATION_FEATURE}" \
+    "$(step_command "rocm-qualification-tests-${qualification_package}")" \
+    "ROCm compile did not run qualification tests for ${qualification_package}"
+done
 assert_equals \
   "env FE2O3_TEST_CARGO_FE2O3_BIN=${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 FE2O3_TEST_CARGO_FE2O3_SHA256=${CARGO_FE2O3_SHA256} cargo test --locked -p rustc-codegen-fe2o3 --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --test trusted_device_items genuine_markers_emit_and_local_external_spoofs_fail_closed -- --ignored --exact" \
   "$(step_command rocm-trusted-device-items)" \
