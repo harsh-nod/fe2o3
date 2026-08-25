@@ -34,7 +34,6 @@ const PROTECTED_RELEASE_CARGO_REPORT: &str = ".fe2o3-protected-release-cargo-rep
 const PROTECTED_RELEASE_CARGO_READY: &str = ".fe2o3-protected-release-cargo-ready-v1";
 const PROTECTED_RELEASE_CARGO_HOLD: &str = ".fe2o3-protected-release-cargo-hold-v1";
 const PROTECTED_RELEASE_CARGO_SURVIVED: &str = ".fe2o3-protected-release-cargo-survived-v1";
-const PROTECTED_RELEASE_RUSTC_REPORT: &str = ".fe2o3-protected-release-rustc-report-v1";
 const PROTECTED_RELEASE_RUSTC_FD_REPORT: &str = ".fe2o3-protected-release-rustc-fd-report-v1.json";
 const PROTECTED_RELEASE_RUSTC_FD_ATTACK: &str = ".fe2o3-protected-release-rustc-fd-attack-v1";
 
@@ -251,12 +250,11 @@ impl ProjectFixture {
             .env("TZ", "UTC")
             .env("CARGO", env!("CARGO_BIN_EXE_cargo-fe2o3-cargo-fixture"))
             .env("FE2O3_BACKEND", &self.backend)
-            .env("FE2O3_TARGET", "gfx942:xnack-")
+            .env("FE2O3_TARGET", "gfx942")
             .env(
                 "FE2O3_AUTHORITY_RUSTC_PATH_V1",
                 rustc_fixture_executable(&self.root),
             )
-            .env("FE2O3_CODEGEN_PIPELINE", "protected-release-fixture-v1")
             .env(
                 "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
                 authority_rustc_sha256(&self.root),
@@ -291,12 +289,18 @@ impl ProjectFixture {
     fn protected_release_build_command(&self) -> Command {
         let cargo = Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3-release-cargo-fixture"));
         let rustc = release_rustc_fixture_executable(&self.root);
+        let worker_config = self.inert_production_worker_config();
         let mut command = self.isolated_protected_release_command("build");
         command
+            .args([
+                "--target",
+                fe2o3_amd_target::PRODUCTION_GFX942_RUSTC_TARGET_V1,
+            ])
             .env("CARGO", cargo)
             .env("FE2O3_AUTHORITY_CARGO_SHA256_V1", file_sha256(cargo))
             .env("FE2O3_AUTHORITY_RUSTC_PATH_V1", &rustc)
             .env("FE2O3_AUTHORITY_RUSTC_SHA256_V1", file_sha256(&rustc))
+            .env("FE2O3_WORKER_V2_CONFIG_V2", worker_config)
             .env(
                 "FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1",
                 runtime_tree_sha256(
@@ -309,6 +313,47 @@ impl ProjectFixture {
                 ),
             );
         command
+    }
+
+    fn inert_production_worker_config(&self) -> PathBuf {
+        let worker = env::current_exe().expect("resolve inert production worker fixture");
+        let worker_bytes = fs::read(&worker).expect("read inert production worker fixture");
+        let worker_sha256 = file_sha256(&worker);
+        let config = self.root.join("production-worker-config.json");
+        let value = serde_json::json!({
+            "candidate_output_max_bytes": 4_194_304,
+            "format": "fe2o3-worker-v2-config-v2",
+            "limits": {
+                "stderr_bytes": 65_536,
+                "stdout_bytes": 8_388_608,
+                "timeout_ms": 30_000
+            },
+            "link_options": [
+                {"name": "code-object-version", "value": "5"},
+                {"name": "opt-level", "value": "2"},
+                {"name": "strip-debug", "value": "true"},
+                {"name": "verify-each", "value": "true"}
+            ],
+            "providers": [],
+            "units": [{
+                "crate_name": "external_standalone",
+                "source": self.workspace.join("src/main.rs"),
+                "working_directory": self.cwd
+            }],
+            "worker": {
+                "byte_len": worker_bytes.len(),
+                "llvm_build_identity": "test-only-unreached-llvm",
+                "path": worker,
+                "sha256": worker_sha256,
+                "worker_build_identity": "test-only-unreached-worker"
+            }
+        });
+        fs::write(
+            &config,
+            serde_json::to_vec(&value).expect("encode canonical production worker config"),
+        )
+        .expect("write inert production worker config");
+        config
     }
 
     fn invocations(&self) -> Vec<Invocation> {
@@ -1692,18 +1737,47 @@ fn protected_release_probe_mints_only_a_real_launcher_handoff() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn protected_release_build_reaches_authenticated_cargo_publication_fixture() {
+fn protected_release_rejects_every_pipeline_selector_before_launch() {
+    let fixture = ProjectFixture::standalone();
+    for selector in [
+        "production-v1",
+        "collected-row-softmax-v1",
+        "kernel-ir-worker-v2",
+    ] {
+        let output = fixture
+            .isolated_protected_release_command("probe")
+            .env("FE2O3_CODEGEN_PIPELINE", selector)
+            .output()
+            .expect("run protected release selector rejection");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "selector {selector:?}: {stderr}");
+        assert!(
+            stderr.contains("rejects unexpected inherited environment")
+                && stderr.contains("FE2O3_CODEGEN_PIPELINE"),
+            "selector {selector:?}: {stderr}",
+        );
+    }
+    assert!(!fixture.log.exists(), "selector rejection executed Cargo");
+    assert!(
+        !fixture.target.join("fe2o3").exists(),
+        "selector rejection created an artifact generation"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn protected_release_preserves_rustc_custody_and_requires_a_real_compiler_handoff() {
     let fixture = ProjectFixture::standalone();
     write_authority_lockfile(&fixture.workspace);
     let output = fixture
         .protected_release_build_command()
         .output()
         .expect("run protected release build fixture");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
     assert!(
-        output.status.success(),
-        "stdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        stderr.contains("V3 compiler module handoff is not published"),
+        "{stderr}"
     );
 
     let report: serde_json::Value = serde_json::from_slice(
@@ -1729,20 +1803,8 @@ fn protected_release_build_reaches_authenticated_cargo_publication_fixture() {
         "{report}"
     );
     assert!(
-        fs::read_to_string(fixture.target.join(PROTECTED_RELEASE_RUSTC_REPORT))
-            .expect("read protected release rustc report")
-            .contains("external_standalone:probe_"),
-        "protected release build did not cross the authenticated rustc/backend fixture"
-    );
-    let artifacts = fs::read_dir(fixture.target.join("fe2o3"))
-        .expect("read protected release publication")
-        .map(|entry| entry.expect("read protected release artifact").path())
-        .filter(|path| path.extension() == Some(OsStr::new("hsaco")))
-        .collect::<Vec<_>>();
-    assert_eq!(artifacts.len(), 1, "{artifacts:?}");
-    assert_eq!(
-        fs::read(&artifacts[0]).expect("read protected release HSACO fixture"),
-        b"fixture hsaco"
+        !protected_release_has_published_hsaco(&fixture.target),
+        "a custody-only rustc fixture published production output"
     );
 
     let fd_report: serde_json::Value = serde_json::from_slice(
@@ -1767,7 +1829,7 @@ fn protected_release_build_reaches_authenticated_cargo_publication_fixture() {
     assert_eq!(fd_report["seals"], required_seals, "{fd_report}");
     assert_eq!(fd_report["required_seals"], required_seals, "{fd_report}");
     assert_eq!(fd_report["close_on_exec"], false, "{fd_report}");
-    assert_eq!(fd_report["fd195_open"], true, "{fd_report}");
+    assert_eq!(fd_report["fd195_open"], false, "{fd_report}");
     assert_eq!(fd_report["same_object_as_fd195"], false, "{fd_report}");
 
     let attack_fixture = ProjectFixture::standalone();
@@ -1808,13 +1870,6 @@ fn protected_release_build_reaches_authenticated_cargo_publication_fixture() {
         assert!(
             stderr.contains(expected),
             "attack={attack}\nstderr:\n{stderr}"
-        );
-        assert!(
-            !attack_fixture
-                .target
-                .join(PROTECTED_RELEASE_RUSTC_REPORT)
-                .exists(),
-            "fd199 attack {attack} reached authorized rustc publication"
         );
         assert!(
             !attack_fixture

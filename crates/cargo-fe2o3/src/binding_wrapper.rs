@@ -118,6 +118,7 @@ const NON_PRODUCTION_REPRODUCTION_RECORD_ENV: &str =
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
 const BUILD_ATTEMPT_ENV: &str = "FE2O3_BUILD_ATTEMPT_V1";
 const CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1: &str = "FE2O3_CARGO_METADATA_MUTATION_TEST_ONLY_V1";
+const QUALIFICATION_RELEASE_ACTION_ENV: &str = "FE2O3_PROTECTED_RELEASE_ACTION_V1";
 const ROW_SOFTMAX_V1_PROVISION_VALUE: &str = "row-softmax-v1-provision";
 const ROW_SOFTMAX_V1_RUN_VALUE: &str = "row-softmax-v1-run";
 const ROW_SOFTMAX_V1_PROVISION_PREFIX: &str = "FE2O3_ROW_SOFTMAX_V1_PROVIDER_OBSERVATION=";
@@ -1330,13 +1331,13 @@ struct CompleteReviewedChildEnvironmentV2 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum FixedS09InheritedInputV2 {
+enum FixedReviewedInheritedInputV2 {
     CargoManifestDir,
     CodegenPipeline,
     Target,
 }
 
-impl FixedS09InheritedInputV2 {
+impl FixedReviewedInheritedInputV2 {
     const ALL: [Self; 3] = [Self::CargoManifestDir, Self::CodegenPipeline, Self::Target];
 
     const fn name(self) -> &'static str {
@@ -1347,13 +1348,13 @@ impl FixedS09InheritedInputV2 {
         }
     }
 
-    fn accepts(self, value: &OsStr) -> bool {
+    fn accepts(self, value: &OsStr, codegen_pipeline: Option<&OsStr>) -> bool {
         match self {
             Self::CargoManifestDir => {
                 let path = Path::new(value);
                 path.is_absolute() && os_bytes(value).len() <= 4096
             }
-            Self::CodegenPipeline => value == "kernel-ir-worker-v2",
+            Self::CodegenPipeline => codegen_pipeline == Some(value),
             Self::Target => value == "gfx942:xnack-",
         }
     }
@@ -1378,8 +1379,17 @@ fn materialize_reviewed_child_environment(
     general_gemm_pins: Option<GeneralGemmChildPinsV1<'_>>,
 ) -> Result<Option<CompleteReviewedChildEnvironmentV2>, BindingWrapperError> {
     match profile {
+        Some(WorkerV2CompileEnvironmentProfileV1::ProductionGfx942) => {
+            materialize_closed_child_environment(command, inherited, None, "production").map(Some)
+        }
         Some(WorkerV2CompileEnvironmentProfileV1::S09AlphaGfx942O0) => {
-            materialize_s09_child_environment(command, inherited).map(Some)
+            materialize_closed_child_environment(
+                command,
+                inherited,
+                Some(OsStr::new("kernel-ir-worker-v2")),
+                "S09",
+            )
+            .map(Some)
         }
         Some(WorkerV2CompileEnvironmentProfileV1::ScalarGemmV1Gfx942) => {
             materialize_scalar_gemm_v1_child_environment(command, inherited).map(Some)
@@ -1414,7 +1424,7 @@ fn materialize_row_softmax_v1_child_environment(
 ) -> Result<CompleteReviewedChildEnvironmentV2, BindingWrapperError> {
     let inherited = inherited.into_iter().collect::<BTreeMap<_, _>>();
     for name in inherited.keys() {
-        if rejected_s09_inherited_environment(name) {
+        if rejected_reviewed_inherited_environment(name) {
             return Err(BindingWrapperError::BuildObservation(format!(
                 "row-softmax child environment rejects inherited variable {name:?}"
             )));
@@ -1486,7 +1496,7 @@ fn materialize_row_softmax_v1_child_environment(
             }
             continue;
         }
-        if !managed_s09_child_environment(&name) {
+        if !managed_reviewed_child_environment(&name) {
             return Err(BindingWrapperError::BuildObservation(format!(
                 "row-softmax command has unreviewed explicit environment mutation {name:?}"
             )));
@@ -1521,30 +1531,35 @@ fn materialize_row_softmax_v1_child_environment(
     })
 }
 
-fn materialize_s09_child_environment(
+fn materialize_closed_child_environment(
     command: &mut Command,
     inherited: impl IntoIterator<Item = (OsString, OsString)>,
+    codegen_pipeline: Option<&OsStr>,
+    profile: &str,
 ) -> Result<CompleteReviewedChildEnvironmentV2, BindingWrapperError> {
     let inherited = inherited.into_iter().collect::<BTreeMap<_, _>>();
     for name in inherited.keys() {
-        if rejected_s09_inherited_environment(name) {
+        if rejected_reviewed_inherited_environment(name) {
             return Err(BindingWrapperError::BuildObservation(format!(
-                "S09 child environment rejects inherited variable {name:?}"
+                "{profile} child environment rejects inherited variable {name:?}"
             )));
         }
     }
 
     let mut final_environment = BTreeMap::new();
-    for input in FixedS09InheritedInputV2::ALL {
+    for input in FixedReviewedInheritedInputV2::ALL {
+        if input == FixedReviewedInheritedInputV2::CodegenPipeline && codegen_pipeline.is_none() {
+            continue;
+        }
         let name = input.name();
         let value = inherited.get(OsStr::new(name)).ok_or_else(|| {
             BindingWrapperError::BuildObservation(format!(
-                "S09 fixed environment is missing required {name}"
+                "{profile} fixed environment is missing required {name}"
             ))
         })?;
-        if !input.accepts(value) {
+        if !input.accepts(value, codegen_pipeline) {
             return Err(BindingWrapperError::BuildObservation(format!(
-                "S09 fixed environment has invalid {name}"
+                "{profile} fixed environment has invalid {name}"
             )));
         }
         final_environment.insert(OsString::from(name), value.clone());
@@ -1557,9 +1572,9 @@ fn materialize_s09_child_environment(
         if apply_managed_loader_environment(&mut final_environment, &name, value.as_deref())? {
             continue;
         }
-        if !managed_s09_child_environment(&name) {
+        if !managed_reviewed_child_environment(&name) {
             return Err(BindingWrapperError::BuildObservation(format!(
-                "S09 command has unreviewed explicit environment mutation {name:?}"
+                "{profile} command has unreviewed explicit environment mutation {name:?}"
             )));
         }
         match value {
@@ -1594,7 +1609,7 @@ fn materialize_scalar_gemm_v1_child_environment(
                 "scalar GEMM child environment variable {name_text} has a non-UTF-8 value"
             )));
         }
-        if rejected_s09_inherited_environment(name) {
+        if rejected_reviewed_inherited_environment(name) {
             return Err(BindingWrapperError::BuildObservation(format!(
                 "scalar GEMM child environment rejects inherited variable {name_text}"
             )));
@@ -1658,7 +1673,7 @@ fn materialize_scalar_gemm_v1_child_environment(
         if apply_managed_loader_environment(&mut final_environment, &name, value.as_deref())? {
             continue;
         }
-        if !managed_s09_child_environment(&name) {
+        if !managed_reviewed_child_environment(&name) {
             return Err(BindingWrapperError::BuildObservation(format!(
                 "scalar GEMM command has unreviewed explicit environment mutation {name:?}"
             )));
@@ -1702,7 +1717,7 @@ fn materialize_general_gemm_v1_child_environment(
                 "general GEMM child environment variable {name_text} has a non-UTF-8 value"
             )));
         }
-        if rejected_s09_inherited_environment(name) {
+        if rejected_reviewed_inherited_environment(name) {
             return Err(BindingWrapperError::BuildObservation(format!(
                 "general GEMM child environment rejects inherited variable {name_text}"
             )));
@@ -1813,7 +1828,7 @@ fn materialize_general_gemm_v1_child_environment(
         if apply_managed_loader_environment(&mut final_environment, &name, value.as_deref())? {
             continue;
         }
-        if !managed_s09_child_environment(&name) {
+        if !managed_reviewed_child_environment(&name) {
             return Err(BindingWrapperError::BuildObservation(format!(
                 "general GEMM command has unreviewed explicit environment mutation {name:?}"
             )));
@@ -2027,7 +2042,7 @@ fn require_canonical_sha256_environment(
     Ok(())
 }
 
-fn rejected_s09_inherited_environment(name: &OsStr) -> bool {
+fn rejected_reviewed_inherited_environment(name: &OsStr) -> bool {
     let bytes = os_bytes(name);
     bytes == b"RUSTC_BOOTSTRAP"
         || crate::is_dynamic_loader_environment_name(name)
@@ -2053,7 +2068,7 @@ fn credential_like_environment_name(name: &[u8]) -> bool {
     })
 }
 
-fn managed_s09_child_environment(name: &OsStr) -> bool {
+fn managed_reviewed_child_environment(name: &OsStr) -> bool {
     matches!(
         os_bytes(name),
         b"LANG"
@@ -2527,11 +2542,11 @@ impl CompilerCapabilities {
         &self,
         attempt: BuildAttempt,
     ) -> Result<PathBuf, BindingWrapperError> {
-        let component = format!(".fe2o3-s09-tmp-{}", attempt.to_env_value());
+        let component = format!(".fe2o3-rustc-tmp-{}", attempt.to_env_value());
         let mode = rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR | rustix::fs::Mode::XUSR;
         rustix::fs::mkdirat(self.artifact.file(), &component, mode).map_err(|error| {
             BindingWrapperError::BuildObservation(format!(
-                "cannot create private S09 compiler temporary directory: {error}"
+                "cannot create private reviewed rustc temporary directory: {error}"
             ))
         })?;
         let directory = rustix::fs::openat(
@@ -2545,12 +2560,12 @@ impl CompilerCapabilities {
         )
         .map_err(|error| {
             BindingWrapperError::BuildObservation(format!(
-                "cannot pin private S09 compiler temporary directory: {error}"
+                "cannot pin private reviewed rustc temporary directory: {error}"
             ))
         })?;
         rustix::fs::fchmod(&directory, mode).map_err(|error| {
             BindingWrapperError::BuildObservation(format!(
-                "cannot make S09 compiler temporary directory private: {error}"
+                "cannot make reviewed rustc temporary directory private: {error}"
             ))
         })?;
         Ok(PathBuf::from(format!(
@@ -2707,7 +2722,7 @@ fn scope_unmanaged_dependency_environment(command: &mut Command) {
         crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV,
         WORKER_V2_CONFIG_ENV,
         WORKER_V2_EXPECTED_ID_ENV,
-        crate::PROTECTED_RELEASE_ACTION_ENV,
+        QUALIFICATION_RELEASE_ACTION_ENV,
     ] {
         command.env_remove(name);
     }
@@ -2845,7 +2860,8 @@ fn worker_v3_readiness_is_absent(error: &WorkerV3LoadEnvelopeErrorV1) -> bool {
     matches!(
         error,
         WorkerV3LoadEnvelopeErrorV1::LoadReadiness(
-            fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::MissingEnvelope
+            fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::AttemptState
+                | fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::MissingEnvelope
                 | fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::MissingClaim
                 | fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::MissingReceipt
         )
@@ -3093,7 +3109,7 @@ fn prepare_managed_attempt(
     let worker_v2_binding_schema =
         WorkerV2BindingSchema::select(protected_compiler_closure, production_v1_worker)
             .map_err(|error| BindingWrapperError::BuildObservation(error.to_owned()))?;
-    let release_action = std::env::var_os(crate::PROTECTED_RELEASE_ACTION_ENV);
+    let release_action = std::env::var_os(QUALIFICATION_RELEASE_ACTION_ENV);
     let row_softmax_provision =
         release_action.as_deref() == Some(OsStr::new(ROW_SOFTMAX_V1_PROVISION_VALUE));
     let row_softmax_release = worker_v2
@@ -3511,7 +3527,7 @@ fn complete_simulation_attempt(managed: &ManagedAttempt) -> Result<(), Completio
 }
 
 fn row_softmax_provisioning_requested() -> bool {
-    std::env::var_os(crate::PROTECTED_RELEASE_ACTION_ENV).as_deref()
+    std::env::var_os(QUALIFICATION_RELEASE_ACTION_ENV).as_deref()
         == Some(OsStr::new(ROW_SOFTMAX_V1_PROVISION_VALUE))
 }
 
@@ -5094,19 +5110,20 @@ mod tests {
         OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2,
         PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2, PRODUCTION_V1_PIPELINE,
         PreparedRustcConsistencyExpectation, ProtectedWorkerV2TransitionBlocker,
-        QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1, ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1,
-        ROW_SOFTMAX_V1_PIPELINE, ROW_SOFTMAX_V1_RUN_VALUE, RustcCodegenMetadataErrorV1,
-        RustcInvocationV2, WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2,
-        WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2, WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
-        WorkerV2BindingSchema, append_prepared_rustc_arguments, canonicalize_rustc_metadata,
-        classify_rustc_invocation_v2, complete_recovered_protected_worker_v2,
-        complete_recovered_worker_v2, configure_build_observation_environment,
+        QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1, QUALIFICATION_RELEASE_ACTION_ENV,
+        ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1, ROW_SOFTMAX_V1_PIPELINE,
+        ROW_SOFTMAX_V1_RUN_VALUE, RustcCodegenMetadataErrorV1, RustcInvocationV2,
+        WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2, WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2,
+        WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, WorkerV2BindingSchema,
+        append_prepared_rustc_arguments, canonicalize_rustc_metadata, classify_rustc_invocation_v2,
+        complete_recovered_protected_worker_v2, complete_recovered_worker_v2,
+        configure_build_observation_environment,
         configure_build_observation_environment_with_test_mutation,
         configure_qualification_route_marker, configure_worker_build_observation_environment,
         decode_managed_rustc_args, derive_build_attempt_input_with_config_identity, hex,
-        is_cargo_stdin_probe, materialize_general_gemm_v1_child_environment,
-        materialize_reviewed_child_environment, materialize_row_softmax_v1_child_environment,
-        materialize_s09_child_environment, materialize_scalar_gemm_v1_child_environment,
+        is_cargo_stdin_probe, materialize_closed_child_environment,
+        materialize_general_gemm_v1_child_environment, materialize_reviewed_child_environment,
+        materialize_row_softmax_v1_child_environment, materialize_scalar_gemm_v1_child_environment,
         measure_build_executable, observe_pinned_cargo_image_and_parent,
         ordered_rustc_codegen_metadata_v1, os_bytes, pipeline_requires_protected_invocation,
         pre_spawn_failure, prepare_managed_attempt, prepared_rustc_command_sha256,
@@ -5990,11 +6007,13 @@ mod tests {
                 .env("TMPDIR", "/proc/self/fd/197/private")
                 .env("FE2O3_BUILD_ATTEMPT_V1", "attempt")
                 .env_remove("FE2O3_HSACO_DIR");
-            let complete_environment = materialize_s09_child_environment(
+            let complete_environment = materialize_closed_child_environment(
                 &mut command,
                 inherited
                     .iter()
                     .map(|(name, value)| (OsString::from(name), OsString::from(value))),
+                Some(OsStr::new("kernel-ir-worker-v2")),
+                "S09",
             )
             .unwrap();
             let digest = prepared_rustc_command_sha256(
@@ -6775,7 +6794,13 @@ mod tests {
                 ),
             ];
             inherited.push((OsString::from(name), OsString::from("forbidden")));
-            let error = materialize_s09_child_environment(&mut command, inherited).unwrap_err();
+            let error = materialize_closed_child_environment(
+                &mut command,
+                inherited,
+                Some(OsStr::new("kernel-ir-worker-v2")),
+                "S09",
+            )
+            .unwrap_err();
             assert!(error.to_string().contains(name));
         }
     }
@@ -6954,7 +6979,7 @@ mod tests {
             .env("LANG", "C.UTF-8")
             .env("TMPDIR", "/proc/self/fd/197/private")
             .env("CUSTOM_ENV_MACRO_INPUT", "unsupported");
-        let error = materialize_s09_child_environment(
+        let error = materialize_closed_child_environment(
             &mut command,
             [
                 (
@@ -6970,6 +6995,8 @@ mod tests {
                     OsString::from("gfx942:xnack-"),
                 ),
             ],
+            Some(OsStr::new("kernel-ir-worker-v2")),
+            "S09",
         )
         .unwrap_err();
         assert!(error.to_string().contains("CUSTOM_ENV_MACRO_INPUT"));
@@ -8487,12 +8514,9 @@ mod tests {
             .env("FE2O3_WORKER_V2_CONFIG_V2", &manifest)
             .env("FE2O3_BUILD_SESSION_V1", "e1".repeat(16));
         if matches!(case, FailClosedCase::RowSoftmax) {
-            command.env(
-                crate::PROTECTED_RELEASE_ACTION_ENV,
-                ROW_SOFTMAX_V1_RUN_VALUE,
-            );
+            command.env(QUALIFICATION_RELEASE_ACTION_ENV, ROW_SOFTMAX_V1_RUN_VALUE);
         } else {
-            command.env_remove(crate::PROTECTED_RELEASE_ACTION_ENV);
+            command.env_remove(QUALIFICATION_RELEASE_ACTION_ENV);
         }
         let status = crate::process_execution::status(&mut command).unwrap();
         assert!(status.success());
@@ -8729,6 +8753,11 @@ mod tests {
 
     #[test]
     fn production_v3_readiness_recovery_distinguishes_absence_from_corruption() {
+        assert!(worker_v3_readiness_is_absent(
+            &WorkerV3LoadEnvelopeErrorV1::LoadReadiness(
+                fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::AttemptState,
+            ),
+        ));
         assert!(worker_v3_readiness_is_absent(
             &WorkerV3LoadEnvelopeErrorV1::LoadReadiness(
                 fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::MissingEnvelope,

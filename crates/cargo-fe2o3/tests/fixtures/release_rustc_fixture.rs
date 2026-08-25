@@ -1,18 +1,10 @@
 use std::env;
 use std::ffi::OsString;
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd};
-use std::os::unix::net::UnixStream;
+use std::fs::{self, File};
+use std::os::fd::{AsRawFd, BorrowedFd};
 use std::path::Path;
 use std::process::ExitCode;
-use std::time::Duration;
 
-use fe2o3_artifact_transaction::{
-    BROKERED_INVOCATION_ADMITTED_V1, BrokeredInvocationCapabilityClaimV1,
-    BrokeredInvocationCapabilityRequestV1, BuildAttempt, EmitError, ProducerIdentity,
-    emit_artifact_transaction_for_attempt,
-};
 use fe2o3_compiler_closure_capability::{
     RUSTC_INVOCATION_CHILD_FD_V1, RustcInvocationCapabilityV1,
 };
@@ -20,10 +12,6 @@ use fe2o3_rustc_invocation::{
     INVOCATION_DESCRIPTOR_MAGIC_V3, INVOCATION_DESCRIPTOR_VERSION_V3, RustcInvocationV2,
     classify_rustc_invocation_v2, encode_descriptor_v3,
 };
-use reserved_fe2o3_symbols::CRATE_BINDING_ID_ENV_V1;
-
-const BUILD_ATTEMPT_ENV: &str = "FE2O3_BUILD_ATTEMPT_V1";
-const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 const DESCRIPTOR_REPORT: &str = ".fe2o3-protected-release-rustc-fd-report-v1.json";
 const DESCRIPTOR_ATTACK: &str = ".fe2o3-protected-release-rustc-fd-attack-v1";
 const INVOCATION_AUTHORITY_FD: i32 = 195;
@@ -55,11 +43,7 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     match classify_rustc_invocation_v2(&filtered) {
-        Ok(RustcInvocationV2::Compile(compile)) if env::var_os(BUILD_ATTEMPT_ENV).is_some() => {
-            observe_rustc_invocation_descriptor()?;
-            publish_fixture(compile.crate_name(), compile.source_path())
-        }
-        Ok(RustcInvocationV2::Compile(_)) => Ok(()),
+        Ok(RustcInvocationV2::Compile(_)) => observe_rustc_invocation_descriptor(),
         Ok(_) => Ok(()),
         Err(error) => Err(format!("classify rustc invocation: {error}")),
     }
@@ -166,91 +150,6 @@ fn close_inherited_invocation_descriptor() -> Result<(), String> {
             "cannot close inherited fd199: {}",
             std::io::Error::last_os_error()
         ));
-    }
-    Ok(())
-}
-
-fn publish_fixture(crate_name: &str, source: &Path) -> Result<(), String> {
-    if Path::new("/proc/self/fd/191").exists() || Path::new("/proc/self/fd/192").exists() {
-        return Err("Cargo binding image descriptors survived the wrapper exec".to_owned());
-    }
-    let attempt = env::var(BUILD_ATTEMPT_ENV)
-        .ok()
-        .and_then(|value| BuildAttempt::from_env_value(&value).ok())
-        .ok_or_else(|| "compile invocation has no canonical build attempt".to_owned())?;
-    consume_invocation_authority(attempt)?;
-    let output = env::var_os(HSACO_DIR_ENV)
-        .ok_or_else(|| "compile invocation has no artifact directory".to_owned())?;
-    if !Path::new("/proc/self/fd/197").is_dir()
-        || Path::new(&output) != Path::new("/proc/self/fd/197")
-    {
-        return Err("artifact directory was not installed at fixed descriptor 197".to_owned());
-    }
-    if fs::read("/proc/self/fd/198")
-        .map_err(|error| format!("read fixed backend descriptor: {error}"))?
-        != b"test backend"
-    {
-        return Err("fixed backend descriptor contains substituted bytes".to_owned());
-    }
-    let binding = env::var(CRATE_BINDING_ID_ENV_V1)
-        .map_err(|_| "compile invocation has no crate binding identity".to_owned())?;
-    if binding.len() != 64
-        || !binding
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-    {
-        return Err("crate binding identity is not canonical hexadecimal".to_owned());
-    }
-    let kernel = format!("probe_{}", &binding[..16]);
-    let producer = ProducerIdentity::from_codegen(crate_name, Some(source))
-        .map_err(|error| format!("construct fixture producer: {error}"))?;
-    emit_artifact_transaction_for_attempt(
-        Path::new(&output),
-        &producer,
-        attempt,
-        &[kernel.as_str()],
-        |name| *name,
-        |name| Ok(format!("; protected release fixture IR for {name}\n")),
-        |_llvm_ir, hsaco| {
-            fs::write(hsaco.with_extension("o"), b"fixture object")?;
-            fs::write(hsaco, b"fixture hsaco")?;
-            Ok::<(), EmitError>(())
-        },
-    )
-    .map_err(|error| format!("publish fixture backend output: {error}"))?;
-
-    let manifest = env::var_os("CARGO_MANIFEST_DIR")
-        .ok_or_else(|| "compile invocation has no Cargo manifest directory".to_owned())?;
-    let report = Path::new(&manifest).join("target/.fe2o3-protected-release-rustc-report-v1");
-    let mut report = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&report)
-        .map_err(|error| format!("open {}: {error}", report.display()))?;
-    writeln!(report, "{crate_name}:{kernel}")
-        .map_err(|error| format!("write release rustc report: {error}"))
-}
-
-fn consume_invocation_authority(attempt: BuildAttempt) -> Result<(), String> {
-    let claim = BrokeredInvocationCapabilityClaimV1::new(attempt, *attempt.invocation().as_bytes())
-        .map_err(|error| format!("construct invocation-authority claim: {error}"))?;
-    // SAFETY: this fixture is the unique consumer of the fixed descriptor and transfers its
-    // ownership to the UnixStream for the complete request/response exchange.
-    let mut stream = unsafe { UnixStream::from_raw_fd(INVOCATION_AUTHORITY_FD) };
-    let timeout = Some(Duration::from_secs(30));
-    stream
-        .set_read_timeout(timeout)
-        .and_then(|()| stream.set_write_timeout(timeout))
-        .map_err(|error| format!("bound invocation-authority exchange: {error}"))?;
-    stream
-        .write_all(&BrokeredInvocationCapabilityRequestV1::Consume(claim).encode())
-        .map_err(|error| format!("consume invocation authority: {error}"))?;
-    let mut response = [0_u8; 16];
-    stream
-        .read_exact(&mut response)
-        .map_err(|error| format!("read invocation-authority admission: {error}"))?;
-    if response != *BROKERED_INVOCATION_ADMITTED_V1 {
-        return Err("invocation authority returned a malformed admission".to_owned());
     }
     Ok(())
 }
