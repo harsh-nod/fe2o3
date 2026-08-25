@@ -281,6 +281,10 @@ dispatch path can transfer model ownership only when it consumes an exact,
 complete, distinct set representing every live mapped C3 lease. That bridge
 retains the real lease and keeps its address facts private. It does not turn an
 initialization declaration into copy evidence or expose a numeric address.
+While a native queue remains live, every detach, rebind, allocation,
+initialization, or release mutation temporarily restores that same model
+foundation to the shared session and reclaims the updated foundation before
+returning to queue operation.
 The dedicated bounded lease journal is not projected into the runtime memory
 model and has no Verus-to-Rust or syscall refinement. Ordinary C3 leases still
 grant no CPU mapping, initialization, sync or async copy, alias, quiescence,
@@ -519,7 +523,10 @@ kernarg while keeping the same native queue, ring, completion arena, event,
 runtime, and doorbell alive. Its exact detached-lease ledger must be consumed by
 a later `bind_fixed_dispatch` or explicit release. The later batch may have a
 different program count, packet count, geometry, scalar bytes, and dispatch-data
-set. It is still published by one reservation and one final doorbell store.
+set. Live memory mutations run only while the authoritative memory model is
+restored to the shared session; the queue engine reclaims it before any later
+lifecycle operation. The later batch is still published by one reservation and
+one final doorbell store.
 
 Storage that entered fully initialized remains fully initialized across generic
 completion and can be rebound without another upload. Exact pre-publication
@@ -698,8 +705,8 @@ and does not depend on the semantic-trace crate. An authenticated dispatch plus
 completion observation and exact artifact/KIR binding are required before that
 adapter can be added without fabricating execution history.
 
-`KFD_SEMANTIC_OBSERVATION_MANIFEST_V1` binds these inputs, output bounds,
-redactions, availability claims, and authority exclusions. Reports and
-capability queries are fixed-size and allocation-free. Hostile tests use only
-crate-private detached-fact constructors; they perform no KFD, DRM, HIP, HSA,
-or ROCm runtime discovery.
+`KFD_SEMANTIC_OBSERVATION_MANIFEST_V1` binds the source-profile identities,
+inputs, output bounds, redactions, availability claims, and authority
+exclusions. Reports and capability queries are fixed-size and allocation-free.
+Hostile tests use only crate-private detached-fact constructors; they perform
+no KFD, DRM, HIP, HSA, or ROCm runtime discovery.
