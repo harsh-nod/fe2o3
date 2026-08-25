@@ -1,0 +1,55 @@
+error[E0432]: unresolved imports `fe2o3_core::GpuFunction`, `fe2o3_core::GpuModule`, `fe2o3_core::KernelParams`, `fe2o3_core::LaunchConfig`, `fe2o3_core::launch_cooperative_kernel_on_stream`, `fe2o3_core::launch_kernel_on_stream`
+ --> tests/ui/production_runtime_surface/raw_module_and_launch_are_unavailable.rs:2:5
+  |
+2 |     GpuFunction, GpuModule, KernelParams, LaunchConfig, launch_cooperative_kernel_on_stream,
+  |     ^^^^^^^^^^^  ^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `launch_cooperative_kernel_on_stream` in the root
+  |     |            |          |             |
+  |     |            |          |             no `LaunchConfig` in the root
+  |     |            |          no `KernelParams` in the root
+  |     |            no `GpuModule` in the root
+  |     no `GpuFunction` in the root
+3 |     launch_kernel_on_stream,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^ no `launch_kernel_on_stream` in the root
+  |
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(any(test, feature = "qualification-raw-hip-test-only"))]
+  |          --------------------------------------------------- the item is gated here
+  | pub use module::{GpuFunction, GpuModule};
+  |                  ^^^^^^^^^^^
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(any(test, feature = "qualification-raw-hip-test-only"))]
+  |          --------------------------------------------------- the item is gated here
+  | pub use module::{GpuFunction, GpuModule};
+  |                               ^^^^^^^^^
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(any(test, feature = "qualification-raw-hip-test-only"))]
+  |          --------------------------------------------------- the item is gated here
+  | pub use launch::{KernelParams, LaunchConfig, launch_kernel_on_stream};
+  |                  ^^^^^^^^^^^^
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(any(test, feature = "qualification-raw-hip-test-only"))]
+  |          --------------------------------------------------- the item is gated here
+  | pub use launch::{KernelParams, LaunchConfig, launch_kernel_on_stream};
+  |                                ^^^^^^^^^^^^
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(any(test, feature = "qualification-raw-hip-test-only"))]
+  |          --------------------------------------------------- the item is gated here
+  | pub use cooperative::launch_cooperative_kernel_on_stream;
+  |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(any(test, feature = "qualification-raw-hip-test-only"))]
+  |          --------------------------------------------------- the item is gated here
+  | pub use launch::{KernelParams, LaunchConfig, launch_kernel_on_stream};
+  |                                              ^^^^^^^^^^^^^^^^^^^^^^^

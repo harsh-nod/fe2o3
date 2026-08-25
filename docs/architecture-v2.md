@@ -251,7 +251,7 @@ continue to point downward according to the machine-checked
 | `fe2o3-pliron-scalar-add-v1` | Exact backend-fixture lineage, repository policy, scalar finalizer join, and sealed one-shot HSA consumer | General backend selection, Rust-source extraction, reusable approval authority, or general runtime policy |
 | `fe2o3-artifacts` | Versioned neutral bundle and identity records | Compilation and loading policy |
 | `fe2o3-host` | Generated typed modules, prepared launches, argument ownership | MIR inspection, target lowering |
-| `fe2o3-core` | HIP resource wrappers, streams, events, buffers, raw launch | Kernel type discovery |
+| `fe2o3-core` | HIP resource wrappers, streams, events, buffers, capability observations; raw module and launch APIs only in qualification builds | Kernel type discovery |
 | `fe2o3-host-api` | Inert target-neutral compile/admit/load/dispatch/wait records | Executing those operations or authenticating authority |
 | `fe2o3-service-model`, `fe2o3-service-host` | Executable-free service semantics and authority-free borrow-retaining host typestates | Persistent execution, runtime waits, progress proof, storage-release authority |
 | `fe2o3-contracts`, `fe2o3-proof-contracts` | Shared launch/spec vocabulary, erased proof markers, and solver-neutral property records | Solving proofs, code generation, proof promotion |

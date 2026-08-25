@@ -5,9 +5,11 @@ use crate::{
         GeneratedDeviceScalarV1,
     },
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use fe2o3_core::KernelParams;
 use fe2o3_core::{
     DeviceBuffer, DeviceBufferIdentity, DeviceBufferRegion, DeviceBufferView, DeviceBufferViewMut,
-    DeviceCopy, DevicePtr, KernelParams,
+    DeviceCopy, DevicePtr,
 };
 use std::collections::HashMap;
 use std::fmt;
@@ -435,6 +437,7 @@ impl<'allocation, T: DeviceCopy> GeneratedReadDeviceSlice<'allocation, T> {
     }
 
     /// Appends this slice's exact device pointer and element count.
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub fn push_pointer_and_len(&self, params: &mut KernelParams) {
         params.push(self.pointer);
         params.push(self.len);
@@ -495,6 +498,10 @@ impl<'allocation, T: DeviceCopy> GeneratedReadDeviceSlice<'allocation, T> {
 /// Empty regions retain their allocation provenance and describe no memory effects.
 #[doc(hidden)]
 pub struct GeneratedWriteDeviceSlice<'allocation, T: DeviceCopy> {
+    #[cfg_attr(
+        not(any(test, feature = "qualification-oracles-test-only")),
+        allow(dead_code)
+    )]
     pointer: DevicePtr<T>,
     len: usize,
     metadata: GeneratedDeviceSliceMetadata,
@@ -537,6 +544,7 @@ impl<'allocation, T: DeviceCopy> GeneratedWriteDeviceSlice<'allocation, T> {
     }
 
     /// Appends this slice's exact device pointer and element count.
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub fn push_pointer_and_len(&self, params: &mut KernelParams) {
         params.push(self.pointer);
         params.push(self.len);

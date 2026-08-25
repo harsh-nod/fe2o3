@@ -7,6 +7,9 @@ repository.workspace = true
 rust-version.workspace = true
 description = "HIP-backed host runtime for fe2o3."
 
+[features]
+qualification-raw-hip-test-only = []
+
 [dependencies]
 fe2o3-amd-target.workspace = true
 fe2o3-completion.workspace = true
@@ -15,6 +18,10 @@ fe2o3-macros.workspace = true
 
 [dev-dependencies]
 trybuild = "1"
+
+[[test]]
+name = "production_runtime_surface_ui"
+path = "tests/production_runtime_surface_ui.rs"
 
 [lib]
 name = "fe2o3_core"

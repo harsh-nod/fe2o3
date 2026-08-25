@@ -1,0 +1,5 @@
+error[E0599]: no method named `load_module_from_bytes_unchecked` found for reference `&Arc<GpuContext>` in the current scope
+ --> tests/ui/production_runtime_surface/raw_module_loader_is_unavailable.rs:5:30
+  |
+5 |     let _ = unsafe { context.load_module_from_bytes_unchecked(&[]) };
+  |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `&Arc<GpuContext>`

@@ -572,9 +572,10 @@ The detailed dependencies and exit criteria are in
   Partial.
 - Row 80: the general `launch!` macro is now a qualification-only unsafe raw-ABI
   escape hatch with compile-fail coverage; feature-free `fe2o3-host` does not
-  export it, `KernelParams`, or `LaunchConfig`. Generated bindings instead expose
-  safe `prepare(...).launch(...)`; the example contains no raw parameter pack,
-  artifact pathname, or unsafe user launch. The two-entry Worker V2 path does
+  export it, `KernelParams`, or `LaunchConfig`, and feature-free `fe2o3-core`
+  excludes its raw module/function and launch surface. Generated bindings instead
+  expose safe `prepare(...).launch(...)`; the example contains no raw parameter
+  pack, artifact pathname, or unsafe user launch. The two-entry Worker V2 path does
   generate manifest-checked preparation and dispatch for the exact alpha/zeta
   roles, and the production publication/admission/load state machines exist.
   The missing production prerequisite authenticator prevents authenticated

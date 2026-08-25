@@ -482,7 +482,7 @@ publish = false
 [dependencies]
 fe2o3-core = {{ path = {_toml_string(str(REPO_ROOT / "crates/fe2o3-core"))} }}
 fe2o3-device = {{ path = {_toml_string(str(REPO_ROOT / "crates/fe2o3-device"))} }}
-fe2o3-host = {{ path = {_toml_string(str(REPO_ROOT / "crates/fe2o3-host"))} }}
+fe2o3-host = {{ path = {_toml_string(str(REPO_ROOT / "crates/fe2o3-host"))}, features = ["qualification-oracles-test-only"] }}
 
 [workspace]
 """

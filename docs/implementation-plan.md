@@ -172,8 +172,10 @@ authority. The backend fixture is not Rust user source.
 - `fe2o3-macros`: `#[kernel]` and future device extern annotations.
 - `reserved-fe2o3-symbols`: shared reserved symbol namespace.
 - `fe2o3-device`: no-std device API and intrinsic stubs.
-- `fe2o3-core`: HIP-backed context, stream, memory, module, and launch runtime.
-- `fe2o3-host`: launch macro and host ergonomics.
+- `fe2o3-core`: HIP-backed context, stream, memory, event, and capability
+  runtime; raw module and launch authority is qualification-only.
+- `fe2o3-host`: generated typed preparation and Worker V3 dispatch; the raw
+  launch macro is qualification-only.
 - `fe2o3-mir-model`: canonical Pliron-independent MIR semantics and
   transformations.
 - `dialect-mir`: compatibility facade over that model and a bounded
