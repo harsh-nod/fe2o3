@@ -781,6 +781,7 @@ fn cargo_with_backend_result(
             protected_compiler_closure,
             authorized_closure,
             production_target_profile,
+            qualification_backend: selected_qualification.is_some(),
         },
         args,
         simulation.is_some(),
@@ -953,6 +954,7 @@ struct BackendRunPreparation {
     protected_compiler_closure: Option<fe2o3_build_authority::CompilerClosureV2>,
     authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
     production_target_profile: bool,
+    qualification_backend: bool,
 }
 
 impl BackendRunContext {
@@ -972,6 +974,7 @@ impl BackendRunContext {
             protected_compiler_closure,
             authorized_closure,
             production_target_profile,
+            qualification_backend,
         } = preparation;
         let target = amd_gpu_target(simulation);
         let target_dir = project.open_or_create_target()?;
@@ -979,7 +982,12 @@ impl BackendRunContext {
         let (backend, pinned_backend) = match authority_backend {
             Some(prebuilt) => prebuilt,
             None => {
-                let backend = find_or_build_backend(&target_dir, &pinned_cargo, &pinned_rustc)?;
+                let backend = find_or_build_backend(
+                    &target_dir,
+                    &pinned_cargo,
+                    &pinned_rustc,
+                    qualification_backend,
+                )?;
                 let pinned_backend =
                     pinned_codegen_backend::PinnedCodegenBackend::open(&backend)
                         .map_err(|error| format!("failed to pin codegen backend: {error}"))?;
@@ -2417,6 +2425,7 @@ fn find_or_build_backend(
     target_dir: &project::PinnedDirectory,
     pinned_cargo: &pinned_executable::PinnedExecutable,
     pinned_rustc: &PinnedRustc,
+    qualification_backend: bool,
 ) -> Result<PathBuf, String> {
     if let Some(path) = env::var_os(BACKEND_ENV) {
         let path = PathBuf::from(path);
@@ -2441,7 +2450,6 @@ fn find_or_build_backend(
         "isolated codegen-backend build directory",
     )?;
     let backend = dylib_path(backend_target.display_path());
-    let qualification_backend = env::var_os(worker_v2::QUALIFICATION_ORACLE_ENV).is_some();
     eprintln!("building rustc-codegen-fe2o3 backend...");
     let mut command = pinned_cargo
         .command()
@@ -2470,14 +2478,7 @@ fn find_or_build_backend(
                 .map(|byte| format!("{byte:02x}"))
                 .collect::<String>(),
         );
-    if qualification_backend {
-        // Selection was already validated before backend preparation. Compile
-        // the explicitly selected oracle into this internal backend without
-        // making any qualification implementation available to production.
-        command
-            .as_command_mut()
-            .args(["--features", "qualification-oracles-test-only"]);
-    }
+    configure_backend_qualification(command.as_command_mut(), qualification_backend);
     remove_dynamic_loader_environment(command.as_command_mut());
     for name in [
         TARGET_ENV,
@@ -2518,6 +2519,15 @@ fn find_or_build_backend(
             "backend build succeeded, but {} was not produced",
             backend.display()
         ))
+    }
+}
+
+fn configure_backend_qualification(command: &mut Command, qualification_backend: bool) {
+    if qualification_backend {
+        // Selection was already validated before backend preparation. Compile
+        // the explicitly selected oracle into this internal backend without
+        // making any qualification implementation available to production.
+        command.args(["--features", "qualification-oracles-test-only"]);
     }
 }
 
@@ -3101,11 +3111,12 @@ mod tests {
     use super::{
         SIMULATION_ATTEMPT_ENV, SIMULATION_MODE_ENV, TARGET_ENV, aggregate_post_spawn_results,
         authority_sensitive_request_selected, clear_cargo_unit_identity_names,
-        configure_production_target_build_environment, configure_simulation_build_environment,
-        effective_qualification_oracle, inject_application_runner_config, normalize_invocation,
-        parse_rocminfo_target, parse_rustup_tool_path, production_compilation_selected,
-        qualification_help_lines, reject_authority_rustup_proxy, reject_obsolete_codegen_pipeline,
-        resolve_amd_gpu_target, selected_run_target, validate_production_cargo_selection,
+        configure_backend_qualification, configure_production_target_build_environment,
+        configure_simulation_build_environment, effective_qualification_oracle,
+        inject_application_runner_config, normalize_invocation, parse_rocminfo_target,
+        parse_rustup_tool_path, production_compilation_selected, qualification_help_lines,
+        reject_authority_rustup_proxy, reject_obsolete_codegen_pipeline, resolve_amd_gpu_target,
+        selected_run_target, validate_production_cargo_selection,
     };
     use crate::pinned_executable_test_directory::TestDirectory;
     use crate::project::PinnedDirectory;
@@ -3306,6 +3317,23 @@ mod tests {
         assert!(authority_sensitive_request_selected(
             false, simulation, true
         ));
+    }
+
+    #[test]
+    fn backend_feature_selection_uses_validated_effective_qualification() {
+        let mut production = Command::new("cargo");
+        configure_backend_qualification(&mut production, false);
+        assert!(production.get_args().next().is_none());
+
+        let mut qualification = Command::new("cargo");
+        configure_backend_qualification(&mut qualification, true);
+        assert_eq!(
+            qualification.get_args().collect::<Vec<_>>(),
+            [
+                OsStr::new("--features"),
+                OsStr::new("qualification-oracles-test-only"),
+            ]
+        );
     }
 
     #[test]

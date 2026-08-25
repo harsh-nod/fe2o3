@@ -48,6 +48,7 @@ const PROHIBITED_ENVIRONMENT: &[&str] = &[
     "FE2O3_PINNED_CARGO_IMAGE_BUILD_OBSERVATION_V2",
     "FE2O3_PROTECTED_RELEASE_ACTION_V1",
     "FE2O3_QUALIFICATION_CODEGEN_BACKEND_SHA256_V1",
+    "FE2O3_QUALIFICATION_ORACLE_V1",
     "FE2O3_SIMULATION_ATTEMPT_V1",
     "FE2O3_SIMULATION_MODE_V1",
     "FE2O3_TARGET",
@@ -406,6 +407,22 @@ mod tests {
                 Err(BindingCheckWrapperError::PreexistingCodegenBackend { .. })
             ));
         }
+    }
+
+    #[test]
+    fn qualification_environment_is_parent_prohibited_and_child_cleared() {
+        const QUALIFICATION: &str = "FE2O3_QUALIFICATION_ORACLE_V1";
+        assert!(PROHIBITED_ENVIRONMENT.contains(&QUALIFICATION));
+
+        let mut child = Command::new("cargo");
+        child.env(QUALIFICATION, "kernel-ir-v1");
+        clear_prohibited_environment(&mut child);
+        assert_eq!(
+            child
+                .get_envs()
+                .find(|(name, _)| *name == std::ffi::OsStr::new(QUALIFICATION)),
+            Some((std::ffi::OsStr::new(QUALIFICATION), None))
+        );
     }
 
     #[test]
