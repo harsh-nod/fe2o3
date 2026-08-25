@@ -1,0 +1,14 @@
+error[E0432]: unresolved import `fe2o3_pliron_scalar_add_v1::execute_repository_scalar_add_v1_on_mi300x`
+ --> tests/ui/feature_free/exact_runtime_is_unavailable.rs:1:5
+  |
+1 | use fe2o3_pliron_scalar_add_v1::execute_repository_scalar_add_v1_on_mi300x;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `execute_repository_scalar_add_v1_on_mi300x` in the root
+  |
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(feature = "qualification-oracles-test-only")]
+  |       ------------------------------------------- the item is gated behind the `qualification-oracles-test-only` feature
+...
+  |     execute_repository_scalar_add_v1_on_mi300x,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

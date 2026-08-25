@@ -5,8 +5,9 @@ bounded Pliron scalar-add checkpoint. Issues
 [#134](https://github.com/harsh-nod/fe2o3/issues/134) and
 [#135](https://github.com/harsh-nod/fe2o3/issues/135) remain open. The landed
 crates make both epics infrastructure-enabled and complete one exact scalar
-compile/finalize/execute slice; they do not implement a general production
-Pliron pipeline or persistent GPU execution.
+compile/finalize slice plus a qualification-only execution observation; they do
+not implement a general production Pliron pipeline or persistent GPU
+execution.
 
 This policy refines the [Pliron Wave 0 architecture](pliron-wave0-architecture.md)
 and preserves the existing production compiler, artifact, proof, publication,
@@ -259,13 +260,15 @@ routes remain composed separately in `rustc-codegen-fe2o3`.
 
 `fe2o3-pliron-scalar-add-v1` is an intentionally narrow integration crate. It
 composes one checked-in backend fixture, the admitted Pliron/V2 lineage, the
-pinned upstream LLVM/in-process-LLD worker, exact HSACO finalization, and a
-sealed one-shot HSA consumer for `gfx942:xnack-`. It is not a general frontend,
-backend, authority framework, or reusable runtime API. In particular, its
-backend fixture is not Rust user source, and its compile-time checkout policy
-records repository/build provenance rather than an external signature or
-attestation. The qualifying runtime observed `gfx942:sramecc+:xnack-`, a COV6
-descriptor kernarg alignment of 8, and a runtime storage alignment of 16.
+pinned upstream LLVM/in-process-LLD worker, and exact HSACO finalization in its
+feature-free graph. Its sealed one-shot HSA consumer for `gfx942:xnack-` and
+runtime-facing dependencies require `qualification-oracles-test-only`. It is
+not a general frontend, backend, authority framework, or reusable runtime API.
+In particular, its backend fixture is not Rust user source, and its
+compile-time checkout policy records repository/build provenance rather than
+an external signature or attestation. The qualifying runtime observed
+`gfx942:sramecc+:xnack-`, a COV6 descriptor kernarg alignment of 8, and a
+runtime storage alignment of 16.
 
 ### Fixtures
 
@@ -310,7 +313,7 @@ it does not mean production compilation exists.
 | Dialects | One `dialect-*` crate per operation family | Seven target-neutral shells plus feature-gated `mir.*` shell landed |
 | Transformations | One `fe2o3-lower-*` family | Narrow context-bound MIR-to-kernel and kernel-to-GPU detached services landed; full production ladder remains open |
 | KIR bridge | `fe2o3-kir-pliron-bridge` | Opaque context-bound exact-byte V1-V5 envelope landed; complete semantic bridge gate remains open |
-| Bounded vertical-slice composition | `fe2o3-pliron-scalar-add-v1` | Exact backend-fixture-to-MI300X scalar-add route landed with sealed one-shot consumption; Rust user-source integration, external attestation, and generalization remain open |
+| Bounded vertical-slice composition | `fe2o3-pliron-scalar-add-v1` | Feature-free exact source/policy/authority/finalization join plus qualification-only MI300X/HSA one-shot consumption; Rust user-source integration, external attestation, and generalization remain open |
 | Proof overlays | `fe2o3-proof-contracts`, `dialect-proof` | Solver-neutral records and inert Pliron overlay landed; proof integration remains open |
 | AMD lowering | AMD model/dialect/lowering crates | Existing implementation extracted to `fe2o3-amdgcn-model`; future Pliron AMD lowering remains open |
 | Driver | `fe2o3-compiler-driver` | Two-route API dispatch landed; production selection remains open and shadow stays inspect-only |

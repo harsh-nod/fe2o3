@@ -63,6 +63,13 @@ The `cargo fe2o3 simulate` command is also oracle-only and is absent from
 feature-free command dispatch and help. Production `build` and `run` cannot
 select it implicitly.
 
+The exact `fe2o3-pliron-scalar-add-v1` source observation, embedded
+policy/authority join, Worker execution join, and HSACO finalization remain in
+that crate's feature-free graph. Its exact MI300X/HSA runtime consumer and
+runtime-facing dependencies require the crate-local
+`qualification-oracles-test-only` feature and are absent from feature-free
+builds.
+
 V2 and V3 host-consumer fixtures are separate binaries with separate features.
 The V3 fixture accepts only V3 inputs and does not enable the host qualification
 feature; the V2 fixture remains available only through the explicit legacy

@@ -266,7 +266,7 @@ impl RepositoryScalarAddProfileV1 {
 pub struct ScalarAddLineageIdentityV1([u8; 32]);
 
 impl ScalarAddLineageIdentityV1 {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     pub(crate) const fn from_digest(digest: [u8; 32]) -> Self {
         Self(digest)
     }
@@ -282,7 +282,7 @@ impl ScalarAddLineageIdentityV1 {
 pub struct ScalarAddObservationIdentityV1([u8; 32]);
 
 impl ScalarAddObservationIdentityV1 {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     pub(crate) const fn from_digest(digest: [u8; 32]) -> Self {
         Self(digest)
     }
@@ -341,7 +341,7 @@ impl ObservedRepositoryScalarAddV1 {
 pub struct FinalizedRepositoryScalarAddV1Identity([u8; 32]);
 
 impl FinalizedRepositoryScalarAddV1Identity {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     pub(crate) const fn from_digest(digest: [u8; 32]) -> Self {
         Self(digest)
     }
@@ -369,8 +369,9 @@ impl FinalizedRepositoryScalarAddV1Identity {
 /// ```
 ///
 /// This type is not `Clone`, exposes no artifact bytes or callback, and grants
-/// no publication, load, or launch authority. The crate's one concrete runtime
-/// transition consumes it and obtains bytes only from the retained execution.
+/// no publication, load, or launch authority. The qualification-only concrete
+/// runtime transition consumes it and obtains bytes only from the retained
+/// execution.
 pub struct FinalizedRepositoryScalarAddV1 {
     identity: FinalizedRepositoryScalarAddV1Identity,
     lineage_identity: ScalarAddLineageIdentityV1,
@@ -472,6 +473,7 @@ impl FinalizedRepositoryScalarAddV1 {
             && self.execution.worker_executable() == self.lineage.worker_measurement().executable()
     }
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn into_runtime_authority(self) -> RepositoryRuntimeAuthorityV1 {
         RepositoryRuntimeAuthorityV1 {
             identity: self.identity,
@@ -484,6 +486,7 @@ impl FinalizedRepositoryScalarAddV1 {
     }
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) struct RepositoryRuntimeAuthorityV1 {
     pub(crate) identity: FinalizedRepositoryScalarAddV1Identity,
     pub(crate) lineage_identity: ScalarAddLineageIdentityV1,

@@ -278,8 +278,11 @@ execution.
 Commits `fd6520d88`, `70f9c5ad7`, `e016833d3`, `c9e8ca702`, `62efd243e`, and
 `228c88ed9` close one exact backend-fixture-to-MI300X scalar-add route. The code
 target is `gfx942:xnack-`; the qualifying device reports
-`gfx942:sramecc+:xnack-`. The backend fixture is not Rust user source. Run the
-ignored test on `mi300x` with the exact qualified files and lane variables:
+`gfx942:sramecc+:xnack-`. The backend fixture is not Rust user source. Source
+observation, policy/authority, Worker execution joining, and exact finalization
+remain feature-free; the MI300X/HSA consumer is a qualification oracle compiled
+only with `qualification-oracles-test-only`. Run the ignored test on `mi300x`
+with the exact qualified files and lane variables:
 
 ```text
 cd /home/harsh/fe2o3-pliron-final-current
@@ -291,6 +294,7 @@ FE2O3_PLIRON_SCALAR_ADD_V1_WORKER=/home/harsh/fe2o3-pliron-integrated-worker-bui
 FE2O3_PLIRON_SCALAR_ADD_V1_OBSERVED_WORKER_BUILD_ID_FILE=/home/harsh/fe2o3-pliron-integrated-worker-build/fe2o3-worker-build-id.txt \
 FE2O3_PLIRON_SCALAR_ADD_V1_OBSERVED_LLVM_BUILD_ID_FILE=/home/harsh/upstream-llvm-fe2o3-v1-acceptance/evidence-v6/upstream-llvm-build-id.txt \
 cargo test --locked -p fe2o3-pliron-scalar-add-v1 \
+  --features qualification-oracles-test-only \
   --test gfx942_repository_scalar_add_v1_hardware \
   repository_scalar_add_v1_isolated_mi300x \
   -- --ignored --exact --nocapture

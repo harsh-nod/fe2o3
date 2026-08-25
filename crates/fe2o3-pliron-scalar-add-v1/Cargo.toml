@@ -8,17 +8,29 @@ rust-version.workspace = true
 description = "Checkout-qualified Pliron scalar-add Worker V2 finalization join."
 publish = false
 
+[features]
+qualification-oracles-test-only = [
+    "dep:fe2o3-amd-target",
+    "dep:fe2o3-artifacts",
+    "dep:fe2o3-core",
+    "dep:fe2o3-host",
+    "dep:fe2o3-hsa-runtime",
+    "fe2o3-host/qualification-oracles-test-only",
+    "fe2o3-hsa-runtime/hardware-test-hooks",
+    "fe2o3-hsa-runtime/qualification-oracles-test-only",
+]
+
 [lib]
 name = "fe2o3_pliron_scalar_add_v1"
 
 [dependencies]
 fe2o3-amdgcn-pliron-llvm.workspace = true
-fe2o3-amd-target.workspace = true
-fe2o3-artifacts.workspace = true
-fe2o3-core.workspace = true
-fe2o3-host.workspace = true
+fe2o3-amd-target = { workspace = true, optional = true }
+fe2o3-artifacts = { workspace = true, optional = true }
+fe2o3-core = { workspace = true, optional = true }
+fe2o3-host = { workspace = true, optional = true }
 fe2o3-hsaco-finalize = { path = "../fe2o3-hsaco-finalize" }
-fe2o3-hsa-runtime = { workspace = true, features = ["hardware-test-hooks"] }
+fe2o3-hsa-runtime = { workspace = true, optional = true }
 fe2o3-llvm-handoff.workspace = true
 fe2o3-pliron-worker-v2 = { path = "../fe2o3-pliron-worker-v2" }
 sha2.workspace = true
@@ -26,6 +38,11 @@ sha2.workspace = true
 [dev-dependencies]
 fe2o3-artifact-transaction.workspace = true
 trybuild = "1"
+
+[[test]]
+name = "gfx942_repository_scalar_add_v1_hardware"
+path = "tests/gfx942_repository_scalar_add_v1_hardware.rs"
+required-features = ["qualification-oracles-test-only"]
 
 [lints.rust]
 missing_docs = "deny"

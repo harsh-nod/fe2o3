@@ -87,8 +87,11 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   repository-policy/finalizer/runtime join `62efd243e`, and descriptor-versus-
   runtime alignment correction `228c88ed9`. The descriptor reports a 280-byte
   COV6 kernarg segment with alignment 8; ROCr reports runtime alignment 16.
-  The dedicated `fe2o3-pliron-scalar-add-v1` consumer uses the stricter runtime
-  alignment and consumes the authorized execution once.
+  Feature-free `fe2o3-pliron-scalar-add-v1` retains the exact source,
+  policy/authority, Worker execution, and finalization join. Its dedicated HSA
+  consumer is available only with `qualification-oracles-test-only`; that
+  consumer uses the stricter runtime alignment and consumes the authorized
+  execution once.
 - The exact MI300X run completed with
   `evidence=69238ad704470649b9811b41cf0194bb392be8116a1b0618adb1dcbe7e1bbd4f`
   against ROCr 1.18 runtime image
@@ -243,7 +246,7 @@ continue to point downward according to the machine-checked
 | `fe2o3-compiler-api` | Target-neutral request, selector, snapshot, receipt, diagnostic, and output contracts | Running a compiler or publishing its candidate |
 | `fe2o3-compiler-driver` | Single-route fail-closed API dispatch for inspect-only shadow evidence or the candidate-producing Pliron route | Production selection, codegen ownership, artifact/runtime authority |
 | `fe2o3-build-authority`, `fe2o3-rustc-invocation`, `fe2o3-compiler-closure-capability`, `fe2o3-artifact-transaction` | Canonical compiler provenance, exact invocation, sealed closure coordination, and attempt-scoped handoff/publication records | Compiler semantics, LLVM execution, artifact authorship, or load/launch authority |
-| `fe2o3-pliron-scalar-add-v1` | Exact backend-fixture lineage, repository policy, scalar finalizer join, and sealed one-shot HSA consumer | General backend selection, Rust-source extraction, reusable approval authority, or general runtime policy |
+| `fe2o3-pliron-scalar-add-v1` | Feature-free exact backend-fixture source/lineage, repository policy and authority, Worker execution join, and scalar finalization; qualification-only sealed one-shot HSA consumer | General backend selection, Rust-source extraction, reusable approval authority, or general runtime policy |
 | `fe2o3-artifacts` | Versioned neutral bundle and identity records | Compilation and loading policy |
 | `fe2o3-host` | Generated typed modules, prepared launches, argument ownership | MIR inspection, target lowering |
 | `fe2o3-core` | HIP resource wrappers, streams, events, buffers, raw launch | Kernel type discovery |
@@ -369,14 +372,15 @@ convention, target attributes, module metadata, and evidence that v0.17.0
 cannot carry, then rejects any mismatch while constructing V2. This fixture is
 not Rust user source and does not establish general Rust-source lowering.
 
-The exact bytes flow through the hardened Worker, exact finalizer, move-only
-execution evidence, and a dedicated sealed consumer in
-`fe2o3-pliron-scalar-add-v1`. Existing low-level HSA adapters were reused, but
-the existing runtime route alone was not sufficient: the join crate adds the
-one-shot policy, artifact, device, ABI, dispatch, result, canary, and unload
-checks for this profile. The descriptor alignment is 8 while ROCr reports 16;
-the consumer requires the stricter runtime value. General typed lowering and
-generalized runtime policy remain future work.
+The exact bytes flow through the hardened Worker and the feature-free exact
+finalizer and move-only execution evidence in
+`fe2o3-pliron-scalar-add-v1`. The dedicated sealed consumer is compiled only
+with `qualification-oracles-test-only`. Existing low-level HSA adapters were
+reused, but the existing runtime route alone was not sufficient: the
+qualification-only consumer adds the one-shot artifact, device, ABI, dispatch,
+result, canary, and unload checks for this profile. The descriptor alignment is
+8 while ROCr reports 16; the consumer requires the stricter runtime value.
+General typed lowering and generalized runtime policy remain future work.
 The pinned surface and missing gfx942 semantics are audited in
 [pliron-llvm-gfx942-coverage.md](pliron-llvm-gfx942-coverage.md).
 

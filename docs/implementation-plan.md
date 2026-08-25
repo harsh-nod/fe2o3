@@ -167,8 +167,10 @@ authority. The backend fixture is not Rust user source.
 - `fe2o3-compiler-driver`: fail-closed single-route API dispatch; not yet the
   production selector.
 - `fe2o3-pliron-scalar-add-v1`: exact backend-fixture lineage, checkout policy,
-  scalar finalizer join, and sealed one-shot HSA execution; not a general
-  backend, source frontend, approval service, or runtime policy.
+  authority, Worker execution join, and scalar finalization remain
+  feature-free; sealed one-shot HSA execution requires
+  `qualification-oracles-test-only`; not a general backend, source frontend,
+  approval service, or runtime policy.
 - `fe2o3-macros`: `#[kernel]` and future device extern annotations.
 - `reserved-fe2o3-symbols`: shared reserved symbol namespace.
 - `fe2o3-device`: no-std device API and intrinsic stubs.
