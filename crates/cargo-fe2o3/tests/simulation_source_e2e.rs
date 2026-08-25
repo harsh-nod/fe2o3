@@ -117,7 +117,10 @@ fn run_simulation(
         .expect("run source simulation")
 }
 
-fn assert_hostile_simulation_value_does_not_suppress_host_contract(manifest: &Path, target: &Path) {
+fn assert_hostile_simulation_value_does_not_supply_a_managed_binding(
+    manifest: &Path,
+    target: &Path,
+) {
     let output = Command::new(env!("CARGO"))
         .args(["check", "--offline", "--locked", "--manifest-path"])
         .arg(manifest)
@@ -133,8 +136,10 @@ fn assert_hostile_simulation_value_does_not_suppress_host_contract(manifest: &Pa
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("could not resolve the fe2o3-host crate"),
-        "hostile simulation value did not retain normal host resolution:\n{stderr}"
+        stderr.contains(
+            "#[kernel(typed)] requires the cargo-fe2o3 rustc wrapper or an explicit 256-bit namespace"
+        ),
+        "hostile simulation value supplied a managed crate binding:\n{stderr}"
     );
 }
 
@@ -189,7 +194,7 @@ fn ordinary_source_simulation_is_exact_deterministic_and_never_probes_a_gpu() {
     let directory = TestDirectory::new();
     let manifest =
         workspace.join("crates/cargo-fe2o3/tests/fixtures/simulation-source-fill/Cargo.toml");
-    assert_hostile_simulation_value_does_not_suppress_host_contract(
+    assert_hostile_simulation_value_does_not_supply_a_managed_binding(
         &manifest,
         &directory.0.join("target-hostile"),
     );
