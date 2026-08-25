@@ -238,14 +238,15 @@ fn generate_host_object_with_accessors(
         payload,
     );
 
-    let mut child = Command::new(&toolchain.llvm_mc)
+    let mut command = Command::new(&toolchain.llvm_mc);
+    command
         .args(["-triple=x86_64-unknown-linux-gnu", "-filetype=obj", "-o"])
         .arg(output_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|source| HostObjectError::Io {
+        .stderr(Stdio::piped());
+    let mut child =
+        crate::process_execution::spawn(&mut command).map_err(|source| HostObjectError::Io {
             path: toolchain.llvm_mc.clone(),
             source,
         })?;
@@ -712,22 +713,22 @@ fn main() {{
         let executable_path = directory.0.join("consumer");
         fs::write(&source_path, source).expect("write consumer source");
         let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-        let compile = Command::new(rustc)
+        let mut command = Command::new(rustc);
+        command
             .arg(&source_path)
             .arg("-o")
             .arg(&executable_path)
             .arg("-C")
-            .arg(format!("link-arg={}", linked_path.display()))
-            .output()
-            .expect("run rustc");
+            .arg(format!("link-arg={}", linked_path.display()));
+        let compile = crate::process_execution::capture_output(&mut command).expect("run rustc");
         assert!(
             compile.status.success(),
             "rustc failed: {}",
             String::from_utf8_lossy(&compile.stderr)
         );
-        let run = Command::new(executable_path)
-            .output()
-            .expect("run linked consumer");
+        let mut command = Command::new(executable_path);
+        let run =
+            crate::process_execution::capture_output(&mut command).expect("run linked consumer");
         assert!(
             run.status.success(),
             "linked consumer failed: {}",
@@ -785,21 +786,22 @@ fn main() {{
         let executable_path = directory.0.join("witness-consumer");
         fs::write(&source_path, source).expect("write witness consumer");
         let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-        let compile = Command::new(rustc)
+        let mut command = Command::new(rustc);
+        command
             .arg(&source_path)
             .arg("-o")
             .arg(&executable_path)
             .arg("-C")
-            .arg(format!("link-arg={}", object.path().display()))
-            .output()
+            .arg(format!("link-arg={}", object.path().display()));
+        let compile = crate::process_execution::capture_output(&mut command)
             .expect("compile witness consumer");
         assert!(
             compile.status.success(),
             "rustc failed: {}",
             String::from_utf8_lossy(&compile.stderr)
         );
-        let run = Command::new(executable_path)
-            .output()
+        let mut command = Command::new(executable_path);
+        let run = crate::process_execution::capture_output(&mut command)
             .expect("run linked witness consumer");
         assert!(
             run.status.success(),

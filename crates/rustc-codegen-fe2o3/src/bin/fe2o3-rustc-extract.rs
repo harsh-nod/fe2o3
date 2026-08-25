@@ -186,8 +186,9 @@ fn passthrough_command(executable: OsString, forwarded_args: Vec<OsString>) -> C
 }
 
 fn execute_passthrough(executable: OsString, forwarded_args: Vec<OsString>) -> Result<i32, String> {
-    let status = passthrough_command(executable, forwarded_args)
-        .status()
+    let mut command = passthrough_command(executable, forwarded_args);
+    let status = fe2o3_artifact_transaction::with_artifact_process_spawn_v1(|| command.spawn())
+        .and_then(|mut child| child.wait())
         .map_err(|error| format!("failed to execute rustc passthrough: {error}"))?;
     Ok(exit_code(status))
 }

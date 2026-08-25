@@ -60,6 +60,7 @@ mod mir_import_v2;
 #[cfg(feature = "qualification-oracles-test-only")]
 mod moe_top2_v1_codegen;
 mod monomorphization_dead;
+mod process_execution;
 mod production_geometry_v1;
 mod production_pipeline_v1;
 mod production_ranked_projection_v1;
@@ -2410,9 +2411,9 @@ fn validate_hsaco_metadata(
         return Ok(());
     };
 
-    let output = Command::new(llvm_readobj)
-        .args(["--notes", path_arg(hsaco_path).as_str()])
-        .output()?;
+    let mut command = Command::new(llvm_readobj);
+    command.args(["--notes", path_arg(hsaco_path).as_str()]);
+    let output = process_execution::capture_output(&mut command)?;
     if !output.status.success() {
         return Err(HsacoError::CommandFailed {
             program: llvm_readobj.clone(),
@@ -2471,7 +2472,7 @@ fn validate_hsaco_metadata_text(
 
 fn run(command: &mut Command) -> Result<(), HsacoError> {
     let program = command.get_program().into();
-    let status = command.status()?;
+    let status = process_execution::status(command)?;
     if status.success() {
         Ok(())
     } else {

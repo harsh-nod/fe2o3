@@ -1062,6 +1062,7 @@ dependencies = [
  "dialect-gpu",
  "dialect-kernel",
  "dialect-proof",
+ "fe2o3-artifact-transaction",
  "fe2o3-kernel-ir",
  "pliron",
  "rustix",
