@@ -237,7 +237,15 @@ pub(crate) fn prepare_reference_effect_request_v2(
         .first_mut()
         .ok_or(ProductionReferenceEffectJoinErrorV2::WriteLocation)?;
     let mut entry_operations = entry.operations().to_vec();
-    replace_reserved_semantic_constant_v2(&mut entry_operations, true_value, 1)?;
+    replace_reserved_semantic_expression_v2(
+        &mut entry_operations,
+        true_value,
+        ProductionSemanticExpressionV2::Constant {
+            scalar: ProductionSemanticScalarTypeV2::Bool,
+            bits: 1,
+        },
+        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+    )?;
     replace_reserved_semantic_expression_v2(
         &mut entry_operations,
         gpu_value_id,
@@ -254,11 +262,11 @@ pub(crate) fn prepare_reference_effect_request_v2(
         let expected_symbol = u32::try_from(axis).map_err(|_| {
             ProductionReferenceEffectJoinErrorV2::InvalidReservedValue(identity.get())
         })?;
-        validate_reserved_semantic_symbol_v2(&entry_operations, identity, expected_symbol)?;
+        replace_reserved_semantic_symbol_v2(&mut entry_operations, identity, expected_symbol)?;
     }
     entry_operations.push(ProductionRankedOperationV1::OwnershipContract {
         view: write.view,
-        coverage: OwnershipCoverageAttr::ExactEffectDomain,
+        coverage: OwnershipCoverageAttr::TotalView,
         partition: OwnershipPartitionAttr::ExactSets,
     });
     *entry = ProductionRankedBlockV1::with_index_arguments(
@@ -996,37 +1004,6 @@ fn terminator_successors_v2(terminator: &ProductionRankedTerminatorV1) -> Vec<us
     }
 }
 
-fn replace_reserved_semantic_constant_v2(
-    operations: &mut [ProductionRankedOperationV1],
-    identity: ProductionRankedValueIdV1,
-    replacement: u64,
-) -> Result<(), ProductionReferenceEffectJoinErrorV2> {
-    let mut found = false;
-    for operation in operations {
-        if operation_result_v2(operation) != Some(identity) {
-            continue;
-        }
-        let ProductionRankedOperationV1::SemanticConstant { value, .. } = operation else {
-            return Err(ProductionReferenceEffectJoinErrorV2::InvalidReservedValue(
-                identity.get(),
-            ));
-        };
-        if found {
-            return Err(ProductionReferenceEffectJoinErrorV2::InvalidReservedValue(
-                identity.get(),
-            ));
-        }
-        *value = replacement;
-        found = true;
-    }
-    if !found {
-        return Err(ProductionReferenceEffectJoinErrorV2::InvalidReservedValue(
-            identity.get(),
-        ));
-    }
-    Ok(())
-}
-
 fn replace_reserved_semantic_expression_v2(
     operations: &mut [ProductionRankedOperationV1],
     identity: ProductionRankedValueIdV1,
@@ -1062,20 +1039,40 @@ fn replace_reserved_semantic_expression_v2(
     Ok(())
 }
 
-fn validate_reserved_semantic_symbol_v2(
-    operations: &[ProductionRankedOperationV1],
+fn replace_reserved_semantic_symbol_v2(
+    operations: &mut [ProductionRankedOperationV1],
     identity: ProductionRankedValueIdV1,
     expected_symbol: u32,
 ) -> Result<(), ProductionReferenceEffectJoinErrorV2> {
-    let mut definitions = operations
-        .iter()
-        .filter(|operation| operation_result_v2(operation) == Some(identity));
-    let valid = matches!(
-        definitions.next(),
-        Some(ProductionRankedOperationV1::SemanticSymbol { symbol, .. })
-            if *symbol == expected_symbol
-    ) && definitions.next().is_none();
-    if !valid {
+    let mut found = false;
+    for operation in operations {
+        if operation_result_v2(operation) != Some(identity) {
+            continue;
+        }
+        if !matches!(
+            operation,
+            ProductionRankedOperationV1::SemanticSymbol { symbol, .. }
+                if *symbol == expected_symbol
+        ) || found
+        {
+            return Err(ProductionReferenceEffectJoinErrorV2::InvalidReservedValue(
+                identity.get(),
+            ));
+        }
+        *operation = ProductionRankedOperationV1::SemanticExpression {
+            result: identity,
+            expression: ProductionSemanticExpressionV2::Symbol {
+                symbol: expected_symbol,
+                scalar: ProductionSemanticScalarTypeV2::Integer {
+                    signed: false,
+                    bits: 64,
+                },
+            },
+            numerical_contract: ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+        };
+        found = true;
+    }
+    if !found {
         return Err(ProductionReferenceEffectJoinErrorV2::InvalidReservedValue(
             identity.get(),
         ));
@@ -1391,6 +1388,56 @@ mod tests {
         assert!(matches!(
             ProductionNumericalContractV2::exact_for_expression(&translated),
             ProductionNumericalContractV2::ExactIeee754OperatorCongruence { .. }
+        ));
+    }
+
+    #[test]
+    fn reserved_effect_coordinates_and_preconditions_become_typed_roots() {
+        let constant = ProductionRankedValueIdV1::new(0);
+        let coordinate = ProductionRankedValueIdV1::new(1);
+        let mut operations = vec![
+            ProductionRankedOperationV1::SemanticConstant {
+                result: constant,
+                value: 0,
+            },
+            ProductionRankedOperationV1::SemanticSymbol {
+                result: coordinate,
+                symbol: 3,
+            },
+        ];
+        replace_reserved_semantic_expression_v2(
+            &mut operations,
+            constant,
+            ProductionSemanticExpressionV2::Constant {
+                scalar: ProductionSemanticScalarTypeV2::Bool,
+                bits: 1,
+            },
+            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+        )
+        .unwrap();
+        replace_reserved_semantic_symbol_v2(&mut operations, coordinate, 3).unwrap();
+        assert!(matches!(
+            &operations[0],
+            ProductionRankedOperationV1::SemanticExpression {
+                expression: ProductionSemanticExpressionV2::Constant {
+                    scalar: ProductionSemanticScalarTypeV2::Bool,
+                    bits: 1,
+                },
+                ..
+            }
+        ));
+        assert!(matches!(
+            &operations[1],
+            ProductionRankedOperationV1::SemanticExpression {
+                expression: ProductionSemanticExpressionV2::Symbol {
+                    symbol: 3,
+                    scalar: ProductionSemanticScalarTypeV2::Integer {
+                        signed: false,
+                        bits: 64,
+                    },
+                },
+                ..
+            }
         ));
     }
 }

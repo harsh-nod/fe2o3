@@ -1,7 +1,8 @@
 use std::ops::Range;
 
 use dialect_kernel::{
-    AccessKindAttr, MemorySpaceAttr, OwnershipCoverageAttr, OwnershipPartitionAttr,
+    AccessKindAttr, DYNAMIC_EXTENT, MemorySpaceAttr, OwnershipCoverageAttr, OwnershipPartitionAttr,
+    SemanticCoverageBindingAttr, SemanticEvaluationOrderAttr,
 };
 use dialect_mir::pliron::MirProductionPlironLimitsV1;
 use ed25519_dalek::{Signer, SigningKey};
@@ -22,6 +23,7 @@ use fe2o3_pliron::{
     MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V4, MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V4,
     PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V4, PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V4,
     PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V5, PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V4,
+    ProductionCollectiveSemanticContractV1, ProductionCollectiveSemanticKindV1,
     ProductionConstructionV1, ProductionEffectRefinementContractV2,
     ProductionFunctionalRefinementTrustPolicyV2, ProductionGpuWriteSiteV2,
     ProductionMiddleEndAssuranceV4, ProductionMiddleEndEvidenceCodecErrorV4,
@@ -32,7 +34,9 @@ use fe2o3_pliron::{
     ProductionReferenceOutputSiteV2, ProductionReferenceProofV2, ProductionSemanticExpressionV2,
     ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1, ProductionSemanticScalarTypeV2,
     ProductionSessionLimitsV1, ShellLimits, compile_ranked_kernel_for_lowering_v1,
-    compile_ranked_kernel_for_lowering_v2, normalized_effect_refinement_hash_for_kernel_v2,
+    compile_ranked_kernel_for_lowering_v2, derive_and_reconcile_mir_pliron_semantic_contract_v1,
+    normalized_effect_refinement_hash_for_kernel_v2,
+    normalized_functional_refinement_formula_hash_for_kernel_v2,
     production_effect_contract_identity_v1, production_loop_transition_identity_v1,
     production_loop_variant_identity_v1, production_ranked_value_identity_v1,
     require_mir_pliron_semantic_contract_v1, require_parallel_reference_contract_v1,
@@ -332,6 +336,16 @@ fn total_coverage_ranked_input() -> ProductionRankedKernelLoweringInputV1 {
 }
 
 fn total_output_refinement_input() -> ProductionRankedKernelLoweringInputV1 {
+    total_output_refinement_input_with_collective(false)
+}
+
+fn collective_total_output_refinement_input() -> ProductionRankedKernelLoweringInputV1 {
+    total_output_refinement_input_with_collective(true)
+}
+
+fn total_output_refinement_input_with_collective(
+    with_collective: bool,
+) -> ProductionRankedKernelLoweringInputV1 {
     let local = |identity| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(identity));
     let scalar_u32 = ProductionSemanticScalarTypeV2::Integer {
         signed: false,
@@ -440,6 +454,47 @@ fn total_output_refinement_input() -> ProductionRankedKernelLoweringInputV1 {
         )],
     )
     .unwrap();
+    let skeleton = if with_collective {
+        let block = &skeleton.blocks()[0];
+        let mut operations = block.operations().to_vec();
+        operations.push(ProductionRankedOperationV1::CollectiveSemantics {
+            contract: ProductionCollectiveSemanticContractV1::new(
+                ProductionCollectiveSemanticKindV1::FiniteFold,
+                [11, 12, 13, 14],
+                [15, 16, 17, 18],
+                [15, 16, 17, 18],
+                1,
+                1,
+                SemanticEvaluationOrderAttr::Ascending,
+                ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                SemanticCoverageBindingAttr::TotalView,
+            )
+            .unwrap(),
+            view: local(0),
+            actual: local(2),
+            expected: local(3),
+            witness0: local(2),
+            witness1: local(3),
+        });
+        operations.push(
+            ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
+                actual: local(2),
+                expected: local(3),
+                subjects: functional_subjects(),
+            },
+        );
+        ProductionRankedKernelV1::new(
+            skeleton.function_name(),
+            skeleton.argument_count(),
+            vec![ProductionRankedBlockV1::new(
+                operations,
+                block.terminator().clone(),
+            )],
+        )
+        .unwrap()
+    } else {
+        skeleton
+    };
     let ProductionRankedOperationV1::RequestEffectRefinement { contract, .. } =
         &skeleton.blocks()[0].operations()[9]
     else {
@@ -454,11 +509,168 @@ fn total_output_refinement_input() -> ProductionRankedKernelLoweringInputV1 {
     )
     .unwrap();
     let (proof, imported, policy) = imported_reference(obligation);
+    let mut imported = vec![imported];
     let bound = skeleton
         .bind_functional_refinement_request_v2(0, 9, proof)
         .unwrap();
+    let bound = if with_collective {
+        let obligation = normalized_functional_refinement_formula_hash_for_kernel_v2(
+            &bound,
+            0,
+            11,
+            local(2),
+            local(3),
+            functional_subjects(),
+        )
+        .unwrap();
+        let (proof, collective_import, _) = imported_reference(obligation);
+        imported.push(collective_import);
+        bound
+            .bind_functional_refinement_request_v2(0, 11, proof)
+            .unwrap()
+    } else {
+        bound
+    };
     compile_ranked_kernel_for_lowering_v2(
         ProductionConstructionV1::ranked_kernel("total_output_refinement", bound).unwrap(),
+        ProductionSessionLimitsV1::default(),
+        imported,
+        policy,
+    )
+    .unwrap()
+}
+
+fn dynamic_total_output_refinement_input() -> ProductionRankedKernelLoweringInputV1 {
+    let local = |identity| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(identity));
+    let scalar_u32 = ProductionSemanticScalarTypeV2::Integer {
+        signed: false,
+        bits: 32,
+    };
+    let scalar_u64 = ProductionSemanticScalarTypeV2::Integer {
+        signed: false,
+        bits: 64,
+    };
+    let contract = ProductionEffectRefinementContractV2::new(
+        74,
+        ProductionGpuWriteSiteV2::new(0, 9),
+        ProductionReferenceOutputSiteV2::new(0, 0, 0),
+        local(1),
+        vec![local(2)],
+        vec![local(6)],
+        vec![local(6)],
+        local(5),
+        local(5),
+        local(5),
+        local(5),
+        local(3),
+        local(4),
+    )
+    .unwrap();
+    let skeleton = ProductionRankedKernelV1::new(
+        "dynamic_total_output_refinement",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::ExecutionLayout {
+                    grid_identity: 10,
+                    global_extents: [1, 1, 1],
+                    workgroup_extents: [1, 1, 1],
+                    subgroup_size: 1,
+                    full_physical_workgroups: true,
+                },
+                ProductionRankedOperationV1::IndexConstant {
+                    result: ProductionRankedValueIdV1::new(0),
+                    value: 1,
+                },
+                ProductionRankedOperationV1::ViewInSpace {
+                    result: ProductionRankedValueIdV1::new(1),
+                    element_width: 32,
+                    writable: true,
+                    shape: vec![DYNAMIC_EXTENT],
+                    dynamic_extents: vec![local(0)],
+                    allocation_origin: 10,
+                    noalias_class: 10,
+                    memory_space: MemorySpaceAttr::Global,
+                },
+                ProductionRankedOperationV1::IndexConstant {
+                    result: ProductionRankedValueIdV1::new(2),
+                    value: 0,
+                },
+                ProductionRankedOperationV1::SemanticExpression {
+                    result: ProductionRankedValueIdV1::new(3),
+                    expression: ProductionSemanticExpressionV2::Constant {
+                        scalar: scalar_u32,
+                        bits: 7,
+                    },
+                    numerical_contract:
+                        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                },
+                ProductionRankedOperationV1::SemanticExpression {
+                    result: ProductionRankedValueIdV1::new(4),
+                    expression: ProductionSemanticExpressionV2::Constant {
+                        scalar: scalar_u32,
+                        bits: 7,
+                    },
+                    numerical_contract:
+                        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                },
+                ProductionRankedOperationV1::SemanticExpression {
+                    result: ProductionRankedValueIdV1::new(5),
+                    expression: ProductionSemanticExpressionV2::Constant {
+                        scalar: ProductionSemanticScalarTypeV2::Bool,
+                        bits: 1,
+                    },
+                    numerical_contract:
+                        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                },
+                ProductionRankedOperationV1::SemanticExpression {
+                    result: ProductionRankedValueIdV1::new(6),
+                    expression: ProductionSemanticExpressionV2::Constant {
+                        scalar: scalar_u64,
+                        bits: 0,
+                    },
+                    numerical_contract:
+                        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                },
+                ProductionRankedOperationV1::OwnershipContract {
+                    view: local(1),
+                    coverage: OwnershipCoverageAttr::TotalView,
+                    partition: OwnershipPartitionAttr::ExactSets,
+                },
+                ProductionRankedOperationV1::ValueAccess {
+                    kind: AccessKindAttr::Write,
+                    view: local(1),
+                    indices: vec![local(2)],
+                    value: local(3),
+                },
+                ProductionRankedOperationV1::RequestEffectRefinement {
+                    contract,
+                    subjects: functional_subjects(),
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .unwrap();
+    let ProductionRankedOperationV1::RequestEffectRefinement { contract, .. } =
+        &skeleton.blocks()[0].operations()[10]
+    else {
+        unreachable!()
+    };
+    let obligation = normalized_effect_refinement_hash_for_kernel_v2(
+        &skeleton,
+        0,
+        10,
+        contract,
+        functional_subjects(),
+    )
+    .unwrap();
+    let (proof, imported, policy) = imported_reference(obligation);
+    let bound = skeleton
+        .bind_functional_refinement_request_v2(0, 10, proof)
+        .unwrap();
+    compile_ranked_kernel_for_lowering_v2(
+        ProductionConstructionV1::ranked_kernel("dynamic_total_output_refinement", bound).unwrap(),
         ProductionSessionLimitsV1::default(),
         vec![imported],
         policy,
@@ -896,6 +1108,200 @@ fn exact_mir_pliron_contract_joins_live_typed_effect_evidence() {
     assert!(verified.establishes_total_output_refinement_at_mir_pliron_boundary());
     assert!(verified.compiler_projection_and_pass_soundness_remain_trusted());
     assert!(!verified.grants_llvm_or_later_authority());
+}
+
+#[test]
+fn compiler_derives_and_independently_reconciles_the_exact_point_output_contract() {
+    let input = total_output_refinement_input();
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let reconciled =
+        derive_and_reconcile_mir_pliron_semantic_contract_v1(&input, &evidence).unwrap();
+    let contract = reconciled.contract();
+    assert_eq!(
+        contract.safe_reference_mir(),
+        functional_subjects().safe_reference_mir_hash()
+    );
+    assert_eq!(
+        contract.kernel_mir(),
+        functional_subjects().kernel_mir_hash()
+    );
+    assert_eq!(contract.domains().len(), 1);
+    assert_eq!(contract.typed_roots().len(), 4);
+    assert_eq!(contract.outputs().len(), 1);
+    assert_eq!(contract.loops().len(), 0);
+    assert_eq!(contract.collectives().len(), 0);
+    assert_eq!(reconciled.semantic_contract_report().total_outputs(), 1);
+    assert!(reconciled.compiler_projection_and_pass_soundness_remain_trusted());
+    assert!(!reconciled.grants_llvm_or_later_authority());
+}
+
+#[test]
+fn compiler_derivation_covers_every_live_natural_loop_without_a_workload_declaration() {
+    let input = loop_total_output_refinement_input();
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let reconciled =
+        derive_and_reconcile_mir_pliron_semantic_contract_v1(&input, &evidence).unwrap();
+    let contract = reconciled.contract();
+    assert_eq!(contract.loops().len(), 1);
+    assert_eq!(contract.loops()[0].header_block(), 1);
+    assert_eq!(contract.loops()[0].latch_block(), 2);
+    assert_eq!(contract.loops()[0].exit_block(), 3);
+    assert_eq!(contract.loops()[0].maximum_steps(), 4);
+    assert_eq!(contract.domains().len(), 2);
+    assert_eq!(reconciled.semantic_contract_report().bounded_loops(), 1);
+}
+
+#[test]
+fn compiler_derivation_covers_every_live_collective_and_reuses_its_output_domain() {
+    let input = collective_total_output_refinement_input();
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let reconciled =
+        derive_and_reconcile_mir_pliron_semantic_contract_v1(&input, &evidence).unwrap();
+    let contract = reconciled.contract();
+    assert_eq!(contract.collectives().len(), 1);
+    assert_eq!(contract.domains().len(), 1);
+    assert_eq!(
+        contract.outputs()[0].output_domain(),
+        contract.collectives()[0].target_domain(),
+    );
+    assert_eq!(
+        reconciled.semantic_contract_report().finite_collectives(),
+        1
+    );
+}
+
+#[test]
+fn compiler_derives_a_full_machine_bound_for_dynamic_output_extents() {
+    let input = dynamic_total_output_refinement_input();
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let reconciled =
+        derive_and_reconcile_mir_pliron_semantic_contract_v1(&input, &evidence).unwrap();
+    let [
+        SemanticFiniteExtentV1::Dynamic {
+            symbol,
+            inclusive_upper_bound,
+        },
+    ] = reconciled.contract().domains()[0].extents()
+    else {
+        panic!("expected one dynamic output extent")
+    };
+    let _canonical_symbol = *symbol;
+    assert_eq!(*inclusive_upper_bound, u64::MAX);
+}
+
+#[test]
+fn dynamic_output_reconciliation_rejects_stale_symbols_and_unproved_narrow_bounds() {
+    let input = dynamic_total_output_refinement_input();
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let reconciled =
+        derive_and_reconcile_mir_pliron_semantic_contract_v1(&input, &evidence).unwrap();
+    let contract = reconciled.contract();
+    let domain = &contract.domains()[0];
+    let [SemanticFiniteExtentV1::Dynamic { symbol, .. }] = domain.extents() else {
+        panic!("expected one dynamic output extent")
+    };
+    for extent in [
+        SemanticFiniteExtentV1::Dynamic {
+            symbol: symbol.wrapping_add(1),
+            inclusive_upper_bound: u64::MAX,
+        },
+        SemanticFiniteExtentV1::Dynamic {
+            symbol: *symbol,
+            inclusive_upper_bound: 1024,
+        },
+    ] {
+        let wrong_domain = SemanticFiniteDomainV1::new(domain.identity(), vec![extent]).unwrap();
+        let wrong = MirPlironSemanticContractV1::new(
+            contract.safe_reference_mir(),
+            contract.kernel_mir(),
+            contract.pliron_evidence(),
+            vec![wrong_domain],
+            contract.typed_roots().to_vec(),
+            contract.loops().to_vec(),
+            contract.collectives().to_vec(),
+            contract.outputs().to_vec(),
+        )
+        .unwrap();
+        assert!(matches!(
+            require_mir_pliron_semantic_contract_v1(
+                &input,
+                &evidence,
+                reconciled.total_output_report(),
+                &wrong,
+            ),
+            Err(
+                fe2o3_pliron::ProductionMirPlironSemanticContractErrorV1::OutputMismatch {
+                    index: 0
+                }
+            )
+        ));
+    }
+}
+
+#[test]
+fn derived_contract_reconciliation_rejects_subject_and_output_mutations() {
+    let input = total_output_refinement_input();
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let reconciled =
+        derive_and_reconcile_mir_pliron_semantic_contract_v1(&input, &evidence).unwrap();
+    let contract = reconciled.contract();
+    let wrong_subject = MirPlironSemanticContractV1::new(
+        proof_digest(98),
+        contract.kernel_mir(),
+        contract.pliron_evidence(),
+        contract.domains().to_vec(),
+        contract.typed_roots().to_vec(),
+        contract.loops().to_vec(),
+        contract.collectives().to_vec(),
+        contract.outputs().to_vec(),
+    )
+    .unwrap();
+    assert_eq!(
+        require_mir_pliron_semantic_contract_v1(
+            &input,
+            &evidence,
+            reconciled.total_output_report(),
+            &wrong_subject,
+        ),
+        Err(fe2o3_pliron::ProductionMirPlironSemanticContractErrorV1::MirSubjectMismatch)
+    );
+
+    let output = &contract.outputs()[0];
+    let wrong_output = SemanticOutputContractV1::new(
+        output.identity(),
+        proof_digest(99),
+        output.output_domain(),
+        output.actual(),
+        output.reference(),
+        output.auxiliary_roots().to_vec(),
+    )
+    .unwrap();
+    let wrong_output = MirPlironSemanticContractV1::new(
+        contract.safe_reference_mir(),
+        contract.kernel_mir(),
+        contract.pliron_evidence(),
+        contract.domains().to_vec(),
+        contract.typed_roots().to_vec(),
+        contract.loops().to_vec(),
+        contract.collectives().to_vec(),
+        vec![wrong_output],
+    )
+    .unwrap();
+    assert!(matches!(
+        require_mir_pliron_semantic_contract_v1(
+            &input,
+            &evidence,
+            reconciled.total_output_report(),
+            &wrong_output,
+        ),
+        Err(fe2o3_pliron::ProductionMirPlironSemanticContractErrorV1::OutputMismatch { index: 0 })
+    ));
 }
 
 #[test]
