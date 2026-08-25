@@ -28,6 +28,7 @@ use fe2o3_pliron::{
     ProductionRankedOperationV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
     normalized_effect_refinement_hash_for_kernel_v2,
     normalized_functional_refinement_formula_hash_for_kernel_v2,
+    normalized_numerical_refinement_hash_for_kernel_v2,
 };
 use fe2o3_proof_contracts::DigestV1;
 use rand_core::OsRng;
@@ -335,6 +336,24 @@ fn generate_ranked_functional_refinement_proof_v2(
                 (contract.gpu_value(), contract.reference_value()),
             ]);
             (obligation, pairs)
+        }
+        ProductionRankedOperationV1::RequestNumericalRefinement {
+            contract,
+            subjects: request_subjects,
+        } if *request_subjects == subjects => {
+            let obligation = normalized_numerical_refinement_hash_for_kernel_v2(
+                kernel,
+                block_index,
+                operation_index,
+                *contract,
+                subjects,
+            )
+            .map_err(|_| invalid_ranked_recipe())?;
+            // The compiler-owned automatic discharge proves exact equality,
+            // which is strictly stronger than every validated nonnegative
+            // finite-error bound. Non-exact claims require an independently
+            // verified receipt for this same obligation digest.
+            (obligation, vec![(contract.actual(), contract.reference())])
         }
         _ => return Err(invalid_ranked_recipe()),
     };
@@ -1209,9 +1228,10 @@ mod tests {
     use dialect_kernel::SemanticBinaryKindAttr;
     use fe2o3_functional_proof::SafeReferenceKindV2;
     use fe2o3_pliron::{
-        ProductionNumericalContractV2, ProductionOverflowContractV2, ProductionRankedBlockV1,
-        ProductionRankedOperationV1, ProductionRankedTerminatorV1, ProductionSemanticBinaryOpV2,
-        ProductionSemanticExpressionV2, ProductionSemanticScalarTypeV2,
+        ProductionNumericalContractV2, ProductionNumericalRefinementContractV2,
+        ProductionOverflowContractV2, ProductionRankedBlockV1, ProductionRankedOperationV1,
+        ProductionRankedTerminatorV1, ProductionSemanticBinaryOpV2, ProductionSemanticExpressionV2,
+        ProductionSemanticScalarTypeV2,
     };
 
     fn output(
@@ -1496,6 +1516,87 @@ mod tests {
         assert_ne!(
             positive_binding.normalized_obligation_effect_ir_hash(),
             mutated_binding.normalized_obligation_effect_ir_hash(),
+        );
+    }
+
+    #[test]
+    fn numerical_generator_proves_the_stronger_exact_fallback_and_binds_bounds() {
+        let float = ProductionSemanticScalarTypeV2::Float { bits: 32 };
+        let boolean = ProductionSemanticScalarTypeV2::Bool;
+        let local = ProductionRankedValueV1::Local;
+        let ids =
+            std::array::from_fn::<_, 4, _>(|index| ProductionRankedValueIdV1::new(index as u32));
+        let build = |absolute: f64| {
+            let contract = ProductionNumericalRefinementContractV2::new(
+                7,
+                local(ids[0]),
+                local(ids[1]),
+                local(ids[2]),
+                local(ids[3]),
+                absolute.to_bits(),
+                0.01_f64.to_bits(),
+            )
+            .unwrap();
+            ProductionRankedKernelV1::new(
+                "numerical_exact_fallback",
+                0,
+                vec![ProductionRankedBlockV1::new(
+                    vec![
+                        ProductionRankedOperationV1::SemanticExpression {
+                            result: ids[0],
+                            expression: ProductionSemanticExpressionV2::Symbol {
+                                symbol: 9,
+                                scalar: float,
+                            },
+                            numerical_contract: ProductionNumericalContractV2::exact_for(float),
+                        },
+                        ProductionRankedOperationV1::SemanticExpression {
+                            result: ids[1],
+                            expression: ProductionSemanticExpressionV2::Symbol {
+                                symbol: 9,
+                                scalar: float,
+                            },
+                            numerical_contract: ProductionNumericalContractV2::exact_for(float),
+                        },
+                        ProductionRankedOperationV1::SemanticExpression {
+                            result: ids[2],
+                            expression: ProductionSemanticExpressionV2::Constant {
+                                scalar: boolean,
+                                bits: 1,
+                            },
+                            numerical_contract: ProductionNumericalContractV2::exact_for(boolean),
+                        },
+                        ProductionRankedOperationV1::SemanticExpression {
+                            result: ids[3],
+                            expression: ProductionSemanticExpressionV2::Constant {
+                                scalar: boolean,
+                                bits: 1,
+                            },
+                            numerical_contract: ProductionNumericalContractV2::exact_for(boolean),
+                        },
+                        ProductionRankedOperationV1::RequestNumericalRefinement {
+                            contract,
+                            subjects: subjects(),
+                        },
+                    ],
+                    ProductionRankedTerminatorV1::Return,
+                )],
+            )
+            .unwrap()
+        };
+
+        let (binding, source) =
+            generate_ranked_functional_refinement_proof_v2(&build(0.001), 0, 4, subjects())
+                .unwrap();
+        let generated = std::str::from_utf8(source.source()).unwrap();
+        assert!(generated.contains("assert(v0 == v1);"));
+        let (mutated, mutated_source) =
+            generate_ranked_functional_refinement_proof_v2(&build(0.002), 0, 4, subjects())
+                .unwrap();
+        assert_eq!(source.source(), mutated_source.source());
+        assert_ne!(
+            binding.normalized_obligation_effect_ir_hash(),
+            mutated.normalized_obligation_effect_ir_hash()
         );
     }
 

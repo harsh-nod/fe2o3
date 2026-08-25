@@ -24,7 +24,10 @@ use dialect_kernel::{
     SemanticTypedSelectOp, SemanticTypedSymbolOp, SemanticTypedUnaryOp, TensorLayoutOp, TrapOp,
     ranked_view_type,
 };
-use dialect_proof::{EvidenceRefOp, ObligationOp, RequireEffectRefinementOp, RequireRefinementOp};
+use dialect_proof::{
+    EvidenceRefOp, ObligationOp, RequireEffectRefinementOp, RequireNumericalRefinementOp,
+    RequireRefinementOp,
+};
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
     common_traits::Named,
@@ -424,7 +427,11 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         Some(RankedOperationKind::ProofObligation)
     } else if operation.downcast_ref::<EvidenceRefOp>().is_some() {
         Some(RankedOperationKind::ProofEvidence)
-    } else if operation.downcast_ref::<RequireRefinementOp>().is_some() {
+    } else if operation.downcast_ref::<RequireRefinementOp>().is_some()
+        || operation
+            .downcast_ref::<RequireNumericalRefinementOp>()
+            .is_some()
+    {
         Some(RankedOperationKind::RequireRefinement)
     } else if operation
         .downcast_ref::<RequireEffectRefinementOp>()

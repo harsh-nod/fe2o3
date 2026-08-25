@@ -690,13 +690,21 @@ impl ProductionMiddleEndEvidenceV5 {
         validate_coverage_v5(coverage)?;
         let semantic_report = ranked.semantic_report();
         let effect_report = semantic_report.effect_refinement();
+        let reference_obligations_declared =
+            usize_to_u64(semantic_report.reference_obligation_count())?
+                .checked_add(usize_to_u64(semantic_report.numerical_obligation_count())?)
+                .ok_or(ProductionMiddleEndEvidenceCodecErrorV5::CounterOverflow)?;
+        let reference_obligations_proved =
+            usize_to_u64(semantic_report.proved_reference_obligation_count())?
+                .checked_add(usize_to_u64(
+                    semantic_report.proved_numerical_obligation_count(),
+                )?)
+                .ok_or(ProductionMiddleEndEvidenceCodecErrorV5::CounterOverflow)?;
         let semantics = ProductionMiddleEndSemanticSummaryV5 {
-            reference_obligations_declared: usize_to_u64(
-                semantic_report.reference_obligation_count(),
-            )?,
-            reference_obligations_proved: usize_to_u64(
-                semantic_report.proved_reference_obligation_count(),
-            )?,
+            // V5 keeps one wire counter for authenticated scalar theorems;
+            // exact equalities and finite-error relations are both included.
+            reference_obligations_declared,
+            reference_obligations_proved,
             effect_contracts_declared: usize_to_u64(effect_report.contract_count())?,
             effect_contracts_proved: usize_to_u64(effect_report.proved_contract_count())?,
             collective_contracts_declared: usize_to_u64(

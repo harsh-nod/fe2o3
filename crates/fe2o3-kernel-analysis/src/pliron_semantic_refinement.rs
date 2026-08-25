@@ -16,7 +16,7 @@ use dialect_kernel::{
 };
 use dialect_proof::{
     CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, PropertyAttr,
-    RequireEffectRefinementOp, RequireRefinementOp,
+    RequireEffectRefinementOp, RequireNumericalRefinementOp, RequireRefinementOp,
 };
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
@@ -595,6 +595,8 @@ pub struct PlironSemanticRefinementReportV1 {
     findings: Vec<PlironSemanticRefinementFindingV1>,
     reference_obligations: usize,
     proved_reference_obligations: usize,
+    numerical_obligations: usize,
+    proved_numerical_obligations: usize,
     collective_contracts: usize,
     proved_collective_contracts: usize,
     typed_root_commitments: Vec<[u64; 4]>,
@@ -641,6 +643,22 @@ impl PlironSemanticRefinementReportV1 {
         self.is_clean()
             && self.reference_obligations != 0
             && self.reference_obligations == self.proved_reference_obligations
+    }
+
+    /// Number of authenticated finite-error relations in the live graph.
+    pub const fn numerical_obligation_count(&self) -> usize {
+        self.numerical_obligations
+    }
+
+    /// Number whose typed roots, finite bounds, and exact evidence join passed.
+    pub const fn proved_numerical_obligation_count(&self) -> usize {
+        self.proved_numerical_obligations
+    }
+
+    pub fn all_numerical_obligations_are_proved(&self) -> bool {
+        self.is_clean()
+            && self.numerical_obligations != 0
+            && self.numerical_obligations == self.proved_numerical_obligations
     }
 
     /// Number of closed finite fold, recurrence, and permutation contracts.
@@ -759,6 +777,7 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
     let mut definitions = Vec::new();
     let mut requirements = Vec::new();
     let mut reference_requirements = Vec::new();
+    let mut numerical_requirements = Vec::new();
     let mut effect_requirement_ids = HashSet::new();
     let mut obligations = Vec::new();
     let mut evidence = Vec::new();
@@ -799,6 +818,20 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
             } else if let Some(requirement) = operation.downcast_ref::<RequireEffectRefinementOp>()
             {
                 effect_requirement_ids.insert(requirement.obligation_id(context).unwrap_or([0; 4]));
+            } else if let Some(requirement) =
+                operation.downcast_ref::<RequireNumericalRefinementOp>()
+            {
+                numerical_requirements.push((
+                    block_index,
+                    operation_index,
+                    requirement.obligation_id(context),
+                    operation.get_operation().deref(context).get_operand(0),
+                    operation.get_operation().deref(context).get_operand(1),
+                    operation.get_operation().deref(context).get_operand(2),
+                    operation.get_operation().deref(context).get_operand(3),
+                    requirement.absolute_error_f64_bits(context),
+                    requirement.relative_error_f64_bits(context),
+                ));
             } else if let Some(obligation) = operation.downcast_ref::<ObligationOp>() {
                 obligations.push((
                     block_index,
@@ -867,10 +900,22 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
     }
 
     let reference_count = reference_requirements.len();
+    let numerical_count = numerical_requirements.len();
+    let authenticated_requirements = reference_requirements
+        .iter()
+        .map(|&(block, operation, identity, actual, expected)| {
+            (block, operation, identity, actual, expected)
+        })
+        .chain(numerical_requirements.iter().map(
+            |&(block, operation, identity, actual, reference, ..)| {
+                (block, operation, identity, actual, reference)
+            },
+        ))
+        .collect::<Vec<_>>();
     let mut findings = Vec::new();
     let mut contract_valid = HashSet::new();
     let mut used_obligations = HashSet::new();
-    for (block, operation, identity, _, _) in &reference_requirements {
+    for (block, operation, identity, _, _) in &authenticated_requirements {
         let identity = identity.unwrap_or([0; 4]);
         let matching = obligations
             .iter()
@@ -1090,6 +1135,96 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
             proved_reference_pairs.insert((actual, expected));
         }
     }
+    let mut proved_numerical_obligations = 0;
+    for (
+        block,
+        operation,
+        _,
+        actual,
+        reference,
+        domain,
+        precondition,
+        absolute_error,
+        relative_error,
+    ) in numerical_requirements
+    {
+        let Some(actual_fact) = expressions.typed_root_fact(actual) else {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::ReferenceContractIncomplete {
+                    block,
+                    operation,
+                    obligation: [0; 4],
+                    reason: "the numerical actual value is not a reconstructed typed root",
+                },
+            );
+            continue;
+        };
+        let Some(reference_fact) = expressions.typed_root_fact(reference) else {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::ReferenceContractIncomplete {
+                    block,
+                    operation,
+                    obligation: [0; 4],
+                    reason: "the numerical reference value is not a reconstructed typed root",
+                },
+            );
+            continue;
+        };
+        let domain_fact = expressions.typed_root_fact(domain);
+        let precondition_fact = expressions.typed_root_fact(precondition);
+        if actual_fact != reference_fact || !actual_fact.scalar.is_float() {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::ReferenceContractRejected {
+                    block,
+                    operation,
+                    obligation: [0; 4],
+                    reason: "numerical actual and reference roots must share one floating scalar contract",
+                },
+            );
+            continue;
+        }
+        if domain_fact.is_none_or(|fact| !fact.scalar.is_bool())
+            || precondition_fact.is_none_or(|fact| !fact.scalar.is_bool())
+        {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::ReferenceContractRejected {
+                    block,
+                    operation,
+                    obligation: [0; 4],
+                    reason: "numerical domain and precondition must be typed Boolean roots",
+                },
+            );
+            continue;
+        }
+        let bounds = absolute_error
+            .zip(relative_error)
+            .map(|(absolute, relative)| (f64::from_bits(absolute), f64::from_bits(relative)));
+        if bounds.is_none_or(|(absolute, relative)| {
+            !absolute.is_finite()
+                || !relative.is_finite()
+                || absolute < 0.0
+                || relative < 0.0
+                || (absolute == 0.0 && relative == 0.0)
+        }) {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::ReferenceContractRejected {
+                    block,
+                    operation,
+                    obligation: [0; 4],
+                    reason: "numerical refinement requires finite nonnegative nonzero bounds",
+                },
+            );
+            continue;
+        }
+        if contract_valid.contains(&(block, operation)) {
+            proved_numerical_obligations += 1;
+        }
+    }
     let collective_count = collective_contracts.len();
     let mut proved_collective_contracts = 0;
     let mut used_reference_pairs = HashSet::new();
@@ -1283,6 +1418,8 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
         findings,
         reference_obligations: reference_count,
         proved_reference_obligations,
+        numerical_obligations: numerical_count,
+        proved_numerical_obligations,
         collective_contracts: collective_count,
         proved_collective_contracts,
         typed_root_commitments,
@@ -1334,6 +1471,8 @@ fn one(finding: PlironSemanticRefinementFindingV1) -> PlironSemanticRefinementRe
         findings: vec![finding],
         reference_obligations: 0,
         proved_reference_obligations: 0,
+        numerical_obligations: 0,
+        proved_numerical_obligations: 0,
         collective_contracts: 0,
         proved_collective_contracts: 0,
         typed_root_commitments: Vec::new(),
@@ -1391,6 +1530,8 @@ mod status_tests {
             ],
             reference_obligations: 1,
             proved_reference_obligations: 0,
+            numerical_obligations: 0,
+            proved_numerical_obligations: 0,
             collective_contracts: 0,
             proved_collective_contracts: 0,
             typed_root_commitments: Vec::new(),
@@ -1403,6 +1544,8 @@ mod status_tests {
                 findings: vec![],
                 reference_obligations: 0,
                 proved_reference_obligations: 0,
+                numerical_obligations: 0,
+                proved_numerical_obligations: 0,
                 collective_contracts: 0,
                 proved_collective_contracts: 0,
                 typed_root_commitments: Vec::new(),

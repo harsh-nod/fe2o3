@@ -1136,6 +1136,16 @@ fn hash_functional_refinement_graph_operation(
             hash_effect_refinement_contract(digest, contract);
             hash_functional_refinement_subjects(digest, proof.binding().subjects());
         }
+        ProductionRankedOperationV1::RequestNumericalRefinement { contract, subjects } => {
+            digest.update([252]);
+            hash_numerical_refinement_contract(digest, *contract);
+            hash_functional_refinement_subjects(digest, *subjects);
+        }
+        ProductionRankedOperationV1::RequireNumericalRefinement { contract, proof } => {
+            digest.update([252]);
+            hash_numerical_refinement_contract(digest, *contract);
+            hash_functional_refinement_subjects(digest, proof.binding().subjects());
+        }
         _ => hash_ranked_operation(digest, operation),
     }
 }
@@ -1173,6 +1183,8 @@ fn functional_refinement_graph_operation_tag(operation: &ProductionRankedOperati
         | ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. } => 24,
         ProductionRankedOperationV1::RequireEffectRefinement { .. }
         | ProductionRankedOperationV1::RequestEffectRefinement { .. } => 25,
+        ProductionRankedOperationV1::RequireNumericalRefinement { .. }
+        | ProductionRankedOperationV1::RequestNumericalRefinement { .. } => 30,
     }
 }
 
@@ -1200,6 +1212,23 @@ fn hash_effect_refinement_contract(
     ] {
         hash_value(digest, value);
     }
+}
+
+fn hash_numerical_refinement_contract(
+    digest: &mut Sha256,
+    contract: super::ProductionNumericalRefinementContractV2,
+) {
+    digest.update(contract.contract_identity().to_le_bytes());
+    for value in [
+        contract.actual(),
+        contract.reference(),
+        contract.domain(),
+        contract.precondition(),
+    ] {
+        hash_value(digest, value);
+    }
+    digest.update(contract.absolute_error_f64_bits().to_le_bytes());
+    digest.update(contract.relative_error_f64_bits().to_le_bytes());
 }
 
 fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperationV1) {
@@ -1622,6 +1651,22 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
         }
         ProductionRankedOperationV1::RequestEffectRefinement { contract, subjects } => {
             digest.update([27]);
+            digest.update(contract.request_shape_hash().as_bytes());
+            hash_functional_refinement_subjects(digest, *subjects);
+        }
+        ProductionRankedOperationV1::RequireNumericalRefinement { contract, proof } => {
+            digest.update([28]);
+            hash_numerical_refinement_contract(digest, *contract);
+            digest.update(proof.receipt_identity().digest().as_bytes());
+            digest.update(
+                proof
+                    .binding()
+                    .normalized_obligation_effect_ir_hash()
+                    .as_bytes(),
+            );
+        }
+        ProductionRankedOperationV1::RequestNumericalRefinement { contract, subjects } => {
+            digest.update([29]);
             digest.update(contract.request_shape_hash().as_bytes());
             hash_functional_refinement_subjects(digest, *subjects);
         }

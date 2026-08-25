@@ -3,9 +3,10 @@ use dialect_kernel::{
     SemanticSymbolOp,
 };
 use dialect_proof::{
-    CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, ObligationRefType,
-    ProofIdAttr, ProofOverlayOpInterface, PropertyAttr, RegistrationError, RegistrationOutcome,
-    RequireEffectRefinementOp, evidence_ref_op_attr_names, register_dialect,
+    AbsoluteErrorF64BitsAttr, CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp,
+    ObligationRefType, ProofIdAttr, ProofOverlayOpInterface, PropertyAttr, RegistrationError,
+    RegistrationOutcome, RelativeErrorF64BitsAttr, RequireEffectRefinementOp,
+    RequireNumericalRefinementOp, evidence_ref_op_attr_names, register_dialect,
 };
 use pliron::{
     attribute::{AttrObj, verify_attr},
@@ -331,4 +332,65 @@ fn effect_refinement_locally_requires_ranked_indices_and_six_semantic_expression
         scalar_value,
     );
     assert!(verify_op(&wrong_semantic, &context).is_err());
+}
+
+#[test]
+fn numerical_refinement_requires_typed_roots_and_a_finite_nonzero_bound() {
+    let mut context = Context::new();
+    dialect_kernel::register_dialect(
+        &mut context,
+        &DialectName::try_new(KERNEL_DIALECT_NAME).unwrap(),
+    )
+    .unwrap();
+    register_dialect(&mut context).unwrap();
+    let scalar = SemanticSymbolOp::new(&mut context, 7).result(&context);
+    let index = IndexConstantOp::new(&mut context, 0).result(&context);
+
+    let valid = RequireNumericalRefinementOp::new(
+        &mut context,
+        id(500),
+        AbsoluteErrorF64BitsAttr(0.01_f64.to_bits()),
+        RelativeErrorF64BitsAttr(0.0_f64.to_bits()),
+        scalar,
+        scalar,
+        scalar,
+        scalar,
+    );
+    verify_op(&valid, &context).expect("finite numerical relation must verify locally");
+
+    let zero = RequireNumericalRefinementOp::new(
+        &mut context,
+        id(510),
+        AbsoluteErrorF64BitsAttr(0.0_f64.to_bits()),
+        RelativeErrorF64BitsAttr(0.0_f64.to_bits()),
+        scalar,
+        scalar,
+        scalar,
+        scalar,
+    );
+    assert!(verify_op(&zero, &context).is_err());
+
+    let nan = RequireNumericalRefinementOp::new(
+        &mut context,
+        id(520),
+        AbsoluteErrorF64BitsAttr(f64::NAN.to_bits()),
+        RelativeErrorF64BitsAttr(0.0_f64.to_bits()),
+        scalar,
+        scalar,
+        scalar,
+        scalar,
+    );
+    assert!(verify_op(&nan, &context).is_err());
+
+    let wrong_type = RequireNumericalRefinementOp::new(
+        &mut context,
+        id(530),
+        AbsoluteErrorF64BitsAttr(0.01_f64.to_bits()),
+        RelativeErrorF64BitsAttr(0.0_f64.to_bits()),
+        scalar,
+        scalar,
+        scalar,
+        index,
+    );
+    assert!(verify_op(&wrong_type, &context).is_err());
 }

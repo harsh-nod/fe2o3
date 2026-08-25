@@ -213,8 +213,12 @@ pub fn require_total_output_refinement_v2(
         total_view_proved: as_u64(coverage.total_view_proved())?,
         collective_contributions_declared: as_u64(coverage.collective_contributions_declared())?,
         collective_contributions_proved: as_u64(coverage.collective_contributions_proved())?,
-        reference_declared: as_u64(semantic.reference_obligation_count())?,
-        reference_proved: as_u64(semantic.proved_reference_obligation_count())?,
+        reference_declared: as_u64(semantic.reference_obligation_count())?
+            .checked_add(as_u64(semantic.numerical_obligation_count())?)
+            .ok_or(ProductionTotalOutputRefinementErrorV2::CounterOverflow)?,
+        reference_proved: as_u64(semantic.proved_reference_obligation_count())?
+            .checked_add(as_u64(semantic.proved_numerical_obligation_count())?)
+            .ok_or(ProductionTotalOutputRefinementErrorV2::CounterOverflow)?,
         effect_declared: as_u64(effects.contract_count())?,
         effect_proved: as_u64(effects.proved_contract_count())?,
         collective_declared: as_u64(semantic.collective_contract_count())?,

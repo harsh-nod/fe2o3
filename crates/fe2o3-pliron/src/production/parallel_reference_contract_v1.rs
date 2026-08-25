@@ -225,7 +225,7 @@ pub fn derive_and_require_parallel_reference_contract_v1(
             .ok_or(ProductionParallelReferenceContractErrorV1::OutputRelationMismatch { index })?;
         let (actual, reference) = output_roots(output, semantic_contract)
             .ok_or(ProductionParallelReferenceContractErrorV1::OutputRelationMismatch { index })?;
-        let numerical_policy = match (
+        let exact_numerical_policy = match (
             actual.scalar(),
             actual.numerical_policy(),
             reference.numerical_policy(),
@@ -263,6 +263,15 @@ pub fn derive_and_require_parallel_reference_contract_v1(
                     },
                 );
             }
+        };
+        let numerical_policy = match numerical_refinement_for_output(ranked, output) {
+            Some((contract, proof)) => ParallelNumericalPolicyV1::ErrorBounded {
+                absolute_error_f64_bits: contract.absolute_error_f64_bits(),
+                relative_error_f64_bits: contract.relative_error_f64_bits(),
+                witness_root: contract.request_shape_hash(),
+                proof,
+            },
+            None => exact_numerical_policy,
         };
         let matching_collectives = semantic_contract
             .collectives()
@@ -480,6 +489,7 @@ pub fn require_parallel_reference_contract_v1(
             relation.numerical_policy(),
             output,
             semantic_contract,
+            Some(ranked),
         )?;
         if matches!(
             relation.numerical_policy(),
@@ -683,6 +693,30 @@ fn output_receipt_identity(
     matches.next().is_none().then_some(identity)
 }
 
+fn numerical_refinement_for_output(
+    ranked: &ProductionRankedKernelLoweringInputV1,
+    output: &SemanticOutputContractV1,
+) -> Option<(super::ProductionNumericalRefinementContractV2, DigestV1)> {
+    let mut matches = ranked
+        .kernel()
+        .blocks()
+        .iter()
+        .flat_map(|block| block.operations())
+        .filter_map(|operation| match operation {
+            ProductionRankedOperationV1::RequireNumericalRefinement { contract, proof }
+                if super::production_ranked_value_identity_v1(contract.actual())
+                    == output.actual()
+                    && super::production_ranked_value_identity_v1(contract.reference())
+                        == output.reference() =>
+            {
+                Some((*contract, proof.receipt_identity().digest()))
+            }
+            _ => None,
+        });
+    let relation = matches.next()?;
+    matches.next().is_none().then_some(relation)
+}
+
 fn has_total_ownership_contract(
     ranked: &ProductionRankedKernelLoweringInputV1,
     output: &SemanticOutputContractV1,
@@ -784,6 +818,7 @@ fn require_numerical_policy(
     policy: ParallelNumericalPolicyV1,
     output: &SemanticOutputContractV1,
     contract: &MirPlironSemanticContractV1,
+    ranked: Option<&ProductionRankedKernelLoweringInputV1>,
 ) -> Result<(), ProductionParallelReferenceContractErrorV1> {
     let Some((actual, reference)) = output_roots(output, contract) else {
         return Err(
@@ -842,9 +877,30 @@ fn require_numerical_policy(
                 )
             }
         }
-        ParallelNumericalPolicyV1::ErrorBounded { .. } => {
-            Err(ProductionParallelReferenceContractErrorV1::NumericalProofIncomplete { index })
-        }
+        ParallelNumericalPolicyV1::ErrorBounded {
+            absolute_error_f64_bits,
+            relative_error_f64_bits,
+            witness_root,
+            proof,
+        } => match ranked.and_then(|ranked| {
+            numerical_refinement_for_output(ranked, output).map(|relation| (ranked, relation))
+        }) {
+            Some((ranked, (numerical, retained_proof)))
+                if matches!(actual.scalar(), SemanticScalarTypeV1::Float(_))
+                    && numerical.absolute_error_f64_bits() == absolute_error_f64_bits
+                    && numerical.relative_error_f64_bits() == relative_error_f64_bits
+                    && numerical.request_shape_hash() == witness_root
+                    && retained_proof == proof
+                    && ranked
+                        .semantic_report()
+                        .all_numerical_obligations_are_proved() =>
+            {
+                Ok(())
+            }
+            _ => {
+                Err(ProductionParallelReferenceContractErrorV1::NumericalProofIncomplete { index })
+            }
+        },
         ParallelNumericalPolicyV1::UnboundedRelaxed => Err(
             ProductionParallelReferenceContractErrorV1::NumericalPolicyRejected {
                 index,
@@ -1036,6 +1092,7 @@ mod tests {
             },
             &contract.outputs()[0],
             &contract,
+            None,
         )
         .unwrap_err();
         assert!(matches!(

@@ -20,17 +20,18 @@ use fe2o3_pliron::{
     ProductionEffectRefinementContractV2, ProductionFunctionalRefinementAdmissionErrorV2,
     ProductionFunctionalRefinementTrustPolicyV2, ProductionGpuWriteSiteV2,
     ProductionIeeeExceptionalValuePolicyV2, ProductionIeeeRoundingModeV2,
-    ProductionNumericalContractV2, ProductionOverflowContractV2, ProductionPlironSessionV1,
-    ProductionRankedBlockV1, ProductionRankedCompileErrorV1, ProductionRankedCompileErrorV2,
-    ProductionRankedKernelErrorV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
-    ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
-    ProductionReferenceOutputSiteV2, ProductionReferenceProofV1, ProductionReferenceProofV2,
-    ProductionSemanticBinaryOpV2, ProductionSemanticCastV2, ProductionSemanticComparisonV2,
-    ProductionSemanticExpressionErrorV2, ProductionSemanticExpressionV2,
-    ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2, ProductionSessionErrorV1,
-    ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
+    ProductionNumericalContractV2, ProductionNumericalRefinementContractV2,
+    ProductionOverflowContractV2, ProductionPlironSessionV1, ProductionRankedBlockV1,
+    ProductionRankedCompileErrorV1, ProductionRankedCompileErrorV2, ProductionRankedKernelErrorV1,
+    ProductionRankedKernelV1, ProductionRankedOperationV1, ProductionRankedTerminatorV1,
+    ProductionRankedValueIdV1, ProductionRankedValueV1, ProductionReferenceOutputSiteV2,
+    ProductionReferenceProofV1, ProductionReferenceProofV2, ProductionSemanticBinaryOpV2,
+    ProductionSemanticCastV2, ProductionSemanticComparisonV2, ProductionSemanticExpressionErrorV2,
+    ProductionSemanticExpressionV2, ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2,
+    ProductionSessionErrorV1, ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
     compile_ranked_kernel_for_lowering_v2, normalized_effect_refinement_hash_for_kernel_v2,
     normalized_functional_refinement_formula_hash_for_kernel_v2,
+    normalized_numerical_refinement_hash_for_kernel_v2,
 };
 use fe2o3_proof_contracts::DigestV1;
 
@@ -1013,6 +1014,147 @@ fn typed_semantic_commitments_reach_all_mandatory_v2_passes() {
     assert_ne!(*reconciliation.ordered_commitments_sha256(), [0; 32]);
     assert!(!reconciliation.grants_arithmetic_interpretation_authority());
     assert!(!reconciliation.grants_target_value_authority());
+}
+
+#[test]
+fn finite_error_receipt_binds_roots_domain_precondition_and_exact_bounds() {
+    let float = ProductionSemanticScalarTypeV2::Float { bits: 32 };
+    let boolean = ProductionSemanticScalarTypeV2::Bool;
+    let actual = ProductionRankedValueIdV1::new(0);
+    let reference = ProductionRankedValueIdV1::new(1);
+    let domain = ProductionRankedValueIdV1::new(2);
+    let precondition = ProductionRankedValueIdV1::new(3);
+    let numerical = ProductionNumericalRefinementContractV2::new(
+        41,
+        local(actual),
+        local(reference),
+        local(domain),
+        local(precondition),
+        0.001_f64.to_bits(),
+        0.01_f64.to_bits(),
+    )
+    .unwrap();
+    let operations = vec![
+        ProductionRankedOperationV1::SemanticExpression {
+            result: actual,
+            expression: ProductionSemanticExpressionV2::Symbol {
+                symbol: 1,
+                scalar: float,
+            },
+            numerical_contract: ProductionNumericalContractV2::exact_for(float),
+        },
+        ProductionRankedOperationV1::SemanticExpression {
+            result: reference,
+            expression: ProductionSemanticExpressionV2::Symbol {
+                symbol: 2,
+                scalar: float,
+            },
+            numerical_contract: ProductionNumericalContractV2::exact_for(float),
+        },
+        ProductionRankedOperationV1::SemanticExpression {
+            result: domain,
+            expression: ProductionSemanticExpressionV2::Constant {
+                scalar: boolean,
+                bits: 1,
+            },
+            numerical_contract: ProductionNumericalContractV2::exact_for(boolean),
+        },
+        ProductionRankedOperationV1::SemanticExpression {
+            result: precondition,
+            expression: ProductionSemanticExpressionV2::Constant {
+                scalar: boolean,
+                bits: 1,
+            },
+            numerical_contract: ProductionNumericalContractV2::exact_for(boolean),
+        },
+        ProductionRankedOperationV1::RequestNumericalRefinement {
+            contract: numerical,
+            subjects: functional_subjects(44),
+        },
+    ];
+    let kernel = ProductionRankedKernelV1::new(
+        "finite_error",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            operations,
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .unwrap();
+    let obligation = normalized_numerical_refinement_hash_for_kernel_v2(
+        &kernel,
+        0,
+        4,
+        numerical,
+        functional_subjects(44),
+    )
+    .unwrap();
+    let changed = ProductionNumericalRefinementContractV2::new(
+        41,
+        local(actual),
+        local(reference),
+        local(domain),
+        local(precondition),
+        0.002_f64.to_bits(),
+        0.01_f64.to_bits(),
+    )
+    .unwrap();
+    assert_ne!(
+        obligation,
+        normalized_numerical_refinement_hash_for_kernel_v2(
+            &kernel,
+            0,
+            4,
+            changed,
+            functional_subjects(44),
+        )
+        .unwrap()
+    );
+
+    let (proof, imported, policy) = imported_reference(
+        functional_binding(44, obligation),
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+    );
+    let bound = kernel
+        .bind_functional_refinement_request_v2(0, 4, proof)
+        .unwrap();
+    let input = compile_ranked_kernel_for_lowering_v2(
+        construction(bound),
+        ProductionSessionLimitsV1::default(),
+        vec![imported],
+        policy,
+    )
+    .unwrap();
+    assert!(
+        input
+            .semantic_report()
+            .all_numerical_obligations_are_proved()
+    );
+    assert_eq!(input.semantic_report().numerical_obligation_count(), 1);
+}
+
+#[test]
+fn finite_error_contract_rejects_vacuous_and_nonfinite_bounds() {
+    let value = ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(0));
+    for (absolute, relative) in [
+        (0.0_f64, 0.0_f64),
+        (f64::NAN, 0.0_f64),
+        (f64::INFINITY, 0.0_f64),
+        (-1.0_f64, 0.0_f64),
+    ] {
+        assert_eq!(
+            ProductionNumericalRefinementContractV2::new(
+                1,
+                value,
+                value,
+                value,
+                value,
+                absolute.to_bits(),
+                relative.to_bits(),
+            ),
+            Err(ProductionRankedKernelErrorV1::InvalidReferenceContract)
+        );
+    }
 }
 
 #[test]

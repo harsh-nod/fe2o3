@@ -36,8 +36,9 @@ use dialect_kernel::{
     TensorLayoutOp, TrapOp,
 };
 use dialect_proof::{
-    CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, ProofIdAttr,
-    PropertyAttr, RequireEffectRefinementOp, RequireRefinementOp,
+    AbsoluteErrorF64BitsAttr, CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp,
+    ProofIdAttr, PropertyAttr, RelativeErrorF64BitsAttr, RequireEffectRefinementOp,
+    RequireNumericalRefinementOp, RequireRefinementOp,
 };
 use fe2o3_kernel_analysis::{
     HierarchicalOwnershipReportV1, MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_OPERATIONS,
@@ -295,6 +296,8 @@ impl ProductionReferenceProofV2 {
 const FUNCTIONAL_REFINEMENT_FORMULA_DOMAIN_V2: &[u8] =
     b"FE2O3/PLIRON/FUNCTIONAL-REFINEMENT-FORMULA/V2\0";
 const EFFECT_REFINEMENT_CONTRACT_DOMAIN_V2: &[u8] = b"FE2O3/PLIRON/EFFECT-REFINEMENT-CONTRACT/V2\0";
+const NUMERICAL_REFINEMENT_CONTRACT_DOMAIN_V2: &[u8] =
+    b"FE2O3/PLIRON/NUMERICAL-REFINEMENT-CONTRACT/V2\0";
 pub const MAX_PRODUCTION_RANKED_EFFECT_INDICES_V2: usize = MAX_RANKED_MEMORY_RANK;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -465,6 +468,99 @@ impl ProductionEffectRefinementContractV2 {
         ] {
             writer.value(tag, value);
         }
+        writer.finish()
+    }
+}
+
+/// Workload-neutral finite-error theorem over two typed semantic roots.
+///
+/// At every logical point where `domain && precondition`, the theorem means
+/// both floating results are finite and
+/// `abs(actual - reference) <= absolute + relative * abs(reference)`.
+/// Exceptional values therefore require a false precondition or a separate
+/// exact-bit relation; they cannot satisfy this finite-error claim.
+///
+/// Construction validates only the closed claim shape. Authority comes from a
+/// receipt whose obligation digest binds this contract to the complete ranked
+/// graph and exact MIR subjects.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductionNumericalRefinementContractV2 {
+    contract_identity: u64,
+    actual: ProductionRankedValueV1,
+    reference: ProductionRankedValueV1,
+    domain: ProductionRankedValueV1,
+    precondition: ProductionRankedValueV1,
+    absolute_error_f64_bits: u64,
+    relative_error_f64_bits: u64,
+}
+
+impl ProductionNumericalRefinementContractV2 {
+    pub fn new(
+        contract_identity: u64,
+        actual: ProductionRankedValueV1,
+        reference: ProductionRankedValueV1,
+        domain: ProductionRankedValueV1,
+        precondition: ProductionRankedValueV1,
+        absolute_error_f64_bits: u64,
+        relative_error_f64_bits: u64,
+    ) -> Result<Self, ProductionRankedKernelErrorV1> {
+        let absolute = f64::from_bits(absolute_error_f64_bits);
+        let relative = f64::from_bits(relative_error_f64_bits);
+        if contract_identity == 0
+            || !absolute.is_finite()
+            || !relative.is_finite()
+            || absolute < 0.0
+            || relative < 0.0
+            || (absolute == 0.0 && relative == 0.0)
+        {
+            return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+        }
+        Ok(Self {
+            contract_identity,
+            actual,
+            reference,
+            domain,
+            precondition,
+            absolute_error_f64_bits,
+            relative_error_f64_bits,
+        })
+    }
+
+    pub const fn contract_identity(self) -> u64 {
+        self.contract_identity
+    }
+    pub const fn actual(self) -> ProductionRankedValueV1 {
+        self.actual
+    }
+    pub const fn reference(self) -> ProductionRankedValueV1 {
+        self.reference
+    }
+    pub const fn domain(self) -> ProductionRankedValueV1 {
+        self.domain
+    }
+    pub const fn precondition(self) -> ProductionRankedValueV1 {
+        self.precondition
+    }
+    pub const fn absolute_error_f64_bits(self) -> u64 {
+        self.absolute_error_f64_bits
+    }
+    pub const fn relative_error_f64_bits(self) -> u64 {
+        self.relative_error_f64_bits
+    }
+
+    pub fn request_shape_hash(self) -> DigestV1 {
+        let mut writer = CanonicalRefinementDigestV2::new(NUMERICAL_REFINEMENT_CONTRACT_DOMAIN_V2);
+        writer.field(1, &self.contract_identity.to_le_bytes());
+        for (tag, value) in [
+            (2, self.actual),
+            (3, self.reference),
+            (4, self.domain),
+            (5, self.precondition),
+        ] {
+            writer.value(tag, value);
+        }
+        writer.field(6, &self.absolute_error_f64_bits.to_le_bytes());
+        writer.field(7, &self.relative_error_f64_bits.to_le_bytes());
         writer.finish()
     }
 }
@@ -640,6 +736,34 @@ pub fn normalized_effect_refinement_hash_for_kernel_v2(
     ] {
         writer.field(tag, &value.to_le_bytes());
     }
+    Ok(writer.finish())
+}
+
+/// Derives the exact finite-error obligation from the complete ranked graph.
+pub fn normalized_numerical_refinement_hash_for_kernel_v2(
+    kernel: &ProductionRankedKernelV1,
+    block_index: usize,
+    operation_index: usize,
+    contract: ProductionNumericalRefinementContractV2,
+    subjects: FunctionalRefinementSubjectsV2,
+) -> Result<DigestV1, ProductionRankedKernelErrorV1> {
+    let mut writer = CanonicalRefinementDigestV2::new(NUMERICAL_REFINEMENT_CONTRACT_DOMAIN_V2);
+    writer.kernel_header(kernel, block_index, operation_index, subjects);
+    writer.field(
+        12,
+        &super::middle_end_evidence_v4::derive_functional_refinement_graph_identity_v2(kernel),
+    );
+    writer.field(20, &contract.contract_identity.to_le_bytes());
+    for (tag, value) in [
+        (21, contract.actual),
+        (22, contract.reference),
+        (23, contract.domain),
+        (24, contract.precondition),
+    ] {
+        writer.value(tag, value);
+    }
+    writer.field(25, &contract.absolute_error_f64_bits.to_le_bytes());
+    writer.field(26, &contract.relative_error_f64_bits.to_le_bytes());
     Ok(writer.finish())
 }
 
@@ -1087,6 +1211,16 @@ pub enum ProductionRankedOperationV1 {
         contract: ProductionEffectRefinementContractV2,
         subjects: FunctionalRefinementSubjectsV2,
     },
+    /// Requires one authenticated finite-error theorem over exact typed roots.
+    RequireNumericalRefinement {
+        contract: ProductionNumericalRefinementContractV2,
+        proof: ProductionReferenceProofV2,
+    },
+    /// Generator input for a finite-error theorem before exact proof import.
+    RequestNumericalRefinement {
+        contract: ProductionNumericalRefinementContractV2,
+        subjects: FunctionalRefinementSubjectsV2,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1268,6 +1402,14 @@ impl ProductionRankedKernelV1 {
                     proof,
                 }
             }
+            ProductionRankedOperationV1::RequestNumericalRefinement { contract, subjects }
+                if *subjects == proof.binding().subjects() =>
+            {
+                ProductionRankedOperationV1::RequireNumericalRefinement {
+                    contract: *contract,
+                    proof,
+                }
+            }
             _ => return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract),
         };
         *operation = replacement;
@@ -1321,6 +1463,8 @@ impl ProductionRankedKernelV1 {
                                 | ProductionRankedOperationV1::RequireEffectRefinement { .. }
                                 | ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
                                 | ProductionRankedOperationV1::RequestEffectRefinement { .. }
+                                | ProductionRankedOperationV1::RequireNumericalRefinement { .. }
+                                | ProductionRankedOperationV1::RequestNumericalRefinement { .. }
                         ) => 3,
                         _ => 1,
                     })
@@ -2300,6 +2444,26 @@ fn validate_operation(
             }
             Ok(None)
         }
+        ProductionRankedOperationV1::RequireNumericalRefinement { contract, .. }
+        | ProductionRankedOperationV1::RequestNumericalRefinement { contract, .. } => {
+            let actual = require_typed_semantic(contract.actual(), argument_count, locals)?;
+            let reference = require_typed_semantic(contract.reference(), argument_count, locals)?;
+            let domain = require_typed_semantic(contract.domain(), argument_count, locals)?;
+            let precondition =
+                require_typed_semantic(contract.precondition(), argument_count, locals)?;
+            let boolean = (
+                ProductionSemanticScalarTypeV2::Bool,
+                ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+            );
+            if actual != reference
+                || !actual.0.is_float()
+                || domain != boolean
+                || precondition != boolean
+            {
+                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+            }
+            Ok(None)
+        }
     }
 }
 
@@ -2469,6 +2633,17 @@ fn validate_block_argument_values_v1(
                     contract.reference_value(),
                 ])
             {
+                validate(value)?;
+            }
+        }
+        ProductionRankedOperationV1::RequireNumericalRefinement { contract, .. }
+        | ProductionRankedOperationV1::RequestNumericalRefinement { contract, .. } => {
+            for value in [
+                contract.actual(),
+                contract.reference(),
+                contract.domain(),
+                contract.precondition(),
+            ] {
                 validate(value)?;
             }
         }
@@ -3198,6 +3373,44 @@ fn resolve_value(
     }
 }
 
+fn materialize_authenticated_refinement_header(
+    context: &mut pliron::context::Context,
+    block: Ptr<BasicBlock>,
+    retained: &[ProductionFunctionalRefinementEvidenceV2],
+    proof: &ProductionReferenceProofV2,
+) -> Result<ProofIdAttr, ProductionRankedKernelErrorV1> {
+    let imported = retained
+        .iter()
+        .find(|candidate| candidate.receipt_identity() == proof.receipt_identity())
+        .filter(|candidate| candidate.binding() == proof.binding())
+        .ok_or(ProductionRankedKernelErrorV1::Materialization(
+            "authenticated functional-refinement evidence was not retained",
+        ))?;
+    let [obligation_words, subject_words, model_words, evidence_words] =
+        authenticated_proof_ids(imported)?;
+    let obligation_id = ProofIdAttr::new(obligation_words);
+    ObligationOp::new(
+        context,
+        obligation_id.clone(),
+        ProofIdAttr::new(subject_words),
+        ProofIdAttr::new(model_words),
+        PropertyAttr::FunctionalRefinement,
+    )
+    .get_operation()
+    .insert_at_back(block, context);
+    EvidenceRefOp::new(
+        context,
+        ProofIdAttr::new(evidence_words),
+        obligation_id.clone(),
+        PropertyAttr::FunctionalRefinement,
+        EvidenceStatusAttr::Proved,
+        CoveredBoundaryAttr::Mir,
+    )
+    .get_operation()
+    .insert_at_back(block, context);
+    Ok(obligation_id)
+}
+
 fn materialize_operation(
     context: &mut pliron::context::Context,
     block: Ptr<BasicBlock>,
@@ -3700,33 +3913,12 @@ fn materialize_operation(
             expected,
             proof,
         } => {
-            let imported = authenticated_functional_refinement
-                .iter()
-                .find(|candidate| candidate.receipt_identity() == proof.receipt_identity())
-                .filter(|candidate| candidate.binding() == proof.binding())
-                .ok_or(ProductionRankedKernelErrorV1::Materialization(
-                    "authenticated functional-refinement evidence was not retained",
-                ))?;
-            let [obligation_words, subject_words, model_words, evidence_words] =
-                authenticated_proof_ids(imported)?;
-            let obligation_id = ProofIdAttr::new(obligation_words);
-            let obligation = ObligationOp::new(
+            let obligation_id = materialize_authenticated_refinement_header(
                 context,
-                obligation_id.clone(),
-                ProofIdAttr::new(subject_words),
-                ProofIdAttr::new(model_words),
-                PropertyAttr::FunctionalRefinement,
-            );
-            obligation.get_operation().insert_at_back(block, context);
-            let evidence = EvidenceRefOp::new(
-                context,
-                ProofIdAttr::new(evidence_words),
-                obligation_id.clone(),
-                PropertyAttr::FunctionalRefinement,
-                EvidenceStatusAttr::Proved,
-                CoveredBoundaryAttr::Mir,
-            );
-            evidence.get_operation().insert_at_back(block, context);
+                block,
+                authenticated_functional_refinement,
+                proof,
+            )?;
             let op = RequireRefinementOp::new(
                 context,
                 obligation_id,
@@ -3736,33 +3928,12 @@ fn materialize_operation(
             (op.get_operation(), None)
         }
         ProductionRankedOperationV1::RequireEffectRefinement { contract, proof } => {
-            let imported = authenticated_functional_refinement
-                .iter()
-                .find(|candidate| candidate.receipt_identity() == proof.receipt_identity())
-                .filter(|candidate| candidate.binding() == proof.binding())
-                .ok_or(ProductionRankedKernelErrorV1::Materialization(
-                    "authenticated effect-refinement evidence was not retained",
-                ))?;
-            let [obligation_words, subject_words, model_words, evidence_words] =
-                authenticated_proof_ids(imported)?;
-            let obligation_id = ProofIdAttr::new(obligation_words);
-            let obligation = ObligationOp::new(
+            let obligation_id = materialize_authenticated_refinement_header(
                 context,
-                obligation_id.clone(),
-                ProofIdAttr::new(subject_words),
-                ProofIdAttr::new(model_words),
-                PropertyAttr::FunctionalRefinement,
-            );
-            obligation.get_operation().insert_at_back(block, context);
-            let evidence = EvidenceRefOp::new(
-                context,
-                ProofIdAttr::new(evidence_words),
-                obligation_id.clone(),
-                PropertyAttr::FunctionalRefinement,
-                EvidenceStatusAttr::Proved,
-                CoveredBoundaryAttr::Mir,
-            );
-            evidence.get_operation().insert_at_back(block, context);
+                block,
+                authenticated_functional_refinement,
+                proof,
+            )?;
             let op = RequireEffectRefinementOp::new(
                 context,
                 obligation_id,
@@ -3811,8 +3982,28 @@ fn materialize_operation(
             );
             (op.get_operation(), None)
         }
+        ProductionRankedOperationV1::RequireNumericalRefinement { contract, proof } => {
+            let obligation_id = materialize_authenticated_refinement_header(
+                context,
+                block,
+                authenticated_functional_refinement,
+                proof,
+            )?;
+            let op = RequireNumericalRefinementOp::new(
+                context,
+                obligation_id,
+                AbsoluteErrorF64BitsAttr(contract.absolute_error_f64_bits()),
+                RelativeErrorF64BitsAttr(contract.relative_error_f64_bits()),
+                resolve_value(contract.actual(), arguments, locals, block_arguments)?,
+                resolve_value(contract.reference(), arguments, locals, block_arguments)?,
+                resolve_value(contract.domain(), arguments, locals, block_arguments)?,
+                resolve_value(contract.precondition(), arguments, locals, block_arguments)?,
+            );
+            (op.get_operation(), None)
+        }
         ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
-        | ProductionRankedOperationV1::RequestEffectRefinement { .. } => {
+        | ProductionRankedOperationV1::RequestEffectRefinement { .. }
+        | ProductionRankedOperationV1::RequestNumericalRefinement { .. } => {
             return Err(ProductionRankedKernelErrorV1::Materialization(
                 "unbound functional-refinement request cannot be materialized",
             ));
@@ -4642,7 +4833,8 @@ fn admit_functional_refinement_v2(
                     );
                 }
                 ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
-                | ProductionRankedOperationV1::RequestEffectRefinement { .. } => {
+                | ProductionRankedOperationV1::RequestEffectRefinement { .. }
+                | ProductionRankedOperationV1::RequestNumericalRefinement { .. } => {
                     return Err(ProductionFunctionalRefinementAdmissionErrorV2::UnboundRequest);
                 }
                 ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent {
@@ -4678,6 +4870,21 @@ fn admit_functional_refinement_v2(
                         proof.receipt_identity(),
                     )
                 })?;
+                    admit(proof, expected_digest)?;
+                }
+                ProductionRankedOperationV1::RequireNumericalRefinement { contract, proof } => {
+                    let expected_digest = normalized_numerical_refinement_hash_for_kernel_v2(
+                        kernel,
+                        block_index,
+                        operation_index,
+                        *contract,
+                        proof.binding().subjects(),
+                    )
+                    .map_err(|_| {
+                        ProductionFunctionalRefinementAdmissionErrorV2::ObligationEffectDigestMismatch(
+                            proof.receipt_identity(),
+                        )
+                    })?;
                     admit(proof, expected_digest)?;
                 }
                 _ => {}
