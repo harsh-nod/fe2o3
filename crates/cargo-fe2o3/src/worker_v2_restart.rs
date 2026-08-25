@@ -55,6 +55,7 @@ use sha2::{Digest, Sha256};
 use crate::worker_v2_artifact_container::{
     WorkerV2ArtifactContainerAssemblyErrorV1, derive_required_worker_v2_publication_plan_v1,
 };
+use crate::worker_v2_envelope_mode::WorkerV2EnvelopeModeV1;
 
 const MARKER_MAGIC: &[u8] = b"FE2O3-CARGO-WORKER-V2-RESUME-V1\0";
 const LEGACY_MARKER_VERSION: u16 = 1;
@@ -144,28 +145,6 @@ fn count_restart_artifact_entry(entries: &mut usize, name: &[u8]) -> Result<bool
         .filter(|entries| *entries <= MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1)
         .ok_or(())?;
     Ok(true)
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorkerV2EnvelopeModeV1 {
-    /// Preserve the inert HSACO publication flow without claiming load or launch authority.
-    NonAuthoritative,
-    /// Require a canonical inert envelope before the attempt can complete.
-    Required,
-}
-
-impl WorkerV2EnvelopeModeV1 {
-    pub(crate) const fn is_required(self) -> bool {
-        matches!(self, Self::Required)
-    }
-
-    pub(crate) const fn grants_load_authority(self) -> bool {
-        false
-    }
-
-    pub(crate) const fn grants_launch_authority(self) -> bool {
-        false
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

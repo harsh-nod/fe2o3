@@ -44,10 +44,11 @@ mod platform {
     use std::thread::{self, JoinHandle};
     use std::time::{Duration, Instant};
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    use fe2o3_artifact_transaction::BrokeredInvocationCapabilityClaimV1;
     use fe2o3_artifact_transaction::{
         BROKERED_INVOCATION_ADMITTED_V1, BROKERED_INVOCATION_PREPARED_V1,
-        BROKERED_INVOCATION_REQUEST_BYTES_V1, BrokeredInvocationCapabilityClaimV1,
-        BrokeredInvocationCapabilityRequestV1, BuildSession,
+        BROKERED_INVOCATION_REQUEST_BYTES_V1, BrokeredInvocationCapabilityRequestV1, BuildSession,
     };
     use fe2o3_process_identity::LinuxObjectIdentityV3;
     use rustix::net::{
@@ -1218,6 +1219,7 @@ mod platform {
             )
         }
 
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         pub(crate) fn prepare(
             &self,
             claim: BrokeredInvocationCapabilityClaimV1,

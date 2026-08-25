@@ -23,6 +23,10 @@ use fe2o3_worker_v2_bundle::{ExactRawHsacoV1, WorkerV2EnvelopeInputsV1};
 mod worker_v2_artifact_container;
 
 #[allow(dead_code)]
+#[path = "../../src/worker_v2_envelope_mode.rs"]
+mod worker_v2_envelope_mode;
+
+#[allow(dead_code)]
 #[path = "../../src/worker_v2_restart.rs"]
 mod worker_v2_restart;
 

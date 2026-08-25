@@ -1,10 +1,17 @@
 use std::ffi::{OsStr, OsString};
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::File;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use std::fs::OpenOptions;
+use std::io::Read;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use std::os::unix::fs::OpenOptionsExt;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use std::path::Path;
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use fe2o3_artifact_transaction::BuildAttempt;
 use rustix::fs::{AtFlags, FileType, Mode, OFlags, fstat, fsync, openat, unlinkat};
 
@@ -15,6 +22,7 @@ const CAPTURE_SUFFIX: &str = ".kir6";
 const MAX_CAPTURE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_CAPTURE_ENTRIES: usize = 2;
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn publish(
     output_dir: &Path,
     attempt: BuildAttempt,

@@ -11,31 +11,37 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use crate::production_release::{
     ExactRowSoftmaxV1CaseV1, RowSoftmaxV1MaskProfileV1, RowSoftmaxV1ReleaseWorkloadV1,
 };
 use crate::protected_compiler_handoff_v3::ParentConsumedProductionHandoff;
+use fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV3;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use fe2o3_artifact_transaction::{
-    CompilerModuleHandoffReceiptV3, ConsumedCompilerModuleHandoffV1,
-    ConsumedCompilerModuleHandoffV2,
+    ConsumedCompilerModuleHandoffV1, ConsumedCompilerModuleHandoffV2,
 };
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3;
 use fe2o3_hsaco_finalize::{
-    ContentIdentityV1, FirstBuildWorkerV2Error, InertFirstBuildWorkerV2EvidenceV1,
-    InertProtectedFirstBuildWorkerV2EvidenceV1, InertProtectedFirstBuildWorkerV3EvidenceV1,
-    LinkOptionV1, LinkPlanError, MAX_LINK_INPUTS, PinnedWorkerV1,
-    PreparedProtectedFirstBuildWorkerV3PreflightV1, ProtectedFirstBuildWorkerV2Error,
-    ProtectedFirstBuildWorkerV3Error, ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT,
-    RowSoftmaxV1DirectWorkerPinsV1, RowSoftmaxV1OcmlProviderPinsV1, RowSoftmaxV1ProviderManifestV1,
-    WorkerExecutionError, WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1,
-    WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerProtocolError,
-    execute_preflighted_protected_reproducible_first_build_worker_v3,
-    execute_protected_reproducible_first_build_worker_v2,
+    ContentIdentityV1, InertProtectedFirstBuildWorkerV3EvidenceV1, LinkOptionV1, LinkPlanError,
+    MAX_LINK_INPUTS, PinnedWorkerV1, PreparedProtectedFirstBuildWorkerV3PreflightV1,
+    ProtectedFirstBuildWorkerV3Error, WorkerExecutionError, WorkerExecutionLimitsV1,
+    WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1,
+    WorkerProtocolError, execute_preflighted_protected_reproducible_first_build_worker_v3,
     execute_protected_reproducible_first_build_worker_v3,
-    execute_reproducible_first_build_worker_v2,
     preflight_protected_reproducible_first_build_worker_v3,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use fe2o3_hsaco_finalize::{
+    FirstBuildWorkerV2Error, InertFirstBuildWorkerV2EvidenceV1,
+    InertProtectedFirstBuildWorkerV2EvidenceV1, ProtectedFirstBuildWorkerV2Error,
+    ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT, RowSoftmaxV1DirectWorkerPinsV1,
+    RowSoftmaxV1OcmlProviderPinsV1, RowSoftmaxV1ProviderManifestV1,
+    execute_protected_reproducible_first_build_worker_v2,
+    execute_reproducible_first_build_worker_v2,
+};
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use fe2o3_verifier::{
     GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256, MAX_GENERAL_GEMM_PROOF_TIMEOUT_SECONDS_V1,
 };
@@ -44,23 +50,29 @@ use rustix::fs::{FileType, Mode, OFlags, fstat, open};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-pub(crate) use crate::worker_v2_restart::WorkerV2EnvelopeModeV1;
+pub(crate) use crate::worker_v2_envelope_mode::WorkerV2EnvelopeModeV1;
 
 pub(crate) const QUALIFICATION_ORACLE_ENV: &str = "FE2O3_QUALIFICATION_ORACLE_V1";
 const OBSOLETE_CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 pub(crate) const WORKER_V2_CONFIG_ENV: &str = "FE2O3_WORKER_V2_CONFIG_V2";
 pub(crate) const WORKER_V2_EXPECTED_ID_ENV: &str = "FE2O3_WORKER_V2_EXPECTED_ID_V1";
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) const GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV: &str =
     "FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT";
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) const GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV: &str =
     "FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256";
 pub(crate) const WORKER_V2_SOURCE_DEBUG_PROFILE_ENV: &str =
     "FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1";
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const WORKER_V2_PIPELINE: &str = "kernel-ir-worker-v2";
 const PRODUCTION_CONFIG_PROFILE_ID_V1: &str = "production-v1";
 pub(crate) const OBSOLETE_PRODUCTION_SELECTOR: &str = PRODUCTION_CONFIG_PROFILE_ID_V1;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const SCALAR_GEMM_V1_PIPELINE: &str = "collected-scalar-gemm-v1";
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const ROW_SOFTMAX_V1_PIPELINE: &str = "collected-row-softmax-v1";
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) const GENERAL_GEMM_V1_PIPELINE: &str = "collected-general-gemm-v1";
 const CONFIG_FORMAT: &str = "fe2o3-worker-v2-config-v2";
 const S09_ALPHA_DEBUG_PROFILE: &str = "s09-alpha-gfx942-o0-v1";
@@ -119,6 +131,7 @@ const PROVIDER_KEYS: &[&str] = &["byte_len", "kind", "path", "sha256"];
 const OPTION_KEYS: &[&str] = &["name", "value"];
 const LIMIT_KEYS: &[&str] = &["stderr_bytes", "stdout_bytes", "timeout_ms"];
 const UNIT_KEYS: &[&str] = &["crate_name", "source", "working_directory"];
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const ROW_SOFTMAX_V1_KEYS: &[&str] = &[
     "case",
     "comparison_policy",
@@ -131,12 +144,14 @@ const ROW_SOFTMAX_V1_KEYS: &[&str] = &[
     "provider_stable_crate_id",
     "row_elements",
 ];
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const GENERAL_GEMM_V1_KEYS: &[&str] = &[
     "profile",
     "proof_timeout_seconds",
     "runtime_closure_v2_manifest_sha256",
     "runtime_closure_v2_root",
 ];
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const GENERAL_GEMM_QUALIFICATION_PAIR_PROFILE_V1: &str = "qualification-pair-v1";
 const REQUIRED_OPTIONS: &[(&str, &[&str])] = &[
     ("code-object-version", &["4", "5", "6"]),
@@ -171,6 +186,7 @@ struct ConfiguredUnit {
 }
 
 pub(crate) struct PreparedWorkerV2Config {
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     manifest_path: PathBuf,
     identity: WorkerV2ConfigIdentity,
     profile: WorkerConfigProfile,
@@ -182,11 +198,14 @@ pub(crate) struct PreparedWorkerV2Config {
     candidate_output: WorkerOutputConstraintsV1,
     limits: WorkerExecutionLimitsV1,
     source_debug_profile: Option<WorkerV2SourceDebugProfileV1>,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     row_softmax_v1: Option<PreparedRowSoftmaxV1Config>,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     general_gemm_v1: Option<PreparedGeneralGemmV1Config>,
     units: Vec<ConfiguredUnit>,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PreparedGeneralGemmV1Config {
     runtime_closure_v2_root: PathBuf,
@@ -194,6 +213,7 @@ pub(crate) struct PreparedGeneralGemmV1Config {
     proof_timeout_seconds: u32,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl PreparedGeneralGemmV1Config {
     pub(crate) fn runtime_closure_v2_root(&self) -> &Path {
         &self.runtime_closure_v2_root
@@ -208,6 +228,7 @@ impl PreparedGeneralGemmV1Config {
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) struct PreparedRowSoftmaxV1Config {
     provider: RowSoftmaxV1ProviderManifestV1,
     ocml: RowSoftmaxV1OcmlProviderPinsV1,
@@ -217,6 +238,7 @@ pub(crate) struct PreparedRowSoftmaxV1Config {
     comparison_policy: String,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl PreparedRowSoftmaxV1Config {
     pub(crate) const fn provider(&self) -> RowSoftmaxV1ProviderManifestV1 {
         self.provider
@@ -253,14 +275,19 @@ pub(crate) enum WorkerV2SourceDebugProfileV1 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WorkerConfigProfile {
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     General,
     Production,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     ScalarGemmV1,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     RowSoftmaxV1,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     GeneralGemmV1,
 }
 
 impl WorkerConfigProfile {
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     fn from_environment_value(value: &OsStr) -> Option<Self> {
         if value == WORKER_V2_PIPELINE {
             Some(Self::General)
@@ -277,10 +304,14 @@ impl WorkerConfigProfile {
 
     const fn environment_value(self) -> &'static str {
         match self {
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::General => WORKER_V2_PIPELINE,
             Self::Production => PRODUCTION_CONFIG_PROFILE_ID_V1,
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::ScalarGemmV1 => SCALAR_GEMM_V1_PIPELINE,
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::RowSoftmaxV1 => ROW_SOFTMAX_V1_PIPELINE,
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::GeneralGemmV1 => GENERAL_GEMM_V1_PIPELINE,
         }
     }
@@ -295,8 +326,11 @@ pub(crate) fn production_compilation_selected(profile: Option<&OsStr>) -> bool {
 pub(crate) enum WorkerV2CompileEnvironmentProfileV1 {
     ProductionGfx942,
     S09AlphaGfx942O0,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     ScalarGemmV1Gfx942,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     RowSoftmaxV1Gfx942,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     GeneralGemmV1Gfx942,
 }
 
@@ -376,10 +410,18 @@ impl PreparedWorkerV2Config {
         let selected = if production_compilation_selected(profile) {
             Some(WorkerConfigProfile::Production)
         } else {
-            profile.and_then(WorkerConfigProfile::from_environment_value)
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+            {
+                profile.and_then(WorkerConfigProfile::from_environment_value)
+            }
+            #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+            {
+                None
+            }
         };
         match (selected, config_path) {
             (None, None) => Ok(None),
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             (Some(WorkerConfigProfile::RowSoftmaxV1), None) => Ok(None),
             (None, Some(_)) => Err(WorkerV2ConfigError::UnexpectedConfiguration),
             (Some(_), None) => Err(WorkerV2ConfigError::MissingConfiguration),
@@ -402,6 +444,7 @@ impl PreparedWorkerV2Config {
         profile: WorkerConfigProfile,
     ) -> Result<Self, WorkerV2ConfigError> {
         require_absolute_path(path, "configuration")?;
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         if profile == WorkerConfigProfile::GeneralGemmV1 {
             require_closed_child_manifest_path(path, "configuration")?;
         }
@@ -438,6 +481,7 @@ impl PreparedWorkerV2Config {
         let limits = parse_limits(required_value(root, "limits", "configuration")?)?;
         let units = parse_units(required_value(root, "units", "configuration")?)?;
         let (envelope_mode, envelope_inputs) = parse_envelope_inputs(root)?;
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         let row_softmax_v1 = parse_row_softmax_v1(
             root,
             profile,
@@ -447,6 +491,7 @@ impl PreparedWorkerV2Config {
             envelope_mode,
             &candidate_output,
         )?;
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         let general_gemm_v1 = parse_general_gemm_v1(
             root,
             profile,
@@ -465,6 +510,7 @@ impl PreparedWorkerV2Config {
             envelope_inputs.as_ref(),
         );
         Ok(Self {
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             manifest_path: path.to_path_buf(),
             identity,
             profile,
@@ -476,7 +522,9 @@ impl PreparedWorkerV2Config {
             candidate_output,
             limits,
             source_debug_profile,
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             row_softmax_v1,
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             general_gemm_v1,
             units,
         })
@@ -486,6 +534,7 @@ impl PreparedWorkerV2Config {
         self.identity
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) fn manifest_path(&self) -> &Path {
         &self.manifest_path
     }
@@ -499,31 +548,50 @@ impl PreparedWorkerV2Config {
     }
 
     pub(crate) const fn requires_expected_identity(&self) -> bool {
-        self.source_debug_profile.is_some()
-            || matches!(
+        if self.source_debug_profile.is_some() {
+            return true;
+        }
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        {
+            matches!(
                 self.profile,
                 WorkerConfigProfile::ScalarGemmV1
                     | WorkerConfigProfile::RowSoftmaxV1
                     | WorkerConfigProfile::GeneralGemmV1
             )
+        }
+        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+        {
+            false
+        }
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) const fn row_softmax_v1(&self) -> Option<&PreparedRowSoftmaxV1Config> {
         self.row_softmax_v1.as_ref()
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) const fn general_gemm_v1(&self) -> Option<&PreparedGeneralGemmV1Config> {
         self.general_gemm_v1.as_ref()
     }
 
     pub(crate) const fn executes_worker_in_rustc(&self) -> bool {
-        matches!(self.profile, WorkerConfigProfile::GeneralGemmV1)
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        {
+            matches!(self.profile, WorkerConfigProfile::GeneralGemmV1)
+        }
+        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+        {
+            false
+        }
     }
 
     pub(crate) const fn is_production_compilation(&self) -> bool {
         matches!(self.profile, WorkerConfigProfile::Production)
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) fn row_softmax_v1_worker_pins(
         &self,
     ) -> Result<RowSoftmaxV1DirectWorkerPinsV1, WorkerV2ConfigError> {
@@ -552,16 +620,25 @@ impl PreparedWorkerV2Config {
             return None;
         }
         if self.profile == WorkerConfigProfile::Production {
-            Some(WorkerV2CompileEnvironmentProfileV1::ProductionGfx942)
-        } else if self.source_debug_profile.is_some() {
-            Some(WorkerV2CompileEnvironmentProfileV1::S09AlphaGfx942O0)
-        } else if self.profile == WorkerConfigProfile::ScalarGemmV1 {
-            Some(WorkerV2CompileEnvironmentProfileV1::ScalarGemmV1Gfx942)
-        } else if self.profile == WorkerConfigProfile::RowSoftmaxV1 {
-            Some(WorkerV2CompileEnvironmentProfileV1::RowSoftmaxV1Gfx942)
-        } else if self.profile == WorkerConfigProfile::GeneralGemmV1 {
-            Some(WorkerV2CompileEnvironmentProfileV1::GeneralGemmV1Gfx942)
-        } else {
+            return Some(WorkerV2CompileEnvironmentProfileV1::ProductionGfx942);
+        }
+        if self.source_debug_profile.is_some() {
+            return Some(WorkerV2CompileEnvironmentProfileV1::S09AlphaGfx942O0);
+        }
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        {
+            if self.profile == WorkerConfigProfile::ScalarGemmV1 {
+                Some(WorkerV2CompileEnvironmentProfileV1::ScalarGemmV1Gfx942)
+            } else if self.profile == WorkerConfigProfile::RowSoftmaxV1 {
+                Some(WorkerV2CompileEnvironmentProfileV1::RowSoftmaxV1Gfx942)
+            } else if self.profile == WorkerConfigProfile::GeneralGemmV1 {
+                Some(WorkerV2CompileEnvironmentProfileV1::GeneralGemmV1Gfx942)
+            } else {
+                None
+            }
+        }
+        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+        {
             None
         }
     }
@@ -590,6 +667,7 @@ impl PreparedWorkerV2Config {
         }
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) fn load_envelope_inputs(
         &self,
     ) -> Result<Option<WorkerV2EnvelopeInputsV1>, WorkerV2ConfigError> {
@@ -631,6 +709,7 @@ impl PreparedWorkerV2Config {
             .is_ok()
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) fn execute(
         &self,
         consumed: ConsumedCompilerModuleHandoffV1,
@@ -645,6 +724,7 @@ impl PreparedWorkerV2Config {
         )
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) fn execute_protected(
         &self,
         consumed: ConsumedCompilerModuleHandoffV2,
@@ -710,6 +790,7 @@ impl PreparedWorkerV2Config {
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn parse_general_gemm_v1(
     root: &Map<String, Value>,
     profile: WorkerConfigProfile,
@@ -810,6 +891,7 @@ fn parse_general_gemm_v1(
     }))
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn parse_row_softmax_v1(
     root: &Map<String, Value>,
     profile: WorkerConfigProfile,
@@ -987,6 +1069,7 @@ fn parse_envelope_inputs(
 }
 
 impl ConfiguredEnvelopeInputs {
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     fn load(&self) -> Result<WorkerV2EnvelopeInputsV1, WorkerV2ConfigError> {
         if let Some(inputs) = &self.pinned {
             return Ok(inputs.as_ref().clone());
@@ -1093,10 +1176,22 @@ impl fmt::Display for WorkerV2ConfigError {
                 formatter,
                 "a Worker V2 codegen profile requires {WORKER_V2_CONFIG_ENV}"
             ),
-            Self::UnexpectedConfiguration => write!(
-                formatter,
-                "{WORKER_V2_CONFIG_ENV} is valid only when {QUALIFICATION_ORACLE_ENV} is unset for production compilation or exactly {WORKER_V2_PIPELINE}, {SCALAR_GEMM_V1_PIPELINE}, {ROW_SOFTMAX_V1_PIPELINE}, or {GENERAL_GEMM_V1_PIPELINE}"
-            ),
+            Self::UnexpectedConfiguration => {
+                #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+                {
+                    write!(
+                        formatter,
+                        "{WORKER_V2_CONFIG_ENV} is valid only when {QUALIFICATION_ORACLE_ENV} is unset for production compilation or exactly {WORKER_V2_PIPELINE}, {SCALAR_GEMM_V1_PIPELINE}, {ROW_SOFTMAX_V1_PIPELINE}, or {GENERAL_GEMM_V1_PIPELINE}"
+                    )
+                }
+                #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+                {
+                    write!(
+                        formatter,
+                        "{WORKER_V2_CONFIG_ENV} is valid only when {QUALIFICATION_ORACLE_ENV} is unset for production compilation"
+                    )
+                }
+            }
             Self::Io { kind, path, error } => {
                 write!(
                     formatter,
@@ -1421,6 +1516,7 @@ fn require_absolute_path(path: &Path, context: &str) -> Result<(), WorkerV2Confi
     Ok(())
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn require_closed_child_manifest_path(
     path: &Path,
     context: &str,
@@ -1591,6 +1687,7 @@ fn decode_sha256(value: &str, context: &str) -> Result<[u8; 32], WorkerV2ConfigE
     Ok(bytes)
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn decode_fixed_hex<const N: usize>(
     value: &str,
     context: &str,
@@ -1612,6 +1709,7 @@ fn decode_fixed_hex<const N: usize>(
     Ok(bytes)
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn decode_identity_array<const COUNT: usize, const WIDTH: usize>(
     value: &Value,
     context: &str,

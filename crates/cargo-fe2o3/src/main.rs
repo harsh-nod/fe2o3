@@ -28,12 +28,21 @@ mod pinned_executable;
 #[cfg(test)]
 mod pinned_executable_test_directory;
 mod process_execution;
-#[cfg(feature = "legacy-hsa-runtime")]
+#[cfg(all(
+    feature = "legacy-hsa-runtime",
+    any(test, feature = "qualification-oracles-test-only")
+))]
 #[path = "../../../examples/row_softmax_v1/src/production_release.rs"]
 mod production_release;
-#[cfg(not(feature = "legacy-hsa-runtime"))]
+#[cfg(all(
+    not(feature = "legacy-hsa-runtime"),
+    any(test, feature = "qualification-oracles-test-only")
+))]
 mod production_release_no_hardware;
-#[cfg(not(feature = "legacy-hsa-runtime"))]
+#[cfg(all(
+    not(feature = "legacy-hsa-runtime"),
+    any(test, feature = "qualification-oracles-test-only")
+))]
 use production_release_no_hardware as production_release;
 mod project;
 mod protected_compiler_handoff_v3;
@@ -45,7 +54,10 @@ mod tool_commands;
 #[path = "../../../examples/row_softmax_v1/src/verification_certificate.rs"]
 mod verification_certificate;
 mod worker_v2;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod worker_v2_artifact_container;
+mod worker_v2_envelope_mode;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod worker_v2_restart;
 
 use std::env;

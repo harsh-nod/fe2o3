@@ -11,10 +11,16 @@ description = "Cargo subcommand for fe2o3."
 [features]
 compiler-handoff-observation-test-only = []
 qualification-oracles-test-only = []
-worker-v2-fault-injection-test-only = []
-legacy-hsa-runtime = ["dep:fe2o3-core", "dep:fe2o3-hsa-runtime", "dep:fe2o3-host"]
+worker-v2-fault-injection-test-only = ["qualification-oracles-test-only"]
+legacy-hsa-runtime = [
+    "qualification-oracles-test-only",
+    "dep:fe2o3-core",
+    "dep:fe2o3-hsa-runtime",
+    "dep:fe2o3-host",
+]
 host-consumer-fixture = ["legacy-hsa-runtime", "fe2o3-host/hardware-test-hooks"]
 worker-v3-envelope-integration-test-only = [
+    "qualification-oracles-test-only",
     "legacy-hsa-runtime",
     "dep:fe2o3-scalar-gemm-v1",
     "fe2o3-host/hardware-test-hooks",

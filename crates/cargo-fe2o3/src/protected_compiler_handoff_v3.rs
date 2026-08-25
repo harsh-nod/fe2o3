@@ -3,12 +3,16 @@ use std::fmt;
 use std::path::Path;
 
 use fe2o3_artifact_transaction::{
-    BuildAttempt, CompilerModuleHandoffErrorV2, CompilerModuleHandoffErrorV3,
-    CompilerModuleHandoffReceiptV3, ConsumedCompilerModuleHandoffV2,
+    BuildAttempt, CompilerModuleHandoffErrorV3, CompilerModuleHandoffReceiptV3,
     ConsumedCompilerModuleHandoffV3, ProducerIdentity,
-    acquire_compiler_module_handoff_currentness_lease_v3, consume_compiler_module_handoff_v2,
+    acquire_compiler_module_handoff_currentness_lease_v3,
     consume_compiler_module_handoff_with_currentness_v3,
     recover_compiler_module_handoff_receipt_v3,
+};
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use fe2o3_artifact_transaction::{
+    CompilerModuleHandoffErrorV2, ConsumedCompilerModuleHandoffV2,
+    consume_compiler_module_handoff_v2,
 };
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_closure_capability::RustcInvocationCapabilityV1;
@@ -241,6 +245,7 @@ impl ProductionCompilerModuleHandoffIntake {
 
 /// Legacy protected V2 transport retained only for explicit qualification
 /// routes. It is not selectable from the production intake.
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn consume_qualification_compiler_module_handoff_v2(
     output_dir: &Path,
     producer: &ProducerIdentity,
