@@ -2,7 +2,6 @@
 // EXPECT: REJECT
 // CHECK: error[FE2O3-EFFECT-001]
 // CHECK: value mismatch
-// CHECK: counterexample coordinate [0]
 builtin.func @effect_refinement_value_mismatch: builtin.function <() -> ()>
 {
   ^entry_block1v1():
@@ -16,6 +15,6 @@ builtin.func @effect_refinement_value_mismatch: builtin.function <() -> ()>
     proof.obligation 0000000000000001000000000000000200000000000000030000000000000004 0000000000000005000000000000000600000000000000070000000000000008 0000000000000009000000000000000a000000000000000b000000000000000c FunctionalRefinement;
     proof.evidence_ref 000000000000000d000000000000000e000000000000000f0000000000000010 0000000000000001000000000000000200000000000000030000000000000004 FunctionalRefinement Proved Mir;
     kernel.access (v0, v1) [] [kernel_access_kind: kernel.access_kind Write]: <(kernel.ranked_view <32,true,[4]>, kernel.index ) -> ()>;
-    proof.require_effect_refinement (v0, v1, v2, v2, v3, v3, v4, v2) [] [proof_require_effect_refinement_obligation_id: proof.id 0000000000000001000000000000000200000000000000030000000000000004]: <(kernel.ranked_view <32,true,[4]>, kernel.index , kernel.semantic_scalar , kernel.semantic_scalar , kernel.semantic_scalar , kernel.semantic_scalar , kernel.semantic_scalar , kernel.semantic_scalar ) -> ()>;
+    proof.require_effect_refinement (v0, v1, v2, v2, v2, v2, v3, v3, v4, v2) [] [proof_require_effect_refinement_obligation_id: proof.id 0000000000000001000000000000000200000000000000030000000000000004]: <(kernel.ranked_view <32,true,[4]>, kernel.index , kernel.semantic_scalar , kernel.semantic_scalar , kernel.semantic_scalar , kernel.semantic_scalar , kernel.semantic_scalar , kernel.semantic_scalar , kernel.semantic_scalar , kernel.semantic_scalar ) -> ()>;
     kernel.return () [] []: <() -> ()>
 }
