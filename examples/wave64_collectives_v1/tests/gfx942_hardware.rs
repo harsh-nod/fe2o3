@@ -1,5 +1,7 @@
 #![cfg(target_os = "linux")]
 
+#![cfg(feature = "qualification-oracles-test-only")]
+
 use fe2o3_artifact_transaction::{
     BuildInvocation, BuildSession, ConsumedCompilerModuleHandoffV1, ProducerIdentity,
     begin_build_attempt, consume_compiler_module_handoff_v1, publish_compiler_module_handoff_v1,

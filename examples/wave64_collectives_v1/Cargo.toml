@@ -11,6 +11,12 @@ publish = false
 # compiler/Worker/finalizer input without widening the root workspace graph.
 [workspace]
 
+[features]
+qualification-oracles-test-only = [
+    "fe2o3-host/qualification-oracles-test-only",
+    "fe2o3-hsa-runtime/qualification-oracles-test-only",
+]
+
 [dependencies]
 fe2o3-device = { path = "../../crates/fe2o3-device" }
 fe2o3-host = { path = "../../crates/fe2o3-host" }

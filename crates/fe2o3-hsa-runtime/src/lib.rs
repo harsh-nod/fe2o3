@@ -11,6 +11,7 @@ mod lifecycle;
 mod moe_top2_resource_observation;
 mod row_softmax_resource_observation;
 mod sys;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod wave64_collectives_resource_observation;
 mod workgroup_sync_resource_observation;
 

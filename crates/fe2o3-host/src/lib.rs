@@ -24,7 +24,9 @@ mod generated_row_softmax_v1;
 mod generated_scalar_gemm_v1;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_vecadd;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_wave64_collectives_v1;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_wave64_collectives_v1_lifecycle;
 #[cfg(test)]
 mod generated_wave64_collectives_v1_lifecycle_tests;
@@ -278,10 +280,12 @@ pub use generated_vecadd::{
     GeneratedVecAddKernelV1, GeneratedVecAddLoadError, GeneratedVecAddPrepareError,
     GeneratedVecAddPreparedV1, GeneratedVecAddProfileError,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_wave64_collectives_v1::{
     GeneratedWave64CollectivesV1HostAdapterErrorV1, GeneratedWave64CollectivesV1HostAdapterV1,
     Wave64CollectivesBufferRoleV1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_wave64_collectives_v1_lifecycle::{
     CompletedWave64CollectivesV1, JoinedWave64CollectivesV1, LoadedWave64CollectivesV1,
     ReviewedWave64CollectivesRuntimeAdapterV1, UnloadedWave64CollectivesV1,
