@@ -50,19 +50,18 @@ and backend digests.
 
 ### Compiler provenance wiring
 
-| Boundary | Current state through `f001409c70` | Remaining production wiring |
+| Boundary | Current state | Remaining production wiring |
 |---|---|---|
-| Protected release and Cargo broker | The release contract validates `CompilerClosureV2`; the broker transfers a sealed raw closure capability to the binding wrapper. | Preserve that admitted closure through every later protected boundary. |
-| Exact rustc invocation | The wrapper constructs and seals V3 for protected captures and installs its exact immutable image at fd 199 for rustc. V2 capture remains for compatibility and receives no fd 199 capability. | Admit V3 inside the backend and compare its argv, cwd, complete environment, role-specific pins, target, and full closure with the live process. |
-| Compiler module handoff | Closure-bound V2 publish/consume records and APIs exist on the shared V1/V2 handoff engine. | Switch the protected producer and consumer call sites from V1 to V2. |
-| Worker publication restart | Closure-bound V2 persist/recover/clear records and APIs exist on the shared V1/V2 publication-intent engine. | Wire V2 into the protected publication and restart call sites and their restart-marker state. |
-| Compatibility | Frozen V1 closure, invocation, handoff, and publication-intent surfaces remain available; current production call sites still use V1 where noted above. | Migrate callers explicitly without changing V1 wire formats or silently upgrading V1 records. |
+| Protected release and Cargo broker | The release contract validates `CompilerClosureV2`; the broker transfers a sealed raw closure capability to the binding wrapper. | Preserve the admitted closure through application handoff and runtime authorization. |
+| Exact rustc invocation | The wrapper constructs and seals V3 for production, installs its immutable image at fd 199, retains parent custody, and the backend revalidates argv, cwd, environment, target, role pins, and closure before V3 publication. Qualification V2 captures receive no fd 199 capability and are not retained as production custody. | Extend archived end-to-end evidence across the final application process boundary. |
+| Compiler module handoff | Production has one mandatory protected-custody path and one V3 publication/consumption transaction. The ordinary publication branch and runtime schema selector are deleted. | Keep V1/V2 consumers confined to explicit qualification code until their oracles retire. |
+| Worker publication restart | `ManagedProductionBuild` has only `Fresh`, `Recovered`, and `Ready` states. It performs strict V3 preflight, one-shot consumption, direct LLVM/LLD execution, independent inspection, durable publication, and load-readiness recovery. | Join generated host interfaces and runtime authorization to the recovered production artifact. |
+| Qualification isolation | Backend workload oracles and extraction drivers require `qualification-oracles-test-only`; their binaries and integration targets are absent from a feature-free build. Cargo labels V1/V2 transport and restart work as qualification and keeps it outside the production state machine. | Put the remaining Cargo qualification work behind an equivalent test-only feature, then delete each oracle after differential migration. |
 
-The broker-to-wrapper raw closure capability is not the rustc invocation
-capability and stops at the wrapper. Until backend V3 admission and the
-protected V2 handoff and restart call sites are connected, the sealed transport
-is coordination evidence, not end-to-end compiler provenance or production
-readiness.
+Version suffixes remain on serialized records, identity domains, receipts, and
+external protocol types. Private production methods and states are unversioned
+because there is only one implementation. A new production schema must be an
+explicit migration of the same transaction, never a selectable pipeline.
 
 The implementation uses one move-only typestate owner, conceptually
 `ProductionCompilationV1<'tcx, Stage>`. A transition consumes the previous
@@ -283,10 +282,13 @@ backend; each requires a backend built with
 
 The 2026-08-20 compiler review made this distinction structural. Qualification
 names now come from one table, every route has an explicit production-or-oracle
-purpose, and a test proves that only `production-v1` is production-capable.
-Shared oracle collection and frontend-record validation do not weaken the
-boundary: `ProductionCompilationV1` still receives only the move-only production
-closure and cannot call the oracle helper. See
+purpose, and tests prove that only the unselected production route is
+production-capable. The backend has one protected publication call, Cargo has
+one production intake without a schema selector, and production recovery is a
+separate state machine from V1/V2 qualification recovery. Shared oracle
+collection and frontend-record validation do not weaken the boundary:
+`ProductionCompilationV1` still receives only the move-only production closure
+and cannot call the oracle helper. See
 `compiler-convergence-review-2026-08-20.md` for the deletion inventory and
 remaining complexity bounds.
 

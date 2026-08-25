@@ -14,7 +14,7 @@ use std::time::Duration;
 use crate::production_release::{
     ExactRowSoftmaxV1CaseV1, RowSoftmaxV1MaskProfileV1, RowSoftmaxV1ReleaseWorkloadV1,
 };
-use crate::protected_compiler_handoff_v3::ParentConsumedCompilerModuleHandoffV3;
+use crate::protected_compiler_handoff_v3::ParentConsumedProductionHandoff;
 use fe2o3_artifact_transaction::{
     CompilerModuleHandoffReceiptV3, ConsumedCompilerModuleHandoffV1,
     ConsumedCompilerModuleHandoffV2,
@@ -329,9 +329,28 @@ impl PreparedWorkerV2Config {
         qualification_oracle: Option<&OsStr>,
         config_path: Option<&OsStr>,
     ) -> Result<Option<Self>, WorkerV2ConfigError> {
+        Self::from_environment_values_with_qualification(
+            obsolete_pipeline,
+            qualification_oracle,
+            config_path,
+            cfg!(any(test, feature = "qualification-oracles-test-only")),
+        )
+    }
+
+    fn from_environment_values_with_qualification(
+        obsolete_pipeline: Option<&OsStr>,
+        qualification_oracle: Option<&OsStr>,
+        config_path: Option<&OsStr>,
+        qualification_oracles_enabled: bool,
+    ) -> Result<Option<Self>, WorkerV2ConfigError> {
         if let Some(value) = obsolete_pipeline {
             return Err(WorkerV2ConfigError::Invalid(format!(
                 "{OBSOLETE_CODEGEN_PIPELINE_ENV} has been removed; production compilation has no selector and temporary test oracles use {QUALIFICATION_ORACLE_ENV}; found {value:?}"
+            )));
+        }
+        if !qualification_oracles_enabled && let Some(value) = qualification_oracle {
+            return Err(WorkerV2ConfigError::Invalid(format!(
+                "{QUALIFICATION_ORACLE_ENV} is unavailable in production builds; remove {value:?} or rebuild cargo-fe2o3 with the qualification-oracles-test-only feature"
             )));
         }
         Self::from_selection(qualification_oracle, config_path)
@@ -641,9 +660,9 @@ impl PreparedWorkerV2Config {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn execute_protected_v3(
+    pub(crate) fn execute_production(
         &self,
-        parent_consumed: ParentConsumedCompilerModuleHandoffV3,
+        parent_consumed: ParentConsumedProductionHandoff,
     ) -> Result<InertProtectedFirstBuildWorkerV3EvidenceV1, ProtectedFirstBuildWorkerV3Error> {
         let (receipt, consumed, expected_compiler_closure) = parent_consumed.into_parts();
         execute_protected_reproducible_first_build_worker_v3(
@@ -658,7 +677,7 @@ impl PreparedWorkerV2Config {
         )
     }
 
-    pub(crate) fn preflight_protected_v3(
+    pub(crate) fn preflight_production(
         &self,
         handoff: &InertSemanticCompilerModuleHandoffV3,
         receipt: CompilerModuleHandoffReceiptV3,
@@ -677,9 +696,9 @@ impl PreparedWorkerV2Config {
         )
     }
 
-    pub(crate) fn execute_preflighted_protected_v3(
+    pub(crate) fn execute_preflighted_production(
         &self,
-        parent_consumed: ParentConsumedCompilerModuleHandoffV3,
+        parent_consumed: ParentConsumedProductionHandoff,
         preflight: PreparedProtectedFirstBuildWorkerV3PreflightV1,
     ) -> Result<InertProtectedFirstBuildWorkerV3EvidenceV1, ProtectedFirstBuildWorkerV3Error> {
         let (_, consumed, _) = parent_consumed.into_parts();
@@ -1734,11 +1753,11 @@ mod tests {
     fn protected_v3_execute_path_retains_parent_receipt_and_native_evidence() {
         let _execute: fn(
             &PreparedWorkerV2Config,
-            ParentConsumedCompilerModuleHandoffV3,
+            ParentConsumedProductionHandoff,
         ) -> Result<
             InertProtectedFirstBuildWorkerV3EvidenceV1,
             ProtectedFirstBuildWorkerV3Error,
-        > = PreparedWorkerV2Config::execute_protected_v3;
+        > = PreparedWorkerV2Config::execute_production;
 
         let _preflight: fn(
             &PreparedWorkerV2Config,
@@ -1748,16 +1767,16 @@ mod tests {
         ) -> Result<
             PreparedProtectedFirstBuildWorkerV3PreflightV1,
             ProtectedFirstBuildWorkerV3Error,
-        > = PreparedWorkerV2Config::preflight_protected_v3;
+        > = PreparedWorkerV2Config::preflight_production;
 
         let _execute_preflighted: fn(
             &PreparedWorkerV2Config,
-            ParentConsumedCompilerModuleHandoffV3,
+            ParentConsumedProductionHandoff,
             PreparedProtectedFirstBuildWorkerV3PreflightV1,
         ) -> Result<
             InertProtectedFirstBuildWorkerV3EvidenceV1,
             ProtectedFirstBuildWorkerV3Error,
-        > = PreparedWorkerV2Config::execute_preflighted_protected_v3;
+        > = PreparedWorkerV2Config::execute_preflighted_production;
     }
 
     fn row_softmax_manifest(directory: &TestDirectory) -> PathBuf {
@@ -1859,6 +1878,21 @@ mod tests {
                 Some(OsStr::new("/config"))
             ),
             Err(WorkerV2ConfigError::UnexpectedConfiguration)
+        ));
+    }
+
+    #[test]
+    fn production_build_rejects_qualification_before_reading_configuration() {
+        assert!(matches!(
+            PreparedWorkerV2Config::from_environment_values_with_qualification(
+                None,
+                Some(OsStr::new(SCALAR_GEMM_V1_PIPELINE)),
+                Some(OsStr::new("/does/not/exist")),
+                false,
+            ),
+            Err(WorkerV2ConfigError::Invalid(reason))
+                if reason.contains("qualification-oracles-test-only")
+                    && reason.contains(SCALAR_GEMM_V1_PIPELINE)
         ));
     }
 
