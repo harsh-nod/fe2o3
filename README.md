@@ -650,9 +650,16 @@ turn the foundations below into end-to-end features.
   fresh occurrence binds those descriptors and the ACK channel; Cargo checks
   the challenge-bound ACK and retains the current-publication lease through
   application exit. Worker V2 application transfer is qualification-only.
-  Feature-free `fe2o3-host` builds export only the Worker V3 application
-  consumer; the V2 consumer and its envelope-recovery constructor require the
-  host crate's `qualification-oracles-test-only` feature.
+  Feature-free `fe2o3-host` builds export only the Worker V3 application,
+  admission, verification, HSA load, and generated dispatch route. Worker V2
+  application recovery, bundle admission, prerequisite authentication, HSA
+  loading, launch metadata, and its alpha/zeta, scalar-GEMM, and Worker-V2
+  vecadd adapters require the host crate's
+  `qualification-oracles-test-only` feature. General
+  `#[kernel(typed)]` expansion likewise emits only its Worker V3 adapter unless
+  an oracle fixture explicitly requests `qualification_worker_v2`.
+  The exact embedded vecadd compatibility API is the remaining generated host
+  island to migrate to this V3 route.
   Production prerequisite authentication, authorized HSA loading, and launch
   remain open.
 - Linux-only rustc and codegen-backend primitives use descriptor-backed procfs

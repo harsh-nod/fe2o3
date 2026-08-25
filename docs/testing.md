@@ -628,11 +628,16 @@ exercised as explicit qualification routes independently of the sole
 production transaction. Generated HSACO inspection uses a strict
 qualification-specific metadata profile.
 
-The host crate enforces the same split. Its feature-free build exposes only the
-Worker V3 application entrypoint, while
-`qualification-oracles-test-only` restores the Worker V2 consumer for legacy
-fixtures. `production_application_handoff_ui` is the compile-fail guard for
-that public API boundary.
+The host crate enforces the same split. Its feature-free build exposes the
+Worker V3 application, admission, verification, HSA load, and generated
+dispatch route, while `qualification-oracles-test-only` restores Worker V2
+application recovery, bundle admission, prerequisite authentication, loading,
+launch metadata, and its alpha/zeta, scalar-GEMM, and Worker-V2 vecadd adapters
+for oracle fixtures.
+`production_application_handoff_ui` compile-fails representative V2 entrypoint
+and runtime imports to guard that public API boundary. The macro fixture also
+proves that general `#[kernel(typed)]` emits only Worker V3 host code unless it
+explicitly carries the `qualification_worker_v2` oracle marker.
 
 The Cargo V3 vertical suite builds a dedicated V3-only static consumer. Its
 dependency graph contains `fe2o3-host/default` and

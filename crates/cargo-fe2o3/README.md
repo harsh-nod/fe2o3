@@ -317,9 +317,14 @@ inert descriptor custody; it does not itself authenticate prerequisites or grant
 HSA load or launch authority.
 
 The same boundary is enforced by `fe2o3-host`: feature-free builds export only
-the Worker V3 application consumer. Cargo's legacy HSA fixture enables the
-host-local `qualification-oracles-test-only` feature explicitly when it needs
-the V2 consumer as a differential oracle.
+the Worker V3 application, admission, verification, load, and generated
+dispatch route. Worker V2 application recovery, bundle admission,
+prerequisite authentication, HSA loading, launch metadata, and its
+alpha/zeta, scalar-GEMM, and Worker-V2 vecadd adapters require the host-local
+`qualification-oracles-test-only` feature. General `#[kernel(typed)]`
+expansion emits only Worker V3 host code unless an oracle fixture explicitly
+requests `qualification_worker_v2`. The exact embedded vecadd compatibility
+API is the remaining generated host island to migrate to this V3 route.
 
 The application integration fixtures are protocol-specific. The V3 fixture
 has no runtime selector and its feature graph enables `fe2o3-host` only with
