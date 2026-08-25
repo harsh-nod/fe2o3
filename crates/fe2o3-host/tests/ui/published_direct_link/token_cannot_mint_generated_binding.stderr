@@ -1,5 +1,0 @@
-error[E0599]: no method named `selection` found for reference `&ValidatedPublishedDirectLinkSelectionV1` in the current scope
-  --> tests/ui/published_direct_link/token_cannot_mint_generated_binding.rs:21:20
-   |
-21 |     unsafe { token.selection().bind_generated_marker::<Marker>() }.unwrap()
-   |                    ^^^^^^^^^ private field, not a method

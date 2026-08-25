@@ -8,7 +8,7 @@ rust-version = "1.94"
 publish = false
 
 [features]
-protected-hardware = [
+qualification-oracles-test-only = [
     "dep:fe2o3-artifact-transaction",
     "dep:fe2o3-compiler-ffi",
     "dep:fe2o3-core",
@@ -16,6 +16,8 @@ protected-hardware = [
     "dep:fe2o3-hsaco",
     "dep:fe2o3-hsaco-finalize",
     "dep:fe2o3-verifier",
+    "fe2o3-host/qualification-oracles-test-only",
+    "fe2o3-hsa-runtime/qualification-oracles-test-only",
 ]
 
 [dependencies]
@@ -43,4 +45,4 @@ path = "src/lib.rs"
 [[test]]
 name = "protected_hardware"
 path = "tests/protected_hardware.rs"
-required-features = ["protected-hardware"]
+required-features = ["qualification-oracles-test-only"]

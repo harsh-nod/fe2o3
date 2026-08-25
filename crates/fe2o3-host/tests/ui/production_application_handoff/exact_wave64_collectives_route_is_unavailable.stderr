@@ -1,0 +1,14 @@
+error[E0432]: unresolved import `fe2o3_host::join_wave64_collectives_v1`
+ --> tests/ui/production_application_handoff/exact_wave64_collectives_route_is_unavailable.rs:1:5
+  |
+1 | use fe2o3_host::join_wave64_collectives_v1;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `join_wave64_collectives_v1` in the root
+  |
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+  |          --------------------------------------------------- the item is gated here
+...
+  |     Wave64CollectivesLoadErrorV1, Wave64CollectivesUnloadIdentityV1, join_wave64_collectives_v1,
+  |                                                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^

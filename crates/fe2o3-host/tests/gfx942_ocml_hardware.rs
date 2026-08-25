@@ -1,3 +1,5 @@
+#![cfg(feature = "qualification-oracles-test-only")]
+
 use fe2o3_core::{DeviceBuffer, GpuContext};
 use fe2o3_host::{Gfx942OcmlArtifactIdentityV1, Gfx942OcmlSinErrorV1, Gfx942OcmlSinF32KernelV1};
 use std::path::PathBuf;

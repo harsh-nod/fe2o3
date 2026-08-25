@@ -4,9 +4,10 @@ use crate::lifecycle::{ReviewedHsaExecutableV1, ReviewedHsaKernelV1};
 use fe2o3_artifacts::MAX_ABI_BYTES;
 use fe2o3_host::{
     HsaDispatchObservationV1, HsaImplicitKernargInitializationObservationV1, HsaLaunchGeometryV1,
-    ReviewedHsaImplicitKernargAdapterV1, WorkgroupSyncImplicitKernargObservationV1,
-    WorkgroupSyncProfileKindV1,
+    ReviewedHsaImplicitKernargAdapterV1,
 };
+#[cfg(feature = "qualification-oracles-test-only")]
+use fe2o3_host::{WorkgroupSyncImplicitKernargObservationV1, WorkgroupSyncProfileKindV1};
 use sha2::{Digest, Sha256};
 use std::time::{Duration, Instant};
 
@@ -35,6 +36,7 @@ const MULTIGRID_SYNC_ARG: usize = 88;
 const HEAP_V1_PTR: usize = 96;
 const DEFAULT_QUEUE_PTR: usize = 104;
 const COMPLETION_ACTION: usize = 112;
+#[cfg(feature = "qualification-oracles-test-only")]
 const DYNAMIC_LDS_SIZE: usize = 120;
 const QUEUE_PTR: usize = 200;
 pub(crate) const COMPLETION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -193,43 +195,65 @@ enum CompletionTransition {
 #[derive(Clone, Copy)]
 enum ImplicitKernargProfileV1 {
     GenericZeroDynamicLds,
+    #[cfg(feature = "qualification-oracles-test-only")]
     ExactWorkgroupSync(WorkgroupSyncProfileKindV1),
 }
 
 impl ImplicitKernargProfileV1 {
     const fn dynamic_lds_bytes(self) -> u32 {
         match self {
-            Self::GenericZeroDynamicLds
-            | Self::ExactWorkgroupSync(WorkgroupSyncProfileKindV1::ScopedAtomic) => 0,
+            Self::GenericZeroDynamicLds => 0,
+            #[cfg(feature = "qualification-oracles-test-only")]
+            Self::ExactWorkgroupSync(WorkgroupSyncProfileKindV1::ScopedAtomic) => 0,
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::ExactWorkgroupSync(WorkgroupSyncProfileKindV1::LdsReduction) => 256,
         }
     }
 
-    const fn hidden_dynamic_lds_offset(self, explicit_byte_len: usize) -> Option<usize> {
+    const fn hidden_dynamic_lds_offset(self, _explicit_byte_len: usize) -> Option<usize> {
         match self {
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::ExactWorkgroupSync(WorkgroupSyncProfileKindV1::LdsReduction) => {
-                Some(explicit_byte_len + DYNAMIC_LDS_SIZE)
+                Some(_explicit_byte_len + DYNAMIC_LDS_SIZE)
             }
-            Self::GenericZeroDynamicLds
-            | Self::ExactWorkgroupSync(WorkgroupSyncProfileKindV1::ScopedAtomic) => None,
+            Self::GenericZeroDynamicLds => None,
+            #[cfg(feature = "qualification-oracles-test-only")]
+            Self::ExactWorkgroupSync(WorkgroupSyncProfileKindV1::ScopedAtomic) => None,
         }
     }
 
     const fn requires_exact_zero_static_resources(self) -> bool {
-        matches!(self, Self::ExactWorkgroupSync(_))
+        #[cfg(feature = "qualification-oracles-test-only")]
+        {
+            matches!(self, Self::ExactWorkgroupSync(_))
+        }
+        #[cfg(not(feature = "qualification-oracles-test-only"))]
+        {
+            let _ = self;
+            false
+        }
     }
 }
 
 struct PreparedImplicitKernargObservationV1 {
     base: HsaImplicitKernargInitializationObservationV1,
+    #[cfg(feature = "qualification-oracles-test-only")]
     executable: fe2o3_host::HsaExecutableObjectIdentityV1,
+    #[cfg(feature = "qualification-oracles-test-only")]
     kernel: fe2o3_host::HsaKernelObjectIdentityV1,
+    #[cfg(feature = "qualification-oracles-test-only")]
     geometry: HsaLaunchGeometryV1,
+    #[cfg(feature = "qualification-oracles-test-only")]
     explicit_byte_len: u64,
+    #[cfg(feature = "qualification-oracles-test-only")]
     implicit_byte_offset: u64,
+    #[cfg(feature = "qualification-oracles-test-only")]
     implicit_byte_len: u64,
+    #[cfg(feature = "qualification-oracles-test-only")]
     hidden_dynamic_lds_offset: Option<usize>,
+    #[cfg(feature = "qualification-oracles-test-only")]
     hidden_dynamic_lds_value: u32,
+    #[cfg(feature = "qualification-oracles-test-only")]
     aql_group_segment_bytes: u32,
 }
 
@@ -467,7 +491,7 @@ fn prepare_implicit_kernarg_with_profile<A: DispatchApi>(
         layout,
         kernarg_digest,
     });
-    let aql_group_segment_bytes = kernel
+    let _aql_group_segment_bytes = kernel
         .group_segment_size
         .checked_add(profile.dynamic_lds_bytes())
         .ok_or(HsaRuntimeAdapterError::InvalidImplicitKernarg(
@@ -488,15 +512,24 @@ fn prepare_implicit_kernarg_with_profile<A: DispatchApi>(
             implicit_byte_len,
             true,
         ),
+        #[cfg(feature = "qualification-oracles-test-only")]
         executable: state.identity,
+        #[cfg(feature = "qualification-oracles-test-only")]
         kernel: kernel.identity,
+        #[cfg(feature = "qualification-oracles-test-only")]
         geometry,
+        #[cfg(feature = "qualification-oracles-test-only")]
         explicit_byte_len,
+        #[cfg(feature = "qualification-oracles-test-only")]
         implicit_byte_offset,
+        #[cfg(feature = "qualification-oracles-test-only")]
         implicit_byte_len,
+        #[cfg(feature = "qualification-oracles-test-only")]
         hidden_dynamic_lds_offset,
+        #[cfg(feature = "qualification-oracles-test-only")]
         hidden_dynamic_lds_value: profile.dynamic_lds_bytes(),
-        aql_group_segment_bytes,
+        #[cfg(feature = "qualification-oracles-test-only")]
+        aql_group_segment_bytes: _aql_group_segment_bytes,
     })
 }
 
@@ -528,6 +561,7 @@ fn prepare_implicit_kernarg<A: DispatchApi>(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn prepare_workgroup_sync_implicit_kernarg<A: DispatchApi>(
     core: &mut AdapterCore<A>,
     pending: &mut Option<PendingDispatch>,
@@ -1286,6 +1320,7 @@ mod tests {
         bytes
     }
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     #[test]
     fn exact_workgroup_sync_profiles_bind_hidden_and_aql_dynamic_lds() {
         for (profile, dynamic_lds, hidden_offset) in [
@@ -1346,6 +1381,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     #[test]
     fn exact_workgroup_sync_dynamic_or_static_resource_substitution_fails_before_queue() {
         let (executable, mut kernel) = handles_for_explicit_prefix(40);

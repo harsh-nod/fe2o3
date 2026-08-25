@@ -2,6 +2,7 @@
 mod application_descriptor_handoff;
 mod argument_alias;
 mod artifact_binding;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod cooperative_launch;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod flash_attention_v1_lifecycle;
@@ -16,44 +17,61 @@ mod generated_lds_gemm;
 mod generated_lds_gemm_lifecycle;
 #[cfg(test)]
 mod generated_lds_gemm_lifecycle_tests;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_moe_expert_v1;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_moe_expert_v2;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_moe_top2_v1;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_row_softmax_v1;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_scalar_gemm_v1;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_vecadd;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_wave64_collectives_v1;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_wave64_collectives_v1_lifecycle;
 #[cfg(test)]
 mod generated_wave64_collectives_v1_lifecycle_tests;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_worker_v2_vecadd;
 mod generated_worker_v3_dispatch;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_workgroup_lds_reduction_v1;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_workgroup_scoped_atomic_v1;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_workgroup_sync_v1_lifecycle;
 #[cfg(test)]
 mod generated_workgroup_sync_v1_lifecycle_tests;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod gfx942_ocml;
 mod hsa_executable_lifecycle;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod launch_kernel_v2_bridge;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod loaded_kernel;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod moe_expert_v1_denial;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod moe_routing_expert_bridge_v1;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod moe_routing_expert_bridge_v2;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod moe_top2_v1_lifecycle;
 mod prepared_launch;
 #[cfg(target_os = "linux")]
 mod production_application;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod protected_row_softmax_v1_lifecycle;
 mod published_direct_link;
 mod published_hsaco_inspection;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod recovered_worker_v2_admission;
 mod recovered_worker_v3_admission;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod row_softmax_protected_admission;
 mod tile_interop;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
@@ -182,20 +200,22 @@ pub use artifact_binding::{
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use artifact_binding::{
     AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1,
-    GeneratedArtifactAuthenticationError, GeneratedKernelBindingV1,
+    GeneratedArtifactAuthenticationError, GeneratedKernelBindingV1, GeneratedMarkerBindingError,
 };
 #[doc(hidden)]
 pub use artifact_binding::{
     CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
     CompilerGeneratedSemanticWitnessErrorV1, GeneratedKernelProfileError,
-    GeneratedMarkerBindingError, ValidatedCompilerGeneratedSemanticWitnessV1,
-    semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
+    ValidatedCompilerGeneratedSemanticWitnessV1, semantic_witness_from_backend_v1,
+    validate_compiler_generated_semantic_witness_v1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use cooperative_launch::{
     CooperativeAdmissionError, CooperativeLaunchAdmission, CooperativeLaunchError,
     CooperativeResidencyAdmission,
 };
 pub use fe2o3_core::{KernelParams, LaunchConfig};
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use fe2o3_hsaco_finalize::WorkgroupSyncProfileKindV1;
 pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
@@ -240,20 +260,24 @@ pub use generated_lds_gemm_lifecycle::{
     LoadedExactLdsGemmSlice1V1, ReviewedExactLdsGemmRuntimeAdapterV1, UnloadedExactLdsGemmSlice1V1,
     join_exact_lds_gemm_slice1_v1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_moe_expert_v1::{
     GeneratedMoeExpertV1HostAdapterErrorV1, GeneratedMoeExpertV1HostAdapterV1,
     MoeExpertCompactCopyV1, MoeExpertCompactPackPlanErrorV1, MoeExpertCompactPackPlanV1,
     MoeExpertV1BufferAccessV1, MoeExpertV1BufferRoleV1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_moe_expert_v2::{
     GeneratedMoeExpertV2HostAdapterErrorV2, GeneratedMoeExpertV2HostAdapterV2,
     MoeExpertV2BufferAccessV2, MoeExpertV2BufferRoleV2,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_moe_top2_v1::{
     GeneratedMoeTop2V1HostAdapterErrorV1, GeneratedMoeTop2V1HostAdapterV1, MoeTop2V1BufferAccessV1,
     MoeTop2V1BufferRoleV1,
 };
 #[doc(hidden)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_row_softmax_v1::{
     GeneratedProtectedRowSoftmaxV1HostAdapterErrorV1, GeneratedProtectedRowSoftmaxV1HostAdapterV1,
     ProtectedRowSoftmaxV1BufferRoleV1,
@@ -278,10 +302,12 @@ pub use generated_vecadd::{
     GeneratedVecAddKernelV1, GeneratedVecAddLoadError, GeneratedVecAddPrepareError,
     GeneratedVecAddPreparedV1, GeneratedVecAddProfileError,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_wave64_collectives_v1::{
     GeneratedWave64CollectivesV1HostAdapterErrorV1, GeneratedWave64CollectivesV1HostAdapterV1,
     Wave64CollectivesBufferRoleV1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_wave64_collectives_v1_lifecycle::{
     CompletedWave64CollectivesV1, JoinedWave64CollectivesV1, LoadedWave64CollectivesV1,
     ReviewedWave64CollectivesRuntimeAdapterV1, UnloadedWave64CollectivesV1,
@@ -302,15 +328,18 @@ pub use generated_worker_v3_dispatch::{
     GeneratedWorkerV3ArgumentErrorV1, GeneratedWorkerV3PrepareErrorV1,
     GeneratedWorkerV3PreparedInvocationV1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_workgroup_lds_reduction_v1::{
     GeneratedWorkgroupLdsReductionV1HostAdapterErrorV1,
     GeneratedWorkgroupLdsReductionV1HostAdapterV1, WorkgroupLdsReductionBufferRoleV1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_workgroup_scoped_atomic_v1::{
     GeneratedWorkgroupScopedAtomicV1HostAdapterErrorV1,
     GeneratedWorkgroupScopedAtomicV1HostAdapterV1, WorkgroupScopedAtomicBufferRoleV1,
     WorkgroupScopedAtomicEffectV1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_workgroup_sync_v1_lifecycle::{
     CompletedWorkgroupLdsReductionV1, CompletedWorkgroupScopedAtomicV1,
     JoinedWorkgroupLdsReductionV1, JoinedWorkgroupScopedAtomicV1, LoadedWorkgroupLdsReductionV1,
@@ -321,6 +350,7 @@ pub use generated_workgroup_sync_v1_lifecycle::{
     WorkgroupSyncLoadErrorV1, WorkgroupSyncUnloadIdentityV1, join_workgroup_lds_reduction_v1,
     join_workgroup_scoped_atomic_v1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use gfx942_ocml::{
     GFX942_OCML_SIN_F32_CODE_OBJECT_VERSION_V1, GFX942_OCML_SIN_F32_DEVICE_ABI_V1,
     GFX942_OCML_SIN_F32_IMPORT_SYMBOL_V1, GFX942_OCML_SIN_F32_KERNEL_ABI_V1,
@@ -360,18 +390,23 @@ pub use launch_kernel_v2_bridge::{
     bind_current_recovered_launch_kernel_metadata_v2,
 };
 #[doc(hidden)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use loaded_kernel::{GeneratedAdmittedLaunch, LoadedKernelLoadError};
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use loaded_kernel::{
     LoadedArgumentAdmittedLaunch, LoadedKernel, LoadedKernelMatchError, LoadedLaunchError,
     LoadedPreparedLaunch,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use moe_expert_v1_denial::{MoeExpertExecutionDeniedV1, deny_moe_expert_execution_v1};
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use moe_routing_expert_bridge_v1::{
     CheckedMoeHostObservedRoutingOutputV1, MoeHostObservedRoutingExpertBridgeV1,
     MoeRoutingExpertBridgeUploadErrorV1, MoeRoutingOutputCandidateV1,
     MoeRoutingOutputConsistencyErrorV1, check_host_observed_moe_routing_output_v1,
     upload_checked_moe_routing_expert_bridge_v1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use moe_routing_expert_bridge_v2::{
     CheckedMoeCompletedRoutingExpertInputsV2, CheckedMoeCompletedRoutingReadbackV2,
     MoeCompletedRoutingExpertBridgeV2, MoeCompletedRoutingExpertUploadErrorV2,
@@ -381,6 +416,7 @@ pub use moe_routing_expert_bridge_v2::{
     MoeRoutingOutputCandidateV2, bind_completed_moe_routing_expert_inputs_v2,
     check_completed_moe_routing_readback_v2, upload_completed_moe_routing_expert_bridge_v2,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use moe_top2_v1_lifecycle::{
     CompletedMoeTop2V1, JoinedMoeTop2V1, LoadedMoeTop2V1, MoeTop2V1DispatchErrorV1,
     MoeTop2V1JoinErrorV1, MoeTop2V1KernelResourceObservationV1, MoeTop2V1LoadErrorV1,
@@ -396,6 +432,7 @@ pub use prepared_launch::{
 pub use production_application::{
     ProductionWorkerV3ApplicationLoadErrorV1, load_inherited_worker_v3_application_v1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use protected_row_softmax_v1_lifecycle::{
     CompletedProtectedRowSoftmaxV1, JoinedProtectedRowSoftmaxV1, LoadedProtectedRowSoftmaxV1,
     ProtectedRowSoftmaxV1DispatchErrorV1, ProtectedRowSoftmaxV1JoinErrorV1,
@@ -430,6 +467,7 @@ pub use recovered_worker_v3_admission::{
     RecoveredWorkerV3AdmissionErrorV1, RecoveredWorkerV3PinnedDescriptorV1,
     WorkerV3HostLineageIdentityV1, admit_recovered_worker_v3_descriptor_v1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use row_softmax_protected_admission::{
     ProtectedRowSoftmaxV1HostAdmissionErrorV1, ProtectedRowSoftmaxV1HostTokenIdentityV1,
     ProtectedRowSoftmaxV1HostTokenV1, prepare_protected_row_softmax_v1_host_token_v1,
@@ -468,40 +506,40 @@ pub mod __generated {
     pub use crate::{
         AlphaZetaCov6DispatchIdentityV1, AlphaZetaCov6KernelRoleV1, AlphaZetaCov6ProfileError,
         CompilerGeneratedAlphaZetaCov6ArgumentsV1, CompilerGeneratedScalarGemmV1Arguments,
-        GeneratedAlphaZetaCov6ArgumentBindingV1, GeneratedAlphaZetaCov6ArgumentError,
-        GeneratedAlphaZetaCov6CompletionV1, GeneratedAlphaZetaCov6GeometryError,
-        GeneratedAlphaZetaCov6PhysicalKernargError, GeneratedAlphaZetaCov6PrepareError,
-        GeneratedAlphaZetaCov6PrepareResultV1, GeneratedAlphaZetaCov6PreparedInvocationV1,
-        GeneratedLdsGemmSlice1HostAdapterErrorV1, GeneratedLdsGemmSlice1HostAdapterV1,
-        GeneratedScalarGemmV1ArgumentBinding, GeneratedScalarGemmV1Completion,
-        GeneratedScalarGemmV1PrepareError, GeneratedScalarGemmV1PrepareResult,
-        GeneratedScalarGemmV1PreparedInvocation, GeneratedScalarGemmV1ReadDeviceSlice,
-        GeneratedScalarGemmV1ReadWriteDeviceSlice, GeneratedWorkerV2VecAddBindError,
-        GeneratedWorkerV2VecAddCompletionV1, GeneratedWorkerV2VecAddExecutorV1,
-        GeneratedWorkerV2VecAddPrepareError, GeneratedWorkerV2VecAddPreparedV1,
-        ScalarGemmV1ArgumentError, ScalarGemmV1DispatchIdentity, ScalarGemmV1GeometryError,
-        ScalarGemmV1PhysicalKernargError, ScalarGemmV1ProfileError,
+        GeneratedAdmittedLaunch, GeneratedAlphaZetaCov6ArgumentBindingV1,
+        GeneratedAlphaZetaCov6ArgumentError, GeneratedAlphaZetaCov6CompletionV1,
+        GeneratedAlphaZetaCov6GeometryError, GeneratedAlphaZetaCov6PhysicalKernargError,
+        GeneratedAlphaZetaCov6PrepareError, GeneratedAlphaZetaCov6PrepareResultV1,
+        GeneratedAlphaZetaCov6PreparedInvocationV1, GeneratedLdsGemmSlice1HostAdapterErrorV1,
+        GeneratedLdsGemmSlice1HostAdapterV1, GeneratedScalarGemmV1ArgumentBinding,
+        GeneratedScalarGemmV1Completion, GeneratedScalarGemmV1PrepareError,
+        GeneratedScalarGemmV1PrepareResult, GeneratedScalarGemmV1PreparedInvocation,
+        GeneratedScalarGemmV1ReadDeviceSlice, GeneratedScalarGemmV1ReadWriteDeviceSlice,
+        GeneratedWorkerV2VecAddBindError, GeneratedWorkerV2VecAddCompletionV1,
+        GeneratedWorkerV2VecAddExecutorV1, GeneratedWorkerV2VecAddPrepareError,
+        GeneratedWorkerV2VecAddPreparedV1, LoadedKernelLoadError, ScalarGemmV1ArgumentError,
+        ScalarGemmV1DispatchIdentity, ScalarGemmV1GeometryError, ScalarGemmV1PhysicalKernargError,
+        ScalarGemmV1ProfileError,
     };
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub use crate::{
         AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1,
-        GeneratedArtifactAuthenticationError, GeneratedKernelBindingV1, GeneratedVecAddKernelV1,
-        GeneratedVecAddLoadError, GeneratedVecAddPrepareError, GeneratedVecAddPreparedV1,
-        GeneratedVecAddProfileError,
+        GeneratedArtifactAuthenticationError, GeneratedKernelBindingV1,
+        GeneratedMarkerBindingError, GeneratedVecAddKernelV1, GeneratedVecAddLoadError,
+        GeneratedVecAddPrepareError, GeneratedVecAddPreparedV1, GeneratedVecAddProfileError,
     };
     pub use crate::{
         CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationV1,
         CompilerGeneratedKernelProfileV1, CompilerGeneratedSemanticWitnessErrorV1,
-        CompilerGeneratedWorkerV3ArgumentsV1, GeneratedAdmittedLaunch,
-        GeneratedArgumentFieldProperty, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
-        GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1,
-        GeneratedKernelProfileError, GeneratedMarkerBindingError, GeneratedPackingComponentKindV1,
-        GeneratedPackingComponentV1, GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice,
-        GeneratedSliceArgumentPairV1, GeneratedWorkerV3ArgumentBindingV1,
-        GeneratedWorkerV3ArgumentErrorV1, GeneratedWorkerV3PrepareErrorV1,
-        GeneratedWorkerV3PreparedInvocationV1, GeneratedWriteDeviceSlice, LoadedKernelLoadError,
-        ValidatedCompilerGeneratedSemanticWitnessV1, semantic_witness_from_backend_v1,
-        validate_compiler_generated_semantic_witness_v1,
+        CompilerGeneratedWorkerV3ArgumentsV1, GeneratedArgumentFieldProperty,
+        GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
+        GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedKernelProfileError,
+        GeneratedPackingComponentKindV1, GeneratedPackingComponentV1, GeneratedReadDeviceSlice,
+        GeneratedReadWriteDeviceSlice, GeneratedSliceArgumentPairV1,
+        GeneratedWorkerV3ArgumentBindingV1, GeneratedWorkerV3ArgumentErrorV1,
+        GeneratedWorkerV3PrepareErrorV1, GeneratedWorkerV3PreparedInvocationV1,
+        GeneratedWriteDeviceSlice, ValidatedCompilerGeneratedSemanticWitnessV1,
+        semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
     };
     pub use fe2o3_artifacts::{
         AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, Mutability, Name,

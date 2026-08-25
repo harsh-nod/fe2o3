@@ -17,7 +17,7 @@
 #[allow(missing_docs, unsafe_code)]
 pub mod kernel;
 mod numerical_contract;
-#[cfg(feature = "protected-hardware")]
+#[cfg(feature = "qualification-oracles-test-only")]
 mod production_release;
 mod source_model_correspondence;
 mod verification_certificate;
@@ -38,7 +38,7 @@ pub use numerical_contract::{
     RowSoftmaxOracleStateV1, SoftmaxComparisonErrorV1, SoftmaxComparisonPolicyV1,
     SoftmaxContractErrorV1, SoftmaxExponentialV1, compare_row_softmax_v1, row_softmax_oracle_v1,
 };
-#[cfg(feature = "protected-hardware")]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub use production_release::{
     AdmittedRowSoftmaxV1WorkloadV1, ExactRowSoftmaxV1CaseV1, RowSoftmaxV1MaskProfileV1,
     RowSoftmaxV1ProductionErrorV1, RowSoftmaxV1ProductionReceiptV1, RowSoftmaxV1ReleaseWorkloadV1,

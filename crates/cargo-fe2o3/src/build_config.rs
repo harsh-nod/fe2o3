@@ -1,11 +1,16 @@
-//! Explicit cargo-side configuration for the narrow Worker V2 handoff flow.
+//! Pinned build recipe for the production compiler transaction.
+//!
+//! Qualification-only builds also parse legacy oracle profiles here so the
+//! production parser and its fail-closed file handling stay identical.
 
 use std::error::Error;
 use std::ffi::OsStr;
 use std::fmt;
 #[cfg(test)]
 use std::fs;
-use std::fs::{File, OpenOptions};
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::Read;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -45,11 +50,14 @@ use fe2o3_hsaco_finalize::{
 use fe2o3_verifier::{
     GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256, MAX_GENERAL_GEMM_PROOF_TIMEOUT_SECONDS_V1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use fe2o3_worker_v2_bundle::{MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES, WorkerV2EnvelopeInputsV1};
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use rustix::fs::{FileType, Mode, OFlags, fstat, open};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) use crate::worker_v2_envelope_mode::WorkerV2EnvelopeModeV1;
 
 pub(crate) const QUALIFICATION_ORACLE_ENV: &str = "FE2O3_QUALIFICATION_ORACLE_V1";
@@ -88,6 +96,7 @@ const ROOT_KEYS: &[&str] = &[
     "units",
     "worker",
 ];
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const ROOT_KEYS_WITH_ENVELOPE: &[&str] = &[
     "candidate_output_max_bytes",
     "format",
@@ -99,6 +108,7 @@ const ROOT_KEYS_WITH_ENVELOPE: &[&str] = &[
     "units",
     "worker",
 ];
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const ROOT_KEYS_WITH_ENVELOPE_MODE: &[&str] = &[
     "candidate_output_max_bytes",
     "format",
@@ -109,6 +119,7 @@ const ROOT_KEYS_WITH_ENVELOPE_MODE: &[&str] = &[
     "units",
     "worker",
 ];
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const ROOT_KEYS_WITH_ENVELOPE_INPUTS: &[&str] = &[
     "candidate_output_max_bytes",
     "format",
@@ -119,6 +130,7 @@ const ROOT_KEYS_WITH_ENVELOPE_INPUTS: &[&str] = &[
     "units",
     "worker",
 ];
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const ENVELOPE_INPUT_KEYS: &[&str] = &["byte_len", "path", "sha256"];
 const WORKER_KEYS: &[&str] = &[
     "byte_len",
@@ -161,9 +173,9 @@ const REQUIRED_OPTIONS: &[(&str, &[&str])] = &[
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WorkerV2ConfigIdentity([u8; 32]);
+pub(crate) struct BuildConfigIdentity([u8; 32]);
 
-impl WorkerV2ConfigIdentity {
+impl BuildConfigIdentity {
     pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -185,12 +197,14 @@ struct ConfiguredUnit {
     working_directory: String,
 }
 
-pub(crate) struct PreparedWorkerV2Config {
+pub(crate) struct PreparedBuildConfig {
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     manifest_path: PathBuf,
-    identity: WorkerV2ConfigIdentity,
+    identity: BuildConfigIdentity,
     profile: WorkerConfigProfile,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     envelope_mode: WorkerV2EnvelopeModeV1,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     envelope_inputs: Option<ConfiguredEnvelopeInputs>,
     worker: PinnedWorkerV1,
     providers: Vec<WorkerInputV1>,
@@ -256,7 +270,7 @@ impl PreparedRowSoftmaxV1Config {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct WorkerV2BuildObservation<'a> {
-    pub(crate) config_identity: WorkerV2ConfigIdentity,
+    pub(crate) config_identity: BuildConfigIdentity,
     pub(crate) executable_sha256: [u8; 32],
     pub(crate) worker_build_identity: &'a str,
     pub(crate) llvm_build_identity: &'a str,
@@ -323,7 +337,7 @@ pub(crate) fn production_compilation_selected(profile: Option<&OsStr>) -> bool {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorkerV2CompileEnvironmentProfileV1 {
+pub(crate) enum BuildCompileEnvironmentProfileV1 {
     ProductionGfx942,
     S09AlphaGfx942O0,
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
@@ -342,6 +356,7 @@ impl WorkerV2SourceDebugProfileV1 {
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 #[derive(Clone, Debug)]
 struct ConfiguredEnvelopeInputs {
     path: PathBuf,
@@ -349,8 +364,8 @@ struct ConfiguredEnvelopeInputs {
     pinned: Option<Box<WorkerV2EnvelopeInputsV1>>,
 }
 
-impl PreparedWorkerV2Config {
-    pub(crate) fn from_environment() -> Result<Option<Self>, WorkerV2ConfigError> {
+impl PreparedBuildConfig {
+    pub(crate) fn from_environment() -> Result<Option<Self>, BuildConfigError> {
         Self::from_environment_values(
             std::env::var_os(OBSOLETE_CODEGEN_PIPELINE_ENV).as_deref(),
             std::env::var_os(QUALIFICATION_ORACLE_ENV).as_deref(),
@@ -362,7 +377,7 @@ impl PreparedWorkerV2Config {
         obsolete_pipeline: Option<&OsStr>,
         qualification_oracle: Option<&OsStr>,
         config_path: Option<&OsStr>,
-    ) -> Result<Option<Self>, WorkerV2ConfigError> {
+    ) -> Result<Option<Self>, BuildConfigError> {
         Self::from_environment_values_with_qualification(
             obsolete_pipeline,
             qualification_oracle,
@@ -376,34 +391,37 @@ impl PreparedWorkerV2Config {
         qualification_oracle: Option<&OsStr>,
         config_path: Option<&OsStr>,
         qualification_oracles_enabled: bool,
-    ) -> Result<Option<Self>, WorkerV2ConfigError> {
+    ) -> Result<Option<Self>, BuildConfigError> {
         if let Some(value) = obsolete_pipeline {
-            return Err(WorkerV2ConfigError::Invalid(format!(
+            return Err(BuildConfigError::Invalid(format!(
                 "{OBSOLETE_CODEGEN_PIPELINE_ENV} has been removed; production compilation has no selector and temporary test oracles use {QUALIFICATION_ORACLE_ENV}; found {value:?}"
             )));
         }
         if !qualification_oracles_enabled && let Some(value) = qualification_oracle {
-            return Err(WorkerV2ConfigError::Invalid(format!(
+            return Err(BuildConfigError::Invalid(format!(
                 "{QUALIFICATION_ORACLE_ENV} is unavailable in production builds; remove {value:?} or rebuild cargo-fe2o3 with the qualification-oracles-test-only feature"
             )));
         }
         Self::from_selection(qualification_oracle, config_path)
     }
 
-    pub(crate) fn from_environment_for_cargo_setup() -> Result<Option<Self>, WorkerV2ConfigError> {
+    pub(crate) fn from_environment_for_cargo_setup() -> Result<Option<Self>, BuildConfigError> {
         let mut prepared = Self::from_environment()?;
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         if let Some(config) = prepared.as_mut() {
             config.pin_envelope_inputs()?;
         }
+        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+        let _ = &mut prepared;
         Ok(prepared)
     }
 
     fn from_selection(
         profile: Option<&OsStr>,
         config_path: Option<&OsStr>,
-    ) -> Result<Option<Self>, WorkerV2ConfigError> {
+    ) -> Result<Option<Self>, BuildConfigError> {
         if profile == Some(OsStr::new(OBSOLETE_PRODUCTION_SELECTOR)) {
-            return Err(WorkerV2ConfigError::Invalid(format!(
+            return Err(BuildConfigError::Invalid(format!(
                 "{QUALIFICATION_ORACLE_ENV} must be unset for production compilation; explicit `{OBSOLETE_PRODUCTION_SELECTOR}` selection has been removed"
             )));
         }
@@ -423,11 +441,9 @@ impl PreparedWorkerV2Config {
             (None, None) => Ok(None),
             #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             (Some(WorkerConfigProfile::RowSoftmaxV1), None) => Ok(None),
-            (None, Some(_)) => Err(WorkerV2ConfigError::UnexpectedConfiguration),
-            (Some(_), None) => Err(WorkerV2ConfigError::MissingConfiguration),
-            (Some(_), Some(path)) if path.is_empty() => {
-                Err(WorkerV2ConfigError::MissingConfiguration)
-            }
+            (None, Some(_)) => Err(BuildConfigError::UnexpectedConfiguration),
+            (Some(_), None) => Err(BuildConfigError::MissingConfiguration),
+            (Some(_), Some(path)) if path.is_empty() => Err(BuildConfigError::MissingConfiguration),
             (Some(profile), Some(path)) => {
                 Self::from_manifest_for_profile(Path::new(path), profile).map(Some)
             }
@@ -435,14 +451,14 @@ impl PreparedWorkerV2Config {
     }
 
     #[cfg(test)]
-    fn from_manifest(path: &Path) -> Result<Self, WorkerV2ConfigError> {
+    fn from_manifest(path: &Path) -> Result<Self, BuildConfigError> {
         Self::from_manifest_for_profile(path, WorkerConfigProfile::General)
     }
 
     fn from_manifest_for_profile(
         path: &Path,
         profile: WorkerConfigProfile,
-    ) -> Result<Self, WorkerV2ConfigError> {
+    ) -> Result<Self, BuildConfigError> {
         require_absolute_path(path, "configuration")?;
         #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         if profile == WorkerConfigProfile::GeneralGemmV1 {
@@ -450,11 +466,11 @@ impl PreparedWorkerV2Config {
         }
         let bytes = read_bounded(path, MAX_CONFIG_BYTES, "configuration")?;
         let value: Value = serde_json::from_slice(&bytes)
-            .map_err(|error| WorkerV2ConfigError::Json(error.to_string()))?;
+            .map_err(|error| BuildConfigError::Json(error.to_string()))?;
         let canonical = serde_json::to_vec(&value)
-            .map_err(|error| WorkerV2ConfigError::Json(error.to_string()))?;
+            .map_err(|error| BuildConfigError::Json(error.to_string()))?;
         if canonical != bytes {
-            return Err(WorkerV2ConfigError::Invalid(
+            return Err(BuildConfigError::Invalid(
                 "configuration must be compact canonical JSON with lexicographically ordered object keys"
                     .to_owned(),
             ));
@@ -462,7 +478,7 @@ impl PreparedWorkerV2Config {
 
         let root = exact_root_object(&value)?;
         if required_string(root, "format", "configuration")? != CONFIG_FORMAT {
-            return Err(WorkerV2ConfigError::Invalid(format!(
+            return Err(BuildConfigError::Invalid(format!(
                 "configuration format must be exactly {CONFIG_FORMAT:?}"
             )));
         }
@@ -477,9 +493,10 @@ impl PreparedWorkerV2Config {
             "candidate_output_max_bytes",
             "configuration",
         )?)
-        .map_err(WorkerV2ConfigError::Protocol)?;
+        .map_err(BuildConfigError::Protocol)?;
         let limits = parse_limits(required_value(root, "limits", "configuration")?)?;
         let units = parse_units(required_value(root, "units", "configuration")?)?;
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         let (envelope_mode, envelope_inputs) = parse_envelope_inputs(root)?;
         #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         let row_softmax_v1 = parse_row_softmax_v1(
@@ -502,6 +519,7 @@ impl PreparedWorkerV2Config {
             &candidate_output,
         )?;
 
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         let identity = transitive_identity(
             profile,
             &bytes,
@@ -509,12 +527,16 @@ impl PreparedWorkerV2Config {
             &providers,
             envelope_inputs.as_ref(),
         );
+        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+        let identity = transitive_identity(profile, &bytes, &worker, &providers);
         Ok(Self {
             #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             manifest_path: path.to_path_buf(),
             identity,
             profile,
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             envelope_mode,
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             envelope_inputs,
             worker,
             providers,
@@ -530,7 +552,7 @@ impl PreparedWorkerV2Config {
         })
     }
 
-    pub(crate) const fn identity(&self) -> WorkerV2ConfigIdentity {
+    pub(crate) const fn identity(&self) -> BuildConfigIdentity {
         self.identity
     }
 
@@ -539,6 +561,7 @@ impl PreparedWorkerV2Config {
         &self.manifest_path
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) const fn envelope_mode(&self) -> WorkerV2EnvelopeModeV1 {
         self.envelope_mode
     }
@@ -594,9 +617,9 @@ impl PreparedWorkerV2Config {
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) fn row_softmax_v1_worker_pins(
         &self,
-    ) -> Result<RowSoftmaxV1DirectWorkerPinsV1, WorkerV2ConfigError> {
+    ) -> Result<RowSoftmaxV1DirectWorkerPinsV1, BuildConfigError> {
         let row = self.row_softmax_v1.as_ref().ok_or_else(|| {
-            WorkerV2ConfigError::Invalid(
+            BuildConfigError::Invalid(
                 "row-softmax worker pins requested from a different profile".to_owned(),
             )
         })?;
@@ -607,7 +630,7 @@ impl PreparedWorkerV2Config {
             measurement.llvm_build_identity(),
             row.ocml,
         )
-        .map_err(|error| WorkerV2ConfigError::Invalid(error.to_string()))
+        .map_err(|error| BuildConfigError::Invalid(error.to_string()))
     }
 
     pub(crate) fn compile_environment_profile(
@@ -615,24 +638,24 @@ impl PreparedWorkerV2Config {
         crate_name: &str,
         source: &Path,
         working_directory: &Path,
-    ) -> Option<WorkerV2CompileEnvironmentProfileV1> {
+    ) -> Option<BuildCompileEnvironmentProfileV1> {
         if !self.selects(crate_name, source, working_directory) {
             return None;
         }
         if self.profile == WorkerConfigProfile::Production {
-            return Some(WorkerV2CompileEnvironmentProfileV1::ProductionGfx942);
+            return Some(BuildCompileEnvironmentProfileV1::ProductionGfx942);
         }
         if self.source_debug_profile.is_some() {
-            return Some(WorkerV2CompileEnvironmentProfileV1::S09AlphaGfx942O0);
+            return Some(BuildCompileEnvironmentProfileV1::S09AlphaGfx942O0);
         }
         #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         {
             if self.profile == WorkerConfigProfile::ScalarGemmV1 {
-                Some(WorkerV2CompileEnvironmentProfileV1::ScalarGemmV1Gfx942)
+                Some(BuildCompileEnvironmentProfileV1::ScalarGemmV1Gfx942)
             } else if self.profile == WorkerConfigProfile::RowSoftmaxV1 {
-                Some(WorkerV2CompileEnvironmentProfileV1::RowSoftmaxV1Gfx942)
+                Some(BuildCompileEnvironmentProfileV1::RowSoftmaxV1Gfx942)
             } else if self.profile == WorkerConfigProfile::GeneralGemmV1 {
-                Some(WorkerV2CompileEnvironmentProfileV1::GeneralGemmV1Gfx942)
+                Some(BuildCompileEnvironmentProfileV1::GeneralGemmV1Gfx942)
             } else {
                 None
             }
@@ -670,14 +693,15 @@ impl PreparedWorkerV2Config {
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) fn load_envelope_inputs(
         &self,
-    ) -> Result<Option<WorkerV2EnvelopeInputsV1>, WorkerV2ConfigError> {
+    ) -> Result<Option<WorkerV2EnvelopeInputsV1>, BuildConfigError> {
         self.envelope_inputs
             .as_ref()
             .map(ConfiguredEnvelopeInputs::load)
             .transpose()
     }
 
-    fn pin_envelope_inputs(&mut self) -> Result<(), WorkerV2ConfigError> {
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    fn pin_envelope_inputs(&mut self) -> Result<(), BuildConfigError> {
         let Some(configured) = self.envelope_inputs.as_mut() else {
             return Ok(());
         };
@@ -799,10 +823,10 @@ fn parse_general_gemm_v1(
     source_debug_profile: Option<WorkerV2SourceDebugProfileV1>,
     envelope_mode: WorkerV2EnvelopeModeV1,
     candidate_output: &WorkerOutputConstraintsV1,
-) -> Result<Option<PreparedGeneralGemmV1Config>, WorkerV2ConfigError> {
+) -> Result<Option<PreparedGeneralGemmV1Config>, BuildConfigError> {
     let Some(value) = root.get("general_gemm_v1") else {
         if profile == WorkerConfigProfile::GeneralGemmV1 {
-            return Err(WorkerV2ConfigError::Invalid(
+            return Err(BuildConfigError::Invalid(
                 "general-GEMM Worker V2 configuration requires general_gemm_v1 qualification-pair pins"
                     .to_owned(),
             ));
@@ -810,17 +834,17 @@ fn parse_general_gemm_v1(
         return Ok(None);
     };
     if profile != WorkerConfigProfile::GeneralGemmV1 {
-        return Err(WorkerV2ConfigError::Invalid(
+        return Err(BuildConfigError::Invalid(
             "general_gemm_v1 pins are valid only for collected-general-gemm-v1".to_owned(),
         ));
     }
     if !providers.is_empty() {
-        return Err(WorkerV2ConfigError::Invalid(
+        return Err(BuildConfigError::Invalid(
             "general-GEMM synchronous worker rejects request-side link providers".to_owned(),
         ));
     }
     if source_debug_profile.is_some() || envelope_mode != WorkerV2EnvelopeModeV1::NonAuthoritative {
-        return Err(WorkerV2ConfigError::Invalid(
+        return Err(BuildConfigError::Invalid(
             "general-GEMM synchronous worker rejects source-debug and load-envelope fields"
                 .to_owned(),
         ));
@@ -836,13 +860,13 @@ fn parse_general_gemm_v1(
         || option("strip-debug") != Some("true")
         || option("verify-each") != Some("true")
     {
-        return Err(WorkerV2ConfigError::Invalid(
+        return Err(BuildConfigError::Invalid(
             "general-GEMM production policy requires COV6, O2, stripped debug, and verify-each"
                 .to_owned(),
         ));
     }
     if candidate_output.max_bytes() != fe2o3_hsaco::MAX_HSACO_BYTES as u64 {
-        return Err(WorkerV2ConfigError::Invalid(format!(
+        return Err(BuildConfigError::Invalid(format!(
             "general-GEMM candidate_output_max_bytes must be exactly {}",
             fe2o3_hsaco::MAX_HSACO_BYTES
         )));
@@ -850,7 +874,7 @@ fn parse_general_gemm_v1(
     let object = exact_object(value, GENERAL_GEMM_V1_KEYS, "general_gemm_v1")?;
     let profile = required_string(object, "profile", "general_gemm_v1")?;
     if profile != GENERAL_GEMM_QUALIFICATION_PAIR_PROFILE_V1 {
-        return Err(WorkerV2ConfigError::Invalid(format!(
+        return Err(BuildConfigError::Invalid(format!(
             "general_gemm_v1.profile has unsupported value {profile:?}"
         )));
     }
@@ -858,7 +882,7 @@ fn parse_general_gemm_v1(
     if proof_timeout_seconds == 0
         || proof_timeout_seconds > u64::from(MAX_GENERAL_GEMM_PROOF_TIMEOUT_SECONDS_V1)
     {
-        return Err(WorkerV2ConfigError::Invalid(format!(
+        return Err(BuildConfigError::Invalid(format!(
             "general_gemm_v1.proof_timeout_seconds must be in 1..={MAX_GENERAL_GEMM_PROOF_TIMEOUT_SECONDS_V1}"
         )));
     }
@@ -879,7 +903,7 @@ fn parse_general_gemm_v1(
         "general_gemm_v1.runtime_closure_v2_manifest_sha256",
     )?;
     if runtime_closure_v2_manifest_sha256 != GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256 {
-        return Err(WorkerV2ConfigError::Invalid(
+        return Err(BuildConfigError::Invalid(
             "general_gemm_v1.runtime_closure_v2_manifest_sha256 differs from the compiled-in reviewed manifest"
                 .to_owned(),
         ));
@@ -900,10 +924,10 @@ fn parse_row_softmax_v1(
     source_debug_profile: Option<WorkerV2SourceDebugProfileV1>,
     envelope_mode: WorkerV2EnvelopeModeV1,
     candidate_output: &WorkerOutputConstraintsV1,
-) -> Result<Option<PreparedRowSoftmaxV1Config>, WorkerV2ConfigError> {
+) -> Result<Option<PreparedRowSoftmaxV1Config>, BuildConfigError> {
     let Some(value) = root.get("row_softmax_v1") else {
         if profile == WorkerConfigProfile::RowSoftmaxV1 {
-            return Err(WorkerV2ConfigError::Invalid(
+            return Err(BuildConfigError::Invalid(
                 "row-softmax Worker V2 configuration requires row_softmax_v1 policy pins"
                     .to_owned(),
             ));
@@ -911,17 +935,17 @@ fn parse_row_softmax_v1(
         return Ok(None);
     };
     if profile != WorkerConfigProfile::RowSoftmaxV1 {
-        return Err(WorkerV2ConfigError::Invalid(
+        return Err(BuildConfigError::Invalid(
             "row_softmax_v1 policy pins are valid only for collected-row-softmax-v1".to_owned(),
         ));
     }
     if !providers.is_empty() {
-        return Err(WorkerV2ConfigError::Invalid(
+        return Err(BuildConfigError::Invalid(
             "row-softmax direct worker rejects request-side link providers".to_owned(),
         ));
     }
     if source_debug_profile.is_some() || envelope_mode != WorkerV2EnvelopeModeV1::NonAuthoritative {
-        return Err(WorkerV2ConfigError::Invalid(
+        return Err(BuildConfigError::Invalid(
             "row-softmax production policy rejects source-debug and generic load envelopes"
                 .to_owned(),
         ));
@@ -936,13 +960,13 @@ fn parse_row_softmax_v1(
         || !required_option("strip-debug", "true")
         || !required_option("verify-each", "true")
     {
-        return Err(WorkerV2ConfigError::Invalid(
+        return Err(BuildConfigError::Invalid(
             "row-softmax production policy requires COV6, O0, stripped debug, and verify-each"
                 .to_owned(),
         ));
     }
     if candidate_output.max_bytes() != fe2o3_hsaco::MAX_HSACO_BYTES as u64 {
-        return Err(WorkerV2ConfigError::Invalid(format!(
+        return Err(BuildConfigError::Invalid(format!(
             "row-softmax candidate_output_max_bytes must be exactly {}",
             fe2o3_hsaco::MAX_HSACO_BYTES
         )));
@@ -955,7 +979,7 @@ fn parse_row_softmax_v1(
         "dominant" => ExactRowSoftmaxV1CaseV1::Dominant,
         "exceptional" => ExactRowSoftmaxV1CaseV1::Exceptional,
         other => {
-            return Err(WorkerV2ConfigError::Invalid(format!(
+            return Err(BuildConfigError::Invalid(format!(
                 "row_softmax_v1.case has unsupported value {other:?}"
             )));
         }
@@ -964,21 +988,21 @@ fn parse_row_softmax_v1(
         "unmasked" => RowSoftmaxV1MaskProfileV1::Unmasked,
         "alternating" => RowSoftmaxV1MaskProfileV1::Alternating,
         other => {
-            return Err(WorkerV2ConfigError::Invalid(format!(
+            return Err(BuildConfigError::Invalid(format!(
                 "row_softmax_v1.mask has unsupported value {other:?}"
             )));
         }
     };
     let row_elements = u32::try_from(required_u64(object, "row_elements", "row_softmax_v1")?)
         .map_err(|_| {
-            WorkerV2ConfigError::Invalid("row_softmax_v1.row_elements exceeds u32".to_owned())
+            BuildConfigError::Invalid("row_softmax_v1.row_elements exceeds u32".to_owned())
         })?;
     let comparison_policy = required_string(object, "comparison_policy", "row_softmax_v1")?;
     if comparison_policy.is_empty()
         || comparison_policy.len() > 128
         || !comparison_policy.is_ascii()
     {
-        return Err(WorkerV2ConfigError::Invalid(
+        return Err(BuildConfigError::Invalid(
             "row_softmax_v1.comparison_policy is not bounded ASCII".to_owned(),
         ));
     }
@@ -997,7 +1021,7 @@ fn parse_row_softmax_v1(
             "row_softmax_v1.provider_source_identities",
         )?,
     )
-    .map_err(|error| WorkerV2ConfigError::Invalid(error.to_string()))?;
+    .map_err(|error| BuildConfigError::Invalid(error.to_string()))?;
     let ocml_files = decode_identity_array::<4, 32>(
         required_value(object, "ocml_file_sha256", "row_softmax_v1")?,
         "row_softmax_v1.ocml_file_sha256",
@@ -1009,7 +1033,7 @@ fn parse_row_softmax_v1(
             "row_softmax_v1.ocml_manifest_sha256",
         )?,
     )
-    .map_err(|error| WorkerV2ConfigError::Invalid(error.to_string()))?;
+    .map_err(|error| BuildConfigError::Invalid(error.to_string()))?;
     Ok(Some(PreparedRowSoftmaxV1Config {
         provider,
         ocml,
@@ -1020,23 +1044,24 @@ fn parse_row_softmax_v1(
     }))
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn parse_envelope_inputs(
     root: &Map<String, Value>,
-) -> Result<(WorkerV2EnvelopeModeV1, Option<ConfiguredEnvelopeInputs>), WorkerV2ConfigError> {
+) -> Result<(WorkerV2EnvelopeModeV1, Option<ConfiguredEnvelopeInputs>), BuildConfigError> {
     let mode = match root.get("load_envelope") {
         None => WorkerV2EnvelopeModeV1::NonAuthoritative,
         Some(Value::String(value)) if value == "required" => WorkerV2EnvelopeModeV1::Required,
-        Some(_) => Err(WorkerV2ConfigError::Invalid(
+        Some(_) => Err(BuildConfigError::Invalid(
             "configuration.load_envelope must be exactly \"required\" when present".to_owned(),
         ))?,
     };
     match (mode, root.get("load_envelope_inputs")) {
         (WorkerV2EnvelopeModeV1::NonAuthoritative, None) => Ok((mode, None)),
-        (WorkerV2EnvelopeModeV1::NonAuthoritative, Some(_)) => Err(WorkerV2ConfigError::Invalid(
+        (WorkerV2EnvelopeModeV1::NonAuthoritative, Some(_)) => Err(BuildConfigError::Invalid(
             "configuration.load_envelope_inputs is valid only when load_envelope is \"required\""
                 .to_owned(),
         )),
-        (WorkerV2EnvelopeModeV1::Required, None) => Err(WorkerV2ConfigError::Invalid(
+        (WorkerV2EnvelopeModeV1::Required, None) => Err(BuildConfigError::Invalid(
             "configuration.load_envelope=\"required\" requires load_envelope_inputs".to_owned(),
         )),
         (WorkerV2EnvelopeModeV1::Required, Some(value)) => {
@@ -1047,12 +1072,12 @@ fn parse_envelope_inputs(
             )?;
             let expected = declared_identity(object, "load_envelope_inputs")?;
             let declared_len = usize::try_from(expected.byte_len()).map_err(|_| {
-                WorkerV2ConfigError::Invalid(
+                BuildConfigError::Invalid(
                     "load_envelope_inputs.byte_len exceeds the platform bound".to_owned(),
                 )
             })?;
             if declared_len > MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES {
-                return Err(WorkerV2ConfigError::Invalid(format!(
+                return Err(BuildConfigError::Invalid(format!(
                     "load_envelope_inputs.byte_len exceeds {MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES} bytes"
                 )));
             }
@@ -1068,35 +1093,36 @@ fn parse_envelope_inputs(
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl ConfiguredEnvelopeInputs {
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    fn load(&self) -> Result<WorkerV2EnvelopeInputsV1, WorkerV2ConfigError> {
+    fn load(&self) -> Result<WorkerV2EnvelopeInputsV1, BuildConfigError> {
         if let Some(inputs) = &self.pinned {
             return Ok(inputs.as_ref().clone());
         }
         self.read_exact()
     }
 
-    fn read_exact(&self) -> Result<WorkerV2EnvelopeInputsV1, WorkerV2ConfigError> {
+    fn read_exact(&self) -> Result<WorkerV2EnvelopeInputsV1, BuildConfigError> {
         let declared_len = usize::try_from(self.expected.byte_len()).map_err(|_| {
-            WorkerV2ConfigError::Invalid(
+            BuildConfigError::Invalid(
                 "load_envelope_inputs.byte_len exceeds the platform bound".to_owned(),
             )
         })?;
         let bytes = read_measured_private(&self.path, declared_len, "envelope input capsule")?;
         let measured: [u8; 32] = Sha256::digest(&bytes).into();
         if self.expected.sha256() != &measured {
-            return Err(WorkerV2ConfigError::Invalid(
+            return Err(BuildConfigError::Invalid(
                 "load_envelope_inputs.sha256 does not match the exact capsule bytes".to_owned(),
             ));
         }
         let inputs = WorkerV2EnvelopeInputsV1::from_bytes(&bytes).map_err(|error| {
-            WorkerV2ConfigError::Invalid(format!(
+            BuildConfigError::Invalid(format!(
                 "load_envelope_inputs is not a canonical capsule: {error}"
             ))
         })?;
         if inputs.to_bytes() != bytes {
-            return Err(WorkerV2ConfigError::Invalid(
+            return Err(BuildConfigError::Invalid(
                 "load_envelope_inputs capsule encoding is not canonical".to_owned(),
             ));
         }
@@ -1109,10 +1135,12 @@ fn transitive_identity(
     manifest: &[u8],
     worker: &PinnedWorkerV1,
     providers: &[WorkerInputV1],
-    envelope_inputs: Option<&ConfiguredEnvelopeInputs>,
-) -> WorkerV2ConfigIdentity {
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))] envelope_inputs: Option<
+        &ConfiguredEnvelopeInputs,
+    >,
+) -> BuildConfigIdentity {
     let mut hash = Sha256::new();
-    update_identity(&mut hash, b"fe2o3-worker-v2-transitive-config-v2");
+    update_identity(&mut hash, b"fe2o3-build-config-transitive-v1");
     update_identity(&mut hash, profile.environment_value().as_bytes());
     update_identity(&mut hash, manifest);
     let measurement = worker.measurement();
@@ -1130,12 +1158,13 @@ fn transitive_identity(
         update_identity(&mut hash, &provider.identity().byte_len().to_le_bytes());
         update_identity(&mut hash, provider.bytes());
     }
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     if let Some(inputs) = envelope_inputs {
         update_identity(&mut hash, &[1]);
         update_identity(&mut hash, inputs.expected.sha256());
         update_identity(&mut hash, &inputs.expected.byte_len().to_le_bytes());
     }
-    WorkerV2ConfigIdentity(hash.finalize().into())
+    BuildConfigIdentity(hash.finalize().into())
 }
 
 fn update_identity(hash: &mut Sha256, bytes: &[u8]) {
@@ -1154,7 +1183,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 #[derive(Debug)]
-pub(crate) enum WorkerV2ConfigError {
+pub(crate) enum BuildConfigError {
     MissingConfiguration,
     UnexpectedConfiguration,
     Io {
@@ -1169,7 +1198,7 @@ pub(crate) enum WorkerV2ConfigError {
     Worker(WorkerExecutionError),
 }
 
-impl fmt::Display for WorkerV2ConfigError {
+impl fmt::Display for BuildConfigError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingConfiguration => write!(
@@ -1208,7 +1237,7 @@ impl fmt::Display for WorkerV2ConfigError {
     }
 }
 
-impl Error for WorkerV2ConfigError {
+impl Error for BuildConfigError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Io { error, .. } => Some(error),
@@ -1223,7 +1252,7 @@ impl Error for WorkerV2ConfigError {
     }
 }
 
-fn prepare_worker(value: &Value) -> Result<PinnedWorkerV1, WorkerV2ConfigError> {
+fn prepare_worker(value: &Value) -> Result<PinnedWorkerV1, BuildConfigError> {
     let object = exact_object(value, WORKER_KEYS, "worker")?;
     let path = absolute_json_path(required_string(object, "path", "worker")?, "worker")?;
     let identity = declared_identity(object, "worker")?;
@@ -1232,16 +1261,16 @@ fn prepare_worker(value: &Value) -> Result<PinnedWorkerV1, WorkerV2ConfigError> 
         required_string(object, "worker_build_identity", "worker")?,
         required_string(object, "llvm_build_identity", "worker")?,
     )
-    .map_err(WorkerV2ConfigError::Worker)?;
-    PinnedWorkerV1::open(path, measurement).map_err(WorkerV2ConfigError::Worker)
+    .map_err(BuildConfigError::Worker)?;
+    PinnedWorkerV1::open(path, measurement).map_err(BuildConfigError::Worker)
 }
 
-fn prepare_providers(value: &Value) -> Result<Vec<WorkerInputV1>, WorkerV2ConfigError> {
+fn prepare_providers(value: &Value) -> Result<Vec<WorkerInputV1>, BuildConfigError> {
     let values = value
         .as_array()
-        .ok_or_else(|| WorkerV2ConfigError::Invalid("providers must be an array".to_owned()))?;
+        .ok_or_else(|| BuildConfigError::Invalid("providers must be an array".to_owned()))?;
     if values.len() >= MAX_LINK_INPUTS {
-        return Err(WorkerV2ConfigError::Invalid(format!(
+        return Err(BuildConfigError::Invalid(format!(
             "providers must contain fewer than {MAX_LINK_INPUTS} entries"
         )));
     }
@@ -1254,7 +1283,7 @@ fn prepare_providers(value: &Value) -> Result<Vec<WorkerInputV1>, WorkerV2Config
         let path = absolute_json_path(required_string(object, "path", &context)?, &context)?;
         let identity = declared_identity(object, &context)?;
         if previous.is_some_and(|previous| previous >= identity) {
-            return Err(WorkerV2ConfigError::Invalid(
+            return Err(BuildConfigError::Invalid(
                 "providers must be strictly ordered by declared content identity".to_owned(),
             ));
         }
@@ -1264,7 +1293,7 @@ fn prepare_providers(value: &Value) -> Result<Vec<WorkerInputV1>, WorkerV2Config
             "amdgpu-relocatable" => WorkerInputKindV1::AmdGpuRelocatable,
             "llvm-text-ir" => WorkerInputKindV1::LlvmTextIr,
             other => {
-                return Err(WorkerV2ConfigError::Invalid(format!(
+                return Err(BuildConfigError::Invalid(format!(
                     "{context}.kind has unsupported value {other:?}"
                 )));
             }
@@ -1276,18 +1305,18 @@ fn prepare_providers(value: &Value) -> Result<Vec<WorkerInputV1>, WorkerV2Config
         )?;
         providers.push(
             WorkerInputV1::from_declared(kind, identity, bytes)
-                .map_err(WorkerV2ConfigError::Protocol)?,
+                .map_err(BuildConfigError::Protocol)?,
         );
     }
     Ok(providers)
 }
 
-fn parse_link_options(value: &Value) -> Result<Vec<LinkOptionV1>, WorkerV2ConfigError> {
+fn parse_link_options(value: &Value) -> Result<Vec<LinkOptionV1>, BuildConfigError> {
     let values = value
         .as_array()
-        .ok_or_else(|| WorkerV2ConfigError::Invalid("link_options must be an array".to_owned()))?;
+        .ok_or_else(|| BuildConfigError::Invalid("link_options must be an array".to_owned()))?;
     if values.len() != REQUIRED_OPTIONS.len() {
-        return Err(WorkerV2ConfigError::Invalid(
+        return Err(BuildConfigError::Invalid(
             "link_options must explicitly contain code-object-version, opt-level, strip-debug, and verify-each"
                 .to_owned(),
         ));
@@ -1302,11 +1331,11 @@ fn parse_link_options(value: &Value) -> Result<Vec<LinkOptionV1>, WorkerV2Config
         let name = required_string(object, "name", &context)?;
         let option_value = required_string(object, "value", &context)?;
         if name != *expected_name || !allowed_values.contains(&option_value) {
-            return Err(WorkerV2ConfigError::Invalid(format!(
+            return Err(BuildConfigError::Invalid(format!(
                 "{context} must be {expected_name:?} with one of {allowed_values:?}"
             )));
         }
-        options.push(LinkOptionV1::new(name, option_value).map_err(WorkerV2ConfigError::LinkPlan)?);
+        options.push(LinkOptionV1::new(name, option_value).map_err(BuildConfigError::LinkPlan)?);
     }
     Ok(options)
 }
@@ -1314,12 +1343,12 @@ fn parse_link_options(value: &Value) -> Result<Vec<LinkOptionV1>, WorkerV2Config
 fn parse_source_debug_profile(
     root: &Map<String, Value>,
     options: &[LinkOptionV1],
-) -> Result<Option<WorkerV2SourceDebugProfileV1>, WorkerV2ConfigError> {
+) -> Result<Option<WorkerV2SourceDebugProfileV1>, BuildConfigError> {
     let Some(value) = root.get("source_debug_profile") else {
         return Ok(None);
     };
     if value.as_str() != Some(S09_ALPHA_DEBUG_PROFILE) {
-        return Err(WorkerV2ConfigError::Invalid(format!(
+        return Err(BuildConfigError::Invalid(format!(
             "configuration.source_debug_profile must be exactly {S09_ALPHA_DEBUG_PROFILE:?}"
         )));
     }
@@ -1334,7 +1363,7 @@ fn parse_source_debug_profile(
         || option("strip-debug") != Some("false")
         || option("verify-each") != Some("true")
     {
-        return Err(WorkerV2ConfigError::Invalid(
+        return Err(BuildConfigError::Invalid(
             "the S09 alpha source-debug profile requires code-object-version=6, opt-level=0, strip-debug=false, and verify-each=true"
                 .to_owned(),
         ));
@@ -1342,27 +1371,27 @@ fn parse_source_debug_profile(
     Ok(Some(WorkerV2SourceDebugProfileV1::S09AlphaGfx942O0))
 }
 
-fn parse_limits(value: &Value) -> Result<WorkerExecutionLimitsV1, WorkerV2ConfigError> {
+fn parse_limits(value: &Value) -> Result<WorkerExecutionLimitsV1, BuildConfigError> {
     let object = exact_object(value, LIMIT_KEYS, "limits")?;
     let timeout_ms = required_u64(object, "timeout_ms", "limits")?;
     let stdout_bytes = usize::try_from(required_u64(object, "stdout_bytes", "limits")?)
-        .map_err(|_| WorkerV2ConfigError::Invalid("limits.stdout_bytes is too large".to_owned()))?;
+        .map_err(|_| BuildConfigError::Invalid("limits.stdout_bytes is too large".to_owned()))?;
     let stderr_bytes = usize::try_from(required_u64(object, "stderr_bytes", "limits")?)
-        .map_err(|_| WorkerV2ConfigError::Invalid("limits.stderr_bytes is too large".to_owned()))?;
+        .map_err(|_| BuildConfigError::Invalid("limits.stderr_bytes is too large".to_owned()))?;
     WorkerExecutionLimitsV1::new(
         Duration::from_millis(timeout_ms),
         stdout_bytes,
         stderr_bytes,
     )
-    .map_err(WorkerV2ConfigError::Worker)
+    .map_err(BuildConfigError::Worker)
 }
 
-fn parse_units(value: &Value) -> Result<Vec<ConfiguredUnit>, WorkerV2ConfigError> {
+fn parse_units(value: &Value) -> Result<Vec<ConfiguredUnit>, BuildConfigError> {
     let values = value
         .as_array()
-        .ok_or_else(|| WorkerV2ConfigError::Invalid("units must be an array".to_owned()))?;
+        .ok_or_else(|| BuildConfigError::Invalid("units must be an array".to_owned()))?;
     if values.is_empty() || values.len() > 1024 {
-        return Err(WorkerV2ConfigError::Invalid(
+        return Err(BuildConfigError::Invalid(
             "units must contain 1..=1024 exact compilation-unit selectors".to_owned(),
         ));
     }
@@ -1374,7 +1403,7 @@ fn parse_units(value: &Value) -> Result<Vec<ConfiguredUnit>, WorkerV2ConfigError
         let source = required_string(object, "source", &context)?;
         let working_directory = required_string(object, "working_directory", &context)?;
         if !valid_selector_text(crate_name) || !valid_selector_text(source) {
-            return Err(WorkerV2ConfigError::Invalid(format!(
+            return Err(BuildConfigError::Invalid(format!(
                 "{context} contains an empty, non-ASCII, control-bearing, or oversized selector"
             )));
         }
@@ -1389,7 +1418,7 @@ fn parse_units(value: &Value) -> Result<Vec<ConfiguredUnit>, WorkerV2ConfigError
                 .to_owned(),
         };
         if units.last().is_some_and(|previous| previous >= &unit) {
-            return Err(WorkerV2ConfigError::Invalid(
+            return Err(BuildConfigError::Invalid(
                 "units must be strictly ordered by crate_name, source, and working_directory"
                     .to_owned(),
             ));
@@ -1402,11 +1431,11 @@ fn parse_units(value: &Value) -> Result<Vec<ConfiguredUnit>, WorkerV2ConfigError
 fn declared_identity(
     object: &Map<String, Value>,
     context: &str,
-) -> Result<ContentIdentityV1, WorkerV2ConfigError> {
+) -> Result<ContentIdentityV1, BuildConfigError> {
     let sha256 = decode_sha256(required_string(object, "sha256", context)?, context)?;
     let byte_len = required_u64(object, "byte_len", context)?;
     if byte_len == 0 {
-        return Err(WorkerV2ConfigError::Invalid(format!(
+        return Err(BuildConfigError::Invalid(format!(
             "{context}.byte_len must be nonzero"
         )));
     }
@@ -1417,42 +1446,51 @@ fn exact_object<'a>(
     value: &'a Value,
     expected: &[&str],
     context: &str,
-) -> Result<&'a Map<String, Value>, WorkerV2ConfigError> {
+) -> Result<&'a Map<String, Value>, BuildConfigError> {
     let object = value
         .as_object()
-        .ok_or_else(|| WorkerV2ConfigError::Invalid(format!("{context} must be an object")))?;
+        .ok_or_else(|| BuildConfigError::Invalid(format!("{context} must be an object")))?;
     let keys = object.keys().map(String::as_str).collect::<Vec<_>>();
     if keys != expected {
-        return Err(WorkerV2ConfigError::Invalid(format!(
+        return Err(BuildConfigError::Invalid(format!(
             "{context} must contain exactly the fields {expected:?}; found {keys:?}"
         )));
     }
     Ok(object)
 }
 
-fn exact_root_object(value: &Value) -> Result<&Map<String, Value>, WorkerV2ConfigError> {
-    let object = value.as_object().ok_or_else(|| {
-        WorkerV2ConfigError::Invalid("configuration must be an object".to_owned())
-    })?;
+fn exact_root_object(value: &Value) -> Result<&Map<String, Value>, BuildConfigError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| BuildConfigError::Invalid("configuration must be an object".to_owned()))?;
     let keys = object.keys().map(String::as_str).collect::<Vec<_>>();
-    let profile_neutral_keys = keys
-        .iter()
-        .copied()
-        .filter(|key| {
-            !matches!(
-                *key,
-                "source_debug_profile" | "row_softmax_v1" | "general_gemm_v1"
-            )
-        })
-        .collect::<Vec<_>>();
-    if profile_neutral_keys != ROOT_KEYS
-        && profile_neutral_keys != ROOT_KEYS_WITH_ENVELOPE_MODE
-        && profile_neutral_keys != ROOT_KEYS_WITH_ENVELOPE_INPUTS
-        && profile_neutral_keys != ROOT_KEYS_WITH_ENVELOPE
-    {
-        return Err(WorkerV2ConfigError::Invalid(format!(
-            "configuration contains unknown or duplicate configuration fields; found {keys:?}"
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    if keys != ROOT_KEYS {
+        return Err(BuildConfigError::Invalid(format!(
+            "production configuration must contain exactly the fields {ROOT_KEYS:?}; found {keys:?}"
         )));
+    }
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    {
+        let profile_neutral_keys = keys
+            .iter()
+            .copied()
+            .filter(|key| {
+                !matches!(
+                    *key,
+                    "source_debug_profile" | "row_softmax_v1" | "general_gemm_v1"
+                )
+            })
+            .collect::<Vec<_>>();
+        if profile_neutral_keys != ROOT_KEYS
+            && profile_neutral_keys != ROOT_KEYS_WITH_ENVELOPE_MODE
+            && profile_neutral_keys != ROOT_KEYS_WITH_ENVELOPE_INPUTS
+            && profile_neutral_keys != ROOT_KEYS_WITH_ENVELOPE
+        {
+            return Err(BuildConfigError::Invalid(format!(
+                "configuration contains unknown or duplicate configuration fields; found {keys:?}"
+            )));
+        }
     }
     Ok(object)
 }
@@ -1461,39 +1499,39 @@ fn required_value<'a>(
     object: &'a Map<String, Value>,
     name: &str,
     context: &str,
-) -> Result<&'a Value, WorkerV2ConfigError> {
+) -> Result<&'a Value, BuildConfigError> {
     object
         .get(name)
-        .ok_or_else(|| WorkerV2ConfigError::Invalid(format!("{context} is missing {name:?}")))
+        .ok_or_else(|| BuildConfigError::Invalid(format!("{context} is missing {name:?}")))
 }
 
 fn required_string<'a>(
     object: &'a Map<String, Value>,
     name: &str,
     context: &str,
-) -> Result<&'a str, WorkerV2ConfigError> {
+) -> Result<&'a str, BuildConfigError> {
     required_value(object, name, context)?
         .as_str()
-        .ok_or_else(|| WorkerV2ConfigError::Invalid(format!("{context}.{name} must be a string")))
+        .ok_or_else(|| BuildConfigError::Invalid(format!("{context}.{name} must be a string")))
 }
 
 fn required_u64(
     object: &Map<String, Value>,
     name: &str,
     context: &str,
-) -> Result<u64, WorkerV2ConfigError> {
+) -> Result<u64, BuildConfigError> {
     required_value(object, name, context)?
         .as_u64()
         .ok_or_else(|| {
-            WorkerV2ConfigError::Invalid(format!(
+            BuildConfigError::Invalid(format!(
                 "{context}.{name} must be an unsigned 64-bit integer"
             ))
         })
 }
 
-fn absolute_json_path(value: &str, context: &str) -> Result<PathBuf, WorkerV2ConfigError> {
+fn absolute_json_path(value: &str, context: &str) -> Result<PathBuf, BuildConfigError> {
     if value.len() > MAX_CONFIG_PATH_BYTES || value.as_bytes().contains(&0) {
-        return Err(WorkerV2ConfigError::Invalid(format!(
+        return Err(BuildConfigError::Invalid(format!(
             "{context}.path is empty or exceeds the path bound"
         )));
     }
@@ -1502,14 +1540,14 @@ fn absolute_json_path(value: &str, context: &str) -> Result<PathBuf, WorkerV2Con
     Ok(path)
 }
 
-fn require_absolute_path(path: &Path, context: &str) -> Result<(), WorkerV2ConfigError> {
+fn require_absolute_path(path: &Path, context: &str) -> Result<(), BuildConfigError> {
     let bytes = path.as_os_str().as_encoded_bytes();
     if !path.is_absolute()
         || bytes.is_empty()
         || bytes.len() > MAX_CONFIG_PATH_BYTES
         || bytes.contains(&0)
     {
-        return Err(WorkerV2ConfigError::Invalid(format!(
+        return Err(BuildConfigError::Invalid(format!(
             "{context} path must be a bounded absolute path"
         )));
     }
@@ -1517,12 +1555,9 @@ fn require_absolute_path(path: &Path, context: &str) -> Result<(), WorkerV2Confi
 }
 
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-fn require_closed_child_manifest_path(
-    path: &Path,
-    context: &str,
-) -> Result<(), WorkerV2ConfigError> {
+fn require_closed_child_manifest_path(path: &Path, context: &str) -> Result<(), BuildConfigError> {
     let Some(value) = path.to_str() else {
-        return Err(WorkerV2ConfigError::Invalid(format!(
+        return Err(BuildConfigError::Invalid(format!(
             "{context} path must be canonical absolute UTF-8 for the reviewed child"
         )));
     };
@@ -1531,7 +1566,7 @@ fn require_closed_child_manifest_path(
             .split('/')
             .any(|component| component.is_empty() || matches!(component, "." | ".."))
     {
-        return Err(WorkerV2ConfigError::Invalid(format!(
+        return Err(BuildConfigError::Invalid(format!(
             "{context} path must be canonical absolute UTF-8 for the reviewed child"
         )));
     }
@@ -1542,17 +1577,17 @@ fn read_bounded(
     path: &Path,
     maximum: usize,
     kind: &'static str,
-) -> Result<Vec<u8>, WorkerV2ConfigError> {
+) -> Result<Vec<u8>, BuildConfigError> {
     let mut file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
-        .map_err(|error| WorkerV2ConfigError::Io {
+        .map_err(|error| BuildConfigError::Io {
             kind,
             path: path.to_owned(),
             error,
         })?;
-    let initial = file.metadata().map_err(|error| WorkerV2ConfigError::Io {
+    let initial = file.metadata().map_err(|error| BuildConfigError::Io {
         kind,
         path: path.to_owned(),
         error,
@@ -1561,7 +1596,7 @@ fn read_bounded(
     if !initial.file_type().is_file()
         || initial_len.is_none_or(|length| length == 0 || length > maximum)
     {
-        return Err(WorkerV2ConfigError::Invalid(format!(
+        return Err(BuildConfigError::Invalid(format!(
             "Worker V2 {kind} {} must be a regular file containing 1..={maximum} bytes",
             path.display()
         )));
@@ -1570,12 +1605,12 @@ fn read_bounded(
     Read::by_ref(&mut file)
         .take((maximum + 1) as u64)
         .read_to_end(&mut bytes)
-        .map_err(|error| WorkerV2ConfigError::Io {
+        .map_err(|error| BuildConfigError::Io {
             kind,
             path: path.to_owned(),
             error,
         })?;
-    let final_metadata = file.metadata().map_err(|error| WorkerV2ConfigError::Io {
+    let final_metadata = file.metadata().map_err(|error| BuildConfigError::Io {
         kind,
         path: path.to_owned(),
         error,
@@ -1591,7 +1626,7 @@ fn read_bounded(
         || final_metadata.ctime() != initial.ctime()
         || final_metadata.ctime_nsec() != initial.ctime_nsec()
     {
-        return Err(WorkerV2ConfigError::Invalid(format!(
+        return Err(BuildConfigError::Invalid(format!(
             "Worker V2 {kind} {} changed while it was read",
             path.display()
         )));
@@ -1599,13 +1634,14 @@ fn read_bounded(
     Ok(bytes)
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn read_measured_private(
     path: &Path,
     exact_len: usize,
     kind: &'static str,
-) -> Result<Vec<u8>, WorkerV2ConfigError> {
+) -> Result<Vec<u8>, BuildConfigError> {
     if exact_len == 0 || exact_len > MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES {
-        return Err(WorkerV2ConfigError::Invalid(format!(
+        return Err(BuildConfigError::Invalid(format!(
             "Worker V2 {kind} {} has an invalid declared length",
             path.display()
         )));
@@ -1615,12 +1651,12 @@ fn read_measured_private(
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
         Mode::empty(),
     )
-    .map_err(|error| WorkerV2ConfigError::Io {
+    .map_err(|error| BuildConfigError::Io {
         kind,
         path: path.to_owned(),
         error: std::io::Error::from(error),
     })?;
-    let initial = fstat(&descriptor).map_err(|error| WorkerV2ConfigError::Io {
+    let initial = fstat(&descriptor).map_err(|error| BuildConfigError::Io {
         kind,
         path: path.to_owned(),
         error: std::io::Error::from(error),
@@ -1630,7 +1666,7 @@ fn read_measured_private(
         || initial.st_mode & 0o077 != 0
         || usize::try_from(initial.st_size).ok() != Some(exact_len)
     {
-        return Err(WorkerV2ConfigError::Invalid(format!(
+        return Err(BuildConfigError::Invalid(format!(
             "Worker V2 {kind} {} must be one private, single-link regular file of the declared size",
             path.display()
         )));
@@ -1640,12 +1676,12 @@ fn read_measured_private(
     Read::by_ref(&mut file)
         .take((exact_len + 1) as u64)
         .read_to_end(&mut bytes)
-        .map_err(|error| WorkerV2ConfigError::Io {
+        .map_err(|error| BuildConfigError::Io {
             kind,
             path: path.to_owned(),
             error,
         })?;
-    let final_stat = fstat(&file).map_err(|error| WorkerV2ConfigError::Io {
+    let final_stat = fstat(&file).map_err(|error| BuildConfigError::Io {
         kind,
         path: path.to_owned(),
         error: std::io::Error::from(error),
@@ -1662,7 +1698,7 @@ fn read_measured_private(
         || final_stat.st_mode & 0o077 != 0
         || usize::try_from(final_stat.st_size).ok() != Some(exact_len)
     {
-        return Err(WorkerV2ConfigError::Invalid(format!(
+        return Err(BuildConfigError::Invalid(format!(
             "Worker V2 {kind} {} changed while it was measured",
             path.display()
         )));
@@ -1670,13 +1706,13 @@ fn read_measured_private(
     Ok(bytes)
 }
 
-fn decode_sha256(value: &str, context: &str) -> Result<[u8; 32], WorkerV2ConfigError> {
+fn decode_sha256(value: &str, context: &str) -> Result<[u8; 32], BuildConfigError> {
     if value.len() != 64
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
-        return Err(WorkerV2ConfigError::Invalid(format!(
+        return Err(BuildConfigError::Invalid(format!(
             "{context}.sha256 must be exactly 64 lowercase hexadecimal digits"
         )));
     }
@@ -1691,13 +1727,13 @@ fn decode_sha256(value: &str, context: &str) -> Result<[u8; 32], WorkerV2ConfigE
 fn decode_fixed_hex<const N: usize>(
     value: &str,
     context: &str,
-) -> Result<[u8; N], WorkerV2ConfigError> {
+) -> Result<[u8; N], BuildConfigError> {
     if value.len() != N * 2
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
-        return Err(WorkerV2ConfigError::Invalid(format!(
+        return Err(BuildConfigError::Invalid(format!(
             "{context} must be exactly {} lowercase hexadecimal digits",
             N * 2
         )));
@@ -1713,19 +1749,19 @@ fn decode_fixed_hex<const N: usize>(
 fn decode_identity_array<const COUNT: usize, const WIDTH: usize>(
     value: &Value,
     context: &str,
-) -> Result<[[u8; WIDTH]; COUNT], WorkerV2ConfigError> {
+) -> Result<[[u8; WIDTH]; COUNT], BuildConfigError> {
     let values = value
         .as_array()
         .filter(|values| values.len() == COUNT)
         .ok_or_else(|| {
-            WorkerV2ConfigError::Invalid(format!(
+            BuildConfigError::Invalid(format!(
                 "{context} must contain exactly {COUNT} hexadecimal identities"
             ))
         })?;
     let mut result = [[0_u8; WIDTH]; COUNT];
     for (index, value) in values.iter().enumerate() {
         let value = value.as_str().ok_or_else(|| {
-            WorkerV2ConfigError::Invalid(format!("{context}[{index}] must be a string"))
+            BuildConfigError::Invalid(format!("{context}[{index}] must be a string"))
         })?;
         result[index] = decode_fixed_hex(value, &format!("{context}[{index}]"))?;
     }
@@ -1829,52 +1865,52 @@ mod tests {
     #[test]
     fn v1_execute_path_preserves_its_handoff_and_evidence_types() {
         let _execute: fn(
-            &PreparedWorkerV2Config,
+            &PreparedBuildConfig,
             ConsumedCompilerModuleHandoffV1,
         )
             -> Result<InertFirstBuildWorkerV2EvidenceV1, FirstBuildWorkerV2Error> =
-            PreparedWorkerV2Config::execute;
+            PreparedBuildConfig::execute;
     }
 
     #[test]
     fn protected_execute_path_consumes_v2_and_returns_protected_evidence() {
         let _execute: fn(
-            &PreparedWorkerV2Config,
+            &PreparedBuildConfig,
             ConsumedCompilerModuleHandoffV2,
         ) -> Result<
             InertProtectedFirstBuildWorkerV2EvidenceV1,
             ProtectedFirstBuildWorkerV2Error,
-        > = PreparedWorkerV2Config::execute_protected;
+        > = PreparedBuildConfig::execute_protected;
     }
 
     #[test]
     fn protected_v3_execute_path_retains_parent_receipt_and_native_evidence() {
         let _execute: fn(
-            &PreparedWorkerV2Config,
+            &PreparedBuildConfig,
             ParentConsumedProductionHandoff,
         ) -> Result<
             InertProtectedFirstBuildWorkerV3EvidenceV1,
             ProtectedFirstBuildWorkerV3Error,
-        > = PreparedWorkerV2Config::execute_production;
+        > = PreparedBuildConfig::execute_production;
 
         let _preflight: fn(
-            &PreparedWorkerV2Config,
+            &PreparedBuildConfig,
             &InertSemanticCompilerModuleHandoffV3,
             CompilerModuleHandoffReceiptV3,
             CompilerClosureV2,
         ) -> Result<
             PreparedProtectedFirstBuildWorkerV3PreflightV1,
             ProtectedFirstBuildWorkerV3Error,
-        > = PreparedWorkerV2Config::preflight_production;
+        > = PreparedBuildConfig::preflight_production;
 
         let _execute_preflighted: fn(
-            &PreparedWorkerV2Config,
+            &PreparedBuildConfig,
             ParentConsumedProductionHandoff,
             PreparedProtectedFirstBuildWorkerV3PreflightV1,
         ) -> Result<
             InertProtectedFirstBuildWorkerV3EvidenceV1,
             ProtectedFirstBuildWorkerV3Error,
-        > = PreparedWorkerV2Config::execute_preflighted_production;
+        > = PreparedBuildConfig::execute_preflighted_production;
     }
 
     fn row_softmax_manifest(directory: &TestDirectory) -> PathBuf {
@@ -1930,65 +1966,62 @@ mod tests {
     #[test]
     fn requires_configuration_for_production_and_qualification_profiles() {
         assert!(matches!(
-            PreparedWorkerV2Config::from_environment_values(
+            PreparedBuildConfig::from_environment_values(
                 Some(OsStr::new("production-v1")),
                 None,
                 None,
             ),
-            Err(WorkerV2ConfigError::Invalid(reason))
+            Err(BuildConfigError::Invalid(reason))
                 if reason.contains("FE2O3_CODEGEN_PIPELINE has been removed")
         ));
         assert!(matches!(
-            PreparedWorkerV2Config::from_selection(None, None),
-            Err(WorkerV2ConfigError::MissingConfiguration)
+            PreparedBuildConfig::from_selection(None, None),
+            Err(BuildConfigError::MissingConfiguration)
         ));
         assert!(matches!(
-            PreparedWorkerV2Config::from_selection(Some(OsStr::new(WORKER_V2_PIPELINE)), None),
-            Err(WorkerV2ConfigError::MissingConfiguration)
+            PreparedBuildConfig::from_selection(Some(OsStr::new(WORKER_V2_PIPELINE)), None),
+            Err(BuildConfigError::MissingConfiguration)
         ));
         assert!(matches!(
-            PreparedWorkerV2Config::from_selection(
+            PreparedBuildConfig::from_selection(
                 Some(OsStr::new(OBSOLETE_PRODUCTION_SELECTOR)),
                 None
             ),
-            Err(WorkerV2ConfigError::Invalid(reason))
+            Err(BuildConfigError::Invalid(reason))
                 if reason.contains("must be unset for production compilation")
         ));
         assert!(matches!(
-            PreparedWorkerV2Config::from_selection(Some(OsStr::new(SCALAR_GEMM_V1_PIPELINE)), None),
-            Err(WorkerV2ConfigError::MissingConfiguration)
+            PreparedBuildConfig::from_selection(Some(OsStr::new(SCALAR_GEMM_V1_PIPELINE)), None),
+            Err(BuildConfigError::MissingConfiguration)
         ));
         assert!(matches!(
-            PreparedWorkerV2Config::from_selection(
-                Some(OsStr::new(GENERAL_GEMM_V1_PIPELINE)),
-                None
-            ),
-            Err(WorkerV2ConfigError::MissingConfiguration)
+            PreparedBuildConfig::from_selection(Some(OsStr::new(GENERAL_GEMM_V1_PIPELINE)), None),
+            Err(BuildConfigError::MissingConfiguration)
         ));
         assert!(
-            PreparedWorkerV2Config::from_selection(Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE)), None)
+            PreparedBuildConfig::from_selection(Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE)), None)
                 .unwrap()
                 .is_none()
         );
         assert!(matches!(
-            PreparedWorkerV2Config::from_selection(
+            PreparedBuildConfig::from_selection(
                 Some(OsStr::new("legacy-v1")),
                 Some(OsStr::new("/config"))
             ),
-            Err(WorkerV2ConfigError::UnexpectedConfiguration)
+            Err(BuildConfigError::UnexpectedConfiguration)
         ));
     }
 
     #[test]
     fn production_build_rejects_qualification_before_reading_configuration() {
         assert!(matches!(
-            PreparedWorkerV2Config::from_environment_values_with_qualification(
+            PreparedBuildConfig::from_environment_values_with_qualification(
                 None,
                 Some(OsStr::new(SCALAR_GEMM_V1_PIPELINE)),
                 Some(OsStr::new("/does/not/exist")),
                 false,
             ),
-            Err(WorkerV2ConfigError::Invalid(reason))
+            Err(BuildConfigError::Invalid(reason))
                 if reason.contains("qualification-oracles-test-only")
                     && reason.contains(SCALAR_GEMM_V1_PIPELINE)
         ));
@@ -1998,7 +2031,7 @@ mod tests {
     fn general_gemm_manifest_selects_only_the_closed_qualification_pair() {
         let directory = TestDirectory::new();
         let path = general_gemm_manifest(&directory);
-        let config = PreparedWorkerV2Config::from_manifest_for_profile(
+        let config = PreparedBuildConfig::from_manifest_for_profile(
             &path,
             WorkerConfigProfile::GeneralGemmV1,
         )
@@ -2022,11 +2055,11 @@ mod tests {
         value["general_gemm_v1"]["profile"] = json!("single-schedule-v1");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest_for_profile(
+            PreparedBuildConfig::from_manifest_for_profile(
                 &path,
                 WorkerConfigProfile::GeneralGemmV1,
             ),
-            Err(WorkerV2ConfigError::Invalid(reason))
+            Err(BuildConfigError::Invalid(reason))
                 if reason.contains("unsupported value")
         ));
     }
@@ -2036,7 +2069,7 @@ mod tests {
         let directory = TestDirectory::new();
         let path = general_gemm_manifest(&directory);
         let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        let reference_identity = PreparedWorkerV2Config::from_manifest_for_profile(
+        let reference_identity = PreparedBuildConfig::from_manifest_for_profile(
             &path,
             WorkerConfigProfile::GeneralGemmV1,
         )
@@ -2044,7 +2077,7 @@ mod tests {
         .identity();
         value["general_gemm_v1"]["proof_timeout_seconds"] = json!(121);
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-        let substituted = PreparedWorkerV2Config::from_manifest_for_profile(
+        let substituted = PreparedBuildConfig::from_manifest_for_profile(
             &path,
             WorkerConfigProfile::GeneralGemmV1,
         )
@@ -2061,7 +2094,7 @@ mod tests {
         value["general_gemm_v1"]["runtime_closure_v2_root"] =
             json!("/opt/fe2o3/verus-runtime-v2/0.2026.08.02-substituted");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-        let substituted = PreparedWorkerV2Config::from_manifest_for_profile(
+        let substituted = PreparedBuildConfig::from_manifest_for_profile(
             &path,
             WorkerConfigProfile::GeneralGemmV1,
         )
@@ -2079,11 +2112,11 @@ mod tests {
         value["general_gemm_v1"]["custom"] = json!(true);
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest_for_profile(
+            PreparedBuildConfig::from_manifest_for_profile(
                 &path,
                 WorkerConfigProfile::GeneralGemmV1,
             ),
-            Err(WorkerV2ConfigError::Invalid(reason))
+            Err(BuildConfigError::Invalid(reason))
                 if reason.contains("must contain exactly")
         ));
 
@@ -2094,11 +2127,11 @@ mod tests {
         value["general_gemm_v1"]["proof_timeout_seconds"] = json!(0);
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest_for_profile(
+            PreparedBuildConfig::from_manifest_for_profile(
                 &path,
                 WorkerConfigProfile::GeneralGemmV1,
             ),
-            Err(WorkerV2ConfigError::Invalid(reason))
+            Err(BuildConfigError::Invalid(reason))
                 if reason.contains("proof_timeout_seconds")
         ));
 
@@ -2106,11 +2139,11 @@ mod tests {
         value["general_gemm_v1"]["runtime_closure_v2_root"] = json!("relative/runtime");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest_for_profile(
+            PreparedBuildConfig::from_manifest_for_profile(
                 &path,
                 WorkerConfigProfile::GeneralGemmV1,
             ),
-            Err(WorkerV2ConfigError::Invalid(reason))
+            Err(BuildConfigError::Invalid(reason))
                 if reason.contains("absolute")
         ));
 
@@ -2119,11 +2152,11 @@ mod tests {
         value["general_gemm_v1"]["runtime_closure_v2_manifest_sha256"] = json!("77".repeat(32));
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest_for_profile(
+            PreparedBuildConfig::from_manifest_for_profile(
                 &path,
                 WorkerConfigProfile::GeneralGemmV1,
             ),
-            Err(WorkerV2ConfigError::Invalid(reason))
+            Err(BuildConfigError::Invalid(reason))
                 if reason.contains("compiled-in reviewed manifest")
         ));
     }
@@ -2140,11 +2173,11 @@ mod tests {
             .join(".")
             .join(path.file_name().unwrap());
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest_for_profile(
+            PreparedBuildConfig::from_manifest_for_profile(
                 &lexical_alias,
                 WorkerConfigProfile::GeneralGemmV1,
             ),
-            Err(WorkerV2ConfigError::Invalid(reason)) if reason.contains("canonical absolute UTF-8")
+            Err(BuildConfigError::Invalid(reason)) if reason.contains("canonical absolute UTF-8")
         ));
 
         let symlink_path = directory.0.join("manifest-link.json");
@@ -2163,7 +2196,7 @@ mod tests {
     fn row_softmax_manifest_binds_exact_provider_ocml_and_workload_policy() {
         let directory = TestDirectory::new();
         let path = row_softmax_manifest(&directory);
-        let config = PreparedWorkerV2Config::from_manifest_for_profile(
+        let config = PreparedBuildConfig::from_manifest_for_profile(
             &path,
             WorkerConfigProfile::RowSoftmaxV1,
         )
@@ -2184,7 +2217,7 @@ mod tests {
         let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         value["row_softmax_v1"]["ocml_manifest_sha256"] = json!(hex(&[0x36; 32]));
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-        let changed = PreparedWorkerV2Config::from_manifest_for_profile(
+        let changed = PreparedBuildConfig::from_manifest_for_profile(
             &path,
             WorkerConfigProfile::RowSoftmaxV1,
         )
@@ -2205,11 +2238,11 @@ mod tests {
         }]);
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest_for_profile(
+            PreparedBuildConfig::from_manifest_for_profile(
                 &path,
                 WorkerConfigProfile::RowSoftmaxV1
             ),
-            Err(WorkerV2ConfigError::Invalid(reason))
+            Err(BuildConfigError::Invalid(reason))
                 if reason.contains("request-side link providers")
         ));
 
@@ -2218,11 +2251,11 @@ mod tests {
         value["link_options"][0]["value"] = json!("5");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest_for_profile(
+            PreparedBuildConfig::from_manifest_for_profile(
                 &path,
                 WorkerConfigProfile::RowSoftmaxV1
             ),
-            Err(WorkerV2ConfigError::Invalid(reason))
+            Err(BuildConfigError::Invalid(reason))
                 if reason.contains("requires COV6")
         ));
     }
@@ -2231,8 +2264,8 @@ mod tests {
     fn prepares_exact_measured_inputs_and_stable_manifest_identity() {
         let directory = TestDirectory::new();
         let path = manifest(&directory);
-        let first = PreparedWorkerV2Config::from_manifest(&path).unwrap();
-        let second = PreparedWorkerV2Config::from_manifest(&path).unwrap();
+        let first = PreparedBuildConfig::from_manifest(&path).unwrap();
+        let second = PreparedBuildConfig::from_manifest(&path).unwrap();
         assert_eq!(first.identity(), second.identity());
         assert_eq!(
             first.envelope_mode(),
@@ -2250,16 +2283,16 @@ mod tests {
     fn compile_environment_profile_requires_exact_profile_and_unit_selection() {
         let directory = TestDirectory::new();
         let path = manifest(&directory);
-        let general = PreparedWorkerV2Config::from_selection(
+        let general = PreparedBuildConfig::from_selection(
             Some(OsStr::new(WORKER_V2_PIPELINE)),
             Some(path.as_os_str()),
         )
         .unwrap()
         .unwrap();
-        let production = PreparedWorkerV2Config::from_selection(None, Some(path.as_os_str()))
+        let production = PreparedBuildConfig::from_selection(None, Some(path.as_os_str()))
             .unwrap()
             .unwrap();
-        let scalar = PreparedWorkerV2Config::from_selection(
+        let scalar = PreparedBuildConfig::from_selection(
             Some(OsStr::new(SCALAR_GEMM_V1_PIPELINE)),
             Some(path.as_os_str()),
         )
@@ -2280,11 +2313,11 @@ mod tests {
         assert_eq!(
             production
                 .compile_environment_profile("kernel", Path::new("src/lib.rs"), &directory.0,),
-            Some(WorkerV2CompileEnvironmentProfileV1::ProductionGfx942)
+            Some(BuildCompileEnvironmentProfileV1::ProductionGfx942)
         );
         assert_eq!(
             scalar.compile_environment_profile("kernel", Path::new("src/lib.rs"), &directory.0),
-            Some(WorkerV2CompileEnvironmentProfileV1::ScalarGemmV1Gfx942)
+            Some(BuildCompileEnvironmentProfileV1::ScalarGemmV1Gfx942)
         );
         for (crate_name, source, working_directory) in [
             ("host", Path::new("src/lib.rs"), directory.0.as_path()),
@@ -2308,7 +2341,7 @@ mod tests {
         value["link_options"][2]["value"] = Value::String("false".to_owned());
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
 
-        let prepared = PreparedWorkerV2Config::from_manifest(&path).unwrap();
+        let prepared = PreparedBuildConfig::from_manifest(&path).unwrap();
         assert_eq!(
             prepared.source_debug_profile(),
             Some(WorkerV2SourceDebugProfileV1::S09AlphaGfx942O0)
@@ -2316,14 +2349,14 @@ mod tests {
         assert!(prepared.requires_expected_identity());
         assert_eq!(
             prepared.compile_environment_profile("kernel", Path::new("src/lib.rs"), &directory.0),
-            Some(WorkerV2CompileEnvironmentProfileV1::S09AlphaGfx942O0)
+            Some(BuildCompileEnvironmentProfileV1::S09AlphaGfx942O0)
         );
 
         value["link_options"][1]["value"] = Value::String("1".to_owned());
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest(&path),
-            Err(WorkerV2ConfigError::Invalid(message))
+            PreparedBuildConfig::from_manifest(&path),
+            Err(BuildConfigError::Invalid(message))
                 if message.contains("requires code-object-version=6, opt-level=0")
         ));
 
@@ -2331,8 +2364,8 @@ mod tests {
         value["source_debug_profile"] = Value::String("custom-gdb-command".to_owned());
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest(&path),
-            Err(WorkerV2ConfigError::Invalid(message))
+            PreparedBuildConfig::from_manifest(&path),
+            Err(BuildConfigError::Invalid(message))
                 if message.contains("must be exactly")
         ));
     }
@@ -2341,20 +2374,20 @@ mod tests {
     fn load_envelope_requirement_needs_an_exact_measured_capsule() {
         let directory = TestDirectory::new();
         let path = manifest(&directory);
-        PreparedWorkerV2Config::from_manifest(&path).unwrap();
+        PreparedBuildConfig::from_manifest(&path).unwrap();
         let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         value["load_envelope"] = Value::String("required".to_owned());
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest(&path),
-            Err(WorkerV2ConfigError::Invalid(_))
+            PreparedBuildConfig::from_manifest(&path),
+            Err(BuildConfigError::Invalid(_))
         ));
 
         value["load_envelope_inputs"]["sha256"] = Value::String("00".repeat(32));
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest(&path),
-            Err(WorkerV2ConfigError::Invalid(_))
+            PreparedBuildConfig::from_manifest(&path),
+            Err(BuildConfigError::Invalid(_))
         ));
 
         let capsule = directory.0.join("envelope-inputs.capsule");
@@ -2370,18 +2403,18 @@ mod tests {
             "sha256": hex(&Sha256::digest(b"not-a-canonical-capsule"))
         });
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-        let mut prepared = PreparedWorkerV2Config::from_manifest(&path).unwrap();
+        let mut prepared = PreparedBuildConfig::from_manifest(&path).unwrap();
         assert!(matches!(
             prepared.pin_envelope_inputs(),
-            Err(WorkerV2ConfigError::Invalid(message))
+            Err(BuildConfigError::Invalid(message))
                 if message.contains("not a canonical capsule")
         ));
 
         value["load_envelope"] = Value::String("optional".to_owned());
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest(&path),
-            Err(WorkerV2ConfigError::Invalid(_))
+            PreparedBuildConfig::from_manifest(&path),
+            Err(BuildConfigError::Invalid(_))
         ));
     }
 
@@ -2405,30 +2438,30 @@ mod tests {
             "sha256": hex(&Sha256::digest(b"capsule"))
         });
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-        let mut prepared = PreparedWorkerV2Config::from_manifest(&path).unwrap();
+        let mut prepared = PreparedBuildConfig::from_manifest(&path).unwrap();
         assert!(matches!(
             prepared.pin_envelope_inputs(),
-            Err(WorkerV2ConfigError::Io { .. })
+            Err(BuildConfigError::Io { .. })
         ));
 
         value["load_envelope_inputs"]["path"] =
             Value::String(target.to_str().expect("temporary path is UTF-8").to_owned());
         value["load_envelope_inputs"]["byte_len"] = Value::from(8);
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-        let mut prepared = PreparedWorkerV2Config::from_manifest(&path).unwrap();
+        let mut prepared = PreparedBuildConfig::from_manifest(&path).unwrap();
         assert!(matches!(
             prepared.pin_envelope_inputs(),
-            Err(WorkerV2ConfigError::Invalid(message))
+            Err(BuildConfigError::Invalid(message))
                 if message.contains("declared size")
         ));
 
         value["load_envelope_inputs"]["byte_len"] = Value::from(7);
         fs::write(&target, b"capsulE").unwrap();
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-        let mut prepared = PreparedWorkerV2Config::from_manifest(&path).unwrap();
+        let mut prepared = PreparedBuildConfig::from_manifest(&path).unwrap();
         assert!(matches!(
             prepared.pin_envelope_inputs(),
-            Err(WorkerV2ConfigError::Invalid(message))
+            Err(BuildConfigError::Invalid(message))
                 if message.contains("sha256 does not match")
         ));
 
@@ -2436,8 +2469,8 @@ mod tests {
             Value::from((MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES as u64) + 1);
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest(&path),
-            Err(WorkerV2ConfigError::Invalid(_))
+            PreparedBuildConfig::from_manifest(&path),
+            Err(BuildConfigError::Invalid(_))
         ));
     }
 
@@ -2449,8 +2482,8 @@ mod tests {
         bytes.push(b'\n');
         fs::write(&path, bytes).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest(&path),
-            Err(WorkerV2ConfigError::Invalid(_))
+            PreparedBuildConfig::from_manifest(&path),
+            Err(BuildConfigError::Invalid(_))
         ));
 
         let path = manifest(&directory);
@@ -2458,8 +2491,8 @@ mod tests {
         value["unknown"] = Value::Bool(true);
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest(&path),
-            Err(WorkerV2ConfigError::Invalid(_))
+            PreparedBuildConfig::from_manifest(&path),
+            Err(BuildConfigError::Invalid(_))
         ));
     }
 
@@ -2471,8 +2504,8 @@ mod tests {
         value["worker"]["sha256"] = Value::String("00".repeat(32));
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest(&path),
-            Err(WorkerV2ConfigError::Worker(_))
+            PreparedBuildConfig::from_manifest(&path),
+            Err(BuildConfigError::Worker(_))
         ));
 
         let path = manifest(&directory);
@@ -2480,8 +2513,8 @@ mod tests {
         value["providers"][0]["sha256"] = Value::String("00".repeat(32));
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest(&path),
-            Err(WorkerV2ConfigError::Protocol(
+            PreparedBuildConfig::from_manifest(&path),
+            Err(BuildConfigError::Protocol(
                 WorkerProtocolError::ContentIdentityMismatch
             ))
         ));
@@ -2495,13 +2528,13 @@ mod tests {
         value["link_options"][0]["name"] = Value::String("opt-level".to_owned());
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest(&path),
-            Err(WorkerV2ConfigError::Invalid(_))
+            PreparedBuildConfig::from_manifest(&path),
+            Err(BuildConfigError::Invalid(_))
         ));
 
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest(Path::new("relative.json")),
-            Err(WorkerV2ConfigError::Invalid(_))
+            PreparedBuildConfig::from_manifest(Path::new("relative.json")),
+            Err(BuildConfigError::Invalid(_))
         ));
     }
 }

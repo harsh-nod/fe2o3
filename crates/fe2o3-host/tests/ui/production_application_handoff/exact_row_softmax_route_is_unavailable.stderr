@@ -1,0 +1,14 @@
+error[E0432]: unresolved import `fe2o3_host::join_protected_row_softmax_v1`
+ --> tests/ui/production_application_handoff/exact_row_softmax_route_is_unavailable.rs:1:5
+  |
+1 | use fe2o3_host::join_protected_row_softmax_v1;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `join_protected_row_softmax_v1` in the root
+  |
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+  |          --------------------------------------------------- the item is gated here
+...
+  |     UnloadedProtectedRowSoftmaxV1, join_protected_row_softmax_v1,
+  |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

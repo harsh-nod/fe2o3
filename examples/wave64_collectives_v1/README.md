@@ -145,6 +145,9 @@ with `requires the measured direct LLVM/LLD worker built for gfx942`; the
 current protected hardware test is separately ignored with `requires all exact
 build pins and one isolated MI300X gfx942:xnack- device`. These independently
 bounded and differently timed receipts are not silently joined into this proof.
+The exact Worker V2 host/HSA lifecycle is a differential oracle, absent from
+production builds, and compiles only with the package feature
+`qualification-oracles-test-only`.
 The bounded worker uses target-machine emission and the in-process LLD library API.
 No COMGR path or shell invocation of `clang`, `llc`, or `ld.lld` is introduced
 by this proof.

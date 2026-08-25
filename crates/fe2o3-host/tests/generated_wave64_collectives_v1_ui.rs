@@ -1,3 +1,5 @@
+#![cfg(feature = "qualification-oracles-test-only")]
+
 #[test]
 fn wave64_collectives_authority_and_borrows_are_closed() {
     let cases = trybuild::TestCases::new();
