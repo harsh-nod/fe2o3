@@ -10,18 +10,11 @@ macro_rules! production_f32_add {
 
 #[cfg_attr(
     not(feature = "qualification-embedded-vecadd-test-only"),
-    kernel(
-        typed,
-        namespace = "7c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
-    )
+    kernel(typed)
 )]
 #[cfg_attr(
     feature = "qualification-embedded-vecadd-test-only",
-    kernel(
-        typed,
-        qualification_worker_v2,
-        namespace = "7c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
-    )
+    kernel(typed, qualification_worker_v2)
 )]
 pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
     vecadd_kernel_body!(thread, (), production_f32_add, a, b, c);
@@ -204,6 +197,7 @@ mod tests {
         ] {
             assert!(production_source.contains(required), "missing `{required}`");
         }
+        assert!(!production_source.contains("namespace ="));
 
         for forbidden in [
             "#[kernel]",
