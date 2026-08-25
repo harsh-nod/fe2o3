@@ -94,6 +94,37 @@ fn production_managed_transaction_has_no_qualification_dispatch() {
 }
 
 #[test]
+fn production_capability_intake_releases_oracle_authority_immediately() {
+    let source = include_str!("../src/binding_wrapper.rs");
+    let broker = include_str!("../src/capability_broker.rs");
+    let intake = source
+        .split("fn from_production_environment(")
+        .nth(1)
+        .expect("direct production capability intake exists")
+        .split("#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\n    fn from_qualification_environment(")
+        .next()
+        .expect("qualification capability intake follows production intake");
+    assert!(intake.contains(".invocation_authority"));
+    assert!(intake.contains(".release()"));
+    assert!(!intake.contains("ROW_SOFTMAX"));
+    assert!(!intake.contains("FE2O3_QUALIFICATION"));
+    assert!(!intake.contains("Some(invocation_authority)"));
+
+    assert!(source.contains(
+        "#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\n    invocation_authority: Option<capability_broker::BrokeredInvocationAuthorityV1>"
+    ));
+    assert!(broker.contains(
+        "Ordinary,\n        #[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\n        S09,"
+    ));
+    assert!(broker.contains(
+        "#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\n        pub(crate) fn inherit_for_child("
+    ));
+    assert!(broker.contains(
+        "#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\n        pinned_cargo_image: File,"
+    ));
+}
+
+#[test]
 fn production_driver_rejects_qualification_before_target_preparation() {
     let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
         .env_clear()

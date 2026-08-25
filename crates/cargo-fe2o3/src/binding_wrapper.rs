@@ -143,6 +143,7 @@ const TARGET_ENV: &str = "FE2O3_TARGET";
 const VERIFY_KERNEL_IR_ENV: &str = "FE2O3_VERIFY_KERNEL_IR";
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const SCALAR_GEMM_V1_PIPELINE: &str = "collected-scalar-gemm-v1";
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const ROW_SOFTMAX_V1_PIPELINE: &str = "collected-row-softmax-v1";
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const NON_PRODUCTION_REPRODUCTION_RECORD_ENV: &str =
@@ -477,7 +478,12 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 .map_err(BindingWrapperError::CapabilityBroker)?;
             authenticate_pinned_rustc(&pinned_rustc, capability_binding.rustc_executable_sha256())?;
             validate_rustc_lib_tree_descriptor(capability_binding)?;
-            let compiler_capabilities = CompilerCapabilities::from_environment(capability_binding)?;
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+            let compiler_capabilities =
+                CompilerCapabilities::from_qualification_environment(capability_binding)?;
+            #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+            let compiler_capabilities =
+                CompilerCapabilities::from_production_environment(capability_binding)?;
             let current_dir =
                 std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
             #[cfg(any(test, feature = "qualification-oracles-test-only"))]
@@ -960,8 +966,7 @@ fn configure_build_observation_environment_with_test_mutation(
 }
 
 fn reject_dynamic_loader_environment() -> Result<(), BindingWrapperError> {
-    let authority_sensitive = std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").as_deref()
-        == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
+    let authority_sensitive = std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").is_some()
         || std::env::var_os(PRODUCTION_BUILD_CONFIG_ENV).is_some()
         || std::env::var_os(crate::build_config::WORKER_V2_CONFIG_ENV).is_some();
     let unprotected_validation = cfg!(debug_assertions)
@@ -2664,18 +2669,82 @@ struct CompilerCapabilities {
     backend: PinnedCodegenBackend,
     artifact: PinnedDirectory,
     compiler_closure: Option<fe2o3_compiler_closure_capability::CompilerClosureCapabilityV1>,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     invocation_authority: Option<capability_broker::BrokeredInvocationAuthorityV1>,
     output_dir: PathBuf,
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pinned_cargo_image_sha256: Option<[u8; 32]>,
 }
 
+fn receive_validated_compiler_capabilities(
+    binding: capability_broker::CapabilityBindingV3,
+) -> Result<capability_broker::BrokeredCapabilities, BindingWrapperError> {
+    let transferred = capability_broker::receive(managed_build_session()?, binding)
+        .map_err(BindingWrapperError::CapabilityBroker)?;
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    let pinned_cargo_image_sha256 = transferred
+        .pinned_cargo_image
+        .as_ref()
+        .map(|image| *image.sha256());
+    if binding.requires_compiler_closure_v2() != transferred.compiler_closure.is_some() {
+        return Err(BindingWrapperError::CapabilityBroker(
+            "brokered compiler-closure descriptor presence differs from the authenticated binding"
+                .to_owned(),
+        ));
+    }
+    if let Some(capability) = &transferred.compiler_closure {
+        capability
+            .revalidate()
+            .map_err(BindingWrapperError::CapabilityBroker)?;
+        let closure = capability.closure();
+        let closure_mismatch = closure.identity_sha256() != binding.compiler_closure_sha256()
+            || closure.rustc_executable_sha256() != binding.rustc_executable_sha256()
+            || closure.codegen_backend_sha256() != *transferred.backend.sha256();
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        let closure_mismatch = closure_mismatch
+            || pinned_cargo_image_sha256
+                .is_some_and(|cargo| closure.cargo_executable_sha256() != cargo);
+        if closure_mismatch {
+            return Err(BindingWrapperError::CapabilityBroker(
+                "brokered compiler closure differs from the retained compiler capabilities"
+                    .to_owned(),
+            ));
+        }
+    }
+    Ok(transferred)
+}
+
 impl CompilerCapabilities {
-    fn from_environment(
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    fn from_production_environment(
         binding: capability_broker::CapabilityBindingV3,
     ) -> Result<Self, BindingWrapperError> {
-        let mut transferred = capability_broker::receive(managed_build_session()?, binding)
+        let mut transferred = receive_validated_compiler_capabilities(binding)?;
+        transferred
+            .invocation_authority
+            .take()
+            .ok_or_else(|| {
+                BindingWrapperError::CapabilityBroker(
+                    "capability broker omitted invocation authority".to_owned(),
+                )
+            })?
+            .release()
             .map_err(BindingWrapperError::CapabilityBroker)?;
+        let output_dir = transferred.artifact.child_path();
+        Ok(Self {
+            binding,
+            backend: transferred.backend,
+            artifact: transferred.artifact,
+            compiler_closure: transferred.compiler_closure,
+            output_dir,
+        })
+    }
+
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    fn from_qualification_environment(
+        binding: capability_broker::CapabilityBindingV3,
+    ) -> Result<Self, BindingWrapperError> {
+        let mut transferred = receive_validated_compiler_capabilities(binding)?;
         let invocation_authority = transferred.invocation_authority.take().ok_or_else(|| {
             BindingWrapperError::CapabilityBroker(
                 "capability broker omitted invocation authority".to_owned(),
@@ -2695,36 +2764,12 @@ impl CompilerCapabilities {
             .pinned_cargo_image
             .as_ref()
             .map(|image| *image.sha256());
-        let compiler_closure = transferred.compiler_closure.take();
-        if binding.requires_compiler_closure_v2() != compiler_closure.is_some() {
-            return Err(BindingWrapperError::CapabilityBroker(
-                "brokered compiler-closure descriptor presence differs from the authenticated binding"
-                    .to_owned(),
-            ));
-        }
-        if let Some(capability) = &compiler_closure {
-            capability
-                .revalidate()
-                .map_err(BindingWrapperError::CapabilityBroker)?;
-            let closure = capability.closure();
-            if closure.identity_sha256() != binding.compiler_closure_sha256()
-                || closure.rustc_executable_sha256() != binding.rustc_executable_sha256()
-                || closure.codegen_backend_sha256() != *transferred.backend.sha256()
-                || pinned_cargo_image_sha256
-                    .is_some_and(|cargo| closure.cargo_executable_sha256() != cargo)
-            {
-                return Err(BindingWrapperError::CapabilityBroker(
-                    "brokered compiler closure differs from the retained compiler capabilities"
-                        .to_owned(),
-                ));
-            }
-        }
         let output_dir = transferred.artifact.child_path();
         Ok(Self {
             binding,
             backend: transferred.backend,
             artifact: transferred.artifact,
-            compiler_closure,
+            compiler_closure: transferred.compiler_closure,
             invocation_authority,
             output_dir,
             #[cfg(any(test, feature = "qualification-oracles-test-only"))]
@@ -2827,6 +2872,7 @@ impl CompilerCapabilities {
             crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV,
             hex(&self.compiler_closure_sha256()),
         );
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         self.inherit_invocation_authority(command)?;
         Ok(())
     }
@@ -2872,6 +2918,7 @@ impl CompilerCapabilities {
             .map_err(|error| BindingWrapperError::ChildCapability(error.to_string()))
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     fn inherit_invocation_authority(
         &self,
         command: &mut Command,

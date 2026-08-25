@@ -82,6 +82,14 @@ attempt. Production preparation and completion contain no Worker V1/V2,
 in-rustc oracle, simulation, row-softmax, or empty-attempt dispatch. The
 qualification harness calls the same V3 recovery/preparation helper when it
 tests production behavior, so recovery semantics still have one owner.
+Production capability intake also releases the broker's one-shot invocation
+authority immediately after authenticating the transfer. The release
+`CompilerCapabilities` shape has no retained invocation-authority field or
+child-inheritance API; those compile only for the row-softmax qualification
+oracle. The S09 broker profile and pinned-Cargo transfer image are likewise
+absent from feature-free compilation. Shared closure, backend, Cargo-image,
+and artifact validation remains route-neutral and runs before either
+constructor receives custody.
 
 The feature-free rustc backend likewise does not compile
 `QualificationSelection`, `CompilationRoute`, or `RustcInvocationPolicy`.

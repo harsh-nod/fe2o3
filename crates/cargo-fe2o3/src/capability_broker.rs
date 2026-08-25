@@ -34,11 +34,14 @@ mod platform {
     use std::io::{self, IoSlice, IoSliceMut, Read, Write};
     use std::mem::MaybeUninit;
     use std::net::Shutdown;
-    use std::os::fd::{AsFd, AsRawFd, BorrowedFd, IntoRawFd, OwnedFd};
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    use std::os::fd::IntoRawFd;
+    use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
     use std::os::linux::net::SocketAddrExt;
     use std::os::unix::fs::MetadataExt;
     use std::os::unix::net::{SocketAddr, UnixListener, UnixStream};
     use std::path::PathBuf;
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     use std::process::Command;
     use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
     use std::thread::{self, JoinHandle};
@@ -65,7 +68,9 @@ mod platform {
 
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
     const REQUEST_MAGIC: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-V3\0";
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     const S09_REQUEST_MAGIC: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-10\0";
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     const _: () = assert!(REQUEST_MAGIC.len() == S09_REQUEST_MAGIC.len());
     const ROUTE_PREFIX: &str = "fe2o3-capability-route-v3";
     const ENDPOINT_BYTES: usize = 32;
@@ -93,6 +98,7 @@ mod platform {
     const MAX_PROC_STAT_BYTES: usize = 4096;
     const EXECUTABLE_PIN_ATTEMPTS: usize = 8;
     const RECEIVED_DESCRIPTOR_FLOOR: i32 = 210;
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) const INVOCATION_AUTHORITY_CHILD_FD_V1: i32 =
         fe2o3_artifact_transaction::BROKERED_INVOCATION_AUTHORITY_CHILD_FD_V1;
     const BROKER_AUTHENTICATION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -126,6 +132,7 @@ mod platform {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub(crate) enum CapabilityProfileV1 {
         Ordinary,
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         S09,
     }
 
@@ -133,6 +140,7 @@ mod platform {
         const fn request_magic(self) -> &'static [u8] {
             match self {
                 Self::Ordinary => REQUEST_MAGIC,
+                #[cfg(any(test, feature = "qualification-oracles-test-only"))]
                 Self::S09 => S09_REQUEST_MAGIC,
             }
         }
@@ -140,6 +148,7 @@ mod platform {
         const fn descriptor_count(self) -> usize {
             match self {
                 Self::Ordinary => 2,
+                #[cfg(any(test, feature = "qualification-oracles-test-only"))]
                 Self::S09 => 3,
             }
         }
@@ -147,6 +156,7 @@ mod platform {
         const fn name(self) -> &'static str {
             match self {
                 Self::Ordinary => "ordinary",
+                #[cfg(any(test, feature = "qualification-oracles-test-only"))]
                 Self::S09 => "S09",
             }
         }
@@ -154,6 +164,7 @@ mod platform {
         const fn route_name(self) -> &'static str {
             match self {
                 Self::Ordinary => "ordinary",
+                #[cfg(any(test, feature = "qualification-oracles-test-only"))]
                 Self::S09 => "s09",
             }
         }
@@ -161,6 +172,7 @@ mod platform {
         fn parse_route_name(value: &str) -> Option<Self> {
             match value {
                 "ordinary" => Some(Self::Ordinary),
+                #[cfg(any(test, feature = "qualification-oracles-test-only"))]
                 "s09" => Some(Self::S09),
                 _ => None,
             }
@@ -185,6 +197,7 @@ mod platform {
             rustc_executable_sha256: [u8; RUSTC_EXECUTABLE_ID_BYTES],
             retained_object_binding_sha256: [u8; RETAINED_OBJECT_BINDING_BYTES],
         ) -> Result<Self, String> {
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             if profile == CapabilityProfileV1::S09 && config_identity.is_none() {
                 return Err("S09 capability binding requires a Worker V2 config identity".into());
             }
@@ -1115,6 +1128,7 @@ mod platform {
             let artifact = artifact
                 .try_clone_for_transfer()
                 .map_err(|error| format!("failed to retain broker artifact directory: {error}"))?;
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             let pinned_cargo_image =
                 pinned_cargo_image
                     .try_clone_for_transfer()
@@ -1148,6 +1162,7 @@ mod platform {
                         executable,
                         backend,
                         artifact,
+                        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
                         pinned_cargo_image,
                         compiler_closure,
                         authentication_timeout: limits.authentication_timeout,
@@ -1192,6 +1207,7 @@ mod platform {
     pub(crate) struct BrokeredCapabilities {
         pub(crate) backend: PinnedCodegenBackend,
         pub(crate) artifact: PinnedDirectory,
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         pub(crate) pinned_cargo_image: Option<PinnedExecutable>,
         pub(crate) compiler_closure: Option<CompilerClosureCapabilityV1>,
         pub(crate) invocation_authority: Option<BrokeredInvocationAuthorityV1>,
@@ -1249,6 +1265,7 @@ mod platform {
             Ok(())
         }
 
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         pub(crate) fn inherit_for_child(&self, command: &mut Command) -> Result<(), String> {
             // SAFETY: this only probes the process-local reserved descriptor.
             let target = unsafe { BorrowedFd::borrow_raw(INVOCATION_AUTHORITY_CHILD_FD_V1) };
@@ -1388,6 +1405,7 @@ mod platform {
         } else {
             None
         };
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         let pinned_cargo_image = if binding.profile == CapabilityProfileV1::S09 {
             let image = normalize_received_descriptor(
                 descriptors.pop().expect("S09 descriptor count checked"),
@@ -1419,6 +1437,7 @@ mod platform {
         Ok(BrokeredCapabilities {
             backend,
             artifact,
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             pinned_cargo_image,
             compiler_closure,
             invocation_authority: None,
@@ -1445,6 +1464,7 @@ mod platform {
         executable: BrokerPeerIdentityV2,
         backend: File,
         artifact: File,
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         pinned_cargo_image: File,
         compiler_closure: Option<CompilerClosureCapabilityV1>,
         authentication_timeout: Duration,
@@ -1580,8 +1600,9 @@ mod platform {
                 [REQUEST_BYTES - REQUEST_AUTH_BYTES..]
                 .try_into()
                 .expect("request authentication field has a fixed size");
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             let profile = self.binding.profile;
-
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             // SCM_RIGHTS preserves the open-file-description offset. Give each S09 wrapper an
             // independently opened description of the retained pinned image. Ordinary clients
             // retain their historical two-descriptor response.
@@ -1595,6 +1616,7 @@ mod platform {
                 .transpose()?;
             deadline.require_remaining()?;
             let mut descriptors = vec![self.backend.as_fd(), self.artifact.as_fd()];
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             if let Some(pinned_cargo_image) = &pinned_cargo_image {
                 descriptors.push(pinned_cargo_image.as_fd());
             }
@@ -3425,9 +3447,12 @@ pub(crate) use platform::*;
 
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 mod unsupported {
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     use std::process::Command;
 
-    use fe2o3_artifact_transaction::{BrokeredInvocationCapabilityClaimV1, BuildSession};
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    use fe2o3_artifact_transaction::BrokeredInvocationCapabilityClaimV1;
+    use fe2o3_artifact_transaction::BuildSession;
 
     use crate::cargo_invocation_boundary::InvocationAuthorizationRegistryV1;
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
@@ -3436,12 +3461,14 @@ mod unsupported {
     use fe2o3_compiler_closure_capability::CompilerClosureCapabilityV1;
 
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) const INVOCATION_AUTHORITY_CHILD_FD_V1: i32 =
         fe2o3_artifact_transaction::BROKERED_INVOCATION_AUTHORITY_CHILD_FD_V1;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub(crate) enum CapabilityProfileV1 {
         Ordinary,
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         S09,
     }
 
@@ -3539,6 +3566,7 @@ mod unsupported {
             Err("Cargo capability transport requires Linux".to_owned())
         }
 
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         pub(crate) fn inherit_for_child(&self, _command: &mut Command) -> Result<(), String> {
             Err("Cargo capability transport requires Linux".to_owned())
         }
@@ -3547,6 +3575,7 @@ mod unsupported {
     pub(crate) struct BrokeredCapabilities {
         pub(crate) backend: PinnedCodegenBackend,
         pub(crate) artifact: PinnedDirectory,
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         pub(crate) pinned_cargo_image: Option<PinnedExecutable>,
         pub(crate) compiler_closure: Option<CompilerClosureCapabilityV1>,
         pub(crate) invocation_authority: Option<BrokeredInvocationAuthorityV1>,
