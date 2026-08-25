@@ -1003,6 +1003,13 @@ fn typed_semantic_commitments_reach_all_mandatory_v2_passes() {
     assert!(summary.is_non_vacuous());
     assert_eq!(summary.expression_roots, 2);
     assert_eq!(summary.exact_bitvector_operator_congruence_roots, 2);
+    let reconciliation = fe2o3_pliron::typed_semantic_commitment_reconciliation_v2(&input).unwrap();
+    assert!(reconciliation.is_exact());
+    assert_eq!(reconciliation.recipe_expression_roots(), 2);
+    assert_eq!(reconciliation.pliron_commitment_roots(), 2);
+    assert_ne!(*reconciliation.ordered_commitments_sha256(), [0; 32]);
+    assert!(!reconciliation.grants_arithmetic_interpretation_authority());
+    assert!(!reconciliation.grants_target_value_authority());
 }
 
 #[test]

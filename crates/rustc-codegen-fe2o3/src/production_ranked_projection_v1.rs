@@ -439,19 +439,19 @@ pub(crate) struct ProductionRankedSemanticProgramV1 {
     receipt: ProductionRankedSemanticProjectionReceiptV1,
 }
 
-/// Move-only custody of the exact ranked graph and all seven mandatory
+/// Move-only custody of the exact ranked graph and all eight mandatory
 /// production checks. Only the production projection can construct this owner.
 #[must_use = "dropping ranked verification abandons its production lineage"]
-pub(crate) struct AuthenticatedRankedVerificationV4 {
-    middle_end_evidence: fe2o3_pliron::ProductionMiddleEndEvidenceV4,
+pub(crate) struct AuthenticatedRankedVerificationV5 {
+    middle_end_evidence: fe2o3_pliron::ProductionMiddleEndEvidenceV5,
 }
 
-impl AuthenticatedRankedVerificationV4 {
+impl AuthenticatedRankedVerificationV5 {
     pub(crate) fn ranked_ir(&self) -> &str {
         self.middle_end_evidence.ranked_ir()
     }
 
-    pub(crate) const fn middle_end_evidence(&self) -> &fe2o3_pliron::ProductionMiddleEndEvidenceV4 {
+    pub(crate) const fn middle_end_evidence(&self) -> &fe2o3_pliron::ProductionMiddleEndEvidenceV5 {
         &self.middle_end_evidence
     }
 }
@@ -490,18 +490,18 @@ impl ProductionRankedSemanticProgramV1 {
     ) -> Result<
         (
             ProductionRankedSemanticProjectionReceiptV1,
-            AuthenticatedRankedVerificationV4,
+            AuthenticatedRankedVerificationV5,
         ),
-        fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV4,
+        fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV5,
     > {
-        let middle_end_evidence = fe2o3_pliron::ProductionMiddleEndEvidenceV4::try_new(
+        let middle_end_evidence = fe2o3_pliron::ProductionMiddleEndEvidenceV5::try_new(
             self.receipt.semantic(),
             self.receipt.lowering(),
             self.receipt.ranked_ir(),
         )?;
         Ok((
             self.receipt,
-            AuthenticatedRankedVerificationV4 {
+            AuthenticatedRankedVerificationV5 {
                 middle_end_evidence,
             },
         ))
@@ -8823,14 +8823,12 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             result,
             expression,
             numerical_contract,
-        } => {
-            let digest = expression.canonical_transcript_sha256(*numerical_contract);
-            format!(
-                "  %{} = kernel.semantic_expression_commitment <{}>\n",
-                result.get(),
-                crate::encode_hex(&digest),
-            )
-        }
+        } => format!(
+            "  %{} = kernel.semantic_expression {} <{:?}>\n",
+            result.get(),
+            crate::encode_hex(&expression.canonical_transcript_sha256(*numerical_contract)),
+            numerical_contract,
+        ),
         ProductionRankedOperationV1::RequireEquivalent { actual, expected } => format!(
             "  kernel.require_equivalent {}, {}\n",
             ranked_value_text_v1(*actual),
@@ -10899,6 +10897,15 @@ mod tests {
     const U8_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(6);
     const I32_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(7);
     const U64_POINTER_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(8);
+
+    #[test]
+    fn authenticated_ranked_projection_exposes_only_the_v5_evidence_wire() {
+        let accessor: for<'a> fn(
+            &'a AuthenticatedRankedVerificationV5,
+        ) -> &'a fe2o3_pliron::ProductionMiddleEndEvidenceV5 =
+            AuthenticatedRankedVerificationV5::middle_end_evidence;
+        let _ = accessor;
+    }
 
     fn bytes(tag: u8) -> [u8; 32] {
         [tag; 32]

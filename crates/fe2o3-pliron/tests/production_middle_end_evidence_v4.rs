@@ -1,19 +1,22 @@
 use std::ops::Range;
 
-use dialect_kernel::AccessKindAttr;
+use dialect_kernel::{
+    AccessKindAttr, MemorySpaceAttr, OwnershipCoverageAttr, OwnershipPartitionAttr,
+};
 use dialect_mir::pliron::MirProductionPlironLimitsV1;
 use fe2o3_mir_model::semantic_mir_v1::*;
 use fe2o3_pliron::{
-    InertProductionMiddleEndEvidenceV4, MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V4,
-    MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V4, PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V4,
-    PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V4, PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V4,
+    InertProductionMiddleEndEvidenceV4, InertProductionMiddleEndEvidenceV5,
+    MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V4, MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V4,
+    PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V4, PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V4,
+    PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V5, PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V4,
     ProductionConstructionV1, ProductionMiddleEndAssuranceV4,
     ProductionMiddleEndEvidenceCodecErrorV4, ProductionMiddleEndEvidencePassV4,
-    ProductionMiddleEndEvidenceV4, ProductionRankedBlockV1, ProductionRankedKernelLoweringInputV1,
-    ProductionRankedKernelV1, ProductionRankedOperationV1, ProductionRankedTerminatorV1,
-    ProductionRankedValueIdV1, ProductionRankedValueV1, ProductionSemanticMirLimitsV1,
-    ProductionSemanticMirOwnerV1, ProductionSessionLimitsV1, ShellLimits,
-    compile_ranked_kernel_for_lowering_v1,
+    ProductionMiddleEndEvidenceV4, ProductionMiddleEndEvidenceV5, ProductionRankedBlockV1,
+    ProductionRankedKernelLoweringInputV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
+    ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
+    ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1, ProductionSessionLimitsV1,
+    ShellLimits, compile_ranked_kernel_for_lowering_v1,
 };
 
 const RANKED_IR: &str = "func @static_copy {\n  kernel.return\n}\n";
@@ -186,6 +189,99 @@ fn ranked_input_with_domain(
 fn evidence(index: u64, ranked_ir: &str) -> ProductionMiddleEndEvidenceV4 {
     ProductionMiddleEndEvidenceV4::try_new(&semantic_owner(), &ranked_input(index), ranked_ir)
         .unwrap()
+}
+
+fn total_coverage_ranked_input() -> ProductionRankedKernelLoweringInputV1 {
+    let view = ProductionRankedValueIdV1::new(0);
+    let coordinate = ProductionRankedValueIdV1::new(1);
+    let local = |value| ProductionRankedValueV1::Local(value);
+    let kernel = ProductionRankedKernelV1::new(
+        "total_coverage_evidence",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::ExecutionLayout {
+                    grid_identity: 3,
+                    global_extents: [4, 1, 1],
+                    workgroup_extents: [4, 1, 1],
+                    subgroup_size: 4,
+                    full_physical_workgroups: true,
+                },
+                ProductionRankedOperationV1::ViewInSpace {
+                    result: view,
+                    element_width: 32,
+                    writable: true,
+                    shape: vec![4],
+                    dynamic_extents: vec![],
+                    allocation_origin: 1,
+                    noalias_class: 1,
+                    memory_space: MemorySpaceAttr::Global,
+                },
+                ProductionRankedOperationV1::OwnershipContract {
+                    view: local(view),
+                    coverage: OwnershipCoverageAttr::TotalView,
+                    partition: OwnershipPartitionAttr::DenseRectangles,
+                },
+                ProductionRankedOperationV1::InvocationIndex {
+                    result: coordinate,
+                    dimension: 0,
+                    launch_extent: 4,
+                },
+                ProductionRankedOperationV1::Access {
+                    kind: AccessKindAttr::Write,
+                    view: local(view),
+                    indices: vec![local(coordinate)],
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .unwrap();
+    compile_ranked_kernel_for_lowering_v1(
+        ProductionConstructionV1::ranked_kernel("total_coverage_evidence", kernel).unwrap(),
+        ProductionSessionLimitsV1::default(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn live_v5_evidence_uses_the_eight_pass_pipeline_without_vacuous_coverage_claims() {
+    let input = ranked_input(7);
+    let live =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let decoded = InertProductionMiddleEndEvidenceV5::decode(live.canonical_bytes()).unwrap();
+    assert_eq!(
+        decoded.pass_successes().map(|success| success.pass()),
+        PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V5
+    );
+    assert!(
+        !decoded
+            .coverage_summary()
+            .has_non_vacuous_total_view_proof()
+    );
+    assert!(
+        !decoded
+            .coverage_summary()
+            .has_non_vacuous_collective_contribution_proof()
+    );
+    assert_eq!(decoded.typed_semantic_summary().expression_roots, 0);
+    assert!(decoded.typed_semantic_reconciliation().is_exact());
+    assert!(!decoded.claims_full_arithmetic_correctness());
+    assert!(!decoded.grants_target_value_authority());
+}
+
+#[test]
+fn live_v5_evidence_binds_non_vacuous_total_view_counts() {
+    let input = total_coverage_ranked_input();
+    let live =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let coverage = live.coverage_summary();
+    assert_eq!(coverage.total_view_declared(), 1);
+    assert_eq!(coverage.total_view_proved(), 1);
+    assert!(coverage.has_non_vacuous_total_view_proof());
+    assert!(!coverage.has_non_vacuous_collective_contribution_proof());
+    assert!(!live.claims_verus_verification());
+    assert!(!live.claims_full_arithmetic_correctness());
 }
 
 #[derive(Debug)]

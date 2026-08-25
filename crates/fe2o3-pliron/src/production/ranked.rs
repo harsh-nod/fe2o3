@@ -49,6 +49,7 @@ use pliron::{
     },
     context::Ptr,
     identifier::Identifier,
+    linked_list::ContainsLinkedList,
     op::Op,
     operation::Operation,
     r#type::TypeHandle,
@@ -1466,6 +1467,131 @@ pub fn typed_semantic_obligation_summary_v2(
         }
     }
     Ok(summary)
+}
+
+/// Exact reconciliation between retained typed recipes and live PLIRON commitments.
+///
+/// The live graph contains opaque commitments, not the typed expression trees. This
+/// record establishes only that materialization retained the same ordered canonical
+/// transcript digests. It does not interpret arithmetic or grant target-value authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductionTypedSemanticCommitmentReconciliationV2 {
+    recipe_expression_roots: usize,
+    pliron_commitment_roots: usize,
+    ordered_commitments_sha256: [u8; 32],
+}
+
+impl ProductionTypedSemanticCommitmentReconciliationV2 {
+    pub const fn recipe_expression_roots(self) -> usize {
+        self.recipe_expression_roots
+    }
+
+    pub const fn pliron_commitment_roots(self) -> usize {
+        self.pliron_commitment_roots
+    }
+
+    pub const fn ordered_commitments_sha256(&self) -> &[u8; 32] {
+        &self.ordered_commitments_sha256
+    }
+
+    pub const fn is_exact(self) -> bool {
+        self.recipe_expression_roots == self.pliron_commitment_roots
+    }
+
+    pub const fn grants_arithmetic_interpretation_authority(self) -> bool {
+        false
+    }
+
+    pub const fn grants_target_value_authority(self) -> bool {
+        false
+    }
+}
+
+/// Reconciles every retained typed expression with the corresponding operation
+/// in the owner-held PLIRON graph, in deterministic block/operation order.
+pub fn typed_semantic_commitment_reconciliation_v2(
+    input: &ProductionRankedKernelLoweringInputV1,
+) -> Result<ProductionTypedSemanticCommitmentReconciliationV2, ProductionRankedKernelErrorV1> {
+    const DOMAIN: &[u8] = b"FE2O3/TYPED-SEMANTIC-COMMITMENT-RECONCILIATION/V2\0";
+
+    let expected = input
+        .kernel
+        .blocks
+        .iter()
+        .flat_map(|block| block.operations())
+        .filter_map(|operation| match operation {
+            ProductionRankedOperationV1::SemanticExpression {
+                expression,
+                numerical_contract,
+                ..
+            } => Some(expression.canonical_transcript_sha256(*numerical_contract)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    let context = &input._session.inner.context;
+    let root_pointer = input
+        ._session
+        .inner
+        .operations
+        .get(&input._root.operation.identity)
+        .copied()
+        .ok_or(ProductionRankedKernelErrorV1::Materialization(
+            "live ranked root is absent during typed commitment reconciliation",
+        ))?;
+    let module = ModuleOp::from_operation(root_pointer);
+    let module_operations = module
+        .get_body(context, 0)
+        .deref(context)
+        .iter(context)
+        .collect::<Vec<_>>();
+    let [function_pointer] = module_operations.as_slice() else {
+        return Err(ProductionRankedKernelErrorV1::Materialization(
+            "live ranked module shape changed during typed commitment reconciliation",
+        ));
+    };
+    let function = Operation::get_op::<FuncOp>(*function_pointer, context).ok_or(
+        ProductionRankedKernelErrorV1::Materialization(
+            "live ranked function is absent during typed commitment reconciliation",
+        ),
+    )?;
+    let mut actual = Vec::new();
+    for block in function.get_region(context).deref(context).iter(context) {
+        for operation in block.deref(context).iter(context) {
+            let Some(commitment) =
+                Operation::get_op::<SemanticExpressionCommitmentOp>(operation, context)
+            else {
+                continue;
+            };
+            let words = commitment.identity(context).ok_or(
+                ProductionRankedKernelErrorV1::Materialization(
+                    "live typed semantic commitment has no canonical identity",
+                ),
+            )?;
+            let mut digest = [0_u8; 32];
+            for (chunk, word) in digest.chunks_exact_mut(8).zip(words) {
+                chunk.copy_from_slice(&word.to_le_bytes());
+            }
+            actual.push(digest);
+        }
+    }
+    if actual != expected {
+        return Err(ProductionRankedKernelErrorV1::Materialization(
+            "retained typed semantic recipes do not match live PLIRON commitments",
+        ));
+    }
+
+    let mut digest = Sha256::new();
+    digest.update(DOMAIN);
+    digest.update((expected.len() as u64).to_le_bytes());
+    for commitment in &expected {
+        digest.update(commitment);
+    }
+    Ok(ProductionTypedSemanticCommitmentReconciliationV2 {
+        recipe_expression_roots: expected.len(),
+        pliron_commitment_roots: actual.len(),
+        ordered_commitments_sha256: digest.finalize().into(),
+    })
 }
 
 impl fmt::Display for ProductionRankedKernelErrorV1 {
