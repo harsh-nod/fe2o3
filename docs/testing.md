@@ -635,9 +635,14 @@ application recovery, bundle admission, prerequisite authentication, loading,
 launch metadata, and its alpha/zeta, scalar-GEMM, and Worker-V2 vecadd adapters
 for oracle fixtures.
 `production_application_handoff_ui` compile-fails representative V2 entrypoint
-and runtime imports to guard that public API boundary. The macro fixture also
-proves that general `#[kernel(typed)]` emits only Worker V3 host code unless it
-explicitly carries the `qualification_worker_v2` oracle marker.
+and runtime imports, including the embedded artifact contract and generated
+vecadd `Kernel`, to guard that public API boundary. The macro fixture also
+proves that every supported `#[kernel(typed)]` signature, including exact
+vecadd, emits only Worker V3 host code unless it explicitly carries the
+`qualification_worker_v2` oracle marker. The vecadd example exposes the old
+embedded execution path only with
+`qualification-embedded-vecadd-test-only`; its default build type-checks the
+V3 `Arguments` surface and fails closed before runtime dispatch.
 
 The Cargo V3 vertical suite builds a dedicated V3-only static consumer. Its
 dependency graph contains `fe2o3-host/default` and

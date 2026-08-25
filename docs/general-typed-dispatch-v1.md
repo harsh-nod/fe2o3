@@ -7,7 +7,13 @@ the production-safe exit gate remains open.
 This milestone connects the existing general scalar/slice ABI model and
 packing plan to a second typed kernel selected from one authenticated Worker V2
 executable. It does not make arbitrary artifact metadata authoritative and it
-does not replace the existing exact vecadd profile.
+does not make the historical exact vecadd artifact profile authoritative.
+
+At current head, exact vecadd is no longer a production macro or host-API
+exception: ordinary `#[kernel(typed)]` emits its Worker V3 expectation and
+`Arguments` surface. The byte-compatible V2 registration and embedded launch
+API described by this historical milestone are available only through explicit
+qualification features while differential coverage is retained.
 
 Implementation through `dc9738e367c392f7716eacb8459ca73fa32abbbb` completes
 the bounded alpha/zeta `gfx942` compiler-to-HSACO slice. It includes V3 lexical
@@ -145,7 +151,7 @@ with metadata's explicit prefixes (`40` and `56`), while the LLVM worker
 canonicalizes the optimized kernels to the complete 256-byte implicit block.
 The witness authenticates the compiler expectation only. It does not grant
 artifact currency, load, or launch authority. The exact vecadd V2 profile
-remains byte-compatible.
+remains byte-compatible only as a qualification oracle.
 
 ### Artifact and bundle binding
 

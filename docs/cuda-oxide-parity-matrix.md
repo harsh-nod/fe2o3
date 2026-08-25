@@ -378,18 +378,19 @@ The detailed dependencies and exit criteria are in
   collection now assigns one canonical source identity to a helper reached by
   two roots, and Kernel IR lowering validates both calls against the collected
   helper's exact signature. The real-source Worker V2 fixture emits one helper
-  definition and two entries into one `gfx942` HSACO. For the exact vecadd
-  signature, `#[kernel(typed)]` emits a public generated host module and a V2
-  typed registration. Other bounded scalar/slice signatures emit
-  expectation-only V3 registrations that rustc checks against semantic
-  primitive and trusted `DisjointSlice<T, Index1D>` identities. Full
+  definition and two entries into one `gfx942` HSACO. Every supported
+  `#[kernel(typed)]` signature, including exact vecadd, emits a public generated
+  host module and an expectation-only V3 registration that rustc checks against
+  semantic primitive and trusted `DisjointSlice<T, Index1D>` identities. Full
   crate/kernel binding IDs are derived independently by the Cargo wrapper,
   macro, and backend and qualify private host/accessor symbols; a real two-rlib
   same-name link test rejects silent archive coalescing. The backend rejects
   token aliases and local trusted-type lookalikes. V3 requires a backend-issued
-  semantic witness; Worker V2 emits deterministic private host-object accessors,
-  and the alpha/zeta native-worker integration links and validates both. For the
-  exact authenticated alpha/zeta roles, the macro generates named-ABI
+  semantic witness. The former exact-vecadd V2 registration, deterministic
+  private embedded-artifact accessors, and generated `Kernel`/`Prepared` API are
+  qualification-only; Worker V2 emits deterministic private host-object
+  accessors, and the alpha/zeta native-worker integration links and validates
+  both. For the exact authenticated alpha/zeta roles, the macro generates named-ABI
   `Arguments` plus safe preparation and synchronous dispatch adapters. Other V3
   `Arguments` remain inert. Durable publication, finalized-bundle admission,
   currentness leasing, authenticated loading, and the reviewed HSA adapter

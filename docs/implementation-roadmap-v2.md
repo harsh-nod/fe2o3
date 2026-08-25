@@ -778,6 +778,14 @@ G3.1 passes only when all of the following are true:
     cross-crate finalization, and broader G2 aggregate support remain separate
     gates and are not implied by G3.1.
 
+Current-head convergence has completed the macro and host-API portion of item
+10. Ordinary exact vecadd now emits the same Worker V3 expectation and
+`Arguments` surface as every other supported typed signature. Its former V2
+registration, embedded artifact contract, and generated `Kernel`/`Prepared`
+types exist only behind explicit qualification features. Production execution
+still fails closed until the Worker V3 application verifier and runtime
+authorization join are complete.
+
 ### Safety tests
 
 Compile-fail tests must cover:
