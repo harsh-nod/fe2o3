@@ -1,7 +1,7 @@
 //! Production join from compiler-derived sequential/parallel facts to one
 //! workload-neutral parallel-reference contract.
 
-use std::{error::Error, fmt};
+use std::{collections::BTreeMap, error::Error, fmt};
 
 use dialect_kernel::OwnershipCoverageAttr;
 use fe2o3_functional_proof::{
@@ -12,13 +12,15 @@ use fe2o3_functional_proof::{
     SemanticCollectiveKindV1, SemanticEvaluationOrderV1, SemanticFiniteExtentV1,
     SemanticNumericalPolicyV1, SemanticOutputContractV1, SemanticScalarTypeV1, SemanticTypedRootV1,
 };
-use fe2o3_kernel_analysis::HierarchicalOwnershipLevelV1;
+use fe2o3_kernel_analysis::{
+    HierarchicalOwnershipLevelV1, HierarchicalOwnershipRegionV1, HierarchicalRegionIdentityV1,
+};
 use fe2o3_proof_contracts::DigestV1;
 use sha2::{Digest as _, Sha256};
 
 use super::{
     ProductionMiddleEndEvidenceV5, ProductionMirPlironSemanticContractReportV1,
-    ProductionRankedKernelLoweringInputV1, ProductionRankedOperationV1,
+    ProductionRankedKernelLoweringInputV1, ProductionRankedOperationV1, ProductionRankedValueV1,
 };
 
 const DYNAMIC_BOUND_DOMAIN_V1: &[u8] = b"FE2O3/PARALLEL-REFERENCE/DYNAMIC-BOUND/V1\0";
@@ -30,11 +32,16 @@ const TENSOR_BARRIER_DOMAIN_V1: &[u8] = b"FE2O3/PARALLEL-REFERENCE/TENSOR-BARRIE
 const TENSOR_DIRECT_DOMAIN_V1: &[u8] = b"FE2O3/PARALLEL-REFERENCE/TENSOR-DIRECT/V1\0";
 const TENSOR_CONTRIBUTION_DOMAIN_V1: &[u8] = b"FE2O3/PARALLEL-REFERENCE/TENSOR-CONTRIBUTION/V1\0";
 const TENSOR_SCATTER_DOMAIN_V1: &[u8] = b"FE2O3/PARALLEL-REFERENCE/TENSOR-SCATTER/V1\0";
+const OUTPUT_OWNERSHIP_DOMAIN_V1: &[u8] = b"FE2O3/PARALLEL-REFERENCE/OUTPUT-OWNERSHIP/V1\0";
+const OUTPUT_FRAME_DOMAIN_V1: &[u8] = b"FE2O3/PARALLEL-REFERENCE/OUTPUT-FRAME/V1\0";
+const OUTPUT_PRODUCT_DOMAIN_V1: &[u8] = b"FE2O3/PARALLEL-REFERENCE/OUTPUT-PRODUCT/V1\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProductionParallelReferenceContractReportV1 {
     contract_identity: DigestV1,
+    output_product_identity: DigestV1,
     output_relations: u64,
+    output_frames: u64,
     pointwise_relations: u64,
     permutation_relations: u64,
     fold_relations: u64,
@@ -47,6 +54,12 @@ pub struct ProductionParallelReferenceContractReportV1 {
 impl ProductionParallelReferenceContractReportV1 {
     pub const fn contract_identity(self) -> DigestV1 {
         self.contract_identity
+    }
+    pub const fn output_product_identity(self) -> DigestV1 {
+        self.output_product_identity
+    }
+    pub const fn output_frames(self) -> u64 {
+        self.output_frames
     }
     pub const fn output_relations(self) -> u64 {
         self.output_relations
@@ -85,7 +98,11 @@ pub enum ProductionParallelReferenceContractErrorV1 {
     SemanticContractMismatch,
     OutputCoverageIncomplete { declared: usize, live: usize },
     OutputRelationMismatch { index: usize },
-    OutputSpecificHierarchyIncomplete { outputs: usize },
+    StableRankedViewIdentityMissing { index: usize },
+    DuplicateOutputView { first: usize, second: usize },
+    OutputSeparationIncomplete { first: usize, second: usize },
+    OutputOwnershipMismatch { index: usize },
+    OutputProductMismatch,
     HierarchyCoverageIncomplete { level: ParallelHierarchyLevelV1 },
     AuthenticatedProofIncomplete { identity: DigestV1 },
     ScheduleRelationIncomplete { index: usize, detail: &'static str },
@@ -109,7 +126,9 @@ impl ProductionParallelReferenceContractErrorV1 {
             self,
             Self::OutputCoverageIncomplete { .. }
                 | Self::HierarchyCoverageIncomplete { .. }
-                | Self::OutputSpecificHierarchyIncomplete { .. }
+                | Self::StableRankedViewIdentityMissing { .. }
+                | Self::OutputSeparationIncomplete { .. }
+                | Self::OutputOwnershipMismatch { .. }
                 | Self::AuthenticatedProofIncomplete { .. }
                 | Self::ScheduleRelationIncomplete { .. }
                 | Self::DynamicBoundProofIncomplete { .. }
@@ -126,7 +145,11 @@ impl fmt::Display for ProductionParallelReferenceContractErrorV1 {
             Self::SemanticContractMismatch => formatter.write_str("error[FE2O3-PARALLEL-001]: parallel relation does not bind the exact compiler-verified MIR/PLIRON semantic contract"),
             Self::OutputCoverageIncomplete { declared, live } => write!(formatter, "error[FE2O3-PARALLEL-002]: parallel reference coverage is incomplete: {declared} logical output relations were declared but {live} live total-output ownership proofs were derived"),
             Self::OutputRelationMismatch { index } => write!(formatter, "error[FE2O3-PARALLEL-003]: parallel output relation {index} does not match its compiler-derived output domain, view, values, or ownership contract"),
-            Self::OutputSpecificHierarchyIncomplete { outputs } => write!(formatter, "error[FE2O3-PARALLEL-016]: the current hierarchy report cannot bind {outputs} output views independently; production rejects multi-output hierarchy composition until the report carries stable ranked-view identities"),
+            Self::StableRankedViewIdentityMissing { index } => write!(formatter, "error[FE2O3-PARALLEL-016]: output {index} does not resolve to exactly one compiler-materialized ranked view identity"),
+            Self::DuplicateOutputView { first, second } => write!(formatter, "error[FE2O3-PARALLEL-018]: outputs {first} and {second} resolve to the same ranked view"),
+            Self::OutputSeparationIncomplete { first, second } => write!(formatter, "error[FE2O3-PARALLEL-019]: compiler-derived memory facts do not prove outputs {first} and {second} are disjoint"),
+            Self::OutputOwnershipMismatch { index } => write!(formatter, "error[FE2O3-PARALLEL-020]: output {index} lacks an exact output-specific TotalView ownership and complete hierarchy binding"),
+            Self::OutputProductMismatch => formatter.write_str("error[FE2O3-PARALLEL-021]: parallel output product does not match the compiler-derived ordered output frames"),
             Self::HierarchyCoverageIncomplete { level } => write!(formatter, "error[FE2O3-PARALLEL-004]: compiler could not derive nonempty {level:?} ownership while relating the sequential output domain to the complete GPU hierarchy"),
             Self::AuthenticatedProofIncomplete { identity } => write!(formatter, "error[FE2O3-PARALLEL-005]: no retained authenticated per-compilation proof has identity {identity:?}"),
             Self::ScheduleRelationIncomplete { index, detail } => write!(formatter, "error[FE2O3-PARALLEL-006]: schedule relation {index} is incomplete: {detail}"),
@@ -220,9 +243,12 @@ pub fn derive_and_require_parallel_reference_contract_v1(
 > {
     let mut relations = Vec::with_capacity(semantic_contract.outputs().len());
     let mut call_summaries = Vec::new();
+    let bindings = derive_live_output_bindings_v1(ranked, evidence, semantic_contract)?;
+    let output_product_identity =
+        output_product_identity_v1(semantic_contract, evidence, &bindings);
     for (index, output) in semantic_contract.outputs().iter().enumerate() {
-        let proof = output_receipt_identity(ranked, output)
-            .ok_or(ProductionParallelReferenceContractErrorV1::OutputRelationMismatch { index })?;
+        let binding = &bindings[index];
+        let proof = binding.authenticated_proof;
         let (actual, reference) = output_roots(output, semantic_contract)
             .ok_or(ProductionParallelReferenceContractErrorV1::OutputRelationMismatch { index })?;
         let exact_numerical_policy = match (
@@ -373,6 +399,9 @@ pub fn derive_and_require_parallel_reference_contract_v1(
                 derived_relation_identity(semantic_contract, output, index),
                 output.identity(),
                 output.output_domain(),
+                binding.ranked_view_identity,
+                binding.ownership_identity,
+                binding.frame_identity,
                 schedule,
                 numerical_policy,
                 COMPLETE_GPU_HIERARCHY_V1.to_vec(),
@@ -384,6 +413,7 @@ pub fn derive_and_require_parallel_reference_contract_v1(
     }
     let contract = ParallelReferenceContractV1::new(
         semantic_contract.canonical_sha256(),
+        output_product_identity,
         relations,
         call_summaries,
     )
@@ -410,6 +440,358 @@ fn derived_relation_identity(
     digest.update(output.identity().as_bytes());
     digest.update((index as u64).to_le_bytes());
     DigestV1::from_untrusted_bytes(digest.finalize().into())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LiveOutputBindingV1 {
+    ranked_view_identity: DigestV1,
+    live_view_name: String,
+    allocation_origin: u64,
+    noalias_class: u64,
+    authenticated_proof: DigestV1,
+    ownership_identity: DigestV1,
+    frame_identity: DigestV1,
+}
+struct LiveOutputFactsIndexV1 {
+    effects: BTreeMap<DigestV1, Vec<(ProductionRankedValueV1, DigestV1)>>,
+    storage: BTreeMap<ProductionRankedValueV1, Vec<(u64, u64)>>,
+    total_ownership: BTreeMap<DigestV1, usize>,
+}
+
+impl LiveOutputFactsIndexV1 {
+    fn from_ranked(ranked: &ProductionRankedKernelLoweringInputV1) -> Self {
+        let mut facts = Self {
+            effects: BTreeMap::new(),
+            storage: BTreeMap::new(),
+            total_ownership: BTreeMap::new(),
+        };
+        for operation in ranked
+            .kernel()
+            .blocks()
+            .iter()
+            .flat_map(|block| block.operations())
+        {
+            match operation {
+                ProductionRankedOperationV1::RequireEffectRefinement { contract, proof } => {
+                    facts
+                        .effects
+                        .entry(super::production_effect_contract_identity_v1(
+                            contract.contract_identity(),
+                        ))
+                        .or_default()
+                        .push((contract.view(), proof.receipt_identity().digest()));
+                }
+                ProductionRankedOperationV1::View {
+                    result,
+                    allocation_origin,
+                    noalias_class,
+                    ..
+                }
+                | ProductionRankedOperationV1::ViewInSpace {
+                    result,
+                    allocation_origin,
+                    noalias_class,
+                    ..
+                } => {
+                    facts
+                        .storage
+                        .entry(ProductionRankedValueV1::Local(*result))
+                        .or_default()
+                        .push((*allocation_origin, *noalias_class));
+                }
+                ProductionRankedOperationV1::OwnershipContract {
+                    view,
+                    coverage: OwnershipCoverageAttr::TotalView,
+                    ..
+                } => {
+                    *facts
+                        .total_ownership
+                        .entry(super::production_ranked_value_identity_v1(*view))
+                        .or_default() += 1;
+                }
+                _ => {}
+            }
+        }
+        facts
+    }
+}
+
+fn derive_live_output_bindings_v1(
+    ranked: &ProductionRankedKernelLoweringInputV1,
+    evidence: &ProductionMiddleEndEvidenceV5,
+    semantic_contract: &MirPlironSemanticContractV1,
+) -> Result<Vec<LiveOutputBindingV1>, ProductionParallelReferenceContractErrorV1> {
+    let mut bindings = Vec::with_capacity(semantic_contract.outputs().len());
+    let facts = LiveOutputFactsIndexV1::from_ranked(ranked);
+    let mut regions_by_view = BTreeMap::<&str, Vec<&HierarchicalOwnershipRegionV1>>::new();
+    for region in ranked.ownership_report().regions().iter().filter(|region| {
+        region.coverage() == OwnershipCoverageAttr::TotalView && region.element_count() != 0
+    }) {
+        regions_by_view
+            .entry(region.view())
+            .or_default()
+            .push(region);
+    }
+    for regions in regions_by_view.values_mut() {
+        regions.sort_by(|left, right| left.identity().cmp(right.identity()));
+    }
+    for (index, output) in semantic_contract.outputs().iter().enumerate() {
+        let Some(effect_matches) = facts.effects.get(&output.identity()) else {
+            return Err(
+                ProductionParallelReferenceContractErrorV1::OutputRelationMismatch { index },
+            );
+        };
+        let [(view, authenticated_proof)] = effect_matches.as_slice() else {
+            return Err(
+                ProductionParallelReferenceContractErrorV1::OutputRelationMismatch { index },
+            );
+        };
+        let (view, authenticated_proof) = (*view, *authenticated_proof);
+        let ranked_view_identity = super::production_ranked_value_identity_v1(view);
+        if ranked_view_identity != output.view_identity() {
+            return Err(
+                ProductionParallelReferenceContractErrorV1::OutputRelationMismatch { index },
+            );
+        }
+        let live_view_name = ranked
+            .live_ranked_view_name(view)
+            .ok_or(
+                ProductionParallelReferenceContractErrorV1::StableRankedViewIdentityMissing {
+                    index,
+                },
+            )?
+            .to_owned();
+        let Some(storage_matches) = facts.storage.get(&view) else {
+            return Err(
+                ProductionParallelReferenceContractErrorV1::StableRankedViewIdentityMissing {
+                    index,
+                },
+            );
+        };
+        let [(allocation_origin, noalias_class)] = storage_matches.as_slice() else {
+            return Err(
+                ProductionParallelReferenceContractErrorV1::StableRankedViewIdentityMissing {
+                    index,
+                },
+            );
+        };
+        let (allocation_origin, noalias_class) = (*allocation_origin, *noalias_class);
+        if facts.total_ownership.get(&output.view_identity()) != Some(&1) {
+            return Err(
+                ProductionParallelReferenceContractErrorV1::OutputOwnershipMismatch { index },
+            );
+        }
+        let regions = regions_by_view
+            .get(live_view_name.as_str())
+            .ok_or(ProductionParallelReferenceContractErrorV1::OutputOwnershipMismatch { index })?;
+        for required in [
+            ParallelHierarchyLevelV1::Invocation,
+            ParallelHierarchyLevelV1::Subgroup,
+            ParallelHierarchyLevelV1::Workgroup,
+            ParallelHierarchyLevelV1::Grid,
+        ] {
+            if !regions
+                .iter()
+                .any(|region| hierarchy_level(region.identity().level()) == required)
+            {
+                return Err(
+                    ProductionParallelReferenceContractErrorV1::HierarchyCoverageIncomplete {
+                        level: required,
+                    },
+                );
+            }
+        }
+        let ownership_identity = output_ownership_identity_v1(
+            semantic_contract,
+            evidence,
+            output,
+            ranked_view_identity,
+            authenticated_proof,
+            allocation_origin,
+            noalias_class,
+            &live_view_name,
+            regions,
+        );
+        let frame_identity = output_frame_identity_v1(
+            semantic_contract,
+            evidence,
+            output,
+            ranked_view_identity,
+            authenticated_proof,
+            ownership_identity,
+        );
+        bindings.push(LiveOutputBindingV1 {
+            ranked_view_identity,
+            live_view_name,
+            allocation_origin,
+            noalias_class,
+            authenticated_proof,
+            ownership_identity,
+            frame_identity,
+        });
+    }
+    let mut ranked_views = BTreeMap::new();
+    let mut live_views = BTreeMap::new();
+    let mut noalias_classes = BTreeMap::new();
+    // The mandatory alias and ownership passes currently grant separation only
+    // to distinct nonzero noalias classes. Same-allocation subviews therefore
+    // fail closed until ranked IR carries independently proved subview ranges.
+    for (second, binding) in bindings.iter().enumerate() {
+        if let Some(first) = ranked_views.insert(binding.ranked_view_identity, second) {
+            return Err(
+                ProductionParallelReferenceContractErrorV1::DuplicateOutputView { first, second },
+            );
+        }
+        if let Some(first) = live_views.insert(binding.live_view_name.clone(), second) {
+            return Err(
+                ProductionParallelReferenceContractErrorV1::DuplicateOutputView { first, second },
+            );
+        }
+        if bindings.len() > 1 && binding.noalias_class == 0 {
+            let other = usize::from(second == 0);
+            return Err(
+                ProductionParallelReferenceContractErrorV1::OutputSeparationIncomplete {
+                    first: other.min(second),
+                    second: other.max(second),
+                },
+            );
+        }
+        if let Some(first) = noalias_classes.insert(binding.noalias_class, second) {
+            return Err(
+                ProductionParallelReferenceContractErrorV1::OutputSeparationIncomplete {
+                    first,
+                    second,
+                },
+            );
+        }
+    }
+    Ok(bindings)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn output_ownership_identity_v1(
+    semantic_contract: &MirPlironSemanticContractV1,
+    evidence: &ProductionMiddleEndEvidenceV5,
+    output: &SemanticOutputContractV1,
+    ranked_view_identity: DigestV1,
+    authenticated_proof: DigestV1,
+    allocation_origin: u64,
+    noalias_class: u64,
+    live_view_name: &str,
+    regions: &[&HierarchicalOwnershipRegionV1],
+) -> DigestV1 {
+    let mut digest = Sha256::new();
+    digest_blob(&mut digest, OUTPUT_OWNERSHIP_DOMAIN_V1);
+    digest.update(semantic_contract.canonical_sha256().as_bytes());
+    digest.update(evidence.identity().sha256());
+    digest.update(output.identity().as_bytes());
+    digest.update(ranked_view_identity.as_bytes());
+    digest.update(authenticated_proof.as_bytes());
+    digest.update(allocation_origin.to_le_bytes());
+    digest.update(noalias_class.to_le_bytes());
+    digest_blob(&mut digest, live_view_name.as_bytes());
+    digest.update((regions.len() as u64).to_le_bytes());
+    for region in regions {
+        digest_region(&mut digest, region);
+    }
+    DigestV1::from_untrusted_bytes(digest.finalize().into())
+}
+
+// A clean middle-end evidence identity binds the full ranked graph and mandatory
+// pass sequence. Joining it with exact-once TotalView ownership and the exact
+// effect receipt makes this the final-value/frame identity for one output; no
+// declaration contributes evidence to this digest.
+fn output_frame_identity_v1(
+    semantic_contract: &MirPlironSemanticContractV1,
+    evidence: &ProductionMiddleEndEvidenceV5,
+    output: &SemanticOutputContractV1,
+    ranked_view_identity: DigestV1,
+    authenticated_proof: DigestV1,
+    ownership_identity: DigestV1,
+) -> DigestV1 {
+    let mut digest = Sha256::new();
+    digest_blob(&mut digest, OUTPUT_FRAME_DOMAIN_V1);
+    digest.update(semantic_contract.canonical_sha256().as_bytes());
+    digest.update(evidence.identity().sha256());
+    digest.update(output.identity().as_bytes());
+    digest.update(ranked_view_identity.as_bytes());
+    digest.update(authenticated_proof.as_bytes());
+    digest.update(ownership_identity.as_bytes());
+    digest.update(
+        evidence
+            .coverage_summary()
+            .total_view_declared()
+            .to_le_bytes(),
+    );
+    digest.update(
+        evidence
+            .coverage_summary()
+            .total_view_proved()
+            .to_le_bytes(),
+    );
+    DigestV1::from_untrusted_bytes(digest.finalize().into())
+}
+
+fn output_product_identity_v1(
+    semantic_contract: &MirPlironSemanticContractV1,
+    evidence: &ProductionMiddleEndEvidenceV5,
+    bindings: &[LiveOutputBindingV1],
+) -> DigestV1 {
+    let mut digest = Sha256::new();
+    digest_blob(&mut digest, OUTPUT_PRODUCT_DOMAIN_V1);
+    digest.update(semantic_contract.canonical_sha256().as_bytes());
+    digest.update(evidence.identity().sha256());
+    digest.update((bindings.len() as u64).to_le_bytes());
+    for (output, binding) in semantic_contract.outputs().iter().zip(bindings) {
+        digest.update(output.identity().as_bytes());
+        digest.update(binding.ranked_view_identity.as_bytes());
+        digest.update(binding.authenticated_proof.as_bytes());
+        digest.update(binding.ownership_identity.as_bytes());
+        digest.update(binding.frame_identity.as_bytes());
+        digest.update(binding.allocation_origin.to_le_bytes());
+        digest.update(binding.noalias_class.to_le_bytes());
+    }
+    DigestV1::from_untrusted_bytes(digest.finalize().into())
+}
+
+fn digest_region(digest: &mut Sha256, region: &HierarchicalOwnershipRegionV1) {
+    match region.identity() {
+        HierarchicalRegionIdentityV1::Invocation(coordinates) => {
+            digest.update([1]);
+            digest.update((coordinates.len() as u64).to_le_bytes());
+            for coordinate in coordinates {
+                digest.update(coordinate.to_le_bytes());
+            }
+        }
+        HierarchicalRegionIdentityV1::Subgroup {
+            workgroup,
+            subgroup,
+        } => {
+            digest.update([2]);
+            digest.update(workgroup.to_le_bytes());
+            digest.update(subgroup.to_le_bytes());
+        }
+        HierarchicalRegionIdentityV1::Workgroup(workgroup) => {
+            digest.update([3]);
+            digest.update(workgroup.to_le_bytes());
+        }
+        HierarchicalRegionIdentityV1::Grid(grid) => {
+            digest.update([4]);
+            digest.update(grid.to_le_bytes());
+        }
+    }
+    digest.update((region.element_count() as u64).to_le_bytes());
+    digest.update((region.bounds().len() as u64).to_le_bytes());
+    for bound in region.bounds() {
+        digest.update(bound.minimum().to_le_bytes());
+        digest.update(bound.maximum().to_le_bytes());
+    }
+    digest.update([u8::from(region.is_dense_rectangle())]);
+}
+
+fn digest_blob(digest: &mut Sha256, bytes: &[u8]) {
+    digest.update((bytes.len() as u64).to_le_bytes());
+    digest.update(bytes);
 }
 
 #[allow(clippy::too_many_lines)]
@@ -447,55 +829,33 @@ pub fn require_parallel_reference_contract_v1(
         );
     }
 
-    if semantic_contract.outputs().len() != 1 {
-        return Err(
-            ProductionParallelReferenceContractErrorV1::OutputSpecificHierarchyIncomplete {
-                outputs: semantic_contract.outputs().len(),
-            },
-        );
+    let bindings = derive_live_output_bindings_v1(ranked, evidence, semantic_contract)?;
+    let derived_product = output_product_identity_v1(semantic_contract, evidence, &bindings);
+    if expected.output_product_identity() != derived_product {
+        return Err(ProductionParallelReferenceContractErrorV1::OutputProductMismatch);
     }
 
     let mut counts = RelationCountsV1::default();
     let mut derived_call_summaries = Vec::new();
     for (index, output) in semantic_contract.outputs().iter().enumerate() {
-        let Some(relation) = expected
-            .relations()
-            .iter()
-            .find(|relation| relation.output_contract() == output.identity())
-        else {
+        let Some(relation) = expected.relations().get(index) else {
             return Err(
                 ProductionParallelReferenceContractErrorV1::OutputRelationMismatch { index },
             );
         };
-        if relation.logical_domain() != output.output_domain()
-            || !has_total_ownership_contract(ranked, output)
+        let binding = &bindings[index];
+        if relation.output_contract() != output.identity()
+            || relation.logical_domain() != output.output_domain()
+            || relation.ranked_view_identity() != binding.ranked_view_identity
+            || relation.ownership_identity() != binding.ownership_identity
+            || relation.frame_identity() != binding.frame_identity
             || relation.hierarchy() != fe2o3_functional_proof::COMPLETE_GPU_HIERARCHY_V1
         {
             return Err(
                 ProductionParallelReferenceContractErrorV1::OutputRelationMismatch { index },
             );
         }
-        for required in [
-            ParallelHierarchyLevelV1::Invocation,
-            ParallelHierarchyLevelV1::Subgroup,
-            ParallelHierarchyLevelV1::Workgroup,
-            ParallelHierarchyLevelV1::Grid,
-        ] {
-            let present = ranked.ownership_report().regions().iter().any(|region| {
-                region.coverage() == OwnershipCoverageAttr::TotalView
-                    && hierarchy_level(region.identity().level()) == required
-                    && region.element_count() != 0
-            });
-            if !present {
-                return Err(
-                    ProductionParallelReferenceContractErrorV1::HierarchyCoverageIncomplete {
-                        level: required,
-                    },
-                );
-            }
-        }
-        let output_proof = output_receipt_identity(ranked, output)
-            .ok_or(ProductionParallelReferenceContractErrorV1::OutputRelationMismatch { index })?;
+        let output_proof = binding.authenticated_proof;
         if relation.authenticated_proof() != output_proof {
             return Err(
                 ProductionParallelReferenceContractErrorV1::AuthenticatedProofIncomplete {
@@ -668,7 +1028,9 @@ pub fn require_parallel_reference_contract_v1(
 
     Ok(ProductionParallelReferenceContractReportV1 {
         contract_identity: expected.canonical_sha256(),
+        output_product_identity: derived_product,
         output_relations: count(expected.relations().len())?,
+        output_frames: count(bindings.len())?,
         pointwise_relations: count(counts.pointwise)?,
         permutation_relations: count(counts.permutation)?,
         fold_relations: count(counts.fold)?,
@@ -697,28 +1059,6 @@ fn hierarchy_level(level: HierarchicalOwnershipLevelV1) -> ParallelHierarchyLeve
     }
 }
 
-fn output_receipt_identity(
-    ranked: &ProductionRankedKernelLoweringInputV1,
-    output: &SemanticOutputContractV1,
-) -> Option<DigestV1> {
-    let mut matches = ranked
-        .kernel()
-        .blocks()
-        .iter()
-        .flat_map(|block| block.operations())
-        .filter_map(|operation| match operation {
-            ProductionRankedOperationV1::RequireEffectRefinement { contract, proof }
-                if super::production_effect_contract_identity_v1(contract.contract_identity())
-                    == output.identity() =>
-            {
-                Some(proof.receipt_identity().digest())
-            }
-            _ => None,
-        });
-    let identity = matches.next()?;
-    matches.next().is_none().then_some(identity)
-}
-
 fn numerical_refinement_for_output(
     ranked: &ProductionRankedKernelLoweringInputV1,
     output: &SemanticOutputContractV1,
@@ -741,15 +1081,6 @@ fn numerical_refinement_for_output(
         });
     let relation = matches.next()?;
     matches.next().is_none().then_some(relation)
-}
-
-fn has_total_ownership_contract(
-    ranked: &ProductionRankedKernelLoweringInputV1,
-    output: &SemanticOutputContractV1,
-) -> bool {
-    ranked.kernel().blocks().iter().flat_map(|block| block.operations()).filter(|operation| {
-        matches!(operation, ProductionRankedOperationV1::OwnershipContract { view, coverage: OwnershipCoverageAttr::TotalView, .. } if super::production_ranked_value_identity_v1(*view) == output.view_identity())
-    }).count() == 1
 }
 
 fn output_roots<'a>(
@@ -1500,9 +1831,14 @@ mod tests {
             ProductionParallelReferenceContractErrorV1::HierarchyCoverageIncomplete {
                 level: ParallelHierarchyLevelV1::Workgroup,
             },
-            ProductionParallelReferenceContractErrorV1::OutputSpecificHierarchyIncomplete {
-                outputs: 2,
+            ProductionParallelReferenceContractErrorV1::StableRankedViewIdentityMissing {
+                index: 1,
             },
+            ProductionParallelReferenceContractErrorV1::OutputSeparationIncomplete {
+                first: 0,
+                second: 1,
+            },
+            ProductionParallelReferenceContractErrorV1::OutputOwnershipMismatch { index: 1 },
             ProductionParallelReferenceContractErrorV1::AuthenticatedProofIncomplete {
                 identity: digest(1),
             },
@@ -1531,6 +1867,11 @@ mod tests {
         for error in [
             ProductionParallelReferenceContractErrorV1::SemanticContractMismatch,
             ProductionParallelReferenceContractErrorV1::OutputRelationMismatch { index: 0 },
+            ProductionParallelReferenceContractErrorV1::DuplicateOutputView {
+                first: 0,
+                second: 1,
+            },
+            ProductionParallelReferenceContractErrorV1::OutputProductMismatch,
             ProductionParallelReferenceContractErrorV1::FoldOrderRejected {
                 index: 0,
                 detail: "IEEE reassociation",

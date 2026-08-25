@@ -62,6 +62,8 @@ fn collective_semantics_textual_pliron_fixtures() {
         "collective_fold_missing_value_proof.pliron",
         "collective_fold_coverage_mismatch.pliron",
         "collective_recurrence_proved.pliron",
+        "ownership_total_multi_output_disjoint.pliron",
+        "ownership_total_multi_output_overlap.pliron",
         "collective_permutation_proved.pliron",
     ] {
         run_fixture(&root.join(fixture));

@@ -14,6 +14,33 @@ pub proof fn fe2o3_output_0_refines_v1(actual: Seq<int>, reference: Seq<int>)
     fe2o3_exact_total_output_v1(actual, reference);
 }
 
+pub open spec fn fe2o3_output_product_arity_v1() -> int { 1 }
+
+pub proof fn fe2o3_output_product_refines_v1(
+    actual: Seq<Seq<int>>,
+    reference: Seq<Seq<int>>,
+)
+    requires
+        actual.len() == fe2o3_output_product_arity_v1(),
+        reference.len() == fe2o3_output_product_arity_v1(),
+        fe2o3_pointwise_equal_v1(actual[0], reference[0]),
+        actual[0].len() > 0,
+        actual[0].len() == fe2o3_output_0_bound_v1(),
+    ensures actual == reference,
+{
+    fe2o3_output_0_refines_v1(actual[0], reference[0]);
+    assert forall|output: int| 0 <= output < actual.len() implies
+        #[trigger] actual[output] == #[trigger] reference[output] by {
+        assert(output == 0);
+        if output == 0 {
+            assert(actual[output] == reference[output]);
+        } else {
+            assert(false);
+        }
+    }
+    assert(actual =~= reference);
+}
+
 pub open spec fn fe2o3_loop_0_maximum_steps_v1() -> int { 64 }
 
 pub proof fn fe2o3_loop_0_refines_v1(actual: Seq<int>, reference: Seq<int>)

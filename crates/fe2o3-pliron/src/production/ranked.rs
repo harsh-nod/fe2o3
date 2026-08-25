@@ -56,6 +56,7 @@ use pliron::{
         ops::{FuncOp, ModuleOp},
         types::FunctionType,
     },
+    common_traits::Named,
     context::Ptr,
     identifier::Identifier,
     linked_list::ContainsLinkedList,
@@ -2999,6 +3000,7 @@ pub(super) struct ConstructedRootV1 {
     pub(super) identity: RootIdentityV1,
     pub(super) ranked_function: Option<Ptr<Operation>>,
     pub(super) ranked_kernel: Option<ProductionRankedKernelV1>,
+    pub(super) ranked_view_names: BTreeMap<ProductionRankedValueV1, String>,
     pub(super) authenticated_functional_refinement: Vec<ProductionFunctionalRefinementEvidenceV2>,
     pub(super) production_pipeline_report: Option<ProductionPlironPreloweringReportV2>,
 }
@@ -3007,6 +3009,7 @@ pub(super) struct MaterializedConstructionV1 {
     pub(super) operation: OperationHandle,
     pub(super) ranked_function: Option<Ptr<Operation>>,
     pub(super) ranked_kernel: Option<ProductionRankedKernelV1>,
+    pub(super) ranked_view_names: BTreeMap<ProductionRankedValueV1, String>,
     pub(super) authenticated_functional_refinement: Vec<ProductionFunctionalRefinementEvidenceV2>,
 }
 
@@ -3073,6 +3076,7 @@ impl ProductionPlironSessionV1 {
                     operation,
                     ranked_function: None,
                     ranked_kernel: None,
+                    ranked_view_names: BTreeMap::new(),
                     authenticated_functional_refinement: Vec::new(),
                 })
                 .map_err(ProductionSessionErrorV1::Operation),
@@ -3250,10 +3254,44 @@ impl ProductionPlironSessionV1 {
         self.inner
             .finish_internal_root_construction(&operation)
             .map_err(ProductionSessionErrorV1::Operation)?;
+        let ranked_view_names = kernel
+            .blocks()
+            .iter()
+            .flat_map(|block| block.operations())
+            .filter_map(|operation| match operation {
+                ProductionRankedOperationV1::View { result, .. }
+                | ProductionRankedOperationV1::ViewInSpace { result, .. } => {
+                    let value = ProductionRankedValueV1::Local(*result);
+                    let live = locals.get(result.get() as usize)?;
+                    Some((value, live.unique_name(&self.inner.context).to_string()))
+                }
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+        let ranked_view_count = kernel
+            .blocks()
+            .iter()
+            .flat_map(|block| block.operations())
+            .filter(|operation| {
+                matches!(
+                    operation,
+                    ProductionRankedOperationV1::View { .. }
+                        | ProductionRankedOperationV1::ViewInSpace { .. }
+                )
+            })
+            .count();
+        if ranked_view_names.len() != ranked_view_count {
+            return Err(ProductionSessionErrorV1::RankedRecipe(
+                ProductionRankedKernelErrorV1::Materialization(
+                    "ranked view identity binding is incomplete",
+                ),
+            ));
+        }
         Ok(MaterializedConstructionV1 {
             operation,
             ranked_function: Some(function.get_operation()),
             ranked_kernel: Some(kernel),
+            ranked_view_names,
             authenticated_functional_refinement,
         })
     }
@@ -3392,6 +3430,7 @@ impl ProductionPlironSessionV1 {
         Ok(ProductionRankedKernelLoweringInputV1 {
             kernel,
             production_pipeline_report: report,
+            ranked_view_names: record.ranked_view_names,
             authenticated_functional_refinement: record.authenticated_functional_refinement,
             _session: self,
             _stage: stage,
@@ -4623,6 +4662,7 @@ fn materialize_terminator(
 pub struct ProductionRankedKernelLoweringInputV1 {
     kernel: ProductionRankedKernelV1,
     production_pipeline_report: ProductionPlironPreloweringReportV2,
+    ranked_view_names: BTreeMap<ProductionRankedValueV1, String>,
     authenticated_functional_refinement: Vec<ProductionFunctionalRefinementEvidenceV2>,
     _session: ProductionPlironSessionV1,
     _stage: ProductionStageHandleV1<KernelChecksVerifiedGraphStageV1>,
@@ -4653,6 +4693,13 @@ impl ProductionRankedKernelLoweringInputV1 {
 
     pub const fn kernel(&self) -> &ProductionRankedKernelV1 {
         &self.kernel
+    }
+
+    /// Compiler-captured live PLIRON SSA identity for one stable ranked value.
+    /// The mapping is created during closed materialization and is never accepted
+    /// from a contract or downstream caller.
+    pub fn live_ranked_view_name(&self, view: ProductionRankedValueV1) -> Option<&str> {
+        self.ranked_view_names.get(&view).map(String::as_str)
     }
 
     /// Indivisible lineage from the mandatory eight-pass production pipeline.

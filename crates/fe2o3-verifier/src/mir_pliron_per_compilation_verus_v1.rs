@@ -430,6 +430,24 @@ fn generate_contract_source(
     .map_err(generated_format_error)?;
     writeln!(
         source,
+        "// output product: {}",
+        hex(parallel_contract.output_product_identity()),
+    )
+    .map_err(generated_format_error)?;
+    for (index, relation) in parallel_contract.relations().iter().enumerate() {
+        writeln!(
+            source,
+            "// output[{index}] relation={} view={} ownership={} frame={} proof={}",
+            hex(relation.identity()),
+            hex(relation.ranked_view_identity()),
+            hex(relation.ownership_identity()),
+            hex(relation.frame_identity()),
+            hex(relation.authenticated_proof()),
+        )
+        .map_err(generated_format_error)?;
+    }
+    writeln!(
+        source,
         "// domains={} roots={} loops={} collectives={} outputs={}",
         report.finite_domains(),
         report.typed_roots(),
@@ -440,8 +458,9 @@ fn generate_contract_source(
     .map_err(generated_format_error)?;
     writeln!(
         source,
-        "// relations={} pointwise={} permutations={} folds={} recurrences={}",
+        "// relations={} frames={} pointwise={} permutations={} folds={} recurrences={}",
         parallel_report.output_relations(),
+        parallel_report.output_frames(),
         parallel_report.pointwise_relations(),
         parallel_report.permutation_relations(),
         parallel_report.fold_relations(),
@@ -461,6 +480,17 @@ fn append_contract_instantiations_v1(
     parallel_contract: &ParallelReferenceContractV1,
 ) -> Result<(), ProductionMirPlironPerCompilationVerusErrorV1> {
     source.push_str("\nverus! {\n\n");
+    if parallel_contract.relations().len() != contract.outputs().len() {
+        return Err(
+            ProductionMirPlironPerCompilationVerusErrorV1::GeneratedSource(
+                "parallel output product arity differs from semantic outputs".to_owned(),
+            ),
+        );
+    }
+    let mut product_requirements = String::new();
+    let mut product_calls = String::new();
+    let mut output_cases = String::new();
+    let mut output_disjunction = String::new();
     for (index, output) in contract.outputs().iter().enumerate() {
         let domain = contract
             .domains()
@@ -499,8 +529,58 @@ pub proof fn fe2o3_output_{index}_refines_v1(actual: Seq<int>, reference: Seq<in
 "#,
         )
         .map_err(generated_format_error)?;
+        writeln!(
+            product_requirements,
+            "        fe2o3_pointwise_equal_v1(actual[{index}], reference[{index}]),\n        actual[{index}].len() > 0,\n        actual[{index}].len() {length_relation} fe2o3_output_{index}_bound_v1(),"
+        )
+        .map_err(generated_format_error)?;
+        writeln!(
+            product_calls,
+            "    fe2o3_output_{index}_refines_v1(actual[{index}], reference[{index}]);"
+        )
+        .map_err(generated_format_error)?;
+        if index != 0 {
+            output_disjunction.push_str(" || ");
+        }
+        write!(output_disjunction, "output == {index}").map_err(generated_format_error)?;
+        if index == 0 {
+            writeln!(output_cases, "        if output == {index} {{")
+                .map_err(generated_format_error)?;
+        } else {
+            writeln!(output_cases, "        }} else if output == {index} {{")
+                .map_err(generated_format_error)?;
+        }
+        writeln!(
+            output_cases,
+            "            assert(actual[output] == reference[output]);"
+        )
+        .map_err(generated_format_error)?;
     }
+    output_cases.push_str("        } else {\n            assert(false);\n        }\n");
 
+    writeln!(
+        source,
+        r#"pub open spec fn fe2o3_output_product_arity_v1() -> int {{ {output_arity} }}
+
+pub proof fn fe2o3_output_product_refines_v1(
+    actual: Seq<Seq<int>>,
+    reference: Seq<Seq<int>>,
+)
+    requires
+        actual.len() == fe2o3_output_product_arity_v1(),
+        reference.len() == fe2o3_output_product_arity_v1(),
+{product_requirements}    ensures actual == reference,
+{{
+{product_calls}    assert forall|output: int| 0 <= output < actual.len() implies
+        #[trigger] actual[output] == #[trigger] reference[output] by {{
+        assert({output_disjunction});
+{output_cases}    }}
+    assert(actual =~= reference);
+}}
+"#,
+        output_arity = contract.outputs().len(),
+    )
+    .map_err(generated_format_error)?;
     for (index, loop_contract) in contract.loops().iter().enumerate() {
         writeln!(
             source,
@@ -586,10 +666,8 @@ pub open spec fn fe2o3_collective_{index}_step_bound_v1() -> int {{ {step_bound}
         }
     }
 
-    // The separately reconciled parallel contract is bound into the generated
-    // source and aggregate obligation identities. Its host-side witnesses are
-    // deliberately not restated as tautological Verus constants here.
-    let _ = parallel_contract;
+    // Compiler-derived identities remain binding inputs, while the generated
+    // theorem composes the exact number of independently refined outputs.
     source.push_str("} // verus!\n\nfn fe2o3_contract_instantiations_v1() {}\n");
     Ok(())
 }
@@ -801,11 +879,15 @@ mod tests {
         let output = &contract.outputs()[0];
         ParallelReferenceContractV1::new(
             contract.canonical_sha256(),
+            digest(34),
             vec![
                 ParallelOutputRelationV1::new(
                     digest(27),
                     output.identity(),
                     output.output_domain(),
+                    digest(31),
+                    digest(32),
+                    digest(33),
                     ParallelScheduleRelationV1::PointwiseBijection,
                     ParallelNumericalPolicyV1::ExactBitVector,
                     COMPLETE_GPU_HIERARCHY_V1.to_vec(),
@@ -814,6 +896,95 @@ mod tests {
                 )
                 .unwrap(),
             ],
+            vec![],
+        )
+        .unwrap()
+    }
+    fn two_output_contract() -> MirPlironSemanticContractV1 {
+        let first_domain = digest(100);
+        let second_domain = digest(101);
+        let roots = [
+            (102, 110, first_domain),
+            (103, 110, first_domain),
+            (104, 111, second_domain),
+            (105, 111, second_domain),
+        ]
+        .map(|(identity, commitment, domain)| {
+            SemanticTypedRootV1::new(
+                digest(identity),
+                digest(commitment),
+                domain,
+                SemanticScalarTypeV1::Unsigned(32),
+                SemanticNumericalPolicyV1::ExactBitVector,
+            )
+            .unwrap()
+        });
+        MirPlironSemanticContractV1::new(
+            digest(18),
+            digest(19),
+            digest(20),
+            vec![
+                SemanticFiniteDomainV1::new(first_domain, vec![SemanticFiniteExtentV1::Static(16)])
+                    .unwrap(),
+                SemanticFiniteDomainV1::new(second_domain, vec![SemanticFiniteExtentV1::Static(8)])
+                    .unwrap(),
+            ],
+            roots.into_iter().collect(),
+            vec![],
+            vec![],
+            vec![
+                SemanticOutputContractV1::new(
+                    digest(112),
+                    digest(114),
+                    first_domain,
+                    digest(102),
+                    digest(103),
+                    vec![],
+                )
+                .unwrap(),
+                SemanticOutputContractV1::new(
+                    digest(113),
+                    digest(115),
+                    second_domain,
+                    digest(104),
+                    digest(105),
+                    vec![],
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn two_output_parallel_contract(
+        contract: &MirPlironSemanticContractV1,
+    ) -> ParallelReferenceContractV1 {
+        let relations = contract
+            .outputs()
+            .iter()
+            .enumerate()
+            .map(|(index, output)| {
+                let base = 120 + u8::try_from(index).unwrap() * 5;
+                ParallelOutputRelationV1::new(
+                    digest(base),
+                    output.identity(),
+                    output.output_domain(),
+                    digest(base + 1),
+                    digest(base + 2),
+                    digest(base + 3),
+                    ParallelScheduleRelationV1::PointwiseBijection,
+                    ParallelNumericalPolicyV1::ExactBitVector,
+                    COMPLETE_GPU_HIERARCHY_V1.to_vec(),
+                    vec![],
+                    digest(base + 4),
+                )
+                .unwrap()
+            })
+            .collect();
+        ParallelReferenceContractV1::new(
+            contract.canonical_sha256(),
+            digest(140),
+            relations,
             vec![],
         )
         .unwrap()
@@ -1048,6 +1219,22 @@ mod tests {
         assert!(dynamic_source.contains("actual.len() <= fe2o3_output_0_bound_v1()"));
         assert!(dynamic_source.contains("fe2o3_output_0_bound_v1() -> int { 32 }"));
         assert_ne!(static_source, dynamic_source);
+    }
+    #[test]
+    fn checked_multi_output_product_is_emitted_by_the_production_generator() {
+        let contract = two_output_contract();
+        let parallel_contract = two_output_parallel_contract(&contract);
+        let mut generated = "include!(\"mir_pliron_per_compilation_template_v1.rs\");\n".to_owned();
+        append_contract_instantiations_v1(&mut generated, &contract, &parallel_contract).unwrap();
+        assert!(generated.contains("fe2o3_output_product_arity_v1() -> int { 2 }"));
+        assert!(generated.contains("fe2o3_output_0_refines_v1(actual[0], reference[0]);"));
+        assert!(generated.contains("fe2o3_output_1_refines_v1(actual[1], reference[1]);"));
+        assert_eq!(
+            generated,
+            include_str!(
+                "../verus/mir_pliron_per_compilation_generated_multi_output_fixture_v1.rs"
+            )
+        );
     }
 
     #[test]

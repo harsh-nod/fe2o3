@@ -466,6 +466,7 @@ impl ProductionPlironSessionV1 {
                 identity: root_identity,
                 ranked_function: materialized.ranked_function,
                 ranked_kernel: materialized.ranked_kernel,
+                ranked_view_names: materialized.ranked_view_names,
                 authenticated_functional_refinement: materialized
                     .authenticated_functional_refinement,
                 production_pipeline_report: None,
