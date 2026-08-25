@@ -171,8 +171,6 @@ pub mod __hardware_test {
     any(test, feature = "qualification-oracles-test-only")
 ))]
 pub use application_descriptor_handoff::WorkerV2ApplicationDescriptorHandoffErrorV1;
-#[cfg(target_os = "linux")]
-pub use application_descriptor_handoff::WorkerV3ApplicationDescriptorHandoffErrorV1;
 #[cfg(all(
     target_os = "linux",
     any(test, feature = "qualification-oracles-test-only")
@@ -181,6 +179,10 @@ pub use application_descriptor_handoff::consume_inherited_worker_v2_application_
 #[cfg(target_os = "linux")]
 #[doc(hidden)]
 pub use application_descriptor_handoff::consume_inherited_worker_v3_application_handoff_v1;
+#[cfg(target_os = "linux")]
+pub use application_descriptor_handoff::{
+    ApplicationDescriptorHandoffErrorV1, WorkerV3ApplicationDescriptorHandoffErrorV1,
+};
 pub use argument_alias::{
     AliasAdmissionError, AllocationIdentity, AllocationProvenance, ArgumentAccess,
     ArgumentAccessMode, ArgumentAliasAdmission, ArgumentAliasValidator, AtomicAccess,
