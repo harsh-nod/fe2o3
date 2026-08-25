@@ -293,6 +293,7 @@ pub(crate) fn production_pipeline_selected(pipeline: Option<&OsStr>) -> bool {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorkerV2CompileEnvironmentProfileV1 {
+    ProductionGfx942,
     S09AlphaGfx942O0,
     ScalarGemmV1Gfx942,
     RowSoftmaxV1Gfx942,
@@ -512,7 +513,9 @@ impl PreparedWorkerV2Config {
         if !self.selects(crate_name, source, working_directory) {
             return None;
         }
-        if self.source_debug_profile.is_some() {
+        if self.pipeline == WorkerV2PipelineV1::ProductionV1 {
+            Some(WorkerV2CompileEnvironmentProfileV1::ProductionGfx942)
+        } else if self.source_debug_profile.is_some() {
             Some(WorkerV2CompileEnvironmentProfileV1::S09AlphaGfx942O0)
         } else if self.pipeline == WorkerV2PipelineV1::ScalarGemmV1 {
             Some(WorkerV2CompileEnvironmentProfileV1::ScalarGemmV1Gfx942)
@@ -2080,7 +2083,7 @@ mod tests {
     }
 
     #[test]
-    fn scalar_environment_profile_requires_pipeline_and_exact_unit_selection() {
+    fn compile_environment_profile_requires_pipeline_and_exact_unit_selection() {
         let directory = TestDirectory::new();
         let path = manifest(&directory);
         let general = PreparedWorkerV2Config::from_selection(
@@ -2124,7 +2127,7 @@ mod tests {
         assert_eq!(
             production
                 .compile_environment_profile("kernel", Path::new("src/lib.rs"), &directory.0,),
-            None
+            Some(WorkerV2CompileEnvironmentProfileV1::ProductionGfx942)
         );
         assert_eq!(
             scalar.compile_environment_profile("kernel", Path::new("src/lib.rs"), &directory.0),

@@ -150,7 +150,6 @@ fn build(args: &[OsString]) -> ExitCode {
         .arg(root.join("src/main.rs"))
         .env("CARGO_PRIMARY_PACKAGE", "1")
         .env("CARGO_MANIFEST_DIR", &root)
-        .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
         .status();
     match status {
         Ok(status) if status.success() => ExitCode::SUCCESS,

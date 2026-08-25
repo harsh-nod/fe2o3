@@ -964,9 +964,8 @@ fn selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_arti
     let invalid_stderr = String::from_utf8_lossy(&invalid.stderr);
     assert!(!invalid.status.success(), "invalid selector was accepted");
     assert!(
-        invalid_stderr.contains(
-            "FE2O3_CODEGEN_PIPELINE must be unset (selecting `production-v1`) or exactly"
-        ) && invalid_stderr.contains("found \"kernel-ir\""),
+        invalid_stderr.contains("FE2O3_CODEGEN_PIPELINE must be unset for production compilation")
+            && invalid_stderr.contains("found \"kernel-ir\""),
         "missing strict selector diagnostic:\n{invalid_stderr}"
     );
     assert!(!invalid_stderr.contains("emitted vecadd"));

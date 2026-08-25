@@ -3,18 +3,7 @@ use std::ffi::OsStr;
 
 use crate::amdgpu_llvm;
 
-/// Architectural role of a selectable backend route.
-///
-/// Only `Production` may become the default device compiler. Qualification
-/// oracles retain migration evidence but must not be called by the production
-/// transaction or treated as fallback implementations.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PipelinePurposeV1 {
-    Production,
-    QualificationOracle,
-}
-
-/// Rustc-process evidence required independently of a pipeline's product role.
+/// Rustc-process evidence required independently of a route's product role.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RustcInvocationPolicyV1 {
     /// Publication-capable compilation requires the sealed V3 descriptor.
@@ -26,9 +15,12 @@ pub(crate) enum RustcInvocationPolicyV1 {
     Unmanaged,
 }
 
+/// A temporary, non-publishing oracle used to qualify production migrations.
+///
+/// These are deliberately not compilation routes. Production has no enum
+/// variant or selector that can be confused with one of these oracles.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CodegenPipeline {
-    ProductionV1,
+pub(crate) enum QualificationOracleV1 {
     SimulationV1,
     KernelIrV1,
     KernelIrWorkerV2,
@@ -44,9 +36,8 @@ pub(crate) enum CodegenPipeline {
     CollectedScopedAtomicV1,
 }
 
-impl CodegenPipeline {
-    pub(crate) const ALL: [Self; 14] = [
-        Self::ProductionV1,
+impl QualificationOracleV1 {
+    pub(crate) const ALL: [Self; 13] = [
         Self::SimulationV1,
         Self::KernelIrV1,
         Self::KernelIrWorkerV2,
@@ -62,62 +53,8 @@ impl CodegenPipeline {
         Self::CollectedScopedAtomicV1,
     ];
 
-    pub(crate) const fn purpose(self) -> PipelinePurposeV1 {
-        match self {
-            Self::ProductionV1 => PipelinePurposeV1::Production,
-            Self::SimulationV1
-            | Self::KernelIrV1
-            | Self::KernelIrWorkerV2
-            | Self::CollectedExecutableScalarControlFlowV2
-            | Self::CollectedFlashAttentionV1
-            | Self::CollectedGeneralGemmV1
-            | Self::CollectedMoeTop2V1
-            | Self::CollectedRowSoftmaxV1
-            | Self::CollectedScalarGemmV1
-            | Self::CollectedTiledGemmV1
-            | Self::CollectedWave64CollectivesV1
-            | Self::CollectedLdsReductionV1
-            | Self::CollectedScopedAtomicV1 => PipelinePurposeV1::QualificationOracle,
-        }
-    }
-
-    pub(crate) const fn rustc_invocation_policy(
-        self,
-        explicit_unprotected_qualification: bool,
-    ) -> RustcInvocationPolicyV1 {
-        match self {
-            Self::ProductionV1 => RustcInvocationPolicyV1::ProtectedV3,
-            Self::SimulationV1 => RustcInvocationPolicyV1::QualificationObserved,
-            Self::CollectedRowSoftmaxV1 => {
-                if explicit_unprotected_qualification {
-                    RustcInvocationPolicyV1::QualificationObserved
-                } else {
-                    RustcInvocationPolicyV1::ProtectedV3
-                }
-            }
-            Self::KernelIrV1
-            | Self::KernelIrWorkerV2
-            | Self::CollectedExecutableScalarControlFlowV2
-            | Self::CollectedFlashAttentionV1
-            | Self::CollectedGeneralGemmV1
-            | Self::CollectedMoeTop2V1
-            | Self::CollectedScalarGemmV1
-            | Self::CollectedTiledGemmV1
-            | Self::CollectedWave64CollectivesV1
-            | Self::CollectedLdsReductionV1
-            | Self::CollectedScopedAtomicV1 => {
-                if explicit_unprotected_qualification {
-                    RustcInvocationPolicyV1::QualificationObserved
-                } else {
-                    RustcInvocationPolicyV1::Unmanaged
-                }
-            }
-        }
-    }
-
     pub(crate) const fn selector_name(self) -> &'static str {
         match self {
-            Self::ProductionV1 => crate::production_pipeline_v1::PRODUCTION_PIPELINE_V1,
             Self::SimulationV1 => crate::production_pipeline_v1::SIMULATION_PIPELINE_V1,
             Self::KernelIrV1 => "kernel-ir-v1",
             Self::KernelIrWorkerV2 => "kernel-ir-worker-v2",
@@ -153,28 +90,124 @@ impl CodegenPipeline {
             }
         }
     }
+
+    const fn rustc_invocation_policy(
+        self,
+        explicit_unprotected_qualification: bool,
+    ) -> RustcInvocationPolicyV1 {
+        match self {
+            Self::SimulationV1 => RustcInvocationPolicyV1::QualificationObserved,
+            Self::CollectedRowSoftmaxV1 => {
+                if explicit_unprotected_qualification {
+                    RustcInvocationPolicyV1::QualificationObserved
+                } else {
+                    RustcInvocationPolicyV1::ProtectedV3
+                }
+            }
+            Self::KernelIrV1
+            | Self::KernelIrWorkerV2
+            | Self::CollectedExecutableScalarControlFlowV2
+            | Self::CollectedFlashAttentionV1
+            | Self::CollectedGeneralGemmV1
+            | Self::CollectedMoeTop2V1
+            | Self::CollectedScalarGemmV1
+            | Self::CollectedTiledGemmV1
+            | Self::CollectedWave64CollectivesV1
+            | Self::CollectedLdsReductionV1
+            | Self::CollectedScopedAtomicV1 => {
+                if explicit_unprotected_qualification {
+                    RustcInvocationPolicyV1::QualificationObserved
+                } else {
+                    RustcInvocationPolicyV1::Unmanaged
+                }
+            }
+        }
+    }
 }
 
 /// One explicitly selected qualification-only backend route.
 ///
 /// This token cannot be produced by the unset/default selection path. Passing
-/// it into qualification collection keeps those compatibility routes out of
-/// the ordinary production transaction by construction.
+/// it into qualification collection keeps compatibility oracles out of the
+/// production transaction by construction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct QualificationPipelineV1 {
-    pipeline: CodegenPipeline,
+    oracle: QualificationOracleV1,
 }
 
 impl QualificationPipelineV1 {
-    pub(crate) const fn pipeline(self) -> CodegenPipeline {
-        self.pipeline
+    pub(crate) const fn oracle(self) -> QualificationOracleV1 {
+        self.oracle
     }
 
     pub(crate) const fn requires_extended_collector_edges(self) -> bool {
         matches!(
-            self.pipeline,
-            CodegenPipeline::CollectedFlashAttentionV1 | CodegenPipeline::CollectedMoeTop2V1
+            self.oracle,
+            QualificationOracleV1::CollectedFlashAttentionV1
+                | QualificationOracleV1::CollectedMoeTop2V1
         )
+    }
+}
+
+/// Compiler execution has exactly one publishing route: `Production`.
+///
+/// The qualification case exists only while test oracles are migrated. It
+/// carries a capability that cannot publish or complete a production build.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CompilationRouteV1 {
+    Production,
+    Qualification(QualificationPipelineV1),
+}
+
+impl CompilationRouteV1 {
+    pub(crate) const fn is_production(self) -> bool {
+        matches!(self, Self::Production)
+    }
+
+    pub(crate) const fn qualification(self) -> Option<QualificationPipelineV1> {
+        match self {
+            Self::Production => None,
+            Self::Qualification(qualification) => Some(qualification),
+        }
+    }
+
+    pub(crate) const fn qualification_oracle(self) -> Option<QualificationOracleV1> {
+        match self.qualification() {
+            Some(qualification) => Some(qualification.oracle()),
+            None => None,
+        }
+    }
+
+    pub(crate) const fn rustc_invocation_policy(
+        self,
+        explicit_unprotected_qualification: bool,
+    ) -> RustcInvocationPolicyV1 {
+        match self {
+            Self::Production => RustcInvocationPolicyV1::ProtectedV3,
+            Self::Qualification(qualification) => qualification
+                .oracle()
+                .rustc_invocation_policy(explicit_unprotected_qualification),
+        }
+    }
+
+    pub(crate) fn device_route(
+        self,
+        production_transaction_complete: bool,
+    ) -> Result<DevicePipelineRouteV1, String> {
+        match (self, production_transaction_complete) {
+            (Self::Production, true) => Ok(DevicePipelineRouteV1::ProductionComplete),
+            (Self::Production, false) => Err(
+                "production compilation did not complete its device transaction; qualification fallback is forbidden"
+                    .to_owned(),
+            ),
+            (Self::Qualification(qualification), false) => {
+                Ok(DevicePipelineRouteV1::QualificationOracle(qualification))
+            }
+            (Self::Qualification(qualification), true) => Err(format!(
+                "qualification oracle `{}` cannot complete or publish as the production device transaction",
+                qualification.oracle().selector_name(),
+            )),
+        }
     }
 }
 
@@ -184,54 +217,11 @@ pub(crate) enum DevicePipelineRouteV1 {
     QualificationOracle(QualificationPipelineV1),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ResolvedPipelineV1 {
-    pipeline: CodegenPipeline,
-    explicitly_selected: bool,
-}
-
-impl ResolvedPipelineV1 {
-    pub(crate) const fn pipeline(self) -> CodegenPipeline {
-        self.pipeline
-    }
-
-    pub(crate) fn device_route(
-        self,
-        production_transaction_complete: bool,
-    ) -> Result<DevicePipelineRouteV1, String> {
-        match (
-            self.pipeline.purpose(),
-            self.explicitly_selected,
-            production_transaction_complete,
-        ) {
-            (PipelinePurposeV1::Production, _, true) => {
-                Ok(DevicePipelineRouteV1::ProductionComplete)
-            }
-            (PipelinePurposeV1::Production, _, false) => Err(format!(
-                "production pipeline `{}` did not complete its device transaction; qualification fallback is forbidden",
-                self.pipeline.selector_name(),
-            )),
-            (PipelinePurposeV1::QualificationOracle, true, false) => Ok(
-                DevicePipelineRouteV1::QualificationOracle(QualificationPipelineV1 {
-                    pipeline: self.pipeline,
-                }),
-            ),
-            (PipelinePurposeV1::QualificationOracle, false, false) => Err(format!(
-                "qualification pipeline `{}` was not explicitly selected",
-                self.pipeline.selector_name(),
-            )),
-            (PipelinePurposeV1::QualificationOracle, _, true) => Err(format!(
-                "qualification pipeline `{}` cannot complete or publish as the production device transaction",
-                self.pipeline.selector_name(),
-            )),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) enum PipelineSelection {
+    #[default]
     DefaultProduction,
-    Explicit(CodegenPipeline),
+    ExplicitQualification(QualificationOracleV1),
     Invalid(String),
 }
 
@@ -244,43 +234,35 @@ impl PipelineSelection {
         let Some(value) = value else {
             return Self::DefaultProduction;
         };
-        if let Some(pipeline) = CodegenPipeline::ALL
+        if let Some(oracle) = QualificationOracleV1::ALL
             .into_iter()
-            .find(|pipeline| value == OsStr::new(pipeline.selector_name()))
+            .find(|oracle| value == OsStr::new(oracle.selector_name()))
         {
-            return Self::Explicit(pipeline);
+            return Self::ExplicitQualification(oracle);
         }
-        let supported = CodegenPipeline::ALL
+        let supported = QualificationOracleV1::ALL
             .into_iter()
-            .map(|pipeline| format!("`{}`", pipeline.selector_name()))
+            .map(|oracle| format!("`{}`", oracle.selector_name()))
             .collect::<Vec<_>>()
             .join(", ");
         Self::Invalid(format!(
-            "{} must be unset (selecting `production-v1`) or exactly one of {supported}; found {value:?}",
+            "{} must be unset for production compilation; temporary qualification selectors are {supported}; found {value:?}",
             crate::CODEGEN_PIPELINE_ENV,
         ))
     }
 
-    pub(crate) fn resolve(&self) -> Result<ResolvedPipelineV1, amdgpu_llvm::EmitError> {
+    pub(crate) fn resolve(&self) -> Result<CompilationRouteV1, amdgpu_llvm::EmitError> {
         match self {
-            Self::DefaultProduction => Ok(ResolvedPipelineV1 {
-                pipeline: CodegenPipeline::ProductionV1,
-                explicitly_selected: false,
-            }),
-            Self::Explicit(pipeline) => Ok(ResolvedPipelineV1 {
-                pipeline: *pipeline,
-                explicitly_selected: true,
-            }),
+            Self::DefaultProduction => Ok(CompilationRouteV1::Production),
+            Self::ExplicitQualification(oracle) => {
+                Ok(CompilationRouteV1::Qualification(QualificationPipelineV1 {
+                    oracle: *oracle,
+                }))
+            }
             Self::Invalid(reason) => Err(amdgpu_llvm::EmitError::Preflight {
                 reason: reason.clone(),
             }),
         }
-    }
-}
-
-impl Default for PipelineSelection {
-    fn default() -> Self {
-        Self::DefaultProduction
     }
 }
 
@@ -290,135 +272,119 @@ mod tests {
     use std::ffi::OsStr;
 
     use super::{
-        CodegenPipeline, DevicePipelineRouteV1, PipelinePurposeV1, PipelineSelection,
+        CompilationRouteV1, DevicePipelineRouteV1, PipelineSelection, QualificationOracleV1,
         RustcInvocationPolicyV1,
     };
 
     #[test]
-    fn exactly_one_selectable_route_is_a_production_pipeline() {
-        let production = CodegenPipeline::ALL
-            .into_iter()
-            .filter(|pipeline| pipeline.purpose() == PipelinePurposeV1::Production)
-            .collect::<Vec<_>>();
-        assert_eq!(production, [CodegenPipeline::ProductionV1]);
+    fn production_has_no_selector_or_alternate_variant() {
+        let route = PipelineSelection::from_value(None)
+            .resolve()
+            .expect("unset selection must resolve");
+        assert_eq!(route, CompilationRouteV1::Production);
+        assert!(route.is_production());
+        assert_eq!(route.qualification(), None);
+        assert_eq!(route.qualification_oracle(), None);
+
+        let PipelineSelection::Invalid(reason) =
+            PipelineSelection::from_value(Some(OsStr::new("production-v1")))
+        else {
+            panic!("production must not have an explicit selector")
+        };
+        assert!(reason.contains("must be unset for production compilation"));
     }
 
     #[test]
-    fn selector_names_are_unique_and_round_trip_through_one_table() {
-        let names = CodegenPipeline::ALL
+    fn qualification_selector_names_are_unique_and_round_trip() {
+        let names = QualificationOracleV1::ALL
             .into_iter()
-            .map(CodegenPipeline::selector_name)
+            .map(QualificationOracleV1::selector_name)
             .collect::<BTreeSet<_>>();
-        assert_eq!(names.len(), CodegenPipeline::ALL.len());
-        for pipeline in CodegenPipeline::ALL {
+        assert_eq!(names.len(), QualificationOracleV1::ALL.len());
+        for oracle in QualificationOracleV1::ALL {
             assert_eq!(
-                PipelineSelection::from_value(Some(OsStr::new(pipeline.selector_name()))),
-                PipelineSelection::Explicit(pipeline),
+                PipelineSelection::from_value(Some(OsStr::new(oracle.selector_name()))),
+                PipelineSelection::ExplicitQualification(oracle),
             );
         }
     }
 
     #[test]
-    fn unset_and_default_selection_resolve_only_to_production() {
-        for selection in [
-            PipelineSelection::from_value(None),
-            PipelineSelection::default(),
-        ] {
-            assert_eq!(selection, PipelineSelection::DefaultProduction);
-            let resolved = selection.resolve().expect("default must resolve");
-            assert_eq!(resolved.pipeline(), CodegenPipeline::ProductionV1);
-            assert_eq!(
-                resolved
-                    .device_route(true)
-                    .expect("completed production transaction"),
-                DevicePipelineRouteV1::ProductionComplete,
-            );
-            assert!(
-                resolved
-                    .device_route(false)
-                    .expect_err("production must never fall back")
-                    .contains("qualification fallback is forbidden")
-            );
-        }
+    fn production_never_falls_back_to_qualification() {
+        let route = PipelineSelection::default()
+            .resolve()
+            .expect("default must resolve");
+        assert_eq!(
+            route
+                .device_route(true)
+                .expect("completed production transaction"),
+            DevicePipelineRouteV1::ProductionComplete,
+        );
+        assert!(
+            route
+                .device_route(false)
+                .expect_err("production must never fall back")
+                .contains("qualification fallback is forbidden")
+        );
     }
 
     #[test]
-    fn every_qualification_route_requires_explicit_selection_and_cannot_publish_as_production() {
-        for pipeline in CodegenPipeline::ALL {
-            if pipeline.purpose() != PipelinePurposeV1::QualificationOracle {
-                continue;
-            }
-            let explicit =
-                PipelineSelection::from_value(Some(OsStr::new(pipeline.selector_name())))
-                    .resolve()
-                    .expect("explicit qualification selector must resolve");
-            let DevicePipelineRouteV1::QualificationOracle(qualification) = explicit
+    fn every_qualification_oracle_is_explicit_and_non_publishing() {
+        for oracle in QualificationOracleV1::ALL {
+            let route = PipelineSelection::from_value(Some(OsStr::new(oracle.selector_name())))
+                .resolve()
+                .expect("explicit qualification selector must resolve");
+            assert!(!route.is_production());
+            assert_eq!(route.qualification_oracle(), Some(oracle));
+            let DevicePipelineRouteV1::QualificationOracle(qualification) = route
                 .device_route(false)
                 .expect("explicit qualification route")
             else {
                 panic!("qualification selector became production")
             };
-            assert_eq!(qualification.pipeline(), pipeline);
+            assert_eq!(qualification.oracle(), oracle);
             assert_eq!(
                 qualification.requires_extended_collector_edges(),
                 matches!(
-                    pipeline,
-                    CodegenPipeline::CollectedFlashAttentionV1
-                        | CodegenPipeline::CollectedMoeTop2V1
+                    oracle,
+                    QualificationOracleV1::CollectedFlashAttentionV1
+                        | QualificationOracleV1::CollectedMoeTop2V1
                 )
             );
             assert!(
-                explicit
+                route
                     .device_route(true)
                     .expect_err("qualification cannot publish as production")
                     .contains("cannot complete or publish as the production")
-            );
-
-            let implicit = super::ResolvedPipelineV1 {
-                pipeline,
-                explicitly_selected: false,
-            };
-            assert!(
-                implicit
-                    .device_route(false)
-                    .expect_err("implicit qualification route must be impossible")
-                    .contains("was not explicitly selected")
             );
         }
     }
 
     #[test]
-    fn invocation_authority_is_independent_of_pipeline_purpose() {
+    fn invocation_authority_is_independent_of_route_role() {
         assert_eq!(
-            CodegenPipeline::ProductionV1.rustc_invocation_policy(true),
+            CompilationRouteV1::Production.rustc_invocation_policy(true),
             RustcInvocationPolicyV1::ProtectedV3,
         );
-        assert_eq!(
-            CodegenPipeline::CollectedRowSoftmaxV1.rustc_invocation_policy(false),
-            RustcInvocationPolicyV1::ProtectedV3,
-        );
-        for explicit_unprotected_qualification in [false, true] {
+        for oracle in QualificationOracleV1::ALL {
+            let route = PipelineSelection::ExplicitQualification(oracle)
+                .resolve()
+                .expect("qualification route");
+            let expected_without_override = match oracle {
+                QualificationOracleV1::SimulationV1 => {
+                    RustcInvocationPolicyV1::QualificationObserved
+                }
+                QualificationOracleV1::CollectedRowSoftmaxV1 => {
+                    RustcInvocationPolicyV1::ProtectedV3
+                }
+                _ => RustcInvocationPolicyV1::Unmanaged,
+            };
             assert_eq!(
-                CodegenPipeline::SimulationV1
-                    .rustc_invocation_policy(explicit_unprotected_qualification),
-                RustcInvocationPolicyV1::QualificationObserved,
-            );
-        }
-        for pipeline in CodegenPipeline::ALL {
-            if matches!(
-                pipeline,
-                CodegenPipeline::ProductionV1
-                    | CodegenPipeline::SimulationV1
-                    | CodegenPipeline::CollectedRowSoftmaxV1
-            ) {
-                continue;
-            }
-            assert_eq!(
-                pipeline.rustc_invocation_policy(false),
-                RustcInvocationPolicyV1::Unmanaged,
+                route.rustc_invocation_policy(false),
+                expected_without_override,
             );
             assert_eq!(
-                pipeline.rustc_invocation_policy(true),
+                route.rustc_invocation_policy(true),
                 RustcInvocationPolicyV1::QualificationObserved,
             );
         }
