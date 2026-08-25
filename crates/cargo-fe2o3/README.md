@@ -45,9 +45,9 @@ inputs and are remeasured; no machine-specific digest is compiled in.
 Production has no pipeline selector. `FE2O3_CODEGEN_PIPELINE` is rejected, and
 `FE2O3_QUALIFICATION_ORACLE_V1` is reserved for temporary non-production test
 oracles such as simulation and migration equivalence checks. Those oracles
-exist only in a `rustc-codegen-fe2o3` backend built with the
-`qualification-oracles-test-only` feature; the production backend rejects the
-environment variable.
+exist only in `cargo-fe2o3` and `rustc-codegen-fe2o3` builds made with each
+package's `qualification-oracles-test-only` feature. Feature-free binaries
+reject the environment variable.
 
 `cargo fe2o3 authority release probe` exercises this exact launcher/handoff
 boundary and exits before Cargo, artifact generation, HSA loading, or GPU
@@ -298,9 +298,10 @@ envelope before resuming. Directory scans are bounded, and authoritative path
 and argument bytes are never compared through lossy UTF-8 conversion.
 
 Legacy protected V2 and ordinary V1 state machines are qualification paths.
-They are named explicitly in code and cannot enter the production intake or
-production recovery state machine. They remain coordination evidence only and
-grant no compiler, proof, HSA load, or launch authority.
+Their work state, restart modules, workload parsers, and V2 intake compile only
+with `qualification-oracles-test-only`; they are absent from the normal binary
+and cannot enter production intake or recovery. They remain coordination
+evidence only and grant no compiler, proof, HSA load, or launch authority.
 
 For a selected unit, the wrapper pins and validates all configured inputs,
 binds a domain-separated identity of the exact manifest, sealed worker image,

@@ -56,7 +56,7 @@ and backend digests.
 | Exact rustc invocation | The wrapper constructs and seals V3 for production, installs its immutable image at fd 199, retains parent custody, and the backend revalidates argv, cwd, environment, target, role pins, and closure before V3 publication. Qualification V2 captures receive no fd 199 capability and are not retained as production custody. | Extend archived end-to-end evidence across the final application process boundary. |
 | Compiler module handoff | Production has one mandatory protected-custody path and one V3 publication/consumption transaction. The ordinary publication branch and runtime schema selector are deleted. | Keep V1/V2 consumers confined to explicit qualification code until their oracles retire. |
 | Worker publication restart | `ManagedProductionBuild` has only `Fresh`, `Recovered`, and `Ready` states. It performs strict V3 preflight, one-shot consumption, direct LLVM/LLD execution, independent inspection, durable publication, and load-readiness recovery. | Join generated host interfaces and runtime authorization to the recovered production artifact. |
-| Qualification isolation | Backend workload oracles and extraction drivers require `qualification-oracles-test-only`; their binaries and integration targets are absent from a feature-free build. Cargo labels V1/V2 transport and restart work as qualification and keeps it outside the production state machine. | Put the remaining Cargo qualification work behind an equivalent test-only feature, then delete each oracle after differential migration. |
+| Qualification isolation | Backend workload oracles and extraction drivers require `qualification-oracles-test-only`. Cargo V1/V2 work state, restart modules, workload parsers, and V2 intake require the same package-local feature. They are absent from feature-free builds, where managed work is directly `ManagedProductionBuild`. | Remove the internal unmanaged-dependency qualification marker, then delete each oracle after differential migration. |
 
 Version suffixes remain on serialized records, identity domains, receipts, and
 external protocol types. Private production methods and states are unversioned
@@ -275,10 +275,13 @@ Migration follows these rules:
 Production became the sole unselected route after the first scalar slice
 completed its compile, host-interface, artifact, and hardware gates. It has no
 selector. An incomplete general route now fails closed instead of silently
-entering legacy codegen. Retained oracles are absent from the production
-backend; each requires a backend built with
-`qualification-oracles-test-only` and an explicit
-`FE2O3_QUALIFICATION_ORACLE_V1` value.
+entering legacy codegen. Retained oracles are absent from feature-free Cargo
+and backend builds. Each requires the package-local
+`qualification-oracles-test-only` feature and an explicit
+`FE2O3_QUALIFICATION_ORACLE_V1` value. Cargo still uses this marker internally
+when routing unmanaged dependency crates away from device codegen; that
+internal host/pass-through role must replace the qualification selector before
+the selector can be deleted completely.
 
 The 2026-08-20 compiler review made this distinction structural. Qualification
 names now come from one table, every route has an explicit production-or-oracle

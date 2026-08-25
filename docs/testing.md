@@ -316,10 +316,12 @@ cargo test --locked -p rustc-codegen-fe2o3 --features qualification-oracles-test
 cargo test --locked -p fe2o3-hsa-runtime --test gfx942_two_kernel_hardware
 cargo test --locked -p fe2o3-hsa-runtime --features hardware-test-hooks \
   --test gfx942_two_kernel_hardware --no-run
-cargo test --locked -p cargo-fe2o3 --test worker_v2_vertical_slice
+cargo test --locked -p cargo-fe2o3 --features qualification-oracles-test-only \
+  --test worker_v2_vertical_slice
 cargo test --locked -p cargo-fe2o3 --test worker_v2_vertical_slice \
   --features worker-v2-fault-injection-test-only
-cargo test --locked -p cargo-fe2o3 worker_v2_artifact_container::tests
+cargo test --locked -p cargo-fe2o3 --features qualification-oracles-test-only \
+  worker_v2_artifact_container::tests
 cargo test --locked -p fe2o3-hsaco-finalize --all-targets --all-features
 cargo test --locked -p fe2o3-artifact-transaction --all-targets --all-features
 scripts/tests/run-parity-snapshot.sh

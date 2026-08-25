@@ -225,7 +225,8 @@ build_shard_command() {
       append_command command "${cargo_bin}" test -p fe2o3-hsa-runtime --locked
       ;;
     Q6)
-      append_command command "${cargo_bin}" test -p cargo-fe2o3 --locked
+      append_command command "${cargo_bin}" test -p cargo-fe2o3 \
+        --features qualification-oracles-test-only --locked
       append_command command "${cargo_bin}" test -p fe2o3-differential --locked
       append_command command "${bash_bin}" scripts/tests/differential-conformance.sh
       ;;
