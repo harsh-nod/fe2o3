@@ -69,6 +69,14 @@ binary. The release path always uses the production expected-identity namespace
 and ordinary compiler-capability profile; route-dependent identity and S09
 selection logic is compiled only into the qualification harness.
 
+The feature-free rustc backend likewise does not compile
+`QualificationSelection`, `CompilationRoute`, or `RustcInvocationPolicy`.
+It captures a selector-free production environment preflight, enters protected
+V3 rustc admission directly, and requires the production device transaction to
+complete directly for every discovered kernel. The route and invocation-policy
+enums exist only in the qualification-feature build used for differential
+testing; they are not release implementation choices.
+
 The `cargo fe2o3 simulate` command is also oracle-only and is absent from
 feature-free command dispatch and help. Production `build` and `run` cannot
 select it implicitly.

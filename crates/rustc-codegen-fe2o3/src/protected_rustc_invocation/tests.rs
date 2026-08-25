@@ -14,9 +14,10 @@ use fe2o3_rustc_invocation::{
     VerificationModeV1, encode_descriptor_v1, encode_descriptor_v2,
 };
 
-use crate::qualification_selection::CompilationRoute;
 #[cfg(feature = "qualification-oracles-test-only")]
-use crate::qualification_selection::{QualificationOracle, QualificationSelection};
+use crate::qualification_selection::{
+    CompilationRoute, QualificationOracle, QualificationSelection,
+};
 
 use super::*;
 
@@ -129,6 +130,7 @@ fn qualification_route(oracle: QualificationOracle) -> CompilationRoute {
 }
 
 #[test]
+#[cfg(feature = "qualification-oracles-test-only")]
 fn absent_and_present_selection_is_exact_and_ordinary_compatible() {
     assert_eq!(
         CompilationRoute::Production.rustc_invocation_policy(true),
@@ -160,6 +162,21 @@ fn absent_and_present_selection_is_exact_and_ordinary_compatible() {
             );
         }
     }
+}
+
+#[test]
+fn production_admission_rejects_qualification_observation_authority() {
+    assert!(matches!(
+        admit_protected_v3_at(TEST_CHILD_FD, true),
+        Err(
+            ProtectedRustcInvocationErrorV1::UnexpectedProtectedSignals {
+                descriptor_present: false,
+                compiler_closure_marker_present: false,
+                backend_marker_present: false,
+                qualification_backend_marker_present: true,
+            }
+        )
+    ));
 }
 
 #[test]
@@ -365,10 +382,6 @@ fn qualification_routes_require_paired_authenticated_observations_and_no_authori
 #[test]
 fn zero_kernel_protected_selection_cannot_downgrade_or_leave_an_inherited_fd() {
     let _guard = FD_TEST_LOCK.lock().unwrap();
-    assert_eq!(
-        CompilationRoute::Production.rustc_invocation_policy(false),
-        RustcInvocationPolicy::ProtectedV3,
-    );
     #[cfg(feature = "qualification-oracles-test-only")]
     assert_eq!(
         qualification_route(QualificationOracle::CollectedRowSoftmaxV1)

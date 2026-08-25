@@ -63,6 +63,8 @@ mod monomorphization_dead;
 mod production_geometry_v1;
 mod production_mir_pliron_verus_join_v1;
 mod production_pipeline_v1;
+#[cfg(not(feature = "qualification-oracles-test-only"))]
+mod production_policy;
 mod production_ranked_projection_v1;
 mod production_reference_effect_join_v2;
 #[cfg(feature = "qualification-oracles-test-only")]
@@ -77,6 +79,7 @@ mod production_target_lineage_v3;
 mod production_target_v1;
 mod production_worker_handoff;
 mod protected_rustc_invocation;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod qualification_selection;
 mod reference_effect_bijection_v1;
 mod reference_effect_v1;
@@ -138,9 +141,10 @@ use std::sync::Mutex;
 #[cfg(feature = "qualification-oracles-test-only")]
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use qualification_selection::QualificationSelection;
 #[cfg(feature = "qualification-oracles-test-only")]
-use qualification_selection::{QualificationOracle, SelectedQualificationOracle};
+use qualification_selection::{
+    QualificationOracle, QualificationSelection, SelectedQualificationOracle,
+};
 
 #[cfg(feature = "qualification-oracles-test-only")]
 const MAX_FINALIZED_LLVM_IR_BYTES: usize = 16 * 1024 * 1024;
@@ -297,7 +301,10 @@ pub struct BackendConfig {
     pub verbose: bool,
     pub dump_mir: bool,
     pub dump_llvm: bool,
+    #[cfg(feature = "qualification-oracles-test-only")]
     qualification_selection: QualificationSelection,
+    #[cfg(not(feature = "qualification-oracles-test-only"))]
+    production_environment_rejection: Option<String>,
     build_attempt: BuildAttemptSelection,
     pub hsaco_output_dir: Option<PathBuf>,
     pub target: AmdGpuTarget,
@@ -309,7 +316,10 @@ impl BackendConfig {
             verbose: env_flag(VERBOSE_ENV),
             dump_mir: env_flag(DUMP_MIR_ENV),
             dump_llvm: env_flag(DUMP_LLVM_ENV),
+            #[cfg(feature = "qualification-oracles-test-only")]
             qualification_selection: QualificationSelection::from_env(),
+            #[cfg(not(feature = "qualification-oracles-test-only"))]
+            production_environment_rejection: production_policy::environment_rejection(),
             build_attempt: BuildAttemptSelection::from_env(),
             hsaco_output_dir: env::var(HSACO_DIR_ENV).ok().map(PathBuf::from),
             target: AmdGpuTarget::from_env_or_default(),
@@ -446,11 +456,20 @@ impl CodegenBackend for Fe2o3CodegenBackend {
 
     fn codegen_crate(&self, tcx: TyCtxt<'_>, crate_info: &CrateInfo) -> Box<dyn Any> {
         with_no_trimmed_paths!({
+            #[cfg(not(feature = "qualification-oracles-test-only"))]
+            if let Some(reason) = &self.config.production_environment_rejection {
+                let error = amdgpu_llvm::EmitError::Preflight {
+                    reason: reason.clone(),
+                };
+                tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"));
+            }
+            #[cfg(feature = "qualification-oracles-test-only")]
             let compilation_route = self
                 .config
                 .qualification_selection
                 .resolve()
                 .unwrap_or_else(|error| tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}")));
+            #[cfg(feature = "qualification-oracles-test-only")]
             let mut protected_rustc_invocation =
                 protected_rustc_invocation::admit_for_codegen(compilation_route)
                     .unwrap_or_else(|error| {
@@ -458,8 +477,19 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             "[rustc-codegen-fe2o3] protected rustc invocation admission failed without fallback: {error}"
                         ))
                     });
+            #[cfg(not(feature = "qualification-oracles-test-only"))]
+            let mut protected_rustc_invocation =
+                protected_rustc_invocation::admit_for_production_codegen().unwrap_or_else(|error| {
+                    tcx.dcx().fatal(format!(
+                        "[rustc-codegen-fe2o3] protected rustc invocation admission failed without fallback: {error}"
+                    ))
+                });
+            #[cfg(feature = "qualification-oracles-test-only")]
+            let production_compilation = compilation_route.is_production();
+            #[cfg(not(feature = "qualification-oracles-test-only"))]
+            let production_compilation = true;
             let mut production_target = None;
-            if compilation_route.is_production()
+            if production_compilation
                 && collector::count_production_roots_before_monomorphization_v1(tcx) > 0
             {
                 production_target = Some(
@@ -520,7 +550,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
             #[cfg(not(feature = "qualification-oracles-test-only"))]
             let temporary_host_objects = TemporaryHostObjects::default();
             let mut production_device_transaction_complete = false;
-            if compilation_route.is_production() {
+            if production_compilation {
                 match production_pipeline_v1::disposition(kernel_count) {
                     production_pipeline_v1::ProductionDispositionV1::HostOnly => {}
                     production_pipeline_v1::ProductionDispositionV1::DeviceTransaction => {
@@ -590,11 +620,18 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                 ));
             }
             if kernel_count > 0 {
+                #[cfg(feature = "qualification-oracles-test-only")]
                 compilation_route
                     .validate_device_transaction(production_device_transaction_complete)
                     .unwrap_or_else(|error| {
                         tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"))
                     });
+                #[cfg(not(feature = "qualification-oracles-test-only"))]
+                if !production_device_transaction_complete {
+                    tcx.dcx().fatal(
+                        "[rustc-codegen-fe2o3] production compilation did not complete its device transaction; qualification fallback is forbidden",
+                    );
+                }
             }
             #[cfg(feature = "qualification-oracles-test-only")]
             if let Some(qualification_pipeline) = compilation_route.qualification() {
@@ -2533,9 +2570,11 @@ fn optional_tool(llvm_bin: &Path, name: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "qualification-oracles-test-only")]
+    use super::QualificationSelection;
     use super::{
-        AmdGpuTarget, BackendConfig, BuildAttemptSelection, QualificationSelection, RocmToolchain,
-        llvm_compile_command, managed_artifact_output, validate_hsaco_metadata_text,
+        AmdGpuTarget, BackendConfig, BuildAttemptSelection, RocmToolchain, llvm_compile_command,
+        managed_artifact_output, validate_hsaco_metadata_text,
     };
     #[cfg(feature = "qualification-oracles-test-only")]
     use super::{
@@ -2550,6 +2589,7 @@ mod tests {
     use fe2o3_artifact_transaction::FinalizedArtifactSnapshot;
     #[cfg(feature = "qualification-oracles-test-only")]
     use rustc_codegen_ssa::CompiledModules;
+    #[cfg(feature = "qualification-oracles-test-only")]
     use std::ffi::OsStr;
     #[cfg(feature = "qualification-oracles-test-only")]
     use std::fs;
@@ -2808,6 +2848,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "qualification-oracles-test-only")]
     fn invalid_qualification_selection_is_versioned_and_strict() {
         for invalid in [
             "",
@@ -2831,19 +2872,11 @@ mod tests {
             let error = selection.resolve().expect_err("selector must be exact");
             let message = error.to_string();
             assert!(message.contains("FE2O3_QUALIFICATION_ORACLE_V1"));
-            #[cfg(feature = "qualification-oracles-test-only")]
             assert!(message.contains("must be unset for production compilation"));
-            #[cfg(not(feature = "qualification-oracles-test-only"))]
-            assert!(message.contains("backend feature `qualification-oracles-test-only`"));
-            #[cfg(feature = "qualification-oracles-test-only")]
             assert!(message.contains("kernel-ir-v1"));
-            #[cfg(feature = "qualification-oracles-test-only")]
             assert!(message.contains("kernel-ir-worker-v2"));
-            #[cfg(feature = "qualification-oracles-test-only")]
             assert!(message.contains("collected-tiled-gemm-v1"));
-            #[cfg(feature = "qualification-oracles-test-only")]
             assert!(message.contains("collected-row-softmax-v1"));
-            #[cfg(feature = "qualification-oracles-test-only")]
             assert!(message.contains("collected-general-gemm-v1"));
         }
     }
