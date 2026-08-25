@@ -1302,12 +1302,14 @@ pub(crate) mod tests {
     }
 
     struct HsacoAdmission<'fixture> {
-        _publication_directory: TestPublicationDirectory,
         validated: ValidatedDirectLinkBundleEvidenceV1<'fixture>,
         bridge: ManifestClaimDirectLinkPublicationBridgeV1,
         selected: SelectedNativeKernel<'fixture>,
         observed: ObservedContext,
         admission: ValidatedPublishedDirectLinkSelectionV1,
+        // Rust drops fields in declaration order. Keep the directory alive until the admission
+        // token has released every descriptor and publication lock it owns.
+        _publication_directory: TestPublicationDirectory,
     }
 
     fn prepare_hsaco_admission<'fixture>(
@@ -1334,12 +1336,12 @@ pub(crate) mod tests {
         )
         .unwrap();
         HsacoAdmission {
-            _publication_directory: publication_directory,
             validated,
             bridge,
             selected,
             observed,
             admission,
+            _publication_directory: publication_directory,
         }
     }
 
