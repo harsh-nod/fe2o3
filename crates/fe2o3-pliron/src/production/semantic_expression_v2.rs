@@ -463,9 +463,11 @@ impl ProductionSemanticExpressionV2 {
                 if operand.scalar() != *scalar
                     || match operation {
                         ProductionSemanticUnaryOpV2::Not => scalar.is_float(),
-                        ProductionSemanticUnaryOpV2::Negate => {
-                            !scalar.is_integer() && !scalar.is_float()
-                        }
+                        ProductionSemanticUnaryOpV2::Negate => !matches!(
+                            scalar,
+                            ProductionSemanticScalarTypeV2::Integer { signed: true, .. }
+                                | ProductionSemanticScalarTypeV2::Float { .. }
+                        ),
                     }
                 {
                     return Err(ProductionSemanticExpressionErrorV2::TypeMismatch);
@@ -553,12 +555,19 @@ impl ProductionSemanticExpressionV2 {
             } => {
                 if operand.scalar() != *source
                     || match kind {
-                        ProductionSemanticCastV2::Integer => {
-                            (!source.is_integer()
-                                && *source != ProductionSemanticScalarTypeV2::Bool)
-                                || (!target.is_integer()
-                                    && *target != ProductionSemanticScalarTypeV2::Bool)
-                        }
+                        ProductionSemanticCastV2::Integer => !matches!(
+                            (source, target),
+                            (
+                                ProductionSemanticScalarTypeV2::Integer { .. },
+                                ProductionSemanticScalarTypeV2::Integer { .. },
+                            ) | (
+                                ProductionSemanticScalarTypeV2::Bool,
+                                ProductionSemanticScalarTypeV2::Integer { .. },
+                            ) | (
+                                ProductionSemanticScalarTypeV2::Bool,
+                                ProductionSemanticScalarTypeV2::Bool,
+                            )
+                        ),
                         ProductionSemanticCastV2::IntegerToFloat => {
                             !source.is_integer() || !target.is_float()
                         }
@@ -897,6 +906,37 @@ mod tests {
             condition: Box::new(u32_symbol(0)),
             when_true: Box::new(u32_symbol(1)),
             when_false: Box::new(u32_symbol(2)),
+        };
+        assert_eq!(
+            bad.validate(),
+            Err(ProductionSemanticExpressionErrorV2::TypeMismatch)
+        );
+
+        let unsigned = ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits: 32,
+        };
+        let bad = ProductionSemanticExpressionV2::Unary {
+            operation: ProductionSemanticUnaryOpV2::Negate,
+            scalar: unsigned,
+            operand: Box::new(ProductionSemanticExpressionV2::Constant {
+                scalar: unsigned,
+                bits: 1,
+            }),
+        };
+        assert_eq!(
+            bad.validate(),
+            Err(ProductionSemanticExpressionErrorV2::TypeMismatch)
+        );
+
+        let bad = ProductionSemanticExpressionV2::Cast {
+            kind: ProductionSemanticCastV2::Integer,
+            source: unsigned,
+            target: ProductionSemanticScalarTypeV2::Bool,
+            operand: Box::new(ProductionSemanticExpressionV2::Constant {
+                scalar: unsigned,
+                bits: 1,
+            }),
         };
         assert_eq!(
             bad.validate(),
