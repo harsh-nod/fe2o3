@@ -50,7 +50,7 @@ impl ExternalProject {
             .env("CARGO", env!("CARGO_BIN_EXE_cargo-fe2o3-cargo-fixture"))
             .env("FE2O3_BACKEND", &self.backend)
             .env("FE2O3_TARGET", "gfx942")
-            .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-v1")
+            .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1")
             .env("FE2O3_TEST_CARGO_LOG", &self.log)
             .env("FE2O3_TEST_WORKSPACE_ROOT", &self.fixture)
             .env("FE2O3_TEST_TARGET_DIRECTORY", &self.target)

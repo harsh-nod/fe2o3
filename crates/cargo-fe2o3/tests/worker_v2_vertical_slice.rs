@@ -946,7 +946,7 @@ fn outer_command(directory: &TestDirectory, config: Option<&Path>, control: &Pat
         .env("FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1", runtime_sha256)
         .env("FE2O3_AUTHORITY_CARGO_SHA256_V1", cargo_sha256)
         .env("FE2O3_AUTHORITY_BACKEND_SHA256_V1", backend_sha256)
-        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-worker-v2")
         .env(
             "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
             "1",
@@ -2513,8 +2513,9 @@ fn s09_environment_stripping_fails_before_the_prepared_broker_can_be_downgraded(
     let directory = TestDirectory::new();
     let config = write_s09_config(&directory);
     let mut options = VerticalRunOptions::new("publish");
-    options.strip =
-        Some("FE2O3_CODEGEN_PIPELINE,FE2O3_WORKER_V2_CONFIG_V2,FE2O3_WORKER_V2_EXPECTED_ID_V1");
+    options.strip = Some(
+        "FE2O3_QUALIFICATION_ORACLE_V1,FE2O3_WORKER_V2_CONFIG_V2,FE2O3_WORKER_V2_EXPECTED_ID_V1",
+    );
     let output = run_wrapper_options(&directory, Some(&config), options);
     assert!(!output.status.success());
     assert!(!directory.0.join("spawned").exists());

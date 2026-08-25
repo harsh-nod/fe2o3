@@ -61,7 +61,7 @@ use crate::general_gemm_final_join_v1::{
 };
 
 pub(crate) const GENERAL_GEMM_PIPELINE_V1: &str = "collected-general-gemm-v1";
-const CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
+const QUALIFICATION_ORACLE_ENV: &str = "FE2O3_QUALIFICATION_ORACLE_V1";
 const WORKER_CONFIG_ENV: &str = "FE2O3_WORKER_V2_CONFIG_V2";
 const EXPECTED_CONFIG_ID_ENV: &str = "FE2O3_WORKER_V2_EXPECTED_ID_V1";
 const QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1: &str =
@@ -165,7 +165,9 @@ impl PreparedGeneralGemmPipelineV1 {
         source: &Path,
         working_directory: &Path,
     ) -> Result<Self, GeneralGemmPipelineErrorV1> {
-        if env::var_os(CODEGEN_PIPELINE_ENV).as_deref() != Some(GENERAL_GEMM_PIPELINE_V1.as_ref()) {
+        if env::var_os(QUALIFICATION_ORACLE_ENV).as_deref()
+            != Some(GENERAL_GEMM_PIPELINE_V1.as_ref())
+        {
             return Err(GeneralGemmPipelineErrorV1::Configuration(
                 "the in-process general-GEMM parser requires the exact pipeline selector"
                     .to_owned(),

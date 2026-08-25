@@ -273,13 +273,14 @@ Migration follows these rules:
    device compilation. The compiler API `Legacy` route is removed, and
    exact-profile qualification selectors retire as their slices migrate.
 
-The default switched to `production-v1` after the first scalar slice completed
-its compile, host-interface, artifact, and hardware gates. An incomplete
-general route now fails closed instead of silently entering legacy codegen;
-every retained oracle route requires an explicit selector.
+Production became the sole unselected route after the first scalar slice
+completed its compile, host-interface, artifact, and hardware gates. It has no
+selector. An incomplete general route now fails closed instead of silently
+entering legacy codegen; every retained oracle requires an explicit
+`FE2O3_QUALIFICATION_ORACLE_V1` value.
 
-The 2026-08-20 compiler review made this distinction structural. Selector names
-now come from one table, every route has an explicit production-or-oracle
+The 2026-08-20 compiler review made this distinction structural. Qualification
+names now come from one table, every route has an explicit production-or-oracle
 purpose, and a test proves that only `production-v1` is production-capable.
 Shared oracle collection and frontend-record validation do not weaken the
 boundary: `ProductionCompilationV1` still receives only the move-only production

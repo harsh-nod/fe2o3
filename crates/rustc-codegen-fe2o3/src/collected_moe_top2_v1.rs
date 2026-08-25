@@ -150,7 +150,8 @@ pub(crate) fn classify_exact_moe_top2_compiler_intrinsic(
     tcx: TyCtxt<'_>,
     def_id: rustc_hir::def_id::DefId,
 ) -> Option<MoeTop2CompilerIntrinsicV1> {
-    if std::env::var("FE2O3_CODEGEN_PIPELINE").as_deref() != Ok(COLLECTED_MOE_TOP2_PIPELINE_V1)
+    if std::env::var("FE2O3_QUALIFICATION_ORACLE_V1").as_deref()
+        != Ok(COLLECTED_MOE_TOP2_PIPELINE_V1)
         || def_id.is_local()
     {
         return None;

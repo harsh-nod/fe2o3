@@ -46,7 +46,8 @@ use sha2::{Digest, Sha256};
 
 pub(crate) use crate::worker_v2_restart::WorkerV2EnvelopeModeV1;
 
-pub(crate) const CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
+pub(crate) const QUALIFICATION_ORACLE_ENV: &str = "FE2O3_QUALIFICATION_ORACLE_V1";
+const OBSOLETE_CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 pub(crate) const WORKER_V2_CONFIG_ENV: &str = "FE2O3_WORKER_V2_CONFIG_V2";
 pub(crate) const WORKER_V2_EXPECTED_ID_ENV: &str = "FE2O3_WORKER_V2_EXPECTED_ID_V1";
 pub(crate) const GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV: &str =
@@ -172,7 +173,7 @@ struct ConfiguredUnit {
 pub(crate) struct PreparedWorkerV2Config {
     manifest_path: PathBuf,
     identity: WorkerV2ConfigIdentity,
-    pipeline: WorkerV2PipelineV1,
+    profile: WorkerConfigProfile,
     envelope_mode: WorkerV2EnvelopeModeV1,
     envelope_inputs: Option<ConfiguredEnvelopeInputs>,
     worker: PinnedWorkerV1,
@@ -251,15 +252,15 @@ pub(crate) enum WorkerV2SourceDebugProfileV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum WorkerV2PipelineV1 {
+enum WorkerConfigProfile {
     General,
-    ProductionV1,
+    Production,
     ScalarGemmV1,
     RowSoftmaxV1,
     GeneralGemmV1,
 }
 
-impl WorkerV2PipelineV1 {
+impl WorkerConfigProfile {
     fn from_environment_value(value: &OsStr) -> Option<Self> {
         if value == WORKER_V2_PIPELINE {
             Some(Self::General)
@@ -277,7 +278,7 @@ impl WorkerV2PipelineV1 {
     const fn environment_value(self) -> &'static str {
         match self {
             Self::General => WORKER_V2_PIPELINE,
-            Self::ProductionV1 => PRODUCTION_CONFIG_PROFILE_ID_V1,
+            Self::Production => PRODUCTION_CONFIG_PROFILE_ID_V1,
             Self::ScalarGemmV1 => SCALAR_GEMM_V1_PIPELINE,
             Self::RowSoftmaxV1 => ROW_SOFTMAX_V1_PIPELINE,
             Self::GeneralGemmV1 => GENERAL_GEMM_V1_PIPELINE,
@@ -286,8 +287,8 @@ impl WorkerV2PipelineV1 {
 }
 
 /// Matches the backend's closed route rule: only unset means production.
-pub(crate) fn production_compilation_selected(pipeline: Option<&OsStr>) -> bool {
-    pipeline.is_none()
+pub(crate) fn production_compilation_selected(profile: Option<&OsStr>) -> bool {
+    profile.is_none()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -316,10 +317,24 @@ struct ConfiguredEnvelopeInputs {
 
 impl PreparedWorkerV2Config {
     pub(crate) fn from_environment() -> Result<Option<Self>, WorkerV2ConfigError> {
-        Self::from_selection(
-            std::env::var_os(CODEGEN_PIPELINE_ENV).as_deref(),
+        Self::from_environment_values(
+            std::env::var_os(OBSOLETE_CODEGEN_PIPELINE_ENV).as_deref(),
+            std::env::var_os(QUALIFICATION_ORACLE_ENV).as_deref(),
             std::env::var_os(WORKER_V2_CONFIG_ENV).as_deref(),
         )
+    }
+
+    fn from_environment_values(
+        obsolete_pipeline: Option<&OsStr>,
+        qualification_oracle: Option<&OsStr>,
+        config_path: Option<&OsStr>,
+    ) -> Result<Option<Self>, WorkerV2ConfigError> {
+        if let Some(value) = obsolete_pipeline {
+            return Err(WorkerV2ConfigError::Invalid(format!(
+                "{OBSOLETE_CODEGEN_PIPELINE_ENV} has been removed; production compilation has no selector and temporary test oracles use {QUALIFICATION_ORACLE_ENV}; found {value:?}"
+            )));
+        }
+        Self::from_selection(qualification_oracle, config_path)
     }
 
     pub(crate) fn from_environment_for_cargo_setup() -> Result<Option<Self>, WorkerV2ConfigError> {
@@ -331,44 +346,44 @@ impl PreparedWorkerV2Config {
     }
 
     fn from_selection(
-        pipeline: Option<&OsStr>,
+        profile: Option<&OsStr>,
         config_path: Option<&OsStr>,
     ) -> Result<Option<Self>, WorkerV2ConfigError> {
-        if pipeline == Some(OsStr::new(OBSOLETE_PRODUCTION_SELECTOR)) {
+        if profile == Some(OsStr::new(OBSOLETE_PRODUCTION_SELECTOR)) {
             return Err(WorkerV2ConfigError::Invalid(format!(
-                "{CODEGEN_PIPELINE_ENV} must be unset for production compilation; explicit `{OBSOLETE_PRODUCTION_SELECTOR}` selection has been removed"
+                "{QUALIFICATION_ORACLE_ENV} must be unset for production compilation; explicit `{OBSOLETE_PRODUCTION_SELECTOR}` selection has been removed"
             )));
         }
-        let selected = if production_compilation_selected(pipeline) {
-            Some(WorkerV2PipelineV1::ProductionV1)
+        let selected = if production_compilation_selected(profile) {
+            Some(WorkerConfigProfile::Production)
         } else {
-            pipeline.and_then(WorkerV2PipelineV1::from_environment_value)
+            profile.and_then(WorkerConfigProfile::from_environment_value)
         };
         match (selected, config_path) {
             (None, None) => Ok(None),
-            (Some(WorkerV2PipelineV1::RowSoftmaxV1), None) => Ok(None),
+            (Some(WorkerConfigProfile::RowSoftmaxV1), None) => Ok(None),
             (None, Some(_)) => Err(WorkerV2ConfigError::UnexpectedConfiguration),
             (Some(_), None) => Err(WorkerV2ConfigError::MissingConfiguration),
             (Some(_), Some(path)) if path.is_empty() => {
                 Err(WorkerV2ConfigError::MissingConfiguration)
             }
-            (Some(pipeline), Some(path)) => {
-                Self::from_manifest_for_pipeline(Path::new(path), pipeline).map(Some)
+            (Some(profile), Some(path)) => {
+                Self::from_manifest_for_profile(Path::new(path), profile).map(Some)
             }
         }
     }
 
     #[cfg(test)]
     fn from_manifest(path: &Path) -> Result<Self, WorkerV2ConfigError> {
-        Self::from_manifest_for_pipeline(path, WorkerV2PipelineV1::General)
+        Self::from_manifest_for_profile(path, WorkerConfigProfile::General)
     }
 
-    fn from_manifest_for_pipeline(
+    fn from_manifest_for_profile(
         path: &Path,
-        pipeline: WorkerV2PipelineV1,
+        profile: WorkerConfigProfile,
     ) -> Result<Self, WorkerV2ConfigError> {
         require_absolute_path(path, "configuration")?;
-        if pipeline == WorkerV2PipelineV1::GeneralGemmV1 {
+        if profile == WorkerConfigProfile::GeneralGemmV1 {
             require_closed_child_manifest_path(path, "configuration")?;
         }
         let bytes = read_bounded(path, MAX_CONFIG_BYTES, "configuration")?;
@@ -406,7 +421,7 @@ impl PreparedWorkerV2Config {
         let (envelope_mode, envelope_inputs) = parse_envelope_inputs(root)?;
         let row_softmax_v1 = parse_row_softmax_v1(
             root,
-            pipeline,
+            profile,
             &providers,
             &link_options,
             source_debug_profile,
@@ -415,7 +430,7 @@ impl PreparedWorkerV2Config {
         )?;
         let general_gemm_v1 = parse_general_gemm_v1(
             root,
-            pipeline,
+            profile,
             &providers,
             &link_options,
             source_debug_profile,
@@ -424,7 +439,7 @@ impl PreparedWorkerV2Config {
         )?;
 
         let identity = transitive_identity(
-            pipeline,
+            profile,
             &bytes,
             &worker,
             &providers,
@@ -433,7 +448,7 @@ impl PreparedWorkerV2Config {
         Ok(Self {
             manifest_path: path.to_path_buf(),
             identity,
-            pipeline,
+            profile,
             envelope_mode,
             envelope_inputs,
             worker,
@@ -467,10 +482,10 @@ impl PreparedWorkerV2Config {
     pub(crate) const fn requires_expected_identity(&self) -> bool {
         self.source_debug_profile.is_some()
             || matches!(
-                self.pipeline,
-                WorkerV2PipelineV1::ScalarGemmV1
-                    | WorkerV2PipelineV1::RowSoftmaxV1
-                    | WorkerV2PipelineV1::GeneralGemmV1
+                self.profile,
+                WorkerConfigProfile::ScalarGemmV1
+                    | WorkerConfigProfile::RowSoftmaxV1
+                    | WorkerConfigProfile::GeneralGemmV1
             )
     }
 
@@ -483,11 +498,11 @@ impl PreparedWorkerV2Config {
     }
 
     pub(crate) const fn executes_worker_in_rustc(&self) -> bool {
-        matches!(self.pipeline, WorkerV2PipelineV1::GeneralGemmV1)
+        matches!(self.profile, WorkerConfigProfile::GeneralGemmV1)
     }
 
-    pub(crate) const fn is_production_v1(&self) -> bool {
-        matches!(self.pipeline, WorkerV2PipelineV1::ProductionV1)
+    pub(crate) const fn is_production_compilation(&self) -> bool {
+        matches!(self.profile, WorkerConfigProfile::Production)
     }
 
     pub(crate) fn row_softmax_v1_worker_pins(
@@ -495,7 +510,7 @@ impl PreparedWorkerV2Config {
     ) -> Result<RowSoftmaxV1DirectWorkerPinsV1, WorkerV2ConfigError> {
         let row = self.row_softmax_v1.as_ref().ok_or_else(|| {
             WorkerV2ConfigError::Invalid(
-                "row-softmax worker pins requested from a different pipeline".to_owned(),
+                "row-softmax worker pins requested from a different profile".to_owned(),
             )
         })?;
         let measurement = self.worker.measurement();
@@ -517,15 +532,15 @@ impl PreparedWorkerV2Config {
         if !self.selects(crate_name, source, working_directory) {
             return None;
         }
-        if self.pipeline == WorkerV2PipelineV1::ProductionV1 {
+        if self.profile == WorkerConfigProfile::Production {
             Some(WorkerV2CompileEnvironmentProfileV1::ProductionGfx942)
         } else if self.source_debug_profile.is_some() {
             Some(WorkerV2CompileEnvironmentProfileV1::S09AlphaGfx942O0)
-        } else if self.pipeline == WorkerV2PipelineV1::ScalarGemmV1 {
+        } else if self.profile == WorkerConfigProfile::ScalarGemmV1 {
             Some(WorkerV2CompileEnvironmentProfileV1::ScalarGemmV1Gfx942)
-        } else if self.pipeline == WorkerV2PipelineV1::RowSoftmaxV1 {
+        } else if self.profile == WorkerConfigProfile::RowSoftmaxV1 {
             Some(WorkerV2CompileEnvironmentProfileV1::RowSoftmaxV1Gfx942)
-        } else if self.pipeline == WorkerV2PipelineV1::GeneralGemmV1 {
+        } else if self.profile == WorkerConfigProfile::GeneralGemmV1 {
             Some(WorkerV2CompileEnvironmentProfileV1::GeneralGemmV1Gfx942)
         } else {
             None
@@ -678,7 +693,7 @@ impl PreparedWorkerV2Config {
 
 fn parse_general_gemm_v1(
     root: &Map<String, Value>,
-    pipeline: WorkerV2PipelineV1,
+    profile: WorkerConfigProfile,
     providers: &[WorkerInputV1],
     options: &[LinkOptionV1],
     source_debug_profile: Option<WorkerV2SourceDebugProfileV1>,
@@ -686,7 +701,7 @@ fn parse_general_gemm_v1(
     candidate_output: &WorkerOutputConstraintsV1,
 ) -> Result<Option<PreparedGeneralGemmV1Config>, WorkerV2ConfigError> {
     let Some(value) = root.get("general_gemm_v1") else {
-        if pipeline == WorkerV2PipelineV1::GeneralGemmV1 {
+        if profile == WorkerConfigProfile::GeneralGemmV1 {
             return Err(WorkerV2ConfigError::Invalid(
                 "general-GEMM Worker V2 configuration requires general_gemm_v1 qualification-pair pins"
                     .to_owned(),
@@ -694,7 +709,7 @@ fn parse_general_gemm_v1(
         }
         return Ok(None);
     };
-    if pipeline != WorkerV2PipelineV1::GeneralGemmV1 {
+    if profile != WorkerConfigProfile::GeneralGemmV1 {
         return Err(WorkerV2ConfigError::Invalid(
             "general_gemm_v1 pins are valid only for collected-general-gemm-v1".to_owned(),
         ));
@@ -778,7 +793,7 @@ fn parse_general_gemm_v1(
 
 fn parse_row_softmax_v1(
     root: &Map<String, Value>,
-    pipeline: WorkerV2PipelineV1,
+    profile: WorkerConfigProfile,
     providers: &[WorkerInputV1],
     options: &[LinkOptionV1],
     source_debug_profile: Option<WorkerV2SourceDebugProfileV1>,
@@ -786,7 +801,7 @@ fn parse_row_softmax_v1(
     candidate_output: &WorkerOutputConstraintsV1,
 ) -> Result<Option<PreparedRowSoftmaxV1Config>, WorkerV2ConfigError> {
     let Some(value) = root.get("row_softmax_v1") else {
-        if pipeline == WorkerV2PipelineV1::RowSoftmaxV1 {
+        if profile == WorkerConfigProfile::RowSoftmaxV1 {
             return Err(WorkerV2ConfigError::Invalid(
                 "row-softmax Worker V2 configuration requires row_softmax_v1 policy pins"
                     .to_owned(),
@@ -794,7 +809,7 @@ fn parse_row_softmax_v1(
         }
         return Ok(None);
     };
-    if pipeline != WorkerV2PipelineV1::RowSoftmaxV1 {
+    if profile != WorkerConfigProfile::RowSoftmaxV1 {
         return Err(WorkerV2ConfigError::Invalid(
             "row_softmax_v1 policy pins are valid only for collected-row-softmax-v1".to_owned(),
         ));
@@ -988,7 +1003,7 @@ impl ConfiguredEnvelopeInputs {
 }
 
 fn transitive_identity(
-    pipeline: WorkerV2PipelineV1,
+    profile: WorkerConfigProfile,
     manifest: &[u8],
     worker: &PinnedWorkerV1,
     providers: &[WorkerInputV1],
@@ -996,7 +1011,7 @@ fn transitive_identity(
 ) -> WorkerV2ConfigIdentity {
     let mut hash = Sha256::new();
     update_identity(&mut hash, b"fe2o3-worker-v2-transitive-config-v2");
-    update_identity(&mut hash, pipeline.environment_value().as_bytes());
+    update_identity(&mut hash, profile.environment_value().as_bytes());
     update_identity(&mut hash, manifest);
     let measurement = worker.measurement();
     update_identity(&mut hash, measurement.executable().sha256());
@@ -1057,11 +1072,11 @@ impl fmt::Display for WorkerV2ConfigError {
         match self {
             Self::MissingConfiguration => write!(
                 formatter,
-                "a Worker V2 codegen pipeline requires {WORKER_V2_CONFIG_ENV}"
+                "a Worker V2 codegen profile requires {WORKER_V2_CONFIG_ENV}"
             ),
             Self::UnexpectedConfiguration => write!(
                 formatter,
-                "{WORKER_V2_CONFIG_ENV} is valid only when {CODEGEN_PIPELINE_ENV} is unset for production compilation or exactly {WORKER_V2_PIPELINE}, {SCALAR_GEMM_V1_PIPELINE}, {ROW_SOFTMAX_V1_PIPELINE}, or {GENERAL_GEMM_V1_PIPELINE}"
+                "{WORKER_V2_CONFIG_ENV} is valid only when {QUALIFICATION_ORACLE_ENV} is unset for production compilation or exactly {WORKER_V2_PIPELINE}, {SCALAR_GEMM_V1_PIPELINE}, {ROW_SOFTMAX_V1_PIPELINE}, or {GENERAL_GEMM_V1_PIPELINE}"
             ),
             Self::Io { kind, path, error } => {
                 write!(
@@ -1796,7 +1811,16 @@ mod tests {
     }
 
     #[test]
-    fn requires_configuration_exactly_for_the_worker_v2_pipeline() {
+    fn requires_configuration_for_production_and_qualification_profiles() {
+        assert!(matches!(
+            PreparedWorkerV2Config::from_environment_values(
+                Some(OsStr::new("production-v1")),
+                None,
+                None,
+            ),
+            Err(WorkerV2ConfigError::Invalid(reason))
+                if reason.contains("FE2O3_CODEGEN_PIPELINE has been removed")
+        ));
         assert!(matches!(
             PreparedWorkerV2Config::from_selection(None, None),
             Err(WorkerV2ConfigError::MissingConfiguration)
@@ -1842,9 +1866,9 @@ mod tests {
     fn general_gemm_manifest_selects_only_the_closed_qualification_pair() {
         let directory = TestDirectory::new();
         let path = general_gemm_manifest(&directory);
-        let config = PreparedWorkerV2Config::from_manifest_for_pipeline(
+        let config = PreparedWorkerV2Config::from_manifest_for_profile(
             &path,
-            WorkerV2PipelineV1::GeneralGemmV1,
+            WorkerConfigProfile::GeneralGemmV1,
         )
         .unwrap();
         let pair = config.general_gemm_v1().unwrap();
@@ -1866,9 +1890,9 @@ mod tests {
         value["general_gemm_v1"]["profile"] = json!("single-schedule-v1");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest_for_pipeline(
+            PreparedWorkerV2Config::from_manifest_for_profile(
                 &path,
-                WorkerV2PipelineV1::GeneralGemmV1,
+                WorkerConfigProfile::GeneralGemmV1,
             ),
             Err(WorkerV2ConfigError::Invalid(reason))
                 if reason.contains("unsupported value")
@@ -1880,17 +1904,17 @@ mod tests {
         let directory = TestDirectory::new();
         let path = general_gemm_manifest(&directory);
         let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        let reference_identity = PreparedWorkerV2Config::from_manifest_for_pipeline(
+        let reference_identity = PreparedWorkerV2Config::from_manifest_for_profile(
             &path,
-            WorkerV2PipelineV1::GeneralGemmV1,
+            WorkerConfigProfile::GeneralGemmV1,
         )
         .unwrap()
         .identity();
         value["general_gemm_v1"]["proof_timeout_seconds"] = json!(121);
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-        let substituted = PreparedWorkerV2Config::from_manifest_for_pipeline(
+        let substituted = PreparedWorkerV2Config::from_manifest_for_profile(
             &path,
-            WorkerV2PipelineV1::GeneralGemmV1,
+            WorkerConfigProfile::GeneralGemmV1,
         )
         .unwrap();
         assert_eq!(
@@ -1905,9 +1929,9 @@ mod tests {
         value["general_gemm_v1"]["runtime_closure_v2_root"] =
             json!("/opt/fe2o3/verus-runtime-v2/0.2026.08.02-substituted");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-        let substituted = PreparedWorkerV2Config::from_manifest_for_pipeline(
+        let substituted = PreparedWorkerV2Config::from_manifest_for_profile(
             &path,
-            WorkerV2PipelineV1::GeneralGemmV1,
+            WorkerConfigProfile::GeneralGemmV1,
         )
         .unwrap();
         assert_eq!(
@@ -1923,9 +1947,9 @@ mod tests {
         value["general_gemm_v1"]["custom"] = json!(true);
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest_for_pipeline(
+            PreparedWorkerV2Config::from_manifest_for_profile(
                 &path,
-                WorkerV2PipelineV1::GeneralGemmV1,
+                WorkerConfigProfile::GeneralGemmV1,
             ),
             Err(WorkerV2ConfigError::Invalid(reason))
                 if reason.contains("must contain exactly")
@@ -1938,9 +1962,9 @@ mod tests {
         value["general_gemm_v1"]["proof_timeout_seconds"] = json!(0);
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest_for_pipeline(
+            PreparedWorkerV2Config::from_manifest_for_profile(
                 &path,
-                WorkerV2PipelineV1::GeneralGemmV1,
+                WorkerConfigProfile::GeneralGemmV1,
             ),
             Err(WorkerV2ConfigError::Invalid(reason))
                 if reason.contains("proof_timeout_seconds")
@@ -1950,9 +1974,9 @@ mod tests {
         value["general_gemm_v1"]["runtime_closure_v2_root"] = json!("relative/runtime");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest_for_pipeline(
+            PreparedWorkerV2Config::from_manifest_for_profile(
                 &path,
-                WorkerV2PipelineV1::GeneralGemmV1,
+                WorkerConfigProfile::GeneralGemmV1,
             ),
             Err(WorkerV2ConfigError::Invalid(reason))
                 if reason.contains("absolute")
@@ -1963,9 +1987,9 @@ mod tests {
         value["general_gemm_v1"]["runtime_closure_v2_manifest_sha256"] = json!("77".repeat(32));
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest_for_pipeline(
+            PreparedWorkerV2Config::from_manifest_for_profile(
                 &path,
-                WorkerV2PipelineV1::GeneralGemmV1,
+                WorkerConfigProfile::GeneralGemmV1,
             ),
             Err(WorkerV2ConfigError::Invalid(reason))
                 if reason.contains("compiled-in reviewed manifest")
@@ -1984,9 +2008,9 @@ mod tests {
             .join(".")
             .join(path.file_name().unwrap());
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest_for_pipeline(
+            PreparedWorkerV2Config::from_manifest_for_profile(
                 &lexical_alias,
-                WorkerV2PipelineV1::GeneralGemmV1,
+                WorkerConfigProfile::GeneralGemmV1,
             ),
             Err(WorkerV2ConfigError::Invalid(reason)) if reason.contains("canonical absolute UTF-8")
         ));
@@ -2007,9 +2031,9 @@ mod tests {
     fn row_softmax_manifest_binds_exact_provider_ocml_and_workload_policy() {
         let directory = TestDirectory::new();
         let path = row_softmax_manifest(&directory);
-        let config = PreparedWorkerV2Config::from_manifest_for_pipeline(
+        let config = PreparedWorkerV2Config::from_manifest_for_profile(
             &path,
-            WorkerV2PipelineV1::RowSoftmaxV1,
+            WorkerConfigProfile::RowSoftmaxV1,
         )
         .unwrap();
         assert!(config.requires_expected_identity());
@@ -2028,9 +2052,9 @@ mod tests {
         let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         value["row_softmax_v1"]["ocml_manifest_sha256"] = json!(hex(&[0x36; 32]));
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-        let changed = PreparedWorkerV2Config::from_manifest_for_pipeline(
+        let changed = PreparedWorkerV2Config::from_manifest_for_profile(
             &path,
-            WorkerV2PipelineV1::RowSoftmaxV1,
+            WorkerConfigProfile::RowSoftmaxV1,
         )
         .unwrap();
         assert_ne!(first_identity, changed.identity());
@@ -2049,9 +2073,9 @@ mod tests {
         }]);
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest_for_pipeline(
+            PreparedWorkerV2Config::from_manifest_for_profile(
                 &path,
-                WorkerV2PipelineV1::RowSoftmaxV1
+                WorkerConfigProfile::RowSoftmaxV1
             ),
             Err(WorkerV2ConfigError::Invalid(reason))
                 if reason.contains("request-side link providers")
@@ -2062,9 +2086,9 @@ mod tests {
         value["link_options"][0]["value"] = json!("5");
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(matches!(
-            PreparedWorkerV2Config::from_manifest_for_pipeline(
+            PreparedWorkerV2Config::from_manifest_for_profile(
                 &path,
-                WorkerV2PipelineV1::RowSoftmaxV1
+                WorkerConfigProfile::RowSoftmaxV1
             ),
             Err(WorkerV2ConfigError::Invalid(reason))
                 if reason.contains("requires COV6")
@@ -2091,7 +2115,7 @@ mod tests {
     }
 
     #[test]
-    fn compile_environment_profile_requires_pipeline_and_exact_unit_selection() {
+    fn compile_environment_profile_requires_exact_profile_and_unit_selection() {
         let directory = TestDirectory::new();
         let path = manifest(&directory);
         let general = PreparedWorkerV2Config::from_selection(
@@ -2113,7 +2137,7 @@ mod tests {
         assert_ne!(general.identity(), scalar.identity());
         assert_ne!(general.identity(), production.identity());
         assert_ne!(production.identity(), scalar.identity());
-        assert_eq!(production.pipeline, WorkerV2PipelineV1::ProductionV1);
+        assert_eq!(production.profile, WorkerConfigProfile::Production);
         assert!(!general.requires_expected_identity());
         assert!(!production.requires_expected_identity());
         assert!(scalar.requires_expected_identity());

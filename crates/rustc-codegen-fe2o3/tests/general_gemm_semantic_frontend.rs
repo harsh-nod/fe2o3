@@ -99,7 +99,7 @@ fn managed_build(
         )
         .env("CARGO_TARGET_DIR", cargo_target_directory(workspace))
         .env("FE2O3_TARGET", "gfx942:xnack-")
-        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-v1")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1")
         .env("FE2O3_HSACO_DIR", artifacts)
         .output()
         .expect("run managed general GEMM frontend build")

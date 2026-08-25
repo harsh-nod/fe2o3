@@ -63,7 +63,7 @@ fn backend_build(workspace: &Path, target: &str) -> Output {
         .current_dir(workspace)
         .args(["build", "-p", "fe2o3-memory-v1-compiler-fixture"])
         .env("FE2O3_TARGET", target)
-        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-worker-v2")
         .env("FE2O3_WORKER_V2_CONFIG_V2", &config.0)
         .output()
         .expect("run memory-v1 compiler fixture")

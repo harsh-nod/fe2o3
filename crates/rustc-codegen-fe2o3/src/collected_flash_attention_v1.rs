@@ -145,7 +145,7 @@ pub(crate) fn classify_exact_flash_attention_compiler_intrinsic(
     tcx: TyCtxt<'_>,
     def_id: rustc_hir::def_id::DefId,
 ) -> Option<FlashAttentionCompilerIntrinsicV1> {
-    if std::env::var("FE2O3_CODEGEN_PIPELINE").as_deref()
+    if std::env::var("FE2O3_QUALIFICATION_ORACLE_V1").as_deref()
         != Ok(COLLECTED_FLASH_ATTENTION_PIPELINE_V1)
         || def_id.is_local()
     {

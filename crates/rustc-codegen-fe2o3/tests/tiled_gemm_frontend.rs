@@ -45,7 +45,7 @@ fn genuine_build(workspace: &Path, target: &str, retained_llvm: Option<&Path>) -
             "tiled_gemm_frontend_v1",
         ])
         .env("FE2O3_TARGET", target)
-        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-v1");
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1");
     if let Some(directory) = retained_llvm {
         command.env("FE2O3_TEST_RETAIN_TILED_GEMM_FRONTEND_LLVM_DIR", directory);
     }
@@ -77,7 +77,7 @@ fn provider_impostor_build(workspace: &Path, package: &str, managed_target: &Pat
             cargo_target_directory(workspace).join("debug/librustc_codegen_fe2o3.so"),
         )
         .env("FE2O3_TARGET", "gfx942:xnack-")
-        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-v1")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1")
         .output()
         .expect("compile external matrix provider impostor")
 }
@@ -337,7 +337,7 @@ fn genuine_matrix_items_reach_verified_ir_and_local_markers_fail_closed() {
         .arg("-o")
         .arg(output.join("libtiled_gemm_local_marker_spoof.rlib"))
         .env("FE2O3_TARGET", "gfx942:xnack-")
-        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-v1")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1")
         .env("FE2O3_HSACO_DIR", output.join("artifacts"))
         .output()
         .expect("compile local matrix marker spoof");

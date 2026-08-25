@@ -448,7 +448,7 @@ fn cargo_fe2o3_command() -> Command {
 fn cargo_fe2o3_command_with_program(program: &Path) -> Command {
     let mut command = Command::new(program);
     command
-        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-v1")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1")
         .env_remove("RUSTUP_HOME")
         .env_remove("RUSTUP_TOOLCHAIN")
         .env_remove("RUSTC")
@@ -1098,7 +1098,7 @@ fn substituted_multithreaded_image_cannot_replay_wrapper_from_non_leader_thread(
         .env("FE2O3_TEST_DISPLACED_WRAPPER", &displaced_wrapper)
         .env("FE2O3_TEST_WRAPPER_RACE_TRACE", &race_trace)
         .env("FE2O3_TEST_MULTITHREADED_TRACE", &thread_trace)
-        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-v1")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1")
         .env("LD_LIBRARY_PATH", harness_loader)
         .env_remove("RUSTUP_HOME")
         .env_remove("RUSTUP_TOOLCHAIN")
@@ -1253,7 +1253,7 @@ fn authoritative_kernel_preflight_rejects_a_hostile_custom_build() {
         .env("FE2O3_BACKEND", &fixture.backend)
         .env("FE2O3_TEST_REAL_RUSTC", resolved_real_rustc())
         .env("FE2O3_TARGET", "gfx942")
-        .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1")
         .env(
             "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
             "1",
@@ -1332,7 +1332,7 @@ fn authoritative_kernel_preflight_rejects_a_hostile_proc_macro() {
         .env("FE2O3_BACKEND", &fixture.backend)
         .env("FE2O3_TEST_REAL_RUSTC", resolved_real_rustc())
         .env("FE2O3_TARGET", "gfx942")
-        .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1")
         .env(
             "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
             "1",
@@ -1601,7 +1601,7 @@ fn loader_injection_environment_is_rejected_before_artifact_authority() {
         let fixture = ProjectFixture::standalone();
         let mut command = fixture.authority_command(&[OsString::from("build")]);
         command
-            .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+            .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1")
             .env(variable, "/definitely/not/a/fe2o3-loader-object.so");
         let output = command.output().expect("run loader rejection probe");
         assert!(!output.status.success());
@@ -1652,7 +1652,7 @@ fn configured_loader_environment_is_rejected_before_artifact_authority() {
 fn authority_build_requires_an_independent_exact_rustc_digest() {
     let missing = ProjectFixture::standalone();
     let mut command = missing.authority_command(&[OsString::from("build")]);
-    command.env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1");
+    command.env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1");
     let output = command.output().expect("run missing rustc pin probe");
     assert!(!output.status.success());
     assert!(
@@ -1667,7 +1667,7 @@ fn authority_build_requires_an_independent_exact_rustc_digest() {
         let fixture = ProjectFixture::standalone();
         let mut command = fixture.authority_command(&[OsString::from("build")]);
         command
-            .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+            .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1")
             .env("FE2O3_AUTHORITY_RUSTC_SHA256_V1", digest)
             .env(
                 "FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1",
@@ -1695,7 +1695,7 @@ fn authority_release_fails_before_executing_cargo_without_a_protected_launcher()
     let mut command = fixture.authority_command(&[OsString::from("build")]);
     command
         .env_remove("FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1")
-        .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1");
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1");
     let output = command.output().expect("run protected-launch gate probe");
     assert!(!output.status.success());
     assert!(
@@ -1737,25 +1737,27 @@ fn protected_release_probe_mints_only_a_real_launcher_handoff() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn protected_release_rejects_every_pipeline_selector_before_launch() {
+fn protected_release_rejects_obsolete_and_qualification_selectors_before_launch() {
     let fixture = ProjectFixture::standalone();
-    for selector in [
-        "production-v1",
-        "collected-row-softmax-v1",
-        "kernel-ir-worker-v2",
-    ] {
-        let output = fixture
-            .isolated_protected_release_command("probe")
-            .env("FE2O3_CODEGEN_PIPELINE", selector)
-            .output()
-            .expect("run protected release selector rejection");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(!output.status.success(), "selector {selector:?}: {stderr}");
-        assert!(
-            stderr.contains("rejects unexpected inherited environment")
-                && stderr.contains("FE2O3_CODEGEN_PIPELINE"),
-            "selector {selector:?}: {stderr}",
-        );
+    for environment in ["FE2O3_CODEGEN_PIPELINE", "FE2O3_QUALIFICATION_ORACLE_V1"] {
+        for selector in [
+            "production-v1",
+            "collected-row-softmax-v1",
+            "kernel-ir-worker-v2",
+        ] {
+            let output = fixture
+                .isolated_protected_release_command("probe")
+                .env(environment, selector)
+                .output()
+                .expect("run protected release selector rejection");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "selector {selector:?}: {stderr}");
+            assert!(
+                stderr.contains("rejects unexpected inherited environment")
+                    && stderr.contains(environment),
+                "selector {selector:?}: {stderr}",
+            );
+        }
     }
     assert!(!fixture.log.exists(), "selector rejection executed Cargo");
     assert!(
@@ -2181,7 +2183,7 @@ fn authority_requires_an_explicit_rustc_path_without_path_selection() {
     let mut command = fixture.authority_command(&[OsString::from("build")]);
     command
         .env_remove("FE2O3_AUTHORITY_RUSTC_PATH_V1")
-        .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1")
         .env(
             "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
             authority_rustc_sha256(&fixture.root),
@@ -2212,7 +2214,7 @@ fn authority_metadata_is_frozen_offline_and_has_no_host_helper_environment() {
     let report = fixture.root.join("authority-preflight-report");
     let mut command = fixture.authority_command(&[OsString::from("build")]);
     command
-        .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1")
         .env(
             "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
             authority_rustc_sha256(&fixture.root),
@@ -2266,7 +2268,7 @@ fn authority_rejects_credential_and_registry_helper_channels_before_cargo() {
         let fixture = ProjectFixture::standalone();
         let mut command = fixture.authority_command(&[OsString::from("build")]);
         command
-            .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+            .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1")
             .env(name, "attacker-helper");
         let output = command.output().expect("run Cargo helper-channel probe");
         assert!(!output.status.success());
@@ -2286,7 +2288,7 @@ fn authority_build_requires_independent_runtime_and_cargo_digests() {
     let missing_runtime = ProjectFixture::standalone();
     let mut command = missing_runtime.authority_command(&[OsString::from("build")]);
     command
-        .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1")
         .env(
             "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
             authority_rustc_sha256(&missing_runtime.root),
@@ -2303,7 +2305,7 @@ fn authority_build_requires_independent_runtime_and_cargo_digests() {
     let missing_cargo = ProjectFixture::standalone();
     let mut command = missing_cargo.authority_command(&[OsString::from("build")]);
     command
-        .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1")
         .env(
             "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
             authority_rustc_sha256(&missing_cargo.root),
@@ -2336,7 +2338,7 @@ fn authority_build_requires_independent_runtime_and_cargo_digests() {
         let fixture = ProjectFixture::standalone();
         let mut command = fixture.authority_command(&[OsString::from("build")]);
         command
-            .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+            .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1")
             .env(
                 "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
                 authority_rustc_sha256(&fixture.root),
@@ -2367,7 +2369,7 @@ fn authority_build_requires_an_independent_exact_backend_digest() {
     let missing = ProjectFixture::standalone();
     let mut command = missing.authority_command(&[OsString::from("build")]);
     command
-        .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1")
         .env(
             "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
             authority_rustc_sha256(&missing.root),
@@ -2389,7 +2391,7 @@ fn authority_build_requires_an_independent_exact_backend_digest() {
     let missing_backend = ProjectFixture::standalone();
     let mut command = missing_backend.authority_command(&[OsString::from("build")]);
     command
-        .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1")
         .env(
             "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
             authority_rustc_sha256(&missing_backend.root),
@@ -2430,7 +2432,7 @@ fn authority_build_requires_an_independent_exact_backend_digest() {
     fs::write(&substituted_backend, b"substituted backend").expect("write backend substitute");
     let mut command = wrong.authority_command(&[OsString::from("build")]);
     command
-        .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1")
         .env(
             "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
             authority_rustc_sha256(&wrong.root),
@@ -2466,7 +2468,7 @@ fn authority_build_rejects_rustup_selection_substitution() {
         let fixture = ProjectFixture::standalone();
         let mut command = fixture.authority_command(&[OsString::from("build")]);
         command
-            .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+            .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1")
             .env(
                 "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
                 authority_rustc_sha256(&fixture.root),
@@ -2516,7 +2518,7 @@ fn authority_build_never_executes_a_rustup_proxy_during_rustc_resolution() {
             env::join_paths(paths).expect("construct hostile rustup PATH"),
         )
         .env("FE2O3_AUTHORITY_RUSTC_PATH_V1", bin.join("rustc"))
-        .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1")
         .env(
             "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
             authority_rustc_sha256(&fixture.root),
@@ -2562,7 +2564,7 @@ fn authority_build_rejects_unpinned_cargo_before_executing_it() {
     let mut command = fixture.authority_command(&[OsString::from("build")]);
     command
         .env("CARGO", &hostile)
-        .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1")
         .env(
             "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
             authority_rustc_sha256(&fixture.root),
@@ -2599,7 +2601,7 @@ fn authority_build_rejects_linker_and_runner_environment() {
         let fixture = ProjectFixture::standalone();
         let mut command = fixture.authority_command(&[OsString::from("build")]);
         command
-            .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+            .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1")
             .env(variable, "attacker-selected-tool");
         let output = command.output().expect("run authority override probe");
         assert!(!output.status.success());
@@ -2631,7 +2633,7 @@ fn authority_build_rejects_configured_linker_and_runner() {
         let fixture = ProjectFixture::standalone();
         let mut command = fixture.authority_command(&[OsString::from("build")]);
         command
-            .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+            .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1")
             .env(
                 "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
                 authority_rustc_sha256(&fixture.root),
@@ -3071,7 +3073,7 @@ fn cargo_failure_aggregates_runtime_and_authority_closure_revalidation() {
     let source = fixture.workspace.join("src/main.rs");
     let mut command = fixture.authority_command(&[OsString::from("build")]);
     command
-        .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1")
         .env(
             "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
             authority_rustc_sha256(&fixture.root),

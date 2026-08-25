@@ -157,5 +157,5 @@ while `PlironV1` is the only candidate-producing compiler API route.
    only `production-v1`.
 5. Switch the default, then remove selectors as differential slices pass.
 
-Do not add another workload-specific `CodegenPipeline` variant, importer, raw
+Do not add another workload-specific `QualificationOracleV1` variant, importer, raw
 context callback, textual identity boundary, or in-process profile finalizer.

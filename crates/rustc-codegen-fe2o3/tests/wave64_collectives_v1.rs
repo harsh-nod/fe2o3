@@ -203,7 +203,7 @@ fn compile(
         )
         .env("FE2O3_HSACO_DIR", &artifact_dir)
         .env("FE2O3_TARGET", profile.target)
-        .env("FE2O3_CODEGEN_PIPELINE", PIPELINE)
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", PIPELINE)
         .output()
         .expect("run Wave64 compiler fixture")
 }

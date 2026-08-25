@@ -99,15 +99,16 @@ driver route or persistent-service model.
   optimizes, emits relocatable ELF through pinned upstream LLVM target-machine
   APIs, and links HSACO through in-process LLD library APIs. It does not use
   COMGR or a command-line compiler or linker.
-- `FE2O3_CODEGEN_PIPELINE=kernel-ir-v1` selects the first integrated G1 path:
+- `FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-v1` selects the first integrated G1 qualification oracle:
   imported device MIR is translated to canonical kernel IR, verified, strictly
   legalized for the exact 1D `fill` shape, lowered by `fe2o3-amdgcn-model`
   through the `dialect-amdgcn` compatibility facade, and published through the
   existing transactional LLVM/object/HSACO path. Invalid selectors and
   unsupported selected inputs fail without legacy fallback and remove stale
-  artifacts. Unset selection enters `production-v1`; `kernel-ir-v1`,
-  `legacy-v1`, and workload-specific routes require explicit qualification
-  selection and cannot complete a production device transaction.
+  artifacts. With no oracle selected, compilation enters the sole production
+  route. `kernel-ir-v1` and workload-specific oracles require explicit
+  qualification selection and cannot complete a production device transaction.
+  The removed `FE2O3_CODEGEN_PIPELINE` environment is rejected.
 - `fe2o3-amdgcn-model`, reached through the `dialect-amdgcn` compatibility
   facade, lowers that verified fill subset to deterministic AMDGPU LLVM. Its
   code-object regression checks target/features, ELF and metadata versions,

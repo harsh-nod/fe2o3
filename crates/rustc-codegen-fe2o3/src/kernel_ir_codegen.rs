@@ -4,7 +4,7 @@
 //! `translate_and_verify` produced this in-memory module. This module must not be used to grant
 //! the same authority to decoded or caller-constructed kernel IR.
 
-use crate::CODEGEN_PIPELINE_ENV;
+use crate::QUALIFICATION_ORACLE_ENV;
 use crate::amdgpu_llvm::{EmitError, PreparedDeviceKernel};
 use crate::trusted_device_items::TrustedDeviceItem;
 use fe2o3_compiler_ffi::{
@@ -2569,7 +2569,7 @@ fn writable_f32_pointer() -> Type {
 fn reject(reason: impl Into<String>) -> EmitError {
     EmitError::Preflight {
         reason: format!(
-            "{CODEGEN_PIPELINE_ENV}=kernel-ir-v1 production path rejected input: {}",
+            "{QUALIFICATION_ORACLE_ENV}=kernel-ir-v1 production path rejected input: {}",
             reason.into()
         ),
     }

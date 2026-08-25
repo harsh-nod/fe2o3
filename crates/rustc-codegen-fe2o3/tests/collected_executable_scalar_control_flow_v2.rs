@@ -961,7 +961,7 @@ fn compile_path(
         .env("FE2O3_VERBOSE", "1")
         .env("FE2O3_DUMP_LLVM", "1")
         .env("FE2O3_TARGET", target)
-        .env("FE2O3_CODEGEN_PIPELINE", pipeline)
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", pipeline)
         .env("FE2O3_HSACO_DIR", output.0.join("artifacts"));
     let backend_descriptor = backend.file.as_raw_fd();
     unsafe {
@@ -1083,7 +1083,7 @@ fn compile_scalar_gemm(
             "7cfd53537e4e74e68c2800f807b8d8a4b04507b5653d07b38ab3e99ace8d2740",
         )
         .env("FE2O3_TARGET", target)
-        .env("FE2O3_CODEGEN_PIPELINE", SCALAR_GEMM_PIPELINE)
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", SCALAR_GEMM_PIPELINE)
         .env("FE2O3_BUILD_ATTEMPT_V1", attempt.to_env_value())
         .env("FE2O3_HSACO_DIR", output.0.join("artifacts"));
     let backend_descriptor = backend.file.as_raw_fd();
@@ -1212,7 +1212,7 @@ fn compile_tiled_gemm(
             "c1ab2dc02fa023687ac7394e15746c39668b5d46ad47c40eae012bc3f42d05c0",
         )
         .env("FE2O3_TARGET", target)
-        .env("FE2O3_CODEGEN_PIPELINE", TILED_GEMM_PIPELINE)
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", TILED_GEMM_PIPELINE)
         .env("FE2O3_BUILD_ATTEMPT_V1", attempt.to_env_value())
         .env("FE2O3_HSACO_DIR", output.0.join("artifacts"));
     let backend_descriptor = backend.file.as_raw_fd();
@@ -2358,7 +2358,7 @@ fn compile_row_softmax_with_device(
             ),
         )
         .env("FE2O3_TARGET", target)
-        .env("FE2O3_CODEGEN_PIPELINE", ROW_SOFTMAX_PIPELINE)
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", ROW_SOFTMAX_PIPELINE)
         .env("FE2O3_HSACO_DIR", output.0.join("artifacts"));
     if let Some(attempt) = attempt {
         command.env("FE2O3_BUILD_ATTEMPT_V1", attempt.to_env_value());
@@ -2476,7 +2476,7 @@ fn compile_row_softmax_with_forged_exact_argv_and_fixed_descriptors(
             "a59650cf8d1bfc6168915cb817dbab3a0fa6a8839291231bbf4149a749913937",
         )
         .env("FE2O3_TARGET", "gfx942:xnack-")
-        .env("FE2O3_CODEGEN_PIPELINE", ROW_SOFTMAX_PIPELINE)
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", ROW_SOFTMAX_PIPELINE)
         .env(
             "FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1",
             encode_lower_hex(&compiler_closure),
@@ -2912,7 +2912,7 @@ fn compile_external_row_softmax_crate_with_broker(
         .env_remove("CARGO_INCREMENTAL")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env("FE2O3_TARGET", spec.target)
-        .env("FE2O3_CODEGEN_PIPELINE", ROW_SOFTMAX_PIPELINE)
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", ROW_SOFTMAX_PIPELINE)
         .env("FE2O3_HSACO_DIR", output.0.join("artifacts"))
         .env("RUSTFLAGS", rustflags);
     match metadata_mutation {
@@ -3299,7 +3299,7 @@ fn compile_clean_external_row_softmax_crate_with_handoff(
         .env_remove("CARGO_INCREMENTAL")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env("FE2O3_TARGET", "gfx942:xnack-")
-        .env("FE2O3_CODEGEN_PIPELINE", ROW_SOFTMAX_PIPELINE)
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", ROW_SOFTMAX_PIPELINE)
         .env("FE2O3_HSACO_DIR", output.0.join("artifacts"))
         .env(HANDOFF_OBSERVATION_DIRECTORY_ENV, &observation_directory)
         .env(HANDOFF_OBSERVATION_CRATE_ENV, &expected_crate_name)
@@ -3778,7 +3778,7 @@ fn target_pipeline_identity_abi_and_collection_substitutions_reject_without_fall
             "gfx942:xnack-",
             "collected-executable-scalar-control-flow-v2-custom",
         ),
-        "FE2O3_CODEGEN_PIPELINE must be unset for production compilation",
+        "FE2O3_QUALIFICATION_ORACLE_V1 must be unset for production compilation",
     );
 
     let custom_llvm = TestOutputDir::new(&workspace);
@@ -4924,7 +4924,7 @@ fn external_cargo_fe2o3_reaches_the_typed_tiled_handoff_boundary() {
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("CARGO_INCREMENTAL")
         .env("FE2O3_TARGET", "gfx942:xnack-")
-        .env("FE2O3_CODEGEN_PIPELINE", TILED_GEMM_PIPELINE)
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", TILED_GEMM_PIPELINE)
         .env("RUSTFLAGS", rustflags)
         .env_remove("CARGO_ENCODED_RUSTFLAGS");
     scrub_test_dynamic_loader_environment(&mut command);
@@ -4975,7 +4975,7 @@ fn managed_cargo_fe2o3_collects_the_exact_attributed_lds_slice1_source() {
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("CARGO_INCREMENTAL")
         .env("FE2O3_TARGET", "gfx942:xnack-")
-        .env("FE2O3_CODEGEN_PIPELINE", TILED_GEMM_PIPELINE)
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", TILED_GEMM_PIPELINE)
         .env("RUSTFLAGS", rustflags)
         .env_remove("CARGO_ENCODED_RUSTFLAGS");
     scrub_test_dynamic_loader_environment(&mut command);
