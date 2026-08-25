@@ -111,6 +111,18 @@ pub enum FunctionAttributeKindV1 {
     ApproxFuncFpMathDisabled,
     /// Disabled floating-point contraction.
     FpContractOff,
+    /// `amdgpu-no-completion-action`.
+    NoCompletionAction,
+    /// `amdgpu-no-default-queue`.
+    NoDefaultQueue,
+    /// `amdgpu-no-heap-ptr`.
+    NoHeapPointer,
+    /// `amdgpu-no-hostcall-ptr`.
+    NoHostcallPointer,
+    /// `amdgpu-no-multigrid-sync-arg`.
+    NoMultigridSyncArgument,
+    /// `amdgpu-no-queue-ptr`.
+    NoQueuePointer,
 }
 
 /// One metadata family used in support queries and diagnostics.
@@ -417,7 +429,13 @@ impl SupportMatrixV1 {
             | FunctionAttributeV1::NoNansFpMathDisabled
             | FunctionAttributeV1::NoSignedZerosFpMathDisabled
             | FunctionAttributeV1::ApproxFuncFpMathDisabled
-            | FunctionAttributeV1::FpContractOff => SupportStatusV1::Supported,
+            | FunctionAttributeV1::FpContractOff
+            | FunctionAttributeV1::NoCompletionAction
+            | FunctionAttributeV1::NoDefaultQueue
+            | FunctionAttributeV1::NoHeapPointer
+            | FunctionAttributeV1::NoHostcallPointer
+            | FunctionAttributeV1::NoMultigridSyncArgument
+            | FunctionAttributeV1::NoQueuePointer => SupportStatusV1::Supported,
             FunctionAttributeV1::FlatWorkgroupSize(range)
                 if range.minimum() == 1 && range.maximum() == 64 =>
             {
@@ -852,6 +870,14 @@ pub(crate) fn function_attribute_kind(attribute: FunctionAttributeV1) -> Functio
             FunctionAttributeKindV1::ApproxFuncFpMathDisabled
         }
         FunctionAttributeV1::FpContractOff => FunctionAttributeKindV1::FpContractOff,
+        FunctionAttributeV1::NoCompletionAction => FunctionAttributeKindV1::NoCompletionAction,
+        FunctionAttributeV1::NoDefaultQueue => FunctionAttributeKindV1::NoDefaultQueue,
+        FunctionAttributeV1::NoHeapPointer => FunctionAttributeKindV1::NoHeapPointer,
+        FunctionAttributeV1::NoHostcallPointer => FunctionAttributeKindV1::NoHostcallPointer,
+        FunctionAttributeV1::NoMultigridSyncArgument => {
+            FunctionAttributeKindV1::NoMultigridSyncArgument
+        }
+        FunctionAttributeV1::NoQueuePointer => FunctionAttributeKindV1::NoQueuePointer,
     }
 }
 

@@ -33,9 +33,69 @@ const RUNTIME_ENABLE_OPCODE: Opcode = AMDKFD_IOC_RUNTIME_ENABLE as Opcode;
 const QUEUE_EXCEPTION_PAYLOAD_OFFSET: usize = 64;
 const MAX_QUEUE_EXCEPTION_WAIT_MS: u32 = 1_000;
 static KFD_RUNTIME_GATE: Mutex<()> = Mutex::new(());
-static KFD_RUNTIME_GATE_POISONED: AtomicBool = AtomicBool::new(false);
+static KFD_RUNTIME_GATE_TEARDOWN_ARMED: AtomicBool = AtomicBool::new(false);
+static KFD_RUNTIME_GATE_PERMANENTLY_POISONED: AtomicBool = AtomicBool::new(false);
 #[allow(dead_code)]
 const UPDATE_QUEUE_OPCODE: Opcode = AMDKFD_IOC_UPDATE_QUEUE as Opcode;
+
+struct RuntimeGateTerminalTeardownArmV1<'a> {
+    flag: &'a AtomicBool,
+    previously_poisoned: bool,
+    confirmed: bool,
+}
+
+impl RuntimeGateTerminalTeardownArmV1<'_> {
+    fn confirm_destroyed(mut self) {
+        if !self.previously_poisoned {
+            self.flag.store(false, Ordering::Release);
+        }
+        self.confirmed = true;
+    }
+}
+
+impl Drop for RuntimeGateTerminalTeardownArmV1<'_> {
+    fn drop(&mut self) {
+        if !self.confirmed {
+            self.flag.store(true, Ordering::Release);
+        }
+    }
+}
+
+fn arm_runtime_gate_for_terminal_teardown(
+    flag: &AtomicBool,
+) -> RuntimeGateTerminalTeardownArmV1<'_> {
+    let previously_poisoned = flag.swap(true, Ordering::AcqRel);
+    RuntimeGateTerminalTeardownArmV1 {
+        flag,
+        previously_poisoned,
+        confirmed: false,
+    }
+}
+
+/// Excludes a new queue session until teardown is confirmed end to end.
+pub(crate) struct ProcessGlobalKfdRuntimeTeardownArmV1(RuntimeGateTerminalTeardownArmV1<'static>);
+
+impl ProcessGlobalKfdRuntimeTeardownArmV1 {
+    pub(crate) fn confirm_destroyed(self) {
+        self.0.confirm_destroyed();
+    }
+}
+
+pub(crate) fn arm_process_global_kfd_runtime_gate_for_teardown_v1()
+-> ProcessGlobalKfdRuntimeTeardownArmV1 {
+    ProcessGlobalKfdRuntimeTeardownArmV1(arm_runtime_gate_for_terminal_teardown(
+        &KFD_RUNTIME_GATE_TEARDOWN_ARMED,
+    ))
+}
+
+pub(crate) fn permanently_poison_process_global_kfd_runtime_gate_v1() {
+    KFD_RUNTIME_GATE_PERMANENTLY_POISONED.store(true, Ordering::Release);
+}
+
+fn process_global_kfd_runtime_gate_is_blocked_v1() -> bool {
+    KFD_RUNTIME_GATE_TEARDOWN_ARMED.load(Ordering::Acquire)
+        || KFD_RUNTIME_GATE_PERMANENTLY_POISONED.load(Ordering::Acquire)
+}
 
 #[derive(Debug)]
 pub(super) enum LinuxDoorbellErrorV1 {
@@ -248,7 +308,7 @@ impl LinuxKfdRuntimeEnabledV1 {
         if opener_pid != std::process::id() || kfd.as_raw_fd() < 0 {
             return Err(LinuxDoorbellErrorV1::ProcessChanged);
         }
-        if KFD_RUNTIME_GATE_POISONED.load(Ordering::Acquire) {
+        if process_global_kfd_runtime_gate_is_blocked_v1() {
             return Err(LinuxDoorbellErrorV1::Runtime(
                 "process-global gate poisoned",
             ));
@@ -261,13 +321,13 @@ impl LinuxKfdRuntimeEnabledV1 {
                 ));
             }
             Err(TryLockError::Poisoned(_)) => {
-                KFD_RUNTIME_GATE_POISONED.store(true, Ordering::Release);
+                permanently_poison_process_global_kfd_runtime_gate_v1();
                 return Err(LinuxDoorbellErrorV1::Runtime(
                     "process-global mutex poisoned",
                 ));
             }
         };
-        if KFD_RUNTIME_GATE_POISONED.load(Ordering::Acquire) {
+        if process_global_kfd_runtime_gate_is_blocked_v1() {
             return Err(LinuxDoorbellErrorV1::Runtime(
                 "process-global gate poisoned",
             ));
@@ -281,14 +341,14 @@ impl LinuxKfdRuntimeEnabledV1 {
         // SAFETY: the retained process-bound fd and exact record satisfy the
         // reviewed request. Every error is treated as an ambiguous transition.
         if let Err(source) = unsafe { rustix::ioctl::ioctl(kfd, request) } {
-            KFD_RUNTIME_GATE_POISONED.store(true, Ordering::Release);
+            permanently_poison_process_global_kfd_runtime_gate_v1();
             return Err(LinuxDoorbellErrorV1::RuntimeSyscall {
                 operation: "AMDKFD_IOC_RUNTIME_ENABLE(enable)",
                 source,
             });
         }
         if args != expected || !args.is_exact_queue_exception_enable() {
-            KFD_RUNTIME_GATE_POISONED.store(true, Ordering::Release);
+            permanently_poison_process_global_kfd_runtime_gate_v1();
             return Err(LinuxDoorbellErrorV1::Runtime(
                 "RUNTIME_ENABLE enable output drift",
             ));
@@ -421,7 +481,7 @@ impl LinuxKfdRuntimeEnabledV1 {
 impl Drop for LinuxKfdRuntimeEnabledV1 {
     fn drop(&mut self) {
         if self.active || self.poisoned {
-            KFD_RUNTIME_GATE_POISONED.store(true, Ordering::Release);
+            permanently_poison_process_global_kfd_runtime_gate_v1();
         }
         // Deliberately no implicit ioctl.
     }
@@ -436,7 +496,7 @@ impl LinuxKfdRuntimeDisabledV1 {
 impl Drop for LinuxKfdRuntimeDisabledV1 {
     fn drop(&mut self) {
         if self.gate.is_some() {
-            KFD_RUNTIME_GATE_POISONED.store(true, Ordering::Release);
+            permanently_poison_process_global_kfd_runtime_gate_v1();
         }
         // Deliberately no implicit ioctl.
     }
@@ -527,6 +587,19 @@ impl LinuxQueueExceptionEventV1 {
             return Err(LinuxDoorbellErrorV1::Event("event/shadow substitution"));
         }
         shadows.validate_readback()
+    }
+
+    pub(crate) fn validate_live_with_shadows_for_diagnostic(
+        &self,
+        kfd: BorrowedFd<'_>,
+        opener_pid: u32,
+        shadows: &LinuxCwsrShadowPagesV1,
+    ) -> Result<(), LinuxDoorbellErrorV1> {
+        self.check_binding(kfd, opener_pid)?;
+        if !shadows.matches(self.binding) {
+            return Err(LinuxDoorbellErrorV1::Event("event/shadow substitution"));
+        }
+        shadows.validate_structural_readback()
     }
 
     #[allow(dead_code)]
@@ -795,7 +868,7 @@ impl LinuxCwsrShadowPagesV1 {
         self.active && self.binding == binding && self.binding.opener_pid == std::process::id()
     }
 
-    fn validate_readback(&self) -> Result<(), LinuxDoorbellErrorV1> {
+    fn validate_structural_readback(&self) -> Result<(), LinuxDoorbellErrorV1> {
         let payload = KfdQueueExceptionPayloadAddressV1::new(self.payload.as_ptr() as usize as u64)
             .ok_or(LinuxDoorbellErrorV1::Shadow("payload readback"))?;
         for (xcc, page) in self.pages.iter().enumerate() {
@@ -811,13 +884,18 @@ impl LinuxCwsrShadowPagesV1 {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn validate_readback(&self) -> Result<(), LinuxDoorbellErrorV1> {
+        self.validate_structural_readback()?;
         if self.observe_reason()?.get() != 0 {
             return Err(LinuxDoorbellErrorV1::Shadow("initial payload"));
         }
         Ok(())
     }
 
-    fn observe_reason(&self) -> Result<KfdQueueExceptionReasonV1, LinuxDoorbellErrorV1> {
+    pub(crate) fn observe_reason(&self) -> Result<KfdQueueExceptionReasonV1, LinuxDoorbellErrorV1> {
         if !self.active || self.binding.opener_pid != std::process::id() {
             return Err(LinuxDoorbellErrorV1::ProcessChanged);
         }
@@ -1235,6 +1313,61 @@ mod tests {
     use crate::queue::submit::{
         GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1, GFX942_CWSR_TOTAL_BYTES_V1, GFX942_CWSR_XCC_COUNT_V1,
     };
+    use std::os::fd::AsFd;
+
+    fn diagnostic_shadow_fixture() -> (
+        LinuxCwsrShadowPagesV1,
+        Vec<Box<[u8; 4096]>>,
+        LinuxQueueExceptionEventV1,
+        std::fs::File,
+    ) {
+        let file = std::fs::File::open("/dev/null").unwrap();
+        let binding = QueueExceptionBindingV1 {
+            event_id: KfdSignalEventIdV1::new(7).unwrap(),
+            opener_pid: std::process::id(),
+            raw_fd: file.as_fd().as_raw_fd(),
+        };
+        let mut storage: Vec<Box<[u8; 4096]>> = (0..GFX942_CWSR_XCC_COUNT_V1)
+            .map(|_| Box::new([0_u8; 4096]))
+            .collect();
+        let payload = NonNull::new(
+            // SAFETY: offset 64 is aligned and wholly inside the retained first page.
+            unsafe { storage[0].as_mut_ptr().add(QUEUE_EXCEPTION_PAYLOAD_OFFSET) }.cast::<u64>(),
+        )
+        .unwrap();
+        let payload_address =
+            KfdQueueExceptionPayloadAddressV1::new(payload.as_ptr() as usize as u64).unwrap();
+        for (xcc, page) in storage.iter_mut().enumerate() {
+            let header = crate::queue::submit::gfx942_cwsr_header_bytes(
+                xcc,
+                payload_address,
+                binding.event_id,
+            )
+            .unwrap();
+            page[..header.len()].copy_from_slice(&header);
+        }
+        let pages: [NonNull<c_void>; GFX942_CWSR_XCC_COUNT_V1] = storage
+            .iter_mut()
+            .map(|page| NonNull::new(page.as_mut_ptr().cast::<c_void>()).unwrap())
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let shadows = LinuxCwsrShadowPagesV1 {
+            pages,
+            payload,
+            binding,
+            #[cfg(feature = "live-validation")]
+            page_bytes: 4096,
+            active: true,
+        };
+        let event = LinuxQueueExceptionEventV1 {
+            binding,
+            active: true,
+            poisoned: false,
+            observation_used: false,
+        };
+        (shadows, storage, event, file)
+    }
 
     #[test]
     fn shadow_plan_is_exact_and_hostile_geometry_fails_closed() {
@@ -1293,6 +1426,43 @@ mod tests {
     }
 
     #[test]
+    fn timeout_diagnostic_admits_reason_but_rejects_malformed_shadow_state() {
+        let (shadows, mut storage, event, file) = diagnostic_shadow_fixture();
+        // SAFETY: the fixture retains the aligned writable payload word.
+        unsafe { core::ptr::write_volatile(shadows.payload.as_ptr(), 1_u64.to_le()) };
+        assert!(
+            event
+                .validate_live_with_shadows_for_diagnostic(
+                    file.as_fd(),
+                    std::process::id(),
+                    &shadows,
+                )
+                .is_ok()
+        );
+        assert!(
+            event
+                .validate_live_with_shadows(file.as_fd(), std::process::id(), &shadows)
+                .is_err()
+        );
+        assert_eq!(shadows.observe_reason().unwrap().get(), 1);
+
+        // SAFETY: the fixture retains the aligned writable payload word.
+        unsafe { core::ptr::write_volatile(shadows.payload.as_ptr(), (1_u64 << 63).to_le()) };
+        assert!(shadows.observe_reason().is_err());
+
+        storage[1][0] ^= 1;
+        assert!(
+            event
+                .validate_live_with_shadows_for_diagnostic(
+                    file.as_fd(),
+                    std::process::id(),
+                    &shadows,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
     fn runtime_queue_event_order_is_linear_and_hostile_reordering_fails() {
         use KfdRuntimeLifecyclePhaseV1 as P;
         let mut phase = P::EnabledBeforeQueue;
@@ -1321,6 +1491,33 @@ mod tests {
         assert!(begin_one_shot_observation(&mut used).is_ok());
         assert!(used);
         assert!(begin_one_shot_observation(&mut used).is_err());
+    }
+
+    #[test]
+    fn terminal_teardown_arm_clears_only_after_confirmed_success() {
+        let flag = AtomicBool::new(false);
+        let arm = arm_runtime_gate_for_terminal_teardown(&flag);
+        assert!(flag.load(Ordering::Acquire));
+        arm.confirm_destroyed();
+        assert!(!flag.load(Ordering::Acquire));
+
+        let arm = arm_runtime_gate_for_terminal_teardown(&flag);
+        assert!(flag.load(Ordering::Acquire));
+        drop(arm);
+        assert!(flag.load(Ordering::Acquire));
+
+        let already_poisoned = AtomicBool::new(true);
+        let arm = arm_runtime_gate_for_terminal_teardown(&already_poisoned);
+        arm.confirm_destroyed();
+        assert!(already_poisoned.load(Ordering::Acquire));
+
+        let panic_flag = AtomicBool::new(false);
+        let result = std::panic::catch_unwind(|| {
+            let _arm = arm_runtime_gate_for_terminal_teardown(&panic_flag);
+            panic!("simulated teardown panic");
+        });
+        assert!(result.is_err());
+        assert!(panic_flag.load(Ordering::Acquire));
     }
 
     #[test]

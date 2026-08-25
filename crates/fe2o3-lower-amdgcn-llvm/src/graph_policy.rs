@@ -502,6 +502,12 @@ fn decode_function_attribute(
             reader.u16()?,
             reader.u16()?,
         ]),
+        16 => FunctionAttributeV2::NoCompletionAction,
+        17 => FunctionAttributeV2::NoDefaultQueue,
+        18 => FunctionAttributeV2::NoHeapPointer,
+        19 => FunctionAttributeV2::NoHostcallPointer,
+        20 => FunctionAttributeV2::NoMultigridSyncArgument,
+        21 => FunctionAttributeV2::NoQueuePointer,
         _ => return Err(InspectionErrorV1::UnexpectedGraph),
     })
 }
@@ -809,6 +815,12 @@ fn function_attributes(function: &FunctionV2) -> Vec<u8> {
                     put_u16(&mut bytes, *extent);
                 }
             }
+            FunctionAttributeV2::NoCompletionAction => bytes.push(16),
+            FunctionAttributeV2::NoDefaultQueue => bytes.push(17),
+            FunctionAttributeV2::NoHeapPointer => bytes.push(18),
+            FunctionAttributeV2::NoHostcallPointer => bytes.push(19),
+            FunctionAttributeV2::NoMultigridSyncArgument => bytes.push(20),
+            FunctionAttributeV2::NoQueuePointer => bytes.push(21),
         }
     }
     bytes

@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 fn event_schema_composes_without_mutating_frozen_parents() {
     assert_eq!(
         KFD_EVENT_QUEUE_EXCEPTION_SCHEMA_ID,
-        "linux-kfd-event-and-queue-exception-1.18-gfx942-v1"
+        "linux-kfd-event-and-queue-exception-1.18-gfx942-v2"
     );
     assert_eq!(
         KFD_EVENT_PARENT_SCHEMA_BINDINGS,
@@ -18,15 +18,15 @@ fn event_schema_composes_without_mutating_frozen_parents() {
             ),
             (
                 KFD_MEMORY_LIFECYCLE_SCHEMA_ID,
-                "e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a"
+                "5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8"
             ),
             (
                 KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_ID,
-                "b11f3c8c766dd25394350646e35269e10c8a33acb98f74cba2a82e95fa185c4e"
+                "9e16e0e6b76387d9602dcfdef2ad6614b09202e8553ec21cbbcf5953781f6119"
             ),
             (
                 KFD_GFX942_QUEUE_RESOURCE_SCHEMA_ID,
-                "63753a9c0dcef0f69e0235b95b44fe6ce22cb5b0d1df6f60a971a5ed28f15904"
+                "8ff2ac20f6001d6f5405423d78e8ad6cec109ac3370fe86d7691c5c4782c1803"
             ),
         ]
     );
@@ -60,7 +60,7 @@ fn event_schema_composes_without_mutating_frozen_parents() {
 fn runtime_schema_composes_the_frozen_event_schema() {
     assert_eq!(
         KFD_RUNTIME_ENABLE_SCHEMA_ID,
-        "linux-kfd-runtime-enable-1.18-queue-exception-v1"
+        "linux-kfd-runtime-enable-1.18-queue-exception-v2"
     );
     assert!(KFD_RUNTIME_ENABLE_SCHEMA_MANIFEST.contains(KFD_EVENT_QUEUE_EXCEPTION_SCHEMA_SHA256));
     let digest = Sha256::digest(KFD_RUNTIME_ENABLE_SCHEMA_MANIFEST);

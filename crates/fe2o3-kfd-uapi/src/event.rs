@@ -10,28 +10,28 @@ use super::{IoctlDirection, IoctlRequest, encode_admitted_ioctl};
 
 /// Stable name of this additive event/queue-exception schema.
 pub const KFD_EVENT_QUEUE_EXCEPTION_SCHEMA_ID: &str =
-    "linux-kfd-event-and-queue-exception-1.18-gfx942-v1";
+    "linux-kfd-event-and-queue-exception-1.18-gfx942-v2";
 
 /// SHA-256 over [`KFD_EVENT_QUEUE_EXCEPTION_SCHEMA_MANIFEST`].
 pub const KFD_EVENT_QUEUE_EXCEPTION_SCHEMA_SHA256: &str =
-    "8d754af12ed2fcd0c238e1f9e38fbbdab053f44fc5d613b227fdcdd616fcc849";
+    "bdde2e2d9b03690d6a63dba3d91074da214d87ece9ae1894c4d7a160bced58b8";
 
 /// Typed digest bytes of [`KFD_EVENT_QUEUE_EXCEPTION_SCHEMA_MANIFEST`].
 pub const KFD_EVENT_QUEUE_EXCEPTION_SCHEMA_SHA256_BYTES: [u8; 32] = [
-    0x8d, 0x75, 0x4a, 0xf1, 0x2e, 0xd2, 0xfc, 0xd0, 0xc2, 0x38, 0xe1, 0xf9, 0xe3, 0x8f, 0xbb, 0xda,
-    0xb0, 0x53, 0xf4, 0x4f, 0xc5, 0xd6, 0x13, 0xb2, 0x27, 0xfd, 0xcd, 0xd6, 0x16, 0xfc, 0xc8, 0x49,
+    0xbd, 0xde, 0x2e, 0x2d, 0x9b, 0x03, 0x69, 0x0d, 0x6a, 0x63, 0xdb, 0xa3, 0xd9, 0x10, 0x74, 0xda,
+    0x21, 0x4d, 0x87, 0xec, 0xe9, 0xae, 0x18, 0x94, 0xc4, 0xd7, 0xa1, 0x60, 0xbc, 0xed, 0x58, 0xb8,
 ];
 
 /// Stable name of the additive process-runtime exception-routing schema.
-pub const KFD_RUNTIME_ENABLE_SCHEMA_ID: &str = "linux-kfd-runtime-enable-1.18-queue-exception-v1";
+pub const KFD_RUNTIME_ENABLE_SCHEMA_ID: &str = "linux-kfd-runtime-enable-1.18-queue-exception-v2";
 
 /// SHA-256 over [`KFD_RUNTIME_ENABLE_SCHEMA_MANIFEST`].
 pub const KFD_RUNTIME_ENABLE_SCHEMA_SHA256: &str =
-    "4c762d1e35a5940f0972290151de51e6e19722f81874a6446c66ddc70a062ac1";
+    "fa47481b10ea4bd89438d10b82bd8197088906e55f5f0c827dc7aa5aba906288";
 
 pub const KFD_RUNTIME_ENABLE_SCHEMA_SHA256_BYTES: [u8; 32] = [
-    0x4c, 0x76, 0x2d, 0x1e, 0x35, 0xa5, 0x94, 0x0f, 0x09, 0x72, 0x29, 0x01, 0x51, 0xde, 0x51, 0xe6,
-    0xe1, 0x97, 0x22, 0xf8, 0x18, 0x74, 0xa6, 0x44, 0x6c, 0x66, 0xdd, 0xc7, 0x0a, 0x06, 0x2a, 0xc1,
+    0xfa, 0x47, 0x48, 0x1b, 0x10, 0xea, 0x4b, 0xd8, 0x94, 0x38, 0xd1, 0x0b, 0x82, 0xbd, 0x81, 0x97,
+    0x08, 0x89, 0x06, 0xe5, 0x5f, 0x5f, 0x0c, 0x82, 0x7d, 0xc7, 0xaa, 0x5a, 0xba, 0x90, 0x62, 0x88,
 ];
 
 /// The frozen schemas this additive schema composes without changing their identities.
@@ -42,15 +42,15 @@ pub const KFD_EVENT_PARENT_SCHEMA_BINDINGS: [(&str, &str); 4] = [
     ),
     (
         super::KFD_MEMORY_LIFECYCLE_SCHEMA_ID,
-        "e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a",
+        "5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8",
     ),
     (
         super::KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_ID,
-        "b11f3c8c766dd25394350646e35269e10c8a33acb98f74cba2a82e95fa185c4e",
+        "9e16e0e6b76387d9602dcfdef2ad6614b09202e8553ec21cbbcf5953781f6119",
     ),
     (
         super::KFD_GFX942_QUEUE_RESOURCE_SCHEMA_ID,
-        "63753a9c0dcef0f69e0235b95b44fe6ce22cb5b0d1df6f60a971a5ed28f15904",
+        "8ff2ac20f6001d6f5405423d78e8ad6cec109ac3370fe86d7691c5c4782c1803",
     ),
 ];
 
@@ -1005,17 +1005,17 @@ const _: () = {
 
 /// Canonical, newline-terminated identity input for this additive schema.
 pub const KFD_EVENT_QUEUE_EXCEPTION_SCHEMA_MANIFEST: &str = concat!(
-    "schema_id=linux-kfd-event-and-queue-exception-1.18-gfx942-v1\n",
+    "schema_id=linux-kfd-event-and-queue-exception-1.18-gfx942-v2\n",
     "target=linux-x86_64-generic-ioc;gfx942\n",
     "source_package=amdgpu-dkms@1:6.16.13.30300400-2341068.24.04\n",
     "parent.discovery.schema_id=linux-kfd-uapi-1.18-generic-ioc-v1\n",
     "parent.discovery.sha256=e4aad5d8e3177ea6d70298adab7741c377cb091373553ce689f3525e7514d9b4\n",
-    "parent.memory.schema_id=linux-kfd-memory-lifecycle-1.18-generic-ioc-v1\n",
-    "parent.memory.sha256=e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a\n",
-    "parent.queue.schema_id=linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v1\n",
-    "parent.queue.sha256=b11f3c8c766dd25394350646e35269e10c8a33acb98f74cba2a82e95fa185c4e\n",
-    "parent.gfx942_resources.schema_id=linux-kfd-gfx942-queue-resources-1.18-v1\n",
-    "parent.gfx942_resources.sha256=63753a9c0dcef0f69e0235b95b44fe6ce22cb5b0d1df6f60a971a5ed28f15904\n",
+    "parent.memory.schema_id=linux-kfd-memory-lifecycle-1.18-generic-ioc-v2\n",
+    "parent.memory.sha256=5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8\n",
+    "parent.queue.schema_id=linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v2\n",
+    "parent.queue.sha256=9e16e0e6b76387d9602dcfdef2ad6614b09202e8553ec21cbbcf5953781f6119\n",
+    "parent.gfx942_resources.schema_id=linux-kfd-gfx942-queue-resources-1.18-v2\n",
+    "parent.gfx942_resources.sha256=8ff2ac20f6001d6f5405423d78e8ad6cec109ac3370fe86d7691c5c4782c1803\n",
     "linux.uapi.path=include/uapi/linux/kfd_ioctl.h\n",
     "linux.uapi.sha256=b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d\n",
     "linux.events.path=amd/amdkfd/kfd_events.c\n",
@@ -1059,11 +1059,11 @@ pub const KFD_EVENT_QUEUE_EXCEPTION_SCHEMA_MANIFEST: &str = concat!(
 /// routing predicate, and the context-save header/event write. It is not a
 /// transitive kernel-build closure or native operation authority.
 pub const KFD_RUNTIME_ENABLE_SCHEMA_MANIFEST: &str = concat!(
-    "schema_id=linux-kfd-runtime-enable-1.18-queue-exception-v1\n",
+    "schema_id=linux-kfd-runtime-enable-1.18-queue-exception-v2\n",
     "target=linux-x86_64-generic-ioc;gfx942\n",
     "source_package=amdgpu-dkms@1:6.16.13.30300400-2341068.24.04\n",
-    "parent.event.schema_id=linux-kfd-event-and-queue-exception-1.18-gfx942-v1\n",
-    "parent.event.sha256=8d754af12ed2fcd0c238e1f9e38fbbdab053f44fc5d613b227fdcdd616fcc849\n",
+    "parent.event.schema_id=linux-kfd-event-and-queue-exception-1.18-gfx942-v2\n",
+    "parent.event.sha256=bdde2e2d9b03690d6a63dba3d91074da214d87ece9ae1894c4d7a160bced58b8\n",
     "linux.uapi.path=include/uapi/linux/kfd_ioctl.h\n",
     "linux.uapi.sha256=b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d\n",
     "linux.chardev.path=amd/amdkfd/kfd_chardev.c\n",

@@ -255,6 +255,18 @@ fn derive_graph_kernel(function: &FunctionV2) -> Result<KernelEntryV1, Inspectio
                 Some(Ok(FunctionAttributeV1::ApproxFuncFpMathDisabled))
             }
             FunctionAttributeV2::FpContractOff => Some(Ok(FunctionAttributeV1::FpContractOff)),
+            FunctionAttributeV2::NoCompletionAction => {
+                Some(Ok(FunctionAttributeV1::NoCompletionAction))
+            }
+            FunctionAttributeV2::NoDefaultQueue => Some(Ok(FunctionAttributeV1::NoDefaultQueue)),
+            FunctionAttributeV2::NoHeapPointer => Some(Ok(FunctionAttributeV1::NoHeapPointer)),
+            FunctionAttributeV2::NoHostcallPointer => {
+                Some(Ok(FunctionAttributeV1::NoHostcallPointer))
+            }
+            FunctionAttributeV2::NoMultigridSyncArgument => {
+                Some(Ok(FunctionAttributeV1::NoMultigridSyncArgument))
+            }
+            FunctionAttributeV2::NoQueuePointer => Some(Ok(FunctionAttributeV1::NoQueuePointer)),
             FunctionAttributeV2::RequiredWorkgroupSize(_) => None,
             FunctionAttributeV2::AlwaysInline
             | FunctionAttributeV2::NoInline
