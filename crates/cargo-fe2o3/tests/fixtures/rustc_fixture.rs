@@ -33,7 +33,8 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<std::process::ExitStatus, String> {
-    let filtered = filtered_args(env::args_os().collect());
+    let raw_args = env::args_os().collect::<Vec<_>>();
+    let filtered = filtered_args(raw_args.clone());
     if filtered.len() == 2 && filtered[1] == "-vV" {
         println!(
             "rustc 1.93.0-nightly (fe2o3-fixture 2026-04-03)\n\
@@ -49,7 +50,11 @@ fn run() -> Result<std::process::ExitStatus, String> {
     }
     let real_rustc = env::var_os("FE2O3_TEST_REAL_RUSTC")
         .ok_or_else(|| "missing FE2O3_TEST_REAL_RUSTC".to_string())?;
-    match classify_rustc_invocation_v2(&filtered) {
+    let invocation = classify_rustc_invocation_v2(&filtered);
+    if let Ok(RustcInvocationV2::Compile(compile)) = &invocation {
+        record_compiler_route(compile.crate_name(), &raw_args)?;
+    }
+    match invocation {
         Ok(RustcInvocationV2::Compile(compile)) if env::var_os(BUILD_ATTEMPT_ENV).is_some() => {
             publish_probe(compile.crate_name(), compile.source_path())?;
             if let Some(report) = env::var_os("FE2O3_TEST_COMPILER_CLOSURE_RUSTC_REPORT") {
@@ -68,6 +73,35 @@ fn run() -> Result<std::process::ExitStatus, String> {
         .args(&filtered[1..])
         .status()
         .map_err(|error| format!("run real rustc: {error}"))
+}
+
+fn record_compiler_route(crate_name: &str, raw_args: &[OsString]) -> Result<(), String> {
+    let Some(path) = env::var_os("FE2O3_TEST_RUSTC_ROUTE_REPORT") else {
+        return Ok(());
+    };
+    let has_argument = |expected: &str| {
+        raw_args.iter().any(|argument| {
+            argument
+                .to_str()
+                .is_some_and(|value| value == expected || value.starts_with(expected))
+        })
+    };
+    let mut report = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| format!("open rustc route report: {error}"))?;
+    writeln!(
+        report,
+        "{crate_name}:managed_backend={}:managed_mir={}:qualification={}:backend_env={}:artifact={}:attempt={}",
+        has_argument("-Zcodegen-backend="),
+        has_argument("-Zmir-enable-passes=-JumpThreading"),
+        env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").is_some(),
+        env::var_os("FE2O3_BACKEND").is_some(),
+        env::var_os(HSACO_DIR_ENV).is_some(),
+        env::var_os(BUILD_ATTEMPT_ENV).is_some(),
+    )
+    .map_err(|error| format!("write rustc route report: {error}"))
 }
 
 fn publish_probe(crate_name: &str, source: &Path) -> Result<(), String> {

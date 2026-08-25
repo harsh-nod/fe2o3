@@ -1099,7 +1099,6 @@ fn run_cargo_with_backend_inner(
             capability_broker.route(),
         )
         .env(TARGET_ENV, &context.target)
-        .env("FE2O3_HOST_PASSTHROUGH", "0")
         .env("RUSTC_WRAPPER", "")
         .env("CARGO_BUILD_RUSTC_WRAPPER", "")
         .env("RUSTC_WORKSPACE_WRAPPER", workspace_wrapper)
@@ -2260,7 +2259,6 @@ fn find_or_build_backend(
         AUTHORITY_RUSTC_SHA256_ENV,
         AUTHORITY_RUSTC_RUNTIME_SHA256_ENV,
         AUTHORITY_BACKEND_SHA256_ENV,
-        "FE2O3_HOST_PASSTHROUGH",
     ] {
         command.as_command_mut().env_remove(name);
     }

@@ -421,7 +421,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         rustc_working_directory,
     ) = match invocation {
         RustcInvocationV2::Compile(compile) => {
-            let managed_rustc_args = managed_rustc_args_from_environment()?;
+            let mut managed_rustc_args = managed_rustc_args_from_environment()?;
             let metadata = ordered_rustc_codegen_metadata_v1(compile)?;
             let build_observation =
                 CompileBuildObservationV2::from_ordered_metadata(compile.crate_name(), &metadata)?;
@@ -479,6 +479,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                     &compiler_capabilities,
                 )?)
             };
+            scope_managed_rustc_arguments(&mut managed_rustc_args, managed.is_some());
             (
                 Some(build_observation),
                 managed,
@@ -529,7 +530,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         pinned_execution_directory.configure_child_fchdir(command.as_command_mut());
         if let Some(capabilities) = &compiler_capabilities {
             if managed_attempt.is_none() {
-                capabilities.prepare_unmanaged_dependency_command(command.as_command_mut())?;
+                capabilities.prepare_host_dependency_command(command.as_command_mut());
             } else if protected_kernel_root {
                 capabilities.prepare_protected_command(command.as_command_mut())?;
             } else {
@@ -1942,7 +1943,6 @@ fn reviewed_scalar_inherited_environment(name: &OsStr) -> bool {
             | b"FE2O3_MANAGED_RUSTC_ARGS_V1"
             | b"FE2O3_BUILD_SESSION_V1"
             | b"FE2O3_CAPABILITY_BROKER_V1"
-            | b"FE2O3_HOST_PASSTHROUGH"
             | b"FE2O3_WORKER_V2_CONFIG_V2"
             | b"FE2O3_WORKER_V2_EXPECTED_ID_V1"
             | b"FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT"
@@ -2317,6 +2317,12 @@ fn managed_rustc_args_from_environment() -> Result<Vec<OsString>, BindingWrapper
     decode_managed_rustc_args(&value)
 }
 
+fn scope_managed_rustc_arguments(arguments: &mut Vec<OsString>, selected_kernel_root: bool) {
+    if !selected_kernel_root {
+        arguments.clear();
+    }
+}
+
 fn append_prepared_rustc_arguments(
     command: &mut Command,
     forwarded_args: &[OsString],
@@ -2685,13 +2691,8 @@ impl CompilerCapabilities {
         Ok(())
     }
 
-    fn prepare_unmanaged_dependency_command(
-        &self,
-        command: &mut Command,
-    ) -> Result<(), BindingWrapperError> {
-        self.prepare_backend_command(command)?;
-        scope_unmanaged_dependency_environment(command);
-        Ok(())
+    fn prepare_host_dependency_command(&self, command: &mut Command) {
+        scope_host_dependency_environment(command);
     }
 
     fn prepare_backend_command(&self, command: &mut Command) -> Result<(), BindingWrapperError> {
@@ -2768,13 +2769,13 @@ fn configure_qualification_route_marker(command: &mut Command, debug_build: bool
     }
 }
 
-fn scope_unmanaged_dependency_environment(command: &mut Command) {
-    // Production is the compiler default, so an unselected dependency needs an
-    // explicit non-authoritative route rather than an absent selector. This route
-    // can diagnose forged kernel providers but cannot publish artifacts.
-    command.env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1");
+fn scope_host_dependency_environment(command: &mut Command) {
+    // Host-only dependencies use rustc's built-in LLVM backend. They are not a
+    // device compilation route and receive no fe2o3 backend or artifact custody.
+    command.env_remove("FE2O3_QUALIFICATION_ORACLE_V1");
     command.env_remove("FE2O3_CODEGEN_PIPELINE");
     for name in [
+        "FE2O3_BACKEND",
         HSACO_DIR_ENV,
         CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2,
         QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1,
@@ -5375,8 +5376,8 @@ mod tests {
         qualification_selection_requires_protected_invocation, reject_authority_linker_arguments,
         reject_uninspectable_rustc_args, require_production_compiler_closure,
         resolve_command_executable_with_path, row_softmax_effective_rustc_argv_identity,
-        row_softmax_provider_observation_json, scope_unmanaged_dependency_environment,
-        selected_kernel_root, worker_v3_readiness_is_absent,
+        row_softmax_provider_observation_json, scope_host_dependency_environment,
+        scope_managed_rustc_arguments, selected_kernel_root, worker_v3_readiness_is_absent,
     };
     use crate::inert_rustc_invocation_capture::InertRustcInvocationCaptureV2;
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
@@ -6401,11 +6402,12 @@ mod tests {
     }
 
     #[test]
-    fn unmanaged_dependencies_do_not_inherit_compiler_authority_signals() {
+    fn host_dependencies_do_not_inherit_device_compiler_authority() {
         let mut command = Command::new("/proc/self/fd/194");
         for (name, value) in [
             ("FE2O3_CODEGEN_PIPELINE", "production-v1"),
             ("FE2O3_QUALIFICATION_ORACLE_V1", "production-v1"),
+            ("FE2O3_BACKEND", "/proc/self/fd/198"),
             ("FE2O3_HSACO_DIR", "/proc/self/fd/197"),
             ("FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2", "44"),
             ("FE2O3_QUALIFICATION_CODEGEN_BACKEND_SHA256_V1", "45"),
@@ -6424,16 +6426,17 @@ mod tests {
             .env("FE2O3_TARGET", "gfx942")
             .env("FE2O3_CRATE_BINDING_ID_V1", "77");
 
-        scope_unmanaged_dependency_environment(&mut command);
+        scope_host_dependency_environment(&mut command);
         let overrides = command
             .get_envs()
             .collect::<std::collections::BTreeMap<_, _>>();
         assert_eq!(
             overrides.get(OsStr::new("FE2O3_QUALIFICATION_ORACLE_V1")),
-            Some(&Some(OsStr::new("kernel-ir-v1")))
+            Some(&None)
         );
         for name in [
             "FE2O3_CODEGEN_PIPELINE",
+            "FE2O3_BACKEND",
             "FE2O3_HSACO_DIR",
             "FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2",
             "FE2O3_QUALIFICATION_CODEGEN_BACKEND_SHA256_V1",
@@ -6514,7 +6517,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_command_keeps_the_rustc_compatible_brokered_selector() {
+    fn selected_kernel_root_keeps_the_brokered_codegen_backend() {
         let command = command_with_production_managed_arguments(&[
             "--crate-name",
             "ordinary",
@@ -6546,7 +6549,6 @@ mod tests {
             ("FE2O3_MANAGED_RUSTC_ARGS_V1", "consumed"),
             ("FE2O3_BUILD_SESSION_V1", "consumed"),
             ("FE2O3_CAPABILITY_BROKER_V1", "consumed"),
-            ("FE2O3_HOST_PASSTHROUGH", "0"),
             ("FE2O3_WORKER_V2_CONFIG_V2", "/outer/config.json"),
             ("FE2O3_WORKER_V2_EXPECTED_ID_V1", "consumed"),
             ("HOME", "/discarded/home"),
@@ -7308,6 +7310,13 @@ mod tests {
             decoded.last().map(OsString::as_os_str),
             Some(OsStr::new("-Zcodegen-backend=/proc/./self/fd/198"))
         );
+
+        let mut host_dependency = decoded.clone();
+        scope_managed_rustc_arguments(&mut host_dependency, false);
+        assert!(host_dependency.is_empty());
+        let mut selected_kernel_root = decoded.clone();
+        scope_managed_rustc_arguments(&mut selected_kernel_root, true);
+        assert_eq!(selected_kernel_root, decoded);
 
         for invalid in [
             OsString::from(""),

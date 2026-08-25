@@ -965,6 +965,85 @@ fn real_cargo_cooperatively_routes_capabilities_to_the_managed_rustc_child() {
     );
 }
 
+#[test]
+fn real_cargo_routes_workspace_dependencies_through_builtin_llvm() {
+    let fixture = ProjectFixture::standalone();
+    let dependency = fixture.workspace.join("host-dependency");
+    fs::create_dir_all(dependency.join("src")).expect("create host dependency");
+    fs::write(
+        fixture.workspace.join("Cargo.toml"),
+        "[package]\nname='external-standalone'\nversion='0.1.0'\nedition='2024'\n\
+         [dependencies]\nhost-dependency={path='host-dependency'}\n\
+         [workspace]\nmembers=['host-dependency']\ndefault-members=['.']\nresolver='3'\n",
+    )
+    .expect("write workspace dependency manifest");
+    fs::write(
+        dependency.join("Cargo.toml"),
+        "[package]\nname='host-dependency'\nversion='0.1.0'\nedition='2024'\n",
+    )
+    .expect("write host dependency manifest");
+    fs::write(
+        dependency.join("src/lib.rs"),
+        "pub fn value() -> u32 { 7 }\n",
+    )
+    .expect("write host dependency source");
+    fs::write(
+        fixture.workspace.join("src/main.rs"),
+        "fn main() { assert_eq!(host_dependency::value(), 7); }\n",
+    )
+    .expect("write dependency-using root source");
+
+    let route_report = fixture.root.join("rustc-routes.log");
+    let capability_report = fixture.root.join("rustc-capabilities.log");
+    let mut command = cargo_fe2o3_command();
+    command
+        .args(["build", "-j", "1"])
+        .current_dir(&fixture.workspace)
+        .env(
+            "CARGO",
+            env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")),
+        )
+        .env("PATH", rustc_fixture_path(&fixture.root))
+        .env_remove("RUSTC")
+        .env("FE2O3_TEST_REAL_RUSTC", resolved_real_rustc())
+        .env("FE2O3_TEST_RUSTC_ROUTE_REPORT", &route_report)
+        .env("FE2O3_TEST_RUSTC_CAPABILITY_REPORT", capability_report)
+        .env("FE2O3_BACKEND", &fixture.backend)
+        .env("FE2O3_TARGET", "gfx942")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env_remove("CARGO_TARGET_DIR");
+
+    let output = command
+        .output()
+        .expect("run workspace dependency route probe");
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = fs::read_to_string(route_report).expect("read rustc route report");
+    let dependency_route = report
+        .lines()
+        .find(|line| line.starts_with("host_dependency:"))
+        .expect("host dependency route was recorded");
+    assert_eq!(
+        dependency_route,
+        "host_dependency:managed_backend=false:managed_mir=false:qualification=false:backend_env=false:artifact=false:attempt=false"
+    );
+    let root_route = report
+        .lines()
+        .find(|line| line.starts_with("external_standalone:"))
+        .expect("selected root route was recorded");
+    assert!(root_route.contains("managed_backend=true"), "{root_route}");
+    assert!(root_route.contains("managed_mir=true"), "{root_route}");
+    assert!(root_route.contains("artifact=true"), "{root_route}");
+    assert!(root_route.contains("attempt=true"), "{root_route}");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn ordinary_build_script_process_inherits_no_raw_capability_descriptors() {

@@ -49,6 +49,11 @@ exist only in `cargo-fe2o3` and `rustc-codegen-fe2o3` builds made with each
 package's `qualification-oracles-test-only` feature. Feature-free binaries
 reject the environment variable.
 
+Cargo dependency units that are not the selected kernel root are host-only
+rustc compilations, not another fe2o3 route. The wrapper removes all managed
+compiler arguments, the fe2o3 backend descriptor, qualification selection, and
+artifact custody before launching rustc's built-in LLVM backend.
+
 `cargo fe2o3 authority release probe` exercises this exact launcher/handoff
 boundary and exits before Cargo, artifact generation, HSA loading, or GPU
 dispatch. A successful probe grants no compiler-origin, proof, artifact-safety,
