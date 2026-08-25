@@ -17,7 +17,7 @@ use fe2o3_functional_proof::{
 use fe2o3_proof_contracts::DigestV1;
 
 use super::mir_pliron_semantic_contract_v1::{
-    LiveTypedRootV1, canonical_static_loop_v1, coverage, evaluation_order, live_typed_roots,
+    LiveTypedRootV1, canonical_finite_loop_v1, coverage, evaluation_order, live_typed_roots,
     production_dynamic_output_symbol_v1, production_output_domain_identity_v1,
 };
 use super::{
@@ -399,18 +399,14 @@ fn derive_contract_data_v1(
     require_limit("loop", backedges.len(), HARD_MAX_SEMANTIC_LOOPS_V1)?;
     let mut loops = Vec::with_capacity(backedges.len());
     for (latch, header) in backedges {
-        let live = canonical_static_loop_v1(ranked, header, latch).map_err(|detail| {
+        let live = canonical_finite_loop_v1(ranked, header, latch).map_err(|detail| {
             ProductionMirPlironSemanticContractDerivationErrorV1::UnsupportedLoop {
                 header,
                 latch,
                 detail,
             }
         })?;
-        insert_domain(
-            &mut domains,
-            live.iteration_domain,
-            vec![SemanticFiniteExtentV1::Static(live.maximum_steps)],
-        )?;
+        insert_domain(&mut domains, live.iteration_domain, vec![live.extent])?;
         for value in [
             live.induction_value,
             live.lower_value,

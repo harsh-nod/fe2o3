@@ -40,7 +40,7 @@ pub use production::{
     ProductionReferenceOutputSiteV2, ProductionReferenceProofV1, ProductionReferenceProofV2,
     ProductionRootHandleV1, ProductionSemanticBinaryOpV2, ProductionSemanticCastV2,
     ProductionSemanticComparisonV2, ProductionSemanticExpressionErrorV2,
-    ProductionSemanticExpressionStatsV2, ProductionSemanticExpressionV2,
+    ProductionSemanticExpressionStatsV2, ProductionSemanticExpressionV2, ProductionSemanticLoadV2,
     ProductionSemanticMirErrorV1, ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1,
     ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2, ProductionSessionErrorV1,
     ProductionSessionLimitErrorV1, ProductionSessionLimitsV1, ProductionStageHandleV1,

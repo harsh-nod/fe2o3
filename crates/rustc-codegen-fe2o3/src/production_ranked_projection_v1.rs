@@ -52,9 +52,9 @@ use fe2o3_pliron::{
     ProductionRankedKernelV1, ProductionRankedOperationV1, ProductionRankedTerminatorV1,
     ProductionRankedValueIdV1, ProductionRankedValueV1, ProductionSemanticBinaryOpV2,
     ProductionSemanticCastV2, ProductionSemanticComparisonV2, ProductionSemanticExpressionV2,
-    ProductionSemanticMirErrorV1, ProductionSemanticMirOwnerV1, ProductionSemanticScalarTypeV2,
-    ProductionSemanticUnaryOpV2, ProductionSessionErrorV1, ProductionSessionLimitsV1,
-    compile_ranked_kernel_for_lowering_v1,
+    ProductionSemanticLoadV2, ProductionSemanticMirErrorV1, ProductionSemanticMirOwnerV1,
+    ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2, ProductionSessionErrorV1,
+    ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
 };
 
 const ROOT_NAME_V1: &str = "semantic_safety_module";
@@ -220,6 +220,7 @@ struct CheckedReferencesV1 {
 }
 
 struct IntrinsicProjectionV1 {
+    index_values: Vec<Option<ProjectedDisjointIndexV1>>,
     local_contracts: ProjectionLocalContractsV1,
     guarded_accesses: Vec<GuardedRankedAccessV1>,
     option_predicates: Vec<Option<GuardPredicateV1>>,
@@ -852,6 +853,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     let bounds_checks = project_rust_bounds_checks(
         function,
         intrinsic.extent_argument_count,
+        &intrinsic.index_values,
         &mut entry_operations,
         &mut next_value,
     )?;
@@ -1117,7 +1119,8 @@ fn projected_reference_gpu_writes_v2(
         }
     }
     let mut writes = Vec::new();
-    let mut expressions = GpuSemanticExpressionResolverV2::new(types, function);
+    let mut expressions =
+        GpuSemanticExpressionResolverV2::with_ranked_reads(types, function, blocks, sources)?;
     for source in sources
         .iter()
         .filter(|source| source.access.writes_memory())
@@ -1172,6 +1175,53 @@ struct GpuSemanticExpressionResolverV2<'a> {
     ambiguous: HashSet<u32>,
     visiting: HashSet<u32>,
     work: usize,
+    loads: HashMap<*const SemanticRvalueV1, ProductionSemanticLoadV2>,
+    place_loads: HashMap<*const SemanticPlaceV1, ProductionSemanticLoadV2>,
+}
+
+fn semantic_rvalue_read_places_v2<'a>(
+    value: &'a SemanticRvalueV1,
+    places: &mut Vec<&'a SemanticPlaceV1>,
+) {
+    fn push_operand<'a>(operand: &'a SemanticOperandV1, places: &mut Vec<&'a SemanticPlaceV1>) {
+        let (SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)) = operand else {
+            return;
+        };
+        if place
+            .projections()
+            .iter()
+            .any(|projection| projection.kind() == SemanticProjectionKindV1::Dereference)
+        {
+            places.push(place);
+        }
+    }
+    match value.kind() {
+        SemanticRvalueKindV1::Load(load) => places.push(load.source()),
+        SemanticRvalueKindV1::Use(operand)
+        | SemanticRvalueKindV1::Unary { operand, .. }
+        | SemanticRvalueKindV1::Cast { operand, .. } => push_operand(operand, places),
+        SemanticRvalueKindV1::Binary { left, right, .. } => {
+            push_operand(left, places);
+            push_operand(right, places);
+        }
+        SemanticRvalueKindV1::CheckedBinary(binary) => {
+            push_operand(binary.left(), places);
+            push_operand(binary.right(), places);
+        }
+        SemanticRvalueKindV1::UncheckedBinary(binary) => {
+            push_operand(binary.left(), places);
+            push_operand(binary.right(), places);
+        }
+        SemanticRvalueKindV1::Aggregate(aggregate) => {
+            for operand in aggregate.operands() {
+                push_operand(operand, places);
+            }
+        }
+        SemanticRvalueKindV1::Borrow { .. }
+        | SemanticRvalueKindV1::AddressOf { .. }
+        | SemanticRvalueKindV1::Length(_)
+        | SemanticRvalueKindV1::Discriminant(_) => {}
+    }
 }
 
 impl<'a> GpuSemanticExpressionResolverV2<'a> {
@@ -1201,7 +1251,143 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             ambiguous,
             visiting: HashSet::new(),
             work: 0,
+            loads: HashMap::new(),
+            place_loads: HashMap::new(),
         }
+    }
+
+    fn with_ranked_reads(
+        types: &'a [SemanticTypeDeclV1],
+        function: &'a SemanticFunctionDeclV1,
+        blocks: &[ProductionRankedBlockV1],
+        sources: &[ProjectedAccessSourceV1],
+    ) -> Result<Self, ProductionRankedProjectionErrorV1> {
+        let mut resolver = Self::new(types, function);
+        let mut allocation_origins = HashMap::new();
+        for block in blocks {
+            for operation in block.operations() {
+                match operation {
+                    ProductionRankedOperationV1::View {
+                        result,
+                        allocation_origin,
+                        ..
+                    }
+                    | ProductionRankedOperationV1::ViewInSpace {
+                        result,
+                        allocation_origin,
+                        ..
+                    } => {
+                        allocation_origins
+                            .insert(ProductionRankedValueV1::Local(*result), *allocation_origin);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for source in sources.iter().filter(|source| source.access.reads_memory()) {
+            if source.access != AccessKindAttr::Read
+                || source.memory_space != MemorySpaceAttr::Global
+            {
+                continue;
+            }
+            let Some(site) = source.semantic_site else {
+                continue;
+            };
+            let Some(statement_index) = site.statement else {
+                continue;
+            };
+            let Some(SemanticStatementKindV1::Assign(assignment)) = function
+                .blocks()
+                .get(site.block)
+                .and_then(|block| block.statements().get(statement_index))
+                .map(|statement| statement.kind())
+            else {
+                continue;
+            };
+            let mut read_places = Vec::new();
+            semantic_rvalue_read_places_v2(assignment.value(), &mut read_places);
+            let matching_sources = sources
+                .iter()
+                .filter(|candidate| {
+                    candidate.access == AccessKindAttr::Read
+                        && candidate.memory_space == MemorySpaceAttr::Global
+                        && candidate.semantic_site == source.semantic_site
+                })
+                .collect::<Vec<_>>();
+            let Some(ordinal) = matching_sources
+                .iter()
+                .position(|candidate| std::ptr::eq(*candidate, source))
+            else {
+                continue;
+            };
+            if read_places.len() != matching_sources.len() {
+                continue;
+            }
+            let Some(read_place) = read_places.get(ordinal).copied() else {
+                continue;
+            };
+            let Some(ProductionRankedOperationV1::Access {
+                kind,
+                view,
+                indices,
+            }) = blocks
+                .get(source.block)
+                .and_then(|block| block.operations().get(source.operation))
+            else {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a projected load correspondence does not identify one ranked read",
+                ));
+            };
+            if *kind != AccessKindAttr::Read {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a projected scalar load changed ranked access kind",
+                ));
+            }
+            let allocation_origin = allocation_origins.get(view).copied().ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "a projected load view has no exact allocation origin",
+                ),
+            )?;
+            let scalar = resolver
+                .scalar_v2(read_place.ty())
+                .map_err(ProductionRankedProjectionErrorV1::Incomplete)?;
+            let load = ProductionSemanticLoadV2 {
+                block: u32::try_from(source.block).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "a projected load block exceeds the ranked identity width",
+                    )
+                })?,
+                operation: u32::try_from(source.operation).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "a projected load operation exceeds the ranked identity width",
+                    )
+                })?,
+                scalar,
+                allocation_origin,
+                view: *view,
+                indices: indices.clone().into_boxed_slice(),
+            };
+            if resolver
+                .place_loads
+                .insert(read_place as *const SemanticPlaceV1, load.clone())
+                .is_some()
+            {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "one semantic scalar read place maps to multiple ranked reads",
+                ));
+            }
+            if matches!(assignment.value().kind(), SemanticRvalueKindV1::Load(_))
+                && resolver
+                    .loads
+                    .insert(assignment.value() as *const SemanticRvalueV1, load)
+                    .is_some()
+            {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "one semantic scalar load maps to multiple ranked reads",
+                ));
+            }
+        }
+        Ok(resolver)
     }
 
     fn resolve_store_v2(
@@ -1294,6 +1480,9 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         depth: usize,
     ) -> Result<ProductionSemanticExpressionV2, &'static str> {
         Self::require_depth_v2(depth)?;
+        if let Some(load) = self.place_loads.get(&(place as *const SemanticPlaceV1)) {
+            return Ok(ProductionSemanticExpressionV2::Load(load.clone()));
+        }
         let local = place.local().index();
         if !place.projections().is_empty() {
             return Err("GPU semantic scalar operand uses an unsupported place projection");
@@ -1432,9 +1621,12 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                     operand: Box::new(self.resolve_operand_v2(operand, depth + 1)?),
                 })
             }
-            SemanticRvalueKindV1::Load(_) => {
-                Err("GPU semantic RHS load projection is not implemented")
-            }
+            SemanticRvalueKindV1::Load(_) => self
+                .loads
+                .get(&(value as *const SemanticRvalueV1))
+                .cloned()
+                .map(ProductionSemanticExpressionV2::Load)
+                .ok_or("GPU semantic RHS load has no exact ranked read correspondence"),
             _ => Err("GPU semantic rvalue is outside typed scalar refinement V2"),
         }
     }
@@ -1612,6 +1804,7 @@ fn production_access_sources(
 fn project_rust_bounds_checks(
     function: &SemanticFunctionDeclV1,
     first_argument: usize,
+    known_indices: &[Option<ProjectedDisjointIndexV1>],
     operations: &mut Vec<ProductionRankedOperationV1>,
     next_value: &mut u32,
 ) -> Result<ProjectedBoundsChecksV1, ProductionRankedProjectionErrorV1> {
@@ -1683,7 +1876,19 @@ fn project_rust_bounds_checks(
             })?;
     }
 
-    let mut local_values = vec![None; function.locals().len()];
+    let mut local_values = if known_indices.is_empty() {
+        vec![None; function.locals().len()]
+    } else {
+        if known_indices.len() != function.locals().len() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "intrinsic index facts do not match the semantic local table",
+            ));
+        }
+        known_indices
+            .iter()
+            .map(|index| index.map(|index| index.value))
+            .collect()
+    };
     let mut checks = Vec::new();
     for (block_index, block) in function.blocks().iter().enumerate() {
         let guard = match block.terminator().kind() {
@@ -3301,6 +3506,10 @@ fn project_intrinsic_contracts(
             continue;
         };
         let kind = match operation {
+            SemanticCompilerIntrinsicOperationV1::ThreadIndexGet { .. }
+            | SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { .. } => {
+                CapabilityEdgeKindV1::Alias
+            }
             SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint {
                 index_space, ..
             } => CapabilityEdgeKindV1::IntoDisjoint {
@@ -4473,6 +4682,7 @@ fn project_intrinsic_contracts(
         allocations: local_allocations,
     };
     Ok(IntrinsicProjectionV1 {
+        index_values,
         local_contracts,
         extent_argument_count: if guarded_accesses.is_empty() && next_runtime_argument == 1 {
             0
@@ -11745,7 +11955,13 @@ mod tests {
     ) -> Result<ProjectedBoundsChecksV1, ProductionRankedProjectionErrorV1> {
         let mut operations = Vec::new();
         let mut next_value = 0;
-        project_rust_bounds_checks(function, first_argument, &mut operations, &mut next_value)
+        project_rust_bounds_checks(
+            function,
+            first_argument,
+            &[],
+            &mut operations,
+            &mut next_value,
+        )
     }
 
     fn literal_bounds_check_function(index: u128, length: u128) -> SemanticFunctionDeclV1 {
@@ -12326,7 +12542,8 @@ mod tests {
         let mut operations = Vec::new();
         let mut next_value = 0;
         let projected =
-            project_rust_bounds_checks(&function, 3, &mut operations, &mut next_value).unwrap();
+            project_rust_bounds_checks(&function, 3, &[], &mut operations, &mut next_value)
+                .unwrap();
 
         assert_eq!(projected.argument_count, 3);
         assert_eq!(next_value, 2);
@@ -12352,6 +12569,31 @@ mod tests {
     }
 
     #[test]
+    fn rust_bounds_check_reuses_an_exact_compiler_intrinsic_index_fact() {
+        let function = bounds_check_function(SemanticBinaryOpV1::LessThan, true, false, false);
+        let exact = ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(99));
+        let mut known = vec![None; function.locals().len()];
+        known[4] = Some(ProjectedDisjointIndexV1 {
+            value: exact,
+            mapping: SemanticDisjointIndexSpaceV1::Index1d,
+            precondition: None,
+            availability: None,
+        });
+        let mut operations = Vec::new();
+        let mut next_value = 0;
+        let projected =
+            project_rust_bounds_checks(&function, 3, &known, &mut operations, &mut next_value)
+                .unwrap();
+
+        assert_eq!(projected.checks[0].index, exact);
+        assert_eq!(next_value, 1);
+        assert!(matches!(
+            operations.as_slice(),
+            [ProductionRankedOperationV1::IndexUnknown { result }] if result.get() == 0
+        ));
+    }
+
+    #[test]
     fn literal_array_bounds_check_does_not_manufacture_dynamic_authorization() {
         for function in [
             literal_bounds_check_function(63, 64),
@@ -12360,7 +12602,8 @@ mod tests {
             let mut operations = Vec::new();
             let mut next_value = 0;
             let projected =
-                project_rust_bounds_checks(&function, 0, &mut operations, &mut next_value).unwrap();
+                project_rust_bounds_checks(&function, 0, &[], &mut operations, &mut next_value)
+                    .unwrap();
             assert!(projected.checks.is_empty());
             assert!(operations.is_empty());
             assert_eq!(next_value, 0);
@@ -12436,6 +12679,7 @@ mod tests {
                     ..BranchBoundsCheckOptionsV1::default()
                 }),
                 7,
+                &[],
                 &mut operations,
                 &mut next_value,
             )

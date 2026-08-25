@@ -576,7 +576,7 @@ pub fn production_loop_variant_identity_v1(
     domain_digest(LOOP_VARIANT_DOMAIN_V1, &bytes)
 }
 
-pub(super) struct CanonicalStaticLoopV1 {
+pub(super) struct CanonicalFiniteLoopV1 {
     pub(super) identity: DigestV1,
     pub(super) exit: u32,
     pub(super) iteration_domain: DigestV1,
@@ -588,6 +588,7 @@ pub(super) struct CanonicalStaticLoopV1 {
     pub(super) variant: DigestV1,
     pub(super) direction: SemanticLoopDirectionV1,
     pub(super) maximum_steps: u64,
+    pub(super) extent: SemanticFiniteExtentV1,
 }
 
 struct LiveLoopDescriptorV1 {
@@ -674,14 +675,14 @@ fn live_loop_descriptor_v1(
     })
 }
 
-/// Extracts the statically finite canonical-loop subset admitted by automatic
-/// contract derivation. Dynamic bounds remain unsupported until a retained
-/// range receipt can supply their finite domain.
-pub(super) fn canonical_static_loop_v1(
+/// Extracts the finite canonical-loop subset admitted by automatic contract
+/// derivation. A dynamic ranked index is bounded by its exact machine type;
+/// no narrower caller-provided range is accepted without a retained receipt.
+pub(super) fn canonical_finite_loop_v1(
     ranked: &ProductionRankedKernelLoweringInputV1,
     header: u32,
     latch: u32,
-) -> Result<CanonicalStaticLoopV1, &'static str> {
+) -> Result<CanonicalFiniteLoopV1, &'static str> {
     let kernel = ranked.kernel();
     let live = live_loop_descriptor_v1(ranked, header, latch).map_err(|error| match error {
         LiveLoopDescriptorErrorV1::Structure => "the natural-loop CFG is inconsistent",
@@ -689,20 +690,9 @@ pub(super) fn canonical_static_loop_v1(
             "the loop is not a canonical increasing induction loop"
         }
     })?;
-    let lower = index_constant(kernel, live.lower_value)
-        .ok_or("the lower bound is dynamic and has no retained range receipt")?;
-    let upper = index_constant(kernel, live.upper_value)
-        .ok_or("the upper bound is dynamic and has no retained range receipt")?;
     let step = index_constant(kernel, live.step_value)
         .filter(|step| *step != 0)
         .ok_or("the step is dynamic or zero")?;
-    let span = upper
-        .checked_sub(lower)
-        .ok_or("the increasing-loop upper bound is below its lower bound")?;
-    let maximum_steps = span.div_ceil(step);
-    if maximum_steps == 0 {
-        return Err("the iteration domain is empty");
-    }
     let induction = production_ranked_value_identity_v1(live.induction_value);
     let lower_identity = production_ranked_value_identity_v1(live.lower_value);
     let upper_identity = production_ranked_value_identity_v1(live.upper_value);
@@ -719,6 +709,21 @@ pub(super) fn canonical_static_loop_v1(
         live.transition,
         direction,
     );
+    let (maximum_steps, extent) = finite_loop_extent_v1(
+        ranked,
+        header,
+        latch,
+        live.exit,
+        live.lower_value,
+        live.upper_value,
+        step,
+        induction,
+        lower_identity,
+        upper_identity,
+        step_identity,
+        live.transition,
+        variant,
+    )?;
     let mut domain_bytes = Vec::with_capacity(32 * 6 + 8 * 2 + 12);
     domain_bytes
         .extend_from_slice(&super::middle_end_evidence_v4::derive_ranked_kernel_identity(ranked));
@@ -740,7 +745,7 @@ pub(super) fn canonical_static_loop_v1(
     let mut identity_bytes = domain_bytes;
     identity_bytes.extend_from_slice(iteration_domain.as_bytes());
     let identity = domain_digest(LOOP_CONTRACT_DOMAIN_V1, &identity_bytes);
-    Ok(CanonicalStaticLoopV1 {
+    Ok(CanonicalFiniteLoopV1 {
         identity,
         exit: live.exit,
         iteration_domain,
@@ -752,7 +757,96 @@ pub(super) fn canonical_static_loop_v1(
         variant,
         direction,
         maximum_steps,
+        extent,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finite_loop_extent_v1(
+    ranked: &ProductionRankedKernelLoweringInputV1,
+    header: u32,
+    latch: u32,
+    exit: u32,
+    lower_value: ProductionRankedValueV1,
+    upper_value: ProductionRankedValueV1,
+    step: u64,
+    induction: DigestV1,
+    lower_bound: DigestV1,
+    upper_bound: DigestV1,
+    step_identity: DigestV1,
+    transition: DigestV1,
+    variant: DigestV1,
+) -> Result<(u64, SemanticFiniteExtentV1), &'static str> {
+    match (
+        index_constant(ranked.kernel(), lower_value),
+        index_constant(ranked.kernel(), upper_value),
+    ) {
+        (Some(lower), Some(upper)) => {
+            let span = upper
+                .checked_sub(lower)
+                .ok_or("the increasing-loop upper bound is below its lower bound")?;
+            let maximum_steps = span.div_ceil(step);
+            if maximum_steps == 0 {
+                return Err("the iteration domain is empty");
+            }
+            Ok((maximum_steps, SemanticFiniteExtentV1::Static(maximum_steps)))
+        }
+        _ if step == 1 => Ok((
+            u64::MAX,
+            SemanticFiniteExtentV1::Dynamic {
+                symbol: production_dynamic_loop_symbol_v1(
+                    ranked,
+                    header,
+                    latch,
+                    exit,
+                    induction,
+                    lower_bound,
+                    upper_bound,
+                    step_identity,
+                    transition,
+                    variant,
+                ),
+                inclusive_upper_bound: u64::MAX,
+            },
+        )),
+        _ => Err(
+            "a dynamic finite loop requires a constant unit step until a narrower range receipt is retained",
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn production_dynamic_loop_symbol_v1(
+    ranked: &ProductionRankedKernelLoweringInputV1,
+    header: u32,
+    latch: u32,
+    exit: u32,
+    induction: DigestV1,
+    lower_bound: DigestV1,
+    upper_bound: DigestV1,
+    step: DigestV1,
+    transition: DigestV1,
+    variant: DigestV1,
+) -> u32 {
+    let mut bytes = Vec::with_capacity(32 * 7 + 12);
+    bytes.extend_from_slice(&super::middle_end_evidence_v4::derive_ranked_kernel_identity(ranked));
+    for block in [header, latch, exit] {
+        bytes.extend_from_slice(&block.to_le_bytes());
+    }
+    for identity in [
+        induction,
+        lower_bound,
+        upper_bound,
+        step,
+        transition,
+        variant,
+    ] {
+        bytes.extend_from_slice(identity.as_bytes());
+    }
+    let digest = domain_digest(b"FE2O3/PRODUCTION-DYNAMIC-LOOP-SYMBOL/V1\0", &bytes);
+    let mut symbol = [0_u8; 4];
+    symbol.copy_from_slice(&digest.as_bytes()[..4]);
+    u32::from_le_bytes(symbol)
 }
 
 fn require_live_loop_contract(
@@ -794,6 +888,35 @@ fn require_live_loop_contract(
         live.transition,
         declared.direction(),
     );
+    let step = index_constant(kernel, live.step_value)
+        .filter(|step| *step != 0)
+        .ok_or(
+            ProductionMirPlironSemanticContractErrorV1::DynamicLoopStepUnproved {
+                header: declared.header_block(),
+                latch: declared.latch_block(),
+            },
+        )?;
+    let expected_extent = finite_loop_extent_v1(
+        ranked,
+        declared.header_block(),
+        declared.latch_block(),
+        declared.exit_block(),
+        live.lower_value,
+        live.upper_value,
+        step,
+        induction,
+        lower_bound,
+        upper_bound_identity,
+        step_identity,
+        live.transition,
+        variant,
+    )
+    .map_err(
+        |_| ProductionMirPlironSemanticContractErrorV1::DynamicLoopStepUnproved {
+            header: declared.header_block(),
+            latch: declared.latch_block(),
+        },
+    )?;
     let Some(domain) = contract
         .domains()
         .iter()
@@ -829,15 +952,10 @@ fn require_live_loop_contract(
             );
         }
     }
-    let extent_matches = static_loop_extent_matches(
-        kernel,
-        live.lower_value,
-        live.upper_value,
-        live.step_value,
-        domain.extents()[0],
-    );
+    let extent_matches = domain.extents().first().copied() == Some(expected_extent.1);
     if domain.extents().len() != 1
         || domain.maximum_cardinality() != Some(declared.maximum_steps())
+        || declared.maximum_steps() != expected_extent.0
         || declared.direction() != SemanticLoopDirectionV1::Increasing
         || !extent_matches
         || declared.induction() != induction
@@ -968,39 +1086,6 @@ fn can_reach_without_header(
         pending.extend(successors(block.terminator()));
     }
     false
-}
-
-fn static_loop_extent_matches(
-    kernel: &super::ProductionRankedKernelV1,
-    lower_bound: ProductionRankedValueV1,
-    upper_bound: ProductionRankedValueV1,
-    step: ProductionRankedValueV1,
-    extent: SemanticFiniteExtentV1,
-) -> bool {
-    if let SemanticFiniteExtentV1::Dynamic { .. } = extent {
-        // The production gate checked the full type bound and unit step before
-        // reaching this structural extent comparison.
-        return true;
-    }
-    let SemanticFiniteExtentV1::Static(expected) = extent else {
-        unreachable!()
-    };
-    let (Some(lower), Some(upper), Some(step)) = (
-        index_constant(kernel, lower_bound),
-        index_constant(kernel, upper_bound),
-        index_constant(kernel, step),
-    ) else {
-        return false;
-    };
-    if step == 0 {
-        return false;
-    }
-    let iterations = if upper <= lower {
-        0
-    } else {
-        (upper - lower).div_ceil(step)
-    };
-    iterations == expected
 }
 
 fn index_constant(

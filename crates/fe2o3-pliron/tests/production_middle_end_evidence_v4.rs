@@ -941,6 +941,16 @@ fn dynamic_total_output_refinement_input() -> ProductionRankedKernelLoweringInpu
 }
 
 fn loop_total_output_refinement_input() -> ProductionRankedKernelLoweringInputV1 {
+    loop_total_output_refinement_input_with_dynamic_bound(false)
+}
+
+fn dynamic_loop_total_output_refinement_input() -> ProductionRankedKernelLoweringInputV1 {
+    loop_total_output_refinement_input_with_dynamic_bound(true)
+}
+
+fn loop_total_output_refinement_input_with_dynamic_bound(
+    dynamic_bound: bool,
+) -> ProductionRankedKernelLoweringInputV1 {
     let local = |identity| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(identity));
     let scalar_u32 = ProductionSemanticScalarTypeV2::Integer {
         signed: false,
@@ -969,7 +979,7 @@ fn loop_total_output_refinement_input() -> ProductionRankedKernelLoweringInputV1
     .unwrap();
     let skeleton = ProductionRankedKernelV1::new(
         "loop_total_output_refinement",
-        0,
+        usize::from(dynamic_bound),
         vec![
             ProductionRankedBlockV1::new(
                 vec![
@@ -1061,7 +1071,11 @@ fn loop_total_output_refinement_input() -> ProductionRankedKernelLoweringInputV1
                         block: 1,
                         argument: 0,
                     },
-                    rhs: local(7),
+                    rhs: if dynamic_bound {
+                        ProductionRankedValueV1::Argument(0)
+                    } else {
+                        local(7)
+                    },
                     true_arguments: vec![ProductionRankedValueV1::BlockArgument {
                         block: 1,
                         argument: 0,
@@ -1414,6 +1428,102 @@ fn compiler_derivation_covers_every_live_natural_loop_without_a_workload_declara
     assert_eq!(contract.loops()[0].maximum_steps(), 4);
     assert_eq!(contract.domains().len(), 2);
     assert_eq!(reconciled.semantic_contract_report().bounded_loops(), 1);
+}
+
+#[test]
+fn compiler_derives_a_machine_finite_dynamic_loop_with_live_variant_identity() {
+    let input = dynamic_loop_total_output_refinement_input();
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let reconciled =
+        derive_and_reconcile_mir_pliron_semantic_contract_v1(&input, &evidence).unwrap();
+    let contract = reconciled.contract();
+    let [loop_contract] = contract.loops() else {
+        panic!("expected one compiler-derived loop")
+    };
+    assert_eq!(
+        loop_contract.upper_bound(),
+        production_ranked_value_identity_v1(ProductionRankedValueV1::Argument(0))
+    );
+    assert_eq!(loop_contract.maximum_steps(), u64::MAX);
+    let domain = contract
+        .domains()
+        .iter()
+        .find(|domain| domain.identity() == loop_contract.iteration_domain())
+        .unwrap();
+    assert!(matches!(
+        domain.extents(),
+        [SemanticFiniteExtentV1::Dynamic {
+            inclusive_upper_bound: u64::MAX,
+            ..
+        }]
+    ));
+    assert_eq!(reconciled.semantic_contract_report().bounded_loops(), 1);
+}
+
+#[test]
+fn dynamic_loop_reconciliation_rejects_stale_symbols_and_narrowed_bounds() {
+    let input = dynamic_loop_total_output_refinement_input();
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let reconciled =
+        derive_and_reconcile_mir_pliron_semantic_contract_v1(&input, &evidence).unwrap();
+    let contract = reconciled.contract();
+    let loop_contract = &contract.loops()[0];
+    let loop_domain = contract
+        .domains()
+        .iter()
+        .find(|domain| domain.identity() == loop_contract.iteration_domain())
+        .unwrap();
+    let [SemanticFiniteExtentV1::Dynamic { symbol, .. }] = loop_domain.extents() else {
+        panic!("expected one dynamic loop extent")
+    };
+    for (extent, constructor_may_reject) in [
+        (
+            SemanticFiniteExtentV1::Dynamic {
+                symbol: symbol.wrapping_add(1),
+                inclusive_upper_bound: u64::MAX,
+            },
+            false,
+        ),
+        (
+            SemanticFiniteExtentV1::Dynamic {
+                symbol: *symbol,
+                inclusive_upper_bound: 1024,
+            },
+            true,
+        ),
+    ] {
+        let domains = contract
+            .domains()
+            .iter()
+            .map(|domain| {
+                if domain.identity() == loop_domain.identity() {
+                    SemanticFiniteDomainV1::new(domain.identity(), vec![extent]).unwrap()
+                } else {
+                    domain.clone()
+                }
+            })
+            .collect();
+        let mutated = MirPlironSemanticContractV1::new(
+            contract.safe_reference_mir(),
+            contract.kernel_mir(),
+            contract.pliron_evidence(),
+            domains,
+            contract.typed_roots().to_vec(),
+            contract.loops().to_vec(),
+            contract.collectives().to_vec(),
+            contract.outputs().to_vec(),
+        );
+        if constructor_may_reject && mutated.is_err() {
+            continue;
+        }
+        let mutated = mutated.unwrap();
+        let total = require_total_output_refinement_v2(&input, &evidence).unwrap();
+        assert!(
+            require_mir_pliron_semantic_contract_v1(&input, &evidence, total, &mutated,).is_err()
+        );
+    }
 }
 
 #[test]

@@ -186,8 +186,13 @@ pub(crate) fn prepare_reference_effect_request_v2(
             detail,
         }
     })?;
-    let reference_expression =
-        reference_expression_v2(&binding.effect_ir, &reference_write.rhs, *element)?;
+    let reference_expression = reference_expression_with_gpu_loads_v2(
+        &binding.effect_ir,
+        &reference_write.rhs,
+        *element,
+        &kernel,
+        &gpu_expression,
+    )?;
     if gpu_expression.scalar() != reference_expression.scalar() {
         return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedGpuEffect {
             block: write.block,
@@ -396,12 +401,37 @@ fn reference_scalar_v2(scalar: ReferenceScalarTypeV1) -> Option<ProductionSemant
     })
 }
 
+#[cfg(test)]
 fn reference_expression_v2(
     effect_ir: &ReferenceEffectIrV1,
     expression: &ReferenceEffectExpressionV1,
     expected: ReferenceScalarTypeV1,
 ) -> Result<ProductionSemanticExpressionV2, ProductionReferenceEffectJoinErrorV2> {
-    let expression = reference_expression_inner_v2(effect_ir, expression, 0)?;
+    reference_expression_inner_checked_v2(effect_ir, expression, expected, None)
+}
+
+fn reference_expression_with_gpu_loads_v2(
+    effect_ir: &ReferenceEffectIrV1,
+    expression: &ReferenceEffectExpressionV1,
+    expected: ReferenceScalarTypeV1,
+    kernel: &ProductionRankedKernelV1,
+    gpu_expression: &ProductionSemanticExpressionV2,
+) -> Result<ProductionSemanticExpressionV2, ProductionReferenceEffectJoinErrorV2> {
+    reference_expression_inner_checked_v2(
+        effect_ir,
+        expression,
+        expected,
+        Some((kernel, gpu_expression)),
+    )
+}
+
+fn reference_expression_inner_checked_v2(
+    effect_ir: &ReferenceEffectIrV1,
+    expression: &ReferenceEffectExpressionV1,
+    expected: ReferenceScalarTypeV1,
+    gpu_loads: Option<(&ProductionRankedKernelV1, &ProductionSemanticExpressionV2)>,
+) -> Result<ProductionSemanticExpressionV2, ProductionReferenceEffectJoinErrorV2> {
+    let expression = reference_expression_inner_v2(effect_ir, expression, gpu_loads, 0)?;
     let expected = reference_scalar_v2(expected).ok_or(
         ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
             "reference output scalar is outside typed semantic refinement V2",
@@ -421,6 +451,7 @@ fn reference_expression_v2(
 fn reference_expression_inner_v2(
     effect_ir: &ReferenceEffectIrV1,
     expression: &ReferenceEffectExpressionV1,
+    gpu_loads: Option<(&ProductionRankedKernelV1, &ProductionSemanticExpressionV2)>,
     depth: usize,
 ) -> Result<ProductionSemanticExpressionV2, ProductionReferenceEffectJoinErrorV2> {
     if depth >= fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 {
@@ -459,6 +490,11 @@ fn reference_expression_inner_v2(
             )?;
             Ok(ProductionSemanticExpressionV2::Symbol { symbol, scalar })
         }
+        ReferenceEffectExpressionV1::InputLength { .. } => {
+            Err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+                "reference slice length cannot be used as an opaque semantic value",
+            ))
+        }
         ReferenceEffectExpressionV1::Constant(ReferenceConstantV1::Scalar { scalar, bits }) => {
             let scalar = reference_scalar_v2(*scalar).ok_or(
                 ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
@@ -477,14 +513,82 @@ fn reference_expression_inner_v2(
                 "reference RHS is a zero-sized value rather than a scalar",
             ))
         }
+        ReferenceEffectExpressionV1::InputLoad {
+            reference_argument,
+            index,
+        } => {
+            let (kernel, gpu_expression) =
+                gpu_loads.ok_or(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+                    "safe reference load requires an independently projected GPU expression",
+                ))?;
+            let point_count = effect_ir
+                .relations
+                .iter()
+                .filter(|relation| {
+                    matches!(
+                        relation,
+                        ReferenceArgumentRelationV1::PointCoordinate { .. }
+                    )
+                })
+                .count();
+            let point_count = u32::try_from(point_count).map_err(|_| {
+                ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+                    "reference point-coordinate count exceeds u32",
+                )
+            })?;
+            let (argument, element) = effect_ir
+                .relations
+                .iter()
+                .find_map(|relation| match relation {
+                    ReferenceArgumentRelationV1::SharedSliceInput { argument, element }
+                        if point_count.checked_add(*argument) == Some(*reference_argument) =>
+                    {
+                        Some((*argument, *element))
+                    }
+                    _ => None,
+                })
+                .ok_or(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+                    "safe reference load base is not one exact shared-slice input",
+                ))?;
+            let scalar = reference_scalar_v2(element).ok_or(
+                ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+                    "safe reference load element type is unsupported",
+                ),
+            )?;
+            let allocation_origin = u64::from(argument).checked_add(1).ok_or(
+                ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+                    "safe reference load argument origin overflowed",
+                ),
+            )?;
+            let mut loads = Vec::new();
+            collect_semantic_loads_v2(gpu_expression, &mut loads);
+            let mut matches = loads.into_iter().filter(|load| {
+                load.scalar == scalar
+                    && load.allocation_origin == allocation_origin
+                    && load.indices.len() == 1
+                    && gpu_index_expression_v2(kernel, load.indices[0], 0)
+                        .is_ok_and(|gpu_index| gpu_index == **index)
+            });
+            let Some(load) = matches.next() else {
+                return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+                    "safe reference load has no exact ranked GPU read with matching input, type, and index",
+                ));
+            };
+            if matches.next().is_some() {
+                return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+                    "safe reference load matches multiple ranked GPU reads",
+                ));
+            }
+            Ok(ProductionSemanticExpressionV2::Load(load.clone()))
+        }
         ReferenceEffectExpressionV1::Binary {
             operation,
             lhs,
             rhs,
             checked,
         } => {
-            let lhs = reference_expression_inner_v2(effect_ir, lhs, depth + 1)?;
-            let rhs = reference_expression_inner_v2(effect_ir, rhs, depth + 1)?;
+            let lhs = reference_expression_inner_v2(effect_ir, lhs, gpu_loads, depth + 1)?;
+            let rhs = reference_expression_inner_v2(effect_ir, rhs, gpu_loads, depth + 1)?;
             let comparison = match operation {
                 ReferenceBinaryOpV1::Equal => Some(ProductionSemanticComparisonV2::Equal),
                 ReferenceBinaryOpV1::LessThan => Some(ProductionSemanticComparisonV2::LessThan),
@@ -537,7 +641,7 @@ fn reference_expression_inner_v2(
             })
         }
         ReferenceEffectExpressionV1::Unary { operation, operand } => {
-            let operand = reference_expression_inner_v2(effect_ir, operand, depth + 1)?;
+            let operand = reference_expression_inner_v2(effect_ir, operand, gpu_loads, depth + 1)?;
             Ok(ProductionSemanticExpressionV2::Unary {
                 operation: match operation {
                     ReferenceUnaryOpV1::Not => ProductionSemanticUnaryOpV2::Not,
@@ -578,9 +682,40 @@ fn reference_expression_inner_v2(
                 operand: Box::new(reference_expression_inner_v2(
                     effect_ir,
                     operand,
+                    gpu_loads,
                     depth + 1,
                 )?),
             })
+        }
+    }
+}
+
+fn collect_semantic_loads_v2<'a>(
+    expression: &'a ProductionSemanticExpressionV2,
+    loads: &mut Vec<&'a fe2o3_pliron::ProductionSemanticLoadV2>,
+) {
+    match expression {
+        ProductionSemanticExpressionV2::Load(load) => loads.push(load),
+        ProductionSemanticExpressionV2::Symbol { .. }
+        | ProductionSemanticExpressionV2::Constant { .. } => {}
+        ProductionSemanticExpressionV2::Unary { operand, .. }
+        | ProductionSemanticExpressionV2::Cast { operand, .. } => {
+            collect_semantic_loads_v2(operand, loads);
+        }
+        ProductionSemanticExpressionV2::Binary { lhs, rhs, .. }
+        | ProductionSemanticExpressionV2::Compare { lhs, rhs, .. } => {
+            collect_semantic_loads_v2(lhs, loads);
+            collect_semantic_loads_v2(rhs, loads);
+        }
+        ProductionSemanticExpressionV2::Select {
+            condition,
+            when_true,
+            when_false,
+            ..
+        } => {
+            collect_semantic_loads_v2(condition, loads);
+            collect_semantic_loads_v2(when_true, loads);
+            collect_semantic_loads_v2(when_false, loads);
         }
     }
 }
@@ -864,7 +999,7 @@ fn validate_bounds_only_gpu_guard_v2(
         if true_reaches == false_reaches {
             continue;
         }
-        if !true_reaches || !exact_bounds_pair_v2(kernel, write, lhs, rhs) {
+        if !true_reaches || !exact_effect_bounds_pair_v2(kernel, write, lhs, rhs) {
             return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedGpuEffect {
                 block: write.block,
                 operation: write.operation,
@@ -875,9 +1010,29 @@ fn validate_bounds_only_gpu_guard_v2(
     Ok(())
 }
 
-fn exact_bounds_pair_v2(
+fn exact_effect_bounds_pair_v2(
     kernel: &ProductionRankedKernelV1,
     write: &RankedGpuWriteV2,
+    lhs: ProductionRankedValueV1,
+    rhs: ProductionRankedValueV1,
+) -> bool {
+    if exact_view_bounds_pair_v2(kernel, write.view, &write.indices, lhs, rhs) {
+        return true;
+    }
+    let Ok(expression) = &write.value else {
+        return false;
+    };
+    let mut loads = Vec::new();
+    collect_semantic_loads_v2(expression, &mut loads);
+    loads
+        .into_iter()
+        .any(|load| exact_view_bounds_pair_v2(kernel, load.view, &load.indices, lhs, rhs))
+}
+
+fn exact_view_bounds_pair_v2(
+    kernel: &ProductionRankedKernelV1,
+    view_value: ProductionRankedValueV1,
+    indices: &[ProductionRankedValueV1],
     lhs: ProductionRankedValueV1,
     rhs: ProductionRankedValueV1,
 ) -> bool {
@@ -897,7 +1052,7 @@ fn exact_bounds_pair_v2(
                 shape,
                 dynamic_extents,
                 ..
-            } if write.view == ProductionRankedValueV1::Local(*result) => {
+            } if view_value == ProductionRankedValueV1::Local(*result) => {
                 Some((shape.as_slice(), dynamic_extents.as_slice()))
             }
             _ => None,
@@ -905,7 +1060,7 @@ fn exact_bounds_pair_v2(
     let Some((shape, dynamic_extents)) = view else {
         return false;
     };
-    write.indices.iter().enumerate().any(|(axis, index)| {
+    indices.iter().enumerate().any(|(axis, index)| {
         if *index != lhs || axis >= shape.len() {
             return false;
         }

@@ -96,7 +96,12 @@ fn annotated_reference_reaches_the_proof_runtime_boundary_and_mutation_is_reject
         "mutated reference did not fail closed before artifact authority:\n{mutated}",
     );
 
-    for feature in ["reference-loop", "reference-call"] {
+    for feature in [
+        "reference-loop",
+        "reference-call",
+        "reference-slice-read",
+        "reference-dynamic-loop",
+    ] {
         let stderr = run_feature(&target.0, feature);
         assert!(
             stderr.contains("functional-refinement proof runtime unavailable")
@@ -117,16 +122,8 @@ fn unsafe_abi_and_unsupported_reference_semantics_fail_closed() {
             "logical ABI mismatch at argument 1",
         ),
         (
-            "reference-dynamic-loop",
-            "has no authenticated finite maximum",
-        ),
-        (
             "reference-nested-call",
             "nested safe helper calls are unsupported",
-        ),
-        (
-            "reference-slice-read",
-            "slice and pointer reads require an independently bound GPU load symbol",
         ),
         (
             "reference-helper-memory",

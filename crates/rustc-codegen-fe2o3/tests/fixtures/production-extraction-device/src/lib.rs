@@ -190,10 +190,10 @@ pub fn fill(mut output: DisjointSlice<u32>) {
     reference = cpu_reference,
     launch(required = [64, 1, 1], max = [64, 1, 1])
 )]
-pub fn fill(_limit: u32, mut output: DisjointSlice<u32>) {
+pub fn fill(limit: u32, mut output: DisjointSlice<u32>) {
     let index = thread::index_1d();
     if let Some(element) = output.get_mut(index) {
-        *element = 17;
+        *element = limit;
     }
 }
 

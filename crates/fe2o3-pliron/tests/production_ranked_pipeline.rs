@@ -27,9 +27,10 @@ use fe2o3_pliron::{
     ProductionRankedValueIdV1, ProductionRankedValueV1, ProductionReferenceOutputSiteV2,
     ProductionReferenceProofV1, ProductionReferenceProofV2, ProductionSemanticBinaryOpV2,
     ProductionSemanticCastV2, ProductionSemanticComparisonV2, ProductionSemanticExpressionErrorV2,
-    ProductionSemanticExpressionV2, ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2,
-    ProductionSessionErrorV1, ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
-    compile_ranked_kernel_for_lowering_v2, normalized_effect_refinement_hash_for_kernel_v2,
+    ProductionSemanticExpressionV2, ProductionSemanticLoadV2, ProductionSemanticScalarTypeV2,
+    ProductionSemanticUnaryOpV2, ProductionSessionErrorV1, ProductionSessionLimitsV1,
+    compile_ranked_kernel_for_lowering_v1, compile_ranked_kernel_for_lowering_v2,
+    normalized_effect_refinement_hash_for_kernel_v2,
     normalized_functional_refinement_formula_hash_for_kernel_v2,
     normalized_numerical_refinement_hash_for_kernel_v2,
 };
@@ -78,6 +79,70 @@ fn static_kernel(index: u64, extent: u64) -> ProductionRankedKernelV1 {
         )],
     )
     .expect("valid static recipe")
+}
+
+fn typed_load_kernel(
+    load_operation: u32,
+    load_origin: u64,
+) -> Result<ProductionRankedKernelV1, ProductionRankedKernelErrorV1> {
+    let scalar = ProductionSemanticScalarTypeV2::Integer {
+        signed: false,
+        bits: 32,
+    };
+    ProductionRankedKernelV1::new(
+        "typed_load",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::ViewInSpace {
+                    result: VIEW,
+                    element_width: 32,
+                    writable: false,
+                    shape: vec![4],
+                    dynamic_extents: vec![],
+                    memory_space: MemorySpaceAttr::Global,
+                    allocation_origin: 1,
+                    noalias_class: 7,
+                },
+                ProductionRankedOperationV1::IndexConstant {
+                    result: INDEX,
+                    value: 2,
+                },
+                ProductionRankedOperationV1::Access {
+                    kind: AccessKindAttr::Read,
+                    view: local(VIEW),
+                    indices: vec![local(INDEX)],
+                },
+                ProductionRankedOperationV1::SemanticExpression {
+                    result: ProductionRankedValueIdV1::new(2),
+                    expression: ProductionSemanticExpressionV2::Load(ProductionSemanticLoadV2 {
+                        block: 0,
+                        operation: load_operation,
+                        scalar,
+                        allocation_origin: load_origin,
+                        view: local(VIEW),
+                        indices: vec![local(INDEX)].into_boxed_slice(),
+                    }),
+                    numerical_contract:
+                        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+}
+
+#[test]
+fn typed_load_leaf_is_reconciled_to_the_exact_live_ranked_read() {
+    assert!(typed_load_kernel(2, 1).is_ok());
+    assert_eq!(
+        typed_load_kernel(1, 1),
+        Err(ProductionRankedKernelErrorV1::InvalidReferenceContract)
+    );
+    assert_eq!(
+        typed_load_kernel(2, 9),
+        Err(ProductionRankedKernelErrorV1::InvalidReferenceContract)
+    );
 }
 
 fn dynamic_kernel(guarded: bool) -> ProductionRankedKernelV1 {

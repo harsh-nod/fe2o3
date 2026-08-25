@@ -786,6 +786,10 @@ fn render_bitvector_expression_v2(
         Expression::Constant { bits, .. } => {
             format!("fe2o3_bv_norm_v2({bits}, {width})")
         }
+        Expression::Load(load) => {
+            let symbol = load.proof_symbol();
+            format!("fe2o3_bv_norm_v2(s{symbol}, {width})")
+        }
         Expression::Unary {
             operation,
             scalar,
@@ -931,6 +935,13 @@ fn render_ieee_congruence_expression_v2(
             format!(
                 "fe2o3_ieee_operator_congruence_v2({}, {bits}, 0, 0)",
                 semantic_operation_tag_v2(2, 0, scalar, 0)
+            )
+        }
+        Expression::Load(load) => {
+            let symbol = load.proof_symbol();
+            format!(
+                "fe2o3_ieee_operator_congruence_v2({}, s{symbol}, 0, 0)",
+                semantic_operation_tag_v2(8, 0, scalar, 0)
             )
         }
         Expression::Unary {

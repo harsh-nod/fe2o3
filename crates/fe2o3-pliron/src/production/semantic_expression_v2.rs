@@ -7,6 +7,8 @@ use std::collections::BTreeSet;
 
 use sha2::{Digest as _, Sha256};
 
+use super::ranked::ProductionRankedValueV1;
+
 pub const MAX_PRODUCTION_SEMANTIC_EXPRESSION_NODES_V2: usize = 8_192;
 pub const MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2: usize = 128;
 
@@ -180,6 +182,26 @@ pub enum ProductionSemanticCastV2 {
     FloatToIntegerSaturating,
 }
 
+/// One compiler-owned scalar load leaf tied to an exact live ranked read.
+/// The ranked-kernel validator independently reconciles every field before
+/// this expression can participate in functional refinement.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ProductionSemanticLoadV2 {
+    pub block: u32,
+    pub operation: u32,
+    pub scalar: ProductionSemanticScalarTypeV2,
+    pub allocation_origin: u64,
+    pub view: ProductionRankedValueV1,
+    pub indices: Box<[ProductionRankedValueV1]>,
+}
+
+impl ProductionSemanticLoadV2 {
+    /// Collision-free namespace within the production ranked resource limits.
+    pub const fn proof_symbol(&self) -> u32 {
+        0xc000_0000 | (self.block << 16) | self.operation
+    }
+}
+
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ProductionSemanticExpressionV2 {
     Symbol {
@@ -190,6 +212,7 @@ pub enum ProductionSemanticExpressionV2 {
         scalar: ProductionSemanticScalarTypeV2,
         bits: u64,
     },
+    Load(ProductionSemanticLoadV2),
     Unary {
         operation: ProductionSemanticUnaryOpV2,
         scalar: ProductionSemanticScalarTypeV2,
@@ -230,6 +253,7 @@ impl ProductionSemanticExpressionV2 {
             | Self::Unary { scalar, .. }
             | Self::Binary { scalar, .. }
             | Self::Select { scalar, .. } => *scalar,
+            Self::Load(load) => load.scalar,
             Self::Compare { .. } => ProductionSemanticScalarTypeV2::Bool,
             Self::Cast { target, .. } => *target,
         }
@@ -240,7 +264,7 @@ impl ProductionSemanticExpressionV2 {
             return true;
         }
         match self {
-            Self::Symbol { .. } | Self::Constant { .. } => false,
+            Self::Symbol { .. } | Self::Constant { .. } | Self::Load(_) => false,
             Self::Unary { operand, .. } | Self::Cast { operand, .. } => {
                 operand.contains_float_semantics()
             }
@@ -283,7 +307,7 @@ impl ProductionSemanticExpressionV2 {
     /// Dynamic guards are intentionally not assumed by this V2 expression.
     pub fn validate_static_domains(&self) -> Result<(), ProductionSemanticExpressionErrorV2> {
         match self {
-            Self::Symbol { .. } | Self::Constant { .. } => Ok(()),
+            Self::Symbol { .. } | Self::Constant { .. } | Self::Load(_) => Ok(()),
             Self::Unary {
                 operation,
                 scalar,
@@ -376,7 +400,7 @@ impl ProductionSemanticExpressionV2 {
 
     fn accumulate_stats(&self, stats: &mut ProductionSemanticExpressionStatsV2) {
         match self {
-            Self::Symbol { .. } | Self::Constant { .. } => {}
+            Self::Symbol { .. } | Self::Constant { .. } | Self::Load(_) => {}
             Self::Unary {
                 scalar, operand, ..
             } => {
@@ -452,6 +476,17 @@ impl ProductionSemanticExpressionV2 {
             Self::Constant { scalar, bits } => {
                 if scalar.bit_width() < 64 && *bits >= (1_u64 << scalar.bit_width()) {
                     return Err(ProductionSemanticExpressionErrorV2::ConstantOutOfRange);
+                }
+                depth
+            }
+            Self::Load(load) => {
+                if load.block >= 4_096
+                    || load.operation >= 65_536
+                    || load.indices.is_empty()
+                    || load.indices.len() > 8
+                    || load.allocation_origin == 0
+                {
+                    return Err(ProductionSemanticExpressionErrorV2::UnboundLoad);
                 }
                 depth
             }
@@ -593,6 +628,9 @@ impl ProductionSemanticExpressionV2 {
                 output.insert(*symbol);
             }
             Self::Constant { .. } => {}
+            Self::Load(load) => {
+                output.insert(load.proof_symbol());
+            }
             Self::Unary { operand, .. } | Self::Cast { operand, .. } => operand.symbols(output),
             Self::Binary { lhs, rhs, .. } | Self::Compare { lhs, rhs, .. } => {
                 lhs.symbols(output);
@@ -649,6 +687,7 @@ pub enum ProductionSemanticExpressionErrorV2 {
     ConstantOutOfRange,
     UnsupportedNumericalContract,
     IncompleteDomain,
+    UnboundLoad,
 }
 
 impl fmt::Display for ProductionSemanticExpressionErrorV2 {
@@ -666,6 +705,9 @@ impl fmt::Display for ProductionSemanticExpressionErrorV2 {
             }
             Self::IncompleteDomain => {
                 "operation definedness requires an authenticated dynamic guard or a stronger range proof"
+            }
+            Self::UnboundLoad => {
+                "semantic load is not a bounded exact ranked read transcript"
             }
         })
     }
@@ -770,6 +812,18 @@ fn hash_expression(digest: &mut Sha256, expression: &ProductionSemanticExpressio
             digest.update(scalar_tag(*scalar));
             digest.update(bits.to_le_bytes());
         }
+        ProductionSemanticExpressionV2::Load(load) => {
+            digest.update([7]);
+            digest.update(scalar_tag(load.scalar));
+            digest.update(load.block.to_le_bytes());
+            digest.update(load.operation.to_le_bytes());
+            digest.update(load.allocation_origin.to_le_bytes());
+            hash_ranked_value(digest, load.view);
+            digest.update((load.indices.len() as u64).to_le_bytes());
+            for index in &load.indices {
+                hash_ranked_value(digest, *index);
+            }
+        }
         ProductionSemanticExpressionV2::Unary {
             operation,
             scalar,
@@ -824,6 +878,24 @@ fn hash_expression(digest: &mut Sha256, expression: &ProductionSemanticExpressio
             digest.update(scalar_tag(*source));
             digest.update(scalar_tag(*target));
             hash_expression(digest, operand);
+        }
+    }
+}
+
+fn hash_ranked_value(digest: &mut Sha256, value: ProductionRankedValueV1) {
+    match value {
+        ProductionRankedValueV1::Argument(argument) => {
+            digest.update([0]);
+            digest.update(argument.to_le_bytes());
+        }
+        ProductionRankedValueV1::BlockArgument { block, argument } => {
+            digest.update([1]);
+            digest.update(block.to_le_bytes());
+            digest.update(argument.to_le_bytes());
+        }
+        ProductionRankedValueV1::Local(identity) => {
+            digest.update([2]);
+            digest.update(identity.get().to_le_bytes());
         }
     }
 }

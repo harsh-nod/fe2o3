@@ -1527,6 +1527,7 @@ impl ProductionRankedKernelV1 {
             expression
                 .validate()
                 .map_err(ProductionRankedKernelErrorV1::InvalidSemanticExpression)?;
+            validate_live_semantic_loads(self, expression)?;
         }
         let operation_count = self.blocks.iter().try_fold(0_usize, |total, block| {
             let materialized = block
@@ -1704,6 +1705,93 @@ impl ProductionRankedKernelV1 {
             )?;
         }
         Ok(tree_work)
+    }
+}
+
+fn validate_live_semantic_loads(
+    kernel: &ProductionRankedKernelV1,
+    expression: &ProductionSemanticExpressionV2,
+) -> Result<(), ProductionRankedKernelErrorV1> {
+    match expression {
+        ProductionSemanticExpressionV2::Load(load) => {
+            let operation = kernel
+                .blocks()
+                .get(load.block as usize)
+                .and_then(|block| block.operations().get(load.operation as usize));
+            let Some(ProductionRankedOperationV1::Access {
+                kind,
+                view,
+                indices,
+            }) = operation
+            else {
+                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+            };
+            if *kind != AccessKindAttr::Read
+                || *view != load.view
+                || indices.as_slice() != load.indices.as_ref()
+            {
+                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+            }
+            let ProductionRankedValueV1::Local(view_identity) = load.view else {
+                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+            };
+            let mut definitions = kernel
+                .blocks()
+                .iter()
+                .flat_map(|block| block.operations())
+                .filter_map(|operation| match operation {
+                    ProductionRankedOperationV1::ViewInSpace {
+                        result,
+                        element_width,
+                        allocation_origin,
+                        memory_space,
+                        ..
+                    } if *result == view_identity => {
+                        Some((*element_width, *allocation_origin, *memory_space))
+                    }
+                    ProductionRankedOperationV1::View {
+                        result,
+                        element_width,
+                        allocation_origin,
+                        ..
+                    } if *result == view_identity => {
+                        Some((*element_width, *allocation_origin, MemorySpaceAttr::Global))
+                    }
+                    _ => None,
+                });
+            let Some((element_width, allocation_origin, memory_space)) = definitions.next() else {
+                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+            };
+            if definitions.next().is_some()
+                || memory_space != MemorySpaceAttr::Global
+                || allocation_origin != load.allocation_origin
+                || element_width != u32::from(load.scalar.bit_width())
+            {
+                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+            }
+            Ok(())
+        }
+        ProductionSemanticExpressionV2::Symbol { .. }
+        | ProductionSemanticExpressionV2::Constant { .. } => Ok(()),
+        ProductionSemanticExpressionV2::Unary { operand, .. }
+        | ProductionSemanticExpressionV2::Cast { operand, .. } => {
+            validate_live_semantic_loads(kernel, operand)
+        }
+        ProductionSemanticExpressionV2::Binary { lhs, rhs, .. }
+        | ProductionSemanticExpressionV2::Compare { lhs, rhs, .. } => {
+            validate_live_semantic_loads(kernel, lhs)?;
+            validate_live_semantic_loads(kernel, rhs)
+        }
+        ProductionSemanticExpressionV2::Select {
+            condition,
+            when_true,
+            when_false,
+            ..
+        } => {
+            validate_live_semantic_loads(kernel, condition)?;
+            validate_live_semantic_loads(kernel, when_true)?;
+            validate_live_semantic_loads(kernel, when_false)
+        }
     }
 }
 
@@ -4266,6 +4354,10 @@ fn materialize_typed_semantic_expression(
         }
         ProductionSemanticExpressionV2::Constant { scalar, bits } => {
             SemanticTypedConstantOp::new(context, *bits, typed_scalar(*scalar)?).get_operation()
+        }
+        ProductionSemanticExpressionV2::Load(load) => {
+            SemanticTypedSymbolOp::new(context, load.proof_symbol(), typed_scalar(load.scalar)?)
+                .get_operation()
         }
         ProductionSemanticExpressionV2::Unary {
             operation,
