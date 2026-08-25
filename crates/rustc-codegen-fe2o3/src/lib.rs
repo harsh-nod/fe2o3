@@ -39,6 +39,7 @@ mod collected_workgroup_sync_v1;
 mod collector;
 mod compiler_descriptor;
 mod compiler_ffi_adapter;
+mod compiler_module_contract;
 mod device_ffi;
 #[cfg(feature = "qualification-oracles-test-only")]
 mod frontend_record_bridge;
@@ -73,6 +74,7 @@ mod production_semantic_terminal_v1;
 mod production_semantic_types_v1;
 mod production_target_lineage_v3;
 mod production_target_v1;
+mod production_worker_handoff;
 mod protected_rustc_invocation;
 mod qualification_selection;
 mod reference_effect_bijection_v1;
@@ -82,13 +84,16 @@ mod rust_type_layout_general;
 mod rust_type_layout_v3;
 mod rustc_semantic_adapter_v1;
 mod rustc_semantic_plan_v1;
+#[cfg(feature = "qualification-oracles-test-only")]
 pub mod s09_identity_v2;
 #[cfg(feature = "qualification-oracles-test-only")]
 mod same_session_rustc_v1;
+#[cfg(feature = "qualification-oracles-test-only")]
 pub mod scalar_mir_v2;
 #[cfg(feature = "qualification-oracles-test-only")]
 mod semantic_features;
 pub mod semantic_layout_bridge;
+#[cfg(feature = "qualification-oracles-test-only")]
 pub mod semantic_type_adapter_v2;
 #[cfg(feature = "qualification-oracles-test-only")]
 mod semantic_witness;
@@ -100,6 +105,7 @@ mod test_temp_dir;
 mod trusted_device_items;
 #[cfg(feature = "qualification-oracles-test-only")]
 mod typed_artifact;
+#[cfg(feature = "qualification-oracles-test-only")]
 mod worker_v2_producer;
 
 #[doc(hidden)]

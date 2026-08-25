@@ -54,7 +54,7 @@ pub(crate) enum ProductionPipelineErrorV1 {
     ProtectedRustcInvocation(ProtectedRustcInvocationErrorV1),
     #[cfg(feature = "qualification-oracles-test-only")]
     ExtractionCannotPublish,
-    WorkerHandoff(crate::worker_v2_producer::WorkerV2ProducerError),
+    WorkerHandoff(crate::production_worker_handoff::ProductionWorkerHandoffError),
     StrictV3Publication(fe2o3_artifact_transaction::CompilerModuleHandoffErrorV3),
 }
 
@@ -172,10 +172,47 @@ struct ProductionTransactionBindingsV1 {
     compiler_custody: ProductionCompilerCustodyV1,
 }
 
+#[cfg(not(feature = "qualification-oracles-test-only"))]
+struct ProductionCompilerCustodyV1(Box<AdmittedProtectedRustcInvocationV1>);
+
+#[cfg(feature = "qualification-oracles-test-only")]
 enum ProductionCompilerCustodyV1 {
     ProtectedV3(Box<AdmittedProtectedRustcInvocationV1>),
-    #[cfg(feature = "qualification-oracles-test-only")]
     ExtractionOnly,
+}
+
+impl ProductionCompilerCustodyV1 {
+    fn protected(invocation: AdmittedProtectedRustcInvocationV1) -> Self {
+        #[cfg(not(feature = "qualification-oracles-test-only"))]
+        {
+            Self(Box::new(invocation))
+        }
+        #[cfg(feature = "qualification-oracles-test-only")]
+        {
+            Self::ProtectedV3(Box::new(invocation))
+        }
+    }
+
+    #[cfg(feature = "qualification-oracles-test-only")]
+    const fn extraction_only() -> Self {
+        Self::ExtractionOnly
+    }
+
+    fn into_publication_invocation(
+        self,
+    ) -> Result<Box<AdmittedProtectedRustcInvocationV1>, ProductionPipelineErrorV1> {
+        #[cfg(not(feature = "qualification-oracles-test-only"))]
+        {
+            Ok(self.0)
+        }
+        #[cfg(feature = "qualification-oracles-test-only")]
+        {
+            match self {
+                Self::ProtectedV3(invocation) => Ok(invocation),
+                Self::ExtractionOnly => Err(ProductionPipelineErrorV1::ExtractionCannotPublish),
+            }
+        }
+    }
 }
 
 struct AuthenticatedProductionBindingsV1 {
@@ -257,7 +294,7 @@ struct PreparedProductionWorkerPublicationV1 {
     invocation: Box<AdmittedProtectedRustcInvocationV1>,
     semantic_lineage: crate::production_semantic_lineage_v3::PreparedProductionSemanticLineageV3,
     rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
-    prepared: crate::worker_v2_producer::PreparedProductionWorkerHandoff,
+    prepared: crate::production_worker_handoff::PreparedProductionWorkerHandoff,
 }
 
 impl AuthenticatedProductionGfx942ModuleV1 {
@@ -532,13 +569,7 @@ impl Gfx942LoweredProductionCompilationV1 {
             return Err(ProductionPipelineErrorV1::RustcLineageMismatch);
         }
         drop(reference_effect_bindings);
-        let invocation = match compiler_custody {
-            ProductionCompilerCustodyV1::ProtectedV3(invocation) => invocation,
-            #[cfg(feature = "qualification-oracles-test-only")]
-            ProductionCompilerCustodyV1::ExtractionOnly => {
-                return Err(ProductionPipelineErrorV1::ExtractionCannotPublish);
-            }
-        };
+        let invocation = compiler_custody.into_publication_invocation()?;
         let semantic_lineage = crate::production_semantic_lineage_v3::PreparedProductionSemanticLineageV3::try_prepare(
             &rustc_identity_inventory,
             &rustc_preflight_plan,
@@ -557,11 +588,11 @@ impl Gfx942LoweredProductionCompilationV1 {
             compiler_ffi_envelope,
         };
         let prepared =
-            crate::worker_v2_producer::prepare_production_worker_handoff(compiler_module)
+            crate::production_worker_handoff::prepare_production_worker_handoff(compiler_module)
                 .map_err(ProductionPipelineErrorV1::WorkerHandoff)?;
         let attempt = build_attempt.ok_or({
             ProductionPipelineErrorV1::WorkerHandoff(
-                crate::worker_v2_producer::WorkerV2ProducerError::MissingBuildAttempt,
+                crate::production_worker_handoff::ProductionWorkerHandoffError::MissingBuildAttempt,
             )
         })?;
         Ok(PreparedProductionWorkerPublicationV1 {
@@ -672,7 +703,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
             producer,
             output_dir,
             build_attempt,
-            ProductionCompilerCustodyV1::ProtectedV3(Box::new(invocation)),
+            ProductionCompilerCustodyV1::protected(invocation),
         )
     }
 
@@ -690,7 +721,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
             producer,
             output_dir,
             build_attempt,
-            ProductionCompilerCustodyV1::ExtractionOnly,
+            ProductionCompilerCustodyV1::extraction_only(),
         )
     }
 
@@ -1002,7 +1033,7 @@ mod tests {
     #[test]
     fn production_publication_has_one_protected_custody_path() {
         let pipeline = include_str!("production_pipeline_v1.rs");
-        let worker = include_str!("worker_v2_producer.rs");
+        let worker = include_str!("production_worker_handoff.rs");
         for removed in [
             concat!("ProductionCompilerModule", "PublicationV1"),
             concat!("PreparedProductionCompiler", "PublicationV1"),
@@ -1019,7 +1050,7 @@ mod tests {
                 "obsolete production publication variant remains: {removed}",
             );
         }
-        assert!(pipeline.contains(concat!("ProductionCompilerCustodyV1::Protected", "V3")));
+        assert!(pipeline.contains("ProductionCompilerCustodyV1::protected(invocation)"));
         assert!(pipeline.contains(concat!("publish_compiler_module_handoff", "_v3")));
     }
 

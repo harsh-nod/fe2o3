@@ -1,4 +1,4 @@
-//! Preparation and attempt-scoped publication of inert Worker V2 compiler modules.
+//! Qualification-only preparation of legacy Worker V2 compiler modules.
 
 #[cfg(feature = "qualification-oracles-test-only")]
 use crate::collected_flash_attention_v1::FlashAttentionFinalizationInputsV1;
@@ -12,9 +12,7 @@ use crate::collected_scalar_gemm_v1::AuthenticatedScalarGemmModuleV1;
 use crate::collected_tiled_gemm_lds_slice1_v1::AuthenticatedLdsSlice1ModuleV1;
 #[cfg(feature = "qualification-oracles-test-only")]
 use crate::collected_tiled_gemm_v1::AuthenticatedTiledGemmModuleV1;
-use crate::compiler_descriptor::{
-    CompilerDescriptorError, construct_production_v1_compiler_descriptor_source_v1,
-};
+use crate::compiler_descriptor::CompilerDescriptorError;
 #[cfg(feature = "qualification-oracles-test-only")]
 use crate::compiler_descriptor::{
     TypedDescriptorRootV1, construct_compiler_descriptor_source_v1,
@@ -23,7 +21,6 @@ use crate::compiler_descriptor::{
 };
 use crate::kernel_ir_codegen::{
     CompilerModuleConstructionError, InertCompilerModuleTextV1, bind_compiler_descriptor_source_v1,
-    retain_production_gfx942_compiler_module_text_v1,
 };
 #[cfg(feature = "qualification-oracles-test-only")]
 use crate::kernel_ir_codegen::{
@@ -44,7 +41,7 @@ use fe2o3_artifact_transaction::{
 #[cfg(feature = "qualification-oracles-test-only")]
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::{
-    CodeObjectVersion, CompilerDescriptorSourceV1, CompilerFfiEnvelopeError, CompilerFfiEnvelopeV1,
+    CodeObjectVersion, CompilerFfiEnvelopeError, CompilerFfiEnvelopeV1,
     CompilerModuleHandoffErrorV2, CompilerModuleHandoffV2, CompilerModuleKindV1,
     CompilerModuleSymbolManifestErrorV1, CompilerModuleSymbolManifestV1,
     CompilerModuleSymbolRoleV1, DeviceTargetV1,
@@ -55,10 +52,9 @@ use fe2o3_compiler_ffi::{
     CompilerFfiSourceOwnerV1, CompilerModuleHandoffIdentityV2,
     decode_row_softmax_compiler_sections_v1,
 };
-use fe2o3_kernel_ir::{
-    AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
-    Module, TargetCapability,
-};
+#[cfg(test)]
+use fe2o3_kernel_ir::AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE;
+use fe2o3_kernel_ir::{AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME, Module, TargetCapability};
 #[cfg(feature = "qualification-oracles-test-only")]
 use fe2o3_kernel_ir::{SCALAR_GEMM_V1_KERNEL_ID, WaveWidth, WorkgroupSize};
 #[cfg(feature = "qualification-oracles-test-only")]
@@ -112,31 +108,6 @@ const FLASH_ATTENTION_OCML_BOUNDARY_V1: &[u8] = b"fe2o3.flash-attention.ocml-exp
 pub(crate) struct PreparedScalarGemmV1WorkerHandoffV1 {
     frontend_authority_commitment: [u8; 32],
     handoff: CompilerModuleHandoffV2,
-}
-
-/// Move-only handoff prepared by the single production compiler pipeline.
-/// It retains the exact LLVM identity and compiler descriptor embedded in the
-/// V2 module handoff, but grants no publication authority.
-pub(crate) struct PreparedProductionWorkerHandoff {
-    llvm_ir_sha256: [u8; 32],
-    handoff: CompilerModuleHandoffV2,
-    compiler_descriptor_source: CompilerDescriptorSourceV1,
-}
-
-impl PreparedProductionWorkerHandoff {
-    pub(crate) fn into_validated_parts(
-        self,
-    ) -> Result<(CompilerModuleHandoffV2, CompilerDescriptorSourceV1), WorkerV2ProducerError> {
-        let Self {
-            llvm_ir_sha256,
-            handoff,
-            compiler_descriptor_source,
-        } = self;
-        if Sha256::digest(handoff.module_bytes()).as_slice() != llvm_ir_sha256 {
-            return Err(WorkerV2ProducerError::MissingProductionBindings);
-        }
-        Ok((handoff, compiler_descriptor_source))
-    }
 }
 
 #[cfg(feature = "qualification-oracles-test-only")]
@@ -765,56 +736,6 @@ fn module_asm_commitment_section(section: &str, bytes: &[u8]) -> String {
     text
 }
 
-/// Prepares the generic production pipeline's exact LLVM text for Worker V2.
-///
-/// The module has already been target-bound and lowered. This transition only
-/// derives the closed symbol manifest, binds the target/COV envelope, and
-/// constructs canonical coordination bytes. It performs no LLVM invocation,
-/// linking, artifact publication, load, or launch.
-pub(crate) fn prepare_production_worker_handoff(
-    authenticated: crate::production_pipeline_v1::AuthenticatedProductionGfx942ModuleV1,
-) -> Result<PreparedProductionWorkerHandoff, WorkerV2ProducerError> {
-    let (formal, module, llvm_ir, typed_roots, compiler_ffi_envelope) = authenticated.into_parts();
-    let target = DeviceTargetV1::parse(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME)
-        .expect("fixed production target is valid");
-    validate_exact_target_binding(target, &module)?;
-    let compiler_module = retain_production_gfx942_compiler_module_text_v1(&module, llvm_ir)
-        .map_err(WorkerV2ProducerError::CompilerModule)?;
-    let envelope = match compiler_ffi_envelope {
-        Some(envelope) => envelope,
-        None => CompilerFfiEnvelopeV1::for_module_without_device_ffi(target, CodeObjectVersion::V6)
-            .map_err(WorkerV2ProducerError::CompilerEnvelope)?,
-    };
-    validate_exact_target_binding(envelope.target(), &module)?;
-    validate_envelope_module_roles(&envelope, &compiler_module)?;
-    let descriptor_source = construct_production_v1_compiler_descriptor_source_v1(
-        &envelope,
-        &module,
-        &compiler_module,
-        &typed_roots,
-        &formal,
-    )
-    .map_err(WorkerV2ProducerError::CompilerDescriptor)?;
-    let compiler_module = bind_compiler_descriptor_source_v1(compiler_module, &descriptor_source)
-        .map_err(WorkerV2ProducerError::CompilerModule)?;
-    let symbol_manifest = construct_symbol_manifest(&compiler_module)?;
-    let llvm_ir_sha256 = Sha256::digest(compiler_module.llvm_ir().as_bytes()).into();
-    let handoff = CompilerModuleHandoffV2::new(
-        CompilerModuleKindV1::LlvmTextIr,
-        target,
-        CodeObjectVersion::V6,
-        envelope,
-        symbol_manifest,
-        compiler_module.llvm_ir().as_bytes(),
-    )
-    .map_err(WorkerV2ProducerError::Handoff)?;
-    Ok(PreparedProductionWorkerHandoff {
-        llvm_ir_sha256,
-        handoff,
-        compiler_descriptor_source: descriptor_source,
-    })
-}
-
 /// Consumes exact frontend authority and prepares the canonical scalar GEMM V1
 /// compiler-module handoff expected by the existing Worker V2 validator.
 ///
@@ -1430,44 +1351,8 @@ pub(crate) fn publish_worker_v2_compiler_module_with_descriptors(
 fn construct_symbol_manifest(
     module: &InertCompilerModuleTextV1,
 ) -> Result<CompilerModuleSymbolManifestV1, WorkerV2ProducerError> {
-    use CompilerModuleSymbolRoleV1 as Role;
-
-    let mut entries = Vec::new();
-    entries.extend(
-        module
-            .kernel_entries()
-            .iter()
-            .cloned()
-            .map(|symbol| (Role::KernelEntry, symbol)),
-    );
-    entries.extend(
-        module
-            .kernel_entries()
-            .iter()
-            .map(|symbol| (Role::KernelDescriptor, format!("{symbol}.kd"))),
-    );
-    entries.extend(
-        module
-            .device_ffi_exports()
-            .iter()
-            .cloned()
-            .map(|symbol| (Role::DeviceFfiExport, symbol)),
-    );
-    entries.extend(
-        module
-            .internal_helpers()
-            .iter()
-            .cloned()
-            .map(|symbol| (Role::InternalHelper, symbol)),
-    );
-    entries.extend(
-        module
-            .external_declarations()
-            .iter()
-            .cloned()
-            .map(|symbol| (Role::UnresolvedExternalImport, symbol)),
-    );
-    CompilerModuleSymbolManifestV1::new(entries).map_err(WorkerV2ProducerError::SymbolManifest)
+    crate::compiler_module_contract::construct_symbol_manifest(module)
+        .map_err(WorkerV2ProducerError::SymbolManifest)
 }
 
 #[cfg(feature = "qualification-oracles-test-only")]
@@ -1556,76 +1441,30 @@ fn validate_exact_target_binding(
     envelope_target: fe2o3_compiler_ffi::DeviceTargetV1,
     module: &Module,
 ) -> Result<(), WorkerV2ProducerError> {
-    let bindings = module
-        .required_capabilities
-        .iter()
-        .chain(
-            module
-                .functions
-                .iter()
-                .flat_map(|function| &function.required_capabilities),
-        )
-        .chain(
-            module
-                .kernels
-                .iter()
-                .flat_map(|kernel| &kernel.required_capabilities),
-        )
-        .filter_map(|capability| match capability {
-            TargetCapability::Extension { namespace, name }
-                if namespace == AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE =>
-            {
-                Some(name.clone())
-            }
-            _ => None,
-        })
-        .collect::<BTreeSet<_>>();
-    if bindings.is_empty() {
-        return Ok(());
-    }
-
-    let envelope_target = envelope_target.to_string();
-    if bindings.len() == 1
-        && bindings.contains(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME)
-        && envelope_target == AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME
-    {
-        return Ok(());
-    }
-
-    Err(WorkerV2ProducerError::TargetBindingMismatch {
-        module: bindings.into_iter().collect(),
-        envelope: envelope_target,
-    })
+    crate::compiler_module_contract::validate_exact_target_binding(envelope_target, module).map_err(
+        |error| WorkerV2ProducerError::TargetBindingMismatch {
+            module: error.module,
+            envelope: error.envelope,
+        },
+    )
 }
 
 fn validate_envelope_module_roles(
     envelope: &CompilerFfiEnvelopeV1,
     module: &InertCompilerModuleTextV1,
 ) -> Result<(), WorkerV2ProducerError> {
-    let symbols = envelope.directional_symbols();
-    for symbol in symbols.imports() {
-        if module
-            .external_declarations()
-            .binary_search_by(|candidate| candidate.as_str().cmp(symbol))
-            .is_err()
-        {
-            return Err(WorkerV2ProducerError::MissingExternalDeclaration(
-                symbol.to_owned(),
-            ));
+    crate::compiler_module_contract::validate_envelope_module_roles(envelope, module).map_err(
+        |error| {
+            match error {
+            crate::compiler_module_contract::CompilerModuleRoleError::MissingExternalDeclaration(
+                symbol,
+            ) => WorkerV2ProducerError::MissingExternalDeclaration(symbol),
+            crate::compiler_module_contract::CompilerModuleRoleError::MissingCompilerDefinition(
+                symbol,
+            ) => WorkerV2ProducerError::MissingCompilerDefinition(symbol),
         }
-    }
-    for symbol in symbols.exports() {
-        if module
-            .device_ffi_exports()
-            .binary_search_by(|candidate| candidate.as_str().cmp(symbol))
-            .is_err()
-        {
-            return Err(WorkerV2ProducerError::MissingCompilerDefinition(
-                symbol.to_owned(),
-            ));
-        }
-    }
-    Ok(())
+        },
+    )
 }
 
 #[derive(Debug)]
@@ -1633,7 +1472,6 @@ pub(crate) enum WorkerV2ProducerError {
     MissingBuildAttempt,
     #[cfg(feature = "qualification-oracles-test-only")]
     MissingCompilerFfiEnvelope,
-    MissingProductionBindings,
     #[cfg(feature = "qualification-oracles-test-only")]
     MissingScalarFrontendAuthority,
     #[cfg(feature = "qualification-oracles-test-only")]
@@ -1692,9 +1530,6 @@ impl fmt::Display for WorkerV2ProducerError {
             Self::MissingCompilerFfiEnvelope => {
                 formatter.write_str("kernel-ir-worker-v2 requires a complete compiler FFI envelope")
             }
-            Self::MissingProductionBindings => formatter.write_str(
-                "production-v1 Worker V2 handoff lost its exact LLVM identity binding",
-            ),
             #[cfg(feature = "qualification-oracles-test-only")]
             Self::MissingScalarFrontendAuthority => formatter.write_str(
                 "scalar GEMM compiler-module handoff lost its embedded frontend authority",
@@ -1839,8 +1674,7 @@ impl Error for WorkerV2ProducerError {
             | Self::MoeTop2ClosureMismatch
             | Self::UnsupportedWaveMode { .. }
             | Self::ConflictingWorkgroupSize { .. } => None,
-            Self::MissingProductionBindings
-            | Self::MissingExternalDeclaration(_)
+            Self::MissingExternalDeclaration(_)
             | Self::MissingCompilerDefinition(_)
             | Self::TargetBindingMismatch { .. } => None,
         }
