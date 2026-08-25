@@ -29,6 +29,7 @@ use rustc_span::Span;
 use rustc_target::callconv::FnAbi;
 
 use crate::collector::CollectedFunctionRole;
+use crate::production_rustc_drop_v1::{ProductionRustcDropClassV1, classify_rustc_drop_v1};
 use crate::production_semantic_terminal_v1::{
     ProductionSemanticTerminalRuleV1, ProductionTerminalExpansionV1,
 };
@@ -973,7 +974,22 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                 self.inspect_place(*destination, site)
             }
             TerminatorKind::TailCall { .. } => Err(reject("TailCall terminator", site)),
-            TerminatorKind::Drop { .. } => Err(reject("Drop terminator", site)),
+            TerminatorKind::Drop { place, unwind, .. } => {
+                if !matches!(unwind, UnwindAction::Continue | UnwindAction::Unreachable) {
+                    return Err(reject("drop with executable unwind edge", site));
+                }
+                self.inspect_place(*place, site)?;
+                match classify_rustc_drop_v1(self.tcx, self.instance, self.body, *place) {
+                    Ok(ProductionRustcDropClassV1::Trivial) => Ok(()),
+                    Ok(ProductionRustcDropClassV1::RequiresDropGlue) => {
+                        Err(reject("Drop terminator requiring drop glue", site))
+                    }
+                    Err(_) => Err(reject(
+                        "Drop place type that failed monomorphic normalization",
+                        site,
+                    )),
+                }
+            }
             TerminatorKind::Assert {
                 cond, msg, unwind, ..
             } => {
@@ -1139,7 +1155,7 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                     self.queue_type(&mut pending, *element)?;
                 }
                 TyKind::Slice(element) => self.queue_type(&mut pending, *element)?,
-                TyKind::Str => return Err(reject("str type", site)),
+                TyKind::Str => {}
                 TyKind::Pat(..) => return Err(reject("pattern type", site)),
                 TyKind::Foreign(..) => return Err(reject("foreign type", site)),
                 TyKind::FnPtr(signature, _) => {

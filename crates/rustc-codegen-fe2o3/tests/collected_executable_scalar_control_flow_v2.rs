@@ -4441,9 +4441,12 @@ fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
     let exact_output = TestOutputDir::new(&workspace);
     let exact = compile_row_softmax_direct(&workspace, backend, &exact_output, ROW_SOFTMAX_FIXTURE);
     let exact_stderr = stderr(&exact);
+    let protected_admission_failed_closed = exact_stderr
+        .contains("requires a managed FE2O3_BUILD_ATTEMPT_V1")
+        || exact_stderr.contains("cannot admit canonical fd 199 as a sealed V3 capability");
     assert!(
         !exact.status.success()
-            && exact_stderr.contains("requires a managed FE2O3_BUILD_ATTEMPT_V1")
+            && protected_admission_failed_closed
             && !exact_stderr.contains("consumed its private single-use frontend receipt")
             && !exact_stderr.contains("selected canonical Kernel IR module"),
         "direct rustc minted row-softmax authority:\n{exact_stderr}"

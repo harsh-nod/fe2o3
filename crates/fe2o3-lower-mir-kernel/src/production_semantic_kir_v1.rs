@@ -3563,6 +3563,12 @@ struct SemanticEnumPayloadSourceV1 {
 }
 
 #[derive(Clone, Debug)]
+struct SemanticEnumPayloadCustodyV1 {
+    source_block: SemanticBlockIdV1,
+    binding: SemanticValueBindingV1,
+}
+
+#[derive(Clone, Debug)]
 enum SemanticEnumPayloadRestoreV1 {
     PrivateStorage(SemanticEnumPayloadFieldStorageV1),
     UniqueSource(SemanticValueBindingV1),
@@ -3587,8 +3593,7 @@ enum SemanticValueBindingV1 {
         discriminant_ty: Type,
         semantic_type: SemanticTypeIdV1,
         variant: Option<u32>,
-        payload_variant: Option<u32>,
-        fields: Vec<SemanticValueBindingV1>,
+        payloads: BTreeMap<u32, Vec<SemanticValueBindingV1>>,
     },
     MathContext,
     CollectiveContext,
@@ -3651,13 +3656,12 @@ enum SemanticValueBindingV1 {
 
 fn project_enum_payload_field(
     selected_variant: u32,
-    payload_variant: Option<u32>,
-    fields: &[SemanticValueBindingV1],
+    payloads: &BTreeMap<u32, Vec<SemanticValueBindingV1>>,
     field: u32,
 ) -> Result<SemanticValueBindingV1, &'static str> {
-    if payload_variant != Some(selected_variant) {
+    let Some(fields) = payloads.get(&selected_variant) else {
         return Ok(SemanticValueBindingV1::Unmaterialized);
-    }
+    };
     fields
         .get(field as usize)
         .cloned()
@@ -3702,12 +3706,12 @@ fn semantic_binding_can_restore_from_unique_source_v1(binding: &SemanticValueBin
         | SemanticValueBindingV1::IndexWitness { .. }
         | SemanticValueBindingV1::GridLeader { .. }
         | SemanticValueBindingV1::ComponentWitness { .. } => true,
-        SemanticValueBindingV1::Aggregate(_) => binding
-            .values()
-            .is_ok_and(|components| components.is_empty()),
+        SemanticValueBindingV1::Aggregate(fields) => fields
+            .iter()
+            .all(semantic_binding_can_restore_from_unique_source_v1),
+        SemanticValueBindingV1::Value { .. } => true,
         SemanticValueBindingV1::Unmaterialized
         | SemanticValueBindingV1::Enum { .. }
-        | SemanticValueBindingV1::Value { .. }
         | SemanticValueBindingV1::OptionPointer { .. }
         | SemanticValueBindingV1::OptionIndexWitness { .. }
         | SemanticValueBindingV1::OptionComponentWitness { .. }
@@ -3722,14 +3726,20 @@ fn reauthenticate_capabilities_from_enum_payload_v1(
 ) {
     let availability = SemanticCapabilityAvailabilityV1::EnumPayload { local, variant };
     match binding {
-        SemanticValueBindingV1::Aggregate(fields)
-        | SemanticValueBindingV1::Enum {
-            variant: Some(_),
-            fields,
-            ..
-        } => {
+        SemanticValueBindingV1::Aggregate(fields) => {
             for field in fields {
                 reauthenticate_capabilities_from_enum_payload_v1(field, local, variant);
+            }
+        }
+        SemanticValueBindingV1::Enum {
+            variant: Some(selected),
+            payloads,
+            ..
+        } => {
+            if let Some(fields) = payloads.get_mut(selected) {
+                for field in fields {
+                    reauthenticate_capabilities_from_enum_payload_v1(field, local, variant);
+                }
             }
         }
         SemanticValueBindingV1::IndexWitness {
@@ -3931,7 +3941,8 @@ struct SemanticFunctionLoweringV1<'a> {
     enum_payload_dominance: SemanticEnumPayloadDominanceV1,
     enum_payload_storage: BTreeMap<(u32, u32, u32), SemanticEnumPayloadFieldStorageV1>,
     enum_payload_sources: BTreeMap<(u32, u32, u32), SemanticEnumPayloadSourceV1>,
-    enum_payload_compile_time_custody: BTreeMap<(u32, u32, u32), SemanticValueBindingV1>,
+    enum_payload_requires_compile_time_custody: BTreeSet<(u32, u32, u32)>,
+    enum_payload_compile_time_custody: BTreeMap<(u32, u32, u32), SemanticEnumPayloadCustodyV1>,
     enum_payload_allocas_emitted: bool,
     control_flow_ssa: SemanticControlFlowSsaPlanV1,
     promoted_enum_variant_by_block: BTreeMap<(u32, u32), u32>,
@@ -4002,13 +4013,14 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             block_parameters.insert(block, parameters);
         }
         let enum_payload_sources = plan_unique_enum_payload_sources_v1(function, &control_flow_ssa);
-        let enum_payload_storage = plan_enum_payload_storage_v1(
-            types,
-            function,
-            &control_flow_ssa,
-            &enum_payload_sources,
-            &mut next_value,
-        )?;
+        let (enum_payload_storage, enum_payload_requires_compile_time_custody) =
+            plan_enum_payload_storage_v1(
+                types,
+                function,
+                &control_flow_ssa,
+                &enum_payload_sources,
+                &mut next_value,
+            )?;
         Ok(Self {
             types,
             callables,
@@ -4018,6 +4030,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             enum_payload_dominance,
             enum_payload_storage,
             enum_payload_sources,
+            enum_payload_requires_compile_time_custody,
             enum_payload_compile_time_custody: BTreeMap::new(),
             enum_payload_allocas_emitted: false,
             control_flow_ssa,
@@ -4194,19 +4207,34 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 .enum_payload_compile_time_custody
                 .get(&key)
                 .cloned()
-                .filter(semantic_binding_can_restore_from_unique_source_v1);
-            if let Some(source) = compile_time_custody {
-                restorations.push(SemanticEnumPayloadRestoreV1::UniqueSource(source));
+                .filter(|custody| {
+                    custody.source_block != block
+                        && self
+                            .enum_payload_dominance
+                            .block_dominates(custody.source_block, block)
+                        && semantic_binding_can_restore_from_unique_source_v1(&custody.binding)
+                });
+            if let Some(custody) = compile_time_custody {
+                restorations.push(SemanticEnumPayloadRestoreV1::UniqueSource(custody.binding));
             } else if let Some(storage) = storage {
                 restorations.push(SemanticEnumPayloadRestoreV1::PrivateStorage(storage));
+            } else if self
+                .enum_payload_requires_compile_time_custody
+                .contains(&key)
+            {
+                return Err(unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "non-storable enum payload source does not strictly dominate its refined use",
+                ));
             } else {
                 self.locals[local as usize] = Some(SemanticValueBindingV1::Enum {
                     discriminant,
                     discriminant_ty,
                     semantic_type,
                     variant: None,
-                    payload_variant: None,
-                    fields: Vec::new(),
+                    payloads: BTreeMap::new(),
                 });
                 return Ok(());
             }
@@ -4272,8 +4300,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             discriminant_ty,
             semantic_type,
             variant: Some(variant),
-            payload_variant: Some(variant),
-            fields,
+            payloads: BTreeMap::from([(variant, fields)]),
         });
         Ok(())
     }
@@ -4844,8 +4871,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     discriminant_ty,
                     semantic_type: result_type,
                     variant: Some(*variant),
-                    payload_variant: Some(*variant),
-                    fields,
+                    payloads: BTreeMap::from([(*variant, fields)]),
                 })
             }
             SemanticRvalueKindV1::Aggregate(aggregate)
@@ -4947,8 +4973,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         discriminant_ty,
                         semantic_type: constant.ty(),
                         variant: Some(variant),
-                        payload_variant: Some(variant),
-                        fields: Vec::new(),
+                        payloads: BTreeMap::from([(variant, Vec::new())]),
                     });
                 }
                 if let SemanticConstantValueV1::Bytes(bytes) = constant.value() {
@@ -5425,8 +5450,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     discriminant_ty,
                     semantic_type: ty,
                     variant: Some(variant_index),
-                    payload_variant: Some(variant_index),
-                    fields,
+                    payloads: BTreeMap::from([(variant_index, fields)]),
                 })
             }
             SemanticTypeShapeV1::Never
@@ -6877,6 +6901,52 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     "checked strided view Result has no unique error payload",
                 )
             })?;
+        let (error_discriminant_type, error_variants) =
+            semantic_enum_shape(self.types, error_type)?;
+        // Provider-bound checked views end in InvalidStride, ExtentOverflow,
+        // and OutOfBounds; preceding unit variants describe statically
+        // impossible element-layout failures.
+        let out_of_bounds_field_types = error_variants
+            .last()
+            .map(|variant| {
+                variant
+                    .fields()
+                    .fields()
+                    .iter()
+                    .map(|field| lower_scalar_type(self.types, *field))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?;
+        if error_variants.len() < 3
+            || error_variants[..error_variants.len() - 3]
+                .iter()
+                .any(|variant| !variant.fields().fields().is_empty())
+            || !error_variants[error_variants.len() - 3]
+                .fields()
+                .fields()
+                .is_empty()
+            || !error_variants[error_variants.len() - 2]
+                .fields()
+                .fields()
+                .is_empty()
+            || error_variants[error_variants.len() - 1]
+                .fields()
+                .fields()
+                .len()
+                != 2
+            || !matches!(out_of_bounds_field_types.as_deref(), Some([first, second])
+                if (first == &Type::INDEX
+                    || index_and_u64_are_transport_equivalent(&Type::INDEX, first))
+                    && (second == &Type::INDEX
+                        || index_and_u64_are_transport_equivalent(&Type::INDEX, second)))
+        {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "checked strided view error type does not match the provider-bound unit/unit/out-of-bounds tail",
+            ));
+        }
         let discriminant_ty = lower_scalar_type(self.types, discriminant_type)?;
         let ok_discriminant = self.emit_id(
             operations,
@@ -6903,6 +6973,74 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 false_value: error_discriminant,
             },
         )?;
+        let error_discriminant_ty = lower_scalar_type(self.types, error_discriminant_type)?;
+        let invalid_stride_variant = error_variants.len() - 3;
+        let extent_overflow_variant = error_variants.len() - 2;
+        let out_of_bounds_variant = error_variants.len() - 1;
+        let error_discriminant = |this: &mut Self,
+                                  operations: &mut Vec<Operation>,
+                                  variant: usize|
+         -> Result<ValueId, ProductionSemanticKirErrorV1> {
+            this.emit_id(
+                operations,
+                error_discriminant_ty.clone(),
+                OperationKind::Constant(integer_constant(
+                    &error_discriminant_ty,
+                    error_variants[variant].discriminant(),
+                )?),
+            )
+        };
+        let invalid_stride_discriminant =
+            error_discriminant(self, operations, invalid_stride_variant)?;
+        let extent_overflow_discriminant =
+            error_discriminant(self, operations, extent_overflow_variant)?;
+        let out_of_bounds_discriminant =
+            error_discriminant(self, operations, out_of_bounds_variant)?;
+        let arithmetic_error_discriminant = self.emit_id(
+            operations,
+            error_discriminant_ty.clone(),
+            OperationKind::Select {
+                condition: arithmetic_safe,
+                true_value: out_of_bounds_discriminant,
+                false_value: extent_overflow_discriminant,
+            },
+        )?;
+        let selected_error_discriminant = self.emit_id(
+            operations,
+            error_discriminant_ty.clone(),
+            OperationKind::Select {
+                condition: stride_valid,
+                true_value: arithmetic_error_discriminant,
+                false_value: invalid_stride_discriminant,
+            },
+        )?;
+        let [required_field_ty, actual_field_ty] = out_of_bounds_field_types
+            .as_deref()
+            .expect("validated checked-view out-of-bounds payload")
+        else {
+            unreachable!("validated checked-view out-of-bounds payload has two fields")
+        };
+        let retain_index = |this: &mut Self,
+                            operations: &mut Vec<Operation>,
+                            value: ValueId,
+                            target: &Type|
+         -> Result<ValueId, ProductionSemanticKirErrorV1> {
+            if target == &Type::INDEX {
+                Ok(value)
+            } else {
+                this.emit_id(
+                    operations,
+                    target.clone(),
+                    OperationKind::Cast {
+                        kind: CastKind::Bitcast,
+                        value,
+                        to: target.clone(),
+                    },
+                )
+            }
+        };
+        let required_payload = retain_index(self, operations, required, required_field_ty)?;
+        let actual_payload = retain_index(self, operations, length, actual_field_ty)?;
         let view = SemanticValueBindingV1::Aggregate(vec![
             SemanticValueBindingV1::Value {
                 id: bits,
@@ -6925,13 +7063,36 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 ty: Type::INDEX,
             },
         ]);
+        let mut error_payloads = BTreeMap::new();
+        for variant in 0..error_variants.len() - 1 {
+            error_payloads.insert(variant as u32, Vec::new());
+        }
+        error_payloads.insert(
+            out_of_bounds_variant as u32,
+            vec![
+                SemanticValueBindingV1::Value {
+                    id: required_payload,
+                    ty: required_field_ty.clone(),
+                },
+                SemanticValueBindingV1::Value {
+                    id: actual_payload,
+                    ty: actual_field_ty.clone(),
+                },
+            ],
+        );
+        let error = SemanticValueBindingV1::Enum {
+            discriminant: selected_error_discriminant,
+            discriminant_ty: error_discriminant_ty,
+            semantic_type: error_type,
+            variant: None,
+            payloads: error_payloads,
+        };
         Ok(SemanticValueBindingV1::Enum {
             discriminant,
             discriminant_ty,
             semantic_type: result_type,
             variant: None,
-            payload_variant: Some(ok_variant),
-            fields: vec![view],
+            payloads: BTreeMap::from([(ok_variant, vec![view]), (error_variant, vec![error])]),
         })
     }
 
@@ -8370,27 +8531,34 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         let SemanticValueBindingV1::Enum {
             variant: Some(variant),
-            fields,
+            payloads,
             ..
         } = value
         else {
             return Ok(());
         };
+        let Some(fields) = payloads.get(variant) else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "variant-refined enum has no retained payload",
+            ));
+        };
         for (field, binding) in fields.iter().enumerate() {
-            let Some(storage) = self
-                .enum_payload_storage
-                .get(&(local.index(), *variant, field as u32))
-                .cloned()
-            else {
-                continue;
-            };
             let key = (local.index(), *variant, field as u32);
             if self.enum_payload_sources.contains_key(&key)
                 && semantic_binding_can_restore_from_unique_source_v1(binding)
             {
                 if self
                     .enum_payload_compile_time_custody
-                    .insert(key, binding.clone())
+                    .insert(
+                        key,
+                        SemanticEnumPayloadCustodyV1 {
+                            source_block: block,
+                            binding: binding.clone(),
+                        },
+                    )
                     .is_some()
                 {
                     return Err(unsupported(
@@ -8402,6 +8570,20 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 }
                 continue;
             }
+            if self
+                .enum_payload_requires_compile_time_custody
+                .contains(&key)
+            {
+                return Err(unsupported(
+                    0,
+                    Some(block.index()),
+                    statement,
+                    "non-storable enum payload cannot be retained from its unique source",
+                ));
+            }
+            let Some(storage) = self.enum_payload_storage.get(&key).cloned() else {
+                continue;
+            };
             let values = match storage.exact_enum_variant {
                 Some(expected_variant) => {
                     exact_enum_binding_values_v1(binding, expected_variant)
@@ -8636,8 +8818,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         discriminant_ty,
                         semantic_type,
                         variant,
-                        payload_variant,
-                        fields,
+                        payloads,
                     },
                     SemanticProjectionKindV1::Downcast(expected),
                 ) => {
@@ -8654,21 +8835,19 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         discriminant_ty,
                         semantic_type,
                         variant: Some(expected),
-                        payload_variant,
-                        fields,
+                        payloads,
                     }
                 }
                 (
                     SemanticValueBindingV1::Enum {
                         variant: Some(variant),
-                        payload_variant,
-                        fields,
+                        payloads,
                         ..
                     },
                     SemanticProjectionKindV1::Field(field),
                 ) => {
-                    let projected =
-                        project_enum_payload_field(variant, payload_variant, &fields, field);
+                    let available_fields = payloads.get(&variant).map_or(0, Vec::len);
+                    let projected = project_enum_payload_field(variant, &payloads, field);
                     if matches!(
                         projected,
                         Ok(SemanticValueBindingV1::Unmaterialized) | Err(_)
@@ -8680,7 +8859,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                             local: place.local().index(),
                             variant,
                             field,
-                            available_fields: fields.len(),
+                            available_fields,
                             evidence: self.enum_carrier_evidence_v1(place.local()),
                         });
                     }
@@ -9570,10 +9749,14 @@ fn plan_enum_payload_storage_v1(
     sources: &BTreeMap<(u32, u32, u32), SemanticEnumPayloadSourceV1>,
     next_value: &mut u32,
 ) -> Result<
-    BTreeMap<(u32, u32, u32), SemanticEnumPayloadFieldStorageV1>,
+    (
+        BTreeMap<(u32, u32, u32), SemanticEnumPayloadFieldStorageV1>,
+        BTreeSet<(u32, u32, u32)>,
+    ),
     ProductionSemanticKirErrorV1,
 > {
     let mut storage = BTreeMap::new();
+    let mut requires_compile_time_custody = BTreeSet::new();
     let mut component_count = 0_usize;
     for (local, promoted) in &control_flow_ssa.promoted {
         let declaration = types
@@ -9606,6 +9789,21 @@ fn plan_enum_payload_storage_v1(
                     }) => continue,
                     Err(error) => return Err(error),
                 };
+                if component_types
+                    .iter()
+                    .any(|(_, kernel_type)| !kernel_type.is_storable())
+                {
+                    if sources.contains_key(&key) {
+                        requires_compile_time_custody.insert(key);
+                        continue;
+                    }
+                    return Err(unsupported(
+                        0,
+                        None,
+                        None,
+                        "enum payload component is not storable in private memory and has no unique source",
+                    ));
+                }
                 for (component_type, kernel_type) in component_types {
                     component_count = component_count.checked_add(1).ok_or_else(|| {
                         unsupported(0, None, None, "enum payload storage count overflow")
@@ -9616,14 +9814,6 @@ fn plan_enum_payload_storage_v1(
                             None,
                             None,
                             "enum payload storage exceeds the component limit",
-                        ));
-                    }
-                    if !kernel_type.is_storable() {
-                        return Err(unsupported(
-                            0,
-                            None,
-                            None,
-                            "enum payload component is not storable in private memory",
                         ));
                     }
                     let alignment = types
@@ -9659,7 +9849,7 @@ fn plan_enum_payload_storage_v1(
             }
         }
     }
-    Ok(storage)
+    Ok((storage, requires_compile_time_custody))
 }
 
 fn plan_unique_enum_payload_sources_v1(
@@ -9798,7 +9988,7 @@ fn exact_enum_binding_values_v1(
         discriminant,
         discriminant_ty,
         variant: Some(actual_variant),
-        fields,
+        payloads,
         ..
     } = binding
     else {
@@ -9807,6 +9997,9 @@ fn exact_enum_binding_values_v1(
     if *actual_variant != expected_variant {
         return Err("exact enum payload source variant changed");
     }
+    let fields = payloads
+        .get(actual_variant)
+        .ok_or("exact enum payload source fields are unavailable")?;
     let mut values = vec![(*discriminant, discriminant_ty.clone())];
     for field in fields {
         field.append_values(&mut values)?;
@@ -9862,8 +10055,7 @@ fn binding_from_exact_enum_value_defs_v1(
         discriminant_ty: discriminant.ty.clone(),
         semantic_type,
         variant: Some(variant),
-        payload_variant: Some(variant),
-        fields,
+        payloads: BTreeMap::from([(variant, fields)]),
     })
 }
 
@@ -9930,8 +10122,7 @@ fn binding_from_value_defs_with_validation(
                     discriminant_ty: value.ty.clone(),
                     semantic_type: ty,
                     variant: None,
-                    payload_variant: None,
-                    fields: Vec::new(),
+                    payloads: BTreeMap::new(),
                 })
             }
             SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_) => {
@@ -11595,20 +11786,32 @@ mod resource_tests {
     }
 
     #[test]
-    fn semantic_result_err_projection_cannot_reuse_ok_view_storage() {
+    fn semantic_result_projection_selects_only_the_downcast_variant_payload() {
         let ok_view = SemanticValueBindingV1::Value {
             id: ValueId(17),
             ty: Type::INDEX,
         };
+        let error = SemanticValueBindingV1::Value {
+            id: ValueId(18),
+            ty: Type::Scalar(ScalarType::U32),
+        };
+        let payloads = BTreeMap::from([(0, vec![ok_view]), (1, vec![error])]);
 
         assert!(matches!(
-            project_enum_payload_field(0, Some(0), std::slice::from_ref(&ok_view), 0),
+            project_enum_payload_field(0, &payloads, 0),
             Ok(SemanticValueBindingV1::Value {
                 id: ValueId(17),
                 ..
             })
         ));
-        let unavailable = project_enum_payload_field(1, Some(0), &[ok_view], 0).unwrap();
+        assert!(matches!(
+            project_enum_payload_field(1, &payloads, 0),
+            Ok(SemanticValueBindingV1::Value {
+                id: ValueId(18),
+                ..
+            })
+        ));
+        let unavailable = project_enum_payload_field(2, &payloads, 0).unwrap();
         assert!(matches!(
             unavailable,
             SemanticValueBindingV1::Unmaterialized
