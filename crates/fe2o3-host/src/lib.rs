@@ -16,6 +16,7 @@ mod generated_moe_expert_v1;
 mod generated_moe_expert_v2;
 mod generated_moe_top2_v1;
 mod generated_row_softmax_v1;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_scalar_gemm_v1;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_vecadd;
@@ -259,6 +260,7 @@ pub use generated_scalar_gemm_v1::{
     ScalarGemmV1PhysicalKernargError, ScalarGemmV1ProfileError,
 };
 #[doc(hidden)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_scalar_gemm_v1::{
     GeneratedScalarGemmV1ReadDeviceSlice, GeneratedScalarGemmV1ReadWriteDeviceSlice,
 };
@@ -464,7 +466,8 @@ pub mod __generated {
         GeneratedAlphaZetaCov6PrepareResultV1, GeneratedAlphaZetaCov6PreparedInvocationV1,
         GeneratedScalarGemmV1ArgumentBinding, GeneratedScalarGemmV1Completion,
         GeneratedScalarGemmV1PrepareError, GeneratedScalarGemmV1PrepareResult,
-        GeneratedScalarGemmV1PreparedInvocation, GeneratedWorkerV2VecAddBindError,
+        GeneratedScalarGemmV1PreparedInvocation, GeneratedScalarGemmV1ReadDeviceSlice,
+        GeneratedScalarGemmV1ReadWriteDeviceSlice, GeneratedWorkerV2VecAddBindError,
         GeneratedWorkerV2VecAddCompletionV1, GeneratedWorkerV2VecAddExecutorV1,
         GeneratedWorkerV2VecAddPrepareError, GeneratedWorkerV2VecAddPreparedV1,
         ScalarGemmV1ArgumentError, ScalarGemmV1DispatchIdentity, ScalarGemmV1GeometryError,
@@ -486,8 +489,7 @@ pub mod __generated {
         GeneratedKernelProfileError, GeneratedLdsGemmSlice1HostAdapterErrorV1,
         GeneratedLdsGemmSlice1HostAdapterV1, GeneratedMarkerBindingError,
         GeneratedPackingComponentKindV1, GeneratedPackingComponentV1, GeneratedReadDeviceSlice,
-        GeneratedReadWriteDeviceSlice, GeneratedScalarGemmV1ReadDeviceSlice,
-        GeneratedScalarGemmV1ReadWriteDeviceSlice, GeneratedSliceArgumentPairV1,
+        GeneratedReadWriteDeviceSlice, GeneratedSliceArgumentPairV1,
         GeneratedWorkerV3ArgumentBindingV1, GeneratedWorkerV3ArgumentErrorV1,
         GeneratedWorkerV3PrepareErrorV1, GeneratedWorkerV3PreparedInvocationV1,
         GeneratedWriteDeviceSlice, LoadedKernelLoadError,

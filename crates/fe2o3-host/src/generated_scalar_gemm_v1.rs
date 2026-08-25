@@ -1145,6 +1145,7 @@ mod worker_v2 {
     impl std::error::Error for ScalarGemmV1GeometryError {}
     impl std::error::Error for ScalarGemmV1PhysicalKernargError {}
 
+    #[cfg(any(test, feature = "hardware-test-hooks"))]
     pub(crate) fn scalar_gemm_v1_test_abi() -> AbiLayout {
         let scalar_u32 = |name: &str, offset: u64| {
             AbiField::new(
@@ -1217,6 +1218,7 @@ mod worker_v2 {
         .unwrap()
     }
 
+    #[cfg(any(test, feature = "hardware-test-hooks"))]
     pub(crate) fn scalar_gemm_v1_test_launch() -> LaunchContract {
         LaunchContract::new(
             1,
@@ -1895,5 +1897,5 @@ pub use worker_v2::{
     ScalarGemmV1ArgumentError, ScalarGemmV1DispatchIdentity, ScalarGemmV1GeometryError,
     ScalarGemmV1PhysicalKernargError, ScalarGemmV1ProfileError,
 };
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(any(test, feature = "hardware-test-hooks"))]
 pub(crate) use worker_v2::{scalar_gemm_v1_test_abi, scalar_gemm_v1_test_launch};

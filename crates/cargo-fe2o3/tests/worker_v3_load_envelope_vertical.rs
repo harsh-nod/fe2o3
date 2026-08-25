@@ -24,8 +24,7 @@ use fe2o3_artifacts::{
 use fe2o3_core::{DeviceBuffer, GpuContext};
 use fe2o3_device::KernelMarkerV1;
 use fe2o3_host::__generated::{
-    GeneratedScalarGemmV1ReadDeviceSlice, GeneratedScalarGemmV1ReadWriteDeviceSlice,
-    load_admitted_worker_v3_application_v1,
+    GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice, load_admitted_worker_v3_application_v1,
 };
 use fe2o3_host::{
     __hardware_test::{
@@ -1114,9 +1113,9 @@ fn synthetic_verifier_executes_real_scalar_gemm_through_strict_v3() {
     {
         let (_left, output, _right) = guarded.split_range_mut(1..1 + expected.len()).unwrap();
         let arguments = scalar_gemm_v1_gpu::Arguments::new(
-            GeneratedScalarGemmV1ReadDeviceSlice::new(&observed, &a).unwrap(),
-            GeneratedScalarGemmV1ReadDeviceSlice::new(&observed, &b).unwrap(),
-            GeneratedScalarGemmV1ReadWriteDeviceSlice::from_view_mut(&observed, output).unwrap(),
+            GeneratedReadDeviceSlice::new(&observed, &a).unwrap(),
+            GeneratedReadDeviceSlice::new(&observed, &b).unwrap(),
+            GeneratedReadWriteDeviceSlice::from_view_mut(&observed, output).unwrap(),
             M,
             N,
             K,

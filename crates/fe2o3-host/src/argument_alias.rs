@@ -222,11 +222,12 @@ impl GeneratedDeviceSliceMetadata {
         observed: &ObservedContext,
         region: &R,
     ) -> Result<Self, RegionError> {
-        Self::from_region_with_empty_policy(observed, region, false)
+        Self::from_region_with_empty_policy(observed, region, true)
     }
 
     /// Retains metadata for profiles whose checked contract permits an empty
     /// selected region.
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(super) fn from_region_allow_empty<T: DeviceCopy, R: DeviceBufferRegion<T> + ?Sized>(
         observed: &ObservedContext,
         region: &R,
@@ -381,7 +382,8 @@ fn checked_device_region_impl<T>(
 ///
 /// This doc-hidden SPI owns the actual shared buffer borrow. Its admission
 /// access is fixed to [`ArgumentAccessMode::SharedRead`], and its packing helper
-/// emits the pointer and element count from that same retained buffer.
+/// emits the pointer and element count from that same retained buffer. Empty
+/// regions retain their allocation provenance and describe no memory effects.
 #[doc(hidden)]
 pub struct GeneratedReadDeviceSlice<'allocation, T: DeviceCopy> {
     pointer: DevicePtr<T>,
@@ -490,6 +492,7 @@ impl<'allocation, T: DeviceCopy> GeneratedReadDeviceSlice<'allocation, T> {
 /// This doc-hidden SPI owns the actual exclusive buffer borrow. Its admission
 /// access is fixed to [`ArgumentAccessMode::ExclusiveWrite`], and its packing
 /// helper emits the pointer and element count from that same retained buffer.
+/// Empty regions retain their allocation provenance and describe no memory effects.
 #[doc(hidden)]
 pub struct GeneratedWriteDeviceSlice<'allocation, T: DeviceCopy> {
     pointer: DevicePtr<T>,
@@ -558,7 +561,8 @@ impl<'allocation, T: DeviceCopy> GeneratedWriteDeviceSlice<'allocation, T> {
 /// This doc-hidden SPI owns the actual exclusive buffer borrow. Its admission
 /// access is distinct from write-only output and its safe packing helper binds
 /// the same retained pointer and length to an exact canonical `DisjointSlice`
-/// argument.
+/// argument. Empty regions retain their allocation provenance and describe no
+/// memory effects.
 #[doc(hidden)]
 pub struct GeneratedReadWriteDeviceSlice<'allocation, T: DeviceCopy> {
     pointer: DevicePtr<T>,
@@ -788,6 +792,11 @@ pub struct GeneratedSliceArgumentPairV1<'allocation> {
 }
 
 impl<'allocation> GeneratedSliceArgumentPairV1<'allocation> {
+    #[cfg(any(
+        test,
+        feature = "hardware-test-hooks",
+        feature = "qualification-oracles-test-only"
+    ))]
     pub(crate) const fn new(
         input: GeneratedArgumentInputV1<'allocation>,
         access: ArgumentAccess<'allocation>,
@@ -1426,7 +1435,7 @@ mod tests {
     }
 
     #[test]
-    fn profile_specific_generated_regions_admit_checked_empty_boundaries() {
+    fn generic_generated_regions_admit_checked_empty_boundaries() {
         assert_eq!(
             checked_device_region_allow_empty::<u32>(0x1000, 4, 0x1010, 0).unwrap(),
             CheckedDeviceRegion {

@@ -1384,7 +1384,11 @@ fn expand_general_typed_kernel_with_imports(
     let model = model_general_typed_signature_v1(&input, &options, kernel_binding.as_bytes())?;
     let generated_host_contract =
         GeneratedHostContractIdV3::from_bytes(*model.generated_host_contract_identity.as_bytes());
-    let generated_host_arguments = generated_general_typed_arguments_v1(&input, &model.arguments);
+    let generated_host_arguments = generated_general_typed_arguments_v1(
+        &input,
+        &model.arguments,
+        options.qualification_worker_v2,
+    );
     let generated_worker_v3_adapter = generated_worker_v3_adapter_v1(&input, &model);
     let (generated_alpha_zeta_cov6_adapter, generated_scalar_gemm_v1_adapter) =
         if options.qualification_worker_v2 {
@@ -2089,9 +2093,10 @@ struct GeneralTypedSignatureModelV1 {
 fn generated_general_typed_arguments_v1(
     input: &ItemFn,
     arguments: &[GeneralTypedArgumentKindV1],
+    qualification_worker_v2: bool,
 ) -> proc_macro2::TokenStream {
     debug_assert_eq!(input.sig.inputs.len(), arguments.len());
-    let scalar_gemm_v1 = exact_scalar_gemm_v1(input, arguments);
+    let scalar_gemm_v1 = qualification_worker_v2 && exact_scalar_gemm_v1(input, arguments);
     let fields = input
         .sig
         .inputs
@@ -5749,7 +5754,7 @@ mod tests {
         };
         let options = parse_kernel_options(quote!(typed)).unwrap();
         let model = model_general_typed_signature_v1(&mixed, &options, [0x31; 32]).unwrap();
-        let generated = generated_general_typed_arguments_v1(&mixed, &model.arguments);
+        let generated = generated_general_typed_arguments_v1(&mixed, &model.arguments, false);
         let generated_text = generated.to_string();
         assert!(!generated_text.contains("* const"));
         assert!(!generated_text.contains("* mut"));
@@ -5841,7 +5846,7 @@ mod tests {
             ) {}
         };
         let model = model_general_typed_signature_v1(&scalars, &options, [0x32; 32]).unwrap();
-        let generated = generated_general_typed_arguments_v1(&scalars, &model.arguments);
+        let generated = generated_general_typed_arguments_v1(&scalars, &model.arguments, false);
         let file: syn::File = syn::parse2(generated).unwrap();
         let arguments = file
             .items
@@ -6415,6 +6420,10 @@ mod tests {
         .to_string();
         assert!(production.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
         assert!(production.contains("prepare_worker_v3"));
+        assert!(production.contains("GeneratedReadDeviceSlice"));
+        assert!(production.contains("GeneratedReadWriteDeviceSlice"));
+        assert!(!production.contains("GeneratedScalarGemmV1ReadDeviceSlice"));
+        assert!(!production.contains("GeneratedScalarGemmV1ReadWriteDeviceSlice"));
         assert!(!production.contains("CompilerGeneratedScalarGemmV1Arguments"));
         assert!(!production.contains("prepare_generated_scalar_gemm_v1"));
 
@@ -6438,7 +6447,8 @@ mod tests {
         assert!(qualification.contains("CompilerGeneratedScalarGemmV1Arguments"));
         assert!(qualification.contains("prepare_generated_scalar_gemm_v1"));
 
-        let arguments = generated_general_typed_arguments_v1(&input, &model.arguments).to_string();
+        let arguments =
+            generated_general_typed_arguments_v1(&input, &model.arguments, true).to_string();
         let adapter = super::generated_scalar_gemm_v1_adapter(
             &input,
             &model,
@@ -7019,7 +7029,8 @@ mod tests {
         assert_eq!(field.ownership(), ArgumentOwnership::UniqueBorrow);
         assert_eq!(field.alias_class(), AliasClass::Exclusive);
 
-        let generated = generated_general_typed_arguments_v1(&input, &model.arguments).to_string();
+        let generated =
+            generated_general_typed_arguments_v1(&input, &model.arguments, false).to_string();
         for marker in [
             "pub struct GlobalMut",
             "GeneratedReadWriteDeviceSlice",
