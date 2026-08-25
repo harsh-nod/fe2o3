@@ -19,13 +19,15 @@ use fe2o3_pliron::{
     DialectRegistration, HARD_MAX_SESSION_OPERATION_TREE_ITEMS, ProductionConstructionV1,
     ProductionEffectRefinementContractV2, ProductionFunctionalRefinementAdmissionErrorV2,
     ProductionFunctionalRefinementTrustPolicyV2, ProductionGpuWriteSiteV2,
+    ProductionIeeeExceptionalValuePolicyV2, ProductionIeeeRoundingModeV2,
     ProductionNumericalContractV2, ProductionOverflowContractV2, ProductionPlironSessionV1,
     ProductionRankedBlockV1, ProductionRankedCompileErrorV1, ProductionRankedCompileErrorV2,
     ProductionRankedKernelErrorV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
     ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
     ProductionReferenceOutputSiteV2, ProductionReferenceProofV1, ProductionReferenceProofV2,
-    ProductionSemanticBinaryOpV2, ProductionSemanticExpressionErrorV2,
-    ProductionSemanticExpressionV2, ProductionSemanticScalarTypeV2, ProductionSessionErrorV1,
+    ProductionSemanticBinaryOpV2, ProductionSemanticCastV2, ProductionSemanticComparisonV2,
+    ProductionSemanticExpressionErrorV2, ProductionSemanticExpressionV2,
+    ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2, ProductionSessionErrorV1,
     ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
     compile_ranked_kernel_for_lowering_v2, normalized_effect_refinement_hash_for_kernel_v2,
     normalized_functional_refinement_formula_hash_for_kernel_v2,
@@ -999,6 +1001,7 @@ fn typed_semantic_commitments_reach_all_mandatory_v2_passes() {
         input.semantic_report().proved_reference_obligation_count(),
         1
     );
+    assert_eq!(input.semantic_report().typed_root_commitments().len(), 2);
     let summary = fe2o3_pliron::typed_semantic_obligation_summary_v2(input.kernel()).unwrap();
     assert!(summary.is_non_vacuous());
     assert_eq!(summary.expression_roots, 2);
@@ -1010,6 +1013,96 @@ fn typed_semantic_commitments_reach_all_mandatory_v2_passes() {
     assert_ne!(*reconciliation.ordered_commitments_sha256(), [0; 32]);
     assert!(!reconciliation.grants_arithmetic_interpretation_authority());
     assert!(!reconciliation.grants_target_value_authority());
+}
+
+#[test]
+fn production_materializes_the_complete_closed_typed_ssa_schema() {
+    let u32_scalar = ProductionSemanticScalarTypeV2::Integer {
+        signed: false,
+        bits: 32,
+    };
+    let f32_scalar = ProductionSemanticScalarTypeV2::Float { bits: 32 };
+    let f64_scalar = ProductionSemanticScalarTypeV2::Float { bits: 64 };
+    let condition = ProductionSemanticExpressionV2::Compare {
+        operation: ProductionSemanticComparisonV2::Equal,
+        operand_scalar: u32_scalar,
+        lhs: Box::new(ProductionSemanticExpressionV2::Constant {
+            scalar: u32_scalar,
+            bits: 1,
+        }),
+        rhs: Box::new(ProductionSemanticExpressionV2::Constant {
+            scalar: u32_scalar,
+            bits: 1,
+        }),
+    };
+    let selected = ProductionSemanticExpressionV2::Select {
+        scalar: f32_scalar,
+        condition: Box::new(condition),
+        when_true: Box::new(ProductionSemanticExpressionV2::Binary {
+            operation: ProductionSemanticBinaryOpV2::Add,
+            scalar: f32_scalar,
+            overflow: ProductionOverflowContractV2::Wrapping,
+            lhs: Box::new(ProductionSemanticExpressionV2::Constant {
+                scalar: f32_scalar,
+                bits: 1.0_f32.to_bits().into(),
+            }),
+            rhs: Box::new(ProductionSemanticExpressionV2::Constant {
+                scalar: f32_scalar,
+                bits: 2.0_f32.to_bits().into(),
+            }),
+        }),
+        when_false: Box::new(ProductionSemanticExpressionV2::Unary {
+            operation: ProductionSemanticUnaryOpV2::Negate,
+            scalar: f32_scalar,
+            operand: Box::new(ProductionSemanticExpressionV2::Constant {
+                scalar: f32_scalar,
+                bits: 3.0_f32.to_bits().into(),
+            }),
+        }),
+    };
+    let expression = ProductionSemanticExpressionV2::Cast {
+        kind: ProductionSemanticCastV2::FloatToFloat,
+        source: f32_scalar,
+        target: f64_scalar,
+        operand: Box::new(selected),
+    };
+    let contract = ProductionNumericalContractV2::ExactIeee754OperatorCongruence {
+        rounding: ProductionIeeeRoundingModeV2::NearestTiesToEven,
+        exceptional_values: ProductionIeeeExceptionalValuePolicyV2::PreserveExactBits,
+    };
+    let actual = ProductionRankedValueIdV1::new(0);
+    let expected = ProductionRankedValueIdV1::new(1);
+    let kernel = ProductionRankedKernelV1::new(
+        "complete_typed_ssa_schema",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::SemanticExpression {
+                    result: actual,
+                    expression: expression.clone(),
+                    numerical_contract: contract,
+                },
+                ProductionRankedOperationV1::SemanticExpression {
+                    result: expected,
+                    expression,
+                    numerical_contract: contract,
+                },
+                ProductionRankedOperationV1::RequireEquivalent {
+                    actual: local(actual),
+                    expected: local(expected),
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .unwrap();
+    let input = compile_ranked_kernel_for_lowering_v1(
+        construction(kernel),
+        ProductionSessionLimitsV1::default(),
+    )
+    .unwrap();
+    assert!(input.all_mandatory_reports_are_clean());
+    assert_eq!(input.semantic_report().typed_root_commitments().len(), 2);
 }
 
 #[test]

@@ -1,8 +1,10 @@
 use dialect_kernel::{
     DIALECT_NAME, MemorySpaceAttr, RankedViewOp, RankedViewType, RequireFiniteFoldOp,
     RequireFiniteRecurrenceOp, RequirePermutationGatherOp, SemanticConstantOp,
-    SemanticCoverageBindingAttr, SemanticEvaluationOrderAttr, SemanticExpressionCommitmentAttr,
-    SemanticExpressionCommitmentOp, SemanticNumericalPolicyAttr, register_dialect,
+    SemanticCoverageBindingAttr, SemanticEvaluationOrderAttr, SemanticExceptionalValueAttr,
+    SemanticExpressionCommitmentAttr, SemanticIeeeRoundingAttr, SemanticNumericalPolicyAttr,
+    SemanticScalarKindAttr, SemanticTypedConstantOp, SemanticTypedExpressionRootOp,
+    SemanticTypedScalarV1, register_dialect,
 };
 use pliron::{
     context::Context,
@@ -30,8 +32,17 @@ fn view(context: &mut Context) -> RankedViewOp {
     .unwrap()
 }
 
-fn commitment(context: &mut Context, seed: u64) -> SemanticExpressionCommitmentOp {
-    SemanticExpressionCommitmentOp::new(context, [seed, seed + 1, seed + 2, seed + 3])
+fn typed_root(context: &mut Context, seed: u64) -> SemanticTypedExpressionRootOp {
+    let scalar = SemanticTypedScalarV1::new(SemanticScalarKindAttr::UnsignedInteger, 64).unwrap();
+    let value = SemanticTypedConstantOp::new(context, seed, scalar);
+    SemanticTypedExpressionRootOp::new(
+        context,
+        value.result(context),
+        SemanticNumericalPolicyAttr::ExactBitVectorOperatorCongruence,
+        SemanticIeeeRoundingAttr::NearestTiesToEven,
+        SemanticExceptionalValueAttr::PreserveExactBits,
+        [seed, seed + 1, seed + 2, seed + 3],
+    )
 }
 
 #[test]
@@ -39,7 +50,7 @@ fn all_finite_contract_kinds_have_closed_verified_payloads() {
     let context = &mut setup();
     let view = view(context);
     let values = (1..=6)
-        .map(|seed| commitment(context, seed * 10))
+        .map(|seed| typed_root(context, seed * 10))
         .collect::<Vec<_>>();
     let fold = RequireFiniteFoldOp::new(
         context,
@@ -97,9 +108,9 @@ fn all_finite_contract_kinds_have_closed_verified_payloads() {
 fn zero_excessive_and_nonterminating_bounds_are_rejected() {
     let context = &mut setup();
     let view = view(context);
-    let actual = commitment(context, 1);
-    let identity = commitment(context, 10);
-    let operator = commitment(context, 20);
+    let actual = typed_root(context, 1);
+    let identity = typed_root(context, 10);
+    let operator = typed_root(context, 20);
     for (domain, steps) in [(0, 0), (1 << 24, (1 << 24) + 1), ((1 << 24) + 1, 1)] {
         let contract = RequireFiniteFoldOp::new(
             context,
@@ -124,8 +135,8 @@ fn zero_excessive_and_nonterminating_bounds_are_rejected() {
 fn untyped_or_open_witness_payloads_are_rejected() {
     let context = &mut setup();
     let view = view(context);
-    let actual = commitment(context, 1);
-    let identity = commitment(context, 10);
+    let actual = typed_root(context, 1);
+    let identity = typed_root(context, 10);
     let untyped_operator = SemanticConstantOp::new(context, 0);
     let contract = RequireFiniteFoldOp::new(
         context,

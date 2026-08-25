@@ -34,9 +34,15 @@ remain absence of evidence. V5 rejects any declared/proved mismatch.
 V5 also binds every counter in `ProductionTypedSemanticObligationSummaryV2`.
 While the owner-held PLIRON graph is live, construction independently walks the
 retained typed ranked recipe and the actual
-`SemanticExpressionCommitmentOp` sequence. Construction requires exact ordered
-digest equality and stores the two counts plus a domain-separated digest of the
-ordered commitments.
+`SemanticTypedExpressionRootOp` sequence reconstructed by the mandatory
+semantic pass. Construction requires exact ordered digest equality and stores
+the two counts plus a domain-separated digest of the ordered commitments.
+
+Finite collective contracts are also reconciled against those typed roots.
+Fold and recurrence results and witnesses must share one scalar and full
+numerical contract. Permutation maps and inverses must share an integer
+bitvector contract, while the gathered value roots must match the declared
+collective numerical policy.
 
 ## Authority boundary
 

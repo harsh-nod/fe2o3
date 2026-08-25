@@ -1,6 +1,10 @@
 use dialect_kernel::{
     DIALECT_NAME, RequireEquivalentOp, ReturnOp, SemanticBinaryKindAttr, SemanticBinaryOp,
-    SemanticExpressionCommitmentOp, SemanticScalarType, SemanticSymbolOp, register_dialect,
+    SemanticExceptionalValueAttr, SemanticExpressionCommitmentOp, SemanticIeeeRoundingAttr,
+    SemanticNumericalContractV1, SemanticNumericalPolicyAttr, SemanticOverflowAttr,
+    SemanticScalarKindAttr, SemanticScalarType, SemanticSymbolOp, SemanticTypedBinaryKindAttr,
+    SemanticTypedBinaryOp, SemanticTypedConstantOp, SemanticTypedExpressionRootOp,
+    SemanticTypedExpressionV1, SemanticTypedScalarV1, SemanticTypedSymbolOp, register_dialect,
 };
 use dialect_proof::{
     CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, ProofIdAttr,
@@ -65,6 +69,164 @@ fn function(context: &mut Context, name: &str, arguments: usize) -> FuncOp {
 
 fn append<O: Op>(context: &Context, block: Ptr<BasicBlock>, operation: &O) {
     operation.get_operation().insert_at_back(block, context);
+}
+
+fn digest_words(digest: [u8; 32]) -> [u64; 4] {
+    std::array::from_fn(|index| {
+        u64::from_le_bytes(digest[index * 8..(index + 1) * 8].try_into().unwrap())
+    })
+}
+
+fn exact_bitvector_contract() -> SemanticNumericalContractV1 {
+    SemanticNumericalContractV1 {
+        policy: SemanticNumericalPolicyAttr::ExactBitVectorOperatorCongruence,
+        rounding: SemanticIeeeRoundingAttr::NearestTiesToEven,
+        exceptional_values: SemanticExceptionalValueAttr::PreserveExactBits,
+    }
+}
+
+fn typed_add_expression() -> SemanticTypedExpressionV1 {
+    let scalar = SemanticTypedScalarV1::new(SemanticScalarKindAttr::UnsignedInteger, 32).unwrap();
+    SemanticTypedExpressionV1::Binary {
+        operation: SemanticTypedBinaryKindAttr::Add,
+        scalar,
+        overflow: SemanticOverflowAttr::Wrapping,
+        lhs: Box::new(SemanticTypedExpressionV1::Symbol { symbol: 7, scalar }),
+        rhs: Box::new(SemanticTypedExpressionV1::Constant { scalar, bits: 4 }),
+    }
+}
+
+fn append_typed_binary_root(
+    context: &mut Context,
+    function: &FuncOp,
+    binary_kind: SemanticTypedBinaryKindAttr,
+    rhs_scalar: SemanticTypedScalarV1,
+    contract: SemanticNumericalContractV1,
+    commitment: [u64; 4],
+) -> pliron::value::Value {
+    let entry = function.get_entry_block(context);
+    let scalar = SemanticTypedScalarV1::new(SemanticScalarKindAttr::UnsignedInteger, 32).unwrap();
+    let symbol = SemanticTypedSymbolOp::new(context, 7, scalar);
+    let constant = SemanticTypedConstantOp::new(context, 4, rhs_scalar);
+    let binary = SemanticTypedBinaryOp::new(
+        context,
+        binary_kind,
+        SemanticOverflowAttr::Wrapping,
+        scalar,
+        symbol.result(context),
+        constant.result(context),
+    );
+    let root = SemanticTypedExpressionRootOp::new(
+        context,
+        binary.result(context),
+        contract.policy,
+        contract.rounding,
+        contract.exceptional_values,
+        commitment,
+    );
+    for operation in [
+        symbol.get_operation(),
+        constant.get_operation(),
+        binary.get_operation(),
+        root.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    root.result(context)
+}
+
+#[test]
+fn typed_ssa_payload_is_reconstructed_and_hashed_by_the_mandatory_pass() {
+    let context = &mut setup();
+    let function = function(context, "typed_ssa_payload", 0);
+    let expression = typed_add_expression();
+    let contract = exact_bitvector_contract();
+    let commitment = digest_words(expression.canonical_transcript_sha256(contract));
+    let scalar = SemanticTypedScalarV1::new(SemanticScalarKindAttr::UnsignedInteger, 32).unwrap();
+    let actual = append_typed_binary_root(
+        context,
+        &function,
+        SemanticTypedBinaryKindAttr::Add,
+        scalar,
+        contract,
+        commitment,
+    );
+    let expected = append_typed_binary_root(
+        context,
+        &function,
+        SemanticTypedBinaryKindAttr::Add,
+        scalar,
+        contract,
+        commitment,
+    );
+    let entry = function.get_entry_block(context);
+    let requirement = RequireEquivalentOp::new(context, actual, expected);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &requirement);
+    append(context, entry, &ret);
+    let report = run_pliron_semantic_refinement_check_v1(context, &function);
+    assert!(report.is_clean());
+    assert_eq!(report.typed_root_commitments(), &[commitment, commitment]);
+}
+
+#[test]
+fn typed_ssa_payload_rejects_type_operator_policy_and_commitment_substitution() {
+    let scalar = SemanticTypedScalarV1::new(SemanticScalarKindAttr::UnsignedInteger, 32).unwrap();
+    let wrong_scalar =
+        SemanticTypedScalarV1::new(SemanticScalarKindAttr::UnsignedInteger, 64).unwrap();
+    let expression = typed_add_expression();
+    let exact = exact_bitvector_contract();
+    let commitment = digest_words(expression.canonical_transcript_sha256(exact));
+    let ieee = SemanticNumericalContractV1 {
+        policy: SemanticNumericalPolicyAttr::ExactIeeeNearestTiesToEvenPreserveBits,
+        ..exact
+    };
+    let cases = [
+        (
+            SemanticTypedBinaryKindAttr::Add,
+            wrong_scalar,
+            exact,
+            commitment,
+        ),
+        (
+            SemanticTypedBinaryKindAttr::Multiply,
+            scalar,
+            exact,
+            commitment,
+        ),
+        (
+            SemanticTypedBinaryKindAttr::Add,
+            scalar,
+            ieee,
+            digest_words(expression.canonical_transcript_sha256(ieee)),
+        ),
+        (
+            SemanticTypedBinaryKindAttr::Add,
+            scalar,
+            exact,
+            [
+                commitment[0] ^ 1,
+                commitment[1],
+                commitment[2],
+                commitment[3],
+            ],
+        ),
+    ];
+    for (index, (operation, rhs_scalar, contract, commitment)) in cases.into_iter().enumerate() {
+        let context = &mut setup();
+        let function = function(context, &format!("typed_substitution_{index}"), 0);
+        append_typed_binary_root(
+            context, &function, operation, rhs_scalar, contract, commitment,
+        );
+        let entry = function.get_entry_block(context);
+        let ret = ReturnOp::new(context);
+        append(context, entry, &ret);
+        let report = run_pliron_semantic_refinement_check_v1(context, &function);
+        assert!(matches!(
+            report.findings(),
+            [PlironSemanticRefinementFindingV1::TypedExpressionRejected { .. }]
+        ));
+    }
 }
 
 #[test]

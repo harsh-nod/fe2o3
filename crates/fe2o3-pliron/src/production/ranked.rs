@@ -27,8 +27,13 @@ use dialect_kernel::{
     RequireEquivalentOp, RequireFiniteFoldOp, RequireFiniteRecurrenceOp,
     RequirePermutationGatherOp, ReturnOp, SUPPORTED_ELEMENT_WIDTHS, SemanticBinaryKindAttr,
     SemanticBinaryOp, SemanticConstantOp, SemanticCoverageBindingAttr, SemanticEvaluationOrderAttr,
-    SemanticExpressionCommitmentOp, SemanticNumericalPolicyAttr, SemanticSymbolOp,
-    TensorConvergenceAttr, TensorLayoutOp, TrapOp,
+    SemanticExceptionalValueAttr, SemanticIeeeRoundingAttr, SemanticNumericalPolicyAttr,
+    SemanticOverflowAttr, SemanticScalarKindAttr, SemanticSymbolOp, SemanticTypedBinaryKindAttr,
+    SemanticTypedBinaryOp, SemanticTypedCastKindAttr, SemanticTypedCastOp,
+    SemanticTypedCompareKindAttr, SemanticTypedCompareOp, SemanticTypedConstantOp,
+    SemanticTypedExpressionRootOp, SemanticTypedScalarV1, SemanticTypedSelectOp,
+    SemanticTypedSymbolOp, SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp, TensorConvergenceAttr,
+    TensorLayoutOp, TrapOp,
 };
 use dialect_proof::{
     CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, ProofIdAttr,
@@ -59,8 +64,10 @@ use pliron::{
 };
 
 use super::{
-    ProductionNumericalContractV2, ProductionSemanticExpressionErrorV2,
-    ProductionSemanticExpressionV2,
+    ProductionIeeeExceptionalValuePolicyV2, ProductionIeeeRoundingModeV2,
+    ProductionNumericalContractV2, ProductionOverflowContractV2, ProductionSemanticBinaryOpV2,
+    ProductionSemanticCastV2, ProductionSemanticComparisonV2, ProductionSemanticExpressionErrorV2,
+    ProductionSemanticExpressionV2, ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2,
 };
 
 use super::{
@@ -1283,25 +1290,40 @@ impl ProductionRankedKernelV1 {
                 actual: self.blocks.len(),
             });
         }
+        for expression in self.blocks.iter().flat_map(|block| {
+            block
+                .operations
+                .iter()
+                .filter_map(|operation| match operation {
+                    ProductionRankedOperationV1::SemanticExpression { expression, .. } => {
+                        Some(expression)
+                    }
+                    _ => None,
+                })
+        }) {
+            expression
+                .validate()
+                .map_err(ProductionRankedKernelErrorV1::InvalidSemanticExpression)?;
+        }
         let operation_count = self.blocks.iter().try_fold(0_usize, |total, block| {
             let materialized = block
                 .operations
                 .iter()
                 .try_fold(0_usize, |count, operation| {
-                    count.checked_add(
-                        if matches!(
+                    count.checked_add(match operation {
+                        ProductionRankedOperationV1::SemanticExpression { expression, .. } => {
+                            expression.validate().ok()?.nodes.checked_add(1)?
+                        }
+                        _ if matches!(
                             operation,
                             ProductionRankedOperationV1::RequireReferenceEquivalent { .. }
                                 | ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
                                 | ProductionRankedOperationV1::RequireEffectRefinement { .. }
                                 | ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
                                 | ProductionRankedOperationV1::RequestEffectRefinement { .. }
-                        ) {
-                            3
-                        } else {
-                            1
-                        },
-                    )
+                        ) => 3,
+                        _ => 1,
+                    })
                 })?;
             total
                 .checked_add(materialized.checked_add(1)?)?
@@ -1589,11 +1611,12 @@ pub fn typed_semantic_obligation_summary_v2(
     Ok(summary)
 }
 
-/// Exact reconciliation between retained typed recipes and live PLIRON commitments.
+/// Exact reconciliation between retained typed recipes and live PLIRON typed roots.
 ///
-/// The live graph contains opaque commitments, not the typed expression trees. This
-/// record establishes only that materialization retained the same ordered canonical
-/// transcript digests. It does not interpret arithmetic or grant target-value authority.
+/// The mandatory semantic pass reconstructs the closed typed SSA trees and validates
+/// every root policy and commitment. This record establishes that materialization
+/// retained the same ordered canonical transcript digests. It does not grant
+/// target-value or lowering authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProductionTypedSemanticCommitmentReconciliationV2 {
     recipe_expression_roots: usize,
@@ -1678,16 +1701,15 @@ pub fn typed_semantic_commitment_reconciliation_v2(
     let mut actual = Vec::new();
     for block in function.get_region(context).deref(context).iter(context) {
         for operation in block.deref(context).iter(context) {
-            let Some(commitment) =
-                Operation::get_op::<SemanticExpressionCommitmentOp>(operation, context)
+            let Some(root) = Operation::get_op::<SemanticTypedExpressionRootOp>(operation, context)
             else {
                 continue;
             };
-            let words = commitment.identity(context).ok_or(
-                ProductionRankedKernelErrorV1::Materialization(
-                    "live typed semantic commitment has no canonical identity",
-                ),
-            )?;
+            let words =
+                root.commitment(context)
+                    .ok_or(ProductionRankedKernelErrorV1::Materialization(
+                        "live typed semantic root has no canonical commitment",
+                    ))?;
             let mut digest = [0_u8; 32];
             for (chunk, word) in digest.chunks_exact_mut(8).zip(words) {
                 chunk.copy_from_slice(&word.to_le_bytes());
@@ -1697,7 +1719,7 @@ pub fn typed_semantic_commitment_reconciliation_v2(
     }
     if actual != expected {
         return Err(ProductionRankedKernelErrorV1::Materialization(
-            "retained typed semantic recipes do not match live PLIRON commitments",
+            "retained typed semantic recipes do not match live PLIRON root commitments",
         ));
     }
 
@@ -3010,7 +3032,16 @@ impl ProductionPlironSessionV1 {
         let function = record
             .ranked_function
             .ok_or(ProductionSessionErrorV1::WrongConstructionKind)?;
+        let expected_typed_roots = expected_typed_root_commitments(
+            record
+                .ranked_kernel
+                .as_ref()
+                .ok_or(ProductionSessionErrorV1::WrongConstructionKind)?,
+        );
         let report = self.run_production_pipeline_guarded(function)?;
+        if report.semantics().typed_root_commitments() != expected_typed_roots {
+            return Err(ProductionSessionErrorV1::RankedGraphChanged);
+        }
         let record = self
             .constructed_roots
             .get_mut(&stage.identity)
@@ -3044,7 +3075,7 @@ impl ProductionPlironSessionV1 {
             self.poisoned = true;
             return Err(ProductionSessionErrorV1::Operation(error));
         }
-        let (expected_root, function, expected_report) = {
+        let (expected_root, function, expected_report, expected_typed_roots) = {
             let record = self
                 .constructed_roots
                 .get(&stage.identity)
@@ -3053,6 +3084,12 @@ impl ProductionPlironSessionV1 {
                 record.identity,
                 record.ranked_function,
                 record.production_pipeline_report.clone(),
+                expected_typed_root_commitments(
+                    record
+                        .ranked_kernel
+                        .as_ref()
+                        .ok_or(ProductionSessionErrorV1::WrongConstructionKind)?,
+                ),
             )
         };
         if root.stage != stage.identity
@@ -3069,6 +3106,10 @@ impl ProductionPlironSessionV1 {
                 return Err(ProductionSessionErrorV1::RankedGraphChanged);
             }
         };
+        if revalidated.semantics().typed_root_commitments() != expected_typed_roots {
+            self.poisoned = true;
+            return Err(ProductionSessionErrorV1::RankedGraphChanged);
+        }
         if expected_report.as_ref() != Some(&revalidated) {
             self.poisoned = true;
             return Err(ProductionSessionErrorV1::RankedGraphChanged);
@@ -3524,9 +3565,17 @@ fn materialize_operation(
             numerical_contract,
         } => {
             let digest = expression.canonical_transcript_sha256(*numerical_contract);
-            // The PLIRON operation is deliberately only a commitment. Typed
-            // authority remains in this retained, validated ranked recipe.
-            let op = SemanticExpressionCommitmentOp::new(context, digest_words_v2(digest));
+            let expression = materialize_typed_semantic_expression(context, block, expression)?;
+            let (policy, rounding, exceptional_values) =
+                typed_numerical_contract(*numerical_contract)?;
+            let op = SemanticTypedExpressionRootOp::new(
+                context,
+                expression,
+                policy,
+                rounding,
+                exceptional_values,
+                digest_words_v2(digest),
+            );
             (op.get_operation(), Some((*result, op.result(context))))
         }
         ProductionRankedOperationV1::CollectiveSemantics {
@@ -3805,6 +3854,247 @@ fn digest_as_proof_id(digest: DigestV1) -> [u64; 4] {
                 .expect("digest quarters have fixed width"),
         )
     })
+}
+
+fn expected_typed_root_commitments(kernel: &ProductionRankedKernelV1) -> Vec<[u64; 4]> {
+    kernel
+        .blocks
+        .iter()
+        .flat_map(|block| &block.operations)
+        .filter_map(|operation| match operation {
+            ProductionRankedOperationV1::SemanticExpression {
+                expression,
+                numerical_contract,
+                ..
+            } => Some(digest_words_v2(
+                expression.canonical_transcript_sha256(*numerical_contract),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+fn typed_scalar(
+    scalar: ProductionSemanticScalarTypeV2,
+) -> Result<SemanticTypedScalarV1, ProductionRankedKernelErrorV1> {
+    let (kind, bits) = match scalar {
+        ProductionSemanticScalarTypeV2::Bool => (SemanticScalarKindAttr::Bool, 1),
+        ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits,
+        } => (SemanticScalarKindAttr::UnsignedInteger, bits),
+        ProductionSemanticScalarTypeV2::Integer { signed: true, bits } => {
+            (SemanticScalarKindAttr::SignedInteger, bits)
+        }
+        ProductionSemanticScalarTypeV2::Float { bits } => (SemanticScalarKindAttr::Float, bits),
+    };
+    SemanticTypedScalarV1::new(kind, bits).ok_or(ProductionRankedKernelErrorV1::Materialization(
+        "validated typed semantic scalar failed PLIRON materialization",
+    ))
+}
+
+fn typed_numerical_contract(
+    contract: ProductionNumericalContractV2,
+) -> Result<
+    (
+        SemanticNumericalPolicyAttr,
+        SemanticIeeeRoundingAttr,
+        SemanticExceptionalValueAttr,
+    ),
+    ProductionRankedKernelErrorV1,
+> {
+    match contract {
+        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence => Ok((
+            SemanticNumericalPolicyAttr::ExactBitVectorOperatorCongruence,
+            SemanticIeeeRoundingAttr::NearestTiesToEven,
+            SemanticExceptionalValueAttr::PreserveExactBits,
+        )),
+        ProductionNumericalContractV2::ExactIeee754OperatorCongruence {
+            rounding,
+            exceptional_values,
+        } => Ok((
+            SemanticNumericalPolicyAttr::ExactIeeeNearestTiesToEvenPreserveBits,
+            match rounding {
+                ProductionIeeeRoundingModeV2::NearestTiesToEven => {
+                    SemanticIeeeRoundingAttr::NearestTiesToEven
+                }
+                ProductionIeeeRoundingModeV2::TowardZero => SemanticIeeeRoundingAttr::TowardZero,
+                ProductionIeeeRoundingModeV2::TowardPositive => {
+                    SemanticIeeeRoundingAttr::TowardPositive
+                }
+                ProductionIeeeRoundingModeV2::TowardNegative => {
+                    SemanticIeeeRoundingAttr::TowardNegative
+                }
+            },
+            match exceptional_values {
+                ProductionIeeeExceptionalValuePolicyV2::PreserveExactBits => {
+                    SemanticExceptionalValueAttr::PreserveExactBits
+                }
+                ProductionIeeeExceptionalValuePolicyV2::CanonicalNan => {
+                    SemanticExceptionalValueAttr::CanonicalNan
+                }
+            },
+        )),
+        ProductionNumericalContractV2::Relaxed
+        | ProductionNumericalContractV2::ErrorBounded { .. } => {
+            Err(ProductionRankedKernelErrorV1::Materialization(
+                "unsupported numerical contract reached PLIRON materialization",
+            ))
+        }
+    }
+}
+
+fn materialize_typed_semantic_expression(
+    context: &mut pliron::context::Context,
+    block: Ptr<BasicBlock>,
+    expression: &ProductionSemanticExpressionV2,
+) -> Result<Value, ProductionRankedKernelErrorV1> {
+    let operation = match expression {
+        ProductionSemanticExpressionV2::Symbol { symbol, scalar } => {
+            SemanticTypedSymbolOp::new(context, *symbol, typed_scalar(*scalar)?).get_operation()
+        }
+        ProductionSemanticExpressionV2::Constant { scalar, bits } => {
+            SemanticTypedConstantOp::new(context, *bits, typed_scalar(*scalar)?).get_operation()
+        }
+        ProductionSemanticExpressionV2::Unary {
+            operation,
+            scalar,
+            operand,
+        } => {
+            let operand = materialize_typed_semantic_expression(context, block, operand)?;
+            SemanticTypedUnaryOp::new(
+                context,
+                match operation {
+                    ProductionSemanticUnaryOpV2::Not => SemanticTypedUnaryKindAttr::Not,
+                    ProductionSemanticUnaryOpV2::Negate => SemanticTypedUnaryKindAttr::Negate,
+                },
+                typed_scalar(*scalar)?,
+                operand,
+            )
+            .get_operation()
+        }
+        ProductionSemanticExpressionV2::Binary {
+            operation,
+            scalar,
+            overflow,
+            lhs,
+            rhs,
+        } => {
+            let lhs = materialize_typed_semantic_expression(context, block, lhs)?;
+            let rhs = materialize_typed_semantic_expression(context, block, rhs)?;
+            SemanticTypedBinaryOp::new(
+                context,
+                match operation {
+                    ProductionSemanticBinaryOpV2::Add => SemanticTypedBinaryKindAttr::Add,
+                    ProductionSemanticBinaryOpV2::Subtract => SemanticTypedBinaryKindAttr::Subtract,
+                    ProductionSemanticBinaryOpV2::Multiply => SemanticTypedBinaryKindAttr::Multiply,
+                    ProductionSemanticBinaryOpV2::Divide => SemanticTypedBinaryKindAttr::Divide,
+                    ProductionSemanticBinaryOpV2::Remainder => {
+                        SemanticTypedBinaryKindAttr::Remainder
+                    }
+                    ProductionSemanticBinaryOpV2::BitXor => SemanticTypedBinaryKindAttr::BitXor,
+                    ProductionSemanticBinaryOpV2::BitAnd => SemanticTypedBinaryKindAttr::BitAnd,
+                    ProductionSemanticBinaryOpV2::BitOr => SemanticTypedBinaryKindAttr::BitOr,
+                    ProductionSemanticBinaryOpV2::ShiftLeft => {
+                        SemanticTypedBinaryKindAttr::ShiftLeft
+                    }
+                    ProductionSemanticBinaryOpV2::ShiftRight => {
+                        SemanticTypedBinaryKindAttr::ShiftRight
+                    }
+                },
+                match overflow {
+                    ProductionOverflowContractV2::Wrapping => SemanticOverflowAttr::Wrapping,
+                    ProductionOverflowContractV2::Checked => SemanticOverflowAttr::Checked,
+                },
+                typed_scalar(*scalar)?,
+                lhs,
+                rhs,
+            )
+            .get_operation()
+        }
+        ProductionSemanticExpressionV2::Compare {
+            operation,
+            operand_scalar,
+            lhs,
+            rhs,
+        } => {
+            let lhs = materialize_typed_semantic_expression(context, block, lhs)?;
+            let rhs = materialize_typed_semantic_expression(context, block, rhs)?;
+            SemanticTypedCompareOp::new(
+                context,
+                match operation {
+                    ProductionSemanticComparisonV2::Equal => SemanticTypedCompareKindAttr::Equal,
+                    ProductionSemanticComparisonV2::LessThan => {
+                        SemanticTypedCompareKindAttr::LessThan
+                    }
+                    ProductionSemanticComparisonV2::LessOrEqual => {
+                        SemanticTypedCompareKindAttr::LessOrEqual
+                    }
+                    ProductionSemanticComparisonV2::NotEqual => {
+                        SemanticTypedCompareKindAttr::NotEqual
+                    }
+                    ProductionSemanticComparisonV2::GreaterOrEqual => {
+                        SemanticTypedCompareKindAttr::GreaterOrEqual
+                    }
+                    ProductionSemanticComparisonV2::GreaterThan => {
+                        SemanticTypedCompareKindAttr::GreaterThan
+                    }
+                },
+                typed_scalar(*operand_scalar)?,
+                lhs,
+                rhs,
+            )
+            .get_operation()
+        }
+        ProductionSemanticExpressionV2::Select {
+            scalar,
+            condition,
+            when_true,
+            when_false,
+        } => {
+            let condition = materialize_typed_semantic_expression(context, block, condition)?;
+            let when_true = materialize_typed_semantic_expression(context, block, when_true)?;
+            let when_false = materialize_typed_semantic_expression(context, block, when_false)?;
+            SemanticTypedSelectOp::new(
+                context,
+                typed_scalar(*scalar)?,
+                condition,
+                when_true,
+                when_false,
+            )
+            .get_operation()
+        }
+        ProductionSemanticExpressionV2::Cast {
+            kind,
+            source,
+            target,
+            operand,
+        } => {
+            let operand = materialize_typed_semantic_expression(context, block, operand)?;
+            SemanticTypedCastOp::new(
+                context,
+                match kind {
+                    ProductionSemanticCastV2::Integer => SemanticTypedCastKindAttr::Integer,
+                    ProductionSemanticCastV2::IntegerToFloat => {
+                        SemanticTypedCastKindAttr::IntegerToFloat
+                    }
+                    ProductionSemanticCastV2::FloatToFloat => {
+                        SemanticTypedCastKindAttr::FloatToFloat
+                    }
+                    ProductionSemanticCastV2::FloatToIntegerSaturating => {
+                        SemanticTypedCastKindAttr::FloatToIntegerSaturating
+                    }
+                },
+                typed_scalar(*source)?,
+                typed_scalar(*target)?,
+                operand,
+            )
+            .get_operation()
+        }
+    };
+    let result = operation.deref(context).get_result(0);
+    operation.insert_at_back(block, context);
+    Ok(result)
 }
 
 fn authenticated_proof_ids(

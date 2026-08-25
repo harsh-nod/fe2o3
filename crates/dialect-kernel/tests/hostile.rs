@@ -7,9 +7,46 @@ use dialect_kernel::{
     IndexType, IndexValueAttr, IterationDomainAttr, KernelError, MAX_DETERMINISTIC_JOIN_INPUTS_V1,
     MAX_ITERATION_RANK, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, OwnershipContractOp,
     OwnershipCoverageAttr, OwnershipPartitionAttr, RankedAccessOp, RankedMemoryError, RankedViewOp,
-    RankedViewType, RegistrationError, RegistrationOutcome, SemanticOwner, StructuredAlgorithmOp,
-    TensorConvergenceAttr, TensorLayoutOp, register_dialect,
+    RankedViewType, RegistrationError, RegistrationOutcome, SemanticExceptionalValueAttr,
+    SemanticIeeeRoundingAttr, SemanticNumericalPolicyAttr, SemanticOverflowAttr, SemanticOwner,
+    SemanticScalarKindAttr, SemanticTypedBinaryKindAttr, SemanticTypedBinaryOp,
+    SemanticTypedConstantOp, SemanticTypedExpressionRootOp, SemanticTypedScalarV1,
+    SemanticTypedSymbolOp, StructuredAlgorithmOp, TensorConvergenceAttr, TensorLayoutOp,
+    register_dialect,
 };
+
+#[test]
+fn typed_semantic_verifiers_reject_bad_width_arity_and_ieee_policy() {
+    let context = &mut Context::new();
+    register_dialect(context, &kernel_name()).unwrap();
+    let u32_scalar =
+        SemanticTypedScalarV1::new(SemanticScalarKindAttr::UnsignedInteger, 32).unwrap();
+    let symbol = SemanticTypedSymbolOp::new(context, 1, u32_scalar);
+    let oversized = SemanticTypedConstantOp::new(context, 1_u64 << 32, u32_scalar);
+    assert!(verify_op(&oversized, context).is_err());
+
+    let constant = SemanticTypedConstantOp::new(context, 4, u32_scalar);
+    let binary = SemanticTypedBinaryOp::new(
+        context,
+        SemanticTypedBinaryKindAttr::Add,
+        SemanticOverflowAttr::Wrapping,
+        u32_scalar,
+        symbol.result(context),
+        constant.result(context),
+    );
+    Operation::remove_operand(binary.get_operation(), context, 1);
+    assert!(verify_op(&binary, context).is_err());
+
+    let bad_policy = SemanticTypedExpressionRootOp::new(
+        context,
+        symbol.result(context),
+        SemanticNumericalPolicyAttr::ExactIeeeNearestTiesToEvenPreserveBits,
+        SemanticIeeeRoundingAttr::TowardZero,
+        SemanticExceptionalValueAttr::PreserveExactBits,
+        [1, 2, 3, 4],
+    );
+    assert!(verify_op(&bad_policy, context).is_err());
+}
 use fe2o3_kernel_ir::{TensorInstructionProfileV1, TensorLayoutContractV1, TensorSymbolicMapV1};
 use pliron::{
     attribute::Attribute,

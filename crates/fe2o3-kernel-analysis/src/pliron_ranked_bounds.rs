@@ -19,7 +19,10 @@ use dialect_kernel::{
     MAX_RANKED_MEMORY_RANK, OwnershipContractOp, RankedAccessOp, RankedViewOp, RankedViewType,
     RequireEquivalentOp, RequireFiniteFoldOp, RequireFiniteRecurrenceOp,
     RequirePermutationGatherOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp,
-    SemanticExpressionCommitmentOp, SemanticSymbolOp, TensorLayoutOp, TrapOp, ranked_view_type,
+    SemanticExpressionCommitmentOp, SemanticSymbolOp, SemanticTypedBinaryOp, SemanticTypedCastOp,
+    SemanticTypedCompareOp, SemanticTypedConstantOp, SemanticTypedExpressionRootOp,
+    SemanticTypedSelectOp, SemanticTypedSymbolOp, SemanticTypedUnaryOp, TensorLayoutOp, TrapOp,
+    ranked_view_type,
 };
 use dialect_proof::{EvidenceRefOp, ObligationOp, RequireEffectRefinementOp, RequireRefinementOp};
 use pliron::{
@@ -297,6 +300,7 @@ enum RankedOperationKind {
     FiniteFoldContract,
     FiniteRecurrenceContract,
     PermutationGatherContract,
+    TypedSemantic,
     RequireEquivalent,
     ProofObligation,
     ProofEvidence,
@@ -388,6 +392,20 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         .is_some()
     {
         Some(RankedOperationKind::SemanticExpressionCommitment)
+    } else if operation.downcast_ref::<SemanticTypedSymbolOp>().is_some()
+        || operation
+            .downcast_ref::<SemanticTypedConstantOp>()
+            .is_some()
+        || operation.downcast_ref::<SemanticTypedUnaryOp>().is_some()
+        || operation.downcast_ref::<SemanticTypedBinaryOp>().is_some()
+        || operation.downcast_ref::<SemanticTypedCompareOp>().is_some()
+        || operation.downcast_ref::<SemanticTypedSelectOp>().is_some()
+        || operation.downcast_ref::<SemanticTypedCastOp>().is_some()
+        || operation
+            .downcast_ref::<SemanticTypedExpressionRootOp>()
+            .is_some()
+    {
+        Some(RankedOperationKind::TypedSemantic)
     } else if operation.downcast_ref::<RequireEquivalentOp>().is_some() {
         Some(RankedOperationKind::RequireEquivalent)
     } else if operation.downcast_ref::<RequireFiniteFoldOp>().is_some() {

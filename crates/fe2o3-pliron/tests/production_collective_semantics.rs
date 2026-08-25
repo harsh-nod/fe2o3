@@ -238,7 +238,7 @@ fn mandatory_production_pipeline_rejects_coverage_without_a_value_proof() {
     let diagnostic = error.to_string();
     assert!(
         diagnostic.contains("error[FE2O3-SEMANTIC-005]"),
-        "{diagnostic}"
+        "{error:?}: {diagnostic}"
     );
     assert!(diagnostic.contains("coverage never proves a final value"));
 }

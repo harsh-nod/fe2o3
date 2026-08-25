@@ -15,10 +15,15 @@ use crate::{
     RankedViewOp, RankedViewType, RequireEquivalentOp, RequireFiniteFoldOp,
     RequireFiniteRecurrenceOp, RequirePermutationGatherOp, ReturnOp, SemanticBinaryKindAttr,
     SemanticBinaryOp, SemanticConstantAttr, SemanticConstantOp, SemanticCoverageBindingAttr,
-    SemanticDomainBoundAttr, SemanticEvaluationOrderAttr, SemanticExpressionCommitmentAttr,
-    SemanticExpressionCommitmentOp, SemanticNumericalPolicyAttr, SemanticScalarType,
-    SemanticStepBoundAttr, SemanticSymbolAttr, SemanticSymbolOp, TensorConvergenceAttr,
-    TensorFragmentAttr, TensorInstructionAttr, TensorLayoutOp, TrapOp,
+    SemanticDomainBoundAttr, SemanticEvaluationOrderAttr, SemanticExceptionalValueAttr,
+    SemanticExpressionCommitmentAttr, SemanticExpressionCommitmentOp, SemanticIeeeRoundingAttr,
+    SemanticNumericalPolicyAttr, SemanticOverflowAttr, SemanticScalarKindAttr, SemanticScalarType,
+    SemanticStepBoundAttr, SemanticSymbolAttr, SemanticSymbolOp, SemanticTypedBinaryKindAttr,
+    SemanticTypedBinaryOp, SemanticTypedCastKindAttr, SemanticTypedCastOp,
+    SemanticTypedCompareKindAttr, SemanticTypedCompareOp, SemanticTypedConstantOp,
+    SemanticTypedExpressionRootOp, SemanticTypedSelectOp, SemanticTypedSymbolOp,
+    SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp, TensorConvergenceAttr, TensorFragmentAttr,
+    TensorInstructionAttr, TensorLayoutOp, TrapOp,
 };
 
 fn registration_hook(
@@ -32,6 +37,15 @@ fn registration_hook(
     service.register_type::<RankedViewType>()?;
     service.register_type::<IndexType>()?;
     service.register_type::<SemanticScalarType>()?;
+    service.register_attribute::<SemanticScalarKindAttr>()?;
+    service.register_attribute::<SemanticTypedUnaryKindAttr>()?;
+    service.register_attribute::<SemanticTypedBinaryKindAttr>()?;
+    service.register_attribute::<SemanticOverflowAttr>()?;
+    service.register_attribute::<SemanticTypedCompareKindAttr>()?;
+    service.register_attribute::<SemanticTypedCastKindAttr>()?;
+    service.register_attribute::<SemanticNumericalPolicyAttr>()?;
+    service.register_attribute::<SemanticIeeeRoundingAttr>()?;
+    service.register_attribute::<SemanticExceptionalValueAttr>()?;
     service.register_attribute::<IndexValueAttr>()?;
     service.register_attribute::<DimensionAttr>()?;
     service.register_attribute::<AccessKindAttr>()?;
@@ -53,7 +67,6 @@ fn registration_hook(
     service.register_attribute::<SemanticDomainBoundAttr>()?;
     service.register_attribute::<SemanticStepBoundAttr>()?;
     service.register_attribute::<SemanticEvaluationOrderAttr>()?;
-    service.register_attribute::<SemanticNumericalPolicyAttr>()?;
     service.register_attribute::<SemanticCoverageBindingAttr>()?;
     service.register_attribute::<TensorConvergenceAttr>()?;
     service.register_attribute::<TensorInstructionAttr>()?;
@@ -85,6 +98,14 @@ fn registration_hook(
     service.register_operation::<SemanticConstantOp>()?;
     service.register_operation::<SemanticExpressionCommitmentOp>()?;
     service.register_operation::<SemanticBinaryOp>()?;
+    service.register_operation::<SemanticTypedSymbolOp>()?;
+    service.register_operation::<SemanticTypedConstantOp>()?;
+    service.register_operation::<SemanticTypedUnaryOp>()?;
+    service.register_operation::<SemanticTypedBinaryOp>()?;
+    service.register_operation::<SemanticTypedCompareOp>()?;
+    service.register_operation::<SemanticTypedSelectOp>()?;
+    service.register_operation::<SemanticTypedCastOp>()?;
+    service.register_operation::<SemanticTypedExpressionRootOp>()?;
     service.register_operation::<RequireEquivalentOp>()?;
     service.register_operation::<RequireFiniteFoldOp>()?;
     service.register_operation::<RequireFiniteRecurrenceOp>()?;

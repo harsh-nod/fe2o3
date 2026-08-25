@@ -13,12 +13,11 @@ use pliron::{
     op::Op,
     operation::Operation,
     result::Result as PlironResult,
-    r#type::Typed,
     value::Value,
     verify_err,
 };
 
-use crate::{SemanticExpressionCommitmentAttr, SemanticExpressionCommitmentOp, ranked_view_type};
+use crate::{SemanticExpressionCommitmentAttr, SemanticTypedExpressionRootOp, ranked_view_type};
 
 /// Hard limit on a declared finite semantic domain or execution bound.
 pub const MAX_COLLECTIVE_SEMANTIC_STEPS_V1: u64 = 1 << 24;
@@ -63,9 +62,7 @@ pub enum SemanticCoverageBindingAttr {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CollectiveSemanticContractError {
     MalformedOperation,
-    ForeignViewOperand,
-    ForeignScalarOperand { operand: usize },
-    ForeignCommitmentOperand { operand: usize },
+    ForeignTypedRootOperand { operand: usize },
     ZeroOrExcessiveDomainBound,
     InvalidTerminationBound,
 }
@@ -76,16 +73,9 @@ impl fmt::Display for CollectiveSemanticContractError {
             Self::MalformedOperation => formatter.write_str(
                 "collective semantic operation has a malformed closed payload",
             ),
-            Self::ForeignViewOperand => formatter.write_str(
-                "collective semantic operand 0 is not a kernel.ranked_view",
-            ),
-            Self::ForeignScalarOperand { operand } => write!(
+            Self::ForeignTypedRootOperand { operand } => write!(
                 formatter,
-                "collective semantic operand {operand} is not kernel.semantic_scalar",
-            ),
-            Self::ForeignCommitmentOperand { operand } => write!(
-                formatter,
-                "collective semantic operand {operand} is not defined by kernel.semantic_expression_commitment",
+                "collective semantic operand {operand} is not defined by kernel.semantic_typed_root",
             ),
             Self::ZeroOrExcessiveDomainBound => write!(
                 formatter,
@@ -178,12 +168,16 @@ impl RequireFiniteFoldOp {
         self.get_attr_kernel_fold_coverage_binding(context)
             .map(|value| *value)
     }
+    pub fn numerical_policy(&self, context: &Context) -> Option<SemanticNumericalPolicyAttr> {
+        self.get_attr_kernel_fold_numerical_policy(context)
+            .map(|value| *value)
+    }
 }
 
 impl Verify for RequireFiniteFoldOp {
     fn verify(&self, context: &Context) -> PlironResult<()> {
         verify_contract(self, context, 5, FOLD_ATTRIBUTES)?;
-        verify_common_operands(self, context, &[], &[1, 2, 3, 4])?;
+        verify_common_operands(self, context, &[1, 2, 3, 4])?;
         verify_bounds(
             self,
             context,
@@ -271,12 +265,16 @@ impl RequireFiniteRecurrenceOp {
         self.get_attr_kernel_recurrence_coverage_binding(context)
             .map(|value| *value)
     }
+    pub fn numerical_policy(&self, context: &Context) -> Option<SemanticNumericalPolicyAttr> {
+        self.get_attr_kernel_recurrence_numerical_policy(context)
+            .map(|value| *value)
+    }
 }
 
 impl Verify for RequireFiniteRecurrenceOp {
     fn verify(&self, context: &Context) -> PlironResult<()> {
         verify_contract(self, context, 5, RECURRENCE_ATTRIBUTES)?;
-        verify_common_operands(self, context, &[], &[1, 2, 3, 4])?;
+        verify_common_operands(self, context, &[1, 2, 3, 4])?;
         verify_bounds(
             self,
             context,
@@ -367,12 +365,16 @@ impl RequirePermutationGatherOp {
         self.get_attr_kernel_permutation_coverage_binding(context)
             .map(|value| *value)
     }
+    pub fn numerical_policy(&self, context: &Context) -> Option<SemanticNumericalPolicyAttr> {
+        self.get_attr_kernel_permutation_numerical_policy(context)
+            .map(|value| *value)
+    }
 }
 
 impl Verify for RequirePermutationGatherOp {
     fn verify(&self, context: &Context) -> PlironResult<()> {
         verify_contract(self, context, 5, PERMUTATION_ATTRIBUTES)?;
-        verify_common_operands(self, context, &[], &[1, 2, 3, 4])?;
+        verify_common_operands(self, context, &[1, 2, 3, 4])?;
         verify_bounds(
             self,
             context,
@@ -454,35 +456,19 @@ fn verify_contract(
 fn verify_common_operands(
     operation: &dyn Op,
     context: &Context,
-    scalar_operands: &[usize],
     commitment_operands: &[usize],
 ) -> PlironResult<()> {
-    for operand_index in scalar_operands {
-        let value = operand(operation, context, *operand_index);
-        if !value
-            .get_type(context)
-            .deref(context)
-            .is::<crate::SemanticScalarType>()
-        {
-            return verify_err!(
-                operation.loc(context),
-                CollectiveSemanticContractError::ForeignScalarOperand {
-                    operand: *operand_index,
-                }
-            );
-        }
-    }
     for operand_index in commitment_operands {
         let value = operand(operation, context, *operand_index);
-        let is_commitment = value.defining_op().is_some_and(|definition| {
+        let is_typed_root = value.defining_op().is_some_and(|definition| {
             Operation::get_op_dyn(definition, context)
-                .downcast_ref::<SemanticExpressionCommitmentOp>()
+                .downcast_ref::<SemanticTypedExpressionRootOp>()
                 .is_some()
         });
-        if !is_commitment {
+        if !is_typed_root {
             return verify_err!(
                 operation.loc(context),
-                CollectiveSemanticContractError::ForeignCommitmentOperand {
+                CollectiveSemanticContractError::ForeignTypedRootOperand {
                     operand: *operand_index,
                 }
             );

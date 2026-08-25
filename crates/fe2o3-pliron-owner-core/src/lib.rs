@@ -29,6 +29,8 @@ pub const PLIRON_REVISION: &str = "2610651306ea3ba670f68d5d8b1e1159bcd521ed";
 pub const HARD_MAX_NAME_BYTES: usize = 96;
 
 /// Hard cap on typed entity registrations performed by one dialect hook.
+/// The fixed upper bound covers the kernel dialect's closed collective and
+/// typed semantic schemas while keeping work independent of input IR size.
 pub const HARD_MAX_DIALECT_REGISTRATION_ACTIONS: usize = 128;
 
 /// Auxiliary-data key for the fe2o3 context-identity locator.

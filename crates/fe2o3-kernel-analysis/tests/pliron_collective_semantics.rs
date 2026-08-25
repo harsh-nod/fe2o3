@@ -2,8 +2,10 @@ use dialect_kernel::{
     AccessKindAttr, DIALECT_NAME, IndexConstantOp, MemorySpaceAttr, OwnershipContractOp,
     OwnershipCoverageAttr, OwnershipPartitionAttr, RankedAccessOp, RankedViewOp, RankedViewType,
     RequireFiniteFoldOp, ReturnOp, SemanticCoverageBindingAttr, SemanticEvaluationOrderAttr,
-    SemanticExpressionCommitmentAttr, SemanticExpressionCommitmentOp, SemanticNumericalPolicyAttr,
-    register_dialect,
+    SemanticExceptionalValueAttr, SemanticExpressionCommitmentAttr, SemanticIeeeRoundingAttr,
+    SemanticNumericalContractV1, SemanticNumericalPolicyAttr, SemanticScalarKindAttr,
+    SemanticTypedConstantOp, SemanticTypedExpressionRootOp, SemanticTypedExpressionV1,
+    SemanticTypedScalarV1, register_dialect,
 };
 use dialect_proof::{
     CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, ProofIdAttr,
@@ -36,6 +38,34 @@ fn proof_id(seed: u64) -> ProofIdAttr {
     ProofIdAttr::new([seed, seed + 1, seed + 2, seed + 3])
 }
 
+fn digest_words(digest: [u8; 32]) -> [u64; 4] {
+    std::array::from_fn(|index| {
+        u64::from_le_bytes(digest[index * 8..(index + 1) * 8].try_into().unwrap())
+    })
+}
+
+fn append_u32_root(context: &mut Context, block: Ptr<BasicBlock>) -> SemanticTypedExpressionRootOp {
+    let scalar = SemanticTypedScalarV1::new(SemanticScalarKindAttr::UnsignedInteger, 32).unwrap();
+    let expression = SemanticTypedExpressionV1::Constant { scalar, bits: 0 };
+    let contract = SemanticNumericalContractV1 {
+        policy: SemanticNumericalPolicyAttr::ExactBitVectorOperatorCongruence,
+        rounding: SemanticIeeeRoundingAttr::NearestTiesToEven,
+        exceptional_values: SemanticExceptionalValueAttr::PreserveExactBits,
+    };
+    let constant = SemanticTypedConstantOp::new(context, 0, scalar);
+    let root = SemanticTypedExpressionRootOp::new(
+        context,
+        constant.result(context),
+        contract.policy,
+        contract.rounding,
+        contract.exceptional_values,
+        digest_words(expression.canonical_transcript_sha256(contract)),
+    );
+    append(context, block, &constant);
+    append(context, block, &root);
+    root
+}
+
 fn fold_report(
     requested: SemanticCoverageBindingAttr,
     provided: OwnershipCoverageAttr,
@@ -58,10 +88,10 @@ fn fold_report(
         17,
     )
     .unwrap();
-    let actual = SemanticExpressionCommitmentOp::new(context, [1, 2, 3, 4]);
-    let expected = SemanticExpressionCommitmentOp::new(context, [1, 2, 3, 4]);
-    let identity = SemanticExpressionCommitmentOp::new(context, [5, 6, 7, 8]);
-    let operator = SemanticExpressionCommitmentOp::new(context, [9, 10, 11, 12]);
+    let actual = append_u32_root(context, entry);
+    let expected = append_u32_root(context, entry);
+    let identity = append_u32_root(context, entry);
+    let operator = append_u32_root(context, entry);
     let zero = IndexConstantOp::new(context, 0);
     let write = RankedAccessOp::new(
         context,
@@ -96,10 +126,6 @@ fn fold_report(
         view.get_operation(),
         zero.get_operation(),
         write.get_operation(),
-        actual.get_operation(),
-        expected.get_operation(),
-        identity.get_operation(),
-        operator.get_operation(),
         ownership.get_operation(),
         fold.get_operation(),
     ] {

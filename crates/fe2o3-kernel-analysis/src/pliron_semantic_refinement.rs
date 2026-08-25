@@ -9,7 +9,10 @@ use dialect_kernel::{
     OwnershipContractOp, OwnershipCoverageAttr, RequireEquivalentOp, RequireFiniteFoldOp,
     RequireFiniteRecurrenceOp, RequirePermutationGatherOp, SemanticBinaryKindAttr,
     SemanticBinaryOp, SemanticConstantOp, SemanticCoverageBindingAttr,
-    SemanticExpressionCommitmentOp, SemanticSymbolOp,
+    SemanticExpressionCommitmentOp, SemanticNumericalContractV1, SemanticNumericalPolicyAttr,
+    SemanticSymbolOp, SemanticTypedBinaryOp, SemanticTypedCastOp, SemanticTypedCompareOp,
+    SemanticTypedConstantOp, SemanticTypedExpressionRootOp, SemanticTypedExpressionV1,
+    SemanticTypedScalarV1, SemanticTypedSelectOp, SemanticTypedSymbolOp, SemanticTypedUnaryOp,
 };
 use dialect_proof::{
     CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, PropertyAttr,
@@ -41,16 +44,28 @@ enum SemanticNodeV1 {
     Binary(SemanticBinaryKindAttr, usize, usize),
     /// Opaque equality is sound only for byte-identical retained commitments.
     Commitment([u64; 4]),
+    TypedExpression(SemanticTypedExpressionV1),
+    TypedRoot(SemanticTypedExpressionV1, SemanticNumericalContractV1),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SemanticExpressionBuildErrorV1 {
+    ResourceLimit,
+    InvalidTypedExpression(&'static str),
 }
 
 /// Shared canonical expression table used by scalar and effect refinement.
 pub(crate) struct SemanticExpressionTableV1 {
     nodes: Vec<SemanticNodeV1>,
     facts: HashMap<pliron::value::Value, usize>,
+    typed_root_commitments: Vec<[u64; 4]>,
 }
 
 impl SemanticExpressionTableV1 {
-    pub(crate) fn from_function(context: &Context, function: &FuncOp) -> Result<Self, ()> {
+    pub(crate) fn from_function(
+        context: &Context,
+        function: &FuncOp,
+    ) -> Result<Self, SemanticExpressionBuildErrorV1> {
         let definitions = function
             .get_region(context)
             .deref(context)
@@ -64,6 +79,7 @@ impl SemanticExpressionTableV1 {
                     || operation
                         .downcast_ref::<SemanticExpressionCommitmentOp>()
                         .is_some()
+                    || is_typed_semantic_definition(&*operation)
             })
             .collect::<Vec<_>>();
         Self::build(context, &definitions)
@@ -72,9 +88,9 @@ impl SemanticExpressionTableV1 {
     fn build(
         context: &Context,
         definitions: &[pliron::context::Ptr<Operation>],
-    ) -> Result<Self, ()> {
+    ) -> Result<Self, SemanticExpressionBuildErrorV1> {
         if definitions.len() > MAX_PLIRON_SEMANTIC_NODES_V1 {
-            return Err(());
+            return Err(SemanticExpressionBuildErrorV1::ResourceLimit);
         }
         let mut nodes = Vec::new();
         let mut interned = HashMap::new();
@@ -101,15 +117,170 @@ impl SemanticExpressionTableV1 {
                     operation.downcast_ref::<SemanticExpressionCommitmentOp>()
                 {
                     commitment.identity(context).map(SemanticNodeV1::Commitment)
+                } else if let Some(symbol) = operation.downcast_ref::<SemanticTypedSymbolOp>() {
+                    match (symbol.symbol(context), symbol.scalar(context)) {
+                        (Some(symbol), Some(scalar)) => Some(SemanticNodeV1::TypedExpression(
+                            SemanticTypedExpressionV1::Symbol { symbol, scalar },
+                        )),
+                        _ => None,
+                    }
+                } else if let Some(constant) = operation.downcast_ref::<SemanticTypedConstantOp>() {
+                    match (constant.bits(context), constant.scalar(context)) {
+                        (Some(bits), Some(scalar)) => Some(SemanticNodeV1::TypedExpression(
+                            SemanticTypedExpressionV1::Constant { scalar, bits },
+                        )),
+                        _ => None,
+                    }
+                } else if let Some(unary) = operation.downcast_ref::<SemanticTypedUnaryOp>() {
+                    let operand =
+                        typed_expression(&nodes, facts.get(&unary.operand(context)).copied());
+                    match (unary.kind(context), unary.scalar(context), operand) {
+                        (Some(operation), Some(scalar), Some(operand)) => Some(
+                            SemanticNodeV1::TypedExpression(SemanticTypedExpressionV1::Unary {
+                                operation,
+                                scalar,
+                                operand: Box::new(operand),
+                            }),
+                        ),
+                        _ => None,
+                    }
+                } else if let Some(binary) = operation.downcast_ref::<SemanticTypedBinaryOp>() {
+                    let lhs = typed_expression(&nodes, facts.get(&binary.lhs(context)).copied());
+                    let rhs = typed_expression(&nodes, facts.get(&binary.rhs(context)).copied());
+                    match (
+                        binary.kind(context),
+                        binary.scalar(context),
+                        binary.overflow(context),
+                        lhs,
+                        rhs,
+                    ) {
+                        (Some(operation), Some(scalar), Some(overflow), Some(lhs), Some(rhs)) => {
+                            Some(SemanticNodeV1::TypedExpression(
+                                SemanticTypedExpressionV1::Binary {
+                                    operation,
+                                    scalar,
+                                    overflow,
+                                    lhs: Box::new(lhs),
+                                    rhs: Box::new(rhs),
+                                },
+                            ))
+                        }
+                        _ => None,
+                    }
+                } else if let Some(compare) = operation.downcast_ref::<SemanticTypedCompareOp>() {
+                    let lhs = typed_expression(&nodes, facts.get(&compare.lhs(context)).copied());
+                    let rhs = typed_expression(&nodes, facts.get(&compare.rhs(context)).copied());
+                    match (
+                        compare.kind(context),
+                        compare.operand_scalar(context),
+                        lhs,
+                        rhs,
+                    ) {
+                        (Some(operation), Some(operand_scalar), Some(lhs), Some(rhs)) => Some(
+                            SemanticNodeV1::TypedExpression(SemanticTypedExpressionV1::Compare {
+                                operation,
+                                operand_scalar,
+                                lhs: Box::new(lhs),
+                                rhs: Box::new(rhs),
+                            }),
+                        ),
+                        _ => None,
+                    }
+                } else if let Some(select) = operation.downcast_ref::<SemanticTypedSelectOp>() {
+                    let condition =
+                        typed_expression(&nodes, facts.get(&select.condition(context)).copied());
+                    let when_true =
+                        typed_expression(&nodes, facts.get(&select.when_true(context)).copied());
+                    let when_false =
+                        typed_expression(&nodes, facts.get(&select.when_false(context)).copied());
+                    match (select.scalar(context), condition, when_true, when_false) {
+                        (Some(scalar), Some(condition), Some(when_true), Some(when_false)) => Some(
+                            SemanticNodeV1::TypedExpression(SemanticTypedExpressionV1::Select {
+                                scalar,
+                                condition: Box::new(condition),
+                                when_true: Box::new(when_true),
+                                when_false: Box::new(when_false),
+                            }),
+                        ),
+                        _ => None,
+                    }
+                } else if let Some(cast) = operation.downcast_ref::<SemanticTypedCastOp>() {
+                    let operand =
+                        typed_expression(&nodes, facts.get(&cast.operand(context)).copied());
+                    match (
+                        cast.kind(context),
+                        cast.source(context),
+                        cast.target(context),
+                        operand,
+                    ) {
+                        (Some(kind), Some(source), Some(target), Some(operand)) => Some(
+                            SemanticNodeV1::TypedExpression(SemanticTypedExpressionV1::Cast {
+                                kind,
+                                source,
+                                target,
+                                operand: Box::new(operand),
+                            }),
+                        ),
+                        _ => None,
+                    }
+                } else if let Some(root) = operation.downcast_ref::<SemanticTypedExpressionRootOp>()
+                {
+                    let expression =
+                        typed_expression(&nodes, facts.get(&root.expression(context)).copied());
+                    match (
+                        expression,
+                        root.policy(context),
+                        root.rounding(context),
+                        root.exceptional_values(context),
+                        root.commitment(context),
+                    ) {
+                        (
+                            Some(expression),
+                            Some(policy),
+                            Some(rounding),
+                            Some(exceptional_values),
+                            Some(commitment),
+                        ) => {
+                            let contract = SemanticNumericalContractV1 {
+                                policy,
+                                rounding,
+                                exceptional_values,
+                            };
+                            validate_typed_root(&expression, contract, commitment)?;
+                            Some(SemanticNodeV1::TypedRoot(expression, contract))
+                        }
+                        _ => None,
+                    }
                 } else {
                     None
                 };
                 let Some(node) = node else { continue };
+                if let SemanticNodeV1::TypedExpression(expression) = &node {
+                    expression.validate().map_err(|error| {
+                        SemanticExpressionBuildErrorV1::InvalidTypedExpression(match error {
+                            dialect_kernel::SemanticTypedExpressionErrorV1::ResourceLimit => {
+                                "typed semantic expression exceeds its node or depth bound"
+                            }
+                            dialect_kernel::SemanticTypedExpressionErrorV1::TypeMismatch => {
+                                "typed semantic expression has an invalid type or operator"
+                            }
+                            dialect_kernel::SemanticTypedExpressionErrorV1::ConstantOutOfRange => {
+                                "typed semantic constant exceeds its scalar width"
+                            }
+                            dialect_kernel::SemanticTypedExpressionErrorV1::UnsupportedNumericalPolicy => {
+                                "typed semantic numerical policy is unsupported"
+                            }
+                            dialect_kernel::SemanticTypedExpressionErrorV1::IncompleteDomain => {
+                                "typed semantic operation definedness is incomplete"
+                            }
+                        })
+                    })?;
+                }
                 let identity = if let Some(identity) = interned.get(&node).copied() {
                     identity
                 } else {
                     if nodes.len() == MAX_PLIRON_SEMANTIC_NODES_V1 {
-                        return Err(());
+                        return Err(SemanticExpressionBuildErrorV1::ResourceLimit);
                     }
                     let identity = nodes.len();
                     nodes.push(node.clone());
@@ -125,7 +296,34 @@ impl SemanticExpressionTableV1 {
                 break;
             }
         }
-        Ok(Self { nodes, facts })
+        let mut typed_root_commitments = Vec::new();
+        for definition in definitions {
+            let operation = Operation::get_op_dyn(*definition, context);
+            if is_typed_semantic_definition(&*operation)
+                && !facts.contains_key(&definition.deref(context).get_result(0))
+            {
+                return Err(SemanticExpressionBuildErrorV1::InvalidTypedExpression(
+                    "typed semantic SSA node cannot be reconstructed",
+                ));
+            }
+            if let Some(root) = operation.downcast_ref::<SemanticTypedExpressionRootOp>() {
+                if !facts.contains_key(&root.result(context)) {
+                    return Err(SemanticExpressionBuildErrorV1::InvalidTypedExpression(
+                        "typed semantic SSA root cannot be reconstructed",
+                    ));
+                }
+                typed_root_commitments.push(root.commitment(context).ok_or(
+                    SemanticExpressionBuildErrorV1::InvalidTypedExpression(
+                        "typed semantic root lacks its commitment",
+                    ),
+                )?);
+            }
+        }
+        Ok(Self {
+            nodes,
+            facts,
+            typed_root_commitments,
+        })
     }
 
     pub(crate) fn identity(&self, value: pliron::value::Value) -> Option<usize> {
@@ -138,6 +336,20 @@ impl SemanticExpressionTableV1 {
         expected: pliron::value::Value,
     ) -> Option<bool> {
         Some(self.identity(actual)? == self.identity(expected)?)
+    }
+
+    pub(crate) fn typed_root_commitments(&self) -> &[[u64; 4]] {
+        &self.typed_root_commitments
+    }
+
+    fn typed_root_fact(&self, value: pliron::value::Value) -> Option<TypedRootFactV1> {
+        match self.nodes.get(self.identity(value)?)? {
+            SemanticNodeV1::TypedRoot(expression, contract) => Some(TypedRootFactV1 {
+                scalar: expression.scalar(),
+                contract: *contract,
+            }),
+            _ => None,
+        }
     }
 
     pub(crate) fn describe_value(&self, value: pliron::value::Value) -> Option<String> {
@@ -163,8 +375,91 @@ impl SemanticExpressionTableV1 {
                 "typed-commitment:{:016x}{:016x}{:016x}{:016x}",
                 identity[0], identity[1], identity[2], identity[3]
             ),
+            SemanticNodeV1::TypedExpression(expression) => {
+                format!("typed-node:{expression:?}")
+            }
+            SemanticNodeV1::TypedRoot(expression, contract) => {
+                format!("typed-root:{contract:?}:{expression:?}")
+            }
         }
     }
+}
+
+fn is_typed_semantic_definition(operation: &dyn pliron::op::Op) -> bool {
+    operation.downcast_ref::<SemanticTypedSymbolOp>().is_some()
+        || operation
+            .downcast_ref::<SemanticTypedConstantOp>()
+            .is_some()
+        || operation.downcast_ref::<SemanticTypedUnaryOp>().is_some()
+        || operation.downcast_ref::<SemanticTypedBinaryOp>().is_some()
+        || operation.downcast_ref::<SemanticTypedCompareOp>().is_some()
+        || operation.downcast_ref::<SemanticTypedSelectOp>().is_some()
+        || operation.downcast_ref::<SemanticTypedCastOp>().is_some()
+        || operation
+            .downcast_ref::<SemanticTypedExpressionRootOp>()
+            .is_some()
+}
+
+fn typed_expression(
+    nodes: &[SemanticNodeV1],
+    identity: Option<usize>,
+) -> Option<SemanticTypedExpressionV1> {
+    match nodes.get(identity?)? {
+        SemanticNodeV1::TypedExpression(expression) => Some(expression.clone()),
+        _ => None,
+    }
+}
+
+fn validate_typed_root(
+    expression: &SemanticTypedExpressionV1,
+    contract: SemanticNumericalContractV1,
+    commitment: [u64; 4],
+) -> Result<(), SemanticExpressionBuildErrorV1> {
+    expression.validate().map_err(|error| {
+        SemanticExpressionBuildErrorV1::InvalidTypedExpression(match error {
+            dialect_kernel::SemanticTypedExpressionErrorV1::ResourceLimit => {
+                "typed semantic expression exceeds its node or depth bound"
+            }
+            dialect_kernel::SemanticTypedExpressionErrorV1::TypeMismatch => {
+                "typed semantic expression has an invalid type or operator"
+            }
+            dialect_kernel::SemanticTypedExpressionErrorV1::ConstantOutOfRange => {
+                "typed semantic constant exceeds its scalar width"
+            }
+            dialect_kernel::SemanticTypedExpressionErrorV1::UnsupportedNumericalPolicy => {
+                "typed semantic numerical policy is unsupported"
+            }
+            dialect_kernel::SemanticTypedExpressionErrorV1::IncompleteDomain => {
+                "typed semantic operation definedness is incomplete"
+            }
+        })
+    })?;
+    expression.validate_static_domains().map_err(|_| {
+        SemanticExpressionBuildErrorV1::InvalidTypedExpression(
+            "typed semantic operation definedness is incomplete",
+        )
+    })?;
+    contract.validate(expression).map_err(|_| {
+        SemanticExpressionBuildErrorV1::InvalidTypedExpression(
+            "typed semantic numerical policy does not match the expression",
+        )
+    })?;
+    if digest_words(expression.canonical_transcript_sha256(contract)) != commitment {
+        return Err(SemanticExpressionBuildErrorV1::InvalidTypedExpression(
+            "typed semantic commitment does not match the reconstructed expression and policy",
+        ));
+    }
+    Ok(())
+}
+
+fn digest_words(digest: [u8; 32]) -> [u64; 4] {
+    std::array::from_fn(|index| {
+        u64::from_le_bytes(
+            digest[index * 8..(index + 1) * 8]
+                .try_into()
+                .expect("digest word has fixed width"),
+        )
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -203,6 +498,9 @@ pub enum PlironSemanticRefinementFindingV1 {
         operation: usize,
         reason: &'static str,
     },
+    TypedExpressionRejected {
+        reason: &'static str,
+    },
     ResourceLimitExceeded,
 }
 
@@ -211,7 +509,8 @@ impl PlironSemanticRefinementFindingV1 {
         match self {
             Self::ExpressionMismatch { .. }
             | Self::ReferenceContractRejected { .. }
-            | Self::CollectiveContractRejected { .. } => KernelCheckStatusV1::Rejected,
+            | Self::CollectiveContractRejected { .. }
+            | Self::TypedExpressionRejected { .. } => KernelCheckStatusV1::Rejected,
             Self::BoundsPrerequisiteRejected
             | Self::UnresolvedExpression { .. }
             | Self::ReferenceContractIncomplete { .. }
@@ -280,6 +579,10 @@ impl fmt::Display for PlironSemanticRefinementFindingV1 {
                 formatter,
                 "error[FE2O3-SEMANTIC-006]: finite collective contract is invalid at block {block} op {operation}: {reason}",
             ),
+            Self::TypedExpressionRejected { reason } => write!(
+                formatter,
+                "error[FE2O3-SEMANTIC-007]: typed semantic expression payload is invalid: {reason}",
+            ),
             Self::ResourceLimitExceeded => formatter.write_str(
                 "error[FE2O3-SEMANTIC-002]: semantic refinement analysis resource limit exceeded",
             ),
@@ -294,6 +597,7 @@ pub struct PlironSemanticRefinementReportV1 {
     proved_reference_obligations: usize,
     collective_contracts: usize,
     proved_collective_contracts: usize,
+    typed_root_commitments: Vec<[u64; 4]>,
     effect_refinement: PlironEffectRefinementReportV1,
 }
 
@@ -355,6 +659,12 @@ impl PlironSemanticRefinementReportV1 {
             && self.collective_contracts == self.proved_collective_contracts
     }
 
+    /// Canonical typed-root commitments reconstructed and verified by the
+    /// mandatory semantic pass, in function order.
+    pub fn typed_root_commitments(&self) -> &[[u64; 4]] {
+        &self.typed_root_commitments
+    }
+
     pub const fn effect_refinement(&self) -> &PlironEffectRefinementReportV1 {
         &self.effect_refinement
     }
@@ -402,6 +712,33 @@ impl fmt::Display for PlironSemanticRefinementCheckErrorV1 {
 
 impl std::error::Error for PlironSemanticRefinementCheckErrorV1 {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TypedRootFactV1 {
+    scalar: SemanticTypedScalarV1,
+    contract: SemanticNumericalContractV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CollectiveContractKindV1 {
+    Fold,
+    Recurrence,
+    Permutation,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CollectiveContractV1 {
+    kind: CollectiveContractKindV1,
+    block: usize,
+    operation: usize,
+    view: pliron::value::Value,
+    actual: pliron::value::Value,
+    expected: pliron::value::Value,
+    coverage: Option<SemanticCoverageBindingAttr>,
+    numerical_policy: Option<SemanticNumericalPolicyAttr>,
+    witness0: pliron::value::Value,
+    witness1: pliron::value::Value,
+}
+
 pub fn run_pliron_semantic_refinement_check_v1(
     context: &Context,
     function: &FuncOp,
@@ -441,6 +778,7 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
                 || operation
                     .downcast_ref::<SemanticExpressionCommitmentOp>()
                     .is_some()
+                || is_typed_semantic_definition(&*operation)
             {
                 definitions.push(operation.get_operation());
             } else if let Some(requirement) = operation.downcast_ref::<RequireEquivalentOp>() {
@@ -483,35 +821,44 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
             } else if let Some(ownership) = operation.downcast_ref::<OwnershipContractOp>() {
                 ownership_contracts.push((ownership.view(context), ownership.coverage(context)));
             } else if let Some(contract) = operation.downcast_ref::<RequireFiniteFoldOp>() {
-                collective_contracts.push((
-                    block_index,
-                    operation_index,
-                    contract.view(context),
-                    contract.actual(context),
-                    contract.expected(context),
-                    contract.coverage(context),
-                    vec![contract.identity(context), contract.operator(context)],
-                ));
+                collective_contracts.push(CollectiveContractV1 {
+                    kind: CollectiveContractKindV1::Fold,
+                    block: block_index,
+                    operation: operation_index,
+                    view: contract.view(context),
+                    actual: contract.actual(context),
+                    expected: contract.expected(context),
+                    coverage: contract.coverage(context),
+                    numerical_policy: contract.numerical_policy(context),
+                    witness0: contract.identity(context),
+                    witness1: contract.operator(context),
+                });
             } else if let Some(contract) = operation.downcast_ref::<RequireFiniteRecurrenceOp>() {
-                collective_contracts.push((
-                    block_index,
-                    operation_index,
-                    contract.view(context),
-                    contract.actual(context),
-                    contract.expected(context),
-                    contract.coverage(context),
-                    vec![contract.initial(context), contract.transition(context)],
-                ));
+                collective_contracts.push(CollectiveContractV1 {
+                    kind: CollectiveContractKindV1::Recurrence,
+                    block: block_index,
+                    operation: operation_index,
+                    view: contract.view(context),
+                    actual: contract.actual(context),
+                    expected: contract.expected(context),
+                    coverage: contract.coverage(context),
+                    numerical_policy: contract.numerical_policy(context),
+                    witness0: contract.initial(context),
+                    witness1: contract.transition(context),
+                });
             } else if let Some(contract) = operation.downcast_ref::<RequirePermutationGatherOp>() {
-                collective_contracts.push((
-                    block_index,
-                    operation_index,
-                    contract.view(context),
-                    contract.actual(context),
-                    contract.expected(context),
-                    contract.coverage(context),
-                    vec![contract.mapping(context), contract.inverse(context)],
-                ));
+                collective_contracts.push(CollectiveContractV1 {
+                    kind: CollectiveContractKindV1::Permutation,
+                    block: block_index,
+                    operation: operation_index,
+                    view: contract.view(context),
+                    actual: contract.actual(context),
+                    expected: contract.expected(context),
+                    coverage: contract.coverage(context),
+                    numerical_policy: contract.numerical_policy(context),
+                    witness0: contract.mapping(context),
+                    witness1: contract.inverse(context),
+                });
             }
         }
     }
@@ -660,7 +1007,12 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
 
     let expressions = match SemanticExpressionTableV1::build(context, &definitions) {
         Ok(expressions) => expressions,
-        Err(()) => return one(PlironSemanticRefinementFindingV1::ResourceLimitExceeded),
+        Err(SemanticExpressionBuildErrorV1::ResourceLimit) => {
+            return one(PlironSemanticRefinementFindingV1::ResourceLimitExceeded);
+        }
+        Err(SemanticExpressionBuildErrorV1::InvalidTypedExpression(reason)) => {
+            return one(PlironSemanticRefinementFindingV1::TypedExpressionRejected { reason });
+        }
     };
 
     for (block, operation, actual, expected) in requirements {
@@ -741,25 +1093,121 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
     let collective_count = collective_contracts.len();
     let mut proved_collective_contracts = 0;
     let mut used_reference_pairs = HashSet::new();
-    for (block, operation, view, actual, expected, coverage, witnesses) in collective_contracts {
-        let unresolved_witness = witnesses
-            .iter()
-            .copied()
-            .find(|witness| expressions.identity(*witness).is_none());
-        if let Some(witness) = unresolved_witness {
+    for collective in collective_contracts {
+        let block = collective.block;
+        let operation = collective.operation;
+        let view = collective.view;
+        let actual = collective.actual;
+        let expected = collective.expected;
+        let coverage = collective.coverage;
+        let Some(actual_fact) = expressions.typed_root_fact(actual) else {
             push(
                 &mut findings,
                 PlironSemanticRefinementFindingV1::CollectiveContractIncomplete {
                     block,
                     operation,
-                    reason: if witness.defining_op().is_some() {
-                        "a typed operator, transition, identity, mapping, or inverse commitment is unresolved"
-                    } else {
-                        "a contract witness has no defining semantic operation"
-                    },
+                    reason: "the actual value is not a reconstructed typed semantic root",
                 },
             );
             continue;
+        };
+        let Some(expected_fact) = expressions.typed_root_fact(expected) else {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::CollectiveContractIncomplete {
+                    block,
+                    operation,
+                    reason: "the expected value is not a reconstructed typed semantic root",
+                },
+            );
+            continue;
+        };
+        let Some(witness0_fact) = expressions.typed_root_fact(collective.witness0) else {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::CollectiveContractIncomplete {
+                    block,
+                    operation,
+                    reason: "the first collective witness is not a reconstructed typed semantic root",
+                },
+            );
+            continue;
+        };
+        let Some(witness1_fact) = expressions.typed_root_fact(collective.witness1) else {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::CollectiveContractIncomplete {
+                    block,
+                    operation,
+                    reason: "the second collective witness is not a reconstructed typed semantic root",
+                },
+            );
+            continue;
+        };
+        let Some(numerical_policy) = collective.numerical_policy else {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::CollectiveContractRejected {
+                    block,
+                    operation,
+                    reason: "the declared collective numerical policy is absent",
+                },
+            );
+            continue;
+        };
+        if actual_fact != expected_fact {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::CollectiveContractRejected {
+                    block,
+                    operation,
+                    reason: "actual and expected roots do not share one scalar and numerical contract",
+                },
+            );
+            continue;
+        }
+        if actual_fact.contract.policy != numerical_policy {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::CollectiveContractRejected {
+                    block,
+                    operation,
+                    reason: "the declared collective policy does not match the actual and expected typed roots",
+                },
+            );
+            continue;
+        }
+        match collective.kind {
+            CollectiveContractKindV1::Fold | CollectiveContractKindV1::Recurrence => {
+                if witness0_fact != actual_fact || witness1_fact != actual_fact {
+                    push(
+                        &mut findings,
+                        PlironSemanticRefinementFindingV1::CollectiveContractRejected {
+                            block,
+                            operation,
+                            reason: "a fold or recurrence witness scalar or numerical contract does not match its result",
+                        },
+                    );
+                    continue;
+                }
+            }
+            CollectiveContractKindV1::Permutation => {
+                if witness0_fact != witness1_fact
+                    || !witness0_fact.scalar.is_integer()
+                    || witness0_fact.contract.policy
+                        != SemanticNumericalPolicyAttr::ExactBitVectorOperatorCongruence
+                {
+                    push(
+                        &mut findings,
+                        PlironSemanticRefinementFindingV1::CollectiveContractRejected {
+                            block,
+                            operation,
+                            reason: "permutation mapping and inverse must share one integer bitvector contract",
+                        },
+                    );
+                    continue;
+                }
+            }
         }
         let required_coverage = match coverage {
             Some(SemanticCoverageBindingAttr::TotalView) => OwnershipCoverageAttr::TotalView,
@@ -830,12 +1278,14 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
     }
     let effect_refinement =
         run_pliron_effect_refinement_with_analyses_v1(context, function, analyses);
+    let typed_root_commitments = expressions.typed_root_commitments().to_vec();
     PlironSemanticRefinementReportV1 {
         findings,
         reference_obligations: reference_count,
         proved_reference_obligations,
         collective_contracts: collective_count,
         proved_collective_contracts,
+        typed_root_commitments,
         effect_refinement,
     }
 }
@@ -886,6 +1336,7 @@ fn one(finding: PlironSemanticRefinementFindingV1) -> PlironSemanticRefinementRe
         proved_reference_obligations: 0,
         collective_contracts: 0,
         proved_collective_contracts: 0,
+        typed_root_commitments: Vec::new(),
         effect_refinement: clean_effect_refinement_report_v1(),
     }
 }
@@ -942,6 +1393,7 @@ mod status_tests {
             proved_reference_obligations: 0,
             collective_contracts: 0,
             proved_collective_contracts: 0,
+            typed_root_commitments: Vec::new(),
             effect_refinement: clean_effect_refinement_report_v1(),
         };
         assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
@@ -953,6 +1405,7 @@ mod status_tests {
                 proved_reference_obligations: 0,
                 collective_contracts: 0,
                 proved_collective_contracts: 0,
+                typed_root_commitments: Vec::new(),
                 effect_refinement: clean_effect_refinement_report_v1(),
             }
             .status(),
