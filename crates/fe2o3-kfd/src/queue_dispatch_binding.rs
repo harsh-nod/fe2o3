@@ -571,14 +571,14 @@ impl Gfx942CompletedDispatchReadbackV1 {
 
 /// Frozen claim boundary for the addressless fixed-dispatch binding slice.
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r11-v1\n",
+    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r12-v1\n",
     "target=gfx942:xnack-,COV6,one-selected-current-device-vm-and-queue-generation\n",
     "code=1-through-32-validated-amdhsa-kernel-envelopes,content-and-selected-descriptor-identity,exact-zero-then-copy-materialization-into-owned-gtt,read-only-seal-before-map,per-packet-program-selection,unused-inspected-programs-retained-without-publication,descriptor-resolution-with-checked-relative-arithmetic\n",
     "kernarg=public-inert-complete-byte-images,exact-inspected-size-and-power-of-two-alignment,optional-exact-trailing-256-byte-COV6-implicit-suffix-must-be-caller-zero,metadata-declared-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds-only,queue-pointer-and-runtime-service-or-address-fields-rejected,all-global-buffer-fields-zero,checked-nonoverlapping-8-byte-internal-device-pointer-patches,one-owned-kernarg-gtt-arena-with-N-distinct-checked-aligned-slices,private-initialization-before-map\n",
     "geometry=block-count-floor-grid-div-workgroup,remainder-grid-mod-workgroup,inactive-dimensions-count-and-group-one-remainder-zero,uniform-workgroup-rejects-any-nonzero-remainder\n",
     "data=1-through-16-actual-linear-mapped-device-local-or-host-visible-coherent-authorities,exact-device-vm-and-allocation-generation,complete-device-local-live-set,all-authorities-retained-even-when-no-packet-references-them,checked-bounded-referenced-subranges,inspected-actual-access-derived-internally-only-for-referenced-authorities,read-or-readwrite-requires-sealed-full-extent-initialization,write-only-admits-uninitialized-exclusive-storage,optional-enclosing-snapshot-requires-coherent-full-initialization\n",
     "batch=1-through-8192,aql-fixed-batch-v2,minimum-ring-packet-capacity-checked,all-program-code-owners,N-distinct-kernarg-slices,conservative-wait-for-prior-default-with-explicit-independent-opt-in,one-generation-bound-template-retaining-the-final-header-per-packet,one-reservation-one-write-counter-fetch-add-one-final-doorbell-and-one-signal-per-packet-composition\n",
-    "retention=queue-owns-all-code-kernarg-and-data-authorities-through-exact-ready-and-recycle,unreferenced-data-has-no-inspected-effect-or-readback-authority,ordinary-destroy-releases-all,returning-destroy-requires-one-exact-recycled-generation-and-returns-actual-mapped-authorities-with-owning-memory-session,fully-initialized-state-preserved-without-stale-current-content-digest,initially-uninitialized-remains-uninitialized\n",
+    "retention=queue-owns-all-code-kernarg-and-data-authorities-through-exact-ready-and-recycle,unreferenced-data-has-no-inspected-effect-or-readback-authority,ordinary-destroy-releases-all,returning-destroy-requires-one-exact-recycled-generation-and-returns-actual-mapped-authorities-with-owning-memory-session,replacement-owner-seeded-from-exact-recycled-predecessor-and-strictly-advances-before-publication,fully-initialized-state-preserved-without-stale-current-content-digest,initially-uninitialized-remains-uninitialized\n",
     "readback=owned-byte-copy-only-after-exact-completion-and-signal-recycle,exact-dispatch-generation-and-retained-host-visible-allocation-authority,ordinary-request-must-be-contained-in-exactly-one-metadata-inspected-write-or-readwrite-binding;optional-snapshot-request-must-exactly-match-one-retained-strictly-enclosing-initialized-range-with-one-isolated-inspected-writable-interior;device-local-readonly-unwritten-out-of-range-overlapping-subrange-and-stale-requests-rejected,no-initialization-promotion\n",
     "queue-transfer=ordinary-path-still-rejects-device-memory,dispatch-path-requires-exact-complete-distinct-set-of-every-live-mapped-c3-lease-before-model-mutation\n",
     "failure=all-layout-and-identity-validation-before-native-preparation;post-side-effect-failure,currentness,publication,completion,timeout,recycle-or-release-ambiguity-poisons-and-requires-teardown\n",
@@ -590,7 +590,7 @@ pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1`].
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1: &str =
-    "4307f4e7aedd1a1b8582fd150966fb5d8b9a4c95955759abcf5d755faa113da4";
+    "0a8d45c4050b754bda7591889ee3ae5cf83ffde1d83ec9cce750f12576bac188";
 
 type CodeAuthority = SharedGttQueueResourceAuthorityV1<
     AqlDispatchCodeResourceRoleV1,
@@ -829,6 +829,21 @@ impl DispatchGenerationOwnerV1 {
             phase: DispatchOwnerPhaseV1::Prepared,
             recycled_generation: None,
         }
+    }
+
+    fn after_recycled(predecessor: u64) -> Result<Self, Gfx942DispatchBindingErrorV1> {
+        if predecessor == 0 {
+            return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration);
+        }
+        let next_generation = predecessor
+            .checked_add(1)
+            .filter(|generation| generation.checked_add(1).is_some())
+            .ok_or(Gfx942DispatchBindingErrorV1::GenerationExhausted)?;
+        Ok(Self {
+            next_generation,
+            phase: DispatchOwnerPhaseV1::Prepared,
+            recycled_generation: None,
+        })
     }
 
     fn next(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
@@ -1899,6 +1914,35 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
     packets: [Gfx942FixedDispatchPacketV1; N],
     data: Vec<Gfx942FixedDispatchDataV1>,
 ) -> Result<DispatchResourceOwnerV1, Gfx942DispatchBindingErrorV1> {
+    prepare_public_fixed_dispatch_resources_with_generation(
+        memory,
+        programs,
+        packets,
+        data,
+        DispatchGenerationOwnerV1::new(),
+    )
+}
+
+pub(super) fn prepare_public_fixed_dispatch_resources_after_recycle<const N: usize>(
+    memory: &mut SharedGttMemorySessionV1,
+    programs: Vec<ValidatedKernelEnvelope<'_>>,
+    packets: [Gfx942FixedDispatchPacketV1; N],
+    data: Vec<Gfx942FixedDispatchDataV1>,
+    predecessor_generation: u64,
+) -> Result<DispatchResourceOwnerV1, Gfx942DispatchBindingErrorV1> {
+    let generation = DispatchGenerationOwnerV1::after_recycled(predecessor_generation)?;
+    prepare_public_fixed_dispatch_resources_with_generation(
+        memory, programs, packets, data, generation,
+    )
+}
+
+fn prepare_public_fixed_dispatch_resources_with_generation<const N: usize>(
+    memory: &mut SharedGttMemorySessionV1,
+    programs: Vec<ValidatedKernelEnvelope<'_>>,
+    packets: [Gfx942FixedDispatchPacketV1; N],
+    data: Vec<Gfx942FixedDispatchDataV1>,
+    generation: DispatchGenerationOwnerV1,
+) -> Result<DispatchResourceOwnerV1, Gfx942DispatchBindingErrorV1> {
     validate_packet_count::<N>()?;
     if programs.is_empty() || programs.len() > GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1 {
         return Err(Gfx942DispatchBindingErrorV1::ProgramCount {
@@ -2180,7 +2224,7 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
         packets: prepared_packets,
         data: data_authorities,
         data_premises,
-        generation: DispatchGenerationOwnerV1::new(),
+        generation,
     })
 }
 
@@ -3969,6 +4013,54 @@ mod tests {
             owner.next(),
             Err(Gfx942DispatchBindingErrorV1::Poisoned)
         ));
+    }
+
+    #[test]
+    fn replacement_owner_advances_from_exact_recycled_generation() {
+        let mut first = DispatchGenerationOwnerV1::new();
+        let first_generation = first.next().unwrap();
+        first.commit_begin(first_generation);
+        first.complete(first_generation).unwrap();
+        first.recycle(first_generation).unwrap();
+
+        let mut second =
+            DispatchGenerationOwnerV1::after_recycled(first.returned_generation().unwrap())
+                .unwrap();
+        let second_generation = second.next().unwrap();
+        assert_eq!(first_generation, 1);
+        assert_eq!(second_generation, 2);
+        second.commit_begin(second_generation);
+        second.complete(second_generation).unwrap();
+        second.recycle(second_generation).unwrap();
+        let writable = readback_premise(
+            Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+            DeviceDataEffectV1::WriteOnly,
+            &[(64, 64)],
+        );
+        let stale = Gfx942CompletedDispatchReadRequestV1::new(first_generation, 0, 64, 64);
+        assert!(validate_completed_read_request(&second, &[writable], stale).is_err());
+
+        let third =
+            DispatchGenerationOwnerV1::after_recycled(second.returned_generation().unwrap())
+                .unwrap();
+        assert_eq!(third.next().unwrap(), 3);
+        assert!(matches!(
+            DispatchGenerationOwnerV1::after_recycled(0),
+            Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration)
+        ));
+        for exhausted in [u64::MAX - 1, u64::MAX] {
+            assert!(matches!(
+                DispatchGenerationOwnerV1::after_recycled(exhausted),
+                Err(Gfx942DispatchBindingErrorV1::GenerationExhausted)
+            ));
+        }
+        assert_eq!(
+            DispatchGenerationOwnerV1::after_recycled(u64::MAX - 2)
+                .unwrap()
+                .next()
+                .unwrap(),
+            u64::MAX - 1
+        );
     }
 
     #[test]
