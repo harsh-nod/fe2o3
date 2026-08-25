@@ -727,13 +727,13 @@ prerequisite authenticator and test-only witnesses.
 Durable publication, finalized-bundle admission, currentness lease
 revalidation, the authenticated load state machine, generated alpha/zeta safe
 dispatch SPI, the reviewed runtime adapter, durable lease reacquisition, Cargo
-publication of the canonical Worker V2 load envelope, cooperative descriptor
+publication of the canonical load envelope, V3-only production descriptor
 handoff, recovered inert host admission, and safe split mutable views already
-exist. Still missing are a protected production application handoff and a
-production `WorkerV2PrerequisiteAuthenticatorV1`. Bounded machine-effect and
-Verus proof records are not production-bound to compiler origin and the exact
-artifact. These are the ordered critical milestones above; feature and
-architecture breadth follows them.
+exist. Still missing is a production `WorkerV2PrerequisiteAuthenticatorV1` that
+can promote the carried evidence into authorized HSA load and launch custody.
+Bounded machine-effect and Verus proof records are not production-bound to
+compiler origin and the exact artifact. These are the ordered critical
+milestones above; feature and architecture breadth follows them.
 
 The compiler ABI descriptor is the integration boundary. Runtime code may
 compare an untrusted manifest with a compiler-generated descriptor, but it may

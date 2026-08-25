@@ -186,15 +186,17 @@ production proof-authenticated dispatch or CUDA-Oxide parity. Complete remains
 1. **Implemented: durable claim and lease recovery.** Reacquire a fresh non-clone lease only
    after revalidating the persisted receipt, complete plan, exact files,
    current generation, path identity, and lock.
-2. **Implemented: canonical Worker V2 load envelope.** Cargo preserves raw/final
-   snapshots, encodes the container, bundle/proof evidence, descriptor lineage,
+2. **Implemented: canonical Worker V3 load-readiness envelope.** Cargo preserves
+   raw/final snapshots, encodes the container, bundle/proof evidence, descriptor lineage,
    finalized identity, and durable claim, and publishes and reconstructs the
    inert envelope. The process-local lease is never serialized.
 3. **Implemented inert foundation: recovered admission and cooperative handoff.**
    Cargo passes read-only pinned descriptors; the host reacquires the lease and
-   reruns structural, semantic, physical ABI, marker, and currentness checks. A
-   protected production application handoff and a generated-safe MI300X replay
-   without the external-HSACO test handoff remain open.
+   reruns structural, semantic, physical ABI, marker, and currentness checks.
+   Production now admits only the V3 application descriptor protocol and binds
+   the descriptors to a sealed application identity and fresh occurrence.
+   Prerequisite authentication and a generated-safe MI300X replay without the
+   external-HSACO test handoff remain open.
 4. **Implemented inert foundation: machine-effect evidence.** Bounded physical
    machine-effect records bind reviewed mechanics and identities. Directly
    extracting each final alpha/zeta payload's closed effects and admitting that
@@ -359,12 +361,11 @@ Finalized Worker V2 bundle admission, currentness leases, the authenticated
 load state machine, generated alpha/zeta safe dispatch SPI, and the reviewed
 runtime adapter already exist. The generated-safe MI300X test exercises those
 runtime pieces with explicit test authority. Cargo envelope publication,
-canonical lease reacquisition, cooperative descriptor handoff, and recovered
-inert host admission also exist. This gate still requires a protected
-production application handoff and a production
-`WorkerV2PrerequisiteAuthenticatorV1`. Bidirectional external-device FFI,
-`gfx1151`, production-bound machine-code effect evidence, and Verus/compiler
-refinement also remain open.
+canonical lease reacquisition, V3-only production descriptor handoff, and
+recovered inert host admission also exist. This gate still requires a
+production `WorkerV2PrerequisiteAuthenticatorV1`. Bidirectional external-device
+FFI, `gfx1151`, production-bound machine-code effect evidence, and
+Verus/compiler refinement also remain open.
 
 ## G8: Reproducibility, Evidence, and Release Gate
 

@@ -391,12 +391,14 @@ the reviewed `fe2o3-hsa-runtime` lifecycle and implicit-kernarg adapters. Unit,
 mutation, and UI tests cover the state transitions, retained borrows, packing,
 alias admission, currentness, identity substitution, and terminal completion.
 
-The production trust chain still lacks protected application handoff and
-prerequisite authentication. Cargo now durably publishes and reconstructs the
-canonical load envelope, transfers pinned envelope and artifact-directory
-descriptors through a bounded cooperative handoff, and retains a fresh
-current-publication lease. Recovered host admission revalidates that handoff
-and currentness but returns an inert descriptor. The `cargo-fe2o3` two-entry
+The production trust chain now has one protected V3 application descriptor
+handoff but still lacks prerequisite authentication. Cargo durably publishes
+and reconstructs the canonical load envelope, transfers pinned envelope and
+artifact-directory descriptors to an identity-pinned sealed application,
+binds them to a fresh occurrence and challenge-bound ACK, and retains a fresh
+current-publication lease through application exit. Recovered host admission
+revalidates that handoff and currentness but returns an inert descriptor. The
+`cargo-fe2o3` two-entry
 artifact-container adapter is compiled outside tests but remains inert.
 Separately, `WorkerV2PrerequisiteAuthenticatorV1` defines the reviewed boundary
 for compiler, Verus, proof, Rust ABI, and executable-effect evidence, but the

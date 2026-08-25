@@ -645,8 +645,13 @@ turn the foundations below into end-to-end features.
   current-generation replay intent, while registry-rooted scavenging removes
   only superseded custody. The envelope still grants no descriptor
   authentication, semantic admission, HSA readiness, load, or launch
-  authority. V3 application descriptor transfer, host admission, exclusive
-  Cargo routing, and HSA launch remain open.
+  authority. Production now transfers only the canonical V3 envelope and
+  artifact-directory descriptors to an identity-pinned sealed application. A
+  fresh occurrence binds those descriptors and the ACK channel; Cargo checks
+  the challenge-bound ACK and retains the current-publication lease through
+  application exit. Worker V2 application transfer is qualification-only.
+  Production prerequisite authentication, authorized HSA loading, and launch
+  remain open.
 - Linux-only rustc and codegen-backend primitives use descriptor-backed procfs
   paths. The external Cargo path copies the backend into a rehashed, immutable
   sealed memfd and installs it after a compile-shaped managed wrapper
@@ -816,18 +821,20 @@ turn the foundations below into end-to-end features.
   In required-envelope mode, the Cargo production path consumes a measured
   upstream canonical envelope-input capsule rather than synthesizing direct-link
   or proof evidence. It binds that input to the build attempt, durably stages
-  it, publishes the exact canonical Worker V2 load envelope, and reconstructs
-  the same envelope from durable input and HSACO claims across restart. The
-  envelope retains the artifact container, bundle index, direct-link evidence,
+  it, publishes the exact canonical Worker V3 load-readiness envelope, and
+  reconstructs the same envelope from durable input and HSACO claims across
+  restart. The envelope retains the artifact container, bundle index,
+  direct-link evidence,
   descriptor lineage, per-kernel proof records, raw HSACO, finalized payload,
   and canonical reacquirable publication claim. Cargo validates transport,
   canonical encoding, identities, and restart closure; it does not authenticate
   the supplied compiler, proof, or machine-effect claims. A bounded cooperative
   application handoff now transfers pinned envelope and artifact-directory
-  descriptors while Cargo retains a fresh current-publication lease, and the
-  host revalidates both before returning an inert descriptor. This is not a
-  protected production handoff and grants no prerequisite, load, or launch
-  authority.
+  descriptors to an identity-pinned sealed application while Cargo retains a
+  fresh current-publication lease. The V3 occurrence binds the envelope,
+  artifact directory, and ACK descriptors; the host revalidates them before
+  returning an inert descriptor. This is the sole protected production
+  descriptor handoff, but it grants no prerequisite, load, or launch authority.
 
   Separately, only fake/test implementations of
   `WorkerV2PrerequisiteAuthenticatorV1` exist, so compiler, Verus/proof, Rust

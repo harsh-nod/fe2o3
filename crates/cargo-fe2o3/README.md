@@ -306,6 +306,16 @@ closure, attempt, handoff receipt, output, publication intent, and durable load
 envelope before resuming. Directory scans are bounded, and authoritative path
 and argument bytes are never compared through lossy UTF-8 conversion.
 
+`cargo fe2o3 run` also has one production application protocol. It accepts only
+the canonical Worker V3 load envelope, pins a sealed static application and its
+V3 identity, binds the envelope, artifact-directory, and ACK descriptors into a
+fresh occurrence, validates the challenge-bound ACK, and retains the
+current-publication lease until the application exits. Worker V2 envelope
+decoding, lease recovery, child environment, challenge, and ACK validation are
+compiled only for qualification-oracle and test builds. The V3 transfer carries
+inert descriptor custody; it does not itself authenticate prerequisites or grant
+HSA load or launch authority.
+
 Legacy protected V2 and ordinary V1 state machines are qualification paths.
 Their work state, restart modules, workload parsers, and V2 intake compile only
 with `qualification-oracles-test-only`; they are absent from the normal binary

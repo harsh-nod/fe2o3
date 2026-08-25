@@ -30,8 +30,8 @@ SHA-256-pinned HSACO.
 
 The remaining composition is larger than implementing
 `WorkerV2PrerequisiteAuthenticatorV1`. Cargo now durably publishes the bounded
-Worker V2 load envelope, recovers it from exact retained inputs, and transfers
-the canonical envelope and artifact-directory descriptors to the application
+Worker V3 load-readiness envelope, recovers it from exact retained inputs, and
+transfers the canonical envelope and artifact-directory descriptors to the application
 while retaining a fresh current-publication lease. The accepted host consumer
 revalidates that descriptor handoff and currentness before reaching exact
 prerequisite admission. No production authenticator binds the bounded
@@ -268,12 +268,13 @@ refinement, or repository-wide CUDA-Oxide parity.
 2. Implemented: publication-intent derivation is sealed behind the finalizer API
    with raw and finalized snapshots; Cargo's duplicate derivation is removed.
 3. Implemented: Cargo durably publishes and reconstructs the canonical bounded
-   Worker V2 load envelope containing the container, bundle/proof index,
-   descriptor lineage, raw/finalized identities, and published claim.
+   Worker V3 load-readiness envelope containing the container, bundle/proof
+   index, descriptor lineage, raw/finalized identities, and published claim.
 4. Implemented inert foundation: recovered host admission consumes that
-   envelope with a freshly reacquired lease, and the cooperative application
-   handoff transfers read-only pinned descriptors. A protected production
-   application handoff and a generated-safe MI300X replay without the external
+   envelope with a freshly reacquired lease. The production V3 application
+   handoff transfers read-only pinned descriptors to an identity-pinned sealed
+   application and binds them to a fresh occurrence. Prerequisite
+   authentication and a generated-safe MI300X replay without the external
    HSACO test handoff remain open.
 5. Implemented inert foundation: bounded physical machine-effect evidence and
    executable-evidence records bind reviewed mechanics and identities. Direct

@@ -194,8 +194,11 @@ after restart. Cargo does not synthesize or authenticate the capsule's compiler,
 proof, or effect claims. Recovered host admission independently reacquires a
 fresh lease and revalidates finalized bytes and descriptor lineage, but returns
 an inert descriptor with no bytes, authentication, load, launch, or prerequisite
-authority. Production application handoff and an implementation of
-`WorkerV2PrerequisiteAuthenticatorV1` remain absent.
+authority. Production now admits only the V3 application envelope and binds its
+pinned descriptors to a sealed application identity and fresh occurrence. A
+production implementation of `WorkerV2PrerequisiteAuthenticatorV1` remains
+absent, so the handoff cannot yet promote the carried evidence into load or
+launch authority.
 
 The new compiler-transaction capsule is inert caller-measured evidence. The
 pre-envelope proof capsule binds persistent ancestry but supplies neither
@@ -406,8 +409,8 @@ The detailed dependencies and exit criteria are in
   `3a916cdabca05ac74d340889aab2067221d6d1252a7cde13e61c1786252565c4`.
   Required-envelope mode accepts only a measured upstream canonical
   envelope-input capsule. It durably binds that input to the attempt, publishes
-  the exact canonical Worker V2 load envelope, and reconstructs the same
-  envelope after restart from durable input and HSACO claims. Cargo neither
+  the exact canonical Worker V3 load-readiness envelope, and reconstructs the
+  same envelope after restart from durable input and HSACO claims. Cargo neither
   synthesizes nor authenticates the supplied direct-link, proof, compiler, or
   effect evidence. Recovered host admission reacquires and revalidates the exact
   durable publication but returns an inert descriptor with no bytes,
