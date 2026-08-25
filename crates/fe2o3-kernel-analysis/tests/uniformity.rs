@@ -3,11 +3,11 @@ use fe2o3_kernel_analysis::{
 };
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, Axis, Barrier, BarrierSemantics,
-    BasicBlock, BinaryOp, BlockId, CastKind, ComparePredicate, Constant, Convergence,
-    F32MathFunction, FloatOperation, Function, FunctionId, IndexKind, IntrinsicKind,
+    BasicBlock, BinaryOp, BlockId, CastKind, CheckedBinaryOperator, ComparePredicate, Constant,
+    Convergence, F32MathFunction, FloatOperation, Function, FunctionId, IndexKind, IntrinsicKind,
     IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering, Module,
-    Operation, OperationKind, ScalarType, Signature, SynchronizationScope, Terminator, Type,
-    ValueDef, ValueId, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
+    Operation, OperationKind, ScalarType, Signature, SwitchCase, SynchronizationScope, Terminator,
+    Type, ValueDef, ValueId, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
     WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
 };
 
@@ -78,6 +78,79 @@ fn cast(id: u32, kind: CastKind, value: u32, to: Type) -> Operation {
     )
 }
 
+fn checked_index(
+    value: u32,
+    overflow: u32,
+    operator: CheckedBinaryOperator,
+    lhs: u32,
+    rhs: u32,
+) -> Operation {
+    Operation::checked_binary(
+        ValueDef::new(ValueId(value), Type::INDEX),
+        ValueDef::new(ValueId(overflow), Type::BOOL),
+        operator,
+        ValueId(lhs),
+        ValueId(rhs),
+    )
+}
+
+fn compare_with(id: u32, predicate: ComparePredicate, lhs: u32, rhs: u32) -> Operation {
+    Operation::effect_free(
+        ValueDef::new(ValueId(id), Type::BOOL),
+        OperationKind::Compare {
+            predicate,
+            lhs: ValueId(lhs),
+            rhs: ValueId(rhs),
+        },
+    )
+}
+
+fn zero_extend_to_index(id: u32, value: u32) -> Operation {
+    cast(id, CastKind::ZeroExtend, value, Type::INDEX)
+}
+
+fn private_slot(id: u32) -> Operation {
+    Operation::effect_free(
+        ValueDef::new(
+            ValueId(id),
+            Type::pointer(Type::INDEX, AddressSpace::Private, AccessMode::ReadWrite),
+        ),
+        OperationKind::Alloca {
+            element: Type::INDEX,
+            count: None,
+            address_space: AddressSpace::Private,
+            alignment: 8,
+        },
+    )
+}
+
+fn private_store(pointer: u32, value: u32) -> Operation {
+    Operation::new(
+        vec![],
+        OperationKind::Store {
+            pointer: ValueId(pointer),
+            value: ValueId(value),
+            access: MemoryAccess::new(AddressSpace::Private, 8),
+        },
+    )
+}
+
+fn private_load(id: u32, pointer: u32) -> Operation {
+    Operation::effect_free(
+        ValueDef::new(ValueId(id), Type::INDEX),
+        OperationKind::Load {
+            pointer: ValueId(pointer),
+            access: MemoryAccess::new(AddressSpace::Private, 8),
+        },
+    )
+}
+
+fn analyze_as_kernel(function: &Function) -> fe2o3_kernel_analysis::AnalysisReport {
+    let mut module = Module::new("uniformity_private_storage");
+    module.functions.push(function.clone());
+    analyze_kernel_entry(&module, function)
+}
+
 fn workgroup_barrier() -> Operation {
     Operation::new(
         vec![],
@@ -117,6 +190,346 @@ fn returning(id: u32) -> BasicBlock {
     let mut block = BasicBlock::new(BlockId(id));
     block.terminator = Some(Terminator::Return { values: vec![] });
     block
+}
+
+#[test]
+fn bounded_lane_arithmetic_has_a_uniform_overflow_flag() {
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.extend([
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::X,
+            },
+        ),
+        constant(1, Constant::Index(64)),
+        binary(2, BinaryOp::Remainder, 0, 1),
+        constant(3, Constant::Index(16)),
+        binary(4, BinaryOp::Divide, 2, 3),
+        constant(5, Constant::Index(4)),
+        checked_index(6, 7, CheckedBinaryOperator::Multiply, 4, 5),
+    ]);
+    entry.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(7),
+        then_target: BlockId(1),
+        then_arguments: vec![],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+    let mut success = returning(2);
+    success.operations.push(workgroup_barrier());
+
+    let report = analyze_function(&function(vec![], vec![entry, returning(1), success]));
+
+    assert_eq!(report.value(ValueId(6)), Variation::Varying);
+    assert_eq!(report.value(ValueId(7)), Variation::GridUniform);
+    assert_eq!(report.block_control(BlockId(2)), Variation::GridUniform);
+    assert!(report.diagnostics().is_empty());
+}
+
+#[test]
+fn unconstrained_lane_arithmetic_keeps_overflow_varying() {
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.extend([
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::X,
+            },
+        ),
+        constant(1, Constant::Index(4)),
+        checked_index(2, 3, CheckedBinaryOperator::Multiply, 0, 1),
+    ]);
+    entry.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(3),
+        then_target: BlockId(1),
+        then_arguments: vec![],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+    let mut success = returning(2);
+    success.operations.push(workgroup_barrier());
+
+    let report = analyze_function(&function(vec![], vec![entry, returning(1), success]));
+
+    assert_eq!(report.value(ValueId(2)), Variation::Varying);
+    assert_eq!(report.value(ValueId(3)), Variation::Varying);
+    assert!(matches!(
+        report.diagnostics(),
+        [Diagnostic::DivergentBarrier {
+            block: BlockId(2),
+            ..
+        }]
+    ));
+}
+
+#[test]
+fn dominating_u32_guards_bound_index_multiply_and_add() {
+    let parameters = vec![ValueId(0), ValueId(1), ValueId(2)];
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.extend([
+        zero_extend_to_index(3, 0),
+        zero_extend_to_index(4, 1),
+        zero_extend_to_index(5, 2),
+        intrinsic(
+            6,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::X,
+            },
+        ),
+        intrinsic(
+            7,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Local,
+                axis: Axis::X,
+            },
+        ),
+        compare_with(8, ComparePredicate::LessThan, 6, 3),
+    ]);
+    entry.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(8),
+        then_target: BlockId(1),
+        then_arguments: vec![],
+        else_target: BlockId(3),
+        else_arguments: vec![],
+    });
+    let mut depth_guard = BasicBlock::new(BlockId(1));
+    depth_guard
+        .operations
+        .push(compare_with(9, ComparePredicate::LessThan, 7, 5));
+    depth_guard.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(9),
+        then_target: BlockId(2),
+        then_arguments: vec![],
+        else_target: BlockId(3),
+        else_arguments: vec![],
+    });
+    let mut arithmetic = returning(2);
+    arithmetic.operations.extend([
+        checked_index(10, 11, CheckedBinaryOperator::Multiply, 6, 4),
+        checked_index(12, 13, CheckedBinaryOperator::Add, 10, 7),
+    ]);
+    let kernel = Function::definition(
+        "guarded_index",
+        Signature::new(
+            vec![
+                Type::Scalar(ScalarType::U32),
+                Type::Scalar(ScalarType::U32),
+                Type::Scalar(ScalarType::U32),
+            ],
+            vec![],
+        ),
+        parameters,
+        vec![entry, depth_guard, arithmetic, returning(3)],
+    );
+
+    let report = analyze_as_kernel(&kernel);
+
+    assert_eq!(report.value(ValueId(10)), Variation::Varying);
+    assert_eq!(report.value(ValueId(11)), Variation::GridUniform);
+    assert_eq!(report.value(ValueId(12)), Variation::Varying);
+    assert_eq!(report.value(ValueId(13)), Variation::GridUniform);
+}
+
+#[test]
+fn shared_branch_target_does_not_authenticate_a_range_guard() {
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.extend([
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::X,
+            },
+        ),
+        constant(1, Constant::Index(16)),
+        compare_with(2, ComparePredicate::LessThan, 0, 1),
+    ]);
+    entry.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(2),
+        then_target: BlockId(1),
+        then_arguments: vec![],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+    let mut shared_target = returning(1);
+    shared_target.operations.extend([
+        constant(3, Constant::Index(2)),
+        checked_index(4, 5, CheckedBinaryOperator::Multiply, 0, 3),
+    ]);
+    let mut false_path = BasicBlock::new(BlockId(2));
+    false_path.terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![],
+    });
+
+    let report = analyze_function(&function(vec![], vec![entry, shared_target, false_path]));
+
+    assert_eq!(report.value(ValueId(5)), Variation::Varying);
+}
+
+#[test]
+fn near_maximum_checked_addition_fails_closed() {
+    let mut entry = returning(0);
+    entry.operations.extend([
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::X,
+            },
+        ),
+        constant(1, Constant::Index(1)),
+        checked_index(2, 3, CheckedBinaryOperator::Add, 0, 1),
+    ]);
+
+    let report = analyze_function(&function(vec![], vec![entry]));
+
+    assert_eq!(report.value(ValueId(3)), Variation::Varying);
+}
+
+#[test]
+fn exhaustive_known_enum_switch_does_not_create_a_synthetic_divergent_exit() {
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.extend([
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::X,
+            },
+        ),
+        constant(1, Constant::Index(0)),
+        compare_with(2, ComparePredicate::NotEqual, 0, 1),
+    ]);
+    entry.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(2),
+        then_target: BlockId(1),
+        then_arguments: vec![],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+    let mut zero = BasicBlock::new(BlockId(1));
+    zero.operations.push(constant(3, Constant::I64(0)));
+    zero.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![ValueId(3)],
+    });
+    let mut one = BasicBlock::new(BlockId(2));
+    one.operations.push(constant(4, Constant::I64(1)));
+    one.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![ValueId(4)],
+    });
+    let mut switch = BasicBlock::new(BlockId(3));
+    switch
+        .parameters
+        .push(ValueDef::new(ValueId(5), Type::Scalar(ScalarType::I64)));
+    switch.terminator = Some(Terminator::Switch {
+        selector: ValueId(5),
+        cases: vec![
+            SwitchCase {
+                value: 0,
+                target: BlockId(4),
+                arguments: vec![],
+            },
+            SwitchCase {
+                value: 1,
+                target: BlockId(5),
+                arguments: vec![],
+            },
+        ],
+        default_target: BlockId(6),
+        default_arguments: vec![],
+    });
+    let mut case_zero = BasicBlock::new(BlockId(4));
+    case_zero.terminator = Some(Terminator::Branch {
+        target: BlockId(7),
+        arguments: vec![],
+    });
+    let mut case_one = BasicBlock::new(BlockId(5));
+    case_one.terminator = Some(Terminator::Branch {
+        target: BlockId(7),
+        arguments: vec![],
+    });
+    let mut merge = returning(7);
+    merge.operations.push(workgroup_barrier());
+
+    let report = analyze_function(&function(
+        vec![],
+        vec![
+            entry,
+            zero,
+            one,
+            switch,
+            case_zero,
+            case_one,
+            returning(6),
+            merge,
+        ],
+    ));
+
+    assert_eq!(report.value(ValueId(5)), Variation::Varying);
+    assert_eq!(report.block_control(BlockId(7)), Variation::GridUniform);
+    assert!(report.diagnostics().is_empty());
+}
+
+#[test]
+fn unknown_switch_selector_keeps_the_default_exit_and_fails_closed() {
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.push(intrinsic(
+        0,
+        IntrinsicKind::InvocationIndex {
+            kind: IndexKind::Global,
+            axis: Axis::X,
+        },
+    ));
+    entry.terminator = Some(Terminator::Switch {
+        selector: ValueId(0),
+        cases: vec![
+            SwitchCase {
+                value: 0,
+                target: BlockId(1),
+                arguments: vec![],
+            },
+            SwitchCase {
+                value: 1,
+                target: BlockId(2),
+                arguments: vec![],
+            },
+        ],
+        default_target: BlockId(3),
+        default_arguments: vec![],
+    });
+    let mut case_zero = BasicBlock::new(BlockId(1));
+    case_zero.terminator = Some(Terminator::Branch {
+        target: BlockId(4),
+        arguments: vec![],
+    });
+    let mut case_one = BasicBlock::new(BlockId(2));
+    case_one.terminator = Some(Terminator::Branch {
+        target: BlockId(4),
+        arguments: vec![],
+    });
+    let mut merge = returning(4);
+    merge.operations.push(workgroup_barrier());
+
+    let report = analyze_function(&function(
+        vec![],
+        vec![entry, case_zero, case_one, returning(3), merge],
+    ));
+
+    assert_eq!(report.block_control(BlockId(4)), Variation::Varying);
+    assert!(matches!(
+        report.diagnostics(),
+        [Diagnostic::DivergentBarrier {
+            block: BlockId(4),
+            ..
+        }]
+    ));
 }
 
 #[test]
@@ -535,6 +948,123 @@ fn arithmetic_comparison_and_memory_rules_propagate_conservatively() {
     assert_eq!(report.value(ValueId(4)), Variation::Varying);
     assert_eq!(report.value(ValueId(5)), Variation::WorkgroupUniform);
     assert_eq!(report.value(ValueId(6)), Variation::Varying);
+}
+
+#[test]
+fn dominated_private_slot_round_trip_preserves_kernel_parameter_uniformity() {
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.extend([
+        private_slot(1),
+        private_store(1, 0),
+        private_load(2, 1),
+        constant(3, Constant::Index(0)),
+        compare(4, 2, 3),
+    ]);
+    entry.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(4),
+        then_target: BlockId(1),
+        then_arguments: vec![],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+    let mut then_block = BasicBlock::new(BlockId(1));
+    then_block.operations.push(workgroup_barrier());
+    then_block.terminator = Some(Terminator::Branch {
+        target: BlockId(2),
+        arguments: vec![],
+    });
+    let kernel = function(vec![ValueId(0)], vec![entry, then_block, returning(2)]);
+
+    let report = analyze_as_kernel(&kernel);
+
+    assert_eq!(report.value(ValueId(2)), Variation::GridUniform);
+    assert_eq!(report.block_control(BlockId(1)), Variation::GridUniform);
+    assert!(report.diagnostics().is_empty());
+}
+
+#[test]
+fn private_slot_round_trip_does_not_make_lane_values_uniform() {
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.extend([
+        private_slot(0),
+        intrinsic(
+            1,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Local,
+                axis: Axis::X,
+            },
+        ),
+        private_store(0, 1),
+        private_load(2, 0),
+        constant(3, Constant::Index(0)),
+        compare(4, 2, 3),
+    ]);
+    entry.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(4),
+        then_target: BlockId(1),
+        then_arguments: vec![],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+    let mut then_block = BasicBlock::new(BlockId(1));
+    then_block.operations.push(workgroup_barrier());
+    then_block.terminator = Some(Terminator::Branch {
+        target: BlockId(2),
+        arguments: vec![],
+    });
+    let kernel = function(vec![], vec![entry, then_block, returning(2)]);
+
+    let report = analyze_as_kernel(&kernel);
+
+    assert_eq!(report.value(ValueId(2)), Variation::Varying);
+    assert!(matches!(
+        report.diagnostics(),
+        [Diagnostic::DivergentBarrier {
+            block: BlockId(1),
+            ..
+        }]
+    ));
+}
+
+#[test]
+fn private_load_without_a_dominating_store_fails_closed() {
+    let mut entry = returning(0);
+    entry.operations.extend([
+        private_slot(0),
+        constant(1, Constant::Index(7)),
+        private_load(2, 0),
+        private_store(0, 1),
+    ]);
+    let kernel = function(vec![], vec![entry]);
+
+    let report = analyze_as_kernel(&kernel);
+
+    assert_eq!(report.value(ValueId(2)), Variation::Varying);
+}
+
+#[test]
+fn escaped_private_slot_load_fails_closed() {
+    let pointer_type = Type::pointer(Type::INDEX, AddressSpace::Private, AccessMode::ReadWrite);
+    let mut entry = returning(0);
+    entry.operations.extend([
+        private_slot(0),
+        constant(1, Constant::Index(7)),
+        Operation::effect_free(
+            ValueDef::new(ValueId(2), pointer_type.clone()),
+            OperationKind::Cast {
+                kind: fe2o3_kernel_ir::CastKind::Bitcast,
+                value: ValueId(0),
+                to: pointer_type,
+            },
+        ),
+        private_store(0, 1),
+        private_load(3, 0),
+    ]);
+    let kernel = function(vec![], vec![entry]);
+
+    let report = analyze_as_kernel(&kernel);
+
+    assert_eq!(report.value(ValueId(3)), Variation::Varying);
 }
 
 #[test]
