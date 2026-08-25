@@ -186,11 +186,24 @@ logical/CPU bytes and a checked doubled GPU-VA span. The CPU VMA covers only
 the physical copy. All four raw flag values are private constants supplied by
 the typed profile; callers cannot introduce other bits.
 
-Every live allocation retains its original anonymous `PROT_NONE` VMA as a GPU
-VA guard. CPU BO mappings are separately kernel-selected. Guards prevent the
+The queue liveness diagnostics have two crate-private ring profiles. One uses
+plain executable coherent GTT with a one-times GPU-VA span. It is selectable
+only by the consuming executable-ring barrier probe. The other registers one
+anonymous DONTFORK `PRIVATE|NORESERVE` VMA at the same CPU/GPU address with the
+exact executable, coherent, uncached, no-substitute USERPTR flags
+(`0xd6000004`). It is selectable only by the USERPTR barrier probe. Reusable
+queues and every dispatch API continue to require the special doubled AQL
+profile. These probes isolate ring backing; the USERPTR path deliberately does
+not claim full ROCr allocator or visible-GPU mapping-order equivalence.
+
+Every ordinary live allocation retains its original anonymous `PROT_NONE` VMA
+as a GPU VA guard. CPU BO mappings are separately kernel-selected. Guards prevent the
 host VMA allocator from recycling an address that KFD still owns, and the
 session independently checks half-open ranges for overlap. A guard is unmapped
-only after CPU munmap and successful `FREE_MEMORY_OF_GPU`.
+only after CPU munmap and successful `FREE_MEMORY_OF_GPU`. The diagnostic
+USERPTR profile instead makes the reserved pages accessible in place, unmaps
+them from the selected GPU, frees the KFD BO while the VMA is still live, then
+unmaps that same VMA without a second guard release.
 
 Every safe CPU view is closure-scoped and requires exclusive mutable access to
 the session. This prevents simultaneous safe aliases across allocations as
@@ -211,13 +224,15 @@ the one permitted `FREE_MEMORY_OF_GPU` attempt; Drop performs no ioctl, munmap,
 FREE, or retry.
 
 The crate-private queue bridge can consume mapped tokens into distinct,
-non-Clone ring, control, EOP, and context-save role capabilities. Each retains
+non-Clone ring, control, EOP, context-save, completion-signal, dispatch-code,
+and dispatch-kernarg role
+capabilities. Each retains
 the exact private GPU VA span, model mapping key, and proposed publication key;
 validated subranges are computed with checked bounds and alignment. Numeric
 addresses and bridge constructors are not public, and the bridge neither
 publishes a mapping nor grants queue authority. The eventual native queue
-adapter must retain all four role capabilities and admit their exact fe2o3
-backing policy before it can construct queue arguments.
+adapter retains the four CREATE_QUEUE role capabilities plus the separate
+completion arena and admits their exact fe2o3 backing policy before use.
 
 The completion journal projects exact profile kinds, allocation generations,
 non-overlapping GPU-VA spans, and successful map/unmap/release order into
@@ -239,6 +254,63 @@ backing equivalence or queue acceptance. This slice performs no queue ioctl,
 doorbell mapping, packet publication, dispatch, wait, VRAM, USERPTR/SVM, or
 peer mapping.
 
+## C3 gfx942 device-memory leases
+
+The shared KFD VM session can additionally own at most 64 writable
+device-local VRAM/HBM allocation records and at most 192 GiB of retained
+device memory. `Gfx942DeviceMemoryLeaseV1<State>` is non-Clone and exposes only
+checked requested/backing size, alignment, and the exact `0x80000001` UAPI
+profile. It retains the exact admitted device generation and VM identity
+privately. The unmapped and mapped typestates are consumed by explicit
+map/unmap/release methods. Even a mapped lease exposes no handle, descriptor,
+pointer, or numeric GPU address.
+
+Size rounding, capacity totals, power-of-two alignment through 4096 bytes,
+aperture ends, range overlap, handle identity, and mmap-offset identity use
+checked arithmetic and exact comparisons. Mapping targets only the selected
+GPU; peer arrays are absent. Every native transition is surrounded by the
+existing contracted device-currentness fence. Once an allocation ioctl has
+been attempted, any errno, malformed output, partial progress, trailing
+currentness failure, unmap ambiguity, FREE ambiguity, or VA-release ambiguity
+quarantines the entire shared session. The reservation and every possible
+handle remain retained, and Drop performs no cleanup or retry.
+
+The ordinary queue path still rejects live device-memory leases. The private C5
+dispatch path can transfer model ownership only when it consumes an exact,
+complete, distinct set representing every live mapped C3 lease. That bridge
+retains the real lease and keeps its address facts private. It does not turn an
+initialization declaration into copy evidence or expose a numeric address.
+The dedicated bounded lease journal is not projected into the runtime memory
+model and has no Verus-to-Rust or syscall refinement. Ordinary C3 leases still
+grant no CPU mapping, initialization, sync or async copy, alias, quiescence,
+public kernel launch, or hardware-completion authority.
+
+The separate `Gfx942InitializedDeviceMemoryV1` path admits exact
+`VRAM | PUBLIC | WRITABLE` flags (`0xa0000001`) without changing ordinary C3
+leases. One entry point accepts an owned nonempty byte slice and a content
+descriptor, checks their exact length and SHA-256 before allocation, copies the
+complete requested extent, and hashes the mapped bytes again. The private
+repeated-byte entry point instead precommits the exact nonempty extent, byte,
+role, and SHA-256, then fills the complete safe mapping without a second HBM
+scan. Large repeated-byte fills are partitioned into at most 16 disjoint safe
+slices and written by bounded scoped CPU workers; smaller fills stay serial.
+A worker spawn failure quarantines the retained session, and no partial fill
+can mint initialized-content authority. Both paths map the returned BO offset
+through the retained render file, use the same
+`PROT_NONE -> MADV_DONTFORK -> read/write` setup as GTT, explicitly unmap the
+CPU VMA, and only then map the allocation to the selected GPU. The result binds
+private allocation/device/VM generations to the checked content descriptor and
+exposes no native address or mutable view. A descriptor alone cannot construct
+it. This is generic KFD/service allocation behavior; it does not encode a
+model, inference engine, or workload-specific initialization policy.
+
+The exact checked gfx942 device profile and successful public-VRAM mmap are the
+only capability admission currently available. A driver or platform that
+rejects the flag profile or CPU mapping fails closed after retaining the native
+record in a quarantined session; it does not fall back to GTT or ordinary
+uninitialized VRAM. CPU/GPU coherence and device-read visibility remain
+contracted hardware behavior rather than proof claims.
+
 ## R4 queue-resource observations
 
 plan_gfx942_aql_queue_resources turns one selected, correlated topology
@@ -252,18 +324,23 @@ cwsr_enable=1; missing or changed values fail closed. Queue ID zero is
 explicitly valid: the pinned KFD process queue manager allocates the first zero
 bit from a zero-initialized 1024-slot bitmap.
 
-The plan also names the exact reviewed ROCr 7.2.4 backing-policy expressions.
-On the reviewed branches, ring and control produce fine-grained USERPTR
-profiles, EOP produces executable coarse VRAM, and CWSR requests anonymous host
+The plan also names the reviewed ROCr 7.2.4 backing-policy values. On the
+reviewed branches, the final ring ioctl is fine-grained USERPTR
+(`0xd6000004`), control produces a source-local fine-grained USERPTR profile,
+EOP produces executable coarse VRAM, and CWSR requests anonymous host
 SVM attributes with a USERPTR fallback. The manifest pins the queue call sites,
 runtime allocator dispatch, KFD driver flag translation, KMT allocation
 translation, the header definitions of page and huge-page alignment, and
-CWSR/EOP expressions needed to derive those values. This is an exact
-expression set, not a transitive ROCr policy implementation closure or
-evidence that an invocation selected a particular branch. These observations
-are not allocations accepted by the current fe2o3 memory authority. USERPTR,
-VRAM, SVM, queue creation, doorbell mmap and doorbell stores remain
-unsupported. The topology does not export CWSR sizes on the admitted host, so
+CWSR/EOP expressions needed to derive those values. The ring value includes
+the FMM-added no-substitute bit; other values remain source-local expressions.
+This is not a transitive ROCr policy implementation closure or
+evidence that an invocation selected a particular branch. These queue-resource
+backing observations do not grant allocation authority. General USERPTR/SVM,
+executable coarse-VRAM resource binding, queue
+creation through this planning API, doorbell mmap, and doorbell stores remain
+unsupported. The generic writable device-memory lease has no queue-resource
+binding or numeric-address export. The topology does not export CWSR sizes on
+the admitted host, so
 the plan uses and tests the exact pinned fallback formula. The read-only
 kfd-queue-resources example validates the topology-derived facts on every
 visible MI300X without opening /dev/kfd or creating a queue.
@@ -306,20 +383,201 @@ CREATE returns an admitted process-local queue ID, including zero, and the
 adapter maps the exact complete 8192-byte KFD process doorbell slice. It checks
 the encoded returned offset, installs MADV_DONTFORK before enabling the VMA,
 and exposes neither an address, pointer, fd, handle, nor public MMIO store. The
-private submission foundation initializes every ring header to exact INVALID
+internal submission foundation initializes every ring header to exact INVALID
 type 1 and the two control counters as atomics before GPU mapping. It uses the
 canonical `fe2o3-aql` single-producer model, the actual acquire/read counters,
-and an inert batch bound of one through 256 packets. One batch performs one
+and the additive V2 fixed-batch bound of one through 8192 packets. A maximum
+batch requires a ring of at least 512 KiB. One batch performs one
 acquire-release write-pointer fetch-add by the full count, copies all INVALID
 packet bodies before any aligned release header, publishes headers in packet
 order, and performs one release-fenced x86-SFENCE volatile `u64` doorbell
 store of the last packet ID. Counter divergence/regression and every possible
 side-effect failure poison the non-Clone owner; only full or insufficient
-space before the actual reservation is retryable. The private publication
+space before the actual reservation is retryable. The publication
 path revalidates the live process-global runtime transition, event, all shadow
-headers, payload, and currentness before publication. There is still no public
-launch API, code/kernarg/allocation generation binding, or completion authority
-in this slice.
+headers, payload, and currentness before publication. Public submission is
+reachable only through the addressless fixed-dispatch custody path below.
+
+The private completion slice owns one separate 512 KiB host-coherent GTT arena
+containing exactly 8192 distinct aligned `AmdBusyCompletionSignalV1` objects.
+The large fixed-cardinality packet and retention arrays are heap-owned. All
+signals are constructed as exact pending user signals before GPU mapping. A
+batch of one through 8192 packets receives one unique slot per packet; the
+binding retains the exact queue, signal allocation, code/kernarg mapping, and
+dispatch generations without exposing a numeric signal address. The generation
+keys detect substitution but do not themselves mint resource ownership,
+initialization, alias, or copy authority.
+
+Completion observation performs bounded atomic `i64` acquire loads. A batch is
+ready only after every exact signal is zero; pending, unexpected-value fault,
+timeout, currentness loss, and native observation ambiguity are distinct.
+Fault, timeout, invalid poll bounds, generation exhaustion, ambiguity, or any
+partial reset terminally poison the queue and require process teardown.
+Completed slots can be recycled only by a checked
+release reset to pending, after which their slot generations advance. Queue
+destroy refuses any bound, published, or completed-but-unrecycled batch and
+releases the completion arena only after confirmed queue destruction.
+
+### One-shot queue liveness probe
+
+`Gfx942BarrierProbePollBoundV1::new` validates a nonzero bounded poll count
+without consuming device authority. The public consuming
+`CheckedGfx942XnackMinusDevice::run_compute_aql_barrier_probe` operation then
+creates an exact fresh queue with no dispatch resources, leases one completion
+signal, publishes one zero-dependency system-scoped BARRIER_AND packet, and
+returns redacted success evidence only after exact completion validation,
+release-reset of that signal, and confirmed queue destruction.
+
+`run_compute_aql_executable_ring_barrier_probe` performs the same consuming
+operation with a crate-private plain executable GTT ring whose CPU and GPU spans
+both equal the logical ring size. The ordinary probe, reusable queue creation,
+and all dispatch entry points retain the doubled special-AQL backing. The
+alternate probe therefore changes only the ring flags and mapping span.
+Every success, failure, and quarantined-custody observation records the selected
+backing, and the backing plus exact logical/GPU span is bound into queue plan
+and configuration identity.
+
+`run_compute_aql_userptr_ring_barrier_probe` performs the same operation with
+the exact `0xd6000004` one-times USERPTR diagnostic profile. The shared VMA is
+created with FE's DONTFORK and NORESERVE safety policy, initialized before its
+selected-GPU map, and freed with the USERPTR-specific BO-before-VMA order. This
+is the smallest backing-only discriminator, not full ROCr allocation or
+all-visible-GPU mapping parity. Any failure after entering inner USERPTR queue
+creation is `TerminalCreation` because a VMA or KFD registration may remain
+under process custody.
+
+The probe binds only queue and signal generations; it does not invent code,
+kernarg, or dispatch generations. Submission cancellation is permitted only
+for a stage-classified full or insufficient-space result before any native
+side effect. Execution failures return opaque quarantined queue custody that
+must remain until process teardown. A `TerminalTeardown` failure recovers no
+authority: native resource disposition is indeterminate, process termination
+is required, and retry, reopen, or confirmed-cleanup claims are prohibited.
+Any `CREATE_QUEUE` result not explicitly reported as failed with no effect, and
+every fallible boundary after successful creation, is `TerminalCreation`: no
+authority is recovered and process termination is required.
+The operation arms a process-global KFD runtime-gate poison before beginning
+destroy and clears it only after end-to-end confirmed success. An error or
+panic retains the poison, including failures after the native mutex owner
+would otherwise have been released, so another thread cannot reopen a queue in
+the teardown window.
+No safe result exposes a GPU address, signal address, descriptor, doorbell, or
+MMIO authority.
+
+### Addressless fixed dispatch binding
+
+`SharedGttMemorySessionV1::create_compute_aql_queue_with_fixed_dispatch`
+consumes the exact existing checked device/VM session, one through 32
+authenticated `ValidatedKernelEnvelope` values, one through 8192 complete
+packet descriptions, and one through 16 existing mapped device-local or
+host-visible coherent data authorities.
+Packet descriptions contain program indices, checked geometry, scalar kernarg
+bytes, zero device-pointer fields, and bounded allocation subranges. They
+contain no native address or caller-supplied effect. Pointer offsets,
+alignments, and read/write effects come only from inspected kernel metadata.
+Read and read/write arguments require sealed full-extent initialization;
+write-only arguments may consume uninitialized exclusive storage. Coherent GTT
+can obtain that sealed state only from an owned whole-extent copy before map;
+the arbitrary scoped-write API does not mint it.
+
+For kernels with hidden metadata, construction requires one exact trailing
+256-byte COV6 implicit suffix and requires every caller byte in that suffix to
+be zero. The retained owner privately initializes only metadata-declared block
+counts, group sizes, partial-group remainders, zero global offsets, grid
+dimensions, and dynamic LDS size before mapping the kernarg arena. Block counts
+are `grid / workgroup`; remainders are `grid % workgroup`. Inactive dimensions
+remain count one, group size one, and remainder zero. A kernel declared with
+uniform workgroups rejects any nonzero remainder. Queue pointers and every
+runtime-service or address field, including printf, hostcall, heap, default
+queue, completion action, multigrid, private base, and shared base, are rejected
+before native allocation.
+
+Construction also rejects missing or duplicate global-buffer bindings, nonzero
+pointer fields, range or alignment drift, intra-packet aliases, incomplete live
+lease sets, and read access without initialization before queue publication. It
+does not infer how many bytes a kernel actually accesses from a caller subrange.
+
+Each authenticated object is materialized exactly into an owned executable GTT
+allocation, hashed after materialization, CPU-sealed, and GPU-mapped. Each
+selected kernel descriptor is resolved by checked subtraction from the loader's
+image base and checked addition to its private mapped base. Kernargs occupy one
+owned mapped arena with distinct aligned slices per packet. Device pointers are
+inserted only inside a closure-scoped CPU initialization borrow; no numeric code,
+kernarg, or device address is returned by safe public API.
+
+The queue retains every code allocation, the kernarg arena, and every data lease
+while it publishes the batch and observes its unique per-packet signals. One
+nonzero dispatch generation advances from prepared to in-flight to completed to
+recycled in lockstep with C4. Ordinary pre-publication ring occupancy can cancel
+the inert binding. Any generation divergence, currentness loss, publication or
+observation ambiguity, timeout, fault, partial recycle, or teardown ambiguity
+poisons the session and requires process teardown. Explicit release occurs only
+after every signal was recycled. A recycled-only detach releases code and
+kernarg while keeping the same native queue, ring, completion arena, event,
+runtime, and doorbell alive. Its exact detached-lease ledger must be consumed by
+a later `bind_fixed_dispatch` or explicit release. The later batch may have a
+different program count, packet count, geometry, scalar bytes, and dispatch-data
+set. It is still published by one reservation and one final doorbell store.
+
+Storage that entered fully initialized remains fully initialized across generic
+completion and can be rebound without another upload. Exact pre-publication
+content descriptors are not returned as current after device publication.
+Storage admitted uninitialized under inspected write-only access remains
+uninitialized until a separate exact full-coverage effect join exists.
+
+While the same batch remains attached, the completed-and-recycled generation
+can copy an owned byte range from host-visible coherent data. A request binds
+the exact dispatch generation and data ordinal and must be contained in exactly
+one global-buffer binding whose inspected actual access is write-only or
+read-write. Device-local, read-only, unwritten, out-of-range, multiply
+intersecting, stale-generation, pre-completion, and pre-recycle requests fail.
+The CPU mapping never escapes, no GPU address is returned, and copying bytes
+does not promote partial writes to full-allocation initialization. Reusing or
+rebinding the queue advances the dispatch generation and stales old requests.
+
+Return is all-or-terminal. Once queue destruction is confirmed, any later
+event, runtime, doorbell, CWSR, queue-resource, code, kernarg, completion-arena,
+or model-restoration failure yields no recoverable returned state. The consumed
+session and its no-effect drops retain any possibly live native resources for
+process teardown; there is no partial in-process cleanup or retry.
+
+There is no initialization boolean or caller-supplied read premise. Implicit
+fields outside the exact geometry/dynamic-LDS subset remain unsupported.
+Per-segment GPU permission behavior for the uniformly mapped code allocation,
+concrete effect/alias semantics, CPU/GPU coherence, firmware packet execution,
+acquire-observed device-write visibility, and quiescence remain Contracted. The host
+state machines and mock fault tests are not a concrete Verus or machine
+refinement; the public custody path alone is not hardware execution evidence.
+
+### C6 unbacked device-content copy foundation
+
+The private C6 foundation binds one exact mapped GTT source publication to one
+exact mapped C3 destination generation, device and VM, requested byte extent,
+semantic role and ordinal, content SHA-256 and canonical content identity. A
+copy intent additionally binds nonzero operation and publication identities,
+the exact queue generation, and one dispatch generation. All substitutions and
+size failures retain both inputs before any possible side effect.
+
+After publication begins, packet-body, release-header, doorbell, completion
+observation, and signal-recycle failures are terminal and retain both resources
+for process teardown. Only an explicitly no-effect failure is retryable. The
+initialized-content state is reachable only through an opaque authenticated
+copy-completion token that binds the exact copy, queue, dispatch, completion
+batch, signal slot and generation, and last packet. Production deliberately has
+no constructor for that token, so neither public data, an internal descriptor,
+nor a boolean can mint initialized memory.
+
+This is a prerequisite state machine, not a device-copy implementation. The
+pinned KFD UAPI exposes no admitted memcpy or SDMA submission operation. The
+queue can now return its real mapped C3 set only after exact C4 recycle and
+confirmed destruction, but that return path is deliberately not connected to
+the content state machine. The next integration must authenticate an exact
+copy-kernel artifact and semantics and consume its exact C2 publication and C4
+completed batch to construct the opaque tokens above. Until those are
+composed, C6 provides no Linux copy backend, actual copy, or
+copy-completion-derived initialized lease. The independent public-VRAM CPU
+initialization path above does not authenticate a device copy. Neither path
+currently supplies a public read-dispatch premise or hardware evidence.
 
 Before event or queue creation, the composition takes a crate-global linear
 owner and executes exact KFD RUNTIME_ENABLE mode 1 with zero debugger address,
@@ -332,8 +590,9 @@ Each page transitions PROT_NONE, MADV_DONTFORK, then read/write. The same exact
 header names the event and one aligned zero reason word in the first shadow.
 No mapping address, pointer, fd, event handle, or MMIO capability is public.
 
-Explicit cleanup confirms queue DESTROY, event DESTROY, runtime disable,
-doorbell unmap, then CWSR/full-resource unmap and FREE. The process-global
+Explicit cleanup first requires every completion batch recycled, then confirms
+queue DESTROY, event DESTROY, runtime disable, doorbell unmap, and complete
+CWSR/queue-resource/completion-arena unmap and FREE. The process-global
 guard remains held through resource return. Drop performs none of those native
 operations. The isolated `kfd-compute-aql-queue` example confirms this lifecycle
 live on the selected MI300X while publishing zero packets and performing zero
@@ -352,15 +611,18 @@ This is queue-exception preparation, not actual fault-delivery evidence.
 CPU-visible debug suspend and checkpoint/wave-state control-stack copies remain
 unsupported because only the eight header pages are CPU shadows. Ordinary
 hardware CWSR preemption and restore use the GPUVM BO and remain Contracted,
-not excluded. Live kernel dispatch, completion, code/kernarg authority, and an
-injected-fault observation remain separate gates.
+not excluded. Live kernel dispatch, hardware completion evidence, a production
+data-copy and implicit-kernarg premise producer, and an injected-fault
+observation remain separate gates.
 
 The abstract Verus relation proves Active and Disabled are the only direct
 destroy sources and that failed-no-effect restores the exact retained source.
 It does not prove the Rust adapter, ioctl/mmap implementation, kernel, firmware,
 hardware, CPU/GPU atomic coherence, or concrete-to-model refinement. The
-private CPU publication sequence is implemented and hostile-tested, but live
-dispatch and completion remain excluded.
+private CPU publication and completion state machines are implemented and
+hostile-tested. GPU signal writes, their system-scope coherence, acquire
+visibility of device result writes, and dispatch quiescence remain Contracted;
+live dispatch and hardware completion evidence remain excluded.
 
 ## Direct-KFD semantic observation boundary
 

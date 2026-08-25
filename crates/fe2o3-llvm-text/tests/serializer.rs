@@ -373,6 +373,74 @@ fn general_gemm_machine_surface_round_trips_and_emits_typed_llvm() {
 }
 
 #[test]
+fn standard_amdgpu_abi_attributes_serialize_canonically() {
+    let existing = fixture(false, Hostile::None);
+    let mut functions = existing.module().functions().to_vec();
+    let helper_index = functions
+        .iter()
+        .position(|function| function.kind() == FunctionKindV2::Helper)
+        .unwrap();
+    let helper = functions[helper_index].clone();
+    let mut attributes = helper.attributes().to_vec();
+    attributes.extend([
+        FunctionAttributeV2::NoCompletionAction,
+        FunctionAttributeV2::NoDefaultQueue,
+        FunctionAttributeV2::NoHeapPointer,
+        FunctionAttributeV2::NoHostcallPointer,
+        FunctionAttributeV2::NoMultigridSyncArgument,
+        FunctionAttributeV2::NoQueuePointer,
+    ]);
+    functions[helper_index] = FunctionV2::new(
+        helper.id(),
+        helper.symbol(),
+        helper.kind(),
+        helper.calling_convention(),
+        helper.return_type(),
+        helper.parameters().to_vec(),
+        attributes,
+        helper.entry(),
+        helper.blocks().to_vec(),
+        helper.evidence().clone(),
+    )
+    .unwrap();
+    let module = ExecutableModuleV2::new(
+        existing.module().flags().to_vec(),
+        existing.module().named_metadata().to_vec(),
+        existing.module().globals().to_vec(),
+        existing.module().intrinsics().to_vec(),
+        functions,
+    )
+    .unwrap();
+    let handoff = Gfx942HandoffV2::new(existing.base().clone(), module).unwrap();
+    let assembly = serialize_gfx942_handoff_v2(&handoff).unwrap();
+    let attribute_line = assembly
+        .as_str()
+        .lines()
+        .find(|line| line.starts_with("attributes #0 ="))
+        .unwrap();
+    assert!(attribute_line.contains(
+        "\"amdgpu-no-completion-action\" \"amdgpu-no-default-queue\" \
+         \"amdgpu-no-heap-ptr\" \"amdgpu-no-hostcall-ptr\" \
+         \"amdgpu-no-multigrid-sync-arg\" \"amdgpu-no-queue-ptr\""
+    ));
+
+    if let Some(llvm_as) = std::env::var_os("FE2O3_LLVM_AS") {
+        let mut child = Command::new(llvm_as)
+            .args(["-o", "/dev/null", "-"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(assembly.as_bytes())
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+    }
+}
+
+#[test]
 fn serializer_rejects_cfg_gep_kernel_call_and_reserved_namespace_attacks() {
     assert_eq!(
         serialize_gfx942_handoff_v2(&fixture(false, Hostile::MultiIndexGep)),
@@ -382,18 +450,12 @@ fn serializer_rejects_cfg_gep_kernel_call_and_reserved_namespace_attacks() {
         })
     );
     assert_eq!(
-        serialize_gfx942_handoff_v2(&fixture(false, Hostile::UnreachableBlock)),
-        Err(SerializeErrorV2::UnreachableBlock {
-            function: fe2o3_llvm_handoff::FunctionIdV2::new(10),
-            block: fe2o3_llvm_handoff::BlockIdV2::new(99),
-        })
+        support::try_module_fixture(&base_fixture(), false, Hostile::UnreachableBlock),
+        Err(HandoffDiagnosticV2::UnsupportedInstruction)
     );
     assert_eq!(
-        serialize_gfx942_handoff_v2(&fixture(false, Hostile::EntryPredecessor)),
-        Err(SerializeErrorV2::EntryBlockHasPredecessor {
-            function: fe2o3_llvm_handoff::FunctionIdV2::new(10),
-            predecessor: fe2o3_llvm_handoff::BlockIdV2::new(2),
-        })
+        support::try_module_fixture(&base_fixture(), false, Hostile::EntryPredecessor),
+        Err(HandoffDiagnosticV2::UnsupportedInstruction)
     );
     assert_eq!(
         serialize_gfx942_handoff_v2(&fixture(false, Hostile::KernelCall)),
