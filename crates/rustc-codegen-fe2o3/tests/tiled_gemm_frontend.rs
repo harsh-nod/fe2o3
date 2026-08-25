@@ -46,6 +46,10 @@ fn genuine_build(workspace: &Path, target: &str, retained_llvm: Option<&Path>) -
             "--bin",
             "tiled_gemm_frontend_v1",
         ])
+        .env(
+            "FE2O3_BACKEND",
+            cargo_target_directory(workspace).join("debug/librustc_codegen_fe2o3.so"),
+        )
         .env("FE2O3_TARGET", target)
         .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1");
     if let Some(directory) = retained_llvm {

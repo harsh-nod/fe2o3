@@ -83,5 +83,17 @@ required-features = ["qualification-oracles-test-only"]
 name = "cross_crate_typed_binding"
 required-features = ["qualification-oracles-test-only"]
 
+[[test]]
+name = "tiled_gemm_frontend"
+required-features = ["qualification-oracles-test-only"]
+
+[[test]]
+name = "gfx942_wave_lds_compiler"
+required-features = ["qualification-oracles-test-only"]
+
+[[test]]
+name = "memory_intrinsics_compiler"
+required-features = ["qualification-oracles-test-only"]
+
 [package.metadata.rust-analyzer]
 rustc_private = true
