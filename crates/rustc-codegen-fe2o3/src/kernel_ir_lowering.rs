@@ -4300,6 +4300,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | TrustedDeviceItem::MfmaAccumulatorRowMajor
                     | TrustedDeviceItem::Bf16MfmaFragment
                     | TrustedDeviceItem::F32AccumulatorFragment
+                    | TrustedDeviceItem::F32AccumulatorMatrixView
+                    | TrustedDeviceItem::F32AccumulatorMatrixViewError
                     | TrustedDeviceItem::Bf16MfmaMatrixView
                     | TrustedDeviceItem::Bf16MfmaMatrixViewError,
                 ) => {
@@ -4315,8 +4317,10 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 Some(
                     TrustedDeviceItem::Bf16MfmaMatrixARowMajor
                     | TrustedDeviceItem::Bf16MfmaMatrixBRowMajor
+                    | TrustedDeviceItem::F32AccumulatorMatrixRowMajor
                     | TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2
                     | TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2
+                    | TrustedDeviceItem::F32AccumulatorMatrixLoadZeroFilledV1
                     | TrustedDeviceItem::F32AccumulatorFragmentZero
                     | TrustedDeviceItem::F32AccumulatorFragmentIntoValues
                     | TrustedDeviceItem::WaveLaneCurrent

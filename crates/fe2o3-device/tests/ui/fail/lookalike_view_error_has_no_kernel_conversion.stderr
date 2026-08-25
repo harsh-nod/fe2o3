@@ -24,3 +24,6 @@ help: `KernelError` implements trait `From<T>`
    |
    | impl From<Bf16MatrixViewError> for crate::KernelError {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<Bf16MatrixViewError>`
+...
+   | impl From<F32AccumulatorMatrixViewError> for crate::KernelError {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<F32AccumulatorMatrixViewError>`

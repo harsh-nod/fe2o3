@@ -1138,6 +1138,61 @@ mod tests {
     }
 
     #[test]
+    fn every_compiler_identity_section_mutation_fails_closed() {
+        for pins in [
+            WorkgroupSyncCompilerPinsV1::exact_lds_reduction_v1(),
+            WorkgroupSyncCompilerPinsV1::exact_scoped_atomic_v1(),
+        ] {
+            let handoff = construct_inert_workgroup_sync_v1_compiler_handoff_v1(pins).unwrap();
+            let spec = pins.profile().spec();
+            for suffix in [
+                "source.v1",
+                "namespace.v1",
+                "authority.v1",
+                "mir.v1",
+                "fnabi.v1",
+                "semantics.v1",
+                "terminals.v3",
+                "abi.v1",
+                "effects.v1",
+                "resources.v1",
+                "kir.v1",
+                "layout.v1",
+            ] {
+                let section = format!("{}.{}", spec.section_prefix(), suffix);
+                let mut module = handoff.module_bytes().to_vec();
+                let section_index = module
+                    .windows(section.len())
+                    .position(|window| window == section.as_bytes())
+                    .unwrap_or_else(|| panic!("missing compiler identity section {section}"));
+                let byte_prefix = b"module asm \".byte 0x";
+                let payload_offset = module[section_index..]
+                    .windows(byte_prefix.len())
+                    .position(|window| window == byte_prefix)
+                    .unwrap_or_else(|| panic!("missing compiler identity payload {section}"));
+                let nibble = section_index + payload_offset + byte_prefix.len();
+                module[nibble] = if module[nibble] == b'0' { b'1' } else { b'0' };
+
+                let mutated = CompilerModuleHandoffV2::new(
+                    CompilerModuleKindV1::LlvmTextIr,
+                    handoff.target(),
+                    handoff.code_object_version(),
+                    handoff.envelope().clone(),
+                    handoff.symbol_manifest().clone(),
+                    &module,
+                );
+                if let Ok(mutated) = mutated {
+                    assert!(
+                        validate_handoff(&mutated, pins).is_err(),
+                        "{} admitted mutated compiler identity section {section}",
+                        spec.kernel,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn exact_handoffs_are_distinct_and_reproducible() {
         let lds = construct_inert_workgroup_sync_v1_compiler_handoff_v1(
             WorkgroupSyncCompilerPinsV1::exact_lds_reduction_v1(),

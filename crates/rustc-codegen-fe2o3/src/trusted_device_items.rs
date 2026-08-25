@@ -40,8 +40,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x9c, 0x8a, 0x34, 0xfb, 0x3e, 0xd0, 0x49, 0x87, 0x2f, 0x19, 0x56, 0x28, 0x82, 0x58, 0x06, 0xec,
-    0xb4, 0x21, 0x66, 0xc0, 0x1c, 0xfe, 0xb1, 0x0d, 0x8a, 0xfc, 0x12, 0x59, 0x9b, 0x78, 0x69, 0x42,
+    0xf2, 0xab, 0xc1, 0x67, 0xd3, 0x38, 0x50, 0x57, 0x04, 0x0a, 0xd1, 0xdf, 0x4c, 0x5b, 0x69, 0xb0,
+    0x82, 0xb8, 0x7a, 0xfb, 0xa1, 0x55, 0x31, 0x9a, 0x70, 0x1b, 0xc8, 0xeb, 0x2b, 0x37, 0x0e, 0x68,
 ];
 #[allow(
     dead_code,
@@ -78,8 +78,8 @@ const REVIEWED_GENERAL_GEMM_PROOF_DEFINITION_SOURCE_V1: [u8; 32] = [
 // Portable semantic identity of the reviewed `fe2o3_device::DisjointSlice`
 // definition and reference source closure used by the store signatures.
 const REVIEWED_GENERAL_GEMM_DISJOINT_SLICE_DEPENDENCY_V1: [u8; 32] = [
-    0x47, 0x5e, 0x9b, 0xa4, 0x37, 0x62, 0x83, 0xbc, 0x90, 0x22, 0x87, 0x78, 0x7d, 0xaa, 0xb7, 0x3d,
-    0xdb, 0xbb, 0xdd, 0x37, 0x27, 0x0f, 0xd9, 0x4f, 0xad, 0x10, 0xc5, 0xe3, 0xdf, 0xe6, 0x04, 0x72,
+    0x51, 0x37, 0x4b, 0x52, 0x26, 0xf2, 0xbd, 0x90, 0x82, 0x4b, 0x0c, 0x9e, 0x24, 0x45, 0xb1, 0x68,
+    0xdb, 0xc1, 0x44, 0xa0, 0x3e, 0x1d, 0x65, 0xf7, 0xfc, 0xd4, 0x1c, 0x13, 0x32, 0xf7, 0x17, 0x11,
 ];
 
 #[cfg(all(test, feature = "qualification-oracles-test-only"))]
@@ -544,6 +544,10 @@ pub(crate) enum TrustedDeviceItem {
     Bf16MfmaMatrixBRowMajor,
     Bf16MfmaMatrixALoadZeroFilledV2,
     Bf16MfmaMatrixBLoadZeroFilledV2,
+    F32AccumulatorMatrixView,
+    F32AccumulatorMatrixViewError,
+    F32AccumulatorMatrixRowMajor,
+    F32AccumulatorMatrixLoadZeroFilledV1,
     DeviceMatrixMultiplyAccumulate,
     GeneralGemm(TrustedGeneralGemmSurfaceV1, TrustedGeneralGemmOperationV1),
     DeviceValue(DeviceValueDiagnosticItem),
@@ -1068,6 +1072,26 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::F32AccumulatorFragmentIntoValues,
         "fe2o3_device_f32_accumulator_fragment_into_values_v1",
         "fe2o3_device::F32AccumulatorFragment::into_values",
+    ),
+    (
+        TrustedDeviceItem::F32AccumulatorMatrixView,
+        "fe2o3_device_f32_accumulator_matrix_view_v1",
+        "fe2o3_device::F32AccumulatorMatrix",
+    ),
+    (
+        TrustedDeviceItem::F32AccumulatorMatrixViewError,
+        "fe2o3_device_f32_accumulator_matrix_view_error_v1",
+        "fe2o3_device::F32AccumulatorMatrixViewError",
+    ),
+    (
+        TrustedDeviceItem::F32AccumulatorMatrixRowMajor,
+        "fe2o3_device_f32_accumulator_matrix_row_major_v1",
+        "fe2o3_device::F32AccumulatorMatrix::row_major",
+    ),
+    (
+        TrustedDeviceItem::F32AccumulatorMatrixLoadZeroFilledV1,
+        "fe2o3_device_f32_accumulator_matrix_load_zero_filled_v1",
+        "fe2o3_device::F32AccumulatorMatrix::load_m16n16",
     ),
     (
         TrustedDeviceItem::Bf16MfmaMatrixView,
@@ -1746,6 +1770,16 @@ fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static 
         TrustedDeviceItem::F32AccumulatorFragmentIntoValues => {
             "fe2o3_device::tensor::{impl#5}::into_values"
         }
+        TrustedDeviceItem::F32AccumulatorMatrixView => "fe2o3_device::tensor::F32AccumulatorMatrix",
+        TrustedDeviceItem::F32AccumulatorMatrixViewError => {
+            "fe2o3_device::tensor::F32AccumulatorMatrixViewError"
+        }
+        TrustedDeviceItem::F32AccumulatorMatrixRowMajor => {
+            "fe2o3_device::tensor::{impl#21}::row_major"
+        }
+        TrustedDeviceItem::F32AccumulatorMatrixLoadZeroFilledV1 => {
+            "fe2o3_device::tensor::{impl#21}::load_m16n16"
+        }
         TrustedDeviceItem::Bf16MfmaMatrixView => "fe2o3_device::tensor::Bf16MfmaMatrix",
         TrustedDeviceItem::Bf16MfmaMatrixViewError => "fe2o3_device::tensor::Bf16MatrixViewError",
         TrustedDeviceItem::Bf16MfmaMatrixARowMajor => "fe2o3_device::tensor::{impl#7}::row_major",
@@ -1817,6 +1851,10 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::F32AccumulatorFragment
             | TrustedDeviceItem::F32AccumulatorFragmentZero
             | TrustedDeviceItem::F32AccumulatorFragmentIntoValues
+            | TrustedDeviceItem::F32AccumulatorMatrixView
+            | TrustedDeviceItem::F32AccumulatorMatrixViewError
+            | TrustedDeviceItem::F32AccumulatorMatrixRowMajor
+            | TrustedDeviceItem::F32AccumulatorMatrixLoadZeroFilledV1
             | TrustedDeviceItem::Bf16MfmaMatrixView
             | TrustedDeviceItem::Bf16MfmaMatrixViewError
             | TrustedDeviceItem::Bf16MfmaMatrixARowMajor
@@ -2985,6 +3023,10 @@ mod tests {
             TrustedDeviceItem::StridedReadView2DError,
             TrustedDeviceItem::StridedReadView2DFromSharedSlice,
             TrustedDeviceItem::StridedReadView2DLoadOr,
+            TrustedDeviceItem::F32AccumulatorMatrixView,
+            TrustedDeviceItem::F32AccumulatorMatrixViewError,
+            TrustedDeviceItem::F32AccumulatorMatrixRowMajor,
+            TrustedDeviceItem::F32AccumulatorMatrixLoadZeroFilledV1,
             TrustedDeviceItem::Bf16MfmaMatrixView,
             TrustedDeviceItem::Bf16MfmaMatrixViewError,
             TrustedDeviceItem::Bf16MfmaMatrixARowMajor,
@@ -3838,6 +3880,10 @@ mod tests {
             TrustedDeviceItem::F32AccumulatorFragment,
             TrustedDeviceItem::F32AccumulatorFragmentZero,
             TrustedDeviceItem::F32AccumulatorFragmentIntoValues,
+            TrustedDeviceItem::F32AccumulatorMatrixView,
+            TrustedDeviceItem::F32AccumulatorMatrixViewError,
+            TrustedDeviceItem::F32AccumulatorMatrixRowMajor,
+            TrustedDeviceItem::F32AccumulatorMatrixLoadZeroFilledV1,
             TrustedDeviceItem::Bf16MfmaMatrixView,
             TrustedDeviceItem::Bf16MfmaMatrixViewError,
             TrustedDeviceItem::Bf16MfmaMatrixARowMajor,

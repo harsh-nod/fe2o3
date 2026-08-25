@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/ui/fail/accumulator_matrix_requires_wave64.rs:4:32
+  |
+4 |     let _ = matrix.load_m16n16(lane, 0, 0);
+  |                    ----------- ^^^^ expected `&WaveLane<Wave64>`, found `&WaveLane<Wave32>`
+  |                    |
+  |                    arguments to this method are incorrect
+  |
+  = note: expected reference `&WaveLane<Wave64>`
+             found reference `&WaveLane<Wave32>`
+note: method defined here
+ --> src/tensor.rs
+  |
+  |     pub fn load_m16n16<'wave>(
+  |            ^^^^^^^^^^^

@@ -596,7 +596,9 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     });
             }
             #[cfg(feature = "qualification-oracles-test-only")]
-            if let Some(qualification_pipeline) = compilation_route.qualification() {
+            if kernel_count > 0
+                && let Some(qualification_pipeline) = compilation_route.qualification()
+            {
                 let output_dir = output_dir.expect("kernel output was required above");
                 let qualification_oracle = qualification_pipeline.oracle();
                 if qualification_oracle == QualificationOracle::SimulationV1 {

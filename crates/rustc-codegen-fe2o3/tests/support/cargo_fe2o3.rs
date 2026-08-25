@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-fn cargo_target_root(workspace: &Path) -> PathBuf {
+pub fn cargo_target_root(workspace: &Path) -> PathBuf {
     match std::env::var_os("CARGO_TARGET_DIR") {
         Some(path) if Path::new(&path).is_absolute() => PathBuf::from(path),
         Some(path) => workspace.join(path),

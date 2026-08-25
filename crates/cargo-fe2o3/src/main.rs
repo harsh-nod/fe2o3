@@ -2237,6 +2237,7 @@ fn find_or_build_backend(
         "isolated codegen-backend build directory",
     )?;
     let backend = dylib_path(backend_target.display_path());
+    let qualification_backend = env::var_os(worker_v2::QUALIFICATION_ORACLE_ENV).is_some();
     eprintln!("building rustc-codegen-fe2o3 backend...");
     let mut command = pinned_cargo
         .command()
@@ -2265,6 +2266,14 @@ fn find_or_build_backend(
                 .map(|byte| format!("{byte:02x}"))
                 .collect::<String>(),
         );
+    if qualification_backend {
+        // Selection was already validated before backend preparation. Compile
+        // the explicitly selected oracle into this internal backend without
+        // making any qualification implementation available to production.
+        command
+            .as_command_mut()
+            .args(["--features", "qualification-oracles-test-only"]);
+    }
     remove_dynamic_loader_environment(command.as_command_mut());
     for name in [
         TARGET_ENV,

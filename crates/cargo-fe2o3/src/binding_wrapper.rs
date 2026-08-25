@@ -6390,6 +6390,47 @@ mod tests {
     }
 
     #[test]
+    fn row_softmax_qualification_replaces_a_substituted_compiler_closure() {
+        let directory = test_artifact_directory("row-softmax-qualification-closure");
+        let capabilities = protected_compiler_capabilities_for_test(
+            &directory,
+            WorkerV2ConfigIdentity::for_test([0x61; 32]),
+        );
+        let expected_backend = hex(&capabilities.backend.sha256()[..]);
+        let expected_closure = hex(&capabilities.compiler_closure_sha256());
+        let substituted_closure = "01".repeat(32);
+        let mut command = Command::new("/proc/self/fd/194");
+        command.env(
+            crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV,
+            &substituted_closure,
+        );
+
+        capabilities
+            .prepare_qualification_command(
+                &mut command,
+                qualification_requires_compiler_closure_observation(Some(OsStr::new(
+                    ROW_SOFTMAX_V1_PIPELINE,
+                ))),
+            )
+            .unwrap();
+
+        let environment = command
+            .get_envs()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(
+            environment.get(OsStr::new(QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1)),
+            Some(&Some(OsStr::new(&expected_backend)))
+        );
+        assert_eq!(
+            environment.get(OsStr::new(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV)),
+            Some(&Some(OsStr::new(&expected_closure)))
+        );
+        assert_ne!(expected_closure, substituted_closure);
+        drop(command);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn kernel_root_routing_prefers_exact_worker_selection_and_validates_cargo_fallback() {
         assert!(selected_kernel_root(Some(true), None).unwrap());
         assert!(!selected_kernel_root(Some(false), Some(OsStr::new("1"))).unwrap());

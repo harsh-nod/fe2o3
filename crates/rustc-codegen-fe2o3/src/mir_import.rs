@@ -1,7 +1,7 @@
 use crate::collector::CollectionResult;
 use crate::rust_type_layout_general::{
-    AdtKind, BackendRepresentationFacts, ScalarPrimitiveFacts, SourceScalarKind, TypeLayoutFacts,
-    TypeLayoutKind, extract_general_layout,
+    AdtKind, BackendRepresentationFacts, FieldLayoutFacts, ScalarPrimitiveFacts, SourceScalarKind,
+    TypeLayoutFacts, TypeLayoutKind, extract_general_layout,
 };
 use crate::semantic_features::{self, SessionRecognizedSemanticItem};
 use crate::trusted_device_items::TrustedDeviceItem;
@@ -2115,7 +2115,7 @@ fn import_bf16_fragment_layout<'tcx>(
             repr_c: true,
             size: 8,
             alignment: 2,
-            field_count: 1,
+            field_count: 3,
             field_offset: 0,
             array_length: 4,
             array_stride: 2,
@@ -2141,7 +2141,7 @@ fn import_f32_fragment_layout<'tcx>(
             repr_c: true,
             size: 16,
             alignment: 4,
-            field_count: 1,
+            field_count: 3,
             field_offset: 0,
             array_length: 4,
             array_stride: 4,
@@ -2173,21 +2173,35 @@ fn import_fragment_container<'a>(
             "outer type does not have one variant",
         ));
     };
-    let [field] = variant.fields.as_slice() else {
+    let [values, contract, not_send_sync] = variant.fields.as_slice() else {
         return Err(matrix_layout_error(
             role,
-            "outer type does not have one field",
+            "outer type does not have the three reviewed fragment fields",
         ));
     };
-    let TypeLayoutKind::Array(array) = &field.layout.kind else {
-        return Err(matrix_layout_error(role, "field is not an array"));
+    if values.name.as_deref() != Some("values")
+        || values.source_index != 0
+        || values.memory_index != 0
+    {
+        return Err(matrix_layout_error(role, "payload field identity drifted"));
+    }
+    let TypeLayoutKind::Array(array) = &values.layout.kind else {
+        return Err(matrix_layout_error(role, "payload field is not an array"));
+    };
+    if !is_fragment_phantom_field(contract, "_contract", 1, facts.size_bytes)
+        || !is_fragment_phantom_field(not_send_sync, "_not_send_sync", 2, facts.size_bytes)
+    {
+        return Err(matrix_layout_error(
+            role,
+            "contract or non-Send/Sync marker layout drifted",
+        ));
     };
     let observed = MatrixFragmentLayoutV1 {
         repr_c: adt.representation.c,
         size: facts.size_bytes,
         alignment: facts.abi_alignment_bytes,
         field_count: u8::try_from(variant.fields.len()).unwrap_or(u8::MAX),
-        field_offset: field.offset_bytes,
+        field_offset: values.offset_bytes,
         array_length: array.length,
         array_stride: array.stride_bytes,
     };
@@ -2199,7 +2213,7 @@ fn import_fragment_container<'a>(
             BackendRepresentationFacts::Memory
         )
         || !matches!(
-            field.layout.backend_representation,
+            values.layout.backend_representation,
             BackendRepresentationFacts::Memory
         )
         || facts.uninhabited
@@ -2211,6 +2225,52 @@ fn import_fragment_container<'a>(
         ));
     }
     Ok((observed, &array.element))
+}
+
+fn is_fragment_phantom_field(
+    field: &FieldLayoutFacts,
+    expected_name: &str,
+    expected_index: usize,
+    payload_extent: u64,
+) -> bool {
+    let TypeLayoutKind::Adt(adt) = &field.layout.kind else {
+        return false;
+    };
+    let [variant] = adt.variants.as_slice() else {
+        return false;
+    };
+    field.source_index == expected_index
+        && field.memory_index == expected_index
+        && field.name.as_deref() == Some(expected_name)
+        && field.offset_bytes == payload_extent
+        && field.layout.size_bytes == 0
+        && field.layout.abi_alignment_bytes == 1
+        && field.layout.unadjusted_abi_alignment_bytes == 1
+        && field.layout.maximum_requested_alignment_bytes.is_none()
+        && !field.layout.uninhabited
+        && field.layout.largest_niche.is_none()
+        && matches!(
+            field.layout.backend_representation,
+            BackendRepresentationFacts::Memory
+        )
+        && matches!(
+            adt.definition.as_str(),
+            "core::marker::PhantomData" | "std::marker::PhantomData"
+        )
+        && adt.kind == AdtKind::Struct
+        && !adt.representation.c
+        && !adt.representation.transparent
+        && !adt.representation.explicit_integer
+        && adt.representation.packed_alignment_bytes.is_none()
+        && adt.representation.requested_alignment_bytes.is_none()
+        && adt.tag.is_none()
+        && variant.source_index == 0
+        && variant.name == "PhantomData"
+        && variant.discriminant_bits.is_none()
+        && variant.discriminant_type.is_none()
+        && variant.discriminant_scalar.is_none()
+        && !variant.uninhabited
+        && variant.fields.is_empty()
 }
 
 fn import_bf16_layout(facts: &TypeLayoutFacts) -> Result<MatrixBf16LayoutV1, MirImportError> {
@@ -3447,6 +3507,90 @@ impl MirFunction {
             .unwrap_or_else(|| MirSemanticInstanceIdentity::plain_item(self.rust_path.clone()))
     }
 
+    fn portable_semantic_instance_v3(&self) -> MirSemanticInstanceIdentity {
+        let mut identity = self.semantic_instance_v1();
+        if self.kind != MirFunctionKind::KernelEntry
+            || self.typed_profile != Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3)
+        {
+            return identity;
+        }
+        let Some(basename) = definition_basename_v1(&identity.definition) else {
+            return identity;
+        };
+        let Some(binding) = basename.strip_prefix("__fe2o3_host_kernel_v1_") else {
+            return identity;
+        };
+        if binding.len() != 64
+            || !binding
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return identity;
+        }
+        let parent = definition_module_path_v1(&identity.definition);
+        identity.definition = if parent.is_empty() {
+            format!("__fe2o3_host_kernel_v1_<portable-v3:{}>", self.export_name)
+        } else {
+            format!(
+                "{parent}::__fe2o3_host_kernel_v1_<portable-v3:{}>",
+                self.export_name
+            )
+        };
+        identity
+    }
+
+    fn portable_authenticated_kernel_body_instance_v3(
+        &self,
+        root: &MirFunction,
+        kernel_binding: KernelBindingIdV1,
+    ) -> Result<MirSemanticInstanceIdentity, MirImportError> {
+        if self.kind != MirFunctionKind::InternalHelper
+            || root.kind != MirFunctionKind::KernelEntry
+            || root.typed_profile != Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3)
+        {
+            return Err(MirImportError::new(
+                "portable MIR authenticated kernel-body bridge has invalid function roles",
+            ));
+        }
+        let root_identity = root.semantic_instance_v1();
+        let root_parent = definition_module_path_v1(&root_identity.definition);
+        let Some(root_basename) = definition_basename_v1(&root_identity.definition) else {
+            return Err(MirImportError::new(
+                "portable MIR authenticated kernel root has no definition basename",
+            ));
+        };
+        let binding = kernel_binding.to_hex();
+        if root_basename != format!("__fe2o3_host_kernel_v1_{binding}") {
+            return Err(MirImportError::new(
+                "portable MIR authenticated kernel root disagrees with its exact binding",
+            ));
+        }
+
+        let mut identity = self.semantic_instance_v1();
+        let body_parent = definition_module_path_v1(&identity.definition);
+        let Some(body_basename) = definition_basename_v1(&identity.definition) else {
+            return Err(MirImportError::new(
+                "portable MIR authenticated kernel body has no definition basename",
+            ));
+        };
+        if body_parent != root_parent
+            || body_basename != format!("__fe2o3_kernel_body_v1_{binding}")
+        {
+            return Err(MirImportError::new(
+                "portable MIR authenticated kernel body disagrees with its exact root binding",
+            ));
+        }
+        identity.definition = if body_parent.is_empty() {
+            format!("__fe2o3_kernel_body_v1_<portable-v3:{}>", root.export_name)
+        } else {
+            format!(
+                "{body_parent}::__fe2o3_kernel_body_v1_<portable-v3:{}>",
+                root.export_name
+            )
+        };
+        Ok(identity)
+    }
+
     fn validate_identity_fields_v1(&self) -> Result<(), MirImportError> {
         for (field, value) in [
             ("function export", self.export_name.as_str()),
@@ -3751,12 +3895,10 @@ impl MirModule {
         }
 
         let mut pending = vec![root];
-        let mut reachable = BTreeMap::new();
+        let mut reachable_by_instance = BTreeMap::new();
         while let Some(function) = pending.pop() {
-            if reachable
-                .insert(function.semantic_instance_v1(), function)
-                .is_some()
-            {
+            let identity = function.semantic_instance_v1();
+            if reachable_by_instance.insert(identity, function).is_some() {
                 continue;
             }
             for block in &function.blocks {
@@ -3790,7 +3932,100 @@ impl MirModule {
             }
         }
 
-        Ok((reachable.into_values().collect(), functions_by_instance))
+        let mut bridged_body_identities = BTreeMap::new();
+        for function in reachable_by_instance.values().copied() {
+            for block in &function.blocks {
+                let Some(MirTerminator {
+                    kind:
+                        MirTerminatorKind::Call {
+                            callee: Some(callee),
+                            ..
+                        },
+                    ..
+                }) = &block.terminator
+                else {
+                    continue;
+                };
+                let Some(bridge) = callee.authenticated_kernel_body_bridge_v1() else {
+                    continue;
+                };
+                let MirCalleeIdentity::Untrusted {
+                    resolution: MirCalleeResolution::Resolved(callee_instance),
+                    ..
+                } = &callee.identity
+                else {
+                    return Err(MirImportError::new(format!(
+                        "portable MIR authenticated kernel-body bridge has no resolved callee for `{}`",
+                        function.rust_path
+                    )));
+                };
+                if callee_instance != bridge.body() {
+                    return Err(MirImportError::new(format!(
+                        "portable MIR authenticated kernel-body bridge disagrees with callee resolution for `{}`",
+                        function.rust_path
+                    )));
+                }
+                if bridge.root() != &function.semantic_instance_v1() {
+                    return Err(MirImportError::new(format!(
+                        "portable MIR authenticated kernel-body bridge disagrees with root `{}`",
+                        function.rust_path
+                    )));
+                }
+                let Some(body) = functions_by_instance.get(bridge.body()).copied() else {
+                    return Err(MirImportError::new(format!(
+                        "portable MIR authenticated kernel-body bridge for `{}` has no collected body",
+                        function.rust_path
+                    )));
+                };
+                let portable = body.portable_authenticated_kernel_body_instance_v3(
+                    function,
+                    bridge.kernel_binding(),
+                )?;
+                if let Some(previous) =
+                    bridged_body_identities.insert(bridge.body().clone(), portable.clone())
+                    && previous != portable
+                {
+                    return Err(MirImportError::new(format!(
+                        "portable MIR body `{}` has conflicting authenticated kernel-root bindings",
+                        body.rust_path
+                    )));
+                }
+            }
+        }
+        let portable = functions_by_instance
+            .iter()
+            .map(|(identity, function)| {
+                (
+                    identity.clone(),
+                    bridged_body_identities
+                        .get(identity)
+                        .cloned()
+                        .unwrap_or_else(|| function.portable_semantic_instance_v3()),
+                )
+            })
+            .collect();
+        let instances = PortableSemanticInstancesV3 {
+            functions: functions_by_instance,
+            portable,
+        };
+
+        let mut reachable = BTreeMap::new();
+        for (identity, function) in reachable_by_instance {
+            let portable_identity = instances.portable_identity(&identity).ok_or_else(|| {
+                MirImportError::new(format!(
+                    "portable MIR has no normalized semantic identity for `{}`",
+                    function.rust_path
+                ))
+            })?;
+            if let Some(previous) = reachable.insert(portable_identity.clone(), function) {
+                return Err(MirImportError::new(format!(
+                    "portable MIR semantic identities for `{}` and `{}` collide after authenticated normalization",
+                    previous.rust_path, function.rust_path
+                )));
+            }
+        }
+
+        Ok((reachable.into_values().collect(), instances))
     }
 }
 
@@ -4159,15 +4394,30 @@ fn portable_v3_incomplete(function: &MirFunction, detail: impl fmt::Display) -> 
     ))
 }
 
-type PortableSemanticClosureV3<'a> = (
-    Vec<&'a MirFunction>,
-    BTreeMap<MirSemanticInstanceIdentity, &'a MirFunction>,
-);
+struct PortableSemanticInstancesV3<'a> {
+    functions: BTreeMap<MirSemanticInstanceIdentity, &'a MirFunction>,
+    portable: BTreeMap<MirSemanticInstanceIdentity, MirSemanticInstanceIdentity>,
+}
+
+impl<'a> PortableSemanticInstancesV3<'a> {
+    fn function(&self, identity: &MirSemanticInstanceIdentity) -> Option<&'a MirFunction> {
+        self.functions.get(identity).copied()
+    }
+
+    fn portable_identity(
+        &self,
+        identity: &MirSemanticInstanceIdentity,
+    ) -> Option<&MirSemanticInstanceIdentity> {
+        self.portable.get(identity)
+    }
+}
+
+type PortableSemanticClosureV3<'a> = (Vec<&'a MirFunction>, PortableSemanticInstancesV3<'a>);
 
 #[derive(Clone, Copy)]
 enum PortableFunctionEncoding<'a> {
     ExportNames(&'a BTreeMap<&'a str, &'a MirFunction>),
-    SemanticInstances(&'a BTreeMap<MirSemanticInstanceIdentity, &'a MirFunction>),
+    SemanticInstances(&'a PortableSemanticInstancesV3<'a>),
 }
 
 #[allow(dead_code)]
@@ -4505,13 +4755,19 @@ impl PortableMirSemanticEncoderV2 {
             PortableFunctionEncoding::ExportNames(_) => self.text(&function.export_name)?,
             PortableFunctionEncoding::SemanticInstances(functions) => {
                 let identity = function.semantic_instance_v1();
-                if !functions.contains_key(&identity) {
+                if functions.function(&identity).is_none() {
                     return Err(MirImportError::new(format!(
                         "portable MIR has no semantic identity for `{}`",
                         function.rust_path
                     )));
                 }
-                self.semantic_instance(&identity)?;
+                let portable = functions.portable_identity(&identity).ok_or_else(|| {
+                    MirImportError::new(format!(
+                        "portable MIR has no normalized semantic identity for `{}`",
+                        function.rust_path
+                    ))
+                })?;
+                self.semantic_instance(portable)?;
             }
         }
         self.tag(function.kind.canonical_order_v1());
@@ -5126,12 +5382,17 @@ impl PortableMirSemanticEncoderV2 {
                                 "portable MIR cannot identify callee `{path}`: {detail}"
                             ))
                         })?;
-                        if !functions.contains_key(identity) {
+                        if functions.function(identity).is_none() {
                             return Err(MirImportError::new(format!(
                                 "portable MIR cannot encode unresolved semantic callee `{path}`"
                             )));
                         }
-                        self.semantic_instance(identity)?;
+                        let portable = functions.portable_identity(identity).ok_or_else(|| {
+                            MirImportError::new(format!(
+                                "portable MIR cannot normalize semantic callee `{path}`"
+                            ))
+                        })?;
+                        self.semantic_instance(portable)?;
                     }
                 }
             }
@@ -6694,12 +6955,88 @@ fn preserve_instance_resolution<T, E: fmt::Debug>(
 mod tests {
     use super::*;
     use crate::collector::CollectedFunctionRole;
+    use crate::rust_type_layout_general::{
+        AdtLayoutFacts, AdtRepresentationFacts, VariantLayoutFacts,
+    };
     use rustc_driver::{Callbacks, Compilation};
     use rustc_hir::def::DefKind;
     use rustc_interface::interface::Compiler;
     use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Mutex, OnceLock};
+
+    fn fragment_phantom_field_for_test(
+        definition: &str,
+        name: &str,
+        index: usize,
+        offset: u64,
+    ) -> FieldLayoutFacts {
+        FieldLayoutFacts {
+            source_index: index,
+            memory_index: index,
+            name: Some(name.to_owned()),
+            offset_bytes: offset,
+            layout: TypeLayoutFacts {
+                rust_type: format!("{definition}<test>"),
+                size_bytes: 0,
+                abi_alignment_bytes: 1,
+                unadjusted_abi_alignment_bytes: 1,
+                maximum_requested_alignment_bytes: None,
+                uninhabited: false,
+                backend_representation: BackendRepresentationFacts::Memory,
+                largest_niche: None,
+                kind: TypeLayoutKind::Adt(AdtLayoutFacts {
+                    definition: definition.to_owned(),
+                    kind: AdtKind::Struct,
+                    representation: AdtRepresentationFacts::rust(),
+                    tag: None,
+                    variants: vec![VariantLayoutFacts {
+                        source_index: 0,
+                        name: "PhantomData".to_owned(),
+                        discriminant_bits: None,
+                        discriminant_type: None,
+                        discriminant_scalar: None,
+                        uninhabited: false,
+                        fields: Vec::new(),
+                    }],
+                }),
+            },
+        }
+    }
+
+    #[test]
+    fn fragment_phantom_fields_reject_name_order_definition_and_layout_spoofing() {
+        let exact = fragment_phantom_field_for_test("std::marker::PhantomData", "_contract", 1, 8);
+        assert!(is_fragment_phantom_field(&exact, "_contract", 1, 8));
+
+        let core =
+            fragment_phantom_field_for_test("core::marker::PhantomData", "_not_send_sync", 2, 8);
+        assert!(is_fragment_phantom_field(&core, "_not_send_sync", 2, 8));
+
+        let mut wrong_name = exact.clone();
+        wrong_name.name = Some("_not_contract".to_owned());
+        assert!(!is_fragment_phantom_field(&wrong_name, "_contract", 1, 8));
+
+        let mut wrong_order = exact.clone();
+        wrong_order.memory_index = 2;
+        assert!(!is_fragment_phantom_field(&wrong_order, "_contract", 1, 8));
+
+        let mut wrong_definition = exact.clone();
+        let TypeLayoutKind::Adt(adt) = &mut wrong_definition.layout.kind else {
+            unreachable!();
+        };
+        adt.definition = "impostor::marker::PhantomData".to_owned();
+        assert!(!is_fragment_phantom_field(
+            &wrong_definition,
+            "_contract",
+            1,
+            8
+        ));
+
+        let mut wrong_layout = exact;
+        wrong_layout.offset_bytes = 0;
+        assert!(!is_fragment_phantom_field(&wrong_layout, "_contract", 1, 8));
+    }
 
     #[test]
     fn definition_module_path_supports_crate_root_and_nested_items() {
@@ -7171,6 +7508,368 @@ fn imported_flow(input: Wrapper<u32>) -> Wrapper<u64> {
     }
 
     #[test]
+    fn portable_semantic_digest_v3_excludes_only_authenticated_kernel_binding_suffixes() {
+        let mut original = portable_semantic_module();
+        original.functions[0].semantic_instance = Some(MirSemanticInstanceIdentity::plain_item(
+            format!("fixture::module::__fe2o3_host_kernel_v1_{}", "a".repeat(64)),
+        ));
+        let environment = portable_semantic_environment();
+        let expected = portable_digest_v3(&original, &environment);
+
+        let mut changed = original.clone();
+        changed.functions[0].semantic_instance = Some(MirSemanticInstanceIdentity::plain_item(
+            format!("fixture::module::__fe2o3_host_kernel_v1_{}", "b".repeat(64)),
+        ));
+        assert_eq!(portable_digest_v3(&changed, &environment), expected);
+
+        let mut crate_root_a = original.clone();
+        crate_root_a.functions[0].semantic_instance =
+            Some(MirSemanticInstanceIdentity::plain_item(format!(
+                "__fe2o3_host_kernel_v1_{}",
+                "a".repeat(64)
+            )));
+        let crate_root_expected = portable_digest_v3(&crate_root_a, &environment);
+        let mut crate_root_b = crate_root_a.clone();
+        crate_root_b.functions[0].semantic_instance =
+            Some(MirSemanticInstanceIdentity::plain_item(format!(
+                "__fe2o3_host_kernel_v1_{}",
+                "b".repeat(64)
+            )));
+        assert_eq!(
+            portable_digest_v3(&crate_root_b, &environment),
+            crate_root_expected
+        );
+        assert_ne!(
+            crate_root_expected, expected,
+            "the module parent remains bound"
+        );
+
+        let mut uppercase_binding = original.clone();
+        uppercase_binding.functions[0].semantic_instance =
+            Some(MirSemanticInstanceIdentity::plain_item(format!(
+                "fixture::module::__fe2o3_host_kernel_v1_{}",
+                "A".repeat(64)
+            )));
+        assert_ne!(
+            portable_digest_v3(&uppercase_binding, &environment),
+            expected,
+            "only exact lowercase binding suffixes are normalized"
+        );
+
+        let mut substituted_basename = original.clone();
+        substituted_basename.functions[0].semantic_instance =
+            Some(MirSemanticInstanceIdentity::plain_item(format!(
+                "fixture::module::__fe2o3_host_kernel_v2_{}",
+                "a".repeat(64)
+            )));
+        assert_ne!(
+            portable_digest_v3(&substituted_basename, &environment),
+            expected
+        );
+
+        let mut changed_parent = changed.clone();
+        changed_parent.functions[0].semantic_instance =
+            Some(MirSemanticInstanceIdentity::plain_item(format!(
+                "fixture::other_module::__fe2o3_host_kernel_v1_{}",
+                "b".repeat(64)
+            )));
+        assert_ne!(portable_digest_v3(&changed_parent, &environment), expected);
+
+        let mut malformed_binding = original.clone();
+        malformed_binding.functions[0].semantic_instance =
+            Some(MirSemanticInstanceIdentity::plain_item(format!(
+                "fixture::module::__fe2o3_host_kernel_v1_{}",
+                "c".repeat(63)
+            )));
+        assert_ne!(
+            portable_digest_v3(&malformed_binding, &environment),
+            expected
+        );
+
+        let mut changed_generic = changed.clone();
+        changed_generic.functions[0]
+            .semantic_instance
+            .as_mut()
+            .unwrap()
+            .generic_arguments
+            .push(MirSemanticGenericArgument::Type(MirSemanticTypeIdentity(
+                vec![0x2a],
+            )));
+        assert_ne!(portable_digest_v3(&changed_generic, &environment), expected);
+
+        let mut changed_kind = changed;
+        changed_kind.functions[0]
+            .semantic_instance
+            .as_mut()
+            .unwrap()
+            .kind = MirSemanticInstanceKind::Intrinsic;
+        assert_ne!(portable_digest_v3(&changed_kind, &environment), expected);
+    }
+
+    #[test]
+    fn portable_semantic_digest_v3_projects_only_after_raw_reachability() {
+        let mut fixture = portable_semantic_module();
+        fixture.functions[0].semantic_instance = Some(MirSemanticInstanceIdentity::plain_item(
+            format!("fixture::module::__fe2o3_host_kernel_v1_{}", "a".repeat(64)),
+        ));
+        let colliding_identity = MirSemanticInstanceIdentity::plain_item(
+            "fixture::module::__fe2o3_host_kernel_v1_<portable-v3:alpha>".to_owned(),
+        );
+        fixture.functions[1].semantic_instance = Some(colliding_identity.clone());
+        let MirTerminatorKind::Call { callee, .. } = &mut fixture.functions[0].blocks[0]
+            .terminator
+            .as_mut()
+            .unwrap()
+            .kind
+        else {
+            panic!("fixture root must call its helper");
+        };
+        *callee = Some(MirCallee::untrusted_semantic_for_test(
+            "fixture::colliding_helper",
+            colliding_identity,
+        ));
+
+        let error = portable_digest_v3_result(&fixture, &portable_semantic_environment())
+            .expect_err("distinct reachable raw identities must not alias after projection");
+        assert!(
+            error
+                .to_string()
+                .contains("collide after authenticated normalization")
+        );
+
+        fixture.functions[0].blocks[0].terminator = Some(MirTerminator {
+            kind: MirTerminatorKind::Return,
+            source: None,
+        });
+        portable_digest_v3_result(&fixture, &portable_semantic_environment())
+            .expect("an unreachable projected collision must not affect the root closure");
+    }
+
+    #[test]
+    fn portable_semantic_digest_v3_normalizes_only_authenticated_kernel_body_bridges() {
+        let environment = portable_semantic_environment();
+        let mut first = portable_semantic_module();
+        configure_authenticated_kernel_body_bridge(
+            &mut first,
+            KernelBindingIdV1::from_bytes([0xaa; 32]),
+        );
+        let expected = portable_digest_v3(&first, &environment);
+
+        let mut second = portable_semantic_module();
+        configure_authenticated_kernel_body_bridge(
+            &mut second,
+            KernelBindingIdV1::from_bytes([0xbb; 32]),
+        );
+        assert_eq!(portable_digest_v3(&second, &environment), expected);
+
+        let mut first_generic = first.clone();
+        let mut first_body = first_generic.functions[1].semantic_instance_v1();
+        first_body
+            .generic_arguments
+            .push(MirSemanticGenericArgument::Type(MirSemanticTypeIdentity(
+                vec![0x2a],
+            )));
+        replace_authenticated_kernel_body_identity(&mut first_generic, first_body);
+        let generic_expected = portable_digest_v3(&first_generic, &environment);
+        let mut second_generic = second.clone();
+        let mut second_body = second_generic.functions[1].semantic_instance_v1();
+        second_body
+            .generic_arguments
+            .push(MirSemanticGenericArgument::Type(MirSemanticTypeIdentity(
+                vec![0x2a],
+            )));
+        replace_authenticated_kernel_body_identity(&mut second_generic, second_body);
+        assert_eq!(
+            portable_digest_v3(&second_generic, &environment),
+            generic_expected
+        );
+
+        let mut changed_generic = second_generic.clone();
+        let mut changed_body = changed_generic.functions[1].semantic_instance_v1();
+        changed_body.generic_arguments = vec![MirSemanticGenericArgument::Type(
+            MirSemanticTypeIdentity(vec![0x2b]),
+        )];
+        replace_authenticated_kernel_body_identity(&mut changed_generic, changed_body);
+        assert_ne!(
+            portable_digest_v3(&changed_generic, &environment),
+            generic_expected
+        );
+
+        let mut changed_kind = second_generic;
+        let mut changed_body = changed_kind.functions[1].semantic_instance_v1();
+        changed_body.kind = MirSemanticInstanceKind::Intrinsic;
+        replace_authenticated_kernel_body_identity(&mut changed_kind, changed_body);
+        assert_ne!(
+            portable_digest_v3(&changed_kind, &environment),
+            generic_expected
+        );
+
+        let mut crate_root_first = first.clone();
+        relocate_authenticated_kernel_bridge_to_crate_root(
+            &mut crate_root_first,
+            KernelBindingIdV1::from_bytes([0xaa; 32]),
+        );
+        let crate_root_expected = portable_digest_v3(&crate_root_first, &environment);
+        let mut crate_root_second = second.clone();
+        relocate_authenticated_kernel_bridge_to_crate_root(
+            &mut crate_root_second,
+            KernelBindingIdV1::from_bytes([0xbb; 32]),
+        );
+        assert_eq!(
+            portable_digest_v3(&crate_root_second, &environment),
+            crate_root_expected
+        );
+        assert_ne!(
+            crate_root_expected, expected,
+            "the module parent remains bound"
+        );
+
+        let body_path = second.functions[1].semantic_instance_v1().definition;
+        let MirTerminatorKind::Call { callee, .. } = &mut second.functions[0].blocks[0]
+            .terminator
+            .as_mut()
+            .unwrap()
+            .kind
+        else {
+            panic!("fixture root must call its generated body");
+        };
+        *callee = Some(MirCallee::untrusted_for_test(body_path));
+        assert_ne!(portable_digest_v3(&second, &environment), expected);
+
+        let mut inconsistent = first;
+        let root_identity = inconsistent.functions[0].semantic_instance_v1();
+        let MirTerminatorKind::Call {
+            callee: Some(callee),
+            ..
+        } = &mut inconsistent.functions[0].blocks[0]
+            .terminator
+            .as_mut()
+            .unwrap()
+            .kind
+        else {
+            panic!("fixture root must call its generated body");
+        };
+        let MirCalleeIdentity::Untrusted { resolution, .. } = &mut callee.identity else {
+            panic!("generated body bridge must retain an untrusted resolved callee");
+        };
+        *resolution = MirCalleeResolution::Resolved(root_identity);
+        let error = match inconsistent.portable_semantic_closure_v3("alpha") {
+            Ok(_) => panic!("inconsistent bridge resolution must fail closed"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("authenticated kernel-body bridge disagrees with callee resolution")
+        );
+    }
+
+    #[test]
+    fn portable_semantic_digest_v3_rejects_authenticated_bridge_substitution() {
+        let binding = KernelBindingIdV1::from_bytes([0xaa; 32]);
+
+        let mut root_substitution = portable_semantic_module();
+        configure_authenticated_kernel_body_bridge(&mut root_substitution, binding);
+        replace_authenticated_kernel_root_identity(
+            &mut root_substitution,
+            MirSemanticInstanceIdentity::plain_item(format!(
+                "fixture::module::__fe2o3_host_kernel_v1_{}",
+                "b".repeat(64)
+            )),
+        );
+        let error = match root_substitution.portable_semantic_closure_v3("alpha") {
+            Ok(_) => panic!("root suffix substitution must fail closed"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("root disagrees with its exact binding")
+        );
+
+        let mut malformed_root = portable_semantic_module();
+        configure_authenticated_kernel_body_bridge(&mut malformed_root, binding);
+        replace_authenticated_kernel_root_identity(
+            &mut malformed_root,
+            MirSemanticInstanceIdentity::plain_item("::".to_owned()),
+        );
+        let error = match malformed_root.portable_semantic_closure_v3("alpha") {
+            Ok(_) => panic!("malformed root definition must fail closed"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("root has no definition basename")
+        );
+
+        for body_path in [
+            format!(
+                "fixture::other::__fe2o3_kernel_body_v1_{}",
+                binding.to_hex()
+            ),
+            format!(
+                "fixture::module::__fe2o3_kernel_body_v2_{}",
+                binding.to_hex()
+            ),
+        ] {
+            let mut body_substitution = portable_semantic_module();
+            configure_authenticated_kernel_body_bridge(&mut body_substitution, binding);
+            replace_authenticated_kernel_body_identity(
+                &mut body_substitution,
+                MirSemanticInstanceIdentity::plain_item(body_path),
+            );
+            let error = match body_substitution.portable_semantic_closure_v3("alpha") {
+                Ok(_) => panic!("body parent or basename substitution must fail closed"),
+                Err(error) => error,
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("body disagrees with its exact root binding")
+            );
+        }
+
+        let mut malformed_body = portable_semantic_module();
+        configure_authenticated_kernel_body_bridge(&mut malformed_body, binding);
+        replace_authenticated_kernel_body_identity(
+            &mut malformed_body,
+            MirSemanticInstanceIdentity::plain_item("::".to_owned()),
+        );
+        let error = match malformed_body.portable_semantic_closure_v3("alpha") {
+            Ok(_) => panic!("malformed body definition must fail closed"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("body has no definition basename")
+        );
+
+        let mut role_substitution = portable_semantic_module();
+        configure_authenticated_kernel_body_bridge(&mut role_substitution, binding);
+        role_substitution.functions[1].kind = MirFunctionKind::KernelEntry;
+        let error = match role_substitution.portable_semantic_closure_v3("alpha") {
+            Ok(_) => panic!("body role substitution must fail closed"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("invalid function roles"));
+
+        let mut missing_body = portable_semantic_module();
+        configure_authenticated_kernel_body_bridge(&mut missing_body, binding);
+        missing_body.functions.remove(1);
+        let error = match missing_body.portable_semantic_closure_v3("alpha") {
+            Ok(_) => panic!("a compiler-sealed bridge cannot name an absent body"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("cannot normalize unresolved semantic callee")
+        );
+    }
+
+    #[test]
     fn portable_semantic_digest_v3_distinguishes_monomorphizations_and_edges() {
         let mut fixture = portable_semantic_module();
         let definition = "core::generic::helper";
@@ -7581,8 +8280,18 @@ fn imported_flow(input: Wrapper<u32>) -> Wrapper<u64> {
         ));
         unreachable.locals[0].ty.kind = MirType::Unknown;
         unreachable.locals[0].ty.shape = MirTypeShape::Unknown;
+        let unreachable_root = unreachable.rust_path.clone();
         unreachable.blocks[0].terminator = Some(MirTerminator {
-            kind: MirTerminatorKind::Other,
+            kind: MirTerminatorKind::Call {
+                callee: Some(MirCallee::authenticated_kernel_body_for_test(
+                    unreachable_root,
+                    "fixture::missing_unreachable_generated_body",
+                    KernelBindingIdV1::from_bytes([0xcc; 32]),
+                )),
+                target: None,
+                destination: None,
+                operands: Vec::new(),
+            },
             source: None,
         });
         with_unreachable_compatibility_body
@@ -7697,6 +8406,10 @@ fn imported_flow(input: Wrapper<u32>) -> Wrapper<u64> {
             panic!("fixture constant operand");
         };
         *literal = MirConstant::U16(2);
+        portable_digest_result(&u16_one, &environment)
+            .expect_err("V2 rejects an exact u16 type instead of changing its stable encoding");
+        portable_digest_result(&u16_two, &environment)
+            .expect_err("V2 rejects an exact u16 constant instead of encoding it as unknown");
         assert_ne!(
             portable_digest_v3(&u16_one, &environment),
             portable_digest_v3(&u16_two, &environment),
@@ -8761,14 +9474,19 @@ fn imported_flow(input: Wrapper<u32>) -> Wrapper<u64> {
         module: &MirModule,
         environment: &PortableSemanticEnvironment,
     ) -> PortableMirSemanticDigestV2 {
-        module
-            .portable_semantic_digest_v2(MirSemanticAdmissionInputsV2::new(
-                "alpha",
-                &environment.target,
-                &environment.abi,
-                &environment.launch,
-            ))
-            .unwrap()
+        portable_digest_result(module, environment).unwrap()
+    }
+
+    fn portable_digest_result(
+        module: &MirModule,
+        environment: &PortableSemanticEnvironment,
+    ) -> Result<PortableMirSemanticDigestV2, MirImportError> {
+        module.portable_semantic_digest_v2(MirSemanticAdmissionInputsV2::new(
+            "alpha",
+            &environment.target,
+            &environment.abi,
+            &environment.launch,
+        ))
     }
 
     fn portable_digest_v3(
@@ -8792,6 +9510,100 @@ fn imported_flow(input: Wrapper<u32>) -> Wrapper<u64> {
 
     fn test_monomorphization(definition: &str, type_tag: u8) -> MirSemanticInstanceIdentity {
         MirSemanticInstanceIdentity::monomorphization_for_test(definition, type_tag)
+    }
+
+    fn root_callee_mut(module: &mut MirModule) -> &mut MirCallee {
+        let MirTerminatorKind::Call {
+            callee: Some(callee),
+            ..
+        } = &mut module.functions[0].blocks[0]
+            .terminator
+            .as_mut()
+            .unwrap()
+            .kind
+        else {
+            panic!("fixture root must call its generated body");
+        };
+        callee
+    }
+
+    fn replace_authenticated_kernel_root_identity(
+        module: &mut MirModule,
+        identity: MirSemanticInstanceIdentity,
+    ) {
+        module.functions[0].semantic_instance = Some(identity.clone());
+        root_callee_mut(module)
+            .authenticated_kernel_body_bridge
+            .as_mut()
+            .expect("fixture must retain compiler-sealed bridge")
+            .root = identity;
+    }
+
+    fn replace_authenticated_kernel_body_identity(
+        module: &mut MirModule,
+        identity: MirSemanticInstanceIdentity,
+    ) {
+        module.functions[1].semantic_instance = Some(identity.clone());
+        let callee = root_callee_mut(module);
+        let MirCalleeIdentity::Untrusted { path, resolution } = &mut callee.identity else {
+            panic!("generated body bridge must retain an untrusted resolved callee");
+        };
+        *path = identity.definition.clone();
+        *resolution = MirCalleeResolution::Resolved(identity.clone());
+        callee
+            .authenticated_kernel_body_bridge
+            .as_mut()
+            .expect("fixture must retain compiler-sealed bridge")
+            .body = identity;
+    }
+
+    fn relocate_authenticated_kernel_bridge_to_crate_root(
+        module: &mut MirModule,
+        binding: KernelBindingIdV1,
+    ) {
+        replace_authenticated_kernel_root_identity(
+            module,
+            MirSemanticInstanceIdentity::plain_item(format!(
+                "__fe2o3_host_kernel_v1_{}",
+                binding.to_hex()
+            )),
+        );
+        replace_authenticated_kernel_body_identity(
+            module,
+            MirSemanticInstanceIdentity::plain_item(format!(
+                "__fe2o3_kernel_body_v1_{}",
+                binding.to_hex()
+            )),
+        );
+    }
+
+    fn configure_authenticated_kernel_body_bridge(
+        module: &mut MirModule,
+        binding: KernelBindingIdV1,
+    ) {
+        let root_path = format!(
+            "fixture::module::__fe2o3_host_kernel_v1_{}",
+            binding.to_hex()
+        );
+        let body_path = format!(
+            "fixture::module::__fe2o3_kernel_body_v1_{}",
+            binding.to_hex()
+        );
+        module.functions[0].semantic_instance =
+            Some(MirSemanticInstanceIdentity::plain_item(root_path.clone()));
+        module.functions[1].semantic_instance =
+            Some(MirSemanticInstanceIdentity::plain_item(body_path.clone()));
+        let MirTerminatorKind::Call { callee, .. } = &mut module.functions[0].blocks[0]
+            .terminator
+            .as_mut()
+            .unwrap()
+            .kind
+        else {
+            panic!("fixture root must call its generated body");
+        };
+        *callee = Some(MirCallee::authenticated_kernel_body_for_test(
+            root_path, body_path, binding,
+        ));
     }
 
     fn portable_semantic_module() -> MirModule {

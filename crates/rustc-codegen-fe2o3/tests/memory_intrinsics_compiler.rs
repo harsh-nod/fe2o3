@@ -7,6 +7,10 @@ use fe2o3_artifacts::DigestAlgorithm;
 #[path = "support/cargo_fe2o3.rs"]
 mod cargo_fe2o3;
 
+const MEMORY_V1_FIXTURE: &str = include_str!("fixtures/memory-v1-compiler/src/main.rs");
+const WAVE_LDS_V1_FIXTURE: &str =
+    include_str!("fixtures/memory-v1-compiler/src/bin/gfx942_wave_lds_v1.rs");
+
 fn backend_test_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -35,8 +39,8 @@ impl WorkerV2MissingEnvelope {
             .collect::<String>();
         let fixture_source =
             "crates/rustc-codegen-fe2o3/tests/fixtures/memory-v1-compiler/src/main.rs";
-        let path = workspace.join(format!(
-            "target/memory-v1-worker-v2-missing-envelope-{}.json",
+        let path = cargo_fe2o3::cargo_target_root(workspace).join(format!(
+            "memory-v1-worker-v2-missing-envelope-{}.json",
             std::process::id()
         ));
         let worker = worker.to_str().expect("UTF-8 worker path");
@@ -67,6 +71,14 @@ fn backend_build(workspace: &Path, target: &str) -> Output {
         .env("FE2O3_WORKER_V2_CONFIG_V2", &config.0)
         .output()
         .expect("run memory-v1 compiler fixture")
+}
+
+#[test]
+fn compiler_fixtures_use_compiler_derived_crate_bindings() {
+    for source in [MEMORY_V1_FIXTURE, WAVE_LDS_V1_FIXTURE] {
+        assert!(source.contains("#[kernel(typed)]"));
+        assert!(!source.contains("namespace ="));
+    }
 }
 
 #[test]

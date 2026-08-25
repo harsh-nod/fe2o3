@@ -184,6 +184,39 @@ pub type Bf16MfmaAMatrix<'data> = Bf16MfmaMatrix<'data, MfmaOperandA>;
 /// Checked row-major storage for an MFMA B operand.
 pub type Bf16MfmaBMatrix<'data> = Bf16MfmaMatrix<'data, MfmaOperandB>;
 
+/// Rejection while establishing one checked row-major FP32 accumulator view.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[rustc_diagnostic_item = "fe2o3_device_f32_accumulator_matrix_view_error_v1"]
+pub enum F32AccumulatorMatrixViewError {
+    /// A nonempty matrix has a stride smaller than its logical column count.
+    InvalidStride,
+    /// Offset, extent, or address arithmetic overflowed `usize`.
+    ExtentOverflow,
+    /// The logical matrix is not fully contained in the supplied allocation.
+    OutOfBounds { required: usize, actual: usize },
+}
+
+/// Checked row-major FP32 storage for one MFMA accumulator tile.
+///
+/// The profile, register distribution, and wave width are retained in the
+/// type. Its fields are private so safe code can create it only through the
+/// checked constructor and can obtain a fragment only with the matching wave
+/// witness.
+#[rustc_diagnostic_item = "fe2o3_device_f32_accumulator_matrix_view_v1"]
+pub struct F32AccumulatorMatrix<
+    'data,
+    Profile = Bf16F32M16N16K16,
+    Distribution = MfmaAccumulatorRowMajor,
+    Width: WaveWidth = Wave64,
+> {
+    values: &'data [f32],
+    offset: usize,
+    rows: usize,
+    columns: usize,
+    stride: usize,
+    _contract: PhantomData<fn(Profile, Distribution, Width)>,
+}
+
 impl<'data, Role: sealed::OperandRole> Bf16MfmaMatrix<'data, Role> {
     fn checked(
         bits: &'data [u16],
@@ -589,6 +622,87 @@ impl From<Bf16MatrixViewError> for crate::KernelError {
     }
 }
 
+impl From<F32AccumulatorMatrixViewError> for crate::KernelError {
+    fn from(_error: F32AccumulatorMatrixViewError) -> Self {
+        Self::InvalidArgument
+    }
+}
+
+impl<'data> F32AccumulatorMatrix<'data> {
+    /// Validates a row-major FP32 accumulator matrix.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_f32_accumulator_matrix_row_major_v1"]
+    pub fn row_major(
+        values: &'data [f32],
+        offset: usize,
+        rows: usize,
+        columns: usize,
+        stride: usize,
+    ) -> Result<Self, F32AccumulatorMatrixViewError> {
+        check_strided_2d_extent(offset, rows, columns, stride, values.len()).map_err(|error| {
+            match error {
+                CheckedStridedExtentError::InvalidStride => {
+                    F32AccumulatorMatrixViewError::InvalidStride
+                }
+                CheckedStridedExtentError::ExtentOverflow => {
+                    F32AccumulatorMatrixViewError::ExtentOverflow
+                }
+                CheckedStridedExtentError::OutOfBounds { required, actual } => {
+                    F32AccumulatorMatrixViewError::OutOfBounds { required, actual }
+                }
+            }
+        })?;
+        Ok(Self {
+            values,
+            offset,
+            rows,
+            columns,
+            stride,
+            _contract: PhantomData,
+        })
+    }
+
+    fn value_or_zero(&self, row: Option<usize>, column: Option<usize>) -> f32 {
+        let (Some(row), Some(column)) = (row, column) else {
+            return 0.0;
+        };
+        if row >= self.rows || column >= self.columns {
+            return 0.0;
+        }
+        row.checked_mul(self.stride)
+            .and_then(|row_offset| self.offset.checked_add(row_offset))
+            .and_then(|index| index.checked_add(column))
+            .and_then(|index| self.values.get(index))
+            .copied()
+            .unwrap_or(0.0)
+    }
+
+    /// Loads this lane's four values from one logical M16xN16 accumulator tile.
+    /// Logical out-of-bounds and overflowed coordinates are zero-filled.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_f32_accumulator_matrix_load_zero_filled_v1"]
+    pub fn load_m16n16<'wave>(
+        &self,
+        lane: &'wave WaveLane<Wave64>,
+        row_base: usize,
+        column_base: usize,
+    ) -> F32AccumulatorFragment<'wave> {
+        let lane_index = lane.get() as usize;
+        let first_row = row_base.checked_add((lane_index >> 4) * 4);
+        let column = column_base.checked_add(lane_index & 15);
+        let mut values = [0.0; 4];
+        let mut component = 0;
+        while component < 4 {
+            values[component] = self.value_or_zero(
+                first_row.and_then(|base| base.checked_add(component)),
+                column,
+            );
+            component += 1;
+        }
+        F32AccumulatorFragment::from_values_for_wave(lane, values)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -632,6 +746,54 @@ mod tests {
         assert_eq!(
             Bf16MfmaAMatrix::row_major(&[], 1, 2, 1, usize::MAX).err(),
             Some(Bf16MatrixViewError::ExtentOverflow)
+        );
+    }
+
+    #[test]
+    fn checked_accumulator_view_rejects_invalid_storage_contracts() {
+        assert_eq!(
+            F32AccumulatorMatrix::row_major(&[0.0; 6], 0, 2, 3, 2).err(),
+            Some(F32AccumulatorMatrixViewError::InvalidStride)
+        );
+        assert_eq!(
+            F32AccumulatorMatrix::row_major(&[0.0; 5], 0, 2, 3, 3).err(),
+            Some(F32AccumulatorMatrixViewError::OutOfBounds {
+                required: 6,
+                actual: 5,
+            })
+        );
+        assert_eq!(
+            F32AccumulatorMatrix::row_major(&[], 1, 2, 1, usize::MAX).err(),
+            Some(F32AccumulatorMatrixViewError::ExtentOverflow)
+        );
+    }
+
+    #[test]
+    fn accumulator_matrix_loads_match_canonical_m16n16_distribution() {
+        let values = (0_u16..256).map(f32::from).collect::<Vec<_>>();
+        let matrix = F32AccumulatorMatrix::row_major(&values, 0, 16, 16, 16).unwrap();
+        let cases = [
+            (0, [0.0, 16.0, 32.0, 48.0]),
+            (15, [15.0, 31.0, 47.0, 63.0]),
+            (16, [64.0, 80.0, 96.0, 112.0]),
+            (63, [207.0, 223.0, 239.0, 255.0]),
+        ];
+        for (lane, expected) in cases {
+            let lane = WaveLane::<Wave64>::from_model_snapshot(lane).unwrap();
+            assert_eq!(matrix.load_m16n16(&lane, 0, 0).into_values(), expected);
+        }
+    }
+
+    #[test]
+    fn accumulator_matrix_loads_zero_fill_logical_edges() {
+        let values = (0_u16..15 * 15).map(f32::from).collect::<Vec<_>>();
+        let matrix = F32AccumulatorMatrix::row_major(&values, 0, 15, 15, 15).unwrap();
+        let lane = WaveLane::<Wave64>::from_model_snapshot(15).unwrap();
+        assert_eq!(matrix.load_m16n16(&lane, 0, 0).into_values(), [0.0; 4]);
+        let lane = WaveLane::<Wave64>::from_model_snapshot(0).unwrap();
+        assert_eq!(
+            matrix.load_m16n16(&lane, 14, 14).into_values(),
+            [224.0, 0.0, 0.0, 0.0]
         );
     }
 
