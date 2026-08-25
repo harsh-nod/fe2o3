@@ -6,11 +6,12 @@ use dialect_kernel::{
 use dialect_mir::pliron::MirProductionPlironLimitsV1;
 use ed25519_dalek::{Signer, SigningKey};
 use fe2o3_functional_proof::{
-    FunctionalRefinementBindingV2, FunctionalRefinementBoundaryV2,
+    COMPLETE_GPU_HIERARCHY_V1, FunctionalRefinementBindingV2, FunctionalRefinementBoundaryV2,
     FunctionalRefinementImportExpectationV2, FunctionalRefinementImportPolicyV2,
     FunctionalRefinementReceiptImporterV2, FunctionalRefinementResultV2,
-    FunctionalRefinementSubjectsV2, MirPlironSemanticContractV1, SafeReferenceKindV2,
-    SemanticFiniteDomainV1, SemanticFiniteExtentV1, SemanticLoopContractV1,
+    FunctionalRefinementSubjectsV2, MirPlironSemanticContractV1, ParallelNumericalPolicyV1,
+    ParallelOutputRelationV1, ParallelReferenceContractV1, ParallelScheduleRelationV1,
+    SafeReferenceKindV2, SemanticFiniteDomainV1, SemanticFiniteExtentV1, SemanticLoopContractV1,
     SemanticLoopDirectionV1, SemanticNumericalPolicyV1, SemanticOutputContractV1,
     SemanticScalarTypeV1, SemanticTypedRootV1, UnsignedFunctionalRefinementReceiptV2,
     VerusToolchainIdentityV2,
@@ -34,8 +35,8 @@ use fe2o3_pliron::{
     compile_ranked_kernel_for_lowering_v2, normalized_effect_refinement_hash_for_kernel_v2,
     production_effect_contract_identity_v1, production_loop_transition_identity_v1,
     production_loop_variant_identity_v1, production_ranked_value_identity_v1,
-    require_mir_pliron_semantic_contract_v1, require_total_output_refinement_v2,
-    verify_ranked_kernel_against_safe_reference_mir_v1,
+    require_mir_pliron_semantic_contract_v1, require_parallel_reference_contract_v1,
+    require_total_output_refinement_v2, verify_ranked_kernel_against_safe_reference_mir_v1,
 };
 use fe2o3_proof_contracts::DigestV1;
 
@@ -895,6 +896,66 @@ fn exact_mir_pliron_contract_joins_live_typed_effect_evidence() {
     assert!(verified.establishes_total_output_refinement_at_mir_pliron_boundary());
     assert!(verified.compiler_projection_and_pass_soundness_remain_trusted());
     assert!(!verified.grants_llvm_or_later_authority());
+}
+
+#[test]
+fn production_parallel_relation_is_derived_from_live_output_and_hierarchy_facts() {
+    let input = total_output_refinement_input();
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let contract = semantic_contract_for_total_output(
+        &input,
+        &evidence,
+        ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(0)),
+        SemanticScalarTypeV1::Boolean,
+    );
+    let total = require_total_output_refinement_v2(&input, &evidence).unwrap();
+    let semantics =
+        require_mir_pliron_semantic_contract_v1(&input, &evidence, total, &contract).unwrap();
+    let receipt = input.retained_functional_refinement_receipts()[0]
+        .receipt_identity()
+        .digest();
+    let output = &contract.outputs()[0];
+    let relation = ParallelOutputRelationV1::new(
+        proof_digest(90),
+        output.identity(),
+        output.output_domain(),
+        ParallelScheduleRelationV1::PointwiseBijection,
+        ParallelNumericalPolicyV1::ExactBitVector,
+        COMPLETE_GPU_HIERARCHY_V1.to_vec(),
+        vec![],
+        receipt,
+    )
+    .unwrap();
+    let expected =
+        ParallelReferenceContractV1::new(contract.canonical_sha256(), vec![relation], vec![])
+            .unwrap();
+    let report =
+        require_parallel_reference_contract_v1(&input, &evidence, semantics, &contract, &expected)
+            .unwrap();
+    assert_eq!(report.output_relations(), 1);
+    assert_eq!(report.pointwise_relations(), 1);
+    assert!(report.binds_reference_domains_to_complete_gpu_hierarchy());
+    assert!(!report.grants_llvm_or_later_authority());
+
+    let wrong = ParallelOutputRelationV1::new(
+        proof_digest(91),
+        output.identity(),
+        output.output_domain(),
+        ParallelScheduleRelationV1::PointwiseBijection,
+        ParallelNumericalPolicyV1::ExactBitVector,
+        COMPLETE_GPU_HIERARCHY_V1.to_vec(),
+        vec![],
+        proof_digest(92),
+    )
+    .unwrap();
+    let wrong =
+        ParallelReferenceContractV1::new(contract.canonical_sha256(), vec![wrong], vec![]).unwrap();
+    let error =
+        require_parallel_reference_contract_v1(&input, &evidence, semantics, &contract, &wrong)
+            .unwrap_err();
+    assert!(error.is_incomplete());
+    assert!(error.to_string().contains("no retained authenticated"));
 }
 
 #[test]

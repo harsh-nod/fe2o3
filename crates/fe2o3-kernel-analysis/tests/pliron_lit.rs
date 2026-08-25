@@ -68,6 +68,24 @@ fn collective_semantics_textual_pliron_fixtures() {
     }
 }
 
+#[test]
+fn parallel_reference_prerequisite_mutation_fixtures() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/lit");
+    for fixture in [
+        "ownership_hole.pliron",
+        "ownership_nonrectangular_subgroup.pliron",
+        "ownership_total_overwrite.pliron",
+        "collective_fold_policy_mismatch.pliron",
+        "collective_recurrence_witness_type_mismatch.pliron",
+        "collective_permutation_non_integer_map.pliron",
+        "tensor_layout_wrong_accumulator_permutation.pliron",
+        "tensor_layout_wrong_fragment_width.pliron",
+        "tensor_layout_divergent_trace.pliron",
+    ] {
+        run_fixture(&root.join(fixture));
+    }
+}
+
 fn run_fixture(path: &Path) {
     let metadata = fs::metadata(path).expect("fixture metadata");
     assert!(metadata.is_file());

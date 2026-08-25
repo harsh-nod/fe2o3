@@ -27,7 +27,9 @@ pub use production::{
     ProductionMiddleEndPassSuccessV5, ProductionMiddleEndSemanticSummaryV5,
     ProductionMiddleEndTypedSemanticReconciliationV5, ProductionMirPlironSemanticContractErrorV1,
     ProductionMirPlironSemanticContractReportV1, ProductionMirPlironVerificationErrorV1,
-    ProductionNumericalContractV2, ProductionOverflowContractV2, ProductionPlironSessionV1,
+    ProductionNumericalContractV2, ProductionOverflowContractV2,
+    ProductionParallelReferenceContractBuilderV1, ProductionParallelReferenceContractErrorV1,
+    ProductionParallelReferenceContractReportV1, ProductionPlironSessionV1,
     ProductionRankedBlockV1, ProductionRankedCompileErrorV1, ProductionRankedCompileErrorV2,
     ProductionRankedKernelErrorV1, ProductionRankedKernelLoweringInputV1, ProductionRankedKernelV1,
     ProductionRankedOperationV1, ProductionRankedTerminatorV1, ProductionRankedValueIdV1,
@@ -43,11 +45,12 @@ pub use production::{
     ProductionVerifiedMirPlironKernelV1, compile_ranked_kernel_for_lowering_v1,
     compile_ranked_kernel_for_lowering_v2, normalized_effect_refinement_hash_for_kernel_v2,
     normalized_functional_refinement_formula_hash_for_kernel_v2,
-    production_effect_contract_identity_v1, production_loop_transition_identity_v1,
-    production_loop_variant_identity_v1, production_ranked_value_identity_v1,
-    require_mir_pliron_semantic_contract_v1, require_total_output_refinement_v2,
-    typed_semantic_commitment_reconciliation_v2, typed_semantic_obligation_summary_v2,
-    verify_ranked_kernel_against_safe_reference_mir_v1,
+    production_dynamic_loop_bound_identity_v1, production_effect_contract_identity_v1,
+    production_loop_transition_identity_v1, production_loop_variant_identity_v1,
+    production_ranked_value_identity_v1, production_tensor_site_identity_v1,
+    require_mir_pliron_semantic_contract_v1, require_parallel_reference_contract_v1,
+    require_total_output_refinement_v2, typed_semantic_commitment_reconciliation_v2,
+    typed_semantic_obligation_summary_v2, verify_ranked_kernel_against_safe_reference_mir_v1,
 };
 
 use std::{
