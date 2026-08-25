@@ -292,6 +292,7 @@ dependencies = [
  "fe2o3-kernel-ir",
  "fe2o3-pliron-owner-core",
  "pliron",
+ "sha2 0.11.0",
 ]
 
 [[package]]

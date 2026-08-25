@@ -355,6 +355,7 @@ enum KernelMode {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct KernelOptions {
     mode: KernelMode,
+    qualification_worker_v2: bool,
     explicit_namespace: Option<CrateBindingIdV1>,
     reference: Option<String>,
     launch: Option<ParsedLaunchBoundsV1>,
@@ -416,6 +417,7 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
     if attr.is_empty() {
         return Ok(KernelOptions {
             mode: KernelMode::Basic,
+            qualification_worker_v2: false,
             explicit_namespace: None,
             reference: None,
             launch: None,
@@ -426,6 +428,7 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
 
     let arguments = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(attr.clone())?;
     let mut typed = false;
+    let mut qualification_worker_v2 = false;
     let mut explicit_namespace = None;
     let mut reference = None;
     let mut launch = None;
@@ -434,6 +437,11 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
     for argument in arguments {
         match argument {
             Meta::Path(path) if path.is_ident("typed") && !typed => typed = true,
+            Meta::Path(path)
+                if path.is_ident("qualification_worker_v2") && !qualification_worker_v2 =>
+            {
+                qualification_worker_v2 = true;
+            }
             Meta::NameValue(value) if value.path.is_ident("namespace") => {
                 if explicit_namespace.is_some() {
                     return Err(syn::Error::new_spanned(
@@ -503,7 +511,7 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
             _ => {
                 return Err(syn::Error::new_spanned(
                     argument,
-                    "#[kernel] accepts only #[kernel], #[kernel(typed)], namespace, reference, launch(...), unsafe_asm(...), and control_flow(...) declarations",
+                    "#[kernel] accepts only #[kernel], #[kernel(typed)], qualification_worker_v2, namespace, reference, launch(...), unsafe_asm(...), and control_flow(...) declarations",
                 ));
             }
         }
@@ -521,6 +529,12 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
             "#[kernel] safe Rust reference bindings require typed mode",
         ));
     }
+    if qualification_worker_v2 && !typed {
+        return Err(syn::Error::new_spanned(
+            attr,
+            "#[kernel] qualification_worker_v2 requires typed mode",
+        ));
+    }
 
     Ok(KernelOptions {
         mode: if typed {
@@ -528,6 +542,7 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
         } else {
             KernelMode::Basic
         },
+        qualification_worker_v2,
         explicit_namespace,
         reference,
         launch,
@@ -949,6 +964,7 @@ fn expand_kernel_with_device_import(
         input,
         KernelOptions {
             mode: KernelMode::Basic,
+            qualification_worker_v2: false,
             explicit_namespace: None,
             reference: None,
             launch: None,
@@ -1361,18 +1377,28 @@ fn expand_general_typed_kernel_with_imports(
         GeneratedHostContractIdV3::from_bytes(*model.generated_host_contract_identity.as_bytes());
     let generated_host_arguments = generated_general_typed_arguments_v1(&input, &model.arguments);
     let generated_worker_v3_adapter = generated_worker_v3_adapter_v1(&input, &model);
-    let generated_alpha_zeta_cov6_adapter = generated_alpha_zeta_cov6_adapter_v1(
-        &input,
-        &model,
-        kernel_binding.as_bytes(),
-        generated_host_contract.as_bytes(),
-    )?;
-    let generated_scalar_gemm_v1_adapter = generated_scalar_gemm_v1_adapter(
-        &input,
-        &model,
-        kernel_binding.as_bytes(),
-        generated_host_contract.as_bytes(),
-    )?;
+    let (generated_alpha_zeta_cov6_adapter, generated_scalar_gemm_v1_adapter) =
+        if options.qualification_worker_v2 {
+            (
+                generated_alpha_zeta_cov6_adapter_v1(
+                    &input,
+                    &model,
+                    kernel_binding.as_bytes(),
+                    generated_host_contract.as_bytes(),
+                )?,
+                generated_scalar_gemm_v1_adapter(
+                    &input,
+                    &model,
+                    kernel_binding.as_bytes(),
+                    generated_host_contract.as_bytes(),
+                )?,
+            )
+        } else {
+            (
+                proc_macro2::TokenStream::new(),
+                proc_macro2::TokenStream::new(),
+            )
+        };
     let control_flow_contract =
         analyze_kernel_control_flow_v1(&input, options.control_flow.as_ref())?;
     lower_bounded_for_loops_v1(&mut input, options.control_flow.as_ref())?;
@@ -5136,6 +5162,7 @@ mod tests {
             parse_kernel_options(quote::quote!()).unwrap(),
             KernelOptions {
                 mode: KernelMode::Basic,
+                qualification_worker_v2: false,
                 explicit_namespace: None,
                 reference: None,
                 launch: None,
@@ -5147,6 +5174,7 @@ mod tests {
             parse_kernel_options(quote::quote!(typed)).unwrap(),
             KernelOptions {
                 mode: KernelMode::Typed,
+                qualification_worker_v2: false,
                 explicit_namespace: None,
                 reference: None,
                 launch: None,
@@ -5162,6 +5190,12 @@ mod tests {
         );
         assert!(parse_kernel_options(quote::quote!(reference = cpu_reference)).is_err());
         assert!(parse_kernel_options(quote::quote!(typed, reference = |value| value)).is_err());
+        assert!(parse_kernel_options(quote::quote!(qualification_worker_v2)).is_err());
+        assert!(
+            parse_kernel_options(quote::quote!(typed, qualification_worker_v2))
+                .unwrap()
+                .qualification_worker_v2
+        );
 
         let explicit = parse_kernel_options(quote::quote!(
             typed,
@@ -5456,6 +5490,7 @@ mod tests {
             input,
             KernelOptions {
                 mode: KernelMode::Typed,
+                qualification_worker_v2: false,
                 explicit_namespace: None,
                 reference: Some("crate :: cpu_reference".to_owned()),
                 launch: None,
@@ -6122,14 +6157,16 @@ mod tests {
             assert!(expansion.contains("fn semantic_witness_v1"));
             assert!(expansion.contains("semantic_witness_from_backend_v1"));
             assert!(expansion.contains("ValidatedCompilerGeneratedSemanticWitnessV1"));
-            assert!(expansion.contains("CompilerGeneratedAlphaZetaCov6ArgumentsV1"));
-            assert!(expansion.contains("AlphaZetaCov6DispatchIdentityV1 :: new"));
+            assert!(expansion.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
+            assert!(expansion.contains("pub fn prepare_worker_v3"));
+            assert!(expansion.contains("prepare_generated_worker_v3_v1"));
+            assert!(!expansion.contains("CompilerGeneratedAlphaZetaCov6ArgumentsV1"));
+            assert!(!expansion.contains("AlphaZetaCov6DispatchIdentityV1 :: new"));
             assert!(!expansion.contains("KernelId :: from_bytes"));
             assert!(expansion.contains("CompilerGeneratedArgumentLayoutV1 :: new"));
             assert!(expansion.contains("from_compiler_generated_parts_v1"));
-            assert!(expansion.contains("pub fn prepare"));
-            assert!(expansion.contains("prepare_generated_alpha_zeta_cov6_selected_kernel_v1"));
-            assert!(expansion.contains("GeneratedAlphaZetaCov6PrepareResultV1"));
+            assert!(!expansion.contains("prepare_generated_alpha_zeta_cov6_selected_kernel_v1"));
+            assert!(!expansion.contains("GeneratedAlphaZetaCov6PrepareResultV1"));
             assert!(!expansion.contains("plan . slice"));
             assert!(!expansion.contains("from_raw"));
             assert!(!expansion.contains("CompilerGeneratedKernelContractV1"));
@@ -6145,29 +6182,6 @@ mod tests {
                     .bytes()
                     .all(|byte| { byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte) })
             );
-            match name {
-                "alpha" => {
-                    assert!(expansion.contains("AlphaZetaCov6KernelRoleV1 :: Alpha"));
-                    assert!(expansion.contains("Name :: new (\"scale\")"));
-                    assert!(expansion.contains("Name :: new (\"input\")"));
-                    assert!(expansion.contains("Name :: new (\"output\")"));
-                    assert!(expansion.contains("scalar_f32 (0 , self . scale)"));
-                    assert!(expansion.contains("self . input . bind_argument_pair (plan , 1)"));
-                    assert!(expansion.contains("self . output . bind_argument_pair (plan , 2)"));
-                }
-                "zeta" => {
-                    assert!(expansion.contains("AlphaZetaCov6KernelRoleV1 :: Zeta"));
-                    assert!(expansion.contains("Name :: new (\"a\")"));
-                    assert!(expansion.contains("Name :: new (\"b\")"));
-                    assert!(expansion.contains("Name :: new (\"bias\")"));
-                    assert!(expansion.contains("Name :: new (\"output\")"));
-                    assert!(expansion.contains("scalar_f32 (2 , self . bias)"));
-                    assert!(expansion.contains("self . a . bind_argument_pair (plan , 0)"));
-                    assert!(expansion.contains("self . b . bind_argument_pair (plan , 1)"));
-                    assert!(expansion.contains("self . output . bind_argument_pair (plan , 3)"));
-                }
-                _ => unreachable!(),
-            }
         }
 
         assert_ne!(alpha_binding, zeta_binding);
@@ -6333,7 +6347,7 @@ mod tests {
     }
 
     #[test]
-    fn scalar_gemm_v1_emits_only_the_narrow_generated_launch_adapter() {
+    fn scalar_gemm_v1_qualification_oracle_emits_only_the_narrow_v2_adapter() {
         let input: ItemFn = parse_quote! {
             pub fn scalar_gemm_v1(
                 a: &[f32],
@@ -6361,6 +6375,41 @@ mod tests {
         );
         let model =
             model_general_typed_signature_v1(&input, &options, kernel_binding.as_bytes()).unwrap();
+        let production = expand_kernel_with_imports(
+            input.clone(),
+            options.clone(),
+            &device_import_for(FoundCrate::Name("gpu_device".to_owned())),
+            None,
+            Some(&host_import_for(FoundCrate::Name("gpu_host".to_owned()))),
+            Some(crate_binding),
+        )
+        .unwrap()
+        .to_string();
+        assert!(production.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
+        assert!(production.contains("prepare_worker_v3"));
+        assert!(!production.contains("CompilerGeneratedScalarGemmV1Arguments"));
+        assert!(!production.contains("prepare_generated_scalar_gemm_v1"));
+
+        let qualification_options = parse_kernel_options(quote!(
+            typed,
+            qualification_worker_v2,
+            launch(required = [256, 1, 1], max = [256, 1, 1])
+        ))
+        .unwrap();
+        let qualification = expand_kernel_with_imports(
+            input.clone(),
+            qualification_options,
+            &device_import_for(FoundCrate::Name("gpu_device".to_owned())),
+            None,
+            Some(&host_import_for(FoundCrate::Name("gpu_host".to_owned()))),
+            Some(crate_binding),
+        )
+        .unwrap()
+        .to_string();
+        assert!(qualification.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
+        assert!(qualification.contains("CompilerGeneratedScalarGemmV1Arguments"));
+        assert!(qualification.contains("prepare_generated_scalar_gemm_v1"));
+
         let arguments = generated_general_typed_arguments_v1(&input, &model.arguments).to_string();
         let adapter = super::generated_scalar_gemm_v1_adapter(
             &input,

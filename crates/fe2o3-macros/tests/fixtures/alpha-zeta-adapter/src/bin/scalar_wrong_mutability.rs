@@ -2,6 +2,7 @@ use gpu_device::kernel;
 
 #[kernel(
     typed,
+    qualification_worker_v2,
     namespace = "53bf3c83481a081d4ab0e2b32039f9c89be5de3937a84aca0c40800c8d6b0413",
     launch(required = [256, 1, 1], max = [256, 1, 1])
 )]

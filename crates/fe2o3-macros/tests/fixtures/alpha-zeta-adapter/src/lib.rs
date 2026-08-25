@@ -2,6 +2,7 @@ use gpu_device::{DisjointSlice, kernel};
 
 #[kernel(
     typed,
+    qualification_worker_v2,
     namespace = "8c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
 )]
 pub fn alpha(scale: f32, input: &[f32], output: DisjointSlice<f32>) {
@@ -10,6 +11,7 @@ pub fn alpha(scale: f32, input: &[f32], output: DisjointSlice<f32>) {
 
 #[kernel(
     typed,
+    qualification_worker_v2,
     namespace = "8c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
 )]
 pub fn zeta(a: &[f32], b: &[f32], bias: f32, output: DisjointSlice<f32>) {
@@ -18,6 +20,7 @@ pub fn zeta(a: &[f32], b: &[f32], bias: f32, output: DisjointSlice<f32>) {
 
 #[kernel(
     typed,
+    qualification_worker_v2,
     namespace = "53bf3c83481a081d4ab0e2b32039f9c89be5de3937a84aca0c40800c8d6b0413",
     launch(required = [256, 1, 1], max = [256, 1, 1])
 )]
